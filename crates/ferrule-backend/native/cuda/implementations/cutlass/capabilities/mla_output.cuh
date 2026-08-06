@@ -376,7 +376,9 @@ output_b_task(const Args &args, const Binding &binding, WarpStage &stage,
               std::uint32_t row_base, std::uint32_t channel_base,
               std::uint32_t lane) {
   float accumulator[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+  float group_accumulator[4] = {0.0f, 0.0f, 0.0f, 0.0f};
   const std::uint32_t scale_cols = args.latent_size / 128u;
+  const std::uint32_t group_scale_cols = args.rank / 128u;
   for (std::uint32_t scale_block = 0u; scale_block < scale_cols;
        ++scale_block) {
     float block_accumulator[4] = {0.0f, 0.0f, 0.0f, 0.0f};
@@ -408,13 +410,21 @@ output_b_task(const Args &args, const Binding &binding, WarpStage &stage,
         const float activation_scale = ue8m0_to_float(
             binding.latent_scales[static_cast<std::uint64_t>(row) * scale_cols +
                                   scale_block]);
-        accumulator[element] +=
+        group_accumulator[element] +=
             block_accumulator[element] * weight_scale * activation_scale;
+      }
+    }
+    if ((scale_block + 1u) % group_scale_cols == 0u) {
+#pragma unroll
+      for (std::uint32_t element = 0u; element < 4u; ++element) {
+        accumulator[element] +=
+            bf16_to_f32(f32_to_bf16_rne(group_accumulator[element]));
+        group_accumulator[element] = 0.0f;
       }
     }
   }
   store_tile(binding.output, args.hidden_size, args.rows, row_base,
-             channel_base, lane, accumulator, false);
+             channel_base, lane, accumulator, true);
 }
 
 __global__ __launch_bounds__(kThreads,
@@ -516,8 +526,8 @@ inline Status validate(const Args *args) {
       args->context_size != args->groups * args->group_input_size ||
       args->latent_size != args->groups * args->rank ||
       args->output_a_scale_cols != args->group_input_size / 128u ||
-      (args->group_input_size % 128u) != 0u ||
-      (args->rank % kMmaColumns) != 0u || (args->latent_size % 128u) != 0u) {
+      (args->group_input_size % 128u) != 0u || (args->rank % 128u) != 0u ||
+      (args->latent_size % 128u) != 0u) {
     return Status::kInvalidArgument;
   }
   const bool pointers_valid =

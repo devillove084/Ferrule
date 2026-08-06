@@ -1,6 +1,7 @@
 #ifndef FERRULE_CUDA_CUTLASS_CAPABILITIES_HYPER_CONNECTION_CUH_
 #define FERRULE_CUDA_CUTLASS_CAPABILITIES_HYPER_CONNECTION_CUH_
 
+#include <cublasLt.h>
 #include <cuda_fp8.h>
 #include <cuda_runtime.h>
 #include <cute/numeric/int.hpp>
@@ -43,7 +44,7 @@ static_assert(sizeof(cute::uint128_t) == 16);
 //
 // Every address names Ferrule-owned device storage. The kernel allocates no
 // memory, and launch_hc_pre_rmsnorm_fp8 never synchronizes the host.
-struct alignas(16) HcPreRmsNormFp8Args {
+struct HcPreRmsNormFp8Args {
   std::uint32_t rows;
   std::uint32_t hc;
   std::uint32_t hidden;
@@ -55,10 +56,13 @@ struct alignas(16) HcPreRmsNormFp8Args {
   std::uint32_t reserved;
 
   std::uint64_t state_f32;
-  std::uint64_t function_col_major_f32;
+  std::uint64_t function_row_major_f32;
   std::uint64_t hc_scale_f32;
   std::uint64_t hc_base_f32;
   std::uint64_t layer_rms_weight_f32;
+  std::uint64_t mix_f32;
+  std::uint64_t workspace;
+  std::uint64_t workspace_bytes;
   std::uint64_t hidden_f32;
   std::uint64_t normalized_f32;
   std::uint64_t packed_e4m3;
@@ -71,9 +75,10 @@ struct alignas(16) HcPreRmsNormFp8Args {
 
 static_assert(std::is_standard_layout_v<HcPreRmsNormFp8Args>);
 static_assert(std::is_trivially_copyable_v<HcPreRmsNormFp8Args>);
-static_assert(sizeof(HcPreRmsNormFp8Args) == 144);
+static_assert(sizeof(HcPreRmsNormFp8Args) == 168);
 static_assert(offsetof(HcPreRmsNormFp8Args, state_f32) == 40);
-static_assert(offsetof(HcPreRmsNormFp8Args, stream) == 136);
+static_assert(offsetof(HcPreRmsNormFp8Args, mix_f32) == 80);
+static_assert(offsetof(HcPreRmsNormFp8Args, stream) == 160);
 
 namespace detail {
 
@@ -87,25 +92,27 @@ __device__ __forceinline__ bool finite_f32(float value) {
 }
 
 __device__ __forceinline__ float rsqrt_approx(float value) {
-  float result;
-  asm("rsqrt.approx.f32 %0, %1;" : "=f"(result) : "f"(value));
-  return result;
+  return rsqrtf(value);
 }
 
 __device__ __forceinline__ float fast_exp(float value) { return expf(value); }
 
+__device__ __forceinline__ std::uint16_t f32_to_bf16_rne(float value) {
+  std::uint32_t bits = __float_as_uint(value);
+  if ((bits & 0x7fffffffu) > 0x7f800000u) {
+    return static_cast<std::uint16_t>((bits >> 16) | 0x0040u);
+  }
+  const std::uint32_t bias = 0x7fffu + ((bits >> 16) & 1u);
+  return static_cast<std::uint16_t>((bits + bias) >> 16);
+}
+
+__device__ __forceinline__ float bf16_round(float value) {
+  return __uint_as_float(static_cast<std::uint32_t>(f32_to_bf16_rne(value))
+                         << 16);
+}
+
 __device__ __forceinline__ float fast_sigmoid(float value) {
-  if (value < -16.0f) {
-    return 0.0f;
-  }
-  if (value > 16.0f) {
-    return 1.0f;
-  }
-  if (value >= 0.0f) {
-    return 1.0f / (1.0f + fast_exp(-value));
-  }
-  float exponential = fast_exp(value);
-  return exponential / (1.0f + exponential);
+  return 1.0f / (1.0f + fast_exp(-value));
 }
 
 __device__ __forceinline__ float block_sum_256(float value, float *reduction) {
@@ -212,6 +219,151 @@ __device__ __forceinline__ float clamp_fp8_input(float value) {
   return value;
 }
 
+struct HcLinearPlan {
+  cublasLtHandle_t handle = nullptr;
+  cublasLtMatmulDesc_t operation = nullptr;
+  cublasLtMatrixLayout_t input_layout = nullptr;
+  cublasLtMatrixLayout_t weight_layout = nullptr;
+  cublasLtMatrixLayout_t output_layout = nullptr;
+  cublasLtMatmulAlgo_t algorithm{};
+  std::uint32_t rows = 0u;
+  std::size_t workspace_bytes = 0u;
+
+  ~HcLinearPlan() {
+    if (input_layout != nullptr) {
+      cublasLtMatrixLayoutDestroy(input_layout);
+    }
+    if (weight_layout != nullptr) {
+      cublasLtMatrixLayoutDestroy(weight_layout);
+    }
+    if (output_layout != nullptr) {
+      cublasLtMatrixLayoutDestroy(output_layout);
+    }
+    if (operation != nullptr) {
+      cublasLtMatmulDescDestroy(operation);
+    }
+    if (handle != nullptr) {
+      cublasLtDestroy(handle);
+    }
+  }
+
+  bool prepare(std::uint32_t requested_rows,
+               std::size_t available_workspace_bytes) {
+    if (rows == requested_rows &&
+        workspace_bytes <= available_workspace_bytes && handle != nullptr) {
+      return true;
+    }
+    if (input_layout != nullptr) {
+      cublasLtMatrixLayoutDestroy(input_layout);
+      input_layout = nullptr;
+    }
+    if (weight_layout != nullptr) {
+      cublasLtMatrixLayoutDestroy(weight_layout);
+      weight_layout = nullptr;
+    }
+    if (output_layout != nullptr) {
+      cublasLtMatrixLayoutDestroy(output_layout);
+      output_layout = nullptr;
+    }
+    if (operation != nullptr) {
+      cublasLtMatmulDescDestroy(operation);
+      operation = nullptr;
+    }
+    rows = 0u;
+    workspace_bytes = 0u;
+
+    if (handle == nullptr && cublasLtCreate(&handle) != CUBLAS_STATUS_SUCCESS) {
+      return false;
+    }
+    if (cublasLtMatmulDescCreate(&operation, CUBLAS_COMPUTE_32F, CUDA_R_32F) !=
+        CUBLAS_STATUS_SUCCESS) {
+      return false;
+    }
+    cublasOperation_t op_n = CUBLAS_OP_N;
+    cublasOperation_t op_t = CUBLAS_OP_T;
+    if (cublasLtMatmulDescSetAttribute(operation, CUBLASLT_MATMUL_DESC_TRANSA,
+                                       &op_n,
+                                       sizeof(op_n)) != CUBLAS_STATUS_SUCCESS ||
+        cublasLtMatmulDescSetAttribute(operation, CUBLASLT_MATMUL_DESC_TRANSB,
+                                       &op_t,
+                                       sizeof(op_t)) != CUBLAS_STATUS_SUCCESS) {
+      return false;
+    }
+    if (cublasLtMatrixLayoutCreate(&input_layout, CUDA_R_32F, requested_rows,
+                                   kHcHidden,
+                                   kHcHidden) != CUBLAS_STATUS_SUCCESS ||
+        cublasLtMatrixLayoutCreate(&weight_layout, CUDA_R_32F, kMix, kHcHidden,
+                                   kHcHidden) != CUBLAS_STATUS_SUCCESS ||
+        cublasLtMatrixLayoutCreate(&output_layout, CUDA_R_32F, requested_rows,
+                                   kMix, kMix) != CUBLAS_STATUS_SUCCESS) {
+      return false;
+    }
+    cublasLtOrder_t row_major = CUBLASLT_ORDER_ROW;
+    if (cublasLtMatrixLayoutSetAttribute(
+            input_layout, CUBLASLT_MATRIX_LAYOUT_ORDER, &row_major,
+            sizeof(row_major)) != CUBLAS_STATUS_SUCCESS ||
+        cublasLtMatrixLayoutSetAttribute(
+            weight_layout, CUBLASLT_MATRIX_LAYOUT_ORDER, &row_major,
+            sizeof(row_major)) != CUBLAS_STATUS_SUCCESS ||
+        cublasLtMatrixLayoutSetAttribute(
+            output_layout, CUBLASLT_MATRIX_LAYOUT_ORDER, &row_major,
+            sizeof(row_major)) != CUBLAS_STATUS_SUCCESS) {
+      return false;
+    }
+
+    cublasLtMatmulPreference_t preference = nullptr;
+    if (cublasLtMatmulPreferenceCreate(&preference) != CUBLAS_STATUS_SUCCESS) {
+      return false;
+    }
+    constexpr std::size_t kHeuristicWorkspaceBudget = 64u << 20;
+    const cublasStatus_t preference_status =
+        cublasLtMatmulPreferenceSetAttribute(
+            preference, CUBLASLT_MATMUL_PREF_MAX_WORKSPACE_BYTES,
+            &kHeuristicWorkspaceBudget, sizeof(kHeuristicWorkspaceBudget));
+    cublasLtMatmulHeuristicResult_t candidates[32];
+    int candidate_count = 0;
+    const cublasStatus_t heuristic_status =
+        preference_status == CUBLAS_STATUS_SUCCESS
+            ? cublasLtMatmulAlgoGetHeuristic(
+                  handle, operation, input_layout, weight_layout, output_layout,
+                  output_layout, preference, 32, candidates, &candidate_count)
+            : preference_status;
+    cublasLtMatmulPreferenceDestroy(preference);
+    if (heuristic_status != CUBLAS_STATUS_SUCCESS) {
+      return false;
+    }
+
+    for (int candidate = 0; candidate < candidate_count; ++candidate) {
+      int algorithm_id = -1;
+      int split_k = 0;
+      int reduction = 0;
+      std::size_t written = 0u;
+      if (cublasLtMatmulAlgoConfigGetAttribute(
+              &candidates[candidate].algo, CUBLASLT_ALGO_CONFIG_ID,
+              &algorithm_id, sizeof(algorithm_id),
+              &written) != CUBLAS_STATUS_SUCCESS ||
+          cublasLtMatmulAlgoConfigGetAttribute(
+              &candidates[candidate].algo, CUBLASLT_ALGO_CONFIG_SPLITK_NUM,
+              &split_k, sizeof(split_k), &written) != CUBLAS_STATUS_SUCCESS ||
+          cublasLtMatmulAlgoConfigGetAttribute(
+              &candidates[candidate].algo,
+              CUBLASLT_ALGO_CONFIG_REDUCTION_SCHEME, &reduction,
+              sizeof(reduction), &written) != CUBLAS_STATUS_SUCCESS) {
+        continue;
+      }
+      if (algorithm_id == 14 && split_k == 64 &&
+          reduction == CUBLASLT_REDUCTION_SCHEME_COMPUTE_TYPE &&
+          candidates[candidate].workspaceSize <= available_workspace_bytes) {
+        algorithm = candidates[candidate].algo;
+        rows = requested_rows;
+        workspace_bytes = candidates[candidate].workspaceSize;
+        return true;
+      }
+    }
+    return false;
+  }
+};
+
 struct alignas(16) SharedStorage {
   float reduction[kThreads];
   float mix[kMix];
@@ -227,11 +379,17 @@ static_assert((kSingleRowFunctionTileColumns * kMix) % 4 == 0);
 static_assert(kSingleRowFunctionTileColumns % 4 == 0);
 
 template <std::uint32_t TileColumns>
-__device__ __forceinline__ float
+__device__ __forceinline__ void
 mix_state_function(SharedStorage &shared, const float *state,
                    const float *function_col_major, std::uint32_t state_base,
                    std::uint32_t tid) {
-  float accumulator = 0.0f;
+  constexpr std::uint32_t kWarpSize = 32u;
+  constexpr std::uint32_t kWarps = kThreads / kWarpSize;
+  constexpr std::uint32_t kOutputsPerWarp = kMix / kWarps;
+  const std::uint32_t warp = tid / kWarpSize;
+  const std::uint32_t lane = tid & (kWarpSize - 1u);
+  float accumulator[kOutputsPerWarp] = {0.0f, 0.0f, 0.0f};
+
   for (std::uint32_t tile_base = 0; tile_base < kHcHidden;
        tile_base += TileColumns) {
     auto const *function_vectors = reinterpret_cast<cute::uint128_t const *>(
@@ -253,16 +411,39 @@ mix_state_function(SharedStorage &shared, const float *state,
     }
     __syncthreads();
 
-    if (tid < kMix) {
 #pragma unroll
-      for (std::uint32_t column = 0; column < TileColumns; ++column) {
-        accumulator += shared.function_tile[column * kMix + tid] *
-                       shared.state_tile[column];
+    for (std::uint32_t output_slot = 0; output_slot < kOutputsPerWarp;
+         ++output_slot) {
+      const std::uint32_t output = warp + output_slot * kWarps;
+#pragma unroll
+      for (std::uint32_t column = lane; column < TileColumns;
+           column += kWarpSize) {
+        accumulator[output_slot] =
+            __fmaf_rn(shared.function_tile[column * kMix + output],
+                      shared.state_tile[column], accumulator[output_slot]);
       }
     }
     __syncthreads();
   }
-  return accumulator;
+
+#pragma unroll
+  for (std::uint32_t offset = kWarpSize / 2u; offset > 0u; offset >>= 1u) {
+#pragma unroll
+    for (std::uint32_t output_slot = 0; output_slot < kOutputsPerWarp;
+         ++output_slot) {
+      accumulator[output_slot] = __fadd_rn(
+          accumulator[output_slot],
+          __shfl_down_sync(0xffffffffu, accumulator[output_slot], offset));
+    }
+  }
+  if (lane == 0u) {
+#pragma unroll
+    for (std::uint32_t output_slot = 0; output_slot < kOutputsPerWarp;
+         ++output_slot) {
+      shared.mix[warp + output_slot * kWarps] = accumulator[output_slot];
+    }
+  }
+  __syncthreads();
 }
 
 } // namespace detail
@@ -282,10 +463,15 @@ validate_hc_pre_rmsnorm_fp8(HcPreRmsNormFp8Args const &args) noexcept {
   // Ferrule device allocations satisfy this naturally. The stronger alignment
   // permits the CuTe uint128_t transport below without changing arithmetic.
   return detail::aligned_device_address(args.state_f32, 16) &&
-         detail::aligned_device_address(args.function_col_major_f32, 16) &&
+         detail::aligned_device_address(args.function_row_major_f32, 16) &&
          detail::aligned_device_address(args.hc_scale_f32, 16) &&
          detail::aligned_device_address(args.hc_base_f32, 16) &&
          detail::aligned_device_address(args.layer_rms_weight_f32, 16) &&
+         detail::aligned_device_address(args.mix_f32, 16) &&
+         detail::aligned_device_address(args.workspace, 16) &&
+         args.workspace_bytes >= static_cast<std::uint64_t>(args.rows) *
+                                         args.mix * 64u * sizeof(float) +
+                                     3u &&
          detail::aligned_device_address(args.hidden_f32, 16) &&
          detail::aligned_device_address(args.normalized_f32, 16) &&
          detail::aligned_device_address(args.packed_e4m3, 16) &&
@@ -307,14 +493,14 @@ __global__ __launch_bounds__(kThreads) void hc_pre_rmsnorm_fp8_kernel(
 
   auto const *state = reinterpret_cast<float const *>(
       static_cast<std::uintptr_t>(args.state_f32));
-  auto const *function_col_major = reinterpret_cast<float const *>(
-      static_cast<std::uintptr_t>(args.function_col_major_f32));
   auto const *hc_scale = reinterpret_cast<float const *>(
       static_cast<std::uintptr_t>(args.hc_scale_f32));
   auto const *hc_base = reinterpret_cast<float const *>(
       static_cast<std::uintptr_t>(args.hc_base_f32));
   auto const *layer_rms_weight = reinterpret_cast<float const *>(
       static_cast<std::uintptr_t>(args.layer_rms_weight_f32));
+  auto const *mix = reinterpret_cast<float const *>(
+      static_cast<std::uintptr_t>(args.mix_f32));
   auto *hidden =
       reinterpret_cast<float *>(static_cast<std::uintptr_t>(args.hidden_f32));
   auto *normalized = reinterpret_cast<float *>(
@@ -346,20 +532,9 @@ __global__ __launch_bounds__(kThreads) void hc_pre_rmsnorm_fp8_kernel(
   __syncthreads();
   float state_rms = shared.reduction[0];
 
-  // CuTe's uint128_t is transport only; each of the 24 arithmetic lanes still
-  // consumes columns in increasing order. A single row uses a wider tile to
-  // halve CTA barriers; wider inputs preserve the original 128-column path.
-  float mix_accumulator = 0.0f;
-  if (args.rows == 1u) {
-    mix_accumulator = detail::mix_state_function<kSingleRowFunctionTileColumns>(
-        shared, state, function_col_major, state_base, tid);
-  } else {
-    mix_accumulator = detail::mix_state_function<kFunctionTileColumns>(
-        shared, state, function_col_major, state_base, tid);
-  }
-
   if (tid < kMix) {
-    shared.mix[tid] = mix_accumulator * state_rms;
+    shared.mix[tid] =
+        mix[static_cast<std::uint64_t>(row) * kMix + tid] * state_rms;
   }
   __syncthreads();
 
@@ -466,7 +641,7 @@ __global__ __launch_bounds__(kThreads) void hc_pre_rmsnorm_fp8_kernel(
       output +=
           shared.pre[copy] * state[state_base + copy * kHidden + dimension];
     }
-    hidden[hidden_base + dimension] = output;
+    hidden[hidden_base + dimension] = detail::bf16_round(output);
   }
   __syncthreads();
 
@@ -489,9 +664,9 @@ __global__ __launch_bounds__(kThreads) void hc_pre_rmsnorm_fp8_kernel(
 
   for (std::uint32_t dimension = tid; dimension < kHidden;
        dimension += kThreads) {
-    normalized[hidden_base + dimension] = hidden[hidden_base + dimension] *
-                                          hidden_rms *
-                                          layer_rms_weight[dimension];
+    normalized[hidden_base + dimension] =
+        detail::bf16_round(hidden[hidden_base + dimension] * hidden_rms *
+                           layer_rms_weight[dimension]);
   }
   __syncthreads();
 
@@ -539,6 +714,29 @@ launch_hc_pre_rmsnorm_fp8(HcPreRmsNormFp8Args const &args) noexcept {
 
   cudaStream_t stream =
       reinterpret_cast<cudaStream_t>(static_cast<std::uintptr_t>(args.stream));
+  thread_local detail::HcLinearPlan plan;
+  if (!plan.prepare(args.rows,
+                    static_cast<std::size_t>(args.workspace_bytes))) {
+    return cudaErrorNotSupported;
+  }
+  const float alpha = 1.0f;
+  const float beta = 0.0f;
+  const auto *state = reinterpret_cast<const float *>(
+      static_cast<std::uintptr_t>(args.state_f32));
+  const auto *weight = reinterpret_cast<const float *>(
+      static_cast<std::uintptr_t>(args.function_row_major_f32));
+  auto *mix =
+      reinterpret_cast<float *>(static_cast<std::uintptr_t>(args.mix_f32));
+  void *workspace =
+      reinterpret_cast<void *>(static_cast<std::uintptr_t>(args.workspace));
+  const cublasStatus_t matmul_status =
+      cublasLtMatmul(plan.handle, plan.operation, &alpha, state,
+                     plan.input_layout, weight, plan.weight_layout, &beta, mix,
+                     plan.output_layout, mix, plan.output_layout,
+                     &plan.algorithm, workspace, plan.workspace_bytes, stream);
+  if (matmul_status != CUBLAS_STATUS_SUCCESS) {
+    return cudaErrorLaunchFailure;
+  }
   hc_pre_rmsnorm_fp8_kernel<<<args.rows, kThreads, 0, stream>>>(args);
   return cudaGetLastError();
 }

@@ -33,6 +33,57 @@ use super::operators::{DeepSeekV4AttentionProfileStage, DeepSeekV4OperatorContex
 use super::sequence::DeepSeekV4PagedKvBinding;
 use crate::TensorRole;
 
+#[cfg(feature = "cuda")]
+fn debug_cuda_attention_stage(
+    layer: usize,
+    stage: &str,
+    buffer: &ferrule_backend::cuda::context::CudaF32Buffer,
+    operators: &mut DeepSeekV4OperatorContext,
+) -> Result<()> {
+    if std::env::var("FERRULE_DEBUG_ATTENTION_LAYER")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        != Some(layer)
+    {
+        return Ok(());
+    }
+    let values = operators.cuda_mut()?.ops.download_f32_buffer(buffer)?;
+    if let Some(directory) = std::env::var_os("FERRULE_DEBUG_ATTENTION_DUMP_DIR") {
+        std::fs::create_dir_all(&directory).map_err(|source| Error::Internal {
+            message: format!("failed to create attention dump directory: {source}"),
+        })?;
+        let path = std::path::PathBuf::from(directory).join(format!("layer_{layer}_{stage}.f32"));
+        if !path.exists() {
+            let bytes = values
+                .iter()
+                .flat_map(|value| value.to_ne_bytes())
+                .collect::<Vec<_>>();
+            std::fs::write(&path, bytes).map_err(|source| Error::Internal {
+                message: format!(
+                    "failed to write attention dump {}: {source}",
+                    path.display()
+                ),
+            })?;
+        }
+    }
+    let sum = values.iter().copied().sum::<f32>();
+    let sumsq = values.iter().map(|value| value * value).sum::<f32>();
+    let absmax = values
+        .iter()
+        .map(|value| value.abs())
+        .fold(0.0f32, f32::max);
+    eprintln!(
+        "attention-stage layer={} name={} sum={} sumsq={} absmax={} samples={:?}",
+        layer,
+        stage,
+        sum,
+        sumsq,
+        absmax,
+        &values[..values.len().min(4)]
+    );
+    Ok(())
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct DeepSeekV4CompressorPayload {
     pub compress_ratio: usize,
@@ -1321,6 +1372,8 @@ impl DeepSeekV4Attention {
             &mut arena.q_latent,
             &mut arena.kv_raw,
         )?;
+        debug_cuda_attention_stage(self.layer, "q_latent", &arena.q_latent, operators)?;
+        debug_cuda_attention_stage(self.layer, "kv_raw", &arena.kv_raw, operators)?;
         record_attention_stage(
             operators,
             self.layer,
@@ -1337,6 +1390,7 @@ impl DeepSeekV4Attention {
             cfg.norm_eps,
             &mut arena.q_norm,
         )?;
+        debug_cuda_attention_stage(self.layer, "q_norm", &arena.q_norm, operators)?;
         record_attention_stage(
             operators,
             self.layer,
@@ -1364,6 +1418,7 @@ impl DeepSeekV4Attention {
             &mut arena.query_raw,
             &mut arena.linear_workspace,
         )?;
+        debug_cuda_attention_stage(self.layer, "query_raw", &arena.query_raw, operators)?;
         record_attention_stage(
             operators,
             self.layer,
@@ -1378,6 +1433,7 @@ impl DeepSeekV4Attention {
             cfg.norm_eps,
             &mut arena.query,
         )?;
+        debug_cuda_attention_stage(self.layer, "query_norm", &arena.query, operators)?;
         record_attention_stage(
             operators,
             self.layer,
@@ -1395,6 +1451,7 @@ impl DeepSeekV4Attention {
             cfg.rope_head_dim as u32,
             false,
         )?;
+        debug_cuda_attention_stage(self.layer, "query", &arena.query, operators)?;
         record_attention_stage(
             operators,
             self.layer,
@@ -1418,6 +1475,7 @@ impl DeepSeekV4Attention {
             cfg.norm_eps,
             &mut arena.kv,
         )?;
+        debug_cuda_attention_stage(self.layer, "kv_norm", &arena.kv, operators)?;
         record_attention_stage(
             operators,
             self.layer,
@@ -1443,6 +1501,7 @@ impl DeepSeekV4Attention {
                 cfg.head_dim,
                 cfg.rope_head_dim,
             )?;
+        debug_cuda_attention_stage(self.layer, "kv", &arena.kv, operators)?;
         record_attention_stage(
             operators,
             self.layer,
@@ -1462,6 +1521,7 @@ impl DeepSeekV4Attention {
         let cfg = self.config;
         let rows = arena.positions.len();
         let rope_name = format!("rope_attn_L{}", self.layer);
+        debug_cuda_attention_stage(self.layer, "context", &arena.context, operators)?;
         let stage_start = operators.profile_start();
         operators.cuda_mut()?.rope_tail_rows_indexed_from_device(
             &rope_name,
@@ -1472,6 +1532,12 @@ impl DeepSeekV4Attention {
             cfg.head_dim as u32,
             cfg.rope_head_dim as u32,
             true,
+        )?;
+        debug_cuda_attention_stage(
+            self.layer,
+            "context_inverse_rope",
+            &arena.context,
+            operators,
         )?;
         record_attention_stage(
             operators,
@@ -1490,6 +1556,8 @@ impl DeepSeekV4Attention {
             &mut arena.linear_workspace,
             &mut arena.output,
         )?;
+        debug_cuda_attention_stage(self.layer, "latent", &arena.latent, operators)?;
+        debug_cuda_attention_stage(self.layer, "output", &arena.output, operators)?;
         record_attention_stage(
             operators,
             self.layer,
@@ -1962,6 +2030,50 @@ impl DeepSeekV4Attention {
                     Some(&arena.indexer_mask),
                     cfg.index_head_dim,
                 )?;
+            }
+
+            if main_compressed_lens.iter().all(|&length| length == 0)
+                && compressed_lens.iter().all(|&length| length == 0)
+            {
+                let attention_topk =
+                    window_lens
+                        .iter()
+                        .copied()
+                        .max()
+                        .ok_or_else(|| Error::Model {
+                            message: "packed compressed attention window lengths are empty".into(),
+                        })?;
+                let window_topk_len =
+                    rows.checked_mul(attention_topk)
+                        .ok_or_else(|| Error::Model {
+                            message: "packed compressed window top-k size overflow".into(),
+                        })?;
+                let mut window_topk = arena.window_topk.prefix(window_topk_len)?;
+                let stage_start = operators.profile_start();
+                operators
+                    .cuda_mut()?
+                    .paged_window_sparse_attention_rows_into(
+                        &arena.query,
+                        &arena.visible_lens,
+                        &mut window_topk,
+                        rows,
+                        self.layer,
+                        SparseAttentionSpec {
+                            heads: cfg.num_heads,
+                            head_dim: cfg.head_dim,
+                            topk: attention_topk,
+                            softmax_scale: (cfg.head_dim as f32).powf(-0.5),
+                            has_attention_sink: !self.payload.attention_sink.is_empty(),
+                        },
+                        &mut arena.context,
+                    )?;
+                record_attention_stage(
+                    operators,
+                    self.layer,
+                    DeepSeekV4AttentionProfileStage::SparseAttention,
+                    stage_start,
+                )?;
+                return Ok(());
             }
 
             if compressed.indexer.is_some() {

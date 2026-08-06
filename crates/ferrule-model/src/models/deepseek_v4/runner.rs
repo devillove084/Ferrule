@@ -3418,6 +3418,32 @@ impl DeepSeekV4Runner {
                         })?
                         .hc_input;
                     #[cfg(feature = "cuda")]
+                    if std::env::var("FERRULE_DEBUG_HC_LAYER")
+                        .ok()
+                        .and_then(|value| value.parse::<usize>().ok())
+                        == Some(layer_idx)
+                    {
+                        let values = self
+                            .operators
+                            .cuda_mut()?
+                            .ops
+                            .download_f32_buffer(hc_state)?;
+                        let sum = values.iter().copied().sum::<f32>();
+                        let sumsq = values.iter().map(|value| value * value).sum::<f32>();
+                        let absmax = values
+                            .iter()
+                            .map(|value| value.abs())
+                            .fold(0.0f32, f32::max);
+                        eprintln!(
+                            "hc layer={} sum={} sumsq={} absmax={} samples={:?}",
+                            layer_idx,
+                            sum,
+                            sumsq,
+                            absmax,
+                            &values[..values.len().min(4)]
+                        );
+                    }
+                    #[cfg(feature = "cuda")]
                     if let Some(proposal) = continuation.proposal_main_buffers.as_mut() {
                         self.operators
                             .cuda_mut()?

@@ -57,7 +57,10 @@ fn main() {
     let cutlass_root = implementations_root.join("cutlass");
 
     let cutlass_include = cutlass_dir.join("include");
+    let cutlass_tools_include = cutlass_dir.join("tools/util/include");
     let cutlass_system_include = format!("--system-include={}", cutlass_include.display());
+    let cutlass_tools_system_include =
+        format!("--system-include={}", cutlass_tools_include.display());
 
     let configure_implementation = |source: PathBuf| {
         let mut build = cc::Build::new();
@@ -70,6 +73,7 @@ fn main() {
             .include(&native_root)
             .include(&cutlass_root)
             .flag(&cutlass_system_include)
+            .flag(&cutlass_tools_system_include)
             .flag("-std=c++17")
             .flag("--expt-relaxed-constexpr")
             .flag("--expt-extended-lambda")
@@ -118,6 +122,7 @@ fn main() {
     // directives even though these implementations share no device symbols.
     configure_implementation(portable_root.join("entrypoints.cu")).compile("ferrule_cuda_core");
     configure_implementation(cutlass_root.join("entrypoints.cu")).compile("ferrule_cuda_cutlass");
+    println!("cargo:rustc-link-lib=dylib=cublasLt");
 }
 
 fn publish_cuda_driver_search_path() {

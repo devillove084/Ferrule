@@ -46,6 +46,7 @@ pub fn cmd_deepseek_v4_generate(
     max_tensor_mb: u64,
     expert_reader_max_slice_mb: u64,
     stop_at_eos: bool,
+    enable_native_proposals: bool,
     verbose_tokens: bool,
     chat_prompt: bool,
     json: bool,
@@ -61,6 +62,7 @@ pub fn cmd_deepseek_v4_generate(
         max_tensor_mb,
         expert_reader_max_slice_mb,
         stop_at_eos,
+        enable_native_proposals,
         verbose_tokens,
         chat_prompt,
         json,
@@ -80,6 +82,7 @@ async fn cmd_deepseek_v4_generate_async(
     max_tensor_mb: u64,
     expert_reader_max_slice_mb: u64,
     stop_at_eos: bool,
+    enable_native_proposals: bool,
     verbose_tokens: bool,
     chat_prompt: bool,
     json: bool,
@@ -137,8 +140,12 @@ async fn cmd_deepseek_v4_generate_async(
             runner,
             Box::new(schema),
             scheduler_config,
-            // Preserve this command's historical EOS behavior.
-            resident_driver_config(ctx_size, stop_at_eos),
+            // Preserve this command's historical EOS behavior while allowing
+            // target-only decode as an explicit correctness oracle.
+            ferrule_runtime::ResidentTopKDriverConfig {
+                enable_native_proposals,
+                ..resident_driver_config(ctx_size, stop_at_eos)
+            },
         )
     };
 
@@ -457,6 +464,7 @@ pub fn cmd_deepseek_v4_generate(
     _max_tensor_mb: u64,
     _expert_reader_max_slice_mb: u64,
     _stop_at_eos: bool,
+    _enable_native_proposals: bool,
     _verbose_tokens: bool,
     _chat_prompt: bool,
     _json: bool,

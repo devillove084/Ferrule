@@ -425,8 +425,7 @@ impl DeepSeekV4CudaLinear {
 
 #[cfg(feature = "cuda")]
 struct HcDeviceWeights {
-    /// Logical `[rows, K]` HC function repacked as `[K, rows]` on device.
-    function_col_major: ferrule_backend::cuda::context::CudaF32Buffer,
+    function_row_major: ferrule_backend::cuda::context::CudaF32Buffer,
     scale: ferrule_backend::cuda::context::CudaF32Buffer,
     base: ferrule_backend::cuda::context::CudaF32Buffer,
 }
@@ -2581,12 +2580,8 @@ impl DeepSeekV4CudaOperatorCache {
         config: HyperConnectionConfig,
     ) -> Result<HcDeviceWeights> {
         weights.validate(config)?;
-        let function_col_major = ferrule_backend::cuda::context::transpose_hc_function_for_device(
-            &weights.function,
-            config.mix_hc(),
-        )?;
         Ok(HcDeviceWeights {
-            function_col_major: self.ops.upload_f32_buffer(&function_col_major)?,
+            function_row_major: self.ops.upload_f32_buffer(&weights.function)?,
             scale: self.ops.upload_f32_buffer(&weights.scale)?,
             base: self.ops.upload_f32_buffer(&weights.base)?,
         })
@@ -3233,6 +3228,8 @@ impl DeepSeekV4CudaOperatorCache {
         config: HyperConnectionConfig,
         hidden: &mut ferrule_backend::cuda::context::CudaF32Buffer,
         normalized: &mut ferrule_backend::cuda::context::CudaF32Buffer,
+        mix: &mut ferrule_backend::cuda::context::CudaF32Buffer,
+        workspace: &mut ferrule_backend::cuda::context::CudaF32Buffer,
         pre: &mut ferrule_backend::cuda::context::CudaF32Buffer,
         post: &mut ferrule_backend::cuda::context::CudaF32Buffer,
         comb: &mut ferrule_backend::cuda::context::CudaF32Buffer,
@@ -3255,10 +3252,12 @@ impl DeepSeekV4CudaOperatorCache {
         };
         self.ops.hc_pre_rmsnorm_fp8_into(
             state,
-            &hw.function_col_major,
+            &hw.function_row_major,
             &hw.scale,
             &hw.base,
             rms_weight,
+            mix,
+            workspace,
             tokens,
             config.hc_mult,
             config.hidden_size,
@@ -4127,6 +4126,23 @@ impl DeepSeekV4CudaOperatorCache {
             continuation.tokens,
             continuation.routes_per_token,
         )?;
+        if std::env::var("FERRULE_DEBUG_ROUTER_LAYER")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            == Some(continuation.layer)
+        {
+            for (token, routes) in routes_by_token.iter().enumerate() {
+                eprintln!(
+                    "router layer={} token={} routes={:?}",
+                    continuation.layer,
+                    token,
+                    routes
+                        .iter()
+                        .map(|route| (route.expert, route.weight))
+                        .collect::<Vec<_>>()
+                );
+            }
+        }
         for routes in &routes_by_token {
             self.metrics.expert_selected = self
                 .metrics

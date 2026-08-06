@@ -126,6 +126,9 @@ pub(crate) enum Command {
         /// Do not stop when eos_token_id is generated.
         #[arg(long)]
         no_stop_eos: bool,
+        /// Disable model-native proposal generation and run target-only decode.
+        #[arg(long)]
+        no_speculative: bool,
         /// Print generated token ids/logits to stderr.
         #[arg(long)]
         verbose_tokens: bool,

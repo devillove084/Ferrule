@@ -264,7 +264,7 @@ struct RopeArgs {
 impl RopeArgs {
     fn with_inverse(mut self, inverse: u32) -> Self {
         self.inverse = inverse;
-        self.restore_bf16_boundary = inverse;
+        self.restore_bf16_boundary = 1;
         self
     }
 }
@@ -3296,10 +3296,10 @@ mod tests {
     }
 
     #[test]
-    fn rope_inverse_restores_bf16_boundary() {
+    fn rope_preserves_the_bf16_activation_boundary_in_both_directions() {
         let forward = RopeArgs::default().with_inverse(0);
         assert_eq!(forward.inverse, 0);
-        assert_eq!(forward.restore_bf16_boundary, 0);
+        assert_eq!(forward.restore_bf16_boundary, 1);
 
         let inverse = RopeArgs::default().with_inverse(1);
         assert_eq!(inverse.inverse, 1);

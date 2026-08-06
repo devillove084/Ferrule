@@ -36,7 +36,7 @@ static_assert(sizeof(FerruleCutlassFp8QueryAKvArgs) == 96,
               "Ferrule CUTLASS FP8 QueryA+KV ABI layout changed");
 static_assert(sizeof(FerruleCutlassBf16CompressorArgs) == 72,
               "Ferrule CUTLASS BF16 compressor ABI layout changed");
-static_assert(sizeof(FerruleCutlassHcProducerArgs) == 144,
+static_assert(sizeof(FerruleCutlassHcProducerArgs) == 168,
               "Ferrule CUTLASS HC producer ABI layout changed");
 static_assert(sizeof(FerruleCutlassSharedFfnArgs) == 160,
               "Ferrule CUTLASS shared FFN ABI layout changed");
@@ -129,21 +129,26 @@ FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassHcProducerArgs, layer_rms_eps, 28);
 FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassHcProducerArgs, reserved, 32);
 FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassHcProducerArgs, state_f32, 40);
 FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassHcProducerArgs,
-                              function_col_major_f32, 48);
+                              function_row_major_f32, 48);
 FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassHcProducerArgs, hc_scale_f32, 56);
 FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassHcProducerArgs, hc_base_f32, 64);
 FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassHcProducerArgs,
                               layer_rms_weight_f32, 72);
-FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassHcProducerArgs, hidden_f32, 80);
-FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassHcProducerArgs, normalized_f32, 88);
-FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassHcProducerArgs, packed_e4m3, 96);
-FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassHcProducerArgs, scales_ue8m0, 104);
-FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassHcProducerArgs, split_pre_f32, 112);
+FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassHcProducerArgs, mix_f32, 80);
+FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassHcProducerArgs, workspace, 88);
+FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassHcProducerArgs, workspace_bytes,
+                              96);
+FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassHcProducerArgs, hidden_f32, 104);
+FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassHcProducerArgs, normalized_f32,
+                              112);
+FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassHcProducerArgs, packed_e4m3, 120);
+FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassHcProducerArgs, scales_ue8m0, 128);
+FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassHcProducerArgs, split_pre_f32, 136);
 FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassHcProducerArgs, split_post_f32,
-                              120);
+                              144);
 FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassHcProducerArgs, split_comb_f32,
-                              128);
-FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassHcProducerArgs, stream, 136);
+                              152);
+FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassHcProducerArgs, stream, 160);
 
 FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassSharedFfnArgs, input_fp8, 0);
 FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassSharedFfnArgs, input_ue8m0, 8);
@@ -443,9 +448,8 @@ FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassGroupedFp4MoeArgs, up_scale_ptrs,
 FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassGroupedFp4MoeArgs, down_ptrs, 144);
 FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassGroupedFp4MoeArgs, down_scale_ptrs,
                               152);
-FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassGroupedFp4MoeArgs, input_packed,
-                              160);
-FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassGroupedFp4MoeArgs, input_scales,
+FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassGroupedFp4MoeArgs, input_fp8, 160);
+FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassGroupedFp4MoeArgs, input_ue8m0,
                               168);
 FERRULE_CUTLASS_ASSERT_OFFSET(FerruleCutlassGroupedFp4MoeArgs, route_output,
                               176);
@@ -668,10 +672,10 @@ FERRULE_CUTLASS_ASSERT_SAME_OFFSET(FerruleCutlassGroupedFp4MoeArgs,
                                    down_scale_ptrs);
 FERRULE_CUTLASS_ASSERT_SAME_OFFSET(FerruleCutlassGroupedFp4MoeArgs,
                                    grouped_fp4_moe::GroupedFp4MoeArgs,
-                                   input_packed);
+                                   input_fp8);
 FERRULE_CUTLASS_ASSERT_SAME_OFFSET(FerruleCutlassGroupedFp4MoeArgs,
                                    grouped_fp4_moe::GroupedFp4MoeArgs,
-                                   input_scales);
+                                   input_ue8m0);
 FERRULE_CUTLASS_ASSERT_SAME_OFFSET(FerruleCutlassGroupedFp4MoeArgs,
                                    grouped_fp4_moe::GroupedFp4MoeArgs,
                                    route_output);
@@ -885,10 +889,13 @@ make_hc_producer_args(const FerruleCutlassHcProducerArgs &args) {
       args.layer_rms_eps,
       args.reserved,
       args.state_f32,
-      args.function_col_major_f32,
+      args.function_row_major_f32,
       args.hc_scale_f32,
       args.hc_base_f32,
       args.layer_rms_weight_f32,
+      args.mix_f32,
+      args.workspace,
+      args.workspace_bytes,
       args.hidden_f32,
       args.normalized_f32,
       args.packed_e4m3,
@@ -1126,8 +1133,8 @@ make_grouped_fp4_moe_args(const FerruleCutlassGroupedFp4MoeArgs &args) {
       args.up_scale_ptrs,
       args.down_ptrs,
       args.down_scale_ptrs,
-      args.input_packed,
-      args.input_scales,
+      args.input_fp8,
+      args.input_ue8m0,
       args.route_output,
       args.route_written,
       args.route_error,

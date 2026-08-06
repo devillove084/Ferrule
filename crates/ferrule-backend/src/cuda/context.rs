@@ -585,8 +585,9 @@ impl CudaRoutedExpertShape {
     pub fn validate(self) -> Result<()> {
         let dimensions = [self.input, self.intermediate, self.output];
         if dimensions.contains(&0)
-            || !self.input.is_multiple_of(32)
-            || !self.intermediate.is_multiple_of(32)
+            || !self.input.is_multiple_of(128)
+            || !self.intermediate.is_multiple_of(128)
+            || !self.output.is_multiple_of(64)
             || dimensions
                 .into_iter()
                 .any(|dimension| u32::try_from(dimension).is_err())
@@ -885,6 +886,29 @@ impl CudaPreparedRoutedExpert {
             down_weight: self.down.weight.cu_deviceptr(),
             down_scale: self.down_provider_scale.cu_deviceptr(),
         })
+    }
+
+    fn debug_buffers(&self) -> [(&'static str, &DeviceBuffer<u8>); 9] {
+        [
+            ("gate.weight.device", &self.gate.weight),
+            (
+                "gate.scale.device",
+                self.gate.scale.as_ref().expect("validated gate scale"),
+            ),
+            ("up.weight.device", &self.up.weight),
+            (
+                "up.scale.device",
+                self.up.scale.as_ref().expect("validated up scale"),
+            ),
+            ("down.weight.device", &self.down.weight),
+            (
+                "down.scale.device",
+                self.down.scale.as_ref().expect("validated down scale"),
+            ),
+            ("gate.scale.sfb", &self.gate_provider_scale),
+            ("up.scale.sfb", &self.up_provider_scale),
+            ("down.scale.sfb", &self.down_provider_scale),
+        ]
     }
 
     fn validate_storage(&self) -> Result<()> {
@@ -1345,13 +1369,6 @@ impl CudaArtifactLinearHandle {
         }
         Ok(())
     }
-
-    fn expert_slot_pointers(&self) -> Result<(u64, u64)> {
-        let scale = self.scale.as_ref().ok_or_else(|| Error::Internal {
-            message: "CUDA expert slot linear is missing its scale buffer".into(),
-        })?;
-        Ok((self.weight.cu_deviceptr(), scale.cu_deviceptr()))
-    }
 }
 
 /// Opaque f32 device buffer used by generic artifact operators.
@@ -1646,8 +1663,8 @@ pub struct CudaExpertGroupRoutePlan {
     route_written: DeviceBuffer<i32>,
     route_error: DeviceBuffer<i32>,
     resolve: CudaExpertRouteResolveWorkspace,
-    x_packed: DeviceBuffer<u8>,
-    x_scales: DeviceBuffer<u8>,
+    input_fp8: DeviceBuffer<u8>,
+    input_ue8m0: DeviceBuffer<u8>,
     cutlass_workspace: DeviceBuffer<u8>,
     max_experts: usize,
     route_capacity: usize,
@@ -2592,25 +2609,6 @@ impl CudaArtifactOperatorContext {
     /// Return free and total bytes for the device bound to this operator context.
     pub fn memory_info(&self) -> Result<(usize, usize)> {
         cu(self._ctx.memory_info())
-    }
-
-    pub fn expert_slot_pointers(
-        &self,
-        gate: &CudaArtifactLinearHandle,
-        up: &CudaArtifactLinearHandle,
-        down: &CudaArtifactLinearHandle,
-    ) -> Result<CudaExpertSlotPointers> {
-        let (gate_weight, gate_scale) = gate.expert_slot_pointers()?;
-        let (up_weight, up_scale) = up.expert_slot_pointers()?;
-        let (down_weight, down_scale) = down.expert_slot_pointers()?;
-        Ok(CudaExpertSlotPointers {
-            gate_weight,
-            gate_scale,
-            up_weight,
-            up_scale,
-            down_weight,
-            down_scale,
-        })
     }
 
     pub fn expert_slot_table(
@@ -5112,6 +5110,28 @@ impl CudaArtifactOperatorContext {
     /// The returned ticket retains all pinned sources until an event recorded
     /// after private layout preparation. No stream or scratch allocation is made.
     #[allow(clippy::too_many_arguments)]
+    pub fn debug_dump_prepared_routed_expert(
+        &self,
+        frame: &CudaPreparedRoutedExpert,
+        directory: &std::path::Path,
+        prefix: &str,
+    ) -> Result<()> {
+        self.check_capture_safe("routed-expert artifact debug dump")?;
+        frame.validate_storage()?;
+        std::fs::create_dir_all(directory).map_err(|source| Error::Internal {
+            message: format!("failed to create routed-expert artifact dump directory: {source}"),
+        })?;
+        for (name, buffer) in frame.debug_buffers() {
+            let values = cu(buffer.to_host_vec(&self.upload_stream))?;
+            std::fs::write(directory.join(format!("{prefix}.{name}.bin")), values).map_err(
+                |source| Error::Internal {
+                    message: format!("failed to write routed-expert artifact dump: {source}"),
+                },
+            )?;
+        }
+        Ok(())
+    }
+
     pub fn materialize_routed_expert_from_pinned_async(
         &self,
         frame: &mut CudaPreparedRoutedExpert,
@@ -6108,10 +6128,12 @@ impl CudaArtifactOperatorContext {
     pub fn hc_pre_rmsnorm_fp8_into<'a>(
         &self,
         state: &CudaF32Buffer,
-        function_col_major: &CudaF32Buffer,
+        function_row_major: &CudaF32Buffer,
         hc_scale: &CudaF32Buffer,
         hc_base: &CudaF32Buffer,
         layer_rms_weight: &CudaF32Buffer,
+        mix_output: &mut CudaF32Buffer,
+        workspace: &mut CudaF32Buffer,
         rows: usize,
         hc: usize,
         hidden_size: usize,
@@ -6129,10 +6151,12 @@ impl CudaArtifactOperatorContext {
         crate::cuda::cutlass::hc_producer(
             &self.stream,
             &state.buffer,
-            &function_col_major.buffer,
+            &function_row_major.buffer,
             &hc_scale.buffer,
             &hc_base.buffer,
             &layer_rms_weight.buffer,
+            &mut mix_output.buffer,
+            &mut workspace.buffer,
             &mut hidden_output.buffer,
             &mut normalized_output.buffer,
             &mut packed_output.x_packed,
@@ -9031,8 +9055,8 @@ impl CudaArtifactOperatorContext {
             route_written: self.zeroed_device_buffer::<i32>(route_capacity)?,
             route_error: self.zeroed_device_buffer::<i32>(1)?,
             resolve: self.expert_route_resolve_workspace(route_capacity, route_capacity)?,
-            x_packed: self.uninitialized_device_buffer::<u8>(total_input / 2)?,
-            x_scales: self.uninitialized_device_buffer::<u8>(total_input / 32)?,
+            input_fp8: self.uninitialized_device_buffer::<u8>(total_input)?,
+            input_ue8m0: self.uninitialized_device_buffer::<u8>(total_input / 128)?,
             cutlass_workspace,
             max_experts,
             route_capacity,
@@ -9074,17 +9098,17 @@ impl CudaArtifactOperatorContext {
                 ),
             });
         }
-        if !input_size.is_multiple_of(64) {
+        if !input_size.is_multiple_of(128) {
             return Err(Error::Internal {
                 message: format!(
-                    "CUDA expert group route input size must be a multiple of 64, got {input_size}"
+                    "CUDA expert group route input size must be a multiple of 128, got {input_size}"
                 ),
             });
         }
 
         let total_values = checked_u32(expected_len, "expert group route input", "elements")?;
         let quant_blocks = checked_u32(
-            expected_len / 32,
+            expected_len / 128,
             "expert group route input",
             "quantization blocks",
         )?;
@@ -9092,16 +9116,15 @@ impl CudaArtifactOperatorContext {
         let timing_enabled = self.observability.moe_timing;
         let phase_start = timing_enabled.then(Instant::now);
         self.launched(unsafe {
-            self.module.fp4_e2m1_e8m0_quantize_f32_packed(
+            self.module.fp8_e4m3fn_e8m0_quantize_f32_packed(
                 &self.stream,
                 LaunchConfig::for_num_elems(quant_blocks),
                 &input.buffer,
-                &mut plan.x_packed,
-                &mut plan.x_scales,
-                0,
+                &mut plan.input_fp8,
+                &mut plan.input_ue8m0,
                 total_values,
                 row_width,
-                32,
+                128,
             )
         })?;
         plan.input_prepared = true;
@@ -9510,8 +9533,8 @@ impl CudaArtifactOperatorContext {
             up_scale_ptrs: &up_scale_ptrs,
             down_ptrs: &down_ptrs,
             down_scale_ptrs: &down_scale_ptrs,
-            input_packed: &plan.x_packed,
-            input_scales: &plan.x_scales,
+            input_fp8: &plan.input_fp8,
+            input_ue8m0: &plan.input_ue8m0,
             route_output: &mut route_output.buffer,
             route_written: &mut route_written,
             route_error: &mut plan.route_error,

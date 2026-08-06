@@ -38,6 +38,59 @@ use super::operators::{DeepSeekV4LayerProfileStage, DeepSeekV4OperatorContext};
 #[cfg(feature = "cuda")]
 use super::sequence::{DeepSeekV4PagedKvBinding, DeepSeekV4SequenceMoeAccessEvent};
 
+#[cfg(feature = "cuda")]
+fn debug_cuda_stage(
+    layer: usize,
+    position: Option<usize>,
+    stage: &str,
+    buffer: &ferrule_backend::cuda::context::CudaF32Buffer,
+    operators: &mut DeepSeekV4OperatorContext,
+) -> Result<()> {
+    if std::env::var("FERRULE_DEBUG_STAGE_LAYER")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        != Some(layer)
+        || std::env::var("FERRULE_DEBUG_STAGE_POSITION")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .is_some_and(|expected| position != Some(expected))
+    {
+        return Ok(());
+    }
+    let values = operators.cuda_mut()?.ops.download_f32_buffer(buffer)?;
+    if let Some(directory) = std::env::var_os("FERRULE_DEBUG_STAGE_DUMP_DIR") {
+        std::fs::create_dir_all(&directory).map_err(|source| Error::Internal {
+            message: format!("failed to create stage dump directory: {source}"),
+        })?;
+        let path = std::path::PathBuf::from(directory).join(format!("layer_{layer}_{stage}.f32"));
+        if !path.exists() {
+            let bytes = values
+                .iter()
+                .flat_map(|value| value.to_ne_bytes())
+                .collect::<Vec<_>>();
+            std::fs::write(&path, bytes).map_err(|source| Error::Internal {
+                message: format!("failed to write stage dump {}: {source}", path.display()),
+            })?;
+        }
+    }
+    let sum = values.iter().copied().sum::<f32>();
+    let sumsq = values.iter().map(|value| value * value).sum::<f32>();
+    let absmax = values
+        .iter()
+        .map(|value| value.abs())
+        .fold(0.0f32, f32::max);
+    eprintln!(
+        "stage layer={} name={} sum={} sumsq={} absmax={} samples={:?}",
+        layer,
+        stage,
+        sum,
+        sumsq,
+        absmax,
+        &values[..values.len().min(4)]
+    );
+    Ok(())
+}
+
 pub struct DeepSeekV4Layer {
     pub layer: usize,
     pub hc_config: HyperConnectionConfig,
@@ -54,6 +107,7 @@ pub struct DeepSeekV4Layer {
 #[cfg(feature = "cuda")]
 pub(crate) struct DeepSeekV4PackedLayerContinuation {
     rows: usize,
+    position: Option<usize>,
     moe: DeepSeekV4CudaPackedMoeContinuation,
 }
 
@@ -456,10 +510,41 @@ impl DeepSeekV4Layer {
             self.hc_config,
             &mut arena.attn_hidden,
             &mut arena.attn_norm,
+            &mut arena.hc_mix,
+            &mut arena.hc_workspace,
             &mut arena.attn_pre,
             &mut arena.attn_post,
             &mut arena.attn_comb,
             &mut arena.hc_fp8_pack,
+        )?;
+        let debug_position = (rows == 1).then_some(positions[0]);
+        debug_cuda_stage(
+            self.layer,
+            debug_position,
+            "attn_hc_pre",
+            &arena.attn_hidden,
+            operators,
+        )?;
+        debug_cuda_stage(
+            self.layer,
+            debug_position,
+            "attn_hc_post_weights",
+            &arena.attn_post,
+            operators,
+        )?;
+        debug_cuda_stage(
+            self.layer,
+            debug_position,
+            "attn_hc_comb",
+            &arena.attn_comb,
+            operators,
+        )?;
+        debug_cuda_stage(
+            self.layer,
+            debug_position,
+            "attn_norm",
+            &arena.attn_norm,
+            operators,
         )?;
 
         let transition = arena
@@ -486,6 +571,13 @@ impl DeepSeekV4Layer {
             &mut arena.attention,
             transition,
         )?;
+        debug_cuda_stage(
+            self.layer,
+            debug_position,
+            "attention_output",
+            &arena.attention.output,
+            operators,
+        )?;
 
         operators.cuda_mut()?.hc_post_from_device_into(
             &arena.attention.output,
@@ -496,6 +588,13 @@ impl DeepSeekV4Layer {
             self.hc_config,
             &mut arena.after_attn,
         )?;
+        debug_cuda_stage(
+            self.layer,
+            debug_position,
+            "attention_hc_post",
+            &arena.after_attn,
+            operators,
+        )?;
 
         let ffn_fp8 = operators.cuda_mut()?.hc_pre_rmsnorm_fp8_into(
             self.layer,
@@ -505,10 +604,40 @@ impl DeepSeekV4Layer {
             self.hc_config,
             &mut arena.ffn_hidden,
             &mut arena.ffn_norm,
+            &mut arena.hc_mix,
+            &mut arena.hc_workspace,
             &mut arena.ffn_pre,
             &mut arena.ffn_post,
             &mut arena.ffn_comb,
             &mut arena.hc_fp8_pack,
+        )?;
+        debug_cuda_stage(
+            self.layer,
+            debug_position,
+            "ffn_hc_pre",
+            &arena.ffn_hidden,
+            operators,
+        )?;
+        debug_cuda_stage(
+            self.layer,
+            debug_position,
+            "ffn_hc_post_weights",
+            &arena.ffn_post,
+            operators,
+        )?;
+        debug_cuda_stage(
+            self.layer,
+            debug_position,
+            "ffn_hc_comb",
+            &arena.ffn_comb,
+            operators,
+        )?;
+        debug_cuda_stage(
+            self.layer,
+            debug_position,
+            "ffn_norm",
+            &arena.ffn_norm,
+            operators,
         )?;
 
         let moe = operators
@@ -531,7 +660,19 @@ impl DeepSeekV4Layer {
                 &mut arena.attention.linear_workspace,
                 &mut arena.moe_output,
             )?;
-        let mut continuation = DeepSeekV4PackedLayerContinuation { rows, moe };
+        let debug_position = (rows == 1).then_some(positions[0]);
+        debug_cuda_stage(
+            self.layer,
+            debug_position,
+            "shared_moe_output",
+            &arena.moe_output,
+            operators,
+        )?;
+        let mut continuation = DeepSeekV4PackedLayerContinuation {
+            rows,
+            position: debug_position,
+            moe,
+        };
         operators
             .cuda_mut()?
             .prime_routed_moe_prefill_batch(&mut continuation.moe)?;
@@ -548,7 +689,11 @@ impl DeepSeekV4Layer {
         hc_state_dev: &mut ferrule_backend::cuda::context::CudaF32Buffer,
         operators: &mut DeepSeekV4OperatorContext,
     ) -> Result<DeepSeekV4PackedLayerProgress> {
-        let DeepSeekV4PackedLayerContinuation { rows, moe } = continuation;
+        let DeepSeekV4PackedLayerContinuation {
+            rows,
+            position,
+            moe,
+        } = continuation;
         match operators
             .cuda_mut()?
             .resume_routed_moe_prefill_batch_from_device_into(
@@ -561,12 +706,28 @@ impl DeepSeekV4Layer {
                 &mut arena.moe_route_output,
                 &mut arena.moe_output,
             )? {
-            DeepSeekV4CudaPackedMoeProgress::Waiting(moe) => {
-                Ok(DeepSeekV4PackedLayerProgress::Waiting(
-                    DeepSeekV4PackedLayerContinuation { rows, moe },
-                ))
-            }
+            DeepSeekV4CudaPackedMoeProgress::Waiting(moe) => Ok(
+                DeepSeekV4PackedLayerProgress::Waiting(DeepSeekV4PackedLayerContinuation {
+                    rows,
+                    position,
+                    moe,
+                }),
+            ),
             DeepSeekV4CudaPackedMoeProgress::Complete { events, leases } => {
+                debug_cuda_stage(
+                    self.layer,
+                    position,
+                    "route_output",
+                    &arena.moe_route_output,
+                    operators,
+                )?;
+                debug_cuda_stage(
+                    self.layer,
+                    position,
+                    "moe_output",
+                    &arena.moe_output,
+                    operators,
+                )?;
                 operators.cuda_mut()?.hc_post_from_device_into(
                     &arena.moe_output,
                     &arena.after_attn,
@@ -576,6 +737,42 @@ impl DeepSeekV4Layer {
                     self.hc_config,
                     &mut arena.layer_output,
                 )?;
+                debug_cuda_stage(
+                    self.layer,
+                    position,
+                    "layer_output",
+                    &arena.layer_output,
+                    operators,
+                )?;
+                if std::env::var("FERRULE_DEBUG_ALL_LAYER_OUTPUT_POSITION")
+                    .ok()
+                    .and_then(|value| value.parse::<usize>().ok())
+                    == position
+                {
+                    let values = operators
+                        .cuda_mut()?
+                        .ops
+                        .download_f32_buffer(&arena.layer_output)?;
+                    let directory = std::env::var_os("FERRULE_DEBUG_ALL_LAYER_OUTPUT_DIR")
+                        .ok_or_else(|| Error::Internal {
+                            message: "all-layer output dump directory is unset".into(),
+                        })?;
+                    std::fs::create_dir_all(&directory).map_err(|source| Error::Internal {
+                        message: format!("failed to create all-layer dump directory: {source}"),
+                    })?;
+                    let path = std::path::PathBuf::from(directory)
+                        .join(format!("layer_{}_output.f32", self.layer));
+                    let bytes = values
+                        .iter()
+                        .flat_map(|value| value.to_ne_bytes())
+                        .collect::<Vec<_>>();
+                    std::fs::write(&path, bytes).map_err(|source| Error::Internal {
+                        message: format!(
+                            "failed to write all-layer dump {}: {source}",
+                            path.display()
+                        ),
+                    })?;
+                }
 
                 std::mem::swap(hc_state_dev, &mut arena.layer_output);
                 Ok(DeepSeekV4PackedLayerProgress::Complete { events, leases })
@@ -642,6 +839,8 @@ impl DeepSeekV4Layer {
             self.hc_config,
             &mut arena.attn_hidden,
             &mut arena.attn_norm,
+            &mut arena.hc_mix,
+            &mut arena.hc_workspace,
             &mut arena.attn_pre,
             &mut arena.attn_post,
             &mut arena.attn_comb,
@@ -673,6 +872,8 @@ impl DeepSeekV4Layer {
             self.hc_config,
             &mut arena.ffn_hidden,
             &mut arena.ffn_norm,
+            &mut arena.hc_mix,
+            &mut arena.hc_workspace,
             &mut arena.ffn_pre,
             &mut arena.ffn_post,
             &mut arena.ffn_comb,
@@ -965,6 +1166,8 @@ pub(crate) struct DeepSeekV4LayerArena {
     attn_post: ferrule_backend::cuda::context::CudaF32Buffer,
     attn_comb: ferrule_backend::cuda::context::CudaF32Buffer,
     attn_norm: ferrule_backend::cuda::context::CudaF32Buffer,
+    hc_mix: ferrule_backend::cuda::context::CudaF32Buffer,
+    hc_workspace: ferrule_backend::cuda::context::CudaF32Buffer,
     hc_fp8_pack: ferrule_backend::cuda::context::CudaFp8ActivationPack,
     after_attn: ferrule_backend::cuda::context::CudaF32Buffer,
     ffn_hidden: ferrule_backend::cuda::context::CudaF32Buffer,
@@ -1068,6 +1271,14 @@ impl DeepSeekV4LayerArena {
             attn_post: operators.cuda_mut()?.ops.zero_f32_buffer(rows * hc)?,
             attn_comb: operators.cuda_mut()?.ops.zero_f32_buffer(rows * comb)?,
             attn_norm: operators.cuda_mut()?.ops.zero_f32_buffer(rows * hidden)?,
+            hc_mix: operators
+                .cuda_mut()?
+                .ops
+                .zero_f32_buffer(rows * config.mix_hc())?,
+            hc_workspace: operators
+                .cuda_mut()?
+                .ops
+                .zero_f32_buffer(rows * config.mix_hc() * 64 + 1)?,
             hc_fp8_pack: operators
                 .cuda_mut()?
                 .ops

@@ -415,9 +415,9 @@ __global__ void quantize_kernel(FerruleCoreQuantizeArgs args) {
   if (args.kind == FERRULE_CORE_QUANTIZE_FP8_IN_PLACE ||
       args.kind == FERRULE_CORE_QUANTIZE_FP8_NON_ROPE_IN_PLACE) {
     for (uint32_t index = begin; index < end; ++index) {
-      values[index] =
+      values[index] = bf16_round(
           fp8_quantized(clamp_value(values[index] / scale, -448.0f, 448.0f)) *
-          scale;
+          scale);
     }
   } else if (args.kind == FERRULE_CORE_QUANTIZE_FP8_PACKED) {
     uint8_t *packed = pointer<uint8_t>(args.packed);
@@ -643,28 +643,65 @@ __global__ void embedding_kernel(FerruleCoreEmbeddingArgs args) {
 }
 
 __global__ void norm_kernel(FerruleCoreNormArgs args) {
-  const uint32_t row = blockIdx.x * blockDim.x + threadIdx.x;
+  const uint32_t row = blockIdx.x;
   if (row >= args.rows || args.width == 0) {
     return;
   }
   const float *input = const_pointer<float>(args.input);
-  float sum = 0.0f;
   const uint64_t base = static_cast<uint64_t>(row) * args.width;
-  for (uint32_t column = 0; column < args.width; ++column) {
+  const bool head_rows = args.kind == FERRULE_CORE_NORM_HEAD_ROWS;
+  float sum = 0.0f;
+  for (uint32_t column = threadIdx.x; column < args.width;
+       column += blockDim.x) {
     const float value = input[base + column];
-    sum += value * value;
+    const float square = value * value;
+    sum += head_rows ? bf16_round(square) : square;
   }
-  const float inverse_rms = rsqrtf(sum / args.width + args.epsilon);
+
+  constexpr uint32_t kWarpSize = 32;
+  constexpr uint32_t kWarpCount = kBlock / kWarpSize;
+  __shared__ float warp_sums[kWarpCount];
+  __shared__ float inverse_rms_shared;
+  for (uint32_t offset = kWarpSize / 2; offset != 0; offset /= 2) {
+    sum += __shfl_down_sync(0xffffffffu, sum, offset);
+  }
+  const uint32_t lane = threadIdx.x % kWarpSize;
+  const uint32_t warp = threadIdx.x / kWarpSize;
+  if (lane == 0) {
+    warp_sums[warp] = sum;
+  }
+  __syncthreads();
+  if (warp == 0) {
+    sum = lane < kWarpCount ? warp_sums[lane] : 0.0f;
+    for (uint32_t offset = kWarpSize / 2; offset != 0; offset /= 2) {
+      sum += __shfl_down_sync(0xffffffffu, sum, offset);
+    }
+    if (lane == 0) {
+      if (head_rows) {
+        const float mean = bf16_round(sum / args.width);
+        const float mean_with_epsilon = bf16_round(mean + args.epsilon);
+        inverse_rms_shared = bf16_round(rsqrtf(mean_with_epsilon));
+      } else {
+        inverse_rms_shared = rsqrtf(sum / args.width + args.epsilon);
+      }
+      if (args.kind == FERRULE_CORE_NORM_COMPUTE_RMS) {
+        pointer<float>(args.output)[row] = inverse_rms_shared;
+      }
+    }
+  }
+  __syncthreads();
   if (args.kind == FERRULE_CORE_NORM_COMPUTE_RMS) {
-    pointer<float>(args.output)[row] = inverse_rms;
     return;
   }
+
   float *output = pointer<float>(args.output);
   const float *weight = const_pointer<float>(args.weight);
-  for (uint32_t column = 0; column < args.width; ++column) {
+  for (uint32_t column = threadIdx.x; column < args.width;
+       column += blockDim.x) {
     const float affine =
         args.kind == FERRULE_CORE_NORM_HEAD_ROWS ? 1.0f : weight[column];
-    output[base + column] = input[base + column] * inverse_rms * affine;
+    output[base + column] =
+        bf16_round(input[base + column] * inverse_rms_shared * affine);
   }
 }
 
@@ -1503,7 +1540,7 @@ __global__ void moe_kernel(FerruleCoreMoeArgs args) {
              row];
       }
     }
-    pointer<float>(args.output)[output] = result;
+    pointer<float>(args.output)[index] = bf16_round(result);
   } else if (args.kind == FERRULE_CORE_MOE_REDUCE_ROUTES ||
              args.kind == FERRULE_CORE_MOE_REDUCE_EXPERT_GROUP_ROUTES) {
     const uint64_t total = static_cast<uint64_t>(args.tokens) * args.hidden;
@@ -1531,7 +1568,7 @@ __global__ void moe_kernel(FerruleCoreMoeArgs args) {
       result += const_pointer<float>(
           args.route_output)[static_cast<uint64_t>(route) * args.hidden + row];
     }
-    pointer<float>(args.output)[index] = result;
+    pointer<float>(args.output)[index] = bf16_round(result);
   }
 }
 
@@ -1551,22 +1588,23 @@ __global__ void hc_post_kernel(FerruleCoreHcArgs args) {
       static_cast<uint64_t>(token) * args.hc * args.hidden_size;
   float residual = 0.0f;
   for (uint32_t input_copy = 0; input_copy < args.hc; ++input_copy) {
-    residual +=
+    const float product = __fmul_rn(
         const_pointer<float>(args.split_comb)
             [(static_cast<uint64_t>(token) * args.hc + input_copy) * args.hc +
-             copy] *
+             copy],
         const_pointer<float>(args.residual)[state_base +
                                             static_cast<uint64_t>(input_copy) *
                                                 args.hidden_size +
-                                            dimension];
+                                            dimension]);
+    residual = __fadd_rn(residual, product);
   }
-  pointer<float>(args.output)[index] =
+  const float update = __fmul_rn(
       const_pointer<float>(
-          args.split_post)[static_cast<uint64_t>(token) * args.hc + copy] *
-          const_pointer<float>(
-              args.hidden)[static_cast<uint64_t>(token) * args.hidden_size +
-                           dimension] +
-      residual;
+          args.split_post)[static_cast<uint64_t>(token) * args.hc + copy],
+      const_pointer<float>(
+          args.hidden)[static_cast<uint64_t>(token) * args.hidden_size +
+                       dimension]);
+  pointer<float>(args.output)[index] = bf16_round(__fadd_rn(update, residual));
 }
 
 __global__ void hc_mean_scatter_kernel(FerruleCoreHcArgs args) {
@@ -1756,7 +1794,7 @@ __global__ void hc_kernel(FerruleCoreHcArgs args) {
     }
     pointer<float>(
         args.hidden)[static_cast<uint64_t>(token) * args.hidden_size +
-                     dimension] = result;
+                     dimension] = bf16_round(result);
   }
 }
 
@@ -1874,8 +1912,7 @@ extern "C" int32_t ferrule_core_norm_launch(const FerruleCoreNormArgs *args) {
   if (!valid(args)) {
     return static_cast<int32_t>(cudaErrorInvalidValue);
   }
-  norm_kernel<<<blocks_for(args->rows), kBlock, 0, stream(args->stream)>>>(
-      *args);
+  norm_kernel<<<args->rows, kBlock, 0, stream(args->stream)>>>(*args);
   return launch_status();
 }
 

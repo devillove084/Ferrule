@@ -4,8 +4,7 @@
 
 use ferrule_backend::cuda::CudaContext;
 use ferrule_backend::cuda::context::{
-    CudaArtifactLinearShape, CudaArtifactOperatorContext, CudaExpertSlotInstallTarget,
-    CudaExpertSlotPointers,
+    CudaArtifactOperatorContext, CudaExpertSlotInstallTarget, CudaExpertSlotPointers,
 };
 use std::sync::{Mutex, MutexGuard, mpsc};
 
@@ -29,26 +28,18 @@ fn stable_slot_table_resolves_residents_misses_and_reuse_generation() {
         return;
     }
 
-    const WIDTH: usize = 32;
     let context = CudaArtifactOperatorContext::new().expect("CUDA artifact context");
-    let shape = CudaArtifactLinearShape::Fp4E2M1PackedWithE8M0Scale {
-        out_features: WIDTH,
-        in_features: WIDTH,
+    // These tests exercise slot generations and route metadata only. The
+    // addresses are never dereferenced; execution tests bind materialized
+    // CudaPreparedRoutedExpert frames with provider-private scale layouts.
+    let pointers = CudaExpertSlotPointers {
+        gate_weight: 16,
+        gate_scale: 32,
+        up_weight: 48,
+        up_scale: 64,
+        down_weight: 80,
+        down_scale: 96,
     };
-    let weight = vec![0x22; WIDTH * WIDTH / 2];
-    let scale = vec![127; WIDTH * WIDTH / 32];
-    let gate = context
-        .upload_artifact_linear(shape, &weight, &scale)
-        .expect("upload gate");
-    let up = context
-        .upload_artifact_linear(shape, &weight, &scale)
-        .expect("upload up");
-    let down = context
-        .upload_artifact_linear(shape, &weight, &scale)
-        .expect("upload down");
-    let pointers = context
-        .expert_slot_pointers(&gate, &up, &down)
-        .expect("expert pointers");
 
     let mut table = context.expert_slot_table(4, 1).expect("slot table");
     context.reset_counters();
@@ -414,30 +405,20 @@ fn device_group_route_plan_compacts_active_groups_indptr_and_routes() {
         return;
     }
 
-    const WIDTH: usize = 64;
+    const WIDTH: usize = 128;
     const TOKENS: usize = 7;
     const ROUTES_PER_TOKEN: usize = 3;
     const ROUTES: usize = TOKENS * ROUTES_PER_TOKEN;
     const RESIDENT_SLOT_CAPACITY: usize = 16;
     let context = CudaArtifactOperatorContext::new().expect("CUDA artifact context");
-    let shape = CudaArtifactLinearShape::Fp4E2M1PackedWithE8M0Scale {
-        out_features: WIDTH,
-        in_features: WIDTH,
+    let pointers = CudaExpertSlotPointers {
+        gate_weight: 16,
+        gate_scale: 32,
+        up_weight: 48,
+        up_scale: 64,
+        down_weight: 80,
+        down_scale: 96,
     };
-    let weight = vec![0x22; WIDTH * WIDTH / 2];
-    let scale = vec![127; WIDTH * WIDTH / 32];
-    let gate = context
-        .upload_artifact_linear(shape, &weight, &scale)
-        .expect("upload gate");
-    let up = context
-        .upload_artifact_linear(shape, &weight, &scale)
-        .expect("upload up");
-    let down = context
-        .upload_artifact_linear(shape, &weight, &scale)
-        .expect("upload down");
-    let pointers = context
-        .expert_slot_pointers(&gate, &up, &down)
-        .expect("expert pointers");
     let mut table = context
         .expert_slot_table(RESIDENT_SLOT_CAPACITY, RESIDENT_SLOT_CAPACITY)
         .expect("slot table");
@@ -498,21 +479,33 @@ fn device_group_route_plan_compacts_active_groups_indptr_and_routes() {
         .expect("download compact group route plan");
     assert_eq!(grouping.host, host);
     assert!(!grouping.dispatch_error);
+    let active_groups = host.active_group_count;
     assert_eq!(
-        grouping.active_expert_slots,
-        vec![expert_one.slot, expert_two.slot]
+        &grouping.active_expert_slots[..active_groups],
+        &[expert_one.slot, expert_two.slot]
+    );
+    assert!(
+        grouping.active_expert_slots[active_groups..]
+            .iter()
+            .all(|&slot| slot == -1)
     );
     assert_eq!(
-        grouping.active_group_generations,
-        vec![expert_one.generation, expert_two.generation]
+        &grouping.active_group_generations[..active_groups],
+        &[expert_one.generation, expert_two.generation]
     );
-    assert_eq!(grouping.expert_route_indptr, vec![0, 8, 17]);
-    assert_eq!(grouping.expert_route_counts, vec![8, 9]);
-    assert_eq!(grouping.route_indices.len(), host.total_routed_rows);
-    assert_eq!(grouping.route_token_indices.len(), host.total_routed_rows);
-    assert_eq!(grouping.route_weights.len(), host.total_routed_rows);
+    assert_eq!(
+        &grouping.expert_route_indptr[..active_groups + 1],
+        &[0, 8, 17]
+    );
+    assert_eq!(&grouping.expert_route_counts[..active_groups], &[8, 9]);
+    assert!(grouping.route_indices.len() >= host.total_routed_rows);
+    assert!(grouping.route_token_indices.len() >= host.total_routed_rows);
+    assert!(grouping.route_weights.len() >= host.total_routed_rows);
 
-    for (group, &slot) in grouping.active_expert_slots.iter().enumerate() {
+    for (group, &slot) in grouping.active_expert_slots[..active_groups]
+        .iter()
+        .enumerate()
+    {
         let start = grouping.expert_route_indptr[group] as usize;
         let end = grouping.expert_route_indptr[group + 1] as usize;
         let mut compact_routes = Vec::with_capacity(end - start);

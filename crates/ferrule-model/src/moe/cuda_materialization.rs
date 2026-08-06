@@ -7,6 +7,7 @@
 #![cfg(feature = "cuda")]
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use ferrule_backend::cuda::context::{
@@ -674,6 +675,24 @@ fn cancel_observation_matches_physical_state<Read, Host, Upload, Frame, Install>
         )
 }
 
+fn debug_expert_artifact_directory(expert: ExpertId) -> Option<PathBuf> {
+    (expert.layer == 0 && matches!(expert.expert, 127 | 182))
+        .then(|| std::env::var_os("FERRULE_DEBUG_EXPERT_ARTIFACT_DIR"))
+        .flatten()
+        .map(PathBuf::from)
+}
+
+fn write_debug_artifact(path: &Path, bytes: &[u8]) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|source| Error::Internal {
+            message: format!("failed to create routed-expert artifact dump directory: {source}"),
+        })?;
+    }
+    std::fs::write(path, bytes).map_err(|source| Error::Internal {
+        message: format!("failed to write routed-expert artifact dump: {source}"),
+    })
+}
+
 struct PinnedExpertLinear {
     matrix: ExpertMatrixKind,
     format: ExpertLinearFormat,
@@ -1324,6 +1343,9 @@ impl CudaExpertMaterializationProvider {
     }
 
     fn submit_bundle_upload(&self, bundle: PinnedExpertBundle) -> Result<CudaExpertUploadTicket> {
+        if let Some(directory) = debug_expert_artifact_directory(bundle.expert) {
+            bundle.debug_dump_pinned(&directory)?;
+        }
         let mut frame = self.allocate_frame(&bundle)?;
         let PinnedExpertBundle {
             gate,
@@ -1568,6 +1590,29 @@ impl CudaExpertMaterializationProvider {
         } else {
             ferrule_backend::cuda::context::CudaExpertSlotInstallTarget::Empty
         };
+        if let Some(directory) = debug_expert_artifact_directory(operation.expert) {
+            let text = format!(
+                "slot={} generation={} gate_weight={:#x} gate_scale={:#x} up_weight={:#x} up_scale={:#x} down_weight={:#x} down_scale={:#x}\n",
+                expected.slot.get(),
+                expected.generation.get(),
+                pointers.gate_weight,
+                pointers.gate_scale,
+                pointers.up_weight,
+                pointers.up_scale,
+                pointers.down_weight,
+                pointers.down_scale,
+            );
+            if let Err(error) = write_debug_artifact(
+                &directory.join(format!(
+                    "layer{}.expert{}.install-submit.txt",
+                    operation.expert.layer, operation.expert.expert
+                )),
+                text.as_bytes(),
+            ) {
+                shared.free_frames.push(frame);
+                return Err(CompletionOutcome::Failed(protocol_failure(error)));
+            }
+        }
         let physical = self.ops.submit_expert_slot_install(
             shared
                 .tables
@@ -2037,6 +2082,32 @@ impl CudaExpertMaterializationProvider {
                         let query_error = completion.err();
                         match ticket.drain_into_frame() {
                             Ok(frame) => {
+                                if let Some(directory) =
+                                    debug_expert_artifact_directory(operation.expert)
+                                {
+                                    let prefix = format!(
+                                        "layer{}.expert{}",
+                                        operation.expert.layer, operation.expert.expert
+                                    );
+                                    if let Err(error) = self.ops.debug_dump_prepared_routed_expert(
+                                        &frame.expert,
+                                        &directory,
+                                        &prefix,
+                                    ) {
+                                        let _ = self.finish_terminal_operation(
+                                            operation_id,
+                                            operation,
+                                            Some(MaterializationOperationState::UploadReady(frame)),
+                                            Some((
+                                                LoadStage::UploadSubmitted,
+                                                CompletionOutcome::Failed(protocol_failure(error)),
+                                                0,
+                                            )),
+                                            true,
+                                        );
+                                        return;
+                                    }
+                                }
                                 Self::mark_source_stale(&mut operation);
                                 if let Some(outcome) = operation.pending_terminal.take() {
                                     let _ = self.finish_terminal_operation(
@@ -3175,6 +3246,21 @@ impl Drop for CudaExpertMaterializationProvider {
 }
 
 impl PinnedExpertBundle {
+    fn debug_dump_pinned(&self, directory: &Path) -> Result<()> {
+        let prefix = format!("layer{}.expert{}", self.expert.layer, self.expert.expert);
+        for (matrix, linear) in [("gate", &self.gate), ("up", &self.up), ("down", &self.down)] {
+            write_debug_artifact(
+                &directory.join(format!("{prefix}.{matrix}.weight.pinned.bin")),
+                linear.weight.as_slice(),
+            )?;
+            write_debug_artifact(
+                &directory.join(format!("{prefix}.{matrix}.scale.pinned.bin")),
+                linear.scale.as_slice(),
+            )?;
+        }
+        Ok(())
+    }
+
     fn from_payload(payload: PinnedExpertArtifactPayload) -> Result<Self> {
         let expert = payload.expert;
         let mut grouped = BTreeMap::<

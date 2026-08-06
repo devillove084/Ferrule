@@ -1,0 +1,1 @@
+slot=127 generation=1 gate_weight=0x72b65bb80000 gate_scale=0x72ae98380000 up_weight=0x72b65bfc0000 up_scale=0x72ae983c0000 down_weight=0x72b65c400000 down_scale=0x72ae98400000

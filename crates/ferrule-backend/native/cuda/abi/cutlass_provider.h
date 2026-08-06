@@ -88,10 +88,13 @@ typedef struct FerruleCutlassHcProducerArgs {
   uint32_t reserved;
 
   uint64_t state_f32;
-  uint64_t function_col_major_f32;
+  uint64_t function_row_major_f32;
   uint64_t hc_scale_f32;
   uint64_t hc_base_f32;
   uint64_t layer_rms_weight_f32;
+  uint64_t mix_f32;
+  uint64_t workspace;
+  uint64_t workspace_bytes;
   uint64_t hidden_f32;
   uint64_t normalized_f32;
   uint64_t packed_e4m3;
@@ -360,8 +363,8 @@ typedef struct FerruleCutlassGroupedFp4MoeArgs {
   uint64_t down_ptrs;
   uint64_t down_scale_ptrs;
 
-  uint64_t input_packed;
-  uint64_t input_scales;
+  uint64_t input_fp8;
+  uint64_t input_ue8m0;
 
   uint64_t route_output;
   uint64_t route_written;

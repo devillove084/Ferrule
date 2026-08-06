@@ -97,6 +97,20 @@ inline ValidationResult validate(const Args &args) noexcept {
 
 namespace detail {
 
+__device__ __forceinline__ std::uint16_t f32_to_bf16_rne(float value) {
+  std::uint32_t bits = __float_as_uint(value);
+  if ((bits & 0x7fffffffu) > 0x7f800000u) {
+    return static_cast<std::uint16_t>((bits >> 16) | 0x0040u);
+  }
+  const std::uint32_t bias = 0x7fffu + ((bits >> 16) & 1u);
+  return static_cast<std::uint16_t>((bits + bias) >> 16);
+}
+
+__device__ __forceinline__ float bf16_round(float value) {
+  return __uint_as_float(static_cast<std::uint32_t>(f32_to_bf16_rne(value))
+                         << 16);
+}
+
 constexpr std::uint32_t kTileM = kCtaRows;
 constexpr std::uint32_t kTileN = 16;
 constexpr std::uint32_t kScaleK = 128;
@@ -389,12 +403,13 @@ struct QueryAKvCollective {
       if (row < args.m && channel < args.n_query_a) {
         args.query_a_output_f32[static_cast<std::uint64_t>(row) *
                                     args.n_query_a +
-                                channel] = query_a_accumulator[element];
+                                channel] =
+            bf16_round(query_a_accumulator[element]);
       }
       if constexpr (DualProjection) {
         if (row < args.m && channel < args.n_kv) {
           args.kv_output_f32[static_cast<std::uint64_t>(row) * args.n_kv +
-                             channel] = kv_accumulator[element];
+                             channel] = bf16_round(kv_accumulator[element]);
         }
       }
     }

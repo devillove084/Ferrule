@@ -10,24 +10,29 @@
 
 #include "grouped_fp4_gemm.cuh"
 
+#include <cuda_fp8.h>
 #include <cuda_runtime.h>
 
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <limits>
+#include <string>
 #include <type_traits>
+#include <vector>
 
 namespace ferrule::cuda::cutlass::architectures::sm103::grouped_fp4_moe {
 
 inline constexpr std::uint32_t kPrepareThreads = 128;
-inline constexpr std::uint32_t kQuantThreads = 32;
+inline constexpr std::uint32_t kQuantThreads = 128;
 inline constexpr std::uint32_t kScatterThreads = 256;
 // The 1SM and 2SM reference kernels use M tiles of 128 and 256 respectively.
 // Their midpoint is a neutral default; providers may tune this crossover.
 inline constexpr std::uint32_t kDefault2SmMinRows = 192;
-inline constexpr std::size_t kWorkspaceAlignment =
-    kCutlassWorkspaceAlignment;
+inline constexpr std::size_t kWorkspaceAlignment = kCutlassWorkspaceAlignment;
 
 // Backend-private POD. All addresses refer to device-accessible memory. Ferrule
 // core is the trusted producer of compact device metadata and keeps slot
@@ -68,10 +73,10 @@ struct GroupedFp4MoeArgs {
   std::uint64_t down_ptrs{};        // uint64[slot_capacity]
   std::uint64_t down_scale_ptrs{};  // uint64[slot_capacity]
 
-  // Full-token linear MXFP4: packed [num_tokens,input_size/2], scales
-  // [num_tokens,input_size/32].
-  std::uint64_t input_packed{};
-  std::uint64_t input_scales{};
+  // Full-token FP8 activation: E4M3 [num_tokens,input_size], UE8M0 scales
+  // [num_tokens,input_size/128].
+  std::uint64_t input_fp8{};
+  std::uint64_t input_ue8m0{};
 
   // Route-major output and status arrays.
   std::uint64_t route_output{};  // float[num_routes,hidden_size]
@@ -105,15 +110,15 @@ struct WorkspacePlan {
   std::size_t gathered_x_sfa_offset{};
   std::size_t gathered_x_sfa_bytes{};
   std::size_t gathered_x_sfa_group_stride{};
-  std::size_t gate_up_f32_offset{};
-  std::size_t gate_up_f32_bytes{};
-  std::size_t hidden_packed_offset{};
-  std::size_t hidden_packed_bytes{};
+  std::size_t gate_up_bf16_offset{};
+  std::size_t gate_up_bf16_bytes{};
+  std::size_t hidden_fp8_offset{};
+  std::size_t hidden_fp8_bytes{};
   std::size_t hidden_sfa_offset{};
   std::size_t hidden_sfa_bytes{};
   std::size_t hidden_sfa_group_stride{};
-  std::size_t down_f32_offset{};
-  std::size_t down_f32_bytes{};
+  std::size_t down_bf16_offset{};
+  std::size_t down_bf16_bytes{};
   std::size_t cutlass_offset{};
   std::size_t cutlass_bytes{};
   std::size_t total_bytes{};
@@ -121,7 +126,8 @@ struct WorkspacePlan {
   bool valid() const noexcept { return total_bytes != 0; }
 };
 
-static_assert(std::is_standard_layout<GroupedFp4MoeArgs>::value, "GroupedFp4MoeArgs POD");
+static_assert(std::is_standard_layout<GroupedFp4MoeArgs>::value,
+              "GroupedFp4MoeArgs POD");
 static_assert(std::is_trivially_copyable<GroupedFp4MoeArgs>::value,
               "GroupedFp4MoeArgs must be trivially copyable");
 static_assert(sizeof(GroupedFp4MoeArgs) == 200u);
@@ -213,10 +219,11 @@ inline bool scalar_args_valid(GroupedFp4MoeArgs const &args,
          args.num_tokens != 0 && args.num_routes != 0 && args.input_size != 0 &&
          args.input_size <= 0x7fffffffu && args.intermediate_size != 0 &&
          args.intermediate_size <= 0x7fffffffu && args.hidden_size != 0 &&
-         args.hidden_size <= 0x7fffffffu && (args.input_size % 64u) == 0 &&
-         (args.intermediate_size % 64u) == 0 && (args.hidden_size % 4u) == 0 &&
-         std::isfinite(args.swiglu_limit) && options.device_id >= 0 &&
-         options.sm_count > 0 && options.two_sm_min_rows != 0 &&
+         args.hidden_size <= 0x7fffffffu && (args.input_size % 128u) == 0 &&
+         (args.intermediate_size % 128u) == 0 &&
+         (args.hidden_size % 64u) == 0 && std::isfinite(args.swiglu_limit) &&
+         options.device_id >= 0 && options.sm_count > 0 &&
+         options.two_sm_min_rows != 0 &&
          (args.small_group_count == args.active_group_count ||
           options.two_sm_min_rows <= args.max_group_rows);
 }
@@ -237,8 +244,8 @@ inline bool pointer_args_valid(GroupedFp4MoeArgs const &args) noexcept {
          aligned_address(args.up_scale_ptrs, alignof(std::uint64_t)) &&
          aligned_address(args.down_ptrs, alignof(std::uint64_t)) &&
          aligned_address(args.down_scale_ptrs, alignof(std::uint64_t)) &&
-         aligned_address(args.input_packed, 16) &&
-         aligned_address(args.input_scales, 16) &&
+         aligned_address(args.input_fp8, 16) &&
+         aligned_address(args.input_ue8m0, 16) &&
          aligned_address(args.route_output, 16) &&
          aligned_address(args.route_written, alignof(std::int32_t)) &&
          aligned_address(args.route_error, alignof(std::int32_t));
@@ -281,9 +288,8 @@ query_descriptor_view(std::int32_t groups) noexcept {
   return view;
 }
 
-inline std::size_t
-cutlass_bytes_for(MmaMode mode, std::uint32_t groups,
-                  LaunchOptions const &options) noexcept {
+inline std::size_t cutlass_bytes_for(MmaMode mode, std::uint32_t groups,
+                                     LaunchOptions const &options) noexcept {
   if (groups == 0 || groups > 0x7fffffffu) {
     return 0;
   }
@@ -330,10 +336,10 @@ struct WorkspaceView {
   std::uint32_t *route_groups{};
   std::uint8_t *gathered_x{};
   ElementScale *gathered_x_sfa{};
-  float *gate_up_f32{};
-  std::uint8_t *hidden_packed{};
+  ElementD *gate_up_bf16{};
+  std::uint8_t *hidden_fp8{};
   ElementScale *hidden_sfa{};
-  float *down_f32{};
+  ElementD *down_bf16{};
   std::size_t gathered_x_sfa_group_stride{};
   std::size_t hidden_sfa_group_stride{};
 };
@@ -353,11 +359,11 @@ write_descriptor(DeviceDescriptorView const &descriptors, std::int32_t index,
   descriptors.sfa[index] = sfa;
   descriptors.sfb[index] = sfb;
   descriptors.stride_a[index] =
-      StrideA{static_cast<std::int64_t>(k), cute::_1{}, cute::_0{}};
+      ::cutlass::make_cute_packed_stride(StrideA{}, cute::make_shape(m, k, 1));
   descriptors.stride_b[index] =
-      StrideB{static_cast<std::int64_t>(k), cute::_1{}, cute::_0{}};
+      ::cutlass::make_cute_packed_stride(StrideB{}, cute::make_shape(n, k, 1));
   descriptors.stride_d[index] =
-      StrideD{static_cast<std::int64_t>(n), cute::_1{}, cute::_0{}};
+      ::cutlass::make_cute_packed_stride(StrideD{}, cute::make_shape(m, n, 1));
   descriptors.layout_sfa[index] =
       BlockScaleConfig::tile_atom_to_shape_SFA(cute::make_shape(m, n, k, 1));
   descriptors.layout_sfb[index] =
@@ -365,8 +371,7 @@ write_descriptor(DeviceDescriptorView const &descriptors, std::int32_t index,
 }
 
 __global__ __launch_bounds__(kPrepareThreads) void prepare_gate_up_kernel(
-    GroupedFp4MoeArgs args, LaunchOptions options,
-    WorkspaceView workspace) {
+    GroupedFp4MoeArgs args, LaunchOptions options, WorkspaceView workspace) {
   const std::uint32_t group = blockIdx.x;
   if (group >= args.active_group_count) {
     return;
@@ -380,6 +385,10 @@ __global__ __launch_bounds__(kPrepareThreads) void prepare_gate_up_kernel(
 
   const auto *slots =
       device_pointer<std::int32_t const>(args.active_expert_slots);
+  const auto *active_generations =
+      device_pointer<std::int32_t const>(args.active_group_generations);
+  const auto *slot_generations =
+      device_pointer<std::int32_t const>(args.slot_generations);
   const auto *indptr =
       device_pointer<std::uint32_t const>(args.expert_route_indptr);
   const auto *counts =
@@ -391,18 +400,22 @@ __global__ __launch_bounds__(kPrepareThreads) void prepare_gate_up_kernel(
     expert_slot = slots[group];
     const bool expected_small = group < args.small_group_count;
     const bool actual_small = route_count < options.two_sm_min_rows;
-    metadata_valid =
-        route_count != 0 && route_count <= args.max_group_rows &&
-                route_begin <= route_end &&
-                route_end <= args.total_routed_rows &&
-                route_end - route_begin == route_count &&
-                (group != 0 || route_begin == 0) &&
-                (group + 1 != args.active_group_count ||
-                 route_end == args.total_routed_rows) &&
-                expected_small == actual_small && expert_slot >= 0 &&
-                static_cast<std::uint32_t>(expert_slot) < args.slot_capacity
-            ? 1
-            : 0;
+    const bool slot_valid =
+        expert_slot >= 0 &&
+        static_cast<std::uint32_t>(expert_slot) < args.slot_capacity;
+    const bool generation_valid =
+        slot_valid &&
+        active_generations[group] == slot_generations[expert_slot];
+    metadata_valid = route_count != 0 && route_count <= args.max_group_rows &&
+                             route_begin <= route_end &&
+                             route_end <= args.total_routed_rows &&
+                             route_end - route_begin == route_count &&
+                             (group != 0 || route_begin == 0) &&
+                             (group + 1 != args.active_group_count ||
+                              route_end == args.total_routed_rows) &&
+                             expected_small == actual_small && generation_valid
+                         ? 1
+                         : 0;
   }
   __syncthreads();
 
@@ -465,43 +478,46 @@ __global__ __launch_bounds__(kPrepareThreads) void prepare_gate_up_kernel(
   }
   __syncthreads();
 
-  const std::size_t input_row_bytes = args.input_size / 2;
-  const std::uint32_t input_scale_columns = args.input_size / kScaleVectorSize;
+  const std::size_t input_row_bytes = args.input_size;
+  const std::uint32_t input_sfa_columns = args.input_size / kScaleVectorSize;
+  const std::uint32_t input_scale_columns = args.input_size / 128;
   auto *group_sfa_bytes =
       reinterpret_cast<std::uint8_t *>(workspace.gathered_x_sfa) +
       static_cast<std::size_t>(group) * workspace.gathered_x_sfa_group_stride;
-  const auto *input = device_pointer<std::uint8_t const>(args.input_packed);
+  const auto *input = device_pointer<std::uint8_t const>(args.input_fp8);
   const auto *input_scales =
-      device_pointer<std::uint8_t const>(args.input_scales);
-  const std::size_t vector_count =
-      static_cast<std::size_t>(route_count) * input_scale_columns;
-  for (std::size_t vector = threadIdx.x; vector < vector_count;
+      device_pointer<std::uint8_t const>(args.input_ue8m0);
+  const std::size_t input_vector_count =
+      static_cast<std::size_t>(route_count) * (args.input_size / 16);
+  for (std::size_t vector = threadIdx.x; vector < input_vector_count;
        vector += blockDim.x) {
     const std::uint32_t row =
-        static_cast<std::uint32_t>(vector / input_scale_columns);
-    const std::uint32_t scale_column =
-        static_cast<std::uint32_t>(vector % input_scale_columns);
+        static_cast<std::uint32_t>(vector / (args.input_size / 16));
+    const std::uint32_t vector_column =
+        static_cast<std::uint32_t>(vector % (args.input_size / 16));
     const std::uint32_t ordinal = route_begin + row;
     const std::int32_t token = tokens[ordinal];
     const auto *source = reinterpret_cast<uint4 const *>(
         input + static_cast<std::size_t>(token) * input_row_bytes +
-        static_cast<std::size_t>(scale_column) * 16);
+        static_cast<std::size_t>(vector_column) * 16);
     auto *destination = reinterpret_cast<uint4 *>(
         workspace.gathered_x +
         static_cast<std::size_t>(ordinal) * input_row_bytes +
-        static_cast<std::size_t>(scale_column) * 16);
+        static_cast<std::size_t>(vector_column) * 16);
     *destination = *source;
   }
 
   const auto sfa_layout = BlockScaleConfig::tile_atom_to_shape_SFA(
       cute::make_shape(static_cast<int>(route_count), 1,
                        static_cast<int>(args.input_size), 1));
-  for (std::size_t scale = threadIdx.x; scale < vector_count;
+  const std::size_t sfa_count =
+      static_cast<std::size_t>(route_count) * input_sfa_columns;
+  for (std::size_t scale = threadIdx.x; scale < sfa_count;
        scale += blockDim.x) {
     const std::uint32_t row =
-        static_cast<std::uint32_t>(scale / input_scale_columns);
+        static_cast<std::uint32_t>(scale / input_sfa_columns);
     const std::uint32_t scale_column =
-        static_cast<std::uint32_t>(scale % input_scale_columns);
+        static_cast<std::uint32_t>(scale % input_sfa_columns);
     const std::uint32_t ordinal = route_begin + row;
     const std::int32_t token = tokens[ordinal];
     const auto destination = sfa_layout(
@@ -509,7 +525,7 @@ __global__ __launch_bounds__(kPrepareThreads) void prepare_gate_up_kernel(
                          static_cast<int>(scale_column * kScaleVectorSize), 0));
     group_sfa_bytes[static_cast<std::size_t>(destination)] =
         input_scales[static_cast<std::size_t>(token) * input_scale_columns +
-                     scale_column];
+                     scale_column / 4];
     workspace.route_groups[ordinal] = group;
   }
   __syncthreads();
@@ -521,10 +537,10 @@ __global__ __launch_bounds__(kPrepareThreads) void prepare_gate_up_kernel(
     auto *a = reinterpret_cast<ElementA const *>(a_bytes);
     auto *sfa = reinterpret_cast<ElementScale const *>(group_sfa_bytes);
     auto *gate_d =
-        workspace.gate_up_f32 +
+        workspace.gate_up_bf16 +
         static_cast<std::size_t>(route_begin) * args.intermediate_size;
     auto *up_d =
-        workspace.gate_up_f32 +
+        workspace.gate_up_bf16 +
         (static_cast<std::size_t>(args.total_routed_rows) + route_begin) *
             args.intermediate_size;
     const auto *gate_b = reinterpret_cast<ElementB const *>(
@@ -565,43 +581,36 @@ __device__ __forceinline__ float e8m0_value(std::uint8_t encoded) {
   return __uint_as_float(bits);
 }
 
-__device__ __forceinline__ std::uint8_t e8m0_for_amax(float amax) {
-  if (amax <= 0.0f) {
+__device__ __forceinline__ std::uint8_t e8m0_for_fp8_amax(float amax) {
+  if (!isfinite(amax) || amax <= 0.0f) {
     return kScalePadding;
   }
-  const float exponent_value = ceilf(log2f(amax / 6.0f));
+  const float exponent_value = ceilf(log2f(fmaxf(amax, 1.0e-4f) / 448.0f));
   if (!isfinite(exponent_value) || exponent_value < -127.0f) {
     return 0;
   }
   const int encoded = static_cast<int>(exponent_value) + 127;
   return static_cast<std::uint8_t>(
-      encoded < 0 ? 0 : (encoded > 254 ? 254 : encoded));
+      encoded < 0 ? 0 : (encoded > 255 ? 255 : encoded));
 }
 
-__device__ __forceinline__ float fp4_value(std::uint8_t value) {
-  constexpr float magnitudes[8] = {0.0f, 0.5f, 1.0f, 1.5f,
-                                   2.0f, 3.0f, 4.0f, 6.0f};
-  const float magnitude = magnitudes[value & 7u];
-  return (value & 8u) != 0 ? -magnitude : magnitude;
+__device__ __forceinline__ std::uint16_t f32_to_bf16_rne(float value) {
+  std::uint32_t bits = __float_as_uint(value);
+  if ((bits & 0x7fffffffu) > 0x7f800000u) {
+    return static_cast<std::uint16_t>((bits >> 16) | 0x0040u);
+  }
+  const std::uint32_t bias = 0x7fffu + ((bits >> 16) & 1u);
+  return static_cast<std::uint16_t>((bits + bias) >> 16);
 }
 
-__device__ __forceinline__ std::uint8_t quantize_fp4(float value) {
-  if (value == 0.0f) {
-    return 0;
-  }
-  const std::uint8_t sign = value < 0.0f ? 8u : 0u;
-  const float magnitude = fminf(fabsf(value), 6.0f);
-  std::uint8_t best = 0;
-  float best_error = magnitude;
-#pragma unroll
-  for (std::uint8_t candidate = 1; candidate < 8; ++candidate) {
-    const float error = fabsf(fp4_value(candidate) - magnitude);
-    if (error < best_error) {
-      best = candidate;
-      best_error = error;
-    }
-  }
-  return static_cast<std::uint8_t>(sign | best);
+__device__ __forceinline__ float bf16_to_f32(std::uint16_t value) {
+  return __uint_as_float(static_cast<std::uint32_t>(value) << 16);
+}
+
+__device__ __forceinline__ std::uint8_t quantize_fp8(float value) {
+  value = fminf(fmaxf(value, -448.0f), 448.0f);
+  return static_cast<std::uint8_t>(
+      __nv_cvt_float_to_fp8(value, __NV_SATFINITE, __NV_E4M3));
 }
 
 __device__ __forceinline__ float swiglu(float gate, float up, float limit) {
@@ -613,8 +622,9 @@ __device__ __forceinline__ float swiglu(float gate, float up, float limit) {
 }
 
 __global__ __launch_bounds__(kQuantThreads) void swiglu_requant_kernel(
-    GroupedFp4MoeArgs args, WorkspaceView workspace) {
-  const std::size_t scale_columns = args.intermediate_size / kScaleVectorSize;
+    GroupedFp4MoeArgs args, WorkspaceView workspace, float *debug_down_input,
+    std::uint32_t debug_first_row, std::uint32_t debug_second_row) {
+  const std::size_t scale_columns = args.intermediate_size / 128;
   const std::size_t row_scale = blockIdx.x;
   const std::size_t routed_row = row_scale / scale_columns;
   if (routed_row >= args.total_routed_rows) {
@@ -623,7 +633,6 @@ __global__ __launch_bounds__(kQuantThreads) void swiglu_requant_kernel(
   const std::uint32_t scale_column =
       static_cast<std::uint32_t>(row_scale % scale_columns);
   const std::uint32_t group = workspace.route_groups[routed_row];
-
   const auto *indptr =
       device_pointer<std::uint32_t const>(args.expert_route_indptr);
   const auto *counts =
@@ -632,45 +641,56 @@ __global__ __launch_bounds__(kQuantThreads) void swiglu_requant_kernel(
   const std::uint32_t route_count = counts[group];
   const std::uint32_t row =
       static_cast<std::uint32_t>(routed_row) - route_begin;
-  const std::uint32_t channel = scale_column * kScaleVectorSize + threadIdx.x;
+  const std::uint32_t channel = scale_column * 128 + threadIdx.x;
   const std::size_t value_index = routed_row * args.intermediate_size + channel;
   const std::size_t up_base =
       static_cast<std::size_t>(args.total_routed_rows) * args.intermediate_size;
-  float value =
-      swiglu(workspace.gate_up_f32[value_index],
-             workspace.gate_up_f32[up_base + value_index], args.swiglu_limit);
-  const unsigned invalid_mask = __ballot_sync(0xffffffffu, !isfinite(value));
-  if (invalid_mask != 0) {
+  const auto *gate_up = workspace.gate_up_bf16;
+  const float route_weight =
+      device_pointer<float const>(args.route_weights)[routed_row];
+  const float gate = bf16_to_f32(f32_to_bf16_rne(gate_up[value_index]));
+  const float up = bf16_to_f32(f32_to_bf16_rne(gate_up[up_base + value_index]));
+  float value = swiglu(gate, up, args.swiglu_limit) * route_weight;
+  if (!isfinite(value)) {
     value = 0.0f;
-    if (threadIdx.x == 0) {
-      set_route_error(args);
-    }
+    set_route_error(args);
+  }
+  value = bf16_to_f32(f32_to_bf16_rne(value));
+  if (debug_down_input != nullptr &&
+      (routed_row == debug_first_row || routed_row == debug_second_row)) {
+    const std::size_t debug_row = routed_row == debug_first_row ? 0u : 1u;
+    debug_down_input[debug_row * args.intermediate_size + channel] = value;
   }
 
+  __shared__ float warp_amax[4];
+  __shared__ std::uint32_t scale_byte;
+  const std::uint32_t lane = threadIdx.x & 31u;
+  const std::uint32_t warp = threadIdx.x >> 5;
   float amax = fabsf(value);
 #pragma unroll
   for (int delta = 16; delta > 0; delta >>= 1) {
     amax = fmaxf(amax, __shfl_down_sync(0xffffffffu, amax, delta));
   }
-  std::uint32_t scale_byte = e8m0_for_amax(amax);
-  scale_byte = __shfl_sync(0xffffffffu, scale_byte, 0);
+  if (lane == 0) {
+    warp_amax[warp] = amax;
+  }
+  __syncthreads();
+  if (warp == 0) {
+    float block_amax = lane < 4 ? warp_amax[lane] : 0.0f;
+#pragma unroll
+    for (int delta = 16; delta > 0; delta >>= 1) {
+      block_amax =
+          fmaxf(block_amax, __shfl_down_sync(0xffffffffu, block_amax, delta));
+    }
+    if (lane == 0) {
+      scale_byte = e8m0_for_fp8_amax(block_amax);
+    }
+  }
+  __syncthreads();
+
   const float reciprocal_scale =
       1.0f / e8m0_value(static_cast<std::uint8_t>(scale_byte));
-  const std::uint32_t nibble = quantize_fp4(value * reciprocal_scale);
-  std::uint32_t low = 0;
-  std::uint32_t high = 0;
-  if (threadIdx.x < 16) {
-    low = __shfl_sync(0xffffffffu, nibble, threadIdx.x * 2);
-    high = __shfl_sync(0xffffffffu, nibble, threadIdx.x * 2 + 1);
-  }
-
-  const std::size_t hidden_row_bytes = args.intermediate_size / 2;
-  if (threadIdx.x < 16) {
-    workspace.hidden_packed[routed_row * hidden_row_bytes +
-                            static_cast<std::size_t>(scale_column) * 16 +
-                            threadIdx.x] =
-        static_cast<std::uint8_t>(low | (high << 4));
-  }
+  workspace.hidden_fp8[value_index] = quantize_fp8(value * reciprocal_scale);
   if (threadIdx.x == 0) {
     auto *sfa_group =
         reinterpret_cast<std::uint8_t *>(workspace.hidden_sfa) +
@@ -679,11 +699,14 @@ __global__ __launch_bounds__(kQuantThreads) void swiglu_requant_kernel(
         BlockScaleConfig::tile_atom_to_shape_SFA(cute::make_shape(
             static_cast<int>(route_count), static_cast<int>(args.hidden_size),
             static_cast<int>(args.intermediate_size), 1));
-    const auto destination = layout(
-        cute::make_coord(static_cast<int>(row),
-                         static_cast<int>(scale_column * kScaleVectorSize), 0));
-    sfa_group[static_cast<std::size_t>(destination)] =
-        static_cast<std::uint8_t>(scale_byte);
+#pragma unroll
+    for (int sub = 0; sub < 4; ++sub) {
+      const auto destination = layout(cute::make_coord(
+          static_cast<int>(row),
+          static_cast<int>(scale_column * 128 + sub * kScaleVectorSize), 0));
+      sfa_group[static_cast<std::size_t>(destination)] =
+          static_cast<std::uint8_t>(scale_byte);
+    }
   }
 }
 
@@ -701,15 +724,15 @@ __global__ __launch_bounds__(kPrepareThreads) void prepare_down_kernel(
   const std::uint32_t route_begin = indptr[group];
   const std::uint32_t route_count = counts[group];
   const std::int32_t m = static_cast<std::int32_t>(route_count);
-  const std::size_t hidden_row_bytes = args.intermediate_size / 2;
-  auto *a_bytes = workspace.hidden_packed +
+  const std::size_t hidden_row_bytes = args.intermediate_size;
+  auto *a_bytes = workspace.hidden_fp8 +
                   static_cast<std::size_t>(route_begin) * hidden_row_bytes;
   auto *sfa_bytes =
       reinterpret_cast<std::uint8_t *>(workspace.hidden_sfa) +
       static_cast<std::size_t>(group) * workspace.hidden_sfa_group_stride;
   auto *a = reinterpret_cast<ElementA const *>(a_bytes);
   auto *sfa = reinterpret_cast<ElementScale const *>(sfa_bytes);
-  auto *d = workspace.down_f32 +
+  auto *d = workspace.down_bf16 +
             static_cast<std::size_t>(route_begin) * args.hidden_size;
   const std::size_t binding_base = static_cast<std::size_t>(group) * 6;
   const auto *b = reinterpret_cast<ElementB const *>(
@@ -737,20 +760,12 @@ __global__ __launch_bounds__(kScatterThreads) void scatter_kernel(
     return;
   }
 
-  const float route_weight =
-      device_pointer<float const>(args.route_weights)[routed_row];
-  const std::size_t vectors = args.hidden_size / 4;
-  const auto *source = reinterpret_cast<float4 const *>(
-      workspace.down_f32 + routed_row * args.hidden_size);
-  auto *destination = reinterpret_cast<float4 *>(
-      device_pointer<float>(args.route_output) +
-      static_cast<std::size_t>(route) * args.hidden_size);
-  for (std::size_t vector = threadIdx.x; vector < vectors;
-       vector += blockDim.x) {
-    const float4 value = source[vector];
-    destination[vector] =
-        make_float4(value.x * route_weight, value.y * route_weight,
-                    value.z * route_weight, value.w * route_weight);
+  const auto *source = workspace.down_bf16 + routed_row * args.hidden_size;
+  auto *destination = device_pointer<float>(args.route_output) +
+                      static_cast<std::size_t>(route) * args.hidden_size;
+  for (std::size_t channel = threadIdx.x; channel < args.hidden_size;
+       channel += blockDim.x) {
+    destination[channel] = bf16_to_f32(f32_to_bf16_rne(source[channel]));
   }
   if (threadIdx.x == 0) {
     auto *written = device_pointer<std::int32_t>(args.route_written);
@@ -776,15 +791,189 @@ make_workspace_view(void *workspace, WorkspacePlan const &plan,
   view.gathered_x = base + plan.gathered_x_offset;
   view.gathered_x_sfa =
       reinterpret_cast<ElementScale *>(base + plan.gathered_x_sfa_offset);
-  view.gate_up_f32 = reinterpret_cast<float *>(base + plan.gate_up_f32_offset);
-  view.hidden_packed = base + plan.hidden_packed_offset;
+  view.gate_up_bf16 =
+      reinterpret_cast<ElementD *>(base + plan.gate_up_bf16_offset);
+  view.hidden_fp8 = base + plan.hidden_fp8_offset;
   view.hidden_sfa =
       reinterpret_cast<ElementScale *>(base + plan.hidden_sfa_offset);
-  view.down_f32 = reinterpret_cast<float *>(base + plan.down_f32_offset);
+  view.down_bf16 = reinterpret_cast<ElementD *>(base + plan.down_bf16_offset);
   view.gathered_x_sfa_group_stride = plan.gathered_x_sfa_group_stride;
   view.hidden_sfa_group_stride = plan.hidden_sfa_group_stride;
   static_cast<void>(args);
   return view;
+}
+
+struct DebugTap {
+  bool enabled{};
+  std::string directory{};
+  std::uint32_t rows[2]{};
+  std::uint32_t groups[2]{};
+  float *down_input{};
+};
+
+inline bool debug_copy(void *host, const void *device, std::size_t bytes,
+                       cudaStream_t stream) {
+  return cudaMemcpyAsync(host, device, bytes, cudaMemcpyDeviceToHost, stream) ==
+             cudaSuccess &&
+         cudaStreamSynchronize(stream) == cudaSuccess;
+}
+
+inline bool prepare_debug_tap(GroupedFp4MoeArgs const &args,
+                              cudaStream_t stream, DebugTap &tap) {
+  const char *directory = std::getenv("FERRULE_DEBUG_GROUPED_FP4_TAP_DIR");
+  if (directory == nullptr || *directory == '\0' || args.num_routes != 6u ||
+      args.active_group_count != 6u || args.total_routed_rows != 6u) {
+    return true;
+  }
+  std::vector<std::int32_t> slots(args.active_group_count);
+  std::vector<std::uint32_t> indptr(args.active_group_count + 1u);
+  std::vector<std::int32_t> routes(args.total_routed_rows);
+  if (!debug_copy(slots.data(),
+                  device_pointer<void const>(args.active_expert_slots),
+                  slots.size() * sizeof(slots[0]), stream) ||
+      !debug_copy(indptr.data(),
+                  device_pointer<void const>(args.expert_route_indptr),
+                  indptr.size() * sizeof(indptr[0]), stream) ||
+      !debug_copy(routes.data(), device_pointer<void const>(args.route_indices),
+                  routes.size() * sizeof(routes[0]), stream)) {
+    return false;
+  }
+  std::int32_t route_experts[6] = {-1, -1, -1, -1, -1, -1};
+  std::uint32_t route_rows[6]{};
+  std::uint32_t route_groups[6]{};
+  for (std::uint32_t group = 0; group < args.active_group_count; ++group) {
+    for (std::uint32_t ordinal = indptr[group]; ordinal < indptr[group + 1u];
+         ++ordinal) {
+      const std::int32_t route = routes[ordinal];
+      if (route < 0 || route >= 6) {
+        return true;
+      }
+      route_experts[route] = slots[group];
+      route_rows[route] = ordinal;
+      route_groups[route] = group;
+    }
+  }
+  constexpr std::int32_t expected[6] = {127, 182, 103, 65, 246, 154};
+  for (int route = 0; route < 6; ++route) {
+    if (route_experts[route] != expected[route]) {
+      return true;
+    }
+  }
+  tap.enabled = true;
+  tap.directory = directory;
+  tap.rows[0] = route_rows[0];
+  tap.rows[1] = route_rows[1];
+  tap.groups[0] = route_groups[0];
+  tap.groups[1] = route_groups[1];
+  return cudaMalloc(reinterpret_cast<void **>(&tap.down_input),
+                    2u * args.intermediate_size * sizeof(float)) == cudaSuccess;
+}
+
+inline bool write_debug_file(std::string const &path, const void *data,
+                             std::size_t bytes) {
+  std::FILE *file = std::fopen(path.c_str(), "wb");
+  if (file == nullptr) {
+    return false;
+  }
+  const bool written = std::fwrite(data, 1u, bytes, file) == bytes;
+  return std::fclose(file) == 0 && written;
+}
+
+inline float debug_bf16_round(float value) {
+  std::uint32_t bits = 0;
+  std::memcpy(&bits, &value, sizeof(bits));
+  bits += 0x7fffu + ((bits >> 16) & 1u);
+  bits &= 0xffff0000u;
+  std::memcpy(&value, &bits, sizeof(value));
+  return value;
+}
+
+inline bool dump_debug_rows(DebugTap const &tap, const char *stage,
+                            const float *source, std::size_t row_width,
+                            bool round_bf16, cudaStream_t stream) {
+  if (!tap.enabled) {
+    return true;
+  }
+  std::vector<float> values(row_width);
+  constexpr int experts[2] = {127, 182};
+  for (int target = 0; target < 2; ++target) {
+    if (!debug_copy(values.data(), source + tap.rows[target] * row_width,
+                    row_width * sizeof(float), stream)) {
+      return false;
+    }
+    if (round_bf16) {
+      for (float &value : values) {
+        value = debug_bf16_round(value);
+      }
+    }
+    const std::string path = tap.directory + "/expert" +
+                             std::to_string(experts[target]) + "." + stage +
+                             ".device.f32";
+    if (!write_debug_file(path, values.data(), values.size() * sizeof(float))) {
+      return false;
+    }
+  }
+  return true;
+}
+
+inline bool dump_debug_launch(DebugTap const &tap,
+                              WorkspaceView const &workspace,
+                              GroupedFp4MoeArgs const &args,
+                              cudaStream_t stream) {
+  if (!tap.enabled) {
+    return true;
+  }
+  std::uint64_t bindings[12]{};
+  std::int32_t active_generations[2]{};
+  std::int32_t slot_generations[2]{};
+  const auto *active =
+      device_pointer<std::int32_t const>(args.active_group_generations);
+  const auto *slots =
+      device_pointer<std::int32_t const>(args.active_expert_slots);
+  std::int32_t target_slots[2]{};
+  for (int target = 0; target < 2; ++target) {
+    if (!debug_copy(bindings + target * 6,
+                    workspace.group_bindings + tap.groups[target] * 6,
+                    6u * sizeof(std::uint64_t), stream) ||
+        !debug_copy(active_generations + target, active + tap.groups[target],
+                    sizeof(std::int32_t), stream) ||
+        !debug_copy(target_slots + target, slots + tap.groups[target],
+                    sizeof(std::int32_t), stream)) {
+      return false;
+    }
+    const auto *slot_generation =
+        device_pointer<std::int32_t const>(args.slot_generations) +
+        target_slots[target];
+    if (!debug_copy(slot_generations + target, slot_generation,
+                    sizeof(std::int32_t), stream)) {
+      return false;
+    }
+  }
+  const std::string path = tap.directory + "/launch-tuples.txt";
+  std::FILE *file = std::fopen(path.c_str(), "wb");
+  if (file == nullptr) {
+    return false;
+  }
+  constexpr int experts[2] = {127, 182};
+  bool ok = true;
+  for (int target = 0; target < 2; ++target) {
+    ok &= std::fprintf(
+              file,
+              "expert=%d group=%u row=%u slot=%d active_generation=%d "
+              "slot_generation=%d gate_weight=%#llx gate_scale=%#llx "
+              "up_weight=%#llx up_scale=%#llx down_weight=%#llx "
+              "down_scale=%#llx\n",
+              experts[target], tap.groups[target], tap.rows[target],
+              target_slots[target], active_generations[target],
+              slot_generations[target],
+              static_cast<unsigned long long>(bindings[target * 6]),
+              static_cast<unsigned long long>(bindings[target * 6 + 1]),
+              static_cast<unsigned long long>(bindings[target * 6 + 2]),
+              static_cast<unsigned long long>(bindings[target * 6 + 3]),
+              static_cast<unsigned long long>(bindings[target * 6 + 4]),
+              static_cast<unsigned long long>(bindings[target * 6 + 5])) > 0;
+  }
+  return std::fclose(file) == 0 && ok;
 }
 
 inline ::cutlass::Status
@@ -822,9 +1011,8 @@ required_cutlass_bytes(GroupedFp4MoeArgs const &args,
 
 } // namespace moe_detail
 
-inline WorkspacePlan
-workspace_plan(GroupedFp4MoeArgs const &args,
-                      LaunchOptions const &options) noexcept {
+inline WorkspacePlan workspace_plan(GroupedFp4MoeArgs const &args,
+                                    LaunchOptions const &options) noexcept {
   WorkspacePlan plan{};
   if (!moe_detail::scalar_args_valid(args, options)) {
     return plan;
@@ -846,70 +1034,68 @@ workspace_plan(GroupedFp4MoeArgs const &args,
   if (plan.descriptor_bytes == 0 || plan.gathered_x_sfa_group_stride == 0 ||
       plan.hidden_sfa_group_stride == 0 ||
       !moe_detail::checked_product(plan.group_bindings_bytes, groups, 6,
-                                      sizeof(std::uint64_t)) ||
+                                   sizeof(std::uint64_t)) ||
       !moe_detail::checked_product(plan.route_groups_bytes, rows,
-                                      sizeof(std::uint32_t)) ||
+                                   sizeof(std::uint32_t)) ||
       !moe_detail::checked_product(plan.gathered_x_bytes, rows,
-                                      args.input_size / 2) ||
+                                   args.input_size) ||
       !moe_detail::checked_product(plan.gathered_x_sfa_bytes, groups,
-                                      plan.gathered_x_sfa_group_stride) ||
-      !moe_detail::checked_product(plan.gate_up_f32_bytes, 2, rows,
-                                      args.intermediate_size, sizeof(float)) ||
-      !moe_detail::checked_product(plan.hidden_packed_bytes, rows,
-                                      args.intermediate_size / 2) ||
+                                   plan.gathered_x_sfa_group_stride) ||
+      !moe_detail::checked_product(plan.gate_up_bf16_bytes, 2, rows,
+                                   args.intermediate_size, sizeof(ElementD)) ||
+      !moe_detail::checked_product(plan.hidden_fp8_bytes, rows,
+                                   args.intermediate_size) ||
       !moe_detail::checked_product(plan.hidden_sfa_bytes, groups,
-                                      plan.hidden_sfa_group_stride) ||
-      !moe_detail::checked_product(plan.down_f32_bytes, rows,
-                                      args.hidden_size, sizeof(float))) {
+                                   plan.hidden_sfa_group_stride) ||
+      !moe_detail::checked_product(plan.down_bf16_bytes, rows, args.hidden_size,
+                                   sizeof(ElementD))) {
     return {};
   }
   plan.cutlass_bytes = moe_detail::required_cutlass_bytes(args, options);
 
   std::size_t cursor = 0;
   if (!moe_detail::append_region(cursor, plan.descriptor_bytes,
-                                    kDescriptorAlignment,
-                                    plan.descriptor_offset) ||
+                                 kDescriptorAlignment,
+                                 plan.descriptor_offset) ||
       !moe_detail::append_region(cursor, plan.group_bindings_bytes,
-                                    alignof(std::uint64_t),
-                                    plan.group_bindings_offset) ||
+                                 alignof(std::uint64_t),
+                                 plan.group_bindings_offset) ||
       !moe_detail::append_region(cursor, plan.route_groups_bytes,
-                                    alignof(std::uint32_t),
-                                    plan.route_groups_offset) ||
+                                 alignof(std::uint32_t),
+                                 plan.route_groups_offset) ||
       !moe_detail::append_region(cursor, plan.gathered_x_bytes, 16,
-                                    plan.gathered_x_offset) ||
+                                 plan.gathered_x_offset) ||
       !moe_detail::append_region(cursor, plan.gathered_x_sfa_bytes, 16,
-                                    plan.gathered_x_sfa_offset) ||
-      !moe_detail::append_region(cursor, plan.gate_up_f32_bytes, 16,
-                                    plan.gate_up_f32_offset) ||
-      !moe_detail::append_region(cursor, plan.hidden_packed_bytes, 16,
-                                    plan.hidden_packed_offset) ||
+                                 plan.gathered_x_sfa_offset) ||
+      !moe_detail::append_region(cursor, plan.gate_up_bf16_bytes, 16,
+                                 plan.gate_up_bf16_offset) ||
+      !moe_detail::append_region(cursor, plan.hidden_fp8_bytes, 16,
+                                 plan.hidden_fp8_offset) ||
       !moe_detail::append_region(cursor, plan.hidden_sfa_bytes, 16,
-                                    plan.hidden_sfa_offset) ||
-      !moe_detail::append_region(cursor, plan.down_f32_bytes, 16,
-                                    plan.down_f32_offset) ||
+                                 plan.hidden_sfa_offset) ||
+      !moe_detail::append_region(cursor, plan.down_bf16_bytes, 16,
+                                 plan.down_bf16_offset) ||
       !moe_detail::append_region(cursor, plan.cutlass_bytes,
-                                    kCutlassWorkspaceAlignment,
-                                    plan.cutlass_offset)) {
+                                 kCutlassWorkspaceAlignment,
+                                 plan.cutlass_offset)) {
     return {};
   }
-  if (cursor > (std::numeric_limits<std::size_t>::max)() -
-                   (kWorkspaceAlignment - 1)) {
+  if (cursor >
+      (std::numeric_limits<std::size_t>::max)() - (kWorkspaceAlignment - 1)) {
     return {};
   }
   plan.total_bytes = detail::align_up(cursor, kWorkspaceAlignment);
   return plan;
 }
 
-inline std::size_t
-workspace_bytes(GroupedFp4MoeArgs const &args,
-                       LaunchOptions const &options) noexcept {
+inline std::size_t workspace_bytes(GroupedFp4MoeArgs const &args,
+                                   LaunchOptions const &options) noexcept {
   return workspace_plan(args, options).total_bytes;
 }
 
-inline Status
-can_implement(GroupedFp4MoeArgs const *args, void *workspace,
-                     std::size_t workspace_bytes,
-                     LaunchOptions const &options) noexcept {
+inline Status can_implement(GroupedFp4MoeArgs const *args, void *workspace,
+                            std::size_t workspace_bytes,
+                            LaunchOptions const &options) noexcept {
   if (args == nullptr || !moe_detail::scalar_args_valid(*args, options) ||
       !moe_detail::pointer_args_valid(*args)) {
     return Status::kInvalidArgument;
@@ -927,9 +1113,8 @@ can_implement(GroupedFp4MoeArgs const *args, void *workspace,
 // and down [hidden,intermediate]. route_written and route_error are not cleared
 // by this helper, allowing composition with a larger routed operation.
 inline Status launch(GroupedFp4MoeArgs const *args, void *workspace,
-                                  std::size_t workspace_bytes,
-                                  cudaStream_t stream,
-                                  LaunchOptions const &options) noexcept {
+                     std::size_t workspace_bytes, cudaStream_t stream,
+                     LaunchOptions const &options) noexcept {
   const Status validation =
       can_implement(args, workspace, workspace_bytes, options);
   if (validation != Status::kSuccess) {
@@ -960,7 +1145,7 @@ inline Status launch(GroupedFp4MoeArgs const *args, void *workspace,
   }
 
   moe_detail::prepare_gate_up_kernel<<<args->active_group_count,
-                                          kPrepareThreads, 0, stream>>>(
+                                       kPrepareThreads, 0, stream>>>(
       *args, options, view);
   if (cudaGetLastError() != cudaSuccess) {
     return Status::kLaunchFailed;
@@ -972,17 +1157,17 @@ inline Status launch(GroupedFp4MoeArgs const *args, void *workspace,
   if (small != 0) {
     DeviceDescriptorView small_gate_up = moe_detail::slice_descriptors(
         view.descriptors, 0, static_cast<std::int32_t>(small * 2));
-    cutlass_status = moe_detail::run_grouped(MmaMode::k1Sm, small_gate_up,
-                                                options, cutlass_workspace,
-                                                plan.cutlass_bytes, stream);
+    cutlass_status =
+        moe_detail::run_grouped(MmaMode::k1Sm, small_gate_up, options,
+                                cutlass_workspace, plan.cutlass_bytes, stream);
   }
   if (cutlass_status == ::cutlass::Status::kSuccess && large != 0) {
     DeviceDescriptorView large_gate_up = moe_detail::slice_descriptors(
         view.descriptors, static_cast<std::int32_t>(small * 2),
         static_cast<std::int32_t>(large * 2));
-    cutlass_status = moe_detail::run_grouped(MmaMode::k2Sm, large_gate_up,
-                                                options, cutlass_workspace,
-                                                plan.cutlass_bytes, stream);
+    cutlass_status =
+        moe_detail::run_grouped(MmaMode::k2Sm, large_gate_up, options,
+                                cutlass_workspace, plan.cutlass_bytes, stream);
   }
   if (cutlass_status != ::cutlass::Status::kSuccess) {
     return Status::kLaunchFailed;
@@ -990,24 +1175,20 @@ inline Status launch(GroupedFp4MoeArgs const *args, void *workspace,
 
   std::size_t quant_blocks = 0;
   if (!moe_detail::checked_product(quant_blocks, args->total_routed_rows,
-                                      args->intermediate_size /
-                                          kScaleVectorSize) ||
+                                   args->intermediate_size / 128) ||
       quant_blocks == 0 || quant_blocks > 0x7fffffffu) {
     return Status::kUnsupportedResources;
   }
   moe_detail::swiglu_requant_kernel<<<static_cast<unsigned>(quant_blocks),
-                                         kQuantThreads, 0, stream>>>(
-      *args, view);
+                                      kQuantThreads, 0, stream>>>(*args, view);
   if (cudaGetLastError() != cudaSuccess) {
     return Status::kLaunchFailed;
   }
 
   const std::uint32_t down_blocks =
-      (args->active_group_count + kPrepareThreads - 1) /
-      kPrepareThreads;
-  moe_detail::
-      prepare_down_kernel<<<down_blocks, kPrepareThreads, 0, stream>>>(
-          *args, view);
+      (args->active_group_count + kPrepareThreads - 1) / kPrepareThreads;
+  moe_detail::prepare_down_kernel<<<down_blocks, kPrepareThreads, 0, stream>>>(
+      *args, view);
   if (cudaGetLastError() != cudaSuccess) {
     return Status::kLaunchFailed;
   }
@@ -1016,25 +1197,25 @@ inline Status launch(GroupedFp4MoeArgs const *args, void *workspace,
   if (small != 0) {
     DeviceDescriptorView small_down = moe_detail::slice_descriptors(
         view.descriptors, 0, static_cast<std::int32_t>(small));
-    cutlass_status = moe_detail::run_grouped(MmaMode::k1Sm, small_down,
-                                                options, cutlass_workspace,
-                                                plan.cutlass_bytes, stream);
+    cutlass_status =
+        moe_detail::run_grouped(MmaMode::k1Sm, small_down, options,
+                                cutlass_workspace, plan.cutlass_bytes, stream);
   }
   if (cutlass_status == ::cutlass::Status::kSuccess && large != 0) {
     DeviceDescriptorView large_down = moe_detail::slice_descriptors(
         view.descriptors, static_cast<std::int32_t>(small),
         static_cast<std::int32_t>(large));
-    cutlass_status = moe_detail::run_grouped(MmaMode::k2Sm, large_down,
-                                                options, cutlass_workspace,
-                                                plan.cutlass_bytes, stream);
+    cutlass_status =
+        moe_detail::run_grouped(MmaMode::k2Sm, large_down, options,
+                                cutlass_workspace, plan.cutlass_bytes, stream);
   }
   if (cutlass_status != ::cutlass::Status::kSuccess) {
     return Status::kLaunchFailed;
   }
 
-  moe_detail::scatter_kernel<<<args->total_routed_rows,
-                                  kScatterThreads, 0, stream>>>(*args,
-                                                                      view);
+  moe_detail::
+      scatter_kernel<<<args->total_routed_rows, kScatterThreads, 0, stream>>>(
+          *args, view);
   return cudaGetLastError() == cudaSuccess ? Status::kSuccess
                                            : Status::kLaunchFailed;
 }

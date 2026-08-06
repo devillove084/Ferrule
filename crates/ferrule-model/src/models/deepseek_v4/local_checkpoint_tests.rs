@@ -9,7 +9,9 @@ use crate::{
     HfSafetensorsTensorInfo, HyperConnectionConfig, LinearWeight, LinearWeightFormat, ModelFamily,
     TensorRole, TokenizerHandle,
     families::deepseek_v4,
+    reference_linear,
     semantic::{AttentionTensorKind, HyperConnectionStage, RouterTensorKind},
+    simulate_fp8_e4m3fn_e8m0_activation_quant_in_place,
 };
 
 use super::DeepSeekV4Checkpoint;
@@ -17,6 +19,126 @@ use super::checkpoint_binding::{
     bind_attention_from_hf, bind_hyper_connection_from_hf, bind_hyper_connection_head_from_hf,
     bind_router_from_hf, bind_shared_swiglu_ffn_from_hf,
 };
+
+fn round_bf16(value: f32) -> f32 {
+    let bits = value.to_bits();
+    let rounded = bits.wrapping_add(0x7fff + ((bits >> 16) & 1));
+    f32::from_bits(rounded & 0xffff_0000)
+}
+
+#[test]
+#[ignore = "manual layer-0 expert boundary oracle"]
+fn local_deepseek_v4_layer0_expert_127_182_boundary_oracle() {
+    let model_dir = local_deepseek_v4_dir().expect("local DeepSeek-V4 checkpoint");
+    let stage_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join(".tmp-dsv4-stage");
+    let input_bytes =
+        std::fs::read(stage_dir.join("layer_0_ffn_norm.f32")).expect("position-4 FFN input dump");
+    let mut input = input_bytes
+        .chunks_exact(4)
+        .map(|bytes| f32::from_ne_bytes(bytes.try_into().unwrap()))
+        .collect::<Vec<_>>();
+    assert_eq!(input.len(), deepseek_v4::HIDDEN_SIZE);
+    let input_len = input.len();
+    simulate_fp8_e4m3fn_e8m0_activation_quant_in_place(&mut input, input_len, 128)
+        .expect("input FP8/K128 boundary");
+
+    let inventory = HfSafetensorsInventory::open(&model_dir, ModelFamily::DeepSeekV4)
+        .expect("checkpoint inventory");
+    let mut planner = ExpertStreamingPlanner::new(ExpertStreamingPolicy::quality_first(2));
+    planner
+        .register_hf_routed_expert_tensor_sets(&model_dir, inventory.routed_expert_tensors())
+        .expect("register expert catalog");
+    let step = planner
+        .plan_layer_step(0, &[127, 182], &[])
+        .expect("plan selected experts");
+    let reader = ExpertStreamingReader::new(64 * 1024 * 1024);
+    let route_output_bytes = std::fs::read(stage_dir.join("layer_0_route_output.f32"))
+        .expect("position-4 route output dump");
+    let route_output = route_output_bytes
+        .chunks_exact(4)
+        .map(|bytes| f32::from_ne_bytes(bytes.try_into().unwrap()))
+        .collect::<Vec<_>>();
+    let weights = [(127usize, 0.5453123f32, 0usize), (182, 0.21186334, 1)];
+
+    for (expert_index, route_weight, route) in weights {
+        let expert = ExpertId::new(0, expert_index);
+        let load = step
+            .loads
+            .iter()
+            .find(|load| load.expert == expert)
+            .unwrap();
+        let payload = reader
+            .read_load_source(expert, &load.load_source)
+            .expect("read expert payload");
+        let bundle =
+            ExpertComputeBundle::from_artifact_payload(payload).expect("construct expert bundle");
+        let gate = reference_linear(&bundle.gate, &input)
+            .expect("gate reference")
+            .into_iter()
+            .map(round_bf16)
+            .collect::<Vec<_>>();
+        let up = reference_linear(&bundle.up, &input)
+            .expect("up reference")
+            .into_iter()
+            .map(round_bf16)
+            .collect::<Vec<_>>();
+        let mut down_input = gate
+            .iter()
+            .zip(&up)
+            .map(|(&gate, &up)| {
+                let gate = gate.min(deepseek_v4::SWIGLU_LIMIT);
+                let up = up.clamp(-deepseek_v4::SWIGLU_LIMIT, deepseek_v4::SWIGLU_LIMIT);
+                round_bf16(gate / (1.0 + (-gate).exp()) * up * route_weight)
+            })
+            .collect::<Vec<_>>();
+        simulate_fp8_e4m3fn_e8m0_activation_quant_in_place(
+            &mut down_input,
+            deepseek_v4::MOE_INTERMEDIATE_SIZE,
+            128,
+        )
+        .expect("down-input FP8/K128 boundary");
+        let down = reference_linear(&bundle.down, &down_input)
+            .expect("down reference")
+            .into_iter()
+            .map(round_bf16)
+            .collect::<Vec<_>>();
+
+        for (name, values) in [
+            ("gate", &gate),
+            ("up", &up),
+            ("down_input", &down_input),
+            ("down", &down),
+        ] {
+            let bytes = values
+                .iter()
+                .flat_map(|value| value.to_ne_bytes())
+                .collect::<Vec<_>>();
+            std::fs::write(
+                stage_dir.join(format!("expert{expert_index}.{name}.cpu.f32")),
+                bytes,
+            )
+            .expect("write CPU oracle stage");
+        }
+
+        let actual =
+            &route_output[route * deepseek_v4::HIDDEN_SIZE..(route + 1) * deepseek_v4::HIDDEN_SIZE];
+        let max_error = actual
+            .iter()
+            .zip(&down)
+            .map(|(actual, expected)| (actual - expected).abs())
+            .fold(0.0f32, f32::max);
+        let mismatches = actual
+            .iter()
+            .zip(&down)
+            .filter(|(actual, expected)| actual.to_bits() != expected.to_bits())
+            .count();
+        eprintln!(
+            "expert={expert_index} route={route} max_error={max_error} bit_mismatches={mismatches}"
+        );
+    }
+}
 
 #[test]
 fn local_deepseek_v4_expert_streaming_reads_one_selected_expert_if_present() {

@@ -60,6 +60,7 @@ pub(crate) fn resident_driver_config(
     ResidentTopKDriverConfig {
         ctx_size,
         stop_at_eos,
+        enable_native_proposals: true,
         proposal_confidence_threshold: DEFAULT_PROPOSAL_CONFIDENCE_THRESHOLD,
     }
 }

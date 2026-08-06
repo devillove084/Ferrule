@@ -413,10 +413,13 @@ struct CutlassHcProducerArgs {
     layer_rms_eps: f32,
     reserved: u32,
     state_f32: u64,
-    function_col_major_f32: u64,
+    function_row_major_f32: u64,
     hc_scale_f32: u64,
     hc_base_f32: u64,
     layer_rms_weight_f32: u64,
+    mix_f32: u64,
+    workspace: u64,
+    workspace_bytes: u64,
     hidden_f32: u64,
     normalized_f32: u64,
     packed_e4m3: u64,
@@ -510,8 +513,8 @@ struct FerruleCutlassGroupedFp4MoeArgs {
     up_scale_ptrs: u64,
     down_ptrs: u64,
     down_scale_ptrs: u64,
-    input_packed: u64,
-    input_scales: u64,
+    input_fp8: u64,
+    input_ue8m0: u64,
     route_output: u64,
     route_written: u64,
     route_error: u64,
@@ -2135,10 +2138,12 @@ pub fn proposal_head(
 pub fn hc_producer(
     stream: &CudaStream,
     state: &DeviceBuffer<f32>,
-    function_col_major: &DeviceBuffer<f32>,
+    function_row_major: &DeviceBuffer<f32>,
     hc_scale: &DeviceBuffer<f32>,
     hc_base: &DeviceBuffer<f32>,
     layer_rms_weight: &DeviceBuffer<f32>,
+    mix_output: &mut DeviceBuffer<f32>,
+    workspace: &mut DeviceBuffer<f32>,
     hidden_output: &mut DeviceBuffer<f32>,
     normalized_output: &mut DeviceBuffer<f32>,
     packed_output: &mut DeviceBuffer<u8>,
@@ -2165,12 +2170,30 @@ pub fn hc_producer(
         ),
         (
             "function",
-            function_col_major.len(),
+            function_row_major.len(),
             checked_mul(hc_hidden, mix, "HC function")?,
         ),
         ("HC scale", hc_scale.len(), 3),
         ("HC base", hc_base.len(), mix),
         ("layer RMS weight", layer_rms_weight.len(), hidden),
+        (
+            "mix output",
+            mix_output.len(),
+            checked_mul(rows, mix, "HC mix output")?,
+        ),
+        (
+            "workspace",
+            workspace.len(),
+            checked_mul(
+                checked_mul(rows, mix, "HC workspace rows")?,
+                64,
+                "HC workspace split-K",
+            )?
+            .checked_add(1)
+            .ok_or_else(|| Error::Internal {
+                message: "HC workspace padding overflow".into(),
+            })?,
+        ),
         (
             "hidden output",
             hidden_output.len(),
@@ -2235,10 +2258,13 @@ pub fn hc_producer(
         layer_rms_eps,
         reserved: 0,
         state_f32: state.cu_deviceptr(),
-        function_col_major_f32: function_col_major.cu_deviceptr(),
+        function_row_major_f32: function_row_major.cu_deviceptr(),
         hc_scale_f32: hc_scale.cu_deviceptr(),
         hc_base_f32: hc_base.cu_deviceptr(),
         layer_rms_weight_f32: layer_rms_weight.cu_deviceptr(),
+        mix_f32: mix_output.cu_deviceptr(),
+        workspace: workspace.cu_deviceptr(),
+        workspace_bytes: (workspace.len() * std::mem::size_of::<f32>()) as u64,
         hidden_f32: hidden_output.cu_deviceptr(),
         normalized_f32: normalized_output.cu_deviceptr(),
         packed_e4m3: packed_output.cu_deviceptr(),
@@ -2573,8 +2599,8 @@ pub struct GroupedFp4MoeBuffers<'a> {
     pub up_scale_ptrs: &'a DeviceBuffer<u64>,
     pub down_ptrs: &'a DeviceBuffer<u64>,
     pub down_scale_ptrs: &'a DeviceBuffer<u64>,
-    pub input_packed: &'a DeviceBuffer<u8>,
-    pub input_scales: &'a DeviceBuffer<u8>,
+    pub input_fp8: &'a DeviceBuffer<u8>,
+    pub input_ue8m0: &'a DeviceBuffer<u8>,
     pub route_output: &'a mut DeviceBuffer<f32>,
     pub route_written: &'a mut DeviceBuffer<i32>,
     pub route_error: &'a mut DeviceBuffer<i32>,
@@ -2610,8 +2636,8 @@ impl FerruleCutlassGroupedFp4MoeArgs {
             up_scale_ptrs: 0,
             down_ptrs: 0,
             down_scale_ptrs: 0,
-            input_packed: 0,
-            input_scales: 0,
+            input_fp8: 0,
+            input_ue8m0: 0,
             route_output: 0,
             route_written: 0,
             route_error: 0,
@@ -2702,21 +2728,21 @@ impl FerruleCutlassGroupedFp4MoeArgs {
                 layout.slot_capacity,
             ),
             (
-                "packed input",
-                buffers.input_packed.len(),
+                "FP8 input",
+                buffers.input_fp8.len(),
                 checked_mul(
                     layout.num_tokens,
-                    layout.input_size / 2,
-                    "grouped FP4 input",
+                    layout.input_size,
+                    "grouped FP4 MoE FP8 input",
                 )?,
             ),
             (
-                "input scales",
-                buffers.input_scales.len(),
+                "input UE8M0 scales",
+                buffers.input_ue8m0.len(),
                 checked_mul(
                     layout.num_tokens,
-                    layout.input_size / 32,
-                    "grouped FP4 input scales",
+                    layout.input_size / 128,
+                    "grouped FP4 MoE input scales",
                 )?,
             ),
             (
@@ -2761,8 +2787,8 @@ impl FerruleCutlassGroupedFp4MoeArgs {
         args.up_scale_ptrs = buffers.up_scale_ptrs.cu_deviceptr();
         args.down_ptrs = buffers.down_ptrs.cu_deviceptr();
         args.down_scale_ptrs = buffers.down_scale_ptrs.cu_deviceptr();
-        args.input_packed = buffers.input_packed.cu_deviceptr();
-        args.input_scales = buffers.input_scales.cu_deviceptr();
+        args.input_fp8 = buffers.input_fp8.cu_deviceptr();
+        args.input_ue8m0 = buffers.input_ue8m0.cu_deviceptr();
         args.route_output = buffers.route_output.cu_deviceptr();
         args.route_written = buffers.route_written.cu_deviceptr();
         args.route_error = buffers.route_error.cu_deviceptr();
@@ -2787,10 +2813,11 @@ fn validate_grouped_fp4_moe_layout(layout: GroupedFp4MoeLayout) -> Result<()> {
         || layout.num_tokens == 0
         || layout.num_routes == 0
         || layout.input_size == 0
-        || !layout.input_size.is_multiple_of(32)
+        || !layout.input_size.is_multiple_of(128)
         || layout.intermediate_size == 0
-        || !layout.intermediate_size.is_multiple_of(32)
+        || !layout.intermediate_size.is_multiple_of(128)
         || layout.hidden_size == 0
+        || !layout.hidden_size.is_multiple_of(64)
         || !layout.swiglu_limit.is_finite()
     {
         return Err(Error::Internal {
@@ -3083,7 +3110,7 @@ mod tests {
         );
         assert_pod_layout!(
             CutlassHcProducerArgs,
-            size = 144,
+            size = 168,
             align = 8,
             rows = 0,
             hc = 4,
@@ -3095,18 +3122,21 @@ mod tests {
             layer_rms_eps = 28,
             reserved = 32,
             state_f32 = 40,
-            function_col_major_f32 = 48,
+            function_row_major_f32 = 48,
             hc_scale_f32 = 56,
             hc_base_f32 = 64,
             layer_rms_weight_f32 = 72,
-            hidden_f32 = 80,
-            normalized_f32 = 88,
-            packed_e4m3 = 96,
-            scales_ue8m0 = 104,
-            split_pre_f32 = 112,
-            split_post_f32 = 120,
-            split_comb_f32 = 128,
-            stream = 136,
+            mix_f32 = 80,
+            workspace = 88,
+            workspace_bytes = 96,
+            hidden_f32 = 104,
+            normalized_f32 = 112,
+            packed_e4m3 = 120,
+            scales_ue8m0 = 128,
+            split_pre_f32 = 136,
+            split_post_f32 = 144,
+            split_comb_f32 = 152,
+            stream = 160,
         );
         assert_pod_layout!(
             CutlassSharedFfnArgs,
@@ -3326,8 +3356,8 @@ mod tests {
             up_scale_ptrs = 136,
             down_ptrs = 144,
             down_scale_ptrs = 152,
-            input_packed = 160,
-            input_scales = 168,
+            input_fp8 = 160,
+            input_ue8m0 = 168,
             route_output = 176,
             route_written = 184,
             route_error = 192,

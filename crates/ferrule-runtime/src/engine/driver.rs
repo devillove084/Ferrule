@@ -83,6 +83,8 @@ fn confident_proposal_prefix_length(logits: &[f32], threshold: f32) -> Result<us
 pub struct ResidentTopKDriverConfig {
     pub ctx_size: usize,
     pub stop_at_eos: bool,
+    /// Whether a model-provided proposal capability may replace target-only decode.
+    pub enable_native_proposals: bool,
     /// Static per-position confidence threshold used until the calibrated,
     /// batch-wide hardware scheduler is available. Zero disables truncation.
     pub proposal_confidence_threshold: f32,
@@ -93,6 +95,7 @@ impl Default for ResidentTopKDriverConfig {
         Self {
             ctx_size: 4096,
             stop_at_eos: true,
+            enable_native_proposals: true,
             proposal_confidence_threshold: 0.2,
         }
     }
@@ -4209,7 +4212,8 @@ where
         self.progress_materialization()?;
         self.check_warmup()?;
         self.update_hard_resource_observability();
-        let proposal_enabled = self.executor.runner().native_proposal_source()?.is_some();
+        let proposal_enabled = self.config.enable_native_proposals
+            && self.executor.runner().native_proposal_source()?.is_some();
 
         let requires_page_manager = proposal_enabled
             || self.executor.capabilities().kv_binding_mode == KvBindingMode::Paged;
@@ -6874,6 +6878,7 @@ mod tests {
             ResidentTopKDriverConfig {
                 ctx_size: 16,
                 stop_at_eos: true,
+                enable_native_proposals: true,
                 proposal_confidence_threshold: 0.2,
             },
         )
@@ -7030,6 +7035,7 @@ mod tests {
             ResidentTopKDriverConfig {
                 ctx_size: 16,
                 stop_at_eos: true,
+                enable_native_proposals: true,
                 proposal_confidence_threshold: 0.2,
             },
         )
@@ -8194,8 +8200,9 @@ mod tests {
     }
 
     #[test]
-    fn model_without_native_proposal_resumes_only_packed_target_execution() {
-        let runner = MockTopKRunner::new(vec![top(10)]).with_resumable_wait_scripts([1, 1]);
+    fn policy_can_disable_native_proposal_and_resume_packed_target_execution() {
+        let mut runner = MockTopKRunner::new(vec![top(10)]).with_resumable_wait_scripts([1, 1]);
+        runner.native_proposal_enabled = true;
         let mut driver = ResidentTopKDriver::with_configs(
             runner,
             FixedSequenceSlotPool::new(1),
@@ -8210,6 +8217,7 @@ mod tests {
             ResidentTopKDriverConfig {
                 ctx_size: 16,
                 stop_at_eos: true,
+                enable_native_proposals: false,
                 proposal_confidence_threshold: 0.2,
             },
         )
@@ -8308,6 +8316,7 @@ mod tests {
             ResidentTopKDriverConfig {
                 ctx_size: 16,
                 stop_at_eos: true,
+                enable_native_proposals: true,
                 proposal_confidence_threshold: 0.2,
             },
         )
@@ -8844,6 +8853,7 @@ mod tests {
             ResidentTopKDriverConfig {
                 ctx_size: 16,
                 stop_at_eos: true,
+                enable_native_proposals: true,
                 proposal_confidence_threshold: 0.2,
             },
         )
@@ -8963,6 +8973,7 @@ mod tests {
             ResidentTopKDriverConfig {
                 ctx_size: 16,
                 stop_at_eos: true,
+                enable_native_proposals: true,
                 proposal_confidence_threshold: 0.2,
             },
         )
@@ -9122,6 +9133,7 @@ mod tests {
             ResidentTopKDriverConfig {
                 ctx_size: 16,
                 stop_at_eos: true,
+                enable_native_proposals: true,
                 proposal_confidence_threshold: 0.2,
             },
         )
@@ -9210,6 +9222,7 @@ mod tests {
             ResidentTopKDriverConfig {
                 ctx_size: 16,
                 stop_at_eos: true,
+                enable_native_proposals: true,
                 proposal_confidence_threshold: 0.2,
             },
         )

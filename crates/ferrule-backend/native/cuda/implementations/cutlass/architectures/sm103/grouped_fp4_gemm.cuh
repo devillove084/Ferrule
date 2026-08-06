@@ -31,6 +31,7 @@
 #include <cutlass/gemm/kernel/gemm_universal.hpp>
 #include <cutlass/layout/matrix.h>
 #include <cutlass/numeric_types.h>
+#include <cutlass/util/packed_stride.hpp>
 #include <cutlass/version.h>
 
 #pragma nv_diag_pop
@@ -48,8 +49,8 @@ inline constexpr std::uint8_t kScalePadding = 0x7f;
 inline constexpr std::size_t kInvalidScaleIndex =
     (std::numeric_limits<std::size_t>::max)();
 
-using ElementA = ::cutlass::float_e2m1_t;
-using ElementB = ::cutlass::float_e2m1_t;
+using ElementPairA = ::cutlass::mx_float8_t<::cutlass::float_e4m3_t>;
+using ElementPairB = ::cutlass::mx_float4_t<::cutlass::float_e2m1_t>;
 using ElementScale = ::cutlass::float_ue8m0_t;
 using ElementD = float;
 using LayoutA = ::cutlass::layout::RowMajor;
@@ -57,64 +58,59 @@ using LayoutB = ::cutlass::layout::ColumnMajor;
 using LayoutD = ::cutlass::layout::RowMajor;
 using ProblemShapeValue = cute::Shape<int, int, int>;
 using ProblemShape = ::cutlass::gemm::GroupProblemShape<ProblemShapeValue>;
-using BlockScaleConfig =
-    ::cutlass::detail::Sm103BlockScaledConfig<kScaleVectorSize>;
 
-inline constexpr int kAlignmentA = 32;
-inline constexpr int kAlignmentB = 32;
+inline constexpr int kAlignmentA = 16;
+inline constexpr int kAlignmentB = 128;
 inline constexpr int kAlignmentD = 4;
 
-using TileShape1Sm = cute::Shape<cute::_128, cute::_128, cute::Int<768>>;
+using TileShape1Sm = cute::Shape<cute::_128, cute::_128, cute::_128>;
 using ClusterShape1Sm = cute::Shape<cute::_2, cute::_4, cute::_1>;
 using Epilogue1Sm = typename ::cutlass::epilogue::collective::CollectiveBuilder<
-    ::cutlass::arch::Sm103, ::cutlass::arch::OpClassBlockScaledTensorOp,
-    TileShape1Sm, ClusterShape1Sm,
-    ::cutlass::epilogue::collective::EpilogueTileAuto, float, float, void,
-    LayoutD *, kAlignmentD, ElementD, LayoutD *, kAlignmentD,
+    ::cutlass::arch::Sm100, ::cutlass::arch::OpClassBlockScaledTensorOp,
+    TileShape1Sm, ClusterShape1Sm, cute::Shape<cute::_128, cute::_64>, float,
+    float, void, LayoutD *, kAlignmentD, ElementD, LayoutD *, kAlignmentD,
     ::cutlass::epilogue::PtrArrayTmaWarpSpecialized1Sm>::CollectiveOp;
 using Mainloop1Sm = typename ::cutlass::gemm::collective::CollectiveBuilder<
-    ::cutlass::arch::Sm103, ::cutlass::arch::OpClassBlockScaledTensorOp,
-    cute::tuple<ElementA, ElementScale>, LayoutA *, kAlignmentA,
-    cute::tuple<ElementB, ElementScale>, LayoutB *, kAlignmentB, float,
-    TileShape1Sm, ClusterShape1Sm,
+    ::cutlass::arch::Sm100, ::cutlass::arch::OpClassBlockScaledTensorOp,
+    ElementPairA, LayoutA *, kAlignmentA, ElementPairB, LayoutB *, kAlignmentB,
+    float, TileShape1Sm, ClusterShape1Sm,
     ::cutlass::gemm::collective::StageCountAutoCarveout<static_cast<int>(
         sizeof(typename Epilogue1Sm::SharedStorage))>,
-    ::cutlass::gemm::
-        KernelPtrArrayTmaWarpSpecialized1SmBlockScaledMxNvf4UltraVs32Sm103>::
+    ::cutlass::gemm::KernelPtrArrayTmaWarpSpecialized1SmMxf8f6f4Sm100>::
     CollectiveOp;
 using Kernel1Sm =
     ::cutlass::gemm::kernel::GemmUniversal<ProblemShape, Mainloop1Sm,
                                            Epilogue1Sm>;
 using GroupedGemm1Sm = ::cutlass::gemm::device::GemmUniversalAdapter<Kernel1Sm>;
 
-using TileShape2Sm = cute::Shape<cute::_256, cute::_256, cute::Int<768>>;
+using TileShape2Sm = cute::Shape<cute::_256, cute::_256, cute::_128>;
 using ClusterShape2Sm = cute::Shape<cute::_4, cute::_2, cute::_1>;
 using Epilogue2Sm = typename ::cutlass::epilogue::collective::CollectiveBuilder<
-    ::cutlass::arch::Sm103, ::cutlass::arch::OpClassBlockScaledTensorOp,
-    TileShape2Sm, ClusterShape2Sm,
-    ::cutlass::epilogue::collective::EpilogueTileAuto, float, float, void,
-    LayoutD *, kAlignmentD, ElementD, LayoutD *, kAlignmentD,
+    ::cutlass::arch::Sm100, ::cutlass::arch::OpClassBlockScaledTensorOp,
+    TileShape2Sm, ClusterShape2Sm, cute::Shape<cute::_128, cute::_64>, float,
+    float, void, LayoutD *, kAlignmentD, ElementD, LayoutD *, kAlignmentD,
     ::cutlass::epilogue::PtrArrayTmaWarpSpecialized2Sm>::CollectiveOp;
 using Mainloop2Sm = typename ::cutlass::gemm::collective::CollectiveBuilder<
-    ::cutlass::arch::Sm103, ::cutlass::arch::OpClassBlockScaledTensorOp,
-    cute::tuple<ElementA, ElementScale>, LayoutA *, kAlignmentA,
-    cute::tuple<ElementB, ElementScale>, LayoutB *, kAlignmentB, float,
-    TileShape2Sm, ClusterShape2Sm,
+    ::cutlass::arch::Sm100, ::cutlass::arch::OpClassBlockScaledTensorOp,
+    ElementPairA, LayoutA *, kAlignmentA, ElementPairB, LayoutB *, kAlignmentB,
+    float, TileShape2Sm, ClusterShape2Sm,
     ::cutlass::gemm::collective::StageCountAutoCarveout<static_cast<int>(
         sizeof(typename Epilogue2Sm::SharedStorage))>,
-    ::cutlass::gemm::
-        KernelPtrArrayTmaWarpSpecialized2SmBlockScaledMxNvf4UltraVs32Sm103>::
+    ::cutlass::gemm::KernelPtrArrayTmaWarpSpecialized2SmMxf8f6f4Sm100>::
     CollectiveOp;
 using Kernel2Sm =
     ::cutlass::gemm::kernel::GemmUniversal<ProblemShape, Mainloop2Sm,
                                            Epilogue2Sm>;
 using GroupedGemm2Sm = ::cutlass::gemm::device::GemmUniversalAdapter<Kernel2Sm>;
 
+using ElementA = typename Mainloop1Sm::ElementA;
+using ElementB = typename Mainloop1Sm::ElementB;
 using StrideA = typename Kernel1Sm::InternalStrideA;
 using StrideB = typename Kernel1Sm::InternalStrideB;
 using StrideD = typename Kernel1Sm::InternalStrideD;
 using LayoutSFA = typename Mainloop1Sm::InternalLayoutSFA;
 using LayoutSFB = typename Mainloop1Sm::InternalLayoutSFB;
+using BlockScaleConfig = typename Mainloop1Sm::Sm1xxBlkScaledConfig;
 
 static_assert(std::is_same_v<StrideA, typename Kernel2Sm::InternalStrideA>);
 static_assert(std::is_same_v<StrideB, typename Kernel2Sm::InternalStrideB>);
@@ -381,16 +377,19 @@ inline DeviceDescriptorView DescriptorStorage::view() const noexcept {
   return result;
 }
 
-inline StrideA packed_stride_a(int, int k) noexcept {
-  return StrideA{static_cast<std::int64_t>(k), cute::_1{}, cute::_0{}};
+inline StrideA packed_stride_a(int m, int k) noexcept {
+  return ::cutlass::make_cute_packed_stride(StrideA{},
+                                            cute::make_shape(m, k, 1));
 }
 
-inline StrideB packed_stride_b(int, int k) noexcept {
-  return StrideB{static_cast<std::int64_t>(k), cute::_1{}, cute::_0{}};
+inline StrideB packed_stride_b(int n, int k) noexcept {
+  return ::cutlass::make_cute_packed_stride(StrideB{},
+                                            cute::make_shape(n, k, 1));
 }
 
-inline StrideD packed_stride_d(int, int n) noexcept {
-  return StrideD{static_cast<std::int64_t>(n), cute::_1{}, cute::_0{}};
+inline StrideD packed_stride_d(int m, int n) noexcept {
+  return ::cutlass::make_cute_packed_stride(StrideD{},
+                                            cute::make_shape(m, n, 1));
 }
 
 inline LayoutSFA make_sfa_layout(int m, int n, int k) noexcept {

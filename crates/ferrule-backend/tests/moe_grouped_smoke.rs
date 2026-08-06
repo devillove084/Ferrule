@@ -3,7 +3,7 @@
 //! CUDA smoke coverage for compact grouped MoE route outputs.
 
 use ferrule_backend::cuda::CudaContext;
-use ferrule_backend::cuda::context::{CudaArtifactLinearShape, CudaArtifactOperatorContext};
+use ferrule_backend::cuda::context::{CudaArtifactOperatorContext, CudaRoutedExpertShape};
 use std::sync::{Mutex, MutexGuard};
 
 static CUDA_TEST_LOCK: Mutex<()> = Mutex::new(());
@@ -26,6 +26,12 @@ fn assert_close_slice(actual: &[f32], expected: &[f32], tolerance: f32, label: &
             "{label}[{index}]: expected {expected}, got {actual}"
         );
     }
+}
+
+fn bf16_round(value: f32) -> f32 {
+    let bits = value.to_bits();
+    let rounded = bits.wrapping_add(0x7fff + ((bits >> 16) & 1));
+    f32::from_bits(rounded & 0xffff_0000)
 }
 
 #[test]
@@ -74,7 +80,7 @@ fn route_ranked_reducer_preserves_prefix_and_uses_token_major_routes() {
                 let route = token * ROUTES_PER_TOKEN + rank;
                 acc += routes[route * HIDDEN_SIZE + row];
             }
-            expected[output_index] = acc;
+            expected[output_index] = bf16_round(acc);
         }
     }
 
@@ -112,20 +118,19 @@ fn expert_major_groups_gather_scatter_and_reduce() {
     const TOKENS: usize = 3;
     const ROUTES_PER_TOKEN: usize = 2;
     const ROUTE_COUNT: usize = TOKENS * ROUTES_PER_TOKEN;
-    const INPUT_SIZE: usize = 64;
-    const INTERMEDIATE_SIZE: usize = 64;
-    const HIDDEN_SIZE: usize = 16;
+    const INPUT_SIZE: usize = 128;
+    const INTERMEDIATE_SIZE: usize = 128;
+    const HIDDEN_SIZE: usize = 64;
     const ROUTE_WEIGHT: f32 = 1.0 / 1024.0;
 
     let context = CudaArtifactOperatorContext::new().expect("CUDA artifact context");
-    let gate_up_shape = CudaArtifactLinearShape::Fp4E2M1PackedWithE8M0Scale {
-        out_features: INTERMEDIATE_SIZE,
-        in_features: INPUT_SIZE,
-    };
-    let down_shape = CudaArtifactLinearShape::Fp4E2M1PackedWithE8M0Scale {
-        out_features: HIDDEN_SIZE,
-        in_features: INTERMEDIATE_SIZE,
-    };
+    let shape = CudaRoutedExpertShape::new(INPUT_SIZE, INTERMEDIATE_SIZE, HIDDEN_SIZE)
+        .expect("routed expert shape");
+    let mut arena = context
+        .allocate_routed_expert_arena(shape, 2)
+        .expect("routed expert arena");
+    let mut expert_zero_frame = arena.allocate_frame().expect("expert 0 frame");
+    let mut expert_one_frame = arena.allocate_frame().expect("expert 1 frame");
 
     // E2M1 nibble 0x2 is +1 and nibble 0x4 is +2. E8M0 byte 127 is scale 1.
     let gate_up_weight = vec![0x22u8; INTERMEDIATE_SIZE * INPUT_SIZE / 2];
@@ -133,26 +138,46 @@ fn expert_major_groups_gather_scatter_and_reduce() {
     let down_one_weight = vec![0x22u8; HIDDEN_SIZE * INTERMEDIATE_SIZE / 2];
     let down_two_weight = vec![0x44u8; HIDDEN_SIZE * INTERMEDIATE_SIZE / 2];
     let down_scale = vec![127u8; HIDDEN_SIZE * INTERMEDIATE_SIZE / 32];
-
-    let gate = context
-        .upload_artifact_linear(gate_up_shape, &gate_up_weight, &gate_up_scale)
-        .expect("upload gate");
-    let up = context
-        .upload_artifact_linear(gate_up_shape, &gate_up_weight, &gate_up_scale)
-        .expect("upload up");
-    let down_one = context
-        .upload_artifact_linear(down_shape, &down_one_weight, &down_scale)
-        .expect("upload expert-0 down");
-    let down_two = context
-        .upload_artifact_linear(down_shape, &down_two_weight, &down_scale)
-        .expect("upload expert-1 down");
+    let pin = |values: &[u8]| {
+        context
+            .pin_u8_host_buffer(values)
+            .expect("pin expert tensor")
+    };
+    let expert_zero_upload = context
+        .materialize_routed_expert_from_pinned_async(
+            &mut expert_zero_frame,
+            pin(&gate_up_weight),
+            pin(&gate_up_scale),
+            pin(&gate_up_weight),
+            pin(&gate_up_scale),
+            pin(&down_one_weight),
+            pin(&down_scale),
+        )
+        .expect("materialize expert 0");
+    let expert_one_upload = context
+        .materialize_routed_expert_from_pinned_async(
+            &mut expert_one_frame,
+            pin(&gate_up_weight),
+            pin(&gate_up_scale),
+            pin(&gate_up_weight),
+            pin(&gate_up_scale),
+            pin(&down_two_weight),
+            pin(&down_scale),
+        )
+        .expect("materialize expert 1");
+    expert_zero_upload
+        .synchronize()
+        .expect("complete expert 0 materialization");
+    expert_one_upload
+        .synchronize()
+        .expect("complete expert 1 materialization");
 
     let mut table = context.expert_slot_table(2, 1).expect("slot table");
-    let expert_zero = context
-        .expert_slot_pointers(&gate, &up, &down_one)
+    let expert_zero = expert_zero_frame
+        .expert_slot_pointers()
         .expect("expert 0 pointers");
-    let expert_one = context
-        .expert_slot_pointers(&gate, &up, &down_two)
+    let expert_one = expert_one_frame
+        .expert_slot_pointers()
         .expect("expert 1 pointers");
     context
         .install_expert_slot(&mut table, 0, expert_zero)
@@ -252,10 +277,11 @@ fn expert_major_groups_gather_scatter_and_reduce() {
     assert_eq!(context.counters().kernel_launches, 1);
     context.sync_stream().expect("synchronize grouped MoE");
 
-    // Quantized input remains exactly 1. Gate/up each produce 64, sigmoid(64)=1,
-    // and route weight 1/1024 yields hidden value 4 exactly. The two down experts
-    // therefore produce 64*4*1=256 and 64*4*2=512 respectively.
-    let route_values = [256.0f32, 512.0, 512.0, 256.0, 256.0, 512.0];
+    // The official grouped FP4 contract quantizes BF16 activations to FP8/K128.
+    // Input 1 stays exact, gate/up each produce BF16 128, and applying the route
+    // weight before the down-input quantization yields hidden value 16. The two
+    // down experts therefore produce 128*16*1=2048 and 128*16*2=4096.
+    let route_values = [2048.0f32, 4096.0, 4096.0, 2048.0, 2048.0, 4096.0];
     let expected_routes = route_values
         .iter()
         .flat_map(|value| std::iter::repeat_n(*value, HIDDEN_SIZE))
@@ -275,7 +301,7 @@ fn expert_major_groups_gather_scatter_and_reduce() {
         .collect::<Vec<_>>();
     let expected = prefix
         .iter()
-        .map(|value| value + 256.0 + 512.0)
+        .map(|value| bf16_round(value + 2048.0 + 4096.0))
         .collect::<Vec<_>>();
     let mut output = context
         .upload_f32_buffer(&prefix)

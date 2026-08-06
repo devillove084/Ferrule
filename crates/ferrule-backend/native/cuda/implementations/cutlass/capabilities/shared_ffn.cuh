@@ -165,6 +165,20 @@ __device__ __forceinline__ std::uint8_t quantize_fp8_e4m3fn_byte(float value) {
       __nv_cvt_float_to_fp8(value, __NV_SATFINITE, __NV_E4M3));
 }
 
+__device__ __forceinline__ std::uint16_t f32_to_bf16_rne(float value) {
+  std::uint32_t bits = __float_as_uint(value);
+  if ((bits & 0x7fffffffu) > 0x7f800000u) {
+    return static_cast<std::uint16_t>((bits >> 16) | 0x0040u);
+  }
+  const std::uint32_t bias = 0x7fffu + ((bits >> 16) & 1u);
+  return static_cast<std::uint16_t>((bits + bias) >> 16);
+}
+
+__device__ __forceinline__ float bf16_round(float value) {
+  return __uint_as_float(static_cast<std::uint32_t>(f32_to_bf16_rne(value))
+                         << 16);
+}
+
 __device__ __forceinline__ std::uint8_t scale_byte_for_amax(float amax) {
   if (!isfinite(amax) || amax <= 0.0f) {
     return 127u;
@@ -349,11 +363,12 @@ gate_up_tile(const Args &args, const SharedLayout &shared,
         channel_base + channel_group + (element >= 2u ? 8u : 0u);
     std::uint32_t row = row_pair * 2u + (element & 1u);
     if (row < active_rows && channel < args.intermediate_size) {
+      const float gate = bf16_round(gate_accumulator[element]);
+      const float up = bf16_round(up_accumulator[element]);
       args.hidden_f32[static_cast<std::uint64_t>(row_base + row) *
                           args.intermediate_size +
                       channel] =
-          swiglu(gate_accumulator[element], up_accumulator[element],
-                 args.output_scale, args.swiglu_limit);
+          bf16_round(swiglu(gate, up, args.output_scale, args.swiglu_limit));
     }
   }
 }
@@ -448,10 +463,12 @@ down_tile(const Args &args, const SharedLayout &shared, std::uint32_t row_base,
       std::uint64_t output_index =
           static_cast<std::uint64_t>(row_base + row) * args.output_size +
           channel;
+      const float down = bf16_round(accumulator[element]);
       if ((args.flags & kAccumulateOutput) != 0u) {
-        args.output_f32[output_index] += accumulator[element];
+        args.output_f32[output_index] =
+            bf16_round(args.output_f32[output_index] + down);
       } else {
-        args.output_f32[output_index] = accumulator[element];
+        args.output_f32[output_index] = down;
       }
     }
   }
