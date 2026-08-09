@@ -1,61 +1,73 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="960" height="240" viewBox="0 0 960 240" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="220" viewBox="0 0 960 220" role="img" aria-labelledby="title desc">
   <title id="title">Ferrule</title>
-  <desc id="desc">A minimal luminous Möbius band beside the Ferrule wordmark.</desc>
+  <desc id="desc">A precision-engineered Möbius data band beside the Ferrule wordmark.</desc>
+
+  <style>
+    .wordmark { fill: #0f172a; }
+    .datum { stroke: #334155; }
+    @media (prefers-color-scheme: dark) {
+      .wordmark { fill: #e2e8f0; }
+      .datum { stroke: #94a3b8; }
+    }
+  </style>
 
   <defs>
-    <linearGradient id="band" x1="25" y1="58" x2="268" y2="182" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#06B6D4"/>
-      <stop offset="0.38" stop-color="#22D3EE"/>
-      <stop offset="0.55" stop-color="#6366F1"/>
-      <stop offset="0.82" stop-color="#8B5CF6"/>
-      <stop offset="1" stop-color="#D946EF"/>
+    <linearGradient id="metal" x1="24" y1="48" x2="270" y2="174" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0f172a"/>
+      <stop offset="0.24" stop-color="#334155"/>
+      <stop offset="0.48" stop-color="#0891b2"/>
+      <stop offset="0.68" stop-color="#1e293b"/>
+      <stop offset="1" stop-color="#020617"/>
     </linearGradient>
-    <linearGradient id="twist" x1="105" y1="72" x2="188" y2="168" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#CFFAFE"/>
-      <stop offset="0.28" stop-color="#22D3EE"/>
-      <stop offset="0.66" stop-color="#6366F1"/>
-      <stop offset="1" stop-color="#C4B5FD"/>
+    <linearGradient id="face" x1="106" y1="61" x2="188" y2="162" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#67e8f9"/>
+      <stop offset="0.28" stop-color="#0891b2"/>
+      <stop offset="0.58" stop-color="#1e293b"/>
+      <stop offset="1" stop-color="#64748b"/>
     </linearGradient>
-    <linearGradient id="ink" x1="310" y1="70" x2="930" y2="170" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#0F172A"/>
-      <stop offset="0.52" stop-color="#334155"/>
-      <stop offset="1" stop-color="#111827"/>
+    <linearGradient id="edge" x1="25" y1="64" x2="261" y2="156" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#22d3ee" stop-opacity=".2"/>
+      <stop offset=".48" stop-color="#67e8f9"/>
+      <stop offset="1" stop-color="#0e7490" stop-opacity=".35"/>
     </linearGradient>
-    <filter id="soft-glow" x="-20%" y="-30%" width="140%" height="160%">
-      <feGaussianBlur stdDeviation="6"/>
-    </filter>
 
-    <path id="loop" d="M28 120C57 61 96 56 144 117C191 177 228 178 260 120C228 62 191 63 144 123C96 184 57 179 28 120Z"/>
-    <path id="over" d="M108 77C121 88 133 103 144 117C157 134 170 151 185 162"/>
-    <mask id="underpass" x="0" y="0" width="290" height="240" maskUnits="userSpaceOnUse">
-      <rect width="290" height="240" fill="white"/>
-      <use href="#over" fill="none" stroke="black" stroke-width="38" stroke-linecap="round"/>
+    <path id="loop" d="M25 110C55 49 96 47 145 108C194 169 232 171 263 110C232 49 194 51 145 112C96 173 55 171 25 110Z"/>
+    <path id="bridge" d="M106 64C121 75 133 92 145 108C158 125 171 144 188 157"/>
+    <mask id="under" x="0" y="0" width="290" height="220" maskUnits="userSpaceOnUse">
+      <rect width="290" height="220" fill="white"/>
+      <use href="#bridge" fill="none" stroke="black" stroke-width="36" stroke-linecap="butt"/>
     </mask>
 
-    <path id="wordmark" fill-rule="evenodd" d="
-      M310 73H377V94H335V113H372V134H335V167H310Z
-      M395 73H465V94H420V111H461V132H420V146H467V167H395Z
-      M486 167V73H529C556 73 572 87 572 109C572 124 564 136 550 142L577 167H544L523 144H511V167ZM511 94V124H527C540 124 547 119 547 109C547 99 540 94 527 94Z
-      M591 167V73H634C661 73 677 87 677 109C677 124 669 136 655 142L682 167H649L628 144H616V167ZM616 94V124H632C645 124 652 119 652 109C652 99 645 94 632 94Z
-      M692 73H717V132C717 143 723 149 735 149C747 149 753 143 753 132V73H778V133C778 156 763 170 735 170C707 170 692 156 692 133Z
-      M797 73H822V146H868V167H797Z
-      M884 73H954V94H909V111H950V132H909V146H956V167H884Z"/>
+    <path id="wordmark-path" fill-rule="evenodd" d="
+      M309 61H376V82H334V102H371V123H334V159H309Z
+      M394 61H464V82H419V100H460V121H419V138H466V159H394Z
+      M485 159V61H529C557 61 574 76 574 108C574 124 566 136 552 142L578 159H543L523 143H510V159ZM510 82V123H527C542 123 549 117 549 103C549 89 542 82 527 82Z
+      M592 159V61H636C664 61 681 76 681 108C681 124 673 136 659 142L685 159H650L630 143H617V159ZM617 82V123H634C649 123 656 117 656 103C656 89 649 82 634 82Z
+      M696 61H721V124C721 136 727 142 739 142C751 142 757 136 757 124V61H782V125C782 149 767 163 739 163C711 163 696 149 696 125Z
+      M801 61H826V138H872V159H801Z
+      M888 61H958V82H913V100H954V121H913V138H960V159H888Z"/>
   </defs>
 
-  <use href="#loop" fill="none" stroke="url(#band)" stroke-width="31" stroke-linecap="round" stroke-linejoin="round" opacity=".22" filter="url(#soft-glow)"/>
-  <g mask="url(#underpass)" fill="none" stroke-linecap="round" stroke-linejoin="round">
-    <use href="#loop" stroke="#0F172A" stroke-opacity=".2" stroke-width="34"/>
-    <use href="#loop" stroke="url(#band)" stroke-width="28"/>
-    <use href="#loop" stroke="#FFFFFF" stroke-opacity=".34" stroke-width="2" transform="translate(0 -3)"/>
-  </g>
-  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
-    <use href="#over" stroke="#0F172A" stroke-opacity=".22" stroke-width="36"/>
-    <use href="#over" stroke="url(#twist)" stroke-width="30"/>
-    <use href="#over" stroke="#FFFFFF" stroke-opacity=".58" stroke-width="2" transform="translate(-2 -3)"/>
+  <g fill="none" stroke-linejoin="miter" mask="url(#under)">
+    <use href="#loop" stroke="#020617" stroke-width="34"/>
+    <use href="#loop" stroke="url(#metal)" stroke-width="27"/>
+    <use href="#loop" stroke="url(#edge)" stroke-width="2" transform="translate(0 -4)"/>
+    <use href="#loop" stroke="#020617" stroke-opacity=".55" stroke-width="1" transform="translate(0 5)"/>
   </g>
 
-  <g stroke-linejoin="round">
-    <use href="#wordmark" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="9"/>
-    <use href="#wordmark" fill="url(#ink)" stroke="#0F172A" stroke-width="1.5"/>
+  <g fill="none" stroke-linecap="butt" stroke-linejoin="miter">
+    <use href="#bridge" stroke="#020617" stroke-width="37"/>
+    <use href="#bridge" stroke="url(#face)" stroke-width="30"/>
+    <use href="#bridge" stroke="#cffafe" stroke-opacity=".75" stroke-width="2" transform="translate(-3 -3)"/>
+    <use href="#bridge" stroke="#020617" stroke-opacity=".55" stroke-width="1" transform="translate(4 4)"/>
   </g>
+
+  <g opacity=".8" fill="none" stroke-width="1">
+    <path class="datum" d="M25 190H263"/>
+    <path class="datum" d="M25 185V195M145 185V195M263 185V195"/>
+  </g>
+
+  <use href="#wordmark-path" class="wordmark"/>
+  <rect x="309" y="177" width="651" height="2" fill="#0891b2" opacity=".7"/>
+  <rect x="309" y="177" width="74" height="2" fill="#22d3ee"/>
 </svg>
