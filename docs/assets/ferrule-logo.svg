@@ -1,41 +1,36 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="960" height="220" viewBox="0 0 960 220" role="img" aria-labelledby="title desc">
   <title id="title">Ferrule</title>
-  <desc id="desc">A precision-engineered Möbius data band beside the Ferrule wordmark.</desc>
+  <desc id="desc">A precise wireframe Möbius loop beside the Ferrule wordmark.</desc>
 
   <style>
+    .structure { stroke: #0f172a; }
     .wordmark { fill: #0f172a; }
-    .datum { stroke: #334155; }
     @media (prefers-color-scheme: dark) {
+      .structure { stroke: #e2e8f0; }
       .wordmark { fill: #e2e8f0; }
-      .datum { stroke: #94a3b8; }
     }
   </style>
 
   <defs>
-    <linearGradient id="metal" x1="24" y1="48" x2="270" y2="174" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#0f172a"/>
-      <stop offset="0.24" stop-color="#334155"/>
-      <stop offset="0.48" stop-color="#0891b2"/>
-      <stop offset="0.68" stop-color="#1e293b"/>
-      <stop offset="1" stop-color="#020617"/>
+    <linearGradient id="side-signal" x1="0" y1="52" x2="0" y2="168" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#2dd4bf"/>
+      <stop offset="0.42" stop-color="#22d3ee"/>
+      <stop offset="0.5" stop-color="#3b82f6"/>
+      <stop offset="0.58" stop-color="#6366f1"/>
+      <stop offset="1" stop-color="#8b5cf6"/>
     </linearGradient>
-    <linearGradient id="face" x1="106" y1="61" x2="188" y2="162" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#67e8f9"/>
-      <stop offset="0.28" stop-color="#0891b2"/>
-      <stop offset="0.58" stop-color="#1e293b"/>
-      <stop offset="1" stop-color="#64748b"/>
-    </linearGradient>
-    <linearGradient id="edge" x1="25" y1="64" x2="261" y2="156" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#22d3ee" stop-opacity=".2"/>
-      <stop offset=".48" stop-color="#67e8f9"/>
-      <stop offset="1" stop-color="#0e7490" stop-opacity=".35"/>
+    <linearGradient id="accent-rule" x1="309" y1="0" x2="361" y2="0" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#2dd4bf"/>
+      <stop offset="0.5" stop-color="#3b82f6"/>
+      <stop offset="1" stop-color="#8b5cf6"/>
     </linearGradient>
 
-    <path id="loop" d="M25 110C55 49 96 47 145 108C194 169 232 171 263 110C232 49 194 51 145 112C96 173 55 171 25 110Z"/>
-    <path id="bridge" d="M106 64C121 75 133 92 145 108C158 125 171 144 188 157"/>
-    <mask id="under" x="0" y="0" width="290" height="220" maskUnits="userSpaceOnUse">
+    <path id="loop" d="M24 110C57 52 99 52 145 110C191 168 233 168 266 110C233 52 191 52 145 110C99 168 57 168 24 110Z"/>
+    <path id="bridge" d="M24 110C57 52 99 52 145 110C191 168 233 168 266 110"/>
+
+    <mask id="underpass" x="0" y="0" width="290" height="220" maskUnits="userSpaceOnUse">
       <rect width="290" height="220" fill="white"/>
-      <use href="#bridge" fill="none" stroke="black" stroke-width="36" stroke-linecap="butt"/>
+      <use href="#bridge" fill="none" stroke="black" stroke-width="28"/>
     </mask>
 
     <path id="wordmark-path" fill-rule="evenodd" d="
@@ -48,26 +43,22 @@
       M888 61H958V82H913V100H954V121H913V138H960V159H888Z"/>
   </defs>
 
-  <g fill="none" stroke-linejoin="miter" mask="url(#under)">
-    <use href="#loop" stroke="#020617" stroke-width="34"/>
-    <use href="#loop" stroke="url(#metal)" stroke-width="27"/>
-    <use href="#loop" stroke="url(#edge)" stroke-width="2" transform="translate(0 -4)"/>
-    <use href="#loop" stroke="#020617" stroke-opacity=".55" stroke-width="1" transform="translate(0 5)"/>
-  </g>
-
   <g fill="none" stroke-linecap="butt" stroke-linejoin="miter">
-    <use href="#bridge" stroke="#020617" stroke-width="37"/>
-    <use href="#bridge" stroke="url(#face)" stroke-width="30"/>
-    <use href="#bridge" stroke="#cffafe" stroke-opacity=".75" stroke-width="2" transform="translate(-3 -3)"/>
-    <use href="#bridge" stroke="#020617" stroke-opacity=".55" stroke-width="1" transform="translate(4 4)"/>
+    <g mask="url(#underpass)">
+      <use href="#loop" class="structure" stroke-width="22"/>
+      <use href="#loop" stroke="url(#side-signal)" stroke-width="4"/>
+      <use href="#loop" stroke="url(#side-signal)" stroke-width="2" transform="translate(0 -7)" opacity=".55"/>
+    </g>
+
+    <use href="#bridge" class="structure" stroke-width="22"/>
+    <use href="#bridge" stroke="url(#side-signal)" stroke-width="4"/>
+    <use href="#bridge" stroke="url(#side-signal)" stroke-width="2" transform="translate(0 -7)" opacity=".55"/>
   </g>
 
-  <g opacity=".8" fill="none" stroke-width="1">
-    <path class="datum" d="M25 190H263"/>
-    <path class="datum" d="M25 185V195M145 185V195M263 185V195"/>
-  </g>
+  <circle cx="24" cy="110" r="3.5" fill="#3b82f6"/>
+  <circle cx="266" cy="110" r="3.5" fill="#3b82f6"/>
 
   <use href="#wordmark-path" class="wordmark"/>
-  <rect x="309" y="177" width="651" height="2" fill="#0891b2" opacity=".7"/>
-  <rect x="309" y="177" width="74" height="2" fill="#22d3ee"/>
+  <rect x="309" y="176" width="651" height="1" class="wordmark" opacity=".18"/>
+  <rect x="309" y="174" width="52" height="3" fill="url(#accent-rule)"/>
 </svg>
