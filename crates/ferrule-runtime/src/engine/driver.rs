@@ -12,16 +12,17 @@ use ferrule_common::io_protocol::{
     RequestGeneration, RetirementReason, WaiterId,
 };
 use ferrule_model::{
-    MaterializationPlacement, MultiSessionBatchProgress, MultiSessionRunner, NativeProposal,
-    NativeProposalProgress, NativeProposalSource, PendingModelProgress,
-    PhysicalMaterializationTopology, ResidentModelRunner, TransactionEndIntent,
-    TransactionEndProgress,
+    MaterializationPlacement, MaterializationResolver, MultiSessionBatchProgress,
+    MultiSessionRunner, NativeProposal, NativeProposalProgress, NativeProposalSource,
+    PendingModelProgress, PhysicalMaterializationTopology, ResidentModelRunner,
+    TransactionEndIntent, TransactionEndProgress,
 };
 use tracing;
 
 use crate::cache::{
-    KvPageManager, KvReservation, KvReservationCommit, KvRetirement, PreemptedKvState,
-    PreparedKvCommit,
+    KvPageManager, KvPrefixSnapshot, KvReservation, KvReservationCommit, KvRetirement,
+    PreemptedKvState, PrefixCacheNamespace, PrefixLookupLimit, PreparedKvCommit,
+    PreparedKvSnapshotFork, RadixPrefixCache, RemovedPrefixEntry,
 };
 use crate::io::{
     FailedContinuation, FairQueueConfig, LoadRegistry, OutputTokenId, ResumeDisposition,
@@ -29,12 +30,15 @@ use crate::io::{
     RuntimeMaterializationResolverStats, SharedMaterializationProvider, TransactionCustodyOutcome,
     UnavailableMaterializationProvider,
 };
-use crate::scheduling::resident::{SuspendedSequenceSchedule, greedy_candidate};
+use crate::scheduling::resident::{
+    PreparedWaitingAdmission, SuspendedSequenceSchedule, greedy_candidate,
+};
 use crate::scheduling::{
     CancelRequestResult, DecodeAction, ExecutionPhase, ExecutionPhaseSet, GenerateRequest,
     PhysicalResourceBroker, PhysicalResourceClaim, PhysicalResourceGrant, PhysicalResourceLimit,
-    RequestId, ResidentScheduler, ResidentSchedulerConfig, ResourceKind, ScheduledBatch,
-    SchedulerAction, SequenceFinishReason, SequenceSlotPool, SequenceState, SessionId,
+    PrefillChunkAction, RequestId, ResidentScheduler, ResidentSchedulerConfig, ResourceKind,
+    ScheduledBatch, SchedulerAction, SequenceFinishReason, SequenceSlotPool, SequenceState,
+    SessionId,
 };
 use crate::speculation::{
     PendingSpeculativeVerificationCohort, PreparedSpeculativeCohort, SpeculativeCohortFailure,
@@ -46,7 +50,9 @@ use crate::speculation::{
 };
 
 use super::NativeMultiSessionExecutor;
-use super::observability::{ResidentDriverObservability, ResidentTopKDriverStats};
+use super::observability::{
+    ResidentDriverObservability, ResidentPrefixCacheStats, ResidentTopKDriverStats,
+};
 
 fn matched_stop(text: &str, stop: &[String]) -> bool {
     stop.iter()
@@ -59,6 +65,12 @@ fn proposal_confidence_probability(logit: f32) -> f32 {
     } else {
         let exponential = logit.exp();
         exponential / (1.0 + exponential)
+    }
+}
+
+fn prefix_cache_error(operation: &str, error: impl std::fmt::Display) -> Error {
+    Error::Invariant {
+        message: format!("{operation}: {error}"),
     }
 }
 
@@ -239,6 +251,41 @@ enum PendingSequenceCleanup<S> {
         retirement: Option<PendingKvRetirement>,
         model_state: Option<S>,
     },
+}
+
+struct ResidentPrefixPayload<S> {
+    model_state: S,
+    snapshot: KvPrefixSnapshot,
+}
+
+struct PreparedPrefixAdmission<S> {
+    model_state: S,
+    pages: PreparedKvSnapshotFork,
+    matched_tokens: usize,
+}
+
+struct PendingPrefixCleanup<S> {
+    snapshot: Option<KvPrefixSnapshot>,
+    retirement: Option<PendingKvRetirement>,
+    model_state: Option<S>,
+}
+
+impl<S> PendingPrefixCleanup<S> {
+    fn from_payload(payload: ResidentPrefixPayload<S>) -> Self {
+        Self {
+            snapshot: Some(payload.snapshot),
+            retirement: None,
+            model_state: Some(payload.model_state),
+        }
+    }
+
+    fn model_only(model_state: S) -> Self {
+        Self {
+            snapshot: None,
+            retirement: None,
+            model_state: Some(model_state),
+        }
+    }
 }
 
 struct RegisteredModelContinuation {
@@ -484,6 +531,8 @@ where
     page_manager: Option<KvPageManager>,
     kv_page_grants: HashMap<KvPageId, PhysicalResourceGrant>,
     page_slots: HashMap<SessionId, StateSlot>,
+    prefix_cache: RadixPrefixCache<ResidentPrefixPayload<R::SequenceState>>,
+    prefix_cache_sessions: HashSet<SessionId>,
     suspended_sequences: HashMap<SessionId, SuspendedDriverSequence<R::SequenceState>>,
     next_page_slot: u32,
     config: ResidentTopKDriverConfig,
@@ -515,6 +564,7 @@ where
     next_output_token_id: u64,
     pending_kv_retirements: VecDeque<PendingKvRetirement>,
     pending_sequence_cleanups: HashMap<SessionId, PendingSequenceCleanup<R::SequenceState>>,
+    pending_prefix_cleanups: VecDeque<PendingPrefixCleanup<R::SequenceState>>,
     committed_token_outbox: VecDeque<ResidentTokenEvent>,
     shutting_down: bool,
 }
@@ -729,6 +779,7 @@ where
             #[cfg(test)]
             uninstalled_resolver,
         } = runtime;
+        let prefix_cache = RadixPrefixCache::new(scheduler.config().prefix_cache_capacity_pages);
         let driver = Self {
             scheduler,
             slot_pool,
@@ -739,6 +790,8 @@ where
             page_manager: None,
             kv_page_grants: HashMap::new(),
             page_slots: HashMap::new(),
+            prefix_cache,
+            prefix_cache_sessions: HashSet::new(),
             suspended_sequences: HashMap::new(),
             next_page_slot: 0,
             config,
@@ -768,6 +821,7 @@ where
             next_output_token_id: 1,
             pending_kv_retirements: VecDeque::new(),
             pending_sequence_cleanups: HashMap::new(),
+            pending_prefix_cleanups: VecDeque::new(),
             committed_token_outbox: VecDeque::new(),
             shutting_down: false,
         };
@@ -896,7 +950,7 @@ where
         self.warmup_pending()
     }
 
-    pub fn has_pending_async_work(&self) -> bool {
+    fn has_pending_non_prefix_async_work(&self) -> bool {
         !self.resident_transactions.is_empty()
             || !self.speculative_transactions.is_empty()
             || !self.continuations.is_empty()
@@ -906,6 +960,13 @@ where
             || self.load_registry.active_operations() != 0
             || !self.pending_kv_retirements.is_empty()
             || !self.pending_sequence_cleanups.is_empty()
+    }
+
+    pub fn has_pending_async_work(&self) -> bool {
+        // Prefix cleanup is owner-thread synchronous work. It has no completion
+        // producer and is retried by step/shutdown/runner extraction, so reporting
+        // it here would let an event-driven owner sleep forever.
+        self.has_pending_non_prefix_async_work()
     }
 
     pub const fn is_shutting_down(&self) -> bool {
@@ -1060,6 +1121,11 @@ where
     /// Install the authoritative runtime page manager and configure a backend
     /// physical pool with the same bounded page capacity.
     pub fn try_with_page_manager(mut self, page_manager: KvPageManager) -> Result<Self> {
+        if self.page_manager.is_some() {
+            return Err(Error::InvalidRequest {
+                message: "the authoritative KV page manager is already installed".into(),
+            });
+        }
         let max_pages = page_manager.max_pages();
         if max_pages == 0 {
             return Err(Error::InvalidRequest {
@@ -1081,6 +1147,138 @@ where
 
     pub fn page_manager(&self) -> Option<&KvPageManager> {
         self.page_manager.as_ref()
+    }
+
+    fn prefix_cache_namespace(&self) -> Option<PrefixCacheNamespace> {
+        if self.prefix_cache.capacity() == 0 {
+            return None;
+        }
+        let manager = self.page_manager.as_ref()?;
+        let placement = self.materialization_resolver.placement();
+        let plan = self.executor.runner().prefix_cache_plan_identity();
+        if plan == 0 {
+            return None;
+        }
+        Some(PrefixCacheNamespace::for_placement(
+            placement.model().get(),
+            placement.backend().get(),
+            placement.device().get(),
+            plan,
+            manager.owner_identity(),
+        ))
+    }
+
+    fn queue_removed_prefix(
+        &mut self,
+        removed: RemovedPrefixEntry<ResidentPrefixPayload<R::SequenceState>>,
+    ) {
+        self.pending_prefix_cleanups
+            .push_back(PendingPrefixCleanup::from_payload(removed.into_payload()));
+    }
+
+    fn queue_prefix_payload_cleanup(&mut self, payload: ResidentPrefixPayload<R::SequenceState>) {
+        self.pending_prefix_cleanups
+            .push_back(PendingPrefixCleanup::from_payload(payload));
+    }
+
+    fn progress_prefix_cleanup(
+        &mut self,
+        mut cleanup: PendingPrefixCleanup<R::SequenceState>,
+    ) -> std::result::Result<(), (Error, PendingPrefixCleanup<R::SequenceState>)> {
+        if self.has_live_transactions() {
+            return Err((
+                Error::InvalidRequest {
+                    message: "cannot release a cached prefix while packed transactions are live"
+                        .into(),
+                },
+                cleanup,
+            ));
+        }
+        if let Some(snapshot) = cleanup.snapshot {
+            let retirement = match self.page_manager.as_mut() {
+                Some(manager) => match manager.release_prefix_snapshot(snapshot) {
+                    Ok(retirement) => retirement,
+                    Err(error) => return Err((error, cleanup)),
+                },
+                None => {
+                    return Err((
+                        Error::Invariant {
+                            message: "cached prefix snapshot has no authoritative page manager"
+                                .into(),
+                        },
+                        cleanup,
+                    ));
+                }
+            };
+            cleanup.snapshot = None;
+            cleanup.retirement = Some(PendingKvRetirement::BackendRelease(retirement));
+        }
+        if let Some(retirement) = cleanup.retirement.take()
+            && let Err((error, retirement)) = self.progress_kv_retirement(retirement)
+        {
+            cleanup.retirement = Some(retirement);
+            return Err((error, cleanup));
+        }
+        if let Some(model_state) = cleanup.model_state.take()
+            && let Err(failure) = self.executor.try_release_sequence_state(model_state)
+        {
+            let (error, model_state) = failure.into_parts();
+            cleanup.model_state = Some(model_state);
+            return Err((error.into(), cleanup));
+        }
+        Ok(())
+    }
+
+    fn progress_prefix_cleanups(&mut self) -> Result<()> {
+        if self.has_live_transactions() {
+            return Ok(());
+        }
+        while let Some(cleanup) = self.pending_prefix_cleanups.pop_front() {
+            if let Err((error, cleanup)) = self.progress_prefix_cleanup(cleanup) {
+                self.pending_prefix_cleanups.push_front(cleanup);
+                return Err(error);
+            }
+        }
+        Ok(())
+    }
+
+    fn drain_prefix_cache(&mut self) -> Result<()> {
+        let removed = self
+            .prefix_cache
+            .drain()
+            .map_err(|error| prefix_cache_error("prefix cache drain", error))?;
+        for entry in removed {
+            self.queue_removed_prefix(entry);
+        }
+        self.progress_prefix_cleanups()
+    }
+
+    fn available_kv_page_credits(&self) -> usize {
+        self.load_registry
+            .resources()
+            .snapshots()
+            .find(|snapshot| snapshot.kind == ResourceKind::KvPage)
+            .map_or(0, |snapshot| {
+                usize::try_from(snapshot.capacity.saturating_sub(snapshot.in_use))
+                    .unwrap_or(usize::MAX)
+            })
+    }
+
+    fn evict_prefixes_for_kv_pages(&mut self, required: usize) -> Result<()> {
+        if required == 0 || self.available_kv_page_credits() >= required {
+            return Ok(());
+        }
+        if self.has_live_transactions() {
+            return Ok(());
+        }
+        while self.available_kv_page_credits() < required {
+            let Some(removed) = self.prefix_cache.evict_lru() else {
+                break;
+            };
+            self.queue_removed_prefix(removed);
+            self.progress_prefix_cleanups()?;
+        }
+        Ok(())
     }
 
     pub fn suspended_len(&self) -> usize {
@@ -1797,7 +1995,7 @@ where
     where
         R: ResidentModelRunner,
     {
-        if self.has_pending_async_work()
+        if self.has_pending_non_prefix_async_work()
             || !self.session_owner.is_empty()
             || !self.committed_token_outbox.is_empty()
         {
@@ -1812,6 +2010,7 @@ where
         if !self.scheduler.is_idle()
             || !self.suspended_sequences.is_empty()
             || !self.sequence_states.is_empty()
+            || !self.prefix_cache_sessions.is_empty()
         {
             return Err(Box::new((
                 Error::InvalidRequest { message:
@@ -1822,6 +2021,35 @@ where
             )));
         }
 
+        if let Err(error) = self.drain_prefix_cache() {
+            return Err(Box::new((error, self)));
+        }
+        let retiring_pages = self
+            .page_manager
+            .as_ref()
+            .map_or(0, |manager| manager.stats().retiring_pages);
+        let active_page_sequences = self
+            .page_manager
+            .as_ref()
+            .map_or(0, KvPageManager::active_sequences);
+        if !self.pending_prefix_cleanups.is_empty()
+            || !self.pending_kv_retirements.is_empty()
+            || !self.kv_page_grants.is_empty()
+            || retiring_pages != 0
+            || active_page_sequences != 0
+        {
+            return Err(Box::new((
+                Error::Invariant {
+                    message: format!(
+                        "cannot extract resident runner with retained KV ownership: prefix_cleanups={} retirements={} grants={} retiring_pages={retiring_pages} active_page_sequences={active_page_sequences}",
+                        self.pending_prefix_cleanups.len(),
+                        self.pending_kv_retirements.len(),
+                        self.kv_page_grants.len(),
+                    ),
+                },
+                self,
+            )));
+        }
         if let Err(error) = self.load_registry.shutdown(self.runtime_now_ns(), 0) {
             let error = Error::from(error);
             return Err(Box::new((error, self)));
@@ -1880,6 +2108,18 @@ where
 
     pub fn stats(&self) -> &ResidentTopKDriverStats {
         self.observability.stats()
+    }
+
+    pub fn prefix_cache_stats(&self) -> &ResidentPrefixCacheStats {
+        self.observability.prefix_cache_stats()
+    }
+
+    pub fn prefix_hits(&self) -> usize {
+        self.observability.prefix_hits()
+    }
+
+    pub fn prefix_misses(&self) -> usize {
+        self.observability.prefix_misses()
     }
 
     /// Validate scheduler policy against the truthful capabilities of the native
@@ -2458,40 +2698,437 @@ where
         self.scheduler.drain_failed()
     }
 
-    /// Admit waiting sequences from the scheduler, creating a forked sequence
-    /// state for each newly admitted session.
+    fn prepare_prefix_admission(
+        &mut self,
+        prepared: &mut PreparedWaitingAdmission,
+        target_slot: StateSlot,
+    ) -> Result<Option<PreparedPrefixAdmission<R::SequenceState>>> {
+        let Some(namespace) = self.prefix_cache_namespace() else {
+            return Ok(None);
+        };
+        if self.has_live_transactions()
+            || !prepared.is_fresh_prompt()
+            || prepared.prompt_tokens().is_empty()
+        {
+            return Ok(None);
+        }
+        let prompt = prepared.prompt_tokens().to_vec();
+        let lease = self
+            .prefix_cache
+            .lookup_longest_prefix(namespace, &prompt, PrefixLookupLimit::BeforeLastPromptToken)
+            .map_err(|error| prefix_cache_error("prefix lookup", error))?;
+        let Some(lease) = lease else {
+            return Ok(None);
+        };
+        let matched_tokens = lease.matched_tokens();
+
+        let (model_state, snapshot) = match self
+            .prefix_cache
+            .payload(&lease)
+            .map_err(|error| prefix_cache_error("pinned prefix payload", error))
+            .and_then(|payload| {
+                self.executor
+                    .fork_sequence_state_from(&payload.model_state, matched_tokens)
+                    .map(|model_state| (model_state, payload.snapshot))
+            }) {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                let cleanup = self
+                    .prefix_cache
+                    .unpin(lease)
+                    .map_err(|error| prefix_cache_error("prefix lookup unpin", error));
+                return Err(Error::with_cleanup("prefix model fork", error, cleanup));
+            }
+        };
+
+        let pages = match self.page_manager.as_ref() {
+            Some(manager) => {
+                manager.prepare_fork_prefix_snapshot(snapshot, target_slot, 0, matched_tokens)
+            }
+            None => Err(Error::Invariant {
+                message: "prefix cache hit has no authoritative page manager".into(),
+            }),
+        };
+        let pages = match pages {
+            Ok(pages) => pages,
+            Err(error) => {
+                let mut cleanup = Vec::new();
+                if let Err(source) = self.executor.release_sequence_state(model_state) {
+                    cleanup.push(CleanupStep::new("prefix model fork release", source));
+                }
+                if let Err(source) = self
+                    .prefix_cache
+                    .unpin(lease)
+                    .map_err(|error| prefix_cache_error("prefix lookup unpin", error))
+                {
+                    cleanup.push(CleanupStep::new("prefix lookup unpin", source));
+                }
+                return Err(Error::with_cleanup_batch(
+                    "prefix page snapshot fork",
+                    error,
+                    cleanup,
+                ));
+            }
+        };
+
+        if let Err(error) = prepared.apply_committed_prefix(matched_tokens) {
+            let mut cleanup = Vec::new();
+            if let Err(source) = self.executor.release_sequence_state(model_state) {
+                cleanup.push(CleanupStep::new("prefix model fork release", source));
+            }
+            if let Err(source) = self
+                .prefix_cache
+                .unpin(lease)
+                .map_err(|error| prefix_cache_error("prefix lookup unpin", error))
+            {
+                cleanup.push(CleanupStep::new("prefix lookup unpin", source));
+            }
+            return Err(Error::with_cleanup_batch(
+                "prefix scheduler frontier prepare",
+                error,
+                cleanup,
+            ));
+        }
+        if let Err(error) = self
+            .prefix_cache
+            .unpin(lease)
+            .map_err(|error| prefix_cache_error("prefix lookup unpin", error))
+        {
+            let cleanup = self.executor.release_sequence_state(model_state);
+            return Err(Error::with_cleanup("prefix lookup unpin", error, cleanup));
+        }
+        Ok(Some(PreparedPrefixAdmission {
+            model_state,
+            pages,
+            matched_tokens,
+        }))
+    }
+
+    /// Admit waiting sequences only after their model and logical KV ownership is
+    /// fully prepared. No fallible work remains once the scheduler publishes the
+    /// sequence as active.
     fn admit_new_sequences(&mut self) -> Result<()> {
         if self.shutting_down {
             return Ok(());
         }
-        let old_active = self.scheduler.active_len();
-        self.scheduler.admit_waiting(&mut self.slot_pool)?;
-        let new_active = self.scheduler.active_len();
-        if new_active > old_active {
-            // Fork sequence states for newly admitted sessions.
-            for session_id in self.scheduler.active_session_ids() {
-                if !self.sequence_states.contains_key(&session_id) {
-                    let state = self.executor.create_sequence_state()?;
-                    self.sequence_states.insert(session_id, state);
-                    if let Some(manager) = &mut self.page_manager {
-                        let slot = StateSlot::new(self.next_page_slot);
-                        self.next_page_slot =
-                            self.next_page_slot.checked_add(1).ok_or_else(|| {
-                                Error::InvalidRequest {
-                                    message: "driver page slot generation overflow".into(),
-                                }
-                            })?;
-                        if let Err(error) = manager.alloc_sequence(slot, 0) {
-                            self.sequence_states.remove(&session_id);
-                            let _ = self
+        while let Some(mut prepared) = self
+            .scheduler
+            .prepare_waiting_admission(&mut self.slot_pool)?
+        {
+            let session_id = prepared.session_id();
+            if self.pending_sequence_cleanups.contains_key(&session_id) {
+                self.scheduler
+                    .abort_waiting_admission(prepared, &mut self.slot_pool)?;
+                break;
+            }
+            if self.sequence_states.contains_key(&session_id) {
+                self.scheduler.publish_waiting_admission(prepared);
+                continue;
+            }
+
+            let cache_eligible = self.prefix_cache_namespace().is_some()
+                && !self.has_live_transactions()
+                && !self.retained_sessions.contains_key(&session_id)
+                && prepared.is_fresh_prompt()
+                && !prepared.prompt_tokens().is_empty();
+            let (page_slot, next_page_slot) = if self.page_manager.is_some() {
+                let slot = StateSlot::new(self.next_page_slot);
+                let next_page_slot = match self.next_page_slot.checked_add(1) {
+                    Some(next_page_slot) => next_page_slot,
+                    None => {
+                        let error = Error::InvalidRequest {
+                            message: "driver page slot generation overflow".into(),
+                        };
+                        let cleanup = self
+                            .scheduler
+                            .abort_waiting_admission(prepared, &mut self.slot_pool);
+                        return Err(Error::with_cleanup(
+                            "resident admission slot generation",
+                            error,
+                            cleanup,
+                        ));
+                    }
+                };
+                (Some(slot), Some(next_page_slot))
+            } else {
+                (None, None)
+            };
+
+            if cache_eligible {
+                let target_slot = page_slot.expect("cache eligibility requires a page manager");
+                match self.prepare_prefix_admission(&mut prepared, target_slot) {
+                    Ok(Some(prefix)) => {
+                        debug_assert!(prefix.matched_tokens > 0);
+                        if let Err(error) = self
+                            .page_manager
+                            .as_mut()
+                            .expect("prefix preparation requires a page manager")
+                            .publish_fork_prefix_snapshot(prefix.pages)
+                        {
+                            let mut cleanup = Vec::new();
+                            if let Err(source) =
+                                self.executor.release_sequence_state(prefix.model_state)
+                            {
+                                cleanup.push(CleanupStep::new("prefix model fork release", source));
+                            }
+                            if let Err(source) = self
                                 .scheduler
-                                .fail_sequence(session_id, &mut self.slot_pool);
-                            return Err(error);
+                                .abort_waiting_admission(prepared, &mut self.slot_pool)
+                            {
+                                cleanup.push(CleanupStep::new(
+                                    "prefix scheduler admission cleanup",
+                                    source,
+                                ));
+                            }
+                            return Err(Error::with_cleanup_batch(
+                                "prefix page fork publish",
+                                error,
+                                cleanup,
+                            ));
                         }
-                        self.page_slots.insert(session_id, slot);
+                        self.sequence_states.insert(session_id, prefix.model_state);
+                        self.page_slots.insert(session_id, target_slot);
+                        self.next_page_slot =
+                            next_page_slot.expect("page-manager admission reserves the next slot");
+                        self.prefix_cache_sessions.insert(session_id);
+                        self.scheduler.publish_waiting_admission(prepared);
+                        self.observability.prefix_cache.hits =
+                            self.observability.prefix_cache.hits.saturating_add(1);
+                        continue;
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        let cleanup = self
+                            .scheduler
+                            .abort_waiting_admission(prepared, &mut self.slot_pool);
+                        return Err(Error::with_cleanup(
+                            "prefix cache admission",
+                            error,
+                            cleanup,
+                        ));
                     }
                 }
             }
+
+            if let Some(slot) = page_slot
+                && let Err(error) = self
+                    .page_manager
+                    .as_mut()
+                    .expect("page-manager presence was checked")
+                    .alloc_sequence(slot, 0)
+            {
+                let cleanup = self
+                    .scheduler
+                    .abort_waiting_admission(prepared, &mut self.slot_pool);
+                return Err(Error::with_cleanup(
+                    "resident admission logical KV preparation",
+                    error,
+                    cleanup,
+                ));
+            }
+            if let Some(next_page_slot) = next_page_slot {
+                self.next_page_slot = next_page_slot;
+            }
+
+            let state = match self.executor.create_sequence_state() {
+                Ok(state) => state,
+                Err(error) => {
+                    let mut cleanup = Vec::new();
+                    if let Some(slot) = page_slot {
+                        let previous = self.page_slots.insert(session_id, slot);
+                        debug_assert!(
+                            previous.is_none(),
+                            "fresh admission page slot must remain absent"
+                        );
+                        if let Err(source) = self.release_sequence_state(session_id) {
+                            cleanup.push(CleanupStep::new(
+                                format!("session {session_id:?} logical KV cleanup"),
+                                source,
+                            ));
+                        }
+                    }
+                    if let Err(source) = self
+                        .scheduler
+                        .abort_waiting_admission(prepared, &mut self.slot_pool)
+                    {
+                        cleanup.push(CleanupStep::new(
+                            format!("session {session_id:?} scheduler admission cleanup"),
+                            source,
+                        ));
+                    }
+                    return Err(Error::with_cleanup_batch(
+                        "resident admission model preparation",
+                        error,
+                        cleanup,
+                    ));
+                }
+            };
+
+            let previous = self.sequence_states.insert(session_id, state);
+            debug_assert!(
+                previous.is_none(),
+                "prepared admission model target must remain absent"
+            );
+            if let Some(slot) = page_slot {
+                let previous = self.page_slots.insert(session_id, slot);
+                debug_assert!(
+                    previous.is_none(),
+                    "prepared admission page target must remain absent"
+                );
+            }
+            if cache_eligible {
+                self.prefix_cache_sessions.insert(session_id);
+            }
+            self.scheduler.publish_waiting_admission(prepared);
+            if cache_eligible {
+                self.observability.prefix_cache.misses =
+                    self.observability.prefix_cache.misses.saturating_add(1);
+            }
+        }
+        Ok(())
+    }
+
+    fn capture_committed_prefill_prefix(&mut self, action: &PrefillChunkAction) -> Result<()> {
+        if !self.prefix_cache_sessions.contains(&action.session_id) || self.has_live_transactions()
+        {
+            // Retained sessions, speculative work, and concurrent packed topology
+            // are deliberately not cached until their ownership is independently
+            // proven safe.
+            return Ok(());
+        }
+        let Some(namespace) = self.prefix_cache_namespace() else {
+            return Ok(());
+        };
+        let sequence = self
+            .scheduler
+            .active_sequence(action.session_id)
+            .ok_or_else(|| Error::Invariant {
+                message: format!(
+                    "committed prefill session {:?} is no longer active",
+                    action.session_id
+                ),
+            })?;
+        let frontier = sequence.position;
+        if frontier == 0
+            || sequence.prompt_cursor != frontier
+            || frontier > sequence.prompt_len
+            || action.token_range.end != sequence.prompt_cursor
+        {
+            return Err(Error::Invariant {
+                message: format!(
+                    "committed prefix frontier mismatch for session {:?}: position={frontier} cursor={} prompt={} action_end={}",
+                    action.session_id,
+                    sequence.prompt_cursor,
+                    sequence.prompt_len,
+                    action.token_range.end
+                ),
+            });
+        }
+        let tokens = sequence.current_prompt_tokens()[..frontier].to_vec();
+        let page_slot =
+            *self
+                .page_slots
+                .get(&action.session_id)
+                .ok_or_else(|| Error::Invariant {
+                    message: format!(
+                        "committed prefix session {:?} has no page slot",
+                        action.session_id
+                    ),
+                })?;
+        let cached_model = {
+            let source = self
+                .sequence_states
+                .get(&action.session_id)
+                .ok_or_else(|| Error::Invariant {
+                    message: format!(
+                        "committed prefix session {:?} has no model state",
+                        action.session_id
+                    ),
+                })?;
+            match self.executor.fork_sequence_state_from(source, frontier) {
+                Ok(state) => state,
+                Err(error) => {
+                    tracing::warn!(
+                        session_id = action.session_id.0,
+                        frontier,
+                        error = %error,
+                        "committed prefix model capture bypassed"
+                    );
+                    return Ok(());
+                }
+            }
+        };
+        let snapshot = match self
+            .page_manager
+            .as_mut()
+            .expect("prefix namespace requires a page manager")
+            .capture_prefix_snapshot(page_slot, frontier)
+        {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                self.pending_prefix_cleanups
+                    .push_back(PendingPrefixCleanup::model_only(cached_model));
+                let cleanup = self.progress_prefix_cleanups();
+                if cleanup.is_ok() {
+                    tracing::warn!(
+                        session_id = action.session_id.0,
+                        frontier,
+                        error = %error,
+                        "committed prefix KV snapshot capture bypassed"
+                    );
+                }
+                return cleanup;
+            }
+        };
+        let charge = snapshot.page_count();
+        let payload = ResidentPrefixPayload {
+            model_state: cached_model,
+            snapshot,
+        };
+        match self
+            .prefix_cache
+            .insert(namespace, &tokens, payload, charge)
+        {
+            Ok(outcome) => {
+                let (_, replaced, evicted) = outcome.into_parts();
+                if let Some(replaced) = replaced {
+                    self.queue_removed_prefix(replaced);
+                }
+                for entry in evicted {
+                    self.queue_removed_prefix(entry);
+                }
+                self.progress_prefix_cleanups()
+            }
+            Err(error) => {
+                let (kind, payload) = error.into_parts();
+                self.queue_prefix_payload_cleanup(payload);
+                let cleanup = self.progress_prefix_cleanups();
+                if cleanup.is_ok() {
+                    tracing::warn!(
+                        session_id = action.session_id.0,
+                        frontier,
+                        error = %kind,
+                        "committed prefix cache insertion bypassed"
+                    );
+                }
+                cleanup
+            }
+        }
+    }
+
+    fn capture_committed_prefill_prefixes(&mut self, action: &SchedulerAction) -> Result<()> {
+        match action {
+            SchedulerAction::Execute { prefills, .. } => {
+                for prefill in prefills {
+                    self.capture_committed_prefill_prefix(prefill)?;
+                }
+            }
+            SchedulerAction::PrefillChunk(prefill) => {
+                self.capture_committed_prefill_prefix(prefill)?;
+            }
+            SchedulerAction::DecodeBatch(_)
+            | SchedulerAction::Finish { .. }
+            | SchedulerAction::Cancel { .. } => {}
         }
         Ok(())
     }
@@ -2499,6 +3136,7 @@ where
     /// Preserve a retained session at its committed position, or release a
     /// normal one immediately after the request turn finishes.
     fn finalize_sequence_state(&mut self, session_id: SessionId, position: usize) -> Result<()> {
+        self.prefix_cache_sessions.remove(&session_id);
         if let Some(retained_position) = self.retained_sessions.get_mut(&session_id) {
             *retained_position = position;
             Ok(())
@@ -2510,6 +3148,7 @@ where
     /// Release sequence/KV ownership now, or retain it in a driver-owned cleanup
     /// record until every packed backend transaction is quiescent.
     fn release_sequence_state(&mut self, session_id: SessionId) -> Result<()> {
+        self.prefix_cache_sessions.remove(&session_id);
         self.pending_sequence_cleanups
             .entry(session_id)
             .or_insert(PendingSequenceCleanup::Deferred);
@@ -2529,6 +3168,7 @@ where
                 return Err(error);
             }
         }
+        self.progress_prefix_cleanups()?;
         let sessions = self
             .pending_sequence_cleanups
             .keys()
@@ -2599,8 +3239,18 @@ where
             );
             return Err(error);
         }
-        if let Some(state) = model_state {
-            self.executor.release_sequence_state(state)?;
+        if let Some(state) = model_state
+            && let Err(failure) = self.executor.try_release_sequence_state(state)
+        {
+            let (error, state) = failure.into_parts();
+            self.pending_sequence_cleanups.insert(
+                session_id,
+                PendingSequenceCleanup::Owned {
+                    retirement: None,
+                    model_state: Some(state),
+                },
+            );
+            return Err(error.into());
         }
         Ok(())
     }
@@ -2767,6 +3417,12 @@ where
                 .as_ref()
                 .expect("page manager presence checked above")
                 .sequence_generation(slot)?;
+            let required_before_eviction = self
+                .page_manager
+                .as_ref()
+                .expect("page manager presence checked above")
+                .required_physical_pages(slot, page_generation, token_count)?;
+            self.evict_prefixes_for_kv_pages(required_before_eviction)?;
             let required = self
                 .page_manager
                 .as_ref()
@@ -2895,6 +3551,9 @@ where
                         .into(),
                 })?
                 .required_physical_pages(item.state_slot, item.generation, token_count)?;
+            // Speculative proposal/verification owns model topology outside the
+            // ordinary resident reserve path, so prefix eviction is deliberately
+            // bypassed here until that ownership can be quiesced independently.
             let mut grants = Vec::with_capacity(required);
             for _ in 0..required {
                 match self.load_registry.acquire_hard_resources(
@@ -3397,6 +4056,7 @@ where
         if let Err(error) = self.scheduler.commit_action(&pending.action) {
             return Err(self.abort_action(&pending.action, error, false, "scheduler publish"));
         }
+        self.capture_committed_prefill_prefixes(&pending.action)?;
         self.observability.stats.actions += 1;
         let externally_committed_tokens = match &pending.action {
             SchedulerAction::Execute { prefills, decodes } => {
@@ -3997,7 +4657,7 @@ where
 
             if self.config.stop_at_eos
                 && !sequence.ignore_eos
-                && self.executor.runner().eos_token_id() == Some(candidate.token_id)
+                && self.executor.runner().is_eos_token(candidate.token_id)
             {
                 let position = self
                     .scheduler
@@ -4093,6 +4753,7 @@ where
         }
         self.retry_pending_continuation_cleanups()?;
         self.cleanup_materialization_failures(false)?;
+        self.drain_prefix_cache()?;
 
         for request_id in self.scheduler.request_ids() {
             self.cancel_scheduled_request(request_id)?;
@@ -4121,6 +4782,7 @@ where
                 .release_preempted_pages(kv_state)?;
             self.release_and_confirm_retirement(retirement)?;
             self.executor.release_sequence_state(model_state)?;
+            self.prefix_cache_sessions.remove(&session_id);
         }
 
         for session_id in self.scheduler.active_session_ids() {
@@ -4133,6 +4795,7 @@ where
             self.release_sequence_state(session_id)?;
         }
         self.retained_sessions.clear();
+        self.prefix_cache_sessions.clear();
         self.progress_pending_cleanups()?;
 
         let registry = self
@@ -4164,17 +4827,23 @@ where
             || !self.pending_registry_detaches.is_empty()
             || !self.session_owner.is_empty()
             || !self.pending_sequence_cleanups.is_empty()
+            || !self.pending_prefix_cleanups.is_empty()
+            || !self.prefix_cache.is_empty()
+            || !self.prefix_cache_sessions.is_empty()
             || !self.sequence_states.is_empty()
             || !self.suspended_sequences.is_empty()
             || !self.scheduler.is_idle()
         {
             return Err(Error::Invariant {
                 message: format!(
-                    "driver shutdown retained ownership: {report:?}, retiring_pages={retiring_pages}, continuations={}, transaction_continuations={}, session_owners={}, cleanups={}, sequence_states={}, suspended={}, scheduler_idle={}",
+                    "driver shutdown retained ownership: {report:?}, retiring_pages={retiring_pages}, continuations={}, transaction_continuations={}, session_owners={}, cleanups={}, prefix_cleanups={}, cached_prefixes={}, prefix_sessions={}, sequence_states={}, suspended={}, scheduler_idle={}",
                     self.continuations.len(),
                     self.transaction_continuations.len(),
                     self.session_owner.len(),
                     self.pending_sequence_cleanups.len(),
+                    self.pending_prefix_cleanups.len(),
+                    self.prefix_cache.len(),
+                    self.prefix_cache_sessions.len(),
                     self.sequence_states.len(),
                     self.suspended_sequences.len(),
                     self.scheduler.is_idle(),
@@ -4213,8 +4882,12 @@ where
         self.check_warmup()?;
         self.update_hard_resource_observability();
         let proposal_enabled = self.config.enable_native_proposals
+            && self.prefix_cache.capacity() == 0
             && self.executor.runner().native_proposal_source()?.is_some();
 
+        // Prefix eviction cannot run while speculative topology is owned. Until
+        // that pressure protocol is transactional, a configured prefix cache
+        // selects the safe target-only path rather than risking request failure.
         let requires_page_manager = proposal_enabled
             || self.executor.capabilities().kv_binding_mode == KvBindingMode::Paged;
         if requires_page_manager && self.page_manager.is_none() {
@@ -4256,7 +4929,7 @@ where
         loop {
             let action = self
                 .scheduler
-                .next_action_policy(&mut self.slot_pool, allow_mixed_batches)?;
+                .next_admitted_action_policy(allow_mixed_batches)?;
             let Some(action) = action else {
                 let pending = self.pending_model_progresses();
                 return if pending.is_empty() {
@@ -5060,7 +5733,6 @@ where
 
         let cohort_transaction_time_us = cohort.transaction_time_us;
         let cohort_verify_time_us = cohort.verify_time_us;
-        let eos_token_id = self.executor.runner().eos_token_id();
         let mut rows = 0usize;
         let mut staged = 0usize;
         let mut finished = 0usize;
@@ -5138,7 +5810,7 @@ where
                     Some(next)
                         if self.config.stop_at_eos
                             && !prepared.sequence.ignore_eos
-                            && eos_token_id == Some(next.token_id) =>
+                            && self.executor.runner().is_eos_token(next.token_id) =>
                     {
                         Some(SequenceFinishReason::Eos)
                     }
@@ -5392,8 +6064,9 @@ where
         anchor_token_id: u32,
         proposal: Vec<u32>,
     ) -> Result<Vec<u32>> {
-        let eos_token_id = self.executor.runner().eos_token_id();
-        if self.config.stop_at_eos && !sequence.ignore_eos && eos_token_id == Some(anchor_token_id)
+        if self.config.stop_at_eos
+            && !sequence.ignore_eos
+            && self.executor.runner().is_eos_token(anchor_token_id)
         {
             return Err(Error::Invariant {
                 message: "an EOS token must not be staged as a speculative anchor".into(),
@@ -5414,7 +6087,10 @@ where
 
         let mut admitted = Vec::with_capacity(proposal.len());
         for token_id in proposal {
-            if self.config.stop_at_eos && !sequence.ignore_eos && eos_token_id == Some(token_id) {
+            if self.config.stop_at_eos
+                && !sequence.ignore_eos
+                && self.executor.runner().is_eos_token(token_id)
+            {
                 break;
             }
             let text = self
@@ -5687,8 +6363,8 @@ mod tests {
     use std::collections::{HashMap, VecDeque};
 
     use ferrule_common::execution::{
-        ExecutionIntent, ForwardPhase, KvLayoutSchema, KvPlaneDescriptor, LogitsOutput,
-        LogitsRequest, LogitsRow,
+        ExecutionIntent, ForwardPhase, KvElementType, KvLayoutSchema, KvPlaneDescriptor,
+        LogitsOutput, LogitsRequest, LogitsRow,
     };
     use ferrule_common::{
         CompletionOutcome, ContentHash, DependencySet, Error as ModelError, ExpertId,
@@ -5746,11 +6422,8 @@ mod tests {
     #[derive(Debug)]
     struct DriverTestKvSchema;
 
-    static DRIVER_TEST_PLANE: KvPlaneDescriptor = KvPlaneDescriptor {
-        name: "test",
-        elements_per_token: 1,
-        layer_count: 1,
-    };
+    static DRIVER_TEST_PLANE: KvPlaneDescriptor =
+        KvPlaneDescriptor::new("test", 1, 1, KvElementType::F32);
 
     impl KvLayoutSchema for DriverTestKvSchema {
         fn planes(&self) -> &[KvPlaneDescriptor] {
@@ -5776,12 +6449,14 @@ mod tests {
         completion_hub: ferrule_common::CompletionHub,
         position: usize,
         eos: Option<u32>,
+        additional_eos: Vec<u32>,
         outputs: VecDeque<Vec<TokenLogit>>,
         fed: Vec<u32>,
         prefills: Vec<Vec<u32>>,
         fail_next_mutation: bool,
         mutation_calls: usize,
         released_sequence_states: usize,
+        release_failures_remaining: usize,
         released_kv_pages: Vec<ferrule_common::execution::KvPageId>,
         native_proposals: VecDeque<NativeProposal>,
         native_proposal_enabled: bool,
@@ -5853,12 +6528,14 @@ mod tests {
                 completion_hub: ferrule_common::CompletionHub::new(),
                 position: 0,
                 eos: None,
+                additional_eos: Vec::new(),
                 outputs: outputs.into(),
                 fed: Vec::new(),
                 prefills: Vec::new(),
                 fail_next_mutation: false,
                 mutation_calls: 0,
                 released_sequence_states: 0,
+                release_failures_remaining: 0,
                 released_kv_pages: Vec::new(),
                 native_proposals: VecDeque::new(),
                 native_proposal_enabled: false,
@@ -6040,8 +6717,21 @@ mod tests {
             self
         }
 
+        fn with_release_failures(mut self, failures: usize) -> Self {
+            self.release_failures_remaining = failures;
+            self
+        }
+
         fn with_eos(mut self, eos: u32) -> Self {
             self.eos = Some(eos);
+            self.additional_eos.clear();
+            self
+        }
+
+        fn with_eos_tokens(mut self, eos_tokens: impl IntoIterator<Item = u32>) -> Self {
+            let mut eos_tokens = eos_tokens.into_iter();
+            self.eos = eos_tokens.next();
+            self.additional_eos = eos_tokens.collect();
             self
         }
 
@@ -6178,6 +6868,10 @@ mod tests {
 
         fn eos_token_id(&self) -> Option<u32> {
             self.eos
+        }
+
+        fn is_eos_token(&self, token_id: u32) -> bool {
+            self.eos == Some(token_id) || self.additional_eos.contains(&token_id)
         }
     }
 
@@ -6358,6 +7052,10 @@ mod tests {
             0
         }
 
+        fn prefix_cache_plan_identity(&self) -> u64 {
+            0xcafe
+        }
+
         fn expert_residency_requirements(
             &self,
         ) -> Option<ferrule_common::expert_residency::ExpertResidencyRequirements> {
@@ -6519,8 +7217,23 @@ mod tests {
             Ok(())
         }
 
-        fn release_sequence_state(&mut self, _state: Self::SequenceState) -> ModelResult<()> {
-            self.ensure_packed_topology_quiescent("release sequence state")?;
+        fn try_release_sequence_state(
+            &mut self,
+            state: Self::SequenceState,
+        ) -> std::result::Result<(), ferrule_model::SequenceStateReleaseError<Self::SequenceState>>
+        {
+            if let Err(error) = self.ensure_packed_topology_quiescent("release sequence state") {
+                return Err(ferrule_model::SequenceStateReleaseError::new(error, state));
+            }
+            if self.release_failures_remaining > 0 {
+                self.release_failures_remaining -= 1;
+                return Err(ferrule_model::SequenceStateReleaseError::new(
+                    ModelError::Execution {
+                        message: "simulated sequence-state release failure".into(),
+                    },
+                    state,
+                ));
+            }
             self.released_sequence_states += 1;
             Ok(())
         }
@@ -6888,6 +7601,34 @@ mod tests {
         outputs: Vec<Vec<TokenLogit>>,
     ) -> ResidentTopKDriver<MockTopKRunner, FixedSequenceSlotPool> {
         driver_from_runner(MockTopKRunner::new(outputs))
+    }
+
+    fn prefix_cache_driver(
+        outputs: Vec<Vec<TokenLogit>>,
+        prefix_capacity_pages: usize,
+        kv_capacity_pages: usize,
+    ) -> ResidentTopKDriver<MockTopKRunner, FixedSequenceSlotPool> {
+        let mut runner = MockTopKRunner::new(outputs);
+        runner.paged = true;
+        ResidentTopKDriver::with_configs(
+            runner,
+            FixedSequenceSlotPool::new(1),
+            ResidentSchedulerConfig {
+                prefill_chunk_size: 8,
+                max_active_sequences: 1,
+                max_decode_batch: 1,
+                max_batch_tokens: 8,
+                allow_mixed_batches: false,
+                prefix_cache_capacity_pages: prefix_capacity_pages,
+                ..Default::default()
+            },
+            NonZeroU32::new(1).unwrap(),
+            ResidentTopKDriverConfig::default(),
+        )
+        .with_page_manager(KvPageManager::new(
+            Box::new(DriverTestKvSchema),
+            kv_capacity_pages,
+        ))
     }
 
     fn batched_driver_from_runner(
@@ -8287,6 +9028,51 @@ mod tests {
             finished[0].finish_reason,
             Some(SequenceFinishReason::MaxTokens)
         );
+    }
+
+    #[test]
+    fn production_speculative_stops_at_secondary_eos_without_emitting_it() {
+        let secondary_eos = 3;
+        let runner = MockTopKRunner::new(vec![top(10)])
+            .with_eos_tokens([2, secondary_eos])
+            .with_speculative_cycle(
+                NativeProposal {
+                    token_ids: vec![11, secondary_eos],
+                    confidence_logits: vec![1.0, 1.0],
+                },
+                vec![
+                    TokenLogit::new(11, 9.0),
+                    TokenLogit::new(secondary_eos, 8.0),
+                ],
+            );
+        let mut driver = speculative_driver_from_runner(runner, 1);
+        let mut submitted = request(77, &[1], 3, Vec::new());
+        submitted.session_id = Some(SessionId(77));
+        driver.submit(submitted);
+        let mut events = Vec::new();
+
+        driver
+            .drive_ready_test_work(|event| {
+                events.push(event.clone());
+                Ok(())
+            })
+            .unwrap();
+
+        assert_eq!(
+            events.iter().map(|event| event.token).collect::<Vec<_>>(),
+            vec![10, 11]
+        );
+        assert!(!events.iter().any(|event| event.token == secondary_eos));
+        assert_eq!(driver.executor().runner().packed_verification_calls, 1);
+        assert_eq!(driver.stats().speculative.proposed_tokens, 1);
+        assert_eq!(driver.stats().speculative.accepted_draft_tokens, 1);
+        assert_eq!(driver.stats().speculative.runtime_emitted_tokens, 2);
+
+        let finished = driver.drain_finished();
+        assert_eq!(finished.len(), 1);
+        assert_eq!(finished[0].finish_reason, Some(SequenceFinishReason::Eos));
+        assert_eq!(finished[0].generated, 2);
+        assert_eq!(finished[0].tokens, vec![1, 10, 11]);
     }
 
     #[test]
@@ -10145,6 +10931,38 @@ mod tests {
     }
 
     #[test]
+    fn secondary_eos_wins_over_max_tokens_without_becoming_visible() {
+        let secondary_eos = 3;
+        let runner =
+            MockTopKRunner::new(vec![top(secondary_eos)]).with_eos_tokens([2, secondary_eos]);
+        let mut driver = ResidentTopKDriver::with_configs(
+            runner,
+            FixedSequenceSlotPool::new(1),
+            ResidentSchedulerConfig::default(),
+            NonZeroU32::new(1).unwrap(),
+            ResidentTopKDriverConfig::default(),
+        );
+        driver.submit(request(39, &[1], 1, Vec::new()));
+        let mut events = Vec::new();
+
+        driver
+            .drive_ready_test_work(|event| {
+                events.push(event.clone());
+                Ok(())
+            })
+            .unwrap();
+
+        assert!(events.is_empty());
+        assert!(driver.executor().runner().fed.is_empty());
+        let finished = driver.drain_finished();
+        assert_eq!(finished.len(), 1);
+        assert_eq!(finished[0].finish_reason, Some(SequenceFinishReason::Eos));
+        assert_eq!(finished[0].generated, 0);
+        assert_eq!(finished[0].position, 1);
+        assert_eq!(finished[0].tokens, vec![1]);
+    }
+
+    #[test]
     fn mixed_requests_isolate_ignore_eos_policy() {
         let eos = 2;
         let mut driver = ResidentTopKDriver::with_configs(
@@ -10221,6 +11039,281 @@ mod tests {
             finished[0].finish_reason,
             Some(SequenceFinishReason::MaxTokens)
         );
+    }
+
+    #[test]
+    fn prefix_cleanup_release_failure_retains_state_without_async_wait() {
+        let mut driver =
+            driver_from_runner(MockTopKRunner::new(Vec::new()).with_release_failures(1));
+        let mut state = driver.executor_mut().create_sequence_state().unwrap();
+        state.position = 37;
+        driver
+            .pending_prefix_cleanups
+            .push_back(PendingPrefixCleanup::model_only(state));
+
+        assert!(!driver.has_pending_async_work());
+        let error = driver.step(&mut |_| Ok(())).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("simulated sequence-state release failure")
+        );
+        assert_eq!(driver.pending_prefix_cleanups.len(), 1);
+        assert_eq!(
+            driver
+                .pending_prefix_cleanups
+                .front()
+                .and_then(|cleanup| cleanup.model_state.as_ref())
+                .map(|state| state.position),
+            Some(37)
+        );
+        assert_eq!(driver.executor().runner().released_sequence_states, 0);
+        assert!(!driver.has_pending_async_work());
+
+        assert_eq!(
+            driver.step(&mut |_| Ok(())).unwrap(),
+            ResidentDriverStep::Idle
+        );
+        assert!(driver.pending_prefix_cleanups.is_empty());
+        assert_eq!(driver.executor().runner().released_sequence_states, 1);
+    }
+
+    #[test]
+    fn shutdown_retries_prefix_cleanup_before_runner_extraction() {
+        let mut driver = prefix_cache_driver(Vec::new(), 2, 2);
+        driver.submit(request(64, &[1, 2, 3], 0, Vec::new()));
+        driver.drive_ready_test_work(|_| Ok(())).unwrap();
+        driver.drain_finished();
+        assert!(!driver.prefix_cache.is_empty());
+        assert_eq!(driver.executor().runner().released_sequence_states, 1);
+
+        driver
+            .executor_mut()
+            .runner_mut()
+            .release_failures_remaining = 1;
+        let error = driver.shutdown(&mut |_| Ok(()), 32).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("simulated sequence-state release failure")
+        );
+        assert!(driver.prefix_cache.is_empty());
+        assert_eq!(driver.pending_prefix_cleanups.len(), 1);
+        assert_eq!(
+            driver
+                .pending_prefix_cleanups
+                .front()
+                .and_then(|cleanup| cleanup.model_state.as_ref())
+                .map(|state| state.position),
+            Some(3)
+        );
+        assert!(!driver.has_pending_async_work());
+
+        let report = driver.shutdown(&mut |_| Ok(()), 32).unwrap();
+        assert!(report.registry.drained);
+        assert!(driver.pending_prefix_cleanups.is_empty());
+        let runner = driver
+            .try_into_runner()
+            .map_err(|failure| failure.0)
+            .unwrap();
+        assert_eq!(runner.released_sequence_states, 2);
+    }
+
+    #[test]
+    fn prefix_cache_pressure_uses_target_only_when_proposals_are_available() {
+        let mut driver = prefix_cache_driver(vec![top(42)], 2, 2);
+        driver.executor_mut().runner_mut().native_proposal_enabled = true;
+        let namespace = driver.prefix_cache_namespace().unwrap();
+
+        driver.submit(request(65, &[1, 2, 3, 4], 0, Vec::new()));
+        driver.drive_ready_test_work(|_| Ok(())).unwrap();
+        driver.drain_finished();
+        assert!(driver.prefix_cache.contains_exact(namespace, &[1, 2, 3, 4]));
+        assert_eq!(driver.available_kv_page_credits(), 1);
+
+        let mut events = Vec::new();
+        driver.submit(request(66, &[9, 10, 11, 12, 13], 1, Vec::new()));
+        driver
+            .drive_ready_test_work(|event| {
+                events.push(event.token);
+                Ok(())
+            })
+            .unwrap();
+        let finished = driver.drain_finished();
+
+        assert_eq!(events, vec![42]);
+        assert_eq!(finished[0].tokens, vec![9, 10, 11, 12, 13, 42]);
+        assert!(!driver.prefix_cache.contains_exact(namespace, &[1, 2, 3, 4]));
+        assert_eq!(driver.executor().runner().native_proposal_begin_calls, 0);
+        assert_eq!(driver.executor().runner().packed_verification_calls, 0);
+        assert_eq!(driver.stats().speculative.cycles, 0);
+
+        driver.shutdown(&mut |_| Ok(()), 32).unwrap();
+    }
+
+    #[test]
+    fn prefix_lookup_is_not_counted_until_admission_publish() {
+        let mut driver = prefix_cache_driver(Vec::new(), 4, 8);
+        let namespace = driver.prefix_cache_namespace().unwrap();
+        driver.submit(request(67, &[1, 2, 3], 0, Vec::new()));
+        driver.drive_ready_test_work(|_| Ok(())).unwrap();
+        driver.drain_finished();
+        assert!(driver.prefix_cache.contains_exact(namespace, &[1, 2, 3]));
+        assert_eq!(
+            (
+                driver.prefix_cache_stats().hits,
+                driver.prefix_cache_stats().misses
+            ),
+            (0, 1)
+        );
+
+        let target_slot = StateSlot::new(driver.next_page_slot);
+        driver
+            .page_manager
+            .as_mut()
+            .unwrap()
+            .alloc_sequence(target_slot, 0)
+            .unwrap();
+        driver.submit(request(68, &[1, 2, 3, 4], 0, Vec::new()));
+        let error = driver.prepare_step().unwrap_err();
+
+        assert!(error.to_string().contains("already allocated"));
+        assert_eq!(driver.executor().runner().sequence_state_fork_calls, 2);
+        assert_eq!(
+            (
+                driver.prefix_cache_stats().hits,
+                driver.prefix_cache_stats().misses
+            ),
+            (0, 1)
+        );
+        assert_eq!(driver.prefix_hits(), driver.prefix_cache_stats().hits);
+        assert_eq!(driver.prefix_misses(), driver.prefix_cache_stats().misses);
+        assert_eq!(driver.scheduler().waiting_len(), 1);
+        assert_eq!(driver.scheduler().active_len(), 0);
+
+        let retirement = driver
+            .page_manager
+            .as_mut()
+            .unwrap()
+            .free_sequence_pages(target_slot)
+            .unwrap();
+        driver.release_and_confirm_retirement(retirement).unwrap();
+        driver.cancel_request(RequestId(68)).unwrap();
+        driver.drain_cancelled();
+        driver.shutdown(&mut |_| Ok(()), 32).unwrap();
+    }
+
+    #[test]
+    fn prefix_cache_hit_restores_committed_frontier_and_executes_only_suffix() {
+        let mut driver = prefix_cache_driver(vec![top(b'a' as u32), top(b'b' as u32)], 4, 8);
+        let namespace = driver
+            .prefix_cache_namespace()
+            .expect("configured cache has a namespace");
+        assert_eq!(namespace.model(), 1);
+        assert_eq!(namespace.backend(), 1);
+        assert_eq!(namespace.device(), 0);
+        assert_eq!(namespace.plan(), 0xcafe);
+        assert_eq!(
+            namespace.layout(),
+            driver.page_manager().unwrap().owner_identity()
+        );
+
+        driver.submit(request(60, &[1, 2, 3], 0, Vec::new()));
+        driver.drive_ready_test_work(|_| Ok(())).unwrap();
+        let first = driver.drain_finished();
+        assert_eq!(first[0].tokens, vec![1, 2, 3]);
+        assert_eq!(driver.prefix_hits(), 0);
+        assert_eq!(driver.prefix_misses(), 1);
+        assert!(driver.prefix_cache.contains_exact(namespace, &[1, 2, 3]));
+        assert_eq!(driver.prefix_cache.used_capacity(), 1);
+        assert_eq!(driver.executor().runner().released_sequence_states, 1);
+
+        driver.submit(request(61, &[1, 2, 3, 4, 5], 1, Vec::new()));
+        assert!(matches!(
+            driver.step(&mut |_| Ok(())).unwrap(),
+            ResidentDriverStep::Executed {
+                action_kind: ResidentActionKind::Prefill,
+                rows: 2,
+                ..
+            }
+        ));
+
+        let sequence = driver.scheduler().active_sequence(SessionId(2)).unwrap();
+        assert_eq!(sequence.tokens, vec![1, 2, 3, 4, 5]);
+        assert_eq!(sequence.position, 5);
+        assert_eq!(sequence.prompt_cursor, 5);
+        let model = &driver.sequence_states[&SessionId(2)];
+        assert_eq!(model.position, 5);
+        assert_eq!(model.prefills, vec![vec![4, 5]]);
+        assert_eq!(driver.prefix_hits(), 1);
+        assert_eq!(driver.prefix_misses(), 1);
+        assert!(
+            driver
+                .prefix_cache
+                .contains_exact(namespace, &[1, 2, 3, 4, 5])
+        );
+        assert_eq!(driver.page_manager().unwrap().active_sequences(), 1);
+
+        let report = driver.shutdown(&mut |_| Ok(()), 32).unwrap();
+        assert!(report.registry.drained);
+        assert!(driver.prefix_cache.is_empty());
+        assert!(driver.pending_prefix_cleanups.is_empty());
+        assert!(driver.prefix_cache_sessions.is_empty());
+        assert_eq!(driver.page_manager().unwrap().active_sequences(), 0);
+        assert_eq!(driver.page_manager().unwrap().allocated_pages(), 0);
+        assert_eq!(driver.executor().runner().released_sequence_states, 4);
+    }
+
+    #[test]
+    fn retained_session_explicitly_bypasses_prefix_cache() {
+        let mut driver = prefix_cache_driver(Vec::new(), 4, 8);
+        driver.retain_session(SessionId(70)).unwrap();
+        let mut submitted = request(70, &[1, 2, 3], 0, Vec::new());
+        submitted.session_id = Some(SessionId(70));
+        driver.submit(submitted);
+        driver.drive_ready_test_work(|_| Ok(())).unwrap();
+        driver.drain_finished();
+
+        assert_eq!(driver.prefix_hits(), 0);
+        assert_eq!(driver.prefix_misses(), 0);
+        assert!(driver.prefix_cache.is_empty());
+        assert!(!driver.prefix_cache_sessions.contains(&SessionId(70)));
+        assert_eq!(driver.retained_session_position(SessionId(70)), Some(3));
+
+        driver.shutdown(&mut |_| Ok(()), 32).unwrap();
+        assert_eq!(driver.page_manager().unwrap().allocated_pages(), 0);
+    }
+
+    #[test]
+    fn kv_reserve_evicts_cached_prefix_before_hard_admission() {
+        let mut driver = prefix_cache_driver(Vec::new(), 2, 2);
+        let namespace = driver.prefix_cache_namespace().unwrap();
+
+        driver.submit(request(62, &[1, 2, 3, 4], 0, Vec::new()));
+        driver.drive_ready_test_work(|_| Ok(())).unwrap();
+        driver.drain_finished();
+        assert!(driver.prefix_cache.contains_exact(namespace, &[1, 2, 3, 4]));
+        assert_eq!(driver.available_kv_page_credits(), 1);
+
+        driver.submit(request(63, &[9, 10, 11, 12, 13], 0, Vec::new()));
+        driver.drive_ready_test_work(|_| Ok(())).unwrap();
+        let finished = driver.drain_finished();
+        assert_eq!(finished[0].tokens, vec![9, 10, 11, 12, 13]);
+        assert!(!driver.prefix_cache.contains_exact(namespace, &[1, 2, 3, 4]));
+        assert!(
+            driver
+                .prefix_cache
+                .contains_exact(namespace, &[9, 10, 11, 12, 13])
+        );
+        assert_eq!(driver.prefix_cache.used_capacity(), 2);
+        assert_eq!(driver.prefix_hits(), 0);
+        assert_eq!(driver.prefix_misses(), 2);
+        assert_eq!(driver.executor().runner().released_sequence_states, 3);
+        assert!(!driver.executor().runner().released_kv_pages.is_empty());
+
+        driver.shutdown(&mut |_| Ok(()), 32).unwrap();
+        assert_eq!(driver.page_manager().unwrap().allocated_pages(), 0);
+        assert_eq!(driver.executor().runner().released_sequence_states, 4);
     }
 
     #[test]
@@ -10718,6 +11811,30 @@ mod tests {
                 .next_decode_token,
             source_candidate
         );
+    }
+
+    #[test]
+    fn driver_admission_restores_waiting_request_when_logical_kv_prepare_fails() {
+        let mut manager = KvPageManager::new(Box::new(DriverTestKvSchema), 8);
+        manager.alloc_sequence(StateSlot::new(0), 0).unwrap();
+        let mut driver = ResidentTopKDriver::with_configs(
+            MockTopKRunner::new(Vec::new()),
+            FixedSequenceSlotPool::new(1),
+            ResidentSchedulerConfig::default(),
+            NonZeroU32::new(1).unwrap(),
+            ResidentTopKDriverConfig::default(),
+        )
+        .with_page_manager(manager);
+        driver.submit(request(5, &[1], 1, Vec::new()));
+
+        let error = driver.prepare_step().unwrap_err();
+        assert!(error.to_string().contains("already allocated"));
+        assert_eq!(driver.scheduler().waiting_len(), 1);
+        assert_eq!(driver.scheduler().active_len(), 0);
+        assert_eq!(driver.slot_pool().active_count(), 0);
+        assert!(driver.sequence_states.is_empty());
+        assert!(driver.page_slots.is_empty());
+        assert_eq!(driver.page_manager().unwrap().active_sequences(), 1);
     }
 
     #[test]

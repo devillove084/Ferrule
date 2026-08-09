@@ -1485,9 +1485,6 @@ impl ValidatedResidencyBinding {
     }
 }
 
-/// Architecture-document name for a validated residency binding.
-pub type GenerationValidatedBinding = ValidatedResidencyBinding;
-
 /// Completion fence that keeps a whole residency lease set immutable after dispatch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct DispatchFenceContract {

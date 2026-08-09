@@ -54,7 +54,7 @@ impl CudaTarget {
     pub const fn capabilities(self) -> CudaKernelCapabilities {
         let compute_capability = self.compute_capability();
         CudaKernelCapabilities {
-            portable_simt: compute_capability >= 80,
+            baseline_simt: compute_capability >= 80,
             bf16_mma_sync: compute_capability >= 80,
             fp8_mma_sync: compute_capability >= 89,
             sm90_wgmma: compute_capability == 90,
@@ -69,8 +69,8 @@ impl CudaTarget {
 /// target. Product names and scheduling policies do not belong in this type.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct CudaKernelCapabilities {
-    /// Portable control, metadata, scalar/SIMT, and software-dequant kernels.
-    pub portable_simt: bool,
+    /// Baseline control, metadata, scalar/SIMT, and software-dequant kernels.
+    pub baseline_simt: bool,
     /// Ampere-or-newer BF16 `mma.sync` kernels.
     pub bf16_mma_sync: bool,
     /// Ada-or-newer FP8 `mma.sync` kernels.

@@ -2,9 +2,9 @@
 
 //! CUDA smoke coverage for compact grouped MoE route outputs.
 
-use ferrule_backend::cuda::CudaContext;
-use ferrule_backend::cuda::context::{CudaArtifactOperatorContext, CudaRoutedExpertShape};
-use ferrule_backend::cuda::cutlass::{self, CutlassKernelId};
+use ferrule_backend::cuda::operators::moe::{CudaOperators, CudaRoutedExpertShape};
+use ferrule_backend::cuda::providers::CudaContext;
+use ferrule_backend::cuda::providers::cutlass::{self, CutlassKernelId};
 use std::sync::{Mutex, MutexGuard};
 
 static CUDA_TEST_LOCK: Mutex<()> = Mutex::new(());
@@ -52,7 +52,7 @@ fn route_ranked_reducer_preserves_prefix_and_uses_token_major_routes() {
     const ROUTES_PER_TOKEN: usize = 4;
     const HIDDEN_SIZE: usize = 5;
 
-    let context = CudaArtifactOperatorContext::new().expect("CUDA artifact context");
+    let context = CudaOperators::new().expect("CUDA artifact context");
     let allocated = context
         .allocate_moe_route_output(TOKENS, ROUTES_PER_TOKEN, HIDDEN_SIZE)
         .expect("allocate route output");
@@ -133,7 +133,7 @@ fn expert_major_groups_gather_scatter_and_reduce() {
     const HIDDEN_SIZE: usize = 64;
     const ROUTE_WEIGHT: f32 = 1.0 / 1024.0;
 
-    let context = CudaArtifactOperatorContext::new().expect("CUDA artifact context");
+    let context = CudaOperators::new().expect("CUDA artifact context");
     let shape = CudaRoutedExpertShape::new(INPUT_SIZE, INTERMEDIATE_SIZE, HIDDEN_SIZE)
         .expect("routed expert shape");
     let mut arena = context

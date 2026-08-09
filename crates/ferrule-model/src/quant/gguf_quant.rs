@@ -5,6 +5,8 @@
 //! but the byte-level semantics live here so model bring-up can fail precisely for
 //! unsupported quant classes.
 
+use ferrule_common::{QuantType, QuantizationError, QuantizationResult};
+
 use super::f16_to_f32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -26,20 +28,8 @@ impl GgufQuantType {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum GgufQuantError {
-    InvalidBlockSize {
-        quant: GgufQuantType,
-        expected: usize,
-        actual: usize,
-    },
-    InvalidRowSize {
-        quant: GgufQuantType,
-        row_values: usize,
-    },
-}
-
-pub type GgufQuantResult<T> = std::result::Result<T, GgufQuantError>;
+pub type GgufQuantError = QuantizationError;
+pub type GgufQuantResult<T> = QuantizationResult<T>;
 
 pub const QK_K: usize = 256;
 pub const Q4_K_SCALE_BYTES: usize = 12;
@@ -55,7 +45,7 @@ impl<'a> Q4KBlock<'a> {
     pub fn from_bytes(bytes: &'a [u8]) -> GgufQuantResult<Self> {
         if bytes.len() != Q4_K_BLOCK_BYTES {
             return Err(GgufQuantError::InvalidBlockSize {
-                quant: GgufQuantType::Q4K,
+                quant: QuantType::Q4_K,
                 expected: Q4_K_BLOCK_BYTES,
                 actual: bytes.len(),
             });
@@ -94,7 +84,7 @@ impl<'a> Q4KBlock<'a> {
 pub fn dequantize_q4_k_row(bytes: &[u8], row_values: usize) -> GgufQuantResult<Vec<f32>> {
     if row_values == 0 || !row_values.is_multiple_of(QK_K) {
         return Err(GgufQuantError::InvalidRowSize {
-            quant: GgufQuantType::Q4K,
+            quant: QuantType::Q4_K,
             row_values,
         });
     }
@@ -102,7 +92,7 @@ pub fn dequantize_q4_k_row(bytes: &[u8], row_values: usize) -> GgufQuantResult<V
     let expected = blocks * Q4_K_BLOCK_BYTES;
     if bytes.len() != expected {
         return Err(GgufQuantError::InvalidBlockSize {
-            quant: GgufQuantType::Q4K,
+            quant: QuantType::Q4_K,
             expected,
             actual: bytes.len(),
         });

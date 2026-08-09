@@ -1,6 +1,7 @@
 #![allow(
     clippy::unnecessary_sort_by,
     clippy::needless_range_loop,
+    clippy::result_large_err,
     clippy::too_many_arguments
 )]
 //! Ferrule runtime for resident workloads, shared scheduling and I/O, resource
@@ -26,11 +27,16 @@ pub use cache::{
     KvReservationId, PageBlockTable, PreemptedKvState, PreparedKvSequenceFork,
 };
 pub use engine::{
-    InferenceCancelProgress, InferenceCompletionOwner, InferenceCompletionReactor, InferenceEngine,
-    InferenceShutdownProgress, LocalResidentInferenceEngine, NativeMultiSessionExecutor,
+    BackendSelection, BuiltinModelResolver, InferenceCancelProgress, InferenceCompletionOwner,
+    InferenceCompletionReactor, InferenceEngine, InferenceShutdownProgress,
+    LocalResidentInferenceEngine, ModelFactoryOptions, NativeMultiSessionExecutor,
     ResidentActionKind, ResidentCancelProgress, ResidentDriverShutdownReport, ResidentDriverStep,
-    ResidentInferenceEngine, ResidentShutdownProgress, ResidentTokenEvent, ResidentTopKDriver,
-    ResidentTopKDriverConfig, ResidentTopKDriverStats,
+    ResidentEngineObservability, ResidentExternalTokenObservability, ResidentInferenceEngine,
+    ResidentKvCacheObservability, ResidentMaterializationObservability,
+    ResidentMaterializationStageObservability, ResidentModelBuildObservability,
+    ResidentModelBuildPlan, ResidentModelPlanner, ResidentPrefixCacheStats,
+    ResidentShutdownProgress, ResidentTokenEvent, ResidentTopKDriver, ResidentTopKDriverConfig,
+    ResidentTopKDriverStats, ResolvedModelBackend,
 };
 pub use expert_residency::{
     ExpertInstallIntent, ExpertInstallPrepareOutcome, ExpertInstallReason, ExpertKey, ExpertLease,

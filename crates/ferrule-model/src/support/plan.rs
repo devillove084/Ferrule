@@ -1,5 +1,6 @@
 use std::fmt;
 
+use crate::execution::ModelExecutionBackend;
 use crate::spec::{AttentionKind, ModelFamily, RouterKind, WeightSource};
 
 use super::contract::ModelSupportContract;
@@ -31,6 +32,7 @@ impl fmt::Display for EnginePlanStatus {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PolicyArea {
     ModelFamily,
+    Backend,
     Attention,
     Router,
     Expert,
@@ -46,6 +48,7 @@ impl PolicyArea {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::ModelFamily => "model_family",
+            Self::Backend => "backend",
             Self::Attention => "attention",
             Self::Router => "router",
             Self::Expert => "expert",
@@ -84,17 +87,31 @@ impl MissingPolicy {
 pub struct EnginePlan {
     pub family: ModelFamily,
     pub architecture: Option<String>,
+    pub backend: ModelExecutionBackend,
+    /// Truthful implementation profile, when the selected backend is available.
+    pub backend_profile: Option<&'static str>,
     pub status: EnginePlanStatus,
     pub policies: PolicySet,
     pub missing: Vec<MissingPolicy>,
 }
 
 impl EnginePlan {
+    /// Build a plan for the always-available CPU reference backend.
     pub fn from_contract(contract: &ModelSupportContract) -> Self {
-        let missing = missing_policies(contract);
+        Self::from_contract_for_backend(contract, ModelExecutionBackend::Cpu)
+    }
+
+    pub fn from_contract_for_backend(
+        contract: &ModelSupportContract,
+        backend: ModelExecutionBackend,
+    ) -> Self {
+        let missing = missing_policies(contract, backend);
         let status = if missing.is_empty() {
             EnginePlanStatus::Executable
-        } else if matches!(contract.spec.family, ModelFamily::Unknown(_)) {
+        } else if matches!(
+            contract.spec.family,
+            ModelFamily::Unknown(_) | ModelFamily::Qwen3 | ModelFamily::QwenMoe
+        ) {
             EnginePlanStatus::Unsupported
         } else {
             EnginePlanStatus::MetadataOnly
@@ -102,6 +119,8 @@ impl EnginePlan {
         Self {
             family: contract.spec.family.clone(),
             architecture: contract.spec.architecture.clone(),
+            backend,
+            backend_profile: backend_profile(&contract.spec.family, backend),
             status,
             policies: contract.policies.clone(),
             missing,
@@ -113,28 +132,91 @@ impl EnginePlan {
     }
 }
 
-fn missing_policies(contract: &ModelSupportContract) -> Vec<MissingPolicy> {
+fn backend_profile(family: &ModelFamily, backend: ModelExecutionBackend) -> Option<&'static str> {
+    match (family, backend) {
+        (ModelFamily::QwenMoe, ModelExecutionBackend::Cpu) => Some("cpu-reference"),
+        (ModelFamily::QwenMoe, ModelExecutionBackend::Cuda) if cfg!(feature = "cuda") => {
+            Some("cuda-correctness-nonresident")
+        }
+        (ModelFamily::DeepSeekV4, ModelExecutionBackend::Cuda) if cfg!(feature = "cuda") => {
+            Some("cuda")
+        }
+        _ => None,
+    }
+}
+
+fn missing_policies(
+    contract: &ModelSupportContract,
+    backend: ModelExecutionBackend,
+) -> Vec<MissingPolicy> {
     let spec = &contract.spec;
     let mut missing = Vec::new();
 
-    match spec.family {
-        ModelFamily::Qwen3 | ModelFamily::QwenMoe | ModelFamily::DeepSeekV4
-            if matches!(spec.weight_source, WeightSource::Safetensors) => {}
-        ModelFamily::Qwen3 => missing.push(MissingPolicy::new(
-            PolicyArea::Quantization,
-            "Qwen3 execution currently expects safetensors startup",
-        )),
-        ModelFamily::Unknown(_) => missing.push(MissingPolicy::new(
-            PolicyArea::ModelFamily,
-            "unknown model family has no descriptor-to-layout binding",
-        )),
-        _ => missing.push(MissingPolicy::new(
-            PolicyArea::ModelFamily,
-            format!(
-                "{} descriptor is recognized, but no executable model-family policy is wired yet",
-                spec.family
+    if !spec.family.is_supported_runtime_family() {
+        let reason = match &spec.family {
+            ModelFamily::Qwen3 => {
+                "dense Qwen3 has no registered runtime runner; only Qwen3-MoE is supported".into()
+            }
+            ModelFamily::Unknown(_) => {
+                "unknown model family has no descriptor-to-layout binding".into()
+            }
+            family => format!(
+                "{family} descriptor is recognized, but no executable model-family policy is wired yet"
             ),
-        )),
+        };
+        missing.push(MissingPolicy::new(PolicyArea::ModelFamily, reason));
+    }
+
+    if spec.family.is_supported_runtime_family()
+        && !matches!(spec.weight_source, WeightSource::Safetensors)
+    {
+        missing.push(MissingPolicy::new(
+            PolicyArea::Quantization,
+            format!(
+                "{} runtime loading requires Hugging Face safetensors, got {}",
+                spec.family, spec.weight_source
+            ),
+        ));
+    }
+
+    match (&spec.family, backend) {
+        (ModelFamily::QwenMoe, ModelExecutionBackend::Cpu) => {}
+        (ModelFamily::QwenMoe, ModelExecutionBackend::Cuda) if cfg!(feature = "cuda") => {}
+        (ModelFamily::QwenMoe, ModelExecutionBackend::Cuda) => {
+            missing.push(MissingPolicy::new(
+                PolicyArea::Backend,
+                "Qwen3-MoE CUDA correctness-nonresident execution requires the cuda feature",
+            ));
+        }
+        (ModelFamily::DeepSeekV4, ModelExecutionBackend::Cuda) if cfg!(feature = "cuda") => {}
+        (ModelFamily::DeepSeekV4, ModelExecutionBackend::Cuda) => {
+            missing.push(MissingPolicy::new(
+                PolicyArea::Backend,
+                "DeepSeek-V4 CUDA execution requires the cuda feature",
+            ));
+        }
+        (ModelFamily::DeepSeekV4, ModelExecutionBackend::Cpu) => {
+            missing.push(MissingPolicy::new(
+                PolicyArea::Backend,
+                "DeepSeek-V4 has no registered CPU resident backend",
+            ));
+        }
+        _ => {}
+    }
+
+    if matches!(spec.family, ModelFamily::QwenMoe) {
+        if !spec.moe.is_moe() {
+            missing.push(MissingPolicy::new(
+                PolicyArea::Expert,
+                "Qwen3-MoE runtime requires routed experts",
+            ));
+        }
+        if !matches!(spec.moe.router, RouterKind::DenseTopK) {
+            missing.push(MissingPolicy::new(
+                PolicyArea::Router,
+                "Qwen3-MoE runtime requires dense top-k routing",
+            ));
+        }
     }
 
     if matches!(spec.attention, AttentionKind::MultiLatentAttention) {
@@ -149,16 +231,16 @@ fn missing_policies(contract: &ModelSupportContract) -> Vec<MissingPolicy> {
         ));
     }
 
-    if matches!(spec.moe.router, RouterKind::HashAssistedTopK) {
+    if !matches!(spec.family, ModelFamily::QwenMoe)
+        && matches!(spec.moe.router, RouterKind::HashAssistedTopK)
+    {
         missing.push(MissingPolicy::new(
             PolicyArea::Router,
             "hash-assisted routing tables require router policy integration",
         ));
     }
 
-    if spec.moe.has_shared_experts
-        && !matches!(spec.family, ModelFamily::Qwen3 | ModelFamily::DeepSeekV4)
-    {
+    if spec.moe.has_shared_experts && !matches!(spec.family, ModelFamily::DeepSeekV4) {
         missing.push(MissingPolicy::new(
             PolicyArea::Expert,
             "shared experts require an explicit shared-expert execution policy",

@@ -274,6 +274,41 @@ struct ExpertSourceCatalogEntry<S> {
     resource_source: Option<ResourceSource>,
 }
 
+/// Per-layer routed-expert source catalog and its streaming policy.
+#[derive(Debug, Clone)]
+pub struct ExpertLayerSources {
+    source_catalog: std::sync::Arc<ExpertSourceCatalog>,
+    streaming_policy: ExpertStreamingPolicy,
+}
+
+impl ExpertLayerSources {
+    pub fn new(
+        source_catalog: std::sync::Arc<ExpertSourceCatalog>,
+        streaming_policy: ExpertStreamingPolicy,
+    ) -> Self {
+        Self {
+            source_catalog,
+            streaming_policy,
+        }
+    }
+
+    pub fn source_catalog(&self) -> &std::sync::Arc<ExpertSourceCatalog> {
+        &self.source_catalog
+    }
+
+    pub const fn streaming_policy(&self) -> &ExpertStreamingPolicy {
+        &self.streaming_policy
+    }
+
+    pub const fn resident_capacity(&self) -> usize {
+        self.streaming_policy.gpu_slots_per_layer
+    }
+
+    pub const fn prefetch_capacity(&self) -> usize {
+        self.streaming_policy.prefetch_per_layer
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExpertSourceCatalog<S = ExpertLoadSource> {
     sources: Vec<(ExpertId, ExpertSourceCatalogEntry<S>)>,
@@ -1149,8 +1184,27 @@ pub struct ExpertArtifactPayload {
     pub tensors: Vec<ExpertTensorPayload>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExpertBundleFormat {
+    Bf16,
+    Fp4E2M1PackedWithE8M0Scale,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExpertBundleLayout {
+    pub format: ExpertBundleFormat,
+    pub input_features: usize,
+    pub intermediate_features: usize,
+    pub output_features: usize,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExpertLinearFormat {
+    /// Unscaled row-major BF16 expert matrix.
+    Bf16 {
+        out_features: usize,
+        in_features: usize,
+    },
     /// Packed FP4 expert artifact format: `torch.float4_e2m1fn_x2` stored in
     /// safetensors as I8 bytes, with one `float8_e8m0fnu` scale per logical
     /// K block.
@@ -1199,7 +1253,7 @@ impl ExpertComputeBundle {
                 .or_default()
                 .push(tensor);
         }
-        Ok(Self {
+        let bundle = Self {
             expert,
             gate: build_linear_payload(
                 expert,
@@ -1216,13 +1270,24 @@ impl ExpertComputeBundle {
                 ExpertMatrixKind::Down,
                 grouped.remove(&ExpertMatrixKind::Down),
             )?,
-        })
+        };
+        validate_expert_compute_bundle(&bundle)?;
+        Ok(bundle)
     }
 
     pub fn total_bytes(&self) -> u64 {
         linear_payload_bytes(&self.gate)
             .saturating_add(linear_payload_bytes(&self.up))
             .saturating_add(linear_payload_bytes(&self.down))
+    }
+
+    pub fn layout(&self) -> Result<ExpertBundleLayout> {
+        typed_expert_bundle_layout(
+            &self.gate.format,
+            &self.up.format,
+            &self.down.format,
+            "expert artifact bundle",
+        )
     }
 }
 
@@ -1495,7 +1560,7 @@ impl ExpertStreamingReader {
     #[cfg(all(target_os = "linux", feature = "cuda"))]
     pub(crate) fn from_env_with_cuda_pinned(
         max_slice_bytes: u64,
-        allocator: ferrule_backend::cuda::context::CudaPinnedHostAllocator,
+        allocator: ferrule_backend::cuda::operators::moe::CudaPinnedHostAllocator,
         completion_hub: CompletionHub,
         plan: ExpertIoPlan,
     ) -> Result<(Self, ExpertIoPlan)> {
@@ -1616,7 +1681,8 @@ impl ExpertStreamingReader {
         self.completion_hub.clone()
     }
 
-    pub(crate) fn take_completion_reactors(&self) -> Vec<ModelCompletionReactor> {
+    /// Transfers physical reader completion reactors to the owning model runner.
+    pub fn take_completion_reactors(&self) -> Vec<ModelCompletionReactor> {
         #[cfg(target_os = "linux")]
         if let Some(reader) = self.io_uring.as_ref()
             && let Some(reactor) = reader.take_completion_reactor()
@@ -2251,44 +2317,225 @@ pub(crate) fn infer_expert_linear_format(
     weight_len: usize,
     scale: Option<(&ExpertTensorSlice, usize)>,
 ) -> Result<ExpertLinearFormat> {
+    if weight.dtype == "BF16" {
+        if let Some((scale, _)) = scale {
+            return Err(Error::Model {
+                message: format!(
+                    "BF16 expert tensor has unexpected scale dtype={} shape={:?}",
+                    scale.dtype, scale.shape
+                ),
+            });
+        }
+        let [out_features, in_features]: [usize; 2] =
+            weight
+                .shape
+                .as_slice()
+                .try_into()
+                .map_err(|_| Error::Model {
+                    message: format!(
+                        "BF16 expert tensor expects a 2D weight shape, got {:?}",
+                        weight.shape
+                    ),
+                })?;
+        if out_features == 0 || in_features == 0 {
+            return Err(Error::Model {
+                message: format!(
+                    "BF16 expert tensor dimensions must be non-zero, got {:?}",
+                    weight.shape
+                ),
+            });
+        }
+        let expected_bytes = out_features
+            .checked_mul(in_features)
+            .and_then(|elements| elements.checked_mul(2))
+            .ok_or_else(|| Error::Model {
+                message: format!(
+                    "BF16 expert tensor byte size overflows for shape {:?}",
+                    weight.shape
+                ),
+            })?;
+        if weight_len != expected_bytes || weight.bytes != expected_bytes as u64 {
+            return Err(Error::Model {
+                message: format!(
+                    "BF16 expert tensor byte length mismatch: shape {:?} requires {expected_bytes}, metadata={}, payload={weight_len}",
+                    weight.shape, weight.bytes
+                ),
+            });
+        }
+        return Ok(ExpertLinearFormat::Bf16 {
+            out_features,
+            in_features,
+        });
+    }
     let Some((scale, scale_len)) = scale else {
         return Ok(ExpertLinearFormat::Opaque);
     };
     if weight.dtype == "I8" && scale.dtype == "F8_E8M0" {
-        if weight.shape.len() != 2 || scale.shape.len() != 2 {
+        let [out_features, packed_in_features]: [usize; 2] = weight
+            .shape
+            .as_slice()
+            .try_into()
+            .map_err(|_| Error::Model {
+                message: format!(
+                    "FP4 expert tensor expects a 2D weight shape, got {:?}",
+                    weight.shape
+                ),
+            })?;
+        let [scale_rows, scale_cols]: [usize; 2] =
+            scale
+                .shape
+                .as_slice()
+                .try_into()
+                .map_err(|_| Error::Model {
+                    message: format!(
+                        "FP4 expert tensor expects a 2D scale shape, got {:?}",
+                        scale.shape
+                    ),
+                })?;
+        let in_features = packed_in_features
+            .checked_mul(2)
+            .ok_or_else(|| Error::Model {
+                message: "FP4 expert packed input dimension overflow".into(),
+            })?;
+        if out_features == 0
+            || in_features == 0
+            || !in_features.is_multiple_of(32)
+            || !in_features.is_multiple_of(2)
+        {
             return Err(Error::Model {
                 message: format!(
-                    "FP4 expert tensor expects 2D weight/scale shapes, got {:?} and {:?}",
+                    "FP4 expert tensor has invalid packed shape {:?}; logical input width must be a non-zero multiple of 32",
+                    weight.shape
+                ),
+            });
+        }
+        let expected_weight_bytes =
+            out_features
+                .checked_mul(packed_in_features)
+                .ok_or_else(|| Error::Model {
+                    message: format!(
+                        "FP4 expert weight byte size overflows for shape {:?}",
+                        weight.shape
+                    ),
+                })?;
+        let expected_scale_cols = in_features / 32;
+        let expected_scale_bytes =
+            out_features
+                .checked_mul(expected_scale_cols)
+                .ok_or_else(|| Error::Model {
+                    message: format!(
+                        "FP4 expert scale byte size overflows for weight shape {:?}",
+                        weight.shape
+                    ),
+                })?;
+        if scale_rows != out_features || scale_cols != expected_scale_cols {
+            return Err(Error::Model {
+                message: format!(
+                    "FP4 expert scale shape mismatch: weight {:?} implies scale [{out_features}, {expected_scale_cols}], got {:?}",
                     weight.shape, scale.shape
                 ),
             });
         }
-        let out = weight.shape[0];
-        let packed_in = weight.shape[1];
-        let logical_in = packed_in.checked_mul(2).ok_or_else(|| Error::Model {
-            message: "FP4 expert packed input dimension overflow".into(),
-        })?;
-        let expected_scale_cols = logical_in / 32;
-        if scale.shape[0] != out || scale.shape[1] != expected_scale_cols {
+        if weight_len != expected_weight_bytes
+            || weight.bytes != expected_weight_bytes as u64
+            || scale_len != expected_scale_bytes
+            || scale.bytes != expected_scale_bytes as u64
+        {
             return Err(Error::Model {
                 message: format!(
-                    "FP4 expert scale shape mismatch: weight {:?} implies scale [{out}, {expected_scale_cols}], got {:?}",
-                    weight.shape, scale.shape
+                    "FP4 expert tensor byte length mismatch: weight metadata={} payload={weight_len} expected={expected_weight_bytes}; scale metadata={} payload={scale_len} expected={expected_scale_bytes}",
+                    weight.bytes, scale.bytes
                 ),
-            });
-        }
-        if weight_len as u64 != weight.bytes || scale_len as u64 != scale.bytes {
-            return Err(Error::Model {
-                message: "expert payload byte length does not match tensor slice metadata".into(),
             });
         }
         return Ok(ExpertLinearFormat::Fp4E2M1PackedWithE8M0Scale {
-            out_features: out,
-            in_features: logical_in,
+            out_features,
+            in_features,
             block_size: 32,
         });
     }
     Ok(ExpertLinearFormat::Opaque)
+}
+
+fn validate_expert_compute_bundle(bundle: &ExpertComputeBundle) -> Result<()> {
+    let formats = [&bundle.gate.format, &bundle.up.format, &bundle.down.format];
+    if formats
+        .iter()
+        .all(|format| matches!(format, ExpertLinearFormat::Opaque))
+    {
+        return Ok(());
+    }
+    typed_expert_bundle_layout(
+        &bundle.gate.format,
+        &bundle.up.format,
+        &bundle.down.format,
+        "expert artifact bundle",
+    )?;
+    Ok(())
+}
+
+pub(crate) fn typed_expert_bundle_layout(
+    gate: &ExpertLinearFormat,
+    up: &ExpertLinearFormat,
+    down: &ExpertLinearFormat,
+    context: &str,
+) -> Result<ExpertBundleLayout> {
+    let gate_dimensions = expert_linear_dimensions(gate);
+    let up_dimensions = expert_linear_dimensions(up);
+    let down_dimensions = expert_linear_dimensions(down);
+    let (
+        Some((gate_format, gate_out, gate_in)),
+        Some((up_format, up_out, up_in)),
+        Some((down_format, down_out, down_in)),
+    ) = (gate_dimensions, up_dimensions, down_dimensions)
+    else {
+        return Err(Error::Model {
+            message: format!(
+                "{context} mixes opaque and typed linear formats: gate={gate:?} up={up:?} down={down:?}"
+            ),
+        });
+    };
+    if gate_format != up_format || gate_format != down_format {
+        return Err(Error::Model {
+            message: format!(
+                "{context} mixes linear formats: gate={gate:?} up={up:?} down={down:?}"
+            ),
+        });
+    }
+    if (gate_out, gate_in) != (up_out, up_in) || down_in != gate_out || down_out != gate_in {
+        return Err(Error::Model {
+            message: format!(
+                "{context} has inconsistent projection shapes: gate={gate_out}x{gate_in} up={up_out}x{up_in} down={down_out}x{down_in}"
+            ),
+        });
+    }
+    Ok(ExpertBundleLayout {
+        format: gate_format,
+        input_features: gate_in,
+        intermediate_features: gate_out,
+        output_features: down_out,
+    })
+}
+
+fn expert_linear_dimensions(
+    format: &ExpertLinearFormat,
+) -> Option<(ExpertBundleFormat, usize, usize)> {
+    match *format {
+        ExpertLinearFormat::Bf16 {
+            out_features,
+            in_features,
+        } => Some((ExpertBundleFormat::Bf16, out_features, in_features)),
+        ExpertLinearFormat::Fp4E2M1PackedWithE8M0Scale {
+            out_features,
+            in_features,
+            ..
+        } => Some((
+            ExpertBundleFormat::Fp4E2M1PackedWithE8M0Scale,
+            out_features,
+            in_features,
+        )),
+        ExpertLinearFormat::Opaque => None,
+    }
 }
 
 fn linear_payload_bytes(linear: &ExpertLinearPayload) -> u64 {
@@ -3249,6 +3496,113 @@ mod tests {
     }
 
     #[test]
+    fn hf_streaming_catalog_reads_unscaled_bf16_expert() {
+        let dir = unique_temp_dir("ferrule-bf16-expert-catalog");
+        std::fs::create_dir_all(&dir).unwrap();
+        let shard = "experts.safetensors";
+        std::fs::write(dir.join(shard), vec![0u8; 36]).unwrap();
+        let expert = ExpertId::new(1, 4);
+        let tensors = [
+            hf_bf16_tensor(1, 4, RoutedExpertMatrix::Gate, shard, vec![2, 3], 0, 12),
+            hf_bf16_tensor(1, 4, RoutedExpertMatrix::Up, shard, vec![2, 3], 12, 12),
+            hf_bf16_tensor(1, 4, RoutedExpertMatrix::Down, shard, vec![3, 2], 24, 12),
+        ];
+        let catalog =
+            ExpertSourceCatalog::from_hf_routed_expert_tensor_sets(&dir, tensors).unwrap();
+        let source = catalog.source(expert).unwrap();
+        let artifact = ExpertStreamingReader::new(64)
+            .read_load_source(expert, source)
+            .unwrap();
+        let bundle = ExpertComputeBundle::from_artifact_payload(artifact).unwrap();
+
+        assert_eq!(
+            bundle.gate.format,
+            ExpertLinearFormat::Bf16 {
+                out_features: 2,
+                in_features: 3,
+            }
+        );
+        assert_eq!(
+            bundle.down.format,
+            ExpertLinearFormat::Bf16 {
+                out_features: 3,
+                in_features: 2,
+            }
+        );
+        assert!(bundle.gate.scale.is_none());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn builds_bf16_expert_compute_bundle_without_scale_slices() {
+        let expert = ExpertId::new(1, 4);
+        let payload = ExpertArtifactPayload {
+            expert,
+            tensors: vec![
+                bf16_payload(expert, ExpertMatrixKind::Gate, vec![2, 3], vec![0; 12]),
+                bf16_payload(expert, ExpertMatrixKind::Up, vec![2, 3], vec![0; 12]),
+                bf16_payload(expert, ExpertMatrixKind::Down, vec![3, 2], vec![0; 12]),
+            ],
+        };
+        let bundle = ExpertComputeBundle::from_artifact_payload(payload).unwrap();
+        assert_eq!(
+            bundle.gate.format,
+            ExpertLinearFormat::Bf16 {
+                out_features: 2,
+                in_features: 3,
+            }
+        );
+        assert_eq!(
+            bundle.down.format,
+            ExpertLinearFormat::Bf16 {
+                out_features: 3,
+                in_features: 2,
+            }
+        );
+        assert!(bundle.gate.scale.is_none());
+        assert_eq!(bundle.total_bytes(), 36);
+    }
+
+    #[test]
+    fn rejects_malformed_bf16_expert_shape_and_byte_lengths() {
+        let expert = ExpertId::new(0, 0);
+        let malformed_shape = bf16_payload(expert, ExpertMatrixKind::Gate, vec![4], vec![0; 8]);
+        let err = infer_linear_format(&malformed_shape, None).unwrap_err();
+        assert!(err.to_string().contains("2D weight shape"));
+
+        let zero_dim = bf16_payload(expert, ExpertMatrixKind::Gate, vec![0, 3], Vec::new());
+        let err = infer_linear_format(&zero_dim, None).unwrap_err();
+        assert!(err.to_string().contains("dimensions must be non-zero"));
+
+        let short = bf16_payload(expert, ExpertMatrixKind::Gate, vec![2, 3], vec![0; 10]);
+        let err = infer_linear_format(&short, None).unwrap_err();
+        assert!(err.to_string().contains("byte length mismatch"));
+
+        let weight = bf16_payload(expert, ExpertMatrixKind::Gate, vec![1, 1], vec![0; 2]);
+        let scale = fp4_payload(
+            expert,
+            ExpertMatrixKind::Gate,
+            ExpertTensorComponent::Scale,
+            vec![1, 1],
+            1,
+        );
+        let err = infer_linear_format(&weight, Some(&scale)).unwrap_err();
+        assert!(err.to_string().contains("unexpected scale"));
+
+        let overflow = ExpertTensorSlice {
+            key: ExpertTensorKey::new(0, 0, ExpertMatrixKind::Gate),
+            component: ExpertTensorComponent::Weight,
+            path: PathBuf::from("synthetic.safetensors"),
+            offset: 0,
+            bytes: 0,
+            dtype: "BF16".into(),
+            shape: vec![usize::MAX, 2],
+        };
+        let err = infer_expert_linear_format(&overflow, 0, None).unwrap_err();
+        assert!(err.to_string().contains("byte size overflows"));
+    }
+
+    #[test]
     fn builds_fp4_expert_compute_bundle_from_six_artifact_slices() {
         let expert = ExpertId::new(0, 3);
         let payload = ExpertArtifactPayload {
@@ -3258,43 +3612,43 @@ mod tests {
                     expert,
                     ExpertMatrixKind::Gate,
                     ExpertTensorComponent::Weight,
-                    vec![2048, 2048],
-                    4,
+                    vec![32, 16],
+                    32 * 16,
                 ),
                 fp4_payload(
                     expert,
                     ExpertMatrixKind::Gate,
                     ExpertTensorComponent::Scale,
-                    vec![2048, 128],
-                    2,
+                    vec![32, 1],
+                    32,
                 ),
                 fp4_payload(
                     expert,
                     ExpertMatrixKind::Up,
                     ExpertTensorComponent::Weight,
-                    vec![2048, 2048],
-                    4,
+                    vec![32, 16],
+                    32 * 16,
                 ),
                 fp4_payload(
                     expert,
                     ExpertMatrixKind::Up,
                     ExpertTensorComponent::Scale,
-                    vec![2048, 128],
-                    2,
+                    vec![32, 1],
+                    32,
                 ),
                 fp4_payload(
                     expert,
                     ExpertMatrixKind::Down,
                     ExpertTensorComponent::Weight,
-                    vec![4096, 1024],
-                    4,
+                    vec![32, 16],
+                    32 * 16,
                 ),
                 fp4_payload(
                     expert,
                     ExpertMatrixKind::Down,
                     ExpertTensorComponent::Scale,
-                    vec![4096, 64],
-                    2,
+                    vec![32, 1],
+                    32,
                 ),
             ],
         };
@@ -3303,20 +3657,20 @@ mod tests {
         assert_eq!(
             bundle.gate.format,
             ExpertLinearFormat::Fp4E2M1PackedWithE8M0Scale {
-                out_features: 2048,
-                in_features: 4096,
+                out_features: 32,
+                in_features: 32,
                 block_size: 32,
             }
         );
         assert_eq!(
             bundle.down.format,
             ExpertLinearFormat::Fp4E2M1PackedWithE8M0Scale {
-                out_features: 4096,
-                in_features: 2048,
+                out_features: 32,
+                in_features: 32,
                 block_size: 32,
             }
         );
-        assert_eq!(bundle.total_bytes(), 18);
+        assert_eq!(bundle.total_bytes(), 3 * (32 * 16 + 32) as u64);
     }
 
     #[test]
@@ -3761,6 +4115,26 @@ mod tests {
         }
     }
 
+    fn bf16_payload(
+        expert: ExpertId,
+        matrix: ExpertMatrixKind,
+        shape: Vec<usize>,
+        bytes: Vec<u8>,
+    ) -> ExpertTensorPayload {
+        ExpertTensorPayload {
+            slice: ExpertTensorSlice {
+                key: ExpertTensorKey { expert, matrix },
+                component: ExpertTensorComponent::Weight,
+                path: PathBuf::from("synthetic.safetensors"),
+                offset: 0,
+                bytes: bytes.len() as u64,
+                dtype: "BF16".into(),
+                shape,
+            },
+            bytes,
+        }
+    }
+
     fn fp4_payload(
         expert: ExpertId,
         matrix: ExpertMatrixKind,
@@ -3784,6 +4158,32 @@ mod tests {
                 shape,
             },
             bytes: vec![1u8; len],
+        }
+    }
+
+    fn hf_bf16_tensor(
+        layer: usize,
+        expert: usize,
+        matrix: RoutedExpertMatrix,
+        shard: &str,
+        shape: Vec<usize>,
+        file_offset: u64,
+        byte_size: u64,
+    ) -> HfRoutedExpertTensorInfo {
+        HfRoutedExpertTensorInfo {
+            descriptor: RoutedExpertTensorRef {
+                layer,
+                expert,
+                matrix,
+                part: RoutedExpertTensorPart::Weight,
+            },
+            name: format!("layers.{layer}.ffn.experts.{expert}.bf16"),
+            shard: shard.into(),
+            dtype: "BF16".into(),
+            shape,
+            data_offset: file_offset,
+            file_offset,
+            byte_size,
         }
     }
 

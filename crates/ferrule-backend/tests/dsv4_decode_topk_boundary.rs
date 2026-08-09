@@ -2,8 +2,8 @@
 
 //! Numerical and long-context boundary regressions for DSV4 device top-k kernels.
 
-use ferrule_backend::cuda::context::{
-    CudaArtifactOperatorContext, validate_dsv4_router_hash_table, validate_dsv4_router_token_ids,
+use ferrule_backend::cuda::operators::moe::{
+    CudaOperators, validate_router_hash_table, validate_router_token_ids,
 };
 use std::sync::{Mutex, MutexGuard};
 
@@ -157,7 +157,7 @@ fn paged_decode_rows_matches_stable_cpu_reference() {
     );
 
     let _guard = cuda_test_guard();
-    let context = CudaArtifactOperatorContext::new().expect("CUDA artifact context");
+    let context = CudaOperators::new().expect("CUDA artifact context");
     let query = context
         .upload_f32_buffer(&query)
         .expect("upload row queries");
@@ -254,7 +254,7 @@ fn indexer_bf16_score_boundary_preserves_stable_near_tie_order() {
     indexer_plane[second_offset..second_offset + INDEX_HEAD_DIM].copy_from_slice(&second);
 
     let _guard = cuda_test_guard();
-    let context = CudaArtifactOperatorContext::new().expect("CUDA artifact context");
+    let context = CudaOperators::new().expect("CUDA artifact context");
     let query = context.upload_f32_buffer(&query).expect("upload query");
     let weights = context.upload_f32_buffer(&[1.0]).expect("upload weights");
     let indexer_plane = context
@@ -344,7 +344,7 @@ fn paged_decode_single_row_uses_absolute_boundaries_and_skips_nan() {
     }
 
     let _guard = cuda_test_guard();
-    let context = CudaArtifactOperatorContext::new().expect("CUDA artifact context");
+    let context = CudaOperators::new().expect("CUDA artifact context");
     let query = context.upload_f32_buffer(&query).expect("upload query");
     let weights = context.upload_f32_buffer(&weights).expect("upload weights");
     let indexer_plane = context
@@ -416,7 +416,7 @@ fn ratio_128_direct_selection_covers_all_visible_compressed_rows() {
     const PAGE_TOKENS: usize = 16;
 
     let _guard = cuda_test_guard();
-    let context = CudaArtifactOperatorContext::new().expect("CUDA artifact context");
+    let context = CudaOperators::new().expect("CUDA artifact context");
     let query = context.upload_f32_buffer(&[0.0]).expect("upload query");
     let weights = context.upload_f32_buffer(&[0.0]).expect("upload weights");
     let indexer_plane = context
@@ -486,7 +486,7 @@ fn invalid_row_metadata_clears_reused_selector_outputs() {
     const INDEX_TOPK: usize = 1;
 
     let _guard = cuda_test_guard();
-    let context = CudaArtifactOperatorContext::new().expect("CUDA artifact context");
+    let context = CudaOperators::new().expect("CUDA artifact context");
     let query = context.upload_f32_buffer(&[1.0]).expect("upload query");
     let weights = context.upload_f32_buffer(&[1.0]).expect("upload weights");
     let indexer_plane = context
@@ -640,7 +640,7 @@ fn router_topk_writes_i32_ids_without_hidden_download_and_matches_cpu_routes() {
     let expected = router_topk_reference(&logits, &bias, TOKENS, EXPERTS, TOP_K, ROUTE_SCALE);
 
     let _guard = cuda_test_guard();
-    let context = CudaArtifactOperatorContext::new().expect("CUDA artifact context");
+    let context = CudaOperators::new().expect("CUDA artifact context");
     let logits = context
         .upload_f32_buffer(&logits)
         .expect("upload router logits");
@@ -692,11 +692,11 @@ fn router_topk_writes_i32_ids_without_hidden_download_and_matches_cpu_routes() {
 #[test]
 fn hash_router_host_validation_covers_token_rows_topk_duplicates_and_bounds() {
     assert_eq!(
-        validate_dsv4_router_token_ids(&[2, 0], 3).expect("valid token rows"),
+        validate_router_token_ids(&[2, 0], 3).expect("valid token rows"),
         vec![2, 0]
     );
     assert!(
-        validate_dsv4_router_token_ids(&[3], 3)
+        validate_router_token_ids(&[3], 3)
             .unwrap_err()
             .to_string()
             .contains("batch row 0")
@@ -704,23 +704,23 @@ fn hash_router_host_validation_covers_token_rows_topk_duplicates_and_bounds() {
 
     let valid = [0usize, 1, 2, 2, 0, 1];
     assert_eq!(
-        validate_dsv4_router_hash_table(&valid, 2, 3, 3, 2).expect("valid hash table"),
+        validate_router_hash_table(&valid, 2, 3, 3, 2).expect("valid hash table"),
         vec![0, 1, 2, 2, 0, 1]
     );
     assert!(
-        validate_dsv4_router_hash_table(&valid, 2, 3, 3, 4)
+        validate_router_hash_table(&valid, 2, 3, 3, 4)
             .unwrap_err()
             .to_string()
             .contains("top_k")
     );
     assert!(
-        validate_dsv4_router_hash_table(&[1, 1, 0], 1, 3, 3, 2)
+        validate_router_hash_table(&[1, 1, 0], 1, 3, 3, 2)
             .unwrap_err()
             .to_string()
             .contains("duplicate expert id 1")
     );
     assert!(
-        validate_dsv4_router_hash_table(&[3, 1, 0], 1, 3, 3, 2)
+        validate_router_hash_table(&[3, 1, 0], 1, 3, 3, 2)
             .unwrap_err()
             .to_string()
             .contains("exceeds expert count 3")
@@ -777,7 +777,7 @@ fn hash_router_uses_token_rows_matches_weights_and_wrapper_has_no_copies_or_sync
     }
 
     let _guard = cuda_test_guard();
-    let context = CudaArtifactOperatorContext::new().expect("CUDA artifact context");
+    let context = CudaOperators::new().expect("CUDA artifact context");
     let logits = context
         .upload_f32_buffer(&logits)
         .expect("upload router logits");

@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 #[cfg(feature = "cuda")]
-use ferrule_backend::cuda::context::{CudaPinnedHostAllocator, CudaPinnedU8HostBuffer};
+use ferrule_backend::cuda::operators::moe::{CudaPinnedHostAllocator, CudaPinnedU8HostBuffer};
 #[cfg(feature = "cuda")]
 use ferrule_common::materialization_io::MaterializationResourceRequirements;
 use ferrule_common::{CompletionHub, Error, Result};

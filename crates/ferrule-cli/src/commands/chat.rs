@@ -1,155 +1,97 @@
-#[cfg(feature = "cuda")]
-use crate::GenerationConfig;
-use crate::SamplingArgs;
-#[cfg(any(feature = "cuda", test))]
-use ferrule_model::{ChatTemplate, detect_chat_template};
-#[cfg(feature = "cuda")]
-use ferrule_model::{
-    ModelDescriptor, ModelExecutionBackend, ModelFamily,
-    models::deepseek_v4::{DeepSeekV4Checkpoint, DeepSeekV4PrepareOptions, DeepSeekV4Runner},
-};
-#[cfg(feature = "cuda")]
+use crate::{GenerationConfig, SamplingArgs};
+use ferrule_model::AutoConfig;
+use ferrule_runtime::engine::LocalSessionInferenceEngine;
+use ferrule_runtime::engine::model_factory::ExpertCacheOptions;
 use ferrule_runtime::{
-    GenerateRequest, LocalResidentInferenceEngine, RequestId, ResidentActionKind,
-    ResidentDriverStep, SequenceFinishReason, SessionId,
+    BackendSelection, GenerateRequest, ModelFactoryOptions, RequestId, ResidentActionKind,
+    ResidentDriverStep, ResidentModelBuildPlan, ResidentModelPlanner, SequenceFinishReason,
+    SessionId,
 };
-#[cfg(feature = "cuda")]
 use std::io::Write;
-#[cfg(feature = "cuda")]
 use std::os::unix::io::AsRawFd;
-#[cfg(any(feature = "cuda", test))]
-use std::path::Path;
-#[cfg(feature = "cuda")]
-use std::path::PathBuf;
-#[cfg(feature = "cuda")]
 use std::time::Instant;
 
-#[cfg(feature = "cuda")]
 use super::info::print_model_info;
-#[cfg(feature = "cuda")]
 use super::resident::{
-    block_on_local_inference, build_resident_topk_driver, require_finished_request,
-    resident_driver_config, single_sequence_scheduler_config,
+    block_on_local_inference, require_finished_request, resident_driver_config,
+    single_sequence_scheduler_config,
 };
-
-// ── resolve_template ─────────────────────────────────────────────────────────
-
-#[cfg(any(feature = "cuda", test))]
-fn resolve_template(model_dir: &Path, chat_template_override: Option<&str>) -> ChatTemplate {
-    if let Some(name) = chat_template_override {
-        ChatTemplate::from_name(name).unwrap_or(ChatTemplate::Plain)
-    } else {
-        detect_chat_template(model_dir)
-    }
-}
-
-#[cfg(feature = "cuda")]
-fn resolve_template_for_family(
-    model_dir: &Path,
-    family: &ModelFamily,
-    chat_template_override: Option<&str>,
-) -> ChatTemplate {
-    if chat_template_override.is_some() {
-        return resolve_template(model_dir, chat_template_override);
-    }
-    if matches!(family, ModelFamily::DeepSeekV4) {
-        ChatTemplate::DeepSeekV4
-    } else {
-        detect_chat_template(model_dir)
-    }
-}
 
 // ── chat ─────────────────────────────────────────────────────────────────────
 
-#[cfg(feature = "cuda")]
 pub fn cmd_chat(
     model_dir: &str,
     max_tokens: usize,
     sampling: &SamplingArgs,
+    backend_override: Option<&str>,
     chat_template_override: Option<&str>,
 ) -> anyhow::Result<()> {
-    let model_path = Path::new(model_dir);
-    let descriptor = ModelDescriptor::load(model_path)?;
-    let template =
-        resolve_template_for_family(model_path, &descriptor.spec.family, chat_template_override);
-    let gen_cfg = sampling.generation_config(max_tokens);
-
-    if !matches!(descriptor.spec.family, ModelFamily::DeepSeekV4) {
+    if !sampling.supports_fast_greedy() {
         anyhow::bail!(
-            "chat currently only supports DeepSeek-V4 models; use deepseek-v4-generate for diagnostics"
+            "resident non-greedy/logprob chat is not yet supported; use --temp 0 --repeat-penalty 1 --logprobs 0 for the top-k fast path"
         );
     }
-    run_deepseek_v4_chat(model_path, &gen_cfg, template, sampling)
+
+    let config = AutoConfig::from_pretrained(model_dir)?;
+    let generation = sampling.generation_config(max_tokens);
+    let backend = backend_override
+        .map(BackendSelection::parse)
+        .transpose()?
+        .unwrap_or_default();
+    let prepared = ResidentModelPlanner::new().prepare(
+        &config,
+        backend,
+        chat_template_override,
+        ModelFactoryOptions {
+            max_layers: None,
+            max_tensor_mebibytes: 128,
+            output_head_chunk_rows: 4096,
+            expert_reader_max_tensor_mebibytes: 64,
+            expert_cache: ExpertCacheOptions::default(),
+            moe_hotset_experts: 0,
+            kv_cache_mebibytes: None,
+            scheduler_config: single_sequence_scheduler_config(4096),
+            driver_config: resident_driver_config(generation.ctx_size, generation.stop_at_eos),
+        },
+    )?;
+    let model_name = prepared.model_name();
+    let backend_profile = prepared.backend_profile();
+    let chat_template = prepared.chat_template();
+
+    run_greedy_chat_loop(
+        prepared,
+        model_name,
+        backend_profile,
+        &generation,
+        chat_template,
+        sampling,
+    )
 }
 
-#[cfg(not(feature = "cuda"))]
-pub fn cmd_chat(
-    model_dir: &str,
-    max_tokens: usize,
-    sampling: &SamplingArgs,
-    chat_template_override: Option<&str>,
-) -> anyhow::Result<()> {
-    let _ = (model_dir, max_tokens, sampling, chat_template_override);
-    anyhow::bail!("resident chat requires building ferrule-cli with --features cuda")
-}
-
-// ── DeepSeek-V4 chat ─────────────────────────────────────────────────────────
-
-#[cfg(feature = "cuda")]
-fn deepseek_v4_chat_options() -> DeepSeekV4PrepareOptions {
-    DeepSeekV4PrepareOptions {
-        output_head_chunk_rows: 4096,
-        moe_hotset_experts: 0,
-        ..DeepSeekV4PrepareOptions::default()
-    }
-}
-
-#[cfg(feature = "cuda")]
-fn run_deepseek_v4_chat(
-    model_path: &Path,
+fn run_greedy_chat_loop(
+    prepared: ResidentModelBuildPlan,
+    adapter_name: &'static str,
+    backend_profile: &'static str,
     generation: &GenerationConfig,
-    chat_template: ChatTemplate,
+    chat_template: ferrule_model::ChatTemplate,
     sampling: &SamplingArgs,
 ) -> anyhow::Result<()> {
-    let options = deepseek_v4_chat_options();
-    if sampling.supports_fast_greedy() {
-        run_deepseek_v4_greedy_chat_loop(
-            model_path.to_path_buf(),
-            options,
-            generation,
-            chat_template,
-            sampling,
-        )
-    } else {
-        anyhow::bail!(
-            "DeepSeek-V4 non-greedy/logprob chat is not yet supported; use --temp 0 --repeat-penalty 1 --logprobs 0 for the top-k fast path"
-        );
-    }
-}
-
-#[cfg(feature = "cuda")]
-fn run_deepseek_v4_greedy_chat_loop(
-    model_path: PathBuf,
-    options: DeepSeekV4PrepareOptions,
-    generation: &GenerationConfig,
-    chat_template: ChatTemplate,
-    sampling: &SamplingArgs,
-) -> anyhow::Result<()> {
-    block_on_local_inference(run_deepseek_v4_greedy_chat_loop_async(
-        model_path,
-        options,
+    block_on_local_inference(run_greedy_chat_loop_async(
+        prepared,
+        adapter_name,
+        backend_profile,
         generation,
         chat_template,
         sampling,
     ))
 }
 
-#[cfg(feature = "cuda")]
-async fn run_deepseek_v4_greedy_chat_loop_async(
-    model_path: PathBuf,
-    options: DeepSeekV4PrepareOptions,
+async fn run_greedy_chat_loop_async(
+    prepared: ResidentModelBuildPlan,
+    adapter_name: &'static str,
+    backend_profile: &'static str,
     generation: &GenerationConfig,
-    chat_template: ChatTemplate,
+    chat_template: ferrule_model::ChatTemplate,
     sampling: &SamplingArgs,
 ) -> anyhow::Result<()> {
     use console::style;
@@ -158,8 +100,7 @@ async fn run_deepseek_v4_greedy_chat_loop_async(
 
     // Redirect stderr (tracing INFO lines) to a tmp file for a clean terminal.
     let log_path = std::env::temp_dir().join(format!("ferrule-chat-{}.log", std::process::id()));
-    let _log_guard;
-    if std::env::var_os("FERRULE_CHAT_KEEP_STDERR").is_none() {
+    let _log_guard = if std::env::var_os("FERRULE_CHAT_KEEP_STDERR").is_none() {
         let log_file = std::fs::File::create(&log_path)?;
         let log_fd = log_file.as_raw_fd();
         // SAFETY: dup2 replaces stderr fd before any multi-threaded work starts.
@@ -170,43 +111,32 @@ async fn run_deepseek_v4_greedy_chat_loop_async(
         unsafe {
             libc::dup2(log_fd, 2);
         }
-        _log_guard = Some(log_file);
+        Some(log_file)
     } else {
-        _log_guard = None;
-    }
+        None
+    };
     eprintln!("[log] stderr -> {}", log_path.display());
 
     let session_id = SessionId(0);
-    let driver_config = resident_driver_config(generation.ctx_size, generation.stop_at_eos);
-    let scheduler_config = single_sequence_scheduler_config(4096);
     let load_started = Instant::now();
-    let model = DeepSeekV4Checkpoint::load_hf_with_limit(&model_path, 128 * 1024 * 1024)?;
-    let runner =
-        DeepSeekV4Runner::new_with_operator_backend(model, options, ModelExecutionBackend::Cuda)?;
-    let schema = runner.kv_layout_schema().clone();
-    let mut driver = LocalResidentInferenceEngine::new(build_resident_topk_driver(
-        runner,
-        Box::new(schema),
-        scheduler_config,
-        driver_config,
-    )?);
+    let mut driver = LocalSessionInferenceEngine::new(prepared.build()?);
     driver.initialize().await?;
     driver.retain_session(session_id)?;
     print_model_info(&driver.model_info());
     println!(
-        "[load] DeepSeek-V4 artifact and CUDA owner initialized in {:.2}s",
+        "[load] {adapter_name} artifact and {backend_profile} owner initialized in {:.2}s",
         load_started.elapsed().as_secs_f64()
     );
     let mut generated_tokens = 0usize;
     let mut turns = 0u64;
     println!(
-        "{} Type /exit or Ctrl-D to quit. Template: {}. DeepSeek-V4 greedy top-k fast path.",
+        "{} Type /exit or Ctrl-D to quit. Template: {}. {adapter_name} greedy top-k fast path.",
         style("Chat ready.").cyan(),
         chat_template.name()
     );
 
     println!(
-        "  /reset      clear session state\n  /stats      show session stats\n  /experts    show DSV4 layer/cache stats\n  /ctx        show context window usage"
+        "  /reset      clear session state\n  /stats      show session stats\n  /experts    show model layer/cache stats\n  /ctx        show context window usage"
     );
 
     let mut first_turn = true;
@@ -400,21 +330,4 @@ async fn run_deepseek_v4_greedy_chat_loop_async(
 
     driver.shutdown().await?;
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_resolve_template_override_known() {
-        let result = resolve_template(Path::new("/nonexistent"), Some("plain"));
-        assert_eq!(result.name(), "plain");
-    }
-
-    #[test]
-    fn test_resolve_template_override_unknown_fallback() {
-        let result = resolve_template(Path::new("/nonexistent"), Some("nonexistent_template"));
-        assert_eq!(result.name(), "plain");
-    }
 }

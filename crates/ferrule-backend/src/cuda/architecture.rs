@@ -42,7 +42,7 @@ mod tests {
     #[test]
     fn sm103_publishes_its_block_scaled_fp4_capability() {
         let sm103 = CudaTarget::parse("sm_103").unwrap().capabilities();
-        assert!(sm103.portable_simt);
+        assert!(sm103.baseline_simt);
         assert!(sm103.bf16_mma_sync);
         assert!(sm103.fp8_mma_sync);
         assert!(!sm103.sm1xx_umma);
@@ -66,7 +66,7 @@ mod tests {
 
     #[test]
     fn malformed_target_has_no_capabilities() {
-        assert!(CudaTarget::parse("portable").is_none());
+        assert!(CudaTarget::parse("invalid").is_none());
         assert!(CudaTarget::parse("sm_xx").is_none());
         assert!(CudaTarget::parse("sm_103a").is_none());
         assert!(CudaTarget::parse("sm_121f").is_none());

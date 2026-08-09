@@ -2,8 +2,8 @@
 
 //! Numerical regression for the DSV4 head-dim-512 warp sparse-attention path.
 
-use ferrule_backend::cuda::CudaContext;
-use ferrule_backend::cuda::context::cuda_sparse_attention_sink_f32;
+use ferrule_backend::cuda::operators::attention::cuda_sparse_attention_sink_f32;
+use ferrule_backend::cuda::providers::CudaContext;
 
 fn has_cuda() -> bool {
     CudaContext::new(0).is_ok()

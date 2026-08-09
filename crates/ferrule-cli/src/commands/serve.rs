@@ -1,65 +1,25 @@
 use std::net::SocketAddr;
-use std::path::{Path, PathBuf};
+
 use std::time::Duration;
 
-use ferrule_common::MemoryPoolLimits;
-use ferrule_common::execution::KvLayoutSchema;
-use ferrule_model::{
-    ChatTemplate, ExpertMemoryPolicy, ModelDescriptor, ModelExecutionBackend, ModelFamily,
-    models::deepseek_v4::{DeepSeekV4PrepareOptions, DeepSeekV4Runner},
+use anyhow::Context as _;
+use ferrule_model::AutoConfig;
+use ferrule_runtime::engine::model_factory::ExpertCacheOptions;
+use ferrule_runtime::{
+    BackendSelection, ModelFactoryOptions, ResidentModelPlanner, ResidentSchedulerConfig,
 };
-use ferrule_runtime::{ResidentInferenceEngine, ResidentSchedulerConfig};
 use ferrule_server::{
     ModelRegistration, ServerState, WorkerConfig, serve_with_shutdown, spawn_model_worker_with,
 };
 
 use crate::args::ServeArgs;
 
-use super::resident::{build_resident_topk_driver_with_page_limit, resident_driver_config};
+use super::resident::resident_driver_config;
 
 pub fn cmd_serve(args: ServeArgs) -> anyhow::Result<()> {
     validate_args(&args)?;
-    let model_path = Path::new(&args.model);
-    let descriptor = ModelDescriptor::load(model_path)?;
-    if !matches!(descriptor.spec.family, ModelFamily::DeepSeekV4) {
-        anyhow::bail!(
-            "serve bootstrap currently supports DeepSeek-V4; the HTTP and worker layers are model-neutral"
-        );
-    }
-    let chat_template = match args.chat_template.as_deref() {
-        Some(name) => ChatTemplate::from_name(name)
-            .ok_or_else(|| anyhow::anyhow!("unknown chat template '{name}'"))?,
-        None => ChatTemplate::DeepSeekV4,
-    };
-    if !cfg!(feature = "cuda") {
-        anyhow::bail!("CUDA serving requires building ferrule-cli with --features cuda");
-    }
+    let config = AutoConfig::from_pretrained(&args.model)?;
 
-    let model_path = PathBuf::from(&args.model);
-    let expert_memory_policy = ExpertMemoryPolicy::new(
-        MemoryPoolLimits::new(
-            args.expert_host_cache_entries,
-            cache_byte_limit(args.expert_host_cache_mb, "expert-host-cache-mb")?,
-        ),
-        MemoryPoolLimits::new(
-            args.expert_pinned_cache_entries,
-            cache_byte_limit(args.expert_pinned_cache_mb, "expert-pinned-cache-mb")?,
-        ),
-    );
-    let kv_cache_bytes = required_mebibytes_to_bytes(args.kv_cache_mb, "kv-cache-mb")?;
-    let reserved_device_bytes = DeepSeekV4PrepareOptions::default()
-        .reserved_device_bytes
-        .checked_add(kv_cache_bytes)
-        .ok_or_else(|| anyhow::anyhow!("device residency reserve overflow"))?;
-    let prepare_options = DeepSeekV4PrepareOptions {
-        max_layers: args.max_layers,
-        output_head_chunk_rows: args.output_head_chunk_rows,
-        expert_reader_max_tensor_bytes: args.expert_reader_max_slice_mb.saturating_mul(1024 * 1024),
-        expert_memory_policy,
-        moe_hotset_experts: args.moe_hotset_experts,
-        reserved_device_bytes,
-    };
-    let max_tensor_bytes = args.max_tensor_mb.saturating_mul(1024 * 1024);
     let scheduler_config = ResidentSchedulerConfig {
         prefill_chunk_size: args.prefill_chunk_size,
         max_active_sequences: args.max_active_sequences,
@@ -70,6 +30,41 @@ pub fn cmd_serve(args: ServeArgs) -> anyhow::Result<()> {
         ..ResidentSchedulerConfig::default()
     };
     let driver_config = resident_driver_config(args.ctx_size, true);
+    let backend = args
+        .backend
+        .as_deref()
+        .map(BackendSelection::parse)
+        .transpose()?
+        .unwrap_or_default();
+    let prepared = ResidentModelPlanner::new().prepare(
+        &config,
+        backend,
+        args.chat_template.as_deref(),
+        ModelFactoryOptions {
+            max_layers: args.max_layers,
+            max_tensor_mebibytes: args.max_tensor_mb,
+            output_head_chunk_rows: args.output_head_chunk_rows,
+            expert_reader_max_tensor_mebibytes: args.expert_reader_max_slice_mb,
+            expert_cache: ExpertCacheOptions {
+                host_entries: args.expert_host_cache_entries,
+                host_mebibytes: args.expert_host_cache_mb,
+                pinned_entries: args.expert_pinned_cache_entries,
+                pinned_mebibytes: args.expert_pinned_cache_mb,
+            },
+            moe_hotset_experts: args.moe_hotset_experts,
+            kv_cache_mebibytes: Some(args.kv_cache_mb),
+            scheduler_config,
+            driver_config,
+        },
+    )?;
+    let adapter_name = prepared.model_name();
+    let backend_name = prepared.backend().as_str();
+    let backend_profile = prepared.backend_profile();
+    let chat_template = prepared.chat_template();
+    let served_model_name = args
+        .served_model_name
+        .clone()
+        .unwrap_or_else(|| adapter_name.to_owned());
     let worker_config = WorkerConfig {
         command_queue_capacity: args.request_queue_capacity,
         event_queue_capacity: args.event_queue_capacity,
@@ -78,55 +73,14 @@ pub fn cmd_serve(args: ServeArgs) -> anyhow::Result<()> {
     };
 
     eprintln!(
-        "loading {} on cuda in the dedicated model worker...",
-        args.served_model_name,
+        "loading {served_model_name} with {adapter_name} on {backend_profile} ({backend_name} backend) in the dedicated model worker...",
     );
-    let worker = spawn_model_worker_with(
-        move || {
-            let runner = DeepSeekV4Runner::load_hf_with_options_and_backend(
-                &model_path,
-                max_tensor_bytes,
-                prepare_options,
-                ModelExecutionBackend::Cuda,
-            )
-            .map_err(|error| error.to_string())?;
-            let schema = runner.kv_layout_schema().clone();
-            let page_bytes = schema
-                .cuda_f32_data_page_bytes()
-                .map_err(|error| error.to_string())?;
-            let page_limit = page_limit_for_budget(kv_cache_bytes, page_bytes)
-                .map_err(|error| error.to_string())?;
-            let full_capacity_pages = schema
-                .pages_for_tokens(driver_config.ctx_size)
-                .checked_mul(scheduler_config.max_active_sequences)
-                .ok_or_else(|| "serving KV page capacity overflow".to_owned())?;
-            let configured_pages = full_capacity_pages.min(page_limit);
-            let configured_bytes = u64::try_from(configured_pages)
-                .ok()
-                .and_then(|pages| pages.checked_mul(page_bytes))
-                .ok_or_else(|| "serving KV byte estimate overflow".to_owned())?;
-            eprintln!(
-                "configuring CUDA KV pool: pages={configured_pages}/{full_capacity_pages}, page_bytes={page_bytes}, physical_budget={} MiB, allocated={} MiB",
-                kv_cache_bytes / (1024 * 1024),
-                configured_bytes / (1024 * 1024),
-            );
-            let driver = build_resident_topk_driver_with_page_limit(
-                runner,
-                Box::new(schema),
-                scheduler_config,
-                driver_config,
-                Some(page_limit),
-            )
-            .map_err(|error| error.to_string())?;
-            Ok(ResidentInferenceEngine::new(driver))
-        },
-        worker_config,
-    )
-    .map_err(anyhow::Error::msg)?;
+    let worker = spawn_model_worker_with(move || prepared.build(), worker_config)
+        .context("failed to start model worker")?;
 
     let address = SocketAddr::new(args.host, args.port);
     let state = ServerState::new(
-        ModelRegistration::new(args.served_model_name.clone(), chat_template),
+        ModelRegistration::new(served_model_name, chat_template),
         worker.handle(),
     );
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -147,43 +101,16 @@ pub fn cmd_serve(args: ServeArgs) -> anyhow::Result<()> {
         .await;
         let shutdown_result = worker.shutdown().await;
         server_result?;
-        shutdown_result.map_err(anyhow::Error::msg)
+        shutdown_result.context("failed to shut down model worker")
     })
 }
 
-fn cache_byte_limit(mebibytes: u64, option: &str) -> anyhow::Result<u64> {
-    if mebibytes == 0 {
-        return Ok(u64::MAX);
-    }
-    mebibytes
-        .checked_mul(1024 * 1024)
-        .ok_or_else(|| anyhow::anyhow!("{option} exceeds the supported byte range"))
-}
-
-fn required_mebibytes_to_bytes(mebibytes: u64, option: &str) -> anyhow::Result<u64> {
-    if mebibytes == 0 {
-        anyhow::bail!("{option} must be greater than zero");
-    }
-    mebibytes
-        .checked_mul(1024 * 1024)
-        .ok_or_else(|| anyhow::anyhow!("{option} exceeds the supported byte range"))
-}
-
-fn page_limit_for_budget(budget_bytes: u64, page_bytes: u64) -> anyhow::Result<usize> {
-    if page_bytes == 0 {
-        anyhow::bail!("physical KV page size must be greater than zero");
-    }
-    let pages = budget_bytes / page_bytes;
-    if pages == 0 {
-        anyhow::bail!(
-            "kv-cache-mb budget ({budget_bytes} bytes) is smaller than one physical KV page ({page_bytes} bytes)"
-        );
-    }
-    usize::try_from(pages).map_err(|_| anyhow::anyhow!("KV page budget exceeds usize"))
-}
-
 fn validate_args(args: &ServeArgs) -> anyhow::Result<()> {
-    if args.served_model_name.trim().is_empty() {
+    if args
+        .served_model_name
+        .as_deref()
+        .is_some_and(|name| name.trim().is_empty())
+    {
         anyhow::bail!("served model name must not be empty");
     }
     if args.ctx_size == 0 {
@@ -210,29 +137,8 @@ fn validate_args(args: &ServeArgs) -> anyhow::Result<()> {
     if args.admission_timeout_secs == 0 {
         anyhow::bail!("admission-timeout-secs must be greater than zero");
     }
+    if args.max_layers == Some(0) {
+        anyhow::bail!("max-layers must be greater than zero");
+    }
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{cache_byte_limit, page_limit_for_budget, required_mebibytes_to_bytes};
-
-    #[test]
-    fn zero_cache_mebibytes_means_entry_limited_only() {
-        assert_eq!(cache_byte_limit(0, "cache").unwrap(), u64::MAX);
-    }
-
-    #[test]
-    fn cache_mebibytes_conversion_is_checked() {
-        assert_eq!(cache_byte_limit(2, "cache").unwrap(), 2 * 1024 * 1024);
-        assert!(cache_byte_limit(u64::MAX, "cache").is_err());
-        assert!(required_mebibytes_to_bytes(0, "kv-cache-mb").is_err());
-    }
-
-    #[test]
-    fn kv_page_limit_is_a_hard_byte_budget() {
-        assert_eq!(page_limit_for_budget(10_000, 3_000).unwrap(), 3);
-        assert!(page_limit_for_budget(2_999, 3_000).is_err());
-        assert!(page_limit_for_budget(10_000, 0).is_err());
-    }
 }

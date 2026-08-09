@@ -1,5 +1,6 @@
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use ferrule_common::ServingConfigError;
 use ferrule_model::ChatTemplate;
 
 #[derive(Debug, Clone)]
@@ -48,18 +49,20 @@ impl Default for WorkerConfig {
 }
 
 impl WorkerConfig {
-    pub(crate) fn validate(&self) -> Result<(), &'static str> {
+    pub(crate) fn validate(&self) -> Result<(), ServingConfigError> {
         if self.command_queue_capacity == 0 {
-            return Err("command_queue_capacity must be greater than zero");
+            return Err(ServingConfigError::ZeroCommandQueueCapacity);
         }
         if self.event_queue_capacity < 2 {
-            return Err("event_queue_capacity must be at least two");
+            return Err(ServingConfigError::EventQueueCapacityTooSmall {
+                actual: self.event_queue_capacity,
+            });
         }
         if self.max_commands_per_tick == 0 {
-            return Err("max_commands_per_tick must be greater than zero");
+            return Err(ServingConfigError::ZeroCommandsPerTick);
         }
         if self.admission_timeout.is_zero() {
-            return Err("admission_timeout must be greater than zero");
+            return Err(ServingConfigError::ZeroAdmissionTimeout);
         }
         Ok(())
     }

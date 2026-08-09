@@ -81,8 +81,18 @@ impl<R: MultiSessionRunner> NativeMultiSessionExecutor<R> {
         Ok(self.runner.reset_sequence_state(state)?)
     }
 
+    pub fn try_release_sequence_state(
+        &mut self,
+        state: R::SequenceState,
+    ) -> std::result::Result<(), ferrule_model::SequenceStateReleaseError<R::SequenceState>> {
+        self.runner.try_release_sequence_state(state)
+    }
+
+    /// Compatibility wrapper that discards retry custody on failure.
     pub fn release_sequence_state(&mut self, state: R::SequenceState) -> Result<()> {
-        Ok(self.runner.release_sequence_state(state)?)
+        self.try_release_sequence_state(state)
+            .map_err(ferrule_model::SequenceStateReleaseError::into_source)?;
+        Ok(())
     }
 
     pub fn with_sequence_state<T>(
@@ -421,7 +431,11 @@ mod tests {
             Ok(())
         }
 
-        fn release_sequence_state(&mut self, _state: Self::SequenceState) -> ModelResult<()> {
+        fn try_release_sequence_state(
+            &mut self,
+            _state: Self::SequenceState,
+        ) -> std::result::Result<(), ferrule_model::SequenceStateReleaseError<Self::SequenceState>>
+        {
             self.sequences_released += 1;
             Ok(())
         }

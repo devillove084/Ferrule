@@ -2,11 +2,11 @@
 
 //! CUDA coverage for expert slots and compact device-side group route plans.
 
-use ferrule_backend::cuda::CudaContext;
-use ferrule_backend::cuda::context::{
-    CudaArtifactOperatorContext, CudaExpertSlotInstallTarget, CudaExpertSlotPointers,
+use ferrule_backend::cuda::operators::moe::{
+    CudaExpertSlotInstallTarget, CudaExpertSlotPointers, CudaOperators,
 };
-use ferrule_backend::cuda::cutlass::{self, CutlassKernelId};
+use ferrule_backend::cuda::providers::CudaContext;
+use ferrule_backend::cuda::providers::cutlass::{self, CutlassKernelId};
 use std::sync::{Mutex, MutexGuard, mpsc};
 
 static CUDA_TEST_LOCK: Mutex<()> = Mutex::new(());
@@ -34,7 +34,7 @@ fn stable_slot_table_resolves_residents_misses_and_reuse_generation() {
         return;
     }
 
-    let context = CudaArtifactOperatorContext::new().expect("CUDA artifact context");
+    let context = CudaOperators::new().expect("CUDA artifact context");
     // These tests exercise slot generations and route metadata only. The
     // addresses are never dereferenced; execution tests bind materialized
     // CudaPreparedRoutedExpert frames with provider-private scale layouts.
@@ -114,8 +114,8 @@ fn async_slot_install_uses_exact_cross_context_consumer_fence() {
         return;
     }
 
-    let consumer = CudaArtifactOperatorContext::new().expect("CUDA consumer context");
-    let provider = CudaArtifactOperatorContext::new().expect("CUDA provider context");
+    let consumer = CudaOperators::new().expect("CUDA consumer context");
+    let provider = CudaOperators::new().expect("CUDA provider context");
     let (compute_priority, upload_priority, control_priority) = provider
         .stream_priorities()
         .expect("CUDA stream priorities");
@@ -229,7 +229,7 @@ fn exact_slot_publication_rejects_stale_and_mismatches_atomically() {
         return;
     }
 
-    let context = CudaArtifactOperatorContext::new().expect("CUDA artifact context");
+    let context = CudaOperators::new().expect("CUDA artifact context");
     let pointers = CudaExpertSlotPointers {
         gate_weight: 1,
         gate_scale: 2,
@@ -363,7 +363,7 @@ fn capture_safe_rejection_is_atomic_and_keeps_stable_table_usable() {
         return;
     }
 
-    let context = CudaArtifactOperatorContext::new().expect("CUDA artifact context");
+    let context = CudaOperators::new().expect("CUDA artifact context");
     let pointers = CudaExpertSlotPointers {
         gate_weight: 1,
         gate_scale: 2,
@@ -420,7 +420,7 @@ fn device_group_route_plan_compacts_active_groups_indptr_and_routes() {
     const ROUTES_PER_TOKEN: usize = 3;
     const ROUTES: usize = TOKENS * ROUTES_PER_TOKEN;
     const RESIDENT_SLOT_CAPACITY: usize = 16;
-    let context = CudaArtifactOperatorContext::new().expect("CUDA artifact context");
+    let context = CudaOperators::new().expect("CUDA artifact context");
     let pointers = CudaExpertSlotPointers {
         gate_weight: 16,
         gate_scale: 32,

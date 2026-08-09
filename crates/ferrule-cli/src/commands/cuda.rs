@@ -1,7 +1,13 @@
 #[cfg(feature = "cuda")]
 pub fn cmd_cuda() -> anyhow::Result<()> {
     println!("=== CUDA Probe ===");
-    ferrule_backend::cuda::cuda_probe()?;
+    let probe = ferrule_backend::cuda::diagnostics::probe_device(0)?;
+    println!("  Device: {}", probe.name);
+    println!(
+        "  Memory: {:.1} GB free / {:.1} GB total",
+        probe.memory.free_bytes as f64 / 1e9,
+        probe.memory.total_bytes as f64 / 1e9
+    );
 
     println!("\n=== GEMV Benchmark (2048×2048) ===");
     let report = ferrule_backend::cuda::run_smoke_benchmark()?;

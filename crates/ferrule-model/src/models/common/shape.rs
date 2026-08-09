@@ -3,29 +3,8 @@
 //! Callers provide model/layer context so family adapters retain their own
 //! diagnostics without duplicating the validation logic.
 
-use crate::checkpoint::tensor::CheckpointTensorPayload;
 use crate::checkpoint::weight::LinearWeight;
 use ferrule_common::{Error, Result};
-
-pub(crate) fn two_dim_shape_from_payload(
-    payload: &CheckpointTensorPayload,
-    label: &str,
-    error_context: &str,
-) -> Result<(usize, usize)> {
-    let [rows, cols]: [usize; 2] =
-        payload
-            .slice
-            .shape
-            .clone()
-            .try_into()
-            .map_err(|shape: Vec<usize>| Error::Model {
-                message: format!(
-                    "{error_context} {label} '{}' expects 2D shape, got {:?}",
-                    payload.slice.name, shape
-                ),
-            })?;
-    Ok((rows, cols))
-}
 
 pub(crate) fn check_linear(
     linear: &LinearWeight,
@@ -68,27 +47,12 @@ mod tests {
 
     use super::*;
     use crate::TensorRole;
-    use crate::checkpoint::tensor::{CheckpointDType, CheckpointTensorSlice};
-
-    #[test]
-    fn extracts_two_dim_shape() {
-        let payload = f32_payload("proj.weight", vec![3, 4]);
-        assert_eq!(
-            two_dim_shape_from_payload(&payload, "projection", "DenseDecoder").unwrap(),
-            (3, 4)
-        );
-    }
+    use crate::checkpoint::tensor::{
+        CheckpointDType, CheckpointTensorPayload, CheckpointTensorSlice,
+    };
 
     #[test]
     fn validators_report_caller_owned_context() {
-        let vector = f32_payload("norm.weight", vec![4]);
-        let error =
-            two_dim_shape_from_payload(&vector, "projection", "DenseDecoder layer 2").unwrap_err();
-        assert_eq!(
-            error.to_string(),
-            "model: DenseDecoder layer 2 projection 'norm.weight' expects 2D shape, got [4]"
-        );
-
         let linear = LinearWeight::from_weight_and_scale(
             TensorRole::AttentionQuery,
             f32_payload("q_proj.weight", vec![3, 4]),

@@ -1,11 +1,13 @@
 #![cfg(feature = "cuda")]
 
-use ferrule_backend::cuda::cutlass::{self, CutlassKernelId};
-use ferrule_backend::cuda::provider::{
+use ferrule_backend::cuda::compile_model_plan;
+use ferrule_backend::cuda::operators::linear::CudaOperators;
+use ferrule_backend::cuda::providers::cutlass::{self, CutlassKernelId};
+use ferrule_backend::cuda::providers::{COMPILED_TARGET, CudaContext, CudaTarget, DeviceBuffer};
+use ferrule_backend::plan::{
     ExecutionMode, KernelOperation, KernelProviderId, LayerKernelRequirements,
     LinearBundleRequirement, OperationRequirement, WeightLayout,
 };
-use ferrule_backend::cuda::runtime::{CudaContext, DeviceBuffer};
 
 fn bf16_storage_word(value: f32) -> u16 {
     let bits = value.to_bits();
@@ -99,8 +101,7 @@ fn cuda_plan_selects_published_inference_operations() {
         }
     }
 
-    let plan = ferrule_backend::cuda::compile_cuda_model_plan(&[layer])
-        .expect("compile CUDA inference plan");
+    let plan = compile_model_plan(&[layer]).expect("compile CUDA inference plan");
     for operation in expected_operations {
         let launch = plan.layers[0]
             .operation(operation, ExecutionMode::Inference)
@@ -128,7 +129,7 @@ fn cuda_plan_rejects_grouped_fp4_without_a_native_kernel() {
         KernelOperation::GroupedFp4Moe,
         ExecutionMode::Inference,
     ));
-    let error = ferrule_backend::cuda::compile_cuda_model_plan(&[layer])
+    let error = compile_model_plan(&[layer])
         .expect_err("grouped FP4 must fail closed without a native kernel");
     let message = error.to_string();
     assert!(message.contains("GroupedFp4Moe"), "{message}");
@@ -142,8 +143,7 @@ fn cuda_plan_rejects_unpublished_operation_mode() {
         KernelOperation::SparseAttention,
         ExecutionMode::Backward,
     ));
-    let error = ferrule_backend::cuda::compile_cuda_model_plan(&[layer])
-        .expect_err("unbound operation mode must fail closed");
+    let error = compile_model_plan(&[layer]).expect_err("unbound operation mode must fail closed");
     let message = error.to_string();
     assert!(message.contains("SparseAttention"), "{message}");
     assert!(message.contains("Backward"), "{message}");
@@ -156,8 +156,7 @@ fn cuda_manifest_publishes_native_capabilities() {
     let manifest = cutlass::discover_provider()
         .expect("CUDA provider")
         .manifest();
-    let target = ferrule_backend::cuda::CudaTarget::parse(ferrule_backend::cuda::COMPILED_TARGET)
-        .expect("compiled CUDA target");
+    let target = CudaTarget::parse(COMPILED_TARGET).expect("compiled CUDA target");
     let capabilities = target.capabilities();
     assert_eq!(
         manifest.supports(CutlassKernelId::Fp8QueryAKv),
@@ -546,8 +545,7 @@ fn cuda_proposal_head_keeps_markov_dependency_on_device() {
 
 #[test]
 fn cuda_hc_mean_scatter_builds_proposal_target_taps_without_host_concat() {
-    let ops = ferrule_backend::cuda::context::CudaArtifactOperatorContext::new()
-        .expect("CUDA artifact operator context");
+    let ops = CudaOperators::new().expect("CUDA artifact operator context");
     const ROWS: usize = 2;
     const HC: usize = 4;
     const HIDDEN: usize = 128;
@@ -2371,6 +2369,104 @@ fn cuda_hybrid_mla_explicit_selection_multi_row_paged_workspace_stress() {
             deterministic_bits[shape_index] = Some(actual_bits);
         }
     }
+}
+
+#[cfg(ferrule_cuda_test_oracle)]
+#[test]
+fn cuda_hybrid_mla_explicit_selection_oracle_compare_zero_smoke() {
+    if !std::env::var("FERRULE_CUDA_HYBRID_MLA_EXPLICIT_SELECTION_TEST_COMPARE")
+        .is_ok_and(|value| value == "1")
+    {
+        eprintln!("skipping oracle compare smoke; enable the compare environment");
+        return;
+    }
+
+    let context = CudaContext::new(0).expect("CUDA context");
+    context.bind_to_thread().expect("bind CUDA context");
+    let stream = context.default_stream();
+    let query = DeviceBuffer::<f32>::zeroed(
+        &stream,
+        HYBRID_MLA_EXPLICIT_SELECTION_HEADS * HYBRID_MLA_EXPLICIT_SELECTION_HEAD_DIM,
+    )
+    .expect("zero oracle query");
+    let first_plane = DeviceBuffer::<f32>::zeroed(&stream, HYBRID_MLA_EXPLICIT_SELECTION_HEAD_DIM)
+        .expect("zero oracle values");
+    let selected_indices =
+        DeviceBuffer::from_host(&stream, &[0i32]).expect("oracle selected index");
+    let attention_sink = DeviceBuffer::<f32>::zeroed(&stream, HYBRID_MLA_EXPLICIT_SELECTION_HEADS)
+        .expect("zero oracle sink");
+    let layout = cutlass::HybridMlaExplicitSelectionLayout {
+        kind: cutlass::HybridMlaKvStorageKind::Contiguous,
+        rows: 1,
+        tokens_per_sequence: 0,
+        kv_len: 1,
+        heads: HYBRID_MLA_EXPLICIT_SELECTION_HEADS,
+        head_dim: HYBRID_MLA_EXPLICIT_SELECTION_HEAD_DIM,
+        selected_width: 1,
+        page_tokens: 0,
+        first_elements_per_token: 0,
+        second_elements_per_token: 0,
+        layer_index: 0,
+        layer_count: 0,
+        row_sequence_ids: false,
+        row_kv_lens: false,
+        softmax_scale: 1.0,
+    };
+    let requirements = cutlass::hybrid_mla_explicit_selection_workspace_requirements(layout)
+        .expect("oracle compare workspace requirements");
+    let mut workspace = DeviceBuffer::<u8>::zeroed(
+        &stream,
+        usize::try_from(requirements.bytes).expect("oracle workspace fits usize"),
+    )
+    .expect("oracle compare workspace");
+    let mut output = DeviceBuffer::<f32>::zeroed(
+        &stream,
+        HYBRID_MLA_EXPLICIT_SELECTION_HEADS * HYBRID_MLA_EXPLICIT_SELECTION_HEAD_DIM,
+    )
+    .expect("oracle production output");
+    let mut oracle_output = DeviceBuffer::<f32>::zeroed(
+        &stream,
+        HYBRID_MLA_EXPLICIT_SELECTION_HEADS * HYBRID_MLA_EXPLICIT_SELECTION_HEAD_DIM,
+    )
+    .expect("oracle reference output");
+    let mut status = DeviceBuffer::from_host(&stream, &[i32::MIN]).expect("oracle status");
+    let mut buffers = cutlass::HybridMlaExplicitSelectionBuffers {
+        query: &query,
+        oracle_output: &mut oracle_output,
+        first_plane: &first_plane,
+        second_plane: None,
+        block_slots: None,
+        block_offsets: None,
+        sequence_kv_lens: None,
+        second_sequence_kv_lens: None,
+        row_sequence_ids: None,
+        row_kv_lens: None,
+        row_second_kv_lens: None,
+        selected_indices: &selected_indices,
+        selectors: None,
+        attention_sink: &attention_sink,
+        workspace: &mut workspace,
+        output: &mut output,
+        status: &mut status,
+    };
+
+    cutlass::hybrid_mla_explicit_selection_launch(&stream, &mut buffers, layout)
+        .expect("production and scalar-oracle compare launch");
+    assert_eq!(status.to_host_vec(&stream).expect("oracle status"), [0]);
+    assert!(
+        output
+            .to_host_vec(&stream)
+            .expect("production zero output")
+            .iter()
+            .all(|value| value.to_bits() == 0)
+    );
+    assert!(
+        oracle_output
+            .to_host_vec(&stream)
+            .expect("oracle zero output")
+            .iter()
+            .all(|value| value.to_bits() == 0)
+    );
 }
 
 #[test]

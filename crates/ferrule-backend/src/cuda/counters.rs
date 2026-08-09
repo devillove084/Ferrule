@@ -136,7 +136,7 @@ pub struct CudaOpCounters {
     pub device_to_host_bytes: u64,
     pub artifact_uploads: u64,
     pub artifact_upload_bytes: u64,
-    /// Device-buffer allocation requests observed by `CudaArtifactOperatorContext`.
+    /// Device-buffer allocation requests observed by `CudaOperators`.
     pub device_allocation_attempts: u64,
     /// Successfully created device buffers. Their native allocations are released
     /// by the owning `DeviceBuffer` RAII value.

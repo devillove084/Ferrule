@@ -10,9 +10,11 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use ferrule_backend::cuda::context::{
-    CudaPreparedRoutedExpert, CudaRoutedExpertArena, CudaRoutedExpertMaterialization,
-    CudaRoutedExpertShape,
+use ferrule_backend::cuda::operators::moe::{
+    CudaComputeStreamAuthority, CudaExpertSlotBinding, CudaExpertSlotInstallTarget,
+    CudaExpertSlotInstallTicket, CudaExpertSlotPointers, CudaExpertSlotTable, CudaOperators,
+    CudaPinnedU8HostBuffer, CudaPreparedRoutedExpert, CudaRoutedExpertArena,
+    CudaRoutedExpertMaterialization, CudaRoutedExpertShape,
 };
 use ferrule_common::materialization_io::{
     MaterializationResourceLimits, MaterializationResourcePlan,
@@ -21,10 +23,10 @@ use ferrule_common::{
     CancellationReason, CompletionEvent, CompletionGeneration, CompletionOutcome,
     CompletionTimestamp, DestinationGeneration, DestinationSlotId, Error,
     ExpertInstallActivationOutcome, ExpertInstallIntent, ExpertInstallPrepareOutcome,
-    ExpertInstallReason, ExpertKey, ExpertLease, ExpertResidencyControl, ExpertResidencyStats,
-    ExpertSlotBinding, FailureReason, FenceId, LoadStage, MaterializationKey,
-    MaterializationPurpose, OperationId, PreparedExpertInstall, ResidencyBinding,
-    ResidencyLeaseSet, Result, StaleReason, UploadFenceContract, ValidatedResidencyBinding,
+    ExpertInstallReason, ExpertKey, ExpertLease, ExpertResidencyControl, ExpertSlotBinding,
+    FailureReason, FenceId, LoadStage, MaterializationKey, MaterializationPurpose, OperationId,
+    PreparedExpertInstall, ResidencyBinding, ResidencyLeaseSet, Result, StaleReason,
+    UploadFenceContract, ValidatedResidencyBinding,
 };
 
 use crate::checkpoint::CheckpointReadPlan;
@@ -61,7 +63,7 @@ impl std::fmt::Debug for CudaSharedExpertSubsystem {
 
 impl CudaSharedExpertSubsystem {
     fn new(
-        tables: BTreeMap<usize, ferrule_backend::cuda::context::CudaExpertSlotTable>,
+        tables: BTreeMap<usize, CudaExpertSlotTable>,
         expert_capacity: usize,
         expert_arenas: BTreeMap<CudaRoutedExpertShapeKey, CudaRoutedExpertArena>,
     ) -> Self {
@@ -97,20 +99,6 @@ impl CudaSharedExpertSubsystem {
         }
         state.residency = Some(control);
         Ok(())
-    }
-
-    pub(crate) fn resident_stats_for_layer(&self, layer: usize) -> (usize, u64) {
-        let state = self.lock();
-        state
-            .experts
-            .iter()
-            .filter(|(expert, _)| expert.layer == layer)
-            .fold((0usize, 0u64), |(count, bytes), (_, frame)| {
-                (
-                    count.saturating_add(1),
-                    bytes.saturating_add(frame.physical_bytes()),
-                )
-            })
     }
 
     pub(crate) fn resident_experts_for_layer(&self, layer: usize) -> Result<BTreeSet<usize>> {
@@ -156,10 +144,7 @@ impl CudaSharedExpertSubsystem {
         layer: usize,
         selected: &[usize],
         leases: &ResidencyLeaseSet,
-        execute: impl FnOnce(
-            &ferrule_backend::cuda::context::CudaExpertSlotTable,
-            &CudaExpertFrame,
-        ) -> Result<T>,
+        execute: impl FnOnce(&CudaExpertSlotTable, &CudaExpertFrame) -> Result<T>,
     ) -> Result<T> {
         let state = self.lock();
         if state.poisoned_layers.contains(&layer) {
@@ -328,7 +313,7 @@ impl From<CudaRoutedExpertShape> for CudaRoutedExpertShapeKey {
 
 struct CudaExpertSubsystemState {
     residency: Option<Box<dyn ExpertResidencyControl>>,
-    tables: BTreeMap<usize, ferrule_backend::cuda::context::CudaExpertSlotTable>,
+    tables: BTreeMap<usize, CudaExpertSlotTable>,
     expert_capacity: usize,
     expert_arenas: BTreeMap<CudaRoutedExpertShapeKey, CudaRoutedExpertArena>,
     experts: BTreeMap<ExpertId, CudaExpertFrame>,
@@ -339,7 +324,6 @@ struct CudaExpertSubsystemState {
 
 pub(crate) struct CudaExpertFrame {
     expert: CudaPreparedRoutedExpert,
-    logical_payload_bytes: u64,
 }
 
 impl CudaExpertFrame {
@@ -359,13 +343,7 @@ impl CudaExpertFrame {
         self.expert.shape().output
     }
 
-    fn physical_bytes(&self) -> u64 {
-        self.expert.physical_bytes() as u64
-    }
-
-    fn expert_slot_pointers(
-        &self,
-    ) -> Result<ferrule_backend::cuda::context::CudaExpertSlotPointers> {
+    fn expert_slot_pointers(&self) -> Result<CudaExpertSlotPointers> {
         self.expert.expert_slot_pointers()
     }
 }
@@ -696,8 +674,8 @@ fn write_debug_artifact(path: &Path, bytes: &[u8]) -> Result<()> {
 struct PinnedExpertLinear {
     matrix: ExpertMatrixKind,
     format: ExpertLinearFormat,
-    weight: ferrule_backend::cuda::context::CudaPinnedU8HostBuffer,
-    scale: ferrule_backend::cuda::context::CudaPinnedU8HostBuffer,
+    weight: CudaPinnedU8HostBuffer,
+    scale: CudaPinnedU8HostBuffer,
 }
 
 struct PinnedExpertBundle {
@@ -740,7 +718,7 @@ impl Drop for CudaExpertUploadTicket {
 
 struct CudaExpertInstallTicket {
     frame: CudaExpertFrame,
-    physical: ferrule_backend::cuda::context::CudaExpertSlotInstallTicket,
+    physical: CudaExpertSlotInstallTicket,
     eviction: Option<(ExpertId, ExpertSlotBinding, MaterializationKey)>,
 }
 
@@ -767,8 +745,8 @@ pub struct CudaExpertMaterializationProvider {
     expert_capacity: usize,
     sources: Arc<MaterializationSourceCatalog<ExpertLoadSource>>,
     reader: ExpertStreamingReader,
-    ops: ferrule_backend::cuda::context::CudaArtifactOperatorContext,
-    consumer_compute: ferrule_backend::cuda::context::CudaComputeStreamAuthority,
+    ops: CudaOperators,
+    consumer_compute: CudaComputeStreamAuthority,
     completion_hub: ferrule_common::CompletionHub,
     shared: CudaSharedExpertSubsystem,
     request_keys: BTreeMap<MaterializationRequest, MaterializationKey>,
@@ -815,7 +793,7 @@ impl CudaExpertMaterializationOwner {
         reader: ExpertStreamingReader,
         expert_capacity: usize,
         layer_slot_capacities: &[(usize, usize)],
-        consumer_compute: ferrule_backend::cuda::context::CudaComputeStreamAuthority,
+        consumer_compute: CudaComputeStreamAuthority,
     ) -> Result<Self> {
         let provider = CudaExpertMaterializationProvider::new(
             placement,
@@ -832,10 +810,6 @@ impl CudaExpertMaterializationOwner {
             shared,
             provider: Some(provider),
         })
-    }
-
-    pub(crate) const fn placement(&self) -> MaterializationPlacement {
-        self.placement
     }
 
     pub(crate) fn handle(&self) -> CudaSharedExpertSubsystem {
@@ -858,14 +832,6 @@ impl CudaExpertMaterializationOwner {
         self.shared.install_residency_control(control)
     }
 
-    pub(crate) fn residency_stats(&self) -> ExpertResidencyStats {
-        self.shared
-            .lock()
-            .residency
-            .as_ref()
-            .map_or_else(ExpertResidencyStats::default, |control| control.stats())
-    }
-
     pub(crate) fn take_provider(&mut self) -> Option<Box<dyn MaterializationProvider>> {
         self.provider
             .take()
@@ -882,7 +848,7 @@ impl CudaExpertMaterializationProvider {
         reader: ExpertStreamingReader,
         expert_capacity: usize,
         layer_slot_capacities: &[(usize, usize)],
-        consumer_compute: ferrule_backend::cuda::context::CudaComputeStreamAuthority,
+        consumer_compute: CudaComputeStreamAuthority,
     ) -> Result<Self> {
         let mut limits = limits.validate()?;
         if expert_capacity == 0 {
@@ -890,7 +856,7 @@ impl CudaExpertMaterializationProvider {
                 message: "expert capacity must be non-zero".into(),
             });
         }
-        let ops = ferrule_backend::cuda::context::CudaArtifactOperatorContext::new()?;
+        let ops = CudaOperators::new()?;
         let mut routed_layer_shapes = BTreeMap::<usize, CudaRoutedExpertShape>::new();
         let mut routed_layer_raw_bytes = BTreeMap::<usize, u64>::new();
         for entry in sources.iter() {
@@ -1304,8 +1270,7 @@ impl CudaExpertMaterializationProvider {
         self.completion_hub.notify();
     }
 
-    fn recycle_frame(&self, mut frame: CudaExpertFrame) {
-        frame.logical_payload_bytes = 0;
+    fn recycle_frame(&self, frame: CudaExpertFrame) {
         self.shared.lock().free_frames.push(frame);
     }
 
@@ -1317,9 +1282,7 @@ impl CudaExpertMaterializationProvider {
             .iter()
             .rposition(|frame| frame.matches(shape))
         {
-            let mut frame = shared.free_frames.swap_remove(index);
-            frame.logical_payload_bytes = bundle.bytes;
-            return Ok(frame);
+            return Ok(shared.free_frames.swap_remove(index));
         }
         let arena = shared
             .expert_arenas
@@ -1336,10 +1299,7 @@ impl CudaExpertMaterializationProvider {
                 shape.input, shape.intermediate, shape.output
             ),
         })?;
-        Ok(CudaExpertFrame {
-            expert,
-            logical_payload_bytes: bundle.bytes,
-        })
+        Ok(CudaExpertFrame { expert })
     }
 
     fn submit_bundle_upload(&self, bundle: PinnedExpertBundle) -> Result<CudaExpertUploadTicket> {
@@ -1579,16 +1539,16 @@ impl CudaExpertMaterializationProvider {
                     return Err(CompletionOutcome::Failed(protocol_failure(error)));
                 }
             };
-            ferrule_backend::cuda::context::CudaExpertSlotInstallTarget::Replacement {
+            CudaExpertSlotInstallTarget::Replacement {
                 previous_expert: evicted.expert,
-                previous_binding: ferrule_backend::cuda::context::CudaExpertSlotBinding {
+                previous_binding: CudaExpertSlotBinding {
                     slot: i32::try_from(old.slot.get()).unwrap_or(-1),
                     generation: i32::try_from(old.generation.get()).unwrap_or(-1),
                 },
                 consumer_quiescence,
             }
         } else {
-            ferrule_backend::cuda::context::CudaExpertSlotInstallTarget::Empty
+            CudaExpertSlotInstallTarget::Empty
         };
         if let Some(directory) = debug_expert_artifact_directory(operation.expert) {
             let text = format!(

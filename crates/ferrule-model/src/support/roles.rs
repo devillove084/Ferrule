@@ -23,6 +23,8 @@ pub enum TensorRole {
     AttentionLatentQueryA,
     AttentionLatentQueryB,
     AttentionQueryNorm,
+    /// Per-head normalization of projected keys only.
+    AttentionKeyNorm,
     AttentionLatentKv,
     AttentionKeyValueNorm,
     AttentionLatentOutputA,
@@ -67,6 +69,7 @@ impl TensorRole {
             Self::AttentionLatentQueryA => "attention_latent_query_a",
             Self::AttentionLatentQueryB => "attention_latent_query_b",
             Self::AttentionQueryNorm => "attention_query_norm",
+            Self::AttentionKeyNorm => "attention_key_norm",
             Self::AttentionLatentKv => "attention_latent_kv",
             Self::AttentionKeyValueNorm => "attention_key_value_norm",
             Self::AttentionLatentOutputA => "attention_latent_output_a",

@@ -24,7 +24,47 @@ pub struct ModelDescriptor {
     pub tensor_classes: Vec<TensorClassCount>,
 }
 
+/// Automatically detected model configuration backed by one descriptor.
+///
+/// The descriptor remains the single source of parsed model metadata; this
+/// wrapper does not mirror any of its fields.
+#[derive(Debug, Clone)]
+pub struct AutoConfig {
+    descriptor: ModelDescriptor,
+}
+
+impl AutoConfig {
+    /// Detect a model from its local pretrained artifact.
+    pub fn from_pretrained(path: impl AsRef<Path>) -> Result<Self> {
+        ModelDescriptor::from_pretrained(path).map(Self::from_descriptor)
+    }
+
+    pub const fn from_descriptor(descriptor: ModelDescriptor) -> Self {
+        Self { descriptor }
+    }
+
+    pub const fn descriptor(&self) -> &ModelDescriptor {
+        &self.descriptor
+    }
+
+    pub fn into_descriptor(self) -> ModelDescriptor {
+        self.descriptor
+    }
+}
+
+impl AsRef<ModelDescriptor> for AutoConfig {
+    fn as_ref(&self) -> &ModelDescriptor {
+        self.descriptor()
+    }
+}
+
 impl ModelDescriptor {
+    /// Load model configuration and lightweight checkpoint metadata without
+    /// materializing parameter payloads.
+    pub fn from_pretrained(path: impl AsRef<Path>) -> Result<Self> {
+        Self::load(path.as_ref())
+    }
+
     pub fn load(path: &Path) -> Result<Self> {
         if path.is_file() {
             if is_gguf_file(path) {

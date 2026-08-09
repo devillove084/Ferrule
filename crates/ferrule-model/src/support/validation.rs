@@ -54,7 +54,8 @@ pub fn validate_model_layout_bindings(
     layout: &ModelLayout,
     bindings: &[TensorBinding],
 ) -> LayoutValidationReport {
-    let counts = binding_role_counts(bindings);
+    let mut counts = binding_role_counts(bindings);
+    apply_role_aliases(layout, &mut counts);
     let mut missing_required = Vec::new();
     let mut optional_roles = Vec::new();
 
@@ -109,6 +110,27 @@ fn binding_role_counts(bindings: &[TensorBinding]) -> BTreeMap<TensorRole, usize
         *counts.entry(binding.role.clone()).or_default() += binding.tensors;
     }
     counts
+}
+
+fn apply_role_aliases(layout: &ModelLayout, counts: &mut BTreeMap<TensorRole, usize>) {
+    for _ in 0..layout.role_aliases.len() {
+        let mut changed = false;
+        for alias in &layout.role_aliases {
+            let physical_count = counts
+                .get(&alias.physical_role)
+                .copied()
+                .unwrap_or_default();
+            if physical_count > 0
+                && counts.get(&alias.logical_role).copied().unwrap_or_default() == 0
+            {
+                counts.insert(alias.logical_role.clone(), physical_count);
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
 }
 
 fn require_role(
@@ -170,6 +192,47 @@ mod tests {
             "missing: {:?}",
             report.missing_required
         );
+    }
+
+    #[test]
+    fn output_head_alias_requires_its_physical_embedding() {
+        let spec = TransformerSpec {
+            family: crate::ModelFamily::Llama,
+            architecture: Some("tied-fixture".into()),
+            weight_source: WeightSource::Safetensors,
+            hidden_size: Some(8),
+            num_layers: Some(0),
+            vocab_size: Some(16),
+            num_heads: Some(2),
+            num_kv_heads: Some(2),
+            head_dim: Some(4),
+            attention: AttentionKind::DenseMha,
+            moe: MoeSpec::none(),
+            semantics: Default::default(),
+            tensor_count: None,
+            quantization: Vec::new(),
+            notes: Vec::new(),
+        };
+        let mut layout = ModelLayout::from_spec(&spec);
+        layout.add_role_alias(TensorRole::OutputHead, TensorRole::TokenEmbedding);
+        let bindings = vec![
+            binding(TensorClass::TokenEmbedding, TensorRole::TokenEmbedding, 1),
+            binding(TensorClass::OutputNorm, TensorRole::OutputNorm, 1),
+        ];
+        let report = validate_model_layout_bindings(&layout, &bindings);
+        assert!(report.is_complete());
+        assert!(
+            report
+                .bound_role_counts
+                .iter()
+                .any(|count| { count.role == TensorRole::OutputHead && count.tensors == 1 })
+        );
+
+        let without_embedding = vec![binding(TensorClass::OutputNorm, TensorRole::OutputNorm, 1)];
+        let report = validate_model_layout_bindings(&layout, &without_embedding);
+        assert!(report.missing_required.iter().any(|missing| {
+            missing.scope == RoleScope::Output && missing.role == TensorRole::OutputHead
+        }));
     }
 
     #[test]

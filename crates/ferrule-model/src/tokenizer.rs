@@ -49,7 +49,7 @@ impl IncrementalDecodeState {
 /// Lightweight tokenizer handle — decoupled from model weights.
 pub struct TokenizerHandle {
     inner: tokenizers::Tokenizer,
-    eos_token_id: Option<u32>,
+    eos_token_ids: Vec<u32>,
 }
 
 impl TokenizerHandle {
@@ -58,7 +58,7 @@ impl TokenizerHandle {
     pub(crate) fn from_parts(inner: tokenizers::Tokenizer, eos_token_id: Option<u32>) -> Self {
         Self {
             inner,
-            eos_token_id,
+            eos_token_ids: eos_token_id.into_iter().collect(),
         }
     }
 
@@ -71,7 +71,7 @@ impl TokenizerHandle {
             })?;
         Ok(Self {
             inner,
-            eos_token_id: read_eos_token_id(model_dir)?,
+            eos_token_ids: read_eos_token_ids(model_dir)?,
         })
     }
 
@@ -94,27 +94,73 @@ impl TokenizerHandle {
             })
     }
 
-    /// Return the EOS token ID from config, if set.
+    /// Return the first configured EOS token ID, preserving the legacy API.
     pub fn eos_token_id(&self) -> Option<u32> {
-        self.eos_token_id
+        self.eos_token_ids.first().copied()
+    }
+
+    /// Return every configured EOS token ID in configuration order.
+    pub fn eos_token_ids(&self) -> &[u32] {
+        &self.eos_token_ids
+    }
+
+    /// Return whether `token_id` is any configured EOS token.
+    pub fn is_eos_token(&self, token_id: u32) -> bool {
+        self.eos_token_ids.contains(&token_id)
     }
 }
 
-fn read_eos_token_id(model_dir: &Path) -> Result<Option<u32>> {
-    let config_path = model_dir.join("config.json");
-    if !config_path.exists() {
-        return Ok(None);
+fn read_eos_token_ids(model_dir: &Path) -> Result<Vec<u32>> {
+    for filename in ["generation_config.json", "config.json"] {
+        let config_path = model_dir.join(filename);
+        if !config_path.exists() {
+            continue;
+        }
+        let text = std::fs::read_to_string(&config_path).map_err(|e| Error::Model {
+            message: format!("config '{}': {e}", config_path.display()),
+        })?;
+        let json: serde_json::Value = serde_json::from_str(&text).map_err(|e| Error::Model {
+            message: format!("config json '{}': {e}", config_path.display()),
+        })?;
+        let Some(value) = json.get("eos_token_id") else {
+            continue;
+        };
+        let ids = parse_eos_token_ids(value, &config_path)?;
+        if !ids.is_empty() {
+            return Ok(ids);
+        }
     }
-    let text = std::fs::read_to_string(&config_path).map_err(|e| Error::Model {
-        message: format!("config '{}': {e}", config_path.display()),
-    })?;
-    let json: serde_json::Value = serde_json::from_str(&text).map_err(|e| Error::Model {
-        message: format!("config json '{}': {e}", config_path.display()),
-    })?;
-    Ok(json
-        .get("eos_token_id")
-        .and_then(|value| value.as_u64())
-        .map(|value| value as u32))
+    Ok(Vec::new())
+}
+
+fn parse_eos_token_ids(value: &serde_json::Value, path: &Path) -> Result<Vec<u32>> {
+    let values = match value {
+        serde_json::Value::Null => return Ok(Vec::new()),
+        serde_json::Value::Number(_) => std::slice::from_ref(value),
+        serde_json::Value::Array(values) => values,
+        _ => {
+            return Err(Error::Model {
+                message: format!("config '{}' has non-integer eos_token_id", path.display()),
+            });
+        }
+    };
+
+    let mut ids = Vec::with_capacity(values.len());
+    for value in values {
+        let id = value
+            .as_u64()
+            .and_then(|value| u32::try_from(value).ok())
+            .ok_or_else(|| Error::Model {
+                message: format!(
+                    "config '{}' has eos_token_id outside the u32 range",
+                    path.display()
+                ),
+            })?;
+        if !ids.contains(&id) {
+            ids.push(id);
+        }
+    }
+    Ok(ids)
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────
@@ -122,6 +168,39 @@ fn read_eos_token_id(model_dir: &Path) -> Result<Option<u32>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    struct TempModelDir(PathBuf);
+
+    impl TempModelDir {
+        fn new(name: &str) -> Self {
+            static NEXT_ID: AtomicU64 = AtomicU64::new(0);
+            let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!(
+                "ferrule-tokenizer-{name}-{}-{id}",
+                std::process::id()
+            ));
+            std::fs::create_dir_all(&path).unwrap();
+            Self(path)
+        }
+
+        fn write(&self, filename: &str, contents: &str) {
+            std::fs::write(self.0.join(filename), contents).unwrap();
+        }
+    }
+
+    impl Drop for TempModelDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    impl AsRef<Path> for TempModelDir {
+        fn as_ref(&self) -> &Path {
+            &self.0
+        }
+    }
 
     #[test]
     fn tokenizer_handle_eos() {
@@ -131,9 +210,64 @@ mod tests {
             .expect("add test special token");
         let handle = TokenizerHandle {
             inner: tok,
-            eos_token_id: Some(2),
+            eos_token_ids: vec![2, 3],
         };
         assert_eq!(handle.eos_token_id(), Some(2));
+        assert_eq!(handle.eos_token_ids(), [2, 3]);
+        assert!(handle.is_eos_token(2));
+        assert!(handle.is_eos_token(3));
+        assert!(!handle.is_eos_token(4));
+    }
+
+    #[test]
+    fn generation_config_array_takes_priority_and_deduplicates_eos_tokens() {
+        let model_dir = TempModelDir::new("generation-array");
+        model_dir.write(
+            "generation_config.json",
+            r#"{"eos_token_id":[151645,151643,151645]}"#,
+        );
+        model_dir.write("config.json", r#"{"eos_token_id":2}"#);
+
+        assert_eq!(
+            read_eos_token_ids(model_dir.as_ref()).unwrap(),
+            [151645, 151643]
+        );
+    }
+
+    #[test]
+    fn generation_config_accepts_integer_eos_token() {
+        let model_dir = TempModelDir::new("generation-integer");
+        model_dir.write("generation_config.json", r#"{"eos_token_id":151645}"#);
+
+        assert_eq!(read_eos_token_ids(model_dir.as_ref()).unwrap(), [151645]);
+    }
+
+    #[test]
+    fn config_json_is_the_fallback_for_missing_or_empty_generation_eos() {
+        for generation_config in [
+            r#"{"temperature":0.6}"#,
+            r#"{"eos_token_id":[]}"#,
+            r#"{"eos_token_id":null}"#,
+        ] {
+            let model_dir = TempModelDir::new("config-fallback");
+            model_dir.write("generation_config.json", generation_config);
+            model_dir.write("config.json", r#"{"eos_token_id":[7,8,7]}"#);
+
+            assert_eq!(read_eos_token_ids(model_dir.as_ref()).unwrap(), [7, 8]);
+        }
+    }
+
+    #[test]
+    fn invalid_generation_eos_is_reported_instead_of_silently_falling_back() {
+        let model_dir = TempModelDir::new("invalid-generation");
+        model_dir.write("generation_config.json", r#"{"eos_token_id":[1,"two"]}"#);
+        model_dir.write("config.json", r#"{"eos_token_id":2}"#);
+
+        let error = read_eos_token_ids(model_dir.as_ref())
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("generation_config.json"));
+        assert!(error.contains("u32 range"));
     }
 
     #[test]
@@ -164,7 +298,7 @@ mod tests {
 
         let handle = TokenizerHandle {
             inner: tok,
-            eos_token_id: Some(2),
+            eos_token_ids: vec![2],
         };
 
         let encoded = handle.encode("hello").unwrap();

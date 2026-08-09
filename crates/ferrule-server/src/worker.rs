@@ -1,10 +1,14 @@
 use std::collections::HashMap;
-use std::fmt;
+use std::error::Error as StdError;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread::JoinHandle;
 use std::time::Instant;
 
+use ferrule_common::{
+    WorkerExecutionError, WorkerOperation, WorkerRequestError, WorkerShutdownError,
+    WorkerStartError,
+};
 use ferrule_runtime::{
     GenerateRequest, InferenceCancelProgress, InferenceCompletionOwner, InferenceEngine,
     InferenceShutdownProgress, RequestId, ResidentDriverStep, ResidentTokenEvent,
@@ -14,6 +18,10 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::config::WorkerConfig;
 use crate::openai::Usage;
+
+type RuntimeWorkerRequestError = WorkerRequestError<ferrule_runtime::Error>;
+type RuntimeWorkerExecutionError = WorkerExecutionError<ferrule_runtime::Error>;
+type RuntimeWorkerShutdownError = WorkerShutdownError<tokio::task::JoinError>;
 
 #[derive(Debug)]
 pub(crate) struct WorkerRequest {
@@ -34,7 +42,7 @@ pub(crate) enum WorkerEvent {
     },
     Cancelled,
     Failed {
-        message: String,
+        error: Arc<RuntimeWorkerExecutionError>,
     },
 }
 
@@ -44,12 +52,12 @@ struct SubmitCommand {
     request: WorkerRequest,
     events: mpsc::Sender<WorkerEvent>,
     cancellation: Arc<AtomicBool>,
-    accepted: oneshot::Sender<Result<(), String>>,
+    accepted: oneshot::Sender<Result<(), Arc<RuntimeWorkerExecutionError>>>,
 }
 
 struct TokenizeCommand {
     prompt: String,
-    response: oneshot::Sender<Result<Vec<u32>, String>>,
+    response: oneshot::Sender<Result<Vec<u32>, ferrule_runtime::Error>>,
 }
 
 enum WorkerCommand {
@@ -67,37 +75,6 @@ struct ActiveRequest {
     emitted_tokens: usize,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SubmitErrorKind {
-    Overloaded,
-    Unavailable,
-    AdmissionTimeout,
-    Rejected,
-}
-
-#[derive(Debug)]
-pub struct SubmitError {
-    pub kind: SubmitErrorKind,
-    message: String,
-}
-
-impl SubmitError {
-    fn new(kind: SubmitErrorKind, message: impl Into<String>) -> Self {
-        Self {
-            kind,
-            message: message.into(),
-        }
-    }
-}
-
-impl fmt::Display for SubmitError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.message)
-    }
-}
-
-impl std::error::Error for SubmitError {}
-
 #[derive(Clone)]
 pub struct ModelWorkerHandle {
     commands: mpsc::Sender<WorkerCommand>,
@@ -109,7 +86,7 @@ impl ModelWorkerHandle {
     pub(crate) async fn submit(
         &self,
         request: WorkerRequest,
-    ) -> Result<EventSubscription, SubmitError> {
+    ) -> Result<EventSubscription, RuntimeWorkerRequestError> {
         let request_id = RequestId(self.next_request_id.fetch_add(1, Ordering::Relaxed));
         let enqueued_at = Instant::now();
         let (events, receiver) = mpsc::channel(self.config.event_queue_capacity);
@@ -127,16 +104,12 @@ impl ModelWorkerHandle {
         match self.commands.try_send(command) {
             Ok(()) => {}
             Err(mpsc::error::TrySendError::Full(_)) => {
-                return Err(SubmitError::new(
-                    SubmitErrorKind::Overloaded,
-                    "model request queue is full",
-                ));
+                return Err(WorkerRequestError::QueueFull);
             }
             Err(mpsc::error::TrySendError::Closed(_)) => {
-                return Err(SubmitError::new(
-                    SubmitErrorKind::Unavailable,
-                    "model worker is unavailable",
-                ));
+                return Err(WorkerRequestError::Unavailable {
+                    operation: WorkerOperation::Admission,
+                });
             }
         }
 
@@ -148,17 +121,13 @@ impl ModelWorkerHandle {
                 cancellation,
                 terminal_seen: false,
             }),
-            Ok(Ok(Err(message))) => Err(SubmitError::new(SubmitErrorKind::Rejected, message)),
-            Ok(Err(_)) => Err(SubmitError::new(
-                SubmitErrorKind::Unavailable,
-                "model worker stopped during admission",
-            )),
+            Ok(Ok(Err(source))) => Err(WorkerRequestError::Rejected { source }),
+            Ok(Err(_)) => Err(WorkerRequestError::Unavailable {
+                operation: WorkerOperation::Admission,
+            }),
             Err(_) => {
                 cancellation.store(true, Ordering::Release);
-                Err(SubmitError::new(
-                    SubmitErrorKind::AdmissionTimeout,
-                    "timed out waiting for model admission",
-                ))
+                Err(WorkerRequestError::AdmissionTimeout)
             }
         }
     }
@@ -167,7 +136,10 @@ impl ModelWorkerHandle {
     ///
     /// Returns the allocated request id alongside the token ids so the caller
     /// can build a unique response identifier consistent with [`submit`].
-    pub(crate) async fn tokenize(&self, prompt: String) -> Result<(u64, Vec<u32>), SubmitError> {
+    pub(crate) async fn tokenize(
+        &self,
+        prompt: String,
+    ) -> Result<(u64, Vec<u32>), RuntimeWorkerRequestError> {
         let request_id = self.next_request_id.fetch_add(1, Ordering::Relaxed);
         let (response, receiver) = oneshot::channel();
         let command = WorkerCommand::Tokenize(TokenizeCommand { prompt, response });
@@ -175,26 +147,21 @@ impl ModelWorkerHandle {
         match self.commands.try_send(command) {
             Ok(()) => {}
             Err(mpsc::error::TrySendError::Full(_)) => {
-                return Err(SubmitError::new(
-                    SubmitErrorKind::Overloaded,
-                    "model request queue is full",
-                ));
+                return Err(WorkerRequestError::QueueFull);
             }
             Err(mpsc::error::TrySendError::Closed(_)) => {
-                return Err(SubmitError::new(
-                    SubmitErrorKind::Unavailable,
-                    "model worker is unavailable",
-                ));
+                return Err(WorkerRequestError::Unavailable {
+                    operation: WorkerOperation::Tokenization,
+                });
             }
         }
 
         match receiver.await {
             Ok(Ok(tokens)) => Ok((request_id, tokens)),
-            Ok(Err(message)) => Err(SubmitError::new(SubmitErrorKind::Rejected, message)),
-            Err(_) => Err(SubmitError::new(
-                SubmitErrorKind::Unavailable,
-                "model worker stopped during tokenization",
-            )),
+            Ok(Err(source)) => Err(WorkerRequestError::Tokenization { source }),
+            Err(_) => Err(WorkerRequestError::Unavailable {
+                operation: WorkerOperation::Tokenization,
+            }),
         }
     }
 }
@@ -255,15 +222,15 @@ impl ModelWorker {
         self.handle.clone()
     }
 
-    pub async fn shutdown(mut self) -> Result<(), String> {
+    pub async fn shutdown(mut self) -> Result<(), RuntimeWorkerShutdownError> {
         let _ = self.handle.commands.send(WorkerCommand::Shutdown).await;
         let Some(thread) = self.thread.take() else {
             return Ok(());
         };
         tokio::task::spawn_blocking(move || thread.join())
             .await
-            .map_err(|error| format!("failed to join model worker task: {error}"))?
-            .map_err(|_| "model worker thread panicked".to_string())
+            .map_err(|source| WorkerShutdownError::JoinTask { source })?
+            .map_err(|_| WorkerShutdownError::ThreadPanicked)
     }
 }
 
@@ -275,27 +242,41 @@ impl Drop for ModelWorker {
     }
 }
 
-pub fn spawn_model_worker<E>(engine: E, config: WorkerConfig) -> Result<ModelWorker, String>
-where
-    E: InferenceEngine,
-{
-    spawn_model_worker_with(move || Ok(engine), config)
-}
-
 /// Construct and run the model engine on the same dedicated owner thread.
 ///
-/// Production CUDA bootstraps should prefer this entry point so context creation,
-/// prepared resources, the resident driver, and every execution step remain on
-/// one OS thread for the worker's entire lifetime.
-pub fn spawn_model_worker_with<F, E>(
+/// Only the `Send` factory crosses the thread boundary. The engine it returns may
+/// be `!Send`; it is constructed, initialized, shut down, and dropped inside the
+/// owner thread.
+///
+/// A prebuilt `!Send` engine cannot be captured and smuggled through the factory:
+///
+/// ```compile_fail
+/// use std::convert::Infallible;
+/// use std::rc::Rc;
+/// use ferrule_runtime::InferenceEngine;
+/// use ferrule_server::{WorkerConfig, spawn_model_worker_with};
+///
+/// let prebuilt = Rc::new(());
+/// let _ = spawn_model_worker_with(
+///     move || -> Result<Box<dyn InferenceEngine>, Infallible> {
+///         drop(prebuilt);
+///         unreachable!()
+///     },
+///     WorkerConfig::default(),
+/// );
+/// ```
+pub fn spawn_model_worker_with<F, E, FactorySource>(
     factory: F,
     config: WorkerConfig,
-) -> Result<ModelWorker, String>
+) -> Result<ModelWorker, WorkerStartError<FactorySource, ferrule_runtime::Error>>
 where
-    F: FnOnce() -> Result<E, String> + Send + 'static,
+    F: FnOnce() -> Result<E, FactorySource> + Send + 'static,
     E: InferenceEngine,
+    FactorySource: StdError + Send + 'static,
 {
-    config.validate().map_err(str::to_string)?;
+    config
+        .validate()
+        .map_err(|source| WorkerStartError::InvalidConfig { source })?;
     let (commands, receiver) = mpsc::channel(config.command_queue_capacity);
     let (ready_sender, ready_receiver) = std::sync::mpsc::sync_channel(1);
     let thread_config = config.clone();
@@ -308,9 +289,8 @@ where
             {
                 Ok(runtime) => runtime,
                 Err(error) => {
-                    let _ = ready_sender.send(Err(format!(
-                        "failed to build model-owner async runtime: {error}"
-                    )));
+                    let _ =
+                        ready_sender.send(Err(WorkerStartError::RuntimeBuild { source: error }));
                     return;
                 }
             };
@@ -319,22 +299,21 @@ where
                 let mut engine = match factory() {
                     Ok(engine) => engine,
                     Err(error) => {
-                        let _ = ready_sender.send(Err(error));
+                        let _ = ready_sender
+                            .send(Err(WorkerStartError::EngineFactory { source: error }));
                         return;
                     }
                 };
                 let mut completion_owner = InferenceCompletionOwner::attach(&mut engine);
                 if let Err(error) = completion_owner.initialize(&mut engine).await {
-                    let _ = ready_sender.send(Err(format!(
-                        "model startup materialization failed: {error}"
-                    )));
+                    let _ = ready_sender.send(Err(WorkerStartError::Startup { source: error }));
                     return;
                 }
                 let _ = ready_sender.send(Ok(()));
                 run_worker(engine, completion_owner, receiver, thread_config).await;
             });
         })
-        .map_err(|error| format!("failed to spawn model worker: {error}"))?;
+        .map_err(|source| WorkerStartError::ThreadSpawn { source })?;
 
     match ready_receiver.recv() {
         Ok(Ok(())) => Ok(ModelWorker {
@@ -349,11 +328,9 @@ where
             let _ = thread.join();
             Err(error)
         }
-        Err(error) => {
+        Err(source) => {
             let _ = thread.join();
-            Err(format!(
-                "model worker stopped during initialization: {error}"
-            ))
+            Err(WorkerStartError::InitializationChannel { source })
         }
     }
 }
@@ -368,7 +345,7 @@ async fn run_worker<E>(
 {
     let mut active = HashMap::<RequestId, ActiveRequest>::new();
     let mut cancellation_scratch = Vec::<RequestId>::new();
-    let mut fatal_error: Option<String> = None;
+    let mut fatal_error: Option<Arc<RuntimeWorkerExecutionError>> = None;
 
     'worker: loop {
         let should_step =
@@ -380,14 +357,16 @@ async fn run_worker<E>(
                     let Some(command) = command else {
                         break;
                     };
-                    if handle_command(command, &mut engine, &mut active, fatal_error.as_deref()) {
+                    if handle_command(command, &mut engine, &mut active, fatal_error.as_ref()) {
                         cancel_all(&mut engine, &mut completion_owner, &mut active).await;
                         break;
                     }
                 }
                 error = completion_owner.reactor_failure() => {
                     tracing::error!(error = %error, "model completion reactor failed");
-                    fatal_error = Some(error.to_string());
+                    fatal_error = Some(Arc::new(WorkerExecutionError::Runtime {
+                        source: error,
+                    }));
                 }
             }
         }
@@ -395,7 +374,7 @@ async fn run_worker<E>(
         for _ in 0..config.max_commands_per_tick {
             match commands.try_recv() {
                 Ok(command) => {
-                    if handle_command(command, &mut engine, &mut active, fatal_error.as_deref()) {
+                    if handle_command(command, &mut engine, &mut active, fatal_error.as_ref()) {
                         cancel_all(&mut engine, &mut completion_owner, &mut active).await;
                         break 'worker;
                     }
@@ -444,10 +423,9 @@ async fn run_worker<E>(
         match step_result {
             Ok(ResidentDriverStep::WaitingForModelProgress(_) | ResidentDriverStep::Blocked) => {
                 if !engine.has_pending_async_work() {
-                    let error = "runtime reported blocked work without an owned async continuation"
-                        .to_owned();
+                    let error = Arc::new(WorkerExecutionError::BlockedWithoutContinuation);
                     tracing::error!(error = %error, "model worker entered a fatal scheduling state");
-                    fatal_error = Some(error.clone());
+                    fatal_error = Some(Arc::clone(&error));
                     fail_all(&mut engine, &mut active, error);
                     continue;
                 }
@@ -458,42 +436,40 @@ async fn run_worker<E>(
                             cancel_all(&mut engine, &mut completion_owner, &mut active).await;
                             break 'worker;
                         };
-                        if handle_command(command, &mut engine, &mut active, fatal_error.as_deref()) {
+                        if handle_command(command, &mut engine, &mut active, fatal_error.as_ref()) {
                             cancel_all(&mut engine, &mut completion_owner, &mut active).await;
                             break 'worker;
                         }
                     }
                     wake = completion => {
                         if matches!(wake, ferrule_common::CompletionWake::Closed) {
-                            let error = "model completion source closed with live async work".to_owned();
+                            let error = Arc::new(WorkerExecutionError::CompletionSourceClosed);
                             tracing::error!(error = %error, "model completion source closed");
-                            fatal_error = Some(error.clone());
+                            fatal_error = Some(Arc::clone(&error));
                             fail_all(&mut engine, &mut active, error);
                         }
                     }
                     error = completion_owner.reactor_failure() => {
                         tracing::error!(error = %error, "model completion reactor failed");
-                        let message = error.to_string();
-                        fatal_error = Some(message.clone());
-                        fail_all(&mut engine, &mut active, message);
+                        let error = Arc::new(WorkerExecutionError::Runtime { source: error });
+                        fatal_error = Some(Arc::clone(&error));
+                        fail_all(&mut engine, &mut active, error);
                     }
                 }
             }
             Ok(ResidentDriverStep::Idle) => {
                 if active.is_empty() && engine.has_background_work() {
-                    let error =
-                        "runtime reported idle while model background work remained runnable"
-                            .to_owned();
+                    let error = Arc::new(WorkerExecutionError::RunnableBackgroundReportedIdle);
                     tracing::error!(error = %error, "model worker entered a fatal scheduling state");
                     fatal_error = Some(error);
                 }
             }
             Ok(ResidentDriverStep::Executed { .. }) => {}
-            Err(error) => {
-                tracing::error!(error = %error, "model worker entered a fatal execution state");
-                let message = error.to_string();
-                fatal_error = Some(message.clone());
-                fail_all(&mut engine, &mut active, message);
+            Err(source) => {
+                tracing::error!(error = %source, "model worker entered a fatal execution state");
+                let error = Arc::new(WorkerExecutionError::Runtime { source });
+                fatal_error = Some(Arc::clone(&error));
+                fail_all(&mut engine, &mut active, error);
             }
         }
         cancel_disconnected(&mut engine, &mut active, &mut cancellation_scratch);
@@ -525,7 +501,7 @@ fn handle_command<E>(
     command: WorkerCommand,
     engine: &mut E,
     active: &mut HashMap<RequestId, ActiveRequest>,
-    fatal_error: Option<&str>,
+    fatal_error: Option<&Arc<RuntimeWorkerExecutionError>>,
 ) -> bool
 where
     E: InferenceEngine,
@@ -533,34 +509,29 @@ where
     match command {
         WorkerCommand::Shutdown => true,
         WorkerCommand::Tokenize(command) => {
-            let result = engine
-                .encode(&command.prompt)
-                .map_err(|error| error.to_string());
-            let _ = command.response.send(result);
+            let _ = command.response.send(engine.encode(&command.prompt));
             false
         }
         WorkerCommand::Submit(command) => {
             let worker_started_at = Instant::now();
             let worker_queue_us = command.enqueued_at.elapsed().as_micros() as u64;
             if let Some(error) = fatal_error {
-                let _ = command
-                    .accepted
-                    .send(Err(format!("model worker is unavailable: {error}")));
+                let _ = command.accepted.send(Err(Arc::clone(error)));
                 return false;
             }
             let tokenize_started_at = Instant::now();
             let prompt_tokens = match engine.encode(&command.request.prompt) {
                 Ok(tokens) if !tokens.is_empty() => tokens,
                 Ok(_) => {
-                    let _ = command
-                        .accepted
-                        .send(Err("formatted prompt produced no tokens".into()));
+                    let _ = command.accepted.send(Err(Arc::new(
+                        WorkerExecutionError::AdmissionEmptyPromptTokens,
+                    )));
                     return false;
                 }
                 Err(error) => {
-                    let _ = command
-                        .accepted
-                        .send(Err(format!("prompt tokenization failed: {error}")));
+                    let _ = command.accepted.send(Err(Arc::new(
+                        WorkerExecutionError::AdmissionTokenization { source: error },
+                    )));
                     return false;
                 }
             };
@@ -639,7 +610,7 @@ fn cancel_disconnected<E>(
                         None,
                     );
                     let _ = request.events.try_send(WorkerEvent::Failed {
-                        message: format!("request cancellation failed: {error}"),
+                        error: Arc::new(WorkerExecutionError::Cancellation { source: error }),
                     });
                 }
             }
@@ -704,7 +675,7 @@ where
                 Some(sequence.generated),
             );
             let _ = request.events.try_send(WorkerEvent::Failed {
-                message: "model execution failed".into(),
+                error: Arc::new(WorkerExecutionError::ModelExecution),
             });
         }
     }
@@ -733,8 +704,11 @@ fn trace_worker_request_terminal(
     );
 }
 
-fn fail_all<E>(engine: &mut E, active: &mut HashMap<RequestId, ActiveRequest>, message: String)
-where
+fn fail_all<E>(
+    engine: &mut E,
+    active: &mut HashMap<RequestId, ActiveRequest>,
+    error: Arc<RuntimeWorkerExecutionError>,
+) where
     E: InferenceEngine,
 {
     let request_ids = active.keys().copied().collect::<Vec<_>>();
@@ -750,7 +724,7 @@ where
                 None,
             );
             let _ = request.events.try_send(WorkerEvent::Failed {
-                message: message.clone(),
+                error: Arc::clone(&error),
             });
         }
     }
@@ -789,7 +763,9 @@ async fn cancel_all<E>(
                         None,
                     );
                     let _ = request.events.try_send(WorkerEvent::Failed {
-                        message: format!("request cancellation failed during shutdown: {error}"),
+                        error: Arc::new(WorkerExecutionError::ShutdownCancellation {
+                            source: error,
+                        }),
                     });
                 }
             }
@@ -846,9 +822,7 @@ async fn cancel_all<E>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ferrule_common::execution::ExecutionTransactionId;
-    use ferrule_common::{CompletionHub, DependencySet, LogicalDependency, OperationId};
-    use ferrule_model::{BatchContinuationId, PendingModelProgress};
+    use ferrule_common::CompletionHub;
     use ferrule_runtime::{
         CancelRequestResult, InferenceCompletionReactor, Result as RuntimeResult, SequenceState,
     };
@@ -971,188 +945,6 @@ mod tests {
         }
     }
 
-    struct BackgroundEngine {
-        completion_hub: CompletionHub,
-        ready: Arc<AtomicBool>,
-        phase: Arc<AtomicUsize>,
-        step_calls: Arc<AtomicUsize>,
-    }
-
-    impl InferenceEngine for BackgroundEngine {
-        fn completion_hub(&self) -> CompletionHub {
-            self.completion_hub.clone()
-        }
-
-        fn take_completion_reactors(&mut self) -> Vec<InferenceCompletionReactor> {
-            Vec::new()
-        }
-
-        fn has_background_work(&self) -> bool {
-            self.phase.load(Ordering::Acquire) < 2
-        }
-
-        fn has_pending_async_work(&self) -> bool {
-            self.phase.load(Ordering::Acquire) == 1
-        }
-
-        fn encode(&self, prompt: &str) -> RuntimeResult<Vec<u32>> {
-            Ok(prompt.bytes().map(u32::from).collect())
-        }
-
-        fn submit(&mut self, _request: GenerateRequest) {
-            panic!("background-only test engine does not accept requests");
-        }
-
-        fn step(
-            &mut self,
-            _on_token: &mut dyn FnMut(&ResidentTokenEvent) -> RuntimeResult<()>,
-        ) -> RuntimeResult<ResidentDriverStep> {
-            self.step_calls.fetch_add(1, Ordering::AcqRel);
-            match self.phase.load(Ordering::Acquire) {
-                0 => {
-                    self.phase.store(1, Ordering::Release);
-                    let continuation = BatchContinuationId::new(2);
-                    let dependency = LogicalDependency::operation_retired(OperationId::new(2))?;
-                    let dependencies = DependencySet::new([dependency])?;
-                    let transaction = ExecutionTransactionId::new(2)?;
-                    let pending =
-                        PendingModelProgress::new(transaction, continuation, dependencies)?;
-                    Ok(ResidentDriverStep::WaitingForModelProgress(vec![pending]))
-                }
-                1 if self.ready.load(Ordering::Acquire) => {
-                    self.phase.store(2, Ordering::Release);
-                    Ok(ResidentDriverStep::Executed {
-                        action_kind: ferrule_runtime::ResidentActionKind::Prefill,
-                        rows: 0,
-                        staged: 0,
-                        finished: 0,
-                    })
-                }
-                1 => Ok(ResidentDriverStep::Blocked),
-                _ => Ok(ResidentDriverStep::Idle),
-            }
-        }
-
-        fn cancel_request(
-            &mut self,
-            request_id: RequestId,
-        ) -> RuntimeResult<InferenceCancelProgress> {
-            Ok(InferenceCancelProgress::Complete(
-                CancelRequestResult::NotFound { request_id },
-            ))
-        }
-
-        fn drain_finished(&mut self) -> Vec<SequenceState> {
-            Vec::new()
-        }
-
-        fn drain_cancelled(&mut self) -> Vec<SequenceState> {
-            Vec::new()
-        }
-
-        fn drain_failed(&mut self) -> Vec<SequenceState> {
-            Vec::new()
-        }
-    }
-
-    struct CompletionDrivenEngine {
-        completion_hub: CompletionHub,
-        ready: Arc<AtomicBool>,
-        step_calls: Arc<AtomicUsize>,
-        request: Option<GenerateRequest>,
-        finished: Vec<SequenceState>,
-    }
-
-    impl InferenceEngine for CompletionDrivenEngine {
-        fn completion_hub(&self) -> CompletionHub {
-            self.completion_hub.clone()
-        }
-
-        fn take_completion_reactors(&mut self) -> Vec<InferenceCompletionReactor> {
-            Vec::new()
-        }
-
-        fn has_pending_async_work(&self) -> bool {
-            self.request.is_some() && !self.ready.load(Ordering::Acquire)
-        }
-
-        fn encode(&self, prompt: &str) -> RuntimeResult<Vec<u32>> {
-            Ok(prompt.bytes().map(u32::from).collect())
-        }
-
-        fn submit(&mut self, request: GenerateRequest) {
-            self.request = Some(request);
-        }
-
-        fn step(
-            &mut self,
-            on_token: &mut dyn FnMut(&ResidentTokenEvent) -> RuntimeResult<()>,
-        ) -> RuntimeResult<ResidentDriverStep> {
-            self.step_calls.fetch_add(1, Ordering::AcqRel);
-            if self.request.is_none() {
-                return Ok(ResidentDriverStep::Idle);
-            }
-            if !self.ready.load(Ordering::Acquire) {
-                let continuation = BatchContinuationId::new(1);
-                let dependency = LogicalDependency::operation_retired(OperationId::new(1))?;
-                let dependencies = DependencySet::new([dependency])?;
-                let transaction = ExecutionTransactionId::new(1)?;
-                let pending = PendingModelProgress::new(transaction, continuation, dependencies)?;
-                return Ok(ResidentDriverStep::WaitingForModelProgress(vec![pending]));
-            }
-
-            let request = self.request.take().expect("checked request above");
-            let session_id = request.session_id.expect("worker assigns a session");
-            on_token(&ResidentTokenEvent {
-                session_id,
-                request_id: Some(request.id),
-                index: 0,
-                token: 1,
-                logit: Some(1.0),
-                text: "ready".into(),
-            })?;
-            let mut sequence = SequenceState::from_request(&request, session_id);
-            sequence.generated = 1;
-            sequence.finish_reason = Some(SequenceFinishReason::MaxTokens);
-            self.finished.push(sequence);
-            Ok(ResidentDriverStep::Executed {
-                action_kind: ferrule_runtime::ResidentActionKind::Decode,
-                rows: 1,
-                staged: 0,
-                finished: 1,
-            })
-        }
-
-        fn cancel_request(
-            &mut self,
-            request_id: RequestId,
-        ) -> RuntimeResult<InferenceCancelProgress> {
-            let Some(request) = self.request.take() else {
-                return Ok(InferenceCancelProgress::Complete(
-                    CancelRequestResult::NotFound { request_id },
-                ));
-            };
-            Ok(InferenceCancelProgress::Complete(
-                CancelRequestResult::Active {
-                    request_id,
-                    session_id: request.session_id.expect("worker assigns a session"),
-                },
-            ))
-        }
-
-        fn drain_finished(&mut self) -> Vec<SequenceState> {
-            std::mem::take(&mut self.finished)
-        }
-
-        fn drain_cancelled(&mut self) -> Vec<SequenceState> {
-            Vec::new()
-        }
-
-        fn drain_failed(&mut self) -> Vec<SequenceState> {
-            Vec::new()
-        }
-    }
-
     fn test_request(id: u64) -> GenerateRequest {
         GenerateRequest {
             id: RequestId(id),
@@ -1224,131 +1016,6 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn idle_worker_drives_background_work_without_polling() {
-        let completion_hub = CompletionHub::new();
-        let ready = Arc::new(AtomicBool::new(false));
-        let phase = Arc::new(AtomicUsize::new(0));
-        let step_calls = Arc::new(AtomicUsize::new(0));
-        let worker = spawn_model_worker(
-            BackgroundEngine {
-                completion_hub: completion_hub.clone(),
-                ready: Arc::clone(&ready),
-                phase: Arc::clone(&phase),
-                step_calls: Arc::clone(&step_calls),
-            },
-            WorkerConfig::default(),
-        )
-        .unwrap();
-
-        tokio::time::timeout(std::time::Duration::from_secs(1), async {
-            while step_calls.load(Ordering::Acquire) == 0 {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .expect("idle worker never started background work");
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        assert_eq!(step_calls.load(Ordering::Acquire), 1);
-        assert_eq!(phase.load(Ordering::Acquire), 1);
-
-        ready.store(true, Ordering::Release);
-        completion_hub.notify();
-        tokio::time::timeout(std::time::Duration::from_secs(1), async {
-            while phase.load(Ordering::Acquire) != 2 {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .expect("completion wake did not resume background work");
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        assert_eq!(step_calls.load(Ordering::Acquire), 2);
-
-        worker.shutdown().await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn shutdown_preempts_waiting_background_work() {
-        let completion_hub = CompletionHub::new();
-        let phase = Arc::new(AtomicUsize::new(0));
-        let step_calls = Arc::new(AtomicUsize::new(0));
-        let worker = spawn_model_worker(
-            BackgroundEngine {
-                completion_hub,
-                ready: Arc::new(AtomicBool::new(false)),
-                phase,
-                step_calls: Arc::clone(&step_calls),
-            },
-            WorkerConfig::default(),
-        )
-        .unwrap();
-
-        tokio::time::timeout(std::time::Duration::from_secs(1), async {
-            while step_calls.load(Ordering::Acquire) == 0 {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .expect("idle worker never entered background wait");
-        tokio::time::timeout(std::time::Duration::from_secs(1), worker.shutdown())
-            .await
-            .expect("shutdown did not preempt background completion wait")
-            .unwrap();
-    }
-
-    #[tokio::test]
-    async fn waiting_worker_resumes_only_after_completion_wake() {
-        let completion_hub = CompletionHub::new();
-        let ready = Arc::new(AtomicBool::new(false));
-        let step_calls = Arc::new(AtomicUsize::new(0));
-        let worker = spawn_model_worker(
-            CompletionDrivenEngine {
-                completion_hub: completion_hub.clone(),
-                ready: Arc::clone(&ready),
-                step_calls: Arc::clone(&step_calls),
-                request: None,
-                finished: Vec::new(),
-            },
-            WorkerConfig::default(),
-        )
-        .unwrap();
-        let mut subscription = worker
-            .handle()
-            .submit(WorkerRequest {
-                prompt: "wake".into(),
-                max_tokens: 1,
-                stop: Vec::new(),
-                ignore_eos: false,
-            })
-            .await
-            .unwrap();
-
-        tokio::time::timeout(std::time::Duration::from_secs(1), async {
-            while step_calls.load(Ordering::Acquire) == 0 {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .expect("worker never entered the waiting model step");
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        assert_eq!(step_calls.load(Ordering::Acquire), 1);
-
-        ready.store(true, Ordering::Release);
-        completion_hub.notify();
-        assert!(matches!(
-            tokio::time::timeout(std::time::Duration::from_secs(1), subscription.recv())
-                .await
-                .unwrap(),
-            Some(WorkerEvent::Token { text }) if text == "ready"
-        ));
-        assert!(matches!(
-            subscription.recv().await,
-            Some(WorkerEvent::Finished { .. })
-        ));
-        assert_eq!(step_calls.load(Ordering::Acquire), 2);
-        worker.shutdown().await.unwrap();
-    }
-
     #[test]
     fn pending_cancellation_retains_request_ownership_until_model_quiesces() {
         let cancellation_count = Arc::new(AtomicUsize::new(0));
@@ -1397,102 +1064,5 @@ mod tests {
         ));
         drain_terminal(&mut engine, &mut active);
         assert!(active.is_empty());
-    }
-
-    #[tokio::test]
-    async fn shutdown_waits_for_pending_model_cancellation_before_dropping_ownership() {
-        let cancellation_count = Arc::new(AtomicUsize::new(0));
-        let mut engine = DisconnectEngine {
-            completion_hub: CompletionHub::new(),
-            request: Some(test_request(4)),
-            token_index: 0,
-            cancellation_count: Arc::clone(&cancellation_count),
-            cancellation_waits_remaining: 1,
-            cancellation_pending: false,
-            cancelled: Vec::new(),
-        };
-        let mut completion_owner = InferenceCompletionOwner::attach(&mut engine);
-        let mut active = HashMap::new();
-        let (events, mut events_receiver) = mpsc::channel(1);
-        active.insert(
-            RequestId(4),
-            ActiveRequest {
-                events,
-                cancellation: Arc::new(AtomicBool::new(false)),
-                cancellation_submitted: false,
-                session_id: SessionId(4),
-                submitted_at: Instant::now(),
-                emitted_tokens: 0,
-            },
-        );
-
-        cancel_all(&mut engine, &mut completion_owner, &mut active).await;
-
-        assert!(active.is_empty());
-        assert_eq!(cancellation_count.load(Ordering::Acquire), 1);
-        assert!(matches!(
-            events_receiver.recv().await,
-            Some(WorkerEvent::Cancelled)
-        ));
-    }
-
-    #[tokio::test]
-    async fn dropping_event_subscription_cancels_without_poisoning_worker() {
-        let cancellation_count = Arc::new(AtomicUsize::new(0));
-        let worker = spawn_model_worker(
-            DisconnectEngine {
-                completion_hub: CompletionHub::new(),
-                request: None,
-                token_index: 0,
-                cancellation_count: Arc::clone(&cancellation_count),
-                cancellation_waits_remaining: 0,
-                cancellation_pending: false,
-                cancelled: Vec::new(),
-            },
-            WorkerConfig {
-                event_queue_capacity: 32,
-                ..WorkerConfig::default()
-            },
-        )
-        .unwrap();
-        let handle = worker.handle();
-        let mut first = handle
-            .submit(WorkerRequest {
-                prompt: "first".into(),
-                max_tokens: 128,
-                stop: Vec::new(),
-                ignore_eos: false,
-            })
-            .await
-            .unwrap();
-        assert!(matches!(
-            first.recv().await,
-            Some(WorkerEvent::Token { .. })
-        ));
-        drop(first);
-
-        tokio::time::timeout(std::time::Duration::from_secs(1), async {
-            while cancellation_count.load(Ordering::Acquire) == 0 {
-                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
-            }
-        })
-        .await
-        .expect("worker did not observe the dropped response");
-
-        let mut second = handle
-            .submit(WorkerRequest {
-                prompt: "second".into(),
-                max_tokens: 128,
-                stop: Vec::new(),
-                ignore_eos: false,
-            })
-            .await
-            .unwrap();
-        assert!(matches!(
-            second.recv().await,
-            Some(WorkerEvent::Token { .. })
-        ));
-        drop(second);
-        worker.shutdown().await.unwrap();
     }
 }

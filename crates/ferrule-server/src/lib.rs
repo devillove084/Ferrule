@@ -11,8 +11,9 @@ mod openai;
 mod worker;
 
 pub use config::{ModelRegistration, WorkerConfig};
-pub use http::{ServerState, router, serve_with_shutdown};
-pub use worker::{
-    ModelWorker, ModelWorkerHandle, SubmitError, SubmitErrorKind, spawn_model_worker,
-    spawn_model_worker_with,
+pub use ferrule_common::{
+    ServingConfigError, ServingRequestError, SseSerializationError, WorkerExecutionError,
+    WorkerOperation, WorkerRequestError, WorkerShutdownError, WorkerStartError,
 };
+pub use http::{ServerState, router, serve_with_shutdown};
+pub use worker::{ModelWorker, ModelWorkerHandle, spawn_model_worker_with};

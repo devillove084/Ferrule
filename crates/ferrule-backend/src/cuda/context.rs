@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use crate::cuda::runtime::{
     self, CudaContext, CudaEvent, CudaStream, DeviceBuffer, DeviceCopy, DevicePtr, LaunchConfig,
-    PinnedHostBuffer,
+    MemoryTier, PinnedHostBuffer,
 };
 use ferrule_common::{Error, Result};
 
@@ -15,19 +15,25 @@ use crate::BackendError;
 pub use crate::cuda::counters::CudaFailpoints;
 use crate::cuda::counters::CudaOpCounterCells;
 pub use crate::cuda::counters::CudaOpCounters;
-use crate::cuda::cutlass::{
-    CutlassKernelId, GroupedFp4MoeBuffers, GroupedFp4MoeLayout, HybridMlaExplicitSelectionLayout,
-    discover_provider, grouped_fp4_moe_launch as grouped_fp4_moe, grouped_fp4_moe_workspace_size,
-    hybrid_mla_explicit_selection_workspace_requirements, mxfp4_sfb_storage_bytes,
-    prepare_mxfp4_sfb,
+use crate::cuda::ffi::core::{
+    DSV4_DECODE_INDEX_QUERY_SHARED_ELEMENTS, TRANSFORMER_PAGED_BF16_APPEND_CAUSAL_GQA,
+    TRANSFORMER_PAGED_BF16_CAUSAL_GQA, TRANSFORMER_PAGED_BF16_KV_APPEND, TransformerArgs,
 };
-use crate::cuda::kernels::{DSV4_DECODE_INDEX_QUERY_SHARED_ELEMENTS, kernels::LoadedModule};
-use crate::cuda::transformer::combined_ring::CombinedRingTopkLayout;
-use crate::cuda::transformer::compressor_recurrent::CompressorRecurrentShape;
-use crate::cuda::transformer::sparse_attention::{
+use crate::cuda::operators::attention::selection::CombinedRingTopkLayout;
+use crate::cuda::operators::attention::sparse::{
     CudaSparseAttentionExecutor, CudaSparseAttentionShape, DualPlanePagedSparseAttentionLayout,
     PagedSparseAttentionLayout,
 };
+use crate::cuda::operators::kv::compressor::CompressorRecurrentShape;
+use crate::cuda::operators::{
+    Bf16MoeRowsLayout, F32ToBf16RowsLayout, GroupedFp4MoeBuffers, GroupedFp4MoeLayout,
+    HybridMlaExplicitSelectionLayout, PagedBf16CausalGqaLayout, SelectedSoftmaxTopKLayout,
+    SplitHalfRopeLayout, grouped_fp4_moe_launch as grouped_fp4_moe, grouped_fp4_moe_workspace_size,
+    hybrid_mla_explicit_selection_workspace_requirements, mxfp4_sfb_storage_bytes,
+    prepare_mxfp4_sfb,
+};
+use crate::cuda::providers::core::CoreOperators;
+use crate::cuda::providers::cutlass::{CutlassKernelId, discover_provider};
 use crate::plan::{ExecutionMode, KernelOperation, KernelProviderId};
 
 /// Preserve a CUDA/provider error as the source at the common error boundary.
@@ -57,6 +63,19 @@ fn slice_bytes<T>(slice: &[T]) -> u64 {
 
 fn element_bytes<T>(len: usize) -> u64 {
     (len as u64).saturating_mul(std::mem::size_of::<T>() as u64)
+}
+
+fn exact_element_bytes<T>(len: usize, label: &str) -> Result<usize> {
+    len.checked_mul(std::mem::size_of::<T>())
+        .ok_or_else(|| Error::Internal {
+            message: format!("{label} byte size overflow"),
+        })
+}
+
+fn checked_u64(value: usize, label: &str, field: &str) -> Result<u64> {
+    u64::try_from(value).map_err(|_| Error::Internal {
+        message: format!("{label} {field} exceeds CUDA u64 ABI: {value}"),
+    })
 }
 
 /// Repack a logical row-major HC function matrix `[rows, cols]` as
@@ -362,23 +381,6 @@ impl Dsv4PagedDecodeRowsShape {
 }
 
 // ── Kernel dispatch (selects Q4_0 vs Q8_0 at runtime) ─────────────────
-
-// ── Device probe ──────────────────────────────────────────────────────
-
-/// Probe the CUDA device and print basic info.
-/// No-op when no GPU is available (returns an error).
-pub fn cuda_probe() -> Result<()> {
-    let ctx = cu(CudaContext::new(0))?;
-    let name = cu(ctx.device_name())?;
-    cu(ctx.bind_to_thread())?;
-    let (free, total) = cu(ctx.memory_info())?;
-    println!(
-        "  Device: {name}\n  Memory: {:.1} GB free / {:.1} GB total",
-        free as f64 / 1e9,
-        total as f64 / 1e9
-    );
-    Ok(())
-}
 
 // ── Reusable artifact-format operator context ────────────────────────────
 
@@ -2543,9 +2545,9 @@ pub struct CudaExpertGroupRoutePlanDownload {
 /// dedicated compute, upload, and control streams. It is intentionally generic
 /// and knows only packed artifact formats plus explicit shapes; model-family
 /// semantics stay in model code.
-pub struct CudaArtifactOperatorContext {
+pub struct CudaOperators {
     _ctx: Arc<CudaContext>,
-    module: LoadedModule,
+    module: CoreOperators,
     stream: Arc<CudaStream>,
     upload_stream: Arc<CudaStream>,
     control_stream: Arc<CudaStream>,
@@ -2558,12 +2560,12 @@ pub struct CudaArtifactOperatorContext {
     capture_safe: Cell<bool>,
 }
 
-impl CudaArtifactOperatorContext {
+impl CudaOperators {
     pub fn new() -> Result<Self> {
         let observability = CudaObservabilityConfig::from_env();
         let ctx = cu(CudaContext::new(0))?;
         cu(ctx.bind_to_thread())?;
-        let module = cu(crate::cuda::kernels::kernels::load(&ctx))?;
+        let module = cu(crate::cuda::providers::core::load(&ctx))?;
         let priorities = cu(ctx.stream_priority_range())?;
         // Compute uses the device's highest supported stream priority. Background
         // materialization remains work-conserving on the lowest-priority upload
@@ -2595,6 +2597,21 @@ impl CudaArtifactOperatorContext {
     /// Return free and total bytes for the device bound to this operator context.
     pub fn memory_info(&self) -> Result<(usize, usize)> {
         cu(self._ctx.memory_info())
+    }
+
+    /// Canonical allocator diagnostics for ordinary CUDA device buffers.
+    pub fn allocator_metrics(&self) -> crate::cuda::CudaAllocatorMetrics {
+        self._ctx.allocator_metrics()
+    }
+
+    /// Release completely idle allocator segments back to the CUDA driver.
+    pub fn trim_device_allocator(&self) -> Result<usize> {
+        cu(self._ctx.trim_allocator())
+    }
+
+    /// Synchronize registered streams and permanently stop allocator growth.
+    pub fn shutdown_device_allocator(&self) {
+        self._ctx.shutdown_allocator();
     }
 
     pub fn expert_slot_table(
@@ -3552,6 +3569,13 @@ impl CudaArtifactOperatorContext {
         ))
     }
 
+    /// Upload raw BF16 storage words without converting through F32.
+    pub fn upload_bf16_words(&self, values: &[u16]) -> Result<CudaBf16Buffer> {
+        Ok(CudaTypedBuffer::from_device_buffer(
+            self.upload_device_slice(values)?,
+        ))
+    }
+
     pub fn zero_f32_buffer(&self, len: usize) -> Result<CudaF32Buffer> {
         Ok(CudaTypedBuffer::from_device_buffer(
             self.zeroed_device_buffer::<f32>(len)?,
@@ -3562,6 +3586,83 @@ impl CudaArtifactOperatorContext {
         Ok(CudaTypedBuffer::from_device_buffer(
             self.zeroed_device_buffer::<u16>(len)?,
         ))
+    }
+
+    /// Convert logical strided F32 rows to raw BF16 words on the compute stream.
+    pub fn f32_to_bf16_rne_rows_from_device_into(
+        &self,
+        input: &CudaF32Buffer,
+        output: &mut CudaBf16Buffer,
+        layout: F32ToBf16RowsLayout,
+    ) -> Result<()> {
+        layout.validate()?;
+        let input_bytes = exact_element_bytes::<f32>(input.len(), "F32 row input")?;
+        let output_bytes = exact_element_bytes::<u16>(output.len(), "BF16 row output")?;
+        let required_input = layout.input.required_bytes()?;
+        let required_output = layout.output.required_bytes()?;
+        if input_bytes < required_input || output_bytes < required_output {
+            return Err(Error::Internal {
+                message: format!(
+                    "F32-to-BF16 row allocation is smaller than its stride extent: input={input_bytes}/{required_input} output={output_bytes}/{required_output}"
+                ),
+            });
+        }
+        let elements = checked_u32(
+            layout.element_count()?,
+            "F32-to-BF16 rows",
+            "logical elements",
+        )?;
+        self.launched(unsafe {
+            self.module.f32_to_bf16_rne_rows(
+                &self.stream,
+                LaunchConfig::for_num_elems(elements),
+                &input.buffer,
+                &mut output.buffer,
+                checked_u32(layout.input.rows, "F32-to-BF16 rows", "rows")?,
+                checked_u32(layout.input.heads, "F32-to-BF16 rows", "heads")?,
+                checked_u32(layout.input.dimensions, "F32-to-BF16 rows", "dimensions")?,
+                checked_u64(input_bytes, "F32-to-BF16 rows", "input bytes")?,
+                checked_u64(
+                    layout.input.row_stride_bytes,
+                    "F32-to-BF16 rows",
+                    "input row stride",
+                )?,
+                checked_u64(
+                    layout.input.head_stride_bytes,
+                    "F32-to-BF16 rows",
+                    "input head stride",
+                )?,
+                checked_u64(output_bytes, "F32-to-BF16 rows", "output bytes")?,
+                checked_u64(
+                    layout.output.row_stride_bytes,
+                    "F32-to-BF16 rows",
+                    "output row stride",
+                )?,
+                checked_u64(
+                    layout.output.head_stride_bytes,
+                    "F32-to-BF16 rows",
+                    "output head stride",
+                )?,
+            )
+        })
+    }
+
+    pub fn f32_to_bf16_rne_rows_from_device(
+        &self,
+        input: &CudaF32Buffer,
+        layout: F32ToBf16RowsLayout,
+    ) -> Result<CudaBf16Buffer> {
+        layout.validate()?;
+        let output_words = layout
+            .output
+            .required_bytes()?
+            .checked_div(std::mem::size_of::<u16>())
+            .ok_or_else(|| Error::Internal {
+                message: "BF16 row output byte extent is not representable as words".into(),
+            })?;
+        let mut output = self.zero_bf16_buffer(output_words)?;
+        self.f32_to_bf16_rne_rows_from_device_into(input, &mut output, layout)?;
+        Ok(output)
     }
 
     pub fn hybrid_mla_explicit_selection_workspace(
@@ -3605,7 +3706,7 @@ impl CudaArtifactOperatorContext {
             })?;
         #[cfg(ferrule_cuda_test_oracle)]
         let status_words =
-            crate::cuda::cutlass::HYBRID_MLA_EXPLICIT_SELECTION_TEST_COMPARE_RESULT_WORDS;
+            crate::cuda::operators::HYBRID_MLA_EXPLICIT_SELECTION_TEST_COMPARE_RESULT_WORDS;
         #[cfg(not(ferrule_cuda_test_oracle))]
         let status_words = 1;
 
@@ -3623,34 +3724,34 @@ impl CudaArtifactOperatorContext {
     }
 
     pub fn hybrid_mla_attention_workspace(&self) -> Result<CudaHybridMlaAttentionWorkspace> {
-        let output_values = crate::cuda::cutlass::PROPOSAL_ROWS
-            .checked_mul(crate::cuda::cutlass::HYBRID_MLA_ATTENTION_HEADS)
+        let output_values = crate::cuda::operators::PROPOSAL_ROWS
+            .checked_mul(crate::cuda::operators::HYBRID_MLA_ATTENTION_HEADS)
             .and_then(|value| {
-                value.checked_mul(crate::cuda::cutlass::HYBRID_MLA_ATTENTION_HEAD_DIM)
+                value.checked_mul(crate::cuda::operators::HYBRID_MLA_ATTENTION_HEAD_DIM)
             })
             .ok_or_else(|| Error::Internal {
                 message: "proposal attention output size overflow".into(),
             })?;
-        let score_values = crate::cuda::cutlass::PROPOSAL_ROWS
-            .checked_mul(crate::cuda::cutlass::HYBRID_MLA_ATTENTION_HEADS)
+        let score_values = crate::cuda::operators::PROPOSAL_ROWS
+            .checked_mul(crate::cuda::operators::HYBRID_MLA_ATTENTION_HEADS)
             .and_then(|value| {
-                value.checked_mul(crate::cuda::cutlass::HYBRID_MLA_ATTENTION_TOKEN_CAPACITY)
+                value.checked_mul(crate::cuda::operators::HYBRID_MLA_ATTENTION_TOKEN_CAPACITY)
             })
             .ok_or_else(|| Error::Internal {
                 message: "proposal attention score size overflow".into(),
             })?;
-        let gathered_values = crate::cuda::cutlass::HYBRID_MLA_ATTENTION_TOKEN_CAPACITY
-            .checked_mul(crate::cuda::cutlass::HYBRID_MLA_ATTENTION_HEAD_DIM)
+        let gathered_values = crate::cuda::operators::HYBRID_MLA_ATTENTION_TOKEN_CAPACITY
+            .checked_mul(crate::cuda::operators::HYBRID_MLA_ATTENTION_HEAD_DIM)
             .ok_or_else(|| Error::Internal {
                 message: "proposal gathered KV size overflow".into(),
             })?;
-        let pair_values = crate::cuda::cutlass::PROPOSAL_ROWS
-            .checked_mul(crate::cuda::cutlass::HYBRID_MLA_ATTENTION_HEADS)
+        let pair_values = crate::cuda::operators::PROPOSAL_ROWS
+            .checked_mul(crate::cuda::operators::HYBRID_MLA_ATTENTION_HEADS)
             .ok_or_else(|| Error::Internal {
                 message: "proposal attention row/head size overflow".into(),
             })?;
         let rescale_values = pair_values
-            .checked_mul(crate::cuda::cutlass::HYBRID_MLA_ATTENTION_ONLINE_SOFTMAX_TILES)
+            .checked_mul(crate::cuda::operators::HYBRID_MLA_ATTENTION_ONLINE_SOFTMAX_TILES)
             .ok_or_else(|| Error::Internal {
                 message: "proposal attention online-softmax size overflow".into(),
             })?;
@@ -3831,6 +3932,18 @@ impl CudaArtifactOperatorContext {
         self.counters
             .add_device_to_host(element_bytes::<i32>(buffer.len()));
         Ok(values)
+    }
+
+    /// Synchronize and validate the first device status word from paged BF16 GQA.
+    pub fn check_paged_bf16_transformer_status(&self, status: &CudaI32Buffer) -> Result<()> {
+        self.check_capture_safe("paged BF16 transformer status download")?;
+        if status.is_empty() {
+            return Err(Error::Internal {
+                message: "paged BF16 transformer status buffer is empty".into(),
+            });
+        }
+        let values = self.download_i32_buffer(status)?;
+        crate::cuda::operators::validate_paged_bf16_transformer_status(values[0])
     }
 
     pub fn clone_f32_buffer(&self, src: &CudaF32Buffer) -> Result<CudaF32Buffer> {
@@ -4574,6 +4687,95 @@ impl CudaArtifactOperatorContext {
         Ok(dst)
     }
 
+    pub fn gather_bf16_moe_rows(
+        &self,
+        source: &CudaBf16Buffer,
+        route_rows: &CudaI32Buffer,
+        layout: Bf16MoeRowsLayout,
+    ) -> Result<CudaF32Buffer> {
+        layout.validate()?;
+        if source.len() != layout.source_elements()? || route_rows.len() != layout.route_rows {
+            return Err(Error::Internal {
+                message: format!(
+                    "CUDA BF16 MoE gather buffer mismatch: source={}/{} routes={}/{}",
+                    source.len(),
+                    layout.source_elements()?,
+                    route_rows.len(),
+                    layout.route_rows,
+                ),
+            });
+        }
+        let mut gathered = self.zero_f32_buffer(layout.route_elements()?)?;
+        self.launched(unsafe {
+            self.module.moe_gather_bf16_rows(
+                &self.stream,
+                LaunchConfig::for_num_elems(checked_u32(
+                    layout.route_elements()?,
+                    "BF16 MoE gather",
+                    "elements",
+                )?),
+                &source.buffer,
+                checked_u32(layout.source_rows, "BF16 MoE gather", "source rows")?,
+                &route_rows.buffer,
+                &mut gathered.buffer,
+                checked_u32(layout.route_rows, "BF16 MoE gather", "route rows")?,
+                checked_u32(layout.row_width, "BF16 MoE gather", "row width")?,
+            )
+        })?;
+        Ok(gathered)
+    }
+
+    pub fn weighted_scatter_add_bf16_moe_rows(
+        &self,
+        route_values: &CudaF32Buffer,
+        route_rows: &CudaI32Buffer,
+        route_weights: &CudaF32Buffer,
+        output: &mut CudaF32Buffer,
+        layout: Bf16MoeRowsLayout,
+    ) -> Result<()> {
+        layout.validate()?;
+        if route_values.len() != layout.route_elements()?
+            || route_rows.len() != layout.route_rows
+            || route_weights.len() != layout.route_rows
+            || output.len() != layout.output_elements()?
+        {
+            return Err(Error::Internal {
+                message: format!(
+                    "CUDA BF16 MoE weighted scatter buffer mismatch: values={}/{} rows={}/{} weights={}/{} output={}/{}",
+                    route_values.len(),
+                    layout.route_elements()?,
+                    route_rows.len(),
+                    layout.route_rows,
+                    route_weights.len(),
+                    layout.route_rows,
+                    output.len(),
+                    layout.output_elements()?,
+                ),
+            });
+        }
+        self.launched(unsafe {
+            self.module.moe_weighted_scatter_add_bf16_rows(
+                &self.stream,
+                LaunchConfig::for_num_elems(checked_u32(
+                    layout.output_elements()?,
+                    "BF16 MoE weighted scatter",
+                    "elements",
+                )?),
+                &route_values.buffer,
+                &route_rows.buffer,
+                &route_weights.buffer,
+                &mut output.buffer,
+                checked_u32(layout.route_rows, "BF16 MoE weighted scatter", "route rows")?,
+                checked_u32(
+                    layout.output_rows,
+                    "BF16 MoE weighted scatter",
+                    "output rows",
+                )?,
+                checked_u32(layout.row_width, "BF16 MoE weighted scatter", "row width")?,
+            )
+        })
+    }
+
     pub fn scatter_add_f32_rows(
         &self,
         src: &CudaF32Buffer,
@@ -4636,7 +4838,7 @@ impl CudaArtifactOperatorContext {
         markov_w2: &CudaArtifactLinearHandle,
         confidence_weight: &CudaArtifactLinearHandle,
         anchor_token_id: u32,
-        layout: crate::cuda::cutlass::ProposalHeadLayout,
+        layout: crate::cuda::operators::ProposalHeadLayout,
         workspace: &mut CudaProposalHeadWorkspace,
     ) -> Result<()> {
         let expected = [
@@ -4688,7 +4890,7 @@ impl CudaArtifactOperatorContext {
         let mut token_ids = vec![0i32; layout.rows + 1];
         token_ids[0] = anchor;
         self.update_i32_host_mirror(&token_ids, &mut workspace.token_ids)?;
-        crate::cuda::cutlass::proposal_head(
+        crate::cuda::operators::proposal_head(
             &self.stream,
             &hc_state.buffer,
             &hc_function.buffer,
@@ -4799,12 +5001,12 @@ impl CudaArtifactOperatorContext {
         block_kv: &CudaF32Buffer,
         block_slots: &CudaI32Buffer,
         attention_sink: &CudaF32Buffer,
-        layout: crate::cuda::cutlass::HybridMlaAttentionLayout,
+        layout: crate::cuda::operators::HybridMlaAttentionLayout,
         output: &mut CudaF32Buffer,
         workspace: &mut CudaHybridMlaAttentionWorkspace,
     ) -> Result<()> {
         self.zero_i32_buffer_in_place(&mut workspace.status)?;
-        crate::cuda::cutlass::hybrid_mla_attention(
+        crate::cuda::operators::hybrid_mla_attention(
             &self.stream,
             &query.buffer,
             &context_plane.buffer,
@@ -4837,7 +5039,7 @@ impl CudaArtifactOperatorContext {
         block_offsets: &CudaI32Buffer,
         mask: Option<&CudaI32Buffer>,
         plane: &mut CudaF32Buffer,
-        layout: crate::cuda::kv_page_pool::PagedPlaneLayout,
+        layout: crate::cuda::operators::kv::page_pool::PagedPlaneLayout,
     ) -> Result<()> {
         self.paged_plane_scatter_selected_rows_from_device_impl(
             values,
@@ -4861,7 +5063,7 @@ impl CudaArtifactOperatorContext {
         row_sequence_ids: &CudaI32Buffer,
         mask: Option<&CudaI32Buffer>,
         plane: &mut CudaF32Buffer,
-        layout: crate::cuda::kv_page_pool::PagedPlaneLayout,
+        layout: crate::cuda::operators::kv::page_pool::PagedPlaneLayout,
     ) -> Result<()> {
         self.paged_plane_scatter_selected_rows_from_device_impl(
             values,
@@ -4885,7 +5087,7 @@ impl CudaArtifactOperatorContext {
         row_sequence_ids: Option<&CudaI32Buffer>,
         mask: Option<&CudaI32Buffer>,
         plane: &mut CudaF32Buffer,
-        layout: crate::cuda::kv_page_pool::PagedPlaneLayout,
+        layout: crate::cuda::operators::kv::page_pool::PagedPlaneLayout,
     ) -> Result<()> {
         layout.validate()?;
         let rows = positions.len();
@@ -5586,25 +5788,19 @@ impl CudaArtifactOperatorContext {
         in_features: usize,
         use_managed: bool,
     ) -> Result<CudaArtifactLinearHandle> {
-        // On unified-memory CUDA systems (unified memory), managed allocation avoids the expert H2D copy.
-        if use_managed {
-            return self.upload_artifact_linear_managed(
-                CudaArtifactLinearShape::Fp4E2M1PackedWithE8M0Scale {
-                    out_features,
-                    in_features,
-                },
-                weight,
-                scale,
-            );
+        let shape = CudaArtifactLinearShape::Fp4E2M1PackedWithE8M0Scale {
+            out_features,
+            in_features,
+        };
+        let memory_tier = if use_managed {
+            MemoryTier::Managed
+        } else {
+            MemoryTier::Device
+        };
+        match memory_tier {
+            MemoryTier::Device => self.upload_artifact_linear(shape, weight, scale),
+            MemoryTier::Managed => self.upload_artifact_linear_managed(shape, weight, scale),
         }
-        self.upload_artifact_linear(
-            CudaArtifactLinearShape::Fp4E2M1PackedWithE8M0Scale {
-                out_features,
-                in_features,
-            },
-            weight,
-            scale,
-        )
     }
 
     /// Allocate expert weight/scale buffers as CUDA managed memory.
@@ -6046,7 +6242,7 @@ impl CudaArtifactOperatorContext {
             &mut scratch.x_scales,
             scratch.scale_capacity,
         )?;
-        crate::cuda::cutlass::fp8_projection(
+        crate::cuda::operators::fp8_projection(
             &self.stream,
             &scratch.x_packed,
             &scratch.x_scales,
@@ -6151,7 +6347,7 @@ impl CudaArtifactOperatorContext {
         split_comb: &mut CudaF32Buffer,
         packed_output: &'a mut CudaFp8ActivationPack,
     ) -> Result<CudaPreparedFp8Activation<'a>> {
-        crate::cuda::cutlass::hc_producer(
+        crate::cuda::operators::hc_producer(
             &self.stream,
             &state.buffer,
             &function_row_major.buffer,
@@ -6226,7 +6422,7 @@ impl CudaArtifactOperatorContext {
                 ),
             });
         }
-        crate::cuda::cutlass::bf16_compressor(
+        crate::cuda::operators::bf16_compressor(
             &self.stream,
             &activation.buffer,
             &projection1.weight,
@@ -6321,7 +6517,7 @@ impl CudaArtifactOperatorContext {
         let weight_scales = projection.scale.as_ref().ok_or_else(|| Error::Internal {
             message: "proposal main projection weight scales are missing".into(),
         })?;
-        crate::cuda::cutlass::main_project_norm(
+        crate::cuda::operators::main_project_norm(
             &self.stream,
             &input.buffer,
             &mut activation.x_packed,
@@ -6405,7 +6601,7 @@ impl CudaArtifactOperatorContext {
             message: "CUTLASS FP8 KV weight scales are missing".into(),
         })?;
 
-        crate::cuda::cutlass::fp8_query_a_kv(
+        crate::cuda::operators::fp8_query_a_kv(
             &self.stream,
             activation.x_packed,
             activation.x_scales,
@@ -6811,7 +7007,7 @@ impl CudaArtifactOperatorContext {
         let output_b_scales = output_b.scale.as_ref().ok_or_else(|| Error::Internal {
             message: "fused MLA output-B scales are missing".into(),
         })?;
-        crate::cuda::cutlass::mla_output(
+        crate::cuda::operators::mla_output(
             &self.stream,
             &context.buffer,
             &output_a.weight,
@@ -8000,7 +8196,7 @@ impl CudaArtifactOperatorContext {
         block_slots: &CudaI32Buffer,
         block_offsets: &CudaI32Buffer,
         compressed_len: usize,
-        layout: crate::cuda::kv_page_pool::PagedPlaneLayout,
+        layout: crate::cuda::operators::kv::page_pool::PagedPlaneLayout,
     ) -> Result<()> {
         layout.validate()?;
         if block_offsets.len() != 2 {
@@ -8062,7 +8258,7 @@ impl CudaArtifactOperatorContext {
         weight_scale: f32,
         output: &mut CudaI32Buffer,
     ) -> Result<()> {
-        let layout = crate::cuda::kv_page_pool::PagedPlaneLayout {
+        let layout = crate::cuda::operators::kv::page_pool::PagedPlaneLayout {
             page_tokens,
             elements_per_token: index_head_dim,
             layer_index,
@@ -8169,7 +8365,7 @@ impl CudaArtifactOperatorContext {
         weight_scale: f32,
         output: &mut CudaI32Buffer,
     ) -> Result<()> {
-        let layout = crate::cuda::kv_page_pool::PagedPlaneLayout {
+        let layout = crate::cuda::operators::kv::page_pool::PagedPlaneLayout {
             page_tokens,
             elements_per_token: index_head_dim,
             layer_index,
@@ -8289,7 +8485,7 @@ impl CudaArtifactOperatorContext {
         weight_scale: f32,
         output: &mut CudaI32Buffer,
     ) -> Result<()> {
-        let layout = crate::cuda::kv_page_pool::PagedPlaneLayout {
+        let layout = crate::cuda::operators::kv::page_pool::PagedPlaneLayout {
             page_tokens,
             elements_per_token: index_head_dim,
             layer_index,
@@ -8437,7 +8633,7 @@ impl CudaArtifactOperatorContext {
         logical_indices: &mut CudaI32Buffer,
         plane_selectors: &mut CudaI32Buffer,
     ) -> Result<()> {
-        let layout = crate::cuda::kv_page_pool::PagedPlaneLayout {
+        let layout = crate::cuda::operators::kv::page_pool::PagedPlaneLayout {
             page_tokens,
             elements_per_token: index_head_dim,
             layer_index,
@@ -8536,7 +8732,7 @@ impl CudaArtifactOperatorContext {
         weight_scale: f32,
         output: &mut CudaI32Buffer,
     ) -> Result<()> {
-        let layout = crate::cuda::kv_page_pool::PagedPlaneLayout {
+        let layout = crate::cuda::operators::kv::page_pool::PagedPlaneLayout {
             page_tokens,
             elements_per_token: index_head_dim,
             layer_index,
@@ -8861,7 +9057,7 @@ impl CudaArtifactOperatorContext {
         let down_scales = down.scale.as_ref().ok_or_else(|| Error::Internal {
             message: "fused shared down scales are missing".into(),
         })?;
-        crate::cuda::cutlass::shared_ffn(
+        crate::cuda::operators::shared_ffn(
             &self.stream,
             input.x_packed,
             input.x_scales,
@@ -11580,6 +11776,445 @@ impl CudaArtifactOperatorContext {
         })
     }
 
+    pub fn split_half_rope_rows_indexed_from_device(
+        &self,
+        values: &mut CudaF32Buffer,
+        cos_table: &CudaF32Buffer,
+        sin_table: &CudaF32Buffer,
+        positions: &CudaI32Buffer,
+        layout: SplitHalfRopeLayout,
+        inverse: bool,
+    ) -> Result<()> {
+        layout.validate()?;
+        if values.len() != layout.value_elements()?
+            || cos_table.len() != layout.table_elements()?
+            || sin_table.len() != layout.table_elements()?
+            || positions.len() != layout.rows
+        {
+            return Err(Error::Internal {
+                message: format!(
+                    "CUDA split-half RoPE buffer mismatch: values={}/{} cos={}/{} sin={}/{} positions={}/{}",
+                    values.len(),
+                    layout.value_elements()?,
+                    cos_table.len(),
+                    layout.table_elements()?,
+                    sin_table.len(),
+                    layout.table_elements()?,
+                    positions.len(),
+                    layout.rows,
+                ),
+            });
+        }
+        let pairs = layout.pair_count()?;
+        self.launched(unsafe {
+            self.module.rope_split_half_rows_indexed(
+                &self.stream,
+                LaunchConfig::for_num_elems(checked_u32(pairs, "split-half RoPE", "pairs")?),
+                &mut values.buffer,
+                &cos_table.buffer,
+                &sin_table.buffer,
+                &positions.buffer,
+                checked_u32(pairs, "split-half RoPE", "pairs")?,
+                checked_u32(layout.rows, "split-half RoPE", "rows")?,
+                checked_u32(layout.heads, "split-half RoPE", "heads")?,
+                checked_u32(layout.head_dim, "split-half RoPE", "head dimension")?,
+                checked_u32(layout.rope_dim, "split-half RoPE", "rotary dimension")?,
+                checked_u32(layout.table_positions, "split-half RoPE", "table positions")?,
+                u32::from(inverse),
+                u32::from(layout.restore_bf16_boundary),
+            )
+        })
+    }
+
+    pub fn selected_softmax_topk_from_device_into(
+        &self,
+        logits: &CudaF32Buffer,
+        indices: &mut CudaI32Buffer,
+        weights: &mut CudaF32Buffer,
+        layout: SelectedSoftmaxTopKLayout,
+    ) -> Result<()> {
+        layout.validate()?;
+        if logits.len() != layout.logit_elements()?
+            || indices.len() != layout.output_elements()?
+            || weights.len() != layout.output_elements()?
+        {
+            return Err(Error::Internal {
+                message: format!(
+                    "CUDA selected-softmax top-k buffer mismatch: logits={}/{} indices={}/{} weights={}/{}",
+                    logits.len(),
+                    layout.logit_elements()?,
+                    indices.len(),
+                    layout.output_elements()?,
+                    weights.len(),
+                    layout.output_elements()?,
+                ),
+            });
+        }
+        self.launched(unsafe {
+            self.module.selected_softmax_topk_rows(
+                &self.stream,
+                LaunchConfig::for_num_elems(checked_u32(
+                    layout.rows,
+                    "selected-softmax top-k",
+                    "rows",
+                )?),
+                &logits.buffer,
+                &mut indices.buffer,
+                &mut weights.buffer,
+                checked_u32(layout.rows, "selected-softmax top-k", "rows")?,
+                checked_u32(layout.experts, "selected-softmax top-k", "experts")?,
+                checked_u32(layout.top_k, "selected-softmax top-k", "top-k")?,
+                layout.output_scale,
+            )
+        })
+    }
+
+    pub fn paged_bf16_kv_append_from_device(
+        &self,
+        append_key: &CudaBf16Buffer,
+        append_value: &CudaBf16Buffer,
+        key_cache: &mut CudaBf16Buffer,
+        value_cache: &mut CudaBf16Buffer,
+        block_slots: &CudaI32Buffer,
+        block_offsets: &CudaI32Buffer,
+        row_sequence_ids: &CudaI32Buffer,
+        row_positions: &CudaI32Buffer,
+        row_kv_lens: &CudaI32Buffer,
+        status: &mut CudaI32Buffer,
+        layout: PagedBf16CausalGqaLayout,
+    ) -> Result<()> {
+        self.paged_bf16_transformer_from_device(
+            TRANSFORMER_PAGED_BF16_KV_APPEND,
+            None,
+            Some((append_key, append_value)),
+            key_cache,
+            value_cache,
+            block_slots,
+            block_offsets,
+            row_sequence_ids,
+            row_positions,
+            row_kv_lens,
+            None,
+            status,
+            layout,
+        )
+    }
+
+    pub fn paged_bf16_causal_gqa_from_device_into(
+        &self,
+        query: &CudaF32Buffer,
+        key_cache: &mut CudaBf16Buffer,
+        value_cache: &mut CudaBf16Buffer,
+        block_slots: &CudaI32Buffer,
+        block_offsets: &CudaI32Buffer,
+        row_sequence_ids: &CudaI32Buffer,
+        row_positions: &CudaI32Buffer,
+        row_kv_lens: &CudaI32Buffer,
+        output: &mut CudaF32Buffer,
+        status: &mut CudaI32Buffer,
+        layout: PagedBf16CausalGqaLayout,
+    ) -> Result<()> {
+        self.paged_bf16_transformer_from_device(
+            TRANSFORMER_PAGED_BF16_CAUSAL_GQA,
+            Some(query),
+            None,
+            key_cache,
+            value_cache,
+            block_slots,
+            block_offsets,
+            row_sequence_ids,
+            row_positions,
+            row_kv_lens,
+            Some(output),
+            status,
+            layout,
+        )
+    }
+
+    /// Append pending BF16 K/V rows and immediately run causal GQA on the same
+    /// stream. The native entrypoint orders append before attention, so a row at
+    /// position `p` observes its own write even when `row_kv_lens[p]` describes
+    /// only the previously committed prefix.
+    pub fn paged_bf16_append_causal_gqa_from_device_into(
+        &self,
+        query: &CudaF32Buffer,
+        append_key: &CudaBf16Buffer,
+        append_value: &CudaBf16Buffer,
+        key_cache: &mut CudaBf16Buffer,
+        value_cache: &mut CudaBf16Buffer,
+        block_slots: &CudaI32Buffer,
+        block_offsets: &CudaI32Buffer,
+        row_sequence_ids: &CudaI32Buffer,
+        row_positions: &CudaI32Buffer,
+        row_kv_lens: &CudaI32Buffer,
+        output: &mut CudaF32Buffer,
+        status: &mut CudaI32Buffer,
+        layout: PagedBf16CausalGqaLayout,
+    ) -> Result<()> {
+        self.paged_bf16_transformer_from_device(
+            TRANSFORMER_PAGED_BF16_APPEND_CAUSAL_GQA,
+            Some(query),
+            Some((append_key, append_value)),
+            key_cache,
+            value_cache,
+            block_slots,
+            block_offsets,
+            row_sequence_ids,
+            row_positions,
+            row_kv_lens,
+            Some(output),
+            status,
+            layout,
+        )
+    }
+
+    fn paged_bf16_transformer_from_device(
+        &self,
+        kind: u32,
+        query: Option<&CudaF32Buffer>,
+        append: Option<(&CudaBf16Buffer, &CudaBf16Buffer)>,
+        key_cache: &mut CudaBf16Buffer,
+        value_cache: &mut CudaBf16Buffer,
+        block_slots: &CudaI32Buffer,
+        block_offsets: &CudaI32Buffer,
+        row_sequence_ids: &CudaI32Buffer,
+        row_positions: &CudaI32Buffer,
+        row_kv_lens: &CudaI32Buffer,
+        output: Option<&mut CudaF32Buffer>,
+        status: &mut CudaI32Buffer,
+        layout: PagedBf16CausalGqaLayout,
+    ) -> Result<()> {
+        layout.validate_metadata_lengths(
+            block_slots.len(),
+            block_offsets.len(),
+            row_sequence_ids.len(),
+            row_positions.len(),
+            row_kv_lens.len(),
+        )?;
+        if status.is_empty() {
+            return Err(Error::Internal {
+                message: "paged BF16 transformer requires a device status word".into(),
+            });
+        }
+        let key_cache_bytes = exact_element_bytes::<u16>(key_cache.len(), "key cache")?;
+        let value_cache_bytes = exact_element_bytes::<u16>(value_cache.len(), "value cache")?;
+        if key_cache_bytes < layout.key_cache.capacity_bytes
+            || value_cache_bytes < layout.value_cache.capacity_bytes
+        {
+            return Err(Error::Internal {
+                message: format!(
+                    "paged BF16 cache capacity mismatch: key={key_cache_bytes}/{} value={value_cache_bytes}/{}",
+                    layout.key_cache.capacity_bytes, layout.value_cache.capacity_bytes,
+                ),
+            });
+        }
+
+        let query_bytes = query
+            .map(|buffer| exact_element_bytes::<f32>(buffer.len(), "GQA query"))
+            .transpose()?
+            .unwrap_or(0);
+        let output_bytes = output
+            .as_deref()
+            .map(|buffer| exact_element_bytes::<f32>(buffer.len(), "GQA output"))
+            .transpose()?
+            .unwrap_or(0);
+        let required_query_bytes = query
+            .is_some()
+            .then(|| layout.query.required_bytes())
+            .transpose()?
+            .unwrap_or(0);
+        let required_output_bytes = output
+            .is_some()
+            .then(|| layout.output.required_bytes())
+            .transpose()?
+            .unwrap_or(0);
+        if query_bytes < required_query_bytes || output_bytes < required_output_bytes {
+            return Err(Error::Internal {
+                message:
+                    "paged BF16 GQA query/output allocation is smaller than its byte-stride extent"
+                        .into(),
+            });
+        }
+        let append_key_bytes = append
+            .map(|(key, _)| exact_element_bytes::<u16>(key.len(), "append key"))
+            .transpose()?
+            .unwrap_or(0);
+        let append_value_bytes = append
+            .map(|(_, value)| exact_element_bytes::<u16>(value.len(), "append value"))
+            .transpose()?
+            .unwrap_or(0);
+        if append.is_some()
+            && (append_key_bytes < layout.append_key.required_bytes()?
+                || append_value_bytes < layout.append_value.required_bytes()?)
+        {
+            return Err(Error::Internal {
+                message: "paged BF16 append allocation is smaller than its byte-stride extent"
+                    .into(),
+            });
+        }
+
+        let query_ptr = query.map_or(0, |buffer| buffer.buffer.cu_deviceptr());
+        let append_key_ptr = append.map_or(0, |(key, _)| key.buffer.cu_deviceptr());
+        let append_value_ptr = append.map_or(0, |(_, value)| value.buffer.cu_deviceptr());
+        let output_ptr = output
+            .as_deref()
+            .map_or(0, |buffer| buffer.buffer.cu_deviceptr());
+        let args = TransformerArgs {
+            kind,
+            rows: checked_u32(layout.rows, "paged BF16 transformer", "rows")?,
+            sequences: checked_u32(layout.sequences, "paged BF16 transformer", "sequences")?,
+            q_heads: checked_u32(layout.q_heads, "paged BF16 transformer", "query heads")?,
+            kv_heads: checked_u32(layout.kv_heads, "paged BF16 transformer", "KV heads")?,
+            head_dim: checked_u32(layout.head_dim, "paged BF16 transformer", "head dimension")?,
+            page_tokens: checked_u32(layout.page_tokens, "paged BF16 transformer", "page tokens")?,
+            layer_index: checked_u32(layout.layer_index, "paged BF16 transformer", "layer index")?,
+            layer_count: checked_u32(layout.layer_count, "paged BF16 transformer", "layer count")?,
+            softmax_scale: layout.softmax_scale,
+            query_f32: query_ptr,
+            query_bytes: checked_u64(query_bytes, "paged BF16 transformer", "query bytes")?,
+            query_row_stride_bytes: checked_u64(
+                layout.query.row_stride_bytes,
+                "paged BF16 transformer",
+                "query row stride",
+            )?,
+            query_head_stride_bytes: checked_u64(
+                layout.query.head_stride_bytes,
+                "paged BF16 transformer",
+                "query head stride",
+            )?,
+            append_key_bf16: append_key_ptr,
+            append_key_bytes: checked_u64(
+                append_key_bytes,
+                "paged BF16 transformer",
+                "append key bytes",
+            )?,
+            append_key_row_stride_bytes: checked_u64(
+                layout.append_key.row_stride_bytes,
+                "paged BF16 transformer",
+                "append key row stride",
+            )?,
+            append_key_head_stride_bytes: checked_u64(
+                layout.append_key.head_stride_bytes,
+                "paged BF16 transformer",
+                "append key head stride",
+            )?,
+            append_value_bf16: append_value_ptr,
+            append_value_bytes: checked_u64(
+                append_value_bytes,
+                "paged BF16 transformer",
+                "append value bytes",
+            )?,
+            append_value_row_stride_bytes: checked_u64(
+                layout.append_value.row_stride_bytes,
+                "paged BF16 transformer",
+                "append value row stride",
+            )?,
+            append_value_head_stride_bytes: checked_u64(
+                layout.append_value.head_stride_bytes,
+                "paged BF16 transformer",
+                "append value head stride",
+            )?,
+            key_cache_bf16: key_cache.buffer.cu_deviceptr(),
+            key_cache_bytes: checked_u64(
+                layout.key_cache.capacity_bytes,
+                "paged BF16 transformer",
+                "key cache bytes",
+            )?,
+            key_slot_stride_bytes: checked_u64(
+                layout.key_cache.slot_stride_bytes,
+                "paged BF16 transformer",
+                "key slot stride",
+            )?,
+            key_layer_stride_bytes: checked_u64(
+                layout.key_cache.layer_stride_bytes,
+                "paged BF16 transformer",
+                "key layer stride",
+            )?,
+            key_token_stride_bytes: checked_u64(
+                layout.key_cache.token_stride_bytes,
+                "paged BF16 transformer",
+                "key token stride",
+            )?,
+            key_head_stride_bytes: checked_u64(
+                layout.key_cache.head_stride_bytes,
+                "paged BF16 transformer",
+                "key head stride",
+            )?,
+            value_cache_bf16: value_cache.buffer.cu_deviceptr(),
+            value_cache_bytes: checked_u64(
+                layout.value_cache.capacity_bytes,
+                "paged BF16 transformer",
+                "value cache bytes",
+            )?,
+            value_slot_stride_bytes: checked_u64(
+                layout.value_cache.slot_stride_bytes,
+                "paged BF16 transformer",
+                "value slot stride",
+            )?,
+            value_layer_stride_bytes: checked_u64(
+                layout.value_cache.layer_stride_bytes,
+                "paged BF16 transformer",
+                "value layer stride",
+            )?,
+            value_token_stride_bytes: checked_u64(
+                layout.value_cache.token_stride_bytes,
+                "paged BF16 transformer",
+                "value token stride",
+            )?,
+            value_head_stride_bytes: checked_u64(
+                layout.value_cache.head_stride_bytes,
+                "paged BF16 transformer",
+                "value head stride",
+            )?,
+            block_slots_i32: block_slots.buffer.cu_deviceptr(),
+            block_slots_count: checked_u64(
+                block_slots.len(),
+                "paged BF16 transformer",
+                "block slots",
+            )?,
+            block_offsets_i32: block_offsets.buffer.cu_deviceptr(),
+            block_offsets_count: checked_u64(
+                block_offsets.len(),
+                "paged BF16 transformer",
+                "block offsets",
+            )?,
+            row_sequence_ids_i32: row_sequence_ids.buffer.cu_deviceptr(),
+            row_sequence_ids_count: checked_u64(
+                row_sequence_ids.len(),
+                "paged BF16 transformer",
+                "row sequence IDs",
+            )?,
+            row_positions_i32: row_positions.buffer.cu_deviceptr(),
+            row_positions_count: checked_u64(
+                row_positions.len(),
+                "paged BF16 transformer",
+                "row positions",
+            )?,
+            row_kv_lens_i32: row_kv_lens.buffer.cu_deviceptr(),
+            row_kv_lens_count: checked_u64(
+                row_kv_lens.len(),
+                "paged BF16 transformer",
+                "row KV lengths",
+            )?,
+            output_f32: output_ptr,
+            output_bytes: checked_u64(output_bytes, "paged BF16 transformer", "output bytes")?,
+            output_row_stride_bytes: checked_u64(
+                layout.output.row_stride_bytes,
+                "paged BF16 transformer",
+                "output row stride",
+            )?,
+            output_head_stride_bytes: checked_u64(
+                layout.output.head_stride_bytes,
+                "paged BF16 transformer",
+                "output head stride",
+            )?,
+            status_i32: status.buffer.cu_deviceptr(),
+            status_count: checked_u64(status.len(), "paged BF16 transformer", "status words")?,
+            ..Default::default()
+        };
+        self.launched(unsafe { self.module.transformer(&self.stream, args) })
+    }
+
     pub fn sparse_attention_sink_f32(
         &self,
         query: &[f32],
@@ -11647,7 +12282,7 @@ fn one_block_config(threads: u32) -> LaunchConfig {
 pub fn cuda_gemv(x: &[f32], w: &[f32], out_f: usize) -> Result<Vec<f32>> {
     let ctx = cu(CudaContext::new(0))?;
     cu(ctx.bind_to_thread())?;
-    let module = cu(crate::cuda::kernels::kernels::load(&ctx))?;
+    let module = cu(crate::cuda::providers::core::load(&ctx))?;
     let s = ctx.default_stream();
     let xd = cu(DeviceBuffer::from_host(&s, x))?;
     let wd = cu(DeviceBuffer::from_host(&s, w))?;
@@ -11699,7 +12334,7 @@ pub fn cuda_gemv_fp8_e4m3fn_e8m0_2d(
             message: "FP8 GEMV length mismatch".to_string(),
         });
     }
-    let ops = CudaArtifactOperatorContext::new()?;
+    let ops = CudaOperators::new()?;
     let handle = ops.upload_fp8_e4m3_e8m0_linear(
         weight,
         scales,
@@ -11757,7 +12392,7 @@ pub fn cuda_sparse_attention_sink_f32(
         });
     }
 
-    CudaArtifactOperatorContext::new()?.sparse_attention_sink_f32(query, values, topk, sink, shape)
+    CudaOperators::new()?.sparse_attention_sink_f32(query, values, topk, sink, shape)
 }
 
 #[cfg(test)]
@@ -12070,7 +12705,7 @@ mod tests {
         const HEADS: usize = 2;
         const HEAD_DIM: usize = 6;
         const ROPE_DIM: usize = 4;
-        let context = CudaArtifactOperatorContext::new().unwrap();
+        let context = CudaOperators::new().unwrap();
         let input: Vec<f32> = (0..ROWS * HEADS * HEAD_DIM)
             .map(|index| index as f32 * 0.125 - 1.5)
             .collect();
@@ -12149,14 +12784,6 @@ mod tests {
     }
 
     #[test]
-    fn cuda_probe_compiles() {
-        // This test just verifies the function signature compiles.
-        // cuda_probe requires a real GPU to succeed, so we only
-        // check that it doesn't panic or cause a link error.
-        let _ = cuda_probe(); // may fail without GPU — that's fine
-    }
-
-    #[test]
     #[ignore = "requires a CUDA device"]
     fn moe_ranked_reducer_matches_host_left_fold() {
         const NUM_EXPERTS: usize = 3;
@@ -12166,7 +12793,7 @@ mod tests {
 
         let ctx = cu(CudaContext::new(0)).unwrap();
         cu(ctx.bind_to_thread()).unwrap();
-        let module = cu(crate::cuda::kernels::kernels::load(&ctx)).unwrap();
+        let module = cu(crate::cuda::providers::core::load(&ctx)).unwrap();
         let stream = ctx.default_stream();
 
         let mut expert_output = vec![0.0f32; NUM_EXPERTS * BATCH_COLS * HIDDEN_SIZE];
@@ -12247,7 +12874,7 @@ mod tests {
 
         let ctx = cu(CudaContext::new(0)).unwrap();
         cu(ctx.bind_to_thread()).unwrap();
-        let module = cu(crate::cuda::kernels::kernels::load(&ctx)).unwrap();
+        let module = cu(crate::cuda::providers::core::load(&ctx)).unwrap();
         let stream = ctx.default_stream();
 
         let resident_output = (0..NUM_EXPERTS * BATCH_COLS * HIDDEN_SIZE)
@@ -12379,7 +13006,7 @@ mod tests {
             return;
         };
         cu(ctx.bind_to_thread()).unwrap();
-        let module = cu(crate::cuda::kernels::kernels::load(&ctx)).unwrap();
+        let module = cu(crate::cuda::providers::core::load(&ctx)).unwrap();
         let stream = ctx.default_stream();
         let visible_lens = cu(DeviceBuffer::from_host(&stream, &[1i32, 4, 7])).unwrap();
         let mut output = cu(DeviceBuffer::<i32>::zeroed(&stream, 12)).unwrap();
@@ -12411,7 +13038,7 @@ mod tests {
         }
         let ctx = cu(CudaContext::new(0)).unwrap();
         cu(ctx.bind_to_thread()).unwrap();
-        let module = cu(crate::cuda::kernels::kernels::load(&ctx)).unwrap();
+        let module = cu(crate::cuda::providers::core::load(&ctx)).unwrap();
         let s = ctx.default_stream();
 
         // 3. rope_yarn (nh=4, rd=64)

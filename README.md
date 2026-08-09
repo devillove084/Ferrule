@@ -82,14 +82,10 @@ provider, serving, and cleanup contracts.
 | Execution | Native Rust runtime with packed exact verification |
 | Expert I/O | Direct asynchronous reads into registered pinned staging, followed by event-gated CUDA placement |
 | KV cache | Runtime-owned paged reservations, COW forks, prefix commit, rollback, and retirement |
-| CUDA | Runtime target detection; local validation on `sm_86`; compile-only validation for `sm_103` |
-| Kernels | Provider-neutral semantic plans with portable CUDA and pinned CUTLASS implementations |
+| CUDA | Runtime target detection |
+| Kernels | Provider-neutral semantic plans with core CUDA and pinned CUTLASS implementations |
 | Serving | OpenAI-compatible HTTP and SSE with deterministic greedy decoding |
 | Other accelerators | Not yet validated |
-
-Support and numerical evidence are hardware-profile specific. In particular,
-successful `sm_86` tests and an `sm_103` cross-build must not be presented as a
-B300 full-model parity result.
 
 ## Quick start
 

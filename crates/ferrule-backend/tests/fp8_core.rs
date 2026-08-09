@@ -2,10 +2,10 @@
 
 //! FP8 E4M3 Tensor Core smoke tests for unified-memory CUDA systems (`sm_121a`).
 
-use ferrule_backend::cuda::context::CudaArtifactOperatorContext;
-use ferrule_backend::cuda::cutlass::{self, CutlassKernelId};
-use ferrule_backend::cuda::kernels::kernels;
-use ferrule_backend::cuda::runtime::{CudaContext, DeviceBuffer, LaunchConfig};
+use ferrule_backend::cuda::operators::linear::CudaOperators;
+use ferrule_backend::cuda::providers::core;
+use ferrule_backend::cuda::providers::cutlass::{self, CutlassKernelId};
+use ferrule_backend::cuda::providers::{CudaContext, DeviceBuffer, LaunchConfig};
 use std::sync::{Mutex, MutexGuard};
 
 static CUDA_TEST_LOCK: Mutex<()> = Mutex::new(());
@@ -122,8 +122,7 @@ fn fp8_activation_pack_matches_cpu_reference() {
 
     let ctx = CudaContext::new(0).expect("ctx");
     ctx.bind_to_thread().expect("bind");
-    let module =
-        kernels::load(&ctx).unwrap_or_else(|error| panic!("module load failed: {error:?}"));
+    let module = core::load(&ctx).unwrap_or_else(|error| panic!("module load failed: {error:?}"));
     let stream = ctx.default_stream();
     let values_dev = DeviceBuffer::from_host(&stream, &values).expect("values");
     let mut packed_dev = DeviceBuffer::<u8>::zeroed(&stream, values.len()).expect("packed");
@@ -202,8 +201,7 @@ fn fp8_prepacked_linear_matches_scalar_reference() {
 
     let ctx = CudaContext::new(0).expect("ctx");
     ctx.bind_to_thread().expect("bind");
-    let module =
-        kernels::load(&ctx).unwrap_or_else(|error| panic!("module load failed: {error:?}"));
+    let module = core::load(&ctx).unwrap_or_else(|error| panic!("module load failed: {error:?}"));
     let stream = ctx.default_stream();
     let x_dev = DeviceBuffer::from_host(&stream, &x).expect("x");
     let xs_dev = DeviceBuffer::from_host(&stream, &x_scales).expect("x scales");
@@ -298,7 +296,7 @@ fn grouped_output_a_bf16_from_fp8_matches_reference() {
         }
     }
 
-    let ops = CudaArtifactOperatorContext::new().expect("operator context");
+    let ops = CudaOperators::new().expect("operator context");
     let handle = ops
         .upload_fp8_e4m3_e8m0_linear(&weight, &weight_scales, OUT, GROUP_IN, 128, 128)
         .expect("upload grouped WO-A");
@@ -367,7 +365,7 @@ fn fp8_prepacked_rows_match_matvec() {
         }
     }
 
-    let ops = CudaArtifactOperatorContext::new().expect("operator context");
+    let ops = CudaOperators::new().expect("operator context");
     let handle = ops
         .upload_fp8_e4m3_e8m0_linear(&weight, &weight_scales, OUT, K, 128, 128)
         .expect("upload linear");

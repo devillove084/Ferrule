@@ -11,7 +11,9 @@ use std::marker::PhantomData;
 
 use std::ops::{Deref, DerefMut};
 use std::ptr::NonNull;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard, Weak};
+
+use super::allocator::{CudaAllocatorMetrics, CudaDeviceAllocator, CudaDeviceBlock};
 
 use snafu::Snafu;
 
@@ -45,6 +47,7 @@ unsafe extern "C" {
     fn cu_device_primary_ctx_release(device: CuDevice) -> CuResult;
     fn cuCtxGetCurrent(context: *mut CuContext) -> CuResult;
     fn cuCtxSetCurrent(context: CuContext) -> CuResult;
+    fn cuCtxSynchronize() -> CuResult;
     fn cuCtxGetStreamPriorityRange(
         least_priority: *mut c_int,
         greatest_priority: *mut c_int,
@@ -159,6 +162,15 @@ impl From<CudaError> for ferrule_common::Error {
 }
 
 impl CudaError {
+    pub(crate) fn internal(message: impl Into<String>) -> Self {
+        Self {
+            operation: "CUDA device allocator",
+            code: 1,
+            name: "CUDA_ERROR_INVALID_VALUE".into(),
+            message: message.into(),
+        }
+    }
+
     fn from_code(operation: &'static str, code: CuResult) -> Self {
         let name = driver_text(code, true).unwrap_or_else(|| "CUDA_ERROR_UNKNOWN".into());
         let message = driver_text(code, false).unwrap_or_else(|| "unknown driver error".into());
@@ -226,11 +238,24 @@ impl LaunchConfig {
     }
 }
 
-#[derive(Debug)]
 pub struct CudaContext {
     device: CuDevice,
     context: CuContext,
     ordinal: usize,
+    allocator: Arc<CudaDeviceAllocator>,
+    streams: Mutex<Vec<Weak<CudaStream>>>,
+    capture_depth: Mutex<usize>,
+}
+
+impl fmt::Debug for CudaContext {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CudaContext")
+            .field("device", &self.device)
+            .field("ordinal", &self.ordinal)
+            .field("allocator", &self.allocator.metrics())
+            .finish_non_exhaustive()
+    }
 }
 
 unsafe impl Send for CudaContext {}
@@ -249,10 +274,13 @@ impl CudaContext {
         check("cuDevicePrimaryCtxRetain", unsafe {
             cuDevicePrimaryCtxRetain(&mut context, device)
         })?;
-        let this = Arc::new(Self {
+        let this = Arc::new_cyclic(|weak| Self {
             device,
             context,
             ordinal,
+            allocator: CudaDeviceAllocator::new(weak.clone()),
+            streams: Mutex::new(Vec::new()),
+            capture_depth: Mutex::new(0),
         });
         this.bind_to_thread()?;
         Ok(this)
@@ -304,11 +332,13 @@ impl CudaContext {
     }
 
     pub fn default_stream(self: &Arc<Self>) -> Arc<CudaStream> {
-        Arc::new(CudaStream {
+        let stream = Arc::new(CudaStream {
             raw: std::ptr::null_mut(),
             context: Arc::clone(self),
             owned: false,
-        })
+        });
+        self.register_stream(&stream);
+        stream
     }
 
     pub fn new_stream(self: &Arc<Self>) -> CudaResult<Arc<CudaStream>> {
@@ -317,11 +347,13 @@ impl CudaContext {
         check("cuStreamCreate", unsafe {
             cuStreamCreate(&mut raw, CU_STREAM_NON_BLOCKING)
         })?;
-        Ok(Arc::new(CudaStream {
+        let stream = Arc::new(CudaStream {
             raw,
             context: Arc::clone(self),
             owned: true,
-        }))
+        });
+        self.register_stream(&stream);
+        Ok(stream)
     }
 
     pub fn new_stream_with_priority(
@@ -333,11 +365,80 @@ impl CudaContext {
         check("cuStreamCreateWithPriority", unsafe {
             cuStreamCreateWithPriority(&mut raw, CU_STREAM_NON_BLOCKING, priority)
         })?;
-        Ok(Arc::new(CudaStream {
+        let stream = Arc::new(CudaStream {
             raw,
             context: Arc::clone(self),
             owned: true,
-        }))
+        });
+        self.register_stream(&stream);
+        Ok(stream)
+    }
+
+    fn register_stream(&self, stream: &Arc<CudaStream>) {
+        let mut streams = self
+            .streams
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        streams.retain(|candidate| candidate.strong_count() != 0);
+        streams.push(Arc::downgrade(stream));
+    }
+
+    pub(crate) fn record_retirement_events(&self) -> Result<Vec<CudaRetirementEvent>, ()> {
+        let streams = self
+            .streams
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .filter_map(Weak::upgrade)
+            .collect::<Vec<_>>();
+        let mut events = Vec::with_capacity(streams.len());
+        for stream in streams {
+            self.bind_to_thread().map_err(|_| ())?;
+            let mut raw = std::ptr::null_mut();
+            check("cuEventCreate", unsafe {
+                cuEventCreate(&mut raw, CU_EVENT_DISABLE_TIMING)
+            })
+            .map_err(|_| ())?;
+            if check("cuEventRecord", unsafe { cuEventRecord(raw, stream.raw) }).is_err() {
+                let _ = check("cuEventDestroy", unsafe { cuEventDestroy_v2(raw) });
+                return Err(());
+            }
+            events.push(CudaRetirementEvent {
+                raw,
+                context: self.context,
+            });
+        }
+        Ok(events)
+    }
+
+    pub(crate) fn synchronize_registered_streams(&self) -> CudaResult<()> {
+        self.bind_to_thread()?;
+        check("cuCtxSynchronizeAllocatorRetirement", unsafe {
+            cuCtxSynchronize()
+        })
+    }
+
+    pub(crate) fn is_capturing(&self) -> bool {
+        *self.capture_state() != 0
+    }
+
+    pub(crate) fn capture_state(&self) -> MutexGuard<'_, usize> {
+        self.capture_depth
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    pub(crate) fn allocator_metrics(&self) -> CudaAllocatorMetrics {
+        self.allocator.poll_retirements();
+        self.allocator.metrics()
+    }
+
+    pub(crate) fn trim_allocator(&self) -> CudaResult<usize> {
+        self.allocator.trim()
+    }
+
+    pub(crate) fn shutdown_allocator(&self) {
+        self.allocator.shutdown();
     }
 
     pub fn new_event(self: &Arc<Self>, timing: bool) -> CudaResult<CudaEvent> {
@@ -360,8 +461,27 @@ impl CudaContext {
     }
 }
 
+pub(crate) fn driver_alloc(bytes: usize) -> CudaResult<DevicePtr> {
+    let mut ptr = 0;
+    if bytes != 0 {
+        check("cuMemAllocAllocatorSegment", unsafe {
+            cuMemAlloc_v2(&mut ptr, bytes)
+        })?;
+    }
+    Ok(ptr)
+}
+
+pub(crate) fn driver_free(ptr: DevicePtr) -> CudaResult<()> {
+    if ptr == 0 {
+        Ok(())
+    } else {
+        check("cuMemFreeAllocatorSegment", unsafe { cuMemFree_v2(ptr) })
+    }
+}
+
 impl Drop for CudaContext {
     fn drop(&mut self) {
+        self.allocator.shutdown_with_context(self, true);
         let _ = self.bind_to_thread();
         let _ = check("cuDevicePrimaryCtxRelease", unsafe {
             cu_device_primary_ctx_release(self.device)
@@ -454,24 +574,30 @@ impl CudaStream {
 
     pub(crate) fn begin_capture(&self) -> CudaResult<()> {
         self.context.bind_to_thread()?;
+        let mut depth = self.context.capture_state();
         check("cuStreamBeginCapture", unsafe {
             cuStreamBeginCapture(self.raw, CU_STREAM_CAPTURE_MODE_RELAXED)
-        })
+        })?;
+        *depth = depth.saturating_add(1);
+        Ok(())
     }
 
     pub(crate) fn end_capture(&self) -> CudaResult<CudaGraph> {
+        let mut depth = self.context.capture_state();
         let mut raw = std::ptr::null_mut();
-        check("cuStreamEndCapture", unsafe {
+        let result = check("cuStreamEndCapture", unsafe {
             cuStreamEndCapture(self.raw, &mut raw)
-        })?;
+        });
+        *depth = depth.saturating_sub(1);
+        result?;
         Ok(CudaGraph { raw })
     }
 }
 
 impl Drop for CudaStream {
     fn drop(&mut self) {
+        let _ = self.synchronize();
         if self.owned && !self.raw.is_null() {
-            let _ = self.context.bind_to_thread();
             let _ = check("cuStreamDestroy", unsafe { cuStreamDestroy_v2(self.raw) });
         }
     }
@@ -481,6 +607,48 @@ impl Drop for CudaStream {
 pub struct CudaEvent {
     raw: CuEvent,
     context: Arc<CudaContext>,
+}
+
+pub(crate) struct CudaRetirementEvent {
+    raw: CuEvent,
+    context: CuContext,
+}
+
+unsafe impl Send for CudaRetirementEvent {}
+unsafe impl Sync for CudaRetirementEvent {}
+
+impl CudaRetirementEvent {
+    pub(crate) fn query(&self) -> CudaResult<bool> {
+        check("cuCtxSetCurrent", unsafe { cuCtxSetCurrent(self.context) })?;
+        match unsafe { cuEventQuery(self.raw) } {
+            CUDA_SUCCESS => Ok(true),
+            CUDA_ERROR_NOT_READY => Ok(false),
+            code => Err(CudaError::from_code("cuEventQuery", code)),
+        }
+    }
+
+    pub(crate) fn synchronize(&self) -> CudaResult<()> {
+        check("cuCtxSetCurrent", unsafe { cuCtxSetCurrent(self.context) })?;
+        check("cuEventSynchronize", unsafe {
+            cuEventSynchronize(self.raw)
+        })
+    }
+}
+
+impl fmt::Debug for CudaRetirementEvent {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CudaRetirementEvent")
+            .field("raw", &self.raw)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Drop for CudaRetirementEvent {
+    fn drop(&mut self) {
+        let _ = check("cuCtxSetCurrent", unsafe { cuCtxSetCurrent(self.context) });
+        let _ = check("cuEventDestroy", unsafe { cuEventDestroy_v2(self.raw) });
+    }
 }
 
 unsafe impl Send for CudaEvent {}
@@ -526,17 +694,54 @@ impl Drop for CudaEvent {
     }
 }
 
-struct DeviceAllocation {
-    ptr: DevicePtr,
-    bytes: usize,
-    context: Arc<CudaContext>,
+/// Physical memory tier backing a CUDA buffer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemoryTier {
+    /// Device memory owned by the canonical segmented allocator.
+    Device,
+    /// CUDA managed memory explicitly selected for unified addressing.
+    Managed,
+}
+
+enum DeviceAllocation {
+    Allocator(Arc<CudaDeviceBlock>),
+    Managed {
+        ptr: DevicePtr,
+        bytes: usize,
+        context: Arc<CudaContext>,
+    },
+}
+
+impl DeviceAllocation {
+    fn bytes(&self) -> usize {
+        match self {
+            Self::Allocator(block) => block.requested_bytes(),
+            Self::Managed { bytes, .. } => *bytes,
+        }
+    }
+
+    fn context(&self) -> &Arc<CudaContext> {
+        match self {
+            Self::Allocator(block) => block.context(),
+            Self::Managed { context, .. } => context,
+        }
+    }
+
+    const fn memory_tier(&self) -> MemoryTier {
+        match self {
+            Self::Allocator(_) => MemoryTier::Device,
+            Self::Managed { .. } => MemoryTier::Managed,
+        }
+    }
 }
 
 impl Drop for DeviceAllocation {
     fn drop(&mut self) {
-        if self.ptr != 0 {
-            let _ = self.context.bind_to_thread();
-            let _ = check("cuMemFree", unsafe { cuMemFree_v2(self.ptr) });
+        if let Self::Managed { ptr, context, .. } = self
+            && *ptr != 0
+        {
+            let _ = context.bind_to_thread();
+            let _ = check("cuMemFreeManaged", unsafe { cuMemFree_v2(*ptr) });
         }
     }
 }
@@ -565,7 +770,8 @@ impl<T: DeviceCopy> fmt::Debug for DeviceBuffer<T> {
             .debug_struct("DeviceBuffer")
             .field("ptr", &format_args!("{:#x}", self.ptr))
             .field("len", &self.len)
-            .field("allocation_bytes", &self.allocation.bytes)
+            .field("allocation_bytes", &self.allocation.bytes())
+            .field("memory_tier", &self.memory_tier())
             .finish_non_exhaustive()
     }
 }
@@ -599,25 +805,26 @@ impl<T: DeviceCopy> DeviceBuffer<T> {
 
     pub unsafe fn uninitialized_async(stream: &CudaStream, len: usize) -> CudaResult<Self> {
         let bytes = allocation_bytes::<T>(len)?;
-        stream.context.bind_to_thread()?;
-        let mut ptr = 0;
-        if bytes != 0 {
-            check("cuMemAlloc", unsafe { cuMemAlloc_v2(&mut ptr, bytes) })?;
-        }
+        let block = stream
+            .context
+            .allocator
+            .allocate(bytes, std::mem::align_of::<T>())?;
         Ok(Self {
-            ptr,
+            ptr: block.ptr(),
             len,
-            allocation: Arc::new(DeviceAllocation {
-                ptr,
-                bytes,
-                context: Arc::clone(&stream.context),
-            }),
+            allocation: Arc::new(DeviceAllocation::Allocator(block)),
             _element: PhantomData,
         })
     }
 
     pub unsafe fn managed(context: &Arc<CudaContext>, len: usize) -> CudaResult<Self> {
         let bytes = allocation_bytes::<T>(len)?;
+        let capture_state = context.capture_state();
+        if *capture_state != 0 {
+            return Err(CudaError::internal(
+                "CUDA managed memory cannot allocate during graph capture",
+            ));
+        }
         context.bind_to_thread()?;
         let mut ptr = 0;
         if bytes != 0 {
@@ -628,29 +835,17 @@ impl<T: DeviceCopy> DeviceBuffer<T> {
                 cuMemAdvise(ptr, bytes, CU_MEM_ADVISE_SET_READ_MOSTLY, context.device())
             })?;
         }
+        drop(capture_state);
         Ok(Self {
             ptr,
             len,
-            allocation: Arc::new(DeviceAllocation {
+            allocation: Arc::new(DeviceAllocation::Managed {
                 ptr,
                 bytes,
                 context: Arc::clone(context),
             }),
             _element: PhantomData,
         })
-    }
-
-    pub unsafe fn from_raw_parts(ptr: DevicePtr, len: usize, context: Arc<CudaContext>) -> Self {
-        Self {
-            ptr,
-            len,
-            allocation: Arc::new(DeviceAllocation {
-                ptr,
-                bytes: len.saturating_mul(std::mem::size_of::<T>()),
-                context,
-            }),
-            _element: PhantomData,
-        }
     }
 
     pub fn slice(&self, offset: usize, len: usize) -> CudaResult<Self> {
@@ -692,7 +887,11 @@ impl<T: DeviceCopy> DeviceBuffer<T> {
     }
 
     pub fn context(&self) -> &Arc<CudaContext> {
-        &self.allocation.context
+        self.allocation.context()
+    }
+
+    pub fn memory_tier(&self) -> MemoryTier {
+        self.allocation.memory_tier()
     }
 
     pub fn copy_from_host(&self, stream: &CudaStream, values: &[T]) -> CudaResult<()> {
@@ -1039,4 +1238,228 @@ pub(crate) fn host_device_pointer(ptr: *mut c_void) -> CudaResult<DevicePtr> {
 fn allocation_bytes<T>(len: usize) -> CudaResult<usize> {
     len.checked_mul(std::mem::size_of::<T>())
         .ok_or_else(|| CudaError::from_code("CUDA allocation size overflow", 1))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cuda::allocator::AllocationCommitHook;
+    use std::sync::Barrier;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::Duration;
+
+    #[test]
+    fn typed_slices_keep_allocator_block_alive() {
+        let Ok(context) = CudaContext::new(0) else {
+            return;
+        };
+        let stream = context.default_stream();
+        let root = DeviceBuffer::<u32>::zeroed(&stream, 1024).unwrap();
+        let root_ptr = root.cu_deviceptr();
+        let slice = root.slice(128, 256).unwrap();
+        assert_eq!(slice.cu_deviceptr(), root_ptr + 128 * 4);
+        drop(root);
+
+        let other = DeviceBuffer::<u32>::zeroed(&stream, 1024).unwrap();
+        assert_ne!(other.cu_deviceptr(), root_ptr);
+        drop(slice);
+        drop(other);
+        stream.synchronize().unwrap();
+        context.allocator.poll_retirements();
+    }
+
+    #[test]
+    fn retirement_never_reuses_a_block_before_all_streams_finish() {
+        let Ok(context) = CudaContext::new(0) else {
+            return;
+        };
+        let producer = context.new_stream().unwrap();
+        let allocator_stream = context.new_stream().unwrap();
+        let block = DeviceBuffer::<u8>::zeroed(&producer, 4096).unwrap();
+        let retired_ptr = block.cu_deviceptr();
+        let release = Arc::new(AtomicBool::new(false));
+        let callback_release = Arc::clone(&release);
+        producer
+            .launch_host_function(move || {
+                while !callback_release.load(Ordering::Acquire) {
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+            })
+            .unwrap();
+        drop(block);
+
+        let before_completion = DeviceBuffer::<u8>::zeroed(&allocator_stream, 4096).unwrap();
+        assert_ne!(before_completion.cu_deviceptr(), retired_ptr);
+        assert_eq!(context.allocator_metrics().pending_retirement_blocks, 1);
+
+        release.store(true, Ordering::Release);
+        producer.synchronize().unwrap();
+        context.allocator.poll_retirements();
+        let after_completion = DeviceBuffer::<u8>::zeroed(&allocator_stream, 4096).unwrap();
+        assert_eq!(after_completion.cu_deviceptr(), retired_ptr);
+    }
+
+    #[test]
+    fn graph_capture_rejects_allocator_growth() {
+        let Ok(context) = CudaContext::new(0) else {
+            return;
+        };
+        let stream = context.new_stream().unwrap();
+        stream.begin_capture().unwrap();
+        let result = DeviceBuffer::<u8>::zeroed(&stream, 4096);
+        let _ = stream.end_capture();
+        let error = match result {
+            Ok(_) => panic!("allocation during capture must fail"),
+            Err(error) => error,
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("cannot allocate during graph capture")
+        );
+        assert_eq!(context.allocator_metrics().driver_allocations, 0);
+    }
+
+    #[test]
+    fn graph_capture_rejects_reusing_a_free_block() {
+        let Ok(context) = CudaContext::new(0) else {
+            return;
+        };
+        let stream = context.new_stream().unwrap();
+        let buffer = DeviceBuffer::<u8>::zeroed(&stream, 4096).unwrap();
+        drop(buffer);
+        stream.synchronize().unwrap();
+        context.allocator.poll_retirements();
+        let before = context.allocator_metrics();
+        assert!(before.free_bytes >= 4096);
+
+        stream.begin_capture().unwrap();
+        let result = DeviceBuffer::<u8>::zeroed(&stream, 4096);
+        let _ = stream.end_capture();
+        let error = match result {
+            Ok(_) => panic!("free-block reuse during capture must fail"),
+            Err(error) => error,
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("cannot allocate during graph capture")
+        );
+        let after = context.allocator_metrics();
+        assert_eq!(after.reuse_allocations, before.reuse_allocations);
+        assert_eq!(after.driver_allocations, before.driver_allocations);
+        assert_eq!(after.live_requested_bytes, 0);
+    }
+
+    #[test]
+    fn shutdown_wins_before_final_allocation_commit() {
+        let Ok(context) = CudaContext::new(0) else {
+            return;
+        };
+        let reached = Arc::new(Barrier::new(2));
+        let resume = Arc::new(Barrier::new(2));
+        context
+            .allocator
+            .set_allocation_commit_hook(AllocationCommitHook {
+                reached: Arc::clone(&reached),
+                resume: Arc::clone(&resume),
+            });
+
+        let worker_context = Arc::clone(&context);
+        let allocation = std::thread::spawn(move || {
+            let stream = worker_context.default_stream();
+            DeviceBuffer::<u8>::zeroed(&stream, 4096)
+        });
+        reached.wait();
+        context.shutdown_allocator();
+        resume.wait();
+
+        let error = allocation
+            .join()
+            .expect("allocation thread")
+            .expect_err("shutdown before commit must reject allocation");
+        assert!(error.to_string().contains("shut down"));
+        let metrics = context.allocator_metrics();
+        assert_eq!(metrics.allocation_requests, 0);
+        assert_eq!(metrics.live_requested_bytes, 0);
+        assert_eq!(metrics.driver_allocations, 0);
+    }
+
+    #[test]
+    fn graph_capture_rejects_managed_allocations() {
+        let Ok(context) = CudaContext::new(0) else {
+            return;
+        };
+        let stream = context.new_stream().unwrap();
+        stream.begin_capture().unwrap();
+        let result = unsafe { DeviceBuffer::<u8>::managed(&context, 1) };
+        let _ = stream.end_capture();
+        let error = result.expect_err("managed allocation during capture must fail");
+        assert!(
+            error
+                .to_string()
+                .contains("cannot allocate during graph capture")
+        );
+    }
+
+    #[test]
+    fn device_and_managed_allocations_report_distinct_memory_tiers() {
+        let Ok(context) = CudaContext::new(0) else {
+            return;
+        };
+        let stream = context.default_stream();
+        let device = DeviceBuffer::<u8>::zeroed(&stream, 1).unwrap();
+        let managed = unsafe { DeviceBuffer::<u8>::managed(&context, 1) }.unwrap();
+        assert_eq!(device.memory_tier(), MemoryTier::Device);
+        assert_eq!(managed.memory_tier(), MemoryTier::Managed);
+    }
+
+    #[test]
+    fn explicit_shutdown_preserves_capture_retirements() {
+        let Ok(context) = CudaContext::new(0) else {
+            return;
+        };
+        let stream = context.new_stream().unwrap();
+        let buffer = DeviceBuffer::<u8>::zeroed(&stream, 4096).unwrap();
+        stream.synchronize().unwrap();
+        stream.begin_capture().unwrap();
+        drop(buffer);
+        let _graph = stream.end_capture().unwrap();
+
+        let captured = context.allocator_metrics();
+        assert_eq!(captured.capture_retirement_bytes, 4096);
+        context.shutdown_allocator();
+        let shutdown = context.allocator_metrics();
+        assert_eq!(shutdown.capture_retirement_bytes, 4096);
+        assert_eq!(shutdown.reserved_bytes, captured.reserved_bytes);
+        assert_eq!(shutdown.driver_frees, 0);
+    }
+
+    #[test]
+    fn allocator_metrics_and_trim_track_driver_segments() {
+        let Ok(context) = CudaContext::new(0) else {
+            return;
+        };
+        let stream = context.default_stream();
+        let buffer = DeviceBuffer::<u8>::zeroed(&stream, 257).unwrap();
+        let live = context.allocator_metrics();
+        assert_eq!(live.allocation_requests, 1);
+        assert_eq!(live.requested_bytes, 257);
+        assert_eq!(live.granted_bytes, 512);
+        assert_eq!(live.live_requested_bytes, 257);
+        assert_eq!(live.live_granted_bytes, 512);
+        assert_eq!(live.driver_allocations, 1);
+        assert!(live.reserved_bytes >= live.live_granted_bytes);
+        assert!(live.internal_fragmentation > 0.0);
+
+        drop(buffer);
+        stream.synchronize().unwrap();
+        context.allocator.poll_retirements();
+        let released = context.trim_allocator().unwrap();
+        let trimmed = context.allocator_metrics();
+        assert!(released > 0);
+        assert_eq!(trimmed.reserved_bytes, 0);
+        assert_eq!(trimmed.driver_frees, 1);
+        assert_eq!(trimmed.live_requested_bytes, 0);
+    }
 }

@@ -965,19 +965,103 @@ fn execution_error(message: impl Into<String>) -> Error {
 
 // ── E5: Physical paged KV layout schema ───────────────────────────────────
 
-/// Describes one logical KV plane (e.g. window, compressed, indexer).
+/// Stable physical element type for one KV plane.
 ///
-/// Each plane has its own element width and page-size semantics. The runtime
-/// page manager allocates pages per plane; the backend maps them to physical
-/// device buffers.
+/// Discriminants are part of schema identity and must not be renumbered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[repr(u8)]
+pub enum KvElementType {
+    F32 = 1,
+    Bf16 = 2,
+}
+
+impl KvElementType {
+    pub const fn stable_id(self) -> u8 {
+        self as u8
+    }
+
+    pub const fn bytes_per_element(self) -> usize {
+        match self {
+            Self::F32 => std::mem::size_of::<f32>(),
+            Self::Bf16 => std::mem::size_of::<u16>(),
+        }
+    }
+}
+
+/// Dtype-aware descriptor for one physical KV plane.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct KvPlaneDescriptor {
     /// Human-readable plane name for diagnostics (e.g. "window", "compressed").
     pub name: &'static str,
-    /// Number of f32-equivalent elements per token in this plane.
+    /// Number of physical elements per token in this plane.
     pub elements_per_token: usize,
     /// Number of layers this plane spans (usually equal to the model layer count).
     pub layer_count: usize,
+    /// Physical element type stored by this plane.
+    pub element_type: KvElementType,
+}
+
+impl KvPlaneDescriptor {
+    pub const fn new(
+        name: &'static str,
+        elements_per_token: usize,
+        layer_count: usize,
+        element_type: KvElementType,
+    ) -> Self {
+        Self {
+            name,
+            elements_per_token,
+            layer_count,
+            element_type,
+        }
+    }
+
+    pub const fn checked_page_elements(self, page_tokens: usize) -> Option<usize> {
+        match page_tokens.checked_mul(self.elements_per_token) {
+            Some(elements) => elements.checked_mul(self.layer_count),
+            None => None,
+        }
+    }
+
+    pub const fn checked_page_bytes(self, page_tokens: usize) -> Option<usize> {
+        match self.checked_page_elements(page_tokens) {
+            Some(elements) => elements.checked_mul(self.element_type.bytes_per_element()),
+            None => None,
+        }
+    }
+}
+
+/// Structural identity of a paged KV schema.
+///
+/// Identity is kept as typed data rather than a process-dependent hash value.
+/// Its `Hash` implementation includes each plane's element type.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct KvLayoutSchemaIdentity {
+    planes: Box<[KvPlaneDescriptor]>,
+    page_size: usize,
+    max_sequence_len: usize,
+}
+
+impl KvLayoutSchemaIdentity {
+    pub fn new(planes: Vec<KvPlaneDescriptor>, page_size: usize, max_sequence_len: usize) -> Self {
+        Self {
+            planes: planes.into_boxed_slice(),
+            page_size,
+            max_sequence_len,
+        }
+    }
+
+    pub fn planes(&self) -> &[KvPlaneDescriptor] {
+        &self.planes
+    }
+
+    pub const fn page_size(&self) -> usize {
+        self.page_size
+    }
+
+    pub const fn max_sequence_len(&self) -> usize {
+        self.max_sequence_len
+    }
 }
 
 /// Model-supplied schema describing how the model's KV cache is laid out
@@ -989,7 +1073,7 @@ pub struct KvPlaneDescriptor {
 /// This trait is model-agnostic. Concrete models (DSV4, Qwen3, etc.) implement
 /// it to describe their specific KV planes.
 pub trait KvLayoutSchema: std::fmt::Debug + Send + Sync {
-    /// All KV planes this model requires.
+    /// All dtype-aware KV plane descriptors this model requires.
     fn planes(&self) -> &[KvPlaneDescriptor];
 
     /// Page size in tokens. All planes use the same page granularity.
@@ -997,6 +1081,25 @@ pub trait KvLayoutSchema: std::fmt::Debug + Send + Sync {
 
     /// Maximum sequence length the schema supports.
     fn max_sequence_len(&self) -> usize;
+
+    /// Returns the exact structural identity used for physical layout construction.
+    fn schema_identity(&self) -> KvLayoutSchemaIdentity {
+        KvLayoutSchemaIdentity::new(
+            self.planes().to_vec(),
+            self.page_size(),
+            self.max_sequence_len(),
+        )
+    }
+
+    /// Checked total physical bytes occupied by one logical page across all planes.
+    fn checked_page_bytes(&self) -> Option<usize> {
+        self.planes()
+            .iter()
+            .copied()
+            .try_fold(0usize, |total, plane| {
+                total.checked_add(plane.checked_page_bytes(self.page_size())?)
+            })
+    }
 
     /// Number of pages needed for a sequence of `token_count` tokens.
     fn pages_for_tokens(&self, token_count: usize) -> usize {
@@ -1045,6 +1148,63 @@ pub struct KvReservationView {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    static DTYPE_TEST_PLANE: KvPlaneDescriptor =
+        KvPlaneDescriptor::new("typed", 3, 2, KvElementType::F32);
+
+    #[derive(Debug)]
+    struct DtypeTestSchema(KvPlaneDescriptor);
+
+    impl KvLayoutSchema for DtypeTestSchema {
+        fn planes(&self) -> &[KvPlaneDescriptor] {
+            std::slice::from_ref(&self.0)
+        }
+
+        fn page_size(&self) -> usize {
+            4
+        }
+
+        fn max_sequence_len(&self) -> usize {
+            64
+        }
+    }
+
+    #[test]
+    fn kv_element_type_ids_and_widths_are_stable() {
+        assert_eq!(KvElementType::F32.stable_id(), 1);
+        assert_eq!(KvElementType::Bf16.stable_id(), 2);
+        assert_eq!(KvElementType::F32.bytes_per_element(), 4);
+        assert_eq!(KvElementType::Bf16.bytes_per_element(), 2);
+    }
+
+    #[test]
+    fn kv_plane_accounting_and_schema_identity_preserve_dtype() {
+        let f32_plane = DTYPE_TEST_PLANE;
+        let bf16_plane = KvPlaneDescriptor::new("typed", 3, 2, KvElementType::Bf16);
+        assert_eq!(f32_plane.checked_page_elements(4), Some(24));
+        assert_eq!(bf16_plane.checked_page_elements(4), Some(24));
+        assert_eq!(f32_plane.checked_page_bytes(4), Some(96));
+        assert_eq!(bf16_plane.checked_page_bytes(4), Some(48));
+        assert_eq!(
+            KvPlaneDescriptor::new("overflow", usize::MAX, 2, KvElementType::Bf16)
+                .checked_page_bytes(2),
+            None
+        );
+
+        let f32 = DtypeTestSchema(f32_plane);
+        let bf16 = DtypeTestSchema(bf16_plane);
+        assert_eq!(f32.checked_page_bytes(), Some(96));
+        assert_eq!(bf16.checked_page_bytes(), Some(48));
+        assert_eq!(f32.schema_identity().planes(), f32.planes());
+        assert_eq!(bf16.schema_identity().planes(), bf16.planes());
+        assert_ne!(f32.schema_identity(), bf16.schema_identity());
+
+        let planes = std::collections::HashSet::from([f32_plane, bf16_plane]);
+        assert_eq!(planes.len(), 2);
+        let identities =
+            std::collections::HashSet::from([f32.schema_identity(), bf16.schema_identity()]);
+        assert_eq!(identities.len(), 2);
+    }
 
     fn nz(value: u32) -> NonZeroU32 {
         NonZeroU32::new(value).unwrap()

@@ -8,5 +8,4 @@ pub mod interactive_trace;
 #[cfg(test)]
 mod summary;
 
-#[cfg(feature = "cuda")]
 pub use interactive_trace::{GoldenTurn, InteractiveTrace, compare_interactive_trace};

@@ -65,6 +65,7 @@ pub fn parse_hf_routed_expert_tensor(
 ) -> Option<RoutedExpertTensorRef> {
     match family {
         ModelFamily::DeepSeekV4 => deepseek_v4::parse_hf_routed_expert_tensor(name),
+        ModelFamily::Qwen3 | ModelFamily::QwenMoe => qwen3::parse_hf_routed_expert_tensor(name),
         _ => None,
     }
 }
@@ -75,6 +76,7 @@ pub fn parse_hf_shared_expert_tensor(
 ) -> Option<SharedExpertTensorRef> {
     match family {
         ModelFamily::DeepSeekV4 => deepseek_v4::parse_hf_shared_expert_tensor(name),
+        ModelFamily::Qwen3 | ModelFamily::QwenMoe => qwen3::parse_hf_shared_expert_tensor(name),
         _ => None,
     }
 }
@@ -82,6 +84,7 @@ pub fn parse_hf_shared_expert_tensor(
 pub fn parse_hf_router_tensor(family: &ModelFamily, name: &str) -> Option<RouterTensorRef> {
     match family {
         ModelFamily::DeepSeekV4 => deepseek_v4::parse_hf_router_tensor(name),
+        ModelFamily::Qwen3 | ModelFamily::QwenMoe => qwen3::parse_hf_router_tensor(name),
         _ => None,
     }
 }
@@ -98,7 +101,7 @@ pub fn parse_hf_dense_layer_tensor(
     name: &str,
 ) -> Option<DenseLayerTensorRef> {
     match family {
-        ModelFamily::Qwen3 | ModelFamily::QwenMoe => common::parse_hf_dense_layer_tensor(name),
+        ModelFamily::Qwen3 | ModelFamily::QwenMoe => qwen3::parse_hf_dense_layer_tensor(name),
         ModelFamily::DeepSeekV4 => None,
         _ => common::parse_hf_dense_layer_tensor(name),
     }

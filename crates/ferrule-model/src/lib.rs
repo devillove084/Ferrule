@@ -1,4 +1,10 @@
-#![allow(clippy::needless_range_loop)]
+#![allow(
+    clippy::field_reassign_with_default,
+    clippy::large_enum_variant,
+    clippy::needless_range_loop,
+    clippy::result_large_err,
+    clippy::too_many_arguments
+)]
 //! Model metadata, checkpoint formats, quantization, and model-family execution.
 //!
 //! ## Crate layout
@@ -21,11 +27,13 @@
 // ── Top-level modules ─────────────────────────────────────────────────────
 pub mod attention_backend;
 pub mod chat;
+pub mod decoder;
 pub mod descriptor;
 pub mod execution;
 pub mod ffn;
 pub mod hyper_connection;
 pub mod materialization;
+pub mod nn;
 pub mod precision;
 pub mod runner;
 pub mod semantic;
@@ -42,6 +50,7 @@ pub mod models;
 pub mod moe;
 pub mod quant;
 pub mod support;
+pub mod transformer;
 
 // ── Re-exports: execution ─────────────────────────────────────────────────
 pub use execution::{
@@ -60,7 +69,7 @@ pub use spec::{
 };
 
 // ── Re-exports: descriptor ────────────────────────────────────────────────
-pub use descriptor::ModelDescriptor;
+pub use descriptor::{AutoConfig, ModelDescriptor};
 
 // ── Re-exports: support ───────────────────────────────────────────────────
 pub use support::{
@@ -136,9 +145,9 @@ pub use ferrule_common::{
 
 // ── Re-exports: runner ────────────────────────────────────────────────────
 pub use runner::{
-    BatchContinuationId, ModelCompletionReactor, ModelInfo, ModelRunner, MultiSessionBatchProgress,
-    MultiSessionRunner, NativeProposal, NativeProposalProgress, NativeProposalSource,
-    PendingModelProgress, ResidentModelRunner, TokenLogit, TransactionEndIntent,
+    ModelCompletionReactor, ModelInfo, ModelRunner, MultiSessionBatchProgress, MultiSessionRunner,
+    NativeProposal, NativeProposalProgress, NativeProposalSource, PendingModelProgress,
+    ResidentModelRunner, SequenceStateReleaseError, TokenLogit, TransactionEndIntent,
     TransactionEndProgress,
 };
 

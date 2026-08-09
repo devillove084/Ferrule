@@ -24,17 +24,24 @@ impl AttentionLayout {
                 ],
                 optional_roles: Vec::new(),
             },
-            AttentionKind::GroupedQuery => Self {
-                kind: spec.attention.clone(),
-                kv_shape: KvCacheShape::GroupedKeysValues,
-                required_roles: vec![
+            AttentionKind::GroupedQuery => {
+                let mut required_roles = vec![
                     TensorRole::AttentionQuery,
                     TensorRole::AttentionKey,
                     TensorRole::AttentionValue,
                     TensorRole::AttentionOutput,
-                ],
-                optional_roles: Vec::new(),
-            },
+                ];
+                if matches!(spec.family, ModelFamily::Qwen3 | ModelFamily::QwenMoe) {
+                    required_roles
+                        .extend([TensorRole::AttentionQueryNorm, TensorRole::AttentionKeyNorm]);
+                }
+                Self {
+                    kind: spec.attention.clone(),
+                    kv_shape: KvCacheShape::GroupedKeysValues,
+                    required_roles,
+                    optional_roles: Vec::new(),
+                }
+            }
             AttentionKind::MultiLatentAttention => Self {
                 kind: spec.attention.clone(),
                 kv_shape: KvCacheShape::LatentOrCompressed,
@@ -161,7 +168,10 @@ impl LayerLayout {
 }
 
 fn layer_norm_roles_for_spec(spec: &TransformerSpec) -> Vec<TensorRole> {
-    if matches!(spec.family, ModelFamily::DeepSeekV4) {
+    if matches!(
+        spec.family,
+        ModelFamily::DeepSeekV4 | ModelFamily::Qwen3 | ModelFamily::QwenMoe
+    ) {
         vec![TensorRole::AttentionNorm, TensorRole::FeedForwardNorm]
     } else {
         vec![TensorRole::LayerNorm]
@@ -169,10 +179,19 @@ fn layer_norm_roles_for_spec(spec: &TransformerSpec) -> Vec<TensorRole> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TensorRoleAlias {
+    /// Logical role consumed by semantic planning.
+    pub logical_role: TensorRole,
+    /// Physical checkpoint role that supplies the same tensor.
+    pub physical_role: TensorRole,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModelLayout {
     pub token_embedding: TensorRole,
     pub output_roles: Vec<TensorRole>,
     pub layers: Vec<LayerLayout>,
+    pub role_aliases: Vec<TensorRoleAlias>,
 }
 
 impl ModelLayout {
@@ -184,7 +203,29 @@ impl ModelLayout {
             token_embedding: TensorRole::TokenEmbedding,
             output_roles: vec![TensorRole::OutputNorm, TensorRole::OutputHead],
             layers,
+            role_aliases: Vec::new(),
         }
+    }
+
+    pub fn add_role_alias(&mut self, logical_role: TensorRole, physical_role: TensorRole) {
+        if let Some(alias) = self
+            .role_aliases
+            .iter_mut()
+            .find(|alias| alias.logical_role == logical_role)
+        {
+            alias.physical_role = physical_role;
+        } else {
+            self.role_aliases.push(TensorRoleAlias {
+                logical_role,
+                physical_role,
+            });
+        }
+    }
+
+    pub fn role_alias(&self, logical_role: &TensorRole) -> Option<&TensorRoleAlias> {
+        self.role_aliases
+            .iter()
+            .find(|alias| &alias.logical_role == logical_role)
     }
 
     pub fn layer_count(&self) -> usize {
@@ -233,6 +274,36 @@ mod tests {
         assert!(required.contains(&TensorRole::FeedForwardNorm));
         assert!(required.contains(&TensorRole::AttentionQueryNorm));
         assert!(required.contains(&TensorRole::AttentionKeyValueNorm));
+    }
+
+    #[test]
+    fn qwen_gqa_layout_requires_key_only_norm() {
+        let spec = TransformerSpec {
+            family: ModelFamily::QwenMoe,
+            architecture: Some("qwen3_moe".into()),
+            weight_source: WeightSource::Safetensors,
+            hidden_size: Some(16),
+            num_layers: Some(1),
+            vocab_size: Some(32),
+            num_heads: Some(4),
+            num_kv_heads: Some(1),
+            head_dim: Some(4),
+            attention: AttentionKind::GroupedQuery,
+            moe: MoeSpec {
+                num_experts: Some(8),
+                num_experts_per_tok: Some(2),
+                has_shared_experts: false,
+                router: RouterKind::DenseTopK,
+            },
+            semantics: Default::default(),
+            tensor_count: None,
+            quantization: Vec::new(),
+            notes: Vec::new(),
+        };
+        let required = ModelLayout::from_spec(&spec).layers[0].required_roles();
+        assert!(required.contains(&TensorRole::AttentionQueryNorm));
+        assert!(required.contains(&TensorRole::AttentionKeyNorm));
+        assert!(!required.contains(&TensorRole::AttentionKeyValueNorm));
     }
 
     #[test]

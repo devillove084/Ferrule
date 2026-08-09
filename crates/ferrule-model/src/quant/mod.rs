@@ -3,7 +3,7 @@
 
 pub mod gguf_quant;
 
-use ferrule_common::QuantType;
+use ferrule_common::{QuantType, QuantizationError, QuantizationResult};
 
 // ── f16 conversion (no external dependency) ───────────────────────────
 
@@ -69,11 +69,16 @@ pub struct QMatrix {
 
 impl QMatrix {
     /// Quantize a f32 weight matrix [out_f × in_f] row-major.
-    pub fn quantize(w: &[f32], out_f: usize, in_f: usize, qtype: QuantType) -> Self {
+    pub fn quantize(
+        w: &[f32],
+        out_f: usize,
+        in_f: usize,
+        qtype: QuantType,
+    ) -> QuantizationResult<Self> {
         match qtype {
-            QuantType::Q4_0 => Self::quantize_q4_0(w, out_f, in_f),
-            QuantType::Q8_0 => Self::quantize_q8_0(w, out_f, in_f),
-            _ => panic!("unsupported quant type for QMatrix: {qtype:?}"),
+            QuantType::Q4_0 => Ok(Self::quantize_q4_0(w, out_f, in_f)),
+            QuantType::Q8_0 => Ok(Self::quantize_q8_0(w, out_f, in_f)),
+            quant => Err(QuantizationError::UnsupportedMatrixType { quant }),
         }
     }
 
@@ -258,7 +263,7 @@ mod tests {
     #[test]
     fn q4_0_uses_llama_half_block_layout() {
         let w: Vec<f32> = (-16..16).map(|v| v as f32).collect();
-        let q = QMatrix::quantize(&w, 1, 32, QuantType::Q4_0);
+        let q = QMatrix::quantize(&w, 1, 32, QuantType::Q4_0).unwrap();
 
         assert_eq!(q.packed.len(), 16);
         assert_eq!(q.scales.len(), 1);
@@ -276,7 +281,7 @@ mod tests {
     #[test]
     fn q4_0_pads_rows_by_block_storage() {
         let w = vec![0.0f32; 2 * 33];
-        let q = QMatrix::quantize(&w, 2, 33, QuantType::Q4_0);
+        let q = QMatrix::quantize(&w, 2, 33, QuantType::Q4_0).unwrap();
 
         assert_eq!(q.blocks_per_row(), 2);
         assert_eq!(q.packed.len(), 2 * 2 * 16);
@@ -284,10 +289,24 @@ mod tests {
     }
 
     #[test]
+    fn unsupported_matrix_quantization_is_typed() {
+        let error = match QMatrix::quantize(&[0.0], 1, 1, QuantType::F32) {
+            Ok(_) => panic!("F32 unexpectedly quantized through QMatrix"),
+            Err(error) => error,
+        };
+        assert_eq!(
+            error,
+            QuantizationError::UnsupportedMatrixType {
+                quant: QuantType::F32,
+            }
+        );
+    }
+
+    #[test]
     fn q8_0_roundtrip_error_within_tolerance() {
         // Quantize a simple vector and check reconstruction error
         let src: Vec<f32> = (0..64).map(|i| (i as f32 - 32.0) * 0.1).collect();
-        let q = QMatrix::quantize(&src, 1, 64, QuantType::Q8_0);
+        let q = QMatrix::quantize(&src, 1, 64, QuantType::Q8_0).unwrap();
         // Q8_0 should have very low error
         let reconstructed = q.dequantize_row(0);
         let max_err = src

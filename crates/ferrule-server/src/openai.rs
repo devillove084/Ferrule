@@ -1,6 +1,10 @@
-use ferrule_model::{ChatMessage, ChatRole, ChatTemplate};
+use ferrule_common::ServingRequestError;
+use ferrule_model::chat::ChatTemplateOptions;
+use ferrule_model::{ChatFormatError, ChatMessage, ChatRole, ChatTemplate};
 use ferrule_runtime::SequenceFinishReason;
 use serde::{Deserialize, Serialize};
+
+type RequestError = ServingRequestError<ChatFormatError>;
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -49,6 +53,15 @@ pub struct ChatCompletionRequest {
     pub response_format: Option<serde_json::Value>,
     #[serde(default)]
     pub user: Option<String>,
+    #[serde(default)]
+    pub chat_template_kwargs: Option<ChatTemplateKwargs>,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ChatTemplateKwargs {
+    #[serde(default)]
+    pub enable_thinking: Option<bool>,
 }
 
 const fn default_one() -> usize {
@@ -59,6 +72,8 @@ const fn default_one() -> usize {
 pub struct OpenAiChatMessage {
     pub role: ChatRole,
     pub content: OpenAiChatContent,
+    #[serde(default)]
+    pub reasoning_content: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -69,38 +84,33 @@ pub enum OpenAiChatContent {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OpenAiChatContentPart {
-    #[serde(rename = "type")]
-    pub kind: String,
-    #[serde(default)]
-    pub text: Option<String>,
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum OpenAiChatContentPart {
+    Text { text: String },
 }
 
 impl OpenAiChatMessage {
-    fn into_model_message(self) -> Result<ChatMessage, String> {
+    fn into_model_message(self) -> Result<ChatMessage, RequestError> {
         let content = match self.content {
             OpenAiChatContent::Text(text) => text,
             OpenAiChatContent::Parts(parts) => {
                 if parts.is_empty() {
-                    return Err("chat content parts must not be empty".into());
+                    return Err(RequestError::EmptyContentParts);
                 }
                 let mut text = String::new();
-                for (index, part) in parts.into_iter().enumerate() {
-                    if part.kind != "text" {
-                        return Err(format!(
-                            "chat content part {index} has unsupported type '{}'",
-                            part.kind
-                        ));
+                for part in parts {
+                    match part {
+                        OpenAiChatContentPart::Text { text: part_text } => {
+                            text.push_str(&part_text);
+                        }
                     }
-                    let part_text = part.text.ok_or_else(|| {
-                        format!("chat text content part {index} is missing its text field")
-                    })?;
-                    text.push_str(&part_text);
                 }
                 text
             }
         };
-        Ok(ChatMessage::new(self.role, content))
+        let mut message = ChatMessage::new(self.role, content);
+        message.reasoning_content = self.reasoning_content;
+        Ok(message)
     }
 }
 
@@ -142,7 +152,7 @@ impl ChatCompletionRequest {
         self,
         expected_model: &str,
         template: ChatTemplate,
-    ) -> Result<ValidatedGenerationRequest, String> {
+    ) -> Result<ValidatedGenerationRequest, RequestError> {
         validate_greedy_parameters(
             GreedyParameters {
                 model: &self.model,
@@ -158,25 +168,31 @@ impl ChatCompletionRequest {
         if self.frequency_penalty.is_some_and(|value| value != 0.0)
             || self.presence_penalty.is_some_and(|value| value != 0.0)
         {
-            return Err("frequency_penalty and presence_penalty are not supported".into());
+            return Err(RequestError::PenaltiesUnsupported);
         }
         if self.logprobs == Some(true) || self.top_logprobs.is_some() {
-            return Err("streaming logprobs are not supported".into());
+            return Err(RequestError::StreamingLogprobsUnsupported);
         }
         if self.tools.is_some() || self.tool_choice.is_some() {
-            return Err("tool calling is not supported".into());
+            return Err(RequestError::ToolCallingUnsupported);
         }
         if self.response_format.is_some() {
-            return Err("response_format is not supported".into());
+            return Err(RequestError::ResponseFormatUnsupported);
         }
         if self.max_completion_tokens.is_some() && self.max_tokens.is_some() {
-            return Err("provide only one of max_completion_tokens or max_tokens".into());
+            return Err(RequestError::ConflictingTokenLimits);
         }
         let max_tokens = self.max_completion_tokens.or(self.max_tokens).unwrap_or(16);
         if max_tokens == 0 {
-            return Err("max_completion_tokens must be greater than zero".into());
+            return Err(RequestError::ZeroTokenLimit {
+                field: "max_completion_tokens",
+            });
         }
         let stop = validate_stop(self.stop)?;
+        let enable_thinking = self
+            .chat_template_kwargs
+            .and_then(|kwargs| kwargs.enable_thinking)
+            .unwrap_or(true);
 
         // Seed and user are accepted because greedy execution is deterministic and
         // neither field changes model semantics in that mode.
@@ -187,8 +203,14 @@ impl ChatCompletionRequest {
             .map(OpenAiChatMessage::into_model_message)
             .collect::<Result<Vec<_>, _>>()?;
         let prompt = template
-            .format_messages(&messages)
-            .map_err(|error| error.to_string())?;
+            .format_messages_with_options(
+                &messages,
+                ChatTemplateOptions {
+                    add_generation_prompt: true,
+                    enable_thinking,
+                },
+            )
+            .map_err(|source| RequestError::ChatFormat { source })?;
 
         Ok(ValidatedGenerationRequest {
             prompt,
@@ -244,7 +266,7 @@ impl CompletionRequest {
     pub(crate) fn validate(
         self,
         expected_model: &str,
-    ) -> Result<ValidatedGenerationRequest, String> {
+    ) -> Result<ValidatedGenerationRequest, RequestError> {
         validate_greedy_parameters(
             GreedyParameters {
                 model: &self.model,
@@ -258,30 +280,32 @@ impl CompletionRequest {
             expected_model,
         )?;
         if self.best_of != 1 {
-            return Err("Ferrule currently supports best_of = 1 only".into());
+            return Err(RequestError::BestOf {
+                actual: self.best_of,
+            });
         }
         if self.logprobs.is_some() {
-            return Err("logprobs is not supported".into());
+            return Err(RequestError::LogprobsUnsupported);
         }
         if self.echo {
-            return Err("echo is not supported".into());
+            return Err(RequestError::EchoUnsupported);
         }
         if self.stream_options.is_some() && !self.stream {
-            return Err("stream_options is only supported when stream = true".into());
+            return Err(RequestError::StreamOptionsWithoutStreaming);
         }
 
         let prompt = match self.prompt {
             serde_json::Value::String(prompt) => prompt,
             serde_json::Value::Array(_) => {
-                return Err(
-                    "batch prompts are not supported; prompt must be a single string".into(),
-                );
+                return Err(RequestError::BatchPromptUnsupported);
             }
-            _ => return Err("prompt must be a single string".into()),
+            _ => return Err(RequestError::InvalidPromptType),
         };
         let max_tokens = self.max_tokens.unwrap_or(16);
         if max_tokens == 0 {
-            return Err("max_tokens must be greater than zero".into());
+            return Err(RequestError::ZeroTokenLimit {
+                field: "max_tokens",
+            });
         }
         let stop = validate_stop(self.stop)?;
 
@@ -313,46 +337,43 @@ struct GreedyParameters<'a> {
 fn validate_greedy_parameters(
     parameters: GreedyParameters<'_>,
     expected_model: &str,
-) -> Result<(), String> {
+) -> Result<(), RequestError> {
     if parameters.model != expected_model {
-        return Err(format!(
-            "model '{}' is not served; available model is '{expected_model}'",
-            parameters.model
-        ));
+        return Err(RequestError::ModelNotServed {
+            requested: parameters.model.to_owned(),
+            available: expected_model.to_owned(),
+        });
     }
     if parameters.n != 1 {
-        return Err("Ferrule currently supports exactly one completion per request (n = 1)".into());
+        return Err(RequestError::CompletionCount {
+            actual: parameters.n,
+        });
     }
-    if parameters.temperature.is_some_and(|value| value != 0.0) {
-        return Err(
-            "Ferrule resident serving currently supports greedy temperature = 0 only".into(),
-        );
+    if let Some(actual) = parameters.temperature.filter(|&value| value != 0.0) {
+        return Err(RequestError::Temperature { actual });
     }
-    if parameters.top_p.is_some_and(|value| value != 1.0) {
-        return Err("Ferrule resident serving currently requires top_p = 1".into());
+    if let Some(actual) = parameters.top_p.filter(|&value| value != 1.0) {
+        return Err(RequestError::TopP { actual });
     }
-    if parameters.top_k.is_some_and(|value| value != 1) {
-        return Err("Ferrule resident serving currently requires top_k = 1".into());
+    if let Some(actual) = parameters.top_k.filter(|&value| value != 1) {
+        return Err(RequestError::TopK { actual });
     }
-    if parameters.min_p.is_some_and(|value| value != 0.0) {
-        return Err("Ferrule resident serving currently requires min_p = 0".into());
+    if let Some(actual) = parameters.min_p.filter(|&value| value != 0.0) {
+        return Err(RequestError::MinP { actual });
     }
-    if parameters
-        .repetition_penalty
-        .is_some_and(|value| value != 1.0)
-    {
-        return Err("Ferrule resident serving currently requires repetition_penalty = 1".into());
+    if let Some(actual) = parameters.repetition_penalty.filter(|&value| value != 1.0) {
+        return Err(RequestError::RepetitionPenalty { actual });
     }
     Ok(())
 }
 
-fn validate_stop(stop: Option<StopInput>) -> Result<Vec<String>, String> {
+fn validate_stop(stop: Option<StopInput>) -> Result<Vec<String>, RequestError> {
     let stop = stop.map(StopInput::into_vec).unwrap_or_default();
     if stop.iter().any(String::is_empty) {
-        return Err("stop strings must not be empty".into());
+        return Err(RequestError::EmptyStopString);
     }
     if stop.len() > 4 {
-        return Err("at most four stop strings are supported".into());
+        return Err(RequestError::TooManyStopStrings { actual: stop.len() });
     }
     Ok(stop)
 }
@@ -393,6 +414,8 @@ pub(crate) struct ChunkChoice<'a> {
 pub(crate) struct ChunkDelta<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_content: Option<&'a str>,
 }
 
 #[derive(Debug, Serialize)]
@@ -416,6 +439,8 @@ pub(crate) struct ResponseChoice<'a> {
 pub(crate) struct AssistantMessage<'a> {
     pub role: &'static str,
     pub content: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_content: Option<&'a str>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -493,15 +518,18 @@ const fn default_true() -> bool {
 }
 
 impl TokenizeRequest {
-    pub(crate) fn validate(self, expected_model: &str) -> Result<String, String> {
+    pub(crate) fn validate(self, expected_model: &str) -> Result<String, RequestError> {
         if let Some(model) = &self.model
             && !model.is_empty()
             && model != expected_model
         {
-            return Err(format!("model '{model}' is not served by this server"));
+            return Err(RequestError::ModelNotServed {
+                requested: model.clone(),
+                available: expected_model.to_owned(),
+            });
         }
         if !self.add_special_tokens {
-            return Err("add_special_tokens=false is not supported".into());
+            return Err(RequestError::AddSpecialTokensUnsupported);
         }
         Ok(self.prompt)
     }
@@ -566,6 +594,78 @@ mod tests {
     }
 
     #[test]
+    fn qwen3_chat_template_kwargs_control_thinking_prompt() {
+        let request: ChatCompletionRequest = serde_json::from_value(serde_json::json!({
+            "model": "test",
+            "messages": [{"role": "user", "content": "hello"}],
+            "chat_template_kwargs": {"enable_thinking": false}
+        }))
+        .unwrap();
+
+        let validated = request.validate("test", ChatTemplate::Qwen3).unwrap();
+        assert_eq!(
+            validated.prompt,
+            "<|im_start|>user\nhello<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
+        );
+    }
+
+    #[test]
+    fn qwen3_accepts_reasoning_content_and_strips_old_reasoning_from_history() {
+        let request: ChatCompletionRequest = serde_json::from_value(serde_json::json!({
+            "model": "test",
+            "messages": [
+                {"role": "user", "content": "one"},
+                {
+                    "role": "assistant",
+                    "content": "answer",
+                    "reasoning_content": "private reasoning"
+                },
+                {"role": "user", "content": "two"}
+            ]
+        }))
+        .unwrap();
+
+        let validated = request.validate("test", ChatTemplate::Qwen3).unwrap();
+        assert_eq!(
+            validated.prompt,
+            "<|im_start|>user\none<|im_end|>\n<|im_start|>assistant\nanswer<|im_end|>\n<|im_start|>user\ntwo<|im_end|>\n<|im_start|>assistant\n"
+        );
+        assert!(!validated.prompt.contains("private reasoning"));
+    }
+
+    #[test]
+    fn rejects_unknown_chat_template_kwargs() {
+        let parsed = serde_json::from_value::<ChatCompletionRequest>(serde_json::json!({
+            "model": "test",
+            "messages": [{"role": "user", "content": "hello"}],
+            "chat_template_kwargs": {"tools": true}
+        }));
+        assert!(parsed.is_err());
+    }
+
+    #[test]
+    fn response_dtos_can_express_reasoning_content() {
+        let response = AssistantMessage {
+            role: "assistant",
+            content: "answer",
+            reasoning_content: Some("reasoning"),
+        };
+        let delta = ChunkDelta {
+            content: None,
+            reasoning_content: Some("reasoning"),
+        };
+
+        assert_eq!(
+            serde_json::to_value(response).unwrap()["reasoning_content"],
+            "reasoning"
+        );
+        assert_eq!(
+            serde_json::to_value(delta).unwrap()["reasoning_content"],
+            "reasoning"
+        );
+    }
+
+    #[test]
     fn accepts_vllm_text_content_parts_for_chat() {
         let request: ChatCompletionRequest = serde_json::from_value(serde_json::json!({
             "model": "test",
@@ -583,23 +683,47 @@ mod tests {
     }
 
     #[test]
-    fn rejects_non_text_chat_content_parts() {
-        let request: ChatCompletionRequest = serde_json::from_value(serde_json::json!({
+    fn rejects_non_text_chat_content_parts_during_deserialization() {
+        let request = serde_json::from_value::<ChatCompletionRequest>(serde_json::json!({
             "model": "test",
             "messages": [{
                 "role": "user",
                 "content": [{"type": "image_url", "image_url": {"url": "x"}}]
             }]
-        }))
-        .unwrap();
-        assert!(request.validate("test", ChatTemplate::Plain).is_err());
+        }));
+        assert!(request.is_err());
+    }
+
+    #[test]
+    fn rejects_text_content_parts_without_text_during_deserialization() {
+        let request = serde_json::from_value::<ChatCompletionRequest>(serde_json::json!({
+            "model": "test",
+            "messages": [{
+                "role": "user",
+                "content": [{"type": "text"}]
+            }]
+        }));
+        assert!(request.is_err());
     }
 
     #[test]
     fn rejects_parameters_the_driver_does_not_implement() {
-        let mut request = request();
-        request.temperature = Some(0.7);
-        assert!(request.validate("test", ChatTemplate::Plain).is_err());
+        let mut sampling_request = request();
+        sampling_request.temperature = Some(0.7);
+        assert!(
+            sampling_request
+                .validate("test", ChatTemplate::Plain)
+                .is_err()
+        );
+
+        let mut tool_request = request();
+        tool_request.tools = Some(serde_json::json!([]));
+        assert!(matches!(
+            tool_request
+                .validate("test", ChatTemplate::Plain)
+                .unwrap_err(),
+            RequestError::ToolCallingUnsupported
+        ));
     }
 
     #[test]

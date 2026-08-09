@@ -1,7 +1,10 @@
 use std::env;
 use std::path::{Path, PathBuf};
 
-use ferrule_model::models::deepseek_v4::DeepSeekV4Checkpoint;
+#[cfg(feature = "cuda")]
+use ferrule_model::execution::TransformerStage;
+#[cfg(feature = "cuda")]
+use ferrule_model::models::deepseek_v4::{DeepSeekV4Checkpoint, DeepSeekV4PrepareOptions, prepare};
 use ferrule_model::{
     AttentionKind, EnginePlanStatus, HfSafetensorsIndex, HfSafetensorsInventory, ModelDescriptor,
     ModelFamily, PolicyArea, RouterKind, SpeculationMode, TensorClass, TensorRole, WeightSource,
@@ -140,28 +143,44 @@ fn local_deepseek_v4_flash_proposal_descriptor_smoke_if_present() {
     assert_missing(&plan, PolicyArea::Tokenizer, "external tokenizer/encoding");
 }
 
+#[cfg(feature = "cuda")]
 #[test]
-#[ignore = "reads the local Proposal attachment payloads"]
+#[ignore = "requires a complete local DeepSeek checkpoint and CUDA materialization"]
 fn local_deepseek_v4_flash_proposal_mtp_attachment_loads() {
     let model_dir = local_deepseek_v4_dir().expect("local DeepSeek V4 checkpoint is required");
     let model = DeepSeekV4Checkpoint::load_hf_with_limit(&model_dir, 128 * 1024 * 1024)
         .expect("local DeepSeek V4 artifact should load");
-    let mtp = model
-        .load_proposal_attachment()
-        .expect("local Proposal attachment should bind")
+    let plan = prepare(&model, DeepSeekV4PrepareOptions::default())
+        .expect("local Proposal attachment should materialize through Bound resources");
+    assert!(!plan.executable().resources().is_empty());
+    assert_eq!(
+        plan.executable()
+            .stages()
+            .iter()
+            .filter(|stage| matches!(stage.operation(), TransformerStage::Attachment { .. }))
+            .count(),
+        3
+    );
+    assert_eq!(
+        plan.executable().stages().last().unwrap().operation(),
+        &TransformerStage::Attachment { index: 2 }
+    );
+    let mtp = plan
+        .resources()
+        .proposal_attachment()
         .expect("local checkpoint should contain an MTP attachment");
 
-    assert_eq!(mtp.config.block_size, 5);
-    assert_eq!(mtp.config.noise_token_id, Some(128_799));
-    assert_eq!(mtp.config.target_layer_ids, vec![40, 41, 42]);
-    assert_eq!(mtp.config.markov_rank, Some(256));
-    assert_eq!(mtp.layers.len(), 3);
-    assert!(mtp.prediction_heads.is_some());
-    for (stage, layer) in mtp.layers.iter().enumerate() {
-        assert_eq!(layer.mtp_index, stage);
+    assert_eq!(mtp.block_size(), 5);
+    assert_eq!(mtp.noise_token_id(), Some(128_799));
+    assert_eq!(mtp.target_layer_ids(), vec![40, 41, 42]);
+    assert_eq!(mtp.markov_rank(), Some(256));
+    assert_eq!(mtp.stages.len(), 3);
+    assert!(mtp.heads.is_some());
+    for (stage, layer) in mtp.stages.iter().enumerate() {
+        assert_eq!(layer.index, stage);
         assert_eq!(layer.execution_layer, 43 + stage);
-        assert_eq!(layer.expert_source_catalog.count(), 256);
-        assert_eq!(layer.main_proj.is_some(), stage == 0);
+        assert_eq!(layer.experts.count(), 256);
+        assert_eq!(layer.main_projection.is_some(), stage == 0);
         assert_eq!(layer.main_norm.is_some(), stage == 0);
     }
 }

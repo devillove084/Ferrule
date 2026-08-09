@@ -12,10 +12,12 @@ const CUTLASS_DIR_ENV: &str = "FERRULE_CUTLASS_DIR";
 const CUDA_TEST_ORACLE_ENV: &str = "FERRULE_CUDA_TEST_ORACLE";
 
 fn main() {
+    build_native_cpu();
     println!("cargo:rerun-if-env-changed={CUDA_ARCH_ENV}");
     println!("cargo:rerun-if-env-changed={CUTLASS_DIR_ENV}");
     println!("cargo:rerun-if-env-changed={CUDA_TEST_ORACLE_ENV}");
     println!("cargo:rustc-check-cfg=cfg(ferrule_cuda_test_oracle)");
+    println!("cargo:rerun-if-changed=native/cpu");
     println!("cargo:rerun-if-changed=native/cuda");
     println!("cargo:rerun-if-changed=architecture_target.rs");
 
@@ -25,7 +27,7 @@ fn main() {
     }
 
     if env::var_os(CUDA_FEATURE_ENV).is_none() {
-        println!("cargo:rustc-env=FERRULE_BACKEND_CUDA_COMPILED_TARGET=portable");
+        println!("cargo:rustc-env=FERRULE_BACKEND_CUDA_COMPILED_TARGET=unavailable");
         return;
     }
 
@@ -52,9 +54,6 @@ fn main() {
     let capabilities = target.capabilities();
     let capability_flag = |enabled| if enabled { "1" } else { "0" };
     let native_root = manifest_dir.join("native/cuda");
-    let implementations_root = native_root.join("implementations");
-    let portable_root = implementations_root.join("portable");
-    let cutlass_root = implementations_root.join("cutlass");
 
     let cutlass_include = cutlass_dir.join("include");
     let cutlass_tools_include = cutlass_dir.join("tools/util/include");
@@ -62,7 +61,7 @@ fn main() {
     let cutlass_tools_system_include =
         format!("--system-include={}", cutlass_tools_include.display());
 
-    let configure_implementation = |source: PathBuf| {
+    let configure_provider = |source: PathBuf| {
         let mut build = cc::Build::new();
         build
             .cuda(true)
@@ -71,7 +70,6 @@ fn main() {
             .cpp(true)
             .file(source)
             .include(&native_root)
-            .include(&cutlass_root)
             .flag(&cutlass_system_include)
             .flag(&cutlass_tools_system_include)
             .flag("-std=c++17")
@@ -83,8 +81,8 @@ fn main() {
             .flag(&generate_code)
             .define("FERRULE_CUDA_TARGET_SM", Some(target_sm.as_str()))
             .define(
-                "FERRULE_CUDA_HAS_PORTABLE_SIMT",
-                Some(capability_flag(capabilities.portable_simt)),
+                "FERRULE_CUDA_HAS_BASELINE_SIMT",
+                Some(capability_flag(capabilities.baseline_simt)),
             )
             .define(
                 "FERRULE_CUDA_HAS_BF16_MMA_SYNC",
@@ -116,13 +114,33 @@ fn main() {
         build
     };
 
-    // Keep each implementation in its own CUDA compilation unit. cc-rs enables
+    // Keep each provider in one Build with one CUDA compilation unit. cc-rs enables
     // relocatable device code automatically when one Build contains multiple
     // .cu files; that makes ptxas discard CUTLASS warp-group setmaxnreg
-    // directives even though these implementations share no device symbols.
-    configure_implementation(portable_root.join("entrypoints.cu")).compile("ferrule_cuda_core");
-    configure_implementation(cutlass_root.join("entrypoints.cu")).compile("ferrule_cuda_cutlass");
+    // directives even though these providers share no device symbols.
+    configure_provider(native_root.join("core/provider.cu")).compile("ferrule_cuda_core");
+    configure_provider(native_root.join("cutlass/provider.cu")).compile("ferrule_cuda_cutlass");
     println!("cargo:rustc-link-lib=dylib=cublasLt");
+}
+
+fn build_native_cpu() {
+    let manifest_dir = PathBuf::from(
+        env::var_os("CARGO_MANIFEST_DIR").expect("Cargo must set CARGO_MANIFEST_DIR"),
+    );
+    let native_root = manifest_dir.join("native/cpu");
+    let mut build = cc::Build::new();
+    build
+        .cpp(true)
+        .warnings(true)
+        .warnings_into_errors(true)
+        .file(native_root.join("provider.cc"))
+        .include(&native_root);
+    if build.get_compiler().is_like_msvc() {
+        build.flag("/std:c++17");
+    } else {
+        build.flag("-std=c++17").flag("-Wall").flag("-Wextra");
+    }
+    build.compile("ferrule_cpu_native");
 }
 
 fn publish_cuda_driver_search_path() {

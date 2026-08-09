@@ -1,9 +1,7 @@
 //! Model-neutral inference engine owned by runtime.
 
 use std::future::Future;
-use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
-use std::thread::{self, ThreadId};
 
 use ferrule_common::{CompletionHub, CompletionListener, CompletionWake};
 use ferrule_model::ResidentModelRunner;
@@ -11,88 +9,7 @@ use ferrule_model::ResidentModelRunner;
 use crate::scheduling::{GenerateRequest, RequestId, SequenceSlotPool, SequenceState};
 use crate::{CancelRequestResult, Error, ResidentDriverStep, ResidentTokenEvent, Result};
 
-use super::ResidentTopKDriver;
-
-/// Owner-affine storage for model state that may contain intentionally `!Send`
-/// completion reactors. The allocation never moves; only this guarded pointer may
-/// cross a thread boundary to satisfy the legacy prebuilt-engine worker API.
-struct OwnerLocal<T> {
-    owner: ThreadId,
-    value: Option<Box<T>>,
-}
-
-impl<T> OwnerLocal<T> {
-    fn new(value: T) -> Self {
-        Self {
-            owner: thread::current().id(),
-            value: Some(Box::new(value)),
-        }
-    }
-
-    fn assert_owner(&self) {
-        assert_eq!(
-            self.owner,
-            thread::current().id(),
-            "owner-local inference engine was accessed from a different thread"
-        );
-    }
-
-    fn get(&self) -> &T {
-        self.assert_owner();
-        self.value
-            .as_deref()
-            .expect("owner-local inference value is present")
-    }
-
-    fn get_mut(&mut self) -> &mut T {
-        self.assert_owner();
-        self.value
-            .as_deref_mut()
-            .expect("owner-local inference value is present")
-    }
-
-    fn into_inner(mut self) -> T {
-        self.assert_owner();
-        *self
-            .value
-            .take()
-            .expect("owner-local inference value is present")
-    }
-}
-
-impl<T> Deref for OwnerLocal<T> {
-    type Target = T;
-
-    fn deref(&self) -> &Self::Target {
-        self.get()
-    }
-}
-
-impl<T> DerefMut for OwnerLocal<T> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.get_mut()
-    }
-}
-
-// SAFETY: `T` remains in its original allocation and can only be dereferenced on
-// `owner`. If the guard itself is transferred incorrectly, every accessor panics
-// before touching `T`, and `Drop` below deliberately leaves `T` allocated rather
-// than running an owner-affine destructor on the wrong thread.
-#[allow(
-    unsafe_code,
-    reason = "owner affinity prevents access or destruction of T after a guard transfer"
-)]
-unsafe impl<T> Send for OwnerLocal<T> {}
-
-impl<T> Drop for OwnerLocal<T> {
-    fn drop(&mut self) {
-        if self.owner != thread::current().id()
-            && let Some(value) = self.value.take()
-        {
-            std::mem::forget(value);
-        }
-    }
-}
+use super::{ResidentEngineObservability, ResidentKvPagePlan, ResidentTopKDriver};
 
 /// Completion reactors and wake coordination owned by one local inference task.
 ///
@@ -210,11 +127,111 @@ impl Drop for InferenceCompletionOwner {
     }
 }
 
+/// Local, event-driven owner for an object-safe session engine.
+///
+/// Interactive frontends use this owner without naming a concrete model runner.
+pub struct LocalSessionInferenceEngine {
+    engine: BoxedSessionInferenceEngine,
+    completion_owner: InferenceCompletionOwner,
+}
+
+impl LocalSessionInferenceEngine {
+    pub fn new(mut engine: BoxedSessionInferenceEngine) -> Self {
+        let completion_owner = InferenceCompletionOwner::attach(&mut engine);
+        Self {
+            engine,
+            completion_owner,
+        }
+    }
+
+    pub fn model_info(&self) -> ferrule_model::ModelInfo {
+        self.engine.model_info()
+    }
+
+    pub fn encode(&self, text: &str) -> Result<Vec<u32>> {
+        self.engine.encode(text)
+    }
+
+    pub fn bound_layer_count(&self) -> Option<usize> {
+        self.engine.bound_layer_count()
+    }
+
+    pub fn expert_report(&self) -> Option<String> {
+        self.engine.expert_report()
+    }
+
+    pub fn observability_snapshot(&self) -> ResidentEngineObservability {
+        self.engine.observability_snapshot()
+    }
+
+    pub fn retain_session(&mut self, session_id: crate::scheduling::SessionId) -> Result<()> {
+        self.engine.retain_session(session_id)
+    }
+
+    pub fn retained_session_position(
+        &self,
+        session_id: crate::scheduling::SessionId,
+    ) -> Option<usize> {
+        self.engine.retained_session_position(session_id)
+    }
+
+    pub fn reset_session(&mut self, session_id: crate::scheduling::SessionId) -> Result<()> {
+        self.engine.reset_session(session_id)
+    }
+
+    pub async fn initialize(&mut self) -> Result<()> {
+        self.completion_owner.initialize(&mut self.engine).await
+    }
+
+    /// Drive model-lifecycle materialization until the runtime reports no
+    /// remaining background work.
+    pub async fn wait_for_model_warmup(&mut self) -> Result<()> {
+        while self.engine.has_background_work() {
+            let step = self.step(&mut |_| Ok(())).await?;
+            if matches!(step, ResidentDriverStep::Idle) && self.engine.has_background_work() {
+                return Err(Error::Invariant {
+                    message: "runtime became idle before model warmup completed".into(),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    pub fn submit(&mut self, request: GenerateRequest) {
+        self.engine.submit(request);
+    }
+
+    pub fn take_request_terminal(
+        &mut self,
+        request_id: crate::scheduling::RequestId,
+    ) -> Option<crate::scheduling::RequestTerminal> {
+        self.engine.take_request_terminal(request_id)
+    }
+
+    pub async fn step<F>(&mut self, on_token: &mut F) -> Result<ResidentDriverStep>
+    where
+        F: FnMut(&ResidentTokenEvent) -> Result<()> + ?Sized,
+    {
+        self.completion_owner.step(&mut self.engine, on_token).await
+    }
+
+    pub async fn shutdown(&mut self) -> Result<()> {
+        loop {
+            let completion = self.completion_owner.listen();
+            match self.engine.shutdown()? {
+                InferenceShutdownProgress::Complete => return Ok(()),
+                InferenceShutdownProgress::Pending => {
+                    self.completion_owner.wait(completion).await?;
+                }
+            }
+        }
+    }
+}
+
 /// Local, event-driven owner for a concrete resident driver.
 ///
-/// This is intended for command-line and diagnostic frontends that own the
-/// inference lane directly. Serving frontends use [`InferenceCompletionOwner`]
-/// separately so commands and cancellation can participate in their `select!`.
+/// This typed interface remains available to benchmarks and diagnostics that
+/// need concrete driver statistics or model-specific observability snapshots.
 pub struct LocalResidentInferenceEngine<R, C>
 where
     R: ResidentModelRunner,
@@ -265,6 +282,18 @@ where
 
     pub fn stats(&self) -> &super::ResidentTopKDriverStats {
         self.engine.driver().stats()
+    }
+
+    pub fn prefix_cache_stats(&self) -> &super::ResidentPrefixCacheStats {
+        self.engine.driver().prefix_cache_stats()
+    }
+
+    pub fn prefix_hits(&self) -> usize {
+        self.engine.driver().prefix_hits()
+    }
+
+    pub fn prefix_misses(&self) -> usize {
+        self.engine.driver().prefix_misses()
     }
 
     pub fn retain_session(&mut self, session_id: crate::scheduling::SessionId) -> Result<()> {
@@ -363,15 +392,22 @@ pub enum InferenceShutdownProgress {
     Complete,
 }
 
-/// Execution lifecycle consumed by serving frontends.
+/// Owner-local execution lifecycle consumed by serving frontends.
 ///
-/// Engines are owner-local in production: `spawn_model_worker_with` constructs
-/// them on the dedicated model thread, and completion reactors may intentionally
-/// be `!Send`. The `Send` bound remains for the legacy prebuilt-engine worker API;
-/// concrete runtime engines enforce owner-thread access internally.
-/// Protocol crates depend on this model-neutral boundary and never select model
-/// capabilities or scheduling algorithms themselves.
-pub trait InferenceEngine: Send + 'static {
+/// Engines may intentionally be `!Send`. A dedicated owner must construct the
+/// engine locally from a `Send` build plan or factory and retain it until shutdown
+/// and destruction complete. Protocol crates depend on this model-neutral boundary
+/// and never select model capabilities or scheduling algorithms themselves.
+///
+/// The object-safe owner boundary deliberately does not implement `Send`:
+///
+/// ```compile_fail
+/// use ferrule_runtime::InferenceEngine;
+///
+/// fn require_send<T: Send>() {}
+/// require_send::<Box<dyn InferenceEngine>>();
+/// ```
+pub trait InferenceEngine: 'static {
     /// Shared allocation-free wake source for all storage, staging, and device
     /// completion producers owned by this engine.
     fn completion_hub(&self) -> CompletionHub;
@@ -410,6 +446,123 @@ pub trait InferenceEngine: Send + 'static {
     fn drain_failed(&mut self) -> Vec<SequenceState>;
 }
 
+impl<T> InferenceEngine for Box<T>
+where
+    T: InferenceEngine + ?Sized,
+{
+    fn completion_hub(&self) -> CompletionHub {
+        (**self).completion_hub()
+    }
+
+    fn take_completion_reactors(&mut self) -> Vec<InferenceCompletionReactor> {
+        (**self).take_completion_reactors()
+    }
+
+    fn has_background_work(&self) -> bool {
+        (**self).has_background_work()
+    }
+
+    fn has_pending_async_work(&self) -> bool {
+        (**self).has_pending_async_work()
+    }
+
+    fn start_background_work(&mut self) -> Result<()> {
+        (**self).start_background_work()
+    }
+
+    fn shutdown(&mut self) -> Result<InferenceShutdownProgress> {
+        (**self).shutdown()
+    }
+
+    fn encode(&self, prompt: &str) -> Result<Vec<u32>> {
+        (**self).encode(prompt)
+    }
+
+    fn submit(&mut self, request: GenerateRequest) {
+        (**self).submit(request);
+    }
+
+    fn step(
+        &mut self,
+        on_token: &mut dyn FnMut(&ResidentTokenEvent) -> Result<()>,
+    ) -> Result<ResidentDriverStep> {
+        (**self).step(on_token)
+    }
+
+    fn cancel_request(&mut self, request_id: RequestId) -> Result<InferenceCancelProgress> {
+        (**self).cancel_request(request_id)
+    }
+
+    fn drain_finished(&mut self) -> Vec<SequenceState> {
+        (**self).drain_finished()
+    }
+
+    fn drain_cancelled(&mut self) -> Vec<SequenceState> {
+        (**self).drain_cancelled()
+    }
+
+    fn drain_failed(&mut self) -> Vec<SequenceState> {
+        (**self).drain_failed()
+    }
+}
+
+/// Object-safe session lifecycle used by model-neutral interactive frontends.
+pub trait SessionInferenceEngine: InferenceEngine {
+    fn model_info(&self) -> ferrule_model::ModelInfo;
+    fn observability_snapshot(&self) -> ResidentEngineObservability;
+    fn bound_layer_count(&self) -> Option<usize>;
+    fn expert_report(&self) -> Option<String>;
+    fn retain_session(&mut self, session_id: crate::scheduling::SessionId) -> Result<()>;
+    fn retained_session_position(&self, session_id: crate::scheduling::SessionId) -> Option<usize>;
+    fn reset_session(&mut self, session_id: crate::scheduling::SessionId) -> Result<()>;
+    fn take_request_terminal(
+        &mut self,
+        request_id: crate::scheduling::RequestId,
+    ) -> Option<crate::scheduling::RequestTerminal>;
+}
+
+pub type BoxedSessionInferenceEngine = Box<dyn SessionInferenceEngine>;
+
+impl<T> SessionInferenceEngine for Box<T>
+where
+    T: SessionInferenceEngine + ?Sized,
+{
+    fn model_info(&self) -> ferrule_model::ModelInfo {
+        (**self).model_info()
+    }
+
+    fn observability_snapshot(&self) -> ResidentEngineObservability {
+        (**self).observability_snapshot()
+    }
+
+    fn bound_layer_count(&self) -> Option<usize> {
+        (**self).bound_layer_count()
+    }
+
+    fn expert_report(&self) -> Option<String> {
+        (**self).expert_report()
+    }
+
+    fn retain_session(&mut self, session_id: crate::scheduling::SessionId) -> Result<()> {
+        (**self).retain_session(session_id)
+    }
+
+    fn retained_session_position(&self, session_id: crate::scheduling::SessionId) -> Option<usize> {
+        (**self).retained_session_position(session_id)
+    }
+
+    fn reset_session(&mut self, session_id: crate::scheduling::SessionId) -> Result<()> {
+        (**self).reset_session(session_id)
+    }
+
+    fn take_request_terminal(
+        &mut self,
+        request_id: crate::scheduling::RequestId,
+    ) -> Option<crate::scheduling::RequestTerminal> {
+        (**self).take_request_terminal(request_id)
+    }
+}
+
 /// Runtime-owned resident inference engine.
 ///
 /// `R` supplies model capabilities. The driver selects target-only or optional
@@ -420,7 +573,8 @@ where
     R: ResidentModelRunner,
     C: SequenceSlotPool,
 {
-    driver: OwnerLocal<ResidentTopKDriver<R, C>>,
+    driver: ResidentTopKDriver<R, C>,
+    kv_page_plan: Option<ResidentKvPagePlan>,
 }
 
 impl<R, C> ResidentInferenceEngine<R, C>
@@ -430,20 +584,73 @@ where
 {
     pub fn new(driver: ResidentTopKDriver<R, C>) -> Self {
         Self {
-            driver: OwnerLocal::new(driver),
+            driver,
+            kv_page_plan: None,
+        }
+    }
+
+    pub(crate) fn with_kv_page_plan(
+        driver: ResidentTopKDriver<R, C>,
+        kv_page_plan: ResidentKvPagePlan,
+    ) -> Self {
+        Self {
+            driver,
+            kv_page_plan: Some(kv_page_plan),
         }
     }
 
     pub fn driver(&self) -> &ResidentTopKDriver<R, C> {
-        self.driver.get()
+        &self.driver
     }
 
     fn driver_mut(&mut self) -> &mut ResidentTopKDriver<R, C> {
-        self.driver.get_mut()
+        &mut self.driver
     }
 
     pub fn into_driver(self) -> ResidentTopKDriver<R, C> {
-        self.driver.into_inner()
+        self.driver
+    }
+}
+
+impl<R, C> SessionInferenceEngine for ResidentInferenceEngine<R, C>
+where
+    R: ResidentModelRunner + 'static,
+    R::SequenceState: 'static,
+    C: SequenceSlotPool + 'static,
+{
+    fn model_info(&self) -> ferrule_model::ModelInfo {
+        self.driver.model_info()
+    }
+
+    fn observability_snapshot(&self) -> ResidentEngineObservability {
+        super::observability::snapshot_driver(self.driver(), self.kv_page_plan)
+    }
+
+    fn bound_layer_count(&self) -> Option<usize> {
+        self.driver.bound_layer_count()
+    }
+
+    fn expert_report(&self) -> Option<String> {
+        self.driver.expert_report()
+    }
+
+    fn retain_session(&mut self, session_id: crate::scheduling::SessionId) -> Result<()> {
+        self.driver_mut().retain_session(session_id)
+    }
+
+    fn retained_session_position(&self, session_id: crate::scheduling::SessionId) -> Option<usize> {
+        self.driver.retained_session_position(session_id)
+    }
+
+    fn reset_session(&mut self, session_id: crate::scheduling::SessionId) -> Result<()> {
+        self.driver_mut().reset_session(session_id)
+    }
+
+    fn take_request_terminal(
+        &mut self,
+        request_id: crate::scheduling::RequestId,
+    ) -> Option<crate::scheduling::RequestTerminal> {
+        self.driver_mut().take_request_terminal(request_id)
     }
 }
 

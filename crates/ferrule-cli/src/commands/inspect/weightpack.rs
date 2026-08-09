@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::{fmt, path::Path};
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -30,13 +30,37 @@ fn read_slice<'a>(
     Ok(slice)
 }
 
-fn read_u64_slice(data: &[u8], pos: &mut usize) -> u64 {
-    if *pos + 8 > data.len() {
-        return 0;
+#[derive(Debug, PartialEq, Eq)]
+enum WeightPackReadError {
+    OffsetOverflow,
+    Truncated { needed: usize, remaining: usize },
+}
+
+impl fmt::Display for WeightPackReadError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::OffsetOverflow => write!(f, "field offset overflow"),
+            Self::Truncated { needed, remaining } => write!(
+                f,
+                "field length truncated: needed {needed} bytes, found {remaining}"
+            ),
+        }
     }
-    let v = u64::from_le_bytes(data[*pos..*pos + 8].try_into().unwrap());
-    *pos += 8;
-    v
+}
+
+impl std::error::Error for WeightPackReadError {}
+
+fn read_u64_slice(data: &[u8], pos: &mut usize) -> Result<u64, WeightPackReadError> {
+    let end = pos
+        .checked_add(8)
+        .ok_or(WeightPackReadError::OffsetOverflow)?;
+    let bytes = data.get(*pos..end).ok_or(WeightPackReadError::Truncated {
+        needed: 8,
+        remaining: data.len().saturating_sub(*pos),
+    })?;
+    let value = u64::from_le_bytes(bytes.try_into().unwrap());
+    *pos = end;
+    Ok(value)
 }
 
 // ── inspect-weightpack ───────────────────────────────────────────────────────
@@ -106,13 +130,12 @@ pub fn cmd_inspect_weightpack(path: &str) -> anyhow::Result<()> {
         let mut bp = 0usize;
         let n_fields = 14;
         let mut field_sizes = Vec::with_capacity(n_fields);
-        for _ in 0..n_fields {
-            if bp + 8 > blob.len() {
-                break;
-            }
-            let flen = read_u64_slice(blob, &mut bp) as usize;
+        for field_index in 0..n_fields {
+            let flen = usize::try_from(read_u64_slice(blob, &mut bp)?).map_err(|_| {
+                anyhow::anyhow!("layer {li} field {field_index} length exceeds usize")
+            })?;
             field_sizes.push(flen);
-            bp = bp.saturating_add(flen).min(blob.len());
+            read_slice(blob, &mut bp, flen, "layer field")?;
         }
         println!("  layer {li:>3}: {blob_len:>10} bytes  (fields: {field_sizes:?})",);
     }
@@ -133,7 +156,7 @@ mod tests {
     fn test_read_u64_slice_valid() {
         let data = [0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF];
         let mut pos = 0;
-        let v = read_u64_slice(&data, &mut pos);
+        let v = read_u64_slice(&data, &mut pos).unwrap();
         assert_eq!(v, 1);
         assert_eq!(pos, 8);
     }
@@ -142,8 +165,14 @@ mod tests {
     fn test_read_u64_slice_short() {
         let data = [0x01, 0x02, 0x03];
         let mut pos = 0;
-        let v = read_u64_slice(&data, &mut pos);
-        assert_eq!(v, 0);
+        let error = read_u64_slice(&data, &mut pos).unwrap_err();
+        assert_eq!(
+            error,
+            WeightPackReadError::Truncated {
+                needed: 8,
+                remaining: 3,
+            }
+        );
         assert_eq!(pos, 0);
     }
 

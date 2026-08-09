@@ -84,6 +84,10 @@ pub enum DenseLayerTensorKind {
     AttentionKey,
     AttentionValue,
     AttentionOutput,
+    /// RMSNorm applied to projected queries only.
+    AttentionQueryNorm,
+    /// RMSNorm applied to projected keys only, never values or a combined KV tensor.
+    AttentionKeyNorm,
     DenseMlpGate,
     DenseMlpUp,
     DenseMlpDown,

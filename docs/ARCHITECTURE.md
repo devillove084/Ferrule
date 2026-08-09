@@ -296,9 +296,14 @@ kernel.
 
 The build detects the local GPU compute capability unless
 `FERRULE_CUDA_ARCH` explicitly requests a cross-build. Standard Cargo plus NVCC
-compiles portable and CUTLASS implementations. Ferrule currently uses CUDA 13.2
-in the validated local environment and pins the header-only CUTLASS dependency
-to:
+compiles core and CUTLASS implementations. Native CUDA code is physically split
+into two flat vertical slices, `native/cuda/core` and `native/cuda/cutlass`.
+Each slice owns one aggregate `provider.cu` and its local ABI, bindings, target,
+validation, and operator headers. The build compiles exactly those two
+translation units independently without relocatable device code.
+
+Ferrule currently uses CUDA 13.2 in the validated local environment and pins the
+header-only CUTLASS dependency to:
 
 ```text
 tag     v4.6.1

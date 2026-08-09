@@ -9,6 +9,7 @@
 use std::borrow::Cow;
 
 use crate::TensorRole;
+use ferrule_backend::cpu::{LinearRef as CpuLinearRef, LinearWeight as CpuLinearWeight};
 use ferrule_common::{Error, Result};
 
 use crate::checkpoint::encoding::{
@@ -151,25 +152,117 @@ impl LinearWeight {
             .prepare_input(input, self.format.in_features())
     }
 
-    pub fn reference_matvec(&self, input: &[f32]) -> Result<Vec<f32>> {
-        if input.len() != self.format.in_features() {
+    /// Apply this linear to one input row and write into caller-owned storage.
+    ///
+    /// BF16 weights are decoded one element at a time and accumulated in F32, so
+    /// this path never expands the complete weight matrix into an F32 allocation.
+    pub fn matvec_into(&self, input: &[f32], output: &mut [f32]) -> Result<()> {
+        self.matvec_rows_into(input, 1, output)
+    }
+
+    /// Apply this linear to packed row-major input rows and reuse the output slice.
+    ///
+    /// Input has shape [input_rows, in_features] and output has shape
+    /// [input_rows, out_features].
+    pub fn matvec_rows_into(
+        &self,
+        input: &[f32],
+        input_rows: usize,
+        output: &mut [f32],
+    ) -> Result<()> {
+        let in_features = self.format.in_features();
+        let out_features = self.format.out_features();
+        let expected_input = input_rows.checked_mul(in_features).ok_or_else(|| Error::Model {
+            message: format!(
+                "linear weight {:?} input shape overflows: rows={input_rows}, in_features={in_features}",
+                self.role
+            ),
+        })?;
+        let expected_output = input_rows.checked_mul(out_features).ok_or_else(|| Error::Model {
+            message: format!(
+                "linear weight {:?} output shape overflows: rows={input_rows}, out_features={out_features}",
+                self.role
+            ),
+        })?;
+        if input.len() != expected_input {
             return Err(Error::Model {
                 message: format!(
-                    "linear weight {:?} input length mismatch: expected {}, got {}",
+                    "linear weight {:?} input length mismatch: expected {expected_input} for {input_rows}x{in_features}, got {}",
                     self.role,
-                    self.format.in_features(),
                     input.len()
                 ),
             });
         }
+        if output.len() != expected_output {
+            return Err(Error::Model {
+                message: format!(
+                    "linear weight {:?} output length mismatch: expected {expected_output} for {input_rows}x{out_features}, got {}",
+                    self.role,
+                    output.len()
+                ),
+            });
+        }
+
+        if let LinearWeightFormat::Bf16 {
+            out_features,
+            in_features,
+        } = self.format
+        {
+            ensure_byte_len(&self.weight, out_features, in_features, 2)?;
+        }
         let input = self.execution_input(input)?;
-        let weights = self.reference_weights_f32()?;
-        Ok(matvec_row_major(
-            &weights,
-            self.format.out_features(),
-            self.format.in_features(),
-            input.as_ref(),
-        ))
+        match self.format {
+            LinearWeightFormat::Bf16 {
+                out_features,
+                in_features,
+            } => ferrule_backend::cpu::reference_linear_rows_into(
+                CpuLinearRef {
+                    weight: CpuLinearWeight::Bf16(&self.weight.bytes),
+                    out_features,
+                    in_features,
+                    bias: None,
+                },
+                input.as_ref(),
+                input_rows,
+                output,
+            )?,
+            _ => {
+                let weights = self.reference_weights_f32()?;
+                ferrule_backend::cpu::reference_linear_rows_into(
+                    CpuLinearRef {
+                        weight: CpuLinearWeight::F32(&weights),
+                        out_features,
+                        in_features,
+                        bias: None,
+                    },
+                    input.as_ref(),
+                    input_rows,
+                    output,
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Compatibility spelling matching the existing CPU reference API.
+    pub fn reference_matvec_into(&self, input: &[f32], output: &mut [f32]) -> Result<()> {
+        self.matvec_into(input, output)
+    }
+
+    /// Compatibility spelling for the row-batched CPU reference API.
+    pub fn reference_matvec_rows_into(
+        &self,
+        input: &[f32],
+        input_rows: usize,
+        output: &mut [f32],
+    ) -> Result<()> {
+        self.matvec_rows_into(input, input_rows, output)
+    }
+
+    pub fn reference_matvec(&self, input: &[f32]) -> Result<Vec<f32>> {
+        let mut output = vec![0.0; self.format.out_features()];
+        self.matvec_into(input, &mut output)?;
+        Ok(output)
     }
 
     pub fn reference_weights_f32(&self) -> Result<Vec<f32>> {
@@ -437,19 +530,6 @@ fn decode_bf16_matrix(
         .collect())
 }
 
-fn matvec_row_major(weights: &[f32], rows: usize, cols: usize, input: &[f32]) -> Vec<f32> {
-    let mut output = vec![0.0f32; rows];
-    for row in 0..rows {
-        let mut acc = 0.0f32;
-        let offset = row * cols;
-        for col in 0..cols {
-            acc += weights[offset + col] * input[col];
-        }
-        output[row] = acc;
-    }
-    output
-}
-
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -500,6 +580,101 @@ mod tests {
             linear.reference_matvec(&[2.0, 3.0, 4.0]).unwrap(),
             vec![-2.0]
         );
+    }
+
+    #[test]
+    fn bf16_matvec_into_reuses_single_and_multi_row_output_buffers() {
+        let linear = LinearWeight::from_weight_and_scale(
+            TensorRole::RouterLogits,
+            payload(
+                "bf16.rows.weight",
+                CheckpointDType::Bf16,
+                vec![2, 3],
+                bf16_bytes(&[1.0, -2.0, 0.5, 0.25, 1.0, -1.0]),
+            ),
+            None,
+        )
+        .unwrap();
+
+        let mut single = vec![99.0; 2];
+        let single_ptr = single.as_ptr();
+        linear.matvec_into(&[2.0, 3.0, 4.0], &mut single).unwrap();
+        assert_eq!(single.as_ptr(), single_ptr);
+        assert_eq!(single, vec![-2.0, -0.5]);
+
+        let mut rows = vec![99.0; 4];
+        let rows_ptr = rows.as_ptr();
+        linear
+            .matvec_rows_into(&[2.0, 3.0, 4.0, -1.0, 0.0, 2.0], 2, &mut rows)
+            .unwrap();
+        assert_eq!(rows.as_ptr(), rows_ptr);
+        assert_eq!(rows, vec![-2.0, -0.5, 0.0, -2.25]);
+    }
+
+    #[test]
+    fn bf16_matvec_accumulates_in_f32() {
+        let linear = LinearWeight::from_weight_and_scale(
+            TensorRole::RouterLogits,
+            payload(
+                "bf16.acc.weight",
+                CheckpointDType::Bf16,
+                vec![1, 3],
+                bf16_bytes(&[1.0, 1.0, 1.0]),
+            ),
+            None,
+        )
+        .unwrap();
+        let mut output = [0.0];
+        linear
+            .matvec_into(&[1.0, 1.0 / 256.0, -1.0], &mut output)
+            .unwrap();
+        assert_eq!(output, [1.0 / 256.0]);
+    }
+
+    #[test]
+    fn matvec_into_validates_row_shapes_and_overflow() {
+        let linear = LinearWeight::from_weight_and_scale(
+            TensorRole::RouterLogits,
+            payload(
+                "bf16.shape.weight",
+                CheckpointDType::Bf16,
+                vec![2, 3],
+                bf16_bytes(&[1.0; 6]),
+            ),
+            None,
+        )
+        .unwrap();
+
+        let mut output = [7.0; 2];
+        let err = linear.matvec_into(&[1.0, 2.0], &mut output).unwrap_err();
+        assert!(err.to_string().contains("input length mismatch"));
+        assert_eq!(output, [7.0; 2]);
+
+        let err = linear
+            .matvec_into(&[1.0, 2.0, 3.0], &mut output[..1])
+            .unwrap_err();
+        assert!(err.to_string().contains("output length mismatch"));
+
+        let err = linear
+            .matvec_rows_into(&[], usize::MAX, &mut [])
+            .unwrap_err();
+        assert!(err.to_string().contains("input shape overflows"));
+
+        let output_overflow = LinearWeight::from_weight_and_scale(
+            TensorRole::RouterLogits,
+            payload(
+                "bf16.output-overflow.weight",
+                CheckpointDType::Bf16,
+                vec![2, 1],
+                bf16_bytes(&[1.0; 2]),
+            ),
+            None,
+        )
+        .unwrap();
+        let err = output_overflow
+            .matvec_rows_into(&[], usize::MAX, &mut [])
+            .unwrap_err();
+        assert!(err.to_string().contains("output shape overflows"));
     }
 
     #[test]

@@ -18,8 +18,9 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::num::NonZeroU64;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::AtomicU64;
 
+use super::take_permanent_identity;
 use crate::{Error, Result};
 use ferrule_common::execution::{
     KvBlockId, KvCowReplacement, KvLayoutSchema, KvPageId, KvReservationView, KvWriteSlot,
@@ -254,10 +255,52 @@ impl std::fmt::Display for ConfirmKvRetirementError {
 
 impl std::error::Error for ConfirmKvRetirementError {}
 
+/// Opaque identity for immutable KV pages captured at one exact committed frontier.
+///
+/// The page manager retains the page references. Dropping this copyable identity
+/// does not release them; callers must explicitly call
+/// [`KvPageManager::release_prefix_snapshot`] and complete the returned
+/// [`KvRetirement`] protocol.
+#[must_use = "KV prefix snapshots must be explicitly released"]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct KvPrefixSnapshot {
+    manager_id: u64,
+    snapshot_id: NonZeroU64,
+    committed_tokens: usize,
+    page_count: usize,
+}
+
+impl KvPrefixSnapshot {
+    /// Stable manager-local snapshot serial.
+    pub const fn id(self) -> u64 {
+        self.snapshot_id.get()
+    }
+
+    /// Exact committed frontier represented by this snapshot.
+    pub const fn committed_tokens(self) -> usize {
+        self.committed_tokens
+    }
+
+    /// Number of logical KV pages retained by this snapshot.
+    pub const fn page_count(self) -> usize {
+        self.page_count
+    }
+}
+
 /// Validated but unpublished exact-prefix page-table fork.
 #[derive(Debug)]
 pub struct PreparedKvSequenceFork {
     source: StateSlot,
+    target: StateSlot,
+    target_generation: u64,
+    block_table: BlockTable,
+}
+
+/// Validated but unpublished fork from an immutable prefix snapshot.
+#[derive(Debug)]
+pub struct PreparedKvSnapshotFork {
+    manager_id: u64,
+    snapshot: KvPrefixSnapshot,
     target: StateSlot,
     target_generation: u64,
     block_table: BlockTable,
@@ -277,6 +320,10 @@ pub struct KvPageManagerStats {
 
 static NEXT_PAGE_MANAGER_ID: AtomicU64 = AtomicU64::new(1);
 
+fn take_page_manager_identity(counter: &AtomicU64) -> u64 {
+    take_permanent_identity(counter, "KV page-manager identity space exhausted")
+}
+
 pub struct KvPageManager {
     manager_id: u64,
     /// The KV layout schema describing page size and planes.
@@ -291,8 +338,11 @@ pub struct KvPageManager {
     /// At most one live reservation may own a sequence state slot.
     reservation_owners: HashMap<u32, KvReservationId>,
     next_reservation_id: NonZeroU64,
-    /// Next page ID to allocate if the free list is empty.
-    next_page_id: u32,
+    /// Immutable committed frontiers retained independently of active slots.
+    prefix_snapshots: HashMap<NonZeroU64, BlockTable>,
+    next_snapshot_id: NonZeroU64,
+    /// Next fresh page ID, or `u32::MAX + 1` after the ID space is exhausted.
+    next_page_id: u64,
     /// Maximum number of pages (0 = unlimited).
     max_pages: usize,
     /// Per-sequence page state, keyed by state slot index.
@@ -310,6 +360,7 @@ impl std::fmt::Debug for KvPageManager {
             .field("max_pages", &self.max_pages)
             .field("retiring_pages", &self.retiring_pages.len())
             .field("pending_reservations", &self.pending_reservations.len())
+            .field("prefix_snapshots", &self.prefix_snapshots.len())
             .field("active_sequences", &self.sequences.len())
             .finish_non_exhaustive()
     }
@@ -318,8 +369,7 @@ impl std::fmt::Debug for KvPageManager {
 impl KvPageManager {
     /// Create a new page manager with the given schema and maximum page count.
     pub fn new(schema: Box<dyn KvLayoutSchema>, max_pages: usize) -> Self {
-        let manager_id = NEXT_PAGE_MANAGER_ID.fetch_add(1, Ordering::Relaxed);
-        assert_ne!(manager_id, 0, "KV page-manager identity space exhausted");
+        let manager_id = take_page_manager_identity(&NEXT_PAGE_MANAGER_ID);
         Self {
             manager_id,
             schema,
@@ -328,11 +378,18 @@ impl KvPageManager {
             pending_reservations: HashMap::new(),
             reservation_owners: HashMap::new(),
             next_reservation_id: NonZeroU64::new(1).expect("one is non-zero"),
+            prefix_snapshots: HashMap::new(),
+            next_snapshot_id: NonZeroU64::new(1).expect("one is non-zero"),
             next_page_id: 0,
             max_pages,
             sequences: BTreeMap::new(),
             page_refcounts: HashMap::new(),
         }
+    }
+
+    /// Stable identity of this authoritative page-manager owner.
+    pub const fn owner_identity(&self) -> u64 {
+        self.manager_id
     }
 
     /// Returns the page size in tokens.
@@ -352,6 +409,88 @@ impl KvPageManager {
             })?;
         self.next_reservation_id = next;
         Ok(id)
+    }
+
+    fn take_snapshot_id(&mut self) -> Result<NonZeroU64> {
+        let id = self.next_snapshot_id;
+        let next = id
+            .get()
+            .checked_add(1)
+            .and_then(NonZeroU64::new)
+            .ok_or_else(|| Error::InvalidRequest {
+                message: "KV prefix snapshot ID space exhausted".into(),
+            })?;
+        self.next_snapshot_id = next;
+        Ok(id)
+    }
+
+    fn prefix_snapshot_state(&self, snapshot: KvPrefixSnapshot) -> Result<&BlockTable> {
+        if snapshot.manager_id != self.manager_id {
+            return Err(Error::InvalidRequest {
+                message: "page manager: prefix snapshot belongs to another manager".into(),
+            });
+        }
+        let block_table = self
+            .prefix_snapshots
+            .get(&snapshot.snapshot_id)
+            .ok_or_else(|| Error::InvalidRequest {
+                message: format!(
+                    "page manager: prefix snapshot {} is not live",
+                    snapshot.id()
+                ),
+            })?;
+        if block_table.committed_tokens != snapshot.committed_tokens
+            || block_table.pages.len() != snapshot.page_count
+        {
+            return Err(Error::Invariant {
+                message: format!(
+                    "page manager: prefix snapshot {} metadata changed",
+                    snapshot.id()
+                ),
+            });
+        }
+        Ok(block_table)
+    }
+
+    fn validate_refcount_increments(&self, pages: &[KvPageId], operation: &str) -> Result<()> {
+        let mut increments = HashMap::<KvPageId, u32>::new();
+        for page in pages {
+            let increment = increments.entry(*page).or_default();
+            *increment = increment
+                .checked_add(1)
+                .ok_or_else(|| Error::InvalidRequest {
+                    message: format!("page manager: {operation} refcount increment overflow"),
+                })?;
+        }
+        for (page, increment) in increments {
+            if self.retiring_pages.contains(&page) {
+                return Err(Error::Invariant {
+                    message: format!(
+                        "page manager: {operation} cannot retain retiring page {}",
+                        page.0
+                    ),
+                });
+            }
+            let refcount =
+                self.page_refcounts
+                    .get(&page)
+                    .copied()
+                    .ok_or_else(|| Error::Invariant {
+                        message: format!(
+                            "page manager: {operation} page {} has no refcount",
+                            page.0
+                        ),
+                    })?;
+            refcount
+                .checked_add(increment)
+                .ok_or_else(|| Error::InvalidRequest {
+                    message: format!(
+                        "page manager: {operation} page {} refcount overflow",
+                        page.0
+                    ),
+                })?;
+        }
+        Ok(())
     }
 
     fn validate_live_reservations(&self, reservations: &[&KvReservation]) -> Result<()> {
@@ -470,8 +609,10 @@ impl KvPageManager {
 
     /// Returns the total number of allocated pages (not free).
     pub fn allocated_pages(&self) -> usize {
-        let total = self.next_page_id as usize;
-        total - self.free_pages.len()
+        let allocated = self
+            .next_page_id
+            .saturating_sub(self.free_pages.len() as u64);
+        usize::try_from(allocated).unwrap_or(usize::MAX)
     }
 
     pub fn stats(&self) -> KvPageManagerStats {
@@ -973,6 +1114,168 @@ impl KvPageManager {
             .map(|s| &s.block_table)
     }
 
+    /// Capture the exact current committed frontier independently of its active slot.
+    ///
+    /// The returned opaque identity retains one reference to every page in the
+    /// frontier. Capture is failure-atomic: all pages and the expected token count
+    /// are validated before any refcount changes. A live append reservation is
+    /// rejected because it may have been planned before the tail became shared.
+    pub fn capture_prefix_snapshot(
+        &mut self,
+        source: StateSlot,
+        expected_prefix_tokens: usize,
+    ) -> Result<KvPrefixSnapshot> {
+        if let Some(owner) = self.reservation_owners.get(&source.get()) {
+            return Err(Error::InvalidRequest {
+                message: format!(
+                    "page manager: cannot snapshot state slot {} owned by reservation {}",
+                    source.get(),
+                    owner.get()
+                ),
+            });
+        }
+        let block_table = self
+            .sequences
+            .get(&source.get())
+            .ok_or_else(|| Error::Invariant {
+                message: "page manager: prefix snapshot source is not allocated".into(),
+            })?
+            .block_table
+            .clone();
+        if block_table.committed_tokens != expected_prefix_tokens {
+            return Err(Error::InvalidRequest {
+                message: format!(
+                    "page manager: snapshot prefix mismatch: expected {expected_prefix_tokens} committed tokens, source has {}",
+                    block_table.committed_tokens
+                ),
+            });
+        }
+        self.validate_refcount_increments(&block_table.pages, "prefix snapshot capture")?;
+        let snapshot_id = self.take_snapshot_id()?;
+        self.prefix_snapshots.reserve(1);
+        for page in &block_table.pages {
+            *self
+                .page_refcounts
+                .get_mut(page)
+                .expect("snapshot refcounts were validated") += 1;
+        }
+        let snapshot = KvPrefixSnapshot {
+            manager_id: self.manager_id,
+            snapshot_id,
+            committed_tokens: block_table.committed_tokens,
+            page_count: block_table.pages.len(),
+        };
+        assert!(
+            self.prefix_snapshots
+                .insert(snapshot_id, block_table)
+                .is_none(),
+            "fresh snapshot ID must be vacant"
+        );
+        Ok(snapshot)
+    }
+
+    /// Explicitly release an immutable prefix snapshot.
+    ///
+    /// Pages whose final logical reference is released are quarantined in the
+    /// returned retirement token. They remain unavailable for allocation until
+    /// backend release has completed and [`Self::confirm_page_retirement`] is
+    /// called. `KvPrefixSnapshot` deliberately has no releasing `Drop` behavior.
+    pub fn release_prefix_snapshot(&mut self, snapshot: KvPrefixSnapshot) -> Result<KvRetirement> {
+        let pages = self.prefix_snapshot_state(snapshot)?.pages.clone();
+        self.validate_refcount_decrements(&pages)?;
+        let removed = self
+            .prefix_snapshots
+            .remove(&snapshot.snapshot_id)
+            .expect("validated prefix snapshot must remain live");
+        debug_assert_eq!(removed.pages, pages);
+        let retiring = pages
+            .into_iter()
+            .filter(|page| decrement_refcount_infallible(&mut self.page_refcounts, *page))
+            .collect();
+        Ok(self.begin_retirement(retiring))
+    }
+
+    /// Validate a fork from an immutable snapshot without publishing a sequence.
+    ///
+    /// The exact token count protects callers from pairing a radix match with the
+    /// wrong snapshot. Preparation never changes page references.
+    pub fn prepare_fork_prefix_snapshot(
+        &self,
+        snapshot: KvPrefixSnapshot,
+        target: StateSlot,
+        target_generation: u64,
+        expected_prefix_tokens: usize,
+    ) -> Result<PreparedKvSnapshotFork> {
+        if self.sequences.contains_key(&target.get()) {
+            return Err(Error::Invariant {
+                message: format!(
+                    "page manager: snapshot fork target state slot {} is already allocated",
+                    target.get()
+                ),
+            });
+        }
+        let block_table = self.prefix_snapshot_state(snapshot)?.clone();
+        if block_table.committed_tokens != expected_prefix_tokens {
+            return Err(Error::InvalidRequest {
+                message: format!(
+                    "page manager: snapshot fork prefix mismatch: expected {expected_prefix_tokens} committed tokens, snapshot has {}",
+                    block_table.committed_tokens
+                ),
+            });
+        }
+        self.validate_refcount_increments(&block_table.pages, "prefix snapshot fork")?;
+        Ok(PreparedKvSnapshotFork {
+            manager_id: self.manager_id,
+            snapshot,
+            target,
+            target_generation,
+            block_table,
+        })
+    }
+
+    /// Atomically publish a previously prepared immutable-snapshot fork.
+    ///
+    /// The snapshot, target vacancy, page identities, and all increments are
+    /// revalidated before any refcount or sequence state changes.
+    pub fn publish_fork_prefix_snapshot(&mut self, prepared: PreparedKvSnapshotFork) -> Result<()> {
+        if prepared.manager_id != self.manager_id {
+            return Err(Error::InvalidRequest {
+                message: "page manager: prepared snapshot fork belongs to another manager".into(),
+            });
+        }
+        if self.sequences.contains_key(&prepared.target.get()) {
+            return Err(Error::Invariant {
+                message: format!(
+                    "page manager: prepared snapshot fork target state slot {} became allocated",
+                    prepared.target.get()
+                ),
+            });
+        }
+        let snapshot = self.prefix_snapshot_state(prepared.snapshot)?;
+        if snapshot.pages != prepared.block_table.pages
+            || snapshot.committed_tokens != prepared.block_table.committed_tokens
+        {
+            return Err(Error::InvalidRequest {
+                message: "page manager: prepared prefix snapshot changed before publish".into(),
+            });
+        }
+        self.validate_refcount_increments(&prepared.block_table.pages, "prefix snapshot fork")?;
+        for page in &prepared.block_table.pages {
+            *self
+                .page_refcounts
+                .get_mut(page)
+                .expect("snapshot fork refcounts were revalidated") += 1;
+        }
+        self.sequences.insert(
+            prepared.target.get(),
+            SequencePageState {
+                generation: prepared.target_generation,
+                block_table: prepared.block_table,
+            },
+        );
+        Ok(())
+    }
+
     /// Validate an exact committed-prefix fork without changing either sequence.
     pub fn prepare_fork_sequence_exact(
         &self,
@@ -1358,17 +1661,21 @@ impl KvPageManager {
         if let Some(page_id) = self.free_pages.pop() {
             return Ok(page_id);
         }
-
-        if self.max_pages > 0 && (self.next_page_id as usize) >= self.max_pages {
-            return Err(Error::Invariant {
-                message: format!("page manager: out of pages (max {})", self.max_pages),
-            });
-        }
-
-        let page_id = KvPageId(self.next_page_id);
-        self.next_page_id += 1;
-        Ok(page_id)
+        take_fresh_page_id(&mut self.next_page_id, self.max_pages)
     }
+}
+
+fn take_fresh_page_id(next_page_id: &mut u64, max_pages: usize) -> Result<KvPageId> {
+    if max_pages > 0 && *next_page_id >= max_pages as u64 {
+        return Err(Error::Invariant {
+            message: format!("page manager: out of pages (max {max_pages})"),
+        });
+    }
+    let raw = u32::try_from(*next_page_id).map_err(|_| Error::Invariant {
+        message: "page manager: page ID space exhausted".into(),
+    })?;
+    *next_page_id += 1;
+    Ok(KvPageId(raw))
 }
 
 fn decrement_refcount_infallible(refcounts: &mut HashMap<KvPageId, u32>, page: KvPageId) -> bool {
@@ -1388,7 +1695,7 @@ fn decrement_refcount_infallible(refcounts: &mut HashMap<KvPageId, u32>, page: K
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ferrule_common::execution::KvPlaneDescriptor;
+    use ferrule_common::execution::{KvElementType, KvPlaneDescriptor};
 
     /// Simple test schema: 1 plane, page_size=4, max 1024 tokens.
     #[derive(Debug)]
@@ -1396,11 +1703,8 @@ mod tests {
         page_size: usize,
     }
 
-    static TEST_PLANE: KvPlaneDescriptor = KvPlaneDescriptor {
-        name: "test",
-        elements_per_token: 1,
-        layer_count: 1,
-    };
+    static TEST_PLANE: KvPlaneDescriptor =
+        KvPlaneDescriptor::new("test", 1, 1, KvElementType::Bf16);
 
     impl KvLayoutSchema for TestSchema {
         fn planes(&self) -> &[KvPlaneDescriptor] {
@@ -1412,6 +1716,14 @@ mod tests {
         fn max_sequence_len(&self) -> usize {
             8192
         }
+    }
+
+    #[test]
+    fn schema_identity_and_page_accounting_preserve_dtype() {
+        let manager = KvPageManager::new(Box::new(TestSchema { page_size: 4 }), 16);
+        assert_eq!(manager.schema.planes(), &[TEST_PLANE]);
+        assert_eq!(manager.schema.checked_page_bytes(), Some(8));
+        assert_eq!(manager.schema.schema_identity().planes(), &[TEST_PLANE]);
     }
 
     fn slot(n: u32) -> StateSlot {
@@ -1983,6 +2295,179 @@ mod tests {
     }
 
     #[test]
+    fn prefix_snapshot_survives_its_source_sequence() {
+        let mut mgr = KvPageManager::new(Box::new(TestSchema { page_size: 4 }), 16);
+        mgr.alloc_sequence(slot(0), 0).unwrap();
+        let initial = mgr.reserve(slot(0), 0, 6).unwrap();
+        commit_full(&mut mgr, initial);
+        let pages = mgr.block_table(slot(0)).unwrap().pages().to_vec();
+
+        let snapshot = mgr.capture_prefix_snapshot(slot(0), 6).unwrap();
+        assert_eq!(snapshot.committed_tokens(), 6);
+        assert_eq!(snapshot.page_count(), 2);
+        assert!(pages.iter().all(|page| mgr.page_refcount(*page) == 2));
+
+        let source_retirement = mgr.free_sequence_pages(slot(0)).unwrap();
+        assert!(source_retirement.is_empty());
+        mgr.confirm_page_retirement(source_retirement).unwrap();
+        assert!(pages.iter().all(|page| mgr.page_refcount(*page) == 1));
+
+        let prepared = mgr
+            .prepare_fork_prefix_snapshot(snapshot, slot(1), 7, 6)
+            .unwrap();
+        assert!(mgr.block_table(slot(1)).is_none());
+        mgr.publish_fork_prefix_snapshot(prepared).unwrap();
+        assert_eq!(mgr.block_table(slot(1)).unwrap().committed_tokens(), 6);
+        assert_eq!(mgr.block_table(slot(1)).unwrap().pages(), pages);
+        assert!(pages.iter().all(|page| mgr.page_refcount(*page) == 2));
+
+        let snapshot_retirement = mgr.release_prefix_snapshot(snapshot).unwrap();
+        assert!(snapshot_retirement.is_empty());
+        mgr.confirm_page_retirement(snapshot_retirement).unwrap();
+        assert!(pages.iter().all(|page| mgr.page_refcount(*page) == 1));
+    }
+
+    #[test]
+    fn releasing_last_snapshot_reference_requires_retirement_confirmation() {
+        let mut mgr = KvPageManager::new(Box::new(TestSchema { page_size: 4 }), 1);
+        mgr.alloc_sequence(slot(0), 0).unwrap();
+        let initial = mgr.reserve(slot(0), 0, 4).unwrap();
+        let page = initial.newly_allocated[0];
+        commit_full(&mut mgr, initial);
+
+        let snapshot = mgr.capture_prefix_snapshot(slot(0), 4).unwrap();
+        let source_retirement = mgr.free_sequence_pages(slot(0)).unwrap();
+        assert!(source_retirement.is_empty());
+        mgr.confirm_page_retirement(source_retirement).unwrap();
+
+        let snapshot_retirement = mgr.release_prefix_snapshot(snapshot).unwrap();
+        assert_eq!(snapshot_retirement.pages(), &[page]);
+        assert_eq!(mgr.page_refcount(page), 0);
+        assert_eq!(mgr.free_pages(), 0);
+        assert_eq!(mgr.stats().retiring_pages, 1);
+
+        mgr.alloc_sequence(slot(1), 0).unwrap();
+        assert!(mgr.reserve(slot(1), 0, 4).is_err());
+        mgr.confirm_page_retirement(snapshot_retirement).unwrap();
+        let reused = mgr.reserve(slot(1), 0, 4).unwrap();
+        assert_eq!(reused.newly_allocated, vec![page]);
+    }
+
+    #[test]
+    fn snapshot_partial_tail_fork_uses_existing_cow_path() {
+        let mut mgr = KvPageManager::new(Box::new(TestSchema { page_size: 4 }), 4);
+        mgr.alloc_sequence(slot(0), 0).unwrap();
+        let initial = mgr.reserve(slot(0), 0, 3).unwrap();
+        commit_full(&mut mgr, initial);
+        let shared_tail = mgr.block_table(slot(0)).unwrap().pages()[0];
+
+        let snapshot = mgr.capture_prefix_snapshot(slot(0), 3).unwrap();
+        let source_retirement = mgr.free_sequence_pages(slot(0)).unwrap();
+        assert!(source_retirement.is_empty());
+        mgr.confirm_page_retirement(source_retirement).unwrap();
+        let fork = mgr
+            .prepare_fork_prefix_snapshot(snapshot, slot(1), 9, 3)
+            .unwrap();
+        mgr.publish_fork_prefix_snapshot(fork).unwrap();
+        assert_eq!(mgr.page_refcount(shared_tail), 2);
+
+        let append = mgr.reserve(slot(1), 9, 1).unwrap();
+        let cow = append
+            .cow_replacement
+            .expect("snapshot-shared tail needs COW");
+        assert_eq!(cow.source, shared_tail);
+        assert_ne!(cow.replacement, shared_tail);
+        commit_full(&mut mgr, append);
+        assert_ne!(mgr.block_table(slot(1)).unwrap().pages()[0], shared_tail);
+        assert_eq!(mgr.page_refcount(shared_tail), 1);
+
+        let retirement = mgr.release_prefix_snapshot(snapshot).unwrap();
+        assert_eq!(retirement.pages(), &[shared_tail]);
+        mgr.confirm_page_retirement(retirement).unwrap();
+    }
+
+    #[test]
+    fn snapshot_capture_rejects_a_live_append_before_changing_refcounts() {
+        let mut mgr = KvPageManager::new(Box::new(TestSchema { page_size: 4 }), 4);
+        mgr.alloc_sequence(slot(0), 0).unwrap();
+        let initial = mgr.reserve(slot(0), 0, 3).unwrap();
+        commit_full(&mut mgr, initial);
+        let tail = mgr.block_table(slot(0)).unwrap().pages()[0];
+        let append = mgr.reserve(slot(0), 0, 1).unwrap();
+        assert!(append.cow_replacement.is_none());
+
+        let error = mgr.capture_prefix_snapshot(slot(0), 3).unwrap_err();
+        assert!(error.to_string().contains("owned by reservation"));
+        assert_eq!(mgr.page_refcount(tail), 1);
+        assert!(mgr.prefix_snapshots.is_empty());
+
+        let retirement = mgr.abort_reservations(vec![append]).unwrap();
+        mgr.confirm_page_retirement(retirement).unwrap();
+    }
+
+    #[test]
+    fn snapshot_capture_failure_does_not_change_any_refcount() {
+        let mut mgr = KvPageManager::new(Box::new(TestSchema { page_size: 4 }), 4);
+        mgr.alloc_sequence(slot(0), 0).unwrap();
+        let initial = mgr.reserve(slot(0), 0, 8).unwrap();
+        commit_full(&mut mgr, initial);
+        let pages = mgr.block_table(slot(0)).unwrap().pages().to_vec();
+        mgr.page_refcounts.insert(pages[1], u32::MAX);
+
+        let error = mgr.capture_prefix_snapshot(slot(0), 8).unwrap_err();
+        assert!(error.to_string().contains("refcount overflow"));
+        assert_eq!(mgr.page_refcount(pages[0]), 1);
+        assert_eq!(mgr.page_refcount(pages[1]), u32::MAX);
+        assert!(mgr.prefix_snapshots.is_empty());
+    }
+
+    #[test]
+    fn snapshot_fork_prepare_and_publish_failures_are_refcount_atomic() {
+        let mut mgr = KvPageManager::new(Box::new(TestSchema { page_size: 4 }), 8);
+        mgr.alloc_sequence(slot(0), 0).unwrap();
+        let initial = mgr.reserve(slot(0), 0, 8).unwrap();
+        commit_full(&mut mgr, initial);
+        let pages = mgr.block_table(slot(0)).unwrap().pages().to_vec();
+        let snapshot = mgr.capture_prefix_snapshot(slot(0), 8).unwrap();
+
+        let mismatch = mgr
+            .prepare_fork_prefix_snapshot(snapshot, slot(1), 1, 7)
+            .unwrap_err();
+        assert!(mismatch.to_string().contains("prefix mismatch"));
+        assert!(mgr.block_table(slot(1)).is_none());
+        assert!(pages.iter().all(|page| mgr.page_refcount(*page) == 2));
+
+        let prepared = mgr
+            .prepare_fork_prefix_snapshot(snapshot, slot(1), 1, 8)
+            .unwrap();
+        mgr.page_refcounts.insert(pages[1], u32::MAX);
+        let error = mgr.publish_fork_prefix_snapshot(prepared).unwrap_err();
+        assert!(error.to_string().contains("refcount overflow"));
+        assert!(mgr.block_table(slot(1)).is_none());
+        assert_eq!(mgr.page_refcount(pages[0]), 2);
+        assert_eq!(mgr.page_refcount(pages[1]), u32::MAX);
+    }
+
+    #[test]
+    fn released_snapshot_cannot_be_forked_or_released_twice() {
+        let mut mgr = KvPageManager::new(Box::new(TestSchema { page_size: 4 }), 4);
+        mgr.alloc_sequence(slot(0), 0).unwrap();
+        let initial = mgr.reserve(slot(0), 0, 4).unwrap();
+        commit_full(&mut mgr, initial);
+        let snapshot = mgr.capture_prefix_snapshot(slot(0), 4).unwrap();
+
+        let retirement = mgr.release_prefix_snapshot(snapshot).unwrap();
+        assert!(retirement.is_empty());
+        mgr.confirm_page_retirement(retirement).unwrap();
+        let error = mgr
+            .prepare_fork_prefix_snapshot(snapshot, slot(1), 0, 4)
+            .unwrap_err();
+        assert!(error.to_string().contains("is not live"));
+        let error = mgr.release_prefix_snapshot(snapshot).unwrap_err();
+        assert!(error.to_string().contains("is not live"));
+    }
+
+    #[test]
     fn preempt_restore_preserves_exact_block_table() {
         let mut mgr = KvPageManager::new(Box::new(TestSchema { page_size: 4 }), 16);
         mgr.alloc_sequence(slot(0), 9).unwrap();
@@ -2019,5 +2504,34 @@ mod tests {
         assert!(mgr.reserve(slot(0), 0, 12).is_err());
         assert_eq!(mgr.allocated_pages(), 0);
         assert_eq!(mgr.free_pages(), 2);
+    }
+
+    #[test]
+    fn fresh_page_id_exhaustion_never_wraps_or_aliases() {
+        let mut mgr = KvPageManager::new(Box::new(TestSchema { page_size: 4 }), 0);
+        mgr.next_page_id = u32::MAX as u64;
+        assert_eq!(mgr.alloc_page().unwrap(), KvPageId(u32::MAX));
+        let exhausted = u32::MAX as u64 + 1;
+        assert_eq!(mgr.next_page_id, exhausted);
+
+        for _ in 0..2 {
+            let error = mgr.alloc_page().unwrap_err();
+            assert!(error.to_string().contains("page ID space exhausted"));
+            assert_eq!(mgr.next_page_id, exhausted);
+        }
+        assert_ne!(KvPageId(u32::MAX), KvPageId(0));
+    }
+
+    #[test]
+    fn page_manager_identity_exhaustion_is_permanent() {
+        let counter = AtomicU64::new(u64::MAX - 1);
+        assert_eq!(take_page_manager_identity(&counter), u64::MAX - 1);
+        assert_eq!(take_page_manager_identity(&counter), u64::MAX);
+        assert_eq!(counter.load(std::sync::atomic::Ordering::Relaxed), 0);
+
+        for _ in 0..2 {
+            assert!(std::panic::catch_unwind(|| take_page_manager_identity(&counter)).is_err());
+            assert_eq!(counter.load(std::sync::atomic::Ordering::Relaxed), 0);
+        }
     }
 }

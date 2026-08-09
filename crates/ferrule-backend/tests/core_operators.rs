@@ -6,9 +6,9 @@
 //! and deterministic output mismatches fail the test instead of only printing a
 //! `[FAIL]` line.
 
-use ferrule_backend::cuda::context::cuda_gemv_fp8_e4m3fn_e8m0_2d;
-use ferrule_backend::cuda::kernels::kernels;
-use ferrule_backend::cuda::runtime::{CudaContext, CudaStream, DeviceBuffer, LaunchConfig};
+use ferrule_backend::cuda::operators::linear::cuda_gemv_fp8_e4m3fn_e8m0_2d;
+use ferrule_backend::cuda::providers::core;
+use ferrule_backend::cuda::providers::{CudaContext, CudaStream, DeviceBuffer, LaunchConfig};
 use ferrule_common::Result;
 use std::sync::Arc;
 
@@ -25,10 +25,10 @@ fn has_cuda() -> bool {
     CudaContext::new(0).is_ok()
 }
 
-fn load() -> Result<(Arc<CudaContext>, kernels::LoadedModule, Arc<CudaStream>)> {
+fn load() -> Result<(Arc<CudaContext>, core::CoreOperators, Arc<CudaStream>)> {
     let ctx = rc(CudaContext::new(0))?;
     rc(ctx.bind_to_thread())?;
-    let module = rc(kernels::load(&ctx))?;
+    let module = rc(core::load(&ctx))?;
     let stream = ctx.default_stream();
     Ok((ctx, module, stream))
 }

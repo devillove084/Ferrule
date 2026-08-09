@@ -1,4 +1,5 @@
 use super::*;
+use crate::execution::ModelExecutionBackend;
 use crate::spec::{
     AttentionKind, ModelFamily, MoeSpec, QuantFormatCount, RouterKind, TransformerSpec,
     WeightSource,
@@ -312,4 +313,77 @@ fn model_support_contract_unknown_family_is_unsupported() {
             .iter()
             .any(|item| item.area == PolicyArea::ModelFamily)
     );
+}
+
+#[test]
+fn qwen_moe_hf_safetensors_cpu_plan_is_executable() {
+    let contract = ModelSupportContract::from_spec(&qwen_moe_spec(false), &[]);
+    let plan = contract.engine_plan();
+
+    assert_eq!(plan.status, EnginePlanStatus::Executable);
+    assert_eq!(plan.backend, ModelExecutionBackend::Cpu);
+    assert_eq!(plan.backend_profile, Some("cpu-reference"));
+    assert!(plan.missing.is_empty());
+}
+
+#[test]
+fn qwen_moe_plan_checks_weight_source_and_schema() {
+    let mut spec = qwen_moe_spec(false);
+    spec.weight_source = WeightSource::Gguf;
+    let plan = ModelSupportContract::from_spec(&spec, &[]).engine_plan();
+    assert_eq!(plan.status, EnginePlanStatus::Unsupported);
+    assert!(
+        plan.missing
+            .iter()
+            .any(|item| item.area == PolicyArea::Quantization
+                && item.reason.contains("requires Hugging Face safetensors"))
+    );
+
+    let mut spec = qwen_moe_spec(false);
+    spec.moe = MoeSpec::none();
+    let plan = ModelSupportContract::from_spec(&spec, &[]).engine_plan();
+    assert_eq!(plan.status, EnginePlanStatus::Unsupported);
+    assert!(
+        plan.missing
+            .iter()
+            .any(|item| item.area == PolicyArea::Expert)
+    );
+}
+
+#[test]
+fn dense_qwen3_remains_unsupported() {
+    let mut spec = qwen_moe_spec(false);
+    spec.family = ModelFamily::Qwen3;
+    spec.architecture = Some("qwen3".into());
+    spec.moe = MoeSpec::none();
+    let plan = ModelSupportContract::from_spec(&spec, &[]).engine_plan();
+
+    assert_eq!(plan.status, EnginePlanStatus::Unsupported);
+    assert!(
+        plan.missing
+            .iter()
+            .any(|item| item.area == PolicyArea::ModelFamily
+                && item.reason.contains("dense Qwen3"))
+    );
+}
+
+#[test]
+fn qwen_moe_cuda_plan_is_truthful_about_capability_profile() {
+    let contract = ModelSupportContract::from_spec(&qwen_moe_spec(false), &[]);
+    let plan = EnginePlan::from_contract_for_backend(&contract, ModelExecutionBackend::Cuda);
+
+    if cfg!(feature = "cuda") {
+        assert_eq!(plan.status, EnginePlanStatus::Executable);
+        assert_eq!(plan.backend_profile, Some("cuda-correctness-nonresident"));
+        assert!(!plan.backend_profile.unwrap().contains("optimized"));
+    } else {
+        assert_eq!(plan.status, EnginePlanStatus::Unsupported);
+        assert_eq!(plan.backend_profile, None);
+        assert!(
+            plan.missing
+                .iter()
+                .any(|item| item.area == PolicyArea::Backend
+                    && item.reason.contains("requires the cuda feature"))
+        );
+    }
 }

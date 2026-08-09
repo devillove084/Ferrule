@@ -244,7 +244,7 @@ Quantized operators preserve these boundaries:
   boundary;
 - grouped kernels must honor nonzero source and destination row offsets.
 
-CUTLASS and portable CUDA implementations share this semantic contract. A
+CUTLASS and core CUDA implementations share this semantic contract. A
 kernel schedule, MMA atom, or epilogue may change only when the resulting
 boundary values and route decisions remain valid.
 

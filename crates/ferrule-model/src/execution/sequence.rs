@@ -1,4 +1,33 @@
+use std::num::NonZeroU64;
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use ferrule_common::{Error, Result};
+
+static NEXT_SEQUENCE_TOPOLOGY_ID: AtomicU64 = AtomicU64::new(1);
+
+/// Stable identity of one committed sequence topology.
+///
+/// The identity is independent of cursor generations. Transaction-local working
+/// copies retain it, while an explicit logical fork receives a fresh identity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SequenceTopologyId(NonZeroU64);
+
+impl SequenceTopologyId {
+    /// Allocates a fresh process-local topology identity.
+    pub fn take() -> Self {
+        let value = NEXT_SEQUENCE_TOPOLOGY_ID
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+                value.checked_add(1)
+            })
+            .expect("sequence topology ID space is exhausted");
+        Self(NonZeroU64::new(value).expect("sequence topology IDs start at one"))
+    }
+
+    /// Returns the non-zero numeric identity.
+    pub const fn get(self) -> u64 {
+        self.0.get()
+    }
+}
 
 /// Versioned binding for one staged sequence-state mutation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -17,6 +46,14 @@ impl SequenceStepBinding {
     pub const fn committed_position(self) -> usize {
         self.committed_position
     }
+}
+
+/// A sequence commit that has already passed stale-binding and overflow checks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ValidatedSequenceStepCommit {
+    generation: u64,
+    committed_position: usize,
+    next_position: usize,
 }
 
 /// Model-family-neutral committed sequence lifecycle state.
@@ -76,6 +113,16 @@ impl SequenceStateCore {
 
     /// Publishes a successfully staged mutation by advancing the committed cursor.
     pub fn commit_step(&mut self, binding: SequenceStepBinding, rows: usize) -> Result<()> {
+        let commit = self.validate_step_commit(binding, rows)?;
+        self.apply_validated_step_commit(commit);
+        Ok(())
+    }
+
+    pub(crate) fn validate_step_commit(
+        &self,
+        binding: SequenceStepBinding,
+        rows: usize,
+    ) -> Result<ValidatedSequenceStepCommit> {
         if self.poisoned {
             return Err(execution_error("cannot commit a poisoned sequence state"));
         }
@@ -85,11 +132,22 @@ impl SequenceStateCore {
                 binding.generation, binding.committed_position, self.generation, self.position
             )));
         }
-        self.position = self
+        let next_position = self
             .position
             .checked_add(rows)
             .ok_or_else(|| execution_error("committed sequence position overflow"))?;
-        Ok(())
+        Ok(ValidatedSequenceStepCommit {
+            generation: self.generation,
+            committed_position: self.position,
+            next_position,
+        })
+    }
+
+    pub(crate) fn apply_validated_step_commit(&mut self, commit: ValidatedSequenceStepCommit) {
+        debug_assert!(!self.poisoned);
+        debug_assert_eq!(self.generation, commit.generation);
+        debug_assert_eq!(self.position, commit.committed_position);
+        self.position = commit.next_position;
     }
 
     /// Marks staged state as non-reusable when rollback is unavailable.
@@ -138,6 +196,16 @@ fn execution_error(message: impl Into<String>) -> Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn topology_ids_are_nonzero_and_unique() {
+        let first = SequenceTopologyId::take();
+        let second = SequenceTopologyId::take();
+
+        assert_ne!(first, second);
+        assert_ne!(first.get(), 0);
+        assert_ne!(second.get(), 0);
+    }
 
     #[test]
     fn commit_advances_only_matching_binding() {

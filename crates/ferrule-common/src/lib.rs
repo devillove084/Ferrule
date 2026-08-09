@@ -8,6 +8,9 @@ pub mod io_protocol;
 pub mod materialization_io;
 pub mod memory;
 pub mod observability;
+pub mod quantization_error;
+pub mod serving_error;
+pub mod state_dict_error;
 
 pub use async_wake::{CompletionHub, CompletionListener, CompletionWake};
 pub use expert_residency::{
@@ -20,6 +23,15 @@ pub use expert_residency::{
 pub use io_protocol::*;
 pub use memory::{
     MemoryPoolKind, MemoryPoolLimits, MemoryPoolStats, MemoryTopology, OwnerMemoryLru,
+};
+pub use quantization_error::{QuantizationError, QuantizationResult};
+pub use serving_error::{
+    ServingConfigError, ServingRequestError, SseSerializationError, WorkerExecutionError,
+    WorkerOperation, WorkerRequestError, WorkerShutdownError, WorkerStartError,
+};
+pub use state_dict_error::{
+    NameMappingError, NameMappingFailureKind, StateDictBindingError, StateDictBindingIssue,
+    StateDictMetadataError, StateDictSchemaError, StateDictTransformError,
 };
 
 use snafu::Snafu;

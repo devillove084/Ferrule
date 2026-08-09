@@ -177,10 +177,6 @@ dsv4-vllm-bench mode='smoke' *args='':
 dsv4-runtime-driver-bench prompt1='Hello' prompt2='Explain Ferrule in one sentence.' tokens='1' warmup='1' chunk='4096' layers='43' *args='':
     just run-cuda bench-interactive models/DeepSeek-V4-Flash-0731 -p "{{ prompt1 }}" -p "{{ prompt2 }}" -n {{ tokens }} --warmup-tokens {{ warmup }} --prefill-chunk-size {{ chunk }} --max-layers {{ layers }} --json {{ args }}
 
-dsv4-runtime-driver-chunk-sweep chunks='1,2,4,8,16,4096' tokens='1' warmup='0' layers='43' output='target/bench/io-scheduler-e2e/chunks' sync='0' *args='': cutlass-setup
-    @test "{{ _use-cuda }}" = "1" || { echo "error: CUDA run requires nvcc and an NVIDIA GPU"; exit 1; }; arch="{{ _cuda-arch }}"; FERRULE_CUDA_ARCH="$arch" cargo build --locked --release -p ferrule-cli --features cuda
-    @sync_arg=""; if [ "{{ sync }}" = "1" ] || [ "{{ sync }}" = "true" ] || [ "{{ sync }}" = "sync" ]; then sync_arg="--profile-sync"; fi; python3 scripts/dsv4_runtime_driver_chunk_sweep.py --model models/DeepSeek-V4-Flash-0731 --chunks "{{ chunks }}" --max-tokens {{ tokens }} --warmup-tokens {{ warmup }} --max-layers {{ layers }} --bin ./target/release/ferrule --output-dir {{ output }} $sync_arg {{ args }}
-
 cuda:
     cargo run -p ferrule-cli -- cuda
 
@@ -204,10 +200,6 @@ dsv4-storage-platform-check output='target/bench/storage-platform-check.txt':
     @command -v gdscheck >/dev/null 2>&1 || { echo "error: gdscheck not found"; exit 1; }
     @mkdir -p "$(dirname "{{ output }}")"
     @bash -o pipefail -c '{ uname -a; echo; nvidia-smi; echo; gdscheck -p; } 2>&1 | tee "{{ output }}"'
-
-dsv4-parity-json prompt='Hello' output='target/dsv4_generation_parity.json' *args='':
-    python3 scripts/dsv4_generation_parity.py models/DeepSeek-V4-Flash-0731 --prompt "{{ prompt }}" --output "{{ output }}" {{ args }}
-    @echo "wrote {{ output }}"
 
 dsv4-chat tokens='64' *args='':
     @tokens="{{ tokens }}"; tokens="${tokens#tokens=}"; case "$tokens" in ''|*[!0-9]*) echo "error: dsv4-chat tokens must be an integer"; exit 2;; esac; just run-cuda chat models/DeepSeek-V4-Flash-0731 -q cuda -n "$tokens" --chat-template deepseek-v4 --temp 0 {{ args }}

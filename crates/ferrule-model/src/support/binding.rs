@@ -1,3 +1,4 @@
+use crate::spec::ModelFamily;
 use crate::tensor_policy::{TensorClass, TensorClassCount};
 
 use super::roles::TensorRole;
@@ -14,6 +15,20 @@ impl TensorBinding {
         Self {
             tensor_class: count.class.clone(),
             role: tensor_role_for_class(&count.class),
+            tensors: count.tensors,
+        }
+    }
+
+    pub fn from_class_count_for_family(count: &TensorClassCount, family: &ModelFamily) -> Self {
+        let role = match (family, &count.class) {
+            (ModelFamily::Qwen3 | ModelFamily::QwenMoe, TensorClass::Auxiliary) => {
+                TensorRole::AttentionKeyNorm
+            }
+            _ => tensor_role_for_class(&count.class),
+        };
+        Self {
+            tensor_class: count.class.clone(),
+            role,
             tensors: count.tensors,
         }
     }

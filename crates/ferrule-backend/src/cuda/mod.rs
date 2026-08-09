@@ -4,40 +4,44 @@
 //! kernels remain inside this module. Model preparation consumes provider-neutral
 //! plans from [`crate::plan`].
 
-pub mod architecture;
-pub mod benchmark;
+mod allocator;
+mod architecture;
+mod benchmark;
+#[doc(hidden)]
 pub mod context;
-pub mod counters;
-pub mod cutlass;
-pub mod graph;
-pub mod kernels;
-pub mod kv_page_pool;
-pub mod provider;
-pub mod runtime;
-pub mod transformer;
+mod counters;
+pub mod diagnostics;
+mod ffi;
+mod graph;
 
-pub use runtime::{CudaContext, CudaStream};
+pub mod operators {
+    pub mod attention;
+    mod contracts;
+    pub mod kv;
+    pub mod linear;
+    pub mod moe;
+    pub mod norm;
+    pub mod rope;
 
-pub use architecture::{
-    COMPILED_TARGET, CudaArchitectureFamily, CudaKernelCapabilities, CudaTarget,
-    compiled_capabilities,
-};
+    pub use contracts::*;
+}
+
+pub mod providers;
+mod runtime;
+
+use ferrule_common::Result;
+
+use crate::plan::{LayerKernelRequirements, ModelKernelPlan};
+
+pub use allocator::CudaAllocatorMetrics;
 pub use benchmark::{CudaSmokeBenchmark, run_gemv_rms_smoke_benchmark, run_smoke_benchmark};
-pub use context::{
-    CombinedRingWindowLens, CudaArtifactOperatorContext, CudaBf16Buffer,
-    CudaCompressorRecurrentCheckpointSlab, CudaCompressorRecurrentState, CudaExpertSlotPointers,
-    CudaF32Buffer, CudaFailpoints, CudaHybridMlaAttentionWorkspace,
-    CudaHybridMlaExplicitSelectionWorkspace, CudaI32Buffer, CudaPreparedRoutedExpert,
-    CudaProposalHeadWorkspace, CudaRoutedExpertArena, CudaRoutedExpertMaterialization,
-    CudaRoutedExpertShape, cuda_probe,
+pub use graph::{
+    CachedDecodeGraph, CudaGraphHandle, capture_decode_graph, cuda_graph_enabled,
+    flash_attn_enabled,
 };
-pub use counters::CudaOpCounters;
-pub use kv_page_pool::{
-    CudaKvPagePool, KvHostSnapshot, KvPagePoolStats, KvPoolReservation, PagedPlaneLayout,
-};
-pub use provider::{CudaProviderCatalog, compile_cuda_model_plan};
-pub use transformer::combined_ring::CombinedRingTopkLayout;
-pub use transformer::compressor_recurrent::CompressorRecurrentShape;
-pub use transformer::sparse_attention::{
-    DualPlanePagedSparseAttentionLayout, PagedSparseAttentionLayout,
-};
+pub use runtime::MemoryTier;
+
+/// Compile provider-neutral model requirements for the CUDA backend.
+pub fn compile_model_plan(requirements: &[LayerKernelRequirements]) -> Result<ModelKernelPlan> {
+    providers::catalog::compile_model_plan(requirements)
+}

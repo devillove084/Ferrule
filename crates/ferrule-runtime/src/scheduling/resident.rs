@@ -59,6 +59,9 @@ pub struct ResidentSchedulerConfig {
     /// one mixed execution batch. When false, prefill and decode are dispatched
     /// as separate batches.
     pub allow_mixed_batches: bool,
+    /// Maximum number of retained KV pages charged to committed prompt prefixes.
+    /// Zero disables prefix reuse without affecting ordinary resident execution.
+    pub prefix_cache_capacity_pages: usize,
 }
 
 impl Default for ResidentSchedulerConfig {
@@ -71,6 +74,7 @@ impl Default for ResidentSchedulerConfig {
             decode_cohort_max_deferrals: 0,
             max_batch_tokens: super::actions::DEFAULT_CHUNK_SIZE,
             allow_mixed_batches: true,
+            prefix_cache_capacity_pages: 0,
         }
     }
 }
@@ -121,6 +125,7 @@ impl ResidentSchedulerConfig {
             decode_cohort_max_deferrals: self.decode_cohort_max_deferrals,
             max_batch_tokens: self.max_batch_tokens,
             allow_mixed_batches: self.allow_mixed_batches,
+            prefix_cache_capacity_pages: self.prefix_cache_capacity_pages,
         }
     }
 }
@@ -130,6 +135,49 @@ pub struct SuspendedSequenceSchedule {
     sequence: SequenceState,
     was_prefill_ready: bool,
     was_decode_ready: bool,
+}
+
+/// Scheduler admission prepared with an owned logical slot but not yet visible.
+///
+/// The driver must either publish this token after model/KV preparation succeeds
+/// or abort it to restore the waiting request and release the slot.
+#[derive(Debug)]
+pub(crate) struct PreparedWaitingAdmission {
+    waiting: WaitingRequest,
+    sequence: SequenceState,
+}
+
+impl PreparedWaitingAdmission {
+    pub(crate) const fn session_id(&self) -> SessionId {
+        self.sequence.session_id
+    }
+
+    pub(crate) fn is_fresh_prompt(&self) -> bool {
+        self.waiting.position_start.is_none() && self.sequence.position == 0
+    }
+
+    pub(crate) fn prompt_tokens(&self) -> &[u32] {
+        self.sequence.current_prompt_tokens()
+    }
+
+    pub(crate) fn apply_committed_prefix(&mut self, matched_tokens: usize) -> Result<()> {
+        if !self.is_fresh_prompt() {
+            return Err(Error::Invariant {
+                message: "prefix reuse requires a fresh prompt admission".into(),
+            });
+        }
+        if matched_tokens >= self.sequence.prompt_len {
+            return Err(Error::Invariant {
+                message: format!(
+                    "prefix reuse must leave the final prompt token executable: matched {matched_tokens} of {}",
+                    self.sequence.prompt_len
+                ),
+            });
+        }
+        self.sequence.position = matched_tokens;
+        self.sequence.prompt_cursor = matched_tokens;
+        Ok(())
+    }
 }
 
 /// Scheduler half of an exact-prefix fork, validated but not yet visible.
@@ -510,40 +558,97 @@ impl ResidentScheduler {
             && self.decode_ready.is_empty()
     }
 
+    /// Reserve the scheduler-owned slot for the front waiting request without
+    /// publishing it to active/runnable state.
+    pub(crate) fn prepare_waiting_admission<C>(
+        &mut self,
+        slot_pool: &mut C,
+    ) -> Result<Option<PreparedWaitingAdmission>>
+    where
+        C: SequenceSlotPool,
+    {
+        if self.active.len() >= self.config.max_active_sequences {
+            return Ok(None);
+        }
+        let Some(waiting) = self.waiting.pop_front() else {
+            return Ok(None);
+        };
+        let session_id = self.resolve_session_id(waiting.request.session_id);
+        if self.active.contains_key(&session_id) {
+            self.waiting.push_front(waiting);
+            return Err(Error::Invariant {
+                message: format!("session {:?} is already active", session_id),
+            });
+        }
+        let kv_handle = match slot_pool.alloc_slot() {
+            Ok(handle) => handle,
+            Err(_) => {
+                self.waiting.push_front(waiting);
+                return Ok(None);
+            }
+        };
+        let mut sequence = SequenceState::from_request(&waiting.request, session_id);
+        if let Some(position_start) = waiting.position_start {
+            sequence.position = position_start;
+        }
+        sequence.bind_kv(kv_handle);
+        Ok(Some(PreparedWaitingAdmission { waiting, sequence }))
+    }
+
+    /// Publish a fully prepared admission. No fallible work remains after driver
+    /// model/KV state has become visible.
+    pub(crate) fn publish_waiting_admission(&mut self, prepared: PreparedWaitingAdmission) {
+        let session_id = prepared.sequence.session_id;
+        assert!(
+            self.active.len() < self.config.max_active_sequences,
+            "prepared admission capacity must remain reserved"
+        );
+        assert!(
+            !self.active.contains_key(&session_id),
+            "prepared admission target must remain absent"
+        );
+        if !prepared.sequence.prompt_prefill_done() {
+            self.prefill_queue.push_back(session_id);
+        }
+        self.active.insert(session_id, prepared.sequence);
+    }
+
+    /// Abort a prepared admission. A successful slot release restores the exact
+    /// request at the queue front. If release fails, the failed sequence retains
+    /// its handle so ownership is explicit and the request is not duplicated.
+    pub(crate) fn abort_waiting_admission<C>(
+        &mut self,
+        mut prepared: PreparedWaitingAdmission,
+        slot_pool: &mut C,
+    ) -> Result<()>
+    where
+        C: SequenceSlotPool,
+    {
+        let handle = prepared
+            .sequence
+            .kv_handle
+            .expect("prepared admission always owns a logical slot");
+        match slot_pool.free_slot(handle) {
+            Ok(()) => {
+                prepared.sequence.clear_kv();
+                self.waiting.push_front(prepared.waiting);
+                Ok(())
+            }
+            Err(error) => {
+                prepared.sequence.mark_error();
+                self.failed.push(prepared.sequence);
+                Err(error)
+            }
+        }
+    }
+
     pub fn admit_waiting<C>(&mut self, slot_pool: &mut C) -> Result<usize>
     where
         C: SequenceSlotPool,
     {
         let mut admitted = 0;
-        while self.active.len() < self.config.max_active_sequences {
-            let Some(waiting) = self.waiting.pop_front() else {
-                break;
-            };
-            let session_id = self.resolve_session_id(waiting.request.session_id);
-            if self.active.contains_key(&session_id) {
-                self.waiting.push_front(waiting);
-                return Err(Error::Invariant {
-                    message: format!("session {:?} is already active", session_id),
-                });
-            }
-
-            let kv_handle = match slot_pool.alloc_slot() {
-                Ok(handle) => handle,
-                Err(_) => {
-                    self.waiting.push_front(waiting);
-                    break;
-                }
-            };
-
-            let mut sequence = SequenceState::from_request(&waiting.request, session_id);
-            if let Some(position_start) = waiting.position_start {
-                sequence.position = position_start;
-            }
-            sequence.bind_kv(kv_handle);
-            if !sequence.prompt_prefill_done() {
-                self.prefill_queue.push_back(sequence.session_id);
-            }
-            self.active.insert(sequence.session_id, sequence);
+        while let Some(prepared) = self.prepare_waiting_admission(slot_pool)? {
+            self.publish_waiting_admission(prepared);
             admitted += 1;
         }
         Ok(admitted)
@@ -594,6 +699,13 @@ impl ResidentScheduler {
         C: SequenceSlotPool,
     {
         self.admit_waiting(slot_pool)?;
+        self.next_admitted_action_policy(allow_mixed_batches)
+    }
+
+    pub(crate) fn next_admitted_action_policy(
+        &mut self,
+        allow_mixed_batches: bool,
+    ) -> Result<Option<SchedulerAction>> {
         let defer_decode = !allow_mixed_batches
             && !self.decode_ready.is_empty()
             && self.decode_ready.len() < self.config.decode_cohort_target
@@ -1480,6 +1592,55 @@ mod tests {
             panic!("expected decode batch");
         };
         assert_eq!(actions[0].token_id, 1);
+    }
+
+    #[test]
+    fn prepared_admission_is_invisible_and_abort_restores_the_request() {
+        let mut scheduler = ResidentScheduler::default();
+        let mut slots = FixedSequenceSlotPool::new(1);
+        let mut submitted = request(30, vec![1, 2]);
+        submitted.session_id = Some(SessionId(30));
+        scheduler.submit(submitted);
+
+        let prepared = scheduler
+            .prepare_waiting_admission(&mut slots)
+            .unwrap()
+            .expect("waiting request should reserve a slot");
+        assert_eq!(prepared.session_id(), SessionId(30));
+        assert_eq!(scheduler.waiting_len(), 0);
+        assert_eq!(scheduler.active_len(), 0);
+        assert_eq!(slots.active_count(), 1);
+
+        scheduler
+            .abort_waiting_admission(prepared, &mut slots)
+            .unwrap();
+        assert_eq!(scheduler.waiting_len(), 1);
+        assert_eq!(scheduler.active_len(), 0);
+        assert_eq!(slots.active_count(), 0);
+
+        assert_eq!(scheduler.admit_waiting(&mut slots).unwrap(), 1);
+        assert!(scheduler.active_sequence(SessionId(30)).is_some());
+    }
+
+    #[test]
+    fn failed_prepared_admission_abort_retains_slot_ownership() {
+        let mut scheduler = ResidentScheduler::default();
+        let mut slots = FailingFreeKvCache;
+        scheduler.submit(request(31, vec![1]));
+
+        let prepared = scheduler
+            .prepare_waiting_admission(&mut slots)
+            .unwrap()
+            .expect("waiting request should reserve a slot");
+        let error = scheduler
+            .abort_waiting_admission(prepared, &mut slots)
+            .unwrap_err();
+
+        assert!(error.to_string().contains("slot free failure"));
+        assert_eq!(scheduler.waiting_len(), 0);
+        assert_eq!(scheduler.active_len(), 0);
+        assert_eq!(scheduler.failed_len(), 1);
+        assert_eq!(scheduler.drain_failed()[0].kv_handle, Some(KvHandle(0)));
     }
 
     #[test]

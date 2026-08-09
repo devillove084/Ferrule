@@ -13,6 +13,7 @@
 //! implementations live in implementation modules such as `cuda`, and must
 //! not leak vendor runtime types into the scheduler or I/O protocols.
 
+pub mod cpu;
 pub mod error;
 pub mod plan;
 

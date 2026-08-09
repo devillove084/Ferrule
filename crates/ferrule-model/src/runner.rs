@@ -67,6 +67,41 @@ impl ModelInfo {
     }
 }
 
+/// Failed sequence-state release retaining custody of the original state.
+///
+/// Callers may inspect the source error and retry with the state returned by
+/// into_parts. Implementations must return the state unchanged when
+/// release preflight fails.
+#[derive(Debug)]
+#[must_use = "a failed release retains sequence-state ownership"]
+pub struct SequenceStateReleaseError<S> {
+    source: Error,
+    state: S,
+}
+
+impl<S> SequenceStateReleaseError<S> {
+    pub fn new(source: Error, state: S) -> Self {
+        Self { source, state }
+    }
+
+    pub const fn source_error(&self) -> &Error {
+        &self.source
+    }
+
+    pub const fn state(&self) -> &S {
+        &self.state
+    }
+
+    pub fn into_parts(self) -> (Error, S) {
+        (self.source, self.state)
+    }
+
+    /// Discard retry custody and return only the source error.
+    pub fn into_source(self) -> Error {
+        self.source
+    }
+}
+
 // ── ModelRunner trait ────────────────────────────────────────────────────
 
 pub trait ModelRunner {
@@ -82,6 +117,19 @@ pub trait ModelRunner {
     }
     fn reset_session(&mut self) -> Result<()>;
     fn eos_token_id(&self) -> Option<u32>;
+    /// Return every EOS token ID recognized by this runner.
+    ///
+    /// Existing runners remain compatible through the single-ID method. Runtime
+    /// stop handling calls `is_eos_token`, whose default implementation consults
+    /// this list. Runners with multiple EOS tokens should override this method and
+    /// may override `is_eos_token` to avoid rebuilding the list for each check.
+    fn eos_token_ids(&self) -> Vec<u32> {
+        self.eos_token_id().into_iter().collect()
+    }
+    /// Return whether `token_id` is any EOS token recognized by this runner.
+    fn is_eos_token(&self, token_id: u32) -> bool {
+        self.eos_token_ids().contains(&token_id)
+    }
     /// Optional count of model layers/materialized execution states currently bound
     /// into the runner. Useful for lazy artifact-backed runners; dense or eagerly
     /// bound runners may return `None`.
@@ -94,12 +142,6 @@ pub trait ModelRunner {
         None
     }
 }
-
-/// Compatibility name for the stable protocol continuation identity.
-///
-/// New APIs use [`ContinuationId`] directly. Zero is rejected whenever an ID is
-/// attached to a pending model continuation.
-pub type BatchContinuationId = ContinuationId;
 
 /// Model wait state exposed at the runtime boundary.
 ///
@@ -131,6 +173,25 @@ impl PendingModelProgress {
                 message: "materialization waits must be constructed from a resolved stage".into(),
             });
         }
+        Ok(Self {
+            transaction,
+            continuation,
+            dependencies,
+            resources: Box::new([]),
+            workspace: WorkspaceClaim::NONE,
+        })
+    }
+
+    /// Bridge a decoder graph wait whose dependency custody was already
+    /// validated by the decoder transaction shell. Decoder graphs retain their
+    /// typed continuation and residency leases; no provider operation is exposed.
+    pub fn for_decoder_graph(
+        transaction: ExecutionTransactionId,
+        continuation: ContinuationId,
+        dependencies: DependencySet,
+    ) -> Result<Self> {
+        validate_continuation_id(continuation)?;
+        dependencies.validate()?;
         Ok(Self {
             transaction,
             continuation,
@@ -254,6 +315,15 @@ pub trait MultiSessionRunner: ModelRunner {
     /// reservations bind this separately from page-manager ownership generation.
     fn sequence_generation(&self, state: &Self::SequenceState) -> u64;
 
+    /// Immutable prepared-plan identity used to namespace reusable prompt state.
+    ///
+    /// The default is valid for runners whose prepared execution plan cannot
+    /// change during the runner's lifetime. Runners that can replace a prepared
+    /// plan in place must override this with that plan's non-zero generation.
+    fn prefix_cache_plan_identity(&self) -> u64 {
+        1
+    }
+
     /// Describe model-owned expert residency capacity, when this runner uses MoE
     /// expert residency managed by the runtime.
     fn expert_residency_requirements(
@@ -376,8 +446,24 @@ pub trait MultiSessionRunner: ModelRunner {
     /// Reset a sequence state for reuse with a new logical sequence.
     fn reset_sequence_state(&mut self, state: &mut Self::SequenceState) -> Result<()>;
 
-    /// Release a sequence state and its physical capacity.
-    fn release_sequence_state(&mut self, state: Self::SequenceState) -> Result<()>;
+    /// Release a sequence state and its physical capacity while preserving
+    /// ownership on failure.
+    ///
+    /// Implementations must complete every fallible preflight before mutating or
+    /// consuming the state. An error returns that exact state to the caller.
+    fn try_release_sequence_state(
+        &mut self,
+        state: Self::SequenceState,
+    ) -> std::result::Result<(), SequenceStateReleaseError<Self::SequenceState>>;
+
+    /// Compatibility wrapper for callers that cannot retry a failed release.
+    ///
+    /// Prefer try_release_sequence_state. This wrapper deliberately
+    /// discards the state returned with an error and therefore forfeits custody.
+    fn release_sequence_state(&mut self, state: Self::SequenceState) -> Result<()> {
+        self.try_release_sequence_state(state)
+            .map_err(SequenceStateReleaseError::into_source)
+    }
 
     /// Configure the maximum number of backend physical KV pages.
     fn configure_kv_page_capacity(&mut self, max_pages: usize) -> Result<()>;
@@ -593,6 +679,38 @@ pub trait ResidentModelRunner: MultiSessionRunner {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct LegacyEosRunner;
+
+    impl ModelRunner for LegacyEosRunner {
+        fn model_info(&self) -> ModelInfo {
+            unreachable!()
+        }
+
+        fn encode(&self, _text: &str) -> Result<Vec<u32>> {
+            unreachable!()
+        }
+
+        fn decode(&self, _tokens: &[u32]) -> Result<String> {
+            unreachable!()
+        }
+
+        fn reset_session(&mut self) -> Result<()> {
+            Ok(())
+        }
+
+        fn eos_token_id(&self) -> Option<u32> {
+            Some(7)
+        }
+    }
+
+    #[test]
+    fn model_runner_multi_eos_api_defaults_to_legacy_single_eos() {
+        let runner = LegacyEosRunner;
+        assert_eq!(runner.eos_token_ids(), [7]);
+        assert!(runner.is_eos_token(7));
+        assert!(!runner.is_eos_token(8));
+    }
 
     fn native_source(native_width: usize) -> NativeProposalSource {
         NativeProposalSource {

@@ -13,7 +13,7 @@ pub mod validation;
 
 pub use binding::{TensorBinding, tensor_role_for_class};
 pub use contract::ModelSupportContract;
-pub use layout::{AttentionLayout, FeedForwardLayout, LayerLayout, ModelLayout};
+pub use layout::{AttentionLayout, FeedForwardLayout, LayerLayout, ModelLayout, TensorRoleAlias};
 pub use plan::{EnginePlan, EnginePlanStatus, MissingPolicy, PolicyArea};
 pub use policies::{
     AttentionPolicy, ExpertPolicy, KvPolicy, ParallelismPlan, PolicySet, QuantPolicy,

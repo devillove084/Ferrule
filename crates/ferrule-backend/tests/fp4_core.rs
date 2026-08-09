@@ -2,9 +2,9 @@
 
 //! Architecture-neutral FP4 core operator tests.
 
-use ferrule_backend::cuda::context::CudaArtifactOperatorContext;
-use ferrule_backend::cuda::kernels::kernels;
-use ferrule_backend::cuda::runtime::{CudaContext, DeviceBuffer, LaunchConfig};
+use ferrule_backend::cuda::operators::linear::CudaOperators;
+use ferrule_backend::cuda::providers::core;
+use ferrule_backend::cuda::providers::{CudaContext, DeviceBuffer, LaunchConfig};
 use std::sync::{Mutex, MutexGuard};
 
 static CUDA_TEST_LOCK: Mutex<()> = Mutex::new(());
@@ -144,7 +144,7 @@ fn hadamard_fp4_qat_restores_bf16_before_scale_selection() {
     );
     fp4_qat_in_place(&mut transformed, BLOCK);
 
-    let context = CudaArtifactOperatorContext::new().expect("create CUDA operator context");
+    let context = CudaOperators::new().expect("create CUDA operator context");
     let mut actual = context
         .upload_f32_buffer(&input)
         .expect("upload indexer values");
@@ -178,7 +178,7 @@ fn fp4_activation_pack_matches_cpu_reference() {
         return;
     };
     context.bind_to_thread().expect("bind CUDA context");
-    let module = kernels::load(&context).expect("load native core provider");
+    let module = core::load(&context).expect("load native core provider");
     let stream = context.default_stream();
 
     const ROWS: usize = 2;

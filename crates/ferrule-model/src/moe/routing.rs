@@ -102,15 +102,25 @@ pub enum RouterSelectionPolicy {
     Hash,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RouterWeightNormalization {
+    /// Keep score-function output as-is. Softmax remains normalized across all experts.
+    ScoreFunction,
+    /// Divide gathered selected scores by their sum.
+    SelectedSum,
+    /// Apply stable softmax to the selected original logits only.
+    SelectedSoftmax,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ExpertRouterPolicy {
     pub top_k: usize,
     pub score_function: RouterScoreFunction,
     pub selection: RouterSelectionPolicy,
-    /// Normalize selected non-softmax scores before applying `route_scale`.
-    /// Softmax scores are already normalized over all experts and are not
-    /// renormalized by the reference gate.
+    /// Compatibility flag consumed by the existing DeepSeek CUDA path.
+    /// Generic CPU routing uses weight_normalization as the source of truth.
     pub normalize_non_softmax_weights: bool,
+    pub weight_normalization: RouterWeightNormalization,
     pub route_scale: f32,
 }
 
@@ -121,6 +131,7 @@ impl ExpertRouterPolicy {
             score_function: RouterScoreFunction::SqrtSoftplus,
             selection: RouterSelectionPolicy::ScoreTopK,
             normalize_non_softmax_weights: true,
+            weight_normalization: RouterWeightNormalization::SelectedSum,
             route_scale,
         }
     }
@@ -132,6 +143,29 @@ impl ExpertRouterPolicy {
         }
     }
 
+    /// Standard sparse-MoE top-k with normalization over selected logits.
+    pub fn softmax_score_topk(top_k: usize, route_scale: f32) -> Self {
+        Self {
+            top_k,
+            score_function: RouterScoreFunction::Softmax,
+            selection: RouterSelectionPolicy::ScoreTopK,
+            normalize_non_softmax_weights: false,
+            weight_normalization: RouterWeightNormalization::SelectedSoftmax,
+            route_scale,
+        }
+    }
+
+    pub fn with_weight_normalization(
+        mut self,
+        weight_normalization: RouterWeightNormalization,
+    ) -> Self {
+        self.weight_normalization = weight_normalization;
+        self.normalize_non_softmax_weights =
+            matches!(weight_normalization, RouterWeightNormalization::SelectedSum)
+                && self.score_function != RouterScoreFunction::Softmax;
+        self
+    }
+
     pub fn route(
         &self,
         logits: &[f32],
@@ -141,12 +175,19 @@ impl ExpertRouterPolicy {
         validate_policy(self, logits, bias, hash_experts)?;
         let original_scores = score_logits(logits, self.score_function)?;
         let indices = match self.selection {
-            RouterSelectionPolicy::ScoreTopK => select_score_topk(
-                &original_scores,
-                bias,
-                self.top_k,
-                self.score_function == RouterScoreFunction::Softmax,
-            ),
+            RouterSelectionPolicy::ScoreTopK => {
+                let selection_scores = if self.score_function == RouterScoreFunction::Softmax {
+                    logits
+                } else {
+                    &original_scores
+                };
+                select_score_topk(
+                    selection_scores,
+                    bias,
+                    self.top_k,
+                    self.score_function == RouterScoreFunction::Softmax,
+                )?
+            }
             RouterSelectionPolicy::Hash => hash_experts
                 .expect("validated")
                 .iter()
@@ -155,26 +196,36 @@ impl ExpertRouterPolicy {
                 .collect::<Vec<_>>(),
         };
 
-        let mut weights = indices
-            .iter()
-            .map(|&expert| original_scores[expert])
-            .collect::<Vec<_>>();
-        if self.score_function != RouterScoreFunction::Softmax && self.normalize_non_softmax_weights
-        {
-            let sum = weights.iter().sum::<f32>();
-            if sum <= 0.0 || !sum.is_finite() {
+        let mut weights = match self.weight_normalization {
+            RouterWeightNormalization::ScoreFunction => indices
+                .iter()
+                .map(|&expert| original_scores[expert])
+                .collect::<Vec<_>>(),
+            RouterWeightNormalization::SelectedSum => {
+                let mut weights = indices
+                    .iter()
+                    .map(|&expert| original_scores[expert])
+                    .collect::<Vec<_>>();
+                normalize_selected_sum(&mut weights)?;
+                weights
+            }
+            RouterWeightNormalization::SelectedSoftmax => {
+                let selected_logits = indices
+                    .iter()
+                    .map(|&expert| logits[expert])
+                    .collect::<Vec<_>>();
+                softmax(&selected_logits)
+            }
+        };
+        for (rank, weight) in weights.iter_mut().enumerate() {
+            *weight *= self.route_scale;
+            if !weight.is_finite() {
                 return Err(Error::Model {
                     message: format!(
-                        "router selected non-positive or non-finite weight sum: {sum}"
+                        "router weight at selected rank {rank} overflowed after route scaling"
                     ),
                 });
             }
-            for weight in &mut weights {
-                *weight /= sum;
-            }
-        }
-        for weight in &mut weights {
-            *weight *= self.route_scale;
         }
 
         Ok(indices
@@ -307,7 +358,7 @@ fn select_score_topk(
     bias: Option<&[f32]>,
     top_k: usize,
     scores_are_softmax: bool,
-) -> Vec<usize> {
+) -> Result<Vec<usize>> {
     let mut ranked = scores
         .iter()
         .enumerate()
@@ -317,16 +368,40 @@ fn select_score_topk(
             } else {
                 score + bias.map(|b| b[expert]).unwrap_or(0.0)
             };
-            (expert, selection_score)
+            if !selection_score.is_finite() {
+                return Err(Error::Model {
+                    message: format!(
+                        "router selection score at expert {expert} overflowed: {selection_score}"
+                    ),
+                });
+            }
+            Ok((expert, selection_score))
         })
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>>>()?;
     ranked.sort_by(|(left_idx, left_score), (right_idx, right_score)| {
-        right_score
-            .total_cmp(left_score)
-            .then_with(|| left_idx.cmp(right_idx))
+        if left_score == right_score {
+            left_idx.cmp(right_idx)
+        } else {
+            right_score
+                .partial_cmp(left_score)
+                .expect("router selection scores validated as finite")
+        }
     });
     ranked.truncate(top_k);
-    ranked.into_iter().map(|(expert, _)| expert).collect()
+    Ok(ranked.into_iter().map(|(expert, _)| expert).collect())
+}
+
+fn normalize_selected_sum(weights: &mut [f32]) -> Result<()> {
+    let sum = weights.iter().sum::<f32>();
+    if sum <= 0.0 || !sum.is_finite() {
+        return Err(Error::Model {
+            message: format!("router selected non-positive or non-finite weight sum: {sum}"),
+        });
+    }
+    for weight in weights {
+        *weight /= sum;
+    }
+    Ok(())
 }
 
 fn softmax(logits: &[f32]) -> Vec<f32> {
@@ -419,6 +494,7 @@ mod tests {
             score_function: RouterScoreFunction::Softmax,
             selection: RouterSelectionPolicy::ScoreTopK,
             normalize_non_softmax_weights: true,
+            weight_normalization: RouterWeightNormalization::ScoreFunction,
             route_scale: 1.0,
         };
         let routes = policy
@@ -427,6 +503,77 @@ mod tests {
         assert_eq!(routes[0].expert, 1);
         assert!(routes[0].weight < 1.0);
         assert_close(routes[0].weight, 1.0f32.exp() / (1.0 + 1.0f32.exp()));
+    }
+
+    #[test]
+    fn selected_softmax_normalizes_only_top_k_with_stable_max_subtraction() {
+        let policy = ExpertRouterPolicy::softmax_score_topk(2, 1.5);
+        let routes = policy
+            .route(&[f32::MAX, f32::MAX, -f32::MAX], None, None)
+            .unwrap();
+        assert_eq!(
+            routes.iter().map(|route| route.expert).collect::<Vec<_>>(),
+            vec![0, 1]
+        );
+        assert_close(routes[0].weight, 0.75);
+        assert_close(routes[1].weight, 0.75);
+    }
+
+    #[test]
+    fn softmax_topk_ranks_logits_without_full_softmax_underflow_ties() {
+        let policy = ExpertRouterPolicy::softmax_score_topk(2, 1.0);
+        let routes = policy.route(&[1_000.0, 0.0, 1.0], None, None).unwrap();
+        assert_eq!(
+            routes.iter().map(|route| route.expert).collect::<Vec<_>>(),
+            vec![0, 2]
+        );
+    }
+
+    #[test]
+    fn score_topk_ties_are_ordered_by_ascending_expert_id() {
+        let policy = ExpertRouterPolicy::softmax_score_topk(3, 1.0);
+        let routes = policy.route(&[2.0, 2.0, 2.0, 1.0], None, None).unwrap();
+        assert_eq!(
+            routes.iter().map(|route| route.expert).collect::<Vec<_>>(),
+            vec![0, 1, 2]
+        );
+        for route in routes {
+            assert_close(route.weight, 1.0 / 3.0);
+        }
+    }
+
+    #[test]
+    fn signed_zero_ties_use_ascending_expert_id() {
+        let policy = ExpertRouterPolicy::softmax_score_topk(2, 1.0);
+        let routes = policy.route(&[-0.0, 0.0], None, None).unwrap();
+        assert_eq!(
+            routes.iter().map(|route| route.expert).collect::<Vec<_>>(),
+            vec![0, 1]
+        );
+    }
+
+    #[test]
+    fn router_rejects_nan_and_bias_shape_mismatch() {
+        let policy = ExpertRouterPolicy::softmax_score_topk(1, 1.0);
+        let err = policy.route(&[0.0, f32::NAN], None, None).unwrap_err();
+        assert!(err.to_string().contains("not finite"));
+
+        let err = policy.route(&[0.0, 1.0], Some(&[0.0]), None).unwrap_err();
+        assert!(err.to_string().contains("bias length mismatch"));
+    }
+
+    #[test]
+    fn router_rejects_route_weight_overflow() {
+        let policy = ExpertRouterPolicy {
+            top_k: 1,
+            score_function: RouterScoreFunction::SqrtSoftplus,
+            selection: RouterSelectionPolicy::ScoreTopK,
+            normalize_non_softmax_weights: false,
+            weight_normalization: RouterWeightNormalization::ScoreFunction,
+            route_scale: f32::MAX,
+        };
+        let err = policy.route(&[f32::MAX], None, None).unwrap_err();
+        assert!(err.to_string().contains("overflowed after route scaling"));
     }
 
     #[test]

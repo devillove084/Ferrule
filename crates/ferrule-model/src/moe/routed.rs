@@ -17,6 +17,37 @@ use crate::moe::streaming::{
     ExpertId, ExpertStreamingPlanner, ExpertStreamingReader, ExpertStreamingStep,
 };
 
+#[cfg(feature = "cuda")]
+mod cuda;
+#[cfg(feature = "cuda")]
+pub use cuda::{
+    PreparedRoutedMoe, RoutedMoeAttribution, RoutedMoeCancelProgress, RoutedMoeContinuation,
+    RoutedMoeExecution, RoutedMoePendingExpert, RoutedMoeProgress, RoutedMoeQuiescence,
+    RoutedMoeRouteState, RoutedMoeScratch, RoutedMoeSequenceEvent,
+};
+
+/// Model-neutral routed-MoE payload shared by CPU reference and device preparation.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RoutedMoePayload {
+    pub router: RouterWeights,
+    pub router_policy: ExpertRouterPolicy,
+    pub shared_expert: SwiGluFfnPayload,
+}
+
+impl RoutedMoePayload {
+    pub const fn layer(&self) -> usize {
+        self.router.layer
+    }
+
+    pub fn hidden_size(&self) -> usize {
+        self.router.weight.format.in_features()
+    }
+
+    pub fn expert_count(&self) -> usize {
+        self.router.weight.format.out_features()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct RoutedMoeStepOutput {
     pub routes: Vec<ExpertRoute>,

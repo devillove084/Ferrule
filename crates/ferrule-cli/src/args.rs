@@ -2,7 +2,6 @@ use std::net::IpAddr;
 
 use clap::{Args, Parser, Subcommand};
 
-#[cfg(feature = "cuda")]
 #[derive(Debug, Clone)]
 pub(crate) struct GenerationConfig {
     pub(crate) max_new_tokens: usize,
@@ -11,7 +10,6 @@ pub(crate) struct GenerationConfig {
     pub(crate) ctx_size: usize,
 }
 
-#[cfg(feature = "cuda")]
 impl Default for GenerationConfig {
     fn default() -> Self {
         Self {
@@ -43,6 +41,9 @@ pub(crate) enum Command {
         max_tokens: usize,
         #[command(flatten)]
         sampling: SamplingArgs,
+        /// Override the model execution backend (cpu or cuda).
+        #[arg(long)]
+        backend: Option<String>,
         /// Override auto-detected chat template.
         #[arg(long = "chat-template")]
         chat_template: Option<String>,
@@ -59,14 +60,14 @@ pub(crate) enum Command {
         /// Max new tokens per turn.
         #[arg(short = 'n', long = "max-tokens", default_value_t = 1)]
         max_tokens: usize,
-        /// Chat template name (e.g. deepseek-v4).
+        /// Chat template name.
         #[arg(long = "chat-template")]
         chat_template: Option<String>,
 
         /// Number of warmup decode tokens before measured turns.
         #[arg(long, default_value_t = 0)]
         warmup_tokens: usize,
-        /// Number of DSV4 base layers to execute.
+        /// Maximum number of model layers to execute.
         #[arg(long, default_value_t = 43)]
         max_layers: usize,
         /// Runtime scheduler prefill chunk size.
@@ -90,62 +91,6 @@ pub(crate) enum Command {
     /// Inspect a WeightPack file header.
     #[command(name = "inspect-weightpack")]
     InspectWeightPack { path: String },
-    /// Smoke-test artifact-preserving expert streaming from local HF shards.
-    #[command(name = "expert-stream-smoke")]
-    ExpertStreamSmoke {
-        model: String,
-        #[arg(long, default_value_t = 0)]
-        layer: usize,
-        #[arg(long, default_value_t = 0)]
-        expert: usize,
-        #[arg(long = "max-slice-mb", default_value_t = 64)]
-        max_slice_mb: u64,
-    },
-
-    /// Generate greedily from real local DeepSeek-V4 HF shards.
-    #[command(name = "deepseek-v4-generate")]
-    DeepSeekV4Generate {
-        model: String,
-        #[arg(short = 'p', long, default_value = "Hello")]
-        prompt: String,
-        /// Number of new tokens to generate greedily.
-        #[arg(short = 'n', long = "max-tokens", default_value_t = 4)]
-        max_tokens: usize,
-        /// Number of DSV4 base layers to execute.
-        #[arg(long, default_value_t = 43)]
-        max_layers: usize,
-        /// lm_head chunk size in rows for full-vocab top-1 scans.
-        #[arg(long, default_value_t = 4096)]
-        output_head_chunk_rows: usize,
-        /// Maximum single artifact tensor read size for top-level/layer tensors.
-        #[arg(long = "max-tensor-mb", default_value_t = 128)]
-        max_tensor_mb: u64,
-        /// Maximum single expert artifact read size.
-        #[arg(long = "expert-max-slice-mb", default_value_t = 64)]
-        expert_reader_max_slice_mb: u64,
-        /// Do not stop when eos_token_id is generated.
-        #[arg(long)]
-        no_stop_eos: bool,
-        /// Disable model-native proposal generation and run target-only decode.
-        #[arg(long)]
-        no_speculative: bool,
-        /// Print generated token ids/logits to stderr.
-        #[arg(long)]
-        verbose_tokens: bool,
-        /// Wrap --prompt with the official DeepSeek-V4 chat encoding.
-        #[arg(long)]
-        chat: bool,
-        /// Emit the versioned runtime materialization report schema (currently v2).
-        #[arg(long)]
-        json: bool,
-        /// Number of warmup decode tokens before timing.
-        #[arg(long, default_value_t = 0)]
-        warmup_tokens: usize,
-
-        /// Routed-expert slots per layer (0 = automatic device-budget planning).
-        #[arg(long, default_value_t = 0)]
-        moe_hotset_experts: usize,
-    },
 }
 
 #[derive(Args, Clone)]
@@ -153,8 +98,12 @@ pub(crate) struct ServeArgs {
     /// Local Hugging Face model directory.
     pub(crate) model: String,
     /// Public model ID returned by /v1/models and accepted by requests.
-    #[arg(long = "served-model-name", default_value = "deepseek-v4")]
-    pub(crate) served_model_name: String,
+    /// Defaults to the resolved model adapter ID.
+    #[arg(long = "served-model-name")]
+    pub(crate) served_model_name: Option<String>,
+    /// Override the model execution backend (cpu or cuda).
+    #[arg(long)]
+    pub(crate) backend: Option<String>,
     /// Listening address.
     #[arg(long, default_value = "127.0.0.1")]
     pub(crate) host: IpAddr,
@@ -182,7 +131,7 @@ pub(crate) struct ServeArgs {
     /// Maximum packed prefill plus decode tokens in one scheduler action.
     #[arg(long = "max-batch-tokens", default_value_t = 512)]
     pub(crate) max_batch_tokens: usize,
-    /// Hard budget for the preallocated physical CUDA KV data planes in MiB.
+    /// Hard budget for the model's physical KV data planes in MiB.
     #[arg(long = "kv-cache-mb", default_value_t = 1024)]
     pub(crate) kv_cache_mb: u64,
     /// Bounded requests waiting for model-worker admission.
@@ -194,9 +143,9 @@ pub(crate) struct ServeArgs {
     /// Maximum time in seconds to wait for tokenizer/runtime admission.
     #[arg(long = "admission-timeout-secs", default_value_t = 30)]
     pub(crate) admission_timeout_secs: u64,
-    /// Number of DSV4 base layers to execute.
-    #[arg(long, default_value_t = 43)]
-    pub(crate) max_layers: usize,
+    /// Maximum model layers to execute (defaults to the descriptor layer count).
+    #[arg(long)]
+    pub(crate) max_layers: Option<usize>,
     /// lm_head chunk size in rows for full-vocabulary top-1 scans.
     #[arg(long, default_value_t = 4096)]
     pub(crate) output_head_chunk_rows: usize,
@@ -261,7 +210,6 @@ pub(crate) struct SamplingArgs {
     ctx_size: usize,
 }
 
-#[cfg(feature = "cuda")]
 impl SamplingArgs {
     pub(crate) fn supports_fast_greedy(&self) -> bool {
         self.temp <= 0.0 && (self.repeat_penalty - 1.0).abs() < f32::EPSILON && self.logprobs == 0
@@ -292,11 +240,48 @@ mod tests {
     }
 
     #[test]
-    fn serve_defaults_to_automatic_device_budget_planning() {
+    fn cli_exposes_only_supported_commands() {
+        let mut command = Cli::command();
+        let command_names = command
+            .get_subcommands()
+            .filter(|subcommand| subcommand.get_name() != "help")
+            .map(|subcommand| subcommand.get_name().to_owned())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            command_names,
+            [
+                "info",
+                "cuda",
+                "chat",
+                "serve",
+                "bench-interactive",
+                "inspect-weightpack",
+            ]
+        );
+
+        let help = command.render_long_help().to_string();
+        assert!(help.contains("inspect-weightpack"));
+        assert!(!help.contains("expert-stream-smoke"));
+        assert!(!help.contains("deepseek-v4-generate"));
+    }
+
+    #[test]
+    fn removed_inspect_commands_are_rejected() {
+        for command in ["expert-stream-smoke", "deepseek-v4-generate"] {
+            assert!(Cli::try_parse_from(["ferrule", command]).is_err());
+        }
+    }
+
+    #[test]
+    fn serve_defaults_to_automatic_device_budget_and_model_layers() {
         let cli = Cli::try_parse_from(["ferrule", "serve", "model"]).unwrap();
         let Command::Serve(args) = cli.command else {
             panic!("serve command was not parsed");
         };
         assert_eq!(args.moe_hotset_experts, 0);
+        assert_eq!(args.max_layers, None);
+        assert_eq!(args.served_model_name, None);
+        assert_eq!(args.backend, None);
     }
 }

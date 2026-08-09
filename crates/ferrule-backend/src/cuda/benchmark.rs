@@ -10,6 +10,7 @@ pub struct CudaSmokeBenchmark {
     pub gpu_gemv_ms: f64,
     pub kernel_launch_overhead_us: f64,
     pub rms_us: f64,
+    pub allocator: crate::cuda::CudaAllocatorMetrics,
 }
 
 impl CudaSmokeBenchmark {
@@ -33,7 +34,7 @@ pub fn run_gemv_rms_smoke_benchmark(
 
     let ctx = cu(CudaContext::new(0))?;
     cu(ctx.bind_to_thread())?;
-    let module = cu(crate::cuda::kernels::kernels::load(&ctx))?;
+    let module = cu(crate::cuda::providers::core::load(&ctx))?;
     let stream = ctx.default_stream();
     let xd = cu(DeviceBuffer::from_host(&stream, &x))?;
     let wd = cu(DeviceBuffer::from_host(&stream, &w))?;
@@ -124,11 +125,13 @@ pub fn run_gemv_rms_smoke_benchmark(
     }
     let cpu_ms = t0.elapsed().as_secs_f64() * 1000.0 / gemv_iters as f64;
 
+    let allocator = ctx.allocator_metrics();
     Ok(CudaSmokeBenchmark {
         dim,
         cpu_ms,
         gpu_gemv_ms,
         kernel_launch_overhead_us,
         rms_us,
+        allocator,
     })
 }
