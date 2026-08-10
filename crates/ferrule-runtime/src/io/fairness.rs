@@ -131,7 +131,7 @@ pub enum FairQueueError {
 
 /// Owner-side classification of a queued item.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum FairQueueEntryState {
+pub enum FairQueueEntryState {
     /// The item is current and its hard physical claims can be admitted.
     Ready,
     /// The item is current but must wait for hard physical capacity.
@@ -290,7 +290,8 @@ impl<T> FairQueue<T> {
         })
     }
 
-    pub(crate) fn pop_next_by(
+    /// Selects one transition with an explicit per-item state classification.
+    pub fn pop_next_by(
         &mut self,
         now: u64,
         mut state: impl FnMut(&T) -> FairQueueEntryState,

@@ -306,7 +306,6 @@ struct ResidentRuntimeParts<R: MultiSessionRunner> {
     registry: LoadRegistry<Box<dyn RuntimeMaterializationProvider>>,
     resolver: RuntimeMaterializationResolver,
     warmup_requests: Vec<ferrule_model::MaterializationRequest>,
-    #[cfg(test)]
     uninstalled_resolver: Option<RuntimeMaterializationResolver>,
 }
 
@@ -545,7 +544,6 @@ where
     completion_hub: ferrule_common::CompletionHub,
     load_registry: LoadRegistry<Box<dyn RuntimeMaterializationProvider>>,
     materialization_resolver: RuntimeMaterializationResolver,
-    #[cfg(test)]
     uninstalled_materialization_resolver: Option<RuntimeMaterializationResolver>,
     continuations: HashMap<ContinuationId, RegisteredModelContinuation>,
     transaction_continuations: HashMap<ExecutionTransactionId, HashSet<ContinuationId>>,
@@ -749,8 +747,6 @@ where
         } else {
             Some(resolver.clone())
         };
-        #[cfg(not(test))]
-        drop(uninstalled_resolver);
 
         Ok(ResidentRuntimeParts {
             executor: NativeMultiSessionExecutor::new(runner),
@@ -758,7 +754,6 @@ where
             registry,
             resolver,
             warmup_requests,
-            #[cfg(test)]
             uninstalled_resolver,
         })
     }
@@ -776,7 +771,6 @@ where
             registry,
             resolver,
             warmup_requests,
-            #[cfg(test)]
             uninstalled_resolver,
         } = runtime;
         let prefix_cache = RadixPrefixCache::new(scheduler.config().prefix_cache_capacity_pages);
@@ -803,7 +797,6 @@ where
             completion_hub,
             load_registry: registry,
             materialization_resolver: resolver,
-            #[cfg(test)]
             uninstalled_materialization_resolver: uninstalled_resolver,
             continuations: HashMap::new(),
             transaction_continuations: HashMap::new(),
@@ -973,7 +966,7 @@ where
         self.shutting_down
     }
 
-    #[cfg(test)]
+    /// Replaces the materialization provider before any execution suspends.
     pub fn try_with_materialization_provider<B>(
         mut self,
         provider: B,
@@ -1097,7 +1090,7 @@ where
         self.materialization_resolver.stats()
     }
 
-    #[cfg(test)]
+    /// Installs the page manager, panicking on an invalid test topology.
     pub fn with_page_manager(mut self, page_manager: KvPageManager) -> Self {
         let explicit_kv_limit = self
             .load_registry
@@ -3674,6 +3667,21 @@ where
                 .map_err(|error| error.into_parts().0)?,
             PendingResidentKv::Prepared(prepared) => manager.abort_prepared_commit(prepared),
         };
+        self.release_and_confirm_retirement(retirement)
+    }
+
+    /// Retires every page owned by one sequence slot and confirms the retirement.
+    pub fn retire_sequence_pages(
+        &mut self,
+        state_slot: ferrule_common::execution::StateSlot,
+    ) -> Result<()> {
+        let retirement = self
+            .page_manager
+            .as_mut()
+            .ok_or_else(|| Error::InvalidRequest {
+                message: "the authoritative KV page manager is not installed".into(),
+            })?
+            .free_sequence_pages(state_slot)?;
         self.release_and_confirm_retirement(retirement)
     }
 
@@ -6379,8 +6387,9 @@ mod tests {
         ResourceSource, TokenLogit, TransactionEndIntent, TransactionEndProgress,
     };
 
-    use crate::io::physical_tests::{MockPhysicalCommand, MockPhysicalProvider};
-    use crate::io::{CohortId, FairQueueConfig, FakeMaterializationProvider};
+    use crate::io::testing::FakeMaterializationProvider;
+    use crate::io::testing::{MockPhysicalCommand, MockPhysicalProvider};
+    use crate::io::{CohortId, FairQueueConfig};
     use crate::scheduling::{
         FixedSequenceSlotPool, PhysicalResourceBroker, PhysicalResourceLimit, RequestId,
         SequenceStatus,
@@ -8507,7 +8516,7 @@ mod tests {
         assert_eq!(
             handle.command_count(|command| matches!(
                 command,
-                crate::io::physical_tests::MockPhysicalCommand::Prepare(_)
+                crate::io::testing::MockPhysicalCommand::Prepare(_)
             )),
             2
         );

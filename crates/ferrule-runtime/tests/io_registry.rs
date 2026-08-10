@@ -13,8 +13,12 @@ use ferrule_common::materialization_io::{
     MaterializationResourceLimits, MaterializationResourcePlan, MaterializationResourceRequirements,
 };
 
-use super::*;
-use crate::scheduling::{
+use ferrule_runtime::io::*;
+
+use ferrule_runtime::io::testing::{
+    FakeCompletionSpec, FakeMaterializationCommand, FakeMaterializationProvider, fake_slot_for_key,
+};
+use ferrule_runtime::scheduling::{
     ExecutionPhase, ExecutionPhaseSet, PhysicalResourceBroker, PhysicalResourceClaim,
     PhysicalResourceError, PhysicalResourceLimit, ResourceDemand, ResourceKind,
 };
@@ -98,7 +102,7 @@ fn preparation(key: MaterializationKey) -> ferrule_model::MaterializationPrepara
         key.resource(),
         key.backend(),
         key.device(),
-        super::provider::fake_slot_for_key(key),
+        fake_slot_for_key(key),
         key.destination_generation(),
     );
     ferrule_model::MaterializationTransfer::new(key, binding, None)
@@ -132,7 +136,7 @@ fn resident_request(key: MaterializationKey) -> LoadRequest {
         key.resource(),
         key.backend(),
         key.device(),
-        super::provider::fake_slot_for_key(key),
+        fake_slot_for_key(key),
         key.destination_generation(),
     );
     let resident = ferrule_model::MaterializationResident::new(key, binding).unwrap();
@@ -2106,13 +2110,13 @@ fn production_fairness_accepts_large_materialization_and_rejects_capacity_plus_o
     queue
         .push(
             'm',
-            super::fairness::FairQueueBand::Required,
+            ferrule_runtime::io::FairQueueBand::Required,
             MATERIALIZATION_BYTES,
             0,
         )
         .unwrap();
     assert!(matches!(
-        queue.push('x', super::fairness::FairQueueBand::Required, MATERIALIZATION_BYTES + 1, 0),
+        queue.push('x', ferrule_runtime::io::FairQueueBand::Required, MATERIALIZATION_BYTES + 1, 0),
         Err(FairQueueError::TransitionTooLarge { cost, maximum })
             if cost == MATERIALIZATION_BYTES + 1 && maximum == MATERIALIZATION_BYTES
     ));
@@ -2157,7 +2161,12 @@ fn production_fairness_rejects_zero_and_out_of_signed_range_capacity() {
     }
     let mut queue = FairQueue::new(config).unwrap();
     queue
-        .push('x', super::fairness::FairQueueBand::Required, signed_max, 0)
+        .push(
+            'x',
+            ferrule_runtime::io::FairQueueBand::Required,
+            signed_max,
+            0,
+        )
         .unwrap();
     assert_eq!(queue.pop_next(0, |_| true), Some('x'));
 
@@ -2186,7 +2195,7 @@ fn production_fairness_keeps_transaction_prefetch_bounded_under_required_pressur
     queue
         .push(
             't',
-            super::fairness::FairQueueBand::Prefetch,
+            ferrule_runtime::io::FairQueueBand::Prefetch,
             MATERIALIZATION_BYTES,
             0,
         )
@@ -2196,7 +2205,7 @@ fn production_fairness_keeps_transaction_prefetch_bounded_under_required_pressur
         queue
             .push(
                 'l',
-                super::fairness::FairQueueBand::Required,
+                ferrule_runtime::io::FairQueueBand::Required,
                 MATERIALIZATION_BYTES,
                 tick,
             )
@@ -2230,7 +2239,7 @@ fn fair_queue_dequeues_ten_thousand_fifo_entries_with_one_check_each() {
     let mut queue = FairQueue::new(config).unwrap();
     for item in 0..ENTRIES {
         queue
-            .push(item, super::fairness::FairQueueBand::Background, 1, 0)
+            .push(item, ferrule_runtime::io::FairQueueBand::Background, 1, 0)
             .unwrap();
     }
 
@@ -2239,7 +2248,7 @@ fn fair_queue_dequeues_ten_thousand_fifo_entries_with_one_check_each() {
         assert_eq!(
             queue.pop_next_by(expected as u64, |_| {
                 checks += 1;
-                super::fairness::FairQueueEntryState::Ready
+                ferrule_runtime::io::FairQueueEntryState::Ready
             }),
             Some(expected)
         );
@@ -2255,7 +2264,7 @@ fn fair_queue_lazily_drops_stale_entries_and_rotates_blocked_heads() {
     let mut queue = FairQueue::new(fairness_config()).unwrap();
     for item in 0..ENTRIES {
         queue
-            .push(item, super::fairness::FairQueueBand::Required, 1, 0)
+            .push(item, ferrule_runtime::io::FairQueueBand::Required, 1, 0)
             .unwrap();
     }
     let mut checks = 0;
@@ -2263,11 +2272,11 @@ fn fair_queue_lazily_drops_stale_entries_and_rotates_blocked_heads() {
         queue.pop_next_by(0, |item| {
             checks += 1;
             if *item < ENTRIES - 2 {
-                super::fairness::FairQueueEntryState::Stale
+                ferrule_runtime::io::FairQueueEntryState::Stale
             } else if *item == ENTRIES - 2 {
-                super::fairness::FairQueueEntryState::Blocked
+                ferrule_runtime::io::FairQueueEntryState::Blocked
             } else {
-                super::fairness::FairQueueEntryState::Ready
+                ferrule_runtime::io::FairQueueEntryState::Ready
             }
         }),
         Some(ENTRIES - 1)
@@ -2281,10 +2290,10 @@ fn fair_queue_lazily_drops_stale_entries_and_rotates_blocked_heads() {
 fn fair_queue_prefers_required_work_on_equal_age() {
     let mut queue = FairQueue::new(fairness_config()).unwrap();
     queue
-        .push('p', super::fairness::FairQueueBand::Prefetch, 1, 0)
+        .push('p', ferrule_runtime::io::FairQueueBand::Prefetch, 1, 0)
         .unwrap();
     queue
-        .push('r', super::fairness::FairQueueBand::Required, 1, 0)
+        .push('r', ferrule_runtime::io::FairQueueBand::Required, 1, 0)
         .unwrap();
     assert_eq!(queue.pop_next(0, |_| true), Some('r'));
 }
@@ -2295,16 +2304,16 @@ fn aged_transaction_prefetch_forces_progress_under_required_pressure() {
     config.required_quantum = 8;
     let mut queue = FairQueue::new(config).unwrap();
     queue
-        .push('p', super::fairness::FairQueueBand::Prefetch, 4, 0)
+        .push('p', ferrule_runtime::io::FairQueueBand::Prefetch, 4, 0)
         .unwrap();
     for tick in 0..2 {
         queue
-            .push('r', super::fairness::FairQueueBand::Required, 1, tick)
+            .push('r', ferrule_runtime::io::FairQueueBand::Required, 1, tick)
             .unwrap();
         assert_eq!(queue.pop_next(tick, |_| true), Some('r'));
     }
     queue
-        .push('r', super::fairness::FairQueueBand::Required, 1, 2)
+        .push('r', ferrule_runtime::io::FairQueueBand::Required, 1, 2)
         .unwrap();
     assert_eq!(queue.pop_next(2, |_| true), Some('p'));
 }
@@ -2313,7 +2322,7 @@ fn aged_transaction_prefetch_forces_progress_under_required_pressure() {
 fn prefetch_has_no_aging_forced_progress() {
     let mut queue = FairQueue::new(fairness_config()).unwrap();
     queue
-        .push('x', super::fairness::FairQueueBand::Background, 4, 0)
+        .push('x', ferrule_runtime::io::FairQueueBand::Background, 4, 0)
         .unwrap();
     assert_eq!(queue.pop_next(100, |_| true), None);
 }
@@ -2322,7 +2331,7 @@ fn prefetch_has_no_aging_forced_progress() {
 fn fairness_never_bypasses_hard_feasibility() {
     let mut queue = FairQueue::new(fairness_config()).unwrap();
     queue
-        .push('x', super::fairness::FairQueueBand::Required, 1, 0)
+        .push('x', ferrule_runtime::io::FairQueueBand::Required, 1, 0)
         .unwrap();
     assert_eq!(queue.pop_next(100, |_| false), None);
 }
@@ -2331,10 +2340,10 @@ fn fairness_never_bypasses_hard_feasibility() {
 fn fairness_skips_infeasible_head_for_feasible_work() {
     let mut queue = FairQueue::new(fairness_config()).unwrap();
     queue
-        .push('x', super::fairness::FairQueueBand::Required, 1, 0)
+        .push('x', ferrule_runtime::io::FairQueueBand::Required, 1, 0)
         .unwrap();
     queue
-        .push('y', super::fairness::FairQueueBand::Required, 1, 0)
+        .push('y', ferrule_runtime::io::FairQueueBand::Required, 1, 0)
         .unwrap();
     assert_eq!(queue.pop_next(0, |item| *item == 'y'), Some('y'));
 }
@@ -2343,7 +2352,7 @@ fn fairness_skips_infeasible_head_for_feasible_work() {
 fn fair_queue_rejects_cost_over_max_transition() {
     let mut queue = FairQueue::new(fairness_config()).unwrap();
     assert!(matches!(
-        queue.push('x', super::fairness::FairQueueBand::Required, 9, 0),
+        queue.push('x', ferrule_runtime::io::FairQueueBand::Required, 9, 0),
         Err(FairQueueError::TransitionTooLarge { .. })
     ));
 }
@@ -2356,10 +2365,13 @@ fn forced_progress_debt_stays_bounded() {
     config.debt_limit = 3;
     let mut queue = FairQueue::new(config).unwrap();
     queue
-        .push('p', super::fairness::FairQueueBand::Prefetch, 4, 0)
+        .push('p', ferrule_runtime::io::FairQueueBand::Prefetch, 4, 0)
         .unwrap();
     assert_eq!(queue.pop_next(0, |_| true), Some('p'));
-    assert_eq!(queue.deficit(super::fairness::FairQueueBand::Prefetch), -3);
+    assert_eq!(
+        queue.deficit(ferrule_runtime::io::FairQueueBand::Prefetch),
+        -3
+    );
 }
 
 #[test]

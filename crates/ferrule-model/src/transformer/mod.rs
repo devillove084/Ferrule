@@ -63,6 +63,3 @@ pub use state_dict::{
     ExternalTensorMeta, NameMapError, NameMapper, NameMapping, StateDictBindError, StateDictBinder,
     StateDictSchema, StateDictSchemaBuilder, StateDictSchemaError, TensorTransform,
 };
-
-#[cfg(test)]
-mod tests;

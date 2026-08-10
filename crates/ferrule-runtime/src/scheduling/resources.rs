@@ -418,8 +418,7 @@ impl PhysicalResourceBroker {
         })
     }
 
-    /// A generous finite catalog used only by deterministic CPU tests.
-    #[cfg(test)]
+    /// A generous finite catalog used by deterministic tests and fixtures.
     pub fn testing_default() -> Self {
         Self::new(ResourceKind::ALL.map(|kind| {
             let capacity = match kind {

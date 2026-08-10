@@ -10,15 +10,13 @@ use ferrule_common::execution::ExecutionTransactionId;
 use ferrule_common::io_protocol::{
     BackendId, CancellationReason, CompletionEvent, CompletionExpectation, CompletionGeneration,
     CompletionOutcome, CompletionTimestamp, ContinuationId, DependencySet, DestinationSlotId,
-    DeviceId, DispatchFenceContract, FailureReason, FenceId, IoProtocolError, LoadStage,
-    MappingEpoch, MaterializationKey, ModelInstanceId, OperationId, ResidencyBinding,
-    ResidencyLeaseSet, RetirementReason, RetirementRecord, RetirementToken, StaleReason,
-    ValidatedResidencyBinding, WaiterId,
+    DeviceId, DispatchFenceContract, FailureReason, FenceId, LoadStage, MappingEpoch,
+    MaterializationKey, ModelInstanceId, OperationId, ResidencyBinding, ResidencyLeaseSet,
+    RetirementReason, RetirementRecord, RetirementToken, StaleReason, ValidatedResidencyBinding,
+    WaiterId,
 };
-
-use ferrule_common::materialization_io::{
-    MaterializationResourceError, MaterializationResourcePlan,
-};
+use ferrule_common::materialization_io::MaterializationResourcePlan;
+use ferrule_common::{IoProtocolError, MaterializationResourceError};
 use ferrule_model::{MaterializationPreparation, ResourceRetention};
 
 use crate::io::fairness::{
@@ -571,7 +569,7 @@ impl<P: RuntimeMaterializationProvider> LoadRegistry<P> {
         })
     }
 
-    #[cfg(test)]
+    /// Constructs a registry with a generous deterministic resource catalog.
     pub fn with_testing_resources(provider: P) -> Result<Self, RegistryError> {
         Self::new(
             provider,
@@ -1552,7 +1550,9 @@ impl<P: RuntimeMaterializationProvider> LoadRegistry<P> {
         self.process_one_completion_with_observation(None)
     }
 
-    pub(crate) fn process_one_completion_at(
+    /// Processes one queued completion with an explicit observation timestamp.
+    /// Deterministic-time variant of [`Self::process_one_completion`].
+    pub fn process_one_completion_at(
         &mut self,
         observed_ns: u64,
     ) -> Result<CompletionDisposition, RegistryError> {
