@@ -5,22 +5,7 @@
 //! reports. Admission and custody accounting live in the runtime-owned
 //! resource broker; no parallel permit service exists here.
 
-use snafu::Snafu;
-
-pub type MaterializationResourceResult<T> = std::result::Result<T, MaterializationResourceError>;
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Snafu)]
-pub enum MaterializationResourceError {
-    #[snafu(display("{context} {resource} requirement {requested} exceeds capacity {capacity}"))]
-    ExceedsCapacity {
-        context: &'static str,
-        resource: &'static str,
-        requested: u64,
-        capacity: u64,
-    },
-    #[snafu(display("physical materialization plan requires non-zero {resource}"))]
-    ZeroRequirement { resource: &'static str },
-}
+use crate::error::{MaterializationResourceError, MaterializationResourceResult};
 
 /// Exact resources retained by one physical materialization operation.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]

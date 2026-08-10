@@ -694,13 +694,12 @@ impl IoUringReadState {
         let entries = u32::try_from(entries).map_err(|_| Error::Model {
             message: "io_uring expert queue depth exceeds u32".into(),
         })?;
-        let ring = IoUring::new(entries).map_err(|error| Error::Model {
-            message: format!("create expert io_uring: {error}"),
-        })?;
+        let ring = IoUring::new(entries)
+            .map_err(|error| Error::context("create expert io_uring", error.into()))?;
         ring.submitter()
             .register_files_sparse(FIXED_FILE_CAPACITY as u32)
-            .map_err(|error| Error::Model {
-                message: format!("register sparse expert io_uring files: {error}"),
+            .map_err(|error| {
+                Error::context("register sparse expert io_uring files", error.into())
             })?;
 
         let iovecs = buffers
@@ -710,9 +709,8 @@ impl IoUringReadState {
         // SAFETY: every iovec points into a fixed-size boxed allocation owned by
         // this state. Buffers are never resized and the ring is unregistered or
         // dropped before the state releases those allocations.
-        unsafe { ring.submitter().register_buffers(&iovecs) }.map_err(|error| Error::Model {
-            message: format!("register expert io_uring buffers: {error}"),
-        })?;
+        unsafe { ring.submitter().register_buffers(&iovecs) }
+            .map_err(|error| Error::context("register expert io_uring buffers", error.into()))?;
 
         #[cfg(feature = "cuda")]
         let buffer_count = buffers.len();
@@ -750,8 +748,8 @@ impl IoUringReadState {
         self.ring
             .submitter()
             .register_eventfd(eventfd.as_raw_fd())
-            .map_err(|error| Error::Model {
-                message: format!("register expert io_uring completion eventfd: {error}"),
+            .map_err(|error| {
+                Error::context("register expert io_uring completion eventfd", error.into())
             })?;
         self.completion_eventfd_registered = true;
         Ok(())
@@ -764,8 +762,11 @@ impl IoUringReadState {
         self.ring
             .submitter()
             .unregister_eventfd()
-            .map_err(|error| Error::Model {
-                message: format!("unregister expert io_uring completion eventfd: {error}"),
+            .map_err(|error| {
+                Error::context(
+                    "unregister expert io_uring completion eventfd",
+                    error.into(),
+                )
             })?;
         self.completion_eventfd_registered = false;
         Ok(())
@@ -1485,9 +1486,10 @@ impl IoUringReadState {
         if self.pinned_queued_submissions.is_empty() {
             return Ok(0);
         }
-        let accepted = self.ring.submit().map_err(|error| Error::Model {
-            message: format!("submit expert io_uring reads: {error}"),
-        })?;
+        let accepted = self
+            .ring
+            .submit()
+            .map_err(|error| Error::context("submit expert io_uring reads", error.into()))?;
         self.confirm_queued_pinned_submissions(accepted)?;
         Ok(accepted)
     }
@@ -1880,9 +1882,10 @@ impl IoUringReadState {
         self.stats.peak_queue_depth = self.stats.peak_queue_depth.max(wave_len);
         if let Err(error) = self.ring.submit_and_wait(wave_len) {
             self.stats.failed_extents = self.stats.failed_extents.saturating_add(wave_len as u64);
-            return Err(Error::Model {
-                message: format!("submit/wait expert io_uring reads: {error}"),
-            });
+            return Err(Error::context(
+                "submit/wait expert io_uring reads",
+                error.into(),
+            ));
         }
 
         let completions = {
@@ -2096,13 +2099,15 @@ impl IoUringExpertReader {
         };
         Some(Box::pin(async move {
             let _registration = registration;
-            let eventfd =
-                tokio::io::unix::AsyncFd::new(reactor_eventfd).map_err(|error| Error::Model {
-                    message: format!("attach expert io_uring completion eventfd to Tokio: {error}"),
-                })?;
+            let eventfd = tokio::io::unix::AsyncFd::new(reactor_eventfd).map_err(|error| {
+                Error::context(
+                    "attach expert io_uring completion eventfd to Tokio",
+                    error.into(),
+                )
+            })?;
             loop {
-                let mut ready = eventfd.readable().await.map_err(|error| Error::Model {
-                    message: format!("await expert io_uring completion eventfd: {error}"),
+                let mut ready = eventfd.readable().await.map_err(|error| {
+                    Error::context("await expert io_uring completion eventfd", error.into())
                 })?;
                 drain_completion_eventfd(eventfd.get_ref())?;
                 ready.clear_ready();
@@ -2308,9 +2313,10 @@ fn drain_completion_eventfd(eventfd: &OwnedFd) -> Result<()> {
             if error.kind() == std::io::ErrorKind::WouldBlock {
                 return Ok(());
             }
-            return Err(Error::Model {
-                message: format!("read expert io_uring completion eventfd: {error}"),
-            });
+            return Err(Error::context(
+                "read expert io_uring completion eventfd",
+                error.into(),
+            ));
         }
         return Err(Error::Model {
             message: format!("short expert io_uring completion eventfd read: got {read} bytes"),

@@ -110,8 +110,8 @@ pub enum ExecutionPlanError {
 
 impl From<ExecutionPlanError> for Error {
     fn from(error: ExecutionPlanError) -> Self {
-        Self::Model {
-            message: format!("invalid prepared executable: {error}"),
+        Self::ModelSource {
+            source: Box::new(error),
         }
     }
 }

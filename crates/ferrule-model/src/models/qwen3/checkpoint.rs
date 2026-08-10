@@ -18,8 +18,11 @@ pub struct Qwen3MoeCheckpoint {
 impl Qwen3MoeCheckpoint {
     pub fn load_hf(model_dir: &Path) -> Result<Self> {
         let config_path = model_dir.join("config.json");
-        let text = std::fs::read_to_string(&config_path).map_err(|error| Error::Model {
-            message: format!("Qwen3-MoE config '{}': {error}", config_path.display()),
+        let text = std::fs::read_to_string(&config_path).map_err(|error| {
+            Error::context(
+                format!("Qwen3-MoE config '{}'", config_path.display()),
+                error.into(),
+            )
         })?;
         let config_json = serde_json::from_str::<serde_json::Value>(&text).map_err(|source| {
             Error::ModelSource {

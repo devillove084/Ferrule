@@ -1,6 +1,7 @@
 //! Ferrule Common — shared types, errors, and observability infrastructure.
 
 pub mod async_wake;
+pub mod error;
 pub mod execution;
 pub mod expert_residency;
 pub mod io_protocol;
@@ -8,11 +9,9 @@ pub mod io_protocol;
 pub mod materialization_io;
 pub mod memory;
 pub mod observability;
-pub mod quantization_error;
-pub mod serving_error;
-pub mod state_dict_error;
 
 pub use async_wake::{CompletionHub, CompletionListener, CompletionWake};
+pub use error::*;
 pub use expert_residency::{
     ExpertInstallActivationOutcome, ExpertInstallIntent, ExpertInstallPrepareOutcome,
     ExpertInstallReason, ExpertKey, ExpertLease, ExpertResidencyControl,
@@ -24,129 +23,6 @@ pub use io_protocol::*;
 pub use memory::{
     MemoryPoolKind, MemoryPoolLimits, MemoryPoolStats, MemoryTopology, OwnerMemoryLru,
 };
-pub use quantization_error::{QuantizationError, QuantizationResult};
-pub use serving_error::{
-    ServingConfigError, ServingRequestError, SseSerializationError, WorkerExecutionError,
-    WorkerOperation, WorkerRequestError, WorkerShutdownError, WorkerStartError,
-};
-pub use state_dict_error::{
-    NameMappingError, NameMappingFailureKind, StateDictBindingError, StateDictBindingIssue,
-    StateDictMetadataError, StateDictSchemaError, StateDictTransformError,
-};
-
-use snafu::Snafu;
-
-/// Cross-crate error boundary for model, execution, and backend APIs.
-///
-/// Subsystems keep their own typed errors and preserve them as sources at their
-/// outer boundary. Message variants remain only for legacy leaf APIs that have
-/// not yet acquired a subsystem-specific error type.
-#[derive(Debug, Snafu)]
-pub enum Error {
-    #[snafu(transparent)]
-    Io { source: std::io::Error },
-
-    #[snafu(transparent)]
-    IoProtocol {
-        source: io_protocol::IoProtocolError,
-    },
-
-    #[snafu(transparent)]
-    Materialization {
-        source: io_protocol::MaterializationResolveError,
-    },
-
-    #[snafu(transparent)]
-    MaterializationResources {
-        source: materialization_io::MaterializationResourceError,
-    },
-
-    #[snafu(display("GGUF: {message}"))]
-    Gguf { message: String },
-
-    #[snafu(display("graph: {message}"))]
-    Graph { message: String },
-
-    #[snafu(display("kernel: {message}"))]
-    Kernel { message: String },
-
-    #[snafu(display("backend: {source}"))]
-    Backend {
-        source: Box<dyn std::error::Error + Send + Sync>,
-    },
-
-    #[snafu(display("model: {message}"))]
-    Model { message: String },
-
-    #[snafu(display("model: {source}"))]
-    ModelSource {
-        source: Box<dyn std::error::Error + Send + Sync>,
-    },
-
-    #[snafu(display("execution: {message}"))]
-    Execution { message: String },
-
-    #[snafu(display("tokenization: {message}"))]
-    Tokenization { message: String },
-
-    #[snafu(display("internal invariant: {message}"))]
-    Internal { message: String },
-
-    #[snafu(display("{operation}: {source}"))]
-    Context {
-        operation: String,
-        source: Box<Error>,
-    },
-
-    #[snafu(display("{operation} failed: {source}; cleanup also failed: {cleanup}"))]
-    Cleanup {
-        operation: String,
-        source: Box<Error>,
-        cleanup: Box<Error>,
-    },
-
-    #[snafu(display(
-        "{operation} encountered {} independent failures",
-        failures.len()
-    ))]
-    FailureBatch {
-        operation: String,
-        failures: Vec<Error>,
-    },
-}
-
-pub type Result<T> = std::result::Result<T, Error>;
-
-impl Error {
-    pub fn context(operation: impl Into<String>, source: Error) -> Self {
-        Self::Context {
-            operation: operation.into(),
-            source: Box::new(source),
-        }
-    }
-
-    pub fn with_cleanup(operation: impl Into<String>, source: Error, cleanup: Result<()>) -> Self {
-        match cleanup {
-            Ok(()) => source,
-            Err(cleanup) => Self::Cleanup {
-                operation: operation.into(),
-                source: Box::new(source),
-                cleanup: Box::new(cleanup),
-            },
-        }
-    }
-
-    pub fn failures(operation: impl Into<String>, failures: Vec<Error>) -> Result<()> {
-        if failures.is_empty() {
-            Ok(())
-        } else {
-            Err(Self::FailureBatch {
-                operation: operation.into(),
-                failures,
-            })
-        }
-    }
-}
 
 /// Quantization format identifier — mirrors GGUF's type enum.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]

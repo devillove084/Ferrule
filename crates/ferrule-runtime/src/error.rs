@@ -1,9 +1,7 @@
 use snafu::Snafu;
 
-use ferrule_common::io_protocol::{
-    CancellationReason, FailureReason, IoProtocolError, MaterializationResolveError, StaleReason,
-};
-use ferrule_common::materialization_io::MaterializationResourceError;
+use ferrule_common::io_protocol::{CancellationReason, FailureReason, StaleReason};
+use ferrule_common::{IoProtocolError, MaterializationResolveError, MaterializationResourceError};
 
 use crate::io::{FairQueueError, RegistryError};
 use crate::scheduling::PhysicalResourceError;

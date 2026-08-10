@@ -242,8 +242,11 @@ fn validate_descriptor(descriptor: &ModelDescriptor) -> Result<()> {
 
 fn read_config_json(model_dir: &Path) -> Result<serde_json::Value> {
     let path = model_dir.join("config.json");
-    let text = std::fs::read_to_string(&path).map_err(|error| Error::Model {
-        message: format!("DeepSeek-V4 config '{}': {error}", path.display()),
+    let text = std::fs::read_to_string(&path).map_err(|error| {
+        Error::context(
+            format!("DeepSeek-V4 config '{}'", path.display()),
+            error.into(),
+        )
     })?;
     serde_json::from_str(&text).map_err(|source| Error::ModelSource {
         source: Box::new(source),
