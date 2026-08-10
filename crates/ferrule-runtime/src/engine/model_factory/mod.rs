@@ -58,9 +58,9 @@ impl From<BackendSelection> for Option<ModelExecutionBackend> {
 }
 
 /// A resolved built-in model backend before heavyweight model loading.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedModelBackend {
-    kind: ModelKind,
+    family: ModelFamily,
     model_name: &'static str,
     backend: ModelExecutionBackend,
     backend_profile: &'static str,
@@ -68,29 +68,53 @@ pub struct ResolvedModelBackend {
 }
 
 impl ResolvedModelBackend {
-    pub const fn model_name(self) -> &'static str {
+    pub const fn model_name(&self) -> &'static str {
         self.model_name
     }
 
-    pub const fn backend(self) -> ModelExecutionBackend {
+    pub const fn backend(&self) -> ModelExecutionBackend {
         self.backend
     }
 
-    pub const fn backend_profile(self) -> &'static str {
+    pub const fn backend_profile(&self) -> &'static str {
         self.backend_profile
     }
 
-    pub const fn default_chat_template(self) -> ChatTemplate {
+    pub const fn default_chat_template(&self) -> ChatTemplate {
         self.default_chat_template
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ModelKind {
-    Qwen3Moe,
-    #[cfg_attr(not(feature = "cuda"), allow(dead_code))]
-    DeepSeekV4,
+/// One built-in resident model implementation. Adding a family means adding
+/// one catalog entry; the resolver and planner scan the catalog generically.
+pub struct ModelImplementation {
+    /// Model family recognized by this implementation.
+    pub family: ModelFamily,
+    /// Resolves the runtime backend for one descriptor.
+    pub resolve: fn(&ModelDescriptor, BackendSelection) -> Result<ResolvedModelBackend>,
+    /// Builds the resident engine from one validated request.
+    pub build: fn(ModelBuildRequest) -> Result<BoxedSessionInferenceEngine>,
 }
+
+/// Static catalog of built-in model implementations.
+pub static MODEL_IMPLEMENTATIONS: &[ModelImplementation] = &[
+    ModelImplementation {
+        family: ModelFamily::QwenMoe,
+        resolve: resolve_qwen_backend,
+        build: build_qwen,
+    },
+    ModelImplementation {
+        family: ModelFamily::DeepSeekV4,
+        resolve: resolve_deepseek_backend,
+        build: build_deepseek,
+    },
+    // Dense Qwen3 is recognized but deliberately rejected with a precise reason.
+    ModelImplementation {
+        family: ModelFamily::Qwen3,
+        resolve: resolve_dense_qwen3_backend,
+        build: unbuildable_model,
+    },
+];
 
 /// Resolver for model families with built-in resident runtime implementations.
 #[derive(Debug, Clone, Copy, Default)]
@@ -106,26 +130,15 @@ impl BuiltinModelResolver {
         descriptor: &ModelDescriptor,
         selection: BackendSelection,
     ) -> Result<ResolvedModelBackend> {
-        match (&descriptor.spec.family, descriptor.spec.weight_source) {
-            (ModelFamily::QwenMoe, WeightSource::Safetensors) => {
-                resolve_qwen_backend(descriptor, selection)
-            }
-            (ModelFamily::QwenMoe, _) => Err(unsupported_model(
-                descriptor,
-                "Qwen3-MoE runtime loading requires Hugging Face safetensors",
-            )),
-            (ModelFamily::Qwen3, _) => Err(unsupported_model(
-                descriptor,
-                "dense Qwen3 is not supported; the resident implementation is Qwen3-MoE only",
-            )),
-            (ModelFamily::DeepSeekV4, WeightSource::Safetensors) => {
-                resolve_deepseek_backend(descriptor, selection)
-            }
-            (ModelFamily::DeepSeekV4, _) => Err(unsupported_model(
-                descriptor,
-                "DeepSeek-V4 runtime loading requires Hugging Face safetensors",
-            )),
-            (ModelFamily::Unknown(_), _) => Err(Error::InvalidRequest {
+        let family = &descriptor.spec.family;
+        if let Some(implementation) = MODEL_IMPLEMENTATIONS
+            .iter()
+            .find(|entry| &entry.family == family)
+        {
+            return (implementation.resolve)(descriptor, selection);
+        }
+        match family {
+            ModelFamily::Unknown(_) => Err(Error::InvalidRequest {
                 message: format!(
                     "no model implementation recognizes family '{}' (architecture {})",
                     descriptor.spec.family,
@@ -144,17 +157,39 @@ fn resolve_qwen_backend(
     descriptor: &ModelDescriptor,
     selection: BackendSelection,
 ) -> Result<ResolvedModelBackend> {
+    if descriptor.spec.weight_source != WeightSource::Safetensors {
+        return Err(unsupported_model(
+            descriptor,
+            "Qwen3-MoE runtime loading requires Hugging Face safetensors",
+        ));
+    }
     let backend =
         Option::<ModelExecutionBackend>::from(selection).unwrap_or(ModelExecutionBackend::Cpu);
     if backend != ModelExecutionBackend::Cpu {
         return Err(unsupported_backend(descriptor, backend, "cpu"));
     }
     Ok(ResolvedModelBackend {
-        kind: ModelKind::Qwen3Moe,
+        family: ModelFamily::QwenMoe,
         model_name: "qwen3-moe",
         backend,
         backend_profile: "cpu-standard-decoder",
         default_chat_template: ChatTemplate::Qwen3,
+    })
+}
+
+fn resolve_dense_qwen3_backend(
+    descriptor: &ModelDescriptor,
+    _selection: BackendSelection,
+) -> Result<ResolvedModelBackend> {
+    Err(unsupported_model(
+        descriptor,
+        "dense Qwen3 is not supported; the resident implementation is Qwen3-MoE only",
+    ))
+}
+
+fn unbuildable_model(_request: ModelBuildRequest) -> Result<BoxedSessionInferenceEngine> {
+    Err(Error::InvalidRequest {
+        message: "model implementation is not buildable".into(),
     })
 }
 
@@ -163,13 +198,19 @@ fn resolve_deepseek_backend(
     descriptor: &ModelDescriptor,
     selection: BackendSelection,
 ) -> Result<ResolvedModelBackend> {
+    if descriptor.spec.weight_source != WeightSource::Safetensors {
+        return Err(unsupported_model(
+            descriptor,
+            "DeepSeek-V4 runtime loading requires Hugging Face safetensors",
+        ));
+    }
     let backend =
         Option::<ModelExecutionBackend>::from(selection).unwrap_or(ModelExecutionBackend::Cuda);
     if backend != ModelExecutionBackend::Cuda {
         return Err(unsupported_backend(descriptor, backend, "cuda"));
     }
     Ok(ResolvedModelBackend {
-        kind: ModelKind::DeepSeekV4,
+        family: ModelFamily::DeepSeekV4,
         model_name: "deepseek-v4",
         backend,
         backend_profile: "cuda",
@@ -182,6 +223,12 @@ fn resolve_deepseek_backend(
     descriptor: &ModelDescriptor,
     _selection: BackendSelection,
 ) -> Result<ResolvedModelBackend> {
+    if descriptor.spec.weight_source != WeightSource::Safetensors {
+        return Err(unsupported_model(
+            descriptor,
+            "DeepSeek-V4 runtime loading requires Hugging Face safetensors",
+        ));
+    }
     Err(unsupported_model(
         descriptor,
         "DeepSeek-V4 requires CUDA, but this build was compiled without the 'cuda' feature",
@@ -269,12 +316,15 @@ impl ResidentModelPlanner {
             })?,
             None => entry.default_chat_template,
         };
+        let model_name = entry.model_name;
+        let backend = entry.backend;
+        let backend_profile = entry.backend_profile;
         let request = configure_request(descriptor, entry, options)?;
 
         Ok(ResidentModelBuildPlan {
-            model_name: entry.model_name,
-            backend: entry.backend,
-            backend_profile: entry.backend_profile,
+            model_name,
+            backend,
+            backend_profile,
             chat_template,
             request,
         })
@@ -338,21 +388,21 @@ impl ResidentModelBuildPlan {
 
     /// Load model state and build the resident engine on the calling thread.
     pub fn build(self) -> Result<BoxedSessionInferenceEngine> {
-        match self.request.kind {
-            ModelKind::Qwen3Moe => build_qwen(self.request),
-            #[cfg(feature = "cuda")]
-            ModelKind::DeepSeekV4 => build_deepseek(self.request),
-            #[cfg(not(feature = "cuda"))]
-            ModelKind::DeepSeekV4 => Err(Error::InvalidRequest {
-                message: "DeepSeek-V4 requires a CUDA-enabled runtime build".into(),
-            }),
-        }
+        let family = &self.request.family;
+        let implementation = MODEL_IMPLEMENTATIONS
+            .iter()
+            .find(|entry| &entry.family == family)
+            .ok_or_else(|| Error::InvalidRequest {
+                message: format!("no resident model implementation can build family '{family}'"),
+            })?;
+        (implementation.build)(self.request)
     }
 }
 
+/// Validated resident-model construction inputs for one catalog family.
 #[derive(Debug, Clone)]
-struct ModelBuildRequest {
-    kind: ModelKind,
+pub struct ModelBuildRequest {
+    family: ModelFamily,
     backend: ModelExecutionBackend,
     model_path: PathBuf,
     max_layers: usize,
@@ -437,7 +487,7 @@ fn configure_request(
     );
 
     Ok(ModelBuildRequest {
-        kind: entry.kind,
+        family: entry.family,
         backend: entry.backend,
         model_path: descriptor.path.clone(),
         max_layers,
@@ -561,6 +611,13 @@ fn deepseek_prepare_options(request: &ModelBuildRequest) -> Result<DeepSeekV4Pre
         expert_memory_policy: request.expert_memory_policy,
         moe_hotset_experts: request.moe_hotset_experts,
         reserved_device_bytes,
+    })
+}
+
+#[cfg(not(feature = "cuda"))]
+fn build_deepseek(_request: ModelBuildRequest) -> Result<BoxedSessionInferenceEngine> {
+    Err(Error::InvalidRequest {
+        message: "DeepSeek-V4 requires a CUDA-enabled runtime build".into(),
     })
 }
 
