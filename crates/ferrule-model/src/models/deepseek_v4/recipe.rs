@@ -1251,7 +1251,11 @@ mod assembly {
         prepare_with_policy(model, options, policy)
     }
 
+    // The plan Arc is dictated by the generic `PreparedDecoder` container; the
+    // assembled resources hold single-threaded CUDA handles and never cross
+    // threads because the resident runner owns them on one worker.
     #[cfg(feature = "cuda")]
+    #[allow(clippy::arc_with_non_send_sync)]
     pub(crate) fn prepare_with_policy(
         model: &DeepSeekV4Checkpoint,
         options: DeepSeekV4PrepareOptions,

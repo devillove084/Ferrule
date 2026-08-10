@@ -1413,9 +1413,9 @@ impl CudaExpertMaterializationProvider {
         &self,
         operation: &MaterializationOperation,
     ) -> std::result::Result<ExpertInstallActivationOutcome, CompletionOutcome> {
-        let prepared = operation
-            .prepared
-            .ok_or_else(|| CompletionOutcome::Failed(FailureReason::InstallationRejected))?;
+        let prepared = operation.prepared.ok_or(CompletionOutcome::Failed(
+            FailureReason::InstallationRejected,
+        ))?;
         let mut shared = self.shared.lock();
         if shared.poisoned_layers.contains(&operation.expert.layer) {
             return Err(CompletionOutcome::Failed(
@@ -1425,7 +1425,9 @@ impl CudaExpertMaterializationProvider {
         shared
             .residency
             .as_mut()
-            .ok_or_else(|| CompletionOutcome::Failed(FailureReason::InstallationRejected))?
+            .ok_or(CompletionOutcome::Failed(
+                FailureReason::InstallationRejected,
+            ))?
             .activate_install(prepared)
             .map_err(|error| CompletionOutcome::Failed(protocol_failure(error)))
     }

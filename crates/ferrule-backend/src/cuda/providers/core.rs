@@ -82,6 +82,10 @@ pub fn load(context: &Arc<CudaContext>) -> KernelResult<CoreOperators> {
 
 impl CoreOperators {
     #[allow(clippy::too_many_arguments)]
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     unsafe fn linear(
         &self,
         stream: &CudaStream,
@@ -120,6 +124,10 @@ impl CoreOperators {
         invoke!(stream, args, ferrule_core_linear_launch, "core linear")
     }
 
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     pub unsafe fn gemv_f32(
         &self,
         stream: &CudaStream,
@@ -151,6 +159,10 @@ impl CoreOperators {
         }
     }
 
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     pub unsafe fn gemv_f32_bytes(
         &self,
         stream: &CudaStream,
@@ -182,6 +194,10 @@ impl CoreOperators {
         }
     }
 
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     pub unsafe fn gemm_f32_bytes(
         &self,
         stream: &CudaStream,
@@ -214,6 +230,10 @@ impl CoreOperators {
         }
     }
 
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     pub unsafe fn linear_bf16_from_f32(
         &self,
         stream: &CudaStream,
@@ -245,6 +265,10 @@ impl CoreOperators {
         }
     }
 
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     pub unsafe fn linear_rows_bf16_from_f32(
         &self,
         stream: &CudaStream,
@@ -278,6 +302,10 @@ impl CoreOperators {
     }
 
     #[allow(clippy::too_many_arguments)]
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     unsafe fn dual_linear(
         &self,
         stream: &CudaStream,
@@ -324,6 +352,10 @@ impl CoreOperators {
     }
 
     #[allow(clippy::too_many_arguments)]
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     pub unsafe fn dual_linear_bf16_from_f32(
         &self,
         stream: &CudaStream,
@@ -360,6 +392,10 @@ impl CoreOperators {
     }
 
     #[allow(clippy::too_many_arguments)]
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     pub unsafe fn gemv_fp8_e4m3fn_e8m0_2d(
         &self,
         stream: &CudaStream,
@@ -396,6 +432,10 @@ impl CoreOperators {
     }
 
     #[allow(clippy::too_many_arguments)]
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     pub unsafe fn gemm_fp8_e4m3fn_e8m0_2d(
         &self,
         stream: &CudaStream,
@@ -433,6 +473,10 @@ impl CoreOperators {
     }
 
     #[allow(clippy::too_many_arguments)]
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     pub unsafe fn gemm_fp8_e4m3fn_e8m0_prepacked(
         &self,
         stream: &CudaStream,
@@ -469,6 +513,10 @@ impl CoreOperators {
     }
 
     #[allow(clippy::too_many_arguments)]
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     pub unsafe fn gemv_fp8_e4m3fn_e8m0_from_f32(
         &self,
         stream: &CudaStream,
@@ -503,6 +551,10 @@ impl CoreOperators {
     }
 
     #[allow(clippy::too_many_arguments)]
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     unsafe fn grouped_linear(
         &self,
         stream: &CudaStream,
@@ -539,6 +591,10 @@ impl CoreOperators {
     }
 
     #[allow(clippy::too_many_arguments)]
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     pub unsafe fn grouped_matvec_f32_rows(
         &self,
         stream: &CudaStream,
@@ -569,6 +625,10 @@ impl CoreOperators {
     }
 
     #[allow(clippy::too_many_arguments)]
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     pub unsafe fn grouped_output_a_bf16_from_fp8(
         &self,
         stream: &CudaStream,
@@ -601,6 +661,10 @@ impl CoreOperators {
     }
 
     #[allow(clippy::too_many_arguments)]
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     unsafe fn quantize(
         &self,
         stream: &CudaStream,
@@ -629,6 +693,10 @@ impl CoreOperators {
         invoke!(stream, args, ferrule_core_quantize_launch, "core quantize")
     }
 
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     pub unsafe fn fp8_e4m3fn_e8m0_quantize_f32_inplace(
         &self,
         stream: &CudaStream,
@@ -654,6 +722,10 @@ impl CoreOperators {
         }
     }
 
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     pub unsafe fn fp8_e4m3fn_e8m0_quantize_non_rope_f32_inplace(
         &self,
         stream: &CudaStream,
@@ -680,6 +752,10 @@ impl CoreOperators {
         }
     }
 
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     pub unsafe fn hadamard_fp4_e2m1_e8m0_quantize_f32_inplace(
         &self,
         stream: &CudaStream,
@@ -706,6 +782,10 @@ impl CoreOperators {
     }
 
     #[allow(clippy::too_many_arguments)]
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     pub unsafe fn fp4_e2m1_e8m0_quantize_f32_packed(
         &self,
         stream: &CudaStream,
@@ -734,6 +814,10 @@ impl CoreOperators {
         }
     }
 
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     pub unsafe fn fp8_e4m3fn_e8m0_quantize_f32_packed(
         &self,
         stream: &CudaStream,
@@ -761,6 +845,10 @@ impl CoreOperators {
         }
     }
 
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     unsafe fn data(&self, stream: &CudaStream, mut args: DataArgs) -> KernelResult<()> {
         invoke!(
             stream,
@@ -771,6 +859,10 @@ impl CoreOperators {
     }
 
     #[allow(clippy::too_many_arguments)]
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     pub unsafe fn f32_to_bf16_rne_rows(
         &self,
         stream: &CudaStream,
@@ -810,6 +902,10 @@ impl CoreOperators {
         )
     }
 
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     pub unsafe fn fill_i32_sequence(
         &self,
         stream: &CudaStream,
@@ -832,6 +928,10 @@ impl CoreOperators {
         }
     }
 
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     pub unsafe fn pack_i32_f32_pairs(
         &self,
         stream: &CudaStream,
@@ -856,6 +956,10 @@ impl CoreOperators {
         }
     }
 
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     pub unsafe fn pack_proposal_head_result(
         &self,
         stream: &CudaStream,
@@ -883,6 +987,10 @@ impl CoreOperators {
         }
     }
 
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     pub unsafe fn fill_dsv4_paged_window_topk(
         &self,
         stream: &CudaStream,
@@ -908,6 +1016,10 @@ impl CoreOperators {
     }
 
     #[allow(clippy::too_many_arguments)]
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     pub unsafe fn fill_dsv4_decode_attention_topk(
         &self,
         stream: &CudaStream,
@@ -936,6 +1048,10 @@ impl CoreOperators {
         }
     }
 
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     pub unsafe fn fill_recent_rows(
         &self,
         stream: &CudaStream,
@@ -962,6 +1078,10 @@ impl CoreOperators {
         }
     }
 
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     pub unsafe fn copy_f32_slot(
         &self,
         stream: &CudaStream,
@@ -986,6 +1106,10 @@ impl CoreOperators {
         }
     }
 
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     pub unsafe fn gather_f32_rows(
         &self,
         stream: &CudaStream,
@@ -1013,6 +1137,10 @@ impl CoreOperators {
         }
     }
 
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     pub unsafe fn scatter_add_f32_rows(
         &self,
         stream: &CudaStream,
@@ -1040,6 +1168,10 @@ impl CoreOperators {
         }
     }
 
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     pub unsafe fn saxpy(
         &self,
         stream: &CudaStream,
@@ -1065,6 +1197,10 @@ impl CoreOperators {
     }
 
     #[allow(clippy::too_many_arguments)]
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     pub unsafe fn convert_combined_ring_topk_indices(
         &self,
         stream: &CudaStream,
@@ -1104,6 +1240,10 @@ impl CoreOperators {
     }
 
     #[allow(clippy::too_many_arguments)]
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     pub unsafe fn paged_plane_scatter_rows_f32(
         &self,
         stream: &CudaStream,
@@ -1151,6 +1291,10 @@ impl CoreOperators {
         }
     }
 
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     pub unsafe fn resident_embedding_hc_bf16(
         &self,
         stream: &CudaStream,
@@ -1183,6 +1327,10 @@ impl CoreOperators {
     }
 
     #[allow(clippy::too_many_arguments)]
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     pub unsafe fn proposal_embedding_hc_bf16(
         &self,
         stream: &CudaStream,
@@ -1215,6 +1363,10 @@ impl CoreOperators {
         )
     }
 
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     unsafe fn norm(
         &self,
         stream: &CudaStream,
@@ -1239,6 +1391,10 @@ impl CoreOperators {
         invoke!(stream, args, ferrule_core_norm_launch, "core normalization")
     }
 
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     pub unsafe fn compute_rms(
         &self,
         stream: &CudaStream,
@@ -1262,6 +1418,10 @@ impl CoreOperators {
         }
     }
 
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     pub unsafe fn rms_norm_fused(
         &self,
         stream: &CudaStream,
@@ -1286,6 +1446,10 @@ impl CoreOperators {
         }
     }
 
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     pub unsafe fn rms_norm_rows_fused(
         &self,
         stream: &CudaStream,
@@ -1311,6 +1475,10 @@ impl CoreOperators {
         }
     }
 
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     pub unsafe fn rms_norm_heads_fused(
         &self,
         stream: &CudaStream,
@@ -1335,6 +1503,10 @@ impl CoreOperators {
         }
     }
 
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     pub unsafe fn swiglu_weighted_clamped(
         &self,
         stream: &CudaStream,
@@ -1362,6 +1534,10 @@ impl CoreOperators {
     }
 
     #[allow(clippy::too_many_arguments)]
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     pub unsafe fn rope_yarn(
         &self,
         stream: &CudaStream,
@@ -1391,6 +1567,10 @@ impl CoreOperators {
     }
 
     #[allow(clippy::too_many_arguments)]
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     pub unsafe fn rope_tail_yaarn_rows_strided(
         &self,
         stream: &CudaStream,
@@ -1431,6 +1611,10 @@ impl CoreOperators {
     }
 
     #[allow(clippy::too_many_arguments)]
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     pub unsafe fn rope_tail_yaarn_rows_indexed(
         &self,
         stream: &CudaStream,
@@ -1469,6 +1653,10 @@ impl CoreOperators {
     }
 
     #[allow(clippy::too_many_arguments)]
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     pub unsafe fn rope_split_half_rows_indexed(
         &self,
         stream: &CudaStream,
@@ -1511,6 +1699,10 @@ impl CoreOperators {
     }
 
     #[allow(clippy::too_many_arguments)]
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     pub unsafe fn dsv4_router_topk_sqrt_softplus_rows(
         &self,
         stream: &CudaStream,
@@ -1547,6 +1739,10 @@ impl CoreOperators {
     }
 
     #[allow(clippy::too_many_arguments)]
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     pub unsafe fn selected_softmax_topk_rows(
         &self,
         stream: &CudaStream,
@@ -1579,6 +1775,10 @@ impl CoreOperators {
     }
 
     #[allow(clippy::too_many_arguments)]
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     pub unsafe fn dsv4_router_hash_sqrt_softplus_rows(
         &self,
         stream: &CudaStream,
@@ -1613,6 +1813,10 @@ impl CoreOperators {
         invoke!(stream, args, ferrule_core_router_launch, "DSV4 hash router")
     }
 
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     pub unsafe fn topk_vocab(
         &self,
         stream: &CudaStream,
@@ -1636,6 +1840,10 @@ impl CoreOperators {
         invoke!(stream, args, ferrule_core_router_launch, "vocabulary top-k")
     }
 
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     pub unsafe fn topk_vocab_rows(
         &self,
         stream: &CudaStream,
@@ -1665,6 +1873,10 @@ impl CoreOperators {
         )
     }
 
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     unsafe fn compressor(&self, stream: &CudaStream, mut args: CompressorArgs) -> KernelResult<()> {
         invoke!(
             stream,
@@ -1674,6 +1886,10 @@ impl CoreOperators {
         )
     }
 
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     pub unsafe fn compressor_recurrent_reset_f32(
         &self,
         stream: &CudaStream,
@@ -1697,6 +1913,10 @@ impl CoreOperators {
     }
 
     #[allow(clippy::too_many_arguments)]
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     pub unsafe fn compressor_recurrent_append_projected_f32(
         &self,
         stream: &CudaStream,
@@ -1732,6 +1952,10 @@ impl CoreOperators {
     }
 
     #[allow(clippy::too_many_arguments)]
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     pub unsafe fn compressor_recurrent_seed_prefill_f32(
         &self,
         stream: &CudaStream,
@@ -1769,6 +1993,10 @@ impl CoreOperators {
     }
 
     #[allow(clippy::too_many_arguments)]
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     pub unsafe fn compressor_recurrent_softmax_f32(
         &self,
         stream: &CudaStream,
@@ -1800,6 +2028,10 @@ impl CoreOperators {
     }
 
     #[allow(clippy::too_many_arguments)]
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     pub unsafe fn dsv4_compressor_prefill_softmax(
         &self,
         stream: &CudaStream,
@@ -1834,11 +2066,19 @@ impl CoreOperators {
         }
     }
 
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     unsafe fn indexer(&self, stream: &CudaStream, mut args: IndexerArgs) -> KernelResult<()> {
         invoke!(stream, args, ferrule_core_indexer_launch, "DSV4 indexer")
     }
 
     #[allow(clippy::too_many_arguments)]
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     pub unsafe fn dsv4_prefill_topk_indices_paged_indexer(
         &self,
         stream: &CudaStream,
@@ -1895,6 +2135,10 @@ impl CoreOperators {
     }
 
     #[allow(clippy::too_many_arguments)]
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     pub unsafe fn dsv4_prefill_topk_indices_fused_index_query_paged_indexer(
         &self,
         stream: &CudaStream,
@@ -1960,6 +2204,10 @@ impl CoreOperators {
     }
 
     #[allow(clippy::too_many_arguments)]
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     pub unsafe fn dsv4_decode_topk_indices_paged_indexer(
         &self,
         stream: &CudaStream,
@@ -2014,6 +2262,10 @@ impl CoreOperators {
     }
 
     #[allow(clippy::too_many_arguments)]
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     pub unsafe fn dsv4_decode_topk_indices_fused_index_query_paged_indexer(
         &self,
         stream: &CudaStream,
@@ -2075,6 +2327,10 @@ impl CoreOperators {
     }
 
     #[allow(clippy::too_many_arguments)]
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     pub unsafe fn dsv4_decode_topk_indices_paged_indexer_rows(
         &self,
         stream: &CudaStream,
@@ -2141,6 +2397,10 @@ impl CoreOperators {
     }
 
     #[allow(clippy::too_many_arguments)]
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     pub unsafe fn install_expert_slot_binding(
         &self,
         stream: &CudaStream,
@@ -2195,6 +2455,10 @@ impl CoreOperators {
     }
 
     #[allow(clippy::too_many_arguments)]
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     pub unsafe fn evict_expert_slot_binding(
         &self,
         stream: &CudaStream,
@@ -2236,6 +2500,10 @@ impl CoreOperators {
         )
     }
 
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     unsafe fn expert_table(
         &self,
         stream: &CudaStream,
@@ -2249,6 +2517,10 @@ impl CoreOperators {
         )
     }
 
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     pub unsafe fn initialize_expert_slot_resolve(
         &self,
         stream: &CudaStream,
@@ -2272,6 +2544,10 @@ impl CoreOperators {
     }
 
     #[allow(clippy::too_many_arguments)]
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     pub unsafe fn resolve_expert_slots(
         &self,
         stream: &CudaStream,
@@ -2313,6 +2589,10 @@ impl CoreOperators {
     }
 
     #[allow(clippy::too_many_arguments)]
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     pub unsafe fn gather_stable_moe_dispatch(
         &self,
         stream: &CudaStream,
@@ -2375,6 +2655,10 @@ impl CoreOperators {
         }
     }
 
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     unsafe fn expert_group_route_plan(
         &self,
         stream: &CudaStream,
@@ -2388,6 +2672,10 @@ impl CoreOperators {
         )
     }
 
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     pub unsafe fn initialize_expert_group_route_invocation(
         &self,
         stream: &CudaStream,
@@ -2415,6 +2703,10 @@ impl CoreOperators {
     }
 
     #[allow(clippy::too_many_arguments)]
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     pub unsafe fn initialize_expert_group_route_plan(
         &self,
         stream: &CudaStream,
@@ -2458,6 +2750,10 @@ impl CoreOperators {
     }
 
     #[allow(clippy::too_many_arguments)]
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     pub unsafe fn count_expert_group_routes(
         &self,
         stream: &CudaStream,
@@ -2487,6 +2783,10 @@ impl CoreOperators {
     }
 
     #[allow(clippy::too_many_arguments)]
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     pub unsafe fn compact_expert_group_routes(
         &self,
         stream: &CudaStream,
@@ -2528,6 +2828,10 @@ impl CoreOperators {
     }
 
     #[allow(clippy::too_many_arguments)]
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     pub unsafe fn scatter_expert_group_routes(
         &self,
         stream: &CudaStream,
@@ -2572,11 +2876,19 @@ impl CoreOperators {
         }
     }
 
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     unsafe fn moe(&self, stream: &CudaStream, mut args: MoeArgs) -> KernelResult<()> {
         invoke!(stream, args, ferrule_core_moe_launch, "MoE operator")
     }
 
     #[allow(clippy::too_many_arguments)]
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     pub unsafe fn moe_gather_bf16_rows(
         &self,
         stream: &CudaStream,
@@ -2606,6 +2918,10 @@ impl CoreOperators {
     }
 
     #[allow(clippy::too_many_arguments)]
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     pub unsafe fn moe_weighted_scatter_add_bf16_rows(
         &self,
         stream: &CudaStream,
@@ -2637,6 +2953,10 @@ impl CoreOperators {
     }
 
     #[allow(clippy::too_many_arguments)]
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     pub unsafe fn moe_reduce_expert_outputs_ranked(
         &self,
         stream: &CudaStream,
@@ -2670,6 +2990,10 @@ impl CoreOperators {
     }
 
     #[allow(clippy::too_many_arguments)]
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     pub unsafe fn moe_reduce_split_expert_outputs_ranked(
         &self,
         stream: &CudaStream,
@@ -2708,6 +3032,10 @@ impl CoreOperators {
         }
     }
 
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     pub unsafe fn moe_reduce_route_outputs_ranked(
         &self,
         stream: &CudaStream,
@@ -2735,6 +3063,10 @@ impl CoreOperators {
     }
 
     #[allow(clippy::too_many_arguments)]
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     pub unsafe fn moe_reduce_expert_group_route_outputs_ranked(
         &self,
         stream: &CudaStream,
@@ -2765,11 +3097,19 @@ impl CoreOperators {
         }
     }
 
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     unsafe fn hc(&self, stream: &CudaStream, mut args: HcArgs) -> KernelResult<()> {
         invoke!(stream, args, ferrule_core_hc_launch, "hyper-connection")
     }
 
     #[allow(clippy::too_many_arguments)]
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     pub unsafe fn hc_pre_f32(
         &self,
         stream: &CudaStream,
@@ -2817,6 +3157,10 @@ impl CoreOperators {
     }
 
     #[allow(clippy::too_many_arguments)]
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     pub unsafe fn hc_post_f32(
         &self,
         stream: &CudaStream,
@@ -2850,6 +3194,10 @@ impl CoreOperators {
     }
 
     #[allow(clippy::too_many_arguments)]
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     pub unsafe fn hc_mean_scatter_f32(
         &self,
         stream: &CudaStream,
@@ -2881,6 +3229,10 @@ impl CoreOperators {
     }
 
     #[allow(clippy::too_many_arguments)]
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     pub(crate) unsafe fn transformer(
         &self,
         stream: &CudaStream,
@@ -2894,6 +3246,10 @@ impl CoreOperators {
         )
     }
 
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     pub unsafe fn hc_head_f32(
         &self,
         stream: &CudaStream,

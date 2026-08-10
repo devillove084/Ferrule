@@ -1563,17 +1563,17 @@ impl IoUringReadState {
                 let submission = self.ring.submission();
                 !submission.is_full()
             };
-            let reusable = has_no_reservations
-                .then(|| {
-                    self.buffers
-                        .iter()
-                        .enumerate()
-                        .filter(|(index, buffer)| {
-                            !self.pinned_buffer_busy[*index] && buffer.is_available()
-                        })
-                        .count()
-                })
-                .unwrap_or(0);
+            let reusable = if has_no_reservations {
+                self.buffers
+                    .iter()
+                    .enumerate()
+                    .filter(|(index, buffer)| {
+                        !self.pinned_buffer_busy[*index] && buffer.is_available()
+                    })
+                    .count()
+            } else {
+                0
+            };
             unscheduled_pinned_operation_reason(
                 scheduler_queued,
                 scheduler_can_queue,

@@ -997,56 +997,50 @@ pub(crate) struct CudaTransformerRuntime {
     output_head_values: HashMap<usize, cuda_linear::CudaF32Buffer>,
 }
 
+/// Device-side HyperConnection weights shared by reference.
+#[cfg(feature = "cuda")]
+pub(crate) type CudaHyperConnection =
+    Rc<PreparedHyperConnection<cuda_linear::CudaF32Buffer, cuda_linear::CudaF32Buffer>>;
+
+/// Prepared MLA/HyperConnection/routed-MoE layer composition on device.
+#[cfg(feature = "cuda")]
+pub(crate) type CudaPreparedMlaHyperMoeLayer = TransformerLayer<
+    Connected<CudaHyperConnection, Rc<PreparedMlaWeights>>,
+    Connected<CudaHyperConnection, Rc<PreparedRoutedMoe>>,
+>;
+
+/// Output HC reduction, final norm, and LM head pipeline on device.
+#[cfg(feature = "cuda")]
+type CudaOutputPipeline = OutputPipeline<
+    HyperReduction<PreparedHyperConnectionHead<cuda_linear::CudaF32Buffer>>,
+    cuda_linear::CudaF32Buffer,
+    cuda_linear::CudaArtifactLinearHandle,
+>;
+
+/// Fully prepared CUDA transformer composition with the MTP target tap.
+#[cfg(feature = "cuda")]
+type CudaPreparedTransformerComposition = PreparedTransformer<
+    cuda_linear::CudaArtifactLinearHandle,
+    CudaPreparedMlaHyperMoeLayer,
+    CudaOutputPipeline,
+    MtpTap,
+>;
+
+/// Prepared MTP attachment with device-side stage backbones and heads.
+#[cfg(feature = "cuda")]
+type CudaPreparedMtpAttachment = PreparedMtpAttachment<
+    CudaPreparedMlaHyperMoeLayer,
+    PreparedHyperConnectionHead<cuda_linear::CudaF32Buffer>,
+    cuda_linear::CudaF32Buffer,
+    PreparedCudaLinear,
+    ModelKernelPlan,
+>;
+
 #[cfg(feature = "cuda")]
 pub struct PreparedCudaTransformer {
-    transformer: PreparedTransformer<
-        cuda_linear::CudaArtifactLinearHandle,
-        TransformerLayer<
-            Connected<
-                Rc<PreparedHyperConnection<cuda_linear::CudaF32Buffer, cuda_linear::CudaF32Buffer>>,
-                Rc<PreparedMlaWeights>,
-            >,
-            Connected<
-                Rc<PreparedHyperConnection<cuda_linear::CudaF32Buffer, cuda_linear::CudaF32Buffer>>,
-                Rc<PreparedRoutedMoe>,
-            >,
-        >,
-        OutputPipeline<
-            HyperReduction<PreparedHyperConnectionHead<cuda_linear::CudaF32Buffer>>,
-            cuda_linear::CudaF32Buffer,
-            cuda_linear::CudaArtifactLinearHandle,
-        >,
-        MtpTap,
-    >,
+    transformer: CudaPreparedTransformerComposition,
     kernel_plan: ModelKernelPlan,
-    mtp: Option<
-        PreparedMtpAttachment<
-            TransformerLayer<
-                Connected<
-                    Rc<
-                        PreparedHyperConnection<
-                            cuda_linear::CudaF32Buffer,
-                            cuda_linear::CudaF32Buffer,
-                        >,
-                    >,
-                    Rc<PreparedMlaWeights>,
-                >,
-                Connected<
-                    Rc<
-                        PreparedHyperConnection<
-                            cuda_linear::CudaF32Buffer,
-                            cuda_linear::CudaF32Buffer,
-                        >,
-                    >,
-                    Rc<PreparedRoutedMoe>,
-                >,
-            >,
-            PreparedHyperConnectionHead<cuda_linear::CudaF32Buffer>,
-            cuda_linear::CudaF32Buffer,
-            PreparedCudaLinear,
-            ModelKernelPlan,
-        >,
-    >,
+    mtp: Option<CudaPreparedMtpAttachment>,
 }
 
 #[cfg(feature = "cuda")]
@@ -1069,18 +1063,7 @@ impl PreparedCudaTransformer {
         self.transformer.output().head()
     }
 
-    fn layers(
-        &self,
-    ) -> &[TransformerLayer<
-        Connected<
-            Rc<PreparedHyperConnection<cuda_linear::CudaF32Buffer, cuda_linear::CudaF32Buffer>>,
-            Rc<PreparedMlaWeights>,
-        >,
-        Connected<
-            Rc<PreparedHyperConnection<cuda_linear::CudaF32Buffer, cuda_linear::CudaF32Buffer>>,
-            Rc<PreparedRoutedMoe>,
-        >,
-    >] {
+    fn layers(&self) -> &[CudaPreparedMlaHyperMoeLayer] {
         self.transformer.layers()
     }
 }
@@ -1485,18 +1468,7 @@ impl CudaTransformerRuntime {
     fn upload_prepared_layer(
         &mut self,
         layer: &MlaHyperMoeLayer,
-    ) -> Result<
-        TransformerLayer<
-            Connected<
-                Rc<PreparedHyperConnection<cuda_linear::CudaF32Buffer, cuda_linear::CudaF32Buffer>>,
-                Rc<PreparedMlaWeights>,
-            >,
-            Connected<
-                Rc<PreparedHyperConnection<cuda_linear::CudaF32Buffer, cuda_linear::CudaF32Buffer>>,
-                Rc<PreparedRoutedMoe>,
-            >,
-        >,
-    > {
+    ) -> Result<CudaPreparedMlaHyperMoeLayer> {
         let layer_id = layer.layer;
         let main_compressor = layer
             .attention
@@ -1552,36 +1524,7 @@ impl CudaTransformerRuntime {
     fn upload_prepared_mtp_attachment<E>(
         &mut self,
         source: Option<CudaTransformerMtpSource<'_, E>>,
-    ) -> Result<
-        Option<
-            PreparedMtpAttachment<
-                TransformerLayer<
-                    Connected<
-                        Rc<
-                            PreparedHyperConnection<
-                                cuda_linear::CudaF32Buffer,
-                                cuda_linear::CudaF32Buffer,
-                            >,
-                        >,
-                        Rc<PreparedMlaWeights>,
-                    >,
-                    Connected<
-                        Rc<
-                            PreparedHyperConnection<
-                                cuda_linear::CudaF32Buffer,
-                                cuda_linear::CudaF32Buffer,
-                            >,
-                        >,
-                        Rc<PreparedRoutedMoe>,
-                    >,
-                >,
-                PreparedHyperConnectionHead<cuda_linear::CudaF32Buffer>,
-                cuda_linear::CudaF32Buffer,
-                PreparedCudaLinear,
-                ModelKernelPlan,
-            >,
-        >,
-    > {
+    ) -> Result<Option<CudaPreparedMtpAttachment>> {
         let Some(source) = source else {
             return Ok(None);
         };
@@ -1816,21 +1759,7 @@ impl CudaTransformerRuntime {
         }
         Ok(())
     }
-    fn prepared_layer(
-        &self,
-        execution_layer: usize,
-    ) -> Result<
-        &TransformerLayer<
-            Connected<
-                Rc<PreparedHyperConnection<cuda_linear::CudaF32Buffer, cuda_linear::CudaF32Buffer>>,
-                Rc<PreparedMlaWeights>,
-            >,
-            Connected<
-                Rc<PreparedHyperConnection<cuda_linear::CudaF32Buffer, cuda_linear::CudaF32Buffer>>,
-                Rc<PreparedRoutedMoe>,
-            >,
-        >,
-    > {
+    fn prepared_layer(&self, execution_layer: usize) -> Result<&CudaPreparedMlaHyperMoeLayer> {
         let image = self.prepared()?;
         if let Some(layer) = image.layers().get(execution_layer) {
             return Ok(layer);
@@ -2215,12 +2144,14 @@ pub(crate) mod cuda_runtime {
         compact
             .chunks_exact(top_k * 2)
             .map(|row| {
-                row.chunks_exact(2)
-                    .map(|pair| {
-                        let token = usize::try_from(pair[0]).map_err(|_| Error::Model {
+                row.as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|[token_bits, logit_bits]| {
+                        let token = usize::try_from(*token_bits).map_err(|_| Error::Model {
                             message: format!(
                                 "CUDA transformer output-head returned negative token index {}",
-                                pair[0]
+                                token_bits
                             ),
                         })?;
                         if token >= vocab {
@@ -2236,7 +2167,7 @@ pub(crate) mod cuda_runtime {
                                     "CUDA transformer output-head token index {token} exceeds u32"
                                 ),
                             })?,
-                            logit: f32::from_bits(pair[1] as u32),
+                            logit: f32::from_bits(*logit_bits as u32),
                         })
                     })
                     .collect::<Result<Vec<_>>>()

@@ -1371,7 +1371,7 @@ impl ExpertIoPlan {
     }
 
     #[cfg(feature = "cuda")]
-    fn from_env(self) -> Result<Self> {
+    fn with_env_overrides(self) -> Result<Self> {
         let buffer_bytes =
             parse_expert_io_mib_override("FERRULE_EXPERT_IO_BUFFER_MIB", self.buffer_bytes)?;
         let plan = Self {
@@ -1566,7 +1566,7 @@ impl ExpertStreamingReader {
     ) -> Result<(Self, ExpertIoPlan)> {
         let transport = ExpertIoTransport::from_env().map_err(transport_error)?;
         validate_io_uring_transport(transport).map_err(transport_error)?;
-        let plan = plan.from_env()?;
+        let plan = plan.with_env_overrides()?;
         tracing::info!(
             transport = transport.as_str(),
             queue_depth = plan.queue_depth,

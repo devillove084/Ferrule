@@ -213,6 +213,10 @@ fn check(operation: &'static str, code: CuResult) -> CudaResult<()> {
 }
 
 /// Plain values whose object representation may be copied to CUDA memory.
+///
+/// # Safety
+/// Implementors must be plain-old-data: no padding-dependent semantics, no
+/// interior pointers, and bit patterns that remain valid after a byte copy.
 pub unsafe trait DeviceCopy: Copy + Default + Send + Sync + 'static {}
 
 macro_rules! device_copy {
@@ -784,6 +788,10 @@ impl<T: DeviceCopy> DeviceBuffer<T> {
         Ok(buffer)
     }
 
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     pub unsafe fn from_pinned_host(
         stream: &CudaStream,
         values: &PinnedHostBuffer<T>,
@@ -803,6 +811,10 @@ impl<T: DeviceCopy> DeviceBuffer<T> {
         Ok(buffer)
     }
 
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     pub unsafe fn uninitialized_async(stream: &CudaStream, len: usize) -> CudaResult<Self> {
         let bytes = allocation_bytes::<T>(len)?;
         let block = stream
@@ -817,6 +829,10 @@ impl<T: DeviceCopy> DeviceBuffer<T> {
         })
     }
 
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     pub unsafe fn managed(context: &Arc<CudaContext>, len: usize) -> CudaResult<Self> {
         let bytes = allocation_bytes::<T>(len)?;
         let capture_state = context.capture_state();
@@ -911,6 +927,10 @@ impl<T: DeviceCopy> DeviceBuffer<T> {
         })
     }
 
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     pub unsafe fn copy_from_pinned_host_async(
         &self,
         stream: &CudaStream,
@@ -958,6 +978,10 @@ impl<T: DeviceCopy> DeviceBuffer<T> {
         stream.synchronize()
     }
 
+    ///
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
     pub unsafe fn copy_to_pinned_host_async(
         &self,
         stream: &CudaStream,
