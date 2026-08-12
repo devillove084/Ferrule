@@ -269,6 +269,12 @@ impl ResidentScheduler {
         self.active.len()
     }
 
+    pub(crate) fn active_session_for_request(&self, request_id: RequestId) -> Option<SessionId> {
+        self.active.iter().find_map(|(session_id, sequence)| {
+            (sequence.request_id == Some(request_id)).then_some(*session_id)
+        })
+    }
+
     pub(crate) fn request_ids(&self) -> Vec<RequestId> {
         let mut requests = self
             .waiting
@@ -519,6 +525,20 @@ impl ResidentScheduler {
             });
         }
 
+        if let Some(session_id) =
+            self.cancelled
+                .iter()
+                .chain(self.failed.iter())
+                .find_map(|sequence| {
+                    (sequence.request_id == Some(request_id)).then_some(sequence.session_id)
+                })
+        {
+            return Ok(CancelRequestResult::Active {
+                request_id,
+                session_id,
+            });
+        }
+
         Ok(CancelRequestResult::NotFound { request_id })
     }
 
@@ -536,7 +556,12 @@ impl ResidentScheduler {
         take(&mut self.finished, request_id)
             .map(RequestTerminal::Finished)
             .or_else(|| take(&mut self.cancelled, request_id).map(RequestTerminal::Cancelled))
-            .or_else(|| take(&mut self.failed, request_id).map(RequestTerminal::Failed))
+            .or_else(|| {
+                let index = self.failed.iter().position(|sequence| {
+                    sequence.request_id == Some(request_id) && sequence.kv_handle.is_none()
+                })?;
+                Some(RequestTerminal::Failed(self.failed.remove(index)))
+            })
     }
 
     pub fn drain_finished(&mut self) -> Vec<SequenceState> {
@@ -548,7 +573,40 @@ impl ResidentScheduler {
     }
 
     pub fn drain_failed(&mut self) -> Vec<SequenceState> {
-        std::mem::take(&mut self.failed)
+        let (drained, retained): (Vec<_>, Vec<_>) = std::mem::take(&mut self.failed)
+            .into_iter()
+            .partition(|sequence| sequence.kv_handle.is_none());
+        self.failed = retained;
+        drained
+    }
+
+    pub(crate) fn retry_failed_slot_releases<C>(&mut self, slot_pool: &mut C) -> Result<usize>
+    where
+        C: SequenceSlotPool,
+    {
+        let mut released = 0;
+        let mut first_error = None;
+        for sequence in &mut self.failed {
+            let Some(handle) = sequence.kv_handle else {
+                continue;
+            };
+            match slot_pool.free_slot(handle) {
+                Ok(()) => {
+                    sequence.clear_kv();
+                    released += 1;
+                }
+                Err(error) if first_error.is_none() => first_error = Some(error),
+                Err(_) => {}
+            }
+        }
+        first_error.map_or(Ok(released), Err)
+    }
+
+    pub(crate) fn failed_slot_ownership(&self) -> usize {
+        self.failed
+            .iter()
+            .filter(|sequence| sequence.kv_handle.is_some())
+            .count()
     }
 
     pub fn is_idle(&self) -> bool {
@@ -885,6 +943,11 @@ impl ResidentScheduler {
                     action.session_id
                 ),
             })?;
+        Self::validate_decode_commit(sequence, action)?;
+        sequence.commit_staged_decode_token(action.token_id)
+    }
+
+    fn validate_decode_commit(sequence: &SequenceState, action: &DecodeAction) -> Result<()> {
         if sequence.position != action.position {
             return Err(Error::Invariant {
                 message: format!(
@@ -901,7 +964,18 @@ impl ResidentScheduler {
                 ),
             });
         }
-        sequence.commit_staged_decode_token(action.token_id)
+        match sequence.next_decode_token {
+            Some(expected) if expected == action.token_id => Ok(()),
+            Some(expected) => Err(Error::Invariant {
+                message: format!(
+                    "decode token mismatch: staged {expected}, committed {}",
+                    action.token_id
+                ),
+            }),
+            None => Err(Error::Invariant {
+                message: "cannot commit decode token without a staged token".into(),
+            }),
+        }
     }
 
     pub fn commit_decode_batch(&mut self, actions: &[DecodeAction]) -> Result<usize> {
@@ -917,6 +991,7 @@ impl ResidentScheduler {
     /// staging remains explicit after runtime correlation so sampling policy stays
     /// separate from state commits.
     pub fn commit_action(&mut self, action: &SchedulerAction) -> Result<usize> {
+        self.preflight_action_commit(action)?;
         match action {
             SchedulerAction::Execute { prefills, decodes } => {
                 let mut committed = 0;
@@ -934,6 +1009,92 @@ impl ResidentScheduler {
             SchedulerAction::DecodeBatch(actions) => self.commit_decode_batch(actions),
             SchedulerAction::Finish { .. } | SchedulerAction::Cancel { .. } => Ok(0),
         }
+    }
+
+    fn preflight_action_commit(&self, action: &SchedulerAction) -> Result<()> {
+        let mut sequences = HashMap::<SessionId, SequenceState, RandomState>::default();
+        match action {
+            SchedulerAction::Execute { prefills, decodes } => {
+                for prefill in prefills {
+                    if let std::collections::hash_map::Entry::Vacant(entry) =
+                        sequences.entry(prefill.session_id)
+                    {
+                        let sequence = self.active.get(&prefill.session_id).ok_or_else(|| {
+                            Error::Invariant {
+                                message: format!(
+                                    "cannot commit prefill for inactive session {:?}",
+                                    prefill.session_id
+                                ),
+                            }
+                        })?;
+                        entry.insert(sequence.clone());
+                    }
+                    prefill.commit(
+                        sequences
+                            .get_mut(&prefill.session_id)
+                            .expect("prefill preflight inserted its sequence"),
+                    )?;
+                }
+                for decode in decodes {
+                    if let std::collections::hash_map::Entry::Vacant(entry) =
+                        sequences.entry(decode.session_id)
+                    {
+                        let sequence = self.active.get(&decode.session_id).ok_or_else(|| {
+                            Error::Invariant {
+                                message: format!(
+                                    "cannot commit decode for inactive session {:?}",
+                                    decode.session_id
+                                ),
+                            }
+                        })?;
+                        entry.insert(sequence.clone());
+                    }
+                    let sequence = sequences
+                        .get_mut(&decode.session_id)
+                        .expect("decode preflight inserted its sequence");
+                    Self::validate_decode_commit(sequence, decode)?;
+                    sequence.commit_staged_decode_token(decode.token_id)?;
+                }
+            }
+            SchedulerAction::PrefillChunk(prefill) => {
+                let sequence =
+                    self.active
+                        .get(&prefill.session_id)
+                        .ok_or_else(|| Error::Invariant {
+                            message: format!(
+                                "cannot commit prefill for inactive session {:?}",
+                                prefill.session_id
+                            ),
+                        })?;
+                let mut sequence = sequence.clone();
+                prefill.commit(&mut sequence)?;
+            }
+            SchedulerAction::DecodeBatch(decodes) => {
+                let mut sequences = HashMap::<SessionId, SequenceState, RandomState>::default();
+                for decode in decodes {
+                    if let std::collections::hash_map::Entry::Vacant(entry) =
+                        sequences.entry(decode.session_id)
+                    {
+                        let sequence = self.active.get(&decode.session_id).ok_or_else(|| {
+                            Error::Invariant {
+                                message: format!(
+                                    "cannot commit decode for inactive session {:?}",
+                                    decode.session_id
+                                ),
+                            }
+                        })?;
+                        entry.insert(sequence.clone());
+                    }
+                    let sequence = sequences
+                        .get_mut(&decode.session_id)
+                        .expect("decode preflight inserted its sequence");
+                    Self::validate_decode_commit(sequence, decode)?;
+                    sequence.commit_staged_decode_token(decode.token_id)?;
+                }
+            }
+            SchedulerAction::Finish { .. } | SchedulerAction::Cancel { .. } => {}
+        }
+        Ok(())
     }
 
     pub fn finish_sequence<C>(
@@ -961,6 +1122,33 @@ impl ResidentScheduler {
             reason,
         };
         self.finished.push(sequence);
+        Ok(action)
+    }
+
+    pub(crate) fn cancel_suspended<C>(
+        &mut self,
+        suspended: SuspendedSequenceSchedule,
+        slot_pool: &mut C,
+    ) -> Result<SchedulerAction>
+    where
+        C: SequenceSlotPool,
+    {
+        let mut sequence = suspended.sequence;
+        let session_id = sequence.session_id;
+        if let Some(handle) = sequence.kv_handle {
+            if let Err(error) = slot_pool.free_slot(handle) {
+                sequence.mark_error();
+                self.failed.push(sequence);
+                return Err(error);
+            }
+            sequence.clear_kv();
+        }
+        sequence.mark_cancelled();
+        let action = SchedulerAction::Cancel {
+            request_id: sequence.request_id,
+            session_id,
+        };
+        self.cancelled.push(sequence);
         Ok(action)
     }
 
@@ -1640,7 +1828,9 @@ mod tests {
         assert_eq!(scheduler.waiting_len(), 0);
         assert_eq!(scheduler.active_len(), 0);
         assert_eq!(scheduler.failed_len(), 1);
-        assert_eq!(scheduler.drain_failed()[0].kv_handle, Some(KvHandle(0)));
+        assert_eq!(scheduler.failed[0].kv_handle, Some(KvHandle(0)));
+        assert!(scheduler.drain_failed().is_empty());
+        assert_eq!(scheduler.failed_slot_ownership(), 1);
     }
 
     #[test]
@@ -1659,12 +1849,13 @@ mod tests {
             assert!(format!("{}", result.unwrap_err()).contains("slot free failure"));
             assert_eq!(scheduler.active_len(), 0);
             assert_eq!(scheduler.failed_len(), 1);
-            let failed = scheduler.drain_failed();
             assert_eq!(
-                failed[0].status,
+                scheduler.failed[0].status,
                 super::super::session::SequenceStatus::Error
             );
-            assert_eq!(failed[0].kv_handle, Some(KvHandle(0)));
+            assert_eq!(scheduler.failed[0].kv_handle, Some(KvHandle(0)));
+            assert!(scheduler.drain_failed().is_empty());
+            assert_eq!(scheduler.failed_slot_ownership(), 1);
         }
     }
 

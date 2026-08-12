@@ -20,11 +20,12 @@
 //! Proposal execution is a checkpoint-native model capability. Verification
 //! uses the existing `MultiSessionRunner` packed batch path.
 
+use std::collections::VecDeque;
 use std::num::NonZeroU32;
 use std::ops::Range;
 use std::time::Instant;
 
-use crate::{CleanupStep, Error, Result};
+use crate::{Error, Result};
 use ferrule_common::execution::{
     ExecutionBatch, ExecutionIntent, ExecutionOutput, ExecutionSequence, ExecutionTransactionId,
     ForwardMode, ForwardPhase, LogitsOutput, LogitsRequest, StateSlot, TokenLogit,
@@ -224,7 +225,10 @@ pub(crate) enum SpeculativeCohortProgress<S> {
 /// backend transaction existed, or returns the complete live transaction to its
 /// caller. No combination of independent optional payloads is representable.
 pub(crate) enum SpeculativeCohortFailure<S> {
-    Quiesced(Error),
+    Quiesced {
+        error: Error,
+        cleanup: Box<QuiescedSpeculativeAbortProgress<S>>,
+    },
     Active {
         error: Error,
         transaction: Box<SpeculativeCohortTransaction<S>>,
@@ -254,6 +258,25 @@ pub(crate) struct PendingSpeculativeVerificationCohort<S> {
 pub(crate) struct PreparedSpeculativeCohort<S> {
     transaction: SpeculativeCohortTransaction<S>,
     result: SpeculativeCohortResult,
+}
+
+pub(crate) struct QuiescedSpeculativePublishProgress<S> {
+    result: Option<SpeculativeCohortResult>,
+    prepared_commit: Option<PreparedKvCommit>,
+    branches: VecDeque<S>,
+    expected_sources: usize,
+    next_source: usize,
+    source_release: Option<S>,
+}
+
+pub(crate) struct QuiescedSpeculativeAbortProgress<S> {
+    kv: Option<QuiescedSpeculativeAbortKv>,
+    branches: Vec<S>,
+}
+
+enum QuiescedSpeculativeAbortKv {
+    Reservations(Vec<KvReservation>),
+    Prepared(PreparedKvCommit),
 }
 
 impl<S> SpeculativeCohortTransaction<S> {
@@ -286,6 +309,78 @@ impl<S> PreparedSpeculativeCohort<S> {
     }
 }
 
+impl<S> QuiescedSpeculativePublishProgress<S> {
+    pub(crate) fn from_prepared(prepared: PreparedSpeculativeCohort<S>) -> Self {
+        let PreparedSpeculativeCohort {
+            transaction,
+            result,
+        } = prepared;
+        let SpeculativeCohortTransaction {
+            prepared_commit,
+            verification_branches,
+            ..
+        } = transaction;
+        let expected_sources = verification_branches.len();
+        Self {
+            result: Some(result),
+            prepared_commit,
+            branches: verification_branches.into(),
+            expected_sources,
+            next_source: 0,
+            source_release: None,
+        }
+    }
+
+    pub(crate) fn take_result(&mut self) -> Option<SpeculativeCohortResult> {
+        debug_assert!(self.prepared_commit.is_none());
+        debug_assert!(self.branches.is_empty());
+        debug_assert!(self.source_release.is_none());
+        self.result.take()
+    }
+}
+
+impl<S> QuiescedSpeculativeAbortProgress<S> {
+    pub(crate) fn from_transaction(transaction: SpeculativeCohortTransaction<S>) -> Self {
+        let SpeculativeCohortTransaction {
+            reservations,
+            prepared_commit,
+            verification_branches,
+            ..
+        } = transaction;
+        Self::from_parts(reservations, prepared_commit, verification_branches)
+    }
+
+    fn from_parts(
+        reservations: Vec<KvReservation>,
+        prepared_commit: Option<PreparedKvCommit>,
+        branches: Vec<S>,
+    ) -> Self {
+        let kv = prepared_commit.map_or_else(
+            || QuiescedSpeculativeAbortKv::Reservations(reservations),
+            QuiescedSpeculativeAbortKv::Prepared,
+        );
+        Self {
+            kv: Some(kv),
+            branches,
+        }
+    }
+}
+
+fn quiesced_speculative_failure<S>(
+    error: Error,
+    reservations: Vec<KvReservation>,
+    branches: Vec<S>,
+) -> SpeculativeCohortFailure<S> {
+    SpeculativeCohortFailure::Quiesced {
+        error,
+        cleanup: Box::new(QuiescedSpeculativeAbortProgress::from_parts(
+            reservations,
+            None,
+            branches,
+        )),
+    }
+}
+
 /// Construct the complete provisional verification payload before the backend
 /// transaction becomes active. The caller may use the exact packed batch to
 /// declare non-blocking materialization work before calling
@@ -298,7 +393,6 @@ pub(crate) fn prepare_speculative_verification_transaction<R>(
     items: &[SpeculativeVerificationItem<'_>],
     reservations: Vec<KvReservation>,
     top_k: NonZeroU32,
-    retirements: &mut Vec<KvRetirement>,
 ) -> std::result::Result<
     SpeculativeCohortTransaction<R::SequenceState>,
     SpeculativeCohortFailure<R::SequenceState>,
@@ -314,9 +408,7 @@ where
         items,
         reservations,
         top_k,
-        retirements,
     )
-    .map_err(SpeculativeCohortFailure::Quiesced)
 }
 
 /// Activate and execute a fully constructed target-verification transaction.
@@ -325,7 +417,6 @@ pub(crate) fn begin_prepared_speculative_verification<R>(
     page_manager: &mut KvPageManager,
     source_states: &[R::SequenceState],
     mut transaction: SpeculativeCohortTransaction<R::SequenceState>,
-    retirements: &mut Vec<KvRetirement>,
 ) -> std::result::Result<
     SpeculativeCohortProgress<R::SequenceState>,
     SpeculativeCohortFailure<R::SequenceState>,
@@ -337,15 +428,12 @@ where
     let reservation_views = match page_manager.reservation_views(&transaction.reservations) {
         Ok(views) => views,
         Err(error) => {
-            return Err(SpeculativeCohortFailure::Quiesced(
-                discard_unsubmitted_speculative_transaction(
-                    executor,
-                    page_manager,
+            return Err(SpeculativeCohortFailure::Quiesced {
+                error,
+                cleanup: Box::new(QuiescedSpeculativeAbortProgress::from_transaction(
                     transaction,
-                    error,
-                    retirements,
-                ),
-            ));
+                )),
+            });
         }
     };
     if let Err(error) = executor.prepare_batch_with_kv(
@@ -354,15 +442,12 @@ where
         &transaction.verification_batch,
         &reservation_views,
     ) {
-        return Err(SpeculativeCohortFailure::Quiesced(
-            discard_unsubmitted_speculative_transaction(
-                executor,
-                page_manager,
+        return Err(SpeculativeCohortFailure::Quiesced {
+            error,
+            cleanup: Box::new(QuiescedSpeculativeAbortProgress::from_transaction(
                 transaction,
-                error,
-                retirements,
-            ),
-        ));
+            )),
+        });
     }
     match executor.execute_prepared_batch(
         transaction_id,
@@ -440,25 +525,36 @@ fn prepare_speculative_cohort_transaction<R: MultiSessionRunner>(
     items: &[SpeculativeVerificationItem<'_>],
     mut reservations: Vec<KvReservation>,
     top_k: NonZeroU32,
-    retirements: &mut Vec<KvRetirement>,
-) -> Result<SpeculativeCohortTransaction<R::SequenceState>> {
+) -> std::result::Result<
+    SpeculativeCohortTransaction<R::SequenceState>,
+    SpeculativeCohortFailure<R::SequenceState>,
+> {
     let transaction_start = Instant::now();
     if items.is_empty() {
-        return Err(Error::InvalidRequest {
-            message: "Speculative verification cohort must contain at least one sequence".into(),
-        });
+        return Err(quiesced_speculative_failure(
+            Error::InvalidRequest {
+                message: "Speculative verification cohort must contain at least one sequence"
+                    .into(),
+            },
+            reservations,
+            Vec::new(),
+        ));
     }
     if source_states.len() != items.len() {
-        return Err(Error::InvalidRequest {
-            message: format!(
-                "Speculative verification cohort state/item mismatch: states={} items={}",
-                source_states.len(),
-                items.len()
-            ),
-        });
+        return Err(quiesced_speculative_failure(
+            Error::InvalidRequest {
+                message: format!(
+                    "Speculative verification cohort state/item mismatch: states={} items={}",
+                    source_states.len(),
+                    items.len()
+                ),
+            },
+            reservations,
+            Vec::new(),
+        ));
     }
 
-    let executed_rows = items
+    let executed_rows = match items
         .iter()
         .map(|item| {
             item.proposal
@@ -468,7 +564,17 @@ fn prepare_speculative_cohort_transaction<R: MultiSessionRunner>(
                     message: "Speculative verification row count overflow".into(),
                 })
         })
-        .collect::<Result<Vec<_>>>()?;
+        .collect::<Result<Vec<_>>>()
+    {
+        Ok(rows) => rows,
+        Err(error) => {
+            return Err(quiesced_speculative_failure(
+                error,
+                reservations,
+                Vec::new(),
+            ));
+        }
+    };
 
     if reservations.len() != items.len() {
         let error = Error::InvalidRequest {
@@ -478,13 +584,10 @@ fn prepare_speculative_cohort_transaction<R: MultiSessionRunner>(
                 items.len()
             ),
         };
-        return Err(discard_speculative_cohort(
-            executor,
-            page_manager,
+        return Err(quiesced_speculative_failure(
+            error,
             reservations,
             Vec::new(),
-            error,
-            retirements,
         ));
     }
     for (sequence, ((item, &rows), reservation)) in items
@@ -502,13 +605,10 @@ fn prepare_speculative_cohort_transaction<R: MultiSessionRunner>(
                     "Speculative cohort sequence {sequence} reservation does not match its exact state/generation/row request"
                 ),
             };
-            return Err(discard_speculative_cohort(
-                executor,
-                page_manager,
+            return Err(quiesced_speculative_failure(
+                error,
                 reservations,
                 Vec::new(),
-                error,
-                retirements,
             ));
         }
         if reservation.positions.start != item.frontier.position {
@@ -519,13 +619,10 @@ fn prepare_speculative_cohort_transaction<R: MultiSessionRunner>(
                     item.frontier.position
                 ),
             };
-            return Err(discard_speculative_cohort(
-                executor,
-                page_manager,
+            return Err(quiesced_speculative_failure(
+                error,
                 reservations,
                 Vec::new(),
-                error,
-                retirements,
             ));
         }
     }
@@ -535,13 +632,10 @@ fn prepare_speculative_cohort_transaction<R: MultiSessionRunner>(
         match page_manager.reservation_bindings(reservation) {
             Ok(sequence_bindings) => bindings.push(sequence_bindings),
             Err(error) => {
-                return Err(discard_speculative_cohort(
-                    executor,
-                    page_manager,
+                return Err(quiesced_speculative_failure(
+                    error,
                     reservations,
                     Vec::new(),
-                    error,
-                    retirements,
                 ));
             }
         }
@@ -550,13 +644,10 @@ fn prepare_speculative_cohort_transaction<R: MultiSessionRunner>(
         match build_speculative_cohort_batch(items, &bindings, top_k) {
             Ok(batch) => batch,
             Err(error) => {
-                return Err(discard_speculative_cohort(
-                    executor,
-                    page_manager,
+                return Err(quiesced_speculative_failure(
+                    error,
                     reservations,
                     Vec::new(),
-                    error,
-                    retirements,
                 ));
             }
         };
@@ -566,13 +657,10 @@ fn prepare_speculative_cohort_transaction<R: MultiSessionRunner>(
         match executor.fork_sequence_state_from(source, item.frontier.position) {
             Ok(branch) => verification_branches.push(branch),
             Err(error) => {
-                return Err(discard_speculative_cohort(
-                    executor,
-                    page_manager,
+                return Err(quiesced_speculative_failure(
+                    error,
                     reservations,
                     verification_branches,
-                    error,
-                    retirements,
                 ));
             }
         }
@@ -586,13 +674,10 @@ fn prepare_speculative_cohort_transaction<R: MultiSessionRunner>(
             verification_batch.sequences()[index].state_slot,
             execution_generation,
         ) {
-            return Err(discard_speculative_cohort(
-                executor,
-                page_manager,
+            return Err(quiesced_speculative_failure(
+                error,
                 reservations,
                 verification_branches,
-                error,
-                retirements,
             ));
         }
     }
@@ -738,47 +823,82 @@ pub(crate) fn publish_quiesced_speculative_cohort<R: MultiSessionRunner>(
     executor: &mut NativeMultiSessionExecutor<R>,
     page_manager: &mut KvPageManager,
     source_states: &mut [R::SequenceState],
-    mut prepared: PreparedSpeculativeCohort<R::SequenceState>,
+    progress: &mut QuiescedSpeculativePublishProgress<R::SequenceState>,
     retirements: &mut Vec<KvRetirement>,
-) -> Result<SpeculativeCohortResult> {
-    retirements.push(
-        page_manager.publish_commit(
-            prepared
-                .transaction
-                .prepared_commit
-                .take()
-                .expect("speculative logical commit was prepared before backend publication"),
-        ),
-    );
-    promote_cohort_branches(
-        executor,
-        source_states,
-        std::mem::take(&mut prepared.transaction.verification_branches),
-    )?;
-    Ok(prepared.result)
+) -> Result<()> {
+    if source_states.len() != progress.expected_sources {
+        return Err(Error::Invariant {
+            message: format!(
+                "speculative state/branch promotion mismatch: states={} branches={}",
+                source_states.len(),
+                progress.expected_sources
+            ),
+        });
+    }
+    if let Some(prepared) = progress.prepared_commit.take() {
+        retirements.push(page_manager.publish_commit(prepared));
+    }
+    while progress.next_source < source_states.len() {
+        if let Some(previous) = progress.source_release.take() {
+            match executor.try_release_sequence_state(previous) {
+                Ok(()) => {
+                    progress.next_source += 1;
+                    continue;
+                }
+                Err(failure) => {
+                    let (error, previous) = failure.into_parts();
+                    progress.source_release = Some(previous);
+                    return Err(error.into());
+                }
+            }
+        }
+        let branch = progress
+            .branches
+            .pop_front()
+            .ok_or_else(|| Error::Invariant {
+                message: "speculative branch ownership ended before source promotion completed"
+                    .into(),
+            })?;
+        progress.source_release = Some(std::mem::replace(
+            &mut source_states[progress.next_source],
+            branch,
+        ));
+    }
+    Ok(())
 }
 
 pub(crate) fn abort_quiesced_speculative_transaction<R: MultiSessionRunner>(
     executor: &mut NativeMultiSessionExecutor<R>,
     page_manager: &mut KvPageManager,
-    transaction: SpeculativeCohortTransaction<R::SequenceState>,
+    progress: &mut QuiescedSpeculativeAbortProgress<R::SequenceState>,
     retirements: &mut Vec<KvRetirement>,
 ) -> Result<()> {
-    cleanup_quiesced_speculative_transaction(executor, page_manager, transaction, retirements)
-}
-
-pub(crate) fn discard_unsubmitted_speculative_transaction<R: MultiSessionRunner>(
-    executor: &mut NativeMultiSessionExecutor<R>,
-    page_manager: &mut KvPageManager,
-    transaction: SpeculativeCohortTransaction<R::SequenceState>,
-    cause: Error,
-    retirements: &mut Vec<KvRetirement>,
-) -> Error {
-    match cleanup_quiesced_speculative_transaction(executor, page_manager, transaction, retirements)
-    {
-        Ok(()) => cause,
-        Err(cleanup) => Error::cleanup("speculative provisional cleanup", cause, cleanup),
+    if let Some(kv) = progress.kv.take() {
+        let retirement = match kv {
+            QuiescedSpeculativeAbortKv::Prepared(prepared) => {
+                page_manager.abort_prepared_commit(prepared)
+            }
+            QuiescedSpeculativeAbortKv::Reservations(reservations) => {
+                match page_manager.abort_reservations(reservations) {
+                    Ok(retirement) => retirement,
+                    Err(error) => {
+                        let (error, reservations) = error.into_parts();
+                        progress.kv = Some(QuiescedSpeculativeAbortKv::Reservations(reservations));
+                        return Err(error);
+                    }
+                }
+            }
+        };
+        retirements.push(retirement);
     }
+    while let Some(branch) = progress.branches.pop() {
+        if let Err(failure) = executor.try_release_sequence_state(branch) {
+            let (error, branch) = failure.into_parts();
+            progress.branches.push(branch);
+            return Err(error.into());
+        }
+    }
+    Ok(())
 }
 
 fn build_speculative_cohort_batch(
@@ -904,87 +1024,6 @@ fn build_speculative_cohort_batch(
         .with_intent(ExecutionIntent::ProvisionalVerification),
         query_ranges,
     ))
-}
-
-fn discard_speculative_cohort<R: MultiSessionRunner>(
-    executor: &mut NativeMultiSessionExecutor<R>,
-    page_manager: &mut KvPageManager,
-    reservations: Vec<KvReservation>,
-    branches: Vec<R::SequenceState>,
-    cause: Error,
-    retirements: &mut Vec<KvRetirement>,
-) -> Error {
-    let retirement = page_manager
-        .abort_reservations(reservations)
-        .map(|retirement| retirements.push(retirement))
-        .map_err(|error| error.into_parts().0);
-    let mut cleanup = retirement
-        .err()
-        .map(|source| CleanupStep::new("speculative KV reservation cleanup", source))
-        .into_iter()
-        .collect::<Vec<_>>();
-    for (index, branch) in branches.into_iter().enumerate() {
-        if let Err(source) = executor.release_sequence_state(branch) {
-            cleanup.push(CleanupStep::new(
-                format!("speculative model branch {index} cleanup"),
-                source,
-            ));
-        }
-    }
-    Error::with_cleanup_batch("speculative provisional cleanup", cause, cleanup)
-}
-
-fn cleanup_quiesced_speculative_transaction<R: MultiSessionRunner>(
-    executor: &mut NativeMultiSessionExecutor<R>,
-    page_manager: &mut KvPageManager,
-    transaction: SpeculativeCohortTransaction<R::SequenceState>,
-    retirements: &mut Vec<KvRetirement>,
-) -> Result<()> {
-    let SpeculativeCohortTransaction {
-        reservations,
-        prepared_commit,
-        verification_branches,
-        ..
-    } = transaction;
-    let retirement = match prepared_commit {
-        Some(prepared) => page_manager.abort_prepared_commit(prepared),
-        None => page_manager
-            .abort_reservations(reservations)
-            .map_err(|error| error.into_parts().0)?,
-    };
-    retirements.push(retirement);
-    for branch in verification_branches {
-        executor.release_sequence_state(branch)?;
-    }
-    Ok(())
-}
-
-fn promote_cohort_branches<R: MultiSessionRunner>(
-    executor: &mut NativeMultiSessionExecutor<R>,
-    sources: &mut [R::SequenceState],
-    branches: Vec<R::SequenceState>,
-) -> Result<()> {
-    if branches.len() != sources.len() {
-        return Err(Error::Invariant {
-            message: format!(
-                "speculative state/branch promotion mismatch: states={} branches={}",
-                sources.len(),
-                branches.len()
-            ),
-        });
-    }
-
-    let mut cleanup = Vec::new();
-    for (sequence, (source, branch)) in sources.iter_mut().zip(branches).enumerate() {
-        let previous = std::mem::replace(source, branch);
-        if let Err(error) = executor.release_sequence_state(previous) {
-            cleanup.push(CleanupStep::new(
-                format!("speculative source state {sequence} release"),
-                error,
-            ));
-        }
-    }
-    Error::cleanup_failures("speculative cohort state promotion", cleanup)
 }
 
 #[derive(Debug, Clone, PartialEq)]

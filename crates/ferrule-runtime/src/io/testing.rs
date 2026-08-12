@@ -108,6 +108,7 @@ pub struct MockPhysicalState {
     reserve_failure: Option<FailureReason>,
     promotion_failures: BTreeMap<MaterializationKey, VecDeque<FailureReason>>,
     release_failures: VecDeque<FailureReason>,
+    cancel_failures: VecDeque<FailureReason>,
     reservation_key_override: Option<MaterializationKey>,
     reservation_operation_override: Option<OperationId>,
     reservation_slot_override: Option<DestinationSlotId>,
@@ -166,6 +167,7 @@ impl MockPhysicalState {
             reserve_failure: None,
             promotion_failures: BTreeMap::new(),
             release_failures: VecDeque::new(),
+            cancel_failures: VecDeque::new(),
             reservation_key_override: None,
             reservation_operation_override: None,
             reservation_slot_override: None,
@@ -381,6 +383,10 @@ impl MockPhysicalHandle {
 
     pub fn fail_next_release(&self, failure: FailureReason) {
         self.lock().release_failures.push_back(failure);
+    }
+
+    pub fn fail_next_cancel(&self, failure: FailureReason) {
+        self.lock().cancel_failures.push_back(failure);
     }
 
     pub fn override_reservation_key(&self, key: MaterializationKey) {
@@ -790,6 +796,9 @@ impl MaterializationProvider for MockPhysicalProvider {
             stage,
             reason.clone(),
         ));
+        if let Some(failure) = state.cancel_failures.pop_front() {
+            return Err(failure);
+        }
         state
             .completions
             .retain(|event| !(event.operation == operation && event.stage == stage));

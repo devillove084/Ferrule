@@ -58,6 +58,9 @@ pub enum Error {
     #[snafu(display("runtime invariant violated: {message}"))]
     Invariant { message: String },
 
+    #[snafu(display("runtime shutdown is incomplete: {message}"))]
+    ShutdownIncomplete { message: String },
+
     #[snafu(display("{operation} failed: {source}; cleanup also failed: {cleanup}"))]
     Cleanup {
         operation: &'static str,
@@ -147,17 +150,6 @@ impl Error {
                 source: Box::new(source),
                 cleanup,
             }
-        }
-    }
-
-    pub(crate) fn cleanup_failures(
-        operation: &'static str,
-        cleanup: Vec<CleanupStep>,
-    ) -> Result<()> {
-        if cleanup.is_empty() {
-            Ok(())
-        } else {
-            Err(Self::CleanupFailures { operation, cleanup })
         }
     }
 

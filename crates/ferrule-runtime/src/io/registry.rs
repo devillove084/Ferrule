@@ -464,6 +464,7 @@ struct TransactionState {
     operations: BTreeSet<OperationId>,
     cohorts: BTreeSet<CohortId>,
     owns_materialization_custody: bool,
+    commit_phase_recorded: bool,
     materialization_custody_finished: bool,
 }
 
@@ -498,6 +499,7 @@ pub struct LoadRegistry<P: RuntimeMaterializationProvider> {
     queued_publications: BTreeSet<OperationId>,
     pending_cleanups: VecDeque<OperationId>,
     queued_cleanups: BTreeSet<OperationId>,
+    pending_execution_downgrades: BTreeSet<OperationId>,
     pending_lease_releases: BTreeSet<MaterializationKey>,
     waiters: WaiterIndex,
     prefetches: HashMap<PrefetchOwner, PrefetchState, RandomState>,
@@ -543,6 +545,7 @@ impl<P: RuntimeMaterializationProvider> LoadRegistry<P> {
             queued_publications: BTreeSet::new(),
             pending_cleanups: VecDeque::new(),
             queued_cleanups: BTreeSet::new(),
+            pending_execution_downgrades: BTreeSet::new(),
             pending_lease_releases: BTreeSet::new(),
             waiters: WaiterIndex::new(),
             prefetches: HashMap::default(),
@@ -632,6 +635,10 @@ impl<P: RuntimeMaterializationProvider> LoadRegistry<P> {
 
     pub fn active_prefetches(&self) -> usize {
         self.prefetches.len()
+    }
+
+    pub fn has_pending_owner_work(&self) -> bool {
+        !self.pending_execution_downgrades.is_empty() || !self.pending_lease_releases.is_empty()
     }
 
     pub fn prefetch_active(&self, prefetch: PrefetchOwner) -> bool {
@@ -1428,6 +1435,8 @@ impl<P: RuntimeMaterializationProvider> LoadRegistry<P> {
         if let Some(continuation) = detached.continuation_became_empty {
             self.release_continuation(continuation)?;
         }
+        self.pending_execution_downgrades
+            .extend(detached.operations_losing_last_waiter.iter().copied());
         self.mark_unowned_for_cleanup(
             detached.operations_losing_last_waiter.iter().copied(),
             &reason,
@@ -1694,6 +1703,9 @@ impl<P: RuntimeMaterializationProvider> LoadRegistry<P> {
         let mut progressed = 0;
         while progressed < maximum {
             let round_start = progressed;
+            while progressed < maximum && self.retry_one_execution_downgrade()?.is_some() {
+                progressed += 1;
+            }
             while progressed < maximum && self.retry_one_lease_release()?.is_some() {
                 progressed += 1;
             }
@@ -1832,21 +1844,36 @@ impl<P: RuntimeMaterializationProvider> LoadRegistry<P> {
         if let Some(grant) = lease.grant.as_ref() {
             self.resources.can_release_all_held(grant)?;
         }
-        self.ledger.record_cohort_phase(
-            CohortId::new(continuation.get()),
-            CriticalPhase::Resume,
-            started_ns,
-            finished_ns.max(started_ns),
-        )?;
+        let bookkeeping = self
+            .ledger
+            .record_cohort_phase(
+                CohortId::new(continuation.get()),
+                CriticalPhase::Resume,
+                started_ns,
+                finished_ns.max(started_ns),
+            )
+            .map_err(RegistryError::from)
+            .and_then(|()| {
+                if disposition == ResumeDisposition::Consumed {
+                    self.preflight_continuation_release(continuation)?;
+                }
+                Ok(())
+            });
         if let Some(grant) = lease.grant.as_mut() {
-            self.resources.release_all_held(grant)?;
+            self.resources
+                .release_all_held(grant)
+                .expect("resume grant release was preflighted");
         }
         lease.grant = None;
+        bookkeeping?;
         if disposition == ResumeDisposition::StillActive {
             return Ok(());
         }
-        self.release_ready_waiters(continuation)?;
+        self.release_ready_waiters(continuation)
+            .expect("ready waiter release was preflighted");
         self.release_continuation(continuation)
+            .expect("continuation release was preflighted");
+        Ok(())
     }
 
     pub fn detach_continuation(
@@ -1855,6 +1882,25 @@ impl<P: RuntimeMaterializationProvider> LoadRegistry<P> {
         reason: CancellationReason,
         now_ns: u64,
     ) -> Result<(), RegistryError> {
+        for waiter in self.waiters.waiters_for_continuation(continuation) {
+            if let Some(grant) = self.waiter_grants.get(&waiter) {
+                self.resources.can_release_all_held(grant)?;
+            }
+        }
+        if let Some(waiters) = self.ready_waiters.get(&continuation) {
+            for waiter in waiters {
+                if let Some(grant) = self.waiter_grants.get(waiter) {
+                    self.resources.can_release_all_held(grant)?;
+                }
+            }
+        }
+        if let Some(state) = self.continuations.get(&continuation) {
+            if let Some(ready) = state.ready_grant.as_ref() {
+                self.resources.can_release_all_held(ready)?;
+            }
+            self.resources.can_release_all_held(&state.grant)?;
+        }
+
         let detached = self.waiters.detach_continuation(continuation);
         let mut lost_last = detached.operations_losing_last_waiter;
         for waiter in detached.removed_waiters {
@@ -1871,6 +1917,8 @@ impl<P: RuntimeMaterializationProvider> LoadRegistry<P> {
             }
         }
         self.release_continuation(continuation)?;
+        self.pending_execution_downgrades
+            .extend(lost_last.iter().copied());
         self.mark_unowned_for_cleanup(lost_last.iter().copied(), &reason);
         for operation in std::mem::take(&mut lost_last) {
             self.release_execution_if_prefetch_only(operation)?;
@@ -1896,6 +1944,10 @@ impl<P: RuntimeMaterializationProvider> LoadRegistry<P> {
             started_ns,
             finished_ns,
         } = outcome
+            && !self
+                .transactions
+                .get(&transaction)
+                .is_some_and(|state| state.commit_phase_recorded)
         {
             let cohort = CohortId::new(transaction.get());
             self.ledger.record_cohort_phase(
@@ -1904,11 +1956,9 @@ impl<P: RuntimeMaterializationProvider> LoadRegistry<P> {
                 started_ns,
                 finished_ns.max(started_ns),
             )?;
-            self.transactions
-                .entry(transaction)
-                .or_default()
-                .cohorts
-                .insert(cohort);
+            let state = self.transactions.entry(transaction).or_default();
+            state.cohorts.insert(cohort);
+            state.commit_phase_recorded = true;
         }
         let prefetches = self
             .prefetches
@@ -2053,6 +2103,7 @@ impl<P: RuntimeMaterializationProvider> LoadRegistry<P> {
         maximum_completions: usize,
     ) -> Result<ShutdownReport, RegistryError> {
         self.begin_shutdown(now_ns)?;
+        while self.retry_one_execution_downgrade()?.is_some() {}
         let mut processed = 0;
         while processed < maximum_completions {
             self.collect_provider_completions(maximum_completions - processed);
@@ -2061,6 +2112,32 @@ impl<P: RuntimeMaterializationProvider> LoadRegistry<P> {
             }
             let _ = self.process_one_completion()?;
             processed += 1;
+        }
+        if processed == maximum_completions && maximum_completions != 0 {
+            self.collect_provider_completions(1);
+        }
+        loop {
+            let mut progressed = false;
+            while self.retry_one_execution_downgrade()?.is_some() {
+                progressed = true;
+            }
+            while self.retry_one_lease_release()?.is_some() {
+                progressed = true;
+            }
+            while self.publish_one_queued(now_ns)?.is_some() {
+                progressed = true;
+            }
+            while self.cleanup_one_queued(now_ns)?.is_some() {
+                progressed = true;
+            }
+            let residencies = self.residencies.keys().copied().collect::<Vec<_>>();
+            for key in residencies {
+                self.release_residency_accounting(key)?;
+                progressed = true;
+            }
+            if !progressed {
+                break;
+            }
         }
         let pending_operations = self.operations.len();
         let pending_completions = self.completions.len();
@@ -2084,6 +2161,7 @@ impl<P: RuntimeMaterializationProvider> LoadRegistry<P> {
         let drained = pending_operations == 0
             && pending_completions == 0
             && active_grants == 0
+            && self.pending_execution_downgrades.is_empty()
             && self.waiters.is_empty()
             && self.prefetches.is_empty()
             && self.operation_prefetches.is_empty();
@@ -2166,18 +2244,34 @@ impl<P: RuntimeMaterializationProvider> LoadRegistry<P> {
         if self.waiters.waiter_count(operation) != 0
             || !self.operation_has_prefetch_owner(operation)
         {
+            self.pending_execution_downgrades.remove(&operation);
             return Ok(());
         }
         let key = match self.operations.get(&operation) {
             Some(active) if active.execution_required => active.key,
-            Some(_) | None => return Ok(()),
+            Some(_) | None => {
+                self.pending_execution_downgrades.remove(&operation);
+                return Ok(());
+            }
         };
-        self.provider.release_execution_lease(key)?;
+        if let Err(error) = self.provider.release_execution_lease(key) {
+            self.pending_execution_downgrades.insert(operation);
+            return Err(RegistryError::Provider { source: error });
+        }
         self.operations
             .get_mut(&operation)
             .expect("operation remains active while releasing execution")
             .execution_required = false;
+        self.pending_execution_downgrades.remove(&operation);
         self.refresh_operation_demand(operation)
+    }
+
+    fn retry_one_execution_downgrade(&mut self) -> Result<Option<OperationId>, RegistryError> {
+        let Some(operation) = self.pending_execution_downgrades.first().copied() else {
+            return Ok(None);
+        };
+        self.release_execution_if_prefetch_only(operation)?;
+        Ok(Some(operation))
     }
 
     fn prefetch_demand_for_operation(&self, operation: OperationId) -> Option<ResourceDemand> {
@@ -2957,6 +3051,7 @@ impl<P: RuntimeMaterializationProvider> LoadRegistry<P> {
                 }
             }
             lost_last.extend(detached.operations_losing_last_waiter);
+            self.release_ready_waiters(continuation)?;
             self.release_continuation(continuation)?;
             if self.failed_set.insert(continuation) {
                 self.failed_continuations.push_back(FailedContinuation {
@@ -2966,8 +3061,11 @@ impl<P: RuntimeMaterializationProvider> LoadRegistry<P> {
             }
         }
         lost_last.remove(&operation);
+        self.pending_execution_downgrades
+            .extend(lost_last.iter().copied());
         self.mark_unowned_for_cleanup(lost_last.iter().copied(), &CancellationReason::Superseded);
         for other in lost_last {
+            self.release_execution_if_prefetch_only(other)?;
             self.handle_unowned_operation(other, CancellationReason::Superseded, now_ns)?;
         }
         Ok(())
@@ -2995,11 +3093,23 @@ impl<P: RuntimeMaterializationProvider> LoadRegistry<P> {
         reason: CancellationReason,
         now_ns: u64,
     ) -> Result<(), RegistryError> {
-        let state = self
-            .prefetches
-            .remove(&owner)
-            .ok_or(RegistryError::UnknownPrefetch { owner })?;
-        for operation in state.operations {
+        if !self.prefetches.contains_key(&owner) {
+            return Err(RegistryError::UnknownPrefetch { owner });
+        }
+        loop {
+            let Some(operation) = self
+                .prefetches
+                .get(&owner)
+                .and_then(|state| state.operations.first().copied())
+            else {
+                self.prefetches.remove(&owner);
+                return Ok(());
+            };
+            self.prefetches
+                .get_mut(&owner)
+                .expect("prefetch owner was checked above")
+                .operations
+                .remove(&operation);
             let remove_reverse = if let Some(owners) = self.operation_prefetches.get_mut(&operation)
             {
                 owners.remove(&owner);
@@ -3010,14 +3120,23 @@ impl<P: RuntimeMaterializationProvider> LoadRegistry<P> {
             if remove_reverse {
                 self.operation_prefetches.remove(&operation);
             }
-            if self.operation_is_unowned(operation) {
+            let progress = if self.operation_is_unowned(operation) {
                 self.mark_unowned_for_cleanup([operation], &reason);
-                self.handle_unowned_operation(operation, reason.clone(), now_ns)?;
+                self.handle_unowned_operation(operation, reason.clone(), now_ns)
             } else {
-                self.refresh_operation_demand(operation)?;
+                self.refresh_operation_demand(operation)
+            };
+            if let Err(error) = progress {
+                if self
+                    .prefetches
+                    .get(&owner)
+                    .is_some_and(|state| state.operations.is_empty())
+                {
+                    self.prefetches.remove(&owner);
+                }
+                return Err(error);
             }
         }
-        Ok(())
     }
 
     fn record_prefetch_failure(&mut self, operation: OperationId, reason: &RetirementReason) {
@@ -3234,11 +3353,40 @@ impl<P: RuntimeMaterializationProvider> LoadRegistry<P> {
         Ok(())
     }
 
+    fn preflight_continuation_release(
+        &self,
+        continuation: ContinuationId,
+    ) -> Result<(), RegistryError> {
+        if let Some(waiters) = self.ready_waiters.get(&continuation) {
+            for waiter in waiters {
+                if let Some(grant) = self.waiter_grants.get(waiter) {
+                    self.resources.can_release_all_held(grant)?;
+                }
+            }
+        }
+        if let Some(state) = self.continuations.get(&continuation) {
+            if let Some(ready) = state.ready_grant.as_ref() {
+                self.resources.can_release_all_held(ready)?;
+            }
+            self.resources.can_release_all_held(&state.grant)?;
+        }
+        Ok(())
+    }
+
     fn release_ready_waiters(&mut self, continuation: ContinuationId) -> Result<(), RegistryError> {
+        if let Some(waiters) = self.ready_waiters.get(&continuation) {
+            for waiter in waiters {
+                if let Some(grant) = self.waiter_grants.get(waiter) {
+                    self.resources.can_release_all_held(grant)?;
+                }
+            }
+        }
         if let Some(waiters) = self.ready_waiters.remove(&continuation) {
             for waiter in waiters {
                 if let Some(mut grant) = self.waiter_grants.remove(&waiter) {
-                    self.resources.release_all_held(&mut grant)?;
+                    self.resources
+                        .release_all_held(&mut grant)
+                        .expect("ready waiter grant release was preflighted");
                 }
             }
         }
@@ -3246,17 +3394,30 @@ impl<P: RuntimeMaterializationProvider> LoadRegistry<P> {
     }
 
     fn release_continuation(&mut self, continuation: ContinuationId) -> Result<(), RegistryError> {
-        let Some(mut state) = self.continuations.remove(&continuation) else {
+        let Some(state) = self.continuations.get(&continuation) else {
             return Ok(());
         };
+        if let Some(ready) = state.ready_grant.as_ref() {
+            self.resources.can_release_all_held(ready)?;
+        }
+        self.resources.can_release_all_held(&state.grant)?;
+
+        let mut state = self
+            .continuations
+            .remove(&continuation)
+            .expect("continuation grant release was preflighted");
         if state.owns_stage_custody {
             self.release_custody_owner(MaterializationCustodyOwner::Stage(continuation));
             state.owns_stage_custody = false;
         }
         if let Some(mut ready) = state.ready_grant {
-            self.resources.release_all_held(&mut ready)?;
+            self.resources
+                .release_all_held(&mut ready)
+                .expect("ready continuation grant release was preflighted");
         }
-        self.resources.release_all_held(&mut state.grant)?;
+        self.resources
+            .release_all_held(&mut state.grant)
+            .expect("continuation grant release was preflighted");
         Ok(())
     }
 

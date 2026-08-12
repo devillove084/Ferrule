@@ -216,6 +216,27 @@ impl std::fmt::Display for AbortKvReservationsError {
 
 impl std::error::Error for AbortKvReservationsError {}
 
+/// Failure to release preempted KV state without consuming its ownership token.
+#[derive(Debug)]
+pub struct ReleasePreemptedKvStateError {
+    error: Error,
+    state: PreemptedKvState,
+}
+
+impl ReleasePreemptedKvStateError {
+    pub fn into_parts(self) -> (Error, PreemptedKvState) {
+        (self.error, self.state)
+    }
+}
+
+impl std::fmt::Display for ReleasePreemptedKvStateError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.error.fmt(f)
+    }
+}
+
+impl std::error::Error for ReleasePreemptedKvStateError {}
+
 /// Pages quarantined until their backend storage is no longer reachable.
 #[must_use = "retiring KV pages must be released and confirmed"]
 #[derive(Debug)]
@@ -1450,8 +1471,13 @@ impl KvPageManager {
     }
 
     /// Release a preempted state and quarantine pages whose refcount reaches zero.
-    pub fn release_preempted_pages(&mut self, state: PreemptedKvState) -> Result<KvRetirement> {
-        self.validate_refcount_decrements(&state.block_table.pages)?;
+    pub fn release_preempted_pages(
+        &mut self,
+        state: PreemptedKvState,
+    ) -> std::result::Result<KvRetirement, ReleasePreemptedKvStateError> {
+        if let Err(error) = self.validate_refcount_decrements(&state.block_table.pages) {
+            return Err(ReleasePreemptedKvStateError { error, state });
+        }
         let retiring = state
             .block_table
             .pages

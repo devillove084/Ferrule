@@ -97,6 +97,17 @@ impl WaiterIndex {
         self.waiter_to_loads.keys().copied()
     }
 
+    pub fn waiters_for_continuation(
+        &self,
+        continuation: ContinuationId,
+    ) -> impl Iterator<Item = WaiterId> + '_ {
+        self.continuation_waiters
+            .get(&continuation)
+            .into_iter()
+            .flatten()
+            .copied()
+    }
+
     pub fn waiter_count(&self, operation: OperationId) -> usize {
         self.load_to_waiters.get(&operation).map_or(0, HashSet::len)
     }

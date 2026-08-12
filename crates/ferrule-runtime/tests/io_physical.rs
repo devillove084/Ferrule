@@ -983,6 +983,70 @@ fn replacement_waits_for_old_logical_owner_without_losing_operation() {
 }
 
 #[test]
+fn shutdown_reclaims_replacement_published_during_fixed_point() {
+    let (physical, handle) = MockPhysicalProvider::automatic();
+    handle.set_resident(true);
+    let provider = SharedMaterializationProvider::new(Box::new(physical));
+    let old_preparation = provider
+        .prepare(request(1), MaterializationPurpose::Execution)
+        .unwrap();
+    let old_key = old_preparation.key();
+    let slot = old_preparation.binding().slot;
+    let mut registry = LoadRegistry::new(
+        provider.clone(),
+        physical_resources(),
+        FairQueueConfig::default(),
+    )
+    .unwrap();
+    registry
+        .attach_waiter(
+            waiter(1, 1),
+            ResourceDemand::required(ExecutionPhase::Prefill),
+            [stage_request(
+                old_preparation,
+                uniform_plan(),
+                ResourceDemand::required(ExecutionPhase::Prefill),
+            )],
+            1,
+        )
+        .unwrap();
+
+    handle.set_resident(false);
+    handle.configure_next_preparation(DESTINATION_GENERATION + 1, slot, Some(old_key));
+    let new_preparation = provider
+        .prepare(request(2), MaterializationPurpose::Execution)
+        .unwrap();
+    let new_key = new_preparation.key();
+    let operation = registry
+        .attach_waiter(
+            waiter(2, 2),
+            ResourceDemand::required(ExecutionPhase::Prefill),
+            [stage_request(
+                new_preparation,
+                uniform_plan(),
+                ResourceDemand::required(ExecutionPhase::Prefill),
+            )],
+            2,
+        )
+        .unwrap()
+        .created[0];
+    registry.drive(100, 32).unwrap();
+    assert_eq!(
+        registry.operation(operation).map(|active| active.stage()),
+        Some(LoadStage::Resident)
+    );
+    assert!(registry.residency_binding(old_key).is_some());
+    assert!(registry.residency_binding(new_key).is_none());
+
+    let report = registry.shutdown(101, 0).unwrap();
+
+    assert!(report.drained);
+    assert_eq!(report.active_grants, 0);
+    assert_eq!(registry.resident_entries(), 0);
+    assert_eq!(registry.resources().active_grants(), 0);
+}
+
+#[test]
 fn replacement_cannot_evict_key_from_another_slot() {
     let (physical, handle) = MockPhysicalProvider::automatic();
     handle.set_resident(true);

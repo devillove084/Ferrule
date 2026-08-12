@@ -9,7 +9,7 @@ pub use page_manager::{
     AbortKvReservationsError, BlockTable as PageBlockTable, ConfirmKvRetirementError,
     KvPageManager, KvPageManagerStats, KvPrefixSnapshot, KvReservation, KvReservationBindings,
     KvReservationCommit, KvReservationId, KvRetirement, PreemptedKvState, PrepareKvCommitError,
-    PreparedKvCommit, PreparedKvSequenceFork, PreparedKvSnapshotFork,
+    PreparedKvCommit, PreparedKvSequenceFork, PreparedKvSnapshotFork, ReleasePreemptedKvStateError,
 };
 pub use radix::{
     PrefixCacheEntryId, PrefixCacheError, PrefixCacheEvictionCandidate, PrefixCacheInsertError,

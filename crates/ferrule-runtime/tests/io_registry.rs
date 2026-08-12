@@ -1343,6 +1343,69 @@ fn failed_completion_retires_despite_sibling_cancel_failure() {
 }
 
 #[test]
+fn failed_sibling_releases_already_satisfied_waiter_grant() {
+    let mut registry = manual_registry();
+    let transaction = ExecutionTransactionId::new(1).unwrap();
+    let continuation = ContinuationId::new(1);
+    let first_waiter = WaiterId::new(
+        transaction,
+        RequestGeneration::new(1),
+        DependencySetEpoch::new(1),
+        continuation,
+    )
+    .unwrap();
+    let second_waiter = WaiterId::new(
+        transaction,
+        RequestGeneration::new(1),
+        DependencySetEpoch::new(2),
+        continuation,
+    )
+    .unwrap();
+    let first_key = key(1, 1);
+    let second_key = key(2, 1);
+    let first = attach_one(&mut registry, first_waiter, first_key);
+    let second = attach_one(&mut registry, second_waiter, second_key);
+    for now_ns in 11..15 {
+        assert!(registry.schedule_one(now_ns).unwrap());
+    }
+
+    registry.enqueue_completion(success_event(
+        first,
+        first_key,
+        LoadStage::ReadSubmitted,
+        20,
+    ));
+    registry.process_one_completion().unwrap();
+    assert!(registry.schedule_one(21).unwrap());
+    registry.enqueue_completion(success_event(
+        first,
+        first_key,
+        LoadStage::UploadSubmitted,
+        22,
+    ));
+    registry.process_one_completion().unwrap();
+    assert!(registry.schedule_one(23).unwrap());
+    registry.enqueue_completion(success_event(first, first_key, LoadStage::Installing, 24));
+    registry.process_one_completion().unwrap();
+    assert_eq!(registry.resources().in_use(ResourceKind::Waiter), 2);
+
+    registry.enqueue_completion(event(
+        second,
+        second_key,
+        LoadStage::ReadSubmitted,
+        CompletionOutcome::Failed(FailureReason::StorageUnavailable),
+        0,
+        25,
+    ));
+    registry.process_one_completion().unwrap();
+
+    assert_eq!(registry.resources().in_use(ResourceKind::Waiter), 0);
+    assert_eq!(registry.resources().in_use(ResourceKind::Continuation), 0);
+    assert_eq!(registry.pop_failed().unwrap().continuation, continuation);
+    assert!(registry.shutdown(26, 0).unwrap().drained);
+}
+
+#[test]
 fn failure_stage_history_is_exactly_once() {
     let (mut registry, materialization_key, operation) = manual_at_read();
     registry.enqueue_completion(event(
@@ -2686,6 +2749,117 @@ fn ready_cohort_credit_exhaustion_delays_resume_without_false_wake() {
     registry.drive(100, 32).unwrap();
     assert_eq!(registry.pop_ready(101).unwrap(), None);
     assert_eq!(registry.waiters().ready_len(), 1);
+}
+
+#[test]
+fn execution_downgrade_failure_retains_every_sibling_for_retry() {
+    let (mut registry, handle) = ferrule_runtime::io::testing::registry(false);
+    let continuation = ContinuationId::new(90);
+    let phases = ExecutionPhaseSet::one(ExecutionPhase::Prefill);
+    let keys = [
+        ferrule_runtime::io::testing::key(1),
+        ferrule_runtime::io::testing::key(2),
+    ];
+    for (index, materialization_key) in keys.into_iter().enumerate() {
+        registry
+            .prefetch(
+                PrefetchOwner::transaction(
+                    ExecutionTransactionId::new(100 + index as u64).unwrap(),
+                    phases,
+                ),
+                [ferrule_runtime::io::testing::load_request(
+                    &registry,
+                    materialization_key,
+                    ferrule_runtime::io::testing::uniform_plan(),
+                    ResourceDemand::prefetch(ExecutionPhase::Prefill),
+                )],
+                1 + index as u64,
+            )
+            .unwrap();
+    }
+    let requests = keys.map(|materialization_key| {
+        ferrule_runtime::io::testing::load_request(
+            &registry,
+            materialization_key,
+            ferrule_runtime::io::testing::uniform_plan(),
+            ResourceDemand::required(ExecutionPhase::Prefill),
+        )
+    });
+    registry
+        .attach_waiter(
+            ferrule_runtime::io::testing::waiter(200, continuation.get()),
+            ResourceDemand::required(ExecutionPhase::Prefill),
+            requests,
+            10,
+        )
+        .unwrap();
+    handle.fail_next_release(FailureReason::ContractViolation {
+        message: "simulated execution lease release failure".into(),
+    });
+
+    let error = registry
+        .detach_continuation(continuation, CancellationReason::ExternalRequest, 20)
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("simulated execution lease release failure")
+    );
+    assert!(registry.has_pending_owner_work());
+
+    registry.drive(21, 2).unwrap();
+    assert!(!registry.has_pending_owner_work());
+    assert_eq!(
+        handle.command_count(|command| matches!(
+            command,
+            ferrule_runtime::io::testing::MockPhysicalCommand::ReleaseExecutionLease(_)
+        )),
+        3
+    );
+}
+
+#[test]
+fn shutdown_clears_stale_execution_downgrade_ownership() {
+    let (mut registry, handle) = ferrule_runtime::io::testing::registry(false);
+    let continuation = ContinuationId::new(91);
+    let phases = ExecutionPhaseSet::one(ExecutionPhase::Prefill);
+    let materialization_key = ferrule_runtime::io::testing::key(1);
+    registry
+        .prefetch(
+            PrefetchOwner::transaction(ExecutionTransactionId::new(101).unwrap(), phases),
+            [ferrule_runtime::io::testing::load_request(
+                &registry,
+                materialization_key,
+                ferrule_runtime::io::testing::uniform_plan(),
+                ResourceDemand::prefetch(ExecutionPhase::Prefill),
+            )],
+            1,
+        )
+        .unwrap();
+    registry
+        .attach_waiter(
+            ferrule_runtime::io::testing::waiter(201, continuation.get()),
+            ResourceDemand::required(ExecutionPhase::Prefill),
+            [ferrule_runtime::io::testing::load_request(
+                &registry,
+                materialization_key,
+                ferrule_runtime::io::testing::uniform_plan(),
+                ResourceDemand::required(ExecutionPhase::Prefill),
+            )],
+            2,
+        )
+        .unwrap();
+    handle.fail_next_release(FailureReason::ContractViolation {
+        message: "simulated shutdown lease release failure".into(),
+    });
+    registry
+        .detach_continuation(continuation, CancellationReason::ExternalRequest, 3)
+        .unwrap_err();
+    assert!(registry.has_pending_owner_work());
+
+    let report = registry.shutdown(4, 16).unwrap();
+    assert!(report.drained);
+    assert!(!registry.has_pending_owner_work());
 }
 
 #[test]
