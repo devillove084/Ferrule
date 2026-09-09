@@ -9,6 +9,7 @@ pub mod io_protocol;
 pub mod materialization_io;
 pub mod memory;
 pub mod observability;
+pub mod topology;
 
 pub use async_wake::{CompletionHub, CompletionListener, CompletionWake};
 pub use error::*;
@@ -22,6 +23,10 @@ pub use expert_residency::{
 pub use io_protocol::*;
 pub use memory::{
     MemoryPoolKind, MemoryPoolLimits, MemoryPoolStats, MemoryTopology, OwnerMemoryLru,
+};
+pub use topology::{
+    ParallelGroupId, ParallelRankId, ParallelTopologyError, ParallelTopologyId, ParallelismPlan,
+    ParallelismPlanError, ParticipantSet, ValidatedParallelTopology,
 };
 
 /// Quantization format identifier — mirrors GGUF's type enum.

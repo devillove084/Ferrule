@@ -11,6 +11,7 @@ mod error;
 
 // ── Sub-directory modules ─────────────────────────────────────────────────
 pub mod cache;
+pub mod distributed;
 pub mod io;
 pub mod scheduling;
 
@@ -20,7 +21,13 @@ pub mod expert_residency;
 pub mod speculation;
 
 // ── Convenience re-exports ────────────────────────────────────────────────
+pub use distributed::{
+    Decision, DistributedTransaction, DistributedTransactionError, DistributedTransactionRecord,
+    FinalizeOutcome, TransactionReport, TransactionState,
+};
 pub use error::{CleanupStep, Error, Result};
+pub use ferrule_common::ParallelRankId;
+pub use ferrule_common::execution::ExecutionTransactionId;
 
 pub use cache::{
     KvPageManager, KvPageManagerStats, KvReservation, KvReservationBindings, KvReservationCommit,

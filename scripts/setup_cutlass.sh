@@ -3,7 +3,7 @@ set -eu
 
 CUTLASS_VERSION="v4.6.1"
 CUTLASS_COMMIT="e05f953a5b3d38adc240df2ff928e0421c2abba3"
-CUTLASS_REPOSITORY="https://github.com/NVIDIA/cutlass.git"
+CUTLASS_REPOSITORY="${FERRULE_CUTLASS_REPOSITORY:-https://github.com/NVIDIA/cutlass.git}"
 CUTLASS_DIR="${FERRULE_CUTLASS_DIR:-target/vendor/cutlass}"
 VERSION_HEADER="$CUTLASS_DIR/include/cutlass/version.h"
 

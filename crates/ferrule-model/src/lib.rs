@@ -76,9 +76,9 @@ pub use support::{
     AttentionLayout, AttentionPolicy, BoundRoleCount, EnginePlan, EnginePlanStatus, ExpertPolicy,
     FeedForwardKind, FeedForwardLayout, KvCacheShape, KvPolicy, LayerLayout,
     LayoutValidationReport, MissingPolicy, MissingRequiredRole, ModelLayout, ModelSupportContract,
-    OptionalRoleStatus, ParallelismPlan, PolicyArea, PolicySet, QuantPolicy, ResidencyPolicy,
-    RoleScope, RouterPolicy, SpeculationMode, SpeculationPolicy, TensorBinding, TensorRole,
-    TokenizerPolicy, ValidationPolicy, validate_model_layout_bindings,
+    OptionalRoleStatus, PolicyArea, PolicySet, QuantPolicy, ResidencyPolicy, RoleScope,
+    RouterPolicy, SpeculationMode, SpeculationPolicy, TensorBinding, TensorRole, TokenizerPolicy,
+    ValidationPolicy, validate_model_layout_bindings,
 };
 
 // ── Re-exports: semantic ──────────────────────────────────────────────────
@@ -136,11 +136,14 @@ pub use materialization::{
     PhysicalMaterializationTopology, ResourceSource, resolve_stage, resolve_stage_resources,
 };
 
+pub use ferrule_common::{ParallelismPlan, ParallelismPlanError};
+
 // Stable protocol identities and lease/dependency contracts used by model APIs.
 pub use ferrule_common::{
     ContinuationId, DependencySet, LogicalDependency, MaterializationKey, MaterializationPurpose,
     MaterializationResolveError, MaterializationResolveResult, MaterializedResourceId,
-    MaterializedResourceKind, PayloadEncodingId, ResidencyLeaseSet, ValidatedResidencyBinding,
+    MaterializedResourceKind, ParallelGroupId, ParallelRankId, ParallelTopologyId,
+    PayloadEncodingId, ResidencyLeaseSet, ValidatedResidencyBinding,
 };
 
 // ── Re-exports: runner ────────────────────────────────────────────────────

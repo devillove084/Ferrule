@@ -54,4 +54,5 @@ __pycache__/
 # IDE / editor state
 .idea/
 .vscode/
+.zed/
 *.options

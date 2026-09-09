@@ -52,28 +52,7 @@ pub struct ResidencyPolicy {
     pub all_resident_required: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ParallelismPlan {
-    pub data_parallel: usize,
-    pub tensor_parallel: usize,
-    pub expert_parallel: usize,
-    pub sequence_parallel: usize,
-    pub context_parallel: usize,
-    pub pipeline_parallel: usize,
-}
-
-impl Default for ParallelismPlan {
-    fn default() -> Self {
-        Self {
-            data_parallel: 1,
-            tensor_parallel: 1,
-            expert_parallel: 1,
-            sequence_parallel: 1,
-            context_parallel: 1,
-            pipeline_parallel: 1,
-        }
-    }
-}
+pub use ferrule_common::{ParallelismPlan, ParallelismPlanError};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SpeculationMode {
@@ -112,6 +91,46 @@ pub struct PolicySet {
     pub tokenizer: TokenizerPolicy,
     pub validation: ValidationPolicy,
     pub semantics: TransformerSemantics,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ParallelismPlan, ParallelismPlanError};
+
+    #[test]
+    fn public_parallelism_types_are_common_types() {
+        let plan: ferrule_common::ParallelismPlan = crate::ParallelismPlan::default();
+        let policy_plan: ParallelismPlan = plan;
+        let _: crate::ParallelismPlan = policy_plan;
+        let error: ferrule_common::ParallelismPlanError =
+            crate::ParallelismPlan::validated(1, 0, 1, 1, 1, 1).unwrap_err();
+        let _: crate::ParallelismPlanError = error;
+        let topology = ferrule_common::ValidatedParallelTopology::new(
+            ferrule_common::ParallelTopologyId::new(1),
+            1,
+            ferrule_common::ParallelRankId::new(0),
+            policy_plan,
+        )
+        .unwrap();
+        assert_eq!(topology.plan(), plan);
+    }
+
+    #[test]
+    fn default_parallelism_plan_is_valid() {
+        assert!(ParallelismPlan::default().validate().is_ok());
+    }
+
+    #[test]
+    fn validated_parallelism_plan_rejects_zero_dimension() {
+        let error = ParallelismPlan::validated(1, 0, 1, 1, 1, 1).unwrap_err();
+        assert_eq!(
+            error,
+            ParallelismPlanError::ZeroDimension {
+                dimension: "tensor_parallel"
+            }
+        );
+        assert!(error.to_string().contains("tensor_parallel"));
+    }
 }
 
 impl PolicySet {
