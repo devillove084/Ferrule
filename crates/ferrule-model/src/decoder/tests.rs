@@ -706,10 +706,28 @@ fn synchronous_standard_forward_publishes_working_copies_exactly_once() {
     assert_eq!(states[2].core().position(), 0);
     assert_eq!(states[0].core().position(), 4);
     assert_eq!(states[2].attachment(), &30);
+    for _ in 0..2 {
+        registry.prepare_publication(active, &states).unwrap();
+        assert_eq!(
+            registry.phase(active).unwrap(),
+            DecoderTransactionPhase::Executed
+        );
+        assert!(!backend.events.contains(&"commit"));
+        assert_eq!(states[2].core().position(), 0);
+        assert_eq!(states[0].core().position(), 4);
+        assert_eq!(states[2].attachment(), &30);
+    }
     assert_eq!(
         registry.publish(active, &mut states, &mut backend).unwrap(),
         KvEndProgress::Pending
     );
+    assert!(registry.prepare_publication(active, &states).is_err());
+    assert_eq!(
+        registry.phase(active).unwrap(),
+        DecoderTransactionPhase::Publishing
+    );
+    assert!(registry.abort(active, &mut backend, &mut executor).is_err());
+    assert!(!backend.events.contains(&"rollback"));
     assert_eq!(states[2].core().position(), 0);
     assert!(registry.contains(active));
     assert_eq!(
@@ -723,6 +741,12 @@ fn synchronous_standard_forward_publishes_working_copies_exactly_once() {
     assert_eq!(states[2].topology_id(), original_topologies[0]);
     assert_eq!(states[0].topology_id(), original_topologies[1]);
     assert!(registry.is_empty());
+    let events = backend.events.clone();
+    assert!(registry.publish(active, &mut states, &mut backend).is_err());
+    assert!(registry.prepare_publication(active, &states).is_err());
+    assert_eq!(backend.events, events);
+    assert_eq!(states[2].core().position(), 3);
+    assert_eq!(states[2].attachment(), &31);
     registry
         .ensure_pages_available(&[KvPageId(20)], "release")
         .unwrap();
@@ -986,7 +1010,7 @@ fn wait_rebuild_failure_remains_cancelable_and_rollbackable() {
     assert!(registry.is_empty());
 }
 #[test]
-fn abort_discards_executed_work_and_can_progress_asynchronously() {
+fn abort_discards_staged_work_and_can_progress_asynchronously() {
     let fixture = mixed_fixture();
     let packed = fixture.lower().unwrap();
     let states = fixture.states;
@@ -998,9 +1022,12 @@ fn abort_discards_executed_work_and_can_progress_asynchronously() {
     registry
         .prepare(active, packed, &states, &mut backend)
         .unwrap();
+    assert!(registry.prepare_publication(active, &states).is_err());
     registry
         .execute_batch(active, &states, &fixture.batch, &mut backend, &mut executor)
         .unwrap();
+    registry.prepare_publication(active, &states).unwrap();
+    assert!(!backend.events.contains(&"commit"));
     assert_eq!(
         registry.abort(active, &mut backend, &mut executor).unwrap(),
         KvEndProgress::Pending
@@ -1010,13 +1037,120 @@ fn abort_discards_executed_work_and_can_progress_asynchronously() {
         DecoderTransactionPhase::Aborting
     );
     assert_eq!(states[2].core().position(), 0);
+    assert!(registry.contains(active));
+    assert!(registry.prepare_publication(active, &states).is_err());
     assert_eq!(
         registry.abort(active, &mut backend, &mut executor).unwrap(),
         KvEndProgress::Complete
     );
     assert_eq!(states[2].attachment(), &30);
+    assert!(!backend.events.contains(&"commit"));
     assert!(registry.is_empty());
 }
+#[test]
+fn publication_preflight_rejects_changed_sources_without_committing() {
+    let fixture = mixed_fixture();
+    let packed = fixture.lower().unwrap();
+    let mut states = fixture.states;
+    let mut backend = MockKvBackend::default();
+    let mut executor = MockForwardExecutor::new(ForwardScript::Sync);
+    let mut registry = Registry::new("mock");
+    let active = transaction(30);
+    registry
+        .prepare(active, packed, &states, &mut backend)
+        .unwrap();
+    registry
+        .execute_batch(active, &states, &fixture.batch, &mut backend, &mut executor)
+        .unwrap();
+    states.swap(0, 2);
+    let events = backend.events.clone();
+    assert!(registry.prepare_publication(active, &states).is_err());
+    assert!(registry.publish(active, &mut states, &mut backend).is_err());
+    assert_eq!(backend.events, events);
+    assert_eq!(
+        registry.phase(active).unwrap(),
+        DecoderTransactionPhase::Executed
+    );
+    assert_eq!(
+        registry.abort(active, &mut backend, &mut executor).unwrap(),
+        KvEndProgress::Complete
+    );
+    assert!(!backend.events.contains(&"commit"));
+}
+
+#[test]
+fn staging_validates_every_working_core_before_applying_any_commit() {
+    for poison in [false, true] {
+        let fixture = mixed_fixture();
+        let packed = fixture.lower().unwrap();
+        let mut states = fixture.states;
+        let committed = states.clone();
+        let mut backend = MockKvBackend::default();
+        let mut executor = MockForwardExecutor::new(ForwardScript::Sync);
+        let mut registry = Registry::new("mock");
+        let active = transaction(301);
+        registry
+            .prepare(active, packed, &states, &mut backend)
+            .unwrap();
+        registry
+            .execute_batch(active, &states, &fixture.batch, &mut backend, &mut executor)
+            .unwrap();
+        let working = registry.working_states_mut(active).unwrap();
+        let original_second = working[1].core().clone();
+        if poison {
+            let binding = working[1].core().begin_step().unwrap();
+            working[1].core_mut().poison_step(binding);
+        } else {
+            working[1].core_mut().reset();
+        }
+        let before = working.to_vec();
+        for _ in 0..2 {
+            assert!(registry.prepare_publication(active, &states).is_err());
+            assert!(registry.publish(active, &mut states, &mut backend).is_err());
+            assert_eq!(
+                registry.working_states_mut(active).unwrap(),
+                before.as_slice()
+            );
+            assert_eq!(states, committed);
+            assert_eq!(
+                registry.phase(active).unwrap(),
+                DecoderTransactionPhase::Executed
+            );
+            assert!(!backend.events.contains(&"commit"));
+        }
+        *registry.working_states_mut(active).unwrap()[1].core_mut() = original_second;
+        registry.prepare_publication(active, &states).unwrap();
+        registry.prepare_publication(active, &states).unwrap();
+        assert_eq!(
+            registry.working_states_mut(active).unwrap()[0]
+                .core()
+                .position(),
+            3
+        );
+        assert_eq!(
+            registry.working_states_mut(active).unwrap()[1]
+                .core()
+                .position(),
+            5
+        );
+        assert_eq!(states, committed);
+        assert_eq!(
+            registry.publish(active, &mut states, &mut backend).unwrap(),
+            KvEndProgress::Complete
+        );
+        assert_eq!(states[2].core().position(), 3);
+        assert_eq!(states[0].core().position(), 5);
+        assert_eq!(
+            backend
+                .events
+                .iter()
+                .filter(|event| **event == "commit")
+                .count(),
+            1
+        );
+    }
+}
+
 #[test]
 fn retained_commit_error_can_be_retried_without_losing_custody() {
     let fixture = mixed_fixture();

@@ -128,6 +128,11 @@ pub enum ParallelTopologyError {
     RankOutOfBounds,
     ZeroFactor,
     UnsupportedParallelism,
+    FactorOverflow,
+    ReplicaOutOfBounds,
+    EmptyParticipants,
+    DuplicateParticipant,
+    ParticipantTopologyMismatch,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -156,14 +161,16 @@ impl ValidatedParallelTopology {
         }
         plan.validate()
             .map_err(|_| ParallelTopologyError::ZeroFactor)?;
-        // A single-rank world must obey the same pure-DP contract as larger worlds.
-        if u32::try_from(plan.data_parallel) != Ok(world_size)
+        let mesh_size = plan
+            .data_parallel
+            .checked_mul(plan.pipeline_parallel)
+            .and_then(|size| size.checked_mul(plan.tensor_parallel))
+            .ok_or(ParallelTopologyError::FactorOverflow)?;
+        if u32::try_from(mesh_size) != Ok(world_size)
             || [
-                plan.tensor_parallel,
                 plan.expert_parallel,
                 plan.sequence_parallel,
                 plan.context_parallel,
-                plan.pipeline_parallel,
             ]
             .iter()
             .any(|factor| *factor != 1)
@@ -191,24 +198,169 @@ impl ValidatedParallelTopology {
     }
     pub fn participants(&self) -> ParticipantSet {
         ParticipantSet {
+            topology_id: self.topology_id,
             world_size: self.world_size,
+            plan: self.plan,
+            ranks: (0..self.world_size).map(ParallelRankId::new).collect(),
         }
+    }
+
+    /// TP peers at pipeline stage zero. Preserves the original DP × TP layout
+    /// when PP=1; use `tensor_stage_participants` for other pipeline stages.
+    pub fn tensor_participants(
+        &self,
+        replica: u32,
+    ) -> Result<ParticipantSet, ParallelTopologyError> {
+        self.tensor_stage_participants(replica, 0)
+    }
+
+    /// Rank layout: ((replica * PP) + pipeline stage) * TP + tensor index.
+    /// EP is deliberately not multiplied into this mesh: it has its own executor.
+    pub fn rank_at(
+        &self,
+        replica: u32,
+        stage: u32,
+        tensor: u32,
+    ) -> Result<ParallelRankId, ParallelTopologyError> {
+        if replica >= self.plan.data_parallel as u32 {
+            return Err(ParallelTopologyError::ReplicaOutOfBounds);
+        }
+        if stage >= self.plan.pipeline_parallel as u32 || tensor >= self.plan.tensor_parallel as u32
+        {
+            return Err(ParallelTopologyError::RankOutOfBounds);
+        }
+        Ok(ParallelRankId::new(
+            (replica * self.plan.pipeline_parallel as u32 + stage)
+                * self.plan.tensor_parallel as u32
+                + tensor,
+        ))
+    }
+
+    pub fn tensor_stage_participants(
+        &self,
+        replica: u32,
+        stage: u32,
+    ) -> Result<ParticipantSet, ParallelTopologyError> {
+        let start = self.rank_at(replica, stage, 0)?.get();
+        ParticipantSet::new(
+            self,
+            (start..start + self.plan.tensor_parallel as u32).map(ParallelRankId::new),
+        )
+    }
+
+    pub fn pipeline_participants(
+        &self,
+        replica: u32,
+        tensor: u32,
+    ) -> Result<ParticipantSet, ParallelTopologyError> {
+        self.rank_at(replica, 0, tensor)?;
+        ParticipantSet::new(
+            self,
+            (0..self.plan.pipeline_parallel as u32).map(|stage| {
+                self.rank_at(replica, stage, tensor)
+                    .expect("validated mesh coordinate")
+            }),
+        )
+    }
+
+    pub fn data_participants(
+        &self,
+        stage: u32,
+        tensor: u32,
+    ) -> Result<ParticipantSet, ParallelTopologyError> {
+        self.rank_at(0, stage, tensor)?;
+        ParticipantSet::new(
+            self,
+            (0..self.plan.data_parallel as u32).map(|replica| {
+                self.rank_at(replica, stage, tensor)
+                    .expect("validated mesh coordinate")
+            }),
+        )
+    }
+
+    pub fn replica_of(&self, rank: ParallelRankId) -> Result<u32, ParallelTopologyError> {
+        if rank.get() >= self.world_size {
+            return Err(ParallelTopologyError::RankOutOfBounds);
+        }
+        Ok(rank.get() / (self.plan.pipeline_parallel * self.plan.tensor_parallel) as u32)
+    }
+
+    /// Require the same topology epoch, world and mesh; local rank is not scope identity.
+    pub fn validate_participants(
+        &self,
+        participants: &ParticipantSet,
+    ) -> Result<(), ParallelTopologyError> {
+        if participants.topology_id != self.topology_id
+            || participants.world_size != self.world_size
+            || participants.plan != self.plan
+        {
+            return Err(ParallelTopologyError::ParticipantTopologyMismatch);
+        }
+        if participants
+            .ranks
+            .iter()
+            .any(|rank| rank.get() >= self.world_size)
+        {
+            return Err(ParallelTopologyError::RankOutOfBounds);
+        }
+        Ok(())
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParticipantSet {
+    topology_id: ParallelTopologyId,
     world_size: u32,
+    plan: ParallelismPlan,
+    ranks: Vec<ParallelRankId>,
 }
 impl ParticipantSet {
-    pub const fn world_size(self) -> u32 {
+    /// Construct a nonempty, sorted scope. Duplicates are rejected, not deduplicated.
+    /// Rank bounds are validated against the supplied topology.
+    pub fn new(
+        topology: &ValidatedParallelTopology,
+        ranks: impl IntoIterator<Item = ParallelRankId>,
+    ) -> Result<Self, ParallelTopologyError> {
+        let mut ranks: Vec<_> = ranks.into_iter().collect();
+        if ranks.is_empty() {
+            return Err(ParallelTopologyError::EmptyParticipants);
+        }
+        ranks.sort_unstable();
+        if ranks.windows(2).any(|pair| pair[0] == pair[1]) {
+            return Err(ParallelTopologyError::DuplicateParticipant);
+        }
+        let participants = Self {
+            topology_id: topology.topology_id,
+            world_size: topology.world_size,
+            plan: topology.plan,
+            ranks,
+        };
+        topology.validate_participants(&participants)?;
+        Ok(participants)
+    }
+
+    pub const fn topology_id(&self) -> ParallelTopologyId {
+        self.topology_id
+    }
+    pub const fn plan(&self) -> ParallelismPlan {
+        self.plan
+    }
+    /// Size of the containing world, not the number of ranks in this scope.
+    pub const fn world_size(&self) -> u32 {
         self.world_size
     }
-    pub const fn contains(self, rank: ParallelRankId) -> bool {
-        rank.get() < self.world_size
+    pub fn len(&self) -> usize {
+        self.ranks.len()
     }
-    pub fn iter(self) -> impl Iterator<Item = ParallelRankId> {
-        (0..self.world_size).map(ParallelRankId::new)
+    pub fn is_empty(&self) -> bool {
+        self.ranks.is_empty()
+    }
+    pub fn contains(&self, rank: ParallelRankId) -> bool {
+        self.ranks.binary_search(&rank).is_ok()
+    }
+    /// An owned iterator lets callers mutate a coordinator while visiting its ranks.
+    pub fn iter(&self) -> std::vec::IntoIter<ParallelRankId> {
+        self.ranks.clone().into_iter()
     }
 }
 
@@ -318,9 +470,67 @@ mod tests {
     }
 
     #[test]
-    fn rejects_non_dp_factors_for_every_world_size() {
+    fn dp_pp_tp_groups_follow_one_rank_layout() {
+        let t = topology(12, ParallelismPlan::validated(2, 2, 1, 1, 1, 3).unwrap()).unwrap();
+        let ids = |group: ParticipantSet| group.iter().map(ParallelRankId::get).collect::<Vec<_>>();
+        assert_eq!(ids(t.tensor_participants(1).unwrap()), vec![6, 7]);
+        assert_eq!(
+            ids(t.tensor_stage_participants(1, 2).unwrap()),
+            vec![10, 11]
+        );
+        assert_eq!(ids(t.pipeline_participants(1, 1).unwrap()), vec![7, 9, 11]);
+        assert_eq!(ids(t.data_participants(2, 1).unwrap()), vec![5, 11]);
+        for replica in 0..2 {
+            for stage in 0..3 {
+                for tensor in 0..2 {
+                    let rank = t.rank_at(replica, stage, tensor).unwrap();
+                    assert_eq!(rank.get(), (replica * 3 + stage) * 2 + tensor);
+                    assert_eq!(t.replica_of(rank).unwrap(), replica);
+                }
+            }
+        }
+        assert!(t.rank_at(2, 0, 0).is_err());
+        assert!(t.tensor_stage_participants(0, 3).is_err());
+        assert!(t.pipeline_participants(0, 2).is_err());
+        assert!(t.data_participants(3, 0).is_err());
+        assert_eq!(
+            topology(2, ParallelismPlan::validated(1, 1, 1, 1, 1, 2).unwrap())
+                .unwrap()
+                .pipeline_participants(0, 0)
+                .unwrap()
+                .len(),
+            2,
+        );
+    }
+
+    #[test]
+    fn sp_cp_and_independent_ep_are_not_mesh_factors() {
+        for plan in [
+            ParallelismPlan::validated(1, 1, 1, 2, 1, 1).unwrap(),
+            ParallelismPlan::validated(1, 1, 1, 1, 2, 1).unwrap(),
+            ParallelismPlan::validated(1, 1, 2, 1, 1, 1).unwrap(),
+        ] {
+            for world in [1, 2] {
+                assert_eq!(
+                    topology(world, plan),
+                    Err(ParallelTopologyError::UnsupportedParallelism)
+                );
+            }
+        }
+        assert_eq!(
+            topology(
+                1,
+                ParallelismPlan::validated(usize::MAX, 2, 1, 1, 1, 2).unwrap()
+            ),
+            Err(ParallelTopologyError::FactorOverflow),
+        );
+    }
+
+    #[test]
+    fn rejects_unsupported_factors_and_mismatched_meshes_for_every_world_size() {
         for world in [1, 2] {
-            for index in 1..6 {
+            // PP is a supported mesh factor now; SPCP/EP remain rejected here.
+            for index in 1..5 {
                 let mut factors = [1; 6];
                 factors[0] = usize::try_from(world).unwrap();
                 factors[index] = 8;
@@ -390,5 +600,189 @@ mod tests {
             topology(2, ParallelismPlan::default()),
             Err(ParallelTopologyError::UnsupportedParallelism)
         );
+    }
+
+    #[test]
+    fn rectangular_meshes_have_exact_tensor_scopes_and_replica_mapping() {
+        for (dp, tp) in [(2, 2), (1, 8), (8, 1)] {
+            let world = dp * tp;
+            let plan = ParallelismPlan::validated(dp as usize, tp as usize, 1, 1, 1, 1).unwrap();
+            for local in 0..world {
+                let t = ValidatedParallelTopology::new(
+                    ParallelTopologyId::new(1),
+                    world,
+                    ParallelRankId::new(local),
+                    plan,
+                )
+                .unwrap();
+                let mut all = Vec::new();
+                for replica in 0..dp {
+                    let scope = t.tensor_participants(replica).unwrap();
+                    let expected: Vec<_> = (replica * tp..(replica + 1) * tp)
+                        .map(ParallelRankId::new)
+                        .collect();
+                    assert_eq!(scope.iter().collect::<Vec<_>>(), expected);
+                    assert_eq!(scope.len(), tp as usize);
+                    assert_eq!(scope.world_size(), world);
+                    assert!(!scope.is_empty());
+                    for rank in 0..world {
+                        let rank = ParallelRankId::new(rank);
+                        assert_eq!(scope.contains(rank), t.replica_of(rank) == Ok(replica));
+                    }
+                    all.extend(scope.iter());
+                }
+                assert_eq!(all, t.participants().iter().collect::<Vec<_>>());
+                assert_eq!(
+                    t.tensor_participants(dp),
+                    Err(ParallelTopologyError::ReplicaOutOfBounds)
+                );
+                assert_eq!(
+                    t.tensor_participants(u32::MAX),
+                    Err(ParallelTopologyError::ReplicaOutOfBounds)
+                );
+                assert_eq!(
+                    t.replica_of(ParallelRankId::new(world)),
+                    Err(ParallelTopologyError::RankOutOfBounds)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn rectangular_mesh_rejects_unequal_world_and_checked_overflow() {
+        for (world, dp, tp) in [(3, 2, 2), (5, 2, 2), (7, 1, 8), (9, 1, 8)] {
+            assert_eq!(
+                topology(
+                    world,
+                    ParallelismPlan::validated(dp, tp, 1, 1, 1, 1).unwrap()
+                ),
+                Err(ParallelTopologyError::UnsupportedParallelism)
+            );
+        }
+        for (dp, tp) in [(usize::MAX, 2), (2, usize::MAX)] {
+            assert_eq!(
+                topology(2, ParallelismPlan::validated(dp, tp, 1, 1, 1, 1).unwrap()),
+                Err(ParallelTopologyError::FactorOverflow)
+            );
+        }
+        // This product fits usize on 64-bit hosts, but must never truncate to u32.
+        let overflow = topology(
+            1,
+            ParallelismPlan::validated(u32::MAX as usize, 2, 1, 1, 1, 1).unwrap(),
+        );
+        assert!(matches!(
+            overflow,
+            Err(ParallelTopologyError::UnsupportedParallelism
+                | ParallelTopologyError::FactorOverflow)
+        ));
+        // Keep this legacy matrix focused on EP/SP/CP. PP has dedicated
+        // rank-layout coverage above.
+        for index in 2..5 {
+            let mut factors = [2, 2, 1, 1, 1, 1];
+            factors[index] = 2;
+            let [dp, tp, ep, sp, cp, pp] = factors;
+            assert_eq!(
+                topology(
+                    4,
+                    ParallelismPlan::validated(dp, tp, ep, sp, cp, pp).unwrap()
+                ),
+                Err(ParallelTopologyError::UnsupportedParallelism)
+            );
+        }
+    }
+
+    #[test]
+    fn last_replica_at_u32_world_boundary_does_not_overflow() {
+        let t = topology(
+            u32::MAX,
+            ParallelismPlan::validated(u32::MAX as usize, 1, 1, 1, 1, 1).unwrap(),
+        )
+        .unwrap();
+        let rank = ParallelRankId::new(u32::MAX - 1);
+        assert_eq!(t.replica_of(rank), Ok(u32::MAX - 1));
+        assert_eq!(
+            t.tensor_participants(u32::MAX - 1)
+                .unwrap()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![rank]
+        );
+    }
+
+    #[test]
+    fn participant_construction_sorts_but_rejects_empty_duplicates_and_out_of_bounds() {
+        let t = topology(4, ParallelismPlan::validated(2, 2, 1, 1, 1, 1).unwrap()).unwrap();
+        let scope = ParticipantSet::new(&t, [3, 1].map(ParallelRankId::new)).unwrap();
+        assert_eq!(
+            scope.iter().collect::<Vec<_>>(),
+            vec![ParallelRankId::new(1), ParallelRankId::new(3)]
+        );
+        assert_eq!(scope.len(), 2);
+        assert_eq!(scope.world_size(), 4);
+        assert!(!scope.contains(ParallelRankId::new(2)));
+        assert_eq!(t.validate_participants(&scope), Ok(()));
+        assert_eq!(
+            ParticipantSet::new(&t, []),
+            Err(ParallelTopologyError::EmptyParticipants)
+        );
+        assert_eq!(
+            ParticipantSet::new(&t, [3, 1, 3].map(ParallelRankId::new)),
+            Err(ParallelTopologyError::DuplicateParticipant)
+        );
+        for rank in [4, u32::MAX] {
+            assert_eq!(
+                ParticipantSet::new(&t, [ParallelRankId::new(rank)]),
+                Err(ParallelTopologyError::RankOutOfBounds)
+            );
+        }
+        let other = topology(2, ParallelismPlan::validated(1, 2, 1, 1, 1, 1).unwrap()).unwrap();
+        assert_eq!(
+            other.validate_participants(&scope),
+            Err(ParallelTopologyError::ParticipantTopologyMismatch)
+        );
+    }
+
+    #[test]
+    fn participant_identity_includes_epoch_and_mesh_but_not_local_rank() {
+        let plan = ParallelismPlan::validated(2, 2, 1, 1, 1, 1).unwrap();
+        let t = topology(4, plan).unwrap();
+        let scope = t.tensor_participants(0).unwrap();
+        assert_eq!(scope.topology_id(), t.topology_id());
+        assert_eq!(scope.plan(), plan);
+        for (epoch, other_plan) in [
+            (2, plan),
+            (1, ParallelismPlan::validated(1, 4, 1, 1, 1, 1).unwrap()),
+            (1, ParallelismPlan::validated(4, 1, 1, 1, 1, 1).unwrap()),
+        ] {
+            let other = ValidatedParallelTopology::new(
+                ParallelTopologyId::new(epoch),
+                4,
+                ParallelRankId::new(0),
+                other_plan,
+            )
+            .unwrap();
+            let other_scope = ParticipantSet::new(&other, scope.iter()).unwrap();
+            assert_ne!(scope, other_scope);
+            assert_eq!(
+                t.validate_participants(&other_scope),
+                Err(ParallelTopologyError::ParticipantTopologyMismatch)
+            );
+            assert_eq!(
+                other.validate_participants(&scope),
+                Err(ParallelTopologyError::ParticipantTopologyMismatch)
+            );
+        }
+        for local in 0..4 {
+            let peer = ValidatedParallelTopology::new(
+                t.topology_id(),
+                4,
+                ParallelRankId::new(local),
+                plan,
+            )
+            .unwrap();
+            assert_eq!(peer.validate_participants(&scope), Ok(()));
+            assert_eq!(peer.tensor_participants(0).unwrap(), scope);
+            assert_eq!(peer.participants(), t.participants());
+        }
     }
 }

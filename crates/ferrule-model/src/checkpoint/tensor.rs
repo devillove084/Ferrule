@@ -7,7 +7,11 @@
 //! later, GPU/streaming tensor handles.
 
 use std::io::{Read, Seek, SeekFrom};
+use std::ops::Range;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use super::{CheckpointReadExtent, CheckpointReadPlan, CheckpointSourceFileIdentity};
 
 use crate::{HfSafetensorsTensorInfo, TensorRole};
 use ferrule_common::{Error, Result};
@@ -132,6 +136,55 @@ pub struct CheckpointTensorPayload {
     pub bytes: Vec<u8>,
 }
 
+/// Checked rectangular view of an immutable dense checkpoint matrix.
+///
+/// The original tensor remains intact: packed column bytes must never masquerade
+/// as a contiguous on-disk `CheckpointTensorSlice`. Extents retain physical
+/// provenance, while `local_shape` describes the packed row-major result.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CheckpointMatrixRead {
+    tensor: CheckpointTensorSlice,
+    rows: Range<usize>,
+    columns: Range<usize>,
+    plan: CheckpointReadPlan,
+}
+
+impl CheckpointMatrixRead {
+    pub fn tensor(&self) -> &CheckpointTensorSlice {
+        &self.tensor
+    }
+    pub fn rows(&self) -> Range<usize> {
+        self.rows.clone()
+    }
+    pub fn columns(&self) -> Range<usize> {
+        self.columns.clone()
+    }
+    pub fn local_shape(&self) -> [usize; 2] {
+        [self.rows.len(), self.columns.len()]
+    }
+    pub fn read_plan(&self) -> &CheckpointReadPlan {
+        &self.plan
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct CheckpointMatrixPayload {
+    provenance: CheckpointMatrixRead,
+    bytes: Vec<u8>,
+}
+
+impl CheckpointMatrixPayload {
+    pub fn provenance(&self) -> &CheckpointMatrixRead {
+        &self.provenance
+    }
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+    pub fn into_parts(self) -> (CheckpointMatrixRead, Vec<u8>) {
+        (self.provenance, self.bytes)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct CheckpointTensorReader {
     max_tensor_bytes: u64,
@@ -156,68 +209,190 @@ impl CheckpointTensorReader {
         start_row: usize,
         row_count: usize,
     ) -> Result<CheckpointTensorPayload> {
-        if slice.shape.len() != 2 {
-            return Err(Error::Model {
-                message: format!(
-                    "checkpoint tensor '{}' row read expects 2D shape, got {:?}",
-                    slice.name, slice.shape
-                ),
-            });
-        }
-        let rows = slice.shape[0];
-        let cols = slice.shape[1];
-        let end_row = start_row.checked_add(row_count).ok_or_else(|| {
-            Error::Model { message: format!(
-                "checkpoint tensor '{}' row range overflows: start={start_row} count={row_count}",
-                slice.name
-            ) }
-        })?;
-        if row_count == 0 || start_row >= rows || end_row > rows {
-            return Err(Error::Model {
-                message: format!(
-                    "checkpoint tensor '{}' invalid row range: start={start_row} count={row_count} rows={rows}",
-                    slice.name
-                ),
-            });
-        }
-        let elem_bytes = slice
-            .dtype
-            .element_size_bytes()
-            .ok_or_else(|| Error::Model {
-                message: format!(
-                    "checkpoint tensor '{}' has unknown dtype {} for row read",
-                    slice.name,
+        let end = start_row
+            .checked_add(row_count)
+            .ok_or_else(|| matrix_error("row range overflow"))?;
+        let columns = slice.shape.get(1).copied().unwrap_or(0);
+        let source = CheckpointSourceFileIdentity::capture(&slice.path)?;
+        let read = self.plan_2d_range(slice, start_row..end, 0..columns, &source)?;
+        let (read, bytes) = self.read_matrix(&read)?.into_parts();
+        let mut local = slice.clone();
+        local.offset = read.plan.extents()[0].offset();
+        local.bytes = read.plan.storage_bytes();
+        local.shape = read.local_shape().to_vec();
+        Ok(CheckpointTensorPayload {
+            slice: local,
+            bytes,
+        })
+    }
+
+    /// Convenience read with a snapshot captured now. Bound checkpoint consumers
+    /// should instead supply their catalog-time snapshot to `plan_2d_range`.
+    pub fn read_2d_columns(
+        &self,
+        slice: &CheckpointTensorSlice,
+        start_column: usize,
+        column_count: usize,
+    ) -> Result<CheckpointMatrixPayload> {
+        let end = start_column
+            .checked_add(column_count)
+            .ok_or_else(|| matrix_error("column range overflow"))?;
+        let rows = slice.shape.first().copied().unwrap_or(0);
+        let source = CheckpointSourceFileIdentity::capture(&slice.path)?;
+        let read = self.plan_2d_range(slice, 0..rows, start_column..end, &source)?;
+        self.read_matrix(&read)
+    }
+
+    /// Plan only the requested BF16/F32 rectangle, preserving native encoding.
+    /// Packed/quantized formats need encoding-aware scale and block geometry;
+    /// interpreting their physical shapes as dense matrices is forbidden here.
+    pub fn plan_2d_range(
+        &self,
+        slice: &CheckpointTensorSlice,
+        rows: Range<usize>,
+        columns: Range<usize>,
+        source: &CheckpointSourceFileIdentity,
+    ) -> Result<CheckpointMatrixRead> {
+        let element_bytes = match slice.dtype {
+            CheckpointDType::F32 => 4usize,
+            CheckpointDType::Bf16 => 2usize,
+            _ => {
+                return Err(matrix_error(format!(
+                    "matrix slicing supports only dense BF16/F32, got {}",
                     slice.dtype.as_str()
-                ),
-            })?;
-        let row_bytes = cols.checked_mul(elem_bytes).ok_or_else(|| {
-            Error::Model { message: format!(
-                "checkpoint tensor '{}' row byte size overflows for cols={cols} elem_bytes={elem_bytes}",
-                slice.name
-            ) }
-        })?;
-        let byte_offset = start_row.checked_mul(row_bytes).ok_or_else(|| {
-            Error::Model { message: format!(
-                "checkpoint tensor '{}' row offset overflows: start={start_row} row_bytes={row_bytes}",
-                slice.name
-            ) }
-        })?;
-        let bytes = row_count.checked_mul(row_bytes).ok_or_else(|| {
-            Error::Model { message: format!(
-                "checkpoint tensor '{}' row read byte count overflows: count={row_count} row_bytes={row_bytes}",
-                slice.name
-            ) }
-        })?;
-        let offset = slice
+                )));
+            }
+        };
+        let [full_rows, full_columns] = slice.shape.as_slice() else {
+            return Err(matrix_error("matrix slicing requires a 2D shape"));
+        };
+        let full_bytes = full_rows
+            .checked_mul(*full_columns)
+            .and_then(|n| n.checked_mul(element_bytes))
+            .filter(|n| *n <= isize::MAX as usize)
+            .ok_or_else(|| matrix_error("matrix byte size overflow"))?;
+        if *full_rows == 0 || *full_columns == 0 || slice.bytes != full_bytes as u64 {
+            return Err(matrix_error("matrix shape/dtype byte size mismatch"));
+        }
+        let full_end = slice
             .offset
-            .checked_add(byte_offset as u64)
-            .ok_or_else(|| Error::Model {
-                message: format!(
-                    "checkpoint tensor '{}' absolute row offset overflows",
-                    slice.name
-                ),
-            })?;
-        self.read_physical_range(slice, offset, bytes as u64, vec![row_count, cols])
+            .checked_add(slice.bytes)
+            .ok_or_else(|| matrix_error("matrix file extent overflow"))?;
+        if source.catalog_path() != slice.path.as_path() || full_end > source.length() {
+            return Err(matrix_error(
+                "matrix extent exceeds or does not match its source snapshot",
+            ));
+        }
+        if rows.start >= rows.end
+            || rows.end > *full_rows
+            || columns.start >= columns.end
+            || columns.end > *full_columns
+        {
+            return Err(matrix_error(
+                "matrix row/column range is empty or out of bounds",
+            ));
+        }
+        let bytes = rows
+            .len()
+            .checked_mul(columns.len())
+            .and_then(|n| n.checked_mul(element_bytes))
+            .ok_or_else(|| matrix_error("local matrix byte size overflow"))?;
+        self.check_matrix_read_limit(bytes as u64)?;
+        let row_stride = *full_columns * element_bytes;
+        let row_bytes = columns.len() * element_bytes;
+        let mut extents = Vec::new();
+        let extent_count = if columns.len() == *full_columns {
+            1
+        } else {
+            rows.len()
+        };
+        extents
+            .try_reserve_exact(extent_count)
+            .map_err(|e| matrix_error(format!("allocate matrix extents: {e}")))?;
+        if columns.len() == *full_columns {
+            extents.push(CheckpointReadExtent::new(
+                slice.path.clone(),
+                slice.offset + (rows.start * row_stride) as u64,
+                bytes as u64,
+            )?);
+        } else {
+            for row in rows.clone() {
+                // Full matrix and selected bounds were checked above, so every
+                // subextent is contained in the original physical tensor.
+                extents.push(CheckpointReadExtent::new(
+                    slice.path.clone(),
+                    slice.offset + (row * row_stride + columns.start * element_bytes) as u64,
+                    row_bytes as u64,
+                )?);
+            }
+        }
+        let sources: Arc<[CheckpointSourceFileIdentity]> = Arc::from([source.clone()]);
+        let plan = CheckpointReadPlan::new(extents, sources)?;
+        plan.validate_source_identity()
+            .map_err(|e| matrix_error(format!("stale matrix source: {e:?}")))?;
+        Ok(CheckpointMatrixRead {
+            tensor: slice.clone(),
+            rows,
+            columns,
+            plan,
+        })
+    }
+
+    /// Read directly into one local packed allocation, using one file handle even
+    /// for noncontiguous columns. Never allocates or decodes the full tensor.
+    pub fn read_matrix(&self, read: &CheckpointMatrixRead) -> Result<CheckpointMatrixPayload> {
+        let length = self.check_matrix_read_limit(read.plan.storage_bytes())?;
+        read.plan
+            .validate_source_identity()
+            .map_err(|e| matrix_error(format!("stale matrix source: {e:?}")))?;
+        let mut file = std::fs::File::open(&read.tensor.path).map_err(|error| {
+            matrix_error(format!(
+                "open '{}' for tensor '{}': {error}",
+                read.tensor.path.display(),
+                read.tensor.name
+            ))
+        })?;
+        let mut bytes = Vec::new();
+        bytes
+            .try_reserve_exact(length)
+            .map_err(|e| matrix_error(format!("allocate local matrix: {e}")))?;
+        bytes.resize(length, 0);
+        let mut cursor = 0;
+        for extent in read.plan.extents() {
+            let end = cursor + extent.bytes() as usize;
+            file.seek(SeekFrom::Start(extent.offset()))
+                .and_then(|_| file.read_exact(&mut bytes[cursor..end]))
+                .map_err(|error| {
+                    matrix_error(format!(
+                        "read '{}' tensor '{}' extent {}..{}: {error}",
+                        extent.path().display(),
+                        read.tensor.name,
+                        extent.offset(),
+                        extent.end()
+                    ))
+                })?;
+            cursor = end;
+        }
+        read.plan
+            .validate_source_identity()
+            .map_err(|e| matrix_error(format!("stale matrix source: {e:?}")))?;
+        Ok(CheckpointMatrixPayload {
+            provenance: read.clone(),
+            bytes,
+        })
+    }
+
+    fn check_matrix_read_limit(&self, bytes: u64) -> Result<usize> {
+        if bytes > self.max_tensor_bytes {
+            return Err(matrix_error(format!(
+                "matrix exceeds bounded read size: {bytes} > {} bytes",
+                self.max_tensor_bytes
+            )));
+        }
+        usize::try_from(bytes)
+            .ok()
+            .filter(|n| *n <= isize::MAX as usize)
+            .ok_or_else(|| matrix_error("local matrix exceeds address space"))
     }
 
     fn read_physical_range(
@@ -255,6 +430,12 @@ impl CheckpointTensorReader {
             slice: range_slice,
             bytes: payload_bytes,
         })
+    }
+}
+
+fn matrix_error(message: impl Into<String>) -> Error {
+    Error::Model {
+        message: format!("checkpoint matrix: {}", message.into()),
     }
 }
 

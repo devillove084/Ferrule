@@ -351,19 +351,37 @@ fn qwen_moe_plan_checks_weight_source_and_schema() {
 }
 
 #[test]
-fn dense_qwen3_remains_unsupported() {
+fn dense_qwen3_is_executable_on_cpu_but_not_cuda() {
     let mut spec = qwen_moe_spec(false);
     spec.family = ModelFamily::Qwen3;
-    spec.architecture = Some("qwen3".into());
+    spec.architecture = Some("Qwen3ForCausalLM".into());
     spec.moe = MoeSpec::none();
-    let plan = ModelSupportContract::from_spec(&spec, &[]).engine_plan();
-
-    assert_eq!(plan.status, EnginePlanStatus::Unsupported);
+    let contract = ModelSupportContract::from_spec(&spec, &[]);
+    let plan = contract.engine_plan();
+    assert_eq!(plan.status, EnginePlanStatus::Executable);
+    assert_eq!(plan.backend_profile, Some("cpu-standard-decoder"));
+    assert!(plan.missing.is_empty());
+    let cuda = EnginePlan::from_contract_for_backend(&contract, ModelExecutionBackend::Cuda);
+    assert_eq!(cuda.status, EnginePlanStatus::Unsupported);
+    assert_eq!(cuda.backend_profile, None);
     assert!(
-        plan.missing
+        cuda.missing
             .iter()
-            .any(|item| item.area == PolicyArea::ModelFamily
-                && item.reason.contains("dense Qwen3"))
+            .any(|item| item.area == PolicyArea::Backend)
+    );
+
+    spec.weight_source = WeightSource::Gguf;
+    assert!(
+        !ModelSupportContract::from_spec(&spec, &[])
+            .engine_plan()
+            .is_executable()
+    );
+    spec.weight_source = WeightSource::Safetensors;
+    spec.moe = qwen_moe_spec(false).moe;
+    assert!(
+        !ModelSupportContract::from_spec(&spec, &[])
+            .engine_plan()
+            .is_executable()
     );
 }
 

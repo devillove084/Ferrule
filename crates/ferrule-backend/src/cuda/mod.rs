@@ -28,6 +28,8 @@ pub mod operators {
 
 pub mod providers;
 mod runtime;
+pub use context::standard;
+mod transport;
 
 use ferrule_common::Result;
 
@@ -40,6 +42,11 @@ pub use graph::{
     flash_attn_enabled,
 };
 pub use runtime::MemoryTier;
+pub use transport::{
+    CudaAsyncTransport, CudaAsyncTransportStats, CudaTransferCompletion, CudaTransferConfig,
+    CudaTransferDirection, CudaTransferDrainError, CudaTransferError, CudaTransferId,
+    CudaTransferTicket,
+};
 
 /// Compile provider-neutral model requirements for the CUDA backend.
 pub fn compile_model_plan(requirements: &[LayerKernelRequirements]) -> Result<ModelKernelPlan> {

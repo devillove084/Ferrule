@@ -80,14 +80,15 @@ impl<'a> DecoderLoadOptions<'a> {
 #[derive(Debug, Clone)]
 pub struct HFDecoderCheckpoint {
     model_dir: PathBuf,
-    index: HfSafetensorsIndex,
+    index: Option<HfSafetensorsIndex>,
     inventory: HfSafetensorsInventory,
     resources: BoundDecoderResources,
 }
 
 impl HFDecoderCheckpoint {
-    /// Open index and shard headers, require exact index/header agreement, and
-    /// bind all tensors without reading payload bytes.
+    /// Open index and shard headers, requiring exact index/header agreement.
+    /// Only when the index is absent, discover `model.safetensors` from its
+    /// header. Neither path reads tensor payloads or writes an index.
     pub fn open(
         model_dir: impl AsRef<Path>,
         family: ModelFamily,
@@ -97,6 +98,14 @@ impl HFDecoderCheckpoint {
     ) -> Result<Self> {
         let model_dir = model_dir.as_ref();
         let index_path = model_dir.join("model.safetensors.index.json");
+        match std::fs::symlink_metadata(&index_path) {
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let inventory = HfSafetensorsInventory::from_single_file(model_dir, family)?;
+                return Self::bind_inventory(model_dir, None, inventory, spec, schema, mapper);
+            }
+            Err(error) => return Err(error.into()),
+        }
         let index = HfSafetensorsIndex::open(&index_path)?;
         let missing_shards = index.missing_shards(model_dir);
         if !missing_shards.is_empty() {
@@ -122,8 +131,25 @@ impl HFDecoderCheckpoint {
         schema: &StateDictSchema,
         mapper: &dyn NameMapper,
     ) -> Result<Self> {
-        let model_dir = model_dir.as_ref();
         validate_inventory(&index, &inventory)?;
+        Self::bind_inventory(
+            model_dir.as_ref(),
+            Some(index),
+            inventory,
+            spec,
+            schema,
+            mapper,
+        )
+    }
+
+    fn bind_inventory(
+        model_dir: &Path,
+        index: Option<HfSafetensorsIndex>,
+        inventory: HfSafetensorsInventory,
+        spec: DecoderModelSpec,
+        schema: &StateDictSchema,
+        mapper: &dyn NameMapper,
+    ) -> Result<Self> {
         let state_dict = StateDictBinder::new(schema, mapper)
             .bind_hf(model_dir, &inventory)
             .map_err(binding_error)?;
@@ -140,8 +166,9 @@ impl HFDecoderCheckpoint {
         &self.model_dir
     }
 
-    pub const fn index(&self) -> &HfSafetensorsIndex {
-        &self.index
+    /// The on-disk index, absent for an unsharded `model.safetensors` artifact.
+    pub const fn index(&self) -> Option<&HfSafetensorsIndex> {
+        self.index.as_ref()
     }
 
     pub const fn inventory(&self) -> &HfSafetensorsInventory {
@@ -513,15 +540,16 @@ impl BoundDecoderResources {
         residency: &ParameterResidency,
         include: impl Fn(&BoundParameter) -> bool,
     ) -> Vec<StageResourceUse> {
+        // Stage membership follows logical roles (including a tied output head),
+        // while resource custody follows deduplicated canonical storage.
+        let mut seen = BTreeSet::new();
         self.state_dict
             .for_residency(residency)
-            .filter(|parameter| {
-                !parameter.is_alias()
-                    && !is_routed_expert_parameter(parameter)
-                    && include(parameter)
-            })
-            .map(|parameter| {
-                StageResourceUse::read(parameter_resource_id(parameter.canonical_id()))
+            .filter(|parameter| !is_routed_expert_parameter(parameter) && include(parameter))
+            .filter_map(|parameter| {
+                let canonical_id = parameter.canonical_id();
+                seen.insert(canonical_id)
+                    .then(|| StageResourceUse::read(parameter_resource_id(canonical_id)))
             })
             .collect()
     }

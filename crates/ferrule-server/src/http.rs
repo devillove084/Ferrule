@@ -806,6 +806,31 @@ fn json_event<T: serde::Serialize>(value: &T) -> Result<Event, SseError> {
 }
 
 fn submit_error(error: SubmitError) -> Response {
+    if let WorkerRequestError::Rejected { source } = &error {
+        let status = match source.as_ref() {
+            ferrule_common::WorkerExecutionError::Runtime {
+                source: ferrule_runtime::Error::InvalidRequest { .. },
+            }
+            | ferrule_common::WorkerExecutionError::AdmissionEmptyPromptTokens => {
+                Some(StatusCode::BAD_REQUEST)
+            }
+            ferrule_common::WorkerExecutionError::Runtime {
+                source: ferrule_runtime::Error::RequestCapacity { .. },
+            } => Some(StatusCode::TOO_MANY_REQUESTS),
+            ferrule_common::WorkerExecutionError::Runtime {
+                source: ferrule_runtime::Error::EngineUnavailable,
+            } => Some(StatusCode::SERVICE_UNAVAILABLE),
+            _ => None,
+        };
+        if let Some(status) = status {
+            let kind = if status == StatusCode::BAD_REQUEST {
+                "invalid_request_error"
+            } else {
+                "server_error"
+            };
+            return api_error(status, &error.to_string(), kind);
+        }
+    }
     let status = if error.is_overloaded() {
         StatusCode::TOO_MANY_REQUESTS
     } else if error.is_unavailable() {

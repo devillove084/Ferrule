@@ -436,6 +436,14 @@ pub trait InferenceEngine: 'static {
 
     fn encode(&self, prompt: &str) -> Result<Vec<u32>>;
     fn submit(&mut self, request: GenerateRequest);
+
+    /// Fallible admission. Serving must acknowledge a request only after this
+    /// succeeds; legacy engines retain their existing submission behavior.
+    fn try_submit(&mut self, request: GenerateRequest) -> Result<()> {
+        self.submit(request);
+        Ok(())
+    }
+
     fn step(
         &mut self,
         on_token: &mut dyn FnMut(&ResidentTokenEvent) -> Result<()>,
@@ -480,6 +488,10 @@ where
 
     fn submit(&mut self, request: GenerateRequest) {
         (**self).submit(request);
+    }
+
+    fn try_submit(&mut self, request: GenerateRequest) -> Result<()> {
+        (**self).try_submit(request)
     }
 
     fn step(
@@ -706,6 +718,10 @@ where
 
     fn submit(&mut self, request: GenerateRequest) {
         self.driver.submit(request);
+    }
+
+    fn try_submit(&mut self, request: GenerateRequest) -> Result<()> {
+        self.driver.try_submit(request)
     }
 
     fn step(

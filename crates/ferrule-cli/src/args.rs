@@ -1,6 +1,7 @@
 use std::net::IpAddr;
+use std::path::PathBuf;
 
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 
 #[derive(Debug, Clone)]
 pub(crate) struct GenerationConfig {
@@ -88,9 +89,90 @@ pub(crate) enum Command {
         json: bool,
     },
 
+    /// Benchmark CUDA F32 linear DP/TP using production executors (host-to-host).
+    #[command(name = "bench-parallel")]
+    BenchParallel(BenchParallelArgs),
+
+    /// Private framed rank-worker protocol endpoint, not a user benchmark.
+    #[command(name = "__rank-worker", hide = true)]
+    RankWorker(RankWorkerArgs),
+
     /// Inspect a WeightPack file header.
     #[command(name = "inspect-weightpack")]
     InspectWeightPack { path: String },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum BenchParallelMode {
+    Dp,
+    TpColumn,
+    TpRow,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum RankBackend {
+    Thread,
+    Process,
+}
+
+#[derive(Debug, Args, Clone)]
+pub(crate) struct RankWorkerArgs {
+    /// Trusted child-local protocol ceiling; limited by the production wire API.
+    #[arg(long)]
+    pub(crate) max_frame_bytes: usize,
+    /// Finite idle pipe deadline; parent independently bounds device work.
+    #[arg(long)]
+    pub(crate) io_timeout_ms: u64,
+}
+
+#[derive(Debug, Args, Clone)]
+pub(crate) struct BenchParallelArgs {
+    #[arg(long, value_enum)]
+    pub(crate) mode: BenchParallelMode,
+    /// Number of CUDA ranks. DP processes this many full batches per iteration.
+    #[arg(long)]
+    pub(crate) ranks: usize,
+    /// Rank isolation backend. Process mode creates CUDA only inside child Boot.
+    #[arg(long, value_enum, default_value = "thread")]
+    pub(crate) rank_backend: RankBackend,
+    /// Process startup/command/shutdown deadline in ms; does not bound thread-mode CUDA.
+    #[arg(long, default_value_t = 30000)]
+    pub(crate) rank_timeout_ms: u64,
+    /// Reserved replay budget. Only 0 is supported: no automatic epoch retry or replay.
+    #[arg(long, default_value_t = 0)]
+    pub(crate) rank_restarts: usize,
+    /// Optional shape overrides; each must match the fixture.
+    #[arg(long)]
+    pub(crate) rows: Option<usize>,
+    #[arg(long)]
+    pub(crate) in_features: Option<usize>,
+    #[arg(long)]
+    pub(crate) out_features: Option<usize>,
+    #[arg(long, default_value_t = 10)]
+    pub(crate) warmup: usize,
+    #[arg(long, default_value_t = 100)]
+    pub(crate) iterations: usize,
+    /// Required JSON: rows, in_features, out_features, weight, input (flat F32 arrays).
+    #[arg(long)]
+    pub(crate) fixture: PathBuf,
+    /// Comma-separated visible CUDA ordinals in rank order; defaults to 0..ranks.
+    #[arg(long, value_delimiter = ',')]
+    pub(crate) devices: Option<Vec<usize>>,
+    /// Emit only the versioned JSON report on stdout; diagnostics use stderr.
+    #[arg(long)]
+    pub(crate) json: bool,
+    /// Include every output element from the last iteration for every rank.
+    #[arg(long)]
+    pub(crate) emit_values: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub(crate) enum ServeEngine {
+    Auto,
+    Resident,
+    Pipeline,
 }
 
 #[derive(Args, Clone)]
@@ -104,6 +186,28 @@ pub(crate) struct ServeArgs {
     /// Override the model execution backend (cpu or cuda).
     #[arg(long)]
     pub(crate) backend: Option<String>,
+    /// Pipeline supports serial greedy CPU/CUDA PP and MoE EP; process owners require Unix.
+    #[arg(long, value_enum, default_value = "auto")]
+    pub(crate) engine: ServeEngine,
+    #[arg(long, default_value_t = 1)]
+    pub(crate) pipeline_parallel: usize,
+    /// Expert owners per pipeline stage (Qwen3-MoE only); EP > 1 uses F32.
+    #[arg(long, default_value_t = 1)]
+    pub(crate) expert_parallel: usize,
+    /// Rank isolation. Process uses private child pipes; there is no automatic replay.
+    #[arg(long, value_enum, default_value = "thread")]
+    pub(crate) rank_backend: RankBackend,
+    /// CUDA ordinals: PP owners, then stage-ordered EP owners (only if EP > 1).
+    /// Defaults to 0..owner-count; repeated ordinals explicitly colocate owners.
+    #[arg(long, value_delimiter = ',')]
+    pub(crate) devices: Option<Vec<usize>>,
+    /// Process startup/command/shutdown deadline (ms), also applied to expert children.
+    /// Thread mode only accepts the default; it cannot preempt a kernel.
+    #[arg(long, default_value_t = 30000)]
+    pub(crate) rank_timeout_ms: u64,
+    /// Reserved replay budget. Only 0 is supported.
+    #[arg(long, default_value_t = 0)]
+    pub(crate) rank_restarts: usize,
     /// Listening address.
     #[arg(long, default_value = "127.0.0.1")]
     pub(crate) host: IpAddr,
@@ -244,7 +348,9 @@ mod tests {
         let mut command = Cli::command();
         let command_names = command
             .get_subcommands()
-            .filter(|subcommand| subcommand.get_name() != "help")
+            .filter(|subcommand| {
+                subcommand.get_name() != "help" && subcommand.get_name() != "__rank-worker"
+            })
             .map(|subcommand| subcommand.get_name().to_owned())
             .collect::<Vec<_>>();
 
@@ -256,6 +362,7 @@ mod tests {
                 "chat",
                 "serve",
                 "bench-interactive",
+                "bench-parallel",
                 "inspect-weightpack",
             ]
         );
@@ -270,6 +377,178 @@ mod tests {
     fn removed_inspect_commands_are_rejected() {
         for command in ["expert-stream-smoke", "deepseek-v4-generate"] {
             assert!(Cli::try_parse_from(["ferrule", command]).is_err());
+        }
+    }
+
+    #[test]
+    fn bench_parallel_parses_modes_defaults_and_explicit_options() {
+        for (mode, expected) in [
+            ("dp", BenchParallelMode::Dp),
+            ("tp-column", BenchParallelMode::TpColumn),
+            ("tp-row", BenchParallelMode::TpRow),
+        ] {
+            let cli = Cli::try_parse_from([
+                "ferrule",
+                "bench-parallel",
+                "--mode",
+                mode,
+                "--ranks",
+                "2",
+                "--fixture",
+                "input.json",
+            ])
+            .unwrap();
+            let Command::BenchParallel(args) = cli.command else {
+                panic!("wrong command")
+            };
+            assert_eq!(args.mode, expected);
+            assert_eq!(args.ranks, 2);
+            assert_eq!(args.rows, None);
+            assert_eq!(args.in_features, None);
+            assert_eq!(args.out_features, None);
+            assert_eq!(args.devices, None);
+            assert_eq!(args.warmup, 10);
+            assert_eq!(args.iterations, 100);
+            assert!(!args.json && !args.emit_values);
+            assert_eq!(args.rank_backend, RankBackend::Thread);
+            assert_eq!(args.rank_timeout_ms, 30_000);
+            assert_eq!(args.rank_restarts, 0);
+        }
+        let cli = Cli::try_parse_from([
+            "ferrule",
+            "bench-parallel",
+            "--mode",
+            "tp-row",
+            "--ranks",
+            "2",
+            "--fixture",
+            "input.json",
+            "--devices",
+            "3,1",
+            "--rows",
+            "7",
+            "--in-features",
+            "19",
+            "--out-features",
+            "17",
+            "--warmup",
+            "0",
+            "--iterations",
+            "4",
+            "--json",
+            "--emit-values",
+        ])
+        .unwrap();
+        let Command::BenchParallel(args) = cli.command else {
+            panic!("wrong command")
+        };
+        assert_eq!(args.devices, Some(vec![3, 1]));
+        assert_eq!(args.rows, Some(7));
+        assert_eq!(args.in_features, Some(19));
+        assert_eq!(args.out_features, Some(17));
+        assert_eq!(args.warmup, 0);
+        assert_eq!(args.iterations, 4);
+        assert!(args.json && args.emit_values);
+        assert_eq!(args.rank_backend, RankBackend::Thread);
+        assert_eq!(args.rank_timeout_ms, 30_000);
+        assert_eq!(args.rank_restarts, 0);
+    }
+
+    #[test]
+    fn bench_parallel_process_options_and_private_worker_are_hidden() {
+        let cli = Cli::try_parse_from([
+            "ferrule",
+            "bench-parallel",
+            "--mode",
+            "dp",
+            "--ranks",
+            "2",
+            "--fixture",
+            "input.json",
+            "--rank-backend",
+            "process",
+            "--rank-timeout-ms",
+            "7",
+            "--rank-restarts",
+            "0",
+        ])
+        .unwrap();
+        let Command::BenchParallel(args) = cli.command else {
+            panic!("wrong command")
+        };
+        assert_eq!(args.rank_backend, RankBackend::Process);
+        assert_eq!(args.rank_timeout_ms, 7);
+        assert_eq!(args.rank_restarts, 0);
+        let worker = Cli::try_parse_from([
+            "ferrule",
+            "__rank-worker",
+            "--max-frame-bytes",
+            "1024",
+            "--io-timeout-ms",
+            "10",
+        ])
+        .unwrap();
+        let Command::RankWorker(args) = worker.command else {
+            panic!("wrong hidden command")
+        };
+        assert_eq!(args.max_frame_bytes, 1024);
+        assert_eq!(args.io_timeout_ms, 10);
+    }
+
+    #[test]
+    fn bench_parallel_requires_fixture_and_rejects_unknown_modes_and_options() {
+        assert!(
+            Cli::try_parse_from(["ferrule", "bench-parallel", "--mode", "dp", "--ranks", "2"])
+                .is_err()
+        );
+        for mode in ["cpu", "tp", "TP-ROW"] {
+            assert!(
+                Cli::try_parse_from([
+                    "ferrule",
+                    "bench-parallel",
+                    "--mode",
+                    mode,
+                    "--ranks",
+                    "2",
+                    "--fixture",
+                    "input.json"
+                ])
+                .is_err()
+            );
+        }
+        for extra in ["--backend", "--unknown"] {
+            assert!(
+                Cli::try_parse_from([
+                    "ferrule",
+                    "bench-parallel",
+                    "--mode",
+                    "dp",
+                    "--ranks",
+                    "2",
+                    "--fixture",
+                    "input.json",
+                    extra,
+                    "cpu"
+                ])
+                .is_err()
+            );
+        }
+        for devices in ["", "0,", "0,-1", "a,1"] {
+            assert!(
+                Cli::try_parse_from([
+                    "ferrule",
+                    "bench-parallel",
+                    "--mode",
+                    "dp",
+                    "--ranks",
+                    "2",
+                    "--fixture",
+                    "input.json",
+                    "--devices",
+                    devices
+                ])
+                .is_err()
+            );
         }
     }
 

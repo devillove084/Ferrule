@@ -2,6 +2,8 @@
 
 pub mod compressor;
 pub mod page_pool;
+pub mod transaction;
+pub use transaction::{CudaF32GqaPlanes, CudaKvView, CudaPagedKvPool, CudaPagedKvTransaction};
 
 #[doc(hidden)]
 pub mod layout {

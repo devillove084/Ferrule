@@ -41,6 +41,7 @@ pub(crate) const NORM_COMPUTE_RMS: u32 = 1;
 pub(crate) const NORM_AFFINE_ROW: u32 = 2;
 pub(crate) const NORM_AFFINE_ROWS: u32 = 3;
 pub(crate) const NORM_HEAD_ROWS: u32 = 4;
+pub(crate) const NORM_AFFINE_F32: u32 = 5;
 
 pub(crate) const ROPE_YARN: u32 = 1;
 pub(crate) const ROPE_TAIL_STRIDED: u32 = 2;
@@ -82,6 +83,9 @@ pub(crate) const MOE_REDUCE_ROUTES: u32 = 7;
 pub(crate) const MOE_REDUCE_EXPERT_GROUP_ROUTES: u32 = 8;
 pub(crate) const MOE_GATHER_BF16_ROWS: u32 = 9;
 pub(crate) const MOE_WEIGHTED_SCATTER_ADD_BF16_ROWS: u32 = 10;
+pub(crate) const MOE_SWIGLU_STANDARD_F32: u32 = 11;
+pub(crate) const MOE_WEIGHTED_COMBINE_F32: u32 = 12;
+pub(crate) const MOE_SWIGLU_CLAMPED_F32: u32 = 13;
 
 pub(crate) const HC_PRE: u32 = 1;
 pub(crate) const HC_POST: u32 = 2;
@@ -91,6 +95,8 @@ pub(crate) const HC_HEAD: u32 = 4;
 pub(crate) const TRANSFORMER_PAGED_BF16_KV_APPEND: u32 = 1;
 pub(crate) const TRANSFORMER_PAGED_BF16_CAUSAL_GQA: u32 = 2;
 pub(crate) const TRANSFORMER_PAGED_BF16_APPEND_CAUSAL_GQA: u32 = 3;
+
+pub(crate) const TRANSFORMER_PAGED_F32_APPEND_CAUSAL_GQA: u32 = 6;
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
@@ -602,4 +608,5 @@ unsafe extern "C" {
     )]
     pub(crate) fn ferrule_core_mla_launch(args: *const MlaArgs) -> i32;
     pub(crate) fn ferrule_core_transformer_launch(args: *const TransformerArgs) -> i32;
+    pub(crate) fn ferrule_core_transformer_f32_launch(args: *const TransformerArgs) -> i32;
 }

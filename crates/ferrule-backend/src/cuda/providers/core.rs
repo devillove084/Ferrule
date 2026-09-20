@@ -81,6 +81,48 @@ pub fn load(context: &Arc<CudaContext>) -> KernelResult<CoreOperators> {
 }
 
 impl CoreOperators {
+    /// # Safety
+    /// All pointers/extents must be validated and allocations must belong to
+    /// this stream's context owner and remain alive through launch submission.
+    pub(crate) unsafe fn standard_norm(
+        &self,
+        stream: &CudaStream,
+        mut args: NormArgs,
+    ) -> KernelResult<()> {
+        invoke!(
+            stream,
+            args,
+            ferrule_core_norm_launch,
+            "standard F32 normalization"
+        )
+    }
+
+    /// # Safety
+    /// All pointers/extents must be validated and allocations must belong to
+    /// this stream's context owner and remain alive through launch submission.
+    pub(crate) unsafe fn standard_moe(
+        &self,
+        stream: &CudaStream,
+        mut args: MoeArgs,
+    ) -> KernelResult<()> {
+        invoke!(stream, args, ferrule_core_moe_launch, "standard F32 MoE")
+    }
+
+    /// # Safety
+    /// All pointers/extents and page metadata must be validated by the typed
+    /// caller. K/V and append pointers in the shared ABI must reference F32.
+    pub(crate) unsafe fn standard_gqa(
+        &self,
+        stream: &CudaStream,
+        mut args: TransformerArgs,
+    ) -> KernelResult<()> {
+        invoke!(
+            stream,
+            args,
+            ferrule_core_transformer_f32_launch,
+            "standard F32 GQA"
+        )
+    }
     #[allow(clippy::too_many_arguments)]
     ///
     /// # Safety
@@ -1125,6 +1167,7 @@ impl CoreOperators {
                 stream,
                 DataArgs {
                     kind: DATA_GATHER_F32_ROWS,
+                    value0: (src.len() / row_width as usize) as u32,
                     count: rows.saturating_mul(row_width),
                     rows,
                     width: row_width,
@@ -3331,6 +3374,40 @@ mod tests {
         assert_eq!(offset_of!(TransformerArgs, value_cache_bf16), 192);
         assert_eq!(offset_of!(TransformerArgs, output_f32), 320);
         assert_eq!(offset_of!(TransformerArgs, status_i32), 352);
+    }
+
+    #[test]
+    fn standard_f32_kinds_match_native_without_changing_bf16_contracts() {
+        let header = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/native/cuda/core/abi.h"
+        ));
+        for (name, value) in [
+            ("NORM_AFFINE_F32", NORM_AFFINE_F32),
+            ("MOE_SWIGLU_STANDARD_F32", MOE_SWIGLU_STANDARD_F32),
+            ("MOE_SWIGLU_CLAMPED_F32", MOE_SWIGLU_CLAMPED_F32),
+            ("MOE_WEIGHTED_COMBINE_F32", MOE_WEIGHTED_COMBINE_F32),
+            (
+                "TRANSFORMER_PAGED_F32_APPEND_CAUSAL_GQA",
+                TRANSFORMER_PAGED_F32_APPEND_CAUSAL_GQA,
+            ),
+        ] {
+            assert!(header.contains(&format!("FERRULE_CORE_{name} = {value},")));
+        }
+        assert_ne!(NORM_AFFINE_F32, NORM_AFFINE_ROWS);
+        assert_ne!(MOE_SWIGLU_STANDARD_F32, MOE_WEIGHTED_SWIGLU_F32);
+        assert_ne!(MOE_SWIGLU_CLAMPED_F32, MOE_SWIGLU_STANDARD_F32);
+        assert_ne!(MOE_SWIGLU_CLAMPED_F32, MOE_WEIGHTED_SWIGLU_F32);
+        assert_pod_layout!(MoeArgs, 248, kind, input => 48, 240);
+        assert_ne!(
+            TRANSFORMER_PAGED_F32_APPEND_CAUSAL_GQA,
+            TRANSFORMER_PAGED_BF16_APPEND_CAUSAL_GQA
+        );
+        // F32 uses the same audited byte-stride POD through a separate symbol.
+        assert_pod_layout!(TransformerArgs, 376, kind, query_f32 => 48, 368);
+        assert!(header.contains(
+            "ferrule_core_transformer_f32_launch(const FerruleCoreTransformerArgs *args)"
+        ));
     }
 
     #[test]

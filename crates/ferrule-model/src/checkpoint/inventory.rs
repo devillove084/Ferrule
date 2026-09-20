@@ -143,8 +143,17 @@ pub struct HfSafetensorsInventory {
 impl HfSafetensorsInventory {
     pub fn open(model_dir: impl AsRef<Path>, family: ModelFamily) -> Result<Self> {
         let model_dir = model_dir.as_ref();
-        let index = HfSafetensorsIndex::open(model_dir.join("model.safetensors.index.json"))?;
-        Self::from_index(model_dir, family, &index)
+        let index_path = model_dir.join("model.safetensors.index.json");
+        match std::fs::symlink_metadata(&index_path) {
+            Ok(_) => {
+                let index = HfSafetensorsIndex::open(index_path)?;
+                Self::from_index(model_dir, family, &index)
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                Self::from_single_file(model_dir, family)
+            }
+            Err(error) => Err(error.into()),
+        }
     }
 
     pub fn from_index(
@@ -152,12 +161,28 @@ impl HfSafetensorsInventory {
         family: ModelFamily,
         index: &HfSafetensorsIndex,
     ) -> Result<Self> {
+        Self::from_shards(model_dir, family, index.shard_names(), Some(index))
+    }
+
+    /// Discover an unsharded HF artifact from its header only, without inventing
+    /// an index or reading tensor payloads.
+    pub fn from_single_file(model_dir: &Path, family: ModelFamily) -> Result<Self> {
+        Self::from_shards(model_dir, family, vec!["model.safetensors".into()], None)
+    }
+
+    fn from_shards(
+        model_dir: &Path,
+        family: ModelFamily,
+        shards: Vec<String>,
+        index: Option<&HfSafetensorsIndex>,
+    ) -> Result<Self> {
         let policy = HfTensorPolicy::for_family(family.clone());
-        let mut tensors = Vec::with_capacity(index.tensor_count());
+        let shard_count = shards.len();
+        let mut tensors = Vec::with_capacity(index.map_or(0, HfSafetensorsIndex::tensor_count));
         let mut shard_summaries = Vec::new();
         let mut header_tensor_to_shard = BTreeMap::<String, String>::new();
 
-        for shard in index.shard_names() {
+        for shard in shards {
             let header = read_safetensors_shard_header(model_dir.join(&shard))?;
             let mut shard_bytes = 0u64;
             let mut shard_tensors = 0usize;
@@ -224,21 +249,31 @@ impl HfSafetensorsInventory {
             })
             .collect();
 
-        let index_only_tensors = index
-            .tensor_names()
-            .filter(|name| !header_tensor_to_shard.contains_key(*name))
-            .map(ToOwned::to_owned)
-            .collect();
-        let header_only_tensors = header_tensor_to_shard
-            .keys()
-            .filter(|name| !index.weight_map.contains_key(*name))
-            .cloned()
-            .collect();
+        let (index_only_tensors, header_only_tensors) = match index {
+            Some(index) => (
+                index
+                    .tensor_names()
+                    .filter(|name| !header_tensor_to_shard.contains_key(*name))
+                    .map(ToOwned::to_owned)
+                    .collect(),
+                header_tensor_to_shard
+                    .keys()
+                    .filter(|name| !index.weight_map.contains_key(*name))
+                    .cloned()
+                    .collect(),
+            ),
+            None => (Vec::new(), Vec::new()),
+        };
 
         Ok(Self {
             family,
-            total_size: index.total_size,
-            shard_count: index.shard_count(),
+            total_size: match index {
+                Some(index) => index.total_size,
+                None => tensors
+                    .iter()
+                    .try_fold(0u64, |bytes, tensor| bytes.checked_add(tensor.byte_size)),
+            },
+            shard_count,
             tensor_count: tensors.len(),
             tensors,
             dtype_counts,

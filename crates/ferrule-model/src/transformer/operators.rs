@@ -14,14 +14,16 @@ use ferrule_backend::cpu::{
 };
 #[cfg(feature = "cuda")]
 use ferrule_backend::cuda::operators::linear::{CudaBf16Buffer, CudaF32Buffer, CudaOperators};
+use ferrule_common::execution::ExecutionTransactionId;
 use ferrule_common::{Error, Result};
 
 use crate::checkpoint::LinearWeightFormat;
 use crate::execution::ExecutionPrecisionPolicy;
 
+use super::expert_parallel::{ExpertDispatchContext, ExpertResult, ExpertTokenBucket};
 use super::{
     MoeRouterSpec, PreparedEmbedding, PreparedLinear, PreparedNorm, PreparedRope, RotaryEmbedding,
-    RotaryPairing, RotaryRegion, RouterScoreFunction, RouterSelection,
+    RotaryPairing, RotaryRegion, RotaryScaling, RouterScoreFunction, RouterSelection,
 };
 
 pub use ferrule_backend::cpu::{HostRows, RouterRoutes, RowsArenaId, RowsDType, RowsShape};
@@ -119,6 +121,32 @@ impl CudaRows {
         self.arena
     }
 
+    pub fn device_ordinal(&self) -> u32 {
+        match &self.storage {
+            CudaRowsStorage::F32(buffer) => buffer.as_device_buffer().context().ordinal() as u32,
+            CudaRowsStorage::Bf16(buffer) => buffer.as_device_buffer().context().ordinal() as u32,
+        }
+    }
+
+    /// Ordinals alone do not identify an allocator/stream owner.
+    pub fn validate_owner(&self, operators: &CudaOperators) -> Result<()> {
+        let stream = operators.stream_clone();
+        let matches = match &self.storage {
+            CudaRowsStorage::F32(buffer) => {
+                Arc::ptr_eq(buffer.as_device_buffer().context(), stream.context())
+            }
+            CudaRowsStorage::Bf16(buffer) => {
+                Arc::ptr_eq(buffer.as_device_buffer().context(), stream.context())
+            }
+        };
+        if !matches {
+            return Err(model_error(
+                "CUDA rows belong to a different operator owner",
+            ));
+        }
+        Ok(())
+    }
+
     pub fn f32_buffer(&self) -> Option<&CudaF32Buffer> {
         match &self.storage {
             CudaRowsStorage::F32(buffer) => Some(buffer),
@@ -166,11 +194,13 @@ impl Rows {
         }
     }
 
-    pub const fn device(&self) -> RowsDevice {
+    pub fn device(&self) -> RowsDevice {
         match self {
             Self::Host(_) => RowsDevice::Host,
             #[cfg(feature = "cuda")]
-            Self::Cuda(_) => RowsDevice::Cuda { ordinal: 0 },
+            Self::Cuda(rows) => RowsDevice::Cuda {
+                ordinal: rows.device_ordinal(),
+            },
         }
     }
 
@@ -238,6 +268,200 @@ impl UnsupportedOperator {
         Self {
             operator,
             reason: reason.into(),
+        }
+    }
+}
+
+impl std::fmt::Display for UnsupportedOperator {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{}: {}", self.operator, self.reason)
+    }
+}
+
+impl std::error::Error for UnsupportedOperator {}
+
+pub(crate) fn standard_rope_unsupported(
+    descriptor: &RotaryEmbedding,
+) -> Option<UnsupportedOperator> {
+    matches!(
+        descriptor.scaling(),
+        RotaryScaling::YaRN {
+            attention_factor: Some(factor),
+            ..
+        } if *factor != 1.0
+    )
+    .then(|| {
+        UnsupportedOperator::new(
+            "rope",
+            "standard CPU RoPE does not support YaRN attention_factor other than 1",
+        )
+    })
+}
+
+pub(crate) fn standard_router_unsupported(policy: &MoeRouterSpec) -> Option<UnsupportedOperator> {
+    (policy.score_function() != RouterScoreFunction::Softmax
+        || policy.selection() != &RouterSelection::TopK
+        || !policy.normalize_selected()
+        || policy.selection_bias())
+        .then(|| {
+            UnsupportedOperator::new(
+                "router",
+                "standard router requires Softmax, TopK, selected renormalization, and no selection bias",
+            )
+        })
+}
+
+#[cfg(test)]
+mod capability_tests {
+    use super::*;
+
+    fn rows() -> Rows {
+        Rows::Host(
+            HostRows::new(
+                RowsShape::new(1, 2).unwrap(),
+                RowsDType::F32,
+                None,
+                vec![2.0, -1.0],
+            )
+            .unwrap(),
+        )
+    }
+
+    #[test]
+    fn router_runtime_guard_rejects_unsupported_policies_and_keeps_defaults() {
+        for precision in [
+            ExecutionPrecisionPolicy::f32(),
+            ExecutionPrecisionPolicy::bf16_compatibility(),
+        ] {
+            let mut operators = CpuStandardDecoderOperators::new(precision);
+            for (score, selection, normalize, bias) in [
+                (
+                    RouterScoreFunction::Sigmoid,
+                    RouterSelection::TopK,
+                    true,
+                    false,
+                ),
+                (
+                    RouterScoreFunction::SqrtSoftplus,
+                    RouterSelection::TopK,
+                    true,
+                    false,
+                ),
+                (
+                    RouterScoreFunction::Softmax,
+                    RouterSelection::GroupLimitedTopK {
+                        groups: 2,
+                        selected_groups: 1,
+                    },
+                    true,
+                    false,
+                ),
+                (
+                    RouterScoreFunction::Softmax,
+                    RouterSelection::HashAssistedTopK { hash_layers: 1 },
+                    true,
+                    false,
+                ),
+                (
+                    RouterScoreFunction::Softmax,
+                    RouterSelection::TopK,
+                    false,
+                    false,
+                ),
+                (
+                    RouterScoreFunction::Softmax,
+                    RouterSelection::TopK,
+                    true,
+                    true,
+                ),
+            ] {
+                let policy = MoeRouterSpec::new(2, 1, score, selection, normalize, 1.0)
+                    .unwrap()
+                    .with_selection_bias(bias);
+                let OperatorProgress::Unsupported(unsupported) =
+                    operators.router(&rows(), &policy).unwrap()
+                else {
+                    panic!("unsupported policy executed: {policy:?}")
+                };
+                assert_eq!(unsupported.operator, "router");
+                assert_eq!(
+                    Some(unsupported.clone()),
+                    standard_router_unsupported(&policy)
+                );
+                let error = super::super::standard::ready::<()>(OperatorProgress::Unsupported(
+                    unsupported.clone(),
+                ))
+                .unwrap_err();
+                let Error::ModelSource { source } = error else {
+                    panic!("lost typed unsupported error: {error:?}")
+                };
+                assert_eq!(
+                    source.downcast_ref::<UnsupportedOperator>(),
+                    Some(&unsupported)
+                );
+            }
+            let policy = MoeRouterSpec::new(
+                2,
+                1,
+                RouterScoreFunction::Softmax,
+                RouterSelection::TopK,
+                true,
+                1.0,
+            )
+            .unwrap();
+            let OperatorProgress::Ready(routes) = operators.router(&rows(), &policy).unwrap()
+            else {
+                panic!("default router rejected")
+            };
+            assert_eq!(routes.row(0).unwrap(), (&[0][..], &[1.0][..]));
+        }
+    }
+
+    #[test]
+    fn rope_runtime_guard_rejects_only_nonunit_explicit_yarn_attention_factor() {
+        let table = PreparedRope::new(1, 2, vec![1.0], vec![0.0]).unwrap();
+        for precision in [
+            ExecutionPrecisionPolicy::f32(),
+            ExecutionPrecisionPolicy::bf16_compatibility(),
+        ] {
+            let mut operators = CpuStandardDecoderOperators::new(precision);
+            for factor in [
+                None,
+                Some(1.0),
+                Some(0.5),
+                Some(1.1),
+                Some(f32::from_bits(1.0f32.to_bits() + 1)),
+            ] {
+                let descriptor = RotaryEmbedding::new(
+                    2,
+                    10000.0,
+                    RotaryPairing::Interleaved,
+                    RotaryRegion::Prefix { dimensions: 2 },
+                    RotaryScaling::YaRN {
+                        factor: 2.0,
+                        original_max_position_embeddings: 16,
+                        beta_fast: 32.0,
+                        beta_slow: 1.0,
+                        attention_factor: factor,
+                    },
+                )
+                .unwrap();
+                let result = operators
+                    .rope(&descriptor, &table, rows(), 1, &[0])
+                    .unwrap();
+                if factor.is_some_and(|factor| factor != 1.0) {
+                    let OperatorProgress::Unsupported(unsupported) = result else {
+                        panic!("unsupported YaRN factor executed: {factor:?}")
+                    };
+                    assert_eq!(unsupported.operator, "rope");
+                    assert!(unsupported.reason.contains("attention_factor"));
+                } else {
+                    let OperatorProgress::Ready(output) = result else {
+                        panic!("supported YaRN factor rejected: {factor:?}")
+                    };
+                    assert_eq!(output.host().unwrap().values(), &[2.0, -1.0]);
+                }
+            }
         }
     }
 }
@@ -401,6 +625,23 @@ pub trait KvView {
     }
 }
 
+/// Entered transaction view accepted by device-neutral standard segments.
+/// CUDA implementations also implement `KvView::append_and_attend_cuda`; that
+/// method owns page translation and must never fall back to host attention.
+pub trait StandardDecoderKvView: KvView {
+    fn transaction(&self) -> ExecutionTransactionId;
+    fn validate_batch(&self, batch: &crate::decoder::PackedDecoderBatch) -> Result<()>;
+}
+
+impl StandardDecoderKvView for crate::decoder::CpuKvView {
+    fn transaction(&self) -> ExecutionTransactionId {
+        self.transaction()
+    }
+    fn validate_batch(&self, batch: &crate::decoder::PackedDecoderBatch) -> Result<()> {
+        self.validate_batch(batch)
+    }
+}
+
 /// Prepared gate/up/down bundle for one dense or routed expert.
 #[derive(Debug, Clone)]
 pub struct PreparedSwiGlu {
@@ -480,6 +721,14 @@ pub trait ExpertProvider {
 pub trait StandardDecoderOperators {
     fn backend_name(&self) -> &'static str;
     fn precision(&self) -> ExecutionPrecisionPolicy;
+    /// Explicit stage/EP boundary, never called between ordinary layer operators.
+    fn bind_rows(&mut self, rows: Rows) -> Result<Rows> {
+        rows.into_host().map(Rows::Host)
+    }
+    fn download_rows(&mut self, rows: Rows) -> Result<HostRows> {
+        rows.into_host()
+    }
+
     fn embedding(
         &mut self,
         embedding: &PreparedEmbedding,
@@ -538,6 +787,75 @@ pub trait StandardDecoderOperators {
         input: &Rows,
         arena: Option<RowsArenaId>,
     ) -> Result<OperatorProgress<Rows>>;
+}
+
+/// Synchronous expert-result boundary, independent of decoder forward and
+/// weight providers. An owned bucket can be moved to another rank's thread or
+/// IPC transport; replies contain only unweighted expert outputs and identity.
+///
+/// The routed executor calls this once per member, including empty buckets.
+/// Implementations must return that owner's complete reply or an error, enforce
+/// receive allocation bounds/timeouts, and authenticate the owner. The caller
+/// validates replies against its immutable plan before combining. There is no
+/// transaction lifecycle, retry or partial-publication state in this trait.
+pub trait ExpertResultExecutor {
+    fn execute(&mut self, bucket: ExpertTokenBucket) -> Result<Vec<ExpertResult>>;
+}
+
+/// The normalized activations and existing router outputs at a routed FFN seam.
+/// Layer coordinates are global, never the segment-local KV layer index.
+pub struct RoutedSwiGluRequest<'a> {
+    pub context: ExpertDispatchContext,
+    pub sequences: &'a [u64],
+    pub input: &'a Rows,
+    pub routes: &'a RouterRoutes,
+    pub arena: Option<RowsArenaId>,
+}
+
+/// Injectable replacement for only the routed SwiGLU call in shared layer math.
+/// Router, shared-expert, residual and dense-layer math stay with the decoder.
+/// The existing transaction authority must reject cancelled/unknown identities
+/// and serialize cancellation with publication; this trait owns no such state.
+pub trait RoutedSwiGluExecutor {
+    fn routed_swiglu(
+        &mut self,
+        request: RoutedSwiGluRequest<'_>,
+        check_active: &mut dyn FnMut(ExecutionTransactionId) -> Result<()>,
+    ) -> Result<OperatorProgress<Rows>>;
+}
+
+/// Narrow adapter used by expert-parallel workers to call the existing
+/// prepared SwiGLU operator without depending on the rest of the decoder API.
+pub trait ExpertSwiGluOperator {
+    fn apply_prepared_swiglu(
+        &mut self,
+        expert: &PreparedSwiGlu,
+        input: &Rows,
+        arena: Option<RowsArenaId>,
+    ) -> Result<Rows>;
+}
+
+impl<T> ExpertSwiGluOperator for T
+where
+    T: StandardDecoderOperators + ?Sized,
+{
+    fn apply_prepared_swiglu(
+        &mut self,
+        expert: &PreparedSwiGlu,
+        input: &Rows,
+        arena: Option<RowsArenaId>,
+    ) -> Result<Rows> {
+        match self.dense_swiglu(expert, input, arena)? {
+            OperatorProgress::Ready(rows) => Ok(rows),
+            OperatorProgress::Waiting(waiting) => Err(model_error(format!(
+                "prepared expert is waiting: {waiting:?}"
+            ))),
+            OperatorProgress::Unsupported(unsupported) => Err(model_error(format!(
+                "prepared expert is unsupported: {}: {}",
+                unsupported.operator, unsupported.reason
+            ))),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -633,6 +951,9 @@ impl StandardDecoderOperators for CpuStandardDecoderOperators {
         heads: usize,
         positions: &[usize],
     ) -> Result<OperatorProgress<Rows>> {
+        if let Some(unsupported) = standard_rope_unsupported(descriptor) {
+            return Ok(OperatorProgress::Unsupported(unsupported));
+        }
         let pairing = match descriptor.pairing() {
             RotaryPairing::SplitHalf => CpuRotaryPairing::SplitHalf,
             RotaryPairing::Interleaved => CpuRotaryPairing::Interleaved,
@@ -703,14 +1024,8 @@ impl StandardDecoderOperators for CpuStandardDecoderOperators {
         logits: &Rows,
         policy: &MoeRouterSpec,
     ) -> Result<OperatorProgress<RouterRoutes>> {
-        if policy.score_function() != RouterScoreFunction::Softmax
-            || policy.selection() != &RouterSelection::TopK
-            || !policy.normalize_selected()
-        {
-            return Ok(OperatorProgress::Unsupported(UnsupportedOperator::new(
-                "router",
-                "standard router requires full softmax, top-k, and selected renormalization",
-            )));
+        if let Some(unsupported) = standard_router_unsupported(policy) {
+            return Ok(OperatorProgress::Unsupported(unsupported));
         }
         if logits.shape().width() != policy.num_experts() {
             return Err(model_error(format!(

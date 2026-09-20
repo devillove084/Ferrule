@@ -13,6 +13,7 @@ mod error;
 pub mod cache;
 pub mod distributed;
 pub mod io;
+pub mod parallel;
 pub mod scheduling;
 
 // ── Top-level modules ─────────────────────────────────────────────────────
@@ -37,13 +38,13 @@ pub use engine::{
     BackendSelection, BuiltinModelResolver, InferenceCancelProgress, InferenceCompletionOwner,
     InferenceCompletionReactor, InferenceEngine, InferenceShutdownProgress,
     LocalResidentInferenceEngine, ModelFactoryOptions, NativeMultiSessionExecutor,
-    ResidentActionKind, ResidentCancelProgress, ResidentDriverShutdownReport, ResidentDriverStep,
-    ResidentEngineObservability, ResidentExternalTokenObservability, ResidentInferenceEngine,
-    ResidentKvCacheObservability, ResidentMaterializationObservability,
-    ResidentMaterializationStageObservability, ResidentModelBuildObservability,
-    ResidentModelBuildPlan, ResidentModelPlanner, ResidentPrefixCacheStats,
-    ResidentShutdownProgress, ResidentTokenEvent, ResidentTopKDriver, ResidentTopKDriverConfig,
-    ResidentTopKDriverStats, ResolvedModelBackend,
+    PipelineInferenceEngine, ResidentActionKind, ResidentCancelProgress,
+    ResidentDriverShutdownReport, ResidentDriverStep, ResidentEngineObservability,
+    ResidentExternalTokenObservability, ResidentInferenceEngine, ResidentKvCacheObservability,
+    ResidentMaterializationObservability, ResidentMaterializationStageObservability,
+    ResidentModelBuildObservability, ResidentModelBuildPlan, ResidentModelPlanner,
+    ResidentPrefixCacheStats, ResidentShutdownProgress, ResidentTokenEvent, ResidentTopKDriver,
+    ResidentTopKDriverConfig, ResidentTopKDriverStats, ResolvedModelBackend,
 };
 pub use expert_residency::{
     ExpertInstallIntent, ExpertInstallPrepareOutcome, ExpertInstallReason, ExpertKey, ExpertLease,

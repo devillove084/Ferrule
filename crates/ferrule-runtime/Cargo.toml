@@ -11,9 +11,10 @@ categories = ["science", "machine-learning"]
 
 [features]
 default = []
-cuda = ["ferrule-model/cuda"]
+cuda = ["ferrule-model/cuda", "dep:ferrule-backend", "ferrule-backend/cuda"]
 
 [dependencies]
+ferrule-backend = { version = "0.2.0", path = "../ferrule-backend", optional = true }
 ferrule-common = { version = "0.2.0", path = "../ferrule-common" }
 ferrule-model = { version = "0.2.0", path = "../ferrule-model" }
 serde = { version = "1", features = ["derive"] }
@@ -21,6 +22,20 @@ tracing = "0.1"
 tokio = { version = "1", features = ["macros", "rt", "sync"] }
 ahash = "0.8"
 snafu.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+serde_json = "1"
+
+[dev-dependencies]
+ferrule-backend = { version = "0.2.0", path = "../ferrule-backend" }
+
+# A test-only executable without libtest's stdout preamble. The production
+# library exports child_serve; it contains no fake-worker or hang dispatch.
+[[example]]
+name = "process_rank_child"
+path = "tests/support/process_rank_child.rs"
+test = false
 
 [lints]
 workspace = true

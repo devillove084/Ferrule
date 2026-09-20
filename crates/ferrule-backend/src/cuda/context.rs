@@ -1,5 +1,8 @@
 //! CUDA context helpers — probe, GEMV benchmarks, kernel dispatch.
 
+#[path = "standard.rs"]
+pub mod standard;
+
 use std::borrow::Cow;
 use std::cell::Cell;
 use std::sync::Arc;
@@ -10,6 +13,8 @@ use crate::cuda::runtime::{
     MemoryTier, PinnedHostBuffer,
 };
 use ferrule_common::{Error, Result};
+
+use crate::cuda::transport::{CudaAsyncTransport, CudaTransferConfig};
 
 use crate::BackendError;
 pub use crate::cuda::counters::CudaFailpoints;
@@ -1247,6 +1252,10 @@ pub struct CudaComputeEvent {
 }
 
 impl CudaComputeEvent {
+    pub(crate) fn event(&self) -> &CudaEvent {
+        &self.event
+    }
+
     pub fn is_complete(&self) -> Result<bool> {
         cu(self.event.query())
     }
@@ -1378,7 +1387,9 @@ impl CudaArtifactLinearHandle {
 /// This is intentionally a CUDA/backend type, not a model-specific arena type.
 /// Model-family code can own and reuse these buffers without exposing CUDA driver
 /// handles through the execution boundary. Length and allocation ownership remain
-/// authoritative in the underlying [`DeviceBuffer`].
+/// authoritative in the underlying [`DeviceBuffer`]. Ordinary copies and RMS
+/// operations require the same context owner, not just the same device ordinal.
+/// Explicitly fenced expert provider/consumer APIs have their own contracts.
 pub struct CudaTypedBuffer<T: DeviceCopy> {
     buffer: DeviceBuffer<T>,
 }
@@ -2562,8 +2573,13 @@ pub struct CudaOperators {
 
 impl CudaOperators {
     pub fn new() -> Result<Self> {
+        Self::new_on_device(0)
+    }
+
+    /// Create operators on a CUDA-visible device ordinal.
+    pub fn new_on_device(ordinal: usize) -> Result<Self> {
         let observability = CudaObservabilityConfig::from_env();
-        let ctx = cu(CudaContext::new(0))?;
+        let ctx = cu(CudaContext::new(ordinal))?;
         cu(ctx.bind_to_thread())?;
         let module = cu(crate::cuda::providers::core::load(&ctx))?;
         let priorities = cu(ctx.stream_priority_range())?;
@@ -2588,6 +2604,19 @@ impl CudaOperators {
             observability,
             capture_safe: Cell::new(false),
         })
+    }
+
+    /// Return the CUDA-visible device ordinal owned by these operators.
+    pub fn device_ordinal(&self) -> usize {
+        self._ctx.ordinal()
+    }
+
+    fn check_buffer_owner<T: DeviceCopy>(
+        &self,
+        buffer: &DeviceBuffer<T>,
+        operation: &str,
+    ) -> Result<()> {
+        cu(buffer.check_context(&self._ctx, operation))
     }
 
     pub fn counters(&self) -> CudaOpCounters {
@@ -3255,6 +3284,19 @@ impl CudaOperators {
         self.stream.clone()
     }
 
+    /// Create a fixed-chunk owner-local pinned transport on this owner's
+    /// existing compute/upload/control streams. No second context is created.
+    pub fn new_async_transport(&self, config: CudaTransferConfig) -> Result<CudaAsyncTransport> {
+        self.check_capture_safe("async transport allocation")?;
+        cu(CudaAsyncTransport::new(
+            config,
+            Arc::clone(&self._ctx),
+            Arc::clone(&self.stream),
+            Arc::clone(&self.upload_stream),
+            Arc::clone(&self.control_stream),
+        ))
+    }
+
     pub fn compute_stream_authority(&self) -> CudaComputeStreamAuthority {
         CudaComputeStreamAuthority {
             stream: Arc::clone(&self.stream),
@@ -3557,6 +3599,7 @@ impl CudaOperators {
     }
 
     fn download_f32(&self, buffer: &DeviceBuffer<f32>, len: usize) -> Result<Vec<f32>> {
+        self.check_buffer_owner(buffer, "download_f32")?;
         self.check_capture_safe("device-to-host download")?;
         let values = cu(buffer.to_host_vec(&self.stream))?;
         self.counters.add_device_to_host(element_bytes::<f32>(len));
@@ -3795,6 +3838,7 @@ impl CudaOperators {
     /// Zero an existing device buffer in-place (cuMemsetD32Async, no allocation).
     /// Safe for CUDA graph capture.
     pub fn zero_f32_buffer_in_place(&self, buf: &mut CudaF32Buffer) -> Result<()> {
+        self.check_buffer_owner(&buf.buffer, "zero_f32_buffer_in_place buf")?;
         cu(runtime::memset_u32(
             &self.stream,
             buf.buffer.cu_deviceptr(),
@@ -3811,6 +3855,7 @@ impl CudaOperators {
         offset: usize,
         len: usize,
     ) -> Result<()> {
+        self.check_buffer_owner(&buffer.buffer, "zero_f32_range buffer")?;
         let ptr = f32_range_device_ptr(buffer, offset, len, "zero_f32_range")?;
         if len == 0 {
             return Ok(());
@@ -3828,6 +3873,8 @@ impl CudaOperators {
         dst_offset: usize,
         len: usize,
     ) -> Result<()> {
+        self.check_buffer_owner(&src.buffer, "copy_f32_range src")?;
+        self.check_buffer_owner(&dst.buffer, "copy_f32_range dst")?;
         let src_ptr = f32_range_device_ptr(src, src_offset, len, "copy_f32_range source")?;
         let dst_ptr = f32_range_device_ptr(dst, dst_offset, len, "copy_f32_range destination")?;
         copy_f32_device_range(&self.stream, src_ptr, dst_ptr, len)
@@ -3841,6 +3888,7 @@ impl CudaOperators {
         dst_offset: usize,
         len: usize,
     ) -> Result<()> {
+        self.check_buffer_owner(&buffer.buffer, "copy_f32_within buffer")?;
         let src_end = src_offset.checked_add(len).ok_or_else(|| Error::Internal {
             message: "CUDA f32 within-copy source overflow".into(),
         })?;
@@ -3871,6 +3919,7 @@ impl CudaOperators {
         offset: usize,
         len: usize,
     ) -> Result<Vec<f32>> {
+        self.check_buffer_owner(&buffer.buffer, "download_f32_range buffer")?;
         self.check_capture_safe("device-to-host range download")?;
         let src = f32_range_device_ptr(buffer, offset, len, "download_f32_range")?;
         let mut values = vec![0.0f32; len];
@@ -3895,6 +3944,7 @@ impl CudaOperators {
         dst: &mut CudaF32Buffer,
         dst_offset: usize,
     ) -> Result<()> {
+        self.check_buffer_owner(&dst.buffer, "overwrite_f32_range dst")?;
         self.check_capture_safe("host-to-device range upload")?;
         let dst_ptr = f32_range_device_ptr(dst, dst_offset, src.len(), "overwrite_f32_range")?;
         if src.is_empty() {
@@ -3913,6 +3963,7 @@ impl CudaOperators {
     }
 
     pub fn download_f32_buffer(&self, buffer: &CudaF32Buffer) -> Result<Vec<f32>> {
+        self.check_buffer_owner(&buffer.buffer, "download_f32_buffer buffer")?;
         self.download_f32(&buffer.buffer, buffer.len())
     }
 
@@ -3947,12 +3998,14 @@ impl CudaOperators {
     }
 
     pub fn clone_f32_buffer(&self, src: &CudaF32Buffer) -> Result<CudaF32Buffer> {
+        self.check_buffer_owner(&src.buffer, "clone_f32_buffer src")?;
         let mut dst = self.zero_f32_buffer(src.len())?;
         self.copy_f32_into_slot(src, &mut dst, 0)?;
         Ok(dst)
     }
 
     pub fn overwrite_f32_buffer(&self, src: &[f32], dst: &mut CudaF32Buffer) -> Result<()> {
+        self.check_buffer_owner(&dst.buffer, "overwrite_f32_buffer dst")?;
         if src.len() != dst.len() {
             return Err(Error::Internal {
                 message: format!(
@@ -3973,6 +4026,9 @@ impl CudaOperators {
         row_width: usize,
         output: &mut CudaF32Buffer,
     ) -> Result<()> {
+        self.check_buffer_owner(&first.buffer, "concat_f32_buffers_into first")?;
+        self.check_buffer_owner(&second.buffer, "concat_f32_buffers_into second")?;
+        self.check_buffer_owner(&output.buffer, "concat_f32_buffers_into output")?;
         if row_width == 0 {
             return Err(Error::Internal {
                 message: "CUDA f32 concat row width must be positive".into(),
@@ -4454,6 +4510,7 @@ impl CudaOperators {
     }
 
     fn copy_f32_into_device_buffer(&self, src: &[f32], dst: &mut DeviceBuffer<f32>) -> Result<()> {
+        self.check_buffer_owner(dst, "copy_f32_into_device_buffer")?;
         self.counters.add_host_to_device(slice_bytes(src));
         cu(dst.copy_from_host(&self.stream, src))
     }
@@ -4468,6 +4525,8 @@ impl CudaOperators {
         dst: &mut CudaF32Buffer,
         slot_offset_elements: usize,
     ) -> Result<()> {
+        self.check_buffer_owner(&src.buffer, "copy_f32_into_slot src")?;
+        self.check_buffer_owner(&dst.buffer, "copy_f32_into_slot dst")?;
         let end = slot_offset_elements
             .checked_add(src.len())
             .ok_or_else(|| Error::Internal {
@@ -4646,6 +4705,7 @@ impl CudaOperators {
         })
     }
 
+    /// Gather F32 rows; negative/out-of-range indices produce zero rows.
     pub fn gather_f32_rows(
         &self,
         src: &CudaF32Buffer,
@@ -4653,6 +4713,8 @@ impl CudaOperators {
         rows: usize,
         row_width: usize,
     ) -> Result<CudaF32Buffer> {
+        self.check_buffer_owner(&src.buffer, "gather_f32_rows source")?;
+        self.check_buffer_owner(&row_indices.buffer, "gather_f32_rows indices")?;
         if rows == 0 || row_width == 0 || row_indices.len() != rows {
             return Err(Error::Internal {
                 message: format!(
@@ -4669,19 +4731,23 @@ impl CudaOperators {
                 ),
             });
         }
-        let mut dst =
-            self.zero_f32_buffer(rows.checked_mul(row_width).ok_or_else(|| Error::Internal {
-                message: "CUDA row gather output size overflow".into(),
-            })?)?;
+        let elements = rows.checked_mul(row_width).ok_or_else(|| Error::Internal {
+            message: "CUDA row gather output size overflow".into(),
+        })?;
+        let count = checked_u32(elements, "F32 gather", "output elements")?;
+        checked_u32(src.len() / row_width, "F32 gather", "source rows")?;
+        let rows = checked_u32(rows, "F32 gather", "rows")?;
+        let row_width = checked_u32(row_width, "F32 gather", "width")?;
+        let mut dst = self.zero_f32_buffer(elements)?;
         self.launched(unsafe {
             self.module.gather_f32_rows(
                 &self.stream,
-                LaunchConfig::for_num_elems((rows * row_width) as u32),
+                LaunchConfig::for_num_elems(count),
                 &src.buffer,
                 &row_indices.buffer,
                 &mut dst.buffer,
-                rows as u32,
-                row_width as u32,
+                rows,
+                row_width,
             )
         })?;
         Ok(dst)
@@ -5214,6 +5280,9 @@ impl CudaOperators {
     /// Used to accumulate routed expert outputs on the GPU without
     /// downloading each expert's output to host and accumulating in `Vec<f32>`.
     pub fn saxpy_into(&self, scale: f32, x: &CudaF32Buffer, y: &mut CudaF32Buffer) -> Result<()> {
+        self.check_buffer_owner(&x.buffer, "saxpy input")?;
+        self.check_buffer_owner(&y.buffer, "saxpy output")?;
+        let count = checked_u32(x.len(), "saxpy", "elements")?;
         if x.len() != y.len() {
             return Err(Error::Internal {
                 message: format!("CUDA saxpy length mismatch: x={} y={}", x.len(), y.len()),
@@ -5222,11 +5291,11 @@ impl CudaOperators {
         self.launched(unsafe {
             self.module.saxpy(
                 &self.stream,
-                LaunchConfig::for_num_elems(x.len() as u32),
+                LaunchConfig::for_num_elems(count),
                 scale,
                 &x.buffer,
                 &mut y.buffer,
-                x.len() as u32,
+                count,
             )
         })
     }
@@ -10185,6 +10254,8 @@ impl CudaOperators {
         weight: &CudaF32Buffer,
         eps: f32,
     ) -> Result<CudaF32Buffer> {
+        self.check_buffer_owner(&input.buffer, "rms_norm_from_device input")?;
+        self.check_buffer_owner(&weight.buffer, "rms_norm_from_device weight")?;
         let mut output = self.zero_f32_buffer(input.len())?;
         self.rms_norm_from_device_into(input, weight, eps, &mut output)?;
         Ok(output)
@@ -10197,6 +10268,9 @@ impl CudaOperators {
         eps: f32,
         output: &mut CudaF32Buffer,
     ) -> Result<()> {
+        self.check_buffer_owner(&input.buffer, "rms_norm_from_device_into input")?;
+        self.check_buffer_owner(&weight.buffer, "rms_norm_from_device_into weight")?;
+        self.check_buffer_owner(&output.buffer, "rms_norm_from_device_into output")?;
         if input.len() != weight.len() || input.is_empty() || output.len() != input.len() {
             return Err(Error::Internal {
                 message: format!(
@@ -10245,6 +10319,8 @@ impl CudaOperators {
         weight: &CudaF32Buffer,
         eps: f32,
     ) -> Result<CudaF32Buffer> {
+        self.check_buffer_owner(&input.buffer, "rms_norm_rows_from_device input")?;
+        self.check_buffer_owner(&weight.buffer, "rms_norm_rows_from_device weight")?;
         let mut output = self.zero_f32_buffer(input.len())?;
         self.rms_norm_rows_from_device_into(input, rows, weight, eps, &mut output)?;
         Ok(output)
@@ -10258,6 +10334,9 @@ impl CudaOperators {
         eps: f32,
         output: &mut CudaF32Buffer,
     ) -> Result<()> {
+        self.check_buffer_owner(&input.buffer, "rms_norm_rows_from_device_into input")?;
+        self.check_buffer_owner(&weight.buffer, "rms_norm_rows_from_device_into weight")?;
+        self.check_buffer_owner(&output.buffer, "rms_norm_rows_from_device_into output")?;
         if rows == 0
             || weight.is_empty()
             || input.len() != rows * weight.len()
@@ -10309,6 +10388,7 @@ impl CudaOperators {
         head_dim: usize,
         eps: f32,
     ) -> Result<CudaF32Buffer> {
+        self.check_buffer_owner(&input.buffer, "rms_norm_heads_from_device input")?;
         let mut output = self.zero_f32_buffer(input.len())?;
         self.rms_norm_heads_from_device_into(input, heads, head_dim, eps, &mut output)?;
         Ok(output)
@@ -10322,6 +10402,8 @@ impl CudaOperators {
         eps: f32,
         output: &mut CudaF32Buffer,
     ) -> Result<()> {
+        self.check_buffer_owner(&input.buffer, "rms_norm_heads_from_device_into input")?;
+        self.check_buffer_owner(&output.buffer, "rms_norm_heads_from_device_into output")?;
         if heads == 0
             || head_dim == 0
             || input.len() != heads * head_dim
@@ -11785,6 +11867,10 @@ impl CudaOperators {
         layout: SplitHalfRopeLayout,
         inverse: bool,
     ) -> Result<()> {
+        self.check_buffer_owner(&values.buffer, "split-half RoPE values")?;
+        self.check_buffer_owner(&cos_table.buffer, "split-half RoPE cosine")?;
+        self.check_buffer_owner(&sin_table.buffer, "split-half RoPE sine")?;
+        self.check_buffer_owner(&positions.buffer, "split-half RoPE positions")?;
         layout.validate()?;
         if values.len() != layout.value_elements()?
             || cos_table.len() != layout.table_elements()?
@@ -11833,7 +11919,15 @@ impl CudaOperators {
         weights: &mut CudaF32Buffer,
         layout: SelectedSoftmaxTopKLayout,
     ) -> Result<()> {
+        self.check_buffer_owner(&logits.buffer, "selected-softmax logits")?;
+        self.check_buffer_owner(&indices.buffer, "selected-softmax indices")?;
+        self.check_buffer_owner(&weights.buffer, "selected-softmax weights")?;
         layout.validate()?;
+        if layout.experts > i32::MAX as usize {
+            return Err(Error::Internal {
+                message: "router expert indices exceed i32".into(),
+            });
+        }
         if logits.len() != layout.logit_elements()?
             || indices.len() != layout.output_elements()?
             || weights.len() != layout.output_elements()?

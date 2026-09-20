@@ -10,6 +10,7 @@ mod inference;
 pub mod model_factory;
 mod native_executor;
 mod observability;
+mod pipeline;
 
 pub use composition::{
     ResidentKvPageAccounting, ResidentKvPagePlan, build_resident_engine, plan_resident_kv_pages,
@@ -36,3 +37,4 @@ pub use observability::{
 };
 
 pub use native_executor::NativeMultiSessionExecutor;
+pub use pipeline::PipelineInferenceEngine;

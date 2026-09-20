@@ -34,6 +34,7 @@ struct ThreadBoundEngine {
     owner: std::thread::ThreadId,
     completion_hub: CompletionHub,
     shutdown_called: Arc<AtomicBool>,
+    shutdown_error: Option<ferrule_runtime::Error>,
     drop_sender: std::sync::mpsc::SyncSender<std::thread::ThreadId>,
     _not_send: Rc<()>,
 }
@@ -69,6 +70,9 @@ impl InferenceEngine for ThreadBoundEngine {
     fn shutdown(&mut self) -> RuntimeResult<ferrule_runtime::InferenceShutdownProgress> {
         self.assert_owner();
         self.shutdown_called.store(true, Ordering::Release);
+        if let Some(error) = self.shutdown_error.take() {
+            return Err(error);
+        }
         Ok(ferrule_runtime::InferenceShutdownProgress::Complete)
     }
 
@@ -207,6 +211,7 @@ async fn factory_shutdown_and_drop_share_the_owner_thread() {
                 owner,
                 completion_hub: CompletionHub::new(),
                 shutdown_called: worker_shutdown_called,
+                shutdown_error: None,
                 drop_sender,
                 _not_send: Rc::new(()),
             }))
@@ -220,6 +225,60 @@ async fn factory_shutdown_and_drop_share_the_owner_thread() {
     worker.shutdown().await.unwrap();
     assert!(shutdown_called.load(Ordering::Acquire));
     assert_eq!(drop_receiver.recv().unwrap(), owner);
+}
+
+#[tokio::test]
+async fn shutdown_returns_typed_runtime_and_quarantine_errors_after_owner_drop() {
+    for error in [
+        ferrule_runtime::Error::ShutdownIncomplete {
+            message: "retirement acknowledgement missing".into(),
+        },
+        ferrule_runtime::Error::EngineUnavailable,
+        ferrule_common::Error::Execution {
+            message: "pipeline owner shutdown failed".into(),
+        }
+        .into(),
+    ] {
+        let expected = error.to_string();
+        let shutdown_called = Arc::new(AtomicBool::new(false));
+        let called = Arc::clone(&shutdown_called);
+        let (owner_sender, owner_receiver) = std::sync::mpsc::sync_channel(1);
+        let (drop_sender, drop_receiver) = std::sync::mpsc::sync_channel(1);
+        let worker = spawn_model_worker_with(
+            move || {
+                let owner = std::thread::current().id();
+                owner_sender.send(owner).unwrap();
+                Ok::<_, Infallible>(ThreadBoundEngine {
+                    owner,
+                    completion_hub: CompletionHub::new(),
+                    shutdown_called: called,
+                    shutdown_error: Some(error),
+                    drop_sender,
+                    _not_send: Rc::new(()),
+                })
+            },
+            WorkerConfig::default(),
+        )
+        .unwrap();
+        let error = tokio::time::timeout(std::time::Duration::from_secs(2), worker.shutdown())
+            .await
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(error.to_string(), expected);
+        assert!(matches!(
+            error,
+            ferrule_runtime::Error::ShutdownIncomplete { .. }
+                | ferrule_runtime::Error::EngineUnavailable
+                | ferrule_runtime::Error::Backend {
+                    source: ferrule_common::Error::Execution { .. }
+                }
+        ));
+        assert!(shutdown_called.load(Ordering::Acquire));
+        assert_eq!(
+            drop_receiver.recv().unwrap(),
+            owner_receiver.recv().unwrap()
+        );
+    }
 }
 
 #[tokio::test]

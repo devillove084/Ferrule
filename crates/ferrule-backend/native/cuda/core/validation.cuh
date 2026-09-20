@@ -50,10 +50,12 @@ inline bool transformer_range(uint64_t address, uint64_t bytes, uint64_t rows,
 inline bool transformer_cache_strides(
     uint64_t address, uint64_t capacity, uint64_t slot_stride,
     uint64_t layer_stride, uint64_t token_stride, uint64_t head_stride,
-    uint64_t layers, uint64_t page_tokens, uint64_t heads, uint64_t head_dim) {
-  if (address == 0 || capacity < slot_stride || address % 2 != 0 ||
-      slot_stride % 2 != 0 || layer_stride % 2 != 0 || token_stride % 2 != 0 ||
-      head_stride % 2 != 0 || heads == 0 || page_tokens == 0 || layers == 0) {
+    uint64_t layers, uint64_t page_tokens, uint64_t heads, uint64_t head_dim,
+    uint64_t element_bytes = sizeof(uint16_t)) {
+  if (element_bytes == 0 || address == 0 || capacity < slot_stride ||
+      address % element_bytes != 0 || slot_stride % element_bytes != 0 ||
+      layer_stride % element_bytes != 0 || token_stride % element_bytes != 0 ||
+      head_stride % element_bytes != 0 || heads == 0 || page_tokens == 0 || layers == 0) {
     return false;
   }
   uint64_t head_width;
@@ -61,7 +63,7 @@ inline bool transformer_cache_strides(
   uint64_t last_token;
   uint64_t last_layer;
   uint64_t required;
-  if (!checked_mul_u64(head_dim, sizeof(uint16_t), &head_width) ||
+  if (!checked_mul_u64(head_dim, element_bytes, &head_width) ||
       head_stride < head_width ||
       !checked_mul_u64(heads - 1, head_stride, &last_head) ||
       !checked_add_u64(last_head, head_width, &required) ||

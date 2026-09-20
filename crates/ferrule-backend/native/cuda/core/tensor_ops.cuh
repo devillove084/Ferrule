@@ -183,10 +183,11 @@ __global__ void data_kernel(FerruleCoreDataArgs args) {
     const uint32_t row = static_cast<uint32_t>(index / args.width);
     const uint32_t column = static_cast<uint32_t>(index % args.width);
     const int32_t source_row = const_pointer<int32_t>(args.input1)[row];
-    if (source_row >= 0) {
-      pointer<float>(args.output0)[index] = const_pointer<float>(
-          args.input0)[static_cast<uint64_t>(source_row) * args.width + column];
-    }
+    pointer<float>(args.output0)[index] =
+        source_row >= 0 && static_cast<uint32_t>(source_row) < args.value0
+            ? const_pointer<float>(args.input0)[
+                  static_cast<uint64_t>(source_row) * args.width + column]
+            : 0.0f;
   } else if (args.kind == FERRULE_CORE_DATA_SCATTER_ADD_F32_ROWS) {
     const uint32_t row = static_cast<uint32_t>(index / args.width);
     const uint32_t column = static_cast<uint32_t>(index % args.width);
@@ -396,8 +397,9 @@ __global__ void norm_kernel(FerruleCoreNormArgs args) {
        column += blockDim.x) {
     const float affine =
         args.kind == FERRULE_CORE_NORM_HEAD_ROWS ? 1.0f : weight[column];
-    output[base + column] =
-        bf16_round(input[base + column] * inverse_rms_shared * affine);
+    const float value = input[base + column] * inverse_rms_shared * affine;
+    output[base + column] = args.kind == FERRULE_CORE_NORM_AFFINE_F32
+                                ? value : bf16_round(value);
   }
 }
 

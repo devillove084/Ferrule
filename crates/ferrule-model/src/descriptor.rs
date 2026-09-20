@@ -182,6 +182,23 @@ impl ModelDescriptor {
                     missing.len()
                 ));
             }
+        } else if model_dir.join("model.safetensors").is_file() {
+            let inventory =
+                HfSafetensorsInventory::from_single_file(model_dir, spec.family.clone())?;
+            spec.tensor_count = Some(inventory.tensor_count);
+            spec.quantization = inventory
+                .dtype_counts
+                .iter()
+                .map(|item| QuantFormatCount {
+                    format: item.dtype.clone(),
+                    tensors: item.tensors,
+                })
+                .collect();
+            tensor_classes = inventory.class_counts;
+            spec.notes.push(format!(
+                "HF single-file safetensors header inventory: {} tensors",
+                inventory.tensor_count
+            ));
         }
         families::refine_hf_spec(&mut spec, &json);
 

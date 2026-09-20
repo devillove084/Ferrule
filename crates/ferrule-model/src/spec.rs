@@ -51,7 +51,7 @@ impl ModelFamily {
     }
 
     pub fn is_supported_runtime_family(&self) -> bool {
-        matches!(self, Self::DeepSeekV4 | Self::QwenMoe)
+        matches!(self, Self::DeepSeekV4 | Self::QwenMoe | Self::Qwen3)
     }
 }
 
@@ -242,6 +242,6 @@ mod tests {
     fn runtime_family_support_is_exact() {
         assert!(ModelFamily::DeepSeekV4.is_supported_runtime_family());
         assert!(ModelFamily::QwenMoe.is_supported_runtime_family());
-        assert!(!ModelFamily::Qwen3.is_supported_runtime_family());
+        assert!(ModelFamily::Qwen3.is_supported_runtime_family());
     }
 }

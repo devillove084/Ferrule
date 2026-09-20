@@ -134,6 +134,7 @@ impl EnginePlan {
 
 fn backend_profile(family: &ModelFamily, backend: ModelExecutionBackend) -> Option<&'static str> {
     match (family, backend) {
+        (ModelFamily::Qwen3, ModelExecutionBackend::Cpu) => Some("cpu-standard-decoder"),
         (ModelFamily::QwenMoe, ModelExecutionBackend::Cpu) => Some("cpu-reference"),
         (ModelFamily::QwenMoe, ModelExecutionBackend::Cuda) if cfg!(feature = "cuda") => {
             Some("cuda-correctness-nonresident")
@@ -154,9 +155,6 @@ fn missing_policies(
 
     if !spec.family.is_supported_runtime_family() {
         let reason = match &spec.family {
-            ModelFamily::Qwen3 => {
-                "dense Qwen3 has no registered runtime runner; only Qwen3-MoE is supported".into()
-            }
             ModelFamily::Unknown(_) => {
                 "unknown model family has no descriptor-to-layout binding".into()
             }
@@ -180,6 +178,13 @@ fn missing_policies(
     }
 
     match (&spec.family, backend) {
+        (ModelFamily::Qwen3, ModelExecutionBackend::Cpu) => {}
+        (ModelFamily::Qwen3, ModelExecutionBackend::Cuda) => {
+            missing.push(MissingPolicy::new(
+                PolicyArea::Backend,
+                "dense Qwen3 CUDA execution is unsupported; use the standard CPU decoder",
+            ));
+        }
         (ModelFamily::QwenMoe, ModelExecutionBackend::Cpu) => {}
         (ModelFamily::QwenMoe, ModelExecutionBackend::Cuda) if cfg!(feature = "cuda") => {}
         (ModelFamily::QwenMoe, ModelExecutionBackend::Cuda) => {
@@ -202,6 +207,13 @@ fn missing_policies(
             ));
         }
         _ => {}
+    }
+
+    if matches!(spec.family, ModelFamily::Qwen3) && spec.moe.is_moe() {
+        missing.push(MissingPolicy::new(
+            PolicyArea::Expert,
+            "dense Qwen3 requires a dense MLP without routed experts",
+        ));
     }
 
     if matches!(spec.family, ModelFamily::QwenMoe) {

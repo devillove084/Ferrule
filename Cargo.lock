@@ -501,9 +501,12 @@ name = "ferrule-runtime"
 version = "0.2.0"
 dependencies = [
  "ahash",
+ "ferrule-backend",
  "ferrule-common",
  "ferrule-model",
+ "libc",
  "serde",
+ "serde_json",
  "snafu",
  "tokio",
  "tracing",

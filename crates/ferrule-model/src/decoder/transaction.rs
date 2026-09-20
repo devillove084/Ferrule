@@ -490,22 +490,38 @@ where
         restore_guard(self, terminal_guard);
         Ok(())
     }
+    /// Stage sequence publication without committing KV or installing working states.
+    /// This is not an all-owner physical ready vote. The additive PreparedKvCommit
+    /// custody protocol must preflight physical owners before a global KV decision.
+    /// Repeated calls only stage once; the transaction remains abortable.
+    pub fn prepare_publication(&mut self, states: &[D::SequenceState]) -> Result<()> {
+        if !matches!(&self.state, DecoderTransactionState::Executed(_)) {
+            return Err(execution_error(format!(
+                "decoder transaction {} cannot prepare publication from phase {:?}",
+                self.transaction.get(),
+                self.phase()
+            )));
+        }
+        self.validate_sources(states)?;
+        self.stage_publication()
+    }
+    /// Apply a caller's Commit decision. Distributed callers must first obtain
+    /// that decision, and may ACK Success only on Complete, never on Pending or
+    /// ConsumedRejected. Local callers retain the prepare-then-publish shortcut.
     pub fn publish(
         &mut self,
         states: &mut [D::SequenceState],
         backend: &mut D::KvBackend,
     ) -> Result<KvEndProgress> {
-        self.validate_sources(states)?;
+        if matches!(&self.state, DecoderTransactionState::Executed(_)) {
+            self.prepare_publication(states)?;
+        } else {
+            self.validate_sources(states)?;
+        }
         let state = self.take_state();
         let guard = match state {
-            DecoderTransactionState::Executed(guard) => {
-                if let Err(error) = self.stage_publication() {
-                    self.restore_state(DecoderTransactionState::Executed(guard));
-                    return Err(error);
-                }
-                guard
-            }
-            DecoderTransactionState::Publishing(guard) => guard,
+            DecoderTransactionState::Executed(guard)
+            | DecoderTransactionState::Publishing(guard) => guard,
             other => {
                 let phase = phase_of(&other);
                 self.restore_state(other);
@@ -791,10 +807,11 @@ where
         if self.publication_staged {
             return Ok(());
         }
+        let mut commits = Vec::with_capacity(self.owners.len());
         for owner in &self.owners {
             let working = self
                 .working_states
-                .get_mut(owner.working_index)
+                .get(owner.working_index)
                 .ok_or_else(|| {
                     internal_error(format!(
                         "decoder transaction {} lost working state {}",
@@ -802,7 +819,18 @@ where
                         owner.working_index
                     ))
                 })?;
-            working.core_mut().commit_step(owner.binding, owner.rows)?;
+            commits.push(
+                working
+                    .core()
+                    .validate_step_commit(owner.binding, owner.rows)?,
+            );
+        }
+        // No working core changes until every binding and position is validated.
+        // A failure on a later sequence must leave earlier sequences retryable.
+        for (owner, commit) in self.owners.iter().zip(commits) {
+            self.working_states[owner.working_index]
+                .core_mut()
+                .apply_validated_step_commit(commit);
         }
         self.publication_staged = true;
         Ok(())
@@ -1063,12 +1091,24 @@ where
             proposal,
         )
     }
+    /// Stage sequence publication only, not distributed physical KV readiness.
+    /// No backend commit or visible installation occurs here.
+    pub fn prepare_publication(
+        &mut self,
+        transaction: ExecutionTransactionId,
+        states: &[D::SequenceState],
+    ) -> Result<()> {
+        self.shell_mut(transaction)?.prepare_publication(states)
+    }
     pub fn publish(
         &mut self,
         transaction: ExecutionTransactionId,
         states: &mut [D::SequenceState],
         backend: &mut D::KvBackend,
     ) -> Result<KvEndProgress> {
+        if self.shell(transaction)?.phase() == DecoderTransactionPhase::Executed {
+            self.prepare_publication(transaction, states)?;
+        }
         let result = self.shell_mut(transaction)?.publish(states, backend);
         match result {
             Ok(progress) => {
@@ -1121,6 +1161,13 @@ where
                 Err(error)
             }
         }
+    }
+    #[cfg(test)]
+    pub fn working_states_mut(
+        &mut self,
+        transaction: ExecutionTransactionId,
+    ) -> Result<&mut [D::SequenceState]> {
+        Ok(&mut self.shell_mut(transaction)?.working_states)
     }
     #[cfg(test)]
     pub fn phase(&self, transaction: ExecutionTransactionId) -> Result<DecoderTransactionPhase> {

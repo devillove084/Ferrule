@@ -21,7 +21,19 @@ use crate::openai::Usage;
 
 type RuntimeWorkerRequestError = WorkerRequestError<ferrule_runtime::Error>;
 type RuntimeWorkerExecutionError = WorkerExecutionError<ferrule_runtime::Error>;
-type RuntimeWorkerShutdownError = WorkerShutdownError<tokio::task::JoinError>;
+fn execution_error(error: Arc<RuntimeWorkerExecutionError>) -> ferrule_runtime::Error {
+    ferrule_common::Error::ModelSource {
+        source: Box::new(error),
+    }
+    .into()
+}
+
+fn join_error(error: WorkerShutdownError<tokio::task::JoinError>) -> ferrule_runtime::Error {
+    ferrule_common::Error::Backend {
+        source: Box::new(error),
+    }
+    .into()
+}
 
 #[derive(Debug)]
 pub(crate) struct WorkerRequest {
@@ -214,7 +226,7 @@ impl Drop for EventSubscription {
 
 pub struct ModelWorker {
     handle: ModelWorkerHandle,
-    thread: Option<JoinHandle<()>>,
+    thread: Option<JoinHandle<RuntimeResult<()>>>,
 }
 
 impl ModelWorker {
@@ -222,15 +234,17 @@ impl ModelWorker {
         self.handle.clone()
     }
 
-    pub async fn shutdown(mut self) -> Result<(), RuntimeWorkerShutdownError> {
+    /// Drain and join the owner, preserving execution and cleanup failures.
+    /// Join failures retain their WorkerShutdownError source in the runtime error.
+    pub async fn shutdown(mut self) -> RuntimeResult<()> {
         let _ = self.handle.commands.send(WorkerCommand::Shutdown).await;
         let Some(thread) = self.thread.take() else {
             return Ok(());
         };
         tokio::task::spawn_blocking(move || thread.join())
             .await
-            .map_err(|source| WorkerShutdownError::JoinTask { source })?
-            .map_err(|_| WorkerShutdownError::ThreadPanicked)
+            .map_err(|source| join_error(WorkerShutdownError::JoinTask { source }))?
+            .map_err(|_| join_error(WorkerShutdownError::ThreadPanicked))?
     }
 }
 
@@ -291,7 +305,7 @@ where
                 Err(error) => {
                     let _ =
                         ready_sender.send(Err(WorkerStartError::RuntimeBuild { source: error }));
-                    return;
+                    return Ok(());
                 }
             };
             let local = tokio::task::LocalSet::new();
@@ -301,17 +315,17 @@ where
                     Err(error) => {
                         let _ = ready_sender
                             .send(Err(WorkerStartError::EngineFactory { source: error }));
-                        return;
+                        return Ok(());
                     }
                 };
                 let mut completion_owner = InferenceCompletionOwner::attach(&mut engine);
                 if let Err(error) = completion_owner.initialize(&mut engine).await {
                     let _ = ready_sender.send(Err(WorkerStartError::Startup { source: error }));
-                    return;
+                    return Ok(());
                 }
                 let _ = ready_sender.send(Ok(()));
-                run_worker(engine, completion_owner, receiver, thread_config).await;
-            });
+                run_worker(engine, completion_owner, receiver, thread_config).await
+            })
         })
         .map_err(|source| WorkerStartError::ThreadSpawn { source })?;
 
@@ -340,12 +354,14 @@ async fn run_worker<E>(
     mut completion_owner: InferenceCompletionOwner,
     mut commands: mpsc::Receiver<WorkerCommand>,
     config: WorkerConfig,
-) where
+) -> RuntimeResult<()>
+where
     E: InferenceEngine,
 {
     let mut active = HashMap::<RequestId, ActiveRequest>::new();
     let mut cancellation_scratch = Vec::<RequestId>::new();
     let mut fatal_error: Option<Arc<RuntimeWorkerExecutionError>> = None;
+    let mut failures = Vec::new();
 
     'worker: loop {
         let should_step =
@@ -358,7 +374,6 @@ async fn run_worker<E>(
                         break;
                     };
                     if handle_command(command, &mut engine, &mut active, fatal_error.as_ref()) {
-                        cancel_all(&mut engine, &mut completion_owner, &mut active).await;
                         break;
                     }
                 }
@@ -375,19 +390,22 @@ async fn run_worker<E>(
             match commands.try_recv() {
                 Ok(command) => {
                     if handle_command(command, &mut engine, &mut active, fatal_error.as_ref()) {
-                        cancel_all(&mut engine, &mut completion_owner, &mut active).await;
                         break 'worker;
                     }
                 }
                 Err(mpsc::error::TryRecvError::Empty) => break,
                 Err(mpsc::error::TryRecvError::Disconnected) => {
-                    cancel_all(&mut engine, &mut completion_owner, &mut active).await;
                     break 'worker;
                 }
             }
         }
 
-        cancel_disconnected(&mut engine, &mut active, &mut cancellation_scratch);
+        cancel_disconnected(
+            &mut engine,
+            &mut active,
+            &mut cancellation_scratch,
+            &mut failures,
+        );
         drain_terminal(&mut engine, &mut active);
         if fatal_error.is_some() || (active.is_empty() && !engine.has_background_work()) {
             continue;
@@ -404,12 +422,16 @@ async fn run_worker<E>(
                 let Some(request) = active.get_mut(&request_id) else {
                     return Ok(());
                 };
-                if request
-                    .events
-                    .try_send(WorkerEvent::Token {
-                        text: event.text.clone(),
-                    })
-                    .is_err()
+                // Keep one channel slot for the terminal event. A slow reader
+                // cancels only its own request, never blocks the model owner.
+                if request.cancellation.load(Ordering::Acquire)
+                    || request.events.capacity() <= 1
+                    || request
+                        .events
+                        .try_send(WorkerEvent::Token {
+                            text: event.text.clone(),
+                        })
+                        .is_err()
                 {
                     request.cancellation.store(true, Ordering::Release);
                 } else {
@@ -426,18 +448,16 @@ async fn run_worker<E>(
                     let error = Arc::new(WorkerExecutionError::BlockedWithoutContinuation);
                     tracing::error!(error = %error, "model worker entered a fatal scheduling state");
                     fatal_error = Some(Arc::clone(&error));
-                    fail_all(&mut engine, &mut active, error);
+                    fail_all(&mut engine, &mut active, error, &mut failures);
                     continue;
                 }
                 tokio::select! {
                     biased;
                     command = commands.recv() => {
                         let Some(command) = command else {
-                            cancel_all(&mut engine, &mut completion_owner, &mut active).await;
                             break 'worker;
                         };
                         if handle_command(command, &mut engine, &mut active, fatal_error.as_ref()) {
-                            cancel_all(&mut engine, &mut completion_owner, &mut active).await;
                             break 'worker;
                         }
                     }
@@ -446,14 +466,14 @@ async fn run_worker<E>(
                             let error = Arc::new(WorkerExecutionError::CompletionSourceClosed);
                             tracing::error!(error = %error, "model completion source closed");
                             fatal_error = Some(Arc::clone(&error));
-                            fail_all(&mut engine, &mut active, error);
+                            fail_all(&mut engine, &mut active, error, &mut failures);
                         }
                     }
                     error = completion_owner.reactor_failure() => {
                         tracing::error!(error = %error, "model completion reactor failed");
                         let error = Arc::new(WorkerExecutionError::Runtime { source: error });
                         fatal_error = Some(Arc::clone(&error));
-                        fail_all(&mut engine, &mut active, error);
+                        fail_all(&mut engine, &mut active, error, &mut failures);
                     }
                 }
             }
@@ -469,15 +489,33 @@ async fn run_worker<E>(
                 tracing::error!(error = %source, "model worker entered a fatal execution state");
                 let error = Arc::new(WorkerExecutionError::Runtime { source });
                 fatal_error = Some(Arc::clone(&error));
-                fail_all(&mut engine, &mut active, error);
+                fail_all(&mut engine, &mut active, error, &mut failures);
             }
         }
-        cancel_disconnected(&mut engine, &mut active, &mut cancellation_scratch);
+        cancel_disconnected(
+            &mut engine,
+            &mut active,
+            &mut cancellation_scratch,
+            &mut failures,
+        );
         drain_terminal(&mut engine, &mut active);
     }
 
+    if let Some(error) = fatal_error {
+        failures.insert(0, execution_error(error));
+    }
+    failures.extend(cancel_all(&mut engine, &mut completion_owner, &mut active).await);
     if let Err(error) = shutdown_engine(&mut engine, &mut completion_owner).await {
         tracing::error!(error = %error, "model worker failed to drain runtime ownership");
+        failures.push(error);
+    }
+    match failures.len() {
+        0 => Ok(()),
+        1 => Err(failures.pop().unwrap()),
+        _ => Err(ferrule_runtime::Error::FailureBatch {
+            operation: "model worker shutdown",
+            failures,
+        }),
     }
 }
 
@@ -519,6 +557,16 @@ where
                 let _ = command.accepted.send(Err(Arc::clone(error)));
                 return false;
             }
+            if active.contains_key(&command.request_id) {
+                let _ = command
+                    .accepted
+                    .send(Err(Arc::new(WorkerExecutionError::Runtime {
+                        source: ferrule_runtime::Error::InvalidRequest {
+                            message: "request ID already has an active turn".into(),
+                        },
+                    })));
+                return false;
+            }
             let tokenize_started_at = Instant::now();
             let prompt_tokens = match engine.encode(&command.request.prompt) {
                 Ok(tokens) if !tokens.is_empty() => tokens,
@@ -548,7 +596,15 @@ where
                 stop: command.request.stop,
                 ignore_eos: command.request.ignore_eos,
             };
-            engine.submit(request);
+            if command.cancellation.load(Ordering::Acquire) || command.accepted.is_closed() {
+                return false;
+            }
+            if let Err(source) = engine.try_submit(request) {
+                let _ = command
+                    .accepted
+                    .send(Err(Arc::new(WorkerExecutionError::Runtime { source })));
+                return false;
+            }
             active.insert(
                 request_id,
                 ActiveRequest {
@@ -584,6 +640,7 @@ fn cancel_disconnected<E>(
     engine: &mut E,
     active: &mut HashMap<RequestId, ActiveRequest>,
     scratch: &mut Vec<RequestId>,
+    failures: &mut Vec<ferrule_runtime::Error>,
 ) where
     E: InferenceEngine,
 {
@@ -599,7 +656,9 @@ fn cancel_disconnected<E>(
                     request.cancellation_submitted = true;
                 }
             }
-            Err(error) => {
+            Err(source) => {
+                let error = Arc::new(WorkerExecutionError::Cancellation { source });
+                failures.push(execution_error(Arc::clone(&error)));
                 if let Some(request) = active.remove(&request_id) {
                     trace_worker_request_terminal(
                         request_id,
@@ -609,9 +668,7 @@ fn cancel_disconnected<E>(
                         &request,
                         None,
                     );
-                    let _ = request.events.try_send(WorkerEvent::Failed {
-                        error: Arc::new(WorkerExecutionError::Cancellation { source: error }),
-                    });
+                    let _ = request.events.try_send(WorkerEvent::Failed { error });
                 }
             }
         }
@@ -640,10 +697,15 @@ where
             &request,
             Some(sequence.generated),
         );
-        let _ = request.events.try_send(WorkerEvent::Finished {
-            reason,
-            usage: Usage::new(sequence.prompt_len, sequence.generated),
-        });
+        let terminal = if request.cancellation.load(Ordering::Acquire) {
+            WorkerEvent::Cancelled
+        } else {
+            WorkerEvent::Finished {
+                reason,
+                usage: Usage::new(sequence.prompt_len, sequence.generated),
+            }
+        };
+        let _ = request.events.try_send(terminal);
     }
     for sequence in engine.drain_cancelled() {
         let Some(request_id) = sequence.request_id else {
@@ -708,12 +770,15 @@ fn fail_all<E>(
     engine: &mut E,
     active: &mut HashMap<RequestId, ActiveRequest>,
     error: Arc<RuntimeWorkerExecutionError>,
+    failures: &mut Vec<ferrule_runtime::Error>,
 ) where
     E: InferenceEngine,
 {
     let request_ids = active.keys().copied().collect::<Vec<_>>();
     for request_id in request_ids {
-        let _ = engine.cancel_request(request_id);
+        if let Err(error) = engine.cancel_request(request_id) {
+            failures.push(error);
+        }
         if let Some(request) = active.remove(&request_id) {
             trace_worker_request_terminal(
                 request_id,
@@ -736,9 +801,11 @@ async fn cancel_all<E>(
     engine: &mut E,
     completion_owner: &mut InferenceCompletionOwner,
     active: &mut HashMap<RequestId, ActiveRequest>,
-) where
+) -> Vec<ferrule_runtime::Error>
+where
     E: InferenceEngine,
 {
+    let mut failures = Vec::new();
     let request_ids = active
         .iter()
         .filter_map(|(request_id, request)| {
@@ -752,7 +819,9 @@ async fn cancel_all<E>(
                     request.cancellation_submitted = true;
                 }
             }
-            Err(error) => {
+            Err(source) => {
+                let error = Arc::new(WorkerExecutionError::ShutdownCancellation { source });
+                failures.push(execution_error(Arc::clone(&error)));
                 if let Some(request) = active.remove(&request_id) {
                     trace_worker_request_terminal(
                         request_id,
@@ -762,11 +831,7 @@ async fn cancel_all<E>(
                         &request,
                         None,
                     );
-                    let _ = request.events.try_send(WorkerEvent::Failed {
-                        error: Arc::new(WorkerExecutionError::ShutdownCancellation {
-                            source: error,
-                        }),
-                    });
+                    let _ = request.events.try_send(WorkerEvent::Failed { error });
                 }
             }
         }
@@ -779,44 +844,71 @@ async fn cancel_all<E>(
         let step = engine.step(&mut discard_token);
         drain_terminal(engine, active);
         if active.is_empty() {
-            return;
+            if let Err(error) = step {
+                failures.push(error);
+            }
+            break;
         }
         match step {
             Ok(ResidentDriverStep::Executed { .. }) => continue,
             Ok(ResidentDriverStep::WaitingForModelProgress(_) | ResidentDriverStep::Blocked) => {
                 if !engine.has_pending_async_work() {
-                    tracing::error!(
-                        "engine reported pending cancellation without an owned async continuation"
-                    );
+                    failures.push(execution_error(Arc::new(
+                        WorkerExecutionError::BlockedWithoutContinuation,
+                    )));
                     break;
                 }
                 if let Err(error) = completion_owner.wait(completion).await {
-                    tracing::error!(%error, "failed while waiting for model cancellation during shutdown");
+                    failures.push(error);
                     break;
                 }
             }
             Ok(ResidentDriverStep::Idle) => {
-                tracing::error!("engine became idle while shutdown cancellation retained requests");
+                failures.push(ferrule_runtime::Error::ShutdownIncomplete {
+                    message: "engine became idle while cancellation retained requests".into(),
+                });
                 break;
             }
             Err(error) => {
-                tracing::error!(%error, "model cancellation failed while shutdown was draining");
+                failures.push(error);
                 break;
             }
         }
     }
 
+    let terminal_error = (!failures.is_empty()).then(|| {
+        Arc::new(WorkerExecutionError::Runtime {
+            source: ferrule_runtime::Error::FailureBatch {
+                operation: "shutdown cancellation",
+                failures: std::mem::take(&mut failures),
+            },
+        })
+    });
     for (request_id, request) in active.drain() {
         trace_worker_request_terminal(
             request_id,
             request.session_id,
-            "cancelled",
+            if terminal_error.is_some() {
+                "failed"
+            } else {
+                "cancelled"
+            },
             "worker_shutdown",
             &request,
             None,
         );
-        let _ = request.events.try_send(WorkerEvent::Cancelled);
+        let terminal = match &terminal_error {
+            Some(error) => WorkerEvent::Failed {
+                error: Arc::clone(error),
+            },
+            None => WorkerEvent::Cancelled,
+        };
+        let _ = request.events.try_send(terminal);
     }
+    if let Some(error) = terminal_error {
+        failures.push(execution_error(error));
+    }
+    failures
 }
 
 #[cfg(test)]
@@ -828,6 +920,7 @@ mod tests {
     };
     use std::sync::atomic::AtomicUsize;
 
+    #[derive(Default)]
     struct DisconnectEngine {
         completion_hub: CompletionHub,
         request: Option<GenerateRequest>,
@@ -836,6 +929,10 @@ mod tests {
         cancellation_waits_remaining: usize,
         cancellation_pending: bool,
         cancelled: Vec<SequenceState>,
+        fail_cancel: bool,
+        fail_retirement: bool,
+        fail_shutdown: bool,
+        shutdown_calls: Arc<AtomicUsize>,
     }
 
     impl InferenceEngine for DisconnectEngine {
@@ -848,7 +945,15 @@ mod tests {
         }
 
         fn has_pending_async_work(&self) -> bool {
-            self.cancellation_pending
+            self.cancellation_pending || self.fail_cancel || self.fail_retirement
+        }
+
+        fn shutdown(&mut self) -> RuntimeResult<InferenceShutdownProgress> {
+            self.shutdown_calls.fetch_add(1, Ordering::Release);
+            if self.fail_shutdown {
+                return Err(ferrule_runtime::Error::EngineUnavailable);
+            }
+            Ok(InferenceShutdownProgress::Complete)
         }
 
         fn encode(&self, prompt: &str) -> RuntimeResult<Vec<u32>> {
@@ -865,6 +970,14 @@ mod tests {
             on_token: &mut dyn FnMut(&ResidentTokenEvent) -> RuntimeResult<()>,
         ) -> RuntimeResult<ResidentDriverStep> {
             std::thread::sleep(std::time::Duration::from_millis(2));
+            if self.fail_retirement && self.cancellation_pending {
+                return Err(ferrule_runtime::Error::ShutdownIncomplete {
+                    message: "injected retirement failure".into(),
+                });
+            }
+            if self.fail_cancel || self.fail_retirement {
+                return Ok(ResidentDriverStep::Blocked);
+            }
             if self.cancellation_pending {
                 self.cancellation_pending = false;
                 let request = self
@@ -909,6 +1022,11 @@ mod tests {
             request_id: RequestId,
         ) -> RuntimeResult<InferenceCancelProgress> {
             self.cancellation_count.fetch_add(1, Ordering::AcqRel);
+            if self.fail_cancel {
+                return Err(ferrule_runtime::Error::ShutdownIncomplete {
+                    message: "injected cancellation failure".into(),
+                });
+            }
             if self.cancellation_waits_remaining > 0 {
                 self.cancellation_waits_remaining -= 1;
                 self.cancellation_pending = true;
@@ -956,6 +1074,175 @@ mod tests {
         }
     }
 
+    fn has_runtime_failure(error: &ferrule_runtime::Error, expected: &str) -> bool {
+        match error {
+            ferrule_runtime::Error::ShutdownIncomplete { message } => message == expected,
+            ferrule_runtime::Error::EngineUnavailable => expected == "quarantine",
+            ferrule_runtime::Error::FailureBatch { failures, .. } => failures
+                .iter()
+                .any(|error| has_runtime_failure(error, expected)),
+            ferrule_runtime::Error::Backend {
+                source: ferrule_common::Error::ModelSource { source },
+            } => {
+                let error = source
+                    .downcast_ref::<Arc<RuntimeWorkerExecutionError>>()
+                    .unwrap();
+                match error.as_ref() {
+                    WorkerExecutionError::Runtime { source }
+                    | WorkerExecutionError::Cancellation { source }
+                    | WorkerExecutionError::ShutdownCancellation { source } => {
+                        has_runtime_failure(source, expected)
+                    }
+                    _ => false,
+                }
+            }
+            _ => false,
+        }
+    }
+
+    #[tokio::test]
+    async fn shutdown_preserves_cancellation_retirement_and_quarantine_failures() {
+        for retirement in [false, true] {
+            for quarantine in [false, true] {
+                let shutdown_calls = Arc::new(AtomicUsize::new(0));
+                let calls = Arc::clone(&shutdown_calls);
+                let worker = spawn_model_worker_with(
+                    move || {
+                        Ok::<_, std::convert::Infallible>(DisconnectEngine {
+                            fail_cancel: !retirement,
+                            fail_retirement: retirement,
+                            fail_shutdown: quarantine,
+                            cancellation_waits_remaining: usize::from(retirement),
+                            shutdown_calls: calls,
+                            ..Default::default()
+                        })
+                    },
+                    WorkerConfig::default(),
+                )
+                .unwrap();
+                let mut events = worker
+                    .handle()
+                    .submit(WorkerRequest {
+                        prompt: "hello".into(),
+                        max_tokens: 8,
+                        stop: Vec::new(),
+                        ignore_eos: false,
+                    })
+                    .await
+                    .unwrap();
+                let error =
+                    tokio::time::timeout(std::time::Duration::from_secs(2), worker.shutdown())
+                        .await
+                        .unwrap()
+                        .unwrap_err();
+                let expected = if retirement {
+                    "injected retirement failure"
+                } else {
+                    "injected cancellation failure"
+                };
+                assert!(has_runtime_failure(&error, expected), "{error:?}");
+                assert_eq!(has_runtime_failure(&error, "quarantine"), quarantine);
+                assert_eq!(shutdown_calls.load(Ordering::Acquire), 1);
+                assert!(matches!(
+                    events.recv().await,
+                    Some(WorkerEvent::Failed { .. })
+                ));
+                assert!(events.recv().await.is_none());
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn disconnected_cancellation_failure_is_not_lost_at_shutdown() {
+        let cancellations = Arc::new(AtomicUsize::new(0));
+        let owner_cancellations = Arc::clone(&cancellations);
+        let worker = spawn_model_worker_with(
+            move || {
+                Ok::<_, std::convert::Infallible>(DisconnectEngine {
+                    fail_cancel: true,
+                    cancellation_count: owner_cancellations,
+                    ..Default::default()
+                })
+            },
+            WorkerConfig::default(),
+        )
+        .unwrap();
+        let events = worker
+            .handle()
+            .submit(WorkerRequest {
+                prompt: "hello".into(),
+                max_tokens: 8,
+                stop: Vec::new(),
+                ignore_eos: false,
+            })
+            .await
+            .unwrap();
+        // Explicitly wake the blocked test engine after dropping the subscriber.
+        drop(events);
+        let (response, received) = oneshot::channel();
+        worker
+            .handle
+            .commands
+            .send(WorkerCommand::Tokenize(TokenizeCommand {
+                prompt: "wake".into(),
+                response,
+            }))
+            .await
+            .unwrap();
+        received.await.unwrap().unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while cancellations.load(Ordering::Acquire) == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        let error = worker.shutdown().await.unwrap_err();
+        assert!(has_runtime_failure(&error, "injected cancellation failure"));
+    }
+
+    #[test]
+    fn duplicate_worker_admission_preserves_original_subscription_and_terminal() {
+        let mut engine = DisconnectEngine::default();
+        let mut active = HashMap::new();
+        let mut receivers = Vec::new();
+        for duplicate in [false, true] {
+            let (events, receiver) = mpsc::channel(8);
+            let (accepted, mut acceptance) = oneshot::channel();
+            assert!(!handle_command(
+                WorkerCommand::Submit(SubmitCommand {
+                    request_id: RequestId(1),
+                    enqueued_at: Instant::now(),
+                    request: WorkerRequest {
+                        prompt: "hello".into(),
+                        max_tokens: 8,
+                        stop: Vec::new(),
+                        ignore_eos: false
+                    },
+                    events,
+                    cancellation: Arc::new(AtomicBool::new(false)),
+                    accepted,
+                }),
+                &mut engine,
+                &mut active,
+                None
+            ));
+            assert_eq!(acceptance.try_recv().unwrap().is_err(), duplicate);
+            receivers.push(receiver);
+        }
+        assert_eq!(active.len(), 1);
+        assert!(receivers[1].try_recv().is_err());
+        engine.cancel_request(RequestId(1)).unwrap();
+        drain_terminal(&mut engine, &mut active);
+        assert!(matches!(
+            receivers[0].try_recv(),
+            Ok(WorkerEvent::Cancelled)
+        ));
+        drain_terminal(&mut engine, &mut active);
+        assert!(receivers[0].try_recv().is_err());
+        assert!(active.is_empty());
+    }
+
     #[test]
     fn disconnected_cancellation_reuses_scratch_without_stale_requests() {
         let cancellation_count = Arc::new(AtomicUsize::new(0));
@@ -967,6 +1254,7 @@ mod tests {
             cancellation_waits_remaining: 0,
             cancellation_pending: false,
             cancelled: Vec::new(),
+            ..Default::default()
         };
         let mut active = HashMap::new();
         let (events, _events_receiver) = mpsc::channel(1);
@@ -984,7 +1272,7 @@ mod tests {
         let mut scratch = Vec::with_capacity(1);
         let scratch_pointer = scratch.as_ptr();
 
-        cancel_disconnected(&mut engine, &mut active, &mut scratch);
+        cancel_disconnected(&mut engine, &mut active, &mut scratch, &mut Vec::new());
 
         assert_eq!(scratch, vec![RequestId(1)]);
         assert_eq!(scratch.as_ptr(), scratch_pointer);
@@ -1005,7 +1293,7 @@ mod tests {
                 emitted_tokens: 0,
             },
         );
-        cancel_disconnected(&mut engine, &mut active, &mut scratch);
+        cancel_disconnected(&mut engine, &mut active, &mut scratch, &mut Vec::new());
 
         assert!(scratch.is_empty());
         assert_eq!(scratch.as_ptr(), scratch_pointer);
@@ -1027,6 +1315,7 @@ mod tests {
             cancellation_waits_remaining: 1,
             cancellation_pending: false,
             cancelled: Vec::new(),
+            ..Default::default()
         };
         let mut active = HashMap::new();
         let (events, _events_receiver) = mpsc::channel(1);
@@ -1043,14 +1332,14 @@ mod tests {
         );
         let mut scratch = Vec::new();
 
-        cancel_disconnected(&mut engine, &mut active, &mut scratch);
+        cancel_disconnected(&mut engine, &mut active, &mut scratch, &mut Vec::new());
 
         assert!(active.contains_key(&RequestId(3)));
         assert!(engine.request.is_some());
         assert!(engine.cancelled.is_empty());
         assert_eq!(cancellation_count.load(Ordering::Acquire), 1);
 
-        cancel_disconnected(&mut engine, &mut active, &mut scratch);
+        cancel_disconnected(&mut engine, &mut active, &mut scratch, &mut Vec::new());
 
         assert!(active.contains_key(&RequestId(3)));
         assert!(engine.request.is_some());

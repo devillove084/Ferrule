@@ -1,14 +1,14 @@
-//! Algorithmic Hugging Face to canonical Qwen3-MoE name mapping.
+//! Algorithmic Hugging Face to canonical dense/MoE Qwen3 name mapping.
 
 use crate::nn::ModulePath;
 use crate::transformer::{ExternalTensorMeta, NameMapError, NameMapper, NameMapping};
 
-use super::Qwen3MoeConfig;
+use super::{Qwen3DenseConfig, Qwen3MoeConfig};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Qwen3HfNameMapper {
     layers: usize,
-    experts: usize,
+    experts: Option<usize>,
     tied_head: bool,
 }
 
@@ -21,7 +21,7 @@ impl Qwen3HfNameMapper {
         }
         Ok(Self {
             layers,
-            experts,
+            experts: Some(experts),
             tied_head,
         })
     }
@@ -32,6 +32,14 @@ impl Qwen3HfNameMapper {
             config.num_experts,
             config.tie_word_embeddings,
         )
+    }
+
+    pub(super) fn from_dense_config(config: &Qwen3DenseConfig) -> Self {
+        Self {
+            layers: config.num_hidden_layers,
+            experts: None,
+            tied_head: config.tie_word_embeddings,
+        }
     }
 
     pub(super) fn mapping(path: String) -> Result<Option<NameMapping>, NameMapError> {
@@ -71,13 +79,25 @@ impl Qwen3HfNameMapper {
                 };
                 format!("layers.{layer}.attention.{component}.weight")
             }
-            ["mlp", "gate", "weight"] => format!("layers.{layer}.router.weight"),
-            ["mlp", "experts", expert, projection, "weight"] => {
+            ["mlp", projection, "weight"] if self.experts.is_none() => {
+                let component = match *projection {
+                    "gate_proj" => "gate",
+                    "up_proj" => "up",
+                    "down_proj" => "down",
+                    _ => return invalid(name),
+                };
+                format!("layers.{layer}.feed_forward.{component}.weight")
+            }
+            ["mlp", "gate", "weight"] if self.experts.is_some() => {
+                format!("layers.{layer}.router.weight")
+            }
+            ["mlp", "experts", expert, projection, "weight"] if self.experts.is_some() => {
+                let experts = self.experts.expect("MoE mapping has an expert count");
                 let expert = parse_index(expert, "expert", name)?;
-                if expert >= self.experts {
+                if expert >= experts {
                     return Err(NameMapError::new(format!(
                         "Qwen3 expert {expert} is outside 0..{} in '{name}'",
-                        self.experts
+                        experts
                     )));
                 }
                 let component = match *projection {
@@ -104,8 +124,9 @@ impl NameMapper for Qwen3HfNameMapper {
             "model.embed_tokens.weight" => Self::mapping("token_embedding.weight".into()),
             "model.norm.weight" => Self::mapping("final_norm.weight".into()),
             "lm_head.weight" if !self.tied_head => Self::mapping("output.weight".into()),
+            "lm_head.weight" if self.experts.is_none() => Self::mapping("output.weight".into()),
             "lm_head.weight" => Err(NameMapError::new(
-                "tied Qwen3 checkpoint must not contain a separate lm_head.weight",
+                "tied Qwen3-MoE checkpoint must not contain a separate lm_head.weight",
             )),
             name if name.starts_with("model.layers.") => self.layer_mapping(name),
             name if name.starts_with("model.") || name.starts_with("lm_head.") => invalid(name),

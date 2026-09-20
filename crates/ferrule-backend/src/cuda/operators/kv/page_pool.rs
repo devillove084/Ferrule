@@ -706,6 +706,10 @@ impl CudaKvPagePool {
             .slot_byte_range(self.physical_slot(page)?, plane)
     }
 
+    pub(super) fn transaction_snapshot_count(&self) -> usize {
+        self.snapshots.len()
+    }
+
     /// Returns a page's reserved slot before commit, for prepared kernel wiring.
     pub fn pending_slot(&self, reservation: &KvPoolReservation, page: KvPageId) -> Option<u32> {
         self.pending
@@ -1306,6 +1310,63 @@ impl CudaKvPagePool {
         }
     }
 
+    // Transaction callers reserve metadata before any GPU submission. Unlike the
+    // legacy reservation API, failed/unknown writes must not recycle these slots.
+    pub(super) fn take_transaction_slots(&mut self, count: usize) -> Result<Vec<u32>> {
+        if count > self.metadata.free_slots.len() {
+            return Err(pool_error(
+                "CUDA transaction exceeds free physical slots (including shadows)",
+            ));
+        }
+        Ok((0..count)
+            .map(|_| self.metadata.free_slots.pop().expect("checked capacity"))
+            .collect())
+    }
+
+    pub(super) fn clear_transaction_slot(
+        &mut self,
+        context: &CudaOperators,
+        slot: u32,
+    ) -> Result<()> {
+        for (plane, storage) in self.plane_storage.iter_mut().enumerate() {
+            let range = self.layout.slot_range(slot, plane).expect("reserved slot");
+            context.zero_f32_range(
+                storage
+                    .as_f32_mut()
+                    .ok_or_else(|| pool_error("transaction requires F32"))?,
+                range.start,
+                range.len(),
+            )?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn install_transaction_slot(&mut self, page: KvPageId, slot: u32) -> Option<u32> {
+        self.metadata.mappings.insert(page, slot)
+    }
+
+    pub(super) fn detach_transaction_page(&mut self, page: KvPageId) -> Option<u32> {
+        self.snapshots.remove(&page);
+        self.metadata.mappings.remove(&page)
+    }
+
+    pub(super) fn recycle_transaction_slots(&mut self, slots: impl IntoIterator<Item = u32>) {
+        self.metadata.free_slots.extend(slots);
+    }
+
+    pub(super) fn f32_transaction_planes(
+        &mut self,
+    ) -> Result<(&mut CudaF32Buffer, &mut CudaF32Buffer)> {
+        let (key, value) = distinct_pair_mut(&mut self.plane_storage, 0, 1)?;
+        Ok((
+            key.as_f32_mut()
+                .ok_or_else(|| pool_error("key plane is not F32"))?,
+            value
+                .as_f32_mut()
+                .ok_or_else(|| pool_error("value plane is not F32"))?,
+        ))
+    }
+
     fn allocate_slot(&mut self, context: &CudaOperators) -> Result<u32> {
         let slot = self
             .metadata
@@ -1339,7 +1400,12 @@ impl CudaKvPagePool {
             .extend(allocated.iter().map(|(_, slot)| *slot));
     }
 
-    fn copy_slot(&mut self, context: &CudaOperators, source: u32, destination: u32) -> Result<()> {
+    pub(super) fn copy_slot(
+        &mut self,
+        context: &CudaOperators,
+        source: u32,
+        destination: u32,
+    ) -> Result<()> {
         if source == destination {
             return Ok(());
         }

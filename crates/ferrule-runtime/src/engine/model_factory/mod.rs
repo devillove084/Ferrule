@@ -1,12 +1,17 @@
 //! Model-aware catalog selection and resident engine construction.
 
+mod pipeline;
+pub use pipeline::{PipelineBuildOptions, PipelineRankBackend};
+
 use std::path::PathBuf;
 
 use ferrule_common::{MemoryPoolLimits, execution::KvLayoutSchema};
 use ferrule_model::{
     AutoConfig, ChatTemplate, ExpertMemoryPolicy, ModelDescriptor, ModelExecutionBackend,
     ModelFamily, WeightSource,
-    models::qwen3::{Qwen3MoeAdapter, Qwen3MoePrepareOptions},
+    models::qwen3::{
+        Qwen3DenseAdapter, Qwen3DensePrepareOptions, Qwen3MoeAdapter, Qwen3MoePrepareOptions,
+    },
 };
 
 #[cfg(feature = "cuda")]
@@ -108,11 +113,10 @@ pub static MODEL_IMPLEMENTATIONS: &[ModelImplementation] = &[
         resolve: resolve_deepseek_backend,
         build: build_deepseek,
     },
-    // Dense Qwen3 is recognized but deliberately rejected with a precise reason.
     ModelImplementation {
         family: ModelFamily::Qwen3,
         resolve: resolve_dense_qwen3_backend,
-        build: unbuildable_model,
+        build: build_dense_qwen3,
     },
 ];
 
@@ -179,17 +183,25 @@ fn resolve_qwen_backend(
 
 fn resolve_dense_qwen3_backend(
     descriptor: &ModelDescriptor,
-    _selection: BackendSelection,
+    selection: BackendSelection,
 ) -> Result<ResolvedModelBackend> {
-    Err(unsupported_model(
-        descriptor,
-        "dense Qwen3 is not supported; the resident implementation is Qwen3-MoE only",
-    ))
-}
-
-fn unbuildable_model(_request: ModelBuildRequest) -> Result<BoxedSessionInferenceEngine> {
-    Err(Error::InvalidRequest {
-        message: "model implementation is not buildable".into(),
+    if descriptor.spec.weight_source != WeightSource::Safetensors {
+        return Err(unsupported_model(
+            descriptor,
+            "dense Qwen3 runtime loading requires Hugging Face safetensors",
+        ));
+    }
+    let backend =
+        Option::<ModelExecutionBackend>::from(selection).unwrap_or(ModelExecutionBackend::Cpu);
+    if backend != ModelExecutionBackend::Cpu {
+        return Err(unsupported_backend(descriptor, backend, "cpu"));
+    }
+    Ok(ResolvedModelBackend {
+        family: ModelFamily::Qwen3,
+        model_name: "qwen3-dense",
+        backend,
+        backend_profile: "cpu-standard-decoder",
+        default_chat_template: ChatTemplate::Qwen3,
     })
 }
 
@@ -405,6 +417,8 @@ pub struct ModelBuildRequest {
     family: ModelFamily,
     backend: ModelExecutionBackend,
     model_path: PathBuf,
+    model_info: ferrule_model::ModelInfo,
+    pipeline: Option<PipelineBuildOptions>,
     max_layers: usize,
     max_tensor_bytes: u64,
     #[cfg_attr(not(feature = "cuda"), allow(dead_code))]
@@ -490,6 +504,8 @@ fn configure_request(
         family: entry.family,
         backend: entry.backend,
         model_path: descriptor.path.clone(),
+        model_info: ferrule_model::ModelInfo::from_descriptor(descriptor, entry.backend.as_str()),
+        pipeline: None,
         max_layers,
         max_tensor_bytes,
         output_head_chunk_rows: options.output_head_chunk_rows,
@@ -562,6 +578,9 @@ fn physical_page_bytes(schema: &dyn KvLayoutSchema) -> Result<u64> {
 }
 
 fn build_qwen(request: ModelBuildRequest) -> Result<BoxedSessionInferenceEngine> {
+    if request.pipeline.is_some() {
+        return pipeline::build(request);
+    }
     let prepare = qwen_prepare_options(&request);
     let adapter = Qwen3MoeAdapter::load_hf_with_options_and_backend(
         &request.model_path,
@@ -578,6 +597,43 @@ fn build_qwen(request: ModelBuildRequest) -> Result<BoxedSessionInferenceEngine>
             .transpose()?,
     );
     log_kv_plan("CPU Qwen3-MoE", &schema, accounting, &request)?;
+    let decoder = adapter.into_decoder(
+        request.driver_config.ctx_size,
+        request.scheduler_config.max_batch_tokens.max(1),
+        request.scheduler_config.max_active_sequences.max(1),
+    )?;
+    build_resident_engine(
+        decoder,
+        Box::new(schema),
+        accounting,
+        request.scheduler_config,
+        request.driver_config,
+    )
+}
+
+fn build_dense_qwen3(request: ModelBuildRequest) -> Result<BoxedSessionInferenceEngine> {
+    if request.pipeline.is_some() {
+        return pipeline::build(request);
+    }
+    let adapter = Qwen3DenseAdapter::load_hf_with_options_and_backend(
+        &request.model_path,
+        request.max_tensor_bytes,
+        Qwen3DensePrepareOptions {
+            max_dense_tensor_bytes: request.max_tensor_bytes,
+            max_layers: Some(request.max_layers),
+            ..Qwen3DensePrepareOptions::default()
+        },
+        request.backend,
+    )?;
+    let schema = adapter.kv_schema().clone();
+    let accounting = kv_accounting(
+        request.kv_cache_bytes,
+        request
+            .kv_cache_bytes
+            .map(|_| physical_page_bytes(&schema))
+            .transpose()?,
+    );
+    log_kv_plan("CPU Qwen3 dense", &schema, accounting, &request)?;
     let decoder = adapter.into_decoder(
         request.driver_config.ctx_size,
         request.scheduler_config.max_batch_tokens.max(1),
@@ -786,13 +842,26 @@ mod tests {
         gguf.spec.weight_source = WeightSource::Gguf;
         assert!(resolver.resolve(&gguf, BackendSelection::Auto).is_err());
 
-        let dense = descriptor(ModelFamily::Qwen3, "qwen3", 40);
+        let dense = descriptor(ModelFamily::Qwen3, "qwen3", 28);
+        for selection in [BackendSelection::Auto, BackendSelection::Cpu] {
+            let resolved = resolver.resolve(&dense, selection).unwrap();
+            assert_eq!(resolved.model_name(), "qwen3-dense");
+            assert_eq!(resolved.backend(), ModelExecutionBackend::Cpu);
+            assert_eq!(resolved.backend_profile(), "cpu-standard-decoder");
+        }
         assert!(
             resolver
-                .resolve(&dense, BackendSelection::Auto)
+                .resolve(&dense, BackendSelection::Cuda)
                 .unwrap_err()
                 .to_string()
-                .contains("dense Qwen3")
+                .contains("supported: cpu")
+        );
+        let mut dense_gguf = dense;
+        dense_gguf.spec.weight_source = WeightSource::Gguf;
+        assert!(
+            resolver
+                .resolve(&dense_gguf, BackendSelection::Auto)
+                .is_err()
         );
     }
 

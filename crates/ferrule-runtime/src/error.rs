@@ -55,6 +55,12 @@ pub enum Error {
     #[snafu(display("invalid runtime request: {message}"))]
     InvalidRequest { message: String },
 
+    #[snafu(display("resident request capacity ({limit}) is exhausted"))]
+    RequestCapacity { limit: usize },
+
+    #[snafu(display("inference engine is closed or quarantined"))]
+    EngineUnavailable,
+
     #[snafu(display("runtime invariant violated: {message}"))]
     Invariant { message: String },
 

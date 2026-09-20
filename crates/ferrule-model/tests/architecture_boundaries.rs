@@ -31,7 +31,10 @@ const FORBIDDEN_DEEPSEEK_FILES: &[&str] = &[
 
 const QWEN_SOURCE_ROOT: &str = "src/models/qwen3";
 const QWEN_PRODUCTION_FILE_BUDGET: usize = 6;
-const QWEN_PRODUCTION_LOC_BUDGET: usize = 1_000;
+// Dense Qwen3 adds ~300 lines of strict configuration and CPU artifact/runner
+// composition. Dense/MoE share graph and schema builders; no family forward is
+// added. Keep the six-file allowlist and provider restrictions unchanged.
+const QWEN_PRODUCTION_LOC_BUDGET: usize = 1_300;
 
 const FINAL_QWEN_FILES: &[&str] = &[
     "adapter.rs",

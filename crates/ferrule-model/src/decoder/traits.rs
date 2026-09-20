@@ -43,6 +43,142 @@ pub enum KvEndProgress {
     /// The shell must release registry custody.
     ConsumedRejected,
 }
+/// Exact cohort identity supplied by the existing decision authority. This is
+/// KV custody metadata, not a second transaction registry or global decision.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KvCommitBinding {
+    transaction: ExecutionTransactionId,
+    topology_id: ferrule_common::ParallelTopologyId,
+    participants: ferrule_common::ParticipantSet,
+    generation: u64,
+}
+impl KvCommitBinding {
+    pub fn new(
+        transaction: ExecutionTransactionId,
+        topology_id: ferrule_common::ParallelTopologyId,
+        participants: ferrule_common::ParticipantSet,
+        generation: u64,
+    ) -> Result<Self> {
+        if generation == 0 || participants.is_empty() || participants.topology_id() != topology_id {
+            return Err(ferrule_common::Error::Execution {
+                message: "invalid KV commit binding".into(),
+            });
+        }
+        Ok(Self {
+            transaction,
+            topology_id,
+            participants,
+            generation,
+        })
+    }
+    pub const fn transaction(&self) -> ExecutionTransactionId {
+        self.transaction
+    }
+    pub const fn topology_id(&self) -> ferrule_common::ParallelTopologyId {
+        self.topology_id
+    }
+    pub const fn participants(&self) -> &ferrule_common::ParticipantSet {
+        &self.participants
+    }
+    pub const fn generation(&self) -> u64 {
+        self.generation
+    }
+}
+
+/// Cohort-wide ACK observation; Pending and rejection never authorize publish.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KvRankAck {
+    binding: KvCommitBinding,
+    rank: ferrule_common::ParallelRankId,
+    owner_generation: u64,
+    progress: KvEndProgress,
+}
+impl KvRankAck {
+    pub(super) const fn new(
+        binding: KvCommitBinding,
+        rank: ferrule_common::ParallelRankId,
+        owner_generation: u64,
+        progress: KvEndProgress,
+    ) -> Self {
+        Self {
+            binding,
+            rank,
+            owner_generation,
+            progress,
+        }
+    }
+    pub const fn binding(&self) -> &KvCommitBinding {
+        &self.binding
+    }
+    pub const fn rank(&self) -> ferrule_common::ParallelRankId {
+        self.rank
+    }
+    pub const fn owner_generation(&self) -> u64 {
+        self.owner_generation
+    }
+    pub const fn progress(&self) -> KvEndProgress {
+        self.progress
+    }
+}
+
+/// Additive all-owner KV adapter. No transport or global decision state lives
+/// here. Complete means the operation AND all owner fences are quiescent;
+/// ConsumedRejected is never a successful install/cleanup ACK.
+///
+/// Implementations retain the original transaction/ledger until finish_prepared.
+/// CUDA must implement real mapping-generation, COW, capacity and fence checks;
+/// it must not emulate preflight by calling commit. The CPU implementation is a
+/// synchronous in-process reference, not a cross-process/CUDA KV implementation.
+/// `PagedKvBackend<P>` opts in only through `PhysicalKvPreparedPool`; legacy MLA
+/// pools retain their ordinary commit contract. CUDA F32 GQA uses the same
+/// ledger/cohort with owner-local shadow slots and exact compute-stream fences.
+pub trait DecoderKvCommitBackend: DecoderKvBackend {
+    /// Read-only: validate the exact existing physical reservation and sources.
+    fn preflight_commit_ready(
+        &self,
+        transaction: &Self::Transaction,
+        binding: &KvCommitBinding,
+        rank: ferrule_common::ParallelRankId,
+        sources: &[Self::SequenceState],
+    ) -> Result<()>;
+    /// Describe the already-validated logical projection, in packed order.
+    /// Rank-local sequence identities may differ; logical page generations may not.
+    fn commit_batch(&self, transaction: &Self::Transaction) -> Result<&PackedDecoderBatch>;
+    /// Exactly one dispatch. All retries use poll_install_ack, including after Err.
+    fn install_commit(
+        &mut self,
+        transaction: &mut Self::Transaction,
+        generation: u64,
+    ) -> Result<KvEndProgress>;
+    fn poll_install_ack(
+        &mut self,
+        transaction: &mut Self::Transaction,
+        generation: u64,
+    ) -> Result<KvEndProgress>;
+    /// Retry cleanup, including a lost owner ACK, without guessing unknown pages free.
+    fn abort_prepared(
+        &mut self,
+        transaction: &mut Self::Transaction,
+        generation: u64,
+    ) -> Result<KvEndProgress>;
+    /// Infallible after all install ACKs. Keep page pins until finish_prepared.
+    fn publish_committed(&mut self, transaction: &Self::Transaction);
+    fn preflight_retirement(
+        &self,
+        transaction: &Self::Transaction,
+        pages: &[KvPageId],
+    ) -> Result<()>;
+    /// Retry-safe release. Complete includes every physical release fence.
+    fn retire_prepared(
+        &mut self,
+        transaction: &mut Self::Transaction,
+        generation: u64,
+        pages: &[KvPageId],
+    ) -> Result<KvEndProgress>;
+    /// Infallible after all cleanup/retirement ACKs; consumes ledger custody only.
+    fn finish_prepared(&mut self, transaction: Self::Transaction);
+}
+
 /// Capacity and lifecycle status of a decoder KV backend.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct DecoderKvCapacity {
@@ -61,6 +197,9 @@ pub trait DecoderKvBackend {
     /// Typed transaction-bound view passed to the forward executor.
     type KvView;
     fn configure_capacity(&mut self, max_pages: usize) -> Result<()>;
+    /// A normal Err guarantees no unresolved prepare work. If device cleanup is
+    /// unknown, return `KvPrepareQuiescenceUnknown` and retain backend custody;
+    /// no returned handle must never be interpreted as a successful rollback.
     fn prepare(&mut self, request: DecoderKvPrepare<'_>) -> Result<Self::Transaction>;
     fn enter(
         &mut self,

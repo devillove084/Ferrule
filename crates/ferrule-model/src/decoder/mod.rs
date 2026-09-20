@@ -17,8 +17,14 @@ pub use batch::{
 };
 pub use kv::{
     CpuKvPlaneStorage, CpuKvView, CpuPagedKvBackend, CpuPagedKvPool, CpuPagedKvTransaction,
-    DecoderKvPlaneStrategy, MlaPlaneStrategy, PagedKvBackend, PagedKvOwnership, PagedKvTransaction,
-    PagedKvTransactionHandle, PhysicalKvPool, StandardGqaPlanes,
+    DecoderKvPlaneStrategy, KvCommitOwner, KvPrepareQuiescenceUnknown, MlaPlaneStrategy,
+    PagedKvBackend, PagedKvOwnership, PagedKvTransaction, PagedKvTransactionHandle,
+    PhysicalKvCommitReady, PhysicalKvPool, PhysicalKvPreparedPool, PrepareKvCommitError,
+    PreparedKvCommit, PreparedKvRetirement, StandardGqaPlanes,
+};
+#[cfg(feature = "cuda")]
+pub use kv::{
+    CudaGqaPlanesMut, CudaKvView, CudaPagedKvBackend, CudaPagedKvPool, CudaPagedKvTransaction,
 };
 pub use logits::{DecoderLogits, DecoderTopKRow, DenseLogits};
 pub use runner::{
@@ -41,7 +47,8 @@ pub use state::{
 };
 pub use traits::{
     DecoderCancelProgress, DecoderContinuationWait, DecoderKvBackend, DecoderKvCapacity,
-    DecoderKvPageSnapshot, DecoderKvPrepare, DecoderKvSequenceCustody, DecoderWait, KvEndProgress,
+    DecoderKvCommitBackend, DecoderKvPageSnapshot, DecoderKvPrepare, DecoderKvSequenceCustody,
+    DecoderWait, KvCommitBinding, KvEndProgress, KvRankAck,
 };
 #[cfg(test)]
 pub(crate) use transaction::DecoderTransactionPhase;

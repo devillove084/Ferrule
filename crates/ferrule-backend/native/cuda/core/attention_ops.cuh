@@ -467,7 +467,7 @@ __device__ inline bool
 transformer_cache_offset(const FerruleCoreTransformerArgs &args,
                          uint32_t sequence, uint32_t logical_token,
                          uint32_t kv_head, uint32_t dimension, bool value_cache,
-                         uint64_t *result) {
+                         uint64_t *result, uint64_t element_bytes = sizeof(uint16_t)) {
   const int32_t block_start_value =
       const_pointer<int32_t>(args.block_offsets_i32)[sequence];
   const int32_t block_end_value =
@@ -512,9 +512,9 @@ transformer_cache_offset(const FerruleCoreTransformerArgs &args,
       !checked_add_u64(offset, term, &offset) ||
       !checked_mul_u64(kv_head, head_stride, &term) ||
       !checked_add_u64(offset, term, &offset) ||
-      !checked_mul_u64(dimension, sizeof(uint16_t), &term) ||
+      !checked_mul_u64(dimension, element_bytes, &term) ||
       !checked_add_u64(offset, term, &offset) || offset > capacity ||
-      sizeof(uint16_t) > capacity - offset) {
+      element_bytes > capacity - offset) {
     transformer_error(args, kTransformerAddressError);
     return false;
   }
@@ -522,6 +522,7 @@ transformer_cache_offset(const FerruleCoreTransformerArgs &args,
   return true;
 }
 
+template <typename T = uint16_t>
 __global__ void transformer_kv_append_kernel(FerruleCoreTransformerArgs args) {
   const uint64_t index =
       static_cast<uint64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
@@ -545,25 +546,29 @@ __global__ void transformer_kv_append_kernel(FerruleCoreTransformerArgs args) {
   uint64_t key_offset;
   uint64_t value_offset;
   if (!transformer_cache_offset(args, sequence, position, kv_head, dimension,
-                                false, &key_offset) ||
+                                false, &key_offset, sizeof(T)) ||
       !transformer_cache_offset(args, sequence, position, kv_head, dimension,
-                                true, &value_offset)) {
+                                true, &value_offset, sizeof(T))) {
     return;
   }
   const uint64_t key_input_offset =
       static_cast<uint64_t>(row) * args.append_key_row_stride_bytes +
       static_cast<uint64_t>(kv_head) * args.append_key_head_stride_bytes +
-      static_cast<uint64_t>(dimension) * sizeof(uint16_t);
+      static_cast<uint64_t>(dimension) * sizeof(T);
   const uint64_t value_input_offset =
       static_cast<uint64_t>(row) * args.append_value_row_stride_bytes +
       static_cast<uint64_t>(kv_head) * args.append_value_head_stride_bytes +
-      static_cast<uint64_t>(dimension) * sizeof(uint16_t);
-  pointer<uint16_t>(args.key_cache_bf16 + key_offset)[0] =
-      const_pointer<uint16_t>(args.append_key_bf16 + key_input_offset)[0];
-  pointer<uint16_t>(args.value_cache_bf16 + value_offset)[0] =
-      const_pointer<uint16_t>(args.append_value_bf16 + value_input_offset)[0];
+      static_cast<uint64_t>(dimension) * sizeof(T);
+  pointer<T>(args.key_cache_bf16 + key_offset)[0] =
+      const_pointer<T>(args.append_key_bf16 + key_input_offset)[0];
+  pointer<T>(args.value_cache_bf16 + value_offset)[0] =
+      const_pointer<T>(args.append_value_bf16 + value_input_offset)[0];
 }
 
+__device__ inline float transformer_value(uint16_t value) { return bf16_value(value); }
+__device__ inline float transformer_value(float value) { return value; }
+
+template <typename T = uint16_t>
 __global__ void transformer_causal_gqa_kernel(FerruleCoreTransformerArgs args) {
   const uint64_t index =
       static_cast<uint64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
@@ -585,7 +590,8 @@ __global__ void transformer_causal_gqa_kernel(FerruleCoreTransformerArgs args) {
     return;
   }
   const uint32_t effective_kv_len =
-      args.kind == FERRULE_CORE_TRANSFORMER_PAGED_BF16_APPEND_CAUSAL_GQA
+      (args.kind == FERRULE_CORE_TRANSFORMER_PAGED_BF16_APPEND_CAUSAL_GQA ||
+       args.kind == FERRULE_CORE_TRANSFORMER_PAGED_F32_APPEND_CAUSAL_GQA)
           ? max(kv_len, position + 1)
           : kv_len;
   const uint32_t visible = min(effective_kv_len, position + 1);
@@ -602,24 +608,24 @@ __global__ void transformer_causal_gqa_kernel(FerruleCoreTransformerArgs args) {
          ++dot_dimension) {
       uint64_t key_offset;
       if (!transformer_cache_offset(args, sequence, token, kv_head,
-                                    dot_dimension, false, &key_offset)) {
+                                    dot_dimension, false, &key_offset, sizeof(T))) {
         return;
       }
       const float query = const_pointer<float>(
           args.query_f32 + query_head +
           static_cast<uint64_t>(dot_dimension) * sizeof(float))[0];
-      const float key = bf16_value(
-          const_pointer<uint16_t>(args.key_cache_bf16 + key_offset)[0]);
+      const float key = transformer_value(
+          const_pointer<T>(args.key_cache_bf16 + key_offset)[0]);
       score += query * key;
     }
     score *= args.softmax_scale;
     uint64_t value_offset;
     if (!transformer_cache_offset(args, sequence, token, kv_head, dimension,
-                                  true, &value_offset)) {
+                                  true, &value_offset, sizeof(T))) {
       return;
     }
-    const float value = bf16_value(
-        const_pointer<uint16_t>(args.value_cache_bf16 + value_offset)[0]);
+    const float value = transformer_value(
+        const_pointer<T>(args.value_cache_bf16 + value_offset)[0]);
     if (denominator == 0.0f || score > maximum) {
       const float rescale = denominator == 0.0f ? 0.0f : expf(maximum - score);
       accumulator = accumulator * rescale + value;
@@ -639,7 +645,8 @@ __global__ void transformer_causal_gqa_kernel(FerruleCoreTransformerArgs args) {
       denominator > 0.0f ? accumulator / denominator : 0.0f;
 }
 
-inline bool valid_transformer(const FerruleCoreTransformerArgs *args) {
+inline bool valid_transformer(const FerruleCoreTransformerArgs *args, bool f32 = false) {
+  const uint64_t element_bytes = f32 ? sizeof(float) : sizeof(uint16_t);
   if (!valid(args) || args->rows == 0 || args->sequences == 0 ||
       args->q_heads == 0 || args->kv_heads == 0 || args->head_dim == 0 ||
       args->q_heads % args->kv_heads != 0 || args->page_tokens == 0 ||
@@ -650,13 +657,13 @@ inline bool valid_transformer(const FerruleCoreTransformerArgs *args) {
           args->key_slot_stride_bytes, args->key_layer_stride_bytes,
           args->key_token_stride_bytes, args->key_head_stride_bytes,
           args->layer_count, args->page_tokens, args->kv_heads,
-          args->head_dim) ||
+          args->head_dim, element_bytes) ||
       !transformer_cache_strides(
           args->value_cache_bf16, args->value_cache_bytes,
           args->value_slot_stride_bytes, args->value_layer_stride_bytes,
           args->value_token_stride_bytes, args->value_head_stride_bytes,
           args->layer_count, args->page_tokens, args->kv_heads,
-          args->head_dim) ||
+          args->head_dim, element_bytes) ||
       args->block_slots_i32 == 0 || args->block_slots_i32 % 4 != 0 ||
       args->block_slots_count == 0 || args->block_offsets_i32 == 0 ||
       args->block_offsets_i32 % 4 != 0 ||
@@ -670,12 +677,13 @@ inline bool valid_transformer(const FerruleCoreTransformerArgs *args) {
       args->status_count == 0) {
     return false;
   }
+  const uint32_t kind = f32 ? args->kind - 3 : args->kind;
   const bool append =
-      args->kind == FERRULE_CORE_TRANSFORMER_PAGED_BF16_KV_APPEND ||
-      args->kind == FERRULE_CORE_TRANSFORMER_PAGED_BF16_APPEND_CAUSAL_GQA;
+      kind == FERRULE_CORE_TRANSFORMER_PAGED_BF16_KV_APPEND ||
+      kind == FERRULE_CORE_TRANSFORMER_PAGED_BF16_APPEND_CAUSAL_GQA;
   const bool attention =
-      args->kind == FERRULE_CORE_TRANSFORMER_PAGED_BF16_CAUSAL_GQA ||
-      args->kind == FERRULE_CORE_TRANSFORMER_PAGED_BF16_APPEND_CAUSAL_GQA;
+      kind == FERRULE_CORE_TRANSFORMER_PAGED_BF16_CAUSAL_GQA ||
+      kind == FERRULE_CORE_TRANSFORMER_PAGED_BF16_APPEND_CAUSAL_GQA;
   if (!append && !attention) {
     return false;
   }
@@ -685,12 +693,12 @@ inline bool valid_transformer(const FerruleCoreTransformerArgs *args) {
            args->append_key_bf16, args->append_key_bytes, args->rows,
            args->append_key_row_stride_bytes, args->kv_heads,
            args->append_key_head_stride_bytes,
-           static_cast<uint64_t>(args->head_dim) * sizeof(uint16_t), 2) ||
+           static_cast<uint64_t>(args->head_dim) * element_bytes, element_bytes) ||
        !transformer_range(
            args->append_value_bf16, args->append_value_bytes, args->rows,
            args->append_value_row_stride_bytes, args->kv_heads,
            args->append_value_head_stride_bytes,
-           static_cast<uint64_t>(args->head_dim) * sizeof(uint16_t), 2))) {
+           static_cast<uint64_t>(args->head_dim) * element_bytes, element_bytes))) {
     return false;
   }
   if (attention &&

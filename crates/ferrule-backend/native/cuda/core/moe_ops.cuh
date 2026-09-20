@@ -427,7 +427,38 @@ expert_group_route_plan_kernel(FerruleCoreExpertGroupRoutePlanArgs args) {
 __global__ void moe_kernel(FerruleCoreMoeArgs args) {
   const uint64_t index =
       static_cast<uint64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-  if (args.kind == FERRULE_CORE_MOE_GATHER_BF16_ROWS) {
+  if (args.kind == FERRULE_CORE_MOE_SWIGLU_STANDARD_F32) {
+    if (index >= args.n) return;
+    const float gate = const_pointer<float>(args.gate)[index];
+    const float e = expf(-fabsf(gate));
+    const float sigmoid = gate >= 0.0f ? 1.0f / (1.0f + e) : e / (1.0f + e);
+    pointer<float>(args.output)[index] =
+        gate * sigmoid * const_pointer<float>(args.up)[index];
+  } else if (args.kind == FERRULE_CORE_MOE_SWIGLU_CLAMPED_F32) {
+    if (index >= args.n) return;
+    const float gate = fminf(const_pointer<float>(args.gate)[index], args.swiglu_limit);
+    const float up = clamp_value(const_pointer<float>(args.up)[index],
+                                 -args.swiglu_limit, args.swiglu_limit);
+    const float e = expf(-fabsf(gate));
+    const float sigmoid = gate >= 0.0f ? 1.0f / (1.0f + e) : e / (1.0f + e);
+    pointer<float>(args.output)[index] = gate * sigmoid * up;
+  } else if (args.kind == FERRULE_CORE_MOE_WEIGHTED_COMBINE_F32) {
+    if (index >= static_cast<uint64_t>(args.tokens) * args.hidden) return;
+    const uint32_t token = static_cast<uint32_t>(index / args.hidden);
+    const uint32_t column = static_cast<uint32_t>(index % args.hidden);
+    float result = 0.0f;
+    // One owner per output element; left-fold in caller route order, no atomics.
+    for (uint32_t route = 0; route < args.batch_columns; ++route) {
+      if (const_pointer<int32_t>(args.route_slots)[route] ==
+          static_cast<int32_t>(token)) {
+        const float value = const_pointer<float>(args.input)[
+            static_cast<uint64_t>(route) * args.hidden + column];
+        result = __fadd_rn(result, __fmul_rn(
+            value, const_pointer<float>(args.route_weights)[route]));
+      }
+    }
+    pointer<float>(args.output)[index] = result;
+  } else if (args.kind == FERRULE_CORE_MOE_GATHER_BF16_ROWS) {
     const uint64_t total =
         static_cast<uint64_t>(args.batch_columns) * args.hidden;
     if (index >= total) {

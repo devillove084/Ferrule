@@ -41,6 +41,7 @@ unsafe extern "C" {
     fn cuGetErrorName(error: CuResult, name: *mut *const c_char) -> CuResult;
     fn cuGetErrorString(error: CuResult, description: *mut *const c_char) -> CuResult;
     fn cuDeviceGet(device: *mut CuDevice, ordinal: c_int) -> CuResult;
+    fn cuDeviceGetCount(count: *mut c_int) -> CuResult;
     fn cuDeviceGetName(name: *mut c_char, len: c_int, device: CuDevice) -> CuResult;
     fn cuDevicePrimaryCtxRetain(context: *mut CuContext, device: CuDevice) -> CuResult;
     #[link_name = "cuDevicePrimaryCtxRelease_v2"]
@@ -266,6 +267,13 @@ unsafe impl Send for CudaContext {}
 unsafe impl Sync for CudaContext {}
 
 impl CudaContext {
+    pub fn device_count() -> CudaResult<usize> {
+        check("cuInit", unsafe { cuInit(0) })?;
+        let mut count = 0;
+        check("cuDeviceGetCount", unsafe { cuDeviceGetCount(&mut count) })?;
+        usize::try_from(count).map_err(|_| CudaError::from_code("device count conversion", 1))
+    }
+
     pub fn new(ordinal: usize) -> CudaResult<Arc<Self>> {
         check("cuInit", unsafe { cuInit(0) })?;
         let ordinal_i32 = c_int::try_from(ordinal)
@@ -659,6 +667,21 @@ unsafe impl Send for CudaEvent {}
 unsafe impl Sync for CudaEvent {}
 
 impl CudaEvent {
+    pub(crate) fn check_context(
+        &self,
+        expected: &Arc<CudaContext>,
+        operation: &'static str,
+    ) -> CudaResult<()> {
+        if !Arc::ptr_eq(&self.context, expected) {
+            return Err(CudaError::internal(format!(
+                "{operation}: CUDA event owner mismatch (event ordinal={}, expected ordinal={})",
+                self.context.ordinal(),
+                expected.ordinal(),
+            )));
+        }
+        Ok(())
+    }
+
     pub fn record(&self, stream: &CudaStream) -> CudaResult<()> {
         self.context.bind_to_thread()?;
         check("cuEventRecord", unsafe {
@@ -803,6 +826,7 @@ impl<T: DeviceCopy> DeviceBuffer<T> {
 
     pub fn zeroed(stream: &CudaStream, len: usize) -> CudaResult<Self> {
         let buffer = unsafe { Self::uninitialized_async(stream, len)? };
+        stream.context.bind_to_thread()?;
         if buffer.num_bytes() != 0 {
             check("cuMemsetD8Async", unsafe {
                 cuMemsetD8Async(buffer.ptr, 0, buffer.num_bytes(), stream.raw)
@@ -910,7 +934,26 @@ impl<T: DeviceCopy> DeviceBuffer<T> {
         self.allocation.memory_tier()
     }
 
+    pub(crate) fn check_context(
+        &self,
+        context: &Arc<CudaContext>,
+        operation: &str,
+    ) -> CudaResult<()> {
+        // Device ordinals (and retained primary-context handles) can match while
+        // allocation/stream owners differ. Ordinary typed copies require one owner.
+        if !Arc::ptr_eq(self.context(), context) {
+            return Err(CudaError::internal(format!(
+                "{operation}: CUDA buffer owner mismatch (buffer ordinal={}, expected ordinal={})",
+                self.context().ordinal(),
+                context.ordinal(),
+            )));
+        }
+        Ok(())
+    }
+
     pub fn copy_from_host(&self, stream: &CudaStream, values: &[T]) -> CudaResult<()> {
+        self.check_context(&stream.context, "copy_from_host")?;
+        stream.context.bind_to_thread()?;
         if values.len() != self.len {
             return Err(CudaError::from_code("host-to-device length mismatch", 1));
         }
@@ -936,6 +979,8 @@ impl<T: DeviceCopy> DeviceBuffer<T> {
         stream: &CudaStream,
         values: &PinnedHostBuffer<T>,
     ) -> CudaResult<()> {
+        self.check_context(&stream.context, "copy_from_pinned_host_async")?;
+        stream.context.bind_to_thread()?;
         if values.len() != self.len {
             return Err(CudaError::from_code(
                 "pinned host-to-device length mismatch",
@@ -956,12 +1001,15 @@ impl<T: DeviceCopy> DeviceBuffer<T> {
     }
 
     pub fn to_host_vec(&self, stream: &CudaStream) -> CudaResult<Vec<T>> {
+        self.check_context(&stream.context, "to_host_vec")?;
         let mut values = vec![T::default(); self.len];
         self.copy_to_host(stream, &mut values)?;
         Ok(values)
     }
 
     pub fn copy_to_host(&self, stream: &CudaStream, values: &mut [T]) -> CudaResult<()> {
+        self.check_context(&stream.context, "copy_to_host")?;
+        stream.context.bind_to_thread()?;
         if values.len() != self.len {
             return Err(CudaError::from_code("device-to-host length mismatch", 1));
         }
@@ -987,6 +1035,8 @@ impl<T: DeviceCopy> DeviceBuffer<T> {
         stream: &CudaStream,
         values: &mut PinnedHostBuffer<T>,
     ) -> CudaResult<()> {
+        self.check_context(&stream.context, "copy_to_pinned_host_async")?;
+        stream.context.bind_to_thread()?;
         if values.len() != self.len {
             return Err(CudaError::from_code(
                 "device-to-pinned-host length mismatch",
@@ -1183,6 +1233,7 @@ pub(crate) fn copy_device_to_device(
     source: DevicePtr,
     bytes: usize,
 ) -> CudaResult<()> {
+    stream.context.bind_to_thread()?;
     if bytes == 0 {
         return Ok(());
     }
@@ -1197,6 +1248,7 @@ pub(crate) fn copy_host_to_device(
     source: *const c_void,
     bytes: usize,
 ) -> CudaResult<()> {
+    stream.context.bind_to_thread()?;
     if bytes == 0 {
         return Ok(());
     }
@@ -1211,6 +1263,7 @@ pub(crate) fn copy_device_to_host(
     source: DevicePtr,
     bytes: usize,
 ) -> CudaResult<()> {
+    stream.context.bind_to_thread()?;
     if bytes == 0 {
         return Ok(());
     }
@@ -1219,12 +1272,74 @@ pub(crate) fn copy_device_to_host(
     })
 }
 
+/// Copy a pinned subrange into the entire checked device view.
+///
+/// # Safety
+/// Keep both allocations alive and the pinned source immutable until the copy
+/// completes. Order device readers/writers around this copy on their streams.
+pub(crate) unsafe fn copy_host_to_device_pinned_range<T: DeviceCopy>(
+    stream: &CudaStream,
+    destination: &DeviceBuffer<T>,
+    source: &PinnedHostBuffer<T>,
+    source_offset: usize,
+) -> CudaResult<()> {
+    destination.check_context(stream.context(), "pinned H2D destination")?;
+    check_pinned_range(source, stream.context(), source_offset, destination.len())?;
+    let bytes = allocation_bytes::<T>(destination.len())?;
+    // SAFETY: the checked range is within the pinned allocation.
+    let source = unsafe { source.as_ptr().add(source_offset) };
+    copy_host_to_device(stream, destination.cu_deviceptr(), source.cast(), bytes)
+}
+
+/// Copy the entire checked device view into a pinned subrange.
+///
+/// # Safety
+/// Keep both allocations alive and do not access the pinned destination until
+/// the copy completes. The device source must not be overwritten during DMA.
+pub(crate) unsafe fn copy_device_to_pinned_host_range<T: DeviceCopy>(
+    stream: &CudaStream,
+    destination: &mut PinnedHostBuffer<T>,
+    destination_offset: usize,
+    source: &DeviceBuffer<T>,
+) -> CudaResult<()> {
+    source.check_context(stream.context(), "pinned D2H source")?;
+    check_pinned_range(
+        destination,
+        stream.context(),
+        destination_offset,
+        source.len(),
+    )?;
+    let bytes = allocation_bytes::<T>(source.len())?;
+    // SAFETY: the checked range is within the pinned allocation.
+    let destination = unsafe { destination.as_mut_ptr().add(destination_offset) };
+    copy_device_to_host(stream, destination.cast(), source.cu_deviceptr(), bytes)
+}
+
+fn check_pinned_range<T: DeviceCopy>(
+    pinned: &PinnedHostBuffer<T>,
+    context: &Arc<CudaContext>,
+    offset: usize,
+    elements: usize,
+) -> CudaResult<()> {
+    if !Arc::ptr_eq(pinned.context(), context) {
+        return Err(CudaError::internal("pinned transfer owner mismatch"));
+    }
+    let end = offset
+        .checked_add(elements)
+        .ok_or_else(|| CudaError::internal("pinned transfer range overflow"))?;
+    if end > pinned.len() || allocation_bytes::<T>(end)? > isize::MAX as usize {
+        return Err(CudaError::internal("pinned transfer range out of bounds"));
+    }
+    Ok(())
+}
+
 pub(crate) fn memset_u32(
     stream: &CudaStream,
     destination: DevicePtr,
     value: u32,
     elements: usize,
 ) -> CudaResult<()> {
+    stream.context.bind_to_thread()?;
     if elements == 0 {
         return Ok(());
     }

@@ -194,6 +194,15 @@ extern "C" int32_t ferrule_core_moe_launch(const FerruleCoreMoeArgs *args) {
   }
   uint64_t count = 0;
   switch (args->kind) {
+  case FERRULE_CORE_MOE_SWIGLU_STANDARD_F32:
+    count = args->n;
+    break;
+  case FERRULE_CORE_MOE_WEIGHTED_COMBINE_F32:
+    count = static_cast<uint64_t>(args->tokens) * args->hidden;
+    break;
+  case FERRULE_CORE_MOE_SWIGLU_CLAMPED_F32:
+    count = args->n;
+    break;
   case FERRULE_CORE_MOE_WEIGHTED_SWIGLU_F32:
     count =
         static_cast<uint64_t>(args->experts) * args->batch_columns * args->n;
@@ -250,6 +259,30 @@ extern "C" int32_t ferrule_core_mla_launch(const FerruleCoreMlaArgs *args) {
 }
 
 extern "C" int32_t
+ferrule_core_transformer_f32_launch(const FerruleCoreTransformerArgs *args) {
+  using namespace ferrule::cuda::core;
+  if (!valid_transformer(args, true)) {
+    return static_cast<int32_t>(cudaErrorInvalidValue);
+  }
+  cudaError_t status = cudaMemsetAsync(pointer<int32_t>(args->status_i32), 0,
+                                      sizeof(int32_t), stream(args->stream));
+  if (status != cudaSuccess) return static_cast<int32_t>(status);
+  if (args->kind == FERRULE_CORE_TRANSFORMER_PAGED_F32_KV_APPEND ||
+      args->kind == FERRULE_CORE_TRANSFORMER_PAGED_F32_APPEND_CAUSAL_GQA) {
+    const uint64_t count = static_cast<uint64_t>(args->rows) * args->kv_heads * args->head_dim;
+    transformer_kv_append_kernel<float><<<blocks_for(count), kBlock, 0, stream(args->stream)>>>(*args);
+    status = cudaPeekAtLastError();
+    if (status != cudaSuccess) return static_cast<int32_t>(status);
+  }
+  if (args->kind == FERRULE_CORE_TRANSFORMER_PAGED_F32_CAUSAL_GQA ||
+      args->kind == FERRULE_CORE_TRANSFORMER_PAGED_F32_APPEND_CAUSAL_GQA) {
+    const uint64_t count = static_cast<uint64_t>(args->rows) * args->q_heads * args->head_dim;
+    transformer_causal_gqa_kernel<float><<<blocks_for(count), kBlock, 0, stream(args->stream)>>>(*args);
+  }
+  return launch_status();
+}
+
+extern "C" int32_t
 ferrule_core_transformer_launch(const FerruleCoreTransformerArgs *args) {
   if (!ferrule::cuda::core::valid_transformer(args)) {
     return static_cast<int32_t>(cudaErrorInvalidValue);
@@ -263,7 +296,7 @@ ferrule_core_transformer_launch(const FerruleCoreTransformerArgs *args) {
       args->kind == FERRULE_CORE_TRANSFORMER_PAGED_BF16_APPEND_CAUSAL_GQA) {
     const uint64_t append_values =
         static_cast<uint64_t>(args->rows) * args->kv_heads * args->head_dim;
-    ferrule::cuda::core::transformer_kv_append_kernel<<<ferrule::cuda::core::blocks_for(append_values), ferrule::cuda::core::kBlock, 0,
+    ferrule::cuda::core::transformer_kv_append_kernel<uint16_t><<<ferrule::cuda::core::blocks_for(append_values), ferrule::cuda::core::kBlock, 0,
                                    ferrule::cuda::core::stream(args->stream)>>>(*args);
     status = cudaPeekAtLastError();
     if (status != cudaSuccess) {
@@ -274,7 +307,7 @@ ferrule_core_transformer_launch(const FerruleCoreTransformerArgs *args) {
       args->kind == FERRULE_CORE_TRANSFORMER_PAGED_BF16_APPEND_CAUSAL_GQA) {
     const uint64_t output_values =
         static_cast<uint64_t>(args->rows) * args->q_heads * args->head_dim;
-    ferrule::cuda::core::transformer_causal_gqa_kernel<<<ferrule::cuda::core::blocks_for(output_values), ferrule::cuda::core::kBlock, 0,
+    ferrule::cuda::core::transformer_causal_gqa_kernel<uint16_t><<<ferrule::cuda::core::blocks_for(output_values), ferrule::cuda::core::kBlock, 0,
                                     ferrule::cuda::core::stream(args->stream)>>>(*args);
   }
   return ferrule::cuda::core::launch_status();

@@ -189,6 +189,8 @@ typedef enum FerruleCoreNormKind {
   FERRULE_CORE_NORM_AFFINE_ROW = 2,
   FERRULE_CORE_NORM_AFFINE_ROWS = 3,
   FERRULE_CORE_NORM_HEAD_ROWS = 4,
+  /* Standard model path: F32 accumulation and F32 output, no BF16 rounding. */
+  FERRULE_CORE_NORM_AFFINE_F32 = 5,
 } FerruleCoreNormKind;
 
 typedef struct FerruleCoreNormArgs {
@@ -418,6 +420,9 @@ typedef enum FerruleCoreMoeKind {
   FERRULE_CORE_MOE_REDUCE_EXPERT_GROUP_ROUTES = 8,
   FERRULE_CORE_MOE_GATHER_BF16_ROWS = 9,
   FERRULE_CORE_MOE_WEIGHTED_SCATTER_ADD_BF16_ROWS = 10,
+  FERRULE_CORE_MOE_SWIGLU_STANDARD_F32 = 11,
+  FERRULE_CORE_MOE_WEIGHTED_COMBINE_F32 = 12,
+  FERRULE_CORE_MOE_SWIGLU_CLAMPED_F32 = 13,
 } FerruleCoreMoeKind;
 
 typedef struct FerruleCoreMoeArgs {
@@ -509,6 +514,9 @@ typedef enum FerruleCoreTransformerKind {
   FERRULE_CORE_TRANSFORMER_PAGED_BF16_KV_APPEND = 1,
   FERRULE_CORE_TRANSFORMER_PAGED_BF16_CAUSAL_GQA = 2,
   FERRULE_CORE_TRANSFORMER_PAGED_BF16_APPEND_CAUSAL_GQA = 3,
+  FERRULE_CORE_TRANSFORMER_PAGED_F32_KV_APPEND = 4,
+  FERRULE_CORE_TRANSFORMER_PAGED_F32_CAUSAL_GQA = 5,
+  FERRULE_CORE_TRANSFORMER_PAGED_F32_APPEND_CAUSAL_GQA = 6,
 } FerruleCoreTransformerKind;
 
 /*
@@ -596,6 +604,8 @@ int32_t ferrule_core_moe_launch(const FerruleCoreMoeArgs *args);
 int32_t ferrule_core_hc_launch(const FerruleCoreHcArgs *args);
 int32_t ferrule_core_mla_launch(const FerruleCoreMlaArgs *args);
 int32_t ferrule_core_transformer_launch(const FerruleCoreTransformerArgs *args);
+/* Same audited POD layout as TransformerArgs, but all K/V and append planes are F32. */
+int32_t ferrule_core_transformer_f32_launch(const FerruleCoreTransformerArgs *args);
 
 #ifdef __cplusplus
 }

@@ -604,6 +604,7 @@ impl<'a> StateDictBinder<'a> {
                 });
                 continue;
             };
+            let mapped_is_alias = mapped_spec.alias_of().is_some();
             let canonical_id = self
                 .schema
                 .canonical_id(mapped_spec.id())
@@ -620,9 +621,11 @@ impl<'a> StateDictBinder<'a> {
                 }
             };
             let key = (canonical_id, mapping.part);
-            if let Some(first) = seen.insert(key, external_name.clone()) {
+            if let Some(first) =
+                seen.insert((mapped_spec.id(), mapping.part), external_name.clone())
+            {
                 issues.push(BindingIssue::DuplicateTensorPart {
-                    path: canonical.path().clone(),
+                    path: mapped_spec.path().clone(),
                     part: mapping.part,
                     first,
                     duplicate: external_name,
@@ -697,17 +700,23 @@ impl<'a> StateDictBinder<'a> {
                 });
                 continue;
             }
-            parts.insert(
-                key,
-                BoundTensorPart {
-                    slice,
-                    source_identity: identity,
-                    transform: mapping.transform,
-                    logical_shape: expected.logical_shape().to_vec(),
-                    physical_shape: expected.physical_shape().to_vec(),
-                    encoding: expected.encoding(),
-                },
-            );
+            // Some HF exports serialize tied parameters twice. Validate the
+            // alias metadata above, but keep the schema's canonical tensor as
+            // the sole storage owner; a redundant alias cannot replace it.
+            // This does not assert byte equality or read either tensor payload.
+            if !mapped_is_alias {
+                parts.insert(
+                    key,
+                    BoundTensorPart {
+                        slice,
+                        source_identity: identity,
+                        transform: mapping.transform,
+                        logical_shape: expected.logical_shape().to_vec(),
+                        physical_shape: expected.physical_shape().to_vec(),
+                        encoding: expected.encoding(),
+                    },
+                );
+            }
         }
 
         let mut storage_by_canonical = BTreeMap::new();
