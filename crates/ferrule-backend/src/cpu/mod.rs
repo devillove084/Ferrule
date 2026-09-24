@@ -29,3 +29,5 @@ pub use operators::{
     rotary_correction_range, rotary_frequency, rotary_linear_ramp,
 };
 pub use provider::{CpuCapabilities, CpuOperatorProvider, NativeCpuProvider, ReferenceCpuProvider};
+
+pub mod gated_delta;

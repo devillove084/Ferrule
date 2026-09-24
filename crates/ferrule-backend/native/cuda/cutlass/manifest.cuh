@@ -70,6 +70,9 @@ ferrule_cutlass_provider_manifest(void) {
           (provider_availability::kFp8Projection
                ? FERRULE_CUTLASS_KERNEL_BIT(
                      FERRULE_CUTLASS_KERNEL_FP8_PROJECTION)
+               : 0ull) |
+          (ferrule_cutlass_f32_available() == 1
+               ? FERRULE_CUTLASS_KERNEL_BIT(FERRULE_CUTLASS_KERNEL_F32_GEMM)
                : 0ull),
   };
 }

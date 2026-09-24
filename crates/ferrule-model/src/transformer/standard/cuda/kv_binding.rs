@@ -129,6 +129,14 @@ impl KvView for CudaStandardKvBinding<'_> {
             self.batch,
             self.batch.protected_pages(),
             |planes| {
+                // `request.layer` is the segment-local layer index produced by
+                // execute_standard_layer. A PP stage never addresses its global
+                // checkpoint layer directly in its local KV pool.
+                if request.layer >= planes.key_layout.layer_count {
+                    return Err(cuda_error(
+                        "CUDA KV layer index is outside the segment-local schema",
+                    ));
+                }
                 if planes.key_layout != planes.value_layout
                     || planes.key_layout.elements_per_token != kv_width
                 {

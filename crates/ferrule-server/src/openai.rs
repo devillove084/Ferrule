@@ -192,7 +192,7 @@ impl ChatCompletionRequest {
         let enable_thinking = self
             .chat_template_kwargs
             .and_then(|kwargs| kwargs.enable_thinking)
-            .unwrap_or(true);
+            .unwrap_or(template != ChatTemplate::Qwen35);
 
         // Seed and user are accepted because greedy execution is deterministic and
         // neither field changes model semantics in that mode.

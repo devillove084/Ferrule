@@ -10,6 +10,7 @@ const CUDA_NATIVE_FILES: &[&str] = &[
     "native/cuda/core/abi.h",
     "native/cuda/core/attention_ops.cuh",
     "native/cuda/core/bindings.cuh",
+    "native/cuda/core/cutlass_f32.cuh",
     "native/cuda/core/dense_ops.cuh",
     "native/cuda/core/device.cuh",
     "native/cuda/core/moe_ops.cuh",

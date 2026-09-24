@@ -482,12 +482,16 @@ pub trait TransformerModule: Sized {
     fn poll_layer_cancel(&mut self, layer: usize, pending: &mut Self::LayerPending)
     -> Result<bool>;
     fn poll_output_cancel(&mut self, pending: &mut Self::OutputPending) -> Result<bool>;
+    /// Called only after the matching cancellation poll proves the pending work
+    /// releasable. On error, module-wide quiescence and abort are still required.
     fn cancel_embedding(&mut self, pending: Self::EmbeddingPending) -> Result<()>;
     fn cancel_layer(&mut self, layer: usize, pending: Self::LayerPending) -> Result<()>;
     fn cancel_output(&mut self, pending: Self::OutputPending) -> Result<()>;
     fn begin_quiescence(&mut self) -> Result<Self::Quiescence>;
     fn poll_quiescence(&mut self, quiescence: &mut Self::Quiescence) -> Result<bool>;
 
+    /// Takes custody of events, including on error. Implementations must retain
+    /// any unquiesced event resources until module cancellation proves completion.
     fn finish(
         &mut self,
         batch: &PackedDecoderBatch,
@@ -520,7 +524,10 @@ where
     LayerPending(Pending<M::LayerPending>),
     OutputReady,
     OutputPending(Pending<M::OutputPending>),
+    Finishing(Option<Pending<M::OutputPending>>),
+    QuiescenceReady,
     Cancelling(M::Quiescence),
+    Aborting,
     Finished,
 }
 
@@ -533,6 +540,8 @@ where
     layer_cursor: usize,
     phase: PhysicalPhase<M>,
     events: Vec<M::Event>,
+    // Output rows remain in custody if the terminal module fence fails.
+    logits: Option<DecoderLogits>,
     failed: bool,
 }
 
@@ -547,7 +556,10 @@ where
         PhysicalPhase::LayerPending(_) => "layer-pending",
         PhysicalPhase::OutputReady => "output-ready",
         PhysicalPhase::OutputPending(_) => "output-pending",
+        PhysicalPhase::Finishing(_) => "finishing",
+        PhysicalPhase::QuiescenceReady => "quiescence-ready",
         PhysicalPhase::Cancelling(_) => "cancelling",
+        PhysicalPhase::Aborting => "aborting",
         PhysicalPhase::Finished => "finished",
     }
 }
@@ -619,6 +631,7 @@ where
             layer_cursor: 0,
             phase: PhysicalPhase::EmbeddingReady,
             events: Vec::new(),
+            logits: None,
             failed: false,
         })
     }
@@ -642,8 +655,9 @@ where
             ));
         }
         loop {
-            let phase = std::mem::replace(&mut state.phase, PhysicalPhase::Finished);
-            match phase {
+            // Borrow the phase: any fallible module call must leave its exact
+            // pending resources and cancellation obligations in the continuation.
+            match &mut state.phase {
                 PhysicalPhase::EmbeddingReady => match self.module.submit_embedding(
                     context,
                     batch,
@@ -663,9 +677,8 @@ where
                         }
                     }
                 },
-                PhysicalPhase::EmbeddingPending(mut pending) => {
+                PhysicalPhase::EmbeddingPending(pending) => {
                     if pending.wait().is_some() && !woke {
-                        state.phase = PhysicalPhase::EmbeddingPending(pending);
                         return Err(transformer_error(
                             "embedding physical work was polled without a wake",
                         ));
@@ -728,9 +741,8 @@ where
                         }
                     }
                 }
-                PhysicalPhase::LayerPending(mut pending) => {
+                PhysicalPhase::LayerPending(pending) => {
                     if pending.wait().is_some() && !woke {
-                        state.phase = PhysicalPhase::LayerPending(pending);
                         return Err(transformer_error(
                             "layer physical work was polled without a wake",
                         ));
@@ -782,18 +794,8 @@ where
                         state.arena.get_mut(),
                     )? {
                         Step::Complete(logits) => {
-                            let terminal_guard = self.module.finish(
-                                batch,
-                                states,
-                                kv,
-                                state.arena.get_mut(),
-                                std::mem::take(&mut state.events),
-                            )?;
-                            state.phase = PhysicalPhase::Finished;
-                            return Ok(DriveProgress::Complete {
-                                logits,
-                                terminal_guard,
-                            });
+                            state.logits = Some(logits);
+                            state.phase = PhysicalPhase::Finishing(None);
                         }
                         Step::Pending(pending) => {
                             let wait = Self::wait_or_continue(&pending);
@@ -804,9 +806,8 @@ where
                         }
                     }
                 }
-                PhysicalPhase::OutputPending(mut pending) => {
+                PhysicalPhase::OutputPending(pending) => {
                     if pending.wait().is_some() && !woke {
-                        state.phase = PhysicalPhase::OutputPending(pending);
                         return Err(transformer_error(
                             "output-head physical work was polled without a wake",
                         ));
@@ -825,18 +826,13 @@ where
                         pending.state_mut(),
                     )? {
                         Poll::Ready(logits) => {
-                            let terminal_guard = self.module.finish(
-                                batch,
-                                states,
-                                kv,
-                                state.arena.get_mut(),
-                                std::mem::take(&mut state.events),
-                            )?;
-                            state.phase = PhysicalPhase::Finished;
-                            return Ok(DriveProgress::Complete {
-                                logits,
-                                terminal_guard,
-                            });
+                            state.logits = Some(logits);
+                            let PhysicalPhase::OutputPending(pending) =
+                                std::mem::replace(&mut state.phase, PhysicalPhase::Finishing(None))
+                            else {
+                                unreachable!()
+                            };
+                            state.phase = PhysicalPhase::Finishing(Some(pending));
                         }
                         Poll::Pending(next) => {
                             let wait = Self::wait_or_continue(&next);
@@ -847,14 +843,28 @@ where
                         }
                     }
                 }
-                PhysicalPhase::Cancelling(quiescence) => {
-                    state.phase = PhysicalPhase::Cancelling(quiescence);
+                PhysicalPhase::Finishing(_) => {
+                    let terminal_guard = self.module.finish(
+                        batch,
+                        states,
+                        kv,
+                        state.arena.get_mut(),
+                        std::mem::take(&mut state.events),
+                    )?;
+                    state.phase = PhysicalPhase::Finished;
+                    return Ok(DriveProgress::Complete {
+                        logits: state.logits.take().expect("completed output rows"),
+                        terminal_guard,
+                    });
+                }
+                PhysicalPhase::QuiescenceReady
+                | PhysicalPhase::Cancelling(_)
+                | PhysicalPhase::Aborting => {
                     return Err(transformer_error(
                         "cancelled forward cannot resume normal execution",
                     ));
                 }
                 PhysicalPhase::Finished => {
-                    state.phase = PhysicalPhase::Finished;
                     return Err(transformer_error("forward is already complete"));
                 }
             }
@@ -868,63 +878,74 @@ where
         kv: &mut M::KvView,
         state: &mut TransformerForwardState<M>,
     ) -> Result<DecoderCancelProgress> {
-        let phase = std::mem::replace(&mut state.phase, PhysicalPhase::Finished);
-        let ready = match phase {
-            PhysicalPhase::EmbeddingPending(mut pending) => {
-                if !self.module.poll_embedding_cancel(pending.state_mut())? {
-                    state.phase = PhysicalPhase::EmbeddingPending(pending);
-                    return Ok(DecoderCancelProgress::Waiting);
+        // Once cancellation starts, even a failed poll must not permit forward
+        // replay. Finished is reserved for a successful finish/abort only.
+        state.failed = true;
+        loop {
+            match &mut state.phase {
+                PhysicalPhase::EmbeddingPending(pending) => {
+                    if !self.module.poll_embedding_cancel(pending.state_mut())? {
+                        return Ok(DecoderCancelProgress::Waiting);
+                    }
+                    let PhysicalPhase::EmbeddingPending(pending) =
+                        std::mem::replace(&mut state.phase, PhysicalPhase::QuiescenceReady)
+                    else {
+                        unreachable!()
+                    };
+                    self.module.cancel_embedding(pending.into_state())?;
                 }
-                self.module.cancel_embedding(pending.into_state())?;
-                true
-            }
-            PhysicalPhase::LayerPending(mut pending) => {
-                if !self
-                    .module
-                    .poll_layer_cancel(state.layer_cursor, pending.state_mut())?
-                {
-                    state.phase = PhysicalPhase::LayerPending(pending);
-                    return Ok(DecoderCancelProgress::Waiting);
+                PhysicalPhase::LayerPending(pending) => {
+                    if !self
+                        .module
+                        .poll_layer_cancel(state.layer_cursor, pending.state_mut())?
+                    {
+                        return Ok(DecoderCancelProgress::Waiting);
+                    }
+                    let PhysicalPhase::LayerPending(pending) =
+                        std::mem::replace(&mut state.phase, PhysicalPhase::QuiescenceReady)
+                    else {
+                        unreachable!()
+                    };
+                    self.module
+                        .cancel_layer(state.layer_cursor, pending.into_state())?;
                 }
-                self.module
-                    .cancel_layer(state.layer_cursor, pending.into_state())?;
-                true
-            }
-            PhysicalPhase::OutputPending(mut pending) => {
-                if !self.module.poll_output_cancel(pending.state_mut())? {
-                    state.phase = PhysicalPhase::OutputPending(pending);
-                    return Ok(DecoderCancelProgress::Waiting);
+                PhysicalPhase::OutputPending(pending) | PhysicalPhase::Finishing(Some(pending)) => {
+                    if !self.module.poll_output_cancel(pending.state_mut())? {
+                        return Ok(DecoderCancelProgress::Waiting);
+                    }
+                    let pending =
+                        match std::mem::replace(&mut state.phase, PhysicalPhase::QuiescenceReady) {
+                            PhysicalPhase::OutputPending(pending)
+                            | PhysicalPhase::Finishing(Some(pending)) => pending,
+                            _ => unreachable!(),
+                        };
+                    self.module.cancel_output(pending.into_state())?;
                 }
-                self.module.cancel_output(pending.into_state())?;
-                true
-            }
-            PhysicalPhase::Cancelling(mut quiescence) => {
-                if !self.module.poll_quiescence(&mut quiescence)? {
-                    state.phase = PhysicalPhase::Cancelling(quiescence);
-                    return Ok(DecoderCancelProgress::Waiting);
+                PhysicalPhase::EmbeddingReady
+                | PhysicalPhase::LayerReady
+                | PhysicalPhase::OutputReady
+                | PhysicalPhase::Finishing(None) => {
+                    state.phase = PhysicalPhase::QuiescenceReady;
                 }
-                true
-            }
-            PhysicalPhase::EmbeddingReady
-            | PhysicalPhase::LayerReady
-            | PhysicalPhase::OutputReady => true,
-            PhysicalPhase::Finished => {
-                state.phase = PhysicalPhase::Finished;
-                return Ok(DecoderCancelProgress::Complete);
-            }
-        };
-        if ready && !matches!(state.phase, PhysicalPhase::Cancelling(_)) {
-            let mut quiescence = self.module.begin_quiescence()?;
-            if !self.module.poll_quiescence(&mut quiescence)? {
-                state.phase = PhysicalPhase::Cancelling(quiescence);
-                return Ok(DecoderCancelProgress::Waiting);
+                PhysicalPhase::QuiescenceReady => {
+                    state.phase = PhysicalPhase::Cancelling(self.module.begin_quiescence()?);
+                }
+                PhysicalPhase::Cancelling(quiescence) => {
+                    if !self.module.poll_quiescence(quiescence)? {
+                        return Ok(DecoderCancelProgress::Waiting);
+                    }
+                    state.phase = PhysicalPhase::Aborting;
+                }
+                PhysicalPhase::Aborting => {
+                    self.module
+                        .abort(batch, states, kv, state.arena.get_mut())?;
+                    state.events.clear();
+                    state.logits = None;
+                    state.phase = PhysicalPhase::Finished;
+                }
+                PhysicalPhase::Finished => return Ok(DecoderCancelProgress::Complete),
             }
         }
-        self.module
-            .abort(batch, states, kv, state.arena.get_mut())?;
-        state.events.clear();
-        state.phase = PhysicalPhase::Finished;
-        Ok(DecoderCancelProgress::Complete)
     }
 }
 
@@ -989,8 +1010,11 @@ where
         kv: &mut M::KvView,
         continuation: &mut Self::Continuation,
     ) -> Result<DecoderForwardResumeProgress<Self::TerminalGuard>> {
-        self.module.validate(context, batch, states, kv)?;
-        match self.drive(context, batch, states, kv, &mut continuation.state, true) {
+        let progress = self
+            .module
+            .validate(context, batch, states, kv)
+            .and_then(|()| self.drive(context, batch, states, kv, &mut continuation.state, true));
+        match progress {
             Ok(DriveProgress::Waiting(wait)) => Ok(DecoderForwardResumeProgress::Waiting(wait)),
             Ok(DriveProgress::Complete {
                 logits,
@@ -1028,3 +1052,6 @@ fn transformer_error(message: impl Into<String>) -> Error {
         message: format!("transformer forward: {}", message.into()),
     }
 }
+
+#[cfg(test)]
+mod tests;

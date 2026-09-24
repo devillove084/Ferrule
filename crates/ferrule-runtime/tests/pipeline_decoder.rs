@@ -1101,3 +1101,33 @@ fn release_error_keeps_zero_refcount_pages_quarantined() {
             .is_err()
     );
 }
+
+#[test]
+fn composed_mesh_metadata_does_not_enable_pipeline_execution() {
+    for (dp, tp, ep) in [(1, 2, 2), (2, 1, 2), (1, 1, 2)] {
+        let topology = ValidatedParallelTopology::new(
+            ParallelTopologyId::new(71),
+            (dp * 2 * tp) as u32,
+            rank(0),
+            ParallelismPlan::validated(dp, tp, ep, 1, 1, 2).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            topology
+                .execution_scopes(0)
+                .unwrap()
+                .kv_participants()
+                .len(),
+            2 * tp
+        );
+        let result = PipelineParallelExecutor::new(
+            topology,
+            plans(2),
+            config(ExecutionPrecisionPolicy::f32()),
+            |_, _| -> Result<PipelineStage<CpuPagedKvBackend>> {
+                panic!("composed topology must be rejected before any owner factory runs")
+            },
+        );
+        assert!(result.is_err());
+    }
+}

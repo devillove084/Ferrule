@@ -9,6 +9,10 @@ pub enum ModelFamily {
     DeepSeekV3,
     DeepSeekV2,
     Qwen3,
+    /// Qwen3.5 dense text-only hybrid CPU/CUDA (strict 0.8B profile).
+    Qwen35,
+    /// Recognized separately so unsupported Qwen3.5 MoE cannot dispatch as Qwen3-MoE.
+    Qwen35Moe,
     QwenMoe,
     Mixtral,
     Llama,
@@ -17,6 +21,23 @@ pub enum ModelFamily {
 
 impl ModelFamily {
     pub fn from_architecture(name: &str) -> Self {
+        // Qwen architecture identities must not use substring matching: qwen3_5
+        // and qwen3_next are not ordinary Qwen3 decoders.
+        match name {
+            "qwen3" | "Qwen3ForCausalLM" => return Self::Qwen3,
+            "qwen3_5"
+            | "qwen3_5_text"
+            | "Qwen3_5ForConditionalGeneration"
+            | "Qwen3_5ForCausalLM" => return Self::Qwen35,
+            "qwen3_5_moe"
+            | "qwen3_5_moe_text"
+            | "Qwen3_5MoeForConditionalGeneration"
+            | "Qwen3_5MoeForCausalLM" => return Self::Qwen35Moe,
+            "qwen2_moe" | "Qwen2MoeForCausalLM" | "qwen3_moe" | "Qwen3MoeForCausalLM" => {
+                return Self::QwenMoe;
+            }
+            _ => {}
+        }
         let n = normalize_name(name);
         if n.contains("deepseek4") || n.contains("deepseekv4") {
             Self::DeepSeekV4
@@ -24,10 +45,6 @@ impl ModelFamily {
             Self::DeepSeekV3
         } else if n.contains("deepseek2") || n.contains("deepseekv2") {
             Self::DeepSeekV2
-        } else if n.contains("qwen") && n.contains("moe") {
-            Self::QwenMoe
-        } else if n.contains("qwen3") {
-            Self::Qwen3
         } else if n.contains("mixtral") {
             Self::Mixtral
         } else if n.contains("llama") {
@@ -43,6 +60,8 @@ impl ModelFamily {
             Self::DeepSeekV3 => "DeepSeek-V3",
             Self::DeepSeekV2 => "DeepSeek-V2",
             Self::Qwen3 => "Qwen3",
+            Self::Qwen35 => "Qwen3.5",
+            Self::Qwen35Moe => "Qwen3.5-MoE",
             Self::QwenMoe => "Qwen-MoE",
             Self::Mixtral => "Mixtral",
             Self::Llama => "Llama",
@@ -51,7 +70,10 @@ impl ModelFamily {
     }
 
     pub fn is_supported_runtime_family(&self) -> bool {
-        matches!(self, Self::DeepSeekV4 | Self::QwenMoe | Self::Qwen3)
+        matches!(
+            self,
+            Self::DeepSeekV4 | Self::QwenMoe | Self::Qwen3 | Self::Qwen35
+        )
     }
 }
 

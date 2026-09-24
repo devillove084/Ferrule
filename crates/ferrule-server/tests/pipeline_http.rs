@@ -42,6 +42,9 @@ impl Fixture {
         Self::with_experts(eos, false)
     }
     fn with_experts(eos: u32, moe: bool) -> Self {
+        Self::with_variant(eos, moe, false)
+    }
+    fn with_variant(eos: u32, moe: bool, tensor: bool) -> Self {
         static NEXT: AtomicU64 = AtomicU64::new(0);
         let path = std::env::temp_dir().join(format!(
             "ferrule-pipeline-http-{}-{}",
@@ -52,7 +55,8 @@ impl Fixture {
         let mut config = json!({
             "architectures":["Qwen3ForCausalLM"], "model_type":"qwen3",
             "hidden_size":4, "intermediate_size":8, "num_hidden_layers":2,
-            "num_attention_heads":2, "num_key_value_heads":1, "head_dim":2,
+            "num_attention_heads":if tensor { 4 } else { 2 },
+            "num_key_value_heads":if tensor { 4 } else { 1 }, "head_dim":2,
             "rms_norm_eps":0.000001, "rope_theta":10000.0, "rope_scaling":null,
             "max_position_embeddings":CONTEXT, "vocab_size":8, "tie_word_embeddings":true,
             "attention_bias":false, "attention_dropout":0.0, "hidden_act":"silu",
@@ -89,10 +93,22 @@ impl Fixture {
             for (name, shape) in [
                 ("input_layernorm.weight", vec![4]),
                 ("post_attention_layernorm.weight", vec![4]),
-                ("self_attn.q_proj.weight", vec![4, 4]),
-                ("self_attn.k_proj.weight", vec![2, 4]),
-                ("self_attn.v_proj.weight", vec![2, 4]),
-                ("self_attn.o_proj.weight", vec![4, 4]),
+                (
+                    "self_attn.q_proj.weight",
+                    vec![if tensor { 8 } else { 4 }, 4],
+                ),
+                (
+                    "self_attn.k_proj.weight",
+                    vec![if tensor { 8 } else { 2 }, 4],
+                ),
+                (
+                    "self_attn.v_proj.weight",
+                    vec![if tensor { 8 } else { 2 }, 4],
+                ),
+                (
+                    "self_attn.o_proj.weight",
+                    vec![4, if tensor { 8 } else { 4 }],
+                ),
                 ("self_attn.q_norm.weight", vec![2]),
                 ("self_attn.k_norm.weight", vec![2]),
                 ("mlp.gate_proj.weight", vec![8, 4]),
@@ -130,8 +146,8 @@ impl Fixture {
                     if index / 4 == 1 { 0.5 } else { 0.125 }
                 } else if shape.len() == 1 {
                     1.0
-                } else if moe {
-                    // Exercise nonzero attention/router/expert computation, not
+                } else if moe || tensor {
+                    // Exercise nonzero attention/MLP/router/expert computation, not
                     // merely the identity residual. Both experts are selected.
                     ((index % 7) as f32 + 1.0) / 128.0
                 } else {
@@ -213,6 +229,30 @@ impl Fixture {
             )
             .unwrap()
     }
+    #[cfg(feature = "cuda")]
+    fn tensor_plan(&self, pp: usize, tp: usize) -> ResidentModelBuildPlan {
+        let config = AutoConfig::from_pretrained(&self.0).unwrap();
+        let mut options = Self::options(1);
+        options.kv_cache_mebibytes = Some(1);
+        ResidentModelPlanner::new()
+            .prepare_pipeline(
+                &config,
+                BackendSelection::Cuda,
+                Some("plain"),
+                options,
+                PipelineBuildOptions {
+                    parallelism: ParallelismPlan {
+                        pipeline_parallel: pp,
+                        tensor_parallel: tp,
+                        ..Default::default()
+                    },
+                    devices: Some((0..pp * tp).rev().collect()),
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+    }
+
     #[cfg(unix)]
     fn process_plan(
         &self,
@@ -1112,7 +1152,7 @@ fn pipeline_plan_rejects_unintegrated_capabilities_and_runs_retained_turns() {
     );
 }
 
-async fn check_parallel_http(plan: ResidentModelBuildPlan) {
+async fn check_parallel_http(plan: ResidentModelBuildPlan) -> (Value, String, String) {
     let (entered_tx, entered) = std::sync::mpsc::channel();
     let (release, release_rx) = std::sync::mpsc::channel();
     let (app, worker, probe) = start_plan(
@@ -1173,6 +1213,7 @@ async fn check_parallel_http(plan: ResidentModelBuildPlan) {
     assert_eq!(value["choices"][0]["text"], "a a a");
     assert_eq!(value["usage"]["completion_tokens"], 3);
     let response = app
+        .clone()
         .oneshot(post(
             "/v1/chat/completions",
             json!({
@@ -1196,7 +1237,30 @@ async fn check_parallel_http(plan: ResidentModelBuildPlan) {
             .iter()
             .any(|v| v["choices"][0]["finish_reason"] == "length")
     );
+    let mut request = completion(true, 3);
+    request["stream_options"] = json!({"include_usage":true});
+    let response = app.oneshot(post("/v1/completions", request)).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = text(response).await;
+    assert_eq!(body.matches("data: [DONE]").count(), 1);
+    let events = sse_values(&body);
+    let completion_text = events
+        .iter()
+        .filter_map(|v| v["choices"][0]["text"].as_str())
+        .collect::<String>();
+    assert_eq!(completion_text, "a a a");
+    assert!(events.iter().any(|v| v["usage"]["completion_tokens"] == 3));
+    assert!(
+        events
+            .iter()
+            .any(|v| v["choices"][0]["finish_reason"] == "length")
+    );
     stop_worker(worker, &probe).await;
+    (
+        json!({"choices": value["choices"], "usage": value["usage"]}),
+        output,
+        completion_text,
+    )
 }
 
 #[tokio::test]
@@ -1388,6 +1452,46 @@ fn pipeline_plan_validates_moe_degrees_and_capacities_before_build() {
                 .is_err()
         );
     }
+}
+
+#[cfg(feature = "cuda")]
+async fn check_tensor_http(pp: usize, tp: usize) {
+    let fixture = Fixture::with_variant(7, false, true);
+    let baseline = check_parallel_http(fixture.tensor_plan(1, 1)).await;
+    // Accounting is global: 2 layers * 2 K/V * 4 heads * 2 dim * 16 tokens * 4 bytes.
+    let mut engine = fixture.tensor_plan(pp, tp).build().unwrap();
+    let kv = engine.observability_snapshot().kv_cache.unwrap();
+    assert_eq!(kv.page_bytes, Some(2048));
+    assert_eq!(kv.full_capacity_pages, 4);
+    assert_eq!(kv.configured_pages, 4);
+    assert_eq!(kv.configured_bytes, Some(8192));
+    assert_eq!(
+        engine.shutdown().unwrap(),
+        InferenceShutdownProgress::Complete
+    );
+    let result = check_parallel_http(fixture.tensor_plan(pp, tp)).await;
+    assert_eq!(result, baseline, "PP{pp} TP{tp} differs from GPU PP1 TP1");
+}
+
+#[cfg(feature = "cuda")]
+#[tokio::test]
+#[ignore = "requires two visible CUDA GPUs; real dense checkpoint factory/HTTP/SSE"]
+async fn cuda_dense_tensor_tp2_matches_tp1_http_sse() {
+    check_tensor_http(1, 2).await;
+}
+
+#[cfg(feature = "cuda")]
+#[tokio::test]
+#[ignore = "requires four visible CUDA GPUs; real dense TP4 factory/HTTP/SSE"]
+async fn cuda_dense_tensor_tp4_matches_tp1_http_sse() {
+    check_tensor_http(1, 4).await;
+}
+
+#[cfg(feature = "cuda")]
+#[tokio::test]
+#[ignore = "requires four visible CUDA GPUs; real dense PP2TP2 factory/HTTP/SSE"]
+async fn cuda_dense_tensor_pp2tp2_matches_tp1_http_sse() {
+    check_tensor_http(2, 2).await;
 }
 
 #[cfg(feature = "cuda")]

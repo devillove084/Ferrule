@@ -16,7 +16,24 @@ pub(crate) struct CutlassWorkspaceRequirements {
     pub(crate) reserved: u32,
 }
 
+/// Matches the generic F32 extension POD in native/cuda/core/cutlass_f32.cuh.
+#[repr(C)]
+pub(crate) struct CutlassF32Args {
+    pub(crate) m: u32,
+    pub(crate) n: u32,
+    pub(crate) k: u32,
+    pub(crate) lda: u32,
+    pub(crate) ldb: u32,
+    pub(crate) ldd: u32,
+    pub(crate) activation: u64,
+    pub(crate) weight: u64,
+    pub(crate) output: u64,
+    pub(crate) stream: u64,
+}
+
 unsafe extern "C" {
+    pub fn ferrule_cutlass_f32_can_implement(args: *const CutlassF32Args) -> i32;
+    pub fn ferrule_cutlass_f32_launch(args: *const CutlassF32Args) -> i32;
     pub fn ferrule_cutlass_provider_manifest() -> CutlassProviderManifest;
     pub fn ferrule_cutlass_bf16_compressor_can_implement(
         args: *const CutlassBf16CompressorArgs,

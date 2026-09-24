@@ -130,6 +130,24 @@ fn pp2_ep2_topk2_full_prefill_decode_is_bitwise_local_without_checkpoint_expert_
         drop(oracle);
         let spy = Spy::new();
         let mut pipeline = pipeline(&fixture, cfg, Arc::clone(&spy), |_| {}).unwrap();
+        let scopes = pipeline.execution_scopes();
+        assert_eq!(scopes.plan().expert_parallel, 1);
+        assert_eq!(
+            scopes.kv_participants().iter().collect::<Vec<_>>(),
+            [rank(0), rank(1)]
+        );
+        for stage in 0..2 {
+            let attached = scopes.expert_dispatch_members(stage, 0).unwrap().unwrap();
+            assert_eq!(
+                attached.iter().collect::<Vec<_>>(),
+                group(stage as usize..stage as usize + 1).members
+            );
+            assert!(
+                attached
+                    .iter()
+                    .all(|member| !scopes.kv_participants().contains(member))
+            );
+        }
         let initial = pipeline.owner_stats().unwrap();
         let mut threads = vec![thread::current().id()];
         for (layer, pp) in initial.iter().enumerate() {
@@ -529,15 +547,27 @@ fn ep_precision_membership_placement_and_rank_namespace_are_not_dummy_configurat
             .is_err()
         );
     }
-    // Common rejects EP factor expansion today; real EP2 above uses explicit
-    // groups and never pretends an accepted common factor created more owners.
+    // EP metadata constrains explicit groups but never expands the mesh world.
+    let attached = ValidatedParallelTopology::new(
+        ParallelTopologyId::new(71),
+        2,
+        rank(0),
+        ParallelismPlan::validated(1, 1, 2, 1, 1, 2).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(attached.world_size(), 2);
     assert!(
-        ValidatedParallelTopology::new(
-            ParallelTopologyId::new(71),
-            2,
-            rank(0),
-            ParallelismPlan::validated(1, 1, 2, 1, 1, 2).unwrap()
-        )
-        .is_err()
+        ValidatedParallelTopology::new(attached.topology_id(), 4, rank(0), attached.plan(),)
+            .is_err()
     );
+    let dispatch = group(0..1).dispatch_members(&attached, 0, 0).unwrap();
+    assert_eq!(dispatch.iter().collect::<Vec<_>>(), group(0..1).members);
+    let mismatch = ValidatedParallelTopology::new(
+        attached.topology_id(),
+        2,
+        rank(0),
+        ParallelismPlan::validated(1, 1, 3, 1, 1, 2).unwrap(),
+    )
+    .unwrap();
+    assert!(group(0..1).dispatch_members(&mismatch, 0, 0).is_err());
 }

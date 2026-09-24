@@ -690,6 +690,17 @@ mod cuda {
     }
 }
 
+/// Successful TP preparation reads. Replicated embedding/norm reads have no
+/// rectangle; every projection retains its exact global source and local range.
+#[derive(Debug, Clone)]
+pub struct TensorParallelPreparationRead {
+    pub parameter: crate::nn::ParameterId,
+    pub canonical: crate::nn::ParameterId,
+    pub role: crate::support::TensorRole,
+    pub bytes: u64,
+    pub rectangle: Option<CheckpointMatrixRead>,
+}
+
 /// Exactly one rank's packed, native-endian-independent checkpoint bytes.
 /// Shape/rank fields are private so an upload cannot silently accept a full
 /// matrix, a shard from another rank, or quantized storage without its scales.
@@ -758,6 +769,28 @@ impl TensorParallelWeightShard {
     pub fn bytes(&self) -> &[u8] {
         &self.bytes
     }
+
+    /// Decode only the packed local payload. Does not perform a checkpoint read.
+    pub(crate) fn values_f32(&self) -> Result<Vec<f32>> {
+        match self.dtype {
+            CheckpointDType::F32 => Ok(self
+                .bytes
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|bytes| f32::from_le_bytes(*bytes))
+                .collect()),
+            CheckpointDType::Bf16 => Ok(self
+                .bytes
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|bytes| f32::from_bits(u32::from(u16::from_le_bytes(*bytes)) << 16))
+                .collect()),
+            _ => Err(invalid("unsupported local weight dtype")),
+        }
+    }
+
     pub fn full_shape(&self) -> [usize; 2] {
         [self.plan.out_features, self.plan.in_features]
     }

@@ -321,6 +321,26 @@ impl BoundDecoderResources {
         &self.state_dict
     }
 
+    /// Check full weight sizes against residency-specific limits without reading payloads.
+    pub fn validate_parameter_limits(&self, dense_limit: u64, expert_limit: u64) -> Result<()> {
+        for parameter in self.state_dict().parameters() {
+            let limit = if matches!(parameter.residency(), ParameterResidency::Expert { .. }) {
+                expert_limit
+            } else {
+                dense_limit
+            };
+            if parameter.weight().slice().bytes > limit {
+                return Err(model_error(format!(
+                    "parameter '{}' is {} bytes, above its {}-byte load limit",
+                    parameter.path(),
+                    parameter.weight().slice().bytes,
+                    limit
+                )));
+            }
+        }
+        Ok(())
+    }
+
     pub fn static_parameters(&self, role: TensorRole) -> &[BoundParameter] {
         self.static_by_role.get(&role).map_or(&[], Vec::as_slice)
     }

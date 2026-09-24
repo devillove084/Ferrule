@@ -21,6 +21,7 @@ extern "C" {
 #define FERRULE_CUTLASS_KERNEL_HYBRID_MLA_ATTENTION 8u
 #define FERRULE_CUTLASS_KERNEL_PROPOSAL_HEAD 9u
 #define FERRULE_CUTLASS_KERNEL_FP8_PROJECTION 10u
+#define FERRULE_CUTLASS_KERNEL_F32_GEMM 11u
 #define FERRULE_CUTLASS_KERNEL_BIT(id) (1ull << ((id) - 1u))
 
 typedef enum FerruleCutlassStatus {
@@ -33,6 +34,13 @@ typedef enum FerruleCutlassStatus {
 typedef struct FerruleCutlassProviderManifest {
   uint64_t kernel_mask;
 } FerruleCutlassProviderManifest;
+
+// Generic F32 TensorOp implementation is compiled in the existing core TU.
+// The manifest queries its compiled capability, not an inferred FP8 capability.
+struct FerruleCutlassF32Args;
+int32_t ferrule_cutlass_f32_available(void);
+int32_t ferrule_cutlass_f32_can_implement(const struct FerruleCutlassF32Args *args);
+int32_t ferrule_cutlass_f32_launch(const struct FerruleCutlassF32Args *args);
 
 // Semantic one-launch QueryA+KV FP8 projection bundle. All tensors are
 // contiguous: activation_fp8 is E4M3 [rows, k], each weight is E4M3 [n, k],

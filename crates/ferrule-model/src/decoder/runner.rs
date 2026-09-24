@@ -140,7 +140,7 @@ impl GenericDecoderOptions {
     pub const fn precision(&self) -> ExecutionPrecisionPolicy {
         self.precision
     }
-    fn validate(&self, resources: &BoundDecoderResources) -> Result<()> {
+    pub(crate) fn validate(&self, resources: &BoundDecoderResources) -> Result<()> {
         let spec = resources.spec();
         if self.page_size == 0 {
             return Err(runner_error("decoder KV page size must be non-zero"));
@@ -346,6 +346,82 @@ where
         })
     }
 }
+/// Standard CPU hybrid composition; only state/lifecycle differ from the ordinary decoder.
+pub struct HybridCpuDecoder;
+pub type HybridCpuKvBackend =
+    PagedKvBackend<super::TypedCpuPagedKvPool<super::HybridDecoderSequenceState>>;
+impl DecoderComposition for HybridCpuDecoder {
+    type Resources = Arc<BoundDecoderResources>;
+    type SequenceState = super::HybridDecoderSequenceState;
+    type KvBackend = HybridCpuKvBackend;
+    type ForwardExecutor = TransformerForwardExecutor<crate::transformer::CpuHybridModule>;
+    type Proposal = NoProposal;
+    type SequenceLifecycle = super::HybridSequenceLifecycle;
+    type ResourceManager = NoResourceManager;
+    type Observer = StandardDecoderObserver;
+    type Snapshot = GenericDecoderObservabilitySnapshot;
+    type Continuation =
+        crate::transformer::TransformerContinuation<crate::transformer::CpuHybridModule>;
+    type ProposalContinuation = std::convert::Infallible;
+    type TerminalGuard = NoTerminalGuard;
+}
+impl GenericDecoderRunner<HybridCpuDecoder> {
+    /// F32 execution with compact full-attention KV and transaction-local recurrent state.
+    pub fn hybrid_cpu(
+        resources: BoundDecoderResources,
+        tokenizer: TokenizerHandle,
+        options: GenericDecoderOptions,
+    ) -> Result<Self> {
+        options.validate(&resources)?;
+        if options.precision != ExecutionPrecisionPolicy::f32() {
+            return Err(Error::ModelSource {
+                source: Box::new(crate::transformer::UnsupportedOperator::new(
+                    "hybrid_cpu_profile",
+                    "hybrid CPU supports F32 execution only",
+                )),
+            });
+        }
+        let active_layers = options
+            .active_layers
+            .unwrap_or(resources.spec().layers().len());
+        let schema = super::HybridStateSchema::from_spec(resources.spec(), active_layers)?;
+        let planes = schema.kv_planes(options.page_size, options.max_positions)?;
+        let pool = super::TypedCpuPagedKvPool::<super::HybridDecoderSequenceState>::from_strategy(
+            &planes, 1,
+        )?;
+        let backend = PagedKvBackend::new(pool);
+        let resources = Arc::new(resources);
+        let model_info = standard_model_info(&resources, &options);
+        let materializer = Arc::new(StateDictMaterializer::new(options.max_parameter_bytes)?);
+        let module = crate::transformer::CpuHybridModule::prepare_prefix(
+            Arc::clone(&resources),
+            materializer,
+            options.precision,
+            options.max_positions,
+            active_layers,
+        )?;
+        let mut lifecycle = super::HybridSequenceLifecycle::new(schema);
+        let default_state = lifecycle.create()?;
+        Self::from_runtime(DecoderComponents {
+            resources,
+            model_info,
+            tokenizer,
+            capabilities: options.capabilities,
+            page_size: options.page_size,
+            prepared_plan_id: PreparedDecoderGeneration::take()?.get(),
+            forward_executor: TransformerForwardExecutor::new(module),
+            backend,
+            default_state,
+            sequence_lifecycle: lifecycle,
+            proposal: NoProposal,
+            resource_manager: NoResourceManager,
+            observer: StandardDecoderObserver,
+            completion_hub: CompletionHub::new(),
+            completion_reactors: Vec::new(),
+        })
+    }
+}
+
 impl<D> GenericDecoderRunner<D>
 where
     D: DecoderComposition,
@@ -1311,7 +1387,7 @@ fn validate_capabilities(capabilities: ExecutionCapabilities, max_positions: usi
     }
     Ok(())
 }
-fn standard_model_info(
+pub(crate) fn standard_model_info(
     resources: &BoundDecoderResources,
     options: &GenericDecoderOptions,
 ) -> ModelInfo {
@@ -1327,7 +1403,16 @@ fn standard_model_info(
     ModelInfo {
         family: options.family.clone(),
         architecture: Some(spec.architecture().to_string()),
-        attention: AttentionKind::GroupedQuery,
+        attention: if spec.layers().iter().any(|layer| {
+            matches!(
+                layer.attention(),
+                crate::transformer::Attention::GatedDeltaNet(_)
+            )
+        }) {
+            AttentionKind::Unknown("hybrid-gated-delta-gqa".into())
+        } else {
+            AttentionKind::GroupedQuery
+        },
         weight_source: options.weight_source,
         hidden_size: spec.hidden_size(),
         num_layers: options.active_layers.unwrap_or(spec.layers().len()),

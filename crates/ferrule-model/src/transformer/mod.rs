@@ -26,12 +26,12 @@ pub use checkpoint::{
 };
 pub use components::{
     Attention, DecoderAttachmentSpec, DecoderLayer, DecoderModelParts, DecoderModelSpec,
-    DescriptorError, Embedding, FeedForward, GqaAttention, HyperConnectionHeadSpec, HyperResidual,
-    Linear, MlaAttention, MlaAttentionLayout, MlaCompressorSpec, MlaDimensions, MlaIndexerSpec,
-    MlaQueryProjection, Moe, MoeRouterSpec, ProposalAttachmentParts, ProposalAttachmentSpec,
-    ProposalHeadsSpec, Residual, RmsNorm, RotaryEmbedding, RotaryPairing, RotaryRegion,
-    RotaryScaling, RouterScoreFunction, RouterSelection, SharedKvMlaDimensions, SharedKvMlaLayout,
-    SwiGlu,
+    DescriptorError, Embedding, FeedForward, GatedDeltaNetAttention, GqaAttention,
+    HyperConnectionHeadSpec, HyperResidual, Linear, MlaAttention, MlaAttentionLayout,
+    MlaCompressorSpec, MlaDimensions, MlaIndexerSpec, MlaQueryProjection, Moe, MoeRouterSpec,
+    ProposalAttachmentParts, ProposalAttachmentSpec, ProposalHeadsSpec, Residual, RmsNorm,
+    RotaryEmbedding, RotaryPairing, RotaryRegion, RotaryScaling, RouterScoreFunction,
+    RouterSelection, SharedKvMlaDimensions, SharedKvMlaLayout, SwiGlu,
 };
 pub use connection::{
     HyperConnection, HyperConnectionConfig, HyperConnectionHead, HyperConnectionHeadWeights,
@@ -58,9 +58,9 @@ pub use materialize::{
 pub use operators::CudaRows;
 pub use operators::{
     CpuStandardDecoderOperators, ExpertAvailability, ExpertProvider, ExpertSwiGluOperator,
-    GqaMetadata, GqaRequest, HostRows, KvAppendRequest, KvHistory, KvView, OperatorProgress,
-    OperatorWaiting, PreparedSwiGlu, RouterRoutes, Rows, RowsArenaId, RowsDType, RowsDevice,
-    RowsShape, StandardDecoderKvView, StandardDecoderOperators, UnsupportedOperator,
+    GatedDeltaNetRequest, GqaMetadata, GqaRequest, HostRows, KvAppendRequest, KvHistory, KvView,
+    OperatorProgress, OperatorWaiting, PreparedSwiGlu, RouterRoutes, Rows, RowsArenaId, RowsDType,
+    RowsDevice, RowsShape, StandardDecoderKvView, StandardDecoderOperators, UnsupportedOperator,
 };
 pub use recipe::{DecoderRecipe, DecoderRecipeError, DecoderRecipeOutput, SyntheticDecoderRecipe};
 pub use segment::{
@@ -68,8 +68,11 @@ pub use segment::{
     SegmentOutput, SegmentResult, SegmentStage, StandardDecoderSegment,
 };
 pub use standard::{
-    CpuGqaMoeModule, CpuTransformerHidden, PreparedCpuOutput, PreparedFeedForwardBlock,
-    PreparedGqaBlock, PreparedGqaMoeLayer, PreparedStandardOutput, StandardTransformerHidden,
+    CpuGqaMoeModule, CpuHybridModule, CpuStandardModule, CpuTransformerHidden,
+    PreparedAttentionBlock, PreparedCpuOutput, PreparedFeedForwardBlock,
+    PreparedGatedDeltaNetBlock, PreparedGqaBlock, PreparedGqaMoeLayer, PreparedStandardLayer,
+    PreparedStandardOutput, StandardTensorCollective, StandardTensorPlacement, StandardTensorPlan,
+    StandardTransformerHidden,
 };
 pub use state_dict::{
     BindingIssue, BoundParameter, BoundStateDict, BoundTensorPart, ExactNameMapper,
@@ -79,6 +82,6 @@ pub use state_dict::{
 
 #[cfg(feature = "cuda")]
 pub use standard::cuda::{
-    CudaExpertParallelRoutedExecutor, CudaExpertWorker, CudaHostRoutedExecutor,
+    CudaExpertParallelRoutedExecutor, CudaExpertWorker, CudaHostRoutedExecutor, CudaHybridModule,
     CudaStandardDecoderOperators, CudaStandardDecoderSegment, CudaStandardKvBinding,
 };

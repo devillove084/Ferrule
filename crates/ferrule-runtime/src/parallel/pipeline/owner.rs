@@ -251,6 +251,11 @@ where
             return Err(error("pipeline cancelled before stage execution"));
         }
         let packed = &active.packed;
+        self.stage.program.validate_execution(
+            &active.key.binding,
+            packed,
+            &[active.key.session.0],
+        )?;
         self.stage
             .description
             .validate_input(&input, packed.len())?;

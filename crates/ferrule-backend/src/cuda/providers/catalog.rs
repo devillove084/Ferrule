@@ -125,6 +125,21 @@ fn validate_linear_bundle(requirement: &LinearBundleRequirement) -> Result<()> {
     }
 
     match (requirement.operation, requirement.weight_layout) {
+        (KernelOperation::LinearF32, WeightLayout::RowMajor) => {
+            if requirement.output_features.len() != 1 {
+                return Err(reject("F32 linear requires exactly one output".into()).into());
+            }
+            // Reuse the provider's shape/capability policy. M is supplied at
+            // launch; preparation validates the fixed checkpoint N/K geometry.
+            super::cutlass::f32_gemm_workspace_requirements(
+                super::cutlass::F32GemmLayout::contiguous(
+                    1,
+                    requirement.output_features[0],
+                    requirement.input_features,
+                ),
+            )
+            .map_err(|error| reject(error.to_string()))?;
+        }
         (KernelOperation::MlaQueryAKv, WeightLayout::Fp8E4m3BlockScaled) => {
             if requirement.output_features.len() != 2
                 || !requirement.input_features.is_multiple_of(128)
@@ -180,22 +195,7 @@ fn require_cutlass_bundle(
     requirement: &LinearBundleRequirement,
 ) -> Result<()> {
     validate_linear_bundle(requirement)?;
-    let kernel = match requirement.operation {
-        KernelOperation::MlaQueryAKv => CutlassKernelId::Fp8QueryAKv,
-        KernelOperation::MlaQueryB => CutlassKernelId::Fp8Projection,
-        KernelOperation::MainCompressorProjection
-        | KernelOperation::IndexerCompressorProjection => CutlassKernelId::Bf16Compressor,
-        _ => {
-            return Err(BackendError::Invariant {
-                message: format!(
-                    "validated linear bundle {:?} has no CUTLASS binding",
-                    requirement.operation
-                ),
-            }
-            .into());
-        }
-    };
-    require_kernel(manifest, requirement.operation, kernel)
+    require_semantic_operation(manifest, requirement.operation)
 }
 
 fn require_kernel(
@@ -224,6 +224,35 @@ pub(crate) fn compile_model_plan(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn f32_missing_native_bit_is_rejected_by_execution_and_plan_views() {
+        let native = CutlassProviderManifest { kernel_mask: 0x186 };
+        let manifest = native.execution_manifest();
+        assert!(!native.supports(CutlassKernelId::F32Gemm));
+        assert!(!manifest.supports(KernelOperation::LinearF32, ExecutionMode::Inference));
+        let mut registry = ProviderRegistry::new();
+        registry.register(manifest);
+        let catalog = CudaProviderCatalog {
+            registry,
+            cutlass: native,
+        };
+        let mut layer = LayerKernelRequirements::default();
+        layer.require(OperationRequirement::new(
+            KernelOperation::LinearF32,
+            ExecutionMode::Inference,
+        ));
+        assert!(catalog.compile_model_plan(&[layer]).is_err());
+        let mut layer = LayerKernelRequirements::default();
+        layer.add_linear_bundle(LinearBundleRequirement::new(
+            KernelOperation::LinearF32,
+            ExecutionMode::Inference,
+            11,
+            [7],
+            WeightLayout::RowMajor,
+        ));
+        assert!(catalog.compile_model_plan(&[layer]).is_err());
+    }
 
     #[test]
     fn capability_catalog_uses_only_the_native_kernel_mask() {

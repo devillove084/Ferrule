@@ -111,6 +111,9 @@ typedef enum FerruleCoreDataKind {
   FERRULE_CORE_DATA_CONVERT_COMBINED_RING = 10,
   FERRULE_CORE_DATA_PAGED_PLANE_SCATTER = 11,
   FERRULE_CORE_DATA_FILL_RECENT_ROWS = 12,
+  FERRULE_CORE_DATA_QUERY_GATE_SPLIT = 13,
+  FERRULE_CORE_DATA_SIGMOID_GATE = 14,
+  FERRULE_CORE_DATA_SILU_GATE = 15,
 } FerruleCoreDataKind;
 
 typedef struct FerruleCoreDataArgs {
@@ -191,6 +194,7 @@ typedef enum FerruleCoreNormKind {
   FERRULE_CORE_NORM_HEAD_ROWS = 4,
   /* Standard model path: F32 accumulation and F32 output, no BF16 rounding. */
   FERRULE_CORE_NORM_AFFINE_F32 = 5,
+  FERRULE_CORE_NORM_OFFSET_AFFINE_F32 = 6,
 } FerruleCoreNormKind;
 
 typedef struct FerruleCoreNormArgs {
@@ -204,6 +208,39 @@ typedef struct FerruleCoreNormArgs {
   uint64_t output;
   uint64_t stream;
 } FerruleCoreNormArgs;
+
+/* Single sequence, packed F32 rows. History is [channels, kernel_size]. */
+typedef struct FerruleCoreConvArgs {
+  uint32_t rows;
+  uint32_t channels;
+  uint32_t kernel_size;
+  uint32_t reserved;
+  uint64_t input;
+  uint64_t weight;
+  uint64_t bias;
+  uint64_t history;
+  uint64_t output;
+  uint64_t stream;
+} FerruleCoreConvArgs;
+
+/* QKV rows: [Q[key_heads,key_dim], K[key_heads,key_dim], V[value_heads,value_dim]].
+ * State: [value_heads,key_dim,value_dim]. a/b: [rows,value_heads]. */
+typedef struct FerruleCoreDeltaArgs {
+  uint32_t rows;
+  uint32_t key_heads;
+  uint32_t value_heads;
+  uint32_t key_dim;
+  uint32_t value_dim;
+  uint32_t reserved;
+  uint64_t qkv;
+  uint64_t a;
+  uint64_t b;
+  uint64_t a_log;
+  uint64_t dt_bias;
+  uint64_t state;
+  uint64_t output;
+  uint64_t stream;
+} FerruleCoreDeltaArgs;
 
 typedef enum FerruleCoreRopeKind {
   FERRULE_CORE_ROPE_YARN = 1,
@@ -591,6 +628,8 @@ int32_t ferrule_core_quantize_launch(const FerruleCoreQuantizeArgs *args);
 int32_t ferrule_core_data_launch(const FerruleCoreDataArgs *args);
 int32_t ferrule_core_rows_launch(const FerruleCoreRowsArgs *args);
 int32_t ferrule_core_embedding_launch(const FerruleCoreEmbeddingArgs *args);
+int32_t ferrule_core_conv_launch(const FerruleCoreConvArgs *args);
+int32_t ferrule_core_delta_launch(const FerruleCoreDeltaArgs *args);
 int32_t ferrule_core_norm_launch(const FerruleCoreNormArgs *args);
 int32_t ferrule_core_rope_launch(const FerruleCoreRopeArgs *args);
 int32_t ferrule_core_router_launch(const FerruleCoreRouterArgs *args);
@@ -632,6 +671,8 @@ FERRULE_CORE_ASSERT_LAYOUT(FerruleCoreRowsArgs, 88, kind, input_f32, 16, 80);
 FERRULE_CORE_ASSERT_LAYOUT(FerruleCoreEmbeddingArgs, 64, kind, embedding, 32,
                            56);
 FERRULE_CORE_ASSERT_LAYOUT(FerruleCoreNormArgs, 56, kind, input, 24, 48);
+FERRULE_CORE_ASSERT_LAYOUT(FerruleCoreConvArgs, 64, rows, input, 16, 56);
+FERRULE_CORE_ASSERT_LAYOUT(FerruleCoreDeltaArgs, 88, rows, qkv, 24, 80);
 FERRULE_CORE_ASSERT_LAYOUT(FerruleCoreRopeArgs, 80, kind, values, 40, 72);
 static_assert(offsetof(FerruleCoreRopeArgs, inverse) == 32,
               "FerruleCoreRopeArgs inverse offset mismatch");

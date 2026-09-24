@@ -6,6 +6,45 @@ fixture 的结果外推为更大的模型、更多节点或更强的故障恢复
 Ferrule production runtime 不依赖、链接或调用 NCCL；外部 Python/NCCL 对比工具
 不属于 Ferrule transport。
 
+**证据时序**：标准 linear 的 GEMM 已切换到 CUTLASS TF32x3。下文明确标记的
+旧 GPU 数值和 serving 记录属于更换 GEMM 前的历史验收，不能作为当前实现的
+回归通过证据。下方“最终串行验证”已同步更换 GEMM 后的新实测，Qwen35 与
+Qwen3 分开列出；选定测试通过不等于无跳过的全 workspace / 全 GPU / strict Clippy
+全部通过。文档更新只核查已有报告与日志，不运行 Cargo。
+
+## Qwen3.5-0.8B：完整 text CPU / 单卡 CUDA 已接通
+
+Qwen35 当前只支持严格 dense 0.8B profile，完整 **24 层（18 GDN + 6 full GQA）**。
+真实 CPU/单卡 CUDA 数值验收已通过（本轮既有结果，文档收尾未重跑）；CLI 默认 CPU，
+显式 `--backend cuda` 已经由 model factory 接入 resident engine / model worker / HTTP/SSE。
+最终日志确认 `hybrid_cuda` **13 tests 通过**，其中 **6 个实际 CUDA 测试、
+1 个比较器验证、6 个 CPU reference 测试**；另有独立 forward CUDA UT **1 passed**。
+Qwen35 `capital` + `hello` 的所有
+prefill rows 和各两次 decode 共 **2,483,200 logits** 完成逐元素比较及 manifest/hash
+校验，最大绝对误差 **`3.337860107e-5`**，greedy 预测一致。此结果不是下面旧 Qwen3
+PP/TP 数值的替代证据。
+
+真实默认 `serve /mnt/nas1/hf/Qwen3.5-0.8B --backend cuda` **6.77 s ready**，
+SSE 输出 `Hello` 和 ` Paris`，SIGTERM exit 0，退出后无残留 GPU process。
+6.77 s ready 是先前前台启动记录；最终 CLI target 又实际通过，耗时 69.59 s，
+不能把 target 总耗时当成 ready 时间。文档收尾未重跑。详细功能矩阵、逐 case 数值
+及精确复现命令见 [QWEN35.md](QWEN35.md)。
+
+- checkpoint 为 schema 限定的 **BF16/F32 混合存储**，执行 tensors 为 F32。
+  GEMM 使用现有 CUTLASS provider 的 **TF32x3**，F32 boundary/accumulation/output，
+  不是严格 IEEE F32 SGEMM，也不承诺 bitwise 相同；
+  GDN 专用 CUDA kernels 经共享 operators 接入，不走 Python 或 CPU fallback。
+- 只执行 text；vision/MTP 附件严格校验后排除，不代表附件推理支持。
+  **MoE/35B/FP8、hybrid TP/PP/EP、process ranks、prefix cache、partial retain 和
+  speculation 均 unsupported**。下面标准 Qwen3 的并行能力不能外推到 Qwen35。
+- 每个 recurrent sequence state 为 **20,643,840 bytes**；预算计入 live、transaction
+  working copies 和 default state，默认 4 sequences 共 **185,794,560 bytes**。
+  KV compact 分配到 6 个 full-attention 层，默认 physical KV 为 192 MiB；
+  weights/workspace 单独核算，不能把 KV budget 当成总显存预算。
+- 性能尚未优化：本地 debug CLI 后续 decode 约 **15 s/token**，仅为观测，不是承诺。
+  离线 Transformers 5.2 oracle、HF 多 token cached continuation 陷阱及本次未重跑的
+  验收 targets 也在专页说明；临时启动验证脚本不是 production engine。
+
 ## 四项已集成能力
 
 | 能力 | 当前集成边界 | 主要入口 |
@@ -15,20 +54,82 @@ Ferrule production runtime 不依赖、链接或调用 NCCL；外部 Python/NCCL
 | 跨进程 PP/EP/KV | production process endpoint 承载 PP/EP child、KV transaction/ACK、bounded host IPC、quarantine/reap；覆盖真实 28-layer dense 和六独立 GPU children 的 MoE fixture | [`process_decoder`](../crates/ferrule-runtime/tests/process_decoder.rs)、[`process_decoder/cuda`](../crates/ferrule-runtime/tests/process_decoder/cuda.rs) |
 | `PipelineInferenceEngine → ModelWorker → HTTP/SSE` | model factory 构建 pipeline engine，由 dedicated model worker 驱动 OpenAI-compatible HTTP/SSE；CPU/GPU thread/process 路径均已测试 | [`pipeline.rs`](../crates/ferrule-runtime/src/engine/pipeline.rs)、[`worker.rs`](../crates/ferrule-server/src/worker.rs)、[`pipeline_http`](../crates/ferrule-server/tests/pipeline_http.rs) |
 
-### 数值和故障证据
+### 当前 standard linear 数值契约
+
+标准 CUDA `linear_f32_into` 现在使用 **CUTLASS TF32x3 TensorOp GEMM**，
+tensor boundary、accumulation 和 output 为 F32；F32 precision enum 或 F32 tensor
+存储类型不等于严格 IEEE SGEMM 运算或 bitwise 等价。此变化不只影响 Qwen35，
+也影响复用该 standard linear 的 decoder 路径。这里不更改 model precision enum，
+也不新增 CLI precision knob。更换 GEMM 后的实测见下一节，历史数字仍单独保留。
+
+`sm_86` canonical manifest → native/Rust discovery → plan/execution 已验证贯通：
+`F32Gemm ID=11`、mask **`0x586`**、F32 TF32x3 / LinearF32 inference 为 true，
+FP8 QueryAKv/Projection 为 false。standard linear graph replay 在原地址写入新输入，
+并预先用 NaN / -777 污染输出 D 后仍得到正确结果，device consumer 读取也正确；
+不是重放旧输出。证据见 [backend lib 日志](../target/validation/qwen35-final-gpu-01-backend-lib.log)
+和 [standard linear / capability 日志](../target/validation/qwen35-final-gpu-02-backend.log)。
+
+### 最终串行验证：更换 GEMM 后的当前证据
+
+来源：[GPU 汇总](../target/validation/qwen35-final-gpu-summary.md)及其分项
+`target/validation/qwen35-final-gpu-*.log`、
+[CPU 汇总](../target/validation/qwen35-final-cpu-summary.md)。这些是 **Git ignored 的
+本地生成证据**，不是随仓库发布的文件；链接仅在保留该次 artifacts 的工作区有效。
+
+- 8 张 RTX 3090，`CARGO_INCREMENTAL=0`、`FERRULE_CUDA_ARCH=sm_86`、
+  `--locked`、测试串行且 `--test-threads=1`，命令 timeout 900 秒。
+  CUDA workspace all-targets check、CLI / process child 构建通过。
+- GPU 验证批次合计 **186 selected passed、0 failed**，**不是 186 项全 GPU 测试**。
+  包含 backend lib **113 passed / 18 ignored**；其中 KV 10 项随后另行定向通过，
+  不代表所有 ignored 都执行。hybrid 13 项构成见上；加独立 forward UT 后，
+  hybrid 组实际 CUDA 测试为 7 项。
+- CPU workspace 最终重跑 **1,274 passed、0 failed、6 ignored、2 精确 skip**；
+  首轮因缺少 `models/Qwen3-30B-A3B/config.json` 有 2 项失败。只跳过
+  `real_qwen3_30b_metadata_binds_to_the_generic_state_dict` 和
+  `qwen_adapter_uses_real_standard_kv_and_rejects_cuda`；doctest 另 **7 passed**。
+  被 ignored 的 Qwen35 全 24 层 CPU oracle target 随后单独执行 **1 passed**。
+- **strict Clippy 尚未全绿**：初次 strict run 报告的两个新增 lint
+  `manual_is_multiple_of` / `unnecessary_lazy_evaluations` 已在 `components.rs` 修复；
+  既有 `collapsible_if`、`chunks_exact_to_as_chunks`、`items_after_test_module`
+  仍是已知阻塞，不能把两个修复或 check/test 通过写成 strict Clippy 全通过。
+
+下列都是 **Qwen3 / 标准 decoder** 数据，不是 Qwen3.5 的 TP/PP 支持证明：
+
+| 本次 target | 当前结果 | 本地日志 |
+| --- | --- | --- |
+| NAS Qwen3-0.6B，28 层，八卡 PP2TP4 vs GPU TP1 | 全 logits `max_abs=2.1457672e-5`，`max_tolerance_fraction=8.026731e-2` | [NAS PP2TP4](../target/validation/qwen35-final-gpu-04-nas-pp2tp4.log) |
+| NAS Qwen3-0.6B，28 层，thread PP2 vs PP1 / causal replay | 本次重测 `max_abs=0`，不是沿用旧数字 | [full model PP1/PP2](../target/validation/qwen35-final-gpu-04-full-model-pp1-pp2.log) |
+| 同一 28 层 GPU vs CPU reference | prefill 三行为 `1.36375427e-4` / `8.41617584e-5` / `6.48498535e-5`；首 decode 为 `5.81741333e-5` | 同上 |
+| process dense fixture，PP2 vs PP1 | 本次重测 `max_abs=0`；独立 CPU kernels 最大差 `2.3841858e-7` | [process dense](../target/validation/qwen35-final-gpu-04-process-dense.log) |
+| process PP2EP2 fixture，PP2 vs PP1 | 本次重测 `max_abs=0`；独立 CPU kernels 最大差 `1.1920929e-7`，4 个 expert children 各执行 6 calls / 12 tokens | [process PP2EP2](../target/validation/qwen35-final-gpu-04-process-pp2ep2.log) |
+
+process 两项的 parent CUDA 保持 `NOT_INITIALIZED`。这里的 process fixture 重测
+不是下方历史 NAS 28 层 process target 的重跑，更不等于真实 35B MoE 验收。
+Qwen35 真实 CUDA HTTP 和默认 CLI target 分别 **1 passed**；标准 pipeline HTTP
+TP2、TP4、PP2TP2、thread PP/EP、process PP/EP 五个 targets 本次 **5 passed**。
+
+[最终 contexts 日志](../target/validation/qwen35-final-gpu-06-final-contexts.log)记录
+**0 个残留 GPU contexts / processes**，八卡利用率 0%，显存回到 2–3 MiB 基线。
+没有 reset GPU 或终止无关进程。没有执行全 workspace ignored、全部 process faults，
+已知旧 shared-FFN formal-shape latency unsupported case 不在范围内；不作全覆盖声明。
+
+### 更换 GEMM 前的历史数值和故障证据
+
+本节保留旧验收的输入、范围和数值以便追溯；**它们不是当前 CUTLASS TF32x3
+实现的通过证据**，尤其不能将旧 `maxdiff = 0` 或 CPU-reference 误差解释为当前保证。
 
 - **真实 NAS Qwen3-0.6B，完整 28 层**：hidden=1024、vocab=151936、311 个绑定
   参数（含 tied alias），checkpoint weights 全为 BF16。PP1 为 `0..28`；PP2 为
   `0..14 / 14..28`，没有截层。每 tensor 上限 1 GiB，最大 tensor 为 311164928 bytes。
-- **GPU thread PP1 vs PP2**：3-token prefill、3 次 greedy decode、取消/重试、完整
+- **历史 GPU thread PP1 vs PP2（更换 GEMM 前）**：3-token prefill、3 次 greedy decode、取消/重试、完整
   前缀 replay 以及 KV cleanup；全部 vocabulary logits 逐元素比较，PP1/PP2 和
   decode/causal replay 的 `maxdiff = 0`。PP1/PP2 tolerance 是
   `2e-5 + 2e-5 * abs(expected)`，并非只检查 argmax。
-- **全 28-layer CPU F32 reference**：三个 prefill 行的最大绝对差分别为
+- **历史全 28-layer GPU vs CPU F32 reference（更换 GEMM 前）**：三个 prefill 行的最大绝对差分别为
   `1.18255615e-4`、`7.66515732e-5`、`5.22136688e-5`，decode 为
   `4.43458557e-5`；最大约 `1.18e-4`，greedy argmax 一致。
   CPU/replay tolerance 为 `2e-3 + 2e-4 * abs(expected)`。
-- **GPU process PP1 vs PP2**：同一 NAS 28-layer 模型的 3-token prefill 和一次
+- **历史 GPU process PP1 vs PP2（更换 GEMM 前）**：同一 NAS 28-layer 模型的 3-token prefill 和一次
   decode，比较全部 logits，`maxdiff = 0`。parent 的 `cuCtxGetCurrent` 始终返回
   `CUDA_ERROR_NOT_INITIALIZED`；CUDA context、model 和 physical KV 在 child 内创建。
 - **PP2×EP2**：两层 MoE checkpoint fixture 使用六个独立 GPU children
@@ -59,6 +160,23 @@ unknown；pipeline owner 保留 journal，拒绝 cleanup ACK、重试、publish/
 **driver 在 submission 注入测试中保持健康；SIGSTOP 是 host process stall，
 SIGKILL 是 child loss，均不是物理 CUDA driver fault 或 GPU engine hang。**
 测试 teardown 的正向 fence 也不是生产环境的强制恢复入口。
+
+### P1 forward / FailedActive quiescence：已修复
+
+最终日志确认：`forward` 失败进入 `FailedActive` 时的 quiescence 保留修复已完成，
+独立 CUDA 故障 UT **1 passed**。精确名称为
+`transformer::forward::tests::cuda::hybrid_unknown_finish_keeps_transaction_pins_despite_independent_kv_fence`，
+见 [exact UT 日志](../target/validation/qwen35-final-gpu-03-forward-unknown-exact.log)。
+最初错误过滤得到的 0 tests 不计通过；本次 docs-only 更新未重新运行。
+
+- **干净失败可重试**：只有确认 forward 已 quiescent、完成必要回滚且未遗留 unknown
+  custody 时，才能按正常失败路径清理并重试。
+- **unknown 不释放**：forward 的 quiescence unknown 必须保留，不能由后续成功的
+  KV fence 清除；KV fence 成功不证明先前 forward work 已完成。不得因此释放
+  相关资源、允许复用/重试、publish/retire 或解除 quarantine。
+
+该定向修复和故障 UT 结果不代表物理 driver fault 恢复，也不代表整 workspace
+或所有 GPU 回归已通过。
 
 ## Process timeout 和资源边界
 
@@ -149,12 +267,132 @@ curl -N http://127.0.0.1:8000/v1/chat/completions \
 或 prefix cache。请求中的非默认 `temperature/top_p/top_k` 与 `n > 1` 被拒绝；
 没有 serve `--precision` 或 `--temperature` 参数。取消在 chunk/token 边界协作进行。
 partial `--max-layers`、nonzero `--moe-hotset-experts` 和 expert-cache policy overrides
-在 pipeline build 前拒绝。默认 `--engine auto` 不等于自动 CUDA，CUDA 必须显式选择。
+在 pipeline build 前拒绝。未传 `--expert-host-cache-*` / `--expert-pinned-cache-*`
+时，pipeline 保留 runtime 默认策略，不把 resident CLI 默认值当作 override；显式传入
+任意一个 cache 参数（包括 0 或恰好等于 runtime 默认值）仍会拒绝，不能承诺未实现的限额。
+resident 未传时仍为 host 64 entries / 1024 MiB、pinned 16 entries / 256 MiB。
+默认 `--engine auto` 不等于自动 CUDA，CUDA 必须显式选择。
+
+Unix CLI 同时监听 SIGTERM 和 SIGINT：停止 HTTP admission，等待连接 drain，再等待
+model worker shutdown/join（含 process owners 的 shutdown/reap）。非 Unix 使用 Ctrl-C。
+HTTP 或 worker shutdown 失败会返回非零退出码；同时失败时也保留 worker shutdown 错误。
 
 `--expert-parallel N` 只用于受支持的 Qwen3-MoE checkpoint，不能用于上面的 dense
 Qwen3-0.6B。CUDA ordinal 顺序是 PP owners 在前，再按 stage 排列 EP owners；
 PP2EP2 需要六个 ordinal，如 `0,1,2,3,4,5`。重复 ordinal 可显式 colocate owners，
 但不会合并 owner identity。未提供经过本轮验收的完整 35B FP8 MoE serve 示例。
+
+## Dense TP：CLI / serving 接入
+
+`serve --tensor-parallel N`（默认 1）接入标准 dense Qwen3 的 **CUDA + thread**
+PP×TP；N 当前仅支持 1、2、4。`--engine auto` 在 TP>1 时选择 pipeline，
+但 **不会自动选择 CUDA**，必须显式传 `--backend cuda`。CPU TP、process TP、
+MoE TP、EP×TP、DP/SP/CP>1 明确拒绝，不回退到 CPU、复制模型或本地专家。
+TP1 保持已有 thread/process PP/EP 路径及其 device colocation 语义。
+
+factory 直接调用 `PipelineParallelExecutor::new_standard_cuda_tensor`，入口实现位于
+[`parallel/pipeline/tensor.rs`](../crates/ferrule-runtime/src/parallel/pipeline/tensor.rs)，
+由 `pipeline` 导出 `StandardCudaTensorConfig`。每个 persistent physical owner
+在 `load` 内加载 checkpoint bindings，并由正式 runtime/model API prepare 对应 shard。
+没有新增 engine、forward 或 KV manager；parent 仍只有一个 logical page manager
+和 transaction coordinator。PP stage 内 TP owners 并发执行 collective，stage 之间
+仍按层顺序执行，不宣称 PP overlap 或性能提升。
+
+### Device 与精度约束
+
+- TP owner/device 数为 **PP × TP**，不是 PP+TP，也不是额外再加 PP leader。
+- `--devices` 按 **PP-stage-major，然后 TP-rank** 排列：
+  `owner = stage * TP + tensor_rank`。例如 PP2TP2 的 `3,1,2,0` 映射为
+  `(stage0,tp0)->3`、`(stage0,tp1)->1`、`(stage1,tp0)->2`、`(stage1,tp1)->0`。
+- 默认 device ordinals 为 `0..PP*TP`；TP 要求每个 physical owner 的 ordinal
+  全局唯一，不能像 TP1 PP/EP 那样 colocate。数量、重复和 ordinal ABI 范围在
+  planner 阶段拒绝；设备真实可用性仍由 owner 的 CUDA 初始化确认。
+- Q heads 与 KV heads 必须能被 TP 整除，不支持 KV replication/head padding。
+  planner 复用 model 的 strict recipe、`StandardTensorPlan` 和 segment validation，
+  在创建 CUDA/owner 前校验层数、几何、上下文、容量与 collective byte arithmetic。
+  checkpoint binding/storage 则在 build 的 metadata preflight 和 owner load 时验证。
+- execution 固定 **F32 weights/activation/KV/logits**；BF16 checkpoint 存储格式
+  不表示 BF16 compute。standard linear 为 CUTLASS TF32x3，F32 boundary、
+  accumulation/output 不等于严格 IEEE SGEMM。没有新增 `--precision` 参数。
+- TP 的 `--max-tensor-mb` 限制 **checkpoint 存储 bytes**，不是转换后的 F32 resident
+  显存总量：projection 按各 rank 的真实 rectangle 校验（含 ragged 最大 rank），
+  不再按 FULL projection bytes 拒绝，也不能用 `global / TP` 平均值放行。
+  replicated embedding/norm 仍必须完整放入同一 limit；tied output head 单独校验
+  projection rectangle，不能用 alias 绕过 embedding 的完整读取限额。
+- TP parent/owners 使用 `Qwen3DenseAdapter::bind_hf_metadata`，与 resident 共用
+  strict config/index/header/state-dict binding；adapter 的
+  `validate_tensor_read_limits` 复用标准 TP parameter plan 与 checkpoint rectangle
+  reader 的 metadata preflight。没有读取或解码全局 projection，也不把 dense limit
+  扩大到 expert reader limit。missing/incorrect index、shape/dtype/name、完整 source
+  extent 与 identity 校验保留；实际 owner materializer 再以原 limit 读取并复验 source。
+  TP1/resident full-weight limit 和 CPU BF16-compatibility profile 不变；CUDA 的
+  F32 tensor boundary/accumulation/output 保留，但 standard linear 已切换到
+  CUTLASS TF32x3，不能再称 CUDA compute 数值契约完全不变。
+  因此 NAS Qwen3-0.6B 的 replicated embedding 仍要求至少
+  311164928 bytes，不能仅靠增加 TP 降到默认 128 MiB 以下。
+
+`--kv-cache-mb` 是整个模型所有 physical owners 的 **KV data-plane 总预算**，
+不是每卡预算，也不包括 weights、workspace 或 host collective buffers。
+每个 owner 的 page bytes 为
+`stage_layers * 2(K/V) * (global_kv_heads / TP) * head_dim * page_tokens * sizeof(f32)`。
+所有 owners 求和等于 parent 全层/global-head logical page bytes；逻辑 page ID 在
+所有 physical owners 上共享 identity，但不共享物理存储。页数覆盖全部 active
+sessions 的完整 context（按 page 向上取整），不足则拒绝，不能靠 TP 虚增容量。
+collective 使用 checked host-buffer limits 和 30 秒 rendezvous timeout；它不是
+CUDA kernel 抢占或 fence，`--rank-timeout-ms` 的 thread 限制不变。
+
+### 启动示例与验收边界
+
+下面是两卡 PP1TP2 的接入示例（非性能配置）；PP2TP2 改为
+`--pipeline-parallel 2 --tensor-parallel 2 --devices 0,1,2,3`，需要四张可见 GPU。
+
+```sh
+FERRULE_CUDA_ARCH=sm_86 cargo run --locked --release -p ferrule-cli --features cuda -- \
+  serve /mnt/nas1/hf/Qwen3-0.6B \
+  --served-model-name qwen3-0.6b --backend cuda --engine pipeline \
+  --pipeline-parallel 1 --tensor-parallel 2 --rank-backend thread --devices 0,1 \
+  --max-tensor-mb 1024 --ctx-size 64 --max-active-sequences 1 --kv-cache-mb 64 \
+  --prefill-chunk-size 1 --max-batch-tokens 1 --host 127.0.0.1 --port 8000
+```
+
+本接入的 CLI parse→build-plan tests 不需要 GPU，覆盖 TP2/4、PP2TP2、device 顺序、
+unsupported 组合、head divisibility、F32 KV 精确预算，以及保留的 cache 默认值修复。
+新增 GPU HTTP tests 使用非零 attention/MLP 的两层 BF16 tiny checkpoint，经真实
+factory/engine/worker/router，比较 GPU TP1 与 TP2 / TP4 / PP2TP2 的 non-streaming 和两个
+SSE endpoint，覆盖断连取消、slot reuse、shutdown、sampling reject 和 KV accounting。
+它们是 ignored tests，缺设备或错误必须失败，**不是完整 28 层 logits 数值验收**。
+以下是更换 GEMM 前的历史执行记录，不代表当前 TF32x3 回归已通过：
+曾使用 `FERRULE_CUDA_ARCH=sm_86` 实跑三个精确 ignored targets：TP2、TP4、PP2TP2
+各 1/1 通过（不是 `--no-run`）；CLI serve tests 13/13 通过，包含 process TP 拒绝和
+F32 KV 预算不足拒绝。tiny fixture 使用 4 个 KV heads，global page 为 2048 bytes，
+4 pages 共 8192 bytes，三个拓扑的 accounting 一致。
+
+同一历史验收还真实启动了 NAS Qwen3-0.6B 全层 CLI thread TP2（`CUDA_VISIBLE_DEVICES=0,1`，
+上述容量参数，端口 18084），完成 non-streaming completion、completion SSE、chat SSE，
+每个请求生成 2 tokens；两个 SSE 均返回 length、usage 和唯一 `[DONE]`。
+受控启动验证脚本仅向本次 CLI PID 发 SIGTERM，等待退出码 0，并确认无 child processes、
+PID 已 reap、监听端口关闭、`nvidia-smi --query-compute-apps` 为空；两卡显存从约
+2053/2052 MiB 回落到 3/2 MiB。NVML 的 host PID 与本地 PID 不同，不能直接按本地
+PID 过滤其 records；此前一次启动验证脚本的该断言失败，不是 serving inference 失败。
+这些是正常 serving/shutdown 的实跑证据，不代表 driver fault 后的 CUDA fence 证明，
+也不替代 runtime 的 28-layer all-logits 数值验收。
+
+```sh
+cargo test --locked -p ferrule-cli --features cuda --bin ferrule commands::serve::tests:: -- --test-threads=1
+cargo test --locked -p ferrule-server --features cuda --test pipeline_http --no-run
+# 至少两卡，TP2 vs GPU TP1
+FERRULE_CUDA_ARCH=sm_86 timeout --signal=TERM --kill-after=20s 300s \
+  cargo test --locked -p ferrule-server --features cuda --test pipeline_http \
+  cuda_dense_tensor_tp2_matches_tp1_http_sse -- --ignored --exact --nocapture --test-threads=1
+# 至少四卡，TP4 vs GPU TP1
+FERRULE_CUDA_ARCH=sm_86 timeout --signal=TERM --kill-after=20s 300s \
+  cargo test --locked -p ferrule-server --features cuda --test pipeline_http \
+  cuda_dense_tensor_tp4_matches_tp1_http_sse -- --ignored --exact --nocapture --test-threads=1
+# 至少四卡，PP2TP2 vs GPU TP1
+FERRULE_CUDA_ARCH=sm_86 timeout --signal=TERM --kill-after=20s 300s \
+  cargo test --locked -p ferrule-server --features cuda --test pipeline_http \
+  cuda_dense_tensor_pp2tp2_matches_tp1_http_sse -- --ignored --exact --nocapture --test-threads=1
+```
 
 ## 精确复现命令
 
@@ -291,8 +529,9 @@ shape/capacity/fence 和 physical handles；install 只 dispatch 一次，pendin
 还需要 owner retirement ACK 和 parent `confirm_page_retirement`。
 
 common mesh 为 `DP * PP * TP`，EP 使用显式 per-stage `ExpertGroup`，不乘入 PP/KV mesh。
-pipeline serving 只接 PP/EP，DP/TP/SP/CP 必须为 1。generic DP owner pool 和 TP
-linear/SwiGLU shard capability 仍独立存在，不代表 TP-sharded 完整 decoder。
+pipeline serving 接 PP/EP，另通过上述正式入口接 dense CUDA thread PP×TP；
+DP/SP/CP 必须为 1，EP×TP 和 process TP 不支持。generic DP owner pool 不代表
+full-model DP serving。
 
 [`CudaAsyncTransport`](../crates/ferrule-backend/src/cuda/transport.rs) 是 bounded pinned
 H2D/D2H API，model shard transfer 默认每 chunk 64 KiB、TX/RX 各一个 slot，共 128 KiB。
@@ -303,7 +542,7 @@ HostCollective 仍是同步 CPU rendezvous，不是端到端异步 collective，
 
 - 完整 35B FP8 checkpoint/decoder、完整 MoE checkpoint GPU EP；
 - GPU BF16 compute；
-- TP-sharded 完整 decoder 或 full-model GPU TP/DP serving；
+- full-model GPU DP serving、MoE/process TP，或未经上述 GPU HTTP targets 实跑验证的 TP serving 结果；
 - CUDA IPC、无 host staging/transport 的零 host 路径；
 - multi-host / multi-node；
 - 物理 CUDA driver fault、D-state 或 GPU engine hang 后的强制恢复；

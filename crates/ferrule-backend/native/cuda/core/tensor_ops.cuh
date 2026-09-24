@@ -123,6 +123,22 @@ __global__ void data_kernel(FerruleCoreDataArgs args) {
   if (index >= args.count) {
     return;
   }
+  if (args.kind == FERRULE_CORE_DATA_QUERY_GATE_SPLIT) {
+    const uint64_t head = index / args.width;
+    const uint64_t dimension = index % args.width;
+    const uint64_t source = head * (2 * static_cast<uint64_t>(args.width)) + dimension;
+    pointer<float>(args.output0)[index] = const_pointer<float>(args.input0)[source];
+    pointer<float>(args.output1)[index] = const_pointer<float>(args.input0)[source + args.width];
+    return;
+  }
+  if (args.kind == FERRULE_CORE_DATA_SIGMOID_GATE ||
+      args.kind == FERRULE_CORE_DATA_SILU_GATE) {
+    const float gate = const_pointer<float>(args.input1)[index];
+    float activated = 1.0f / (1.0f + expf(-gate));
+    if (args.kind == FERRULE_CORE_DATA_SILU_GATE) activated *= gate;
+    pointer<float>(args.output0)[index] = const_pointer<float>(args.input0)[index] * activated;
+    return;
+  }
   if (args.kind == FERRULE_CORE_DATA_FILL_I32) {
     const int64_t value =
         static_cast<int64_t>(static_cast<int32_t>(args.start)) + index;
@@ -396,9 +412,11 @@ __global__ void norm_kernel(FerruleCoreNormArgs args) {
   for (uint32_t column = threadIdx.x; column < args.width;
        column += blockDim.x) {
     const float affine =
-        args.kind == FERRULE_CORE_NORM_HEAD_ROWS ? 1.0f : weight[column];
+        args.kind == FERRULE_CORE_NORM_HEAD_ROWS ? 1.0f :
+        args.kind == FERRULE_CORE_NORM_OFFSET_AFFINE_F32 ? 1.0f + weight[column] : weight[column];
     const float value = input[base + column] * inverse_rms_shared * affine;
-    output[base + column] = args.kind == FERRULE_CORE_NORM_AFFINE_F32
+    output[base + column] = (args.kind == FERRULE_CORE_NORM_AFFINE_F32 ||
+                             args.kind == FERRULE_CORE_NORM_OFFSET_AFFINE_F32)
                                 ? value : bf16_round(value);
   }
 }

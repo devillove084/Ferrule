@@ -1,5 +1,8 @@
 //! CUDA context helpers — probe, GEMV benchmarks, kernel dispatch.
 
+#[path = "recurrent.rs"]
+pub mod recurrent;
+
 #[path = "standard.rs"]
 pub mod standard;
 

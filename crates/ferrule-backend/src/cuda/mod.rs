@@ -22,6 +22,7 @@ pub mod operators {
     pub mod moe;
     pub mod norm;
     pub mod rope;
+    pub use crate::cuda::context::recurrent;
 
     pub use contracts::*;
 }

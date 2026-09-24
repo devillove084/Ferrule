@@ -38,20 +38,30 @@ pub fn cmd_chat(
         .map(BackendSelection::parse)
         .transpose()?
         .unwrap_or_default();
+    let mut driver_config = resident_driver_config(generation.ctx_size, generation.stop_at_eos);
+    if config.descriptor().spec.family == ferrule_model::ModelFamily::Qwen35 {
+        driver_config.enable_native_proposals = false;
+    }
     let prepared = ResidentModelPlanner::new().prepare(
         &config,
         backend,
         chat_template_override,
         ModelFactoryOptions {
             max_layers: None,
-            max_tensor_mebibytes: 128,
+            max_tensor_mebibytes: if config.descriptor().spec.family
+                == ferrule_model::ModelFamily::Qwen35
+            {
+                1024
+            } else {
+                128
+            },
             output_head_chunk_rows: 4096,
             expert_reader_max_tensor_mebibytes: 64,
             expert_cache: ExpertCacheOptions::default(),
             moe_hotset_experts: 0,
             kv_cache_mebibytes: None,
             scheduler_config: single_sequence_scheduler_config(4096),
-            driver_config: resident_driver_config(generation.ctx_size, generation.stop_at_eos),
+            driver_config,
         },
     )?;
     let model_name = prepared.model_name();

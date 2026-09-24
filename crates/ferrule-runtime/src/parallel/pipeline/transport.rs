@@ -7,7 +7,7 @@
 //! be reconstructed in the child, never serialized as an address.
 
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use ferrule_common::execution::{
@@ -280,6 +280,37 @@ pub trait PipelineTransport {
         poll: &mut dyn FnMut(),
     ) -> Result<PipelineReply>;
 
+    /// Admit every member before waiting for any reply. The default explicitly
+    /// rejects multi-owner calls: process transports do not support TP yet.
+    /// Errors must drain admitted commands; they never stand in for KV ACKs.
+    fn call_batch_observed(
+        &mut self,
+        commands: Vec<(PipelineRank, PipelineCommand)>,
+        poll: &mut dyn FnMut(),
+    ) -> Result<Vec<PipelineReply>> {
+        if commands.len() != 1 {
+            return Err(error("transport does not support concurrent TP dispatch"));
+        }
+        let (rank, command) = commands.into_iter().next().expect("one command");
+        self.call_observed(rank, command, poll)
+            .map(|reply| vec![reply])
+    }
+
+    /// Failure notification wakes in-flight collective peers BEFORE draining.
+    /// It carries no completion evidence and must not issue any KV ACK.
+    fn call_batch_observed_with_failure(
+        &mut self,
+        commands: Vec<(PipelineRank, PipelineCommand)>,
+        poll: &mut dyn FnMut(),
+        on_failure: &mut dyn FnMut(),
+    ) -> Result<Vec<PipelineReply>> {
+        let result = self.call_batch_observed(commands, poll);
+        if result.is_err() {
+            on_failure();
+        }
+        result
+    }
+
     fn outstanding(&self) -> usize;
 
     /// Attempt ALL owners even when one shutdown fails. Healthy thread shutdown
@@ -303,6 +334,21 @@ impl<T: PipelineTransport + ?Sized> PipelineTransport for Box<T> {
         poll: &mut dyn FnMut(),
     ) -> Result<PipelineReply> {
         (**self).call_observed(rank, command, poll)
+    }
+    fn call_batch_observed(
+        &mut self,
+        commands: Vec<(PipelineRank, PipelineCommand)>,
+        poll: &mut dyn FnMut(),
+    ) -> Result<Vec<PipelineReply>> {
+        (**self).call_batch_observed(commands, poll)
+    }
+    fn call_batch_observed_with_failure(
+        &mut self,
+        commands: Vec<(PipelineRank, PipelineCommand)>,
+        poll: &mut dyn FnMut(),
+        on_failure: &mut dyn FnMut(),
+    ) -> Result<Vec<PipelineReply>> {
+        (**self).call_batch_observed_with_failure(commands, poll, on_failure)
     }
     fn outstanding(&self) -> usize {
         (**self).outstanding()
@@ -380,6 +426,122 @@ impl PipelineTransport for DataPoolPipelineTransport {
                 Err(error(format!("pipeline owner unavailable: {other:?}")))
             }
         }
+    }
+
+    fn call_batch_observed(
+        &mut self,
+        commands: Vec<(PipelineRank, PipelineCommand)>,
+        poll: &mut dyn FnMut(),
+    ) -> Result<Vec<PipelineReply>> {
+        self.call_batch_observed_with_failure(commands, poll, &mut || {})
+    }
+
+    fn call_batch_observed_with_failure(
+        &mut self,
+        commands: Vec<(PipelineRank, PipelineCommand)>,
+        poll: &mut dyn FnMut(),
+        on_failure: &mut dyn FnMut(),
+    ) -> Result<Vec<PipelineReply>> {
+        if self.unavailable || commands.is_empty() {
+            return Err(error("empty batch or unavailable pipeline transport"));
+        }
+        let pool = self
+            .pool
+            .as_mut()
+            .ok_or_else(|| error("pipeline transport is closed"))?;
+        if pool.outstanding() != 0 {
+            return Err(error("pipeline batch requires an idle transport"));
+        }
+        let count = commands.len();
+        let end = self
+            .next_id
+            .checked_add(count as u64)
+            .ok_or_else(|| error("pipeline command identity exhausted"))?;
+        let mut ranks = std::collections::BTreeSet::new();
+        let mut cancellation = Vec::new();
+        for (rank, command) in &commands {
+            if !ranks.insert(rank.local) {
+                return Err(error("duplicate pipeline batch owner"));
+            }
+            if let PipelineCommand::Execute {
+                cancellation: flag, ..
+            } = command
+            {
+                cancellation.push(Arc::clone(flag));
+            }
+        }
+        let start = self.next_id;
+        self.next_id = end;
+        let mut pending = std::collections::BTreeMap::new();
+        let mut replies: Vec<Option<PipelineReply>> = (0..count).map(|_| None).collect();
+        let mut failures = Vec::new();
+        for (index, (rank, command)) in commands.into_iter().enumerate() {
+            let id = ExecutionTransactionId::new(start + index as u64)?;
+            let route = SessionId(u64::from(rank.local.get()) + 1);
+            match pool.try_submit_to(route, rank.local, id, command) {
+                Ok(_) => {
+                    pending.insert(id, (index, rank, route));
+                }
+                Err(rejected) => {
+                    on_failure();
+                    failures.push(error(format!(
+                        "pipeline batch admission: {:?}",
+                        rejected.kind
+                    )));
+                    break;
+                }
+            }
+        }
+        while pool.outstanding() != 0 {
+            poll();
+            if !failures.is_empty() {
+                // Wake collective waiters, not fake-complete a physical command.
+                for flag in &cancellation {
+                    flag.store(true, Ordering::Release);
+                }
+            }
+            let Some(completion) = pool.try_recv() else {
+                std::thread::sleep(Duration::from_micros(50));
+                continue;
+            };
+            let expected = pending.remove(&completion.transaction);
+            let Some((index, rank, route)) = expected else {
+                on_failure();
+                self.unavailable = true;
+                failures.push(error("unknown pipeline batch completion"));
+                continue;
+            };
+            if completion.rank != rank.local || completion.session != route {
+                on_failure();
+                self.unavailable = true;
+                failures.push(error("pipeline batch completion identity mismatch"));
+                continue;
+            }
+            match completion.outcome {
+                CompletionOutcome::Success(reply) => replies[index] = Some(reply),
+                CompletionOutcome::Failed(source) => {
+                    on_failure();
+                    failures.push(source)
+                }
+                other => {
+                    on_failure();
+                    self.unavailable = true;
+                    failures.push(error(format!(
+                        "pipeline batch owner unavailable: {other:?}"
+                    )));
+                }
+            }
+        }
+        if !failures.is_empty() {
+            for flag in &cancellation {
+                flag.store(true, Ordering::Release);
+            }
+            return Err(super::errors("pipeline batch dispatch", failures));
+        }
+        replies
+            .into_iter()
+            .map(|reply| reply.ok_or_else(|| error("missing pipeline batch reply")))
+            .collect()
     }
 
     fn outstanding(&self) -> usize {

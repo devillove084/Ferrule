@@ -1,6 +1,7 @@
 //! Model-aware catalog selection and resident engine construction.
 
 mod pipeline;
+mod qwen35;
 pub use pipeline::{PipelineBuildOptions, PipelineRankBackend};
 
 use std::path::PathBuf;
@@ -103,6 +104,11 @@ pub struct ModelImplementation {
 
 /// Static catalog of built-in model implementations.
 pub static MODEL_IMPLEMENTATIONS: &[ModelImplementation] = &[
+    ModelImplementation {
+        family: ModelFamily::Qwen35,
+        resolve: qwen35::resolve,
+        build: qwen35::build,
+    },
     ModelImplementation {
         family: ModelFamily::QwenMoe,
         resolve: resolve_qwen_backend,
@@ -436,8 +442,11 @@ pub struct ModelBuildRequest {
 fn configure_request(
     descriptor: &ModelDescriptor,
     entry: ResolvedModelBackend,
-    options: ModelFactoryOptions,
+    mut options: ModelFactoryOptions,
 ) -> Result<ModelBuildRequest> {
+    if entry.family == ModelFamily::Qwen35 {
+        qwen35::validate_options(descriptor, &mut options)?;
+    }
     let max_layers = options
         .max_layers
         .or(descriptor.spec.num_layers)
@@ -752,7 +761,11 @@ mod tests {
 
     use super::*;
 
-    fn descriptor(family: ModelFamily, architecture: &str, layers: usize) -> ModelDescriptor {
+    pub(super) fn descriptor(
+        family: ModelFamily,
+        architecture: &str,
+        layers: usize,
+    ) -> ModelDescriptor {
         ModelDescriptor {
             path: PathBuf::from("model"),
             spec: TransformerSpec {
@@ -789,7 +802,7 @@ mod tests {
         descriptor
     }
 
-    fn options() -> ModelFactoryOptions {
+    pub(super) fn options() -> ModelFactoryOptions {
         ModelFactoryOptions {
             max_layers: None,
             max_tensor_mebibytes: 128,
@@ -903,6 +916,67 @@ mod tests {
             BackendSelection::Cuda
         );
         assert!(BackendSelection::parse("optimized-cuda").is_err());
+    }
+
+    #[test]
+    fn qwen35_plans_owner_local_full_depth_and_rejects_unsupported_policies() {
+        let config = AutoConfig::from_descriptor(descriptor(
+            ModelFamily::Qwen35,
+            "Qwen3_5ForConditionalGeneration",
+            24,
+        ));
+        let options = || {
+            let mut o = self::options();
+            o.driver_config.enable_native_proposals = false;
+            o
+        };
+        for backend in [
+            BackendSelection::Auto,
+            BackendSelection::Cpu,
+            BackendSelection::Cuda,
+        ] {
+            let plan = ResidentModelPlanner.prepare(&config, backend, None, options());
+            if backend == BackendSelection::Cuda && !cfg!(feature = "cuda") {
+                assert!(plan.err().unwrap().to_string().contains("cuda"));
+                continue;
+            }
+            let plan = plan.unwrap();
+            assert_eq!(plan.chat_template(), ChatTemplate::Qwen35);
+            assert_eq!(plan.request.max_layers, 24);
+            assert!(!plan.request.driver_config.enable_native_proposals);
+            assert_eq!(plan.request.scheduler_config.max_batch_tokens, 32);
+        }
+        for case in 0..6 {
+            let mut o = options();
+            match case {
+                0 => o.max_layers = Some(1),
+                1 => o.scheduler_config.prefix_cache_capacity_pages = 1,
+                2 => o.expert_cache.host_entries = 1,
+                3 => o.moe_hotset_experts = 1,
+                4 => o.driver_config.enable_native_proposals = true,
+                _ => o.scheduler_config.max_batch_tokens = 0,
+            }
+            assert!(
+                ResidentModelPlanner
+                    .prepare(&config, BackendSelection::Cpu, None, o)
+                    .is_err()
+            );
+        }
+        assert!(
+            ResidentModelPlanner
+                .prepare_pipeline(
+                    &config,
+                    BackendSelection::Cpu,
+                    None,
+                    options(),
+                    PipelineBuildOptions::default()
+                )
+                .is_err()
+        );
+        let plan = ResidentModelPlanner
+            .prepare(&config, BackendSelection::Cpu, None, options())
+            .unwrap();
+        assert!(plan.with_pipeline(PipelineBuildOptions::default()).is_err());
     }
 
     #[test]

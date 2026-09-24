@@ -15,6 +15,13 @@ use ferrule_common::{Error, Result};
 #[cfg(ferrule_cuda_test_oracle)]
 use std::sync::atomic::{AtomicU64, Ordering};
 
+#[path = "cutlass_f32.rs"]
+mod f32_linear;
+pub(crate) use f32_linear::f32_gemm_bytes;
+pub use f32_linear::{
+    F32GemmError, F32GemmLayout, f32_gemm, f32_gemm_can_implement, f32_gemm_workspace_requirements,
+};
+
 pub const PROPOSAL_ROWS: usize = 5;
 pub const HYBRID_MLA_ATTENTION_HEADS: usize = 64;
 pub const HYBRID_MLA_ATTENTION_HEAD_DIM: usize = 512;
@@ -43,6 +50,7 @@ pub enum CutlassKernelId {
     HybridMlaAttention = 8,
     ProposalHead = 9,
     Fp8Projection = 10,
+    F32Gemm = 11,
 }
 
 impl CutlassKernelId {
@@ -62,6 +70,7 @@ impl CutlassKernelId {
             Self::HybridMlaAttention => "hybrid-mla-attention",
             Self::ProposalHead => "proposal-head",
             Self::Fp8Projection => "fp8-projection",
+            Self::F32Gemm => "f32-gemm-tf32x3",
         }
     }
 }
@@ -144,6 +153,7 @@ pub(crate) const CUTLASS_OPERATION_BINDINGS: &[(KernelOperation, CutlassKernelId
         CutlassKernelId::HybridMlaAttention,
     ),
     (KernelOperation::ProposalHead, CutlassKernelId::ProposalHead),
+    (KernelOperation::LinearF32, CutlassKernelId::F32Gemm),
 ];
 
 pub(crate) fn kernel_for_operation(operation: KernelOperation) -> Option<CutlassKernelId> {
@@ -3287,6 +3297,31 @@ mod tests {
             prepared_destination = 24,
             stream = 32,
         );
+    }
+
+    #[test]
+    fn f32_native_manifest_ffi_discovery_and_execution_views_agree() {
+        let native = unsafe { ffi::ferrule_cutlass_provider_manifest() };
+        let provider = discover_provider().unwrap();
+        assert_eq!(native, provider.manifest());
+        let execution = provider.execution_manifest().unwrap();
+        for &(operation, kernel) in CUTLASS_OPERATION_BINDINGS {
+            assert_eq!(
+                execution.supports(operation, crate::plan::ExecutionMode::Inference),
+                native.supports(kernel),
+                "{operation:?}/{kernel:?}"
+            );
+            assert_eq!(kernel_for_operation(operation), Some(kernel));
+        }
+        assert!(native.supports(CutlassKernelId::F32Gemm));
+        assert!(execution.supports(
+            KernelOperation::LinearF32,
+            crate::plan::ExecutionMode::Inference
+        ));
+        if crate::cuda::architecture::COMPILED_TARGET == "sm_86" {
+            assert_eq!(native.kernel_mask, 0x586);
+            assert_eq!(execution.operations.len(), 7);
+        }
     }
 
     #[test]

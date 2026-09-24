@@ -186,19 +186,23 @@ pub(crate) struct ServeArgs {
     /// Override the model execution backend (cpu or cuda).
     #[arg(long)]
     pub(crate) backend: Option<String>,
-    /// Pipeline supports serial greedy CPU/CUDA PP and MoE EP; process owners require Unix.
+    /// Serial greedy CPU/CUDA PP, MoE EP, or dense CUDA thread PP x TP.
     #[arg(long, value_enum, default_value = "auto")]
     pub(crate) engine: ServeEngine,
     #[arg(long, default_value_t = 1)]
     pub(crate) pipeline_parallel: usize,
+    /// Dense CUDA tensor owners per stage (1, 2 or 4); thread only, no EP x TP.
+    #[arg(long, default_value_t = 1)]
+    pub(crate) tensor_parallel: usize,
     /// Expert owners per pipeline stage (Qwen3-MoE only); EP > 1 uses F32.
     #[arg(long, default_value_t = 1)]
     pub(crate) expert_parallel: usize,
     /// Rank isolation. Process uses private child pipes; there is no automatic replay.
     #[arg(long, value_enum, default_value = "thread")]
     pub(crate) rank_backend: RankBackend,
-    /// CUDA ordinals: PP owners, then stage-ordered EP owners (only if EP > 1).
-    /// Defaults to 0..owner-count; repeated ordinals explicitly colocate owners.
+    /// CUDA ordinals: TP uses PP-stage-major then TP-rank order (PP * TP distinct devices).
+    /// Otherwise PP owners, then stage-ordered EP owners; only non-TP allows colocation.
+    /// Defaults to 0..owner-count.
     #[arg(long, value_delimiter = ',')]
     pub(crate) devices: Option<Vec<usize>>,
     /// Process startup/command/shutdown deadline (ms), also applied to expert children.
@@ -233,6 +237,7 @@ pub(crate) struct ServeArgs {
     #[arg(long = "prefill-chunk-size", default_value_t = 512)]
     pub(crate) prefill_chunk_size: usize,
     /// Maximum packed prefill plus decode tokens in one scheduler action.
+    /// Qwen3.5 token-serial execution uses at most 32.
     #[arg(long = "max-batch-tokens", default_value_t = 512)]
     pub(crate) max_batch_tokens: usize,
     /// Hard budget for the model's physical KV data planes in MiB.
@@ -253,28 +258,32 @@ pub(crate) struct ServeArgs {
     /// lm_head chunk size in rows for full-vocabulary top-1 scans.
     #[arg(long, default_value_t = 4096)]
     pub(crate) output_head_chunk_rows: usize,
-    /// Maximum single top-level/layer artifact tensor read size.
-    #[arg(long = "max-tensor-mb", default_value_t = 128)]
-    pub(crate) max_tensor_mb: u64,
+    /// Single tensor materialization limit in MiB (Qwen3.5: 1024, others: 128).
+    #[arg(long = "max-tensor-mb")]
+    pub(crate) max_tensor_mb: Option<u64>,
     /// Maximum single expert artifact read size.
     #[arg(long = "expert-max-slice-mb", default_value_t = 64)]
     pub(crate) expert_reader_max_slice_mb: u64,
 
     /// Routed-expert slots per layer (0 = automatic device-budget planning).
-    #[arg(long, default_value_t = 0)]
-    pub(crate) moe_hotset_experts: usize,
+    #[arg(long)]
+    pub(crate) moe_hotset_experts: Option<usize>,
     /// Maximum whole experts retained in pageable host memory (0 disables retention).
-    #[arg(long = "expert-host-cache-entries", default_value_t = 64)]
-    pub(crate) expert_host_cache_entries: usize,
+    /// Resident default: 64. Explicit cache options are unsupported by pipeline/Qwen3.5.
+    #[arg(long = "expert-host-cache-entries")]
+    pub(crate) expert_host_cache_entries: Option<usize>,
     /// Pageable host expert-cache budget in MiB (0 = entry-limited only).
-    #[arg(long = "expert-host-cache-mb", default_value_t = 1024)]
-    pub(crate) expert_host_cache_mb: u64,
+    /// Resident default: 1024. Explicit cache options are unsupported by pipeline/Qwen3.5.
+    #[arg(long = "expert-host-cache-mb")]
+    pub(crate) expert_host_cache_mb: Option<u64>,
     /// Maximum whole experts retained in pinned host memory (0 disables retention).
-    #[arg(long = "expert-pinned-cache-entries", default_value_t = 16)]
-    pub(crate) expert_pinned_cache_entries: usize,
+    /// Resident default: 16. Explicit cache options are unsupported by pipeline/Qwen3.5.
+    #[arg(long = "expert-pinned-cache-entries")]
+    pub(crate) expert_pinned_cache_entries: Option<usize>,
     /// Pinned host expert-cache budget in MiB (0 = entry-limited only).
-    #[arg(long = "expert-pinned-cache-mb", default_value_t = 256)]
-    pub(crate) expert_pinned_cache_mb: u64,
+    /// Resident default: 256. Explicit cache options are unsupported by pipeline/Qwen3.5.
+    #[arg(long = "expert-pinned-cache-mb")]
+    pub(crate) expert_pinned_cache_mb: Option<u64>,
 }
 
 #[derive(Args, Clone)]
@@ -558,7 +567,7 @@ mod tests {
         let Command::Serve(args) = cli.command else {
             panic!("serve command was not parsed");
         };
-        assert_eq!(args.moe_hotset_experts, 0);
+        assert_eq!(args.moe_hotset_experts, None);
         assert_eq!(args.max_layers, None);
         assert_eq!(args.served_model_name, None);
         assert_eq!(args.backend, None);

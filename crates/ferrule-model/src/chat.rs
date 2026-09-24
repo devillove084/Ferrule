@@ -85,6 +85,7 @@ pub enum ChatTemplate {
     Llama3,
     Qwen,
     Qwen3,
+    Qwen35,
     DeepSeekV4,
     Plain,
 }
@@ -112,6 +113,7 @@ impl ChatTemplate {
             Self::Llama3 => "llama3",
             Self::Qwen => "qwen",
             Self::Qwen3 => "qwen3",
+            Self::Qwen35 => "qwen3.5",
             Self::DeepSeekV4 => "deepseek-v4",
             Self::Plain => "plain",
         }
@@ -123,6 +125,7 @@ impl ChatTemplate {
             "llama3" | "llama-3" => Some(Self::Llama3),
             "qwen" => Some(Self::Qwen),
             "qwen3" | "qwen-3" => Some(Self::Qwen3),
+            "qwen35" | "qwen3.5" | "qwen-3.5" => Some(Self::Qwen35),
             "deepseek-v4" | "deepseekv4" | "dsv4" | "deepseek" => Some(Self::DeepSeekV4),
             "plain" | "none" => Some(Self::Plain),
             _ => None,
@@ -135,7 +138,14 @@ impl ChatTemplate {
     /// and assistant messages, ending with a user message. The returned prompt
     /// includes the template's assistant generation marker.
     pub fn format_messages(self, messages: &[ChatMessage]) -> Result<String, ChatFormatError> {
-        self.format_messages_with_options(messages, ChatTemplateOptions::default())
+        self.format_messages_with_options(
+            messages,
+            ChatTemplateOptions {
+                // The actual Qwen3.5 Jinja default is non-thinking.
+                enable_thinking: self != Self::Qwen35,
+                ..ChatTemplateOptions::default()
+            },
+        )
     }
 
     pub fn format_messages_with_options(
@@ -150,6 +160,7 @@ impl ChatTemplate {
                 format_chatml_messages(messages, options.add_generation_prompt)
             }
             Self::Qwen3 => format_qwen3_messages(messages, options),
+            Self::Qwen35 => format_qwen35_messages(messages, options),
             Self::Llama3 => format_llama3_messages(messages, options.add_generation_prompt),
             Self::DeepSeekV4 => {
                 format_deepseek_v4_messages(messages, options.add_generation_prompt)
@@ -190,6 +201,12 @@ impl ChatTemplate {
                 }
             }
             Self::Qwen3 => format!("<|im_start|>user\n{turn}<|im_end|>\n<|im_start|>assistant\n"),
+            Self::Qwen35 => format!(
+                "{}<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n",
+                // EOS is selected but not committed to the retained sequence.
+                if first_turn { "" } else { "<|im_end|>\n" },
+                turn.trim()
+            ),
             Self::DeepSeekV4 => {
                 if first_turn {
                     format!("<｜begin▁of▁sentence｜><｜User｜>{turn}<｜Assistant｜></think>")
@@ -321,6 +338,41 @@ fn format_qwen3_messages(messages: &[ChatMessage], options: ChatTemplateOptions)
         output.push_str("<|im_start|>assistant\n");
         if !options.enable_thinking {
             output.push_str("<think>\n\n</think>\n\n");
+        }
+    }
+    output
+}
+
+// Text-only subset of Qwen3.5's chat_template.jinja (no tools/vision).
+fn format_qwen35_messages(messages: &[ChatMessage], options: ChatTemplateOptions) -> String {
+    let last_user = messages
+        .iter()
+        .rposition(|m| m.role == ChatRole::User)
+        .expect("validated user");
+    let mut output = String::new();
+    for (index, message) in messages.iter().enumerate() {
+        output.push_str("<|im_start|>");
+        output.push_str(message.role.as_str());
+        output.push('\n');
+        if message.role == ChatRole::Assistant {
+            let mut trimmed = message.clone();
+            trimmed.content = trimmed.content.trim().to_owned();
+            let (reasoning, content) = qwen3_assistant_parts(&trimmed);
+            if index > last_user {
+                output.push_str("<think>\n");
+                output.push_str(reasoning.trim());
+                output.push_str("\n</think>\n\n");
+            }
+            output.push_str(content);
+        } else {
+            output.push_str(message.content.trim());
+        }
+        output.push_str("<|im_end|>\n");
+    }
+    if options.add_generation_prompt {
+        output.push_str("<|im_start|>assistant\n<think>\n");
+        if !options.enable_thinking {
+            output.push_str("\n</think>\n\n");
         }
     }
     output

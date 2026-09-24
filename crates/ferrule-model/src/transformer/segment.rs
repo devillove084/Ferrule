@@ -281,6 +281,50 @@ impl StandardDecoderSegment {
         max_positions: usize,
         max_parameter_bytes: u64,
     ) -> SegmentResult<Self> {
+        let materializer = StateDictMaterializer::new(max_parameter_bytes)
+            .map_err(SegmentError::at(SegmentStage::Prepare))?;
+        Self::prepare_with_materializer(resources, plan, precision, max_positions, materializer)
+    }
+
+    /// Prepare the same global decoder graph with rank-local projection payloads.
+    /// This is preparation only; CPU execution cannot consume TP linears without
+    /// rank-local operators and a collective. CUDA uses this same composition.
+    pub fn prepare_tensor(
+        resources: &BoundDecoderResources,
+        plan: LayerSegmentPlan,
+        tensor: super::StandardTensorPlan,
+        rank: ParallelRankId,
+        max_positions: usize,
+        max_parameter_bytes: u64,
+    ) -> SegmentResult<Self> {
+        tensor
+            .validate_segment(resources.spec(), &plan)
+            .and_then(|_| tensor.validate_resources(resources))
+            .map_err(SegmentError::at(SegmentStage::Prepare))?;
+        let materializer = StateDictMaterializer::for_tensor(max_parameter_bytes, tensor, rank)
+            .map_err(SegmentError::at(SegmentStage::Prepare))?;
+        Self::prepare_with_materializer(
+            resources,
+            plan,
+            ExecutionPrecisionPolicy::f32(),
+            max_positions,
+            materializer,
+        )
+    }
+
+    pub fn tensor_reads(
+        &self,
+    ) -> ferrule_common::Result<Vec<super::parallel::TensorParallelPreparationRead>> {
+        self.materializer.tensor_reads()
+    }
+
+    fn prepare_with_materializer(
+        resources: &BoundDecoderResources,
+        plan: LayerSegmentPlan,
+        precision: ExecutionPrecisionPolicy,
+        max_positions: usize,
+        materializer: StateDictMaterializer,
+    ) -> SegmentResult<Self> {
         let spec = resources.spec();
         if plan.total_layers != spec.layers().len() {
             return Err(SegmentError::LayerCount {
@@ -302,8 +346,6 @@ impl StandardDecoderSegment {
         }
         let descriptors = &spec.layers()[plan.layers()];
         validate_standard_descriptors(spec, descriptors)
-            .map_err(SegmentError::at(SegmentStage::Prepare))?;
-        let materializer = StateDictMaterializer::new(max_parameter_bytes)
             .map_err(SegmentError::at(SegmentStage::Prepare))?;
         let embedding = plan
             .embedding

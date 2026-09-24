@@ -1,0 +1,156 @@
+{
+  "source": "Qwen3.5-0.8B/chat_template.jinja",
+  "sha256": "273d8e0e683b885071fb17e08d71e5f2a5ddfb5309756181681de4f5a1822d80",
+  "cases": [
+    {
+      "messages": [
+        {
+          "role": "user",
+          "content": "  Hi \n"
+        }
+      ],
+      "enable_thinking": null,
+      "add_generation_prompt": true,
+      "expected": "<|im_start|>user\nHi<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
+    },
+    {
+      "messages": [
+        {
+          "role": "user",
+          "content": "  Hi \n"
+        }
+      ],
+      "enable_thinking": false,
+      "add_generation_prompt": true,
+      "expected": "<|im_start|>user\nHi<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
+    },
+    {
+      "messages": [
+        {
+          "role": "user",
+          "content": "  Hi \n"
+        }
+      ],
+      "enable_thinking": true,
+      "add_generation_prompt": true,
+      "expected": "<|im_start|>user\nHi<|im_end|>\n<|im_start|>assistant\n<think>\n"
+    },
+    {
+      "messages": [
+        {
+          "role": "system",
+          "content": " concise \n"
+        },
+        {
+          "role": "user",
+          "content": " hello "
+        },
+        {
+          "role": "assistant",
+          "content": " <think>\nold reasoning\n</think>\n\nanswer "
+        },
+        {
+          "role": "user",
+          "content": " next "
+        }
+      ],
+      "enable_thinking": null,
+      "add_generation_prompt": true,
+      "expected": "<|im_start|>system\nconcise<|im_end|>\n<|im_start|>user\nhello<|im_end|>\n<|im_start|>assistant\nanswer<|im_end|>\n<|im_start|>user\nnext<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
+    },
+    {
+      "messages": [
+        {
+          "role": "system",
+          "content": " concise \n"
+        },
+        {
+          "role": "user",
+          "content": " hello "
+        },
+        {
+          "role": "assistant",
+          "content": " <think>\nold reasoning\n</think>\n\nanswer "
+        },
+        {
+          "role": "user",
+          "content": " next "
+        }
+      ],
+      "enable_thinking": false,
+      "add_generation_prompt": true,
+      "expected": "<|im_start|>system\nconcise<|im_end|>\n<|im_start|>user\nhello<|im_end|>\n<|im_start|>assistant\nanswer<|im_end|>\n<|im_start|>user\nnext<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
+    },
+    {
+      "messages": [
+        {
+          "role": "system",
+          "content": " concise \n"
+        },
+        {
+          "role": "user",
+          "content": " hello "
+        },
+        {
+          "role": "assistant",
+          "content": " <think>\nold reasoning\n</think>\n\nanswer "
+        },
+        {
+          "role": "user",
+          "content": " next "
+        }
+      ],
+      "enable_thinking": true,
+      "add_generation_prompt": true,
+      "expected": "<|im_start|>system\nconcise<|im_end|>\n<|im_start|>user\nhello<|im_end|>\n<|im_start|>assistant\nanswer<|im_end|>\n<|im_start|>user\nnext<|im_end|>\n<|im_start|>assistant\n<think>\n"
+    },
+    {
+      "messages": [
+        {
+          "role": "user",
+          "content": "question"
+        },
+        {
+          "role": "assistant",
+          "content": " answer ",
+          "reasoning_content": " reason \n"
+        }
+      ],
+      "enable_thinking": null,
+      "add_generation_prompt": false,
+      "expected": "<|im_start|>user\nquestion<|im_end|>\n<|im_start|>assistant\n<think>\nreason\n</think>\n\nanswer<|im_end|>\n"
+    },
+    {
+      "messages": [
+        {
+          "role": "user",
+          "content": "question"
+        },
+        {
+          "role": "assistant",
+          "content": " answer ",
+          "reasoning_content": " reason \n"
+        }
+      ],
+      "enable_thinking": false,
+      "add_generation_prompt": false,
+      "expected": "<|im_start|>user\nquestion<|im_end|>\n<|im_start|>assistant\n<think>\nreason\n</think>\n\nanswer<|im_end|>\n"
+    },
+    {
+      "messages": [
+        {
+          "role": "user",
+          "content": "question"
+        },
+        {
+          "role": "assistant",
+          "content": " answer ",
+          "reasoning_content": " reason \n"
+        }
+      ],
+      "enable_thinking": true,
+      "add_generation_prompt": false,
+      "expected": "<|im_start|>user\nquestion<|im_end|>\n<|im_start|>assistant\n<think>\nreason\n</think>\n\nanswer<|im_end|>\n"
+    }
+  ]
+}

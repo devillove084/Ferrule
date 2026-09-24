@@ -21,7 +21,8 @@ use crate::cuda::ffi::core::{
     NORM_AFFINE_F32, NormArgs, TRANSFORMER_PAGED_F32_APPEND_CAUSAL_GQA, TransformerArgs,
 };
 pub use crate::cuda::operators::{SelectedSoftmaxTopKLayout, SplitHalfRopeLayout};
-use crate::cuda::runtime::{DeviceCopy, LaunchConfig};
+use crate::cuda::providers::cutlass::{F32GemmLayout, f32_gemm_bytes};
+use crate::cuda::runtime::DeviceCopy;
 use ferrule_common::{Error, Result};
 
 fn invalid(message: impl Into<String>) -> Error {
@@ -238,8 +239,11 @@ impl CudaOperators {
         Ok(())
     }
 
-    /// F32 `[rows,in] * [out,in]^T`, using the existing F32 native linear.
-    /// Only an explicitly F32 artifact is accepted; checkpoint conversion is external.
+    /// Bias-free F32 `[rows,in] * [out,in]^T` through the existing CUTLASS provider.
+    /// Uses TF32x3 TensorOp multiplication with F32 accumulation/output (not
+    /// bitwise IEEE SGEMM). No implicit SIMT fallback on unsupported capability
+    /// or shape. Only F32 artifacts are accepted; conversion is external.
+    /// Submission uses this owner's compute stream, events and retirement fences.
     pub fn linear_f32_into(
         &self,
         weight: &CudaArtifactLinearHandle,
@@ -258,21 +262,13 @@ impl CudaOperators {
         self.check_buffer_owner(&weight.weight, "standard F32 linear weight")?;
         self.standard_buffer(input, product(&[rows, in_features])?)?;
         self.standard_buffer(output, product(&[rows, out_features])?)?;
-        count(input.len())?;
-        count(product(&[out_features, in_features])?)?;
-        let n = count(output.len())?;
-        self.launched(unsafe {
-            self.module.gemm_f32_bytes(
-                &self.stream,
-                LaunchConfig::for_num_elems(n),
-                &input.buffer,
-                &weight.weight,
-                &mut output.buffer,
-                count(rows)?,
-                count(out_features)?,
-                count(in_features)?,
-            )
-        })
+        self.launched(f32_gemm_bytes(
+            &self.stream,
+            &input.buffer,
+            &weight.weight,
+            &mut output.buffer,
+            F32GemmLayout::contiguous(rows, out_features, in_features),
+        ))
     }
 
     /// Checked embedding/row gather. IDs are CPU metadata; all value copying is GPU-side.

@@ -9,10 +9,14 @@ use ferrule_common::{
 use ferrule_model::decoder::StandardGqaPlanes;
 use ferrule_model::execution::ExecutionPrecisionPolicy;
 use ferrule_model::transformer::expert_parallel::{ExpertDispatchLimits, ExpertPlacement};
-use ferrule_model::transformer::{Attention, BoundDecoderResources, FeedForward, LayerSegmentPlan};
+use ferrule_model::transformer::{
+    Attention, BoundDecoderResources, DecoderModelSpec, DecoderRecipe, FeedForward,
+    LayerSegmentPlan, StandardTensorPlacement, StandardTensorPlan,
+};
 use ferrule_model::{ModelExecutionBackend, ModelFamily, TokenizerHandle};
 
 use crate::engine::PipelineInferenceEngine;
+use crate::parallel::collective::HostCollectiveLimits;
 use crate::parallel::expert::{ExpertGroup, ExpertParallelExecutor, ExpertRankWorker};
 use crate::parallel::pipeline::{
     BoxedPipelineStageWorker, PipelineConfig, PipelineParallelExecutor, PipelineRank,
@@ -51,7 +55,8 @@ pub struct PipelineBuildOptions {
     /// trusted child ceilings must accept those limits. Never used in thread mode.
     #[cfg(unix)]
     pub process_launch: Option<ProcessLaunch>,
-    /// CUDA ordinals: PP owners first, then each stage's EP owners in stage order
+    /// TP: PP-stage-major then TP-rank order, with PP * TP distinct devices.
+    /// Otherwise CUDA ordinals: PP owners first, then each stage's EP owners in stage order
     /// (EP owners exist only when EP > 1). Defaults to 0..owner_count. Explicit
     /// repeated ordinals permit colocation; logical owner IDs remain distinct.
     pub devices: Option<Vec<usize>>,
@@ -82,10 +87,10 @@ impl PipelineBuildOptions {
             0
         };
         experts
-            .checked_add(1)
+            .checked_add(p.tensor_parallel)
             .and_then(|owners| p.pipeline_parallel.checked_mul(owners))
             .filter(|&count| u32::try_from(count).is_ok())
-            .ok_or_else(|| invalid("pipeline/expert owner count exceeds the rank ABI"))
+            .ok_or_else(|| invalid("pipeline/tensor/expert owner count exceeds the rank ABI"))
     }
 
     fn validate(&self, backend: ModelExecutionBackend) -> Result<()> {
@@ -105,14 +110,26 @@ impl PipelineBuildOptions {
             ));
         }
         let p = self.parallelism;
-        if p.data_parallel != 1
-            || p.tensor_parallel != 1
-            || p.sequence_parallel != 1
-            || p.context_parallel != 1
-        {
-            return Err(invalid(
-                "pipeline serving supports PP/EP only; DP/TP/SP/CP must be 1",
-            ));
+        if p.data_parallel != 1 || p.sequence_parallel != 1 || p.context_parallel != 1 {
+            return Err(invalid("pipeline serving requires DP/SP/CP = 1"));
+        }
+        if p.tensor_parallel > 1 {
+            if backend != ModelExecutionBackend::Cuda {
+                return Err(invalid(
+                    "dense TP serving requires CUDA; CPU TP is unsupported",
+                ));
+            }
+            if self.rank_backend != PipelineRankBackend::Thread {
+                return Err(invalid(
+                    "process TP serving is unsupported; use thread ranks",
+                ));
+            }
+            if p.expert_parallel != 1 {
+                return Err(invalid("EP x TP serving is unsupported"));
+            }
+            if !matches!(p.tensor_parallel, 2 | 4) {
+                return Err(invalid("supported TP degrees are 1, 2 and 4"));
+            }
         }
         let count = self.owner_count()?;
         if self.rank_backend == PipelineRankBackend::Process {
@@ -159,8 +176,24 @@ impl PipelineBuildOptions {
                         || devices.iter().any(|&id| i32::try_from(id).is_err())
                     {
                         return Err(invalid(format!(
-                            "--devices requires {count} CUDA ordinals in PP-then-stage-EP order, each within i32"
+                            "--devices requires {count} CUDA ordinals in {} order, each within i32",
+                            if p.tensor_parallel > 1 {
+                                "PP-stage-major then TP-rank"
+                            } else {
+                                "PP-then-stage-EP"
+                            }
                         )));
+                    }
+                    if p.tensor_parallel > 1
+                        && devices
+                            .iter()
+                            .collect::<std::collections::BTreeSet<_>>()
+                            .len()
+                            != count
+                    {
+                        return Err(invalid(
+                            "TP requires one distinct CUDA device per physical owner",
+                        ));
                     }
                 } else if count > i32::MAX as usize {
                     return Err(invalid(
@@ -204,7 +237,6 @@ impl PipelineBuildOptions {
         }
     }
 
-    #[cfg(any(feature = "cuda", unix))]
     fn device(&self, owner: usize) -> usize {
         self.devices
             .as_ref()
@@ -280,6 +312,11 @@ impl ResidentModelBuildPlan {
                 "this model family has no standard pipeline serving binding",
             ));
         }
+        if options.parallelism.tensor_parallel > 1 && self.request.family != ModelFamily::Qwen3 {
+            return Err(invalid(
+                "TP serving requires dense Qwen3; MoE TP is unsupported",
+            ));
+        }
         if options.parallelism.expert_parallel > 1
             && (self.request.family != ModelFamily::QwenMoe
                 || options.parallelism.expert_parallel > self.request.model_info.num_experts)
@@ -317,6 +354,34 @@ impl ResidentModelBuildPlan {
             .min(self.request.driver_config.ctx_size);
         scheduler.prefill_chunk_size = scheduler.prefill_chunk_size.min(scheduler.max_batch_tokens);
         self.request.driver_config.enable_native_proposals = false;
+        if options.parallelism.tensor_parallel > 1 {
+            // Reuse strict model metadata validation without weight reads or CUDA.
+            let path = self.request.model_path.join("config.json");
+            let bytes =
+                std::fs::read(&path).map_err(|e| invalid(format!("{}: {e}", path.display())))?;
+            let value = serde_json::from_slice(&bytes).map_err(|e| invalid(e.to_string()))?;
+            let spec = ferrule_model::models::qwen3::Qwen3DenseRecipe::new()
+                .build_spec(&value)
+                .map_err(|e| invalid(e.to_string()))?;
+            let plans = segment_plans(
+                self.request.max_layers,
+                options.parallelism.pipeline_parallel,
+            )?;
+            validate_tensor_spec(&spec, &plans, &options)?;
+            let (config, _) = pipeline_capacity(
+                &self.request,
+                &options,
+                &spec,
+                Qwen3DensePrepareOptions::default().page_size,
+                &plans,
+            )?;
+            tensor_collective_limits(
+                &spec,
+                config.max_batch_tokens,
+                options.parallelism.tensor_parallel,
+            )?;
+        }
+
         self.backend_profile = match (
             options.rank_backend,
             self.backend,
@@ -354,11 +419,51 @@ impl ResidentModelBuildPlan {
 // into_decoder: stage factories alone construct computation and physical KV.
 enum Checkpoint {
     Dense(Qwen3DenseAdapter),
+    DenseTensor {
+        resources: BoundDecoderResources,
+        schema: StandardGqaPlanes,
+    },
     Moe(Qwen3MoeAdapter),
 }
 impl Checkpoint {
     fn load(request: &ModelBuildRequest) -> ferrule_common::Result<Self> {
         match request.family {
+            ModelFamily::Qwen3
+                if request
+                    .pipeline
+                    .as_ref()
+                    .is_some_and(|p| p.parallelism.tensor_parallel > 1) =>
+            {
+                let options = request.pipeline.as_ref().expect("TP options");
+                let (config, checkpoint) =
+                    Qwen3DenseAdapter::bind_hf_metadata(&request.model_path)?;
+                let resources = checkpoint.into_resources();
+                let tensor = StandardTensorPlan::new(
+                    resources.spec(),
+                    (0..options.parallelism.tensor_parallel)
+                        .map(|rank| StandardTensorPlacement {
+                            owner: ParallelRankId::new(rank as u32),
+                            device: options.device(rank),
+                        })
+                        .collect(),
+                )?;
+                // Parent and every owner use exactly the materializer's dense
+                // limit. Only bindings are retained; payloads remain owner-local.
+                Qwen3DenseAdapter::validate_tensor_read_limits(
+                    &resources,
+                    &tensor,
+                    request.max_tensor_bytes,
+                )?;
+                let schema = StandardGqaPlanes::new(
+                    config.num_hidden_layers,
+                    config.num_key_value_heads,
+                    config.head_dim,
+                    Qwen3DensePrepareOptions::default().page_size,
+                    config.max_position_embeddings,
+                    KvElementType::F32,
+                )?;
+                Ok(Self::DenseTensor { resources, schema })
+            }
             ModelFamily::Qwen3 => Ok(Self::Dense(Qwen3DenseAdapter::load_hf_with_options(
                 &request.model_path,
                 request.max_tensor_bytes,
@@ -381,12 +486,14 @@ impl Checkpoint {
     fn resources(&self) -> &BoundDecoderResources {
         match self {
             Self::Dense(a) => a.resources(),
+            Self::DenseTensor { resources, .. } => resources,
             Self::Moe(a) => a.resources(),
         }
     }
     fn schema(&self) -> &StandardGqaPlanes {
         match self {
             Self::Dense(a) => a.kv_schema(),
+            Self::DenseTensor { schema, .. } => schema,
             Self::Moe(a) => a.kv_schema(),
         }
     }
@@ -523,48 +630,141 @@ fn prepare_stage(
     }
 }
 
-pub(super) fn build(request: ModelBuildRequest) -> Result<BoxedSessionInferenceEngine> {
-    let options = request
-        .pipeline
-        .as_ref()
-        .ok_or_else(|| invalid("missing pipeline build options"))?;
-    options.validate(request.backend)?;
-    let degree = options.parallelism.pipeline_parallel;
-    let precision = options.precision(request.backend);
-    let checkpoint = Checkpoint::load(&request)?;
-    let template = checkpoint.schema();
-    if request.driver_config.ctx_size > template.max_sequence_len() {
+fn segment_plans(layers: usize, degree: usize) -> Result<Vec<LayerSegmentPlan>> {
+    (0..degree)
+        .map(|stage| {
+            let base = layers / degree;
+            let remainder = layers % degree;
+            let start = stage * base + stage.min(remainder);
+            let end = start + base + usize::from(stage < remainder);
+            LayerSegmentPlan::new(layers, start..end, stage == 0, stage + 1 == degree)
+                .map_err(|e| invalid(e.to_string()))
+        })
+        .collect()
+}
+
+fn validate_tensor_spec(
+    spec: &DecoderModelSpec,
+    plans: &[LayerSegmentPlan],
+    options: &PipelineBuildOptions,
+) -> Result<Vec<StandardTensorPlan>> {
+    let tp = options.parallelism.tensor_parallel;
+    plans
+        .iter()
+        .enumerate()
+        .map(|(stage, segment)| {
+            let tensor = StandardTensorPlan::new(
+                spec,
+                (0..tp)
+                    .map(|rank| {
+                        let owner = stage * tp + rank;
+                        StandardTensorPlacement {
+                            owner: ParallelRankId::new(owner as u32),
+                            device: options.device(owner),
+                        }
+                    })
+                    .collect(),
+            )?;
+            tensor.validate_segment(spec, segment)?;
+            Ok(tensor)
+        })
+        .collect()
+}
+
+fn tensor_collective_limits(
+    spec: &DecoderModelSpec,
+    rows: usize,
+    tp: usize,
+) -> Result<HostCollectiveLimits> {
+    let elements = rows
+        .checked_mul(spec.hidden_size().max(spec.vocab_size().div_ceil(tp)))
+        .ok_or_else(|| invalid("TP collective element bound overflow"))?;
+    // AllGather keeps all inputs plus a full gathered output for every peer.
+    let bytes = elements
+        .checked_mul(std::mem::size_of::<f32>())
+        .and_then(|n| n.checked_mul(tp))
+        .and_then(|n| n.checked_mul(tp + 1))
+        .filter(|&n| n <= isize::MAX as usize)
+        .ok_or_else(|| invalid("TP collective host byte bound overflow"))?;
+    Ok(HostCollectiveLimits {
+        max_ranks: tp,
+        max_elements_per_rank: elements,
+        max_host_bytes: bytes,
+    })
+}
+
+fn pipeline_capacity(
+    request: &ModelBuildRequest,
+    options: &PipelineBuildOptions,
+    spec: &DecoderModelSpec,
+    page_size: usize,
+    plans: &[LayerSegmentPlan],
+) -> Result<(PipelineConfig, crate::engine::ResidentKvPagePlan)> {
+    if spec.layers().len() != request.max_layers {
+        return Err(invalid(
+            "pipeline checkpoint layer count changed after planning",
+        ));
+    }
+    if spec
+        .max_sequence_length()
+        .is_some_and(|max| request.driver_config.ctx_size > max)
+    {
         return Err(invalid(
             "pipeline context exceeds the checkpoint position range",
         ));
     }
-    // Budget every layer at the actual execution KV dtype, not the BF16 storage
-    // dtype of the checkpoint. EP owners do not allocate additional KV pages.
-    let first = checkpoint
-        .resources()
-        .spec()
+    let precision = options.precision(request.backend);
+    let dtype = if precision == ExecutionPrecisionPolicy::f32() {
+        KvElementType::F32
+    } else {
+        KvElementType::Bf16
+    };
+    let first = spec
         .layers()
         .first()
         .ok_or_else(|| invalid("pipeline model has no decoder layers"))?;
     let Attention::Gqa(attention) = first.attention() else {
         return Err(invalid("pipeline requires standard GQA attention"));
     };
+    let tp = options.parallelism.tensor_parallel;
+    if !attention.num_kv_heads().is_multiple_of(tp) {
+        return Err(invalid(
+            "KV heads must be divisible by TP; KV replication is unsupported",
+        ));
+    }
     let schema = StandardGqaPlanes::new(
         request.max_layers,
         attention.num_kv_heads(),
         attention.head_dim(),
-        template.page_size(),
+        page_size,
         request.driver_config.ctx_size,
-        if precision == ExecutionPrecisionPolicy::f32() {
-            KvElementType::F32
-        } else {
-            KvElementType::Bf16
-        },
+        dtype,
     )?;
-    let accounting = kv_accounting(request.kv_cache_bytes, Some(physical_page_bytes(&schema)?));
+    // One logical page spans every layer/global head. Sum segment-local,
+    // local-head physical owners, not a full-model replica for each TP rank.
+    let mut physical_bytes = 0u64;
+    for plan in plans {
+        let local = StandardGqaPlanes::new(
+            plan.layer_count(),
+            attention.num_kv_heads() / tp,
+            attention.head_dim(),
+            page_size,
+            request.driver_config.ctx_size,
+            dtype,
+        )?;
+        physical_bytes = physical_page_bytes(&local)?
+            .checked_mul(tp as u64)
+            .and_then(|n| physical_bytes.checked_add(n))
+            .ok_or_else(|| invalid("pipeline physical KV byte bound overflow"))?;
+    }
+    if physical_bytes != physical_page_bytes(&schema)? {
+        return Err(invalid(
+            "physical owner KV does not match parent logical schema",
+        ));
+    }
     let kv_plan = plan_resident_kv_pages(
         &schema,
-        accounting,
+        kv_accounting(request.kv_cache_bytes, Some(physical_bytes)),
         request.scheduler_config,
         request.driver_config,
     )?;
@@ -574,33 +774,47 @@ pub(super) fn build(request: ModelBuildRequest) -> Result<BoxedSessionInferenceE
         ));
     }
     let config = PipelineConfig {
-        page_size: schema.page_size(),
+        page_size,
         max_pages: kv_plan.configured_pages,
         max_positions: request.driver_config.ctx_size,
         max_batch_tokens: request.scheduler_config.max_batch_tokens,
         session_capacity: request.scheduler_config.max_active_sequences,
-        max_parameter_bytes: request
-            .max_tensor_bytes
-            .max(request.expert_reader_max_tensor_bytes),
+        max_parameter_bytes: if options.parallelism.tensor_parallel > 1 {
+            request.max_tensor_bytes
+        } else {
+            request
+                .max_tensor_bytes
+                .max(request.expert_reader_max_tensor_bytes)
+        },
         precision,
         max_ack_polls: 8,
     };
     config.validate()?;
-    let plans = (0..degree)
-        .map(|stage| {
-            let base = request.max_layers / degree;
-            let remainder = request.max_layers % degree;
-            let start = stage * base + stage.min(remainder);
-            let end = start + base + usize::from(stage < remainder);
-            LayerSegmentPlan::new(
-                request.max_layers,
-                start..end,
-                stage == 0,
-                stage + 1 == degree,
-            )
-            .map_err(|error| invalid(error.to_string()))
-        })
-        .collect::<Result<Vec<_>>>()?;
+    Ok((config, kv_plan))
+}
+
+pub(super) fn build(request: ModelBuildRequest) -> Result<BoxedSessionInferenceEngine> {
+    let options = request
+        .pipeline
+        .as_ref()
+        .ok_or_else(|| invalid("missing pipeline build options"))?;
+    options.validate(request.backend)?;
+    let degree = options.parallelism.pipeline_parallel;
+    let checkpoint = Checkpoint::load(&request)?;
+    let spec = checkpoint.resources().spec().clone();
+    let plans = segment_plans(request.max_layers, degree)?;
+    if options.parallelism.tensor_parallel > 1 {
+        for tensor in validate_tensor_spec(&spec, &plans, options)? {
+            tensor.validate_resources(checkpoint.resources())?;
+        }
+    }
+    let (config, kv_plan) = pipeline_capacity(
+        &request,
+        options,
+        &spec,
+        checkpoint.schema().page_size(),
+        &plans,
+    )?;
     let groups = plans
         .iter()
         .enumerate()
@@ -618,7 +832,7 @@ pub(super) fn build(request: ModelBuildRequest) -> Result<BoxedSessionInferenceE
     // EP owners are separate compute identities, never physical KV participants.
     let topology = ValidatedParallelTopology::new(
         ParallelTopologyId::new(1),
-        degree as u32,
+        (degree * options.parallelism.tensor_parallel) as u32,
         ParallelRankId::new(0),
         ParallelismPlan {
             expert_parallel: 1,
@@ -628,6 +842,30 @@ pub(super) fn build(request: ModelBuildRequest) -> Result<BoxedSessionInferenceE
     .map_err(|error| invalid(format!("invalid pipeline topology: {error:?}")))?;
     let tokenizer = TokenizerHandle::load(&request.model_path)?;
     let pipeline = match options.rank_backend {
+        #[cfg(feature = "cuda")]
+        PipelineRankBackend::Thread if options.parallelism.tensor_parallel > 1 => {
+            use crate::parallel::pipeline::StandardCudaTensorConfig;
+            let tensor_config = StandardCudaTensorConfig {
+                devices: (0..options.owner_count()?)
+                    .map(|owner| options.device(owner))
+                    .collect(),
+                collective_limits: tensor_collective_limits(
+                    &spec,
+                    config.max_batch_tokens,
+                    options.parallelism.tensor_parallel,
+                )?,
+                collective_timeout: Duration::from_secs(30),
+            };
+            let owner_request = request.clone();
+            PipelineParallelExecutor::new_standard_cuda_tensor(
+                topology,
+                plans,
+                config,
+                &spec,
+                tensor_config,
+                move |_| Ok(Checkpoint::load(&owner_request)?.resources().clone()),
+            )?
+        }
         PipelineRankBackend::Thread => {
             let boots = plans
                 .into_iter()
@@ -843,6 +1081,348 @@ mod tests {
         }
     }
 
+    struct TensorCheckpointFixture(std::path::PathBuf);
+
+    impl TensorCheckpointFixture {
+        fn new(vocabulary: usize, tied: bool) -> Self {
+            use std::sync::atomic::{AtomicU64, Ordering};
+            static NEXT: AtomicU64 = AtomicU64::new(0);
+            let path = std::env::temp_dir().join(format!(
+                "ferrule-factory-tp-budget-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed),
+            ));
+            std::fs::create_dir_all(&path).unwrap();
+            let config = serde_json::json!({
+                "architectures":["Qwen3ForCausalLM"], "model_type":"qwen3",
+                "hidden_size":8, "intermediate_size":21, "num_hidden_layers":2,
+                "num_attention_heads":4, "num_key_value_heads":4, "head_dim":2,
+                "rms_norm_eps":0.000001, "rope_theta":10000.0, "rope_scaling":null,
+                "max_position_embeddings":64, "vocab_size":vocabulary, "tie_word_embeddings":tied,
+                "attention_bias":false, "attention_dropout":0.0, "hidden_act":"silu",
+                "torch_dtype":"bfloat16", "use_cache":true, "use_sliding_window":false,
+                "sliding_window":null, "max_window_layers":2, "initializer_range":0.02,
+                "bos_token_id":1, "eos_token_id":2
+            });
+            std::fs::write(path.join("config.json"), config.to_string()).unwrap();
+            let mut tensors = vec![
+                ("model.embed_tokens.weight".to_owned(), vec![vocabulary, 8]),
+                ("model.norm.weight".to_owned(), vec![8]),
+            ];
+            if !tied {
+                tensors.push(("lm_head.weight".to_owned(), vec![vocabulary, 8]));
+            }
+            for layer in 0..2 {
+                for (name, shape) in [
+                    ("input_layernorm.weight", vec![8]),
+                    ("post_attention_layernorm.weight", vec![8]),
+                    ("self_attn.q_proj.weight", vec![8, 8]),
+                    ("self_attn.k_proj.weight", vec![8, 8]),
+                    ("self_attn.v_proj.weight", vec![8, 8]),
+                    ("self_attn.o_proj.weight", vec![8, 8]),
+                    ("self_attn.q_norm.weight", vec![2]),
+                    ("self_attn.k_norm.weight", vec![2]),
+                    ("mlp.gate_proj.weight", vec![21, 8]),
+                    ("mlp.up_proj.weight", vec![21, 8]),
+                    ("mlp.down_proj.weight", vec![8, 21]),
+                ] {
+                    tensors.push((format!("model.layers.{layer}.{name}"), shape));
+                }
+            }
+            let mut header = serde_json::Map::new();
+            let mut payload = Vec::new();
+            for (name, shape) in tensors {
+                let start = payload.len();
+                for _ in 0..shape.iter().product::<usize>() {
+                    payload.extend_from_slice(&0x3f80u16.to_le_bytes());
+                }
+                header.insert(name, serde_json::json!({"dtype":"BF16", "shape":shape, "data_offsets":[start, payload.len()]}));
+            }
+            Self::write_checkpoint(&path, &serde_json::Value::Object(header), &payload);
+            // TP metadata binding must not require a tokenizer.
+            Self(path)
+        }
+        fn write_checkpoint(path: &std::path::Path, header: &serde_json::Value, payload: &[u8]) {
+            let mut header = serde_json::to_vec(header).unwrap();
+            while !header.len().is_multiple_of(8) {
+                header.push(b' ');
+            }
+            let mut file = (header.len() as u64).to_le_bytes().to_vec();
+            file.extend(header);
+            file.extend_from_slice(payload);
+            std::fs::write(path.join("model.safetensors"), file).unwrap();
+        }
+        fn request(&self, pp: usize, tp: usize, limit: u64) -> ModelBuildRequest {
+            let config = AutoConfig::from_pretrained(&self.0).unwrap();
+            ModelBuildRequest {
+                family: ModelFamily::Qwen3,
+                backend: ModelExecutionBackend::Cuda,
+                model_path: self.0.clone(),
+                model_info: ferrule_model::ModelInfo::from_descriptor(config.descriptor(), "cuda"),
+                pipeline: Some(PipelineBuildOptions {
+                    parallelism: ParallelismPlan {
+                        pipeline_parallel: pp,
+                        tensor_parallel: tp,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }),
+                max_layers: 2,
+                max_tensor_bytes: limit,
+                output_head_chunk_rows: 4,
+                // Must not widen the dense TP materializer's read limit.
+                expert_reader_max_tensor_bytes: 1 << 20,
+                expert_memory_policy: Default::default(),
+                moe_hotset_experts: 0,
+                kv_cache_bytes: None,
+                scheduler_config: crate::ResidentSchedulerConfig {
+                    max_active_sequences: 1,
+                    max_batch_tokens: 4,
+                    prefill_chunk_size: 4,
+                    ..Default::default()
+                },
+                driver_config: crate::ResidentTopKDriverConfig {
+                    ctx_size: 32,
+                    ..Default::default()
+                },
+            }
+        }
+    }
+    impl Drop for TensorCheckpointFixture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn tensor_checkpoint_factory_accepts_local_reads_not_full_projection_limits() {
+        use ferrule_model::{TensorRole, transformer::StateDictMaterializer};
+        for tied in [false, true] {
+            let fixture = TensorCheckpointFixture::new(4, tied);
+            // Global MLP matrices: 336 bytes. Ragged TP2: 176/160 bytes;
+            // TP4: 96/80/80/80 bytes, for Column gate/up AND Row down.
+            for (pp, tp, limit) in [(1, 2, 176), (2, 2, 176), (1, 4, 96), (2, 4, 96)] {
+                let request = fixture.request(pp, tp, limit);
+                for _ in 0..=pp * tp {
+                    // The same entrypoint runs in the parent and each owner.
+                    assert!(matches!(
+                        Checkpoint::load(&request).unwrap(),
+                        Checkpoint::DenseTensor { .. }
+                    ));
+                }
+                let checkpoint = Checkpoint::load(&request).unwrap();
+                let resources = checkpoint.resources();
+                let plans = segment_plans(2, pp).unwrap();
+                let options = request.pipeline.as_ref().unwrap();
+                let tensor_plans = validate_tensor_spec(resources.spec(), &plans, options).unwrap();
+                let (config, _) =
+                    pipeline_capacity(&request, options, resources.spec(), 16, &plans).unwrap();
+                assert_eq!(config.max_parameter_bytes, limit);
+                assert_eq!(config.precision, ExecutionPrecisionPolicy::f32());
+                for tensor in tensor_plans {
+                    for rank in 0..tp {
+                        let materializer = StateDictMaterializer::for_tensor(
+                            limit,
+                            tensor.clone(),
+                            ParallelRankId::new(rank as u32),
+                        )
+                        .unwrap();
+                        for binding in resources.state_dict().parameters() {
+                            if matches!(
+                                binding.role(),
+                                TensorRole::TokenEmbedding
+                                    | TensorRole::OutputNorm
+                                    | TensorRole::AttentionNorm
+                                    | TensorRole::FeedForwardNorm
+                                    | TensorRole::AttentionQueryNorm
+                                    | TensorRole::AttentionKeyNorm
+                            ) {
+                                materializer.parameter(binding).unwrap();
+                            } else {
+                                let linear = materializer
+                                    .prepared_linear(binding, binding.role().clone())
+                                    .unwrap();
+                                let shard = linear.tensor_shard().unwrap();
+                                assert!(shard.bytes().len() as u64 <= limit);
+                                assert_eq!(
+                                    shard.provenance().unwrap().tensor(),
+                                    binding.weight().slice()
+                                );
+                            }
+                        }
+                    }
+                }
+                assert!(!fixture.0.join("tokenizer.json").exists());
+                let error = Checkpoint::load(&fixture.request(pp, tp, limit - 1))
+                    .err()
+                    .unwrap()
+                    .to_string();
+                assert!(
+                    error.contains("rank 0") && error.contains("limit"),
+                    "{error}"
+                );
+                // A global/TP average must not admit the larger ragged rank.
+                assert!(Checkpoint::load(&fixture.request(pp, tp, 336 / tp as u64)).is_err());
+            }
+            let mut request = fixture.request(1, 1, 176);
+            let error = Checkpoint::load(&request).err().unwrap().to_string();
+            assert!(
+                error.contains("336 bytes") && error.contains("load limit"),
+                "{error}"
+            );
+            request.pipeline = None;
+            request.backend = ModelExecutionBackend::Cpu;
+            assert!(
+                Checkpoint::load(&request)
+                    .err()
+                    .unwrap()
+                    .to_string()
+                    .contains("load limit")
+            );
+        }
+    }
+
+    #[test]
+    fn tensor_checkpoint_factory_preserves_replicated_embedding_budget() {
+        for tied in [false, true] {
+            let fixture = TensorCheckpointFixture::new(32, tied);
+            for tp in [2, 4] {
+                let error = Checkpoint::load(&fixture.request(2, tp, 256))
+                    .err()
+                    .unwrap()
+                    .to_string();
+                assert!(
+                    error.contains("replicated parameter 'token_embedding.weight'")
+                        && error.contains("512 bytes"),
+                    "{error}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn tensor_checkpoint_factory_keeps_source_identity_and_reader_checks() {
+        use ferrule_model::{TensorRole, transformer::StateDictMaterializer};
+        let fixture = TensorCheckpointFixture::new(4, true);
+        let request = fixture.request(2, 2, 176);
+        let checkpoint = Checkpoint::load(&request).unwrap();
+        let resources = checkpoint.resources();
+        let embedding = resources
+            .require_static(TensorRole::TokenEmbedding)
+            .unwrap();
+        let head = resources.require_static(TensorRole::OutputHead).unwrap();
+        assert!(head.shares_storage_with(embedding));
+        let tensor = validate_tensor_spec(
+            resources.spec(),
+            &segment_plans(2, 2).unwrap(),
+            request.pipeline.as_ref().unwrap(),
+        )
+        .unwrap()
+        .remove(0);
+        let materializer =
+            StateDictMaterializer::for_tensor(176, tensor.clone(), ParallelRankId::new(0)).unwrap();
+        let replacement = fixture.0.join("replacement.safetensors");
+        std::fs::copy(fixture.0.join("model.safetensors"), &replacement).unwrap();
+        std::fs::rename(replacement, fixture.0.join("model.safetensors")).unwrap();
+        // Same bytes/length, new inode: do not recapture an old binding's source.
+        assert!(!resources.state_dict().validate_source_identities());
+        let error =
+            Qwen3DenseAdapter::validate_tensor_read_limits(resources, &tensor, 176).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("stale checkpoint source identity"),
+            "{error}"
+        );
+        assert!(materializer.parameter(embedding).is_err());
+        assert!(
+            materializer
+                .prepared_linear(head, TensorRole::OutputHead)
+                .is_err()
+        );
+        assert!(
+            materializer
+                .prepared_linear(
+                    resources
+                        .require_layer(0, TensorRole::DenseMlpDown)
+                        .unwrap(),
+                    TensorRole::DenseMlpDown
+                )
+                .is_err()
+        );
+        assert!(materializer.tensor_reads().unwrap().is_empty());
+    }
+
+    #[test]
+    fn tensor_checkpoint_factory_keeps_strict_index_header_and_binding_validation() {
+        for corrupt in [
+            "index",
+            "missing-shard",
+            "index-mismatch",
+            "truncated",
+            "dtype",
+            "shape",
+            "name",
+        ] {
+            let fixture = TensorCheckpointFixture::new(4, true);
+            let request = fixture.request(1, 2, 176);
+            let path = fixture.0.join("model.safetensors");
+            let bytes = std::fs::read(&path).unwrap();
+            let header_len = u64::from_le_bytes(bytes[..8].try_into().unwrap()) as usize;
+            match corrupt {
+                "index" => {
+                    std::fs::write(fixture.0.join("model.safetensors.index.json"), "not-json")
+                        .unwrap()
+                }
+                "missing-shard" | "index-mismatch" => {
+                    let shard = if corrupt == "missing-shard" {
+                        "missing.safetensors"
+                    } else {
+                        "model.safetensors"
+                    };
+                    std::fs::write(
+                        fixture.0.join("model.safetensors.index.json"),
+                        serde_json::json!({
+                            "weight_map":{"model.embed_tokens.weight":shard}
+                        })
+                        .to_string(),
+                    )
+                    .unwrap();
+                }
+                "truncated" => std::fs::OpenOptions::new()
+                    .write(true)
+                    .open(&path)
+                    .unwrap()
+                    .set_len((8 + header_len) as u64)
+                    .unwrap(),
+                _ => {
+                    let mut header: serde_json::Value =
+                        serde_json::from_slice(&bytes[8..8 + header_len]).unwrap();
+                    let name = "model.layers.0.mlp.gate_proj.weight";
+                    match corrupt {
+                        "dtype" => header[name]["dtype"] = serde_json::json!("F16"),
+                        "shape" => header[name]["shape"] = serde_json::json!([8, 21]),
+                        "name" => {
+                            let value = header.as_object_mut().unwrap().remove(name).unwrap();
+                            header["model.layers.0.mlp.invalid.weight"] = value;
+                        }
+                        _ => unreachable!(),
+                    }
+                    TensorCheckpointFixture::write_checkpoint(
+                        &fixture.0,
+                        &header,
+                        &bytes[8 + header_len..],
+                    );
+                }
+            }
+            let error = Checkpoint::load(&request).err().expect(corrupt).to_string();
+            assert!(
+                !error.contains("read limit"),
+                "strict {corrupt} validation masked by budgeting: {error}"
+            );
+        }
+    }
+
     #[test]
     fn pipeline_precision_and_owner_count_are_explicit() {
         let dense = options(2, 1);
@@ -875,6 +1455,58 @@ mod tests {
                     .is_err()
             );
         }
+    }
+
+    #[test]
+    fn tensor_owner_count_is_pp_times_tp_and_never_silently_falls_back() {
+        for (pp, tp) in [(1, 2), (1, 4), (2, 2), (3, 4)] {
+            let mut tensor = options(pp, 1);
+            tensor.parallelism.tensor_parallel = tp;
+            assert_eq!(tensor.owner_count().unwrap(), pp * tp);
+            assert!(
+                tensor
+                    .validate(ModelExecutionBackend::Cpu)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("CPU TP")
+            );
+            #[cfg(feature = "cuda")]
+            {
+                tensor.validate(ModelExecutionBackend::Cuda).unwrap();
+                tensor.devices = Some((0..pp * tp).rev().collect());
+                tensor.validate(ModelExecutionBackend::Cuda).unwrap();
+                assert_eq!(tensor.device(0), pp * tp - 1);
+                tensor.devices = Some(vec![0; pp * tp]);
+                assert!(
+                    tensor
+                        .validate(ModelExecutionBackend::Cuda)
+                        .unwrap_err()
+                        .to_string()
+                        .contains("distinct")
+                );
+                tensor.devices = None;
+            }
+            tensor.parallelism.expert_parallel = 2;
+            assert!(
+                tensor
+                    .validate(ModelExecutionBackend::Cuda)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("EP x TP")
+            );
+            tensor.parallelism.expert_parallel = 1;
+            tensor.rank_backend = PipelineRankBackend::Process;
+            assert!(
+                tensor
+                    .validate(ModelExecutionBackend::Cuda)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("process TP")
+            );
+        }
+        let mut overflow = options(usize::MAX, 1);
+        overflow.parallelism.tensor_parallel = 4;
+        assert!(overflow.owner_count().is_err());
     }
 
     #[test]

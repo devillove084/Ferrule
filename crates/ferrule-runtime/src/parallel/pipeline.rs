@@ -26,7 +26,9 @@ use ferrule_common::execution::{
     ExecutionBatch, ExecutionCapabilities, ExecutionSequence, ExecutionTransactionId, ForwardMode,
     ForwardPhase, KvElementType, KvPageId, LogitsRequest, StateSlot,
 };
-use ferrule_common::{ParallelRankId, ParticipantSet, ValidatedParallelTopology};
+use ferrule_common::{
+    MeshCoordinate, ParallelExecutionScopes, ParallelRankId, ValidatedParallelTopology,
+};
 use ferrule_model::decoder::{
     CpuPagedKvBackend, CpuPagedKvPool, DecoderKvBackend, DecoderKvCapacity, DecoderKvCommitBackend,
     DecoderKvPrepare, DenseLogits, GenericDecoderOptions, GenericDecoderSequenceState,
@@ -46,7 +48,14 @@ pub use cuda::CudaPipelineStageProgram;
 
 pub mod owner;
 pub mod stage;
+#[cfg(feature = "cuda")]
+pub mod tensor;
+pub mod tensor_scope;
+#[cfg(test)]
+mod tensor_tests;
 pub mod transport;
+#[cfg(feature = "cuda")]
+pub use tensor::StandardCudaTensorConfig;
 
 use ferrule_model::{ModelFamily, WeightSource};
 pub use owner::{PipelineOwnerStats, PipelineStageWorker};
@@ -150,6 +159,7 @@ pub struct PipelineStageDescription {
     pub config: PipelineConfig,
     pub hidden: usize,
     pub vocabulary: usize,
+    /// Physical heads per owner (global heads / TP for a tensor stage).
     pub kv_heads: usize,
     pub head_dim: usize,
     pub expert_group: Option<ExpertGroup>,
@@ -549,17 +559,41 @@ fn validate_pipeline(
     plans: &[LayerSegmentPlan],
     config: PipelineConfig,
 ) -> Result<()> {
+    validate_pipeline_layout(topology, plans, config, false)
+}
+
+fn validate_pipeline_layout(
+    topology: &ValidatedParallelTopology,
+    plans: &[LayerSegmentPlan],
+    config: PipelineConfig,
+    thread_tensor: bool,
+) -> Result<()> {
     config.validate()?;
-    if topology.plan().data_parallel != 1
-        || topology.plan().tensor_parallel != 1
-        || topology.plan().sequence_parallel != 1
-        || topology.plan().context_parallel != 1
+    if topology.plan().data_parallel != 1 {
+        return Err(error("pipeline requires DP=1"));
+    }
+    if !thread_tensor && topology.plan().tensor_parallel != 1 {
+        return Err(error(
+            "process/transport TP unsupported; use the thread standard tensor constructor",
+        ));
+    }
+    if topology.plan().sequence_parallel != 1 || topology.plan().context_parallel != 1 {
+        return Err(error("pipeline requires SP=CP=1"));
+    }
+    if thread_tensor
+        && (!matches!(topology.plan().tensor_parallel, 1 | 2 | 4)
+            || config.precision != ExecutionPrecisionPolicy::f32())
     {
-        return Err(error("pipeline requires DP=TP=SP=CP=1"));
+        return Err(error("thread tensor pipeline requires TP1/2/4 and F32"));
+    }
+    if topology.plan().expert_parallel != 1 && topology.plan().tensor_parallel != 1 {
+        return Err(error(
+            "EP×TP unsupported; expert dispatch has no TP owner mapping",
+        ));
     }
     if topology.plan().expert_parallel != 1 {
         return Err(error(
-            "common EP topology is not expanded by pipeline; configure explicit stage ExpertGroups instead",
+            "common EP topology is metadata-only; configure explicit stage ExpertGroups instead",
         ));
     }
     if topology.plan().pipeline_parallel != plans.len() {
@@ -826,17 +860,20 @@ pub struct PipelineProgress {
 }
 
 /// One serial pipeline, independently selecting owner transport and device program.
-/// DP/TP meshes are described by common topology, but
-/// this entry point intentionally requires DP=TP=1. It is not a serving adapter.
+/// Generic constructors retain DP=TP=1. `new_standard_cuda_tensor` opts into
+/// sealed concurrent thread PP×TP, with one KV manager and one coordinator.
+/// Process TP and EP×TP are not supported.
 pub struct PipelineParallelExecutor {
     transport: Rc<RefCell<Box<dyn PipelineTransport>>>,
     coordinator: DistributedTransaction,
-    participants: ParticipantSet,
+    scopes: ParallelExecutionScopes,
     page_manager: KvPageManager,
     config: PipelineConfig,
     descriptions: Vec<Description>,
+    tensor_controls: Vec<super::tensor::decoder_collective::DecoderTensorCollectiveControl>,
     sessions: BTreeMap<SessionId, StateSlot>,
     next_transaction: u64,
+    // Unresolved custody only. is_quarantined also includes terminal TP failure.
     quarantined: bool,
     closed: bool,
     unresolved_retirement: Option<crate::cache::KvRetirement>,
@@ -937,6 +974,78 @@ impl PipelineParallelExecutor {
         Self::new_with_transport(topology, plans, config, ThreadTransport::new(pool))
     }
 
+    /// Generic thread owner factory. TP>1 requires `new_standard_cuda_tensor`
+    /// so arbitrary programs cannot bypass sealed collective validation.
+    ///
+    /// `plans` has one entry per PP stage. With TP=1 the factory runs once per
+    /// stage and receives its mesh coordinate; all resources remain owner-local.
+    pub fn new_thread_tensor_with_program<F, B, P>(
+        topology: ValidatedParallelTopology,
+        plans: Vec<LayerSegmentPlan>,
+        config: PipelineConfig,
+        factory: F,
+    ) -> Result<Self>
+    where
+        F: FnOnce(PipelineRank, MeshCoordinate, LayerSegmentPlan) -> Result<PipelineStage<B, P>>
+            + Clone
+            + Send
+            + 'static,
+        B: DecoderKvCommitBackend<SequenceState = GenericDecoderSequenceState> + 'static,
+        P: PipelineStageProgram<KvView = B::KvView>,
+    {
+        validate_pipeline_layout(&topology, &plans, config, true)?;
+        if topology.plan().tensor_parallel > 1 {
+            return Err(error(
+                "generic tensor program requires TP=1; use new_standard_cuda_tensor for sealed TP",
+            ));
+        }
+        Self::new_thread_tensor_with_program_inner(topology, plans, config, factory)
+    }
+
+    // Only the standard constructor and internal fault-injection tests may admit
+    // TP programs; they install both scoped programs and their cohort controls.
+    fn new_thread_tensor_with_program_inner<F, B, P>(
+        topology: ValidatedParallelTopology,
+        plans: Vec<LayerSegmentPlan>,
+        config: PipelineConfig,
+        factory: F,
+    ) -> Result<Self>
+    where
+        F: FnOnce(PipelineRank, MeshCoordinate, LayerSegmentPlan) -> Result<PipelineStage<B, P>>
+            + Clone
+            + Send
+            + 'static,
+        B: DecoderKvCommitBackend<SequenceState = GenericDecoderSequenceState> + 'static,
+        P: PipelineStageProgram<KvView = B::KvView>,
+    {
+        validate_pipeline_layout(&topology, &plans, config, true)?;
+        let owner_topology = topology.clone();
+        let owner_plans = Arc::new(plans.clone());
+        let degree = topology.world_size() as usize;
+        let pool = DataParallelExecutor::new(
+            DataParallelConfig {
+                replicas: degree,
+                max_outstanding_per_replica: 1,
+                session_capacity: degree,
+            },
+            move |local| {
+                let coordinate = owner_topology
+                    .coordinate_of(local)
+                    .map_err(|e| error(format!("tensor owner coordinate: {e:?}")))?;
+                let boot = PipelineStageBoot {
+                    rank: Self::rank(local.get() as usize),
+                    plan: owner_plans[coordinate.stage() as usize].clone(),
+                    config,
+                    program_spec: Vec::new(),
+                };
+                let stage = factory(boot.rank, coordinate, boot.plan.clone())?;
+                Ok(PipelineStageWorker::new(&boot, stage)?.boxed())
+            },
+        )
+        .map_err(pool_build_error)?;
+        Self::new_with_transport_inner(topology, plans, config, ThreadTransport::new(pool), true)
+    }
+
     /// Inject thread/process transport without a second owner or KV state machine.
     /// This executor alone constructs/owns the logical page manager. Serving should
     /// own this pipeline directly, not wrap it in another KV-owning driver.
@@ -946,16 +1055,28 @@ impl PipelineParallelExecutor {
         topology: ValidatedParallelTopology,
         plans: Vec<LayerSegmentPlan>,
         config: PipelineConfig,
+        transport: T,
+    ) -> Result<Self> {
+        Self::new_with_transport_inner(topology, plans, config, transport, false)
+    }
+
+    fn new_with_transport_inner<T: PipelineTransport + 'static>(
+        topology: ValidatedParallelTopology,
+        plans: Vec<LayerSegmentPlan>,
+        config: PipelineConfig,
         mut transport: T,
+        thread_tensor: bool,
     ) -> Result<Self> {
         let startup = (|| {
-            validate_pipeline(&topology, &plans, config)?;
-            let degree = plans.len();
+            validate_pipeline_layout(&topology, &plans, config, thread_tensor)?;
+            let degree = topology.world_size() as usize;
+            let tp = topology.plan().tensor_parallel;
             let mut descriptions: Vec<Description> = Vec::with_capacity(degree);
-            let mut owner_ids = (0..degree)
-                .map(|index| Self::rank(index).global)
-                .collect::<BTreeSet<_>>();
-            for (index, plan) in plans.iter().enumerate() {
+            let mut scopes = topology
+                .execution_scopes(0)
+                .map_err(|e| error(format!("pipeline execution scope: {e:?}")))?;
+            for index in 0..degree {
+                let plan = &plans[index / tp];
                 let Reply::Description(description) =
                     transport.call(Self::rank(index), Command::Describe)?
                 else {
@@ -981,28 +1102,34 @@ impl PipelineParallelExecutor {
                     return Err(error("pipeline owners disagree on decoder geometry"));
                 }
                 if let Some(group) = &description.expert_group {
-                    for &owner in &group.members {
-                        if !owner_ids.insert(owner) {
-                            return Err(error(
-                                "expert owner IDs must be disjoint across groups and from pipeline KV ranks",
-                            ));
-                        }
+                    if tp > 1 {
+                        return Err(error("EP×TP is unsupported; no local expert fallback"));
                     }
+                    scopes
+                        .attach_expert_dispatch_members(group.dispatch_members(
+                            &topology,
+                            0,
+                            index as u32,
+                        )?)
+                        .map_err(|e| error(format!("pipeline expert scope: {e:?}")))?;
                 }
                 descriptions.push(description);
             }
             let first = &descriptions[0];
             let schema = StandardGqaPlanes::new(
                 plans[0].total_layers(),
-                first.kv_heads,
+                first
+                    .kv_heads
+                    .checked_mul(tp)
+                    .ok_or_else(|| error("global KV head count overflow"))?,
                 first.head_dim,
                 config.page_size,
                 config.max_positions,
                 config.dtype(),
             )?;
-            Ok((descriptions, schema))
+            Ok((descriptions, schema, scopes))
         })();
-        let (descriptions, schema) = match startup {
+        let (descriptions, schema, scopes) = match startup {
             Ok(startup) => startup,
             Err(source) => {
                 return Err(ferrule_common::Error::with_cleanup(
@@ -1012,8 +1139,7 @@ impl PipelineParallelExecutor {
                 ));
             }
         };
-        let degree = plans.len();
-        let participants = topology.participants();
+        let degree = topology.world_size() as usize;
         Ok(Self {
             transport: Rc::new(RefCell::new(Box::new(transport))),
             coordinator: DistributedTransaction::new_with_limits(
@@ -1024,10 +1150,11 @@ impl PipelineParallelExecutor {
                     max_operations: degree,
                 },
             ),
-            participants,
+            scopes,
             page_manager: KvPageManager::new(Box::new(schema), config.max_pages),
             config,
             descriptions,
+            tensor_controls: Vec::new(),
             sessions: BTreeMap::new(),
             next_transaction: 1,
             quarantined: false,
@@ -1047,6 +1174,17 @@ impl PipelineParallelExecutor {
         self.transport.borrow_mut().call(rank, command)
     }
     fn available(&self) -> Result<()> {
+        self.custody_available()?;
+        if self.is_quarantined() {
+            return Err(error(
+                "tensor collective lifetime failed; pipeline terminally unavailable",
+            ));
+        }
+        Ok(())
+    }
+    // A poisoned collective forbids new work, but is not evidence of unknown
+    // device custody. Proven rollback still permits session cleanup and shutdown.
+    fn custody_available(&self) -> Result<()> {
         if self.closed || self.quarantined {
             return Err(error("pipeline closed or quarantined; custody retained"));
         }
@@ -1054,6 +1192,9 @@ impl PipelineParallelExecutor {
     }
     pub fn config(&self) -> PipelineConfig {
         self.config
+    }
+    pub fn execution_scopes(&self) -> &ParallelExecutionScopes {
+        &self.scopes
     }
     pub fn stage_descriptions(&self) -> &[PipelineStageDescription] {
         &self.descriptions
@@ -1068,8 +1209,15 @@ impl PipelineParallelExecutor {
     pub fn page_manager(&self) -> &KvPageManager {
         &self.page_manager
     }
+    /// Unknown custody or a permanently failed TP lifetime blocks new work.
+    /// Successful rollback/shutdown does not reset collective failure; there is
+    /// no implicit epoch replacement or replay.
     pub fn is_quarantined(&self) -> bool {
         self.quarantined
+            || self
+                .tensor_controls
+                .iter()
+                .any(|control| control.is_failed())
     }
     pub fn outstanding(&self) -> usize {
         self.transport.borrow().outstanding()
@@ -1172,7 +1320,7 @@ impl PipelineParallelExecutor {
     }
 
     pub fn release_session(&mut self, session: SessionId) -> Result<()> {
-        self.available()?;
+        self.custody_available()?;
         let slot = *self
             .sessions
             .get(&session)
@@ -1213,7 +1361,7 @@ impl PipelineParallelExecutor {
         if self.closed {
             return Ok(());
         }
-        self.available()?;
+        self.custody_available()?;
         let sessions = self.sessions.keys().copied().collect::<Vec<_>>();
         for session in sessions {
             self.release_session(session)?;
@@ -1322,7 +1470,8 @@ impl PipelineParallelExecutor {
 
     /// One complete call. Only committed full logits are returned. Prefill chunks
     /// may extend an existing session; decode requires exactly one token and a
-    /// nonempty committed prefix. Calls and owner command delivery are serial.
+    /// nonempty committed prefix. Forward calls and PP stages are serial; TP
+    /// owners within a stage execute concurrently.
     pub fn forward(
         &mut self,
         session: SessionId,
@@ -1390,7 +1539,7 @@ impl PipelineParallelExecutor {
         let binding = KvCommitBinding::new(
             id,
             self.coordinator.topology().topology_id(),
-            self.participants.clone(),
+            self.scopes.kv_participants().as_participants().clone(),
             id.get(),
         )?;
         let keys = (0..self.descriptions.len())
@@ -1400,9 +1549,12 @@ impl PipelineParallelExecutor {
                 session,
             })
             .collect::<Vec<_>>();
-        coordinator(self.coordinator.begin_scoped(id, self.participants.clone()))?;
-        // This flag is cleared only by an acknowledged terminal path. A panic or
-        // unexpected early return therefore cannot make this executor reusable.
+        coordinator(
+            self.coordinator
+                .begin_scoped(id, self.scopes.kv_participants().as_participants().clone()),
+        )?;
+        // This custody flag is cleared only by an acknowledged terminal path.
+        // Collective failure independently blocks reuse even after safe rollback.
         self.quarantined = true;
         coordinator(self.coordinator.reserve(id, keys.len()))?;
         for key in &keys {
@@ -1486,56 +1638,117 @@ impl PipelineParallelExecutor {
         let computed = (|| {
             let mut input = SegmentInput::Tokens;
             let mut logits = None;
-            for (index, key) in keys.iter().enumerate() {
+            let tp = self.coordinator.topology().plan().tensor_parallel;
+            let pp = self.coordinator.topology().plan().pipeline_parallel;
+            for stage in 0..pp {
                 if cancellation.load(Ordering::Acquire) {
                     return Err(error("pipeline cancelled during compute"));
                 }
-                // The coordinator remains Preparing throughout this serial
-                // call. Mirror only cancellation/liveness, not a new commit
-                // registry, into a call-scoped flag visible on the PP owner.
                 let cancelled = Arc::new(AtomicBool::new(false));
-                let Reply::Prepared { projection } = self.command(
-                    key.rank,
-                    Command::Prepare {
-                        key: key.clone(),
-                        batch: Box::new(batch.clone()),
-                        reservation: view.clone(),
-                    },
-                )?
-                else {
-                    return Err(error("missing stage preparation"));
-                };
-                let packed =
-                    projection.into_commit_batch(&batch, &view, &self.descriptions[index])?;
-                let Reply::Executed { output } = self.transport.borrow_mut().call_observed(
-                    key.rank,
-                    Command::Execute {
-                        key: key.clone(),
-                        input,
-                        cancellation: Arc::clone(&cancelled),
-                    },
-                    &mut || {
-                        if cancellation.load(Ordering::Acquire)
-                            || !matches!(
-                                self.coordinator.state(id),
-                                Ok(crate::TransactionState::Preparing)
-                            )
-                        {
+                let stage_keys = &keys[stage * tp..(stage + 1) * tp];
+                // Prepare everyone before admitting any collective execution.
+                for (local, key) in stage_keys.iter().enumerate() {
+                    let index = stage * tp + local;
+                    let Reply::Prepared { projection } = self.command(
+                        key.rank,
+                        Command::Prepare {
+                            key: key.clone(),
+                            batch: Box::new(batch.clone()),
+                            reservation: view.clone(),
+                        },
+                    )?
+                    else {
+                        return Err(error("missing stage preparation"));
+                    };
+                    let packed =
+                        projection.into_commit_batch(&batch, &view, &self.descriptions[index])?;
+                    remotes.push(RemotePhysicalOwner {
+                        transport: Rc::clone(&self.transport),
+                        batch: packed,
+                        receipts: Rc::clone(&receipts[index]),
+                    });
+                    slots.push(Some(RemoteToken { key: key.clone() }));
+                }
+                if let Some(control) = self.tensor_controls.get(stage) {
+                    control.begin_sealed(
+                        tensor_scope::TensorBatchIdentity::from_packed(
+                            &binding,
+                            &remotes[stage * tp].batch,
+                            &[session.0],
+                        )?,
+                        Arc::clone(&cancelled),
+                    )?;
+                }
+                let commands = stage_keys
+                    .iter()
+                    .map(|key| {
+                        let input = match &input {
+                            SegmentInput::Tokens => SegmentInput::Tokens,
+                            SegmentInput::Hidden { next_layer, rows } => SegmentInput::Hidden {
+                                next_layer: *next_layer,
+                                rows: rows.clone(),
+                            },
+                        };
+                        (
+                            key.rank,
+                            Command::Execute {
+                                key: key.clone(),
+                                input,
+                                cancellation: Arc::clone(&cancelled),
+                            },
+                        )
+                    })
+                    .collect();
+                let replies = self
+                    .transport
+                    .borrow_mut()
+                    .call_batch_observed_with_failure(
+                        commands,
+                        &mut || {
+                            if cancellation.load(Ordering::Acquire)
+                                || cancelled.load(Ordering::Acquire)
+                                || !matches!(
+                                    self.coordinator.state(id),
+                                    Ok(crate::TransactionState::Preparing)
+                                )
+                            {
+                                cancelled.store(true, Ordering::Release);
+                                if let Some(control) = self.tensor_controls.get(stage) {
+                                    let _ = control.abort(id, "pipeline cancellation");
+                                }
+                            }
+                        },
+                        &mut || {
                             cancelled.store(true, Ordering::Release);
+                            if let Some(control) = self.tensor_controls.get(stage) {
+                                let _ = control.abort(id, "pipeline owner failure");
+                            }
+                        },
+                    )?;
+                if replies.len() != tp {
+                    return Err(error("incomplete tensor stage output cohort"));
+                }
+                let mut leader = None;
+                for reply in replies {
+                    let Reply::Executed { output } = reply else {
+                        return Err(error("missing segment output"));
+                    };
+                    self.descriptions[stage * tp].validate_output(&output, tokens.len())?;
+                    if let Some(first) = &leader {
+                        if !identical_output(first, &output) {
+                            return Err(error(
+                                "TP boundary outputs are not identical replicated values",
+                            ));
                         }
-                    },
-                )?
-                else {
-                    return Err(error("missing segment output"));
-                };
-                remotes.push(RemotePhysicalOwner {
-                    transport: Rc::clone(&self.transport),
-                    batch: packed,
-                    receipts: Rc::clone(&receipts[index]),
-                });
-                slots.push(Some(RemoteToken { key: key.clone() }));
-                input = match output {
-                    SegmentOutput::Hidden { next_layer, rows } if index + 1 < keys.len() => {
+                    } else {
+                        leader = Some(output);
+                    }
+                }
+                if let Some(control) = self.tensor_controls.get(stage) {
+                    control.finish(id)?;
+                }
+                input = match leader.expect("nonempty tensor stage") {
+                    SegmentOutput::Hidden { next_layer, rows } if stage + 1 < pp => {
                         let shape = rows.shape();
                         let dtype = rows.dtype();
                         SegmentInput::Hidden {
@@ -1543,12 +1756,7 @@ impl PipelineParallelExecutor {
                             rows: HostRows::new(shape, dtype, None, rows.into_values())?,
                         }
                     }
-                    SegmentOutput::Logits(output) if index + 1 == keys.len() => {
-                        if output.rows() != tokens.len()
-                            || output.width() != self.descriptions[0].vocabulary
-                        {
-                            return Err(error("invalid final pipeline logits shape"));
-                        }
+                    SegmentOutput::Logits(output) if stage + 1 == pp => {
                         logits = Some(output);
                         SegmentInput::Tokens
                     }
@@ -1560,6 +1768,9 @@ impl PipelineParallelExecutor {
         let logits = match computed {
             Ok(logits) => logits,
             Err(source) => {
+                for control in &self.tensor_controls {
+                    control.fail_execution(id);
+                }
                 return Err(self.cleanup_error(
                     id,
                     &keys,
@@ -1713,5 +1924,36 @@ impl Drop for PipelineParallelExecutor {
             // No potentially unbounded join of an unknown GPU worker on Drop.
             self.transport.borrow_mut().quarantine();
         }
+    }
+}
+
+fn identical_output(left: &SegmentOutput, right: &SegmentOutput) -> bool {
+    let equal = |left: &[f32], right: &[f32]| {
+        left.len() == right.len()
+            && left
+                .iter()
+                .zip(right)
+                .all(|(a, b)| a.is_finite() && a.to_bits() == b.to_bits())
+    };
+    match (left, right) {
+        (
+            SegmentOutput::Hidden {
+                next_layer: a,
+                rows: x,
+            },
+            SegmentOutput::Hidden {
+                next_layer: b,
+                rows: y,
+            },
+        ) => {
+            a == b
+                && x.shape() == y.shape()
+                && x.dtype() == y.dtype()
+                && equal(x.values(), y.values())
+        }
+        (SegmentOutput::Logits(x), SegmentOutput::Logits(y)) => {
+            x.rows() == y.rows() && x.width() == y.width() && equal(x.values(), y.values())
+        }
+        _ => false,
     }
 }

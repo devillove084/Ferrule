@@ -42,6 +42,10 @@ pub(crate) const NORM_AFFINE_ROW: u32 = 2;
 pub(crate) const NORM_AFFINE_ROWS: u32 = 3;
 pub(crate) const NORM_HEAD_ROWS: u32 = 4;
 pub(crate) const NORM_AFFINE_F32: u32 = 5;
+pub(crate) const NORM_OFFSET_AFFINE_F32: u32 = 6;
+pub(crate) const DATA_QUERY_GATE_SPLIT: u32 = 13;
+pub(crate) const DATA_SIGMOID_GATE: u32 = 14;
+pub(crate) const DATA_SILU_GATE: u32 = 15;
 
 pub(crate) const ROPE_YARN: u32 = 1;
 pub(crate) const ROPE_TAIL_STRIDED: u32 = 2;
@@ -582,7 +586,43 @@ pub(crate) struct TransformerArgs {
     pub(crate) stream: u64,
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub(crate) struct ConvArgs {
+    pub(crate) rows: u32,
+    pub(crate) channels: u32,
+    pub(crate) kernel_size: u32,
+    pub(crate) reserved: u32,
+    pub(crate) input: u64,
+    pub(crate) weight: u64,
+    pub(crate) bias: u64,
+    pub(crate) history: u64,
+    pub(crate) output: u64,
+    pub(crate) stream: u64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub(crate) struct DeltaArgs {
+    pub(crate) rows: u32,
+    pub(crate) key_heads: u32,
+    pub(crate) value_heads: u32,
+    pub(crate) key_dim: u32,
+    pub(crate) value_dim: u32,
+    pub(crate) reserved: u32,
+    pub(crate) qkv: u64,
+    pub(crate) a: u64,
+    pub(crate) b: u64,
+    pub(crate) a_log: u64,
+    pub(crate) dt_bias: u64,
+    pub(crate) state: u64,
+    pub(crate) output: u64,
+    pub(crate) stream: u64,
+}
+
 unsafe extern "C" {
+    pub(crate) fn ferrule_core_conv_launch(args: *const ConvArgs) -> i32;
+    pub(crate) fn ferrule_core_delta_launch(args: *const DeltaArgs) -> i32;
     pub(crate) fn ferrule_core_linear_launch(args: *const LinearArgs) -> i32;
     pub(crate) fn ferrule_core_dual_linear_launch(args: *const DualLinearArgs) -> i32;
     pub(crate) fn ferrule_core_grouped_linear_launch(args: *const GroupedLinearArgs) -> i32;
@@ -609,4 +649,18 @@ unsafe extern "C" {
     pub(crate) fn ferrule_core_mla_launch(args: *const MlaArgs) -> i32;
     pub(crate) fn ferrule_core_transformer_launch(args: *const TransformerArgs) -> i32;
     pub(crate) fn ferrule_core_transformer_f32_launch(args: *const TransformerArgs) -> i32;
+}
+
+#[cfg(test)]
+mod recurrent_abi_tests {
+    use super::*;
+    #[test]
+    fn recurrent_pods_match_native_layout() {
+        assert_eq!(size_of::<ConvArgs>(), 64);
+        assert_eq!(std::mem::offset_of!(ConvArgs, input), 16);
+        assert_eq!(std::mem::offset_of!(ConvArgs, stream), 56);
+        assert_eq!(size_of::<DeltaArgs>(), 88);
+        assert_eq!(std::mem::offset_of!(DeltaArgs, qkv), 24);
+        assert_eq!(std::mem::offset_of!(DeltaArgs, stream), 80);
+    }
 }

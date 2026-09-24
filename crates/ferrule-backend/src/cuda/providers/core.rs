@@ -82,6 +82,46 @@ pub fn load(context: &Arc<CudaContext>) -> KernelResult<CoreOperators> {
 
 impl CoreOperators {
     /// # Safety
+    /// Typed caller validates all extents, owners, and non-aliasing write ranges.
+    pub(crate) unsafe fn causal_conv(
+        &self,
+        stream: &CudaStream,
+        mut args: ConvArgs,
+    ) -> KernelResult<()> {
+        invoke!(
+            stream,
+            args,
+            ferrule_core_conv_launch,
+            "F32 causal convolution"
+        )
+    }
+
+    /// # Safety
+    /// Typed caller validates all extents, owners, and non-aliasing write ranges.
+    pub(crate) unsafe fn gated_delta(
+        &self,
+        stream: &CudaStream,
+        mut args: DeltaArgs,
+    ) -> KernelResult<()> {
+        invoke!(
+            stream,
+            args,
+            ferrule_core_delta_launch,
+            "F32 gated delta recurrence"
+        )
+    }
+
+    /// # Safety
+    /// Typed caller validates all extents, owners, and non-aliasing write ranges.
+    pub(crate) unsafe fn recurrent_data(
+        &self,
+        stream: &CudaStream,
+        mut args: DataArgs,
+    ) -> KernelResult<()> {
+        invoke!(stream, args, ferrule_core_data_launch, "F32 split/gate")
+    }
+
+    /// # Safety
     /// All pointers/extents must be validated and allocations must belong to
     /// this stream's context owner and remain alive through launch submission.
     pub(crate) unsafe fn standard_norm(

@@ -1020,7 +1020,7 @@ fn binder_and_materializer_preserve_packed_fp4_physical_shape() {
         .unwrap()
         .parameter(binding)
         .unwrap();
-    assert_eq!(prepared.weight().slice.shape, [1, 16]);
+    assert_eq!(prepared.weight().unwrap().slice.shape, [1, 16]);
     assert_eq!(prepared.scale().unwrap().slice.shape, [1, 1]);
     let linear = prepared.into_linear(TensorRole::RoutedExpertGate).unwrap();
     assert_eq!(linear.in_features(), 32);

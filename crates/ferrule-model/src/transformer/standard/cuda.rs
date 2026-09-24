@@ -3,6 +3,9 @@
 //! BF16 checkpoints are converted once to resident F32 weights. Activations,
 //! KV and logits are genuinely F32; this is NOT BF16 compatibility execution.
 
+mod hybrid;
+mod recurrent;
+pub use hybrid::CudaHybridModule;
 mod binding;
 mod boundary;
 mod expert;
@@ -18,9 +21,12 @@ use std::fmt;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use crate::transformer::parallel::{TensorParallelLinearPartition, TensorParallelStagePlan};
+use crate::transformer::{StandardTensorCollective, StandardTensorPlan};
 use ferrule_backend::cuda::operators::linear::{CudaF32Buffer, CudaOperators};
 use ferrule_backend::cuda::operators::{SelectedSoftmaxTopKLayout, SplitHalfRopeLayout};
-use ferrule_common::{Error, Result};
+use ferrule_common::execution::ExecutionTransactionId;
+use ferrule_common::{Error, ParallelRankId, Result};
 
 use crate::execution::ExecutionPrecisionPolicy;
 use crate::transformer::operators::{standard_rope_unsupported, standard_router_unsupported};
@@ -37,10 +43,15 @@ use boundary::Boundary;
 
 pub struct CudaStandardDecoderOperators {
     ops: Rc<CudaOperators>,
+    deltas: BTreeMap<usize, recurrent::ResidentDelta>,
     bindings: Bindings,
     experts: BTreeMap<(usize, usize), Arc<PreparedSwiGlu>>,
     boundary: Boundary,
     poisoned: bool,
+    tensor_collective: Option<Box<dyn StandardTensorCollective>>,
+    tensor_transaction: Option<ExecutionTransactionId>,
+    tensor_watermark: Option<ExecutionTransactionId>,
+    tensor_failed: bool,
 }
 
 impl fmt::Debug for CudaStandardDecoderOperators {
@@ -66,12 +77,65 @@ impl CudaStandardDecoderOperators {
         let bindings = Bindings::new(parameters)?;
         let boundary = Boundary::new(&ops)?;
         Ok(Self {
+            deltas: BTreeMap::new(),
             ops,
             bindings,
             experts: BTreeMap::new(),
             boundary,
             poisoned: false,
+            tensor_collective: None,
+            tensor_transaction: None,
+            tensor_watermark: None,
+            tensor_failed: false,
         })
+    }
+
+    fn configure_tensor(
+        &mut self,
+        plan: StandardTensorPlan,
+        rank: ParallelRankId,
+        collective: Box<dyn StandardTensorCollective>,
+    ) -> Result<()> {
+        let placement = plan.placement(rank)?;
+        if placement.device != self.ops.device_ordinal()
+            || placement.owner != collective.owner()
+            || collective
+                .members()
+                .iter()
+                .copied()
+                .ne(plan.placements().iter().map(|p| p.owner))
+        {
+            return Err(cuda_error("TP collective/owner/device placement mismatch"));
+        }
+        self.bindings.tensor = Some((plan, rank));
+        self.tensor_collective = Some(collective);
+        Ok(())
+    }
+
+    fn begin_tensor(&mut self, transaction: ExecutionTransactionId) -> Result<()> {
+        if self.bindings.tensor.is_some() {
+            if self.tensor_failed {
+                return Err(cuda_error("TP collective lifetime has failed"));
+            }
+            if self.tensor_transaction.is_some()
+                || self
+                    .tensor_watermark
+                    .is_some_and(|previous| previous.get() >= transaction.get())
+            {
+                return Err(cuda_error("TP transaction must strictly increase"));
+            }
+            self.tensor_transaction = Some(transaction);
+            self.tensor_watermark = Some(transaction);
+        }
+        Ok(())
+    }
+
+    fn end_tensor(&mut self, success: bool) {
+        self.tensor_transaction = None;
+        if !success && let Some(collective) = &mut self.tensor_collective {
+            self.tensor_failed = true;
+            collective.abort();
+        }
     }
 
     pub(in crate::transformer) fn prepare_image(
@@ -209,12 +273,12 @@ impl CudaStandardDecoderOperators {
         arena: Option<RowsArenaId>,
     ) -> Result<Rows> {
         let input_buffer = self.f32(input)?;
-        if input.shape().width() != linear.in_features() {
+        let weight = self.bindings.linear(&self.ops, linear)?;
+        if input.shape().width() != weight.shape.1 {
             return Err(cuda_error("linear input width mismatch"));
         }
-        let weight = self.bindings.linear(&self.ops, linear)?;
         let rows = input.shape().rows();
-        let shape = RowsShape::new(rows, linear.out_features())?;
+        let shape = RowsShape::new(rows, weight.shape.0)?;
         let mut output = self.ops.zero_f32_buffer(shape.elements())?;
         self.ops
             .linear_f32_into(&weight.handle, input_buffer, rows, &mut output)?;
@@ -225,7 +289,36 @@ impl CudaStandardDecoderOperators {
                 .gather_f32_rows(bias, &ids, rows, linear.out_features())?;
             self.ops.saxpy_into(1.0, &bias, &mut output)?;
         }
-        device_rows(RowsShape::new(rows, linear.out_features())?, arena, output)
+        let Some((tensor, rank)) = &self.bindings.tensor else {
+            return device_rows(shape, arena, output);
+        };
+        let plan = tensor.linear_plan(linear)?;
+        // Column activations stay sharded through attention and gate/up. Only
+        // the vocabulary head gathers; Row projections reduce before residuals.
+        if plan.partition() == TensorParallelLinearPartition::Column
+            && linear.role() != &crate::support::TensorRole::OutputHead
+        {
+            return device_rows(shape, arena, output);
+        }
+        let stage = TensorParallelStagePlan::from(plan);
+        let values = self.boundary.download(&self.ops, &output)?;
+        let payload = stage.pack_local_output(*rank, &values, rows)?;
+        let transaction = self
+            .tensor_transaction
+            .ok_or_else(|| cuda_error("TP operator outside forward transaction"))?;
+        let values = self
+            .tensor_collective
+            .as_mut()
+            .ok_or_else(|| cuda_error("missing TP collective"))?
+            .exchange(
+                transaction,
+                linear.parameter().binding().id().get(),
+                stage.collective(),
+                payload,
+            )?;
+        let values = stage.unpack_collective_output(&values, rows)?;
+        let output = self.boundary.upload(&self.ops, &values)?;
+        device_rows(RowsShape::new(rows, stage.out_features())?, arena, output)
     }
 
     fn swiglu_rows(
@@ -254,6 +347,34 @@ impl CudaStandardDecoderOperators {
 }
 
 impl StandardDecoderOperators for CudaStandardDecoderOperators {
+    fn gated_delta_net(
+        &mut self,
+        request: crate::transformer::GatedDeltaNetRequest<'_>,
+    ) -> Result<OperatorProgress<Rows>> {
+        self.delta_rows(request)
+    }
+    fn unpack_gated_query(
+        &mut self,
+        input: Rows,
+        heads: usize,
+        head_dim: usize,
+    ) -> Result<OperatorProgress<(Rows, Rows)>> {
+        self.split_query_rows(input, heads, head_dim)
+    }
+    fn sigmoid_gate(&mut self, input: Rows, gate: &Rows) -> Result<OperatorProgress<Rows>> {
+        self.gate_rows(input, gate)
+    }
+    fn attention_heads(&self, query: usize, kv: usize) -> Result<(usize, usize)> {
+        let degree = self
+            .bindings
+            .tensor
+            .as_ref()
+            .map_or(1, |(plan, _)| plan.ranks());
+        if query == 0 || kv == 0 || !query.is_multiple_of(degree) || !kv.is_multiple_of(degree) {
+            return Err(cuda_error("attention head count does not divide TP"));
+        }
+        Ok((query / degree, kv / degree))
+    }
     fn backend_name(&self) -> &'static str {
         "cuda-standard-f32"
     }
@@ -344,8 +465,26 @@ impl StandardDecoderOperators for CudaStandardDecoderOperators {
                 .checked_mul(heads)
                 .ok_or_else(|| cuda_error("norm row count overflow"))?;
             let mut output = this.ops.zero_f32_buffer(input.shape().elements())?;
-            this.ops
-                .rms_norm_f32_into(input_buffer, rows, &weight, norm.epsilon(), &mut output)?;
+            if norm.one_plus_weight() {
+                this.ops.offset_rms_norm_f32_into(
+                    input_buffer,
+                    &weight,
+                    &mut output,
+                    ferrule_backend::cuda::operators::recurrent::F32RowsLayout {
+                        rows,
+                        width: norm.weight().len(),
+                    },
+                    norm.epsilon(),
+                )?;
+            } else {
+                this.ops.rms_norm_f32_into(
+                    input_buffer,
+                    rows,
+                    &weight,
+                    norm.epsilon(),
+                    &mut output,
+                )?;
+            }
             device_rows(input.shape(), arena, output).map(OperatorProgress::Ready)
         })
     }
@@ -588,6 +727,152 @@ fn validate_rope(descriptor: &RotaryEmbedding) -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
+mod partial_rope_tests {
+    use super::validate_rope;
+    use crate::transformer::{RotaryEmbedding, RotaryPairing, RotaryRegion, RotaryScaling};
+
+    #[test]
+    fn accepts_split_half_partial_rotary_for_wide_heads() {
+        let descriptor = RotaryEmbedding::new(
+            128,
+            10_000.0,
+            RotaryPairing::SplitHalf,
+            RotaryRegion::Prefix { dimensions: 64 },
+            RotaryScaling::None,
+        )
+        .unwrap();
+        validate_rope(&descriptor).unwrap();
+    }
+
+    #[test]
+    #[ignore = "requires CUDA; FERRULE_CUDA_ARCH=sm_86"]
+    fn tp2_tp4_partial_rotary_local_heads_match_full_f32_oracle() {
+        use super::CudaStandardDecoderOperators;
+        use crate::execution::ExecutionPrecisionPolicy;
+        use crate::transformer::{
+            CpuStandardDecoderOperators, HostRows, OperatorProgress, Rows, RowsDType, RowsShape,
+            StandardDecoderOperators,
+        };
+        use ferrule_backend::cuda::operators::linear::CudaOperators;
+        use std::rc::Rc;
+
+        let ops = Rc::new(CudaOperators::new_on_device(0).unwrap());
+        let mut cuda =
+            CudaStandardDecoderOperators::new(ops, ExecutionPrecisionPolicy::f32(), &[]).unwrap();
+        let mut cpu = CpuStandardDecoderOperators::new(ExecutionPrecisionPolicy::f32());
+        let ready = |progress| match progress {
+            OperatorProgress::Ready(rows) => rows,
+            _ => panic!("expected rows"),
+        };
+        let positions = [0, 1, 7];
+        for head_dim in [8, 128] {
+            let dimensions = head_dim / 2;
+            let descriptor = RotaryEmbedding::new(
+                head_dim,
+                10_000.0,
+                RotaryPairing::SplitHalf,
+                RotaryRegion::Prefix { dimensions },
+                RotaryScaling::None,
+            )
+            .unwrap();
+            let table = super::super::prepare_rope(&descriptor, 16).unwrap();
+            for heads in [8, 4] {
+                let width = heads * head_dim;
+                let values = (0..positions.len() * width)
+                    .map(|i| (i as f32 % 97.0 - 48.0) * 0.01)
+                    .collect::<Vec<_>>();
+                let host = HostRows::new(
+                    RowsShape::new(positions.len(), width).unwrap(),
+                    RowsDType::F32,
+                    None,
+                    values.clone(),
+                )
+                .unwrap();
+                let reference = ready(
+                    cpu.rope(&descriptor, &table, Rows::Host(host), heads, &positions)
+                        .unwrap(),
+                );
+                let reference = cpu.download_rows(reference).unwrap();
+                for degree in [2, 4] {
+                    let local_heads = heads / degree;
+                    let local_width = local_heads * head_dim;
+                    for rank in 0..degree {
+                        let columns = rank * local_width..(rank + 1) * local_width;
+                        let input = values
+                            .chunks_exact(width)
+                            .flat_map(|row| row[columns.clone()].iter().copied())
+                            .collect::<Vec<_>>();
+                        let expected = reference
+                            .values()
+                            .chunks_exact(width)
+                            .flat_map(|row| row[columns.clone()].iter().copied())
+                            .collect::<Vec<_>>();
+                        let host = HostRows::new(
+                            RowsShape::new(positions.len(), local_width).unwrap(),
+                            RowsDType::F32,
+                            None,
+                            input.clone(),
+                        )
+                        .unwrap();
+                        let input_rows = cuda.bind_rows(Rows::Host(host)).unwrap();
+                        let output = ready(
+                            cuda.rope(&descriptor, &table, input_rows, local_heads, &positions)
+                                .unwrap(),
+                        );
+                        let output = cuda.download_rows(output).unwrap();
+                        for (index, (&actual, &expected)) in
+                            output.values().iter().zip(&expected).enumerate()
+                        {
+                            assert!(
+                                (actual - expected).abs() <= 1e-6,
+                                "TP{degree} rank={rank} head_dim={head_dim} element={index}: {actual} vs {expected}"
+                            );
+                        }
+                        for (actual, original) in output
+                            .values()
+                            .chunks_exact(head_dim)
+                            .zip(input.chunks_exact(head_dim))
+                        {
+                            assert_eq!(
+                                &actual[dimensions..],
+                                &original[dimensions..],
+                                "non-rotary tail changed"
+                            );
+                        }
+                        let bad_shape = HostRows::new(
+                            RowsShape::new(positions.len(), local_width).unwrap(),
+                            RowsDType::F32,
+                            None,
+                            input,
+                        )
+                        .unwrap();
+                        let bad_shape = cuda.bind_rows(Rows::Host(bad_shape)).unwrap();
+                        assert!(
+                            cuda.rope(&descriptor, &table, bad_shape, local_heads + 1, &positions)
+                                .is_err()
+                        );
+                    }
+                }
+            }
+        }
+        cuda.quiesce().unwrap();
+    }
+
+    #[test]
+    fn rejects_interleaved_partial_rotary_without_silently_changing_layout() {
+        let descriptor = RotaryEmbedding::new(
+            128,
+            10_000.0,
+            RotaryPairing::Interleaved,
+            RotaryRegion::Prefix { dimensions: 64 },
+            RotaryScaling::None,
+        )
+        .unwrap();
+        assert!(validate_rope(&descriptor).is_err());
+    }
+}
+
 fn device_rows(
     shape: RowsShape,
     arena: Option<RowsArenaId>,
@@ -612,6 +897,7 @@ impl Drop for CudaStandardDecoderOperators {
         }));
         if !matches!(proof, Ok(true)) {
             self.bindings.retain_on_unknown_completion();
+            std::mem::forget(std::mem::take(&mut self.deltas));
             std::mem::forget(Rc::clone(&self.ops));
         }
     }

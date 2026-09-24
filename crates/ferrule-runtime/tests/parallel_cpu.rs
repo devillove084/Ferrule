@@ -838,3 +838,221 @@ fn unknown_quiescence_retains_operation_custody_and_closes_executor() {
         }
     }
 }
+
+fn composed_topology() -> ValidatedParallelTopology {
+    ValidatedParallelTopology::new(
+        ParallelTopologyId::new(81),
+        4,
+        rank(0),
+        ParallelismPlan::validated(1, 2, 2, 1, 1, 2).unwrap(),
+    )
+    .unwrap()
+}
+
+#[test]
+fn pp2_tp2_ep2_tensor_stage_uses_global_members_not_kv_ownership() {
+    for stage in 0..2 {
+        let observations = Observations::new(2);
+        let worker_observations = Arc::clone(&observations);
+        let plan = TensorParallelLinearPlan::new(OUTPUT, INPUT, 2, Partition::Row).unwrap();
+        let worker_plan = plan.clone();
+        let mut executor = TensorParallelExecutor::new_at_stage(
+            composed_topology(),
+            0,
+            stage,
+            plan,
+            config(2),
+            move |tensor_rank: TensorRank| {
+                assert_eq!(
+                    tensor_rank.global.get(),
+                    stage * 2 + tensor_rank.local.get()
+                );
+                worker_observations.created[tensor_rank.local.get() as usize]
+                    .fetch_add(1, Ordering::AcqRel);
+                Ok::<_, &'static str>(LinearWorker {
+                    owner: Rc::new(thread::current().id()),
+                    rank: tensor_rank,
+                    weight: worker_plan
+                        .shard_weight(tensor_rank.local, &weights())
+                        .unwrap()
+                        .0,
+                    plan: worker_plan,
+                    observations: worker_observations,
+                    order: vec![1, 0],
+                    fault: Fault::None,
+                })
+            },
+            ParallelGroupId::new(9),
+            limits(2),
+        )
+        .unwrap();
+        let scopes = executor.execution_scopes();
+        assert_eq!(
+            scopes.kv_participants().iter().collect::<Vec<_>>(),
+            [rank(0), rank(1), rank(2), rank(3)]
+        );
+        assert_eq!(
+            executor.collective_participants().as_participants(),
+            &composed_topology()
+                .tensor_stage_participants(0, stage)
+                .unwrap()
+        );
+        assert_eq!(
+            scopes.validate_kv_participants(executor.collective_participants().as_participants()),
+            Err(ferrule_common::ParallelTopologyError::ScopeKindMismatch)
+        );
+        assert_eq!(
+            executor.collective().members(),
+            &[rank(stage as usize * 2), rank(stage as usize * 2 + 1)]
+        );
+        let output = executor
+            .execute(tx(10), SessionId(90), input(ROWS), ROWS)
+            .unwrap();
+        for (tensor_rank, values) in output.ranks {
+            assert_eq!(
+                tensor_rank.global.get(),
+                stage * 2 + tensor_rank.local.get()
+            );
+            assert_eq!(values, oracle(ROWS));
+        }
+        assert_eq!(executor.coordinator().publication_count(), 1);
+        drained(&executor);
+        executor.shutdown().unwrap();
+        observations.joined(2);
+    }
+}
+
+#[test]
+fn pp2_tp2_ep2_kv_transaction_waits_for_all_mesh_owners_not_expert_dispatch() {
+    use ferrule_model::decoder::KvCommitBinding;
+    use ferrule_model::transformer::expert_parallel::{ExpertDispatchLimits, ExpertPlacement};
+    use ferrule_runtime::parallel::expert::ExpertGroup;
+    use ferrule_runtime::{Decision, DistributedTransaction, FinalizeOutcome};
+
+    let topology = composed_topology();
+    let mut scopes = topology.execution_scopes(0).unwrap();
+    for stage in 0..2 {
+        let members = vec![rank(101 + stage * 10), rank(100 + stage * 10)];
+        let group = ExpertGroup {
+            source_rank: members[1],
+            members: members.clone(),
+            layers: stage..stage + 1,
+            placement: ExpertPlacement::new([(stage, 0, members[0]), (stage, 1, members[1])])
+                .unwrap(),
+            limits: ExpertDispatchLimits {
+                max_tokens: 4,
+                max_bytes: 64,
+            },
+        };
+        scopes
+            .attach_expert_dispatch_members(
+                group.dispatch_members(&topology, 0, stage as u32).unwrap(),
+            )
+            .unwrap();
+        let attached = scopes
+            .expert_dispatch_members(stage as u32, 0)
+            .unwrap()
+            .unwrap();
+        assert_eq!(attached.iter().collect::<Vec<_>>(), members);
+        assert_eq!(attached.source_rank(), group.source_rank);
+    }
+    let kv = scopes.kv_participants().as_participants().clone();
+    let binding = KvCommitBinding::new(tx(42), topology.topology_id(), kv.clone(), 1).unwrap();
+    let mut coordinator = DistributedTransaction::new(topology.clone(), 4);
+    coordinator.begin_scoped(tx(42), kv.clone()).unwrap();
+    assert_eq!(coordinator.participants(tx(42)), Ok(binding.participants()));
+    assert_eq!(
+        coordinator.pending_ranks(tx(42)).unwrap(),
+        [rank(0), rank(1), rank(2), rank(3)]
+    );
+    for outsider in [100, 101, 110, 111, 4] {
+        assert_eq!(
+            coordinator.prepare(tx(42), rank(outsider)),
+            Err(DistributedTransactionError::InvalidRank)
+        );
+        assert_eq!(
+            coordinator.communicate(tx(42), rank(outsider)),
+            Err(DistributedTransactionError::InvalidRank)
+        );
+        assert_eq!(
+            coordinator.prepare_vote(tx(42), rank(outsider), FinalizeOutcome::Success),
+            Err(DistributedTransactionError::InvalidRank)
+        );
+    }
+    for stage in 0..2 {
+        let tp = scopes.tensor_collective_participants(stage, 0).unwrap();
+        for owner in tp.iter() {
+            coordinator.prepare(tx(42), owner).unwrap();
+            coordinator
+                .prepare_vote(tx(42), owner, FinalizeOutcome::Success)
+                .unwrap();
+        }
+        if stage == 0 {
+            assert_eq!(
+                coordinator.commit_decision(tx(42)),
+                Err(DistributedTransactionError::InvalidState)
+            );
+        }
+    }
+    assert_eq!(coordinator.commit_decision(tx(42)), Ok(Decision::Commit));
+    for owner in scopes.tensor_collective_participants(0, 0).unwrap().iter() {
+        coordinator
+            .finalize(tx(42), owner, FinalizeOutcome::Success)
+            .unwrap();
+    }
+    assert_eq!(
+        coordinator.publish(tx(42)),
+        Err(DistributedTransactionError::InvalidState)
+    );
+    assert_eq!(
+        coordinator.pending_ranks(tx(42)).unwrap(),
+        [rank(2), rank(3)]
+    );
+    // Stage one's local slots 0/1 are NOT owners 2/3. Full coordinates resolve them.
+    for tensor in 0..2 {
+        let coordinate = topology.coordinate(0, 1, tensor).unwrap();
+        let owner = scopes.kv_owner(coordinate).unwrap();
+        assert_ne!(owner, rank(tensor as usize));
+        coordinator
+            .finalize(tx(42), owner, FinalizeOutcome::Success)
+            .unwrap();
+    }
+    for stage in 0..2 {
+        for expert in scopes
+            .expert_dispatch_members(stage, 0)
+            .unwrap()
+            .unwrap()
+            .iter()
+        {
+            assert_eq!(
+                coordinator.finalize(tx(42), expert, FinalizeOutcome::Success),
+                Err(DistributedTransactionError::InvalidRank)
+            );
+        }
+    }
+    coordinator.publish(tx(42)).unwrap();
+    assert_eq!(coordinator.publication_count(), 1);
+    coordinator.retire(tx(42)).unwrap();
+    assert_eq!(coordinator.retained_transaction_count(), 0);
+    // Changed EP metadata is a different transaction identity, despite identical KV IDs.
+    let foreign = ValidatedParallelTopology::new(
+        topology.topology_id(),
+        4,
+        rank(0),
+        ParallelismPlan::validated(1, 2, 3, 1, 1, 2).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        coordinator.begin_scoped(
+            tx(43),
+            foreign
+                .execution_scopes(0)
+                .unwrap()
+                .kv_participants()
+                .as_participants()
+                .clone()
+        ),
+        Err(DistributedTransactionError::InvalidScope)
+    );
+    coordinator.begin_scoped(tx(43), kv).unwrap();
+}

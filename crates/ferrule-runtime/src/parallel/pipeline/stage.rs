@@ -2,7 +2,7 @@
 
 use ferrule_common::execution::ExecutionTransactionId;
 use ferrule_common::{Error, ParallelRankId, Result};
-use ferrule_model::decoder::{CpuKvView, PackedDecoderBatch};
+use ferrule_model::decoder::{CpuKvView, KvCommitBinding, PackedDecoderBatch};
 use ferrule_model::transformer::expert_parallel::RoutedSwiGluExecutor;
 use ferrule_model::transformer::{
     LayerSegmentPlan, SegmentError, SegmentInput, SegmentOutput, StandardDecoderSegment,
@@ -37,6 +37,17 @@ pub trait PipelineStageProgram: 'static {
 
     fn plan(&self) -> &LayerSegmentPlan;
 
+    /// Optional runtime admission check against the actual owner-local lowering.
+    /// A rejection is not a KV rollback or a device completion acknowledgement.
+    fn validate_execution(
+        &self,
+        _: &KvCommitBinding,
+        _: &PackedDecoderBatch,
+        _: &[u64],
+    ) -> Result<()> {
+        Ok(())
+    }
+
     fn execute(
         &mut self,
         batch: &PackedDecoderBatch,
@@ -64,6 +75,15 @@ impl<P: PipelineStageProgram + ?Sized> PipelineStageProgram for Box<P> {
 
     fn plan(&self) -> &LayerSegmentPlan {
         (**self).plan()
+    }
+
+    fn validate_execution(
+        &self,
+        binding: &KvCommitBinding,
+        batch: &PackedDecoderBatch,
+        sessions: &[u64],
+    ) -> Result<()> {
+        (**self).validate_execution(binding, batch, sessions)
     }
 
     fn execute(

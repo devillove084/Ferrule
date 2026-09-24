@@ -537,8 +537,6 @@ pub(crate) mod process {
         spec: WorkerSpec,
         linear: crate::commands::parallel_worker::cuda::LinearWorker,
     }
-    #[cfg(not(feature = "cuda"))]
-    struct Handler;
 
     #[cfg(feature = "cuda")]
     impl ProcessChildHandler for Handler {
@@ -587,18 +585,6 @@ pub(crate) mod process {
             self.linear.shutdown_worker().map_err(|error| {
                 ProcessHandlerError::fenced(ProcessFailureKind::Shutdown, format!("{error:#}"))
             })
-        }
-    }
-
-    #[cfg(not(feature = "cuda"))]
-    impl ProcessChildHandler for Handler {
-        type Command = serde_json::Value;
-        type Output = serde_json::Value;
-        fn execute(
-            &mut self,
-            _: ProcessRequest<Self::Command>,
-        ) -> std::result::Result<Self::Output, ProcessHandlerError> {
-            Err(no_cuda())
         }
     }
 

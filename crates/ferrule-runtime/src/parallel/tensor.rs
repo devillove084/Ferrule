@@ -26,7 +26,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use ferrule_common::{ParallelGroupId, ParallelRankId, ParticipantSet, ValidatedParallelTopology};
+use ferrule_common::{
+    ParallelExecutionScopes, ParallelGroupId, ParallelRankId, TensorCollectiveParticipants,
+    ValidatedParallelTopology,
+};
 use ferrule_model::transformer::parallel::{TensorParallelCollective, TensorParallelStagePlan};
 
 use super::collective::{
@@ -47,7 +50,8 @@ use crate::{
 pub struct TensorRank {
     /// Pool-local rank and the index passed to the stage plan: 0..TP.
     pub local: ParallelRankId,
-    /// Topology/collective rank: replica * TP + local. Not a device ordinal.
+    /// Topology/collective rank: ((replica * PP) + stage) * TP + local.
+    /// Neither this collective role nor `local` grants KV ownership.
     pub global: ParallelRankId,
 }
 
@@ -126,7 +130,8 @@ where
 {
     pool: WorkerPool<T::Error>,
     coordinator: DistributedTransaction,
-    participants: ParticipantSet,
+    scopes: ParallelExecutionScopes,
+    participants: TensorCollectiveParticipants,
     ranks: Vec<TensorRank>,
     plan: TensorParallelStagePlan,
     group_id: ParallelGroupId,
@@ -159,10 +164,42 @@ where
     where
         F: FnOnce(TensorRank) -> Result<T, T::Error> + Clone + Send + 'static,
     {
+        Self::new_at_stage(
+            topology,
+            replica,
+            0,
+            plan,
+            config,
+            worker_factory,
+            group_id,
+            limits,
+        )
+    }
+
+    /// Run a stage-local collective using the existing CPU-owned orchestration.
+    /// This does not run a PP pipeline or acquire KV custody. Its transaction
+    /// tracks only collective work, not the replica's full KV commit cohort.
+    pub fn new_at_stage<F>(
+        topology: ValidatedParallelTopology,
+        replica: u32,
+        stage: u32,
+        plan: impl Into<TensorParallelStagePlan>,
+        config: DataParallelConfig,
+        worker_factory: F,
+        group_id: ParallelGroupId,
+        limits: HostCollectiveLimits,
+    ) -> Result<Self, TensorParallelError<T::Error>>
+    where
+        F: FnOnce(TensorRank) -> Result<T, T::Error> + Clone + Send + 'static,
+    {
         let plan = plan.into();
-        let participants = topology
-            .tensor_participants(replica)
+        let scopes = topology
+            .execution_scopes(replica)
             .map_err(|_| TensorParallelError::Configuration("replica outside topology"))?;
+        let participants = scopes
+            .tensor_collective_participants(stage, replica)
+            .map_err(|_| TensorParallelError::Configuration("stage outside topology"))?
+            .clone();
         let degree = participants.len();
         if plan.ranks() != degree || config.replicas != degree {
             return Err(TensorParallelError::Configuration(
@@ -203,6 +240,7 @@ where
                     max_operations: degree,
                 },
             ),
+            scopes,
             participants,
             ranks,
             plan,
@@ -215,6 +253,12 @@ where
         })
     }
 
+    pub fn execution_scopes(&self) -> &ParallelExecutionScopes {
+        &self.scopes
+    }
+    pub fn collective_participants(&self) -> &TensorCollectiveParticipants {
+        &self.participants
+    }
     pub fn coordinator(&self) -> &DistributedTransaction {
         &self.coordinator
     }
@@ -287,7 +331,7 @@ where
                 })?;
         }
         self.coordinator
-            .begin_scoped(id, self.participants.clone())?;
+            .begin_scoped(id, self.participants.as_participants().clone())?;
         let descriptor = HostCollectiveDescriptor {
             epoch: self.coordinator.topology().topology_id(),
             group: self.group_id,
@@ -584,3 +628,7 @@ fn run_phase<E: Send + 'static>(
         None => Ok(outputs),
     }
 }
+
+/// Bounded host collective endpoints and shared abort/wake control.
+#[path = "tensor_collective.rs"]
+pub mod decoder_collective;

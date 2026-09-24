@@ -67,6 +67,8 @@ pub enum KernelPhase {
     Router = 11,
     /// Proposal attachment operations.
     ProposalAttachment = 12,
+    /// Generic dense linear projection, independent of a model-family bundle.
+    Linear = 13,
 }
 
 /// Stable semantic operation bound to a provider kernel.
@@ -109,6 +111,10 @@ pub enum KernelOperation {
     /// Checkpoint-native proposal HC head, base LM projection, sequential Markov
     /// proposal selection, and confidence bundle.
     ProposalHead = 22,
+    /// Bias-free F32 A[M,K] * W[N,K]^T -> D[M,N], row-major storage.
+    /// CUDA uses TF32x3 multiplication with F32 accumulation/output, not
+    /// bitwise IEEE SGEMM. No implicit quantization or SIMT fallback.
+    LinearF32 = 23,
 }
 
 impl KernelOperation {
@@ -133,6 +139,7 @@ impl KernelOperation {
             Self::OutputHeadNorm => KernelPhase::OutputHeadNorm,
             Self::OutputHeadVocab => KernelPhase::OutputHeadVocab,
             Self::Router => KernelPhase::Router,
+            Self::LinearF32 => KernelPhase::Linear,
             Self::MainProjectNorm | Self::HybridMlaAttention | Self::ProposalHead => {
                 KernelPhase::ProposalAttachment
             }

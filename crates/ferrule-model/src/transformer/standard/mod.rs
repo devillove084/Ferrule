@@ -3,6 +3,11 @@
 #[cfg(feature = "cuda")]
 pub mod cuda;
 
+mod hybrid;
+pub use hybrid::{PreparedAttentionBlock, PreparedGatedDeltaNetBlock, PreparedStandardLayer};
+mod tensor;
+pub use tensor::{StandardTensorCollective, StandardTensorPlacement, StandardTensorPlan};
+
 use std::convert::Infallible;
 use std::sync::Arc;
 
@@ -97,14 +102,19 @@ impl StandardTransformerHidden {
 }
 
 /// Prepared CPU module selected by Qwen and other ordinary GQA/Add decoders.
+pub type CpuGqaMoeModule = CpuStandardModule<GenericDecoderSequenceState>;
+pub type CpuHybridModule = CpuStandardModule<crate::decoder::HybridDecoderSequenceState>;
+
 #[derive(Debug)]
-pub struct CpuGqaMoeModule {
+pub struct CpuStandardModule<S> {
+    state: std::marker::PhantomData<fn() -> S>,
+    schema: crate::decoder::HybridStateSchema,
     resources: Arc<BoundDecoderResources>,
     materializer: Arc<StateDictMaterializer>,
     operators: CpuStandardDecoderOperators,
     prepared: PreparedTransformer<
         PreparedEmbedding,
-        PreparedGqaMoeLayer,
+        PreparedStandardLayer,
         PreparedCpuOutput,
         NoPostLayerTap,
     >,
@@ -143,7 +153,7 @@ impl ExpertProvider for StateDictExpertProvider<'_> {
     }
 }
 
-impl CpuGqaMoeModule {
+impl<S: crate::decoder::StandardSequenceState> CpuStandardModule<S> {
     pub fn prepare(
         resources: Arc<BoundDecoderResources>,
         materializer: Arc<StateDictMaterializer>,
@@ -183,13 +193,16 @@ impl CpuGqaMoeModule {
                 spec.layers().len()
             )));
         }
-        validate_standard_descriptors(spec, spec.layers())?;
+        hybrid::validate_cpu_profile(spec, precision)?;
+        validate_hybrid_descriptors(spec, spec.layers())?;
+        let schema = crate::decoder::HybridStateSchema::from_spec(spec, active_layers)?;
+        S::validate_standard_schema(&schema)?;
         let embedding = prepare_embedding(&resources, &materializer)?;
         let output = prepare_output(&resources, &materializer)?;
         let mut layers = Vec::with_capacity(active_layers);
         for descriptor in &spec.layers()[..active_layers] {
             let mut cache = MemoryLayerWeightCache::new();
-            layers.push(prepare_layer(
+            layers.push(hybrid::prepare_standard_layer(
                 descriptor,
                 &resources,
                 &materializer,
@@ -198,6 +211,8 @@ impl CpuGqaMoeModule {
             )?);
         }
         Ok(Self {
+            state: std::marker::PhantomData,
+            schema,
             resources,
             materializer,
             operators: CpuStandardDecoderOperators::new(precision),
@@ -214,17 +229,31 @@ impl CpuGqaMoeModule {
         layer_index: usize,
         hidden: &mut CpuTransformerHidden,
         kv: &mut CpuKvView,
+        states: &mut [S],
     ) -> Result<()> {
-        execute_standard_layer(
+        let layer = self
+            .prepared
+            .layers()
+            .get(layer_index)
+            .ok_or_else(|| model_error("missing prepared standard layer"))?;
+        let kv_layer = match &self.schema.layers()[layer_index] {
+            crate::decoder::HybridLayerSchema::FullAttention { kv_layer, .. } => *kv_layer,
+            _ => 0,
+        };
+        let mut states = states
+            .iter_mut()
+            .map(|s| s as &mut dyn crate::decoder::StandardSequenceState)
+            .collect::<Vec<_>>();
+        execute_standard_layer_inner(
             &mut self.operators,
             &self.materializer,
-            self.prepared
-                .layers()
-                .get(layer_index)
-                .ok_or_else(|| model_error(format!("missing prepared layer {layer_index}")))?,
-            layer_index,
+            layer.index(),
+            layer.attention().block().as_ref(),
+            layer.feed_forward().block(),
+            kv_layer,
             hidden,
             kv,
+            &mut states,
             None,
         )
     }
@@ -256,54 +285,43 @@ pub(super) fn execute_standard_layer(
     kv: &mut dyn KvView,
     routed_execution: Option<&mut RoutedLayerExecution<'_>>,
 ) -> Result<()> {
-    let attention = layer.attention().block();
-    let Attention::Gqa(gqa) = attention.descriptor.attention() else {
-        return Err(model_error("prepared GQA layer lost its descriptor"));
-    };
-    let arena = None;
-    let normalized = ready(operators.rms_norm(&attention.input_norm, hidden.rows()?, 1, arena)?)?;
-    let mut query = ready(operators.linear(&attention.query, &normalized, arena)?)?;
-    let mut key = ready(operators.linear(&attention.key, &normalized, arena)?)?;
-    let value = ready(operators.linear(&attention.value, &normalized, arena)?)?;
-    if let Some(norm) = &attention.query_norm {
-        query = ready(operators.rms_norm(norm, &query, gqa.num_heads(), arena)?)?;
-    }
-    if let Some(norm) = &attention.key_norm {
-        key = ready(operators.rms_norm(norm, &key, gqa.num_kv_heads(), arena)?)?;
-    }
-    query = ready(operators.rope(
-        gqa.rotary(),
-        &attention.rope,
-        query,
-        gqa.num_heads(),
-        hidden.metadata.row_positions(),
-    )?)?;
-    key = ready(operators.rope(
-        gqa.rotary(),
-        &attention.rope,
-        key,
-        gqa.num_kv_heads(),
-        hidden.metadata.row_positions(),
-    )?)?;
-    let update = ready(operators.paged_gqa(
+    execute_standard_layer_inner(
+        operators,
+        materializer,
+        layer.index(),
+        hybrid::AttentionBlockRef::Gqa(layer.attention().block()),
+        layer.feed_forward().block(),
+        kv_layer,
+        hidden,
         kv,
-        GqaRequest {
-            layer: kv_layer,
-            query: &query,
-            key: &key,
-            value: &value,
-            metadata: &hidden.metadata,
-            query_heads: gqa.num_heads(),
-            kv_heads: gqa.num_kv_heads(),
-            head_dim: gqa.head_dim(),
-            softmax_scale: (gqa.head_dim() as f32).sqrt().recip(),
-            arena,
-        },
-    )?)?;
-    let update = ready(operators.linear(&attention.output, &update, arena)?)?;
-    hidden.rows = Some(ready(operators.residual(hidden.take_rows()?, &update)?)?);
+        &mut [],
+        routed_execution,
+    )
+}
 
-    let feed_forward = layer.feed_forward().block();
+#[allow(clippy::too_many_arguments)]
+fn execute_standard_layer_inner(
+    operators: &mut dyn StandardDecoderOperators,
+    materializer: &StateDictMaterializer,
+    layer_index: usize,
+    attention: hybrid::AttentionBlockRef<'_>,
+    feed_forward: &PreparedFeedForwardBlock,
+    kv_layer: usize,
+    hidden: &mut CpuTransformerHidden,
+    kv: &mut dyn KvView,
+    states: &mut [&mut dyn crate::decoder::StandardSequenceState],
+    routed_execution: Option<&mut RoutedLayerExecution<'_>>,
+) -> Result<()> {
+    let arena = None;
+    let update = match attention {
+        hybrid::AttentionBlockRef::Gqa(block) => {
+            execute_gqa(operators, block, kv_layer, hidden, kv)?
+        }
+        hybrid::AttentionBlockRef::GatedDeltaNet(block) => {
+            hybrid::execute_delta(operators, block, layer_index, hidden, states)?
+        }
+    };
+    hidden.rows = Some(ready(operators.residual(hidden.take_rows()?, &update)?)?);
     let normalized = ready(operators.rms_norm(&feed_forward.norm, hidden.rows()?, 1, arena)?)?;
     let update = match &feed_forward.kind {
         PreparedFeedForwardKind::Dense(feed_forward) => {
@@ -329,7 +347,7 @@ pub(super) fn execute_standard_layer(
                         context: ExpertDispatchContext {
                             transaction: execution.transaction,
                             source_rank: execution.source_rank,
-                            layer: layer.index(),
+                            layer: layer_index,
                         },
                         sequences: execution.sequences,
                         input: &normalized,
@@ -340,13 +358,13 @@ pub(super) fn execute_standard_layer(
                 )?)?
             } else {
                 let mut experts = StateDictExpertProvider {
-                    layer: layer.index(),
+                    layer: layer_index,
                     bindings,
                     activation_limit: descriptor.expert().activation_limit(),
                     materializer,
                 };
                 ready(operators.routed_swiglu(
-                    attention.descriptor.index(),
+                    layer_index,
                     &normalized,
                     &routes,
                     &mut experts,
@@ -365,8 +383,74 @@ pub(super) fn execute_standard_layer(
     Ok(())
 }
 
-impl TransformerModule for CpuGqaMoeModule {
-    type State = GenericDecoderSequenceState;
+fn execute_gqa(
+    operators: &mut dyn StandardDecoderOperators,
+    attention: &PreparedGqaBlock,
+    kv_layer: usize,
+    hidden: &CpuTransformerHidden,
+    kv: &mut dyn KvView,
+) -> Result<Rows> {
+    let Attention::Gqa(gqa) = attention.descriptor.attention() else {
+        return Err(model_error("prepared GQA layer lost its descriptor"));
+    };
+    let (query_heads, kv_heads) = operators.attention_heads(gqa.num_heads(), gqa.num_kv_heads())?;
+    let arena = None;
+    let normalized = ready(operators.rms_norm(&attention.input_norm, hidden.rows()?, 1, arena)?)?;
+    let mut query = ready(operators.linear(&attention.query, &normalized, arena)?)?;
+    let gate = if gqa.gated_query() {
+        let (q, gate) = ready(operators.unpack_gated_query(query, query_heads, gqa.head_dim())?)?;
+        query = q;
+        Some(gate)
+    } else {
+        None
+    };
+    let mut key = ready(operators.linear(&attention.key, &normalized, arena)?)?;
+    let value = ready(operators.linear(&attention.value, &normalized, arena)?)?;
+    if let Some(norm) = &attention.query_norm {
+        query = ready(operators.rms_norm(norm, &query, query_heads, arena)?)?;
+    }
+    if let Some(norm) = &attention.key_norm {
+        key = ready(operators.rms_norm(norm, &key, kv_heads, arena)?)?;
+    }
+    query = ready(operators.rope(
+        gqa.rotary(),
+        &attention.rope,
+        query,
+        query_heads,
+        hidden.metadata.row_positions(),
+    )?)?;
+    key = ready(operators.rope(
+        gqa.rotary(),
+        &attention.rope,
+        key,
+        kv_heads,
+        hidden.metadata.row_positions(),
+    )?)?;
+    let update = ready(operators.paged_gqa(
+        kv,
+        GqaRequest {
+            layer: kv_layer,
+            query: &query,
+            key: &key,
+            value: &value,
+            metadata: &hidden.metadata,
+            query_heads,
+            kv_heads,
+            head_dim: gqa.head_dim(),
+            softmax_scale: (gqa.head_dim() as f32).sqrt().recip(),
+            arena,
+        },
+    )?)?;
+    let update = if let Some(gate) = gate {
+        ready(operators.sigmoid_gate(update, &gate)?)?
+    } else {
+        update
+    };
+    ready(operators.linear(&attention.output, &update, arena)?)
+}
+
+impl<S: crate::decoder::StandardSequenceState> TransformerModule for CpuStandardModule<S> {
+    type State = S;
     type KvView = CpuKvView;
     type Hidden = CpuTransformerHidden;
     type ArenaKey = (usize, usize);
@@ -386,9 +470,12 @@ impl TransformerModule for CpuGqaMoeModule {
         &mut self,
         _context: &crate::decoder::DecoderTransactionContext,
         batch: &PackedDecoderBatch,
-        _states: &mut [Self::State],
+        states: &mut [Self::State],
         kv: &mut Self::KvView,
     ) -> Result<()> {
+        for state in states {
+            state.validate_standard_state(&self.schema)?;
+        }
         kv.validate_batch(batch)
     }
 
@@ -440,10 +527,10 @@ impl TransformerModule for CpuGqaMoeModule {
         hidden: &mut Self::Hidden,
         _arena: &mut Self::Arena,
     ) -> Result<Step<Vec<Self::Event>, Self::LayerPending>> {
-        let LayerRequest::Target { kv, .. } = request else {
+        let LayerRequest::Target { kv, states, .. } = request else {
             return Err(model_error("CPU GQA module does not have proposal stages"));
         };
-        self.execute_layer(layer, hidden, kv)?;
+        self.execute_layer(layer, hidden, kv, states)?;
         Ok(Step::Complete(Vec::new()))
     }
 
@@ -534,12 +621,18 @@ impl TransformerModule for CpuGqaMoeModule {
 
     fn finish(
         &mut self,
-        _batch: &PackedDecoderBatch,
-        _states: &mut [Self::State],
+        batch: &PackedDecoderBatch,
+        states: &mut [Self::State],
         _kv: &mut Self::KvView,
         _arena: &mut Self::Arena,
         events: Vec<Self::Event>,
     ) -> Result<Self::TerminalGuard> {
+        for sequence in batch.sequences() {
+            let state = states
+                .get(sequence.state_index())
+                .ok_or_else(|| model_error("missing hybrid sequence at completion"))?;
+            state.validate_standard_state_at(&self.schema, sequence.sequence_len())?;
+        }
         match events.into_iter().next() {
             Some(event) => match event {},
             None => Ok(NoTerminalGuard),
@@ -575,20 +668,17 @@ pub(super) fn prepare_output(
     materializer: &StateDictMaterializer,
 ) -> Result<PreparedCpuOutput> {
     let spec = resources.spec();
-    let norm = PreparedNorm::new(
+    let norm = PreparedNorm::from_descriptor(
         materializer.static_parameter(
             resources
                 .require_static_shape(TensorRole::OutputNorm, &spec.final_norm().weight_shape())?,
         )?,
-        spec.final_norm().epsilon(),
+        spec.final_norm(),
     )?;
     // The logical head keeps its canonical embedding dependency even when this
     // stage does not own the embedding operation.
-    let head = PreparedLinear::from_parameter(
-        materializer.static_parameter(
-            resources
-                .require_static_shape(TensorRole::OutputHead, &spec.output().weight_shape())?,
-        )?,
+    let head = materializer.prepared_linear(
+        resources.require_static_shape(TensorRole::OutputHead, &spec.output().weight_shape())?,
         TensorRole::OutputHead,
     )?;
     Ok(OutputPipeline::new(NoReduction, norm, head))
@@ -623,6 +713,22 @@ pub(super) fn validate_standard_descriptors(
     spec: &DecoderModelSpec,
     layers: &[DecoderLayer],
 ) -> Result<()> {
+    for layer in layers {
+        if !matches!(layer.attention(), Attention::Gqa(gqa) if !gqa.gated_query() && !gqa.query_norm().is_some_and(RmsNorm::one_plus_weight) && !gqa.key_norm().is_some_and(RmsNorm::one_plus_weight))
+            || layer.input_norm().one_plus_weight()
+            || layer.post_attention_norm().one_plus_weight()
+            || spec.final_norm().one_plus_weight()
+        {
+            return Err(unsupported_error(UnsupportedOperator::new(
+                "standard_segment",
+                "hybrid/gated attention requires an explicitly supported backend and sequence state",
+            )));
+        }
+    }
+    validate_hybrid_descriptors(spec, layers)
+}
+
+fn validate_hybrid_descriptors(spec: &DecoderModelSpec, layers: &[DecoderLayer]) -> Result<()> {
     if spec.output().has_bias() {
         return Err(unsupported_error(UnsupportedOperator::new(
             "lm_head",
@@ -636,14 +742,19 @@ pub(super) fn validate_standard_descriptors(
         )));
     }
     for layer in layers {
-        let Attention::Gqa(gqa) = layer.attention() else {
-            return Err(model_error(format!(
-                "layer {} requires GQA attention",
-                layer.index()
-            )));
-        };
-        if let Some(unsupported) = standard_rope_unsupported(gqa.rotary()) {
-            return Err(unsupported_error(unsupported));
+        match layer.attention() {
+            Attention::Gqa(gqa) => {
+                if let Some(unsupported) = standard_rope_unsupported(gqa.rotary()) {
+                    return Err(unsupported_error(unsupported));
+                }
+            }
+            Attention::GatedDeltaNet(_) => {}
+            _ => {
+                return Err(unsupported_error(UnsupportedOperator::new(
+                    "standard_attention",
+                    "only GQA and GatedDeltaNet are supported",
+                )));
+            }
         }
         if let FeedForward::Moe(moe) = layer.feed_forward()
             && let Some(unsupported) = standard_router_unsupported(moe.router_spec())
@@ -747,7 +858,42 @@ pub(super) fn prepare_layer(
             )
         })
         .transpose()?;
-    let feed_forward = match descriptor.feed_forward() {
+    let feed_forward = prepare_feed_forward(
+        descriptor,
+        resources,
+        materializer,
+        cache,
+        post_attention_norm,
+    )?;
+    Ok(TransformerLayer::new(
+        layer,
+        Connected::new(
+            AddResidual,
+            PreparedGqaBlock {
+                descriptor: descriptor.clone(),
+                input_norm,
+                query,
+                key,
+                value,
+                output,
+                query_norm,
+                key_norm,
+                rope: prepare_rope(gqa.rotary(), max_positions)?,
+            },
+        ),
+        Connected::new(AddResidual, feed_forward),
+    ))
+}
+
+fn prepare_feed_forward(
+    descriptor: &DecoderLayer,
+    resources: &BoundDecoderResources,
+    materializer: &StateDictMaterializer,
+    cache: &mut MemoryLayerWeightCache,
+    norm: PreparedNorm,
+) -> Result<PreparedFeedForwardBlock> {
+    let layer = descriptor.index();
+    let kind = match descriptor.feed_forward() {
         FeedForward::SwiGlu(feed_forward) => PreparedFeedForwardKind::Dense(prepare_swiglu(
             layer,
             feed_forward,
@@ -794,30 +940,7 @@ pub(super) fn prepare_layer(
                 .transpose()?,
         },
     };
-    Ok(TransformerLayer::new(
-        layer,
-        Connected::new(
-            AddResidual,
-            PreparedGqaBlock {
-                descriptor: descriptor.clone(),
-                input_norm,
-                query,
-                key,
-                value,
-                output,
-                query_norm,
-                key_norm,
-                rope: prepare_rope(gqa.rotary(), max_positions)?,
-            },
-        ),
-        Connected::new(
-            AddResidual,
-            PreparedFeedForwardBlock {
-                norm: post_attention_norm,
-                kind: feed_forward,
-            },
-        ),
-    ))
+    Ok(PreparedFeedForwardBlock { norm, kind })
 }
 
 fn prepare_swiglu(
@@ -878,12 +1001,12 @@ fn prepare_layer_linear(
     materializer: &StateDictMaterializer,
     cache: &mut MemoryLayerWeightCache,
 ) -> Result<PreparedLinear> {
-    let parameter = materializer.layer_parameter(
+    let linear = materializer.prepared_layer_linear(
         layer,
         resources.require_layer_shape(layer, role.clone(), &descriptor.weight_shape())?,
+        role.clone(),
         cache,
     )?;
-    let linear = PreparedLinear::from_parameter(parameter, role.clone())?;
     if descriptor.has_bias() {
         let bias_shape = descriptor
             .bias_shape()
@@ -907,13 +1030,13 @@ fn prepare_layer_norm(
     materializer: &StateDictMaterializer,
     cache: &mut MemoryLayerWeightCache,
 ) -> Result<PreparedNorm> {
-    PreparedNorm::new(
+    PreparedNorm::from_descriptor(
         materializer.layer_parameter(
             layer,
             resources.require_layer_shape(layer, role, &descriptor.weight_shape())?,
             cache,
         )?,
-        descriptor.epsilon(),
+        descriptor,
     )
 }
 
@@ -1050,6 +1173,6 @@ fn unsupported_error(unsupported: UnsupportedOperator) -> Error {
 
 fn model_error(message: impl Into<String>) -> Error {
     Error::Model {
-        message: format!("CPU GQA/MoE transformer: {}", message.into()),
+        message: format!("standard transformer: {}", message.into()),
     }
 }

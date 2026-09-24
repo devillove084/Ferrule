@@ -96,6 +96,7 @@ impl Embedding {
 pub struct RmsNorm {
     hidden_size: usize,
     epsilon: f32,
+    one_plus_weight: bool,
 }
 
 impl RmsNorm {
@@ -105,6 +106,7 @@ impl RmsNorm {
         Ok(Self {
             hidden_size,
             epsilon,
+            one_plus_weight: false,
         })
     }
 
@@ -114,6 +116,16 @@ impl RmsNorm {
 
     pub const fn epsilon(&self) -> f32 {
         self.epsilon
+    }
+
+    /// Interpret checkpoint affine weights as offsets from one.
+    pub const fn with_one_plus_weight(mut self) -> Self {
+        self.one_plus_weight = true;
+        self
+    }
+
+    pub const fn one_plus_weight(&self) -> bool {
+        self.one_plus_weight
     }
 
     pub fn weight_shape(&self) -> [usize; 1] {
@@ -264,6 +276,7 @@ pub struct GqaAttention {
     query_norm: Option<RmsNorm>,
     key_norm: Option<RmsNorm>,
     rotary: RotaryEmbedding,
+    gated_query: bool,
 }
 
 impl GqaAttention {
@@ -310,7 +323,24 @@ impl GqaAttention {
             query_norm: None,
             key_norm: None,
             rotary,
+            gated_query: false,
         })
+    }
+
+    /// Store each query head as [query D, gate D]; gate the attention output before O.
+    pub fn with_gated_query(mut self) -> Result<Self, DescriptorError> {
+        let query_width = checked_mul("gated GQA query width", self.num_heads, self.head_dim)?;
+        self.query = Linear::new(
+            self.hidden_size,
+            checked_mul("gated GQA query/gate width", query_width, 2)?,
+            self.query.has_bias(),
+        )?;
+        self.gated_query = true;
+        Ok(self)
+    }
+
+    pub const fn gated_query(&self) -> bool {
+        self.gated_query
     }
 
     pub fn with_qk_norms(
@@ -942,9 +972,126 @@ fn validate_mla_rotary(
     Ok(())
 }
 
+/// Bias-optional input projections with bias-free causal depthwise SiLU convolution.
+/// Q/K use L2 normalization (epsilon 1e-6), with K heads repeated to V heads.
+/// The output uses ordinary affine RMSNorm followed by SiLU(z), not offset weights.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GatedDeltaNetAttention {
+    hidden_size: usize,
+    num_key_heads: usize,
+    num_value_heads: usize,
+    key_head_dim: usize,
+    value_head_dim: usize,
+    conv_kernel_dim: usize,
+    qkv: Linear,
+    z: Linear,
+    beta: Linear,
+    a: Linear,
+    norm: RmsNorm,
+    output: Linear,
+}
+
+impl GatedDeltaNetAttention {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        hidden_size: usize,
+        num_key_heads: usize,
+        num_value_heads: usize,
+        key_head_dim: usize,
+        value_head_dim: usize,
+        conv_kernel_dim: usize,
+        epsilon: f32,
+        bias: bool,
+    ) -> Result<Self, DescriptorError> {
+        for (name, value) in [
+            ("gated_delta_net.hidden_size", hidden_size),
+            ("gated_delta_net.num_key_heads", num_key_heads),
+            ("gated_delta_net.num_value_heads", num_value_heads),
+            ("gated_delta_net.key_head_dim", key_head_dim),
+            ("gated_delta_net.value_head_dim", value_head_dim),
+            ("gated_delta_net.conv_kernel_dim", conv_kernel_dim),
+        ] {
+            non_zero(name, value)?;
+        }
+        if !num_value_heads.is_multiple_of(num_key_heads) {
+            return Err(DescriptorError::Inconsistent {
+                component: "gated_delta_net",
+                message: "value heads must be a multiple of key heads".into(),
+            });
+        }
+        let key_width = checked_mul("gated delta key width", num_key_heads, key_head_dim)?;
+        let value_width = checked_mul("gated delta value width", num_value_heads, value_head_dim)?;
+        let qkv_width = checked_mul("gated delta qkv width", key_width, 2)?
+            .checked_add(value_width)
+            .ok_or(DescriptorError::DimensionOverflow {
+                operation: "gated delta qkv width",
+            })?;
+        checked_mul("gated delta conv state", qkv_width, conv_kernel_dim)?;
+        checked_mul("gated delta recurrent state", value_width, key_head_dim)?;
+        Ok(Self {
+            hidden_size,
+            num_key_heads,
+            num_value_heads,
+            key_head_dim,
+            value_head_dim,
+            conv_kernel_dim,
+            qkv: Linear::new(hidden_size, qkv_width, bias)?,
+            z: Linear::new(hidden_size, value_width, bias)?,
+            beta: Linear::new(hidden_size, num_value_heads, bias)?,
+            a: Linear::new(hidden_size, num_value_heads, bias)?,
+            norm: RmsNorm::new(value_head_dim, epsilon)?,
+            output: Linear::new(value_width, hidden_size, bias)?,
+        })
+    }
+
+    pub const fn hidden_size(&self) -> usize {
+        self.hidden_size
+    }
+    pub const fn num_key_heads(&self) -> usize {
+        self.num_key_heads
+    }
+    pub const fn num_value_heads(&self) -> usize {
+        self.num_value_heads
+    }
+    pub const fn key_head_dim(&self) -> usize {
+        self.key_head_dim
+    }
+    pub const fn value_head_dim(&self) -> usize {
+        self.value_head_dim
+    }
+    pub const fn conv_kernel_dim(&self) -> usize {
+        self.conv_kernel_dim
+    }
+    pub const fn conv_dim(&self) -> usize {
+        self.num_key_heads * self.key_head_dim * 2 + self.num_value_heads * self.value_head_dim
+    }
+    pub fn qkv(&self) -> &Linear {
+        &self.qkv
+    }
+    pub fn z(&self) -> &Linear {
+        &self.z
+    }
+    pub fn beta(&self) -> &Linear {
+        &self.beta
+    }
+    pub fn a(&self) -> &Linear {
+        &self.a
+    }
+    pub fn conv_weight_shape(&self) -> [usize; 3] {
+        [self.conv_dim(), 1, self.conv_kernel_dim]
+    }
+    pub fn norm(&self) -> &RmsNorm {
+        &self.norm
+    }
+    pub fn output(&self) -> &Linear {
+        &self.output
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Attention {
     Gqa(GqaAttention),
+    GatedDeltaNet(GatedDeltaNetAttention),
     Mla(MlaAttention),
 }
 
@@ -952,6 +1099,7 @@ impl Attention {
     pub fn hidden_size(&self) -> usize {
         match self {
             Self::Gqa(attention) => attention.hidden_size(),
+            Self::GatedDeltaNet(attention) => attention.hidden_size(),
             Self::Mla(attention) => attention.hidden_size(),
         }
     }

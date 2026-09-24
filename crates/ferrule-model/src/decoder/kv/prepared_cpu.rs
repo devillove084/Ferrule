@@ -2,7 +2,7 @@
 
 use super::*;
 
-impl PhysicalKvPreparedPool for CpuPagedKvPool {
+impl<S: super::super::DecoderSequence> PhysicalKvPreparedPool for TypedCpuPagedKvPool<S> {
     fn preflight_prepared(&self, transaction: &Self::Transaction) -> Result<()> {
         self.inner.preflight_commit(
             transaction

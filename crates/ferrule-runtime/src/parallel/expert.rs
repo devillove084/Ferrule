@@ -20,7 +20,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use ferrule_common::execution::ExecutionTransactionId;
-use ferrule_common::{Error, ParallelRankId, Result};
+use ferrule_common::{
+    Error, ExpertDispatchMembers, ParallelRankId, Result, ValidatedParallelTopology,
+};
 use ferrule_model::TensorRole;
 use ferrule_model::moe::ExpertId;
 use ferrule_model::transformer::expert_parallel::{
@@ -64,6 +66,25 @@ pub struct ExpertGroup {
 }
 
 impl ExpertGroup {
+    /// Bind this existing dispatch group to mesh metadata without changing its
+    /// slot order, placement, or activation-only execution/transaction protocol.
+    pub fn dispatch_members(
+        &self,
+        topology: &ValidatedParallelTopology,
+        replica: u32,
+        stage: u32,
+    ) -> Result<ExpertDispatchMembers> {
+        self.validate()?;
+        ExpertDispatchMembers::new(
+            topology,
+            replica,
+            stage,
+            self.source_rank,
+            self.members.iter().copied(),
+        )
+        .map_err(|e| error(format!("expert attachment scope: {e:?}")))
+    }
+
     fn validate(&self) -> Result<()> {
         if self.members.is_empty()
             || self.members.len() > u32::MAX as usize

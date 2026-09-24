@@ -130,6 +130,22 @@ impl ModelDescriptor {
             .map(ModelFamily::from_architecture)
             .unwrap_or_else(|| ModelFamily::Unknown("hf-transformer".into()));
 
+        let qwen35_architecture = json
+            .get("architectures")
+            .and_then(|value| value.as_array())
+            .is_some_and(|names| {
+                names.iter().filter_map(|name| name.as_str()).any(|name| {
+                    matches!(
+                        ModelFamily::from_architecture(name),
+                        ModelFamily::Qwen35 | ModelFamily::Qwen35Moe
+                    )
+                })
+            });
+        if matches!(family, ModelFamily::Qwen35 | ModelFamily::Qwen35Moe) || qwen35_architecture {
+            return crate::models::qwen35::Qwen35Metadata::from_value(model_dir, &json)
+                .map(|metadata| metadata.descriptor());
+        }
+
         let mut spec = generic_hf_spec(&json, family, architecture.clone());
         if spec.architecture.is_none() {
             spec.architecture = architecture;

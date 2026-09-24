@@ -62,6 +62,35 @@ fn synthetic_multishard_artifact_binds_without_reading_payloads() {
         assert_eq!(parameter.spec().dtype().allowed(), [ParameterDType::Bf16]);
         assert_eq!(parameter.weight().slice().dtype.as_str(), "BF16");
     }
+    let resources = checkpoint.resources();
+    let largest = |expert| {
+        resources
+            .state_dict()
+            .parameters()
+            .iter()
+            .filter(|p| {
+                matches!(
+                    p.residency(),
+                    ferrule_model::nn::ParameterResidency::Expert { .. }
+                ) == expert
+            })
+            .map(|p| p.weight().slice().bytes)
+            .max()
+            .unwrap()
+    };
+    let (dense_limit, expert_limit) = (largest(false), largest(true));
+    resources
+        .validate_parameter_limits(dense_limit, expert_limit)
+        .unwrap();
+    for (dense, expert) in [
+        (dense_limit - 1, expert_limit),
+        (dense_limit, expert_limit - 1),
+    ] {
+        let error = resources
+            .validate_parameter_limits(dense, expert)
+            .unwrap_err();
+        assert!(error.to_string().contains("above its"), "{error}");
+    }
     let expert = checkpoint
         .resources()
         .experts()

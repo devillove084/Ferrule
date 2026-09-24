@@ -9,6 +9,77 @@
 
 namespace ferrule::cuda::core {
 
+// One thread owns a channel for the entire sequence: no inter-row history races.
+__global__ void causal_depthwise_conv_kernel(FerruleCoreConvArgs args) {
+  const uint32_t channel = blockIdx.x * blockDim.x + threadIdx.x;
+  if (channel >= args.channels) return;
+  float *history = pointer<float>(args.history) +
+                   static_cast<uint64_t>(channel) * args.kernel_size;
+  const float *weight = const_pointer<float>(args.weight) +
+                        static_cast<uint64_t>(channel) * args.kernel_size;
+  for (uint32_t row = 0; row < args.rows; ++row) {
+    const uint64_t index = static_cast<uint64_t>(row) * args.channels + channel;
+    for (uint32_t tap = 0; tap + 1 < args.kernel_size; ++tap)
+      history[tap] = history[tap + 1];
+    history[args.kernel_size - 1] = const_pointer<float>(args.input)[index];
+    float value = args.bias == 0 ? 0.0f : const_pointer<float>(args.bias)[channel];
+    for (uint32_t tap = 0; tap < args.kernel_size; ++tap)
+      value += history[tap] * weight[tap];
+    pointer<float>(args.output)[index] = value / (1.0f + expf(-value));
+  }
+}
+
+// Each thread owns a complete state column [dk] for one value head.
+// Serial time traversal supports arbitrary prefill length without host state copies.
+__global__ void gated_delta_kernel(FerruleCoreDeltaArgs args) {
+  const uint64_t index = static_cast<uint64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  const uint64_t value_width = static_cast<uint64_t>(args.value_heads) * args.value_dim;
+  if (index >= value_width) return;
+  const uint32_t head = index / args.value_dim;
+  const uint32_t column = index % args.value_dim;
+  const uint32_t key_head = head / (args.value_heads / args.key_heads);
+  const uint64_t key_width = static_cast<uint64_t>(args.key_heads) * args.key_dim;
+  const uint64_t row_width = 2 * key_width + value_width;
+  float *state = pointer<float>(args.state) +
+                static_cast<uint64_t>(head) * args.key_dim * args.value_dim + column;
+  const float qscale = rsqrtf(static_cast<float>(args.key_dim));
+  const float decay_scale = expf(const_pointer<float>(args.a_log)[head]);
+  for (uint32_t row = 0; row < args.rows; ++row) {
+    const float *q = const_pointer<float>(args.qkv) + row * row_width +
+                     static_cast<uint64_t>(key_head) * args.key_dim;
+    const float *k = q + key_width;
+    float qnorm = 0.0f, knorm = 0.0f;
+    for (uint32_t d = 0; d < args.key_dim; ++d) {
+      qnorm += q[d] * q[d];
+      knorm += k[d] * k[d];
+    }
+    qnorm = rsqrtf(qnorm + 1.0e-6f);
+    knorm = rsqrtf(knorm + 1.0e-6f);
+    const uint64_t gate_index = static_cast<uint64_t>(row) * args.value_heads + head;
+    const float x = const_pointer<float>(args.a)[gate_index] +
+                    const_pointer<float>(args.dt_bias)[head];
+    // torch softplus uses beta=1 and threshold=20; avoid overflow on either tail.
+    const float softplus = x > 20.0f ? x : log1pf(expf(x));
+    const float decay = expf(-decay_scale * softplus);
+    const float beta = 1.0f / (1.0f + expf(-const_pointer<float>(args.b)[gate_index]));
+    float memory = 0.0f;
+    for (uint32_t d = 0; d < args.key_dim; ++d) {
+      const uint64_t offset = static_cast<uint64_t>(d) * args.value_dim;
+      state[offset] *= decay;
+      memory += (k[d] * knorm) * state[offset];
+    }
+    const float value = const_pointer<float>(args.qkv)[row * row_width + 2 * key_width + index];
+    const float delta = beta * (value - memory);
+    float result = 0.0f;
+    for (uint32_t d = 0; d < args.key_dim; ++d) {
+      const uint64_t offset = static_cast<uint64_t>(d) * args.value_dim;
+      state[offset] += (k[d] * knorm) * delta;
+      result += ((q[d] * qnorm) * qscale) * state[offset];
+    }
+    pointer<float>(args.output)[static_cast<uint64_t>(row) * value_width + index] = result;
+  }
+}
+
 __global__ void rope_kernel(FerruleCoreRopeArgs args) {
   const uint32_t pair_index = blockIdx.x * blockDim.x + threadIdx.x;
   if (pair_index >= args.pair_count || args.rope_dim == 0 ||

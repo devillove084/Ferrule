@@ -234,6 +234,65 @@ impl PipelineStage<CudaPagedKvBackend, CudaPipelineStageProgram> {
         Self::new(program, backend, description, capabilities)
     }
 
+    /// Dense rank-local standard decoder using the same PP worker journal.
+    /// `rank` is TP-local; the collective/plan carries the physical global owner.
+    /// The description and backend both use local heads and segment-local layers,
+    /// while the parent alone constructs the full logical PP×TP schema.
+    #[allow(clippy::too_many_arguments)]
+    pub fn prepare_cuda_tensor(
+        resources: &BoundDecoderResources,
+        plan: LayerSegmentPlan,
+        tensor: ferrule_model::transformer::StandardTensorPlan,
+        rank: ferrule_common::ParallelRankId,
+        config: PipelineConfig,
+        ops: Rc<CudaOperators>,
+        collective: Box<dyn ferrule_model::transformer::StandardTensorCollective>,
+    ) -> Result<Self> {
+        config.validate()?;
+        if config.precision != ExecutionPrecisionPolicy::f32() {
+            return Err(error(
+                "standard tensor pipeline requires F32 activations and KV",
+            ));
+        }
+        tensor.validate_segment(resources.spec(), &plan)?;
+        let description = PipelineStageDescription {
+            plan: plan.clone(),
+            config,
+            hidden: resources.spec().hidden_size(),
+            vocabulary: resources.spec().vocab_size(),
+            kv_heads: tensor.local_kv_heads(),
+            head_dim: tensor.head_dim(),
+            expert_group: None,
+        };
+        let capabilities = description.execution_capabilities()?;
+        let planes = tensor.kv_planes_for_segment(&plan, config.page_size, config.max_positions)?;
+        let segment = checked_completion(
+            StandardDecoderSegment::prepare_cuda_tensor(
+                resources,
+                plan,
+                tensor,
+                rank,
+                config.max_positions,
+                config.max_parameter_bytes,
+                Rc::clone(&ops),
+                collective,
+            )
+            .map_err(segment_error),
+        )?;
+        let mut program = CudaPipelineStageProgram::new(segment);
+        let backend = match CudaPagedKvPool::from_strategy(ops, &planes, config.max_pages) {
+            Ok(pool) => PagedKvBackend::new(pool),
+            Err(source) => {
+                return checked_completion(Err(Error::with_cleanup(
+                    "tensor pipeline KV startup",
+                    source,
+                    program.shutdown(),
+                )));
+            }
+        };
+        Self::new(program, backend, description, capabilities)
+    }
+
     pub fn prepare_cuda_with_experts(
         resources: &BoundDecoderResources,
         plan: LayerSegmentPlan,

@@ -56,6 +56,7 @@ impl CudaTarget {
         CudaKernelCapabilities {
             baseline_simt: compute_capability >= 80,
             bf16_mma_sync: compute_capability >= 80,
+            tf32_mma_sync: compute_capability >= 80,
             fp8_mma_sync: compute_capability >= 89,
             sm90_wgmma: compute_capability == 90,
             sm1xx_umma: matches!(compute_capability, 100 | 101 | 110),
@@ -73,6 +74,8 @@ pub struct CudaKernelCapabilities {
     pub baseline_simt: bool,
     /// Ampere-or-newer BF16 `mma.sync` kernels.
     pub bf16_mma_sync: bool,
+    /// Ampere-or-newer TF32 `mma.sync`, including the TF32x3 F32 GEMM path.
+    pub tf32_mma_sync: bool,
     /// Ada-or-newer FP8 `mma.sync` kernels.
     pub fp8_mma_sync: bool,
     /// Hopper architecture-specific WGMMA instructions.

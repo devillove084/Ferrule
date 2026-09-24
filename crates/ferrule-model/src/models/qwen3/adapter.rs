@@ -10,7 +10,6 @@ use crate::decoder::{
     StandardGqaPlanes,
 };
 use crate::execution::ExecutionPrecisionPolicy;
-use crate::nn::ParameterResidency;
 use crate::{ModelExecutionBackend, ModelFamily, WeightSource};
 
 use super::{Qwen3DenseConfig, Qwen3DenseRecipe, Qwen3MoeCheckpoint};
@@ -85,8 +84,7 @@ impl Qwen3MoeAdapter {
                 checkpoint.config.num_hidden_layers
             )));
         }
-        validate_parameter_limits(
-            checkpoint.resources(),
+        checkpoint.resources().validate_parameter_limits(
             max_tensor_bytes.min(options.max_dense_tensor_bytes),
             options.max_expert_tensor_bytes,
         )?;
@@ -152,29 +150,6 @@ impl Qwen3MoeAdapter {
     }
 }
 
-fn validate_parameter_limits(
-    resources: &BoundDecoderResources,
-    dense_limit: u64,
-    expert_limit: u64,
-) -> Result<()> {
-    for parameter in resources.state_dict().parameters() {
-        let limit = if matches!(parameter.residency(), ParameterResidency::Expert { .. }) {
-            expert_limit
-        } else {
-            dense_limit
-        };
-        if parameter.weight().slice().bytes > limit {
-            return Err(model_error(format!(
-                "parameter '{}' is {} bytes, above its {}-byte load limit",
-                parameter.path(),
-                parameter.weight().slice().bytes,
-                limit
-            )));
-        }
-    }
-    Ok(())
-}
-
 fn model_error(message: impl Into<String>) -> Error {
     Error::Model {
         message: format!("Qwen3 adapter: {}", message.into()),
@@ -235,18 +210,7 @@ impl Qwen3DenseAdapter {
         if max_tensor_bytes == 0 || options.page_size == 0 || options.max_dense_tensor_bytes == 0 {
             return Err(model_error("all Qwen3 load limits must be non-zero"));
         }
-        let config_path = model_dir.join("config.json");
-        let text = std::fs::read_to_string(&config_path).map_err(|error| {
-            Error::context(
-                format!("Qwen3 dense config '{}'", config_path.display()),
-                error.into(),
-            )
-        })?;
-        let value: serde_json::Value =
-            serde_json::from_str(&text).map_err(|source| Error::ModelSource {
-                source: Box::new(source),
-            })?;
-        let config = Qwen3DenseConfig::from_value(&value)?;
+        let (config, checkpoint) = Self::bind_hf_metadata(model_dir)?;
         let active_layers = options.max_layers.unwrap_or(config.num_hidden_layers);
         if active_layers == 0 || active_layers > config.num_hidden_layers {
             return Err(model_error(format!(
@@ -254,14 +218,10 @@ impl Qwen3DenseAdapter {
                 config.num_hidden_layers
             )));
         }
-        let checkpoint = DecoderLoadOptions::new(&Qwen3DenseRecipe::new(), &value)
-            .open_hf_checkpoint(model_dir, ModelFamily::Qwen3)?;
         let max_parameter_bytes = max_tensor_bytes.min(options.max_dense_tensor_bytes);
-        validate_parameter_limits(
-            checkpoint.resources(),
-            max_parameter_bytes,
-            max_parameter_bytes,
-        )?;
+        checkpoint
+            .resources()
+            .validate_parameter_limits(max_parameter_bytes, max_parameter_bytes)?;
         let kv_schema = StandardGqaPlanes::new(
             active_layers,
             config.num_key_value_heads,
@@ -279,6 +239,38 @@ impl Qwen3DenseAdapter {
             active_layers,
             max_parameter_bytes,
         })
+    }
+
+    /// Strict config/index/header/state-dict binding, without tensor payload reads,
+    /// tokenizer loading, backend selection, or a full-weight read budget. Callers
+    /// must validate their actual read geometry before materializing weights.
+    /// Resident loading uses this same binding followed by full-parameter limits.
+    pub fn bind_hf_metadata(model_dir: &Path) -> Result<(Qwen3DenseConfig, HFDecoderCheckpoint)> {
+        let config_path = model_dir.join("config.json");
+        let text = std::fs::read_to_string(&config_path).map_err(|error| {
+            Error::context(
+                format!("Qwen3 dense config '{}'", config_path.display()),
+                error.into(),
+            )
+        })?;
+        let value: serde_json::Value =
+            serde_json::from_str(&text).map_err(|source| Error::ModelSource {
+                source: Box::new(source),
+            })?;
+        let config = Qwen3DenseConfig::from_value(&value)?;
+        let checkpoint = DecoderLoadOptions::new(&Qwen3DenseRecipe::new(), &value)
+            .open_hf_checkpoint(model_dir, ModelFamily::Qwen3)?;
+        Ok((config, checkpoint))
+    }
+
+    /// Delegate metadata-only TP preflight to the shared standard decoder plan.
+    /// Actual bounded reads still revalidate checkpoint source identities.
+    pub fn validate_tensor_read_limits(
+        resources: &BoundDecoderResources,
+        tensor: &crate::transformer::StandardTensorPlan,
+        max_tensor_bytes: u64,
+    ) -> Result<()> {
+        tensor.validate_read_limits(resources, max_tensor_bytes)
     }
 
     pub const fn config(&self) -> &Qwen3DenseConfig {

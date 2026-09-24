@@ -110,7 +110,11 @@ impl EnginePlan {
             EnginePlanStatus::Executable
         } else if matches!(
             contract.spec.family,
-            ModelFamily::Unknown(_) | ModelFamily::Qwen3 | ModelFamily::QwenMoe
+            ModelFamily::Unknown(_)
+                | ModelFamily::Qwen3
+                | ModelFamily::QwenMoe
+                | ModelFamily::Qwen35
+                | ModelFamily::Qwen35Moe
         ) {
             EnginePlanStatus::Unsupported
         } else {
@@ -134,6 +138,10 @@ impl EnginePlan {
 
 fn backend_profile(family: &ModelFamily, backend: ModelExecutionBackend) -> Option<&'static str> {
     match (family, backend) {
+        (ModelFamily::Qwen35, ModelExecutionBackend::Cpu) => Some("cpu-hybrid-f32-qwen35-0.8b"),
+        (ModelFamily::Qwen35, ModelExecutionBackend::Cuda) if cfg!(feature = "cuda") => {
+            Some("cuda-hybrid-f32-qwen35-0.8b")
+        }
         (ModelFamily::Qwen3, ModelExecutionBackend::Cpu) => Some("cpu-standard-decoder"),
         (ModelFamily::QwenMoe, ModelExecutionBackend::Cpu) => Some("cpu-reference"),
         (ModelFamily::QwenMoe, ModelExecutionBackend::Cuda) if cfg!(feature = "cuda") => {
@@ -178,6 +186,20 @@ fn missing_policies(
     }
 
     match (&spec.family, backend) {
+        (ModelFamily::Qwen35, ModelExecutionBackend::Cpu) => {}
+        (ModelFamily::Qwen35, ModelExecutionBackend::Cuda) if cfg!(feature = "cuda") => {}
+        (ModelFamily::Qwen35, ModelExecutionBackend::Cuda) => {
+            missing.push(MissingPolicy::new(
+                PolicyArea::Backend,
+                "Qwen3.5 CUDA requires the cuda feature",
+            ));
+        }
+        (ModelFamily::Qwen35Moe, _) => {
+            missing.push(MissingPolicy::new(
+                PolicyArea::Backend,
+                "Qwen3.5 MoE/FP8 execution is unsupported; only dense 0.8B BF16 storage is supported",
+            ));
+        }
         (ModelFamily::Qwen3, ModelExecutionBackend::Cpu) => {}
         (ModelFamily::Qwen3, ModelExecutionBackend::Cuda) => {
             missing.push(MissingPolicy::new(
@@ -236,7 +258,10 @@ fn missing_policies(
             PolicyArea::Attention,
             "latent/compressed attention requires a dedicated attention policy, KV shape, and kernels",
         ));
-    } else if matches!(spec.attention, AttentionKind::Unknown(_)) {
+    } else if matches!(spec.attention, AttentionKind::Unknown(_))
+        && !(spec.family == ModelFamily::Qwen35
+            && spec.attention == AttentionKind::Unknown("qwen35_hybrid_linear_full".into()))
+    {
         missing.push(MissingPolicy::new(
             PolicyArea::Attention,
             "unknown attention kind has no execution policy",

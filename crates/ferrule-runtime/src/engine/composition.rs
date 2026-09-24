@@ -19,6 +19,12 @@ use super::{
 pub enum ResidentKvPageAccounting {
     /// Provision enough pages for every configured active sequence at `ctx_size`.
     ContextCapacity,
+    /// Reserve full context capacity plus one shadow per committed page.
+    /// Both sets are charged against the same physical byte budget.
+    TransactionCapacity {
+        page_bytes: u64,
+        budget_bytes: Option<u64>,
+    },
     /// Apply an explicit physical page ceiling.
     PageLimit(usize),
     /// Derive the physical page ceiling from a byte budget and backend page size.
@@ -70,7 +76,40 @@ pub fn plan_resident_kv_pages(
             message: "resident engine KV page capacity overflow".into(),
         })?;
 
+    if let ResidentKvPageAccounting::TransactionCapacity {
+        page_bytes,
+        budget_bytes,
+    } = accounting
+    {
+        let configured_pages =
+            full_capacity_pages
+                .checked_mul(2)
+                .ok_or_else(|| Error::InvalidRequest {
+                    message: "transaction KV capacity overflow".into(),
+                })?;
+        let configured_bytes = u64::try_from(configured_pages)
+            .ok()
+            .and_then(|pages| pages.checked_mul(page_bytes))
+            .filter(|bytes| *bytes > 0)
+            .ok_or_else(|| Error::InvalidRequest {
+                message: "transaction KV byte capacity overflow".into(),
+            })?;
+        if budget_bytes.is_some_and(|budget| configured_bytes > budget) {
+            return Err(Error::InvalidRequest {
+                message: format!(
+                    "hybrid CUDA KV budget must cover full contexts plus transaction shadows: required {configured_bytes} bytes, budget {budget_bytes:?}; reduce ctx-size or max-active-sequences"
+                ),
+            });
+        }
+        return Ok(ResidentKvPagePlan {
+            full_capacity_pages,
+            configured_pages,
+            page_bytes: Some(page_bytes),
+            configured_bytes: Some(configured_bytes),
+        });
+    }
     let (page_limit, page_bytes) = match accounting {
+        ResidentKvPageAccounting::TransactionCapacity { .. } => unreachable!(),
         ResidentKvPageAccounting::ContextCapacity => (full_capacity_pages, None),
         ResidentKvPageAccounting::PageLimit(0) => {
             return Err(Error::InvalidRequest {
@@ -180,6 +219,30 @@ mod tests {
         fn max_sequence_len(&self) -> usize {
             64
         }
+    }
+
+    #[test]
+    fn transaction_capacity_charges_shadows_inside_hard_budget() {
+        let scheduler = ResidentSchedulerConfig {
+            max_active_sequences: 3,
+            ..Default::default()
+        };
+        let driver = ResidentTopKDriverConfig {
+            ctx_size: 10,
+            ..Default::default()
+        };
+        let accounting = |budget| ResidentKvPageAccounting::TransactionCapacity {
+            page_bytes: 10,
+            budget_bytes: budget,
+        };
+        let plan =
+            plan_resident_kv_pages(&TestSchema, accounting(Some(180)), scheduler, driver).unwrap();
+        assert_eq!(plan.full_capacity_pages, 9);
+        assert_eq!(plan.configured_pages, 18);
+        assert_eq!(plan.configured_bytes, Some(180));
+        assert!(
+            plan_resident_kv_pages(&TestSchema, accounting(Some(179)), scheduler, driver).is_err()
+        );
     }
 
     #[test]

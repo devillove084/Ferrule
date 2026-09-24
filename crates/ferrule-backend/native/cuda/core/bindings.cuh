@@ -4,6 +4,7 @@
 #include "core/device.cuh"
 #include "core/validation.cuh"
 #include "core/dense_ops.cuh"
+#include "core/cutlass_f32.cuh"
 #include "core/tensor_ops.cuh"
 #include "core/sequence_ops.cuh"
 #include "core/attention_ops.cuh"
@@ -63,8 +64,42 @@ ferrule_core_quantize_launch(const FerruleCoreQuantizeArgs *args) {
   return ferrule::cuda::core::launch_status();
 }
 
+extern "C" int32_t ferrule_core_conv_launch(const FerruleCoreConvArgs *args) {
+  if (!args || !args->rows || !args->channels || !args->kernel_size ||
+      !args->input || !args->weight || !args->history || !args->output) {
+    return static_cast<int32_t>(cudaErrorInvalidValue);
+  }
+  ferrule::cuda::core::causal_depthwise_conv_kernel<<<
+      ferrule::cuda::core::blocks_for(args->channels), ferrule::cuda::core::kBlock, 0,
+      ferrule::cuda::core::stream(args->stream)>>>(*args);
+  return ferrule::cuda::core::launch_status();
+}
+
+extern "C" int32_t ferrule_core_delta_launch(const FerruleCoreDeltaArgs *args) {
+  if (!args || !args->rows || !args->key_heads || !args->value_heads ||
+      args->value_heads % args->key_heads != 0 || !args->key_dim || !args->value_dim ||
+      !args->qkv || !args->a || !args->b || !args->a_log || !args->dt_bias ||
+      !args->state || !args->output) {
+    return static_cast<int32_t>(cudaErrorInvalidValue);
+  }
+  ferrule::cuda::core::gated_delta_kernel<<<
+      ferrule::cuda::core::blocks_for(static_cast<uint64_t>(args->value_heads) * args->value_dim),
+      ferrule::cuda::core::kBlock, 0, ferrule::cuda::core::stream(args->stream)>>>(*args);
+  return ferrule::cuda::core::launch_status();
+}
+
 extern "C" int32_t ferrule_core_data_launch(const FerruleCoreDataArgs *args) {
   if (!ferrule::cuda::core::valid(args)) {
+    return static_cast<int32_t>(cudaErrorInvalidValue);
+  }
+  if (args->kind == FERRULE_CORE_DATA_QUERY_GATE_SPLIT &&
+      (!args->count || !args->width || args->count % args->width != 0 ||
+       !args->input0 || !args->output0 || !args->output1)) {
+    return static_cast<int32_t>(cudaErrorInvalidValue);
+  }
+  if ((args->kind == FERRULE_CORE_DATA_SIGMOID_GATE ||
+       args->kind == FERRULE_CORE_DATA_SILU_GATE) &&
+      (!args->count || !args->input0 || !args->input1 || !args->output0)) {
     return static_cast<int32_t>(cudaErrorInvalidValue);
   }
   ferrule::cuda::core::data_kernel<<<ferrule::cuda::core::blocks_for(args->count), ferrule::cuda::core::kBlock, 0, ferrule::cuda::core::stream(args->stream)>>>(

@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
-use ferrule_common::{Error, Result};
+use ferrule_common::{Error, ParallelRankId, Result};
 
 use crate::checkpoint::{
     CheckpointDType, CheckpointTensorPayload, CheckpointTensorReader, LinearWeight,
@@ -12,6 +12,8 @@ use crate::checkpoint::{
 use crate::nn::{ParameterId, ParameterResidency};
 use crate::support::TensorRole;
 
+use super::parallel::{TensorParallelPreparationRead, TensorParallelWeightShard};
+use super::standard::StandardTensorPlan;
 use super::{BoundParameter, BoundTensorPart, TensorTransform};
 use crate::execution::{PreparedExecutable, PreparedModel};
 
@@ -182,8 +184,14 @@ impl<R, O, A> PreparedDecoder<R, O, A> {
 #[derive(Debug, Clone)]
 pub struct PreparedParameter {
     binding: BoundParameter,
-    weight: CheckpointTensorPayload,
+    weight: PreparedParameterWeight,
     scale: Option<CheckpointTensorPayload>,
+}
+
+#[derive(Debug, Clone)]
+enum PreparedParameterWeight {
+    Full(CheckpointTensorPayload),
+    Tensor(Arc<TensorParallelWeightShard>),
 }
 
 impl PreparedParameter {
@@ -203,8 +211,21 @@ impl PreparedParameter {
         self.binding.role()
     }
 
-    pub fn weight(&self) -> &CheckpointTensorPayload {
-        &self.weight
+    /// Packed TP rectangles have no contiguous on-disk tensor slice.
+    pub fn weight(&self) -> Result<&CheckpointTensorPayload> {
+        match &self.weight {
+            PreparedParameterWeight::Full(weight) => Ok(weight),
+            PreparedParameterWeight::Tensor(_) => Err(model_error(
+                "TP parameter requires its typed rank-local shard",
+            )),
+        }
+    }
+
+    pub fn tensor_shard(&self) -> Option<&TensorParallelWeightShard> {
+        match &self.weight {
+            PreparedParameterWeight::Tensor(shard) => Some(shard),
+            PreparedParameterWeight::Full(_) => None,
+        }
     }
 
     pub fn scale(&self) -> Option<&CheckpointTensorPayload> {
@@ -212,12 +233,16 @@ impl PreparedParameter {
     }
 
     pub fn values_f32(&self) -> Result<Vec<f32>> {
-        decode_float_payload(&self.weight)
+        match &self.weight {
+            PreparedParameterWeight::Full(weight) => decode_float_payload(weight),
+            PreparedParameterWeight::Tensor(shard) => shard.values_f32(),
+        }
     }
 
     pub fn values_usize(&self) -> Result<Vec<usize>> {
-        let expected = self.weight.slice.element_count()?;
-        match self.weight.slice.dtype {
+        let weight = self.weight()?;
+        let expected = weight.slice.element_count()?;
+        match weight.slice.dtype {
             CheckpointDType::I32 => {
                 let expected_bytes = expected.checked_mul(4).ok_or_else(|| {
                     model_error(format!(
@@ -225,14 +250,14 @@ impl PreparedParameter {
                         self.binding.path()
                     ))
                 })?;
-                if self.weight.bytes.len() != expected_bytes {
+                if weight.bytes.len() != expected_bytes {
                     return Err(model_error(format!(
                         "I32 parameter '{}' has {} bytes, expected {expected_bytes}",
                         self.binding.path(),
-                        self.weight.bytes.len()
+                        weight.bytes.len()
                     )));
                 }
-                self.weight
+                weight
                     .bytes
                     .as_chunks::<4>()
                     .0
@@ -255,14 +280,14 @@ impl PreparedParameter {
                         self.binding.path()
                     ))
                 })?;
-                if self.weight.bytes.len() != expected_bytes {
+                if weight.bytes.len() != expected_bytes {
                     return Err(model_error(format!(
                         "I64 parameter '{}' has {} bytes, expected {expected_bytes}",
                         self.binding.path(),
-                        self.weight.bytes.len()
+                        weight.bytes.len()
                     )));
                 }
-                self.weight
+                weight
                     .bytes
                     .as_chunks::<8>()
                     .0
@@ -287,15 +312,15 @@ impl PreparedParameter {
     }
 
     pub fn values_bf16_words(&self) -> Result<Vec<u16>> {
-        if self.weight.slice.dtype != CheckpointDType::Bf16 {
+        let weight = self.weight()?;
+        if weight.slice.dtype != CheckpointDType::Bf16 {
             return Err(model_error(format!(
                 "parameter '{}' is {}, not BF16",
                 self.binding.path(),
-                self.weight.slice.dtype.as_str()
+                weight.slice.dtype.as_str()
             )));
         }
-        Ok(self
-            .weight
+        Ok(weight
             .bytes
             .as_chunks::<2>()
             .0
@@ -305,39 +330,47 @@ impl PreparedParameter {
     }
 
     pub fn into_linear(&self, role: TensorRole) -> Result<PreparedLinear> {
-        let weight =
-            LinearWeight::from_weight_and_scale(role, self.weight.clone(), self.scale.clone())?;
-        Ok(PreparedLinear {
-            parameter: Arc::new(self.clone()),
-            weight,
-            bias: None,
-        })
+        PreparedLinear::from_parameter(Arc::new(self.clone()), role)
     }
 }
 
-/// Prepared matrix and optional additive bias.
+/// Global linear descriptor with a full matrix or a typed rank-local payload.
+/// Feature counts stay global; TP operators use `tensor_shard().local_shape()`.
 #[derive(Debug, Clone)]
 pub struct PreparedLinear {
     parameter: Arc<PreparedParameter>,
-    weight: LinearWeight,
+    weight: Option<LinearWeight>,
+    role: TensorRole,
     bias: Option<Arc<[f32]>>,
 }
 
 impl PreparedLinear {
     pub fn from_parameter(parameter: Arc<PreparedParameter>, role: TensorRole) -> Result<Self> {
-        let weight = LinearWeight::from_weight_and_scale(
-            role,
-            parameter.weight.clone(),
-            parameter.scale.clone(),
-        )?;
+        if parameter.tensor_shard().is_some() && parameter.role() != &role {
+            return Err(model_error(
+                "TP linear cannot reinterpret a shard as another role",
+            ));
+        }
+        let weight = match &parameter.weight {
+            PreparedParameterWeight::Full(weight) => Some(LinearWeight::from_weight_and_scale(
+                role.clone(),
+                weight.clone(),
+                parameter.scale.clone(),
+            )?),
+            PreparedParameterWeight::Tensor(_) => None,
+        };
         Ok(Self {
             parameter,
             weight,
+            role,
             bias: None,
         })
     }
 
     pub fn with_bias(mut self, bias: Arc<PreparedParameter>) -> Result<Self> {
+        if self.tensor_shard().is_some() {
+            return Err(model_error("TP linear bias is unsupported"));
+        }
         let values = bias.values_f32()?;
         if values.len() != self.out_features() {
             return Err(model_error(format!(
@@ -355,8 +388,18 @@ impl PreparedLinear {
         &self.parameter
     }
 
-    pub fn weight(&self) -> &LinearWeight {
-        &self.weight
+    pub fn weight(&self) -> Result<&LinearWeight> {
+        self.weight
+            .as_ref()
+            .ok_or_else(|| model_error("TP linear requires rank-local operators and collectives"))
+    }
+
+    pub fn role(&self) -> &TensorRole {
+        &self.role
+    }
+
+    pub fn tensor_shard(&self) -> Option<&TensorParallelWeightShard> {
+        self.parameter.tensor_shard()
     }
 
     pub fn bias(&self) -> Option<&[f32]> {
@@ -364,11 +407,27 @@ impl PreparedLinear {
     }
 
     pub fn in_features(&self) -> usize {
-        self.weight.format.in_features()
+        match self.tensor_shard() {
+            Some(shard) => shard.full_shape()[1],
+            None => self
+                .weight
+                .as_ref()
+                .expect("full linear")
+                .format
+                .in_features(),
+        }
     }
 
     pub fn out_features(&self) -> usize {
-        self.weight.format.out_features()
+        match self.tensor_shard() {
+            Some(shard) => shard.full_shape()[0],
+            None => self
+                .weight
+                .as_ref()
+                .expect("full linear")
+                .format
+                .out_features(),
+        }
     }
 }
 
@@ -407,6 +466,7 @@ impl PreparedCudaLinear {
 /// Prepared affine RMSNorm parameters.
 #[derive(Debug, Clone)]
 pub struct PreparedNorm {
+    one_plus_weight: bool,
     parameter: Arc<PreparedParameter>,
     weight: Arc<[f32]>,
     epsilon: f32,
@@ -419,10 +479,35 @@ impl PreparedNorm {
         }
         let weight: Arc<[f32]> = parameter.values_f32()?.into();
         Ok(Self {
+            one_plus_weight: false,
             parameter,
             weight,
             epsilon,
         })
+    }
+
+    pub fn from_descriptor(
+        parameter: Arc<PreparedParameter>,
+        descriptor: &super::RmsNorm,
+    ) -> Result<Self> {
+        let mut norm = Self::new(parameter, descriptor.epsilon())?;
+        if norm.weight.len() != descriptor.hidden_size() {
+            return Err(model_error("norm weight shape differs from descriptor"));
+        }
+        norm.one_plus_weight = descriptor.one_plus_weight();
+        if descriptor.one_plus_weight() {
+            norm.weight = norm
+                .weight
+                .iter()
+                .map(|weight| 1.0 + weight)
+                .collect::<Vec<_>>()
+                .into();
+        }
+        Ok(norm)
+    }
+
+    pub const fn one_plus_weight(&self) -> bool {
+        self.one_plus_weight
     }
 
     pub fn parameter(&self) -> &PreparedParameter {
@@ -575,6 +660,8 @@ pub struct StateDictMaterializer {
     max_parameter_bytes: u64,
     reader: CheckpointTensorReader,
     static_parameters: Mutex<BTreeMap<ParameterId, Arc<PreparedParameter>>>,
+    tensor: Option<(StandardTensorPlan, ParallelRankId)>,
+    tensor_reads: Mutex<Vec<TensorParallelPreparationRead>>,
 }
 
 impl StateDictMaterializer {
@@ -586,7 +673,82 @@ impl StateDictMaterializer {
             max_parameter_bytes,
             reader: CheckpointTensorReader::new(max_parameter_bytes),
             static_parameters: Mutex::new(BTreeMap::new()),
+            tensor: None,
+            tensor_reads: Mutex::new(Vec::new()),
         })
+    }
+
+    /// Projection payloads use checkpoint rectangles, never the replicated cache.
+    /// The byte limit applies to a local read; replicated embedding/norms must
+    /// still fit in full. The binding retains the original global source identity.
+    pub fn for_tensor(
+        max_parameter_bytes: u64,
+        plan: StandardTensorPlan,
+        rank: ParallelRankId,
+    ) -> Result<Self> {
+        plan.placement(rank)?;
+        let mut materializer = Self::new(max_parameter_bytes)?;
+        materializer.tensor = Some((plan, rank));
+        Ok(materializer)
+    }
+
+    pub fn tensor_reads(&self) -> Result<Vec<TensorParallelPreparationRead>> {
+        self.tensor_reads
+            .lock()
+            .map(|reads| reads.clone())
+            .map_err(|_| model_error("TP read accounting is poisoned"))
+    }
+
+    pub fn prepared_linear(
+        &self,
+        binding: &BoundParameter,
+        role: TensorRole,
+    ) -> Result<PreparedLinear> {
+        let Some((tensor, rank)) = &self.tensor else {
+            return PreparedLinear::from_parameter(self.parameter(binding)?, role);
+        };
+        let plan = tensor.parameter_plan(binding, &role)?;
+        let shard = plan.read_weight_shard_with_source(
+            &self.reader,
+            binding.weight().slice(),
+            *rank,
+            binding.weight().source_identity(),
+        )?;
+        self.tensor_reads
+            .lock()
+            .map_err(|_| model_error("TP read accounting is poisoned"))?
+            .push(TensorParallelPreparationRead {
+                parameter: binding.id(),
+                canonical: binding.canonical_id(),
+                role: role.clone(),
+                bytes: shard.bytes().len() as u64,
+                rectangle: shard.provenance().cloned(),
+            });
+        PreparedLinear::from_parameter(
+            Arc::new(PreparedParameter {
+                binding: binding.clone(),
+                weight: PreparedParameterWeight::Tensor(Arc::new(shard)),
+                scale: None,
+            }),
+            role,
+        )
+    }
+
+    pub(crate) fn prepared_layer_linear(
+        &self,
+        layer: usize,
+        binding: &BoundParameter,
+        role: TensorRole,
+        cache: &mut dyn LayerWeightCache,
+    ) -> Result<PreparedLinear> {
+        if binding.residency() != &(ParameterResidency::Layer { layer }) {
+            return Err(model_error("linear binding belongs to another layer"));
+        }
+        if self.tensor.is_some() {
+            self.prepared_linear(binding, role)
+        } else {
+            PreparedLinear::from_parameter(self.layer_parameter(layer, binding, cache)?, role)
+        }
     }
 
     pub const fn max_parameter_bytes(&self) -> u64 {
@@ -599,7 +761,7 @@ impl StateDictMaterializer {
         let parameter = self.parameter(binding)?;
         LinearWeight::from_weight_and_scale(
             binding.role().clone(),
-            parameter.weight().clone(),
+            parameter.weight()?.clone(),
             parameter.scale().cloned(),
         )
     }
@@ -634,6 +796,7 @@ impl StateDictMaterializer {
                 binding.residency()
             )));
         }
+        self.validate_full_read(binding)?;
         let canonical = binding.canonical_id();
         if let Some(parameter) = self
             .static_parameters
@@ -668,6 +831,7 @@ impl StateDictMaterializer {
                 binding.residency()
             )));
         }
+        self.validate_full_read(binding)?;
         if let Some(parameter) = cache.get(binding.canonical_id()) {
             return Ok(parameter);
         }
@@ -714,7 +878,27 @@ impl StateDictMaterializer {
         Ok(Arc::new(self.read_parameter(binding)?))
     }
 
+    fn validate_full_read(&self, binding: &BoundParameter) -> Result<()> {
+        if self.tensor.is_some()
+            && !matches!(
+                binding.role(),
+                TensorRole::TokenEmbedding
+                    | TensorRole::OutputNorm
+                    | TensorRole::AttentionNorm
+                    | TensorRole::FeedForwardNorm
+                    | TensorRole::AttentionQueryNorm
+                    | TensorRole::AttentionKeyNorm
+            )
+        {
+            return Err(model_error(
+                "TP projections require rank-local prepared_linear, not full reads",
+            ));
+        }
+        Ok(())
+    }
+
     fn read_parameter(&self, binding: &BoundParameter) -> Result<PreparedParameter> {
+        self.validate_full_read(binding)?;
         let total_bytes = binding
             .weight()
             .slice()
@@ -746,9 +930,21 @@ impl StateDictMaterializer {
         if let Some(scale) = binding.scale() {
             ensure_current(scale, binding)?;
         }
+        if self.tensor.is_some() {
+            self.tensor_reads
+                .lock()
+                .map_err(|_| model_error("TP read accounting is poisoned"))?
+                .push(TensorParallelPreparationRead {
+                    parameter: binding.id(),
+                    canonical: binding.canonical_id(),
+                    role: binding.role().clone(),
+                    bytes: total_bytes,
+                    rectangle: None,
+                });
+        }
         Ok(PreparedParameter {
             binding: binding.clone(),
-            weight,
+            weight: PreparedParameterWeight::Full(weight),
             scale,
         })
     }

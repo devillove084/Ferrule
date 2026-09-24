@@ -6,8 +6,10 @@ use std::rc::Rc;
 
 pub type CudaPagedKvBackend = PagedKvBackend<CudaPagedKvPool>;
 
-#[derive(Clone)]
-pub struct CudaPagedKvPool {
+pub type CudaPagedKvPool = TypedCudaPagedKvPool<super::super::GenericDecoderSequenceState>;
+
+pub struct TypedCudaPagedKvPool<S> {
+    state: std::marker::PhantomData<fn() -> S>,
     inner: device::CudaPagedKvPool,
     max_sequence_len: Option<usize>,
 }
@@ -33,7 +35,16 @@ impl CudaPagedKvTransaction {
             .ok_or_else(|| kv_error("CUDA physical KV handle absent"))
     }
 }
-impl CudaPagedKvPool {
+impl<S> Clone for TypedCudaPagedKvPool<S> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+            max_sequence_len: self.max_sequence_len,
+            state: std::marker::PhantomData,
+        }
+    }
+}
+impl<S> TypedCudaPagedKvPool<S> {
     pub fn new(
         context: Rc<CudaOperators>,
         planes: impl IntoIterator<Item = KvPlaneDescriptor>,
@@ -44,6 +55,7 @@ impl CudaPagedKvPool {
         Ok(Self {
             inner: device::CudaPagedKvPool::new(context, &planes, page_size, max_slots)?,
             max_sequence_len: None,
+            state: std::marker::PhantomData,
         })
     }
     pub fn from_strategy(
@@ -88,13 +100,13 @@ impl CudaPagedKvPool {
         self.inner.capacity().active_transactions
     }
 }
-impl DecoderKvPageView for CudaPagedKvPool {
+impl<S> DecoderKvPageView for TypedCudaPagedKvPool<S> {
     fn page_status(&self, page: KvPageId) -> DecoderKvPageStatus {
         map_page_status(self.inner.page_status(page))
     }
 }
-impl PhysicalKvPool for CudaPagedKvPool {
-    type SequenceState = super::super::GenericDecoderSequenceState;
+impl<S: super::super::DecoderSequence> PhysicalKvPool for TypedCudaPagedKvPool<S> {
+    type SequenceState = S;
     type Transaction = CudaPagedKvTransaction;
     type KvView = CudaKvView;
 
@@ -238,7 +250,7 @@ impl PhysicalKvPool for CudaPagedKvPool {
         self.inner.shutdown()
     }
 }
-impl PhysicalKvPreparedPool for CudaPagedKvPool {
+impl<S: super::super::DecoderSequence> PhysicalKvPreparedPool for TypedCudaPagedKvPool<S> {
     fn preflight_prepared(&self, tx: &Self::Transaction) -> Result<()> {
         self.inner.preflight_prepared(tx.handle()?)
     }

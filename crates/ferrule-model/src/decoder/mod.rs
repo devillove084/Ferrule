@@ -20,16 +20,17 @@ pub use kv::{
     DecoderKvPlaneStrategy, KvCommitOwner, KvPrepareQuiescenceUnknown, MlaPlaneStrategy,
     PagedKvBackend, PagedKvOwnership, PagedKvTransaction, PagedKvTransactionHandle,
     PhysicalKvCommitReady, PhysicalKvPool, PhysicalKvPreparedPool, PrepareKvCommitError,
-    PreparedKvCommit, PreparedKvRetirement, StandardGqaPlanes,
+    PreparedKvCommit, PreparedKvRetirement, StandardGqaPlanes, TypedCpuPagedKvPool,
 };
 #[cfg(feature = "cuda")]
 pub use kv::{
     CudaGqaPlanesMut, CudaKvView, CudaPagedKvBackend, CudaPagedKvPool, CudaPagedKvTransaction,
+    TypedCudaPagedKvPool,
 };
 pub use logits::{DecoderLogits, DecoderTopKRow, DenseLogits};
 pub use runner::{
     GenericDecoderModelView, GenericDecoderObservabilitySnapshot, GenericDecoderOptions,
-    GenericDecoderRunner, GenericDecoderSequenceState,
+    GenericDecoderRunner, GenericDecoderSequenceState, HybridCpuDecoder, HybridCpuKvBackend,
 };
 pub use runtime::{
     ComposedDecoderObserver, ComposedDecoderSnapshot, DecoderComponents, DecoderComposition,
@@ -57,3 +58,19 @@ pub(crate) use transaction::{DecoderTransactionProgress, PackedTransactionRegist
 mod custom_runtime_tests;
 #[cfg(test)]
 mod tests;
+
+mod hybrid;
+pub use hybrid::{
+    GatedDeltaNetState, GatedDeltaStateRef, HybridDecoderSequenceState, HybridLayerSchema,
+    HybridLayerState, HybridLayerStates, HybridSequenceLifecycle, HybridStateSchema,
+    StandardSequenceState,
+};
+
+#[cfg(feature = "cuda")]
+mod hybrid_cuda;
+#[cfg(feature = "cuda")]
+pub use hybrid_cuda::{
+    CudaGatedDeltaState, CudaHybridLayerStates, CudaHybridSequenceLifecycle,
+    CudaHybridSequenceState, HybridCudaCompletionUnknown, HybridCudaDecoder, HybridCudaDevice,
+    HybridCudaKvBackend, HybridCudaMemoryBudget, HybridCudaMemoryEstimate,
+};

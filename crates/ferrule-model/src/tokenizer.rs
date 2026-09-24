@@ -122,12 +122,19 @@ fn read_eos_token_ids(model_dir: &Path) -> Result<Vec<u32>> {
         let json: serde_json::Value = serde_json::from_str(&text).map_err(|e| Error::Model {
             message: format!("config json '{}': {e}", config_path.display()),
         })?;
-        let Some(value) = json.get("eos_token_id") else {
-            continue;
-        };
-        let ids = parse_eos_token_ids(value, &config_path)?;
-        if !ids.is_empty() {
-            return Ok(ids);
+        // Generation settings override model defaults; nested text defaults are
+        // considered only after the model's top-level EOS setting is absent/empty.
+        let nested = (filename == "config.json")
+            .then(|| {
+                json.get("text_config")
+                    .and_then(|text| text.get("eos_token_id"))
+            })
+            .flatten();
+        for value in [json.get("eos_token_id"), nested].into_iter().flatten() {
+            let ids = parse_eos_token_ids(value, &config_path)?;
+            if !ids.is_empty() {
+                return Ok(ids);
+            }
         }
     }
     Ok(Vec::new())

@@ -717,16 +717,64 @@ pub trait ExpertProvider {
     fn expert(&mut self, layer: usize, expert: usize) -> Result<ExpertAvailability>;
 }
 
+/// Packed projected rows for one GatedDeltaNet layer. States are transaction working copies.
+pub struct GatedDeltaNetRequest<'a> {
+    pub layer: usize,
+    pub shape: cpu::gated_delta::GatedDeltaShape,
+    pub qkv: &'a Rows,
+    pub z: &'a Rows,
+    pub a: &'a Rows,
+    pub b: &'a Rows,
+    pub conv: &'a [f32],
+    pub a_log: &'a [f32],
+    pub dt_bias: &'a [f32],
+    pub norm: &'a PreparedNorm,
+    pub metadata: &'a GqaMetadata,
+    pub states: &'a mut [crate::decoder::GatedDeltaStateRef<'a>],
+}
+
 /// Model composition surface. Concrete CPU math belongs to `ferrule_backend::cpu`.
 pub trait StandardDecoderOperators {
     fn backend_name(&self) -> &'static str;
     fn precision(&self) -> ExecutionPrecisionPolicy;
+    /// Attention executes whole local heads; residual width remains replicated.
+    fn attention_heads(&self, query: usize, kv: usize) -> Result<(usize, usize)> {
+        Ok((query, kv))
+    }
     /// Explicit stage/EP boundary, never called between ordinary layer operators.
     fn bind_rows(&mut self, rows: Rows) -> Result<Rows> {
         rows.into_host().map(Rows::Host)
     }
     fn download_rows(&mut self, rows: Rows) -> Result<HostRows> {
         rows.into_host()
+    }
+
+    /// Backends opt in explicitly; never run recurrent state on a host fallback.
+    fn gated_delta_net(
+        &mut self,
+        _request: GatedDeltaNetRequest<'_>,
+    ) -> Result<OperatorProgress<Rows>> {
+        Ok(OperatorProgress::Unsupported(UnsupportedOperator::new(
+            "gated_delta_net",
+            "backend has no GatedDeltaNet implementation",
+        )))
+    }
+    fn unpack_gated_query(
+        &mut self,
+        _input: Rows,
+        _heads: usize,
+        _head_dim: usize,
+    ) -> Result<OperatorProgress<(Rows, Rows)>> {
+        Ok(OperatorProgress::Unsupported(UnsupportedOperator::new(
+            "gated_query",
+            "backend has no head-interleaved query/gate unpack",
+        )))
+    }
+    fn sigmoid_gate(&mut self, _input: Rows, _gate: &Rows) -> Result<OperatorProgress<Rows>> {
+        Ok(OperatorProgress::Unsupported(UnsupportedOperator::new(
+            "sigmoid_gate",
+            "backend has no output gate",
+        )))
     }
 
     fn embedding(
@@ -894,6 +942,134 @@ impl StandardDecoderOperators for CpuStandardDecoderOperators {
 
     fn precision(&self) -> ExecutionPrecisionPolicy {
         self.precision
+    }
+
+    fn unpack_gated_query(
+        &mut self,
+        input: Rows,
+        heads: usize,
+        head_dim: usize,
+    ) -> Result<OperatorProgress<(Rows, Rows)>> {
+        if self.precision != ExecutionPrecisionPolicy::f32() {
+            return Ok(OperatorProgress::Unsupported(UnsupportedOperator::new(
+                "gated_query",
+                "CPU gated attention requires F32",
+            )));
+        }
+        let input = input.into_host()?;
+        let width = heads
+            .checked_mul(head_dim)
+            .filter(|&n| n > 0)
+            .ok_or_else(|| model_error("gated query shape overflow"))?;
+        if width.checked_mul(2) != Some(input.shape().width()) {
+            return Err(model_error("gated query width mismatch"));
+        }
+        let mut query = Vec::with_capacity(input.shape().rows() * width);
+        let mut gate = Vec::with_capacity(query.capacity());
+        for head in input.values().chunks_exact(2 * head_dim) {
+            query.extend_from_slice(&head[..head_dim]);
+            gate.extend_from_slice(&head[head_dim..]);
+        }
+        let shape = RowsShape::new(input.shape().rows(), width)?;
+        Ok(OperatorProgress::Ready((
+            Rows::Host(HostRows::new(shape, RowsDType::F32, input.arena(), query)?),
+            Rows::Host(HostRows::new(shape, RowsDType::F32, input.arena(), gate)?),
+        )))
+    }
+    fn sigmoid_gate(&mut self, input: Rows, gate: &Rows) -> Result<OperatorProgress<Rows>> {
+        if self.precision != ExecutionPrecisionPolicy::f32() {
+            return Ok(OperatorProgress::Unsupported(UnsupportedOperator::new(
+                "sigmoid_gate",
+                "CPU gated attention requires F32",
+            )));
+        }
+        let mut input = input.into_host()?;
+        let gate = gate.host()?;
+        if input.shape() != gate.shape() {
+            return Err(model_error("output gate shape mismatch"));
+        }
+        for (x, g) in input.values_mut().iter_mut().zip(gate.values()) {
+            *x *= cpu::gated_delta::sigmoid(*g);
+        }
+        Ok(OperatorProgress::Ready(Rows::Host(input)))
+    }
+    fn gated_delta_net(
+        &mut self,
+        request: GatedDeltaNetRequest<'_>,
+    ) -> Result<OperatorProgress<Rows>> {
+        if self.precision != ExecutionPrecisionPolicy::f32() {
+            return Ok(OperatorProgress::Unsupported(UnsupportedOperator::new(
+                "gated_delta_net",
+                "CPU GatedDeltaNet requires F32",
+            )));
+        }
+        let qkv = request.qkv.host()?;
+        let z = request.z.host()?;
+        let a = request.a.host()?;
+        let b = request.b.host()?;
+        let (channels, _, _) = request.shape.sizes()?;
+        let width = request.shape.value_heads * request.shape.value_dim;
+        let rows = request.metadata.row_positions().len();
+        if qkv.shape() != RowsShape::new(rows, channels)?
+            || z.shape() != RowsShape::new(rows, width)?
+            || a.shape() != RowsShape::new(rows, request.shape.value_heads)?
+            || a.shape() != b.shape()
+            || request.states.len() != request.metadata.sequence_count()
+        {
+            return Err(model_error(
+                "packed GatedDeltaNet projection/state shape mismatch",
+            ));
+        }
+        // Validate every sequence frontier before the first state write.
+        let mut positions = request
+            .states
+            .iter_mut()
+            .map(|s| s.cpu().map(|s| s.position))
+            .collect::<Result<Vec<_>>>()?;
+        for (row, &sequence) in request.metadata.row_sequence_ids().iter().enumerate() {
+            if request.states[sequence].cpu()?.shape != request.shape
+                || positions[sequence] != request.metadata.row_positions()[row]
+            {
+                return Err(model_error(
+                    "GatedDeltaNet packed sequence frontier mismatch",
+                ));
+            }
+            positions[sequence] = positions[sequence]
+                .checked_add(1)
+                .ok_or_else(|| model_error("recurrent position overflow"))?;
+        }
+        let mut output = Vec::with_capacity(rows * width);
+        for (row, &sequence) in request.metadata.row_sequence_ids().iter().enumerate() {
+            let state = request.states[sequence].cpu()?;
+            fn row_slice(input: &HostRows, row: usize) -> &[f32] {
+                &input.values()[row * input.shape().width()..(row + 1) * input.shape().width()]
+            }
+            output.extend(cpu::gated_delta::gated_delta_step(
+                request.shape,
+                cpu::gated_delta::GatedDeltaWeights {
+                    conv: request.conv,
+                    a_log: request.a_log,
+                    dt_bias: request.dt_bias,
+                    norm: request.norm.weight(),
+                    norm_epsilon: request.norm.epsilon(),
+                },
+                cpu::gated_delta::GatedDeltaInput {
+                    qkv: row_slice(qkv, row),
+                    z: row_slice(z, row),
+                    a: row_slice(a, row),
+                    b: row_slice(b, row),
+                },
+                &mut state.conv_history,
+                &mut state.recurrent,
+            )?);
+            state.position += 1;
+        }
+        Ok(OperatorProgress::Ready(Rows::Host(HostRows::new(
+            RowsShape::new(rows, width)?,
+            RowsDType::F32,
+            None,
+            output,
+        )?)))
     }
 
     fn embedding(
@@ -1188,17 +1364,18 @@ struct CpuLinearAdapter<'a> {
 
 impl<'a> CpuLinearAdapter<'a> {
     fn new(linear: &'a PreparedLinear) -> Result<Self> {
-        let (storage, out_features, in_features) = match linear.weight().format {
+        let weight = linear.weight()?;
+        let (storage, out_features, in_features) = match weight.format {
             LinearWeightFormat::Bf16 {
                 out_features,
                 in_features,
             } => (
-                CpuWeightStorage::Bf16(&linear.weight().weight.bytes),
+                CpuWeightStorage::Bf16(&weight.weight.bytes),
                 out_features,
                 in_features,
             ),
             _ => (
-                CpuWeightStorage::F32(Cow::Owned(linear.weight().reference_weights_f32()?)),
+                CpuWeightStorage::F32(Cow::Owned(weight.reference_weights_f32()?)),
                 linear.out_features(),
                 linear.in_features(),
             ),

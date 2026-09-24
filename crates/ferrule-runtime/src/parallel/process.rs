@@ -224,8 +224,9 @@ impl ProcessOwnerConfig {
 }
 
 /// Child-local ceilings are trusted application configuration, not limits
-/// supplied by a peer. No child IPC wait is infinite. A handler/initializer may
-/// block, in which case the independent parent deadline still applies.
+/// supplied by a peer. Boot, frame, and reply waits are bounded. A healthy
+/// command pipe may remain idle without an idle timeout; handler/initializer
+/// execution is controlled by an independent parent deadline.
 #[derive(Debug, Clone, Copy)]
 pub struct ProcessChildConfig {
     pub frame_limits: ProcessFrameLimits,

@@ -3,10 +3,11 @@
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
+use crate::transformer::StandardTensorPlan;
 use ferrule_backend::cuda::operators::linear::{
     CudaArtifactLinearHandle, CudaF32Buffer, CudaOperators,
 };
-use ferrule_common::Result;
+use ferrule_common::{ParallelRankId, Result};
 
 use crate::checkpoint::CheckpointDType;
 use crate::nn::ParameterId;
@@ -20,6 +21,7 @@ use super::cuda_error;
 pub(super) struct ResidentLinear {
     pub handle: CudaArtifactLinearHandle,
     pub bias: Option<CudaF32Buffer>,
+    pub shape: (usize, usize),
     bias_values: Option<Vec<f32>>,
 }
 
@@ -32,10 +34,11 @@ pub(super) struct ResidentRope {
 pub(super) struct Bindings {
     pub generation: PreparedDecoderGeneration,
     allowed: BTreeMap<ParameterId, BoundParameter>,
-    linear: BTreeMap<ParameterId, Rc<ResidentLinear>>,
+    linear: BTreeMap<(ParameterId, Option<crate::support::TensorRole>), Rc<ResidentLinear>>,
     vectors: BTreeMap<ParameterId, Rc<CudaF32Buffer>>,
     ropes: Vec<Rc<ResidentRope>>,
     bytes: usize,
+    pub tensor: Option<(StandardTensorPlan, ParallelRankId)>,
 }
 
 impl Bindings {
@@ -57,6 +60,7 @@ impl Bindings {
             vectors: BTreeMap::new(),
             ropes: Vec::new(),
             bytes: 0,
+            tensor: None,
         })
     }
 
@@ -71,7 +75,7 @@ impl Bindings {
             return Err(cuda_error("parameter belongs to another prepared image"));
         }
         if !matches!(
-            parameter.weight().slice.dtype,
+            parameter.binding().weight().slice().dtype,
             CheckpointDType::F32 | CheckpointDType::Bf16
         ) || parameter.scale().is_some()
         {
@@ -88,12 +92,32 @@ impl Bindings {
         linear: &PreparedLinear,
     ) -> Result<Rc<ResidentLinear>> {
         self.validate(linear.parameter())?;
-        if linear.weight().execution.activation_quantization.is_some() {
+        match (&self.tensor, linear.tensor_shard()) {
+            (Some((tensor, rank)), Some(shard)) => {
+                if shard.plan() != &tensor.linear_plan(linear)? || shard.rank() != *rank {
+                    return Err(cuda_error("TP weight plan/rank mismatch"));
+                }
+            }
+            (None, None) => {}
+            _ => {
+                return Err(cuda_error(
+                    "TP requires checkpoint-local weights; no upload-time slicing",
+                ));
+            }
+        }
+        if linear.tensor_shard().is_none()
+            && linear.weight()?.execution.activation_quantization.is_some()
+        {
             return Err(cuda_error(
                 "F32 standard CUDA does not support activation quantization",
             ));
         }
-        let id = linear.parameter().canonical_id();
+        // Aliased matrices may have different TP layouts (e.g. Q versus O).
+        // Keep TP caches role-qualified, while preserving TP1 alias deduplication.
+        let id = (
+            linear.parameter().canonical_id(),
+            self.tensor.as_ref().map(|_| linear.role().clone()),
+        );
         if let Some(resident) = self.linear.get(&id) {
             if resident.bias_values.as_deref() != linear.bias() {
                 return Err(cuda_error("prepared linear bias changed within one image"));
@@ -101,12 +125,23 @@ impl Bindings {
             return Ok(Rc::clone(resident));
         }
         // Representation conversion only; no CPU activation or matrix math.
-        let values = linear.parameter().values_f32()?;
+        let (values, shape) = if let Some(shard) = linear.tensor_shard() {
+            shard.validate_source_identity()?;
+            (
+                shard.values_f32()?,
+                (shard.local_shape()[0], shard.local_shape()[1]),
+            )
+        } else {
+            (
+                linear.parameter().values_f32()?,
+                (linear.out_features(), linear.in_features()),
+            )
+        };
         let bytes = values
             .iter()
             .flat_map(|v| v.to_le_bytes())
             .collect::<Vec<_>>();
-        let handle = ops.upload_f32_linear(&bytes, linear.out_features(), linear.in_features())?;
+        let handle = ops.upload_f32_linear(&bytes, shape.0, shape.1)?;
         let bias = linear
             .bias()
             .map(|v| ops.upload_f32_buffer(v))
@@ -115,6 +150,7 @@ impl Bindings {
         let resident = Rc::new(ResidentLinear {
             handle,
             bias,
+            shape,
             bias_values: linear.bias().map(<[f32]>::to_vec),
         });
         self.linear.insert(id, Rc::clone(&resident));

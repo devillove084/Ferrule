@@ -1,8 +1,10 @@
 use super::DecoderSequence;
+#[cfg(test)]
+use super::DecoderSequenceState;
 use super::{
     DecoderKvBackend, DecoderKvCapacity, DecoderKvCommitBackend, DecoderKvPageStatus,
-    DecoderKvPageView, DecoderKvPrepare, DecoderSequenceState, KvCommitBinding, KvEndProgress,
-    KvRankAck, PackedDecoderBatch,
+    DecoderKvPageView, DecoderKvPrepare, KvCommitBinding, KvEndProgress, KvRankAck,
+    PackedDecoderBatch,
 };
 use crate::transformer::{KvAppendRequest, KvHistory, KvView as TransformerKvView};
 use ferrule_backend::cpu::{
@@ -27,6 +29,7 @@ mod prepare_tests;
 #[cfg(feature = "cuda")]
 pub use cuda::{
     CudaGqaPlanesMut, CudaKvView, CudaPagedKvBackend, CudaPagedKvPool, CudaPagedKvTransaction,
+    TypedCudaPagedKvPool,
 };
 
 /// Borrowed input. A successful preflight transfers the non-cloneable handle
@@ -1617,10 +1620,20 @@ impl KvLayoutSchema for StandardGqaPlanes {
 }
 
 /// Decoder transaction adapter over backend-owned physical CPU storage.
-#[derive(Clone)]
-pub struct CpuPagedKvPool {
+pub struct TypedCpuPagedKvPool<S> {
+    state: std::marker::PhantomData<fn() -> S>,
     inner: cpu::CpuPagedKvPool,
     identity: std::rc::Rc<()>,
+}
+
+impl<S> Clone for TypedCpuPagedKvPool<S> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+            identity: self.identity.clone(),
+            state: std::marker::PhantomData,
+        }
+    }
 }
 
 /// CPU physical reservation and mapping/shape witness, not a second ownership
@@ -1651,7 +1664,9 @@ impl CpuPagedKvTransaction {
     }
 }
 
-impl CpuPagedKvPool {
+pub type CpuPagedKvPool = TypedCpuPagedKvPool<super::GenericDecoderSequenceState>;
+
+impl<S> TypedCpuPagedKvPool<S> {
     pub fn new(
         planes: impl IntoIterator<Item = KvPlaneDescriptor>,
         page_size: usize,
@@ -1659,6 +1674,7 @@ impl CpuPagedKvPool {
     ) -> Result<Self> {
         Ok(Self {
             inner: cpu::CpuPagedKvPool::new(planes, page_size, capacity)?,
+            state: std::marker::PhantomData,
             identity: std::rc::Rc::new(()),
         })
     }
@@ -1692,14 +1708,14 @@ impl CpuPagedKvPool {
     }
 }
 
-impl DecoderKvPageView for CpuPagedKvPool {
+impl<S> DecoderKvPageView for TypedCpuPagedKvPool<S> {
     fn page_status(&self, page: KvPageId) -> DecoderKvPageStatus {
         map_page_status(self.inner.page_status(page))
     }
 }
 
-impl PhysicalKvPool for CpuPagedKvPool {
-    type SequenceState = DecoderSequenceState<(), ()>;
+impl<S: super::DecoderSequence> PhysicalKvPool for TypedCpuPagedKvPool<S> {
+    type SequenceState = S;
     type Transaction = CpuPagedKvTransaction;
     type KvView = CpuKvView;
 

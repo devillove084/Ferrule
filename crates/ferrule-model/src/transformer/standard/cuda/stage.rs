@@ -26,6 +26,70 @@ pub struct CudaStandardDecoderSegment {
 }
 
 impl StandardDecoderSegment {
+    /// Replicated embedding/norms, head-sharded attention/KV and vocabulary,
+    /// column/row SwiGLU. Uses the ordinary segment's only forward implementation.
+    /// Projection payloads are read directly as source-validated checkpoint
+    /// rectangles. Only embedding/norms are replicated; no full projection cache.
+    #[allow(clippy::too_many_arguments)]
+    pub fn prepare_cuda_tensor(
+        resources: &BoundDecoderResources,
+        plan: LayerSegmentPlan,
+        tensor: crate::transformer::StandardTensorPlan,
+        rank: ParallelRankId,
+        max_positions: usize,
+        max_parameter_bytes: u64,
+        ops: Rc<CudaOperators>,
+        collective: Box<dyn crate::transformer::StandardTensorCollective>,
+    ) -> SegmentResult<CudaStandardDecoderSegment> {
+        let prepare = |source| SegmentError::Execution {
+            stage: SegmentStage::Prepare,
+            source,
+        };
+        tensor
+            .validate_segment(resources.spec(), &plan)
+            .map_err(prepare)?;
+        for layer in &resources.spec().layers()[plan.layers()] {
+            if let Attention::Gqa(gqa) = layer.attention() {
+                validate_rope(gqa.rotary()).map_err(prepare)?;
+            }
+        }
+        // Placement validation precedes checkpoint materialization and uploads.
+        let placement = tensor.placement(rank).map_err(prepare)?;
+        if placement.device != ops.device_ordinal()
+            || placement.owner != collective.owner()
+            || collective
+                .members()
+                .iter()
+                .copied()
+                .ne(tensor.placements().iter().map(|p| p.owner))
+        {
+            return Err(prepare(super::cuda_error(
+                "TP collective/owner/device placement mismatch",
+            )));
+        }
+        let segment = Self::prepare_tensor(
+            resources,
+            plan,
+            tensor.clone(),
+            rank,
+            max_positions,
+            max_parameter_bytes,
+        )?;
+        let mut operators = CudaStandardDecoderOperators::new(
+            ops,
+            ExecutionPrecisionPolicy::f32(),
+            segment.parameters(),
+        )
+        .map_err(prepare)?;
+        operators
+            .configure_tensor(tensor, rank, collective)
+            .map_err(prepare)?;
+        segment
+            .prepare_cuda_bindings(&mut operators)
+            .map_err(prepare)?;
+        Ok(CudaStandardDecoderSegment { segment, operators })
+    }
+
     pub fn prepare_cuda(
         resources: &BoundDecoderResources,
         plan: LayerSegmentPlan,
@@ -80,6 +144,11 @@ impl CudaStandardDecoderSegment {
     pub fn parameters(&self) -> &[BoundParameter] {
         self.segment.parameters()
     }
+    pub fn tensor_reads(
+        &self,
+    ) -> Result<Vec<crate::transformer::parallel::TensorParallelPreparationRead>> {
+        self.segment.tensor_reads()
+    }
     pub fn operators(&self) -> &CudaStandardDecoderOperators {
         &self.operators
     }
@@ -98,13 +167,24 @@ impl CudaStandardDecoderSegment {
         input: DeviceSegmentInput,
         kv: &mut CudaKvView,
     ) -> SegmentResult<DeviceSegmentOutput> {
-        let mut binding =
-            CudaStandardKvBinding::new(kv, batch).map_err(|source| SegmentError::Execution {
-                stage: SegmentStage::Input,
-                source,
+        let result = (|| {
+            self.operators
+                .begin_tensor(kv.transaction())
+                .map_err(|source| SegmentError::Execution {
+                    stage: SegmentStage::Input,
+                    source,
+                })?;
+            let mut binding = CudaStandardKvBinding::new(kv, batch).map_err(|source| {
+                SegmentError::Execution {
+                    stage: SegmentStage::Input,
+                    source,
+                }
             })?;
-        self.segment
-            .execute_bound(batch, input, &mut binding, &mut self.operators)
+            self.segment
+                .execute_bound(batch, input, &mut binding, &mut self.operators)
+        })();
+        self.operators.end_tensor(result.is_ok());
+        result
     }
 
     /// Explicit pinned PP input/output staging, not a per-layer copy loop.
@@ -114,12 +194,16 @@ impl CudaStandardDecoderSegment {
         input: SegmentInput,
         kv: &mut CudaKvView,
     ) -> SegmentResult<SegmentOutput> {
-        self.execute_cuda_bound(batch, input.into(), kv)?
-            .into_host(&mut self.operators)
+        let output = self.execute_cuda_bound(batch, input.into(), kv)?;
+        self.download_output(output)
     }
 
     pub fn download_output(&mut self, output: DeviceSegmentOutput) -> SegmentResult<SegmentOutput> {
-        output.into_host(&mut self.operators)
+        let result = output.into_host(&mut self.operators);
+        if result.is_err() {
+            self.operators.end_tensor(false);
+        }
+        result
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -132,6 +216,12 @@ impl CudaStandardDecoderSegment {
         executor: &mut dyn RoutedSwiGluExecutor,
         check_active: &mut dyn FnMut(ExecutionTransactionId) -> Result<()>,
     ) -> SegmentResult<DeviceSegmentOutput> {
+        if self.operators.bindings.tensor.is_some() {
+            return Err(SegmentError::Execution {
+                stage: SegmentStage::Input,
+                source: super::cuda_error("MoE/EP injection is unsupported with TP"),
+            });
+        }
         let mut binding =
             CudaStandardKvBinding::new(kv, batch).map_err(|source| SegmentError::Execution {
                 stage: SegmentStage::Input,
