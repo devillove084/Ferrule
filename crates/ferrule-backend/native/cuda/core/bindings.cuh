@@ -5,6 +5,7 @@
 #include "core/validation.cuh"
 #include "core/dense_ops.cuh"
 #include "core/cutlass_f32.cuh"
+#include "cutlass/bf16_linear.cuh"
 #include "core/tensor_ops.cuh"
 #include "core/sequence_ops.cuh"
 #include "core/attention_ops.cuh"
@@ -97,10 +98,17 @@ extern "C" int32_t ferrule_core_data_launch(const FerruleCoreDataArgs *args) {
        !args->input0 || !args->output0 || !args->output1)) {
     return static_cast<int32_t>(cudaErrorInvalidValue);
   }
-  if ((args->kind == FERRULE_CORE_DATA_SIGMOID_GATE ||
-       args->kind == FERRULE_CORE_DATA_SILU_GATE) &&
-      (!args->count || !args->input0 || !args->input1 || !args->output0)) {
-    return static_cast<int32_t>(cudaErrorInvalidValue);
+  if (args->kind == FERRULE_CORE_DATA_SIGMOID_GATE ||
+      args->kind == FERRULE_CORE_DATA_SILU_GATE) {
+    if (!args->count || !args->input0 || !args->input1 || !args->output0 ||
+        (args->flags & ~static_cast<uint32_t>(FERRULE_CORE_GATE_ROW_BROADCAST))) {
+      return static_cast<int32_t>(cudaErrorInvalidValue);
+    }
+    if ((args->flags & FERRULE_CORE_GATE_ROW_BROADCAST) &&
+        (!args->rows || !args->width || args->count > INT32_MAX ||
+         static_cast<uint64_t>(args->rows) * args->width != args->count)) {
+      return static_cast<int32_t>(cudaErrorInvalidValue);
+    }
   }
   ferrule::cuda::core::data_kernel<<<ferrule::cuda::core::blocks_for(args->count), ferrule::cuda::core::kBlock, 0, ferrule::cuda::core::stream(args->stream)>>>(
       *args);
@@ -311,8 +319,14 @@ ferrule_core_transformer_f32_launch(const FerruleCoreTransformerArgs *args) {
   }
   if (args->kind == FERRULE_CORE_TRANSFORMER_PAGED_F32_CAUSAL_GQA ||
       args->kind == FERRULE_CORE_TRANSFORMER_PAGED_F32_APPEND_CAUSAL_GQA) {
-    const uint64_t count = static_cast<uint64_t>(args->rows) * args->q_heads * args->head_dim;
-    transformer_causal_gqa_kernel<float><<<blocks_for(count), kBlock, 0, stream(args->stream)>>>(*args);
+    const uint64_t heads = static_cast<uint64_t>(args->rows) * args->q_heads;
+    // Keep the scalar launch beyond CUDA's one-dimensional grid limit.
+    if (heads <= INT32_MAX) {
+      transformer_causal_gqa_cooperative_f32_kernel<<<static_cast<uint32_t>(heads), kBlock, 0, stream(args->stream)>>>(*args);
+    } else {
+      const uint64_t count = heads * args->head_dim;
+      transformer_causal_gqa_kernel<float><<<blocks_for(count), kBlock, 0, stream(args->stream)>>>(*args);
+    }
   }
   return launch_status();
 }

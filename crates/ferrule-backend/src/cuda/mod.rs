@@ -17,10 +17,13 @@ mod graph;
 pub mod operators {
     pub mod attention;
     mod contracts;
+    mod impls;
     pub mod kv;
+    pub mod legacy;
     pub mod linear;
     pub mod moe;
     pub mod norm;
+    pub mod proposal;
     pub mod rope;
     pub use crate::cuda::context::recurrent;
 

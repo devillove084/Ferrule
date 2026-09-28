@@ -1,10 +1,10 @@
 #![cfg(feature = "cuda")]
 
 use ferrule_backend::cuda::compile_model_plan;
-use ferrule_backend::cuda::providers::cutlass::{
-    self, CutlassKernelId, F32GemmError, F32GemmLayout, f32_gemm, f32_gemm_can_implement,
-    f32_gemm_workspace_requirements,
+use ferrule_backend::cuda::operators::linear::{
+    F32GemmError, F32GemmLayout, f32_gemm, f32_gemm_can_implement, f32_gemm_workspace_requirements,
 };
+use ferrule_backend::cuda::providers::cutlass::{self, CutlassKernelId};
 use ferrule_backend::cuda::providers::{COMPILED_TARGET, CudaContext, CudaTarget, DeviceBuffer};
 use ferrule_backend::plan::{
     ExecutionMode, KernelOperation, KernelPhase, KernelProviderId, LayerKernelRequirements,
@@ -18,17 +18,33 @@ fn f32_sm86_exact_capability_and_plan_policy() {
     assert!(provider.supports(CutlassKernelId::F32Gemm));
     assert!(execution.supports(KernelOperation::LinearF32, ExecutionMode::Inference));
     if COMPILED_TARGET == "sm_86" {
-        // Exact native capability set, not an optional F32 assertion.
-        assert_eq!(provider.manifest().kernel_mask, 0x586);
+        // Exact native capability set includes the independent BF16 GEMM bit.
+        assert_eq!(provider.manifest().kernel_mask, 0xd86);
+        assert!(provider.supports(CutlassKernelId::Bf16Gemm));
         let caps = CudaTarget::parse(COMPILED_TARGET).unwrap().capabilities();
         assert!(caps.tf32_mma_sync);
+        assert!(caps.bf16_mma_sync);
         assert!(!caps.fp8_mma_sync);
         assert!(!provider.supports(CutlassKernelId::Fp8QueryAKv));
         assert!(!provider.supports(CutlassKernelId::Fp8Projection));
         assert!(!execution.supports(KernelOperation::MlaQueryAKv, ExecutionMode::Inference));
         assert!(!execution.supports(KernelOperation::MlaQueryB, ExecutionMode::Inference));
+        // Generic BF16 GEMM adds a native bit, not a semantic plan binding.
+        let expected_operations = [
+            KernelOperation::MainCompressorProjection,
+            KernelOperation::IndexerCompressorProjection,
+            KernelOperation::AttentionHcPre,
+            KernelOperation::FeedForwardHcPre,
+            KernelOperation::HybridMlaAttention,
+            KernelOperation::ProposalHead,
+            KernelOperation::LinearF32,
+        ];
+        assert_eq!(execution.operations.len(), expected_operations.len());
+        for operation in expected_operations {
+            assert!(execution.supports(operation, ExecutionMode::Inference));
+        }
         eprintln!(
-            "sm_86 native/Rust mask=0x586: F32 TF32x3=true, FP8 QueryAKv/Projection=false, LinearF32 inference=true"
+            "sm_86 native/Rust mask=0xD86: F32 TF32x3=true, BF16 GEMM=true, FP8 QueryAKv/Projection=false, inference operations=7"
         );
     }
     let mut bundle = LayerKernelRequirements::default();

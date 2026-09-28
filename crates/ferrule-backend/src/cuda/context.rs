@@ -3,11 +3,17 @@
 #[path = "recurrent.rs"]
 pub mod recurrent;
 
+#[path = "operators/numeric_fp8.rs"]
+pub mod numeric_fp8;
+
+#[path = "operators/resources.rs"]
+mod operator_resources;
+
 #[path = "standard.rs"]
 pub mod standard;
 
 use std::borrow::Cow;
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -27,21 +33,30 @@ use crate::cuda::ffi::core::{
     DSV4_DECODE_INDEX_QUERY_SHARED_ELEMENTS, TRANSFORMER_PAGED_BF16_APPEND_CAUSAL_GQA,
     TRANSFORMER_PAGED_BF16_CAUSAL_GQA, TRANSFORMER_PAGED_BF16_KV_APPEND, TransformerArgs,
 };
+use crate::cuda::operators::attention::hybrid::workspace_requirements as hybrid_mla_explicit_selection_workspace_requirements;
+pub use crate::cuda::operators::attention::hybrid::{
+    CudaHybridMlaAttentionWorkspace, CudaHybridMlaExplicitSelectionWorkspace,
+};
 use crate::cuda::operators::attention::selection::CombinedRingTopkLayout;
 use crate::cuda::operators::attention::sparse::{
     CudaSparseAttentionExecutor, CudaSparseAttentionShape, DualPlanePagedSparseAttentionLayout,
     PagedSparseAttentionLayout,
 };
 use crate::cuda::operators::kv::compressor::CompressorRecurrentShape;
+pub use crate::cuda::operators::moe::grouped_fp4::{
+    CudaExpertGroupRoutePlan, CudaExpertGroupRoutePlanHost, CudaMoeBatchedWorkspace,
+};
+use crate::cuda::operators::moe::grouped_fp4::{
+    ExpertScaleShape, GROUPED_FP4_MOE_SMALL_GROUP_ROW_LIMIT, GROUPED_FP4_MOE_WORKSPACE_ALIGNMENT,
+    workspace_requirements as grouped_fp4_moe_workspace_requirements,
+};
+pub use crate::cuda::operators::proposal::CudaProposalHeadWorkspace;
 use crate::cuda::operators::{
     Bf16MoeRowsLayout, F32ToBf16RowsLayout, GroupedFp4MoeBuffers, GroupedFp4MoeLayout,
     HybridMlaExplicitSelectionLayout, PagedBf16CausalGqaLayout, SelectedSoftmaxTopKLayout,
-    SplitHalfRopeLayout, grouped_fp4_moe_launch as grouped_fp4_moe, grouped_fp4_moe_workspace_size,
-    hybrid_mla_explicit_selection_workspace_requirements, mxfp4_sfb_storage_bytes,
-    prepare_mxfp4_sfb,
+    SplitHalfRopeLayout, grouped_fp4_moe_launch as grouped_fp4_moe,
 };
 use crate::cuda::providers::core::CoreOperators;
-use crate::cuda::providers::cutlass::{CutlassKernelId, discover_provider};
 use crate::plan::{ExecutionMode, KernelOperation, KernelProviderId};
 
 /// Preserve a CUDA/provider error as the source at the common error boundary.
@@ -644,7 +659,7 @@ impl CudaRoutedExpertShape {
         let provider_private_bytes = |out_features: usize, in_features: usize| -> Result<usize> {
             // The native provider currently consumes a transformed scale-block
             // layout. Keep that representation and its sizing contract private.
-            mxfp4_sfb_storage_bytes(out_features, in_features).map_err(|_| Error::Internal {
+            ExpertScaleShape { out_features, in_features }.prepared_bytes().map_err(|_| Error::Internal {
                 message: format!(
                     "CUDA routed-expert private layout byte query failed: out={out_features} in={in_features}"
                 ),
@@ -1463,58 +1478,7 @@ pub struct CudaArtifactLinearWorkspace {
     scale_capacity: usize,
 }
 
-/// Graph-stable scratch for one checkpoint-native proposal hybrid-attention launch.
-///
-/// The five-row query and block KV remain caller-owned stage values. This workspace
-/// owns only the BF16 boundaries, score/probability matrices, output, and device
-/// status needed by the semantic CUTLASS bundle.
-pub struct CudaHybridMlaAttentionWorkspace {
-    #[cfg_attr(
-        not(feature = "cuda"),
-        allow(dead_code, reason = "keeps native CUTLASS query scratch alive")
-    )]
-    query_bf16: DeviceBuffer<u16>,
-    #[cfg_attr(
-        not(feature = "cuda"),
-        allow(dead_code, reason = "keeps native CUTLASS KV scratch alive")
-    )]
-    gathered_kv_bf16: DeviceBuffer<u16>,
-    #[cfg_attr(
-        not(feature = "cuda"),
-        allow(dead_code, reason = "keeps native CUTLASS score scratch alive")
-    )]
-    scores: CudaF32Buffer,
-    #[cfg_attr(
-        not(feature = "cuda"),
-        allow(dead_code, reason = "keeps native CUTLASS probability scratch alive")
-    )]
-    probabilities_bf16: DeviceBuffer<u16>,
-    #[cfg_attr(
-        not(feature = "cuda"),
-        allow(
-            dead_code,
-            reason = "keeps native CUTLASS online-softmax rescale scratch alive"
-        )
-    )]
-    online_rescales: CudaF32Buffer,
-    #[cfg_attr(
-        not(feature = "cuda"),
-        allow(
-            dead_code,
-            reason = "keeps native CUTLASS softmax denominator scratch alive"
-        )
-    )]
-    denominators: CudaF32Buffer,
-    status: CudaI32Buffer,
-}
-
-impl CudaHybridMlaAttentionWorkspace {
-    pub fn status(&self) -> &CudaI32Buffer {
-        &self.status
-    }
-}
-
-/// Opaque provider workspace for hybrid MLA explicit selection.
+/// Preserve launch accounting for production and oracle modes.
 fn hybrid_mla_explicit_selection_launch_count() -> u64 {
     #[cfg(ferrule_cuda_test_oracle)]
     {
@@ -1530,91 +1494,6 @@ fn hybrid_mla_explicit_selection_launch_count() -> u64 {
         }
     }
     4
-}
-
-pub struct CudaHybridMlaExplicitSelectionWorkspace {
-    storage: DeviceBuffer<u8>,
-    status: CudaI32Buffer,
-    capacity_bytes: usize,
-    alignment: usize,
-    allocated_layout: HybridMlaExplicitSelectionLayout,
-    #[cfg(ferrule_cuda_test_oracle)]
-    oracle_output: DeviceBuffer<f32>,
-}
-
-impl CudaHybridMlaExplicitSelectionWorkspace {
-    pub fn status(&self) -> &CudaI32Buffer {
-        &self.status
-    }
-
-    fn supports(&self, layout: HybridMlaExplicitSelectionLayout) -> Result<bool> {
-        let requirements = hybrid_mla_explicit_selection_workspace_requirements(layout)?;
-        let required_bytes = usize::try_from(requirements.bytes).map_err(|_| Error::Internal {
-            message: format!(
-                "hybrid MLA explicit selection workspace requirement exceeds usize: {}",
-                requirements.bytes
-            ),
-        })?;
-        let required_alignment = requirements.alignment as usize;
-        Ok(required_bytes <= self.capacity_bytes
-            && required_alignment <= self.alignment
-            && self
-                .storage
-                .cu_deviceptr()
-                .is_multiple_of(requirements.alignment.into()))
-    }
-}
-
-/// Graph-stable outputs and reduction scratch for the checkpoint-native proposal
-/// HC/LM/Markov/confidence semantic bundle.
-pub struct CudaProposalHeadWorkspace {
-    #[cfg_attr(
-        not(feature = "cuda"),
-        allow(dead_code, reason = "keeps native CUTLASS hidden scratch alive")
-    )]
-    hidden: CudaF32Buffer,
-    #[cfg_attr(
-        not(feature = "cuda"),
-        allow(dead_code, reason = "keeps native CUTLASS normalization scratch alive")
-    )]
-    normalized: CudaF32Buffer,
-    #[cfg_attr(
-        not(feature = "cuda"),
-        allow(dead_code, reason = "keeps native CUTLASS logits scratch alive")
-    )]
-    base_logits: CudaF32Buffer,
-    #[cfg_attr(
-        not(feature = "cuda"),
-        allow(dead_code, reason = "keeps native CUTLASS reduction values alive")
-    )]
-    partial_values: CudaF32Buffer,
-    #[cfg_attr(
-        not(feature = "cuda"),
-        allow(dead_code, reason = "keeps native CUTLASS reduction indices alive")
-    )]
-    partial_indices: CudaI32Buffer,
-    token_ids: CudaI32HostMirror,
-    confidence: CudaF32Buffer,
-    status: CudaI32Buffer,
-    #[cfg_attr(
-        not(feature = "cuda"),
-        allow(dead_code, reason = "keeps the CUTLASS result mirror alive")
-    )]
-    result: CudaI32HostMirror,
-}
-
-impl CudaProposalHeadWorkspace {
-    pub fn token_ids(&self) -> &CudaI32Buffer {
-        self.token_ids.device()
-    }
-
-    pub fn confidence(&self) -> &CudaF32Buffer {
-        &self.confidence
-    }
-
-    pub fn status(&self) -> &CudaI32Buffer {
-        &self.status
-    }
 }
 
 /// Dedicated storage for a producer-owned FP8 activation pack.
@@ -1636,115 +1515,6 @@ pub struct CudaPreparedFp8Activation<'a> {
     row_width: usize,
 }
 
-/// Reusable workspace for grouped FP4 MoE batched execution.
-///
-/// The decode path hits this once per layer per token, so avoiding transient
-/// CUDA allocations here is critical. The workspace owns all per-call scratch
-/// buffers and fixed-size device arrays for selected expert pointers/weights.
-pub struct CudaMoeBatchedWorkspace {
-    gate_ptrs: DeviceBuffer<u64>,
-    gate_scale_ptrs: DeviceBuffer<u64>,
-    up_ptrs: DeviceBuffer<u64>,
-    up_scale_ptrs: DeviceBuffer<u64>,
-    down_ptrs: DeviceBuffer<u64>,
-    down_scale_ptrs: DeviceBuffer<u64>,
-    route_weights: DeviceBuffer<f32>,
-    route_slots: DeviceBuffer<i32>,
-    dispatch_error: DeviceBuffer<i32>,
-    expert_output: CudaF32Buffer,
-    max_experts: usize,
-    input_size: usize,
-    intermediate_size: usize,
-    hidden_size: usize,
-}
-
-/// Device-resident compact routing metadata and caller-owned grouped FP4 MoE scratch.
-///
-/// Route resolution, counting, compaction, and scattering remain stream ordered on
-/// device. The native grouped operator also requires four host scalar dimensions,
-/// so a fixed 16-byte control block is copied to persistent pinned storage once per
-/// prepared plan; no device allocation or stream-wide synchronization occurs there.
-pub struct CudaExpertGroupRoutePlan {
-    slot_counts: DeviceBuffer<i32>,
-    slot_route_offsets: DeviceBuffer<i32>,
-    slot_cursors: DeviceBuffer<i32>,
-    active_expert_slots: DeviceBuffer<i32>,
-    active_group_generations: DeviceBuffer<i32>,
-    expert_route_indptr: DeviceBuffer<i32>,
-    expert_route_counts: DeviceBuffer<i32>,
-    route_token_indices: DeviceBuffer<i32>,
-    route_indices: DeviceBuffer<i32>,
-    route_weights: DeviceBuffer<f32>,
-    host_scalars: DeviceBuffer<i32>,
-    host_staging: PinnedHostBuffer<i32>,
-    metadata_ready: CudaEvent,
-    metadata_copied: CudaEvent,
-    host_metadata: Option<CudaExpertGroupRoutePlanHost>,
-    route_written: DeviceBuffer<i32>,
-    route_error: DeviceBuffer<i32>,
-    resolve: CudaExpertRouteResolveWorkspace,
-    input_fp8: DeviceBuffer<u8>,
-    input_ue8m0: DeviceBuffer<u8>,
-    cutlass_workspace: DeviceBuffer<u8>,
-    max_experts: usize,
-    route_capacity: usize,
-    tokens: usize,
-    input_size: usize,
-    intermediate_size: usize,
-    hidden_size: usize,
-    input_prepared: bool,
-    invocation_routes: Option<usize>,
-}
-
-const GROUPED_FP4_MOE_SMALL_GROUP_ROW_LIMIT: usize = 192;
-const GROUPED_FP4_MOE_WORKSPACE_ALIGNMENT: usize = 256;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct CudaExpertGroupRoutePlanHost {
-    pub active_group_count: usize,
-    pub small_group_count: usize,
-    pub max_group_rows: usize,
-    pub total_routed_rows: usize,
-}
-
-impl CudaMoeBatchedWorkspace {
-    pub fn matches(
-        &self,
-        max_experts: usize,
-        input_size: usize,
-        intermediate_size: usize,
-        hidden_size: usize,
-    ) -> bool {
-        self.max_experts >= max_experts
-            && self.input_size == input_size
-            && self.intermediate_size == intermediate_size
-            && self.hidden_size == hidden_size
-    }
-}
-
-impl CudaExpertGroupRoutePlan {
-    pub fn matches(
-        &self,
-        max_experts: usize,
-        route_capacity: usize,
-        tokens: usize,
-        input_size: usize,
-        intermediate_size: usize,
-        hidden_size: usize,
-    ) -> bool {
-        self.max_experts >= max_experts
-            && self.route_capacity >= route_capacity
-            && self.tokens == tokens
-            && self.input_size == input_size
-            && self.intermediate_size == intermediate_size
-            && self.hidden_size == hidden_size
-    }
-
-    pub fn host_metadata(&self) -> Option<CudaExpertGroupRoutePlanHost> {
-        self.host_metadata
-    }
-}
-
 impl<T: DeviceCopy> CudaTypedBuffer<T> {
     fn from_device_buffer(buffer: DeviceBuffer<T>) -> Self {
         Self { buffer }
@@ -1760,6 +1530,10 @@ impl<T: DeviceCopy> CudaTypedBuffer<T> {
 
     pub fn as_device_buffer(&self) -> &DeviceBuffer<T> {
         &self.buffer
+    }
+
+    pub(crate) fn as_device_buffer_mut(&mut self) -> &mut DeviceBuffer<T> {
+        &mut self.buffer
     }
 }
 
@@ -1800,7 +1574,8 @@ pub struct CudaDsv4RouterHashTable {
 pub struct CudaI32HostMirror {
     host: Vec<i32>,
     device: CudaI32Buffer,
-    staging: PinnedHostBuffer<i32>,
+    staging: Arc<PinnedHostBuffer<i32>>,
+    poisoned: bool,
     copy_event: CudaEvent,
     active_download: Option<Arc<CudaEvent>>,
 }
@@ -1854,7 +1629,8 @@ impl Drop for CudaI32HostMirror {
 pub struct CudaDsv4RouterTokenIds {
     host: Vec<u32>,
     device: CudaI32Buffer,
-    staging: PinnedHostBuffer<i32>,
+    staging: Arc<PinnedHostBuffer<i32>>,
+    poisoned: bool,
     copy_event: CudaEvent,
 }
 
@@ -2553,6 +2329,29 @@ pub struct CudaExpertGroupRoutePlanDownload {
     pub dispatch_error: bool,
 }
 
+/// Restores the previous capture-safe assertion even when the scoped operation
+/// returns an error or unwinds. This assertion is intentionally distinct from
+/// the native driver's capture depth/unknown state.
+pub struct CaptureSafeGuard<'a> {
+    assertion: &'a Cell<bool>,
+    previous: bool,
+}
+
+impl<'a> CaptureSafeGuard<'a> {
+    fn new(assertion: &'a Cell<bool>) -> Self {
+        Self {
+            assertion,
+            previous: assertion.replace(true),
+        }
+    }
+}
+
+impl Drop for CaptureSafeGuard<'_> {
+    fn drop(&mut self) {
+        self.assertion.set(self.previous);
+    }
+}
+
 /// Reusable host-side context for generic artifact-format CUDA operators.
 ///
 /// Creates one CUDA context, loads the native provider modules once, and reuses
@@ -2572,6 +2371,29 @@ pub struct CudaOperators {
     /// a capture region returns an error immediately. This is the E2
     /// capture-safe assertion mode.
     capture_safe: Cell<bool>,
+    pending_copy_cleanup: RefCell<Vec<(Arc<PinnedHostBuffer<i32>>, DeviceBuffer<i32>)>>,
+}
+
+impl crate::cuda::operators::OperatorOwner for CudaOperators {
+    fn submit_operator<T>(
+        &self,
+        launches: u64,
+        submit: impl FnOnce(&CudaStream) -> Result<T>,
+    ) -> Result<T> {
+        let result = submit(&self.stream)?;
+        self.record_kernel_launches(launches);
+        Ok(result)
+    }
+}
+
+impl Drop for CudaOperators {
+    fn drop(&mut self) {
+        let pending = self.pending_copy_cleanup.get_mut();
+        if !pending.is_empty() && self.stream.synchronize().is_err() {
+            // No completion evidence: retain context, pinned source and operands.
+            std::mem::forget(std::mem::take(pending));
+        }
+    }
 }
 
 impl CudaOperators {
@@ -2606,6 +2428,7 @@ impl CudaOperators {
             failpoints: CudaFailpoints::default(),
             observability,
             capture_safe: Cell::new(false),
+            pending_copy_cleanup: RefCell::new(Vec::new()),
         })
     }
 
@@ -2672,10 +2495,9 @@ impl CudaOperators {
     }
 
     fn upload_device_slice<T: DeviceCopy>(&self, values: &[T]) -> Result<DeviceBuffer<T>> {
-        let buffer = self.record_device_allocation(
-            values.len(),
-            DeviceBuffer::from_host(&self.stream, values),
-        )?;
+        let buffer = self.record_device_allocation(values.len(), || {
+            DeviceBuffer::from_host(&self.stream, values)
+        })?;
         self.counters.add_host_to_device(slice_bytes(values));
         Ok(buffer)
     }
@@ -2702,44 +2524,41 @@ impl CudaOperators {
             stream: &CudaStream,
             src: &[T],
             dst: &DeviceBuffer<T>,
-        ) -> Result<()> {
+        ) -> runtime::CudaResult<()> {
             let bytes = slice_bytes(src) as usize;
-            cu(runtime::copy_host_to_device(
-                stream,
-                dst.cu_deviceptr(),
-                src.as_ptr().cast(),
-                bytes,
-            ))
+            runtime::copy_host_to_device(stream, dst.cu_deviceptr(), src.as_ptr().cast(), bytes)
         }
 
-        enqueue(&self.stream, &host.gate_weight, &table.gate_weight)?;
-        enqueue(&self.stream, &host.gate_scale, &table.gate_scale)?;
-        enqueue(&self.stream, &host.up_weight, &table.up_weight)?;
-        enqueue(&self.stream, &host.up_scale, &table.up_scale)?;
-        enqueue(&self.stream, &host.down_weight, &table.down_weight)?;
-        enqueue(&self.stream, &host.down_scale, &table.down_scale)?;
-        enqueue(&self.stream, &host.expert_to_slot, &table.expert_to_slot)?;
-        enqueue(
-            &self.stream,
-            &host.expert_generation,
-            &table.expert_generation,
-        )?;
-        enqueue(&self.stream, &host.slot_generation, &table.slot_generation)?;
+        self.record_stream_wide_sync(|| {
+            enqueue(&self.stream, &host.gate_weight, &table.gate_weight)?;
+            enqueue(&self.stream, &host.gate_scale, &table.gate_scale)?;
+            enqueue(&self.stream, &host.up_weight, &table.up_weight)?;
+            enqueue(&self.stream, &host.up_scale, &table.up_scale)?;
+            enqueue(&self.stream, &host.down_weight, &table.down_weight)?;
+            enqueue(&self.stream, &host.down_scale, &table.down_scale)?;
+            enqueue(&self.stream, &host.expert_to_slot, &table.expert_to_slot)?;
+            enqueue(
+                &self.stream,
+                &host.expert_generation,
+                &table.expert_generation,
+            )?;
+            enqueue(&self.stream, &host.slot_generation, &table.slot_generation)?;
 
-        for bytes in [
-            slice_bytes(&host.gate_weight),
-            slice_bytes(&host.gate_scale),
-            slice_bytes(&host.up_weight),
-            slice_bytes(&host.up_scale),
-            slice_bytes(&host.down_weight),
-            slice_bytes(&host.down_scale),
-            slice_bytes(&host.expert_to_slot),
-            slice_bytes(&host.expert_generation),
-            slice_bytes(&host.slot_generation),
-        ] {
-            self.counters.add_host_to_device(bytes);
-        }
-        self.record_stream_wide_sync(self.stream.synchronize())
+            for bytes in [
+                slice_bytes(&host.gate_weight),
+                slice_bytes(&host.gate_scale),
+                slice_bytes(&host.up_weight),
+                slice_bytes(&host.up_scale),
+                slice_bytes(&host.down_weight),
+                slice_bytes(&host.down_scale),
+                slice_bytes(&host.expert_to_slot),
+                slice_bytes(&host.expert_generation),
+                slice_bytes(&host.slot_generation),
+            ] {
+                self.counters.add_host_to_device(bytes);
+            }
+            self.stream.synchronize()
+        })
     }
 
     fn publish_expert_slot_table_host(
@@ -3260,10 +3079,15 @@ impl CudaOperators {
         )
     }
 
+    pub fn scoped_capture_safe(&self) -> CaptureSafeGuard<'_> {
+        CaptureSafeGuard::new(&self.capture_safe)
+    }
+
     pub fn capture_decode_graph(
         &self,
         capture_fn: impl FnOnce() -> Result<()>,
     ) -> Result<crate::cuda::graph::CudaGraphHandle> {
+        let _assertion = self.scoped_capture_safe();
         crate::cuda::graph::capture_decode_graph(&self.stream, capture_fn)
     }
 
@@ -3279,7 +3103,7 @@ impl CudaOperators {
     /// Build a llama.cpp-style auto-warmup cached decode graph bound to this
     /// context's stream. See [`crate::cuda::graph::CachedDecodeGraph`].
     pub fn cached_decode_graph(&self) -> crate::cuda::graph::CachedDecodeGraph {
-        crate::cuda::graph::CachedDecodeGraph::new(&self._ctx)
+        crate::cuda::graph::CachedDecodeGraph::for_stream(&self.stream)
     }
 
     /// Clone the stream for use with graph capture outside of `&self` borrow.
@@ -3315,11 +3139,13 @@ impl CudaOperators {
     }
 
     pub fn sync_stream(&self) -> Result<()> {
-        self.record_stream_wide_sync(self.stream.synchronize())
+        self.record_stream_wide_sync(|| self.stream.synchronize())?;
+        self.pending_copy_cleanup.borrow_mut().clear();
+        Ok(())
     }
 
     pub fn sync_upload_stream(&self) -> Result<()> {
-        self.record_stream_wide_sync(self.upload_stream.synchronize())
+        self.record_stream_wide_sync(|| self.upload_stream.synchronize())
     }
 
     pub fn wait_upload_event(&self, event: &CudaUploadEvent) -> Result<()> {
@@ -3371,6 +3197,14 @@ impl CudaOperators {
         self.compute_stream_authority().record_event()
     }
 
+    /// Explicit facade sync-operation attempts, including submitted-copy cleanup.
+    /// Copy-and-sync operations count one attempt before either native operation;
+    /// DeviceBuffer's internal synchronous upload/download calls are excluded.
+    /// Kept separate to preserve the existing public CudaOpCounters struct layout.
+    pub fn stream_wide_sync_attempts(&self) -> u64 {
+        self.counters.stream_wide_sync_attempts()
+    }
+
     pub fn reset_counters(&self) {
         self.counters.reset();
     }
@@ -3417,7 +3251,7 @@ impl CudaOperators {
     /// Check if the current operation is allowed under capture-safe mode.
     /// Returns an error if capture-safe is enabled and the operation is forbidden.
     fn check_capture_safe(&self, op: &str) -> Result<()> {
-        if self.capture_safe.get() {
+        if self.capture_safe.get() || self._ctx.is_capturing() {
             return Err(Error::Internal {
                 message: format!(
                     "capture-safe violation: '{op}' is forbidden inside a graph capture region"
@@ -3463,7 +3297,7 @@ impl CudaOperators {
     /// before any read. This keeps the unsafe `uninitialized_async` contract in
     /// one place instead of scattering `cu(unsafe { ... })` through hot paths.
     fn uninitialized_device_buffer<T: DeviceCopy>(&self, len: usize) -> Result<DeviceBuffer<T>> {
-        self.record_device_allocation(len, unsafe {
+        self.record_device_allocation(len, || unsafe {
             DeviceBuffer::<T>::uninitialized_async(&self.stream, len)
         })
     }
@@ -3472,100 +3306,106 @@ impl CudaOperators {
         &self,
         len: usize,
     ) -> Result<DeviceBuffer<T>> {
-        self.check_capture_safe("device allocation")?;
-        if self.failpoints.check_allocation() {
-            return Err(Error::Internal {
-                message: "deterministic failpoint: device allocation".into(),
-            });
-        }
-
-        self.counters.begin_device_allocation();
-        match cu(unsafe { DeviceBuffer::<T>::uninitialized_async(&self.upload_stream, len) }) {
-            Ok(buffer) => {
-                self.counters
-                    .complete_device_allocation(element_bytes::<T>(len));
-                Ok(buffer)
-            }
-            Err(error) => {
-                self.counters.fail_device_allocation();
-                Err(error)
-            }
-        }
+        self.record_device_allocation(len, || unsafe {
+            DeviceBuffer::<T>::uninitialized_async(&self.upload_stream, len)
+        })
     }
 
     fn zeroed_device_buffer<T: DeviceCopy>(&self, len: usize) -> Result<DeviceBuffer<T>> {
-        self.record_device_allocation(len, DeviceBuffer::<T>::zeroed(&self.stream, len))
+        self.record_device_allocation(len, || DeviceBuffer::<T>::zeroed(&self.stream, len))
     }
 
     fn record_device_allocation<T: DeviceCopy, E>(
         &self,
         len: usize,
-        result: std::result::Result<DeviceBuffer<T>, E>,
+        execute: impl FnOnce() -> std::result::Result<DeviceBuffer<T>, E>,
     ) -> Result<DeviceBuffer<T>>
     where
         E: std::error::Error + Send + Sync + 'static,
     {
-        self.check_capture_safe("device allocation")?;
-        if self.failpoints.check_allocation() {
-            return Err(Error::Internal {
-                message: "deterministic failpoint: device allocation".into(),
-            });
-        }
-
-        self.counters.begin_device_allocation();
-        match cu(result) {
-            Ok(buffer) => {
-                self.counters
-                    .complete_device_allocation(element_bytes::<T>(len));
-                Ok(buffer)
-            }
-            Err(error) => {
-                self.counters.fail_device_allocation();
-                Err(error)
-            }
-        }
+        self.counters.checked_allocation(
+            || self.check_capture_safe("device allocation"),
+            &self.failpoints,
+            element_bytes::<T>(len),
+            || cu(execute()),
+        )
     }
 
-    fn record_stream_wide_sync<T, E>(&self, result: std::result::Result<T, E>) -> Result<T>
+    fn record_stream_wide_sync<T, E>(
+        &self,
+        execute: impl FnOnce() -> std::result::Result<T, E>,
+    ) -> Result<T>
     where
         E: std::error::Error + Send + Sync + 'static,
     {
-        self.check_capture_safe("stream-wide sync")?;
-        match cu(result) {
-            Ok(value) => {
-                self.counters.complete_stream_wide_sync();
-                Ok(value)
-            }
-            Err(error) => {
-                self.counters.fail_stream_wide_sync();
-                Err(error)
-            }
+        self.counters.checked_sync(
+            || self.check_capture_safe("stream-wide sync"),
+            || self.failpoints.check_stream_sync(),
+            || cu(execute()),
+        )
+    }
+
+    fn record_copy_event(&self) -> runtime::CudaResult<CudaEvent> {
+        if self.failpoints.check_copy_event() {
+            return Err(runtime::CudaError::internal(
+                "deterministic failpoint: copy event",
+            ));
         }
+        self.stream.record_event(None)
+    }
+
+    // An accepted copy owns staging and operands until its own stream drains.
+    // Assertion mode cannot cancel cleanup; an old event cannot prove completion.
+    fn submitted_copy_cleanup(
+        &self,
+        primary: runtime::CudaError,
+        staging: &Arc<PinnedHostBuffer<i32>>,
+        operand: &DeviceBuffer<i32>,
+    ) -> Error {
+        let cleanup = self.counters.checked_sync(
+            || Ok(()),
+            || false,
+            || {
+                if self.failpoints.check_submitted_cleanup() {
+                    return Err(Error::Internal {
+                        message: "deterministic failpoint: submitted copy completion unknown"
+                            .into(),
+                    });
+                }
+                cu(self.stream.synchronize())
+            },
+        );
+        if cleanup.is_err() {
+            self.pending_copy_cleanup.borrow_mut().push((
+                Arc::clone(staging),
+                operand
+                    .slice(0, operand.len())
+                    .expect("full allocation view"),
+            ));
+        }
+        Error::with_cleanup("submitted pinned copy", primary.into(), cleanup)
     }
 
     fn upload_u8(&self, values: &[u8]) -> Result<DeviceBuffer<u8>> {
-        let buffer = self.record_device_allocation(
-            values.len(),
-            DeviceBuffer::from_host(&self.stream, values),
-        )?;
+        let buffer = self.record_device_allocation(values.len(), || {
+            DeviceBuffer::from_host(&self.stream, values)
+        })?;
         self.counters.add_host_to_device(slice_bytes(values));
         Ok(buffer)
     }
 
     fn upload_f32(&self, values: &[f32]) -> Result<DeviceBuffer<f32>> {
-        let buffer = self.record_device_allocation(
-            values.len(),
-            DeviceBuffer::from_host(&self.stream, values),
-        )?;
+        let buffer = self.record_device_allocation(values.len(), || {
+            DeviceBuffer::from_host(&self.stream, values)
+        })?;
         self.counters.add_host_to_device(slice_bytes(values));
         Ok(buffer)
     }
 
     fn upload_i32(&self, values: &[i32]) -> Result<DeviceBuffer<i32>> {
-        let buffer = self.record_device_allocation(
-            values.len(),
-            DeviceBuffer::from_host(&self.stream, values),
-        )?;
+        let buffer = self.record_device_allocation(values.len(), || {
+            DeviceBuffer::from_host(&self.stream, values)
+        })?;
         self.counters.add_host_to_device(slice_bytes(values));
         Ok(buffer)
     }
@@ -3577,6 +3417,7 @@ impl CudaOperators {
     }
 
     pub fn pin_u8_host_buffer(&self, values: &[u8]) -> Result<CudaPinnedU8HostBuffer> {
+        self.check_capture_safe("pinned host allocation")?;
         Ok(CudaPinnedU8HostBuffer {
             buffer: Arc::new(cu(PinnedHostBuffer::from_slice(&self._ctx, values))?),
             offset: 0,
@@ -3594,7 +3435,7 @@ impl CudaOperators {
         &self,
         values: &CudaPinnedU8HostBuffer,
     ) -> Result<DeviceBuffer<u8>> {
-        let buffer = self.record_device_allocation(values.len(), unsafe {
+        let buffer = self.record_device_allocation(values.len(), || unsafe {
             DeviceBuffer::from_pinned_host(&self.upload_stream, values.buffer.as_ref())
         })?;
         self.counters.add_host_to_device(values.len() as u64);
@@ -3770,37 +3611,13 @@ impl CudaOperators {
     }
 
     pub fn hybrid_mla_attention_workspace(&self) -> Result<CudaHybridMlaAttentionWorkspace> {
-        let output_values = crate::cuda::operators::PROPOSAL_ROWS
-            .checked_mul(crate::cuda::operators::HYBRID_MLA_ATTENTION_HEADS)
-            .and_then(|value| {
-                value.checked_mul(crate::cuda::operators::HYBRID_MLA_ATTENTION_HEAD_DIM)
-            })
-            .ok_or_else(|| Error::Internal {
-                message: "proposal attention output size overflow".into(),
-            })?;
-        let score_values = crate::cuda::operators::PROPOSAL_ROWS
-            .checked_mul(crate::cuda::operators::HYBRID_MLA_ATTENTION_HEADS)
-            .and_then(|value| {
-                value.checked_mul(crate::cuda::operators::HYBRID_MLA_ATTENTION_TOKEN_CAPACITY)
-            })
-            .ok_or_else(|| Error::Internal {
-                message: "proposal attention score size overflow".into(),
-            })?;
-        let gathered_values = crate::cuda::operators::HYBRID_MLA_ATTENTION_TOKEN_CAPACITY
-            .checked_mul(crate::cuda::operators::HYBRID_MLA_ATTENTION_HEAD_DIM)
-            .ok_or_else(|| Error::Internal {
-                message: "proposal gathered KV size overflow".into(),
-            })?;
-        let pair_values = crate::cuda::operators::PROPOSAL_ROWS
-            .checked_mul(crate::cuda::operators::HYBRID_MLA_ATTENTION_HEADS)
-            .ok_or_else(|| Error::Internal {
-                message: "proposal attention row/head size overflow".into(),
-            })?;
-        let rescale_values = pair_values
-            .checked_mul(crate::cuda::operators::HYBRID_MLA_ATTENTION_ONLINE_SOFTMAX_TILES)
-            .ok_or_else(|| Error::Internal {
-                message: "proposal attention online-softmax size overflow".into(),
-            })?;
+        let [
+            output_values,
+            score_values,
+            gathered_values,
+            pair_values,
+            rescale_values,
+        ] = CudaHybridMlaAttentionWorkspace::storage_lengths()?;
         Ok(CudaHybridMlaAttentionWorkspace {
             query_bf16: self.zeroed_device_buffer::<u16>(output_values)?,
             gathered_kv_bf16: self.zeroed_device_buffer::<u16>(gathered_values)?,
@@ -3930,13 +3747,10 @@ impl CudaOperators {
             return Ok(values);
         }
         let bytes = element_bytes::<f32>(len) as usize;
-        cu(runtime::copy_device_to_host(
-            &self.stream,
-            values.as_mut_ptr().cast(),
-            src,
-            bytes,
-        ))?;
-        self.record_stream_wide_sync(self.stream.synchronize())?;
+        self.record_stream_wide_sync(|| {
+            runtime::copy_device_to_host(&self.stream, values.as_mut_ptr().cast(), src, bytes)?;
+            self.stream.synchronize()
+        })?;
         self.counters.add_device_to_host(bytes as u64);
         Ok(values)
     }
@@ -3954,13 +3768,10 @@ impl CudaOperators {
             return Ok(());
         }
         let bytes = slice_bytes(src) as usize;
-        cu(runtime::copy_host_to_device(
-            &self.stream,
-            dst_ptr,
-            src.as_ptr().cast(),
-            bytes,
-        ))?;
-        self.record_stream_wide_sync(self.stream.synchronize())?;
+        self.record_stream_wide_sync(|| {
+            runtime::copy_host_to_device(&self.stream, dst_ptr, src.as_ptr().cast(), bytes)?;
+            self.stream.synchronize()
+        })?;
         self.counters.add_host_to_device(bytes as u64);
         Ok(())
     }
@@ -3982,6 +3793,7 @@ impl CudaOperators {
     }
 
     pub fn download_i32_buffer(&self, buffer: &CudaI32Buffer) -> Result<Vec<i32>> {
+        self.check_capture_safe("i32 device-to-host download")?;
         let values = cu(buffer.buffer.to_host_vec(&self.stream))?;
         self.counters
             .add_device_to_host(element_bytes::<i32>(buffer.len()));
@@ -4080,29 +3892,31 @@ impl CudaOperators {
     }
 
     pub fn i32_host_mirror(&self, values: &[i32]) -> Result<CudaI32HostMirror> {
+        self.check_capture_safe("pinned i32 mirror allocation")?;
         if values.is_empty() {
             return Err(Error::Internal {
                 message: "CUDA i32 host mirror requires a non-empty buffer".into(),
             });
         }
-        let staging = cu(PinnedHostBuffer::from_slice(&self._ctx, values))?;
-        let buffer = self.record_device_allocation(values.len(), unsafe {
-            DeviceBuffer::from_pinned_host(&self.stream, &staging)
+        let mut staging = None;
+        let buffer = self.record_device_allocation(values.len(), || {
+            let pinned =
+                staging.insert(Arc::new(PinnedHostBuffer::from_slice(&self._ctx, values)?));
+            unsafe { DeviceBuffer::from_pinned_host(&self.stream, pinned) }
         })?;
+        let staging = staging.expect("successful pinned allocation");
         self.counters.add_host_to_device(slice_bytes(values));
-        let copy_event = match self.stream.record_event(None) {
+        let copy_event = match self.record_copy_event() {
             Ok(event) => event,
             Err(error) => {
-                self.record_stream_wide_sync(self.stream.synchronize())?;
-                return Err(Error::Internal {
-                    message: format!("CUDA i32 host mirror event failed: {error:?}"),
-                });
+                return Err(self.submitted_copy_cleanup(error, &staging, &buffer));
             }
         };
         Ok(CudaI32HostMirror {
             host: values.to_vec(),
             device: CudaTypedBuffer::from_device_buffer(buffer),
             staging,
+            poisoned: false,
             copy_event,
             active_download: None,
         })
@@ -4114,6 +3928,11 @@ impl CudaOperators {
         produced: &CudaComputeEvent,
     ) -> Result<CudaI32HostDownload> {
         self.check_capture_safe("i32 control mirror download")?;
+        if mirror.poisoned {
+            return Err(Error::Internal {
+                message: "pinned copy completion unknown".into(),
+            });
+        }
         if mirror.active_download.is_some() {
             return Err(Error::Internal {
                 message: "CUDA i32 host mirror already owns an active D2H download".into(),
@@ -4128,7 +3947,9 @@ impl CudaOperators {
             });
         }
         let bytes = element_bytes::<i32>(mirror.device.len()) as usize;
-        let staging = mirror.staging.as_mut_slice();
+        let staging = Arc::get_mut(&mut mirror.staging)
+            .expect("healthy exclusive staging")
+            .as_mut_slice();
         if let Err(error) = runtime::copy_device_to_host(
             &self.control_stream,
             staging.as_mut_ptr().cast(),
@@ -4191,6 +4012,13 @@ impl CudaOperators {
         values: &[i32],
         mirror: &mut CudaI32HostMirror,
     ) -> Result<()> {
+        self.check_capture_safe("pinned mirror update")?;
+        self.check_buffer_owner(&mirror.device.buffer, "pinned mirror update")?;
+        if mirror.poisoned {
+            return Err(Error::Internal {
+                message: "pinned copy completion unknown".into(),
+            });
+        }
         if values.len() != mirror.len() {
             return Err(Error::Internal {
                 message: format!(
@@ -4207,7 +4035,10 @@ impl CudaOperators {
             cu(download.synchronize())?;
         }
         cu(mirror.copy_event.synchronize())?;
-        mirror.staging.as_mut_slice().copy_from_slice(values);
+        Arc::get_mut(&mut mirror.staging)
+            .expect("healthy exclusive staging")
+            .as_mut_slice()
+            .copy_from_slice(values);
         unsafe {
             cu(mirror
                 .device
@@ -4215,17 +4046,14 @@ impl CudaOperators {
                 .copy_from_pinned_host_async(&self.stream, &mirror.staging))?;
         }
         self.counters.add_host_to_device(slice_bytes(values));
-        match self.stream.record_event(None) {
+        match self.record_copy_event() {
             Ok(event) => mirror.copy_event = event,
             Err(error) => {
-                self.record_stream_wide_sync(self.stream.synchronize())?;
+                let error =
+                    self.submitted_copy_cleanup(error, &mirror.staging, &mirror.device.buffer);
+                mirror.poisoned = matches!(error, Error::Cleanup { .. });
                 mirror.host.clear();
-                mirror.host.extend_from_slice(values);
-                return Err(Error::Internal {
-                    message: format!(
-                        "CUDA i32 host mirror update event failed after copy: {error:?}"
-                    ),
-                });
+                return Err(error);
             }
         }
         mirror.host.clear();
@@ -4474,13 +4302,15 @@ impl CudaOperators {
             return Ok(());
         }
         let bytes = slice_bytes(src) as usize;
-        cu(runtime::copy_host_to_device(
-            &self.stream,
-            dst.buffer.cu_deviceptr(),
-            src.as_ptr().cast(),
-            bytes,
-        ))?;
-        self.record_stream_wide_sync(self.stream.synchronize())?;
+        self.record_stream_wide_sync(|| {
+            runtime::copy_host_to_device(
+                &self.stream,
+                dst.buffer.cu_deviceptr(),
+                src.as_ptr().cast(),
+                bytes,
+            )?;
+            self.stream.synchronize()
+        })?;
         self.counters.add_host_to_device(bytes as u64);
         Ok(())
     }
@@ -4501,13 +4331,15 @@ impl CudaOperators {
             return Ok(());
         }
         let bytes = slice_bytes(src) as usize;
-        cu(runtime::copy_host_to_device(
-            &self.stream,
-            dst.buffer.cu_deviceptr(),
-            src.as_ptr().cast(),
-            bytes,
-        ))?;
-        self.record_stream_wide_sync(self.stream.synchronize())?;
+        self.record_stream_wide_sync(|| {
+            runtime::copy_host_to_device(
+                &self.stream,
+                dst.buffer.cu_deviceptr(),
+                src.as_ptr().cast(),
+                bytes,
+            )?;
+            self.stream.synchronize()
+        })?;
         self.counters.add_host_to_device(bytes as u64);
         Ok(())
     }
@@ -4893,99 +4725,6 @@ impl CudaOperators {
         })
     }
 
-    /// Run the checkpoint-native proposal HC/LM/Markov/confidence proposal head.
-    #[allow(clippy::too_many_arguments)]
-    pub fn artifact_proposal_head_into(
-        &self,
-        hc_state: &CudaF32Buffer,
-        hc_function: &CudaF32Buffer,
-        hc_scale: &CudaF32Buffer,
-        hc_base: &CudaF32Buffer,
-        norm_weight: &CudaF32Buffer,
-        lm_head: &CudaArtifactLinearHandle,
-        markov_w1: &CudaArtifactLinearHandle,
-        markov_w2: &CudaArtifactLinearHandle,
-        confidence_weight: &CudaArtifactLinearHandle,
-        anchor_token_id: u32,
-        layout: crate::cuda::operators::ProposalHeadLayout,
-        workspace: &mut CudaProposalHeadWorkspace,
-    ) -> Result<()> {
-        let expected = [
-            (
-                "LM head",
-                lm_head.shape,
-                CudaArtifactLinearShape::Bf16Bytes {
-                    out_features: layout.vocab,
-                    in_features: layout.hidden,
-                },
-            ),
-            (
-                "Markov W1",
-                markov_w1.shape,
-                CudaArtifactLinearShape::Bf16Bytes {
-                    out_features: layout.vocab,
-                    in_features: layout.markov_rank,
-                },
-            ),
-            (
-                "Markov W2",
-                markov_w2.shape,
-                CudaArtifactLinearShape::Bf16Bytes {
-                    out_features: layout.vocab,
-                    in_features: layout.markov_rank,
-                },
-            ),
-            (
-                "confidence",
-                confidence_weight.shape,
-                CudaArtifactLinearShape::Bf16Bytes {
-                    out_features: 1,
-                    in_features: layout.hidden + layout.markov_rank,
-                },
-            ),
-        ];
-        for (name, actual, required) in expected {
-            if actual != required {
-                return Err(Error::Internal {
-                    message: format!(
-                        "proposal-head {name} shape mismatch: actual={actual:?} expected={required:?}"
-                    ),
-                });
-            }
-        }
-        let anchor = i32::try_from(anchor_token_id).map_err(|_| Error::Internal {
-            message: "proposal anchor token exceeds i32 ABI".into(),
-        })?;
-        let mut token_ids = vec![0i32; layout.rows + 1];
-        token_ids[0] = anchor;
-        self.update_i32_host_mirror(&token_ids, &mut workspace.token_ids)?;
-        crate::cuda::operators::proposal_head(
-            &self.stream,
-            &hc_state.buffer,
-            &hc_function.buffer,
-            &hc_scale.buffer,
-            &hc_base.buffer,
-            &norm_weight.buffer,
-            &lm_head.weight,
-            &markov_w1.weight,
-            &markov_w2.weight,
-            &confidence_weight.weight,
-            &mut workspace.hidden.buffer,
-            &mut workspace.normalized.buffer,
-            &mut workspace.base_logits.buffer,
-            &mut workspace.partial_values.buffer,
-            &mut workspace.partial_indices.buffer,
-            &mut workspace.token_ids.device_mut_invalidate_host().buffer,
-            &mut workspace.confidence.buffer,
-            &mut workspace.status.buffer,
-            layout,
-        )?;
-        self.record_kernel_launch();
-        self.record_kernel_launch();
-        self.record_kernel_launch();
-        Ok(())
-    }
-
     /// Download proposal-head numerical boundaries for diagnostic parity checks.
     /// This is intentionally separate from the compact production result path.
     pub fn download_proposal_head_debug_snapshot(
@@ -5057,43 +4796,6 @@ impl CudaOperators {
             .ok_or_else(|| Error::Internal {
                 message: "proposal-head result remained pending after synchronization".into(),
             })
-    }
-
-    /// Compute a BF16-compressed two-projection bundle on device.
-    /// Run checkpoint-native proposal attention over committed paged context and
-    /// one read-only five-row proposal block. All scratch remains caller-owned.
-    #[allow(clippy::too_many_arguments)]
-    pub fn hybrid_mla_attention_into(
-        &self,
-        query: &CudaF32Buffer,
-        context_plane: &CudaF32Buffer,
-        block_kv: &CudaF32Buffer,
-        block_slots: &CudaI32Buffer,
-        attention_sink: &CudaF32Buffer,
-        layout: crate::cuda::operators::HybridMlaAttentionLayout,
-        output: &mut CudaF32Buffer,
-        workspace: &mut CudaHybridMlaAttentionWorkspace,
-    ) -> Result<()> {
-        self.zero_i32_buffer_in_place(&mut workspace.status)?;
-        crate::cuda::operators::hybrid_mla_attention(
-            &self.stream,
-            &query.buffer,
-            &context_plane.buffer,
-            &block_kv.buffer,
-            &block_slots.buffer,
-            &attention_sink.buffer,
-            &mut workspace.query_bf16,
-            &mut workspace.gathered_kv_bf16,
-            &mut workspace.scores.buffer,
-            &mut workspace.probabilities_bf16,
-            &mut workspace.online_rescales.buffer,
-            &mut workspace.denominators.buffer,
-            &mut output.buffer,
-            &mut workspace.status.buffer,
-            layout,
-        )?;
-        self.record_kernel_launch();
-        Ok(())
     }
 
     /// Scatter `[rows, layout.elements_per_token]` values into one layer of a
@@ -5463,13 +5165,11 @@ impl CudaOperators {
          -> Result<()> {
             // The source is the linear scale view just uploaded above. The
             // native provider transforms it directly into its private layout.
-            prepare_mxfp4_sfb(
-                &self.upload_stream,
-                source,
-                destination,
+            ExpertScaleShape {
                 out_features,
                 in_features,
-            )
+            }
+            .prepare_into(&self.upload_stream, source, destination)
             .map_err(|_| Error::Internal {
                 message: "CUDA routed-expert private layout preparation failed".into(),
             })?;
@@ -5618,13 +5318,15 @@ impl CudaOperators {
             .ok_or_else(|| Error::Internal {
                 message: "artifact device address overflow".into(),
             })?;
-        cu(runtime::copy_host_to_device(
-            &self.upload_stream,
-            destination,
-            bytes.as_ptr().cast(),
-            bytes.len(),
-        ))?;
-        self.record_stream_wide_sync(self.upload_stream.synchronize())?;
+        self.record_stream_wide_sync(|| {
+            runtime::copy_host_to_device(
+                &self.upload_stream,
+                destination,
+                bytes.as_ptr().cast(),
+                bytes.len(),
+            )?;
+            self.upload_stream.synchronize()
+        })?;
         self.counters.add_host_to_device(bytes.len() as u64);
         self.counters.add_artifact_upload(bytes.len() as u64);
         Ok(())
@@ -5958,17 +5660,9 @@ impl CudaOperators {
     }
 
     fn alloc_managed_u8_len(&self, len: usize) -> Result<DeviceBuffer<u8>> {
-        self.counters.begin_device_allocation();
-        match unsafe { DeviceBuffer::managed(self.stream.context(), len) } {
-            Ok(buffer) => {
-                self.counters.complete_device_allocation(len as u64);
-                Ok(buffer)
-            }
-            Err(error) => {
-                self.counters.fail_device_allocation();
-                Err(error.into())
-            }
-        }
+        self.record_device_allocation(len, || unsafe {
+            DeviceBuffer::managed(self.stream.context(), len)
+        })
     }
 
     pub fn artifact_linear_matvec(
@@ -6246,450 +5940,6 @@ impl CudaOperators {
             ARTIFACT_LINEAR_FP8_ACTIVATION_BLOCK_SIZE,
         )?;
         self.artifact_linear_rows_device(handle, &scratch.cloned.buffer, rows, &mut output.buffer)
-    }
-
-    pub fn artifact_fp8_projection_rows_from_device_into_with_scratch(
-        &self,
-        handle: &CudaArtifactLinearHandle,
-        input: &CudaF32Buffer,
-        rows: usize,
-        output: &mut CudaF32Buffer,
-        scratch: &mut CudaArtifactLinearWorkspace,
-    ) -> Result<()> {
-        let CudaArtifactLinearShape::Fp8E4M3WithE8M0Scale {
-            out_features,
-            in_features,
-            block_m: 128,
-            block_k: 128,
-        } = handle.shape
-        else {
-            return Err(Error::Internal {
-                message: "FP8 projection requires an FP8 K128 artifact".into(),
-            });
-        };
-        let input_len = rows
-            .checked_mul(in_features)
-            .ok_or_else(|| Error::Internal {
-                message: "FP8 projection input size overflow".into(),
-            })?;
-        let output_len = rows
-            .checked_mul(out_features)
-            .ok_or_else(|| Error::Internal {
-                message: "FP8 projection output size overflow".into(),
-            })?;
-        if rows == 0 || input.len() != input_len || output.len() != output_len {
-            return Err(Error::Internal {
-                message: format!(
-                    "FP8 projection shape mismatch: rows={rows} input={}/{} output={}/{}",
-                    input.len(),
-                    input_len,
-                    output.len(),
-                    output_len
-                ),
-            });
-        }
-        let scale_cols = in_features / ARTIFACT_LINEAR_FP8_ACTIVATION_BLOCK_SIZE;
-        let scale_len = rows
-            .checked_mul(scale_cols)
-            .ok_or_else(|| Error::Internal {
-                message: "FP8 projection scale size overflow".into(),
-            })?;
-        if input_len > scratch.value_capacity || scale_len > scratch.scale_capacity {
-            return Err(Error::Internal {
-                message: format!(
-                    "FP8 projection scratch too small: packed={input_len}/{} scales={scale_len}/{}",
-                    scratch.value_capacity, scratch.scale_capacity
-                ),
-            });
-        }
-        let weight_scales = handle.scale.as_ref().ok_or_else(|| Error::Internal {
-            message: "FP8 projection scales are missing".into(),
-        })?;
-        self.pack_fp8_rows_from_f32_preallocated(
-            &input.buffer,
-            rows,
-            in_features,
-            &mut scratch.x_packed,
-            scratch.value_capacity,
-            &mut scratch.x_scales,
-            scratch.scale_capacity,
-        )?;
-        crate::cuda::operators::fp8_projection(
-            &self.stream,
-            &scratch.x_packed,
-            &scratch.x_scales,
-            &handle.weight,
-            weight_scales,
-            &mut output.buffer,
-            rows,
-            out_features,
-            in_features,
-        )?;
-        self.record_kernel_launch();
-        Ok(())
-    }
-
-    pub fn prepare_fp8_activation_from_device<'a>(
-        &self,
-        input: &CudaF32Buffer,
-        rows: usize,
-        row_width: usize,
-        storage: &'a mut CudaFp8ActivationPack,
-    ) -> Result<CudaPreparedFp8Activation<'a>> {
-        let expected = rows.checked_mul(row_width).ok_or_else(|| Error::Internal {
-            message: "CUDA FP8 activation pack input size overflow".into(),
-        })?;
-        if rows == 0 || row_width == 0 || input.len() != expected {
-            return Err(Error::Internal {
-                message: format!(
-                    "CUDA FP8 activation pack input mismatch: rows={rows} row_width={row_width} input={}",
-                    input.len()
-                ),
-            });
-        }
-        self.pack_fp8_rows_from_f32_preallocated(
-            &input.buffer,
-            rows,
-            row_width,
-            &mut storage.x_packed,
-            storage.value_capacity,
-            &mut storage.x_scales,
-            storage.scale_capacity,
-        )?;
-        self.prepared_fp8_activation_from_storage(storage, rows, row_width)
-    }
-
-    pub fn prepared_fp8_activation_from_storage<'a>(
-        &self,
-        storage: &'a CudaFp8ActivationPack,
-        rows: usize,
-        row_width: usize,
-    ) -> Result<CudaPreparedFp8Activation<'a>> {
-        let values = rows.checked_mul(row_width).ok_or_else(|| Error::Internal {
-            message: "CUDA prepared FP8 activation size overflow".into(),
-        })?;
-        let scales = rows
-            .checked_mul(row_width.div_ceil(ARTIFACT_LINEAR_FP8_ACTIVATION_BLOCK_SIZE))
-            .ok_or_else(|| Error::Internal {
-                message: "CUDA prepared FP8 scale size overflow".into(),
-            })?;
-        if rows == 0
-            || row_width == 0
-            || !row_width.is_multiple_of(ARTIFACT_LINEAR_FP8_ACTIVATION_BLOCK_SIZE)
-            || storage.value_capacity != values
-            || storage.scale_capacity != scales
-        {
-            return Err(Error::Internal {
-                message: format!(
-                    "CUDA prepared FP8 activation storage mismatch: rows={rows} width={row_width} values={}/{} scales={}/{}",
-                    storage.value_capacity, values, storage.scale_capacity, scales
-                ),
-            });
-        }
-        Ok(CudaPreparedFp8Activation {
-            x_packed: &storage.x_packed,
-            x_scales: &storage.x_scales,
-            rows,
-            row_width,
-        })
-    }
-
-    /// Execute the complete HC-pre + layer RMSNorm + FP8 activation producer.
-    #[allow(clippy::too_many_arguments)]
-    pub fn hc_pre_rmsnorm_fp8_into<'a>(
-        &self,
-        state: &CudaF32Buffer,
-        function_row_major: &CudaF32Buffer,
-        hc_scale: &CudaF32Buffer,
-        hc_base: &CudaF32Buffer,
-        layer_rms_weight: &CudaF32Buffer,
-        mix_output: &mut CudaF32Buffer,
-        workspace: &mut CudaF32Buffer,
-        rows: usize,
-        hc: usize,
-        hidden_size: usize,
-        sinkhorn_iters: usize,
-        hc_eps: f32,
-        hc_norm_eps: f32,
-        layer_rms_eps: f32,
-        hidden_output: &mut CudaF32Buffer,
-        normalized_output: &mut CudaF32Buffer,
-        split_pre: &mut CudaF32Buffer,
-        split_post: &mut CudaF32Buffer,
-        split_comb: &mut CudaF32Buffer,
-        packed_output: &'a mut CudaFp8ActivationPack,
-    ) -> Result<CudaPreparedFp8Activation<'a>> {
-        crate::cuda::operators::hc_producer(
-            &self.stream,
-            &state.buffer,
-            &function_row_major.buffer,
-            &hc_scale.buffer,
-            &hc_base.buffer,
-            &layer_rms_weight.buffer,
-            &mut mix_output.buffer,
-            &mut workspace.buffer,
-            &mut hidden_output.buffer,
-            &mut normalized_output.buffer,
-            &mut packed_output.x_packed,
-            &mut packed_output.x_scales,
-            &mut split_pre.buffer,
-            &mut split_post.buffer,
-            &mut split_comb.buffer,
-            rows,
-            hc,
-            hidden_size,
-            sinkhorn_iters,
-            hc_eps,
-            hc_norm_eps,
-            layer_rms_eps,
-        )?;
-        self.record_kernel_launch();
-        self.prepared_fp8_activation_from_storage(packed_output, rows, hidden_size)
-    }
-
-    /// Execute the BF16 compressor dual projection semantic operator.
-    pub fn artifact_bf16_compressor_into(
-        &self,
-        projection1: &CudaArtifactLinearHandle,
-        projection2: &CudaArtifactLinearHandle,
-        activation: &CudaF32Buffer,
-        rows: usize,
-        projection1_output: &mut CudaF32Buffer,
-        projection2_output: &mut CudaF32Buffer,
-    ) -> Result<()> {
-        let (
-            CudaArtifactLinearShape::Bf16Bytes {
-                out_features: n1,
-                in_features: k1,
-            },
-            CudaArtifactLinearShape::Bf16Bytes {
-                out_features: n2,
-                in_features: k2,
-            },
-        ) = (projection1.shape, projection2.shape)
-        else {
-            return Err(Error::Internal {
-                message: format!(
-                    "BF16 compressor requires BF16 weights, got first={:?} second={:?}",
-                    projection1.shape, projection2.shape
-                ),
-            });
-        };
-        if k1 != k2 || activation.len() != rows * k1 {
-            return Err(Error::Internal {
-                message: format!(
-                    "BF16 compressor input mismatch: rows={rows} first_k={k1} second_k={k2} input={}",
-                    activation.len()
-                ),
-            });
-        }
-        if projection1_output.len() != rows * n1 || projection2_output.len() != rows * n2 {
-            return Err(Error::Internal {
-                message: format!(
-                    "BF16 compressor output mismatch: first={}/{} second={}/{}",
-                    projection1_output.len(),
-                    rows * n1,
-                    projection2_output.len(),
-                    rows * n2
-                ),
-            });
-        }
-        crate::cuda::operators::bf16_compressor(
-            &self.stream,
-            &activation.buffer,
-            &projection1.weight,
-            &projection2.weight,
-            &mut projection1_output.buffer,
-            &mut projection2_output.buffer,
-            rows,
-            n1,
-            n2,
-            k1,
-        )?;
-        self.record_kernel_launch();
-        Ok(())
-    }
-
-    /// Execute the checkpoint-native proposal stage-zero target-tap projection and
-    /// RMSNorm in one cooperative fused semantic launch.
-    #[allow(clippy::too_many_arguments)]
-    pub fn artifact_main_project_norm_into(
-        &self,
-        projection: &CudaArtifactLinearHandle,
-        norm_weight: &CudaF32Buffer,
-        input: &CudaF32Buffer,
-        rows: usize,
-        rms_eps: f32,
-        activation: &mut CudaFp8ActivationPack,
-        inv_rms: &mut CudaF32Buffer,
-        output: &mut CudaF32Buffer,
-    ) -> Result<()> {
-        let CudaArtifactLinearShape::Fp8E4M3WithE8M0Scale {
-            out_features,
-            in_features,
-            block_m,
-            block_k,
-        } = projection.shape
-        else {
-            return Err(Error::Internal {
-                message: format!(
-                    "proposal main projection requires FP8/E8M0 weights, got {:?}",
-                    projection.shape
-                ),
-            });
-        };
-        if block_m != 128 || block_k != 128 || !out_features.is_multiple_of(128) {
-            return Err(Error::Internal {
-                message: format!(
-                    "proposal main projection requires K128/N128 layout, got {:?}",
-                    projection.shape
-                ),
-            });
-        }
-        let input_len = rows
-            .checked_mul(in_features)
-            .ok_or_else(|| Error::Internal {
-                message: "proposal main projection input size overflow".into(),
-            })?;
-        let output_len = rows
-            .checked_mul(out_features)
-            .ok_or_else(|| Error::Internal {
-                message: "proposal main projection output size overflow".into(),
-            })?;
-        let scale_len = rows
-            .checked_mul(in_features / 128)
-            .ok_or_else(|| Error::Internal {
-                message: "proposal main projection scale size overflow".into(),
-            })?;
-        if input.len() != input_len
-            || norm_weight.len() != out_features
-            || activation.value_capacity != input_len
-            || activation.scale_capacity != scale_len
-            || inv_rms.len() != rows
-            || output.len() != output_len
-        {
-            return Err(Error::Internal {
-                message: format!(
-                    "fused proposal main-project/norm binding mismatch: input={}/{} norm={}/{} activation={}/{} scales={}/{} inv_rms={}/{} output={}/{}",
-                    input.len(),
-                    input_len,
-                    norm_weight.len(),
-                    out_features,
-                    activation.value_capacity,
-                    input_len,
-                    activation.scale_capacity,
-                    scale_len,
-                    inv_rms.len(),
-                    rows,
-                    output.len(),
-                    output_len
-                ),
-            });
-        }
-        let weight_scales = projection.scale.as_ref().ok_or_else(|| Error::Internal {
-            message: "proposal main projection weight scales are missing".into(),
-        })?;
-        crate::cuda::operators::main_project_norm(
-            &self.stream,
-            &input.buffer,
-            &mut activation.x_packed,
-            &mut activation.x_scales,
-            &projection.weight,
-            weight_scales,
-            &norm_weight.buffer,
-            &mut inv_rms.buffer,
-            &mut output.buffer,
-            rows,
-            in_features,
-            out_features,
-            rms_eps,
-        )?;
-        self.record_kernel_launch();
-        Ok(())
-    }
-
-    /// Execute the required one-launch QueryA+KV FP8 projection bundle.
-    /// Any shape, binding, or native-provider mismatch is fatal.
-    pub fn artifact_fp8_query_a_kv_into(
-        &self,
-        query_a: &CudaArtifactLinearHandle,
-        key_value: &CudaArtifactLinearHandle,
-        activation: &CudaPreparedFp8Activation<'_>,
-        query_a_output: &mut CudaF32Buffer,
-        key_value_output: &mut CudaF32Buffer,
-    ) -> Result<()> {
-        let (
-            CudaArtifactLinearShape::Fp8E4M3WithE8M0Scale {
-                out_features: query_a_out,
-                in_features: query_a_in,
-                block_m: query_a_block_m,
-                block_k: query_a_block_k,
-            },
-            CudaArtifactLinearShape::Fp8E4M3WithE8M0Scale {
-                out_features: kv_out,
-                in_features: kv_in,
-                block_m: kv_block_m,
-                block_k: kv_block_k,
-            },
-        ) = (query_a.shape, key_value.shape)
-        else {
-            return Err(Error::Internal {
-                message: format!(
-                    "fused FP8 QueryA+KV requires FP8 weights, got query_a={:?} kv={:?}",
-                    query_a.shape, key_value.shape
-                ),
-            });
-        };
-        if query_a_in != kv_in
-            || query_a_in != activation.row_width
-            || query_a_block_m != 128
-            || query_a_block_k != 128
-            || kv_block_m != 128
-            || kv_block_k != 128
-        {
-            return Err(Error::Internal {
-                message: format!(
-                    "fused FP8 QueryA+KV binding mismatch: query_a={:?} kv={:?} activation_width={}",
-                    query_a.shape, key_value.shape, activation.row_width
-                ),
-            });
-        }
-        let rows = activation.rows;
-        if query_a_output.len() != rows * query_a_out || key_value_output.len() != rows * kv_out {
-            return Err(Error::Internal {
-                message: format!(
-                    "CUTLASS FP8 QueryA+KV output mismatch: query_a={}/{} kv={}/{}",
-                    query_a_output.len(),
-                    rows * query_a_out,
-                    key_value_output.len(),
-                    rows * kv_out
-                ),
-            });
-        }
-        let query_a_scales = query_a.scale.as_ref().ok_or_else(|| Error::Internal {
-            message: "CUTLASS FP8 QueryA weight scales are missing".into(),
-        })?;
-        let kv_scales = key_value.scale.as_ref().ok_or_else(|| Error::Internal {
-            message: "CUTLASS FP8 KV weight scales are missing".into(),
-        })?;
-
-        crate::cuda::operators::fp8_query_a_kv(
-            &self.stream,
-            activation.x_packed,
-            activation.x_scales,
-            &query_a.weight,
-            query_a_scales,
-            &key_value.weight,
-            kv_scales,
-            &mut query_a_output.buffer,
-            &mut key_value_output.buffer,
-            rows,
-            query_a_out,
-            kv_out,
-            query_a_in,
-        )?;
-        self.record_kernel_launch();
-        Ok(())
     }
 
     pub fn artifact_linear_rows_from_prepared_fp8_into(
@@ -7016,96 +6266,6 @@ impl CudaOperators {
         })
     }
 
-    /// Grouped output-A -> BF16 latent -> output-B MLA transaction. Single-row
-    /// execution uses three ordered kernels; wider inputs use one cooperative kernel.
-    #[allow(clippy::too_many_arguments)]
-    pub fn artifact_mla_output_into(
-        &self,
-        context: &CudaF32Buffer,
-        rows: usize,
-        output_a: &CudaArtifactLinearHandle,
-        output_b: &CudaArtifactLinearHandle,
-        groups: usize,
-        group_input: usize,
-        rank: usize,
-        latent: &mut CudaBf16Buffer,
-        workspace: &mut CudaArtifactLinearWorkspace,
-        output: &mut CudaF32Buffer,
-    ) -> Result<()> {
-        let latent_size = groups.checked_mul(rank).ok_or_else(|| Error::Internal {
-            message: "fused FP8 MLA latent size overflow".into(),
-        })?;
-        let context_size = groups
-            .checked_mul(group_input)
-            .ok_or_else(|| Error::Internal {
-                message: "fused FP8 MLA context size overflow".into(),
-            })?;
-        let hidden_size = match output_b.shape {
-            CudaArtifactLinearShape::Fp8E4M3WithE8M0Scale {
-                out_features,
-                in_features,
-                block_m: 128,
-                block_k: 128,
-            } if in_features == latent_size => out_features,
-            _ => {
-                return Err(Error::Internal {
-                    message: format!(
-                        "fused MLA output-B requires FP8/E8M0 [{hidden_size},{latent_size}], got {:?}",
-                        output_b.shape,
-                        hidden_size = output.len().checked_div(rows).unwrap_or(0)
-                    ),
-                });
-            }
-        };
-        if !matches!(
-            output_a.shape,
-            CudaArtifactLinearShape::Fp8E4M3WithE8M0Scale {
-                out_features,
-                in_features,
-                block_m: 128,
-                block_k: 128,
-            } if out_features == latent_size && in_features == group_input
-        ) {
-            return Err(Error::Internal {
-                message: format!(
-                    "fused MLA output-A requires FP8/E8M0 [{latent_size},{group_input}], got {:?}",
-                    output_a.shape
-                ),
-            });
-        }
-        let output_a_scales = output_a.scale.as_ref().ok_or_else(|| Error::Internal {
-            message: "fused MLA output-A scales are missing".into(),
-        })?;
-        let output_b_scales = output_b.scale.as_ref().ok_or_else(|| Error::Internal {
-            message: "fused MLA output-B scales are missing".into(),
-        })?;
-        crate::cuda::operators::mla_output(
-            &self.stream,
-            &context.buffer,
-            &output_a.weight,
-            output_a_scales,
-            &output_b.weight,
-            output_b_scales,
-            &mut latent.buffer,
-            &mut workspace.x_packed,
-            &mut workspace.x_scales,
-            &mut output.buffer,
-            rows,
-            context_size,
-            groups,
-            group_input,
-            rank,
-            latent_size,
-            hidden_size,
-        )?;
-        self.record_kernel_launch();
-        if rows == 1 {
-            self.record_kernel_launch();
-            self.record_kernel_launch();
-        }
-        Ok(())
-    }
-
     /// Device-resident batched grouped matvec for block-diagonal output-A
     /// layouts. `context` is `[rows, q_full_dim]`; output is
     /// `[rows, output_latent_dim]`.
@@ -7305,25 +6465,28 @@ impl CudaOperators {
         token_ids: &[u32],
         hash_rows: usize,
     ) -> Result<CudaDsv4RouterTokenIds> {
+        self.check_capture_safe("pinned router token allocation")?;
         let validated = validate_dsv4_router_token_ids(token_ids, hash_rows)?;
-        let staging = cu(PinnedHostBuffer::from_slice(&self._ctx, &validated))?;
-        let buffer = self.record_device_allocation(validated.len(), unsafe {
-            DeviceBuffer::from_pinned_host(&self.stream, &staging)
+        let mut staging = None;
+        let buffer = self.record_device_allocation(validated.len(), || {
+            let pinned = staging.insert(Arc::new(PinnedHostBuffer::from_slice(
+                &self._ctx, &validated,
+            )?));
+            unsafe { DeviceBuffer::from_pinned_host(&self.stream, pinned) }
         })?;
+        let staging = staging.expect("successful pinned allocation");
         self.counters.add_host_to_device(slice_bytes(&validated));
-        let copy_event = match self.stream.record_event(None) {
+        let copy_event = match self.record_copy_event() {
             Ok(event) => event,
             Err(error) => {
-                self.record_stream_wide_sync(self.stream.synchronize())?;
-                return Err(Error::Internal {
-                    message: format!("CUDA router token-id copy event failed: {error:?}"),
-                });
+                return Err(self.submitted_copy_cleanup(error, &staging, &buffer));
             }
         };
         Ok(CudaDsv4RouterTokenIds {
             host: token_ids.to_vec(),
             device: CudaTypedBuffer::from_device_buffer(buffer),
             staging,
+            poisoned: false,
             copy_event,
         })
     }
@@ -7334,6 +6497,13 @@ impl CudaOperators {
         hash_rows: usize,
         cached: &mut CudaDsv4RouterTokenIds,
     ) -> Result<()> {
+        self.check_capture_safe("pinned mirror update")?;
+        self.check_buffer_owner(&cached.device.buffer, "pinned mirror update")?;
+        if cached.poisoned {
+            return Err(Error::Internal {
+                message: "pinned copy completion unknown".into(),
+            });
+        }
         if cached.host.len() != token_ids.len() {
             return Err(Error::Internal {
                 message: format!(
@@ -7351,7 +6521,10 @@ impl CudaOperators {
         }
         let validated = validate_dsv4_router_token_ids(token_ids, hash_rows)?;
         cu(cached.copy_event.synchronize())?;
-        cached.staging.as_mut_slice().copy_from_slice(&validated);
+        Arc::get_mut(&mut cached.staging)
+            .expect("healthy exclusive staging")
+            .as_mut_slice()
+            .copy_from_slice(&validated);
         unsafe {
             cu(cached
                 .device
@@ -7359,17 +6532,14 @@ impl CudaOperators {
                 .copy_from_pinned_host_async(&self.stream, &cached.staging))?;
         }
         self.counters.add_host_to_device(slice_bytes(&validated));
-        match self.stream.record_event(None) {
+        match self.record_copy_event() {
             Ok(event) => cached.copy_event = event,
             Err(error) => {
-                self.record_stream_wide_sync(self.stream.synchronize())?;
+                let error =
+                    self.submitted_copy_cleanup(error, &cached.staging, &cached.device.buffer);
+                cached.poisoned = matches!(error, Error::Cleanup { .. });
                 cached.host.clear();
-                cached.host.extend_from_slice(token_ids);
-                return Err(Error::Internal {
-                    message: format!(
-                        "CUDA router token-id copy event failed after the copy completed: {error:?}"
-                    ),
-                });
+                return Err(error);
             }
         }
         cached.host.clear();
@@ -9049,115 +8219,6 @@ impl CudaOperators {
         })
     }
 
-    /// Execute the complete fused shared-expert gate/up -> SwiGLU -> down
-    /// bundle and write directly to the caller-owned destination.
-    #[allow(clippy::too_many_arguments)]
-    pub fn artifact_shared_ffn_into(
-        &self,
-        gate: &CudaArtifactLinearHandle,
-        up: &CudaArtifactLinearHandle,
-        down: &CudaArtifactLinearHandle,
-        input: &CudaPreparedFp8Activation<'_>,
-        hidden_f32: &mut CudaF32Buffer,
-        hidden: &mut CudaFp8ActivationPack,
-        rows: usize,
-        output_scale: f32,
-        swiglu_limit: f32,
-        output: &mut CudaF32Buffer,
-        accumulate_output: bool,
-    ) -> Result<()> {
-        let (
-            CudaArtifactLinearShape::Fp8E4M3WithE8M0Scale {
-                out_features: intermediate,
-                in_features: input_size,
-                block_m: gate_block_m,
-                block_k: gate_block_k,
-            },
-            CudaArtifactLinearShape::Fp8E4M3WithE8M0Scale {
-                out_features: up_out,
-                in_features: up_in,
-                block_m: up_block_m,
-                block_k: up_block_k,
-            },
-            CudaArtifactLinearShape::Fp8E4M3WithE8M0Scale {
-                out_features: output_size,
-                in_features: down_in,
-                block_m: down_block_m,
-                block_k: down_block_k,
-            },
-        ) = (gate.shape, up.shape, down.shape)
-        else {
-            return Err(Error::Internal {
-                message: format!(
-                    "fused shared FFN requires FP8 weights: gate={:?} up={:?} down={:?}",
-                    gate.shape, up.shape, down.shape
-                ),
-            });
-        };
-        if rows == 0
-            || input_size != up_in
-            || intermediate != up_out
-            || intermediate != down_in
-            || input.rows != rows
-            || input.row_width != input_size
-            || hidden_f32.len() < rows * intermediate
-            || hidden.value_capacity != rows * intermediate
-            || hidden.scale_capacity != rows * intermediate.div_ceil(128)
-            || output.len() != rows * output_size
-        {
-            return Err(Error::Internal {
-                message: format!(
-                    "fused shared FFN shape mismatch: rows={rows} input=[{},{}] hidden_f32={} hidden=[{},{}] output={} gate={:?} up={:?} down={:?}",
-                    input.rows,
-                    input.row_width,
-                    hidden_f32.len(),
-                    hidden.value_capacity,
-                    hidden.scale_capacity,
-                    output.len(),
-                    gate.shape,
-                    up.shape,
-                    down.shape
-                ),
-            });
-        }
-        let gate_scales = gate.scale.as_ref().ok_or_else(|| Error::Internal {
-            message: "fused shared gate scales are missing".into(),
-        })?;
-        let up_scales = up.scale.as_ref().ok_or_else(|| Error::Internal {
-            message: "fused shared up scales are missing".into(),
-        })?;
-        let down_scales = down.scale.as_ref().ok_or_else(|| Error::Internal {
-            message: "fused shared down scales are missing".into(),
-        })?;
-        crate::cuda::operators::shared_ffn(
-            &self.stream,
-            input.x_packed,
-            input.x_scales,
-            &gate.weight,
-            gate_scales,
-            &up.weight,
-            up_scales,
-            &down.weight,
-            down_scales,
-            &mut hidden_f32.buffer,
-            &mut hidden.x_packed,
-            &mut hidden.x_scales,
-            &mut output.buffer,
-            rows,
-            input_size,
-            intermediate,
-            output_size,
-            (gate_block_m, gate_block_k),
-            (up_block_m, up_block_k),
-            (down_block_m, down_block_k),
-            output_scale,
-            swiglu_limit,
-            accumulate_output,
-        )?;
-        self.record_kernel_launch();
-        Ok(())
-    }
-
     pub fn moe_batched_workspace(
         &self,
         max_experts: usize,
@@ -9268,7 +8329,7 @@ impl CudaOperators {
         ] {
             checked_u32(value, "expert group route plan", field)?;
         }
-        if !discover_provider()?.supports(CutlassKernelId::GroupedFp4Moe) {
+        if !crate::cuda::operators::moe::grouped_fp4::available()? {
             return Err(unsupported_grouped_fp4_moe());
         }
 
@@ -9290,8 +8351,8 @@ impl CudaOperators {
             {
                 continue;
             }
-            workspace_bytes =
-                workspace_bytes.max(grouped_fp4_moe_workspace_size(GroupedFp4MoeLayout {
+            workspace_bytes = workspace_bytes.max(
+                grouped_fp4_moe_workspace_requirements(GroupedFp4MoeLayout {
                     active_group_count: maximum_active_groups,
                     small_group_count,
                     slot_capacity: max_experts,
@@ -9303,7 +8364,9 @@ impl CudaOperators {
                     intermediate_size,
                     hidden_size,
                     swiglu_limit: 0.0,
-                })?);
+                })?
+                .bytes as usize,
+            );
         }
         if workspace_bytes == 0 {
             return Err(unsupported_grouped_fp4_moe());
@@ -12546,8 +11609,18 @@ mod tests {
         let shape = CudaRoutedExpertShape::new(256, 512, 384).unwrap();
         let raw_gate_up = 512 * (256 / 2) + 512 * (256 / 32);
         let raw_down = 384 * (512 / 2) + 384 * (512 / 32);
-        let private_gate_up = mxfp4_sfb_storage_bytes(512, 256).unwrap();
-        let private_down = mxfp4_sfb_storage_bytes(384, 512).unwrap();
+        let private_gate_up = ExpertScaleShape {
+            out_features: 512,
+            in_features: 256,
+        }
+        .prepared_bytes()
+        .unwrap();
+        let private_down = ExpertScaleShape {
+            out_features: 384,
+            in_features: 512,
+        }
+        .prepared_bytes()
+        .unwrap();
         let expected = raw_gate_up * 2 + raw_down + private_gate_up * 2 + private_down;
 
         assert_eq!(shape.physical_bytes().unwrap(), expected);
@@ -13165,6 +12238,113 @@ mod tests {
             .unwrap();
             let _out = cu(qkd.to_host_vec(&s)).unwrap();
             eprintln!("  [PASS] rope_yarn");
+        }
+    }
+}
+
+#[cfg(test)]
+mod pr01_tests {
+    use super::*;
+
+    #[test]
+    #[ignore = "actual CUDA GPU; submitted cleanup must bypass assertion and retain custody"]
+    fn submitted_cleanup_drains_despite_assertion_and_retains_double_failure() {
+        let op = CudaOperators::new_on_device(0).expect("required CUDA device");
+        let staging = Arc::new(PinnedHostBuffer::from_slice(&op._ctx, &[7i32]).unwrap());
+        let buffer = unsafe { DeviceBuffer::from_pinned_host(&op.stream, &staging) }.unwrap();
+        op.enable_capture_safe();
+        let error =
+            op.submitted_copy_cleanup(runtime::CudaError::internal("primary"), &staging, &buffer);
+        assert!(!matches!(error, Error::Cleanup { .. }));
+        assert_eq!(op.counters().stream_wide_syncs, 1);
+        op.failpoints.arm_submitted_cleanup();
+        let error =
+            op.submitted_copy_cleanup(runtime::CudaError::internal("primary"), &staging, &buffer);
+        assert!(matches!(error, Error::Cleanup { .. }));
+        assert!(error.to_string().contains("primary"));
+        assert!(error.to_string().contains("unknown"));
+        assert_eq!(op.pending_copy_cleanup.borrow().len(), 1);
+        assert_eq!(Arc::strong_count(&staging), 2);
+        drop(buffer);
+        assert_eq!(op.allocator_metrics().live_requested_bytes, 4);
+        op.disable_capture_safe();
+        op.sync_stream().unwrap();
+        assert!(op.pending_copy_cleanup.borrow().is_empty());
+        assert_eq!(Arc::strong_count(&staging), 1);
+    }
+
+    #[test]
+    #[ignore = "actual CUDA GPU; all four submitted pinned H2D error exits"]
+    fn pinned_creation_and_update_double_faults_retain_operands() {
+        let op = CudaOperators::new_on_device(0).expect("required CUDA device");
+        for router in [false, true] {
+            op.failpoints.arm_copy_event();
+            op.failpoints.arm_submitted_cleanup();
+            let error = if router {
+                op.dsv4_router_token_ids(&[0], 2).err().unwrap()
+            } else {
+                op.i32_host_mirror(&[0]).err().unwrap()
+            };
+            assert!(matches!(error, Error::Cleanup { .. }));
+            assert_eq!(op.pending_copy_cleanup.borrow().len(), 1);
+            assert_eq!(op.allocator_metrics().live_requested_bytes, 4);
+            op.sync_stream().unwrap();
+        }
+        let mut mirror = op.i32_host_mirror(&[0]).unwrap();
+        let mut router = op.dsv4_router_token_ids(&[0], 2).unwrap();
+        op.failpoints.arm_copy_event();
+        op.failpoints.arm_submitted_cleanup();
+        assert!(matches!(
+            op.update_i32_host_mirror(&[1], &mut mirror),
+            Err(Error::Cleanup { .. })
+        ));
+        assert!(mirror.poisoned);
+        assert!(op.update_i32_host_mirror(&[2], &mut mirror).is_err());
+        assert!(
+            op.begin_i32_host_mirror_download_after(
+                &mut mirror,
+                &op.record_compute_event().unwrap()
+            )
+            .is_err()
+        );
+        op.failpoints.arm_copy_event();
+        op.failpoints.arm_submitted_cleanup();
+        assert!(matches!(
+            op.update_dsv4_router_token_ids(&[1], 2, &mut router),
+            Err(Error::Cleanup { .. })
+        ));
+        assert!(router.poisoned);
+        assert!(
+            op.update_dsv4_router_token_ids(&[0], 2, &mut router)
+                .is_err()
+        );
+        drop(mirror);
+        drop(router);
+        assert_eq!(op.pending_copy_cleanup.borrow().len(), 2);
+        assert_eq!(op.allocator_metrics().live_requested_bytes, 8);
+        op.sync_stream().unwrap();
+        assert_eq!(op.allocator_metrics().live_requested_bytes, 0);
+    }
+}
+
+#[cfg(test)]
+mod capture_scope_tests {
+    use super::*;
+    #[test]
+    fn assertion_scope_restores_previous_value_through_nested_unwind() {
+        for prior in [false, true] {
+            let assertion = Cell::new(prior);
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _scope = CaptureSafeGuard::new(&assertion);
+                assert!(assertion.get());
+                {
+                    let _nested = CaptureSafeGuard::new(&assertion);
+                }
+                assert!(assertion.get());
+                panic!("scope unwind");
+            }));
+            assert!(result.is_err());
+            assert_eq!(assertion.get(), prior);
         }
     }
 }

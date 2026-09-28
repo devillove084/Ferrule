@@ -2,6 +2,7 @@
 //! constructors shared by the crate's own tests and downstream integration
 //! tests. Everything here is side-effect-free and scheduling-explicit.
 
+use ferrule_common::io_protocol::{ProviderFault, ProviderProgress};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -107,8 +108,11 @@ pub struct MockPhysicalState {
     resolve_failure: Option<FailureReason>,
     reserve_failure: Option<FailureReason>,
     promotion_failures: BTreeMap<MaterializationKey, VecDeque<FailureReason>>,
+    promotion_override: Option<MaterializationPreparation>,
     release_failures: VecDeque<FailureReason>,
+    discard_failures: BTreeMap<MaterializationKey, VecDeque<FailureReason>>,
     cancel_failures: VecDeque<FailureReason>,
+    defer_cancel_completion: bool,
     reservation_key_override: Option<MaterializationKey>,
     reservation_operation_override: Option<OperationId>,
     reservation_slot_override: Option<DestinationSlotId>,
@@ -121,6 +125,7 @@ pub struct MockPhysicalState {
     resident_keys: BTreeSet<MaterializationKey>,
     commands: Vec<MockPhysicalCommand>,
     completions: VecDeque<CompletionEvent>,
+    faults: VecDeque<ProviderFault>,
     scripted_outcomes: BTreeMap<LoadStage, VecDeque<CompletionOutcome>>,
     lost_completions: BTreeMap<LoadStage, usize>,
     clock_ns: u64,
@@ -166,8 +171,11 @@ impl MockPhysicalState {
             resolve_failure: None,
             reserve_failure: None,
             promotion_failures: BTreeMap::new(),
+            promotion_override: None,
             release_failures: VecDeque::new(),
+            discard_failures: BTreeMap::new(),
             cancel_failures: VecDeque::new(),
+            defer_cancel_completion: false,
             reservation_key_override: None,
             reservation_operation_override: None,
             reservation_slot_override: None,
@@ -176,6 +184,7 @@ impl MockPhysicalState {
             resident_keys: BTreeSet::new(),
             commands: Vec::new(),
             completions: VecDeque::new(),
+            faults: VecDeque::new(),
             scripted_outcomes: BTreeMap::new(),
             lost_completions: BTreeMap::new(),
             clock_ns: 1,
@@ -373,6 +382,10 @@ impl MockPhysicalHandle {
         self.lock().reserve_failure = Some(failure);
     }
 
+    pub fn override_next_promotion(&self, preparation: MaterializationPreparation) {
+        self.lock().promotion_override = Some(preparation);
+    }
+
     pub fn fail_next_promotion(&self, key: MaterializationKey, failure: FailureReason) {
         self.lock()
             .promotion_failures
@@ -381,8 +394,20 @@ impl MockPhysicalHandle {
             .push_back(failure);
     }
 
+    pub fn fail_next_discard(&self, key: MaterializationKey, failure: FailureReason) {
+        self.lock()
+            .discard_failures
+            .entry(key)
+            .or_default()
+            .push_back(failure);
+    }
+
     pub fn fail_next_release(&self, failure: FailureReason) {
         self.lock().release_failures.push_back(failure);
+    }
+
+    pub fn defer_cancellation_completion(&self) {
+        self.lock().defer_cancel_completion = true;
     }
 
     pub fn fail_next_cancel(&self, failure: FailureReason) {
@@ -411,6 +436,10 @@ impl MockPhysicalHandle {
             .entry(stage)
             .or_default()
             .push_back(outcome);
+    }
+
+    pub fn push_fault(&self, fault: ProviderFault) {
+        self.lock().faults.push_back(fault);
     }
 
     pub fn push_completion(&self, completion: CompletionEvent) {
@@ -575,6 +604,9 @@ impl MaterializationProvider for MockPhysicalProvider {
             {
                 return Err(failure);
             }
+            if let Some(preparation) = state.promotion_override.take() {
+                return Ok(preparation);
+            }
         }
         self.prepared(key)
     }
@@ -584,6 +616,13 @@ impl MaterializationProvider for MockPhysicalProvider {
         state
             .commands
             .push(MockPhysicalCommand::DiscardPreparation(key));
+        if let Some(failure) = state
+            .discard_failures
+            .get_mut(&key)
+            .and_then(VecDeque::pop_front)
+        {
+            return Err(failure);
+        }
         let request = state
             .resolved
             .iter()
@@ -802,7 +841,7 @@ impl MaterializationProvider for MockPhysicalProvider {
         state
             .completions
             .retain(|event| !(event.operation == operation && event.stage == stage));
-        if stage.is_submitted_completion_stage() {
+        if stage.is_submitted_completion_stage() && !state.defer_cancel_completion {
             let timestamp = CompletionTimestamp::from_nanos(state.clock_ns);
             state.clock_ns = state.clock_ns.saturating_add(1);
             state.completions.push_back(CompletionEvent::new(
@@ -818,8 +857,15 @@ impl MaterializationProvider for MockPhysicalProvider {
         Ok(())
     }
 
-    fn next_completion(&mut self) -> Option<CompletionEvent> {
-        self.lock().completions.pop_front()
+    fn next_progress(&mut self) -> ProviderProgress {
+        let mut state = self.lock();
+        if let Some(fault) = state.faults.pop_front() {
+            return ProviderProgress::Fault(fault);
+        }
+        state
+            .completions
+            .pop_front()
+            .map_or(ProviderProgress::Idle, ProviderProgress::Completion)
     }
 }
 
@@ -1074,6 +1120,7 @@ pub struct FakeMaterializationProvider {
     clock_ns: u64,
     commands: Vec<FakeMaterializationCommand>,
     completions: VecDeque<CompletionEvent>,
+    faults: VecDeque<ProviderFault>,
     scripts: BTreeMap<LoadStage, VecDeque<FakeCompletionSpec>>,
     lost: BTreeMap<LoadStage, usize>,
     rejected: BTreeMap<LoadStage, VecDeque<FailureReason>>,
@@ -1091,6 +1138,7 @@ impl Default for FakeMaterializationProvider {
             clock_ns: 1,
             commands: Vec::new(),
             completions: VecDeque::new(),
+            faults: VecDeque::new(),
             scripts: BTreeMap::new(),
             lost: BTreeMap::new(),
             rejected: BTreeMap::new(),
@@ -1409,7 +1457,12 @@ impl RuntimeMaterializationProvider for FakeMaterializationProvider {
         Ok(())
     }
 
-    fn next_completion(&mut self) -> Option<CompletionEvent> {
-        self.completions.pop_front()
+    fn next_progress(&mut self) -> ProviderProgress {
+        if let Some(fault) = self.faults.pop_front() {
+            return ProviderProgress::Fault(fault);
+        }
+        self.completions
+            .pop_front()
+            .map_or(ProviderProgress::Idle, ProviderProgress::Completion)
     }
 }

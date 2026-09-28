@@ -25,6 +25,10 @@ use ferrule_model::transformer::{
 };
 
 #[cfg(feature = "cuda")]
+#[path = "expert_parallel/bounded_cuda.rs"]
+mod bounded_cuda;
+
+#[cfg(feature = "cuda")]
 mod cuda {
     use super::*;
     use ferrule_backend::cuda::operators::linear::CudaOperators;
@@ -382,7 +386,6 @@ fn placement_members_routes_and_sequences_reject_ambiguous_or_unknown_identities
     for (members, expected) in [
         (vec![], "non-empty"),
         (vec![rank(3), rank(3)], "duplicate dispatch member"),
-        (vec![rank(7), rank(2)], "unknown source rank"),
         (vec![rank(3), rank(2)], "unknown expert owner"),
     ] {
         assert_error(
@@ -1144,6 +1147,10 @@ struct PreparedFixture {
 
 impl PreparedFixture {
     fn new() -> Self {
+        Self::with_dtype(CheckpointDType::F32)
+    }
+
+    fn with_dtype(dtype: CheckpointDType) -> Self {
         static NEXT: AtomicU64 = AtomicU64::new(0);
         let nonce = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -1187,7 +1194,11 @@ impl PreparedFixture {
                 let parameter = ParameterSpec::new(
                     ParameterId::new(slices.len() as u64 + 1),
                     path.clone(),
-                    ParameterDType::F32,
+                    if dtype == CheckpointDType::Bf16 {
+                        ParameterDType::Bf16
+                    } else {
+                        ParameterDType::F32
+                    },
                     [2, 2],
                     ParameterResidency::expert(LAYER, expert),
                 )
@@ -1197,14 +1208,22 @@ impl PreparedFixture {
                     .insert(name.clone(), NameMapping::weight(path))
                     .unwrap();
                 let offset = bytes.len() as u64;
-                bytes.extend(values.into_iter().flat_map(f32::to_le_bytes));
+                if dtype == CheckpointDType::Bf16 {
+                    bytes.extend(
+                        values
+                            .into_iter()
+                            .flat_map(|v| half::bf16::from_f32(v).to_le_bytes()),
+                    );
+                } else {
+                    bytes.extend(values.into_iter().flat_map(f32::to_le_bytes));
+                }
                 slices.push(CheckpointTensorSlice {
                     name,
                     role,
                     path: file.clone(),
                     offset,
-                    bytes: 16,
-                    dtype: CheckpointDType::F32,
+                    bytes: bytes.len() as u64 - offset,
+                    dtype: dtype.clone(),
                     shape: vec![2, 2],
                 });
             }
@@ -1368,5 +1387,140 @@ fn unavailable_experts_and_non_local_weight_access_fail_without_partial_results(
             if waiting { "waiting" } else { "unsupported" },
         );
         assert_eq!(provider.calls, 1);
+    }
+}
+
+#[test]
+fn batch_hook_authenticates_complete_owner_sets_and_canonicalizes_reverse_arrival() {
+    struct Batch {
+        corrupt: usize,
+        calls: usize,
+    }
+    impl ExpertResultExecutor for Batch {
+        fn execute(&mut self, _: ExpertTokenBucket) -> Result<Vec<ExpertResult>> {
+            panic!("batch-capable transport must not be dispatched serially")
+        }
+        fn supports_batch(&self) -> bool {
+            true
+        }
+        fn execute_batch(
+            &mut self,
+            buckets: Vec<ExpertTokenBucket>,
+        ) -> Result<Vec<(ParallelRankId, Vec<ExpertResult>)>> {
+            self.calls += 1;
+            let mut replies = buckets
+                .into_iter()
+                .map(|bucket| {
+                    let mut results = bucket
+                        .tokens
+                        .iter()
+                        .map(|t| ExpertResult::from_token(t, bucket.owner_rank, t.payload.clone()))
+                        .collect::<Vec<_>>();
+                    results.reverse();
+                    (bucket.owner_rank, results)
+                })
+                .collect::<Vec<_>>();
+            let occupied = replies.iter().position(|r| !r.1.is_empty()).unwrap();
+            match self.corrupt {
+                0 => (),
+                1 => {
+                    replies.pop();
+                }
+                2 => replies.push(replies[0].clone()),
+                3 => replies[occupied].0 = rank(999),
+                4 => replies[occupied].1[0].transaction = transaction(999),
+                5 => replies[occupied].1[0].source_rank = rank(999),
+                6 => replies[occupied].1[0].sequence += 1,
+                7 => replies[occupied].1[0].owner_rank = rank(999),
+                8 => {
+                    let duplicate = replies[occupied].1[0].clone();
+                    replies[occupied].1[1] = duplicate;
+                }
+                _ => unreachable!(),
+            }
+            replies.reverse();
+            Ok(replies)
+        }
+    }
+    let expected = plan()
+        .combine(&echo_results(&plan(), &INPUT), &mut active)
+        .unwrap();
+    for corrupt in 0..9 {
+        let mut batch = Batch { corrupt, calls: 0 };
+        let output = seam_execute(
+            &mut batch,
+            &placement(),
+            &seam_input(),
+            &routes(),
+            &mut active,
+        );
+        assert_eq!(batch.calls, 1);
+        if corrupt == 0 {
+            let OperatorProgress::Ready(rows) = output.unwrap() else {
+                panic!("not ready");
+            };
+            assert_eq!(rows.host().unwrap().values(), expected.values());
+        } else {
+            assert!(output.is_err(), "corruption {corrupt}");
+        }
+    }
+}
+
+#[test]
+fn external_source_plan_preserves_exact_token_and_result_identity_without_a_root_bucket() {
+    let legacy = plan();
+    let mut ctx = context();
+    ctx.source_rank = rank(0);
+    let owners = vec![rank(7), rank(2)];
+    let plan = ExpertDispatchPlan::new(
+        ctx,
+        owners.clone(),
+        &placement(),
+        &routes(),
+        &[100, 200],
+        2,
+        limits(),
+    )
+    .unwrap();
+    let buckets = plan.dispatch(&INPUT, &mut active).unwrap();
+    assert_eq!(
+        buckets.iter().map(|b| b.owner_rank).collect::<Vec<_>>(),
+        owners
+    );
+    let mut results = Vec::new();
+    for bucket in &buckets {
+        plan.validate_bucket(bucket).unwrap();
+        for source in [rank(7), rank(3), rank(99)] {
+            let mut spoof = bucket.clone();
+            spoof.tokens[0].source_rank = source;
+            assert_error(plan.validate_bucket(&spoof), "source rank");
+        }
+        results.extend(
+            bucket
+                .tokens
+                .iter()
+                .map(|t| ExpertResult::from_token(t, bucket.owner_rank, t.payload.clone())),
+        );
+    }
+    results.reverse();
+    let actual = plan.combine(&results, &mut active).unwrap();
+    let expected = legacy
+        .combine(&echo_results(&legacy, &INPUT), &mut active)
+        .unwrap();
+    assert_eq!(actual.values(), expected.values());
+    for case in 0..5 {
+        let mut spoof = results.clone();
+        match case {
+            0 => spoof[0].source_rank = rank(7),
+            1 => spoof[0].source_rank = rank(99),
+            2 => spoof[0].transaction = transaction(999),
+            3 => spoof[0].owner_rank = ctx.source_rank,
+            4 => spoof[0].expert.layer += 1,
+            _ => unreachable!(),
+        }
+        assert!(
+            plan.combine(&spoof, &mut active).is_err(),
+            "spoof case {case}"
+        );
     }
 }

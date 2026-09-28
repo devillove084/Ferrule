@@ -11,7 +11,7 @@ pub enum ModelFamily {
     Qwen3,
     /// Qwen3.5 dense text-only hybrid CPU/CUDA (strict 0.8B profile).
     Qwen35,
-    /// Recognized separately so unsupported Qwen3.5 MoE cannot dispatch as Qwen3-MoE.
+    /// Strict Qwen3.5 MoE 35B-A3B numeric FP8 text profile on CUDA only.
     Qwen35Moe,
     QwenMoe,
     Mixtral,
@@ -69,10 +69,13 @@ impl ModelFamily {
         }
     }
 
+    /// At least one runtime profile is implemented for this family. This is not
+    /// admission for every variant, backend, precision, or parallel topology.
+    /// Use a strict descriptor and a backend-specific EnginePlan for those checks.
     pub fn is_supported_runtime_family(&self) -> bool {
         matches!(
             self,
-            Self::DeepSeekV4 | Self::QwenMoe | Self::Qwen3 | Self::Qwen35
+            Self::DeepSeekV4 | Self::QwenMoe | Self::Qwen3 | Self::Qwen35 | Self::Qwen35Moe
         )
     }
 }
@@ -232,8 +235,70 @@ pub struct TransformerSpec {
 }
 
 impl TransformerSpec {
+    /// Whether this descriptor has an implementation in this build on at least
+    /// one backend. This does not select a backend: the default EnginePlan is CPU.
     pub fn supports_current_runtime(&self) -> bool {
+        if self.family == ModelFamily::Qwen35Moe {
+            return cfg!(feature = "cuda") && self.is_qwen35_moe_35b_a3b_fp8();
+        }
         self.family.is_supported_runtime_family()
+    }
+
+    /// Exact summary emitted by the strict Qwen35Metadata boundary. Do not infer
+    /// this profile from family identity or the presence of an FP8 dtype alone.
+    /// Text storage is mandatory; visual and MTP attachments are independently
+    /// absent or complete. Counts include weight AND numeric BF16 scale parts.
+    ///
+    /// This is a planning check, not a substitute for config/name/shape/pair and
+    /// shard-extent validation by Qwen35Metadata before loading an artifact.
+    pub(crate) fn is_qwen35_moe_35b_a3b_fp8(&self) -> bool {
+        if self.family != ModelFamily::Qwen35Moe
+            || self.architecture.as_deref() != Some("Qwen3_5MoeForConditionalGeneration")
+            || self.weight_source != WeightSource::Safetensors
+            || self.hidden_size != Some(2048)
+            || self.num_layers != Some(40)
+            || self.vocab_size != Some(248320)
+            || self.num_heads != Some(16)
+            || self.num_kv_heads != Some(2)
+            || self.head_dim != Some(256)
+            || self.attention != AttentionKind::Unknown("qwen35_hybrid_linear_full".into())
+            || self.moe
+                != (MoeSpec {
+                    num_experts: Some(256),
+                    num_experts_per_tok: Some(8),
+                    has_shared_experts: true,
+                    router: RouterKind::DenseTopK,
+                })
+            || self.semantics
+                != (TransformerSemantics {
+                    norm_epsilon: Some(1e-6),
+                    rope_theta: Some(10_000_000.0),
+                    rope_head_dim: Some(64),
+                    ..TransformerSemantics::default()
+                })
+        {
+            return false;
+        }
+        // A duplicate, missing, unknown, native-E8M0 or packed-BF16 format cannot
+        // masquerade as the verified per-expert FP8 + numeric BF16 schema.
+        if self.quantization.len() != 3 {
+            return false;
+        }
+        [false, true].into_iter().any(|visual| {
+            [false, true].into_iter().any(|mtp| {
+                let fp8 = 30_970 + usize::from(mtp) * 775;
+                let bf16 = 31_273 + usize::from(visual) * 333 + usize::from(mtp) * 785;
+                let expected = [("F8_E4M3", fp8), ("BF16", bf16), ("F32", 60)];
+                self.tensor_count == Some(fp8 + bf16 + 60)
+                    && expected.iter().all(|(format, tensors)| {
+                        self.quantization
+                            .iter()
+                            .filter(|q| q.format == *format && q.tensors == *tensors)
+                            .count()
+                            == 1
+                    })
+            })
+        })
     }
 }
 
@@ -265,5 +330,6 @@ mod tests {
         assert!(ModelFamily::DeepSeekV4.is_supported_runtime_family());
         assert!(ModelFamily::QwenMoe.is_supported_runtime_family());
         assert!(ModelFamily::Qwen3.is_supported_runtime_family());
+        assert!(ModelFamily::Qwen35Moe.is_supported_runtime_family());
     }
 }

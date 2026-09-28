@@ -5,19 +5,22 @@ use ferrule_common::{Error, Result};
 pub use crate::cuda::context::{
     CudaArtifactLinearHandle, CudaArtifactLinearShape, CudaBf16Buffer, CudaComputeEvent,
     CudaComputeStreamAuthority, CudaDsv4RouterHashTable as CudaRouterHashTable,
-    CudaDsv4RouterTokenIds as CudaRouterTokenIds, CudaExpertGroupRoutePlan,
-    CudaExpertGroupRoutePlanDownload, CudaExpertGroupRoutePlanHost, CudaExpertRouteMisses,
-    CudaExpertRouteResolveResult, CudaExpertRouteResolveWorkspace, CudaExpertSlotBinding,
-    CudaExpertSlotInstallTarget, CudaExpertSlotInstallTicket, CudaExpertSlotPointers,
-    CudaExpertSlotTable, CudaExpertSlotTableHost, CudaF32Buffer, CudaFailpoints, CudaI32Buffer,
-    CudaI32HostDownload, CudaI32HostMirror, CudaMoeBatchedWorkspace, CudaOperators,
+    CudaDsv4RouterTokenIds as CudaRouterTokenIds, CudaExpertGroupRoutePlanDownload,
+    CudaExpertRouteMisses, CudaExpertRouteResolveResult, CudaExpertRouteResolveWorkspace,
+    CudaExpertSlotBinding, CudaExpertSlotInstallTarget, CudaExpertSlotInstallTicket,
+    CudaExpertSlotPointers, CudaExpertSlotTable, CudaExpertSlotTableHost, CudaF32Buffer,
+    CudaFailpoints, CudaI32Buffer, CudaI32HostDownload, CudaI32HostMirror, CudaOperators,
     CudaPinnedHostAllocator, CudaPinnedU8HostBuffer, CudaPreparedRoutedExpert,
     CudaRoutedExpertArena, CudaRoutedExpertMaterialization, CudaRoutedExpertShape, CudaUploadEvent,
     validate_dsv4_router_hash_table as validate_router_hash_table,
     validate_dsv4_router_token_ids as validate_router_token_ids,
 };
 pub use crate::cuda::operators::contracts::{Bf16MoeRowsLayout, SelectedSoftmaxTopKLayout};
-pub use crate::cuda::providers::cutlass::GroupedFp4MoeLayout;
+pub mod grouped_fp4;
+pub use grouped_fp4::{
+    CudaExpertGroupRoutePlan, CudaExpertGroupRoutePlanHost, CudaMoeBatchedWorkspace,
+    GroupedFp4MoeBuffers, GroupedFp4MoeLayout,
+};
 
 pub mod residency;
 pub mod routing;

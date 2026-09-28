@@ -7,8 +7,8 @@ use std::path::{Component, Path, PathBuf};
 use ferrule_common::Result;
 
 use crate::{
-    AttentionKind, HfSafetensorsIndex, HfSafetensorsInventory, ModelDescriptor, ModelFamily,
-    MoeSpec, QuantFormatCount, RouterKind, TransformerSemantics, TransformerSpec, WeightSource,
+    AttentionKind, HfSafetensorsIndex, HfSafetensorsInventory, ModelDescriptor, MoeSpec,
+    QuantFormatCount, RouterKind, TransformerSemantics, TransformerSpec, WeightSource,
 };
 
 use super::{Qwen35Config, Qwen35HfNameMapper, Qwen35TensorPartition, model_error};
@@ -100,10 +100,8 @@ impl Qwen35Metadata {
             }
         }
         let inventory = match &index {
-            Some(index) => {
-                HfSafetensorsInventory::from_index(model_dir, ModelFamily::Qwen35, index)?
-            }
-            None => HfSafetensorsInventory::from_single_file(model_dir, ModelFamily::Qwen35)?,
+            Some(index) => HfSafetensorsInventory::from_index(model_dir, config.family(), index)?,
+            None => HfSafetensorsInventory::from_single_file(model_dir, config.family())?,
         };
         if let Some(index) = &index {
             for tensor in &inventory.tensors {
@@ -157,7 +155,7 @@ impl Qwen35Metadata {
         ModelDescriptor {
             path: self.path.clone(),
             spec: TransformerSpec {
-                family: ModelFamily::Qwen35,
+                family: self.config.family(),
                 architecture: Some(self.config.architecture().to_owned()),
                 weight_source: WeightSource::Safetensors,
                 hidden_size: Some(t.hidden_size),
@@ -168,8 +166,14 @@ impl Qwen35Metadata {
                 head_dim: Some(t.head_dim),
                 attention: AttentionKind::Unknown("qwen35_hybrid_linear_full".into()),
                 moe: MoeSpec {
-                    num_experts: None, num_experts_per_tok: None,
-                    has_shared_experts: false, router: RouterKind::None,
+                    num_experts: t.num_experts,
+                    num_experts_per_tok: t.num_experts_per_tok,
+                    has_shared_experts: t.shared_expert_intermediate_size.is_some(),
+                    router: if t.num_experts.is_some() {
+                        RouterKind::DenseTopK
+                    } else {
+                        RouterKind::None
+                    },
                 },
                 semantics: TransformerSemantics {
                     norm_epsilon: Some(t.rms_norm_eps),
@@ -178,13 +182,50 @@ impl Qwen35Metadata {
                     ..TransformerSemantics::default()
                 },
                 tensor_count: Some(self.inventory.tensor_count),
-                quantization: self.inventory.dtype_counts.iter().map(|item| QuantFormatCount {
-                    format: item.dtype.clone(), tensors: item.tensors,
-                }).collect(),
+                quantization: self
+                    .inventory
+                    .dtype_counts
+                    .iter()
+                    .map(|item| QuantFormatCount {
+                        format: item.dtype.clone(),
+                        tensors: item.tensors,
+                    })
+                    .collect(),
                 notes: vec![
-                    "Qwen3.5-0.8B BF16 storage; F32 CPU/CUDA text-only resident execution; no prefix cache, speculation, partial retain or TP/PP".into(),
-                    format!("validated text-only partition: {} text, {} visual, {} MTP tensors; attachments are not executed", self.partition.text().len(), self.partition.visual().len(), self.partition.mtp().len()),
-                    "18 linear + 6 full layers; per-head sigmoid output gate, offset RMSNorm, 64-dimension partial RoPE, tied output head".into(),
+                    match self.config.profile() {
+                        super::Qwen35Profile::Dense08Bbf16 => {
+                            "Qwen3.5-0.8B BF16 storage; F32 text-only execution".into()
+                        }
+                        super::Qwen35Profile::Moe35BA3Bfp8 => format!(
+                            "Qwen3.5-35B-A3B FP8 storage (E4M3FN weights + numeric BF16 128x128 block scales); CUDA F32Tf32x3 compute, not native FP8 compute; bounded expert cache on the default single device; full 40-layer text-only execution; dedicated runtime CUDA-thread EP2/4/8 uses explicit devices, full shared host prewarm and all-owned resident experts; CPU, vision/MTP execution, TP/PP and process/rank execution unsupported; generic TP/PP/EP policy is not runtime placement admission; {}",
+                            if cfg!(feature = "cuda") {
+                                "CUDA profile available; runtime capacity admission still required"
+                            } else {
+                                "CUDA profile requires the cuda feature (not enabled in this build)"
+                            }
+                        ),
+                    },
+                    format!(
+                        "validated text-only partition: {} text, {} visual, {} MTP tensors; attachments are not executed",
+                        self.partition.text().len(),
+                        self.partition.visual().len(),
+                        self.partition.mtp().len()
+                    ),
+                    format!(
+                        "{} linear + {} full layers; per-head sigmoid output gate, offset RMSNorm, {}-dimension partial RoPE, tied output head: {}",
+                        self.config
+                            .layer_types()
+                            .iter()
+                            .filter(|k| **k == super::Qwen35LayerType::LinearAttention)
+                            .count(),
+                        self.config
+                            .layer_types()
+                            .iter()
+                            .filter(|k| **k == super::Qwen35LayerType::FullAttention)
+                            .count(),
+                        self.config.semantics().rotary_dimensions,
+                        t.tie_word_embeddings
+                    ),
                 ],
             },
             tensor_classes: Vec::new(),

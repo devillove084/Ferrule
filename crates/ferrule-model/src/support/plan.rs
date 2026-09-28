@@ -1,7 +1,7 @@
 use std::fmt;
 
 use crate::execution::ModelExecutionBackend;
-use crate::spec::{AttentionKind, ModelFamily, RouterKind, WeightSource};
+use crate::spec::{AttentionKind, ModelFamily, RouterKind, TransformerSpec, WeightSource};
 
 use super::contract::ModelSupportContract;
 use super::policies::{PolicySet, SpeculationMode};
@@ -101,6 +101,10 @@ impl EnginePlan {
         Self::from_contract_for_backend(contract, ModelExecutionBackend::Cpu)
     }
 
+    /// Reports the registered single-owner backend profile, not device-memory
+    /// admission or process/parallel serving capability. The strict 35B numeric
+    /// FP8 profile selects F32Tf32x3 compute and a bounded expert cache only;
+    /// it does not offer a native-FP8/BF16 precision alternative.
     pub fn from_contract_for_backend(
         contract: &ModelSupportContract,
         backend: ModelExecutionBackend,
@@ -120,13 +124,26 @@ impl EnginePlan {
         } else {
             EnginePlanStatus::MetadataOnly
         };
+        let mut policies = contract.policies.clone();
+        if status == EnginePlanStatus::Executable && contract.spec.is_qwen35_moe_35b_a3b_fp8() {
+            // Dense parameters are resident, routed experts use the bounded
+            // cache. Never advertise all-expert residency for the 35B profile.
+            policies.residency.streaming_allowed = true;
+            policies.residency.all_resident_required = false;
+        }
         Self {
             family: contract.spec.family.clone(),
             architecture: contract.spec.architecture.clone(),
             backend,
-            backend_profile: backend_profile(&contract.spec.family, backend),
+            backend_profile: if contract.spec.family == ModelFamily::Qwen35Moe
+                && !missing.is_empty()
+            {
+                None
+            } else {
+                backend_profile(&contract.spec, backend)
+            },
             status,
-            policies: contract.policies.clone(),
+            policies,
             missing,
         }
     }
@@ -136,8 +153,13 @@ impl EnginePlan {
     }
 }
 
-fn backend_profile(family: &ModelFamily, backend: ModelExecutionBackend) -> Option<&'static str> {
-    match (family, backend) {
+fn backend_profile(spec: &TransformerSpec, backend: ModelExecutionBackend) -> Option<&'static str> {
+    match (&spec.family, backend) {
+        (ModelFamily::Qwen35Moe, ModelExecutionBackend::Cuda)
+            if cfg!(feature = "cuda") && spec.is_qwen35_moe_35b_a3b_fp8() =>
+        {
+            Some("cuda-hybrid-numeric-fp8-f32-tf32x3-qwen35-35b-a3b")
+        }
         (ModelFamily::Qwen35, ModelExecutionBackend::Cpu) => Some("cpu-hybrid-f32-qwen35-0.8b"),
         (ModelFamily::Qwen35, ModelExecutionBackend::Cuda) if cfg!(feature = "cuda") => {
             Some("cuda-hybrid-f32-qwen35-0.8b")
@@ -160,6 +182,26 @@ fn missing_policies(
 ) -> Vec<MissingPolicy> {
     let spec = &contract.spec;
     let mut missing = Vec::new();
+    let qwen35_moe_fp8 = spec.is_qwen35_moe_35b_a3b_fp8();
+    if spec.family == ModelFamily::Qwen35Moe {
+        if !qwen35_moe_fp8 {
+            missing.push(MissingPolicy::new(PolicyArea::ModelFamily,
+                "Qwen3.5 MoE requires the strict Qwen35Metadata 35B-A3B FP8 profile; other variants, packed BF16 experts and unknown quantization are unsupported"));
+        }
+        if contract.policies.parallelism != super::policies::ParallelismPlan::default() {
+            missing.push(MissingPolicy::new(PolicyArea::Backend,
+                "Qwen3.5-35B FP8 generic EnginePlan describes the default single-owner CUDA path; dedicated resident GPU-thread EP2/4/8 requires explicit runtime device placement, full shared host prewarm and physical-card admission; a generic EP degree alone cannot authorize it; TP/PP/DP/SP/CP and process/rank execution are unsupported"));
+        }
+        if contract.policies.quant.weight_source != spec.weight_source
+            || contract.policies.quant.formats != spec.quantization
+            || contract.policies.semantics != spec.semantics
+        {
+            missing.push(MissingPolicy::new(
+                PolicyArea::Validation,
+                "Qwen3.5-35B FP8 policies must retain the strict descriptor storage and semantics",
+            ));
+        }
+    }
 
     if !spec.family.is_supported_runtime_family() {
         let reason = match &spec.family {
@@ -194,11 +236,16 @@ fn missing_policies(
                 "Qwen3.5 CUDA requires the cuda feature",
             ));
         }
-        (ModelFamily::Qwen35Moe, _) => {
+        (ModelFamily::Qwen35Moe, ModelExecutionBackend::Cuda) if cfg!(feature = "cuda") => {}
+        (ModelFamily::Qwen35Moe, ModelExecutionBackend::Cuda) => {
             missing.push(MissingPolicy::new(
                 PolicyArea::Backend,
-                "Qwen3.5 MoE/FP8 execution is unsupported; only dense 0.8B BF16 storage is supported",
+                "Qwen3.5-35B FP8 F32Tf32x3 CUDA execution requires the cuda feature",
             ));
+        }
+        (ModelFamily::Qwen35Moe, ModelExecutionBackend::Cpu) => {
+            missing.push(MissingPolicy::new(PolicyArea::Backend,
+                "Qwen3.5-35B FP8 has no supported CPU execution profile; select CUDA with the cuda feature (F32Tf32x3 compute, bounded expert cache, text only)"));
         }
         (ModelFamily::Qwen3, ModelExecutionBackend::Cpu) => {}
         (ModelFamily::Qwen3, ModelExecutionBackend::Cuda) => {
@@ -259,7 +306,7 @@ fn missing_policies(
             "latent/compressed attention requires a dedicated attention policy, KV shape, and kernels",
         ));
     } else if matches!(spec.attention, AttentionKind::Unknown(_))
-        && !(spec.family == ModelFamily::Qwen35
+        && !((spec.family == ModelFamily::Qwen35 || qwen35_moe_fp8)
             && spec.attention == AttentionKind::Unknown("qwen35_hybrid_linear_full".into()))
     {
         missing.push(MissingPolicy::new(
@@ -277,7 +324,10 @@ fn missing_policies(
         ));
     }
 
-    if spec.moe.has_shared_experts && !matches!(spec.family, ModelFamily::DeepSeekV4) {
+    if spec.moe.has_shared_experts
+        && !matches!(spec.family, ModelFamily::DeepSeekV4)
+        && !qwen35_moe_fp8
+    {
         missing.push(MissingPolicy::new(
             PolicyArea::Expert,
             "shared experts require an explicit shared-expert execution policy",

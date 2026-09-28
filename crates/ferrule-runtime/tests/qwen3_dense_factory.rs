@@ -34,6 +34,81 @@ fn qwen3_dense_factory_builds_single_file_cpu_engine() {
     assert!(error.to_string().contains("supported: cpu"));
 }
 
+#[test]
+fn long_context_non_hybrid_engine_boundary_and_waiting_capacity() {
+    use ferrule_runtime::{
+        Error, GenerateRequest, RequestId, RuntimeAdmissionError, RuntimeAdmissionOptions,
+        RuntimeAdmissionResource,
+    };
+    for context in [1024, 2048, 4096] {
+        let fixture = Fixture::new();
+        let config_path = fixture.0.join("config.json");
+        let config_text = std::fs::read_to_string(&config_path).unwrap().replace(
+            "\"max_position_embeddings\":8",
+            &format!("\"max_position_embeddings\":{context}"),
+        );
+        std::fs::write(config_path, config_text).unwrap();
+        let config = AutoConfig::from_pretrained(&fixture.0).unwrap();
+        let mut options = options();
+        options.driver_config.ctx_size = context;
+        options.driver_config.enable_native_proposals = false;
+        let mut engine = ResidentModelPlanner
+            .prepare(&config, BackendSelection::Cpu, None, options)
+            .unwrap()
+            .build()
+            .unwrap();
+        engine
+            .set_admission_options(RuntimeAdmissionOptions {
+                max_waiting_requests: 1,
+                max_request_identities: 2,
+                max_session_identities: 2,
+            })
+            .unwrap();
+        let make = |id, prompt, max_new_tokens| GenerateRequest {
+            id: RequestId(id),
+            session_id: None,
+            prompt_tokens: vec![1; prompt],
+            max_new_tokens,
+            stop: vec![],
+            ignore_eos: true,
+        };
+        let before = engine.capacity_snapshot();
+        assert!(matches!(
+            engine.try_submit(make(1, context - 8, 9)),
+            Err(Error::Admission {
+                source: RuntimeAdmissionError::InvalidPosition { .. }
+            })
+        ));
+        assert_eq!(engine.capacity_snapshot(), before);
+        assert_eq!(
+            engine.admission_snapshot().unwrap().request_identities_held,
+            0
+        );
+        engine.try_submit(make(1, context - 8, 8)).unwrap();
+        let held = engine.admission_snapshot().unwrap();
+        assert_eq!(held.waiting_requests, 1);
+        assert_eq!(held.request_identities_held, 1);
+        assert_eq!(engine.capacity_snapshot().kv, before.kv);
+        assert!(matches!(
+            engine.try_submit(make(2, 1, 1)),
+            Err(Error::Admission {
+                source: RuntimeAdmissionError::Capacity {
+                    resource: RuntimeAdmissionResource::WaitingRequests,
+                    ..
+                }
+            })
+        ));
+        assert_eq!(engine.admission_snapshot().unwrap(), held);
+        engine.cancel_request(RequestId(1)).unwrap();
+        assert_eq!(engine.drain_cancelled().len(), 1);
+        assert_eq!(
+            engine.admission_snapshot().unwrap().request_identities_held,
+            0
+        );
+        engine.shutdown().unwrap();
+    }
+}
+
 fn options() -> ModelFactoryOptions {
     ModelFactoryOptions {
         max_layers: None,
@@ -41,6 +116,8 @@ fn options() -> ModelFactoryOptions {
         output_head_chunk_rows: 8,
         expert_reader_max_tensor_mebibytes: 1,
         expert_cache: Default::default(),
+        qwen35_moe_capacity: None,
+        qwen35_host_cache: None,
         moe_hotset_experts: 0,
         kv_cache_mebibytes: None,
         scheduler_config: ResidentSchedulerConfig {

@@ -77,6 +77,7 @@ fn boots() -> Vec<PipelineStageBoot> {
             rank: rank(index as u32),
             plan,
             config: config(),
+            physical_pages: config().max_pages,
             program_spec: vec![index as u8, 7],
         })
         .collect()
@@ -386,7 +387,7 @@ fn stage(
     probe.initialized.lock().unwrap().push(*owner);
     let planes = StandardGqaPlanes::new(boot.plan.layer_count(), 1, 2, 2, 8, boot.config.dtype())?;
     let backend = DeviceBackend {
-        cpu: PagedKvBackend::new(CpuPagedKvPool::from_strategy(&planes, 8)?),
+        cpu: PagedKvBackend::new(CpuPagedKvPool::from_strategy(&planes, boot.physical_pages)?),
         owner: Rc::clone(&owner),
         probe: Arc::clone(&probe),
         retained: None,
@@ -399,6 +400,7 @@ fn stage(
     let description = PipelineStageDescription {
         plan: boot.plan.clone(),
         config: boot.config,
+        physical_pages: boot.physical_pages,
         hidden: 2,
         vocabulary: 4,
         kv_heads: 1,
@@ -423,6 +425,7 @@ fn typed_program_and_distinct_non_send_view_use_the_existing_coordinator() {
                     rank,
                     plan,
                     config: config(),
+                    physical_pages: config().max_pages,
                     program_spec: vec![],
                 },
                 make,
@@ -1173,41 +1176,45 @@ fn portable_projection_revalidates_request_snapshots_and_arbitrary_fork_generati
     let description = worker.boot_description();
     let decoded = projection
         .clone()
-        .into_commit_batch(&batch, &reservation, description)
+        .into_commit_projection(&batch, &reservation, description)
         .unwrap();
-    assert_eq!(decoded.new_pages(), &[KvPageId(0)]);
+    let original = decoded;
+    assert_eq!(original.protected_pages(), &[KvPageId(0)]);
     assert_eq!(
-        decoded.sequences()[0].page_state_slot(),
-        reservation.state_slot
+        original,
+        projection
+            .clone()
+            .into_execution_identity(&batch, &reservation, description, &[1],)
+            .unwrap()
+            .commit_projection()
     );
-    assert_eq!(decoded.sequences()[0].page_generation(), 0);
 
     let mut stale = projection.clone();
     stale.reservation.generation += 1;
     assert!(
         stale
-            .into_commit_batch(&batch, &reservation, description)
+            .into_commit_projection(&batch, &reservation, description)
             .is_err()
     );
     let mut duplicate = projection.clone();
     duplicate.page_statuses.push(duplicate.page_statuses[0]);
     assert!(
         duplicate
-            .into_commit_batch(&batch, &reservation, description)
+            .into_commit_projection(&batch, &reservation, description)
             .is_err()
     );
     let mut missing = projection.clone();
     missing.page_statuses.clear();
     assert!(
         missing
-            .into_commit_batch(&batch, &reservation, description)
+            .into_commit_projection(&batch, &reservation, description)
             .is_err()
     );
     let mut wrong_status = projection.clone();
     wrong_status.page_statuses[0].status = DecoderKvPageStatus::Resident;
     assert!(
         wrong_status
-            .into_commit_batch(&batch, &reservation, description)
+            .into_commit_projection(&batch, &reservation, description)
             .is_err()
     );
 
@@ -1218,10 +1225,9 @@ fn portable_projection_revalidates_request_snapshots_and_arbitrary_fork_generati
     deep.reservation.execution_generation = u64::MAX - 1;
     let expected = deep.reservation.clone();
     let decoded = deep
-        .into_commit_batch(&batch, &expected, description)
+        .into_commit_projection(&batch, &expected, description)
         .unwrap();
-    assert_eq!(decoded.sequences()[0].page_generation(), u64::MAX - 1);
-    assert_eq!(decoded.sequences()[0].execution_generation(), 0);
+    assert_ne!(decoded, original);
     worker.dispatch(PipelineCommand::Rollback(key())).unwrap();
     worker.shutdown().unwrap();
 }
@@ -1362,4 +1368,100 @@ fn injected_transport_observes_all_ready_abort_and_finish() {
     assert!(calls.contains(&"finish"));
     drop(calls);
     pipeline.shutdown().unwrap();
+}
+
+#[test]
+fn physical_shadow_capacity_never_widens_parent_or_releases_unknown_custody() {
+    let probe = Arc::new(Probe::default());
+    let mut specs = boots();
+    for boot in &mut specs {
+        boot.physical_pages = boot.config.physical_pages(true).unwrap();
+    }
+    let make = Arc::clone(&probe);
+    let mut pipeline = PipelineParallelExecutor::new_with_factory(topology(), specs, move |boot| {
+        Ok(PipelineStageWorker::new(&boot, stage(&boot, make)?)?.boxed())
+    })
+    .unwrap();
+    assert_eq!(pipeline.page_manager().max_pages(), 8);
+    for owner in pipeline.owner_stats().unwrap() {
+        assert_eq!((owner.kv.physical_pages, owner.kv.free_pages), (16, 16));
+    }
+    pipeline
+        .forward(SessionId(1), &[1], ForwardPhase::Prefill)
+        .unwrap();
+    *probe.prepare_failure.lock().unwrap() = PrepareFailure::Unknown;
+    assert!(
+        pipeline
+            .forward(SessionId(1), &[2], ForwardPhase::Decode)
+            .is_err()
+    );
+    assert!(pipeline.is_quarantined());
+    let before = pipeline.owner_stats().unwrap();
+    assert!(before[0].kv.active_transactions > 0);
+    assert!(pipeline.release_session(SessionId(1)).is_err());
+    assert!(pipeline.create_session(SessionId(2)).is_err());
+    assert!(pipeline.shutdown().is_err());
+    let after = pipeline.owner_stats().unwrap();
+    assert_eq!(after[0].kv.physical_pages, 16);
+    assert_eq!(after[0].kv.free_pages, before[0].kv.free_pages);
+    assert_eq!(pipeline.page_manager().max_pages(), 8);
+}
+
+#[test]
+fn boot_stage_and_backend_require_exact_physical_capacity() {
+    let probe = Arc::new(Probe::default());
+    let mut boot = boots().remove(0);
+    let original = stage(&boot, Arc::clone(&probe)).unwrap();
+    boot.physical_pages *= 2;
+    assert!(PipelineStageWorker::new(&boot, original).is_err());
+    assert_eq!(probe.backend_shutdown.load(Ordering::Relaxed), 1);
+    boot.physical_pages += 1;
+    assert!(boot.validate().is_err());
+    let mut config = config();
+    config.page_size = 1;
+    config.max_pages = i32::MAX as usize / 2 + 2;
+    assert!(config.physical_pages(true).is_err());
+    assert_eq!(config.physical_pages(false).unwrap(), config.max_pages);
+    config.max_pages = usize::MAX;
+    assert!(config.physical_pages(true).is_err());
+}
+
+#[test]
+fn parent_rejects_disagreeing_physical_stage_descriptions() {
+    struct WrongCapacity(LocalTransport);
+    impl PipelineTransport for WrongCapacity {
+        fn call_observed(
+            &mut self,
+            rank: PipelineRank,
+            command: PipelineCommand,
+            poll: &mut dyn FnMut(),
+        ) -> Result<PipelineReply> {
+            let mut reply = self.0.call_observed(rank, command, poll)?;
+            if rank.local.get() == 1 {
+                if let PipelineReply::Description(description) = &mut reply {
+                    description.physical_pages *= 2;
+                }
+            }
+            Ok(reply)
+        }
+        fn outstanding(&self) -> usize {
+            self.0.outstanding()
+        }
+        fn shutdown(&mut self) -> Result<()> {
+            self.0.shutdown()
+        }
+        fn quarantine(&mut self) {
+            self.0.quarantine();
+        }
+    }
+    let probe = Arc::new(TransportProbe::default());
+    let transport = WrongCapacity(LocalTransport::new(
+        Arc::new(Probe::default()),
+        Arc::clone(&probe),
+    ));
+    assert!(
+        PipelineParallelExecutor::new_with_transport(topology(), plans(), config(), transport)
+            .is_err()
+    );
+    assert_eq!(probe.shutdown.load(Ordering::Relaxed), 1);
 }

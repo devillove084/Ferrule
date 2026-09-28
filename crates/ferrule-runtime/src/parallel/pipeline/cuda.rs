@@ -194,6 +194,7 @@ impl PipelineStage<CudaPagedKvBackend, CudaPipelineStageProgram> {
         let description = PipelineStageDescription {
             plan: plan.clone(),
             config,
+            physical_pages: config.physical_pages(true)?,
             hidden: resources.spec().hidden_size(),
             vocabulary: resources.spec().vocab_size(),
             kv_heads,
@@ -221,7 +222,8 @@ impl PipelineStage<CudaPagedKvBackend, CudaPipelineStageProgram> {
             .map_err(segment_error),
         )?;
         let mut program = CudaPipelineStageProgram::new(segment);
-        let backend = match CudaPagedKvPool::from_strategy(ops, &planes, config.max_pages) {
+        let backend = match CudaPagedKvPool::from_strategy(ops, &planes, description.physical_pages)
+        {
             Ok(pool) => PagedKvBackend::new(pool),
             Err(source) => {
                 return checked_completion(Err(Error::with_cleanup(
@@ -258,6 +260,7 @@ impl PipelineStage<CudaPagedKvBackend, CudaPipelineStageProgram> {
         let description = PipelineStageDescription {
             plan: plan.clone(),
             config,
+            physical_pages: config.physical_pages(true)?,
             hidden: resources.spec().hidden_size(),
             vocabulary: resources.spec().vocab_size(),
             kv_heads: tensor.local_kv_heads(),
@@ -280,7 +283,8 @@ impl PipelineStage<CudaPagedKvBackend, CudaPipelineStageProgram> {
             .map_err(segment_error),
         )?;
         let mut program = CudaPipelineStageProgram::new(segment);
-        let backend = match CudaPagedKvPool::from_strategy(ops, &planes, config.max_pages) {
+        let backend = match CudaPagedKvPool::from_strategy(ops, &planes, description.physical_pages)
+        {
             Ok(pool) => PagedKvBackend::new(pool),
             Err(source) => {
                 return checked_completion(Err(Error::with_cleanup(

@@ -687,6 +687,167 @@ fn joined_resource_plan_must_match() {
 }
 
 #[test]
+fn admission_policies_classify_mixed_batches_with_distinct_execution_credits() {
+    for required in [false, true] {
+        let mut registry = manual_registry();
+        let mut resident = resident_request(key(1, 1));
+        resident.demand = ResourceDemand::ModelWarmup;
+        let existing = registry
+            .prefetch(prefetch_id(1), [resident, prefetch_request(key(3, 1))], 1)
+            .unwrap()
+            .created[0];
+        let demand = if required {
+            ResourceDemand::required(ExecutionPhase::Decode)
+        } else {
+            ResourceDemand::prefetch(ExecutionPhase::Decode)
+        };
+        let requests = [
+            request(key(4, 1)),
+            request(key(3, 1)),
+            resident_request(key(2, 1)),
+            resident,
+        ]
+        .map(|mut request| {
+            request.demand = demand;
+            request
+        });
+        let (created, joined, already_resident) = if required {
+            let report = registry
+                .attach_waiter(waiter(1), demand, requests, 2)
+                .unwrap();
+            assert!(!report.continuation_ready);
+            (report.created, report.joined, report.already_resident)
+        } else {
+            let report = registry.prefetch(prefetch_id(2), requests, 2).unwrap();
+            (report.created, report.joined, report.already_resident)
+        };
+        assert_eq!(already_resident, 2);
+        assert_eq!(joined, [existing]);
+        assert_eq!(created.len(), 1);
+        assert_eq!(registry.key_for_operation(created[0]), Some(key(4, 1)));
+        assert_eq!(registry.active_operations(), 2);
+        assert_eq!(registry.resident_entries(), 2);
+        assert_eq!(registry.operation(existing).unwrap().demand(), demand);
+        assert_eq!(
+            registry.resources().in_use(ResourceKind::ResidentBytes),
+            2 * BYTES
+        );
+        assert_eq!(
+            registry.resources().in_use(ResourceKind::Waiter),
+            u64::from(required)
+        );
+        assert_eq!(
+            registry.resources().in_use(ResourceKind::Continuation),
+            u64::from(required)
+        );
+        assert_eq!(registry.waiters().is_empty(), !required);
+        assert_eq!(registry.provider().physical_reads(), 0);
+        assert!(registry.shutdown(3, 32).unwrap().drained);
+    }
+}
+
+#[test]
+fn admission_policies_reject_duplicate_and_mismatch_without_mutation() {
+    #[derive(Debug, Clone, Copy)]
+    enum Rejection {
+        Duplicate,
+        Plan,
+        JoinBinding,
+        JoinResident,
+        ResidentBinding,
+        ResidentTransfer,
+    }
+
+    for required in [false, true] {
+        for rejection in [
+            Rejection::Duplicate,
+            Rejection::Plan,
+            Rejection::JoinBinding,
+            Rejection::JoinResident,
+            Rejection::ResidentBinding,
+            Rejection::ResidentTransfer,
+        ] {
+            let mut registry = manual_registry();
+            let mut keys = [key(1, 1), key(2, 1), key(3, 1)];
+            keys.sort();
+            let target = keys[2];
+            let resident = matches!(
+                rejection,
+                Rejection::ResidentBinding | Rejection::ResidentTransfer
+            );
+            let mut initial = if resident {
+                resident_request(target)
+            } else {
+                request(target)
+            };
+            initial.demand = ResourceDemand::ModelWarmup;
+            registry.prefetch(prefetch_id(1), [initial], 1).unwrap();
+            let demand = if required {
+                ResourceDemand::required(ExecutionPhase::Prefill)
+            } else {
+                ResourceDemand::ModelWarmup
+            };
+            let mut invalid = initial;
+            match rejection {
+                Rejection::Plan => invalid.plan = uniform_plan(2 * BYTES),
+                Rejection::JoinBinding | Rejection::ResidentBinding => {
+                    let mut binding = invalid.preparation.binding();
+                    binding.slot = ferrule_common::io_protocol::DestinationSlotId::new(
+                        if binding.slot.get() == 1 { 2 } else { 1 },
+                    );
+                    invalid.preparation = if resident {
+                        ferrule_model::MaterializationPreparation::Resident(
+                            ferrule_model::MaterializationResident::new(target, binding).unwrap(),
+                        )
+                    } else {
+                        ferrule_model::MaterializationPreparation::Transfer(
+                            ferrule_model::MaterializationTransfer::new(target, binding, None)
+                                .unwrap(),
+                        )
+                    };
+                }
+                Rejection::JoinResident => invalid = resident_request(target),
+                Rejection::ResidentTransfer => invalid = request(target),
+                Rejection::Duplicate => {}
+            }
+            // Earlier keys would adopt and create if classification executed mutations.
+            let mut requests = vec![resident_request(keys[0]), request(keys[1]), invalid];
+            if matches!(rejection, Rejection::Duplicate) {
+                requests.push(invalid);
+            }
+            for request in &mut requests {
+                request.demand = demand;
+            }
+            let before = format!("{registry:?}");
+            let error = if required {
+                registry
+                    .attach_waiter(waiter(1), demand, requests, 2)
+                    .unwrap_err()
+            } else {
+                registry.prefetch(prefetch_id(2), requests, 2).unwrap_err()
+            };
+            match rejection {
+                Rejection::Duplicate => assert!(
+                    matches!(error, RegistryError::DuplicateDependency { key } if *key == target)
+                ),
+                Rejection::Plan => assert!(
+                    matches!(error, RegistryError::ResourcePlanMismatch { key, .. } if *key == target)
+                ),
+                _ => assert!(
+                    matches!(error, RegistryError::PublishedResidencyConflict { key } if *key == target)
+                ),
+            }
+            assert_eq!(
+                format!("{registry:?}"),
+                before,
+                "{required:?}: {rejection:?}"
+            );
+            assert!(registry.shutdown(3, 32).unwrap().drained);
+        }
+    }
+}
+
+#[test]
 fn duplicate_dependency_is_rejected_before_side_effects() {
     let mut registry = manual_registry();
     let materialization_key = key(1, 1);

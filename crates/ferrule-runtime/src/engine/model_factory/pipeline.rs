@@ -79,7 +79,7 @@ impl Default for PipelineBuildOptions {
 }
 
 impl PipelineBuildOptions {
-    fn owner_count(&self) -> Result<usize> {
+    pub(super) fn owner_count(&self) -> Result<usize> {
         let p = self.parallelism;
         let experts = if p.expert_parallel > 1 {
             p.expert_parallel
@@ -262,6 +262,19 @@ impl ResidentModelPlanner {
         options: ModelFactoryOptions,
         pipeline: PipelineBuildOptions,
     ) -> Result<ResidentModelBuildPlan> {
+        if matches!(
+            config.descriptor().spec.family,
+            ModelFamily::Qwen35 | ModelFamily::Qwen35Moe
+        ) {
+            return self.prepare_qwen35_expert_parallel(
+                config,
+                backend,
+                chat_template_override,
+                options,
+                pipeline,
+            );
+        }
+        let requested_backend = backend;
         let backend =
             Option::<ModelExecutionBackend>::from(backend).unwrap_or(ModelExecutionBackend::Cpu);
         pipeline.validate(backend)?;
@@ -279,6 +292,7 @@ impl ResidentModelPlanner {
             chat_template_override,
             options,
         )?;
+        plan.requested_backend = requested_backend;
         plan.backend = backend;
         plan.request.backend = backend;
         plan.request.model_info =
@@ -406,6 +420,7 @@ impl ResidentModelBuildPlan {
                 "cuda-pipeline-process-f32-serial"
             }
         };
+        self.requested_parallel = Some(options.clone());
         self.request.pipeline = Some(options);
         Ok(self)
     }
@@ -426,7 +441,7 @@ enum Checkpoint {
     Moe(Qwen3MoeAdapter),
 }
 impl Checkpoint {
-    fn load(request: &ModelBuildRequest) -> ferrule_common::Result<Self> {
+    fn load(request: &ResolvedModelRequest) -> ferrule_common::Result<Self> {
         match request.family {
             ModelFamily::Qwen3
                 if request
@@ -539,7 +554,10 @@ fn expert_group(
         .and_then(|size| size.checked_mul(std::mem::size_of::<f32>()))
         .ok_or_else(|| invalid("EP activation byte bound overflow"))?;
     Ok(Some(ExpertGroup {
-        source_rank: members[0],
+        source_rank: match options.rank_backend {
+            PipelineRankBackend::Thread => members[0],
+            PipelineRankBackend::Process => ParallelRankId::new(stage as u32),
+        },
         members,
         layers: plan.layers(),
         placement: ExpertPlacement::new(entries)?,
@@ -551,13 +569,38 @@ fn expert_group(
 }
 
 fn prepare_stage(
-    request: ModelBuildRequest,
+    request: ResolvedModelRequest,
     boot: PipelineStageBoot,
     group: Option<ExpertGroup>,
 ) -> ferrule_common::Result<BoxedPipelineStageWorker> {
     let checkpoint = Checkpoint::load(&request)?;
     let resources = checkpoint.resources();
     let config = boot.config;
+    let options = request
+        .pipeline
+        .as_ref()
+        .expect("validated pipeline options");
+    let plans =
+        segment_plans(request.max_layers, options.parallelism.pipeline_parallel).map_err(|e| {
+            ferrule_common::Error::Execution {
+                message: e.to_string(),
+            }
+        })?;
+    let (live_config, live_plan) = pipeline_capacity(
+        &request,
+        options,
+        resources.spec(),
+        checkpoint.schema().page_size(),
+        &plans,
+    )
+    .map_err(|e| ferrule_common::Error::Execution {
+        message: e.to_string(),
+    })?;
+    if live_config != config || live_plan.configured_pages != boot.physical_pages {
+        return Err(ferrule_common::Error::Execution {
+            message: "pipeline owner capacity changed after planning".into(),
+        });
+    }
     match request.backend {
         ModelExecutionBackend::Cpu => {
             let stage = if let Some(group) = group {
@@ -694,7 +737,7 @@ fn tensor_collective_limits(
 }
 
 fn pipeline_capacity(
-    request: &ModelBuildRequest,
+    request: &ResolvedModelRequest,
     options: &PipelineBuildOptions,
     spec: &DecoderModelSpec,
     page_size: usize,
@@ -762,20 +805,17 @@ fn pipeline_capacity(
             "physical owner KV does not match parent logical schema",
         ));
     }
-    let kv_plan = plan_resident_kv_pages(
+    let kv_plan = crate::engine::composition::plan_pipeline_kv_pages(
         &schema,
-        kv_accounting(request.kv_cache_bytes, Some(physical_bytes)),
+        physical_bytes,
+        request.kv_cache_bytes,
+        request.backend == ModelExecutionBackend::Cuda,
         request.scheduler_config,
         request.driver_config,
     )?;
-    if kv_plan.configured_pages < kv_plan.full_capacity_pages {
-        return Err(invalid(
-            "pipeline KV budget cannot cover max-active-sequences full contexts; increase --kv-cache-mb or reduce capacity",
-        ));
-    }
     let config = PipelineConfig {
         page_size,
-        max_pages: kv_plan.configured_pages,
+        max_pages: kv_plan.full_capacity_pages,
         max_positions: request.driver_config.ctx_size,
         max_batch_tokens: request.scheduler_config.max_batch_tokens,
         session_capacity: request.scheduler_config.max_active_sequences,
@@ -790,10 +830,66 @@ fn pipeline_capacity(
         max_ack_polls: 8,
     };
     config.validate()?;
+    if config.physical_pages(request.backend == ModelExecutionBackend::Cuda)?
+        != kv_plan.configured_pages
+    {
+        return Err(invalid("pipeline factory physical capacity mismatch"));
+    }
+    let per_device = pipeline_kv_bytes_by_device(spec, options, request.backend, config, plans)?;
+    let total = per_device.values().try_fold(0u64, |sum, &bytes| {
+        sum.checked_add(bytes)
+            .ok_or_else(|| invalid("pipeline placed KV byte overflow"))
+    })?;
+    if Some(total) != kv_plan.configured_bytes {
+        return Err(invalid("pipeline placed KV bytes differ from admission"));
+    }
     Ok((config, kv_plan))
 }
 
-pub(super) fn build(request: ModelBuildRequest) -> Result<BoxedSessionInferenceEngine> {
+/// Sum KV owners sharing a card before comparing the global physical KV budget.
+/// EP-only owners hold no KV; their separate expert accounting is unchanged.
+fn pipeline_kv_bytes_by_device(
+    spec: &DecoderModelSpec,
+    options: &PipelineBuildOptions,
+    backend: ModelExecutionBackend,
+    config: PipelineConfig,
+    plans: &[LayerSegmentPlan],
+) -> Result<std::collections::BTreeMap<usize, u64>> {
+    let tp = options.parallelism.tensor_parallel;
+    let cuda = backend == ModelExecutionBackend::Cuda;
+    let mut totals = std::collections::BTreeMap::<usize, u64>::new();
+    for (stage, plan) in plans.iter().enumerate() {
+        let Attention::Gqa(attention) = spec.layers()[plan.layers().start].attention() else {
+            return Err(invalid("pipeline requires standard GQA attention"));
+        };
+        let description = crate::parallel::pipeline::PipelineStageDescription {
+            plan: plan.clone(),
+            config,
+            physical_pages: config.physical_pages(cuda)?,
+            hidden: spec.hidden_size(),
+            vocabulary: spec.vocab_size(),
+            kv_heads: attention.num_kv_heads() / tp,
+            head_dim: attention.head_dim(),
+            expert_group: None,
+        };
+        description.validate()?;
+        let bytes = description.physical_bytes()?;
+        for rank in 0..tp {
+            let device = if cuda {
+                options.device(stage * tp + rank)
+            } else {
+                0
+            };
+            let total = totals.entry(device).or_default();
+            *total = total
+                .checked_add(bytes)
+                .ok_or_else(|| invalid("pipeline same-card KV byte overflow"))?;
+        }
+    }
+    Ok(totals)
+}
+
+pub(super) fn build(request: ResolvedModelRequest) -> Result<BoxedSessionInferenceEngine> {
     let options = request
         .pipeline
         .as_ref()
@@ -878,6 +974,7 @@ pub(super) fn build(request: ModelBuildRequest) -> Result<BoxedSessionInferenceE
                             global: rank,
                         },
                         plan,
+                        physical_pages: kv_plan.configured_pages,
                         config,
                         program_spec: Vec::new(),
                     }
@@ -900,7 +997,9 @@ pub(super) fn build(request: ModelBuildRequest) -> Result<BoxedSessionInferenceE
                 boots,
                 options.process_owner_config(),
             )?;
-            PipelineParallelExecutor::new_with_transport(topology, plans, config, transport)?
+            PipelineParallelExecutor::new_with_external_expert_transport(
+                topology, plans, config, transport,
+            )?
         }
         #[cfg(not(unix))]
         PipelineRankBackend::Process => {
@@ -925,7 +1024,7 @@ pub(super) fn build(request: ModelBuildRequest) -> Result<BoxedSessionInferenceE
 /// binary tensor byte counts. The transport still validates actual frames.
 #[cfg(unix)]
 fn validate_process_frames(
-    request: &ModelBuildRequest,
+    request: &ResolvedModelRequest,
     config: PipelineConfig,
     groups: &[Option<ExpertGroup>],
 ) -> Result<()> {
@@ -968,7 +1067,7 @@ fn validate_process_frames(
 
 #[cfg(unix)]
 fn process_boots(
-    request: &ModelBuildRequest,
+    request: &ResolvedModelRequest,
     plans: &[LayerSegmentPlan],
     config: PipelineConfig,
     groups: &[Option<ExpertGroup>],
@@ -1014,6 +1113,7 @@ fn process_boots(
                         }
                     }
                     Ok(ExpertPlacementFrame {
+                        source_scope: ferrule_common::topology::ExpertSourceScope::ExternalStage,
                         source: group.source_rank.get(),
                         members: group.members.iter().map(|rank| rank.get()).collect(),
                         entries,
@@ -1040,7 +1140,7 @@ fn process_boots(
                     DecoderPrecision::Bf16Compatibility
                 },
                 device: device(stage),
-                kv: KvConfigFrame::encode(config),
+                kv: KvConfigFrame::encode_for_device(config, device(stage))?,
                 experts,
             };
             boot.stage_boot()?;
@@ -1078,6 +1178,85 @@ mod tests {
                 ..Default::default()
             },
             ..Default::default()
+        }
+    }
+
+    #[test]
+    fn pipeline_capacity_separates_logical_physical_and_placed_bytes_without_cuda() {
+        let fixture = TensorCheckpointFixture::new(4, false);
+        let checkpoint = Checkpoint::load(&fixture.request(1, 2, 4096)).unwrap();
+        let spec = checkpoint.resources().spec();
+        for (backend, ep, tp) in [
+            (ModelExecutionBackend::Cpu, 1, 1),
+            (ModelExecutionBackend::Cpu, 2, 1),
+            (ModelExecutionBackend::Cuda, 1, 1),
+            (ModelExecutionBackend::Cuda, 1, 2),
+            (ModelExecutionBackend::Cuda, 1, 4),
+        ] {
+            for pp in [1, 2] {
+                let mut request = fixture.request(pp, tp, 4096);
+                request.backend = backend;
+                request.driver_config.ctx_size = 2;
+                request.scheduler_config.max_batch_tokens = 2;
+                request.scheduler_config.prefill_chunk_size = 2;
+                request
+                    .pipeline
+                    .as_mut()
+                    .unwrap()
+                    .parallelism
+                    .expert_parallel = ep;
+                // Checkpoint metadata and pure budget planning need no CUDA feature/device.
+                let plans = segment_plans(2, pp).unwrap();
+                let options = request.pipeline.as_ref().unwrap().clone();
+                let (config, plan) =
+                    pipeline_capacity(&request, &options, spec, 2, &plans).unwrap();
+                let cuda = backend == ModelExecutionBackend::Cuda;
+                assert_eq!((config.max_pages, plan.full_capacity_pages), (1, 1));
+                assert_eq!(plan.configured_pages, if cuda { 2 } else { 1 });
+                let bytes = if cuda {
+                    512
+                } else if ep > 1 {
+                    256
+                } else {
+                    128
+                };
+                assert_eq!(plan.configured_bytes, Some(bytes));
+                request.kv_cache_bytes = Some(bytes);
+                assert_eq!(
+                    pipeline_capacity(&request, &options, spec, 2, &plans)
+                        .unwrap()
+                        .1,
+                    plan
+                );
+                request.kv_cache_bytes = Some(bytes - 1);
+                assert!(pipeline_capacity(&request, &options, spec, 2, &plans).is_err());
+                let mut placement = options.clone();
+                placement.devices = Some(vec![3; pp * tp]);
+                let totals =
+                    pipeline_kv_bytes_by_device(spec, &placement, backend, config, &plans).unwrap();
+                assert_eq!(totals.len(), 1);
+                assert_eq!(totals[&if cuda { 3 } else { 0 }], bytes);
+                #[cfg(unix)]
+                if tp == 1 {
+                    // Transport changes neither capacity nor decoder boot meaning.
+                    request.kv_cache_bytes = Some(bytes);
+                    for rank_backend in [PipelineRankBackend::Thread, PipelineRankBackend::Process]
+                    {
+                        request.pipeline.as_mut().unwrap().rank_backend = rank_backend;
+                        let boots =
+                            process_boots(&request, &plans, config, &vec![None; pp]).unwrap();
+                        for (_, boot) in boots {
+                            assert_eq!(boot.version, DECODER_WIRE_VERSION);
+                            assert_eq!(boot.kv.max_pages, 1);
+                            assert_eq!(boot.kv.physical_pages, plan.configured_pages);
+                            assert_eq!(
+                                boot.stage_boot().unwrap().physical_pages,
+                                plan.configured_pages
+                            );
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -1152,9 +1331,9 @@ mod tests {
             file.extend_from_slice(payload);
             std::fs::write(path.join("model.safetensors"), file).unwrap();
         }
-        fn request(&self, pp: usize, tp: usize, limit: u64) -> ModelBuildRequest {
+        fn request(&self, pp: usize, tp: usize, limit: u64) -> ResolvedModelRequest {
             let config = AutoConfig::from_pretrained(&self.0).unwrap();
-            ModelBuildRequest {
+            ResolvedModelRequest {
                 family: ModelFamily::Qwen3,
                 backend: ModelExecutionBackend::Cuda,
                 model_path: self.0.clone(),
@@ -1173,6 +1352,7 @@ mod tests {
                 // Must not widen the dense TP materializer's read limit.
                 expert_reader_max_tensor_bytes: 1 << 20,
                 expert_memory_policy: Default::default(),
+                family_options: ResolvedFamilyOptions::Generic,
                 moe_hotset_experts: 0,
                 kv_cache_bytes: None,
                 scheduler_config: crate::ResidentSchedulerConfig {
@@ -1558,6 +1738,64 @@ mod tests {
                 "{case:?}"
             );
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pipeline_process_boot_preserves_external_stage_identity_and_worker_only_members() {
+        use ferrule_common::topology::ExpertSourceScope;
+        let fixture = TensorCheckpointFixture::new(4, false);
+        let mut request = fixture.request(2, 1, 4096);
+        let (_, checkpoint) = Qwen3DenseAdapter::bind_hf_metadata(&fixture.0).unwrap();
+        let resources = checkpoint.into_resources();
+        request.backend = ModelExecutionBackend::Cpu;
+        request.family = ModelFamily::QwenMoe;
+        request.model_info.num_experts = 2;
+        let mut process = options(2, 2);
+        process.rank_backend = PipelineRankBackend::Process;
+        process.rank_timeout = Duration::from_millis(7250);
+        request.pipeline = Some(process.clone());
+        let plans = segment_plans(2, 2).unwrap();
+        let (config, _) =
+            pipeline_capacity(&request, &process, resources.spec(), 2, &plans).unwrap();
+        // Boot projection uses only placement metadata, never expert weights.
+        let mut groups = (0..2)
+            .map(|stage| {
+                let members = [3 + stage * 2, 2 + stage * 2].map(ParallelRankId::new);
+                Some(ExpertGroup {
+                    source_rank: ParallelRankId::new(stage),
+                    members: members.to_vec(),
+                    layers: stage as usize..stage as usize + 1,
+                    placement: ExpertPlacement::new([
+                        (stage as usize, 0, members[0]),
+                        (stage as usize, 1, members[1]),
+                    ])
+                    .unwrap(),
+                    limits: ExpertDispatchLimits {
+                        max_tokens: 8,
+                        max_bytes: 256,
+                    },
+                })
+            })
+            .collect::<Vec<_>>();
+        let boots = process_boots(&request, &plans, config, &groups).unwrap();
+        for (identity, boot) in boots {
+            let frame = boot.experts.as_ref().unwrap();
+            assert_eq!(frame.source_scope, ExpertSourceScope::ExternalStage);
+            assert_eq!(frame.source, boot.rank);
+            assert_eq!(frame.source, identity.rank.get());
+            assert_eq!(frame.members, [3 + boot.rank * 2, 2 + boot.rank * 2]);
+            assert!(!frame.members.contains(&frame.source));
+            assert_eq!(frame.timeout_ms, 7250);
+            assert_eq!(boot.version, DECODER_WIRE_VERSION);
+            assert_eq!(
+                serde_json::from_slice::<DecoderBoot>(&serde_json::to_vec(&boot).unwrap()).unwrap(),
+                boot
+            );
+        }
+        let first = groups[0].as_mut().unwrap();
+        first.source_rank = first.members[0];
+        assert!(process_boots(&request, &plans, config, &groups).is_err());
     }
 
     #[cfg(unix)]

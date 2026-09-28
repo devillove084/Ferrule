@@ -46,6 +46,11 @@ pub struct GenericDecoderOptions {
     max_parameter_bytes: u64,
     active_layers: Option<usize>,
     precision: ExecutionPrecisionPolicy,
+    hybrid_numeric_fp8: Option<(
+        crate::transformer::ExpertCacheLimits,
+        usize,
+        crate::transformer::NumericFp8Precision,
+    )>,
 }
 impl GenericDecoderOptions {
     #[allow(clippy::too_many_arguments)]
@@ -67,7 +72,72 @@ impl GenericDecoderOptions {
             max_parameter_bytes,
             active_layers: None,
             precision,
+            hybrid_numeric_fp8: None,
         }
+    }
+    /// Explicit hybrid numeric FP8 execution using the legacy BF16-RNE
+    /// arithmetic profile. The newer F32 profile is opt-in below.
+    pub fn with_hybrid_cuda_numeric_fp8(
+        self,
+        limits: crate::transformer::ExpertCacheLimits,
+        scratch_bytes: usize,
+    ) -> Result<Self> {
+        self.with_hybrid_cuda_numeric_fp8_precision(
+            limits,
+            scratch_bytes,
+            crate::transformer::NumericFp8Precision::Bf16RneF32Accumulate,
+        )
+    }
+
+    /// Selects immutable arithmetic for this prepared CUDA image. Activations,
+    /// state, KV and outputs stay F32. `scratch_bytes` is INCLUDED in
+    /// `limits.max_bytes`, not an additional hidden budget. In F32 mode it
+    /// bounds four-byte decoded weight tiles; input/output buffers are charged
+    /// separately as operation scratch. Resource admission validates the exact
+    /// selected backend plan without expanding checkpoint weights.
+    ///
+    /// This does not create a CPU fallback; CPU construction rejects the profile.
+    pub fn with_hybrid_cuda_numeric_fp8_precision(
+        mut self,
+        limits: crate::transformer::ExpertCacheLimits,
+        scratch_bytes: usize,
+        precision: crate::transformer::NumericFp8Precision,
+    ) -> Result<Self> {
+        if self.precision != ExecutionPrecisionPolicy::f32()
+            || limits.max_experts == 0
+            || scratch_bytes == 0
+            || limits.max_bytes <= scratch_bytes
+        {
+            return Err(Error::ModelSource {
+                source: Box::new(crate::transformer::UnsupportedOperator::new(
+                    "hybrid_cuda_numeric_fp8_profile",
+                    "requires F32 execution and nonzero bounded cache with room beyond numeric scratch",
+                )),
+            });
+        }
+        self.hybrid_numeric_fp8 = Some((limits, scratch_bytes, precision));
+        Ok(self)
+    }
+    pub fn hybrid_cuda_numeric_fp8(
+        &self,
+    ) -> Option<(crate::transformer::ExpertCacheLimits, usize)> {
+        self.hybrid_numeric_fp8
+            .map(|(limits, scratch, _)| (limits, scratch))
+    }
+    pub fn hybrid_cuda_numeric_fp8_precision(
+        &self,
+    ) -> Option<crate::transformer::NumericFp8Precision> {
+        self.hybrid_numeric_fp8.map(|(_, _, precision)| precision)
+    }
+    #[cfg(feature = "cuda")]
+    pub(crate) fn hybrid_cuda_numeric_fp8_config(
+        &self,
+    ) -> Option<(
+        crate::transformer::ExpertCacheLimits,
+        usize,
+        crate::transformer::NumericFp8Precision,
+    )> {
+        self.hybrid_numeric_fp8
     }
     /// Restricts execution to a non-empty prefix of the described decoder.
     pub fn with_active_layers(mut self, active_layers: usize) -> Result<Self> {
@@ -212,9 +282,14 @@ pub struct GenericDecoderObservabilitySnapshot {
     pub aborts: u64,
     pub shutdown: bool,
 }
-struct ProposalSlot<C> {
+#[derive(Clone, Copy)]
+struct ProposalOwner {
     transaction: ExecutionTransactionId,
     topology_id: crate::execution::SequenceTopologyId,
+    state_binding: crate::execution::SequenceStepBinding,
+}
+struct ProposalSlot<C> {
+    owner: ProposalOwner,
     continuation: C,
     wait: Option<DecoderContinuationWait>,
     leases: Vec<ResidencyLeaseSet>,
@@ -310,6 +385,14 @@ where
         completion_reactors: Vec<ModelCompletionReactor>,
     ) -> Result<Self> {
         options.validate(&resources)?;
+        if options.hybrid_numeric_fp8.is_some() {
+            return Err(Error::ModelSource {
+                source: Box::new(crate::transformer::UnsupportedOperator::new(
+                    "standard_cpu_profile",
+                    "hybrid numeric FP8 requires the CUDA hybrid constructor; CPU fallback is forbidden",
+                )),
+            });
+        }
         let resources = Arc::new(resources);
         let materializer = Arc::new(StateDictMaterializer::new(options.max_parameter_bytes)?);
         let module = CpuGqaMoeModule::prepare_prefix(
@@ -373,11 +456,13 @@ impl GenericDecoderRunner<HybridCpuDecoder> {
         options: GenericDecoderOptions,
     ) -> Result<Self> {
         options.validate(&resources)?;
-        if options.precision != ExecutionPrecisionPolicy::f32() {
+        if options.hybrid_numeric_fp8.is_some()
+            || options.precision != ExecutionPrecisionPolicy::f32()
+        {
             return Err(Error::ModelSource {
                 source: Box::new(crate::transformer::UnsupportedOperator::new(
                     "hybrid_cpu_profile",
-                    "hybrid CPU supports F32 execution only",
+                    "hybrid CPU supports F32 execution only, without a CUDA numeric profile; CPU fallback is forbidden",
                 )),
             });
         }
@@ -566,13 +651,13 @@ where
         if let Some((continuation, slot)) = self
             .proposal_continuations
             .iter()
-            .find(|(_, slot)| slot.topology_id == state.topology_id())
+            .find(|(_, slot)| slot.owner.topology_id == state.topology_id())
         {
             return Err(runner_error(format!(
                 "cannot {operation}: decoder sequence topology {} is owned by proposal continuation {} in transaction {}",
                 state.topology_id().get(),
                 continuation.get(),
-                slot.transaction.get()
+                slot.owner.transaction.get()
             )));
         }
         Ok(())
@@ -638,8 +723,7 @@ where
     }
     fn insert_proposal_slot(
         &mut self,
-        transaction: ExecutionTransactionId,
-        topology_id: crate::execution::SequenceTopologyId,
+        owner: ProposalOwner,
         id: ContinuationId,
         continuation: D::ProposalContinuation,
         wait: Option<DecoderWait>,
@@ -654,8 +738,7 @@ where
                 let replaced = self.proposal_continuations.insert(
                     id,
                     ProposalSlot {
-                        transaction,
-                        topology_id,
+                        owner,
                         continuation,
                         wait: None,
                         leases,
@@ -668,7 +751,7 @@ where
         };
         let pending = match wait
             .as_ref()
-            .map(|wait| Self::proposal_pending(transaction, wait))
+            .map(|wait| Self::proposal_pending(owner.transaction, wait))
             .transpose()
         {
             Ok(pending) => pending,
@@ -676,8 +759,7 @@ where
                 let replaced = self.proposal_continuations.insert(
                     id,
                     ProposalSlot {
-                        transaction,
-                        topology_id,
+                        owner,
                         continuation,
                         wait: None,
                         leases,
@@ -691,8 +773,7 @@ where
         let replaced = self.proposal_continuations.insert(
             id,
             ProposalSlot {
-                transaction,
-                topology_id,
+                owner,
                 continuation,
                 wait,
                 leases,
@@ -728,7 +809,7 @@ where
             let Some(id) = self
                 .proposal_continuations
                 .iter()
-                .find_map(|(id, slot)| (slot.transaction == transaction).then_some(*id))
+                .find_map(|(id, slot)| (slot.owner.transaction == transaction).then_some(*id))
             else {
                 return Ok(TransactionEndProgress::Complete);
             };
@@ -736,12 +817,12 @@ where
                 .proposal_continuations
                 .remove(&id)
                 .expect("proposal continuation was selected above");
-            let owns_default_state = self.default_state.topology_id() == slot.topology_id;
+            let owns_default_state = self.default_state.topology_id() == slot.owner.topology_id;
             let explicit_state_index = states
                 .iter()
-                .position(|state| state.topology_id() == slot.topology_id);
+                .position(|state| state.topology_id() == slot.owner.topology_id);
             if !owns_default_state && explicit_state_index.is_none() {
-                let topology_id = slot.topology_id;
+                let topology_id = slot.owner.topology_id;
                 self.proposal_continuations.insert(id, slot);
                 return Err(runner_error(format!(
                     "proposal continuation {} transaction {} lost sequence topology {}",
@@ -1019,7 +1100,7 @@ where
                 if self
                     .proposal_continuations
                     .values()
-                    .any(|slot| slot.transaction == transaction)
+                    .any(|slot| slot.owner.transaction == transaction)
                 {
                     return Err(runner_error(format!(
                         "cannot publish decoder transaction {} with active proposal continuations",
@@ -1138,6 +1219,9 @@ where
     D: DecoderComposition,
 {
     type ObservabilitySnapshot = D::Snapshot;
+    fn shutdown_physical(&mut self) -> Result<()> {
+        GenericDecoderRunner::shutdown(self)
+    }
     fn observability_snapshot(&self) -> Self::ObservabilitySnapshot {
         let mut core = self.observability.clone();
         core.active_transactions = self.transactions.len();
@@ -1155,8 +1239,46 @@ where
     fn native_proposal_source(&self) -> Result<Option<NativeProposalSource>> {
         self.proposal.source()
     }
+    fn begin_native_proposal_for(
+        &mut self,
+        state: &mut Self::SequenceState,
+        transaction: ExecutionTransactionId,
+        anchor_token_id: u32,
+    ) -> Result<NativeProposalProgress> {
+        self.begin_native_proposal_impl(Some(state), transaction, anchor_token_id)
+    }
+    fn resume_native_proposal_for(
+        &mut self,
+        state: &mut Self::SequenceState,
+        transaction: ExecutionTransactionId,
+        continuation: ContinuationId,
+        leases: ResidencyLeaseSet,
+    ) -> Result<NativeProposalProgress> {
+        self.resume_native_proposal_impl(Some(state), transaction, continuation, leases)
+    }
     fn begin_native_proposal(
         &mut self,
+        transaction: ExecutionTransactionId,
+        anchor_token_id: u32,
+    ) -> Result<NativeProposalProgress> {
+        self.begin_native_proposal_impl(None, transaction, anchor_token_id)
+    }
+    fn resume_native_proposal(
+        &mut self,
+        transaction: ExecutionTransactionId,
+        continuation: ContinuationId,
+        leases: ResidencyLeaseSet,
+    ) -> Result<NativeProposalProgress> {
+        self.resume_native_proposal_impl(None, transaction, continuation, leases)
+    }
+}
+impl<D> GenericDecoderRunner<D>
+where
+    D: DecoderComposition,
+{
+    fn begin_native_proposal_impl(
+        &mut self,
+        state: Option<&mut D::SequenceState>,
         transaction: ExecutionTransactionId,
         anchor_token_id: u32,
     ) -> Result<NativeProposalProgress> {
@@ -1168,18 +1290,13 @@ where
             ))
         })?;
         source.validate()?;
-        self.ensure_sequence_available(&self.default_state, "begin a native proposal")?;
-        let topology_id = self.default_state.topology_id();
-        if self
-            .proposal_continuations
-            .values()
-            .any(|slot| slot.topology_id == topology_id)
-        {
-            return Err(runner_error(format!(
-                "decoder sequence topology {} already owns a native proposal continuation",
-                topology_id.get()
-            )));
-        }
+        let source_state = state.as_deref().unwrap_or(&self.default_state);
+        self.ensure_sequence_available(source_state, "begin a native proposal")?;
+        let owner = ProposalOwner {
+            transaction,
+            topology_id: source_state.topology_id(),
+            state_binding: source_state.core().begin_step()?,
+        };
         let continuation_id = self.control.continuations().allocate()?;
         let mut context = DecoderTransactionContext::with_services(
             transaction,
@@ -1189,27 +1306,16 @@ where
             Some(continuation_id),
             self.resolver.clone(),
         );
-        let mut kv = self
-            .backend
-            .proposal_view(transaction, &mut self.default_state)?;
-        let progress = self.proposal.start(
-            &mut context,
-            &mut self.default_state,
-            &mut kv,
-            anchor_token_id,
-        );
+        let state = state.unwrap_or(&mut self.default_state);
+        let mut kv = self.backend.proposal_view(transaction, state)?;
+        let progress = self
+            .proposal
+            .start(&mut context, state, &mut kv, anchor_token_id);
         let leases = context.into_leases();
         match progress {
             Ok(DecoderProposalProgress::Waiting { continuation, wait }) => {
                 let pending = self
-                    .insert_proposal_slot(
-                        transaction,
-                        topology_id,
-                        continuation_id,
-                        continuation,
-                        Some(wait),
-                        leases,
-                    )?
+                    .insert_proposal_slot(owner, continuation_id, continuation, Some(wait), leases)?
                     .expect("waiting proposal has dependency progress");
                 self.observability.proposal_waits =
                     self.observability.proposal_waits.saturating_add(1);
@@ -1224,14 +1330,7 @@ where
                 continuation,
                 error,
             }) => {
-                self.insert_proposal_slot(
-                    transaction,
-                    topology_id,
-                    continuation_id,
-                    continuation,
-                    None,
-                    leases,
-                )?;
+                self.insert_proposal_slot(owner, continuation_id, continuation, None, leases)?;
                 Err(error)
             }
             Ok(DecoderProposalProgress::FailedQuiescent(error)) | Err(error) => {
@@ -1240,8 +1339,9 @@ where
             }
         }
     }
-    fn resume_native_proposal(
+    fn resume_native_proposal_impl(
         &mut self,
+        state: Option<&mut D::SequenceState>,
         transaction: ExecutionTransactionId,
         continuation_id: ContinuationId,
         leases: ResidencyLeaseSet,
@@ -1250,39 +1350,47 @@ where
         let source = self.proposal.source()?.ok_or_else(|| {
             runner_error("target-only decoder has no native proposal continuation")
         })?;
-        let mut slot = self
+        let state = state.unwrap_or(&mut self.default_state);
+        let slot = self
             .proposal_continuations
-            .remove(&continuation_id)
+            .get(&continuation_id)
             .ok_or_else(|| {
                 runner_error(format!(
                     "decoder has no native proposal continuation {}",
                     continuation_id.get()
                 ))
             })?;
-        if slot.transaction != transaction || slot.topology_id != self.default_state.topology_id() {
-            let owner_transaction = slot.transaction;
-            let owner_topology = slot.topology_id;
-            self.proposal_continuations.insert(continuation_id, slot);
+        if slot.owner.transaction != transaction || slot.owner.topology_id != state.topology_id() {
             return Err(runner_error(format!(
                 "proposal continuation {} belongs to transaction {}/topology {}, not {}/{}",
                 continuation_id.get(),
-                owner_transaction.get(),
-                owner_topology.get(),
+                slot.owner.transaction.get(),
+                slot.owner.topology_id.get(),
                 transaction.get(),
-                self.default_state.topology_id().get()
+                state.topology_id().get()
             )));
         }
-        let Some(wait) = slot.wait.as_ref() else {
-            self.proposal_continuations.insert(continuation_id, slot);
+        if slot.owner.state_binding != state.core().begin_step()? {
             return Err(runner_error(format!(
-                "proposal continuation {} failed active and must be cancelled",
+                "proposal continuation {} has a stale sequence state binding",
                 continuation_id.get()
             )));
-        };
-        if let Err(error) = wait.validate_resume_leases(&leases) {
-            self.proposal_continuations.insert(continuation_id, slot);
-            return Err(error);
         }
+        // Only this proposal's ownership is exempt from the availability gate;
+        // packed transaction ownership and all other state operations stay guarded.
+        self.transactions
+            .ensure_sequence_available(state, "resume a native proposal")?;
+        let wait = slot.wait.as_ref().ok_or_else(|| {
+            runner_error(format!(
+                "proposal continuation {} failed active and must be cancelled",
+                continuation_id.get()
+            ))
+        })?;
+        wait.validate_resume_leases(&leases)?;
+        let mut slot = self
+            .proposal_continuations
+            .remove(&continuation_id)
+            .expect("proposal owner and resume leases validated above");
         slot.leases.push(leases);
         let mut context = DecoderTransactionContext::with_services(
             transaction,
@@ -1292,16 +1400,11 @@ where
             Some(continuation_id),
             self.resolver.clone(),
         );
-        let progress = match self
-            .backend
-            .proposal_view(transaction, &mut self.default_state)
-        {
-            Ok(mut kv) => self.proposal.resume(
-                &mut context,
-                &mut self.default_state,
-                &mut kv,
-                &mut slot.continuation,
-            ),
+        let progress = match self.backend.proposal_view(transaction, state) {
+            Ok(mut kv) => {
+                self.proposal
+                    .resume(&mut context, state, &mut kv, &mut slot.continuation)
+            }
             Err(error) => {
                 slot.leases = context.into_leases();
                 self.proposal_continuations.insert(continuation_id, slot);

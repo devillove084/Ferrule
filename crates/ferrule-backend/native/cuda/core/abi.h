@@ -116,6 +116,14 @@ typedef enum FerruleCoreDataKind {
   FERRULE_CORE_DATA_SILU_GATE = 15,
 } FerruleCoreDataKind;
 
+/* SIGMOID_GATE/SILU_GATE only: flags=0 means elementwise. Row broadcast
+ * requires count=rows*width and gate input1 has exactly rows F32 logits.
+ * The typed caller validates buffer lengths/owners and disjoint write ranges.
+ */
+typedef enum FerruleCoreGateFlags {
+  FERRULE_CORE_GATE_ROW_BROADCAST = 1,
+} FerruleCoreGateFlags;
+
 typedef struct FerruleCoreDataArgs {
   uint32_t kind;
   uint32_t count;

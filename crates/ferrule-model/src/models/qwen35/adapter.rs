@@ -82,6 +82,12 @@ impl Qwen35Adapter {
                 "page_size and max_parameter_bytes must be non-zero",
             ));
         }
+        let config_value =
+            serde_json::from_str(&std::fs::read_to_string(model_dir.join("config.json"))?)
+                .map_err(|error| model_error(format!("config: {error}")))?;
+        if !Qwen35Config::from_value(&config_value)?.supports_execution() {
+            return Err(super::Qwen35Unsupported::Execution.into());
+        }
         let (metadata, resources) = Self::bind_hf_metadata(model_dir)?;
         resources
             .validate_parameter_limits(options.max_parameter_bytes, options.max_parameter_bytes)?;

@@ -15,6 +15,11 @@ use crate::scheduling::PhysicalResourceError;
 #[derive(Debug, Snafu)]
 pub enum Error {
     #[snafu(transparent)]
+    Admission {
+        source: crate::engine::RuntimeAdmissionError,
+    },
+
+    #[snafu(transparent)]
     Backend { source: ferrule_common::Error },
 
     #[snafu(transparent)]

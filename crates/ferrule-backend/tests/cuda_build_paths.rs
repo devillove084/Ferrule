@@ -17,6 +17,8 @@ fn cutlass_native_abi_ids_and_unavailable_f32_manifest() {
 #include "cutlass/manifest.cuh"
 #include <cassert>
 static int f32_available = 1;
+static int bf16_available = 1;
+extern "C" int32_t ferrule_cutlass_bf16_available(void) { return bf16_available; }
 extern "C" int32_t ferrule_cutlass_f32_available(void) { return f32_available; }
 static_assert(sizeof(FerruleCutlassProviderManifest) == 8);
 static_assert(alignof(FerruleCutlassProviderManifest) == 8);
@@ -37,6 +39,7 @@ static_assert(alignof(FerruleCutlassProviderManifest) == 8);
         ("PROPOSAL_HEAD", CutlassKernelId::ProposalHead),
         ("FP8_PROJECTION", CutlassKernelId::Fp8Projection),
         ("F32_GEMM", CutlassKernelId::F32Gemm),
+        ("BF16_GEMM", CutlassKernelId::Bf16Gemm),
     ] {
         code.push_str(&format!(
             "static_assert(FERRULE_CUTLASS_KERNEL_{name} == {}u);\nstatic_assert(FERRULE_CUTLASS_KERNEL_BIT(FERRULE_CUTLASS_KERNEL_{name}) == {}ull);\n",
@@ -46,11 +49,15 @@ static_assert(alignof(FerruleCutlassProviderManifest) == 8);
     code.push_str(
         r#"
 int main() {
-  assert(ferrule_cutlass_provider_manifest().kernel_mask == 0x586ull);
+  assert(ferrule_cutlass_provider_manifest().kernel_mask == 0xd86ull);
   // Model a build with no compiled F32 TensorOp. Other native bits must stay
   // identical; neither Rust nor the native manifest may infer F32 from BF16.
   f32_available = 0;
+  assert(ferrule_cutlass_provider_manifest().kernel_mask == 0x986ull);
+  bf16_available = 0;
   assert(ferrule_cutlass_provider_manifest().kernel_mask == 0x186ull);
+  f32_available = 1;
+  assert(ferrule_cutlass_provider_manifest().kernel_mask == 0x586ull);
 }
 "#,
     );

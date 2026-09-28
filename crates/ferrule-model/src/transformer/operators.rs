@@ -15,7 +15,7 @@ use ferrule_backend::cpu::{
 #[cfg(feature = "cuda")]
 use ferrule_backend::cuda::operators::linear::{CudaBf16Buffer, CudaF32Buffer, CudaOperators};
 use ferrule_common::execution::ExecutionTransactionId;
-use ferrule_common::{Error, Result};
+use ferrule_common::{Error, ParallelRankId, Result};
 
 use crate::checkpoint::LinearWeightFormat;
 use crate::execution::ExecutionPrecisionPolicy;
@@ -713,7 +713,279 @@ pub enum ExpertAvailability {
     Unsupported(String),
 }
 
+/// Payload-free routed expert contract. Bound parameters carry canonical IDs,
+/// global shapes, roles, storage encoding and exact catalog source generations
+/// (the weight/scale file snapshots). No decoded weights or host cache handles.
+#[derive(Debug, Clone)]
+pub struct ExpertMetadata {
+    image: Arc<ExpertMetadataImage>,
+    activation_limit: Option<f32>,
+}
+
+#[derive(Debug)]
+struct ExpertMetadataImage {
+    parameters: [super::BoundParameter; 3],
+    device_bytes: usize,
+    numeric_sources: [Option<crate::checkpoint::NumericFp8Source>; 3],
+    sources: MetadataSourceSet,
+}
+
+/// Immutable snapshots, not cached freshness. Equality includes the original
+/// path, canonical target and both file identities, including timestamps.
+#[derive(Debug, Clone)]
+pub(crate) struct MetadataSourceSet(Arc<[crate::checkpoint::CheckpointSourceFileIdentity]>);
+
+impl MetadataSourceSet {
+    pub(crate) fn new<'a>(parameters: impl IntoIterator<Item = &'a super::BoundParameter>) -> Self {
+        let sources = parameters
+            .into_iter()
+            .flat_map(|parameter| {
+                std::iter::once(parameter.weight().source_identity())
+                    .chain(parameter.scale().map(|scale| scale.source_identity()))
+            })
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        Self(sources.into_iter().collect())
+    }
+
+    #[cfg(feature = "cuda")]
+    pub(crate) fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub(crate) fn validate(&self) -> Result<()> {
+        self.validate_counted(|| {})
+    }
+
+    pub(crate) fn validate_counted(&self, mut checked: impl FnMut()) -> Result<()> {
+        for source in self.0.iter() {
+            checked();
+            if !source.is_current() {
+                return Err(model_error("stale expert metadata source identity"));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Borrowed catalog description for providers backed by immutable model images.
+/// The CUDA owner resolves it against its prepared plans without reconstruction
+/// or payload I/O. Custom providers can keep using `expert_metadata` or `expert`.
+pub struct ExpertMetadataBindings<'a> {
+    pub parameters: &'a [super::BoundParameter; 3],
+    pub activation_limit: Option<f32>,
+}
+
+impl ExpertMetadata {
+    pub fn new(
+        layer: usize,
+        expert: usize,
+        parameters: [super::BoundParameter; 3],
+        activation_limit: Option<f32>,
+    ) -> Result<Self> {
+        use crate::checkpoint::CheckpointDType;
+        use crate::nn::{ParameterResidency, StorageEncoding};
+        use crate::support::TensorRole;
+        let roles = [
+            TensorRole::RoutedExpertGate,
+            TensorRole::RoutedExpertUp,
+            TensorRole::RoutedExpertDown,
+        ];
+        let mut device_bytes = 0usize;
+        let mut numeric_sources = [None, None, None];
+        for (index, (parameter, role)) in parameters.iter().zip(roles).enumerate() {
+            let shape = parameter.spec().shape();
+            if parameter.role() != &role
+                || parameter.residency() != &(ParameterResidency::Expert { layer, expert })
+                || parameter.id() != parameter.canonical_id()
+                || shape.len() != 2
+                || shape.contains(&0)
+                || parameter.weight().logical_shape() != shape
+            {
+                return Err(model_error(
+                    "expert metadata canonical identity/residency/role/shape mismatch",
+                ));
+            }
+            let bytes = if let Some(encoding) = parameter.numeric_fp8_encoding() {
+                let source = parameter.numeric_fp8_source(encoding)?;
+                if source.expert_count().is_some() || source.matrix_shape() != [shape[0], shape[1]]
+                {
+                    return Err(model_error("expert numeric metadata global shape mismatch"));
+                }
+                let bytes = usize::try_from(
+                    source
+                        .weight()
+                        .bytes
+                        .checked_add(source.scale().bytes)
+                        .ok_or_else(|| model_error("expert bytes overflow"))?,
+                )
+                .map_err(|_| model_error("expert bytes overflow"))?;
+                numeric_sources[index] = Some(source);
+                bytes
+            } else {
+                if !matches!(
+                    parameter.weight().slice().dtype,
+                    CheckpointDType::F32 | CheckpointDType::Bf16
+                ) || parameter.scale().is_some()
+                    || parameter.weight().encoding() != StorageEncoding::Dense
+                {
+                    return Err(model_error(
+                        "expert metadata requires dense F32/BF16 or paired numeric FP8",
+                    ));
+                }
+                shape[0]
+                    .checked_mul(shape[1])
+                    .and_then(|n| n.checked_mul(4))
+                    .ok_or_else(|| model_error("expert bytes overflow"))?
+            };
+            device_bytes = device_bytes
+                .checked_add(bytes)
+                .ok_or_else(|| model_error("expert bytes overflow"))?;
+        }
+        let [gate, up, down] = parameters.each_ref().map(|p| p.spec().shape());
+        if gate != up
+            || gate[0] != down[1]
+            || activation_limit.is_some_and(|limit| !limit.is_finite() || limit <= 0.0)
+        {
+            return Err(model_error(
+                "expert metadata SwiGLU shape/activation mismatch",
+            ));
+        }
+        let sources = MetadataSourceSet::new(&parameters);
+        let metadata = Self {
+            image: Arc::new(ExpertMetadataImage {
+                parameters,
+                device_bytes,
+                numeric_sources,
+                sources,
+            }),
+            activation_limit,
+        };
+        metadata.validate_sources()?;
+        Ok(metadata)
+    }
+
+    pub fn parameters(&self) -> &[super::BoundParameter; 3] {
+        &self.image.parameters
+    }
+
+    #[cfg(feature = "cuda")]
+    pub(crate) fn for_bindings(&self, bindings: ExpertMetadataBindings<'_>) -> Result<Self> {
+        if bindings
+            .activation_limit
+            .is_some_and(|limit| !limit.is_finite() || limit <= 0.0)
+        {
+            return Err(model_error("expert metadata activation mismatch"));
+        }
+        for (expected, actual) in self.parameters().iter().zip(bindings.parameters) {
+            if !expected.shares_storage_with(actual)
+                || expected.id() != actual.id()
+                || expected.canonical_id() != actual.canonical_id()
+                || expected.role() != actual.role()
+                || expected.residency() != actual.residency()
+                || expected.spec().shape() != actual.spec().shape()
+            {
+                return Err(model_error(
+                    "expert bindings differ from prepared image metadata",
+                ));
+            }
+        }
+        Ok(Self {
+            image: Arc::clone(&self.image),
+            activation_limit: bindings.activation_limit,
+        })
+    }
+
+    pub fn activation_limit(&self) -> Option<f32> {
+        self.activation_limit
+    }
+    pub fn expected_device_bytes(&self) -> usize {
+        self.image.device_bytes
+    }
+    pub fn input_width(&self) -> usize {
+        self.image.parameters[0].spec().shape()[1]
+    }
+    pub fn output_width(&self) -> usize {
+        self.image.parameters[2].spec().shape()[0]
+    }
+
+    /// Source identity is checked on every preflight, including resident hits.
+    pub fn validate_sources(&self) -> Result<()> {
+        self.image.sources.validate()
+    }
+
+    /// Verify that one materialized payload is exactly the planned expert.
+    pub fn validate_payload(&self, expert: &PreparedSwiGlu) -> Result<()> {
+        self.validate_sources()?;
+        if self.activation_limit != expert.activation_limit() {
+            return Err(model_error(
+                "expert payload activation differs from metadata",
+            ));
+        }
+        for (index, (expected, linear)) in self
+            .parameters()
+            .iter()
+            .zip([expert.gate(), expert.up(), expert.down()])
+            .enumerate()
+        {
+            let actual = linear.parameter().binding();
+            if !expected.shares_storage_with(actual)
+                || expected.id() != actual.id()
+                || expected.canonical_id() != actual.canonical_id()
+                || expected.role() != actual.role()
+                || expected.role() != linear.role()
+                || expected.residency() != actual.residency()
+                || expected.spec().shape() != linear.global_shape()
+                || linear.tensor_shard().is_some()
+                || linear.bias().is_some()
+            {
+                return Err(model_error(
+                    "expert payload does not match metadata identity/shape/role",
+                ));
+            }
+            match (expected.numeric_fp8_encoding(), linear.numeric_fp8()) {
+                (Some(_), Some(artifact)) => {
+                    let source = self.image.numeric_sources[index]
+                        .as_ref()
+                        .expect("validated numeric metadata");
+                    let read = artifact.provenance().weight_read();
+                    if artifact.provenance().source() != source
+                        || artifact.local_shape() != source.matrix_shape()
+                        || read.rows().start != 0
+                        || read.columns().start != 0
+                        || artifact.storage_bytes() != source.weight().bytes + source.scale().bytes
+                    {
+                        return Err(model_error(
+                            "expert payload paired source differs from metadata",
+                        ));
+                    }
+                }
+                (None, None) if linear.weight()?.execution.activation_quantization.is_none() => {}
+                _ => return Err(model_error("expert payload encoding differs from metadata")),
+            }
+        }
+        Ok(())
+    }
+}
+
 pub trait ExpertProvider {
+    /// Opt in to reusing an owner's immutable, generation-bound image plan.
+    /// This only borrows a catalog description; it does not check freshness.
+    fn expert_metadata_bindings(
+        &self,
+        _layer: usize,
+        _expert: usize,
+    ) -> Result<Option<ExpertMetadataBindings<'_>>> {
+        Ok(None)
+    }
+
+    /// Strict metadata-only preflight. `Some` commits to a ready expert with
+    /// exactly this identity; execution may skip `expert()` on a resident hit.
+    /// Return `None` to retain the legacy Waiting/Unsupported payload protocol.
+    /// This method must never materialize weights.
+    fn expert_metadata(&mut self, _layer: usize, _expert: usize) -> Result<Option<ExpertMetadata>> {
+        Ok(None)
+    }
     fn expert(&mut self, layer: usize, expert: usize) -> Result<ExpertAvailability>;
 }
 
@@ -774,6 +1046,15 @@ pub trait StandardDecoderOperators {
         Ok(OperatorProgress::Unsupported(UnsupportedOperator::new(
             "sigmoid_gate",
             "backend has no output gate",
+        )))
+    }
+
+    /// Token-wise scalar gate: input [rows, hidden], gate [rows, 1].
+    /// Backends must opt in; no device download or implicit host fallback.
+    fn shared_expert_gate(&mut self, _input: Rows, _gate: &Rows) -> Result<OperatorProgress<Rows>> {
+        Ok(OperatorProgress::Unsupported(UnsupportedOperator::new(
+            "shared_expert_gate",
+            "backend has no broadcast shared-expert sigmoid gate",
         )))
     }
 
@@ -848,6 +1129,27 @@ pub trait StandardDecoderOperators {
 /// transaction lifecycle, retry or partial-publication state in this trait.
 pub trait ExpertResultExecutor {
     fn execute(&mut self, bucket: ExpertTokenBucket) -> Result<Vec<ExpertResult>>;
+
+    /// Implementations opt into simultaneous admission. The default keeps the
+    /// historical per-bucket validation/side-effect order.
+    fn supports_batch(&self) -> bool {
+        false
+    }
+
+    /// Admit one immutable outer dispatch before collecting any owner reply.
+    /// The default preserves existing synchronous implementations.
+    fn execute_batch(
+        &mut self,
+        buckets: Vec<ExpertTokenBucket>,
+    ) -> Result<Vec<(ParallelRankId, Vec<ExpertResult>)>> {
+        buckets
+            .into_iter()
+            .map(|bucket| {
+                let owner = bucket.owner_rank;
+                self.execute(bucket).map(|reply| (owner, reply))
+            })
+            .collect()
+    }
 }
 
 /// The normalized activations and existing router outputs at a routed FFN seam.
@@ -990,6 +1292,37 @@ impl StandardDecoderOperators for CpuStandardDecoderOperators {
         }
         for (x, g) in input.values_mut().iter_mut().zip(gate.values()) {
             *x *= cpu::gated_delta::sigmoid(*g);
+        }
+        Ok(OperatorProgress::Ready(Rows::Host(input)))
+    }
+    fn shared_expert_gate(&mut self, input: Rows, gate: &Rows) -> Result<OperatorProgress<Rows>> {
+        if self.precision != ExecutionPrecisionPolicy::f32() {
+            return Ok(OperatorProgress::Unsupported(UnsupportedOperator::new(
+                "shared_expert_gate",
+                "CPU shared-expert gate requires F32",
+            )));
+        }
+        let mut input = input.into_host()?;
+        let gate = gate.host()?;
+        if input.dtype() != RowsDType::F32
+            || gate.dtype() != RowsDType::F32
+            || gate.shape().rows() != input.shape().rows()
+            || gate.shape().width() != 1
+        {
+            return Err(model_error(
+                "shared-expert gate requires F32 [rows, hidden] and [rows, 1]",
+            ));
+        }
+        let width = input.shape().width();
+        for (row, g) in input
+            .values_mut()
+            .chunks_exact_mut(width)
+            .zip(gate.values())
+        {
+            let factor = cpu::gated_delta::sigmoid(*g);
+            for value in row {
+                *value *= factor;
+            }
         }
         Ok(OperatorProgress::Ready(Rows::Host(input)))
     }

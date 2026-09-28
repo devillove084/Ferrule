@@ -1,28 +1,58 @@
 //! Provider-neutral CUDA semantic operator façade.
 //!
 //! Backend execution code dispatches operations through this module. The
-//! concrete provider implementation remains private so callers do not depend on
-//! its implementation technology.
+//! semantic definitions live in their operator families. Historical raw launch
+//! and preparation exports remain explicitly compatibility-only; they do not
+//! imply that every legacy path is provider-neutral yet.
 
-pub use crate::cuda::providers::cutlass::{
-    GroupedFp4MoeBuffers, GroupedFp4MoeLayout, HYBRID_MLA_ATTENTION_HEAD_DIM,
-    HYBRID_MLA_ATTENTION_HEADS, HYBRID_MLA_ATTENTION_ONLINE_SOFTMAX_TILE,
-    HYBRID_MLA_ATTENTION_ONLINE_SOFTMAX_TILES, HYBRID_MLA_ATTENTION_PAGE_TOKENS,
-    HYBRID_MLA_ATTENTION_TOKEN_CAPACITY, HYBRID_MLA_ATTENTION_WINDOW,
-    HYBRID_MLA_EXPLICIT_SELECTION_MAXIMUM_WIDTH, HybridMlaAttentionLayout,
-    HybridMlaExplicitSelectionBuffers, HybridMlaExplicitSelectionLayout, HybridMlaKvStorageKind,
-    PROPOSAL_ROWS, ProposalHeadLayout, bf16_compressor, fp8_projection, fp8_query_a_kv,
-    grouped_fp4_moe_can_implement, grouped_fp4_moe_launch, grouped_fp4_moe_workspace_size,
-    hc_producer, hybrid_mla_attention, hybrid_mla_explicit_selection_can_implement,
-    hybrid_mla_explicit_selection_launch, hybrid_mla_explicit_selection_workspace_requirements,
-    main_project_norm, mla_output, mxfp4_sfb_storage_bytes, prepare_mxfp4_sfb, proposal_head,
+pub use crate::cuda::operators::attention::hybrid::{
+    HYBRID_MLA_ATTENTION_HEAD_DIM, HYBRID_MLA_ATTENTION_HEADS,
+    HYBRID_MLA_ATTENTION_ONLINE_SOFTMAX_TILE, HYBRID_MLA_ATTENTION_ONLINE_SOFTMAX_TILES,
+    HYBRID_MLA_ATTENTION_PAGE_TOKENS, HYBRID_MLA_ATTENTION_TOKEN_CAPACITY,
+    HYBRID_MLA_ATTENTION_WINDOW, HYBRID_MLA_EXPLICIT_SELECTION_MAXIMUM_WIDTH,
+    HybridMlaAttentionLayout, HybridMlaExplicitSelectionBuffers, HybridMlaExplicitSelectionLayout,
+    HybridMlaKvStorageKind, hybrid_mla_attention, hybrid_mla_explicit_selection_can_implement,
+    hybrid_mla_explicit_selection_launch,
+    workspace_requirements as hybrid_mla_explicit_selection_workspace_requirements,
+};
+pub use crate::cuda::operators::moe::grouped_fp4::{
+    GroupedFp4MoeBuffers, GroupedFp4MoeLayout, grouped_fp4_moe_can_implement,
+    grouped_fp4_moe_launch,
+};
+pub use crate::cuda::operators::proposal::{PROPOSAL_ROWS, ProposalHeadLayout, proposal_head};
+
+/// Legacy provider-specific preparation/sizing surface. Production operator
+/// code uses family workspace requirements and internal scale preparation.
+pub use crate::cuda::operators::legacy;
+/// Compatibility-only root aliases. Do not introduce new callers here.
+pub use legacy::{grouped_fp4_moe_workspace_size, mxfp4_sfb_storage_bytes, prepare_mxfp4_sfb};
+
+// Remaining aggregate launch names are compatibility-only. Keeping this
+// re-export through `operators::legacy` prevents production contracts from
+// depending directly on the provider module while downstream callers migrate.
+#[cfg(ferrule_cuda_test_oracle)]
+pub use crate::cuda::operators::attention::hybrid::HYBRID_MLA_EXPLICIT_SELECTION_TEST_COMPARE_RESULT_WORDS;
+pub use crate::cuda::operators::legacy::{
+    bf16_compressor, fp8_projection, fp8_query_a_kv, hc_producer, main_project_norm, mla_output,
     shared_ffn,
 };
 
-#[cfg(ferrule_cuda_test_oracle)]
-pub use crate::cuda::providers::cutlass::HYBRID_MLA_EXPLICIT_SELECTION_TEST_COMPARE_RESULT_WORDS;
-
+use crate::cuda::runtime::CudaStream;
 use ferrule_common::{Error, Result};
+
+/// The only resource capability family implementations may borrow from the
+/// CUDA owner. It deliberately exposes neither allocation nor synchronization:
+/// those remain owner-local, while native submission receives the exact stream
+/// identity selected by `CudaOperators`.
+pub(crate) trait OperatorOwner {
+    /// Count only accepted submissions. This does not prove completion or
+    /// mutate workspace poison; those contracts remain in the provider.
+    fn submit_operator<T>(
+        &self,
+        launches: u64,
+        submit: impl FnOnce(&CudaStream) -> Result<T>,
+    ) -> Result<T>;
+}
 
 /// Provider-neutral workspace size and alignment requirements.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

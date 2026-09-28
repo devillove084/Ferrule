@@ -1,5 +1,6 @@
 //! Materialization-provider boundary and deterministic fake implementation.
 
+use ferrule_common::io_protocol::{ProviderFault, ProviderProgress};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -111,26 +112,44 @@ impl MaterializationOperationReservation {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExecutionPromotion {
     AlreadyExecution(MaterializationPreparation),
     Promoted(MaterializationPreparation),
+    /// Physical promotion succeeded, but its descriptor violated the frozen
+    /// identity. The original key still needs a durable execution-lease undo.
+    Rejected {
+        preparation: MaterializationPreparation,
+        reason: FailureReason,
+    },
 }
 
 impl ExecutionPromotion {
-    pub const fn preparation(self) -> MaterializationPreparation {
+    pub const fn preparation(&self) -> MaterializationPreparation {
         match self {
-            Self::AlreadyExecution(preparation) | Self::Promoted(preparation) => preparation,
+            Self::AlreadyExecution(preparation)
+            | Self::Promoted(preparation)
+            | Self::Rejected { preparation, .. } => *preparation,
         }
     }
 
-    pub const fn changed(self) -> bool {
-        matches!(self, Self::Promoted(_))
+    pub const fn changed(&self) -> bool {
+        !matches!(self, Self::AlreadyExecution(_))
+    }
+
+    pub const fn rejection(&self) -> Option<&FailureReason> {
+        match self {
+            Self::Rejected { reason, .. } => Some(reason),
+            _ => None,
+        }
     }
 }
 
 /// Runtime/provider command interface. Command acceptance never changes owner
-/// state by itself; physical progress is observed only through `CompletionEvent`.
+/// state by itself; custody return is proved by completion, not by a fault observation.
+/// A submitted-stage command error certifies that no outstanding stage references
+/// remain. Partial submission must instead retain its owner, return acceptance,
+/// and report a Pending/Unknown fault through `next_progress`.
 pub trait RuntimeMaterializationProvider: std::fmt::Debug + Send {
     /// Exact provider-owned preparation fixed before registry admission.
     fn preparation(
@@ -197,7 +216,12 @@ pub trait RuntimeMaterializationProvider: std::fmt::Debug + Send {
         reason: CancellationReason,
     ) -> Result<(), FailureReason>;
 
-    fn next_completion(&mut self) -> Option<CompletionEvent>;
+    fn next_progress(&mut self) -> ProviderProgress;
+
+    /// Compatibility polling preserves faults instead of turning them into Idle.
+    fn next_completion(&mut self) -> std::result::Result<Option<CompletionEvent>, ProviderFault> {
+        self.next_progress().into_completion()
+    }
 }
 
 /// Shared runtime handle around the physical provider transferred once from a
@@ -311,8 +335,16 @@ impl SharedMaterializationProvider {
         }
         let preparation = state.provider.promote_to_execution(key)?;
         if preparation.key() != key || preparation.binding() != expected.preparation.binding() {
-            return Err(FailureReason::ContractViolation {
-                message: "execution promotion changed the frozen key or binding".into(),
+            state
+                .preparations
+                .get_mut(&key)
+                .expect("frozen preparation exists")
+                .purpose = MaterializationPurpose::Execution;
+            return Ok(ExecutionPromotion::Rejected {
+                preparation: expected.preparation,
+                reason: FailureReason::ContractViolation {
+                    message: "execution promotion changed the frozen key or binding".into(),
+                },
             });
         }
         state.preparations.insert(
@@ -491,8 +523,8 @@ impl RuntimeMaterializationProvider for SharedMaterializationProvider {
         self.lock().provider.cancel(operation, key, stage, reason)
     }
 
-    fn next_completion(&mut self) -> Option<CompletionEvent> {
-        self.lock().provider.next_completion()
+    fn next_progress(&mut self) -> ProviderProgress {
+        self.lock().provider.next_progress()
     }
 }
 
@@ -578,8 +610,8 @@ where
         (**self).cancel(operation, key, stage, reason)
     }
 
-    fn next_completion(&mut self) -> Option<CompletionEvent> {
-        (**self).next_completion()
+    fn next_progress(&mut self) -> ProviderProgress {
+        (**self).next_progress()
     }
 }
 
@@ -666,7 +698,7 @@ impl RuntimeMaterializationProvider for UnavailableMaterializationProvider {
         Ok(())
     }
 
-    fn next_completion(&mut self) -> Option<CompletionEvent> {
-        None
+    fn next_progress(&mut self) -> ProviderProgress {
+        ProviderProgress::Idle
     }
 }

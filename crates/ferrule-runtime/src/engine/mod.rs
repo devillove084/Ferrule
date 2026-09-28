@@ -18,13 +18,14 @@ pub use composition::{
 pub use driver::{
     ResidentActionKind, ResidentCancelProgress, ResidentDriverShutdownReport, ResidentDriverStep,
     ResidentRuntimeResourceLimits, ResidentShutdownProgress, ResidentTokenEvent,
-    ResidentTopKDriver, ResidentTopKDriverConfig,
+    ResidentTopKDriver, ResidentTopKDriverConfig, RuntimeAdmissionError, RuntimeAdmissionOptions,
+    RuntimeAdmissionResource, RuntimeAdmissionSnapshot,
 };
 pub use inference::{
     BoxedSessionInferenceEngine, InferenceCancelProgress, InferenceCompletionOwner,
-    InferenceCompletionReactor, InferenceEngine, InferenceShutdownProgress,
-    LocalResidentInferenceEngine, LocalSessionInferenceEngine, ResidentInferenceEngine,
-    SessionInferenceEngine,
+    InferenceCompletionReactor, InferenceEngine, InferenceRequestCleanup,
+    InferenceShutdownProgress, LocalResidentInferenceEngine, LocalSessionInferenceEngine,
+    RequestCleanupOwner, RequestCleanupReceipt, ResidentInferenceEngine, SessionInferenceEngine,
 };
 pub use model_factory::{
     BackendSelection, BuiltinModelResolver, ModelFactoryOptions, ResidentModelBuildObservability,

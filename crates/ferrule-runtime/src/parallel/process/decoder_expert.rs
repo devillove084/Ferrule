@@ -94,6 +94,8 @@ pub struct ExpertProcessStats {
     pub owned_experts: Vec<(usize, usize)>,
     pub calls: usize,
     pub tokens: usize,
+    /// Last completed activation call; echoes the existing outer transaction.
+    pub last_context: Option<(u64, u32)>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
@@ -214,6 +216,7 @@ impl ExpertChild {
                 owned_experts: experts.0.keys().map(|e| (e.layer, e.expert)).collect(),
                 calls: 0,
                 tokens: 0,
+                last_context: None,
             },
             boot: config.expert_boot,
             group,
@@ -318,8 +321,15 @@ impl ProcessChildHandler for ExpertChild {
         else {
             return Ok(ExpertReply::Stats(self.stats.clone()));
         };
+        if source != self.group.source_rank.get()
+            || tokens.iter().any(|token| token.source != source)
+        {
+            return Err(ProcessHandlerError::unknown(
+                ProcessFailureKind::CommandDecode,
+                "expert source identity mismatch; quarantine required",
+            ));
+        }
         if transaction != request.identity.transaction.get()
-            || source != self.group.source_rank.get()
             || !self.group.layers.contains(&layer)
             || tokens.len() > self.group.limits.max_tokens
         {
@@ -389,6 +399,7 @@ impl ProcessChildHandler for ExpertChild {
         if !by_route.is_empty() {
             return Err(unknown("extra expert result"));
         }
+        self.stats.last_context = Some((transaction, source));
         self.stats.calls += 1;
         self.stats.tokens += tokens.len();
         Ok(ExpertReply::Results {
@@ -422,6 +433,10 @@ impl ProcessExperts {
         launch: ProcessLaunch,
         limits: ProcessFrameLimits,
     ) -> Result<Self> {
+        boot.stage_boot()?;
+        if identity.rank.get() != boot.rank {
+            return Err(error("expert caller Boot identity mismatch"));
+        }
         let placement = boot
             .experts
             .as_ref()
@@ -529,6 +544,13 @@ impl ferrule_model::transformer::expert_parallel::ExpertResultExecutor for Proce
         };
         if bucket.tokens.len() > self.group.limits.max_tokens {
             return Err(error("expert token bound exceeded"));
+        }
+        if bucket
+            .tokens
+            .iter()
+            .any(|token| token.source_rank != self.group.source_rank)
+        {
+            self.lost("expert dispatch source differs from the booted PP caller");
         }
         let transaction = first.transaction;
         let command = ExpertCommand::Compute {

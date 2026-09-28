@@ -319,3 +319,91 @@ fn split_gate_and_offset_norm_validate_all_inputs_before_launch() {
     unchanged(&op, &b[1]);
     unchanged(&op, &b[2]);
 }
+
+#[test]
+#[ignore = "requires actual CUDA GPU; distinct context owners on the SAME ordinal"]
+fn row_broadcast_gate_checks_all_owners_lengths_and_overflows_before_launch() {
+    let op = CudaOperators::new_on_device(0).unwrap();
+    let foreign = CudaOperators::new_on_device(0).unwrap();
+    let rows = F32RowsLayout {
+        rows: 3,
+        width: 1536,
+    };
+    let layout = F32GateLayout::RowBroadcast(rows);
+    for wrong_owner in [false, true] {
+        for bad in 0..3 {
+            let mut b = buffers(&op, &foreign, &[4608, 3, 4608], bad, wrong_owner);
+            let (reads, writes) = b.split_at_mut(2);
+            for activation in [GateActivation::Sigmoid, GateActivation::Silu] {
+                op.reset_counters();
+                rejected(
+                    &op,
+                    op.elementwise_gate_f32_into(
+                        &reads[0],
+                        &reads[1],
+                        &mut writes[0],
+                        layout,
+                        activation,
+                    ),
+                );
+            }
+            unchanged(
+                if bad == 2 && wrong_owner {
+                    &foreign
+                } else {
+                    &op
+                },
+                &b[2],
+            );
+        }
+    }
+    let input = op.zero_f32_buffer(4608).unwrap();
+    let gate = op.zero_f32_buffer(3).unwrap();
+    let elementwise_gate = op.zero_f32_buffer(4608).unwrap();
+    let mut output = op.upload_f32_buffer(&vec![0.37; 4608]).unwrap();
+    for invalid in [
+        F32RowsLayout { rows: 0, ..rows },
+        F32RowsLayout { width: 0, ..rows },
+        F32RowsLayout {
+            rows: usize::MAX,
+            ..rows
+        },
+        F32RowsLayout {
+            width: usize::MAX,
+            ..rows
+        },
+        F32RowsLayout {
+            rows: i32::MAX as usize,
+            width: 2,
+        },
+    ] {
+        op.reset_counters();
+        rejected(
+            &op,
+            op.elementwise_gate_f32_into(
+                &input,
+                &gate,
+                &mut output,
+                F32GateLayout::RowBroadcast(invalid),
+                GateActivation::Sigmoid,
+            ),
+        );
+    }
+    // Never infer the broadcast mode from a short/long gate buffer.
+    op.reset_counters();
+    rejected(
+        &op,
+        op.elementwise_gate_f32_into(&input, &gate, &mut output, rows, GateActivation::Sigmoid),
+    );
+    rejected(
+        &op,
+        op.elementwise_gate_f32_into(
+            &input,
+            &elementwise_gate,
+            &mut output,
+            layout,
+            GateActivation::Sigmoid,
+        ),
+    );
+    unchanged(&op, &output);
+}

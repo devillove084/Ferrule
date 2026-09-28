@@ -369,6 +369,489 @@ fn lowering_classifies_writable_and_cow_pages_and_protects_sources() {
             .contains("invalid COW")
     );
 }
+fn projection(fixture: &Fixture) -> Result<KvCommitProjection> {
+    KvCommitProjection::validate(
+        &fixture.batch,
+        &fixture.reservations,
+        &capabilities(),
+        4,
+        &|page| {
+            fixture
+                .pages
+                .get(&page)
+                .copied()
+                .unwrap_or(DecoderKvPageStatus::Vacant)
+        },
+    )
+}
+
+// Freeze the old comparator independently of the new derived equality.
+fn legacy_commit_equal(a: &PackedDecoderBatch, b: &PackedDecoderBatch) -> bool {
+    a.page_size() == b.page_size()
+        && a.new_pages() == b.new_pages()
+        && a.writable_pages() == b.writable_pages()
+        && a.cow_replacements() == b.cow_replacements()
+        && a.protected_pages() == b.protected_pages()
+        && a.row_to_sequence() == b.row_to_sequence()
+        && a.positions() == b.positions()
+        && a.sequences().len() == b.sequences().len()
+        && a.sequences().iter().zip(b.sequences()).all(|(x, y)| {
+            x.page_state_slot() == y.page_state_slot()
+                && x.page_generation() == y.page_generation()
+                && x.context_len() == y.context_len()
+                && x.query_len() == y.query_len()
+                && x.block_table() == y.block_table()
+        })
+}
+
+#[test]
+fn commit_equality_differential_preserves_weak_and_strong_identity_boundaries() {
+    let fixture = || {
+        single_sequence_fixture(
+            vec![State::with_position(2, 1, 1)],
+            0,
+            4,
+            2,
+            vec![20],
+            vec![],
+            None,
+            &[KvPageId(20)],
+        )
+    };
+    let original = fixture().lower().unwrap();
+    let mut variants = vec![original.clone()];
+    for axis in 0..8 {
+        let mut f = fixture();
+        let mut tokens = f.batch.token_ids().to_vec();
+        let mut logits = f.batch.logits().to_vec();
+        let mut sequences = f.batch.sequences().to_vec();
+        let mut mode = f.batch.mode();
+        let mut intent = f.batch.intent();
+        match axis {
+            0 => tokens[0] += 1,
+            1 => intent = ferrule_common::execution::ExecutionIntent::ProvisionalVerification,
+            2 => {
+                mode = ForwardMode::Decode;
+                sequences[0].phase = ForwardPhase::Decode;
+            }
+            3 => logits[0] = LogitsRequest::Full,
+            4 => f.reservations[0].state_slot = StateSlot::new(5),
+            5 => f.reservations[0].generation += 1,
+            6 => {
+                sequences[0].state_slot = StateSlot::new(1);
+                f.reservations[0].execution_state_slot = StateSlot::new(1);
+                f.states.push(State::with_position(2, 7, 9));
+            }
+            7 => {
+                f.states[0].core_mut().reset();
+                let binding = f.states[0].core().begin_step().unwrap();
+                f.states[0].core_mut().commit_step(binding, 2).unwrap();
+                f.reservations[0].execution_generation = f.states[0].core().generation();
+            }
+            _ => unreachable!(),
+        }
+        f.batch = ExecutionBatch::new(
+            mode,
+            tokens,
+            f.batch.positions().to_vec(),
+            f.batch.kv_write_slots().to_vec(),
+            logits,
+            sequences,
+            f.batch.kv_block_ids().to_vec(),
+        )
+        .with_intent(intent);
+        let packed = f.lower().unwrap();
+        assert_eq!(projection(&f).unwrap(), packed.commit_projection());
+        let strong = LogicalExecutionIdentity::validate(
+            &f.batch,
+            &f.reservations,
+            &capabilities(),
+            4,
+            &|_| DecoderKvPageStatus::Resident,
+            &[10],
+        )
+        .unwrap();
+        assert_eq!(strong, packed.logical_execution_identity(&[10]).unwrap());
+        assert_eq!(
+            packed.commit_projection() == original.commit_projection(),
+            !matches!(axis, 4 | 5)
+        );
+        assert_eq!(
+            strong == original.logical_execution_identity(&[10]).unwrap(),
+            matches!(axis, 6 | 7)
+        );
+        variants.push(packed);
+    }
+    for a in &variants {
+        for b in &variants {
+            assert_eq!(
+                legacy_commit_equal(a, b),
+                a.commit_projection() == b.commit_projection()
+            );
+        }
+    }
+    assert_ne!(
+        original.logical_execution_identity(&[10]).unwrap(),
+        original.logical_execution_identity(&[11]).unwrap()
+    );
+    assert!(original.logical_execution_identity(&[]).is_err());
+    assert!(original.logical_execution_identity(&[10, 11]).is_err());
+}
+
+fn pair_fixture(parts: [(u32, Vec<u32>, Option<KvCowReplacement>); 2], reverse: bool) -> Fixture {
+    let mut tokens = Vec::new();
+    let mut positions = Vec::new();
+    let mut writes = Vec::new();
+    let mut sequences = Vec::new();
+    let mut blocks = Vec::new();
+    let mut states = Vec::new();
+    let mut reservations = Vec::new();
+    let mut pages = BTreeMap::new();
+    for original in if reverse { [1, 0] } else { [0, 1] } {
+        let (context, table, cow) = &parts[original];
+        let index = sequences.len() as u32;
+        let block_start = blocks.len() as u32;
+        let before = (*context as usize).div_ceil(4);
+        let new = table[before..]
+            .iter()
+            .copied()
+            .map(KvPageId)
+            .collect::<Vec<_>>();
+        for page in &table[..before] {
+            if cow.is_none_or(|c| c.replacement != KvPageId(*page)) {
+                pages.insert(KvPageId(*page), DecoderKvPageStatus::Resident);
+            }
+        }
+        if let Some(cow) = cow {
+            pages.insert(cow.source, DecoderKvPageStatus::Resident);
+        }
+        tokens.push(original as u32 + 11);
+        positions.push(*context);
+        writes.push(Some(KvWriteSlot::new(
+            table[*context as usize / 4] * 4 + *context % 4,
+        )));
+        blocks.extend(table.iter().copied().map(KvBlockId::new));
+        sequences.push(ExecutionSequence::new(
+            StateSlot::new(index),
+            ForwardPhase::Prefill,
+            index..index + 1,
+            *context,
+            *context + 1,
+            block_start..blocks.len() as u32,
+        ));
+        states.push(State::with_position(*context as usize, 0, 0));
+        reservations.push(KvReservationView {
+            state_slot: StateSlot::new(10 + original as u32),
+            execution_state_slot: StateSlot::new(index),
+            positions: *context as usize..*context as usize + 1,
+            newly_allocated: new,
+            generation: original as u64 + 20,
+            execution_generation: 0,
+            cow_replacement: *cow,
+        });
+    }
+    Fixture {
+        states,
+        reservations,
+        pages,
+        batch: ExecutionBatch::new(
+            ForwardMode::Prefill,
+            tokens,
+            positions,
+            writes,
+            vec![LogitsRequest::None; 2],
+            sequences,
+            blocks,
+        ),
+    }
+}
+
+#[test]
+fn same_batch_alias_conflicts_fail_in_both_sequence_orders() {
+    let cow = |source, replacement| {
+        Some(KvCowReplacement {
+            logical_page: 0,
+            source: KvPageId(source),
+            replacement: KvPageId(replacement),
+        })
+    };
+    let cases = [
+        // Read-only prefix aliases a page written by the other sequence.
+        [(4, vec![1, 2], None), (2, vec![1], None)],
+        // New/new, new/table, new/COW replacement, and COW/COW replacement.
+        [(0, vec![2], None), (0, vec![2], None)],
+        [(0, vec![1], None), (4, vec![1, 2], None)],
+        [(0, vec![2], None), (2, vec![2], cow(1, 2))],
+        [(2, vec![2], cow(1, 2)), (2, vec![2], cow(3, 2))],
+        // The COW source is also a reader and must exclude another writer.
+        [(2, vec![2], cow(1, 2)), (2, vec![1], None)],
+        [(2, vec![2], cow(1, 2)), (4, vec![2, 3], None)],
+    ];
+    for (case, parts) in cases.into_iter().enumerate() {
+        for reverse in [false, true] {
+            let f = pair_fixture(parts.clone(), reverse);
+            assert!(f.lower().is_err(), "case={case}, reverse={reverse}");
+            assert!(
+                projection(&f).is_err(),
+                "projection case={case}, reverse={reverse}"
+            );
+        }
+    }
+}
+
+#[test]
+fn shared_read_only_prefix_and_cow_sources_keep_packed_order() {
+    for cow in [false, true] {
+        let parts = if cow {
+            [
+                (
+                    2,
+                    vec![2],
+                    Some(KvCowReplacement {
+                        logical_page: 0,
+                        source: KvPageId(1),
+                        replacement: KvPageId(2),
+                    }),
+                ),
+                (
+                    2,
+                    vec![3],
+                    Some(KvCowReplacement {
+                        logical_page: 0,
+                        source: KvPageId(1),
+                        replacement: KvPageId(3),
+                    }),
+                ),
+            ]
+        } else {
+            [(4, vec![1, 2], None), (4, vec![1, 3], None)]
+        };
+        let mut packed = Vec::new();
+        for reverse in [false, true] {
+            let f = pair_fixture(parts.clone(), reverse);
+            let p = f.lower().unwrap();
+            assert_eq!(
+                p.protected_pages(),
+                &[KvPageId(1), KvPageId(2), KvPageId(3)]
+            );
+            assert!(p.writable_pages().is_empty());
+            assert_eq!(p.commit_projection(), projection(&f).unwrap());
+            if cow {
+                assert_eq!(
+                    p.cow_replacements()
+                        .iter()
+                        .map(|c| c.replacement)
+                        .collect::<Vec<_>>(),
+                    if reverse {
+                        vec![KvPageId(3), KvPageId(2)]
+                    } else {
+                        vec![KvPageId(2), KvPageId(3)]
+                    }
+                );
+            } else {
+                assert_eq!(
+                    p.new_pages(),
+                    if reverse {
+                        &[KvPageId(3), KvPageId(2)]
+                    } else {
+                        &[KvPageId(2), KvPageId(3)]
+                    }
+                );
+            }
+            packed.push(p);
+        }
+        assert!(!legacy_commit_equal(&packed[0], &packed[1]));
+        assert_ne!(packed[0].commit_projection(), packed[1].commit_projection());
+        assert_ne!(
+            packed[0].logical_execution_identity(&[10, 11]).unwrap(),
+            packed[1].logical_execution_identity(&[11, 10]).unwrap()
+        );
+    }
+}
+
+#[test]
+fn membership_suffix_matches_legacy_contains_for_empty_new_prefill_and_large_tables() {
+    for pages in [1u32, 2, 17, 1024] {
+        for context in [0, pages * 4 - 1] {
+            let table = (10..10 + pages).map(KvBlockId::new).collect::<Vec<_>>();
+            let end = pages * 4;
+            let rows = (end - context) as usize;
+            let before = (context as usize).div_ceil(4);
+            let new = table[before..]
+                .iter()
+                .map(|b| KvPageId(b.get()))
+                .collect::<Vec<_>>();
+            let batch = ExecutionBatch::new(
+                ForwardMode::Prefill,
+                vec![1; rows],
+                (context..end).collect(),
+                (context..end)
+                    .map(|p| Some(KvWriteSlot::new(40 + p)))
+                    .collect(),
+                vec![LogitsRequest::None; rows],
+                vec![ExecutionSequence::new(
+                    StateSlot::new(0),
+                    ForwardPhase::Prefill,
+                    0..rows as u32,
+                    context,
+                    end,
+                    0..pages,
+                )],
+                table,
+            );
+            let reservation = KvReservationView {
+                state_slot: StateSlot::new(5),
+                execution_state_slot: StateSlot::new(0),
+                positions: context as usize..end as usize,
+                newly_allocated: new.clone(),
+                generation: 9,
+                execution_generation: 0,
+                cow_replacement: None,
+            };
+            let mut caps = capabilities();
+            caps.max_batch_tokens = rows;
+            caps.max_prefill_query_tokens_per_sequence = rows;
+            let status = |page: KvPageId| {
+                if new.contains(&page) {
+                    DecoderKvPageStatus::Vacant
+                } else {
+                    DecoderKvPageStatus::Resident
+                }
+            };
+            let packed = PackedDecoderBatch::lower(
+                &batch,
+                &[reservation.clone()],
+                &[State::with_position(context as usize, 0, 0)],
+                &caps,
+                4,
+                &status,
+            )
+            .unwrap();
+            for (index, page) in packed.sequences()[0].block_table().iter().enumerate() {
+                assert_eq!(new.contains(page), index >= before);
+            }
+            assert_eq!(packed.new_pages(), new);
+            assert_eq!(
+                packed.writable_pages(),
+                if context == 0 {
+                    vec![]
+                } else {
+                    vec![KvPageId(9 + pages)]
+                }
+            );
+            assert_eq!(
+                packed.protected_pages(),
+                (10..10 + pages).map(KvPageId).collect::<Vec<_>>()
+            );
+            assert_eq!(
+                packed.commit_projection(),
+                KvCommitProjection::validate(&batch, &[reservation.clone()], &caps, 4, &status)
+                    .unwrap()
+            );
+            let mut malformed = reservation;
+            malformed.newly_allocated.push(KvPageId(9999));
+            assert!(KvCommitProjection::validate(&batch, &[malformed], &caps, 4, &status).is_err());
+        }
+    }
+}
+
+#[test]
+fn logical_validation_does_not_replace_owner_state_or_source_freshness() {
+    let mut f = mixed_fixture();
+    let packed = f.lower().unwrap();
+    let old = projection(&f).unwrap();
+    f.reservations[0].execution_generation += 1;
+    assert_eq!(projection(&f).unwrap(), old);
+    assert!(f.lower().is_err());
+    assert!(
+        packed
+            .validate_source_batch(&batch_with_different_first_token(&f.batch))
+            .is_err()
+    );
+    f.states[2] = State::new(30, 300);
+    assert!(packed.validate_states(&f.states).is_err());
+}
+
+#[test]
+fn logical_lowering_rejects_checked_overflow_and_malformed_order() {
+    let mut f = mixed_fixture();
+    f.reservations.reverse();
+    assert!(f.lower().is_err());
+    assert!(projection(&f).is_err());
+    let batch = ExecutionBatch::new(
+        ForwardMode::Prefill,
+        vec![1],
+        vec![0],
+        vec![Some(KvWriteSlot::new(0))],
+        vec![LogitsRequest::None],
+        vec![ExecutionSequence::new(
+            StateSlot::new(0),
+            ForwardPhase::Prefill,
+            0..1,
+            0,
+            1,
+            0..1,
+        )],
+        vec![KvBlockId::new(2)],
+    );
+    let reservation = KvReservationView {
+        state_slot: StateSlot::new(1),
+        execution_state_slot: StateSlot::new(0),
+        positions: 0..1,
+        newly_allocated: vec![KvPageId(2)],
+        generation: 0,
+        execution_generation: 0,
+        cow_replacement: None,
+    };
+    for page_size in [0, usize::MAX] {
+        assert!(
+            KvCommitProjection::validate(
+                &batch,
+                &[reservation.clone()],
+                &capabilities(),
+                page_size,
+                &|_| DecoderKvPageStatus::Vacant
+            )
+            .is_err()
+        );
+        assert!(
+            PackedDecoderBatch::lower(
+                &batch,
+                &[reservation.clone()],
+                &[State::new(0, 0)],
+                &capabilities(),
+                page_size,
+                &|_| DecoderKvPageStatus::Vacant
+            )
+            .is_err()
+        );
+    }
+    let overflow = ExecutionBatch::new(
+        ForwardMode::Prefill,
+        vec![1],
+        vec![u32::MAX],
+        vec![Some(KvWriteSlot::new(0))],
+        vec![LogitsRequest::None],
+        vec![ExecutionSequence::new(
+            StateSlot::new(0),
+            ForwardPhase::Prefill,
+            0..1,
+            u32::MAX,
+            0,
+            0..1,
+        )],
+        vec![KvBlockId::new(2)],
+    );
+    assert!(
+        KvCommitProjection::validate(&overflow, &[reservation], &capabilities(), 4, &|_| {
+            DecoderKvPageStatus::Vacant
+        })
+        .unwrap_err()
+        .to_string()
+        .contains("overflows")
+    );
+}
+
 #[derive(Debug)]
 struct MockKvTransaction {
     entered: bool,
@@ -1865,8 +2348,10 @@ mod synthetic_end_to_end {
         assert_eq!(snapshot.bound_layers, 2);
         assert_eq!(snapshot.commits, 3);
         assert_eq!(snapshot.aborts, 2);
-        runner.shutdown().unwrap();
+        ResidentModelRunner::shutdown_physical(&mut runner).unwrap();
         assert!(completion_hub.is_closed());
+        assert!(ResidentModelRunner::observability_snapshot(&runner).shutdown);
+        ResidentModelRunner::shutdown_physical(&mut runner).unwrap();
     }
     fn synthetic_config() -> serde_json::Value {
         serde_json::json!({

@@ -97,3 +97,47 @@ unsafe extern "C" {
     pub fn ferrule_cutlass_mxfp4_sfb_storage_bytes(n: u32, k: u32) -> u64;
     pub fn ferrule_cutlass_prepare_mxfp4_sfb(args: *const PrepareMxfp4SfbArgs) -> i32;
 }
+
+#[repr(C)]
+pub(crate) struct Bf16Args {
+    pub(crate) m: u32,
+    pub(crate) n: u32,
+    pub(crate) k: u32,
+    pub(crate) lda: u32,
+    pub(crate) ldb: u32,
+    pub(crate) ldd: u32,
+    pub(crate) activation: u64,
+    pub(crate) weight: u64,
+    pub(crate) output: u64,
+    pub(crate) stream: u64,
+}
+#[repr(C)]
+pub(crate) struct NumericArgs {
+    pub(crate) m: u32,
+    pub(crate) n: u32,
+    pub(crate) k: u32,
+    pub(crate) padded_k: u32,
+    pub(crate) tile_rows: u32,
+    pub(crate) scale_cols: u32,
+    pub(crate) row_origin: u32,
+    pub(crate) column_origin: u32,
+    pub(crate) scale_bytes: u32,
+    pub(crate) lda: u32,
+    pub(crate) ldd: u32,
+    pub(crate) reserved: u32,
+    pub(crate) activation: u64,
+    pub(crate) weight: u64,
+    pub(crate) scales: u64,
+    pub(crate) output: u64,
+    pub(crate) workspace: u64,
+    pub(crate) workspace_bytes: u64,
+    pub(crate) stream: u64,
+}
+unsafe extern "C" {
+    pub fn ferrule_cutlass_bf16_can_implement(args: *const Bf16Args) -> i32;
+    pub fn ferrule_cutlass_bf16_launch(args: *const Bf16Args) -> i32;
+    pub fn ferrule_cutlass_numeric_fp8_can_implement(args: *const NumericArgs) -> i32;
+    pub fn ferrule_cutlass_numeric_fp8_launch(args: *const NumericArgs) -> i32;
+    pub fn ferrule_cutlass_numeric_fp8_f32_can_implement(args: *const NumericArgs) -> i32;
+    pub fn ferrule_cutlass_numeric_fp8_f32_launch(args: *const NumericArgs) -> i32;
+}

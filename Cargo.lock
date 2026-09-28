@@ -482,6 +482,7 @@ dependencies = [
  "byteorder",
  "ferrule-backend",
  "ferrule-common",
+ "ferrule-runtime",
  "half",
  "io-uring",
  "libc",

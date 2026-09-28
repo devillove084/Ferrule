@@ -1,5 +1,5 @@
 //! Opt-in real GPU process acceptance, using the CLI's production endpoint.
-//! Build ferrule-cli with --features cuda, then run this test target with
+//! The matching CUDA CLI is built once; run this test target with
 //! --features cuda cuda:: -- --ignored --test-threads=1 --nocapture.
 //! Missing CLI, CUDA, GPUs or NAS files fail; there are no runtime skips.
 
@@ -132,8 +132,11 @@ fn gpu_launch() -> ProcessLaunch {
     gpu_launch_with_timeout(300000)
 }
 fn gpu_launch_with_timeout(timeout_ms: u64) -> ProcessLaunch {
-    let executable = std::env::var_os("FERRULE_DECODER_CHILD").map(PathBuf::from).unwrap_or_else(|| {
-        std::env::current_exe().unwrap().ancestors().map(|directory| directory.join("ferrule")).find(|candidate| candidate.is_file()).expect("build ferrule-cli --features cuda --bin ferrule first, or set FERRULE_DECODER_CHILD")
+    static CHILD: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    let executable = CHILD.get_or_init(|| {
+        std::env::var_os("FERRULE_DECODER_CHILD")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| build_process_child::build("ferrule-cli", "bin", "ferrule"))
     });
     assert!(
         executable.is_file(),
@@ -166,7 +169,8 @@ fn boots(
             let experts = ep.then(|| {
                 let first = 10 + rank * 2;
                 ExpertPlacementFrame {
-                    source: first,
+                    source_scope: ferrule_common::topology::ExpertSourceScope::ExternalStage,
+                    source: rank,
                     members: vec![first, first + 1],
                     entries: (start..end)
                         .flat_map(|layer| [(layer, 0, first), (layer, 1, first + 1)])
@@ -200,7 +204,17 @@ fn boots(
                     } else {
                         DecoderDevice::Cpu
                     },
-                    kv: KvConfigFrame::encode(cfg),
+                    kv: KvConfigFrame::encode_for_device(
+                        cfg,
+                        if cuda {
+                            DecoderDevice::Cuda {
+                                ordinal: rank as usize,
+                            }
+                        } else {
+                            DecoderDevice::Cpu
+                        },
+                    )
+                    .unwrap(),
                     experts,
                 },
             )
@@ -302,7 +316,7 @@ impl ProcessPipeline {
         let transport = ProcessPipelineTransport::spawn(gpu_launch(), boots.clone(), gpu_options())
             .expect("real GPU child Boot must succeed")
             .shared();
-        let executor = PipelineParallelExecutor::new_with_transport(
+        let executor = PipelineParallelExecutor::new_with_external_expert_transport(
             topology(degree as u32),
             plans,
             cfg,

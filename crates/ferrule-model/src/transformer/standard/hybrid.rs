@@ -48,7 +48,8 @@ pub(super) fn validate_cpu_profile(
 ) -> Result<()> {
     let extended = spec.final_norm().one_plus_weight()
         || spec.layers().iter().any(|l| {
-            l.input_norm().one_plus_weight()
+            matches!(l.feed_forward(), FeedForward::Moe(m) if m.shared_expert_gate().is_some())
+                || l.input_norm().one_plus_weight()
                 || l.post_attention_norm().one_plus_weight()
                 || match l.attention() {
                     Attention::GatedDeltaNet(_) => true,

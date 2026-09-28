@@ -140,6 +140,7 @@ pub enum ParallelTopologyError {
     ScopeKindMismatch,
     ExpertDegreeMismatch,
     ExpertSourceNotMember,
+    ExpertSourceNotStageCaller,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -478,21 +479,56 @@ impl TensorCollectiveParticipants {
     }
 }
 
+/// The caller identity scope for an attached expert dispatch group.
+///
+/// `Member` is the legacy thread path: the caller is one of the expert
+/// owners. `ExternalStage` is the process PP×EP path: the caller is the
+/// attached PP stage rank and expert members are workers only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExpertSourceScope {
+    Member,
+    ExternalStage,
+}
+
 /// Attached activation owners for one replica/stage, shared by its TP peers.
 /// This is not a `ParticipantSet`: expert owners cannot join a KV transaction.
 /// Explicit member order is preserved because it defines expert dispatch slots.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExpertDispatchMembers {
     attachment: MeshCoordinate,
+    source_scope: ExpertSourceScope,
     source_rank: ParallelRankId,
     members: Vec<ParallelRankId>,
 }
 
 impl ExpertDispatchMembers {
+    /// Legacy member-source constructor. Thread callers retain this exact
+    /// member-only contract.
     pub fn new(
         topology: &ValidatedParallelTopology,
         replica: u32,
         stage: u32,
+        source_rank: ParallelRankId,
+        members: impl IntoIterator<Item = ParallelRankId>,
+    ) -> Result<Self, ParallelTopologyError> {
+        Self::new_with_scope(
+            topology,
+            replica,
+            stage,
+            ExpertSourceScope::Member,
+            source_rank,
+            members,
+        )
+    }
+
+    /// Construct an attachment with an explicit caller scope. EP members are
+    /// always activation workers; ExternalStage never adds the caller to them.
+    pub fn new_with_scope(
+        topology: &ValidatedParallelTopology,
+        replica: u32,
+        stage: u32,
+        source_scope: ExpertSourceScope,
         source_rank: ParallelRankId,
         members: impl IntoIterator<Item = ParallelRankId>,
     ) -> Result<Self, ParallelTopologyError> {
@@ -509,8 +545,19 @@ impl ExpertDispatchMembers {
         if members.iter().any(|rank| rank.get() < topology.world_size) {
             return Err(ParallelTopologyError::ExpertDispatchMemberOverlap);
         }
-        if !members.contains(&source_rank) {
-            return Err(ParallelTopologyError::ExpertSourceNotMember);
+        match source_scope {
+            ExpertSourceScope::Member if !members.contains(&source_rank) => {
+                return Err(ParallelTopologyError::ExpertSourceNotMember);
+            }
+            ExpertSourceScope::ExternalStage => {
+                if topology.plan.tensor_parallel != 1 {
+                    return Err(ParallelTopologyError::UnsupportedParallelism);
+                }
+                if source_rank != topology.rank_at(replica, stage, 0)? {
+                    return Err(ParallelTopologyError::ExpertSourceNotStageCaller);
+                }
+            }
+            ExpertSourceScope::Member => {}
         }
         // EP=1 keeps legacy explicitly configured groups compatible. A declared
         // EP>1 constrains attached groups; it never allocates implicit owners.
@@ -519,6 +566,7 @@ impl ExpertDispatchMembers {
         }
         Ok(Self {
             attachment,
+            source_scope,
             source_rank,
             members,
         })
@@ -531,6 +579,9 @@ impl ExpertDispatchMembers {
     }
     pub const fn stage(&self) -> u32 {
         self.attachment.stage
+    }
+    pub const fn source_scope(&self) -> ExpertSourceScope {
+        self.source_scope
     }
     pub const fn source_rank(&self) -> ParallelRankId {
         self.source_rank
@@ -1500,6 +1551,125 @@ mod tests {
         assert_eq!(
             left.validate_disjoint_owners(&foreign.execution_scopes(1).unwrap()),
             Err(ParallelTopologyError::ParticipantTopologyMismatch)
+        );
+    }
+}
+
+#[cfg(test)]
+mod external_expert_source_tests {
+    use super::*;
+
+    fn external_topology(tp: usize) -> ValidatedParallelTopology {
+        ValidatedParallelTopology::new(
+            ParallelTopologyId::new(31),
+            (4 * tp) as u32,
+            ParallelRankId::new(0),
+            ParallelismPlan::validated(2, tp, 2, 1, 1, 2).unwrap(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn external_stage_source_is_exact_and_never_an_expert_or_extra_kv_owner() {
+        let topology = external_topology(1);
+        for replica in 0..2 {
+            let mut scopes = topology.execution_scopes(replica).unwrap();
+            let kv = scopes.kv_participants().clone();
+            for stage in 0..2 {
+                let source = topology.rank_at(replica, stage, 0).unwrap();
+                let base = 10 + replica * 4 + stage * 2;
+                let members = [base + 1, base].map(ParallelRankId::new);
+                let group = ExpertDispatchMembers::new_with_scope(
+                    &topology,
+                    replica,
+                    stage,
+                    ExpertSourceScope::ExternalStage,
+                    source,
+                    members,
+                )
+                .unwrap();
+                assert_eq!(group.source_scope(), ExpertSourceScope::ExternalStage);
+                assert_eq!(group.source_rank(), source);
+                assert_eq!(group.iter().collect::<Vec<_>>(), members);
+                assert!(!group.contains(source));
+                assert!(kv.contains(source));
+                assert!(members.iter().all(|rank| !kv.contains(*rank)));
+                scopes.attach_expert_dispatch_members(group).unwrap();
+                assert_eq!(scopes.kv_participants(), &kv);
+                for wrong in [source.get() ^ 1, source.get() ^ 2, base, u32::MAX] {
+                    assert_eq!(
+                        ExpertDispatchMembers::new_with_scope(
+                            &topology,
+                            replica,
+                            stage,
+                            ExpertSourceScope::ExternalStage,
+                            ParallelRankId::new(wrong),
+                            members,
+                        ),
+                        Err(ParallelTopologyError::ExpertSourceNotStageCaller),
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn external_scope_rejects_worker_overlap_and_does_not_enable_tp_ep() {
+        let topology = external_topology(1);
+        for members in [[0, 10], [2, 10], [10, 10], [10, 11]] {
+            let source = ParallelRankId::new(0);
+            let scope = if members == [10, 11] {
+                ExpertSourceScope::Member
+            } else {
+                ExpertSourceScope::ExternalStage
+            };
+            assert!(
+                ExpertDispatchMembers::new_with_scope(
+                    &topology,
+                    0,
+                    0,
+                    scope,
+                    source,
+                    members.map(ParallelRankId::new),
+                )
+                .is_err()
+            );
+        }
+        let tp = external_topology(2);
+        assert_eq!(
+            ExpertDispatchMembers::new_with_scope(
+                &tp,
+                0,
+                0,
+                ExpertSourceScope::ExternalStage,
+                ParallelRankId::new(0),
+                [10, 11].map(ParallelRankId::new),
+            ),
+            Err(ParallelTopologyError::UnsupportedParallelism),
+        );
+    }
+
+    #[test]
+    fn legacy_constructor_remains_member_only() {
+        let topology = external_topology(1);
+        let members = [11, 10].map(ParallelRankId::new);
+        let legacy = ExpertDispatchMembers::new(&topology, 0, 0, members[1], members).unwrap();
+        assert_eq!(legacy.source_scope(), ExpertSourceScope::Member);
+        assert_eq!(
+            legacy,
+            ExpertDispatchMembers::new_with_scope(
+                &topology,
+                0,
+                0,
+                ExpertSourceScope::Member,
+                members[1],
+                members,
+            )
+            .unwrap()
+        );
+        assert_eq!(
+            ExpertDispatchMembers::new(&topology, 0, 0, ParallelRankId::new(0), members),
+            Err(ParallelTopologyError::ExpertSourceNotMember),
         );
     }
 }

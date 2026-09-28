@@ -3,15 +3,18 @@
 use ferrule_common::Result;
 
 pub use crate::cuda::context::{
-    CombinedRingWindowLens, CudaBf16Buffer, CudaF32Buffer, CudaHybridMlaAttentionWorkspace,
-    CudaHybridMlaExplicitSelectionWorkspace, CudaI32Buffer, CudaI32HostDownload, CudaI32HostMirror,
-    CudaOperators, CudaProposalHeadWorkspace, cuda_sparse_attention_sink_f32,
+    CombinedRingWindowLens, CudaBf16Buffer, CudaF32Buffer, CudaI32Buffer, CudaI32HostDownload,
+    CudaI32HostMirror, CudaOperators, cuda_sparse_attention_sink_f32,
 };
 pub use crate::cuda::operators::contracts::{
     PAGED_BF16_TRANSFORMER_ADDRESS_ERROR, PAGED_BF16_TRANSFORMER_METADATA_ERROR,
     PagedBf16CausalGqaLayout, PagedBf16PlaneLayout, validate_paged_bf16_transformer_status,
 };
-pub use crate::cuda::providers::cutlass::{
+/// Historical attention-family path; the workspace belongs to proposal.
+pub use crate::cuda::operators::proposal::CudaProposalHeadWorkspace;
+pub mod hybrid;
+pub use hybrid::{
+    CudaHybridMlaAttentionWorkspace, CudaHybridMlaExplicitSelectionWorkspace,
     HYBRID_MLA_ATTENTION_HEAD_DIM, HYBRID_MLA_ATTENTION_HEADS,
     HYBRID_MLA_ATTENTION_ONLINE_SOFTMAX_TILE, HYBRID_MLA_ATTENTION_ONLINE_SOFTMAX_TILES,
     HYBRID_MLA_ATTENTION_PAGE_TOKENS, HYBRID_MLA_ATTENTION_TOKEN_CAPACITY,

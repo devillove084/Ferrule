@@ -11,12 +11,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use ferrule_common::execution::{
-    ExecutionBatch, ExecutionTransactionId, KvPageId, KvReservationView, StateSlot,
+    ExecutionBatch, ExecutionTransactionId, KvPageId, KvReservationView,
 };
 use ferrule_common::{Error, Result};
 use ferrule_model::decoder::{
-    DecoderKvPageSnapshot, GenericDecoderSequenceState, KvCommitBinding, KvEndProgress,
-    PackedDecoderBatch,
+    DecoderKvPageSnapshot, KvCommitBinding, KvCommitProjection, KvEndProgress,
+    LogicalExecutionIdentity, PackedDecoderBatch,
 };
 use ferrule_model::transformer::{SegmentInput, SegmentOutput};
 
@@ -119,7 +119,7 @@ pub enum PipelineCommand {
 /// Portable preparation projection: no sequence topology, private KV token,
 /// device handle, or backend transaction is encoded. An IPC codec may convert
 /// these public host values to its bounded wire DTO. Decoded values are untrusted
-/// until `into_commit_batch` checks the exact original parent request.
+/// until `into_commit_projection` checks the exact original parent request.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PipelinePreparedProjection {
     pub batch: ExecutionBatch,
@@ -155,71 +155,17 @@ impl PipelinePreparedProjection {
         })
     }
 
-    /// Revalidate the logical cohort projection without reconstructing an
-    /// owner-local sequence identity. This batch is for RemotePhysicalOwner's
-    /// `commit_batch` ONLY; never pass it to a physical backend's `enter`.
-    ///
-    /// The model cohort compares logical page slots/generations, COW and row
-    /// projection, deliberately excluding rank-local execution slots/topologies.
-    /// Bind a temporary generation-zero sequence to a DIFFERENT execution slot
-    /// than the logical page slot. This preserves the real logical generation
-    /// (including arbitrarily deep forks) without serializing private sequence
-    /// state or creating a second parent sequence/transaction registry. Physical
-    /// readiness still requires an ACK from the original owner and real token.
-    pub fn into_commit_batch(
+    /// Revalidate only logical commit metadata. No synthetic state or executable batch is made.
+    pub fn into_commit_projection(
         self,
         expected_batch: &ExecutionBatch,
         expected_reservation: &KvReservationView,
         description: &PipelineStageDescription,
-    ) -> Result<PackedDecoderBatch> {
-        description.validate()?;
-        if &self.batch != expected_batch
-            || &self.reservation != expected_reservation
-            || self.page_size != description.config.page_size
-            || self.batch.sequences().len() != 1
-            || self.reservation.positions.end > description.config.max_positions
-            || self.page_statuses.len() > description.config.max_pages
-        {
-            return Err(error(
-                "pipeline preparation projection differs from parent request",
-            ));
-        }
-        let statuses = self
-            .page_statuses
-            .iter()
-            .map(|snapshot| (snapshot.page, snapshot.status))
-            .collect::<std::collections::BTreeMap<_, _>>();
-        if statuses.len() != self.page_statuses.len() {
-            return Err(error("duplicate pipeline projection page snapshot"));
-        }
-        let execution_slot = StateSlot::new(if self.reservation.state_slot == StateSlot::new(0) {
-            1
-        } else {
-            0
-        });
-        let mut sequences = self.batch.sequences().to_vec();
-        sequences[0].state_slot = execution_slot;
-        let normalized = ExecutionBatch::new(
-            self.batch.mode(),
-            self.batch.token_ids().to_vec(),
-            self.batch.positions().to_vec(),
-            self.batch.kv_write_slots().to_vec(),
-            self.batch.logits().to_vec(),
-            sequences,
-            self.batch.kv_block_ids().to_vec(),
-        )
-        .with_intent(self.batch.intent());
-        let mut reservation = self.reservation;
-        reservation.execution_state_slot = execution_slot;
-        reservation.execution_generation = 0;
-        let states = [
-            GenericDecoderSequenceState::with_position(reservation.positions.start, (), ()),
-            GenericDecoderSequenceState::with_position(reservation.positions.start, (), ()),
-        ];
-        let packed = PackedDecoderBatch::lower(
-            &normalized,
-            &[reservation],
-            &states,
+    ) -> Result<KvCommitProjection> {
+        let statuses = self.validate_metadata(expected_batch, expected_reservation, description)?;
+        let projection = KvCommitProjection::validate(
+            &self.batch,
+            std::slice::from_ref(&self.reservation),
             &description.execution_capabilities()?,
             self.page_size,
             &|page| {
@@ -229,7 +175,80 @@ impl PipelinePreparedProjection {
                     .unwrap_or(ferrule_model::decoder::DecoderKvPageStatus::Preempted)
             },
         )?;
-        if packed
+        self.validate_protected(&projection, &statuses)?;
+        Ok(projection)
+    }
+
+    /// Strong collective identity is derived from the original full request, never commit equality.
+    pub fn into_execution_identity(
+        self,
+        expected_batch: &ExecutionBatch,
+        expected_reservation: &KvReservationView,
+        description: &PipelineStageDescription,
+        sessions: &[u64],
+    ) -> Result<LogicalExecutionIdentity> {
+        let statuses = self.validate_metadata(expected_batch, expected_reservation, description)?;
+        let identity = LogicalExecutionIdentity::validate(
+            &self.batch,
+            std::slice::from_ref(&self.reservation),
+            &description.execution_capabilities()?,
+            self.page_size,
+            &|page| {
+                statuses
+                    .get(&page)
+                    .copied()
+                    .unwrap_or(ferrule_model::decoder::DecoderKvPageStatus::Preempted)
+            },
+            sessions,
+        )?;
+        self.validate_protected(&identity.commit_projection(), &statuses)?;
+        Ok(identity)
+    }
+
+    fn validate_metadata(
+        &self,
+        expected_batch: &ExecutionBatch,
+        expected_reservation: &KvReservationView,
+        description: &PipelineStageDescription,
+    ) -> Result<std::collections::BTreeMap<KvPageId, ferrule_model::decoder::DecoderKvPageStatus>>
+    {
+        description.validate()?;
+        if &self.batch != expected_batch
+            || &self.reservation != expected_reservation
+            || self.page_size != description.config.page_size
+            || self.batch.sequences().len() != 1
+            || self.reservation.positions.end > description.config.max_positions
+            || self.page_statuses.len() > description.config.max_pages
+            || self
+                .batch
+                .token_ids()
+                .iter()
+                .any(|&token| token as usize >= description.vocabulary)
+        {
+            return Err(error(
+                "pipeline preparation projection differs from parent request",
+            ));
+        }
+        let statuses = self
+            .page_statuses
+            .iter()
+            .map(|s| (s.page, s.status))
+            .collect::<std::collections::BTreeMap<_, _>>();
+        if statuses.len() != self.page_statuses.len() {
+            return Err(error("duplicate pipeline projection page snapshot"));
+        }
+        Ok(statuses)
+    }
+
+    fn validate_protected(
+        &self,
+        projection: &KvCommitProjection,
+        statuses: &std::collections::BTreeMap<
+            KvPageId,
+            ferrule_model::decoder::DecoderKvPageStatus,
+        >,
+    ) -> Result<()> {
+        if projection
             .protected_pages()
             .iter()
             .copied()
@@ -239,7 +258,7 @@ impl PipelinePreparedProjection {
                 "pipeline projection snapshots do not cover exact protected pages",
             ));
         }
-        Ok(packed)
+        Ok(())
     }
 }
 

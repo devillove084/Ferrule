@@ -133,7 +133,9 @@ __global__ void data_kernel(FerruleCoreDataArgs args) {
   }
   if (args.kind == FERRULE_CORE_DATA_SIGMOID_GATE ||
       args.kind == FERRULE_CORE_DATA_SILU_GATE) {
-    const float gate = const_pointer<float>(args.input1)[index];
+    const uint64_t gate_index = (args.flags & FERRULE_CORE_GATE_ROW_BROADCAST)
+                                    ? index / args.width : index;
+    const float gate = const_pointer<float>(args.input1)[gate_index];
     float activated = 1.0f / (1.0f + expf(-gate));
     if (args.kind == FERRULE_CORE_DATA_SILU_GATE) activated *= gate;
     pointer<float>(args.output0)[index] = const_pointer<float>(args.input0)[index] * activated;

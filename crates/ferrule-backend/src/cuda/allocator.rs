@@ -278,7 +278,7 @@ impl CudaDeviceAllocator {
         if state.shutdown {
             return Err(CudaError::internal("CUDA allocator is shut down"));
         }
-        if *capture_state != 0 {
+        if capture_state.blocks_allocation() {
             state.metrics.allocation_failures = state.metrics.allocation_failures.saturating_add(1);
             return Err(CudaError::internal(
                 "CUDA allocator cannot allocate during graph capture",
@@ -409,7 +409,7 @@ impl CudaDeviceAllocator {
         state.metrics.live_requested_bytes =
             state.metrics.live_requested_bytes.saturating_sub(requested);
         state.metrics.live_granted_bytes = state.metrics.live_granted_bytes.saturating_sub(granted);
-        if *capture_state != 0 {
+        if capture_state.blocks_allocation() {
             // A graph may retain the pointer after capture. Keep it isolated until
             // the owning CUDA context (and therefore every graph) is destroyed.
             state.metrics.capture_retirement_bytes = state

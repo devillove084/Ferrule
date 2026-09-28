@@ -243,13 +243,58 @@ impl LaunchConfig {
     }
 }
 
+/// Unknown is sticky: neither a local depth decrement nor an unrelated sync
+/// proves that capture ended or that graph consumers retired.
+#[derive(Debug, Default)]
+pub(crate) struct CaptureState {
+    depth: usize,
+    owner: Option<usize>,
+    unknown: bool,
+}
+
+impl CaptureState {
+    pub(crate) fn blocks_allocation(&self) -> bool {
+        self.depth != 0 || self.unknown
+    }
+
+    fn end_result(&mut self, code: CuResult, has_graph: bool) {
+        // EndCapture terminates an invalidated sequence too (901). All other
+        // failures, including context-binding failure, lack termination proof.
+        if !self.unknown && ((code == CUDA_SUCCESS && has_graph) || code == 901) {
+            self.depth = self.depth.saturating_sub(1);
+            self.owner = None;
+        } else {
+            self.unknown = true;
+        }
+    }
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy)]
+pub(crate) enum GraphFault {
+    Begin = 0,
+    End = 1,
+    Instantiate = 2,
+    Launch = 3,
+    Upload = 4,
+}
+
+#[cfg(test)]
+#[derive(Default)]
+struct GraphTestHooks {
+    faults: std::sync::atomic::AtomicUsize,
+    calls: [std::sync::atomic::AtomicUsize; 5],
+}
+
 pub struct CudaContext {
     device: CuDevice,
     context: CuContext,
     ordinal: usize,
     allocator: Arc<CudaDeviceAllocator>,
     streams: Mutex<Vec<Weak<CudaStream>>>,
-    capture_depth: Mutex<usize>,
+    capture_depth: Mutex<CaptureState>,
+    #[cfg(test)]
+    graph_test_hooks: GraphTestHooks,
 }
 
 impl fmt::Debug for CudaContext {
@@ -292,7 +337,9 @@ impl CudaContext {
             ordinal,
             allocator: CudaDeviceAllocator::new(weak.clone()),
             streams: Mutex::new(Vec::new()),
-            capture_depth: Mutex::new(0),
+            capture_depth: Mutex::new(CaptureState::default()),
+            #[cfg(test)]
+            graph_test_hooks: GraphTestHooks::default(),
         });
         this.bind_to_thread()?;
         Ok(this)
@@ -424,6 +471,7 @@ impl CudaContext {
     }
 
     pub(crate) fn synchronize_registered_streams(&self) -> CudaResult<()> {
+        self.check_graph_ready()?;
         self.bind_to_thread()?;
         check("cuCtxSynchronizeAllocatorRetirement", unsafe {
             cuCtxSynchronize()
@@ -431,13 +479,50 @@ impl CudaContext {
     }
 
     pub(crate) fn is_capturing(&self) -> bool {
-        *self.capture_state() != 0
+        self.capture_state().blocks_allocation()
     }
 
-    pub(crate) fn capture_state(&self) -> MutexGuard<'_, usize> {
+    pub(crate) fn capture_state(&self) -> MutexGuard<'_, CaptureState> {
         self.capture_depth
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    pub(crate) fn graph_completion_unknown(&self) -> bool {
+        self.capture_state().unknown
+    }
+
+    pub(crate) fn mark_graph_unknown(&self) {
+        self.capture_state().unknown = true;
+    }
+
+    pub(crate) fn check_graph_ready(&self) -> CudaResult<()> {
+        if self.is_capturing() {
+            return Err(CudaError::internal(
+                "CUDA capture active or graph completion unknown",
+            ));
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn arm_graph_fault(&self, fault: GraphFault) {
+        self.graph_test_hooks
+            .faults
+            .fetch_or(1 << fault as usize, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn graph_calls(&self, fault: GraphFault) -> usize {
+        self.graph_test_hooks.calls[fault as usize].load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    #[cfg(test)]
+    fn graph_fault(&self, fault: GraphFault) -> bool {
+        use std::sync::atomic::Ordering::SeqCst;
+        self.graph_test_hooks.calls[fault as usize].fetch_add(1, SeqCst);
+        let bit = 1 << fault as usize;
+        self.graph_test_hooks.faults.fetch_and(!bit, SeqCst) & bit != 0
     }
 
     pub(crate) fn allocator_metrics(&self) -> CudaAllocatorMetrics {
@@ -493,6 +578,10 @@ pub(crate) fn driver_free(ptr: DevicePtr) -> CudaResult<()> {
 
 impl Drop for CudaContext {
     fn drop(&mut self) {
+        if self.graph_completion_unknown() {
+            // Do not release a primary-context retain with unknown graph custody.
+            return;
+        }
         self.allocator.shutdown_with_context(self, true);
         let _ = self.bind_to_thread();
         let _ = check("cuDevicePrimaryCtxRelease", unsafe {
@@ -521,6 +610,7 @@ impl CudaStream {
     }
 
     pub fn synchronize(&self) -> CudaResult<()> {
+        self.context.check_graph_ready()?;
         self.context.bind_to_thread()?;
         check("cuStreamSynchronize", unsafe {
             cuStreamSynchronize(self.raw)
@@ -584,30 +674,76 @@ impl CudaStream {
         result
     }
 
+    pub(crate) fn owner(&self) -> CudaResult<Arc<Self>> {
+        self.context
+            .streams
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .filter_map(Weak::upgrade)
+            .find(|stream| std::ptr::eq(stream.as_ref(), self))
+            .ok_or_else(|| CudaError::internal("CUDA stream owner is unavailable"))
+    }
+
     pub(crate) fn begin_capture(&self) -> CudaResult<()> {
         self.context.bind_to_thread()?;
-        let mut depth = self.context.capture_state();
+        let mut state = self.context.capture_state();
+        if state.blocks_allocation() {
+            return Err(CudaError::internal(
+                "CUDA capture active or graph completion unknown",
+            ));
+        }
+        #[cfg(test)]
+        if self.context.graph_fault(GraphFault::Begin) {
+            return Err(CudaError::internal("injected capture begin failure"));
+        }
         check("cuStreamBeginCapture", unsafe {
             cuStreamBeginCapture(self.raw, CU_STREAM_CAPTURE_MODE_RELAXED)
         })?;
-        *depth = depth.saturating_add(1);
+        state.depth += 1;
+        state.owner = Some(self.raw as usize);
         Ok(())
     }
 
     pub(crate) fn end_capture(&self) -> CudaResult<CudaGraph> {
-        let mut depth = self.context.capture_state();
+        let owner = self.owner()?;
+        let mut state = self.context.capture_state();
+        if state.owner != Some(self.raw as usize) || state.depth == 0 {
+            return Err(CudaError::internal("capture end stream owner mismatch"));
+        }
+        if let Err(error) = self.context.bind_to_thread() {
+            state.unknown = true;
+            return Err(error);
+        }
         let mut raw = std::ptr::null_mut();
-        let result = check("cuStreamEndCapture", unsafe {
-            cuStreamEndCapture(self.raw, &mut raw)
-        });
-        *depth = depth.saturating_sub(1);
-        result?;
-        Ok(CudaGraph { raw })
+        let code = unsafe { cuStreamEndCapture(self.raw, &mut raw) };
+        // End the real driver capture before withholding its result. The hook
+        // tests unknown evidence without leaving the primary context capturing.
+        #[cfg(test)]
+        let code = if self.context.graph_fault(GraphFault::End) {
+            3
+        } else {
+            code
+        };
+        state.end_result(code, !raw.is_null());
+        drop(state);
+        let graph = CudaGraph { raw, owner };
+        check("cuStreamEndCapture", code)?;
+        if raw.is_null() {
+            return Err(CudaError::internal(
+                "capture ended without a graph; completion unknown",
+            ));
+        }
+        Ok(graph)
     }
 }
 
 impl Drop for CudaStream {
     fn drop(&mut self) {
+        if self.context.graph_completion_unknown() {
+            std::mem::forget(Arc::clone(&self.context));
+            return;
+        }
         let _ = self.synchronize();
         if self.owned && !self.raw.is_null() {
             let _ = check("cuStreamDestroy", unsafe { cuStreamDestroy_v2(self.raw) });
@@ -767,6 +903,10 @@ impl Drop for DeviceAllocation {
         if let Self::Managed { ptr, context, .. } = self
             && *ptr != 0
         {
+            if context.is_capturing() {
+                std::mem::forget(Arc::clone(context));
+                return;
+            }
             let _ = context.bind_to_thread();
             let _ = check("cuMemFreeManaged", unsafe { cuMemFree_v2(*ptr) });
         }
@@ -860,7 +1000,7 @@ impl<T: DeviceCopy> DeviceBuffer<T> {
     pub unsafe fn managed(context: &Arc<CudaContext>, len: usize) -> CudaResult<Self> {
         let bytes = allocation_bytes::<T>(len)?;
         let capture_state = context.capture_state();
-        if *capture_state != 0 {
+        if capture_state.blocks_allocation() {
             return Err(CudaError::internal(
                 "CUDA managed memory cannot allocate during graph capture",
             ));
@@ -1096,6 +1236,12 @@ impl<T: DeviceCopy> PinnedHostBuffer<T> {
 
     fn allocate(context: &Arc<CudaContext>, len: usize) -> CudaResult<Self> {
         let bytes = allocation_bytes::<T>(len)?;
+        let capture_state = context.capture_state();
+        if capture_state.blocks_allocation() {
+            return Err(CudaError::internal(
+                "CUDA pinned memory cannot allocate during graph capture or unknown completion",
+            ));
+        }
         context.bind_to_thread()?;
         let ptr = if bytes == 0 {
             NonNull::dangling()
@@ -1169,6 +1315,10 @@ impl<T: DeviceCopy> DerefMut for PinnedHostBuffer<T> {
 impl<T: DeviceCopy> Drop for PinnedHostBuffer<T> {
     fn drop(&mut self) {
         if self.bytes != 0 {
+            if self.context.is_capturing() {
+                std::mem::forget(Arc::clone(&self.context));
+                return;
+            }
             let _ = self.context.bind_to_thread();
             let _ = check("cuMemFreeHost", unsafe {
                 cuMemFreeHost(self.ptr.as_ptr().cast())
@@ -1179,21 +1329,39 @@ impl<T: DeviceCopy> Drop for PinnedHostBuffer<T> {
 
 pub(crate) struct CudaGraph {
     raw: CuGraph,
+    owner: Arc<CudaStream>,
 }
 
 impl CudaGraph {
     pub(crate) fn instantiate(&self) -> CudaResult<CudaGraphExec> {
+        self.owner.context.check_graph_ready()?;
+        self.owner.context.bind_to_thread()?;
+        #[cfg(test)]
+        if self.owner.context.graph_fault(GraphFault::Instantiate) {
+            return Err(CudaError::internal("injected graph instantiate failure"));
+        }
         let mut raw = std::ptr::null_mut();
         check("cuGraphInstantiate", unsafe {
             cuGraphInstantiateWithFlags(&mut raw, self.raw, 0)
         })?;
-        Ok(CudaGraphExec { raw })
+        Ok(CudaGraphExec {
+            raw,
+            owner: Arc::clone(&self.owner),
+        })
     }
 }
 
 impl Drop for CudaGraph {
     fn drop(&mut self) {
         if !self.raw.is_null() {
+            if self.owner.context.graph_completion_unknown()
+                || self.owner.context.bind_to_thread().is_err()
+            {
+                // Preserve native custody and context lifetime without claiming a
+                // process exit or unrelated sync proved graph retirement.
+                std::mem::forget(Arc::clone(&self.owner));
+                return;
+            }
             let _ = check("cuGraphDestroy", unsafe { cuGraphDestroy(self.raw) });
         }
     }
@@ -1201,25 +1369,69 @@ impl Drop for CudaGraph {
 
 pub(crate) struct CudaGraphExec {
     raw: CuGraphExec,
+    owner: Arc<CudaStream>,
 }
 
 impl CudaGraphExec {
+    pub(crate) fn precheck(&self, stream: &CudaStream) -> CudaResult<()> {
+        if !Arc::ptr_eq(&self.owner.context, stream.context())
+            || !std::ptr::eq(self.owner.as_ref(), stream)
+        {
+            return Err(CudaError::internal(
+                "CUDA graph context/stream owner mismatch",
+            ));
+        }
+        self.owner.context.check_graph_ready()
+    }
+
     pub(crate) fn launch(&self, stream: &CudaStream) -> CudaResult<()> {
-        check("cuGraphLaunch", unsafe {
+        self.precheck(stream)?;
+        self.owner.context.bind_to_thread()?;
+        #[cfg(test)]
+        if self.owner.context.graph_fault(GraphFault::Launch) {
+            self.owner.context.mark_graph_unknown();
+            return Err(CudaError::internal(
+                "injected graph launch completion unknown",
+            ));
+        }
+        let result = check("cuGraphLaunch", unsafe {
             cuGraphLaunch(self.raw, stream.raw)
-        })
+        });
+        if result.is_err() {
+            self.owner.context.mark_graph_unknown();
+        }
+        result
     }
 
     pub(crate) fn upload(&self, stream: &CudaStream) -> CudaResult<()> {
-        check("cuGraphUpload", unsafe {
+        self.precheck(stream)?;
+        self.owner.context.bind_to_thread()?;
+        #[cfg(test)]
+        if self.owner.context.graph_fault(GraphFault::Upload) {
+            self.owner.context.mark_graph_unknown();
+            return Err(CudaError::internal(
+                "injected graph upload completion unknown",
+            ));
+        }
+        let result = check("cuGraphUpload", unsafe {
             cuGraphUpload(self.raw, stream.raw)
-        })
+        });
+        if result.is_err() {
+            self.owner.context.mark_graph_unknown();
+        }
+        result
     }
 }
 
 impl Drop for CudaGraphExec {
     fn drop(&mut self) {
         if !self.raw.is_null() {
+            if self.owner.context.graph_completion_unknown()
+                || self.owner.context.bind_to_thread().is_err()
+            {
+                std::mem::forget(Arc::clone(&self.owner));
+                return;
+            }
             let _ = check("cuGraphExecDestroy", unsafe {
                 cuGraphExecDestroy(self.raw)
             });
@@ -1600,5 +1812,39 @@ mod tests {
         assert_eq!(trimmed.reserved_bytes, 0);
         assert_eq!(trimmed.driver_frees, 1);
         assert_eq!(trimmed.live_requested_bytes, 0);
+    }
+}
+
+#[cfg(test)]
+mod capture_state_tests {
+    use super::*;
+
+    #[test]
+    fn end_evidence_controls_depth_and_unknown_is_sticky() {
+        for (code, graph, ended) in [
+            (0, true, true),
+            (901, false, true),
+            (3, false, false),
+            (1, false, false),
+            (0, false, false),
+        ] {
+            let mut state = CaptureState {
+                depth: 1,
+                owner: Some(7),
+                unknown: false,
+            };
+            state.end_result(code, graph);
+            assert_eq!(state.depth, if ended { 0 } else { 1 });
+            assert_eq!(state.unknown, !ended);
+            assert_eq!(state.blocks_allocation(), !ended);
+            if !ended {
+                state.end_result(0, true);
+                assert!(state.unknown);
+                assert_eq!(
+                    state.depth, 1,
+                    "later local success is not unknown retirement evidence"
+                );
+            }
+        }
     }
 }

@@ -22,6 +22,7 @@ const CUDA_NATIVE_FILES: &[&str] = &[
     "native/cuda/cutlass/abi_checks.cuh",
     "native/cuda/cutlass/attention.cuh",
     "native/cuda/cutlass/attention_oracle.cuh",
+    "native/cuda/cutlass/bf16_linear.cuh",
     "native/cuda/cutlass/bindings.cuh",
     "native/cuda/cutlass/decoder_ops.cuh",
     "native/cuda/cutlass/fp4.cuh",

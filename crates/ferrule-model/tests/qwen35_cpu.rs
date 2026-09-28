@@ -35,7 +35,7 @@ fn qwen35_typed_unsupported_profiles_and_cuda_fail_before_loading() {
     value["model_type"] = "qwen3_5_moe".into();
     assert_source(
         Qwen35Config::from_value(&value).unwrap_err(),
-        Qwen35Unsupported::Profile("qwen3_5_moe".into()),
+        Qwen35Unsupported::PackedBf16Experts,
     );
     value["model_type"] = "qwen3_5".into();
     value["quantization_config"] = serde_json::json!({"quant_method":"fp8"});

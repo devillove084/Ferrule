@@ -8,6 +8,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use ferrule_common::{
     ContentHash, Error, PayloadEncodingId, Result, SourceGeneration, SourceIdentityHash,
@@ -19,44 +20,141 @@ use crate::materialization::ResourceSource;
 use super::hash::{CheckpointFileIdentity, Sha256};
 use super::{CheckpointReadExtent, CheckpointReadPlan};
 
+static CAPTURE_CALLS: AtomicU64 = AtomicU64::new(0);
+static CANONICALIZE_CALLS: AtomicU64 = AtomicU64::new(0);
+static PATH_METADATA_CALLS: AtomicU64 = AtomicU64::new(0);
+
+/// Process-wide source discovery/validation call counters (not a cache).
+/// `path_metadata_calls` counts explicit stat/lstat calls, not the platform's
+/// internal canonicalize path traversal. Reader counters isolate session I/O.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CheckpointSourceCounters {
+    pub capture_calls: u64,
+    pub canonicalize_calls: u64,
+    pub path_metadata_calls: u64,
+}
+
 /// Canonical path and filesystem identity captured during checkpoint discovery.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct CheckpointSourceFileIdentity {
     catalog_path: PathBuf,
     canonical_path: PathBuf,
     file_identity: CheckpointFileIdentity,
+    /// Identity of the original directory entry (not the followed target).
+    /// This detects a final symlink being replaced or retargeted.
+    original_path_identity: CheckpointFileIdentity,
+    original_path_is_symlink: bool,
 }
 
 impl CheckpointSourceFileIdentity {
+    pub fn counters() -> CheckpointSourceCounters {
+        CheckpointSourceCounters {
+            capture_calls: CAPTURE_CALLS.load(Ordering::Relaxed),
+            canonicalize_calls: CANONICALIZE_CALLS.load(Ordering::Relaxed),
+            path_metadata_calls: PATH_METADATA_CALLS.load(Ordering::Relaxed),
+        }
+    }
+
     pub fn capture(catalog_path: &Path) -> Result<Self> {
+        CAPTURE_CALLS.fetch_add(1, Ordering::Relaxed);
+        CANONICALIZE_CALLS.fetch_add(1, Ordering::Relaxed);
         let canonical_path = std::fs::canonicalize(catalog_path).map_err(|error| Error::Model {
             message: format!(
                 "canonicalize checkpoint source '{}': {error}",
                 catalog_path.display()
             ),
         })?;
-        let metadata = std::fs::metadata(&canonical_path).map_err(|error| Error::Model {
+        PATH_METADATA_CALLS.fetch_add(1, Ordering::Relaxed);
+        let target_metadata = std::fs::metadata(&canonical_path).map_err(|error| Error::Model {
             message: format!(
                 "read checkpoint source metadata '{}': {error}",
                 canonical_path.display()
             ),
         })?;
         let file_identity =
-            CheckpointFileIdentity::from_metadata(&metadata).map_err(|error| Error::Model {
+            CheckpointFileIdentity::from_metadata(&target_metadata).map_err(|error| {
+                Error::Model {
+                    message: format!("capture checkpoint source identity: {error}"),
+                }
+            })?;
+        PATH_METADATA_CALLS.fetch_add(1, Ordering::Relaxed);
+        let original_metadata =
+            std::fs::symlink_metadata(catalog_path).map_err(|error| Error::Model {
                 message: format!(
-                    "capture checkpoint source identity '{}': {error}",
-                    canonical_path.display()
+                    "read checkpoint original path '{}': {error}",
+                    catalog_path.display()
                 ),
             })?;
+        let original_path_identity = CheckpointFileIdentity::from_metadata(&original_metadata)
+            .map_err(|error| Error::Model {
+                message: format!("capture checkpoint original path identity: {error}"),
+            })?;
+        let original_path_is_symlink = original_metadata.file_type().is_symlink();
+        // A read session performs the authoritative pre-boundary check. Avoid
+        // re-stat'ing here: catalog capture is intentionally metadata-only and
+        // does not promise a long-lived trust token.
         Ok(Self {
             catalog_path: catalog_path.to_path_buf(),
             canonical_path,
             file_identity,
+            original_path_identity,
+            original_path_is_symlink,
         })
     }
 
     pub fn is_current(&self) -> bool {
-        Self::capture(&self.catalog_path).is_ok_and(|current| current == *self)
+        self.is_current_counted(None)
+    }
+
+    pub(crate) fn is_current_counted(&self, metadata_calls: Option<&AtomicU64>) -> bool {
+        // Validate the original directory entry first. Checking only a retained
+        // FD would let an unlink/rename replacement reuse the old payload.
+        if let Some(calls) = metadata_calls {
+            calls.fetch_add(1, Ordering::Relaxed);
+        }
+        PATH_METADATA_CALLS.fetch_add(1, Ordering::Relaxed);
+        let Ok(original) = std::fs::symlink_metadata(&self.catalog_path) else {
+            return false;
+        };
+        let Ok(original_identity) = CheckpointFileIdentity::from_metadata(&original) else {
+            return false;
+        };
+        if original_identity != self.original_path_identity
+            || original.file_type().is_symlink() != self.original_path_is_symlink
+        {
+            return false;
+        }
+        if self.original_path_is_symlink {
+            if let Some(calls) = metadata_calls {
+                calls.fetch_add(1, Ordering::Relaxed);
+            }
+            PATH_METADATA_CALLS.fetch_add(1, Ordering::Relaxed);
+            let Ok(current) = std::fs::metadata(&self.catalog_path) else {
+                return false;
+            };
+            if !self.matches_open_metadata(&current) {
+                return false;
+            }
+        } else if original_identity != self.file_identity {
+            return false;
+        }
+        // Unix device/inode bind the cached canonical target to the current
+        // original path. Without those fields preserve canonical validation.
+        #[cfg(not(unix))]
+        {
+            CANONICALIZE_CALLS.fetch_add(1, Ordering::Relaxed);
+            if !std::fs::canonicalize(&self.catalog_path)
+                .is_ok_and(|path| path == self.canonical_path)
+            {
+                return false;
+            }
+        }
+        true
+    }
+
+    pub(crate) fn matches_open_metadata(&self, metadata: &std::fs::Metadata) -> bool {
+        CheckpointFileIdentity::from_metadata(metadata)
+            .is_ok_and(|identity| identity == self.file_identity)
     }
 
     pub fn catalog_path(&self) -> &Path {
@@ -74,6 +172,8 @@ impl CheckpointSourceFileIdentity {
     fn update_hash(&self, hasher: &mut Sha256) {
         update_hash_path(hasher, &self.canonical_path);
         self.file_identity.update_hash(hasher);
+        self.original_path_identity.update_hash(hasher);
+        hasher.update(&[self.original_path_is_symlink as u8]);
     }
 
     #[cfg(test)]
@@ -82,6 +182,8 @@ impl CheckpointSourceFileIdentity {
             catalog_path,
             canonical_path,
             file_identity: CheckpointFileIdentity::for_test(length, 1, 2, Some(3), Some(4)),
+            original_path_identity: CheckpointFileIdentity::for_test(1, 1, 2, Some(3), Some(4)),
+            original_path_is_symlink: false,
         }
     }
 }

@@ -56,3 +56,8 @@ __pycache__/
 .vscode/
 .zed/
 *.options
+
+# Local refactoring artifacts and excluded paper planning
+/logs/
+/refactoring/
+/docs/ARXIV_PAPER_PLAN.md

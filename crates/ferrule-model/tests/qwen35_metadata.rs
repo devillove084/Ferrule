@@ -60,7 +60,7 @@ fn exact_family_identity_does_not_inherit_qwen3_runtime_support() {
         );
     }
     assert!(ModelFamily::Qwen35.is_supported_runtime_family());
-    assert!(!ModelFamily::Qwen35Moe.is_supported_runtime_family());
+    assert!(ModelFamily::Qwen35Moe.is_supported_runtime_family());
 }
 
 #[test]
@@ -142,7 +142,7 @@ fn maps_exact_text_schema_and_validates_attachments_without_binding_them() {
     assert_eq!(mapper.tensors().count(), 488);
     assert_eq!(
         mapper.output_alias(),
-        ("output.weight", "token_embedding.weight")
+        Some(("output.weight", "token_embedding.weight"))
     );
 
     let qkv = mapper
@@ -249,42 +249,66 @@ fn real_08b_headers_validate_text_and_known_attachment_partitions() {
 
 #[test]
 #[ignore = "requires FERRULE_QWEN35_35B_FP8_DIR; schema inspection only, no execution"]
-fn real_35b_fp8_is_recognized_but_rejected_as_an_unimplemented_profile() {
+fn real_35b_fp8_strict_headers_and_binder_are_metadata_only() {
+    use ferrule_model::TensorRole;
+    use ferrule_model::models::qwen35::Qwen35Adapter;
+    use ferrule_model::nn::StorageEncoding;
     let directory =
         std::env::var("FERRULE_QWEN35_35B_FP8_DIR").expect("set FERRULE_QWEN35_35B_FP8_DIR");
     let path = Path::new(&directory);
-    let value: Value =
-        serde_json::from_str(&std::fs::read_to_string(path.join("config.json")).unwrap()).unwrap();
-    assert_eq!(
-        ModelFamily::from_architecture(value["model_type"].as_str().unwrap()),
-        ModelFamily::Qwen35Moe
+    let (metadata, resources) = Qwen35Adapter::bind_hf_metadata(path).unwrap();
+    assert_eq!(metadata.config().profile(), Qwen35Profile::Moe35BA3Bfp8);
+    assert_eq!(metadata.inventory().family, ModelFamily::Qwen35Moe);
+    assert_eq!(metadata.inventory().shard_count, 14);
+    assert_eq!(metadata.inventory().tensor_count, 64196);
+    assert_eq!(metadata.partition().text().len(), 62303);
+    assert_eq!(metadata.partition().visual().len(), 333);
+    assert_eq!(metadata.partition().mtp().len(), 1560);
+    assert_eq!(resources.state_dict().len(), 31333);
+    assert!(!metadata.config().supports_execution());
+    // Default planning remains CPU; only an explicit CUDA plan is executable.
+    assert!(!metadata.descriptor().engine_plan().is_executable());
+    let cuda = ferrule_model::EnginePlan::from_contract_for_backend(
+        &metadata.descriptor().support_contract(),
+        ferrule_model::ModelExecutionBackend::Cuda,
+    );
+    assert_eq!(cuda.is_executable(), cfg!(feature = "cuda"));
+    assert!(
+        Qwen35Adapter::load_hf(path)
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("metadata/binding only")
     );
     assert!(
-        Qwen35Config::from_value(&value)
+        !resources
+            .require_static(TensorRole::OutputHead)
+            .unwrap()
+            .shares_storage_with(
+                resources
+                    .require_static(TensorRole::TokenEmbedding)
+                    .unwrap()
+            )
+    );
+    let encoding = metadata.config().numeric_fp8_encoding().unwrap();
+    let mut pairs = 0;
+    for parameter in resources.state_dict().parameters() {
+        assert_ne!(parameter.role(), &TensorRole::Unknown);
+        if parameter.scale().is_some() {
+            assert_eq!(parameter.weight().encoding(), StorageEncoding::Dense);
+            parameter.numeric_fp8_source(encoding).unwrap();
+            pairs += 1;
+        }
+    }
+    assert_eq!(pairs, 30970);
+    let mut bad = metadata.inventory().clone();
+    bad.tensors[0].name = "model.language_model.layers.0.mlp.unknown.weight".into();
+    assert!(
+        metadata
+            .name_mapper()
+            .validate_inventory(&bad)
             .unwrap_err()
             .to_string()
-            .contains("unsupported profile")
+            .contains("unknown")
     );
-    assert!(Qwen35Metadata::open_hf(path).is_err());
-    assert!(ferrule_model::AutoConfig::from_pretrained(path).is_err());
-    let inventory =
-        ferrule_model::HfSafetensorsInventory::open(path, ModelFamily::Qwen35Moe).unwrap();
-    assert_eq!(inventory.shard_count, 14);
-    assert_eq!(inventory.tensor_count, 64196);
-    let tensor = inventory
-        .tensors
-        .iter()
-        .find(|t| t.name == "model.language_model.layers.0.linear_attn.in_proj_qkv.weight")
-        .unwrap();
-    assert_eq!(tensor.dtype, "F8_E4M3");
-    assert_eq!(tensor.shape, [8192, 2048]);
-    let scale = inventory
-        .tensors
-        .iter()
-        .find(|t| {
-            t.name == "model.language_model.layers.0.linear_attn.in_proj_qkv.weight_scale_inv"
-        })
-        .unwrap();
-    assert_eq!(scale.dtype, "BF16");
-    assert_eq!(scale.shape, [64, 16]);
 }

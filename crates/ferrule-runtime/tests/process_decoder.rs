@@ -1,8 +1,11 @@
 //! Real checkpoint execution through production Boot/dispatch and private pipes.
-//! Build `cargo build -p ferrule-runtime --example process_rank_child` first.
+//! The matching process_rank_child is built once per test process.
 //! Set FERRULE_DECODER_CHILD to a built ferrule CLI to exercise __rank-worker
 //! with the same lifecycle tests instead of the fixture's production endpoint.
 #![cfg(unix)]
+
+#[path = "support/build_process_child.rs"]
+mod build_process_child;
 
 #[cfg(all(feature = "cuda", target_os = "linux"))]
 #[path = "process_decoder/cuda.rs"]
@@ -48,12 +51,10 @@ fn launch_with_timeout(timeout_ms: u64) -> ProcessLaunch {
             .arg("--io-timeout-ms")
             .arg(timeout_ms.to_string());
     }
-    let executable = std::env::current_exe().unwrap();
-    let fixture = executable
-        .ancestors()
-        .map(|directory| directory.join("examples/process_rank_child"))
-        .find(|candidate| candidate.is_file())
-        .expect("build fixture first: cargo build -p ferrule-runtime --example process_rank_child");
+    static CHILD: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    let fixture = CHILD.get_or_init(|| {
+        build_process_child::build("ferrule-runtime", "example", "process_rank_child")
+    });
     ProcessLaunch::new(fixture)
         .arg("decoder")
         .arg(timeout_ms.to_string())
@@ -166,7 +167,8 @@ impl Fixture {
                 let experts = ep.then(|| {
                     let first = 10 + rank * 2;
                     ExpertPlacementFrame {
-                        source: first,
+                        source_scope: ferrule_common::topology::ExpertSourceScope::ExternalStage,
+                        source: rank,
                         members: vec![first, first + 1],
                         entries: layers
                             .clone()
@@ -211,7 +213,7 @@ impl Fixture {
         let transport = ProcessPipelineTransport::spawn(launch(), boots, options())
             .unwrap()
             .shared();
-        let pipeline = PipelineParallelExecutor::new_with_transport(
+        let pipeline = PipelineParallelExecutor::new_with_external_expert_transport(
             topology(degree),
             plans,
             config(),
@@ -415,7 +417,7 @@ fn child_owns_real_prepare_execute_commit_finalize_and_release() {
 }
 
 #[test]
-fn process_pp2_matches_unsplit_child_through_decode_fork_and_release() {
+fn process_pp2_ep2_external_source_matches_unsplit_through_prefill_decode_fork_release() {
     for ep in [false, true] {
         let fixture = Fixture::new();
         let (mut pipeline, transport) = fixture.pipeline(2, ep);
@@ -425,6 +427,35 @@ fn process_pp2_matches_unsplit_child_through_decode_fork_and_release() {
             .collect();
         assert_ne!(pids[0], pids[1]);
         assert!(!pids.contains(&std::process::id()));
+        let scopes = pipeline.execution_scopes();
+        assert_eq!(
+            scopes
+                .kv_participants()
+                .iter()
+                .map(ParallelRankId::get)
+                .collect::<Vec<_>>(),
+            [0, 1]
+        );
+        for rank in 0..2 {
+            let group = scopes.expert_dispatch_members(rank, 0).unwrap();
+            if ep {
+                let group = group.unwrap();
+                assert_eq!(
+                    group.source_scope(),
+                    ferrule_common::topology::ExpertSourceScope::ExternalStage
+                );
+                assert_eq!(group.source_rank(), ParallelRankId::new(rank));
+                assert_eq!(group.len(), 2);
+                assert!(!group.contains(group.source_rank()));
+                assert!(
+                    group
+                        .iter()
+                        .all(|worker| !scopes.kv_participants().contains(worker))
+                );
+            } else {
+                assert!(group.is_none());
+            }
+        }
         pipeline.create_session(SessionId(19)).unwrap();
         oracle.create_session(SessionId(19)).unwrap();
         for (step, tokens) in [&[1, 2, 3][..], &[4]].into_iter().enumerate() {
@@ -469,6 +500,7 @@ fn process_pp2_matches_unsplit_child_through_decode_fork_and_release() {
                         assert_ne!(expert.pid, std::process::id());
                         assert_eq!(expert.owned_experts.len(), 1);
                         assert!(expert.calls > 0 && expert.tokens > 0);
+                        assert_eq!(expert.last_context, Some((output.transaction.get(), rank)));
                     }
                 }
             }
@@ -1073,4 +1105,307 @@ fn oversized_ep_bucket_is_fenced_and_experts_accept_the_next_command() {
         },
     );
     owner.shutdown().unwrap();
+}
+
+#[test]
+fn capacity_wire_roundtrip_and_old_boot_rejection_precede_factory() {
+    let fixture = Fixture::new();
+    let (_, cpu) = fixture.boots(1, false).remove(0);
+    for device in [DecoderDevice::Cpu, DecoderDevice::Cuda { ordinal: 3 }] {
+        let mut boot = cpu.clone();
+        boot.device = device;
+        boot.kv = KvConfigFrame::encode_for_device(config(), device).unwrap();
+        let encoded = serde_json::to_value(&boot).unwrap();
+        let decoded: DecoderBoot = serde_json::from_value(encoded.clone()).unwrap();
+        assert_eq!(decoded, boot);
+        let stage = decoded.stage_boot().unwrap();
+        let expected = config().max_pages * if device == DecoderDevice::Cpu { 1 } else { 2 };
+        assert_eq!(stage.config.max_pages, config().max_pages);
+        assert_eq!(stage.physical_pages, expected);
+        assert_eq!(
+            decoded.description(4, 8, 1, 2).unwrap().physical_pages,
+            expected
+        );
+        for pages in [
+            0,
+            expected + 1,
+            if device == DecoderDevice::Cpu {
+                expected * 2
+            } else {
+                expected / 2
+            },
+        ] {
+            let mut invalid = boot.clone();
+            invalid.kv.physical_pages = pages;
+            assert!(invalid.stage_boot().is_err());
+        }
+        let mut missing = encoded;
+        missing["kv"]
+            .as_object_mut()
+            .unwrap()
+            .remove("physical_pages");
+        assert!(serde_json::from_value::<DecoderBoot>(missing).is_err());
+        boot.version = 1;
+        assert!(boot.stage_boot().is_err());
+        let called = std::cell::Cell::new(false);
+        assert!(
+            DecoderChild::initialize(
+                ProcessBoot {
+                    identity: identity(boot.rank),
+                    limits: options().frame_limits,
+                    config: serde_json::to_value(&boot).unwrap(),
+                },
+                |_| {
+                    called.set(true);
+                    unreachable!("old Boot must be rejected before loading/CUDA")
+                }
+            )
+            .is_err()
+        );
+        assert!(!called.get());
+    }
+    assert_eq!(DECODER_WIRE_VERSION, 3);
+    assert_eq!(PROCESS_PROTOCOL_VERSION, 1);
+}
+
+#[test]
+fn process_cpu_single_logical_page_two_tokens_keeps_exact_capacity() {
+    process_single_logical_page(DecoderDevice::Cpu);
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+#[ignore = "requires one GPU and CUDA process_rank_child; --test-threads=1"]
+fn process_cuda_single_logical_page_two_tokens_keeps_exact_capacity() {
+    process_single_logical_page(DecoderDevice::Cuda { ordinal: 0 });
+}
+
+fn process_single_logical_page(device: DecoderDevice) {
+    let fixture = Fixture::new();
+    let cfg = PipelineConfig {
+        max_pages: 1,
+        max_positions: 2,
+        max_batch_tokens: 2,
+        session_capacity: 1,
+        ..config()
+    };
+    let mut boots = fixture.boots(2, false);
+    let physical = cfg
+        .physical_pages(matches!(device, DecoderDevice::Cuda { .. }))
+        .unwrap();
+    for (_, boot) in &mut boots {
+        boot.device = device;
+        boot.kv = KvConfigFrame::encode_for_device(cfg, boot.device).unwrap();
+    }
+    let plans = boots
+        .iter()
+        .map(|(_, boot)| boot.segment.decode().unwrap())
+        .collect();
+    let transport = ProcessPipelineTransport::spawn(launch(), boots, options())
+        .unwrap()
+        .shared();
+    let mut pipeline = PipelineParallelExecutor::new_with_external_expert_transport(
+        topology(2),
+        plans,
+        cfg,
+        transport.clone(),
+    )
+    .unwrap();
+    pipeline
+        .forward(SessionId(91), &[1], ForwardPhase::Prefill)
+        .unwrap();
+    pipeline
+        .forward(SessionId(91), &[2], ForwardPhase::Decode)
+        .unwrap();
+    assert_eq!(pipeline.page_manager().max_pages(), 1);
+    for rank in 0..2 {
+        let stats = transport.process_stats(rank).unwrap();
+        assert_eq!(
+            (stats.physical_pages, stats.resident_pages, stats.free_pages),
+            (physical, 1, physical - 1)
+        );
+    }
+    assert!(
+        pipeline
+            .forward(SessionId(91), &[3], ForwardPhase::Decode)
+            .is_err()
+    );
+    pipeline.release_session(SessionId(91)).unwrap();
+    for rank in 0..2 {
+        assert_eq!(transport.process_stats(rank).unwrap().free_pages, physical);
+    }
+    pipeline.shutdown().unwrap();
+}
+
+#[test]
+fn external_source_boot_topology_roundtrip_and_invalid_identity_rejection() {
+    use ferrule_common::topology::{ExpertDispatchMembers, ExpertSourceScope};
+    let fixture = Fixture::new();
+    let topology = topology(2);
+    let mut scopes = topology.execution_scopes(0).unwrap();
+    for (_, boot) in fixture.boots(2, true) {
+        let json = serde_json::to_value(&boot).unwrap();
+        assert_eq!(json["experts"]["source_scope"], "external_stage");
+        let decoded: DecoderBoot = serde_json::from_value(json.clone()).unwrap();
+        assert_eq!(decoded, boot);
+        let frame = decoded.experts.as_ref().unwrap();
+        assert_eq!(frame.source, decoded.rank);
+        assert!(!frame.members.contains(&frame.source));
+        decoded.stage_boot().unwrap();
+        let description = decoded.description(4, 8, 1, 2).unwrap();
+        let group = description.expert_group.as_ref().unwrap();
+        scopes
+            .attach_expert_dispatch_members(
+                ExpertDispatchMembers::new_with_scope(
+                    &topology,
+                    0,
+                    decoded.rank,
+                    frame.source_scope,
+                    group.source_rank,
+                    group.members.iter().copied(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        assert!(
+            description
+                .validate_expert_source(ExpertSourceScope::Member, group.source_rank)
+                .is_err()
+        );
+        let mut missing = json;
+        missing["experts"]
+            .as_object_mut()
+            .unwrap()
+            .remove("source_scope");
+        assert!(serde_json::from_value::<DecoderBoot>(missing).is_err());
+        for axis in 0..8 {
+            let mut invalid = boot.clone();
+            let frame = invalid.experts.as_mut().unwrap();
+            match axis {
+                0 => frame.source = boot.rank ^ 1,
+                1 => frame.source = frame.members[0],
+                2 => frame.source = u32::MAX,
+                3 => frame.members[0] = boot.rank,
+                4 => frame.source_scope = ExpertSourceScope::Member,
+                5 => {
+                    frame.source_scope = ExpertSourceScope::Member;
+                    frame.source = frame.members[0];
+                }
+                6 => invalid.version = 1,
+                7 => invalid.version = 2,
+                _ => unreachable!(),
+            }
+            assert!(invalid.stage_boot().is_err(), "axis {axis}");
+            assert!(
+                DecoderChild::initialize(
+                    ProcessBoot {
+                        identity: identity(boot.rank),
+                        limits: options().frame_limits,
+                        config: serde_json::to_value(&invalid).unwrap(),
+                    },
+                    |_| panic!("invalid source/version reached factory: {axis}"),
+                )
+                .is_err()
+            );
+        }
+    }
+    assert_eq!(
+        scopes
+            .kv_participants()
+            .iter()
+            .map(ParallelRankId::get)
+            .collect::<Vec<_>>(),
+        [0, 1]
+    );
+    for scope in [ExpertSourceScope::Member, ExpertSourceScope::ExternalStage] {
+        assert_eq!(
+            serde_json::from_str::<ExpertSourceScope>(&serde_json::to_string(&scope).unwrap())
+                .unwrap(),
+            scope
+        );
+    }
+}
+
+#[test]
+fn expert_external_source_spoof_quarantines_real_process_without_replay() {
+    type ExpertOwner = ProcessRankOwner<ExpertBoot, ExpertCommand, ExpertReply>;
+    let fixture = Fixture::new();
+    // Exercise both PP caller ranks and spoof the envelope source, token source,
+    // or both consistently. A worker ID is not a permitted caller identity.
+    for stage in 0..2 {
+        for axis in 0..4 {
+            let boot = fixture.boots(2, true).remove(stage as usize).1;
+            let worker = boot.experts.as_ref().unwrap().members[0];
+            let mut owner = ExpertOwner::spawn(
+                launch(),
+                identity(worker),
+                &ExpertBoot {
+                    expert_boot: boot,
+                    owner: worker,
+                },
+                options(),
+            )
+            .unwrap();
+            let token = ExpertTokenFrame {
+                transaction: 71,
+                sequence: 19,
+                source: stage,
+                row: 0,
+                route: 0,
+                layer: stage as usize,
+                expert: 0,
+                weight: 0.5,
+                values: vec![0.1; 4],
+            };
+            let valid = ExpertCommand::Compute {
+                transaction: 71,
+                source: stage,
+                layer: stage as usize,
+                tokens: vec![token],
+            };
+            let ExpertReply::Results {
+                owner: actual,
+                tokens,
+            } = owner.execute(tx(71), 0, &valid).unwrap()
+            else {
+                panic!("real expert result")
+            };
+            assert_eq!(actual, worker);
+            assert_eq!(
+                (tokens[0].transaction, tokens[0].source, tokens[0].sequence),
+                (71, stage, 19)
+            );
+            assert!(tokens[0].values.iter().all(|value| value.is_finite()));
+            let mut spoof = valid.clone();
+            let ExpertCommand::Compute { source, tokens, .. } = &mut spoof else {
+                unreachable!()
+            };
+            match axis {
+                0 => *source = stage ^ 1,
+                1 => tokens[0].source = worker,
+                2 => {
+                    *source = worker;
+                    tokens[0].source = worker;
+                }
+                3 => {
+                    *source = u32::MAX;
+                    tokens[0].source = u32::MAX;
+                }
+                _ => unreachable!(),
+            }
+            let error = owner.execute(tx(71), 0, &spoof).unwrap_err();
+            assert!(error.is_quiescence_unknown(), "{error}");
+            assert!(
+                error
+                    .to_string()
+                    .contains("expert source identity mismatch"),
+                "{error}"
+            );
+            assert!(matches!(
+                owner.execute(tx(71), 0, &valid),
+                Err(ProcessError::OwnerUnavailable)
+            ));
+            assert!(owner.shutdown().unwrap_err().is_quiescence_unknown());
+        }
+    }
 }

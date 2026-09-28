@@ -614,3 +614,198 @@ fn conv_delta_norm_silu_pipeline_keeps_two_sequences_independent() {
         }
     }
 }
+
+#[path = "support/row_gate_reference.rs"]
+mod row_gate_reference;
+
+#[test]
+fn gate_layouts_make_broadcast_explicit_and_reject_invalid_extents() {
+    let rows = F32RowsLayout {
+        rows: 3,
+        width: 2048,
+    };
+    let elementwise = F32GateLayout::from(rows);
+    let broadcast = F32GateLayout::RowBroadcast(rows);
+    assert_eq!(elementwise, F32GateLayout::Elementwise(rows));
+    assert_eq!(elementwise.input_elements().unwrap(), 6144);
+    assert_eq!(elementwise.gate_elements().unwrap(), 6144);
+    assert_eq!(broadcast.input_elements().unwrap(), 6144);
+    assert_eq!(broadcast.gate_elements().unwrap(), 3);
+    for rows in [
+        F32RowsLayout {
+            rows: 0,
+            width: 2048,
+        },
+        F32RowsLayout { rows: 3, width: 0 },
+        F32RowsLayout {
+            rows: usize::MAX,
+            width: 2,
+        },
+        F32RowsLayout {
+            rows: 2,
+            width: usize::MAX,
+        },
+        F32RowsLayout {
+            rows: i32::MAX as usize,
+            width: 2,
+        },
+        F32RowsLayout {
+            rows: 1,
+            width: i32::MAX as usize + 1,
+        },
+    ] {
+        for layout in [
+            F32GateLayout::Elementwise(rows),
+            F32GateLayout::RowBroadcast(rows),
+        ] {
+            assert!(layout.validate().is_err());
+            assert!(layout.input_elements().is_err());
+            assert!(layout.gate_elements().is_err());
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires actual native CUDA GPU; run explicitly (no silent skip)"]
+fn row_broadcast_gate_matches_transformers_cpu_f32_and_stays_resident() {
+    use row_gate_reference::{GATE, INPUT, SIGMOID, SILU};
+    let op = CudaOperators::new_on_device(0).unwrap();
+    // Odd rows and widths exercise both row and kernel-block boundaries;
+    // 1536/2048 are real dense hidden widths, rows=1 is decode.
+    for (rows, width) in [(1, 1), (3, 7), (17, 259), (5, 1536), (9, 2048), (1, 2048)] {
+        let layout = F32RowsLayout { rows, width };
+        let x = (0..rows * width)
+            .map(|i| INPUT[i % width % INPUT.len()])
+            .collect::<Vec<_>>();
+        let g = (0..rows).map(|i| GATE[i % GATE.len()]).collect::<Vec<_>>();
+        let expanded = g
+            .iter()
+            .flat_map(|v| std::iter::repeat_n(*v, width))
+            .collect::<Vec<_>>();
+        let input = upload(&op, &x);
+        let gate = upload(&op, &g);
+        let expanded_gate = upload(&op, &expanded);
+        let mut output = op.zero_f32_buffer(x.len()).unwrap();
+        let mut old_output = op.zero_f32_buffer(x.len()).unwrap();
+        for (activation, table) in [
+            (GateActivation::Sigmoid, &SIGMOID),
+            (GateActivation::Silu, &SILU),
+        ] {
+            op.reset_counters();
+            op.enable_capture_safe();
+            op.elementwise_gate_f32_into(
+                &input,
+                &gate,
+                &mut output,
+                F32GateLayout::RowBroadcast(layout),
+                activation,
+            )
+            .unwrap();
+            op.disable_capture_safe();
+            resident(&op, 1);
+            let actual = op.download_f32_buffer(&output).unwrap();
+            let expected = (0..rows * width)
+                .map(|i| table[(i / width) % GATE.len()][i % width % INPUT.len()])
+                .collect::<Vec<_>>();
+            close(&actual, &expected, 2e-6);
+            if activation == GateActivation::Sigmoid {
+                for i in 0..width {
+                    assert_eq!(
+                        actual[i].to_bits(),
+                        (x[i] * 0.5).to_bits(),
+                        "zero gate must halve F32 exactly"
+                    );
+                }
+            }
+            // The previous untyped layout call is source compatible, and the
+            // same kernel arithmetic must give identical bits after expansion.
+            op.elementwise_gate_f32_into(
+                &input,
+                &expanded_gate,
+                &mut old_output,
+                layout,
+                activation,
+            )
+            .unwrap();
+            let old = op.download_f32_buffer(&old_output).unwrap();
+            assert!(
+                actual
+                    .iter()
+                    .zip(old)
+                    .all(|(a, b)| a.to_bits() == b.to_bits())
+            );
+        }
+        assert_eq!(op.download_f32_buffer(&input).unwrap(), x);
+        assert_eq!(op.download_f32_buffer(&gate).unwrap(), g);
+    }
+}
+
+#[test]
+#[ignore = "requires actual native CUDA GPU; run explicitly (no silent skip)"]
+fn row_broadcast_gate_preserves_legacy_nonfinite_policy() {
+    let op = CudaOperators::new_on_device(0).unwrap();
+    let x = [
+        1.0f32,
+        -2.0,
+        0.0,
+        -0.0,
+        f32::INFINITY,
+        f32::NEG_INFINITY,
+        f32::NAN,
+    ];
+    let g = [
+        0.0,
+        f32::INFINITY,
+        f32::NEG_INFINITY,
+        f32::NAN,
+        -100.0,
+        100.0,
+    ];
+    let layout = F32RowsLayout {
+        rows: g.len(),
+        width: x.len(),
+    };
+    let input = upload(&op, &x.repeat(g.len()));
+    let gate = upload(&op, &g);
+    let expanded = upload(
+        &op,
+        &g.iter()
+            .flat_map(|v| std::iter::repeat_n(*v, x.len()))
+            .collect::<Vec<_>>(),
+    );
+    let mut output = op.zero_f32_buffer(layout.elements().unwrap()).unwrap();
+    let mut legacy = op.zero_f32_buffer(layout.elements().unwrap()).unwrap();
+    for activation in [GateActivation::Sigmoid, GateActivation::Silu] {
+        op.reset_counters();
+        op.elementwise_gate_f32_into(
+            &input,
+            &gate,
+            &mut output,
+            F32GateLayout::RowBroadcast(layout),
+            activation,
+        )
+        .unwrap();
+        resident(&op, 1);
+        op.elementwise_gate_f32_into(&input, &expanded, &mut legacy, layout, activation)
+            .unwrap();
+        let actual = op.download_f32_buffer(&output).unwrap();
+        let expected = op.download_f32_buffer(&legacy).unwrap();
+        for (i, (a, e)) in actual.iter().zip(expected).enumerate() {
+            assert!(
+                if e.is_nan() {
+                    a.is_nan()
+                } else {
+                    a.to_bits() == e.to_bits()
+                },
+                "legacy nonfinite mismatch at {i}"
+            );
+        }
+        if activation == GateActivation::Sigmoid {
+            assert_eq!(actual[0], 0.5);
+            assert_eq!(actual[x.len()], 1.0); // sigmoid(+Inf) = 1
+            assert_eq!(actual[2 * x.len()], 0.0); // sigmoid(-Inf) = 0
+            assert!(actual[2 * x.len() + 4].is_nan()); // +Inf * 0
+            assert!(actual[3 * x.len()..4 * x.len()].iter().all(|v| v.is_nan()));
+        }
+    }
+}

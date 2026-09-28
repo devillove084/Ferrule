@@ -3,8 +3,15 @@
 #[cfg(feature = "cuda")]
 pub mod cuda;
 
+#[path = "cuda/expert_cache.rs"]
+pub mod expert_cache;
+
 mod hybrid;
+mod numeric_precision;
+#[cfg(any(feature = "cuda", test))]
+pub(crate) mod scratch;
 pub use hybrid::{PreparedAttentionBlock, PreparedGatedDeltaNetBlock, PreparedStandardLayer};
+pub use numeric_precision::NumericFp8Precision;
 mod tensor;
 pub use tensor::{StandardTensorCollective, StandardTensorPlacement, StandardTensorPlan};
 
@@ -63,6 +70,7 @@ enum PreparedFeedForwardKind {
         router: PreparedLinear,
         descriptor: Moe,
         shared: Option<PreparedSwiGlu>,
+        shared_gate: Option<PreparedLinear>,
         experts: Box<[[BoundParameter; 3]]>,
     },
 }
@@ -123,11 +131,49 @@ pub struct CpuStandardModule<S> {
 struct StateDictExpertProvider<'a> {
     layer: usize,
     bindings: &'a [[BoundParameter; 3]],
+
     activation_limit: Option<f32>,
     materializer: &'a StateDictMaterializer,
 }
 
 impl ExpertProvider for StateDictExpertProvider<'_> {
+    fn expert_metadata_bindings(
+        &self,
+        layer: usize,
+        expert: usize,
+    ) -> Result<Option<super::ExpertMetadataBindings<'_>>> {
+        if layer != self.layer {
+            return Err(model_error(format!(
+                "expert request for unowned layer {layer}"
+            )));
+        }
+        let parameters = self
+            .bindings
+            .get(expert)
+            .ok_or_else(|| model_error(format!("missing expert {layer}:{expert}")))?;
+        Ok(Some(super::ExpertMetadataBindings {
+            parameters,
+            activation_limit: self.activation_limit,
+        }))
+    }
+
+    fn expert_metadata(
+        &mut self,
+        layer: usize,
+        expert: usize,
+    ) -> Result<Option<super::ExpertMetadata>> {
+        if layer != self.layer {
+            return Err(model_error(format!(
+                "expert request for unowned layer {layer}"
+            )));
+        }
+        let bindings = self
+            .bindings
+            .get(expert)
+            .ok_or_else(|| model_error(format!("missing expert {layer}:{expert}")))?;
+        super::ExpertMetadata::new(layer, expert, bindings.clone(), self.activation_limit).map(Some)
+    }
+
     fn expert(&mut self, layer: usize, expert: usize) -> Result<ExpertAvailability> {
         if layer != self.layer {
             return Err(model_error(format!(
@@ -323,24 +369,53 @@ fn execute_standard_layer_inner(
     };
     hidden.rows = Some(ready(operators.residual(hidden.take_rows()?, &update)?)?);
     let normalized = ready(operators.rms_norm(&feed_forward.norm, hidden.rows()?, 1, arena)?)?;
-    let update = match &feed_forward.kind {
+    let update = execute_feed_forward(
+        operators,
+        materializer,
+        layer_index,
+        &feed_forward.kind,
+        &normalized,
+        routed_execution,
+    )?;
+    hidden.rows = Some(ready(operators.residual(hidden.take_rows()?, &update)?)?);
+    Ok(())
+}
+
+fn execute_feed_forward(
+    operators: &mut dyn StandardDecoderOperators,
+    materializer: &StateDictMaterializer,
+    layer_index: usize,
+    kind: &PreparedFeedForwardKind,
+    normalized: &Rows,
+    routed_execution: Option<&mut RoutedLayerExecution<'_>>,
+) -> Result<Rows> {
+    let arena = None;
+    let update = match kind {
         PreparedFeedForwardKind::Dense(feed_forward) => {
-            ready(operators.dense_swiglu(feed_forward, &normalized, arena)?)?
+            ready(operators.dense_swiglu(feed_forward, normalized, arena)?)?
         }
         PreparedFeedForwardKind::Routed {
             router,
             descriptor,
             shared,
+            shared_gate,
             experts: bindings,
         } => {
-            let logits = ready(operators.linear(router, &normalized, arena)?)?;
+            let logits = ready(operators.linear(router, normalized, arena)?)?;
             let routes = ready(operators.router(&logits, descriptor.router_spec())?)?;
-            let shared = shared
+            let mut shared = shared
                 .as_ref()
-                .map(|shared| operators.dense_swiglu(shared, &normalized, arena))
+                .map(|shared| operators.dense_swiglu(shared, normalized, arena))
                 .transpose()?
                 .map(ready)
                 .transpose()?;
+            if let Some(gate) = shared_gate {
+                let gate = ready(operators.linear(gate, normalized, arena)?)?;
+                let output = shared
+                    .take()
+                    .ok_or_else(|| model_error("shared output gate without shared expert"))?;
+                shared = Some(ready(operators.shared_expert_gate(output, &gate)?)?);
+            }
             let mut routed = if let Some(execution) = routed_execution {
                 ready(execution.executor.routed_swiglu(
                     RoutedSwiGluRequest {
@@ -350,7 +425,7 @@ fn execute_standard_layer_inner(
                             layer: layer_index,
                         },
                         sequences: execution.sequences,
-                        input: &normalized,
+                        input: normalized,
                         routes: &routes,
                         arena,
                     },
@@ -360,12 +435,13 @@ fn execute_standard_layer_inner(
                 let mut experts = StateDictExpertProvider {
                     layer: layer_index,
                     bindings,
+
                     activation_limit: descriptor.expert().activation_limit(),
                     materializer,
                 };
                 ready(operators.routed_swiglu(
                     layer_index,
-                    &normalized,
+                    normalized,
                     &routes,
                     &mut experts,
                     arena,
@@ -379,8 +455,7 @@ fn execute_standard_layer_inner(
             routed
         }
     };
-    hidden.rows = Some(ready(operators.residual(hidden.take_rows()?, &update)?)?);
-    Ok(())
+    Ok(update)
 }
 
 fn execute_gqa(
@@ -892,6 +967,9 @@ fn prepare_feed_forward(
     cache: &mut MemoryLayerWeightCache,
     norm: PreparedNorm,
 ) -> Result<PreparedFeedForwardBlock> {
+    if let Some(host_experts) = resources.host_experts() {
+        materializer.attach_host_experts(host_experts)?;
+    }
     let layer = descriptor.index();
     let kind = match descriptor.feed_forward() {
         FeedForward::SwiGlu(feed_forward) => PreparedFeedForwardKind::Dense(prepare_swiglu(
@@ -925,6 +1003,7 @@ fn prepare_feed_forward(
                 })
                 .collect::<Result<Vec<_>>>()?
                 .into_boxed_slice(),
+
             router: prepare_layer_linear(
                 layer,
                 TensorRole::RouterLogits,
@@ -934,6 +1013,19 @@ fn prepare_feed_forward(
                 cache,
             )?,
             descriptor: moe.clone(),
+            shared_gate: moe
+                .shared_expert_gate()
+                .map(|gate| {
+                    prepare_layer_linear(
+                        layer,
+                        TensorRole::SharedExpertOutputGate,
+                        gate,
+                        resources,
+                        materializer,
+                        cache,
+                    )
+                })
+                .transpose()?,
             shared: moe
                 .shared_expert()
                 .map(|shared| prepare_swiglu(layer, shared, resources, materializer, cache, true))
@@ -1176,3 +1268,6 @@ fn model_error(message: impl Into<String>) -> Error {
         message: format!("standard transformer: {}", message.into()),
     }
 }
+
+#[cfg(test)]
+mod shared_gate_tests;

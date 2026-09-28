@@ -8,6 +8,7 @@ pub mod connection;
 pub(crate) mod cuda;
 pub mod expert_parallel;
 mod forward;
+pub mod host_experts;
 mod materialize;
 mod operators;
 pub mod parallel;
@@ -51,24 +52,29 @@ pub use forward::{
 pub use materialize::PreparedCudaLinear;
 pub use materialize::{
     LayerWeightCache, MemoryLayerWeightCache, PreparedDecoder, PreparedDecoderAttachment,
-    PreparedDecoderGeneration, PreparedEmbedding, PreparedInteger, PreparedLinear, PreparedNorm,
-    PreparedParameter, PreparedRope, StateDictMaterializer,
+    PreparedDecoderGeneration, PreparedEmbedding, PreparedInteger, PreparedLinear,
+    PreparedLinearStorage, PreparedNorm, PreparedParameter, PreparedParameterStorage, PreparedRope,
+    StateDictMaterializer,
 };
 #[cfg(feature = "cuda")]
 pub use operators::CudaRows;
 pub use operators::{
-    CpuStandardDecoderOperators, ExpertAvailability, ExpertProvider, ExpertSwiGluOperator,
-    GatedDeltaNetRequest, GqaMetadata, GqaRequest, HostRows, KvAppendRequest, KvHistory, KvView,
-    OperatorProgress, OperatorWaiting, PreparedSwiGlu, RouterRoutes, Rows, RowsArenaId, RowsDType,
-    RowsDevice, RowsShape, StandardDecoderKvView, StandardDecoderOperators, UnsupportedOperator,
+    CpuStandardDecoderOperators, ExpertAvailability, ExpertMetadata, ExpertMetadataBindings,
+    ExpertProvider, ExpertSwiGluOperator, GatedDeltaNetRequest, GqaMetadata, GqaRequest, HostRows,
+    KvAppendRequest, KvHistory, KvView, OperatorProgress, OperatorWaiting, PreparedSwiGlu,
+    RouterRoutes, Rows, RowsArenaId, RowsDType, RowsDevice, RowsShape, StandardDecoderKvView,
+    StandardDecoderOperators, UnsupportedOperator,
 };
 pub use recipe::{DecoderRecipe, DecoderRecipeError, DecoderRecipeOutput, SyntheticDecoderRecipe};
 pub use segment::{
     DeviceSegmentInput, DeviceSegmentOutput, LayerSegmentPlan, SegmentError, SegmentInput,
     SegmentOutput, SegmentResult, SegmentStage, StandardDecoderSegment,
 };
+pub use standard::expert_cache::{ExpertCacheLimits, ExpertCachePolicy, ExpertCacheStats};
+#[cfg(feature = "cuda")]
+pub(crate) use standard::scratch::SwiGluScratchPlan;
 pub use standard::{
-    CpuGqaMoeModule, CpuHybridModule, CpuStandardModule, CpuTransformerHidden,
+    CpuGqaMoeModule, CpuHybridModule, CpuStandardModule, CpuTransformerHidden, NumericFp8Precision,
     PreparedAttentionBlock, PreparedCpuOutput, PreparedFeedForwardBlock,
     PreparedGatedDeltaNetBlock, PreparedGqaBlock, PreparedGqaMoeLayer, PreparedStandardLayer,
     PreparedStandardOutput, StandardTensorCollective, StandardTensorPlacement, StandardTensorPlan,
@@ -84,4 +90,5 @@ pub use state_dict::{
 pub use standard::cuda::{
     CudaExpertParallelRoutedExecutor, CudaExpertWorker, CudaHostRoutedExecutor, CudaHybridModule,
     CudaStandardDecoderOperators, CudaStandardDecoderSegment, CudaStandardKvBinding,
+    ExpertMetadataPreflightStats,
 };

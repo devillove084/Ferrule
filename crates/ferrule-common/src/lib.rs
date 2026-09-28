@@ -8,6 +8,7 @@ pub mod io_protocol;
 
 pub mod materialization_io;
 pub mod memory;
+pub mod numeric_fp8;
 pub mod observability;
 pub mod topology;
 

@@ -1,8 +1,61 @@
 [profile.default]
 slow-timeout = { period = "60s", terminate-after = 2 }
 
+# CPU required: no filter/exclusion of workspace tests or missing model fixtures.
+# Only explicitly #[ignore] tests are opt-in; a missing hermetic fixture is a failure.
 [profile.ci]
 fail-fast = false
+retries = 0
 
 [profile.ci.junit]
+path = "junit.xml"
+
+# Audited single-GPU contracts only, including library lifecycle tests. The
+# recipe uses --run-ignored all, never a workspace-wide --ignored invocation.
+# Legacy cuda_allocator tests that return on initialization failure are NOT
+# evidence for this lane; their classification belongs to the backend owner.
+[profile.gpu-smoke]
+fail-fast = false
+retries = 0
+test-threads = 1
+slow-timeout = { period = "120s", terminate-after = 3 }
+default-filter = '''
+package(=ferrule-backend) & (
+    (binary(=cuda_allocator) & test(/pr01_/)) |
+    binary(=cuda_graph_lifecycle) |
+    binary(=cuda_kv_transactions) |
+    binary(=cuda_standard) |
+    (kind(lib) & (
+        test(/cuda::graph::gpu_lifecycle_tests::/) |
+        test(/cuda::context::pr01_tests::/)
+    ))
+)
+'''
+
+[profile.gpu-smoke.junit]
+path = "junit.xml"
+
+# Optional scheduled coverage: real model/oracle, four GPUs, EP2 and PP2/TP4.
+# Missing prerequisites are UNVERIFIED in the job report, not a passing test.
+# These are bounded selections, not permission to run every ignored test.
+[profile.gpu-nightly]
+fail-fast = false
+retries = 0
+test-threads = 1
+slow-timeout = { period = "300s", terminate-after = 3 }
+default-filter = '''
+(package(=ferrule-backend) & binary(=cuda_device_owners) & test(=two_device_same_thread_context_switch_regression)) |
+(package(=ferrule-model) & (
+    (binary(=hybrid_cuda) & test(=qwen35_08b_full_24_layer_gpu_matches_local_tf_reference)) |
+    (binary(=numeric_standard_cuda) & test(/(^|::)(numeric_two_layer_moe_top2_cap1_reloads_and_shared_gate_matches_torch|metadata_payload_calls_cap1_reload_and_large_cache_hits|numeric_attention_router_shared_and_head_use_the_same_linear_binding)$/)) |
+    (binary(=expert_parallel) & test(/(^|::)clamped_cuda_experts_and_gpu_combine_match_cpu_and_reject_stale_results$/))
+)) |
+(package(=ferrule-runtime) & (
+    (binary(=standard_tensor_cuda) & test(/^(pp1_tp2_tp4_logits_decode_cow_match_cpu_and_gpu_tp1|tp_rejects_foreign_placement_owner_and_unsharded_or_bf16_kv)$/)) |
+    (binary(=pipeline_decoder) & test(=cuda_pipeline::cuda_pp2_prefill_decode_cow_and_cancel_use_the_existing_kv_cohort)) |
+    (kind(lib) & test(/::tiny_ep2_full_hybrid_matches_local_and_lifecycle$/))
+))
+'''
+
+[profile.gpu-nightly.junit]
 path = "junit.xml"

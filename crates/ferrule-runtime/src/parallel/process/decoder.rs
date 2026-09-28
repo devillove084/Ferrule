@@ -8,6 +8,7 @@ use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 
 use ferrule_common::execution::ExecutionTransactionId;
+use ferrule_common::topology::ExpertSourceScope;
 use ferrule_common::{Error, ParallelRankId};
 use ferrule_model::execution::ExecutionPrecisionPolicy;
 use ferrule_model::models::qwen3::{Qwen3DenseRecipe, Qwen3MoeRecipe};
@@ -41,7 +42,9 @@ pub(super) fn error(message: impl std::fmt::Display) -> Error {
     }
 }
 
-pub const DECODER_WIRE_VERSION: u16 = 1;
+// Capacity and source-scope semantics require coordinated parent/child restart.
+// Neither v1 nor v2 Boot can establish the v3 caller identity contract.
+pub const DECODER_WIRE_VERSION: u16 = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -94,7 +97,10 @@ impl SegmentFrame {
 #[serde(deny_unknown_fields)]
 pub struct KvConfigFrame {
     pub page_size: usize,
+    /// Logical page capacity.
     pub max_pages: usize,
+    /// Required physical slots; never inferred for old peers.
+    pub physical_pages: usize,
     pub max_positions: usize,
     pub max_batch_tokens: usize,
     pub session_capacity: usize,
@@ -102,10 +108,13 @@ pub struct KvConfigFrame {
     pub max_ack_polls: usize,
 }
 impl KvConfigFrame {
+    /// CPU compatibility encoder: physical slots equal logical pages.
+    /// CUDA callers must use `encode_for_device`.
     pub fn encode(c: PipelineConfig) -> Self {
         Self {
             page_size: c.page_size,
             max_pages: c.max_pages,
+            physical_pages: c.max_pages,
             max_positions: c.max_positions,
             max_batch_tokens: c.max_batch_tokens,
             session_capacity: c.session_capacity,
@@ -113,7 +122,14 @@ impl KvConfigFrame {
             max_ack_polls: c.max_ack_polls,
         }
     }
-    fn decode(&self, precision: DecoderPrecision) -> Result<PipelineConfig> {
+    /// Encode the explicit backend capacity without initializing that backend.
+    pub fn encode_for_device(c: PipelineConfig, device: DecoderDevice) -> Result<Self> {
+        let mut frame = Self::encode(c);
+        frame.physical_pages = c.physical_pages(matches!(device, DecoderDevice::Cuda { .. }))?;
+        Ok(frame)
+    }
+
+    fn decode(&self, precision: DecoderPrecision, device: DecoderDevice) -> Result<PipelineConfig> {
         let c = PipelineConfig {
             page_size: self.page_size,
             max_pages: self.max_pages,
@@ -130,12 +146,18 @@ impl KvConfigFrame {
             },
         };
         c.validate()?;
+        if self.physical_pages != c.physical_pages(matches!(device, DecoderDevice::Cuda { .. }))? {
+            return Err(error(
+                "decoder physical capacity differs from backend L/2L policy",
+            ));
+        }
         Ok(c)
     }
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ExpertPlacementFrame {
+    pub source_scope: ExpertSourceScope,
     pub source: u32,
     pub members: Vec<u32>,
     pub entries: Vec<(usize, usize, u32)>,
@@ -158,7 +180,10 @@ impl ExpertPlacementFrame {
             || self.members.len() > PROCESS_REAPER_CAPACITY
             || (self.devices.len() != self.members.len() && !self.devices.is_empty())
             || self.timeout_ms == 0
-            || !self.members.contains(&self.source)
+            || match self.source_scope {
+                ExpertSourceScope::Member => !self.members.contains(&self.source),
+                ExpertSourceScope::ExternalStage => self.members.contains(&self.source),
+            }
             || self
                 .members
                 .iter()
@@ -228,12 +253,20 @@ impl DecoderBoot {
                 global: rank,
             },
             plan: self.segment.decode()?,
-            config: self.kv.decode(self.precision)?,
+            config: self.kv.decode(self.precision, self.device)?,
+            physical_pages: self.kv.physical_pages,
             program_spec: Vec::new(),
         };
         boot.validate()?;
         if let Some(experts) = &self.experts {
             let group = experts.decode(boot.plan.layers())?;
+            if experts.source_scope != ExpertSourceScope::ExternalStage
+                || experts.source != self.rank
+            {
+                return Err(error(
+                    "process expert source must be the current external PP stage",
+                ));
+            }
             if group.members.contains(&rank) {
                 return Err(error("expert owner overlaps pipeline rank"));
             }
@@ -267,6 +300,7 @@ impl DecoderBoot {
         let description = PipelineStageDescription {
             plan: boot.plan,
             config: boot.config,
+            physical_pages: boot.physical_pages,
             hidden,
             vocabulary,
             kv_heads,
@@ -278,6 +312,10 @@ impl DecoderBoot {
                 .transpose()?,
         };
         description.validate()?;
+        if let Some(experts) = &self.experts {
+            description
+                .validate_expert_source(experts.source_scope, ParallelRankId::new(self.rank))?;
+        }
         Ok(description)
     }
     /// HF metadata and selected tensor payloads are read only inside the child.

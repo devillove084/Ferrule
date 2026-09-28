@@ -219,6 +219,7 @@ pub struct BoundDecoderResources {
     attachments: BTreeMap<ModulePath, BTreeMap<TensorRole, Vec<BoundParameter>>>,
     experts: BoundExpertCatalog,
     sources: BoundDecoderSourceCatalogs,
+    host_experts: Option<Arc<super::host_experts::HostExpertCache>>,
 }
 
 impl BoundDecoderResources {
@@ -310,6 +311,7 @@ impl BoundDecoderResources {
             attachments,
             experts,
             sources,
+            host_experts: None,
         })
     }
 
@@ -321,7 +323,33 @@ impl BoundDecoderResources {
         &self.state_dict
     }
 
-    /// Check full weight sizes against residency-specific limits without reading payloads.
+    pub fn host_experts(&self) -> Option<&Arc<super::host_experts::HostExpertCache>> {
+        self.host_experts.as_ref()
+    }
+
+    /// Consuming startup boundary: a failed warm cannot publish partial resources.
+    pub fn with_host_expert_prewarm(
+        mut self,
+        options: super::host_experts::HostExpertCacheOptions,
+        max_parameter_bytes: u64,
+        progress: impl FnMut(super::host_experts::HostExpertWarmProgress),
+    ) -> Result<Self> {
+        options.validate()?;
+        if self.host_experts.is_some() {
+            return Err(model_error("host expert generation is already installed"));
+        }
+        if options.mode == super::host_experts::ExpertPrewarmMode::Full {
+            let plan = super::host_experts::HostExpertWarmPlan::new(
+                self.state_dict(),
+                options,
+                max_parameter_bytes,
+            )?;
+            self.host_experts = Some(Arc::new(plan.warm(progress)?));
+        }
+        Ok(self)
+    }
+
+    /// Check full paired storage sizes against residency-specific limits without payload I/O.
     pub fn validate_parameter_limits(&self, dense_limit: u64, expert_limit: u64) -> Result<()> {
         for parameter in self.state_dict().parameters() {
             let limit = if matches!(parameter.residency(), ParameterResidency::Expert { .. }) {
@@ -329,11 +357,17 @@ impl BoundDecoderResources {
             } else {
                 dense_limit
             };
-            if parameter.weight().slice().bytes > limit {
+            let bytes = parameter
+                .weight()
+                .slice()
+                .bytes
+                .checked_add(parameter.scale().map_or(0, |scale| scale.slice().bytes))
+                .ok_or_else(|| model_error("parameter weight+scale byte size overflow"))?;
+            if bytes > limit {
                 return Err(model_error(format!(
                     "parameter '{}' is {} bytes, above its {}-byte load limit",
                     parameter.path(),
-                    parameter.weight().slice().bytes,
+                    bytes,
                     limit
                 )));
             }
@@ -877,7 +911,8 @@ fn parameter_stage(parameter: &BoundParameter) -> TransformerStage {
         | TensorRole::DenseMlpDown
         | TensorRole::SharedExpertGate
         | TensorRole::SharedExpertUp
-        | TensorRole::SharedExpertDown => TransformerStage::FeedForward { layer },
+        | TensorRole::SharedExpertDown
+        | TensorRole::SharedExpertOutputGate => TransformerStage::FeedForward { layer },
         TensorRole::AuxHiddenCompressor
             if parameter
                 .path()

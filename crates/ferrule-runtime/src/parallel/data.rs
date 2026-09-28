@@ -700,6 +700,28 @@ impl<I: Send + 'static, O: Send + 'static, E: Send + 'static> DataParallelExecut
         self.try_recv()
     }
 
+    /// Close inputs and signal cancellation without joining owners or retiring
+    /// any ticket. Poll shutdown_ready, then shutdown, for a bounded host wait.
+    pub fn begin_shutdown(&mut self) {
+        self.closed = true;
+        for pending in self.pending.values() {
+            pending.cancellation.0.store(true, Ordering::Release);
+        }
+        for replica in &mut self.replicas {
+            replica.sender.take();
+        }
+    }
+
+    /// Nonblocking join preflight, not a device fence. Consume completions and
+    /// inspect shutdown failures before treating external work as complete.
+    pub fn shutdown_ready(&self) -> bool {
+        self.closed
+            && self
+                .replicas
+                .iter()
+                .all(|r| r.owner.as_ref().is_none_or(JoinHandle::is_finished))
+    }
+
     /// Close ALL inputs, request cancellation, then join ALL owners even if some
     /// fail. Completion channels hold at least the entire outstanding budget, so
     /// joining never requires concurrent host draining. Results/credits remain
@@ -708,13 +730,7 @@ impl<I: Send + 'static, O: Send + 'static, E: Send + 'static> DataParallelExecut
     /// A joined quarantined owner is NOT a device fence: its worker stays leaked,
     /// and the caller must retain custody for QuiescenceUnknown notifications.
     pub fn shutdown(&mut self) -> Result<(), ShutdownError<E>> {
-        self.closed = true;
-        for pending in self.pending.values() {
-            pending.cancellation.0.store(true, Ordering::Release);
-        }
-        for replica in &mut self.replicas {
-            replica.sender.take();
-        }
+        self.begin_shutdown();
         let mut failures = Vec::new();
         for (index, replica) in self.replicas.iter_mut().enumerate() {
             if let Some(owner) = replica.owner.take() {

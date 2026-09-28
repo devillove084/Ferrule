@@ -11,6 +11,78 @@ use crate::{CancelRequestResult, Error, ResidentDriverStep, ResidentTokenEvent, 
 
 use super::{ResidentEngineObservability, ResidentKvPagePlan, ResidentTopKDriver};
 
+/// Fixed-size owner-local serving gauges. Unsupported domains remain `None`.
+/// No histories, request IDs, sequence states or materialization ledgers are read.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
+pub struct InferenceCapacitySnapshot {
+    pub scheduler: Option<InferenceSchedulerSnapshot>,
+    pub kv: Option<InferenceKvSnapshot>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub struct InferenceSchedulerSnapshot {
+    pub active_sequences: usize,
+    pub waiting_requests: usize,
+    /// Effective limits read from the live scheduler, not requested CLI policy.
+    pub max_active_sequences: usize,
+    pub max_decode_batch: usize,
+    /// None means the scheduler has no batch-token limit, not zero capacity.
+    pub max_batch_tokens: Option<usize>,
+    pub prefill_chunk_size: usize,
+}
+
+impl InferenceSchedulerSnapshot {
+    fn read(scheduler: &crate::scheduling::ResidentScheduler) -> Self {
+        let config = scheduler.config();
+        Self {
+            active_sequences: scheduler.active_len(),
+            waiting_requests: scheduler.waiting_len(),
+            max_active_sequences: config.max_active_sequences,
+            max_decode_batch: config.max_decode_batch,
+            max_batch_tokens: (config.max_batch_tokens != 0).then_some(config.max_batch_tokens),
+            prefill_chunk_size: config.prefill_chunk_size,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub struct InferenceKvSnapshot {
+    pub page_size_tokens: usize,
+    /// None is logically unlimited. These are page-manager counts, not VRAM.
+    pub logical_capacity_pages: Option<usize>,
+    /// Includes reservations, retained prefixes and unconfirmed retirements.
+    pub logical_allocated_pages: usize,
+    /// All allocatable logical credits, including pages not yet issued.
+    pub logical_free_pages: Option<usize>,
+    /// Already issued pages whose retirement has been confirmed; subset of free.
+    pub recycled_pages: usize,
+    /// Only an authoritative backend query may populate physical counts.
+    pub physical: Option<InferencePhysicalKvSnapshot>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub struct InferencePhysicalKvSnapshot {
+    pub capacity_pages: usize,
+    pub free_pages: usize,
+}
+
+impl InferenceKvSnapshot {
+    fn read(manager: &crate::cache::KvPageManager) -> Self {
+        let capacity = (manager.max_pages() != 0).then_some(manager.max_pages());
+        let allocated = manager.allocated_pages();
+        Self {
+            page_size_tokens: manager.page_size(),
+            logical_capacity_pages: capacity,
+            logical_allocated_pages: allocated,
+            logical_free_pages: capacity.and_then(|limit| limit.checked_sub(allocated)),
+            recycled_pages: manager.free_pages(),
+            // Neither the page plan nor logical page retirement is a query of
+            // the physical allocator. Do not derive its free count from either.
+            physical: None,
+        }
+    }
+}
+
 /// Completion reactors and wake coordination owned by one local inference task.
 ///
 /// Attach this object on the CUDA owner's [`tokio::task::LocalSet`]. Reactor
@@ -200,6 +272,9 @@ impl LocalSessionInferenceEngine {
     pub fn submit(&mut self, request: GenerateRequest) {
         self.engine.submit(request);
     }
+    pub fn try_submit(&mut self, request: GenerateRequest) -> Result<()> {
+        self.engine.try_submit(request)
+    }
 
     pub fn take_request_terminal(
         &mut self,
@@ -333,6 +408,9 @@ where
     pub fn submit(&mut self, request: GenerateRequest) {
         self.engine.driver_mut().submit(request);
     }
+    pub fn try_submit(&mut self, request: GenerateRequest) -> Result<()> {
+        self.engine.driver_mut().try_submit(request)
+    }
 
     pub fn take_request_terminal(
         &mut self,
@@ -352,14 +430,18 @@ where
         self.completion_owner.step(&mut self.engine, on_token).await
     }
 
-    /// Cancel background warmup and drain every submitted physical operation before
+    /// Cancel background warmup, drain submitted work and explicitly close the runner before
     /// releasing the model owner. Logical shutdown never releases resources while a
     /// provider still owns physical work.
     pub async fn shutdown(&mut self) -> Result<()> {
         loop {
             let completion = self.completion_owner.listen();
             let mut discard = |_event: &ResidentTokenEvent| Ok(());
-            match self.engine.driver_mut().shutdown_progress(&mut discard)? {
+            match self
+                .engine
+                .driver_mut()
+                .shutdown_and_close_progress(&mut discard)?
+            {
                 super::driver::ResidentShutdownProgress::Complete(report) => {
                     debug_assert!(report.registry.drained);
                     return Ok(());
@@ -378,11 +460,16 @@ pub type InferenceCompletionReactor = Pin<Box<dyn Future<Output = Result<()>> + 
 /// Progress of a request cancellation owned by the inference runtime.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InferenceCancelProgress {
+    RequiresRestoreOrShutdown {
+        request_id: RequestId,
+        session_id: crate::scheduling::SessionId,
+    },
     /// The request is quiescent and scheduler cancellation has completed.
     Complete(CancelRequestResult),
     /// Cancellation was accepted and the owner will drive backend quiescence on
-    /// subsequent ticks. The caller retains request ownership but must not resubmit
-    /// the cancellation request.
+    /// subsequent ticks. An irrevocable Publish may still complete physically,
+    /// but accepted cancellation must not become a successful request terminal.
+    /// The caller retains request ownership but must not resubmit the cancellation.
     Pending,
 }
 
@@ -390,6 +477,68 @@ pub enum InferenceCancelProgress {
 pub enum InferenceShutdownProgress {
     Pending,
     Complete,
+}
+
+/// Generation-specific evidence issued by the original cleanup owner. This
+/// receipt holds no physical resources. Observers can read it after identity
+/// reaping; dropping the last observer frees it without a tombstone registry.
+#[derive(Debug, Clone)]
+pub struct RequestCleanupReceipt(std::sync::Arc<std::sync::atomic::AtomicBool>);
+
+impl RequestCleanupReceipt {
+    fn pending() -> Self {
+        Self(std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
+            false,
+        )))
+    }
+
+    pub fn is_released(&self) -> bool {
+        self.0.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    fn release(&self) {
+        self.0.store(true, std::sync::atomic::Ordering::Release);
+    }
+}
+
+/// Non-cloneable issuer for third-party engine implementations. Keep this with
+/// the existing cleanup ledger, not with HTTP observers. Dropping it is NOT a
+/// release proof; its observers remain pending if custody becomes unknown.
+#[derive(Debug)]
+pub struct RequestCleanupOwner(RequestCleanupReceipt);
+
+impl Default for RequestCleanupOwner {
+    fn default() -> Self {
+        Self(RequestCleanupReceipt::pending())
+    }
+}
+
+impl RequestCleanupOwner {
+    pub fn receipt(&self) -> RequestCleanupReceipt {
+        self.0.clone()
+    }
+
+    /// Publish only after this generation's runtime terminal was consumed and
+    /// all request-owned work/cleanup is quiescent or transferred to a retained
+    /// session owner. Cancellation acceptance and idle are not sufficient.
+    pub fn release(self) {
+        self.0.release();
+    }
+}
+
+/// Per-admission cleanup contract, captured immediately after successful submit.
+#[derive(Debug, Clone, Default)]
+pub enum InferenceRequestCleanup {
+    /// No proof: retain credit until authoritative shutdown.
+    #[default]
+    Unavailable,
+    /// Explicit legacy capability: draining this request's runtime terminal
+    /// proves all its work and cleanup quiescent. Never inferred from idle,
+    /// cancel acceptance, HTTP completion, or an absent admission snapshot.
+    TerminalQuiescent,
+    /// Only the original runtime owner can release this generation's receipt,
+    /// after terminal consumption AND exact cleanup. Reads acknowledge nothing.
+    Tracked(RequestCleanupReceipt),
 }
 
 /// Owner-local execution lifecycle consumed by serving frontends.
@@ -444,6 +593,39 @@ pub trait InferenceEngine: 'static {
         Ok(())
     }
 
+    /// Capture this generation before stepping or draining can reap its identity.
+    fn request_cleanup(&self, _request_id: RequestId) -> InferenceRequestCleanup {
+        InferenceRequestCleanup::Unavailable
+    }
+
+    /// None means this engine has no configurable resident admission contract.
+    fn admission_snapshot(&self) -> Option<super::RuntimeAdmissionSnapshot> {
+        None
+    }
+
+    /// Read only the current owner's bounded semantic capacities. The default
+    /// preserves custom/legacy engines: unknown is not a zero or idle gauge.
+    fn capacity_snapshot(&self) -> InferenceCapacitySnapshot {
+        InferenceCapacitySnapshot::default()
+    }
+
+    fn set_admission_options(&mut self, _options: super::RuntimeAdmissionOptions) -> Result<()> {
+        Err(Error::InvalidRequest {
+            message: "engine does not support resident admission options".into(),
+        })
+    }
+
+    /// Close new submission without claiming that existing work is drained.
+    fn close_admission(&mut self) -> Result<()> {
+        Err(Error::InvalidRequest {
+            message: "engine does not support a separate admission barrier".into(),
+        })
+    }
+
+    /// Advance execution and deliver selected tokens. A token callback is not a
+    /// request-completion or retained-KV barrier: target-only engines may emit
+    /// before that token's KV append. Continue until a terminal is drained.
+    /// Return Ok only after accepting an event; Err permits the owner to retry it.
     fn step(
         &mut self,
         on_token: &mut dyn FnMut(&ResidentTokenEvent) -> Result<()>,
@@ -492,6 +674,21 @@ where
 
     fn try_submit(&mut self, request: GenerateRequest) -> Result<()> {
         (**self).try_submit(request)
+    }
+    fn request_cleanup(&self, request_id: RequestId) -> InferenceRequestCleanup {
+        (**self).request_cleanup(request_id)
+    }
+    fn admission_snapshot(&self) -> Option<super::RuntimeAdmissionSnapshot> {
+        (**self).admission_snapshot()
+    }
+    fn capacity_snapshot(&self) -> InferenceCapacitySnapshot {
+        (**self).capacity_snapshot()
+    }
+    fn set_admission_options(&mut self, options: super::RuntimeAdmissionOptions) -> Result<()> {
+        (**self).set_admission_options(options)
+    }
+    fn close_admission(&mut self) -> Result<()> {
+        (**self).close_admission()
     }
 
     fn step(
@@ -701,7 +898,7 @@ where
     fn shutdown(&mut self) -> Result<InferenceShutdownProgress> {
         let mut discard = |_event: &ResidentTokenEvent| Ok(());
         self.driver
-            .shutdown_progress(&mut discard)
+            .shutdown_and_close_progress(&mut discard)
             .map(|progress| match progress {
                 super::driver::ResidentShutdownProgress::Pending => {
                     InferenceShutdownProgress::Pending
@@ -723,6 +920,25 @@ where
     fn try_submit(&mut self, request: GenerateRequest) -> Result<()> {
         self.driver.try_submit(request)
     }
+    fn request_cleanup(&self, request_id: RequestId) -> InferenceRequestCleanup {
+        self.driver.request_cleanup(request_id)
+    }
+    fn admission_snapshot(&self) -> Option<super::RuntimeAdmissionSnapshot> {
+        Some(self.driver.admission_snapshot())
+    }
+    fn capacity_snapshot(&self) -> InferenceCapacitySnapshot {
+        InferenceCapacitySnapshot {
+            scheduler: Some(InferenceSchedulerSnapshot::read(self.driver.scheduler())),
+            kv: self.driver.page_manager().map(InferenceKvSnapshot::read),
+        }
+    }
+    fn set_admission_options(&mut self, options: super::RuntimeAdmissionOptions) -> Result<()> {
+        self.driver.set_admission_options(options)
+    }
+    fn close_admission(&mut self) -> Result<()> {
+        self.driver.close_admission();
+        Ok(())
+    }
 
     fn step(
         &mut self,
@@ -734,6 +950,13 @@ where
 
     fn cancel_request(&mut self, request_id: RequestId) -> Result<InferenceCancelProgress> {
         match self.driver.cancel_request(request_id) {
+            Ok(super::driver::ResidentCancelProgress::RequiresRestoreOrShutdown {
+                request_id,
+                session_id,
+            }) => Ok(InferenceCancelProgress::RequiresRestoreOrShutdown {
+                request_id,
+                session_id,
+            }),
             Ok(super::driver::ResidentCancelProgress::Complete(result)) => {
                 Ok(InferenceCancelProgress::Complete(result))
             }
@@ -754,5 +977,114 @@ where
 
     fn drain_failed(&mut self) -> Vec<SequenceState> {
         self.driver.drain_failed()
+    }
+}
+
+#[cfg(test)]
+mod capacity_snapshot_tests {
+    use super::*;
+    use crate::cache::KvPageManager;
+    use crate::scheduling::{
+        FixedSequenceSlotPool, ResidentScheduler, ResidentSchedulerConfig, SessionId,
+    };
+    use ferrule_common::execution::{KvElementType, KvLayoutSchema, KvPlaneDescriptor, StateSlot};
+
+    #[derive(Debug)]
+    struct Schema;
+    impl KvLayoutSchema for Schema {
+        fn planes(&self) -> &[KvPlaneDescriptor] {
+            static PLANE: KvPlaneDescriptor =
+                KvPlaneDescriptor::new("test", 1, 1, KvElementType::F32);
+            std::slice::from_ref(&PLANE)
+        }
+        fn page_size(&self) -> usize {
+            4
+        }
+        fn max_sequence_len(&self) -> usize {
+            32
+        }
+    }
+
+    #[test]
+    fn logical_kv_snapshot_conserves_unissued_reserved_retiring_and_recycled_pages() {
+        let mut manager = KvPageManager::new(Box::new(Schema), 4);
+        let slot = StateSlot::new(0);
+        let check = |manager: &KvPageManager, held, free, recycled| {
+            let snapshot = InferenceKvSnapshot::read(manager);
+            assert_eq!(snapshot, InferenceKvSnapshot::read(manager));
+            assert_eq!(snapshot.logical_capacity_pages, Some(4));
+            assert_eq!(snapshot.logical_allocated_pages, held);
+            assert_eq!(snapshot.logical_free_pages, Some(free));
+            assert_eq!(snapshot.recycled_pages, recycled);
+            assert_eq!(held + free, 4);
+            assert!(recycled <= free);
+            assert!(snapshot.physical.is_none());
+        };
+        // No pages issued yet: the recycled free list is empty, but all credits
+        // are available. A snapshot must not mistake this for exhaustion.
+        check(&manager, 0, 4, 0);
+        manager.alloc_sequence(slot, 0).unwrap();
+        let reservation = manager.reserve(slot, 0, 5).unwrap();
+        check(&manager, 2, 2, 0);
+        let retirement = manager.abort_reservations(vec![reservation]).unwrap();
+        check(&manager, 2, 2, 0);
+        manager.confirm_page_retirement(retirement).unwrap();
+        check(&manager, 0, 4, 2);
+        let reservation = manager.reserve(slot, 0, 16).unwrap();
+        check(&manager, 4, 0, 0);
+        assert!(manager.reserve(slot, 0, 1).is_err());
+        check(&manager, 4, 0, 0);
+        let retirement = manager.abort_reservations(vec![reservation]).unwrap();
+        check(&manager, 4, 0, 0);
+        manager.confirm_page_retirement(retirement).unwrap();
+        check(&manager, 0, 4, 4);
+    }
+
+    #[test]
+    fn snapshot_distinguishes_unbounded_limits_from_zero_and_uses_effective_scheduler() {
+        let manager = KvPageManager::new(Box::new(Schema), 0);
+        let kv = InferenceKvSnapshot::read(&manager);
+        assert_eq!(kv.logical_capacity_pages, None);
+        assert_eq!(kv.logical_free_pages, None);
+        assert_eq!(kv.logical_allocated_pages, 0);
+        let mut scheduler = ResidentScheduler::new(ResidentSchedulerConfig {
+            max_active_sequences: 0,
+            max_decode_batch: 0,
+            prefill_chunk_size: 0,
+            max_batch_tokens: 0,
+            ..Default::default()
+        });
+        let initial = InferenceSchedulerSnapshot::read(&scheduler);
+        assert_eq!(initial.active_sequences, 0);
+        assert_eq!(initial.waiting_requests, 0);
+        assert_eq!(initial.max_active_sequences, 1);
+        assert_eq!(initial.max_decode_batch, 1);
+        assert_eq!(initial.prefill_chunk_size, 1);
+        assert_eq!(initial.max_batch_tokens, None);
+        for id in 1..=2 {
+            scheduler.submit(GenerateRequest {
+                id: RequestId(id),
+                session_id: Some(SessionId(id)),
+                prompt_tokens: vec![1, 2],
+                max_new_tokens: 2,
+                stop: vec![],
+                ignore_eos: true,
+            });
+        }
+        let waiting = InferenceSchedulerSnapshot::read(&scheduler);
+        assert_eq!((waiting.active_sequences, waiting.waiting_requests), (0, 2));
+        let mut slots = FixedSequenceSlotPool::new(1);
+        scheduler.admit_waiting(&mut slots).unwrap();
+        let active = InferenceSchedulerSnapshot::read(&scheduler);
+        assert_eq!((active.active_sequences, active.waiting_requests), (1, 1));
+        assert_eq!(
+            active.active_sequences + slots.available(),
+            active.max_active_sequences
+        );
+        assert_eq!(active, InferenceSchedulerSnapshot::read(&scheduler));
+        scheduler.cancel_request(RequestId(1), &mut slots).unwrap();
+        scheduler.cancel_request(RequestId(2), &mut slots).unwrap();
+        assert_eq!(InferenceSchedulerSnapshot::read(&scheduler), initial);
+        assert_eq!(slots.available(), initial.max_active_sequences);
     }
 }

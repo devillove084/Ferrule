@@ -2,12 +2,15 @@
 use std::sync::Arc;
 
 use crate::TensorRole;
-use crate::nn::{DTypeConstraint, ModulePath, ParameterId, ParameterResidency, ParameterSpec};
+use crate::nn::{
+    DTypeConstraint, ModulePath, ParameterDType, ParameterId, ParameterPart, ParameterResidency,
+    ParameterSpec,
+};
 use crate::transformer::{
     Attention, DecoderLayer, DecoderModelParts, DecoderModelSpec, DecoderRecipe,
-    DecoderRecipeError, Embedding, FeedForward, GatedDeltaNetAttention, GqaAttention, Linear,
-    NameMapper, Residual, RmsNorm, RotaryEmbedding, RotaryPairing, RotaryRegion, RotaryScaling,
-    StateDictSchema, SwiGlu,
+    DecoderRecipeError, Embedding, FeedForward, GatedDeltaNetAttention, GqaAttention, Linear, Moe,
+    MoeRouterSpec, NameMapper, Residual, RmsNorm, RotaryEmbedding, RotaryPairing, RotaryRegion,
+    RotaryScaling, RouterScoreFunction, RouterSelection, StateDictSchema, SwiGlu,
 };
 
 use super::{Qwen35Config, Qwen35HfNameMapper, Qwen35LayerType, Qwen35TensorPartitionKind};
@@ -66,7 +69,32 @@ impl Qwen35Recipe {
                 attention,
                 Residual::Add,
                 norm(t.hidden_size)?,
-                FeedForward::SwiGlu(SwiGlu::new(t.hidden_size, t.intermediate_size, false)?),
+                if let Some(experts) = t.num_experts {
+                    FeedForward::Moe(
+                        Moe::new(
+                            t.hidden_size,
+                            t.moe_intermediate_size.expect("validated MoE"),
+                            MoeRouterSpec::new(
+                                experts,
+                                t.num_experts_per_tok.expect("validated top-k"),
+                                RouterScoreFunction::Softmax,
+                                RouterSelection::TopK,
+                                true,
+                                1.0,
+                            )?,
+                            false,
+                        )?
+                        .with_shared_expert(SwiGlu::new(
+                            t.hidden_size,
+                            t.shared_expert_intermediate_size
+                                .expect("validated shared expert"),
+                            false,
+                        )?)?
+                        .with_shared_expert_gate(Linear::new(t.hidden_size, 1, false)?)?,
+                    )
+                } else {
+                    FeedForward::SwiGlu(SwiGlu::new(t.hidden_size, t.intermediate_size, false)?)
+                },
                 Residual::Add,
             )?);
         }
@@ -88,10 +116,9 @@ impl Qwen35Recipe {
         let mut builder = StateDictSchema::builder();
         let mut embedding = None;
         let mut next = 1;
-        for tensor in mapper
-            .tensors()
-            .filter(|s| s.partition == Qwen35TensorPartitionKind::Text)
-        {
+        for tensor in mapper.tensors().filter(|s| {
+            s.partition == Qwen35TensorPartitionKind::Text && s.part == ParameterPart::Weight
+        }) {
             let path = tensor
                 .canonical_path
                 .clone()
@@ -102,29 +129,41 @@ impl Qwen35Recipe {
             if role == TensorRole::TokenEmbedding {
                 embedding = Some(id);
             }
-            builder.register_with_role(
-                ParameterSpec::new(
-                    id,
-                    path,
-                    DTypeConstraint::exact(tensor.dtype.clone()),
-                    tensor.shape.clone(),
-                    residency,
-                )?,
-                role,
+            let mut parameter = ParameterSpec::new(
+                id,
+                path,
+                DTypeConstraint::exact(tensor.dtype.clone()),
+                tensor.shape.clone(),
+                residency,
             )?;
+            if tensor.dtype == ParameterDType::F8E4M3 {
+                // Physical Dense is deliberate: F8E4M3 + numeric BF16 scales is
+                // not StorageEncoding::Fp8Block128 (the native E8M0 contract).
+                parameter = parameter.with_required_scale(
+                    ParameterDType::Bf16,
+                    tensor
+                        .shape
+                        .iter()
+                        .map(|n| n.div_ceil(128))
+                        .collect::<Vec<_>>(),
+                )?;
+            }
+            builder.register_with_role(parameter, role)?;
         }
         let t = config.text();
-        builder.register_with_role(
-            ParameterSpec::new(
-                ParameterId::new(next),
-                ModulePath::new(mapper.output_alias().0)?,
-                DTypeConstraint::exact(crate::nn::ParameterDType::Bf16),
-                vec![t.vocab_size, t.hidden_size],
-                ParameterResidency::Static,
-            )?
-            .with_alias(embedding.expect("text schema includes embedding")),
-            TensorRole::OutputHead,
-        )?;
+        if let Some((output, _)) = mapper.output_alias() {
+            builder.register_with_role(
+                ParameterSpec::new(
+                    ParameterId::new(next),
+                    ModulePath::new(output)?,
+                    DTypeConstraint::exact(crate::nn::ParameterDType::Bf16),
+                    vec![t.vocab_size, t.hidden_size],
+                    ParameterResidency::Static,
+                )?
+                .with_alias(embedding.expect("text schema includes embedding")),
+                TensorRole::OutputHead,
+            )?;
+        }
         Ok(builder.build()?)
     }
 }
@@ -155,6 +194,7 @@ fn parameter_role(path: &str) -> Result<(ParameterResidency, TensorRole), Decode
     let static_role = match path {
         "token_embedding.weight" => Some(TensorRole::TokenEmbedding),
         "final_norm.weight" => Some(TensorRole::OutputNorm),
+        "output.weight" => Some(TensorRole::OutputHead),
         _ => None,
     };
     if let Some(role) = static_role {
@@ -171,7 +211,31 @@ fn parameter_role(path: &str) -> Result<(ParameterResidency, TensorRole), Decode
     let layer = index
         .parse::<usize>()
         .map_err(|_| DecoderRecipeError::invalid_config("invalid canonical layer index"))?;
+    if let Some(expert) = suffix.strip_prefix("feed_forward.experts.") {
+        let (index, projection) = expert
+            .split_once('.')
+            .ok_or_else(|| DecoderRecipeError::invalid_config("invalid expert parameter"))?;
+        let expert = index
+            .parse::<usize>()
+            .map_err(|_| DecoderRecipeError::invalid_config("invalid expert index"))?;
+        let role = match projection {
+            "gate.weight" => TensorRole::RoutedExpertGate,
+            "up.weight" => TensorRole::RoutedExpertUp,
+            "down.weight" => TensorRole::RoutedExpertDown,
+            _ => {
+                return Err(DecoderRecipeError::invalid_config(
+                    "unknown expert projection",
+                ));
+            }
+        };
+        return Ok((ParameterResidency::expert(layer, expert), role));
+    }
     let role = match suffix {
+        "feed_forward.router.weight" => TensorRole::RouterLogits,
+        "feed_forward.shared_expert_gate.weight" => TensorRole::SharedExpertOutputGate,
+        "feed_forward.shared_expert.gate.weight" => TensorRole::SharedExpertGate,
+        "feed_forward.shared_expert.up.weight" => TensorRole::SharedExpertUp,
+        "feed_forward.shared_expert.down.weight" => TensorRole::SharedExpertDown,
         "input_norm.weight" => TensorRole::AttentionNorm,
         "post_attention_norm.weight" => TensorRole::FeedForwardNorm,
         "attention.query_gate.weight" => TensorRole::AttentionQuery,

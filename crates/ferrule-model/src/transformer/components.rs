@@ -1296,6 +1296,7 @@ pub struct Moe {
     router_spec: MoeRouterSpec,
     expert: SwiGlu,
     shared_expert: Option<SwiGlu>,
+    shared_expert_gate: Option<Linear>,
 }
 
 impl Moe {
@@ -1312,6 +1313,7 @@ impl Moe {
             router_spec,
             expert: SwiGlu::new(hidden_size, expert_intermediate_size, bias)?,
             shared_expert: None,
+            shared_expert_gate: None,
         })
     }
 
@@ -1336,6 +1338,27 @@ impl Moe {
         }
         self.shared_expert = Some(expert);
         Ok(self)
+    }
+
+    /// Optional token-wise output gate, distinct from the shared SwiGLU gate.
+    /// Computes sigmoid(Linear(x)[row, 0]) * shared_swiglu(x)[row, :],
+    /// then adds that branch to the already weighted routed expert sum.
+    pub fn with_shared_expert_gate(mut self, gate: Linear) -> Result<Self, DescriptorError> {
+        if self.shared_expert.is_none()
+            || gate.weight_shape() != [1, self.hidden_size]
+            || gate.has_bias()
+        {
+            return Err(DescriptorError::Inconsistent {
+                component: "moe.shared_expert_gate",
+                message: "requires a shared expert and a bias-free hidden -> 1 projection".into(),
+            });
+        }
+        self.shared_expert_gate = Some(gate);
+        Ok(self)
+    }
+
+    pub fn shared_expert_gate(&self) -> Option<&Linear> {
+        self.shared_expert_gate.as_ref()
     }
 
     pub const fn hidden_size(&self) -> usize {

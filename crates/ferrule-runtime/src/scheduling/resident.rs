@@ -49,12 +49,20 @@ pub struct ResidentSchedulerConfig {
     /// Desired number of ready decode sequences before dispatch. Normalized to
     /// `1..=max_decode_batch`.
     pub decode_cohort_target: usize,
-    /// Maximum consecutive prefill-only decisions allowed while a non-empty
-    /// decode cohort is below target. Zero preserves eager decode dispatch.
+    /// Maximum consecutive cohort-building prefill-only decisions allowed while
+    /// a non-empty decode cohort is below target. Zero preserves eager dispatch
+    /// except for the token-budget fairness turn described below.
     pub decode_cohort_max_deferrals: usize,
     /// Maximum total packed tokens in one execution batch. Zero means no limit.
     /// This bounds the combined prefill + decode token count per batch.
     pub max_batch_tokens: usize,
+    /// Tokens reserved for runnable prefill when decode can exhaust a bounded
+    /// batch. Defaults to one; zero disables token-budget fairness. Mixed batches
+    /// retain at least one decode token, even if the requested reserve is larger.
+    /// With a one-token budget or mixed batches disabled, an exhausted decode
+    /// batch instead earns prefill one turn before another decode batch.
+    /// Below budget, existing packing and decode cohort policy are unchanged.
+    pub prefill_reserve_tokens: usize,
     /// When true, the scheduler may combine prefill and decode sequences into
     /// one mixed execution batch. When false, prefill and decode are dispatched
     /// as separate batches.
@@ -73,6 +81,7 @@ impl Default for ResidentSchedulerConfig {
             decode_cohort_target: 1,
             decode_cohort_max_deferrals: 0,
             max_batch_tokens: super::actions::DEFAULT_CHUNK_SIZE,
+            prefill_reserve_tokens: 1,
             allow_mixed_batches: true,
             prefix_cache_capacity_pages: 0,
         }
@@ -124,6 +133,7 @@ impl ResidentSchedulerConfig {
             decode_cohort_target: self.decode_cohort_target.clamp(1, max_decode_batch),
             decode_cohort_max_deferrals: self.decode_cohort_max_deferrals,
             max_batch_tokens: self.max_batch_tokens,
+            prefill_reserve_tokens: self.prefill_reserve_tokens,
             allow_mixed_batches: self.allow_mixed_batches,
             prefix_cache_capacity_pages: self.prefix_cache_capacity_pages,
         }
@@ -194,6 +204,9 @@ impl PreparedSequenceFork {
 }
 
 impl SuspendedSequenceSchedule {
+    pub(crate) fn request_id(&self) -> Option<RequestId> {
+        self.sequence.request_id
+    }
     pub fn session_id(&self) -> SessionId {
         self.sequence.session_id
     }
@@ -207,6 +220,7 @@ pub struct ResidentScheduler {
     prefill_queue: VecDeque<SessionId>,
     decode_ready: VecDeque<SessionId>,
     decode_cohort_deferrals: usize,
+    prefill_turn_due: bool,
     finished: Vec<SequenceState>,
     cancelled: Vec<SequenceState>,
     failed: Vec<SequenceState>,
@@ -229,6 +243,7 @@ impl ResidentScheduler {
             prefill_queue: VecDeque::new(),
             decode_ready: VecDeque::new(),
             decode_cohort_deferrals: 0,
+            prefill_turn_due: false,
             finished: Vec::new(),
             cancelled: Vec::new(),
             failed: Vec::new(),
@@ -255,6 +270,45 @@ impl ResidentScheduler {
         self.total_submitted = self.total_submitted.saturating_add(1);
         self.waiting
             .push_back(WaitingRequest::at_position(request, position_start));
+    }
+
+    pub(crate) fn contains_request_identity(&self, id: RequestId) -> bool {
+        self.waiting.iter().any(|waiting| waiting.request.id == id)
+            || self
+                .active
+                .values()
+                .chain(&self.finished)
+                .chain(&self.cancelled)
+                .chain(&self.failed)
+                .any(|sequence| sequence.request_id == Some(id))
+    }
+
+    pub(crate) fn contains_session_identity(&self, id: SessionId) -> bool {
+        self.waiting
+            .iter()
+            .any(|waiting| waiting.request.session_id == Some(id))
+            || self
+                .active
+                .values()
+                .chain(&self.finished)
+                .chain(&self.cancelled)
+                .chain(&self.failed)
+                .any(|sequence| sequence.session_id == id)
+    }
+
+    pub(crate) fn identity_sessions(&self) -> Vec<SessionId> {
+        self.waiting
+            .iter()
+            .filter_map(|waiting| waiting.request.session_id)
+            .chain(
+                self.active
+                    .values()
+                    .chain(&self.finished)
+                    .chain(&self.cancelled)
+                    .chain(&self.failed)
+                    .map(|sequence| sequence.session_id),
+            )
+            .collect()
     }
 
     pub fn total_submitted(&self) -> u64 {
@@ -737,8 +791,8 @@ impl ResidentScheduler {
         Ok(None)
     }
 
-    /// Pick the next executable action, preferring ready decode work over new
-    /// prefill chunks for token latency. Callers that need stricter prefill-first
+    /// Pick the next executable action, preferring ready decode work without
+    /// starving prefill at a saturated token budget. Callers needing prefill-first
     /// behavior can keep using `next_prefill_action` and `next_decode_action`
     /// directly.
     pub fn next_action<C>(&mut self, slot_pool: &mut C) -> Result<Option<SchedulerAction>>
@@ -764,16 +818,38 @@ impl ResidentScheduler {
         &mut self,
         allow_mixed_batches: bool,
     ) -> Result<Option<SchedulerAction>> {
-        let defer_decode = !allow_mixed_batches
-            && !self.decode_ready.is_empty()
-            && self.decode_ready.len() < self.config.decode_cohort_target
-            && !self.prefill_queue.is_empty()
-            && self.decode_cohort_deferrals < self.config.decode_cohort_max_deferrals;
         let token_budget = if self.config.max_batch_tokens == 0 {
             usize::MAX
         } else {
             self.config.max_batch_tokens
         };
+        let has_prefill = self.prefill_queue.iter().any(|session_id| {
+            self.active
+                .get(session_id)
+                .is_some_and(|sequence| !sequence.prompt_prefill_done())
+        });
+        let fairness_enabled = self.config.prefill_reserve_tokens > 0
+            && self.config.max_batch_tokens != 0
+            && has_prefill;
+        let decode_saturates_budget =
+            self.decode_ready.len().min(self.config.max_decode_batch) >= token_budget;
+        let separate_prefill_turn = !allow_mixed_batches || token_budget == 1;
+        let fair_prefill_turn = fairness_enabled && separate_prefill_turn && self.prefill_turn_due;
+        let defer_decode = fair_prefill_turn
+            || (!allow_mixed_batches
+                && !self.decode_ready.is_empty()
+                && self.decode_ready.len() < self.config.decode_cohort_target
+                && has_prefill
+                && self.decode_cohort_deferrals < self.config.decode_cohort_max_deferrals);
+        // Leave decode at least one row. If the two kinds cannot share a batch,
+        // repay an exhausted decode-only decision with one prefill turn instead.
+        let prefill_reserve =
+            if fairness_enabled && !separate_prefill_turn && decode_saturates_budget {
+                self.config.prefill_reserve_tokens.min(token_budget - 1)
+            } else {
+                0
+            };
+        let decode_budget = token_budget - prefill_reserve;
         let mut remaining = token_budget;
         let mut decodes = Vec::new();
         let decode_candidates = if defer_decode {
@@ -782,7 +858,10 @@ impl ResidentScheduler {
             self.decode_ready.len()
         };
         for _ in 0..decode_candidates {
-            if remaining == 0 || decodes.len() >= self.config.max_decode_batch {
+            if remaining == 0
+                || decodes.len() >= self.config.max_decode_batch
+                || decodes.len() >= decode_budget
+            {
                 break;
             }
             let Some(session_id) = self.decode_ready.pop_front() else {
@@ -827,22 +906,24 @@ impl ResidentScheduler {
             }
         }
 
+        self.prefill_turn_due = fairness_enabled
+            && separate_prefill_turn
+            && prefills.is_empty()
+            && decodes.len() == token_budget;
+        if !decodes.is_empty() || self.decode_ready.is_empty() {
+            self.decode_cohort_deferrals = 0;
+        } else if !prefills.is_empty() && defer_decode {
+            // A fairness turn also counts toward cohort-building deferrals; it
+            // must not buy an additional run of prefill-only cohort decisions.
+            self.decode_cohort_deferrals = self.decode_cohort_deferrals.saturating_add(1);
+        }
+
         if prefills.is_empty() && decodes.is_empty() {
-            if self.decode_ready.is_empty() {
-                self.decode_cohort_deferrals = 0;
-            }
             Ok(None)
         } else if !allow_mixed_batches {
             if decodes.is_empty() {
-                let action = prefills.pop().map(SchedulerAction::PrefillChunk);
-                if action.is_some() && defer_decode {
-                    self.decode_cohort_deferrals = self.decode_cohort_deferrals.saturating_add(1);
-                } else if self.decode_ready.is_empty() {
-                    self.decode_cohort_deferrals = 0;
-                }
-                Ok(action)
+                Ok(prefills.pop().map(SchedulerAction::PrefillChunk))
             } else {
-                self.decode_cohort_deferrals = 0;
                 Ok(Some(SchedulerAction::DecodeBatch(decodes)))
             }
         } else {
@@ -1278,6 +1359,9 @@ impl ResidentScheduler {
             QueueKind::Decode => &mut self.decode_ready,
         };
         target.retain(|queued| *queued != session_id);
+        if self.prefill_queue.is_empty() {
+            self.prefill_turn_due = false;
+        }
     }
 }
 
@@ -1320,6 +1404,96 @@ mod tests {
             max_new_tokens: 16,
             stop: Vec::new(),
             ignore_eos: false,
+        }
+    }
+
+    fn fairness_fixture(
+        config: ResidentSchedulerConfig,
+        decode_count: usize,
+        prompts: &[Vec<u32>],
+    ) -> (ResidentScheduler, FixedSequenceSlotPool) {
+        let capacity = decode_count + prompts.len();
+        let mut scheduler = ResidentScheduler::new(ResidentSchedulerConfig {
+            max_active_sequences: capacity,
+            ..config
+        });
+        let mut slots = FixedSequenceSlotPool::new(capacity);
+        for index in 0..capacity {
+            let tokens = if index < decode_count {
+                vec![index as u32]
+            } else {
+                prompts[index - decode_count].clone()
+            };
+            let mut request = request(index as u64 + 1, tokens);
+            request.max_new_tokens = 1024;
+            scheduler.submit(request);
+        }
+        assert_eq!(scheduler.admit_waiting(&mut slots).unwrap(), capacity);
+        for index in 0..decode_count {
+            let action = scheduler.next_prefill_action(&mut slots).unwrap().unwrap();
+            scheduler.commit_action(&action).unwrap();
+            scheduler
+                .stage_decode_token(SessionId(index as u64 + 1), 99)
+                .unwrap();
+        }
+        (scheduler, slots)
+    }
+
+    fn execution_parts(action: &SchedulerAction) -> (&[PrefillChunkAction], &[DecodeAction]) {
+        match action {
+            SchedulerAction::Execute { prefills, decodes } => (prefills, decodes),
+            SchedulerAction::PrefillChunk(prefill) => (std::slice::from_ref(prefill), &[]),
+            SchedulerAction::DecodeBatch(decodes) => (&[], decodes),
+            _ => panic!("expected executable action"),
+        }
+    }
+
+    fn assert_bounded_fairness_action(scheduler: &ResidentScheduler, action: &SchedulerAction) {
+        let (prefills, decodes) = execution_parts(action);
+        let tokens = prefills.iter().map(|p| p.tokens.len()).sum::<usize>() + decodes.len();
+        assert!(tokens > 0);
+        assert!(
+            scheduler.config.max_batch_tokens == 0 || tokens <= scheduler.config.max_batch_tokens
+        );
+        assert!(decodes.len() <= scheduler.config.max_decode_batch);
+        let mut sessions = std::collections::HashSet::new();
+        let mut requests = std::collections::HashSet::new();
+        let mut handles = std::collections::HashSet::new();
+        for (session_id, request_id, handle, position) in prefills
+            .iter()
+            .map(|p| (p.session_id, p.request_id, p.kv_handle, p.position_start))
+            .chain(
+                decodes
+                    .iter()
+                    .map(|d| (d.session_id, d.request_id, d.kv_handle, d.position)),
+            )
+        {
+            assert!(sessions.insert(session_id), "duplicate session in tick");
+            assert!(
+                requests.insert(request_id.unwrap()),
+                "duplicate request in tick"
+            );
+            assert!(handles.insert(handle.unwrap()), "aliased slot in tick");
+            let sequence = scheduler.active_sequence(session_id).unwrap();
+            assert_eq!(sequence.request_id, request_id);
+            assert_eq!(sequence.kv_handle, handle);
+            assert_eq!(sequence.position, position);
+        }
+        for prefill in prefills {
+            let sequence = scheduler.active_sequence(prefill.session_id).unwrap();
+            assert_eq!(prefill.token_range.start, sequence.prompt_cursor);
+            assert_eq!(prefill.tokens.len(), prefill.token_range.len());
+            assert!(prefill.tokens.len() <= scheduler.config.prefill_chunk_size);
+        }
+    }
+
+    fn commit_and_restage_decodes(scheduler: &mut ResidentScheduler, action: &SchedulerAction) {
+        assert_bounded_fairness_action(scheduler, action);
+        scheduler.commit_action(action).unwrap();
+        for decode in execution_parts(action).1 {
+            scheduler
+                .stage_decode_token(decode.session_id, decode.token_id)
+                .unwrap();
         }
     }
 
@@ -1652,6 +1826,350 @@ mod tests {
     }
 
     #[test]
+    fn scheduler_fairness_saturated_mixed_batches_progress_both_queues_in_bounded_ticks() {
+        for budget in [2, 3, 32] {
+            for decode_count in [budget, budget + 8] {
+                for reserve in [1, 8, usize::MAX] {
+                    let (mut scheduler, slots) = fairness_fixture(
+                        ResidentSchedulerConfig {
+                            prefill_chunk_size: 8,
+                            max_decode_batch: decode_count,
+                            max_batch_tokens: budget,
+                            prefill_reserve_tokens: reserve,
+                            ..Default::default()
+                        },
+                        decode_count,
+                        &[vec![10; 3], vec![20; 3], vec![30; 3]],
+                    );
+                    let mut expected_decodes = scheduler.decode_ready.clone();
+                    // Each tick consumes at least one of the nine prompt tokens.
+                    // Decodes stay ready throughout, rather than draining away.
+                    for _ in 0..9 {
+                        if scheduler.prefill_queue.is_empty() {
+                            break;
+                        }
+                        let expected_prefill = scheduler.prefill_queue[0];
+                        let action = scheduler
+                            .next_admitted_action_policy(true)
+                            .unwrap()
+                            .unwrap();
+                        let (prefills, decodes) = execution_parts(&action);
+                        assert_eq!(prefills[0].session_id, expected_prefill);
+                        assert!(!decodes.is_empty());
+                        assert_eq!(decodes.len(), budget - reserve.min(budget - 1));
+                        for decode in decodes {
+                            assert_eq!(Some(decode.session_id), expected_decodes.pop_front());
+                            expected_decodes.push_back(decode.session_id);
+                        }
+                        commit_and_restage_decodes(&mut scheduler, &action);
+                        assert_eq!(scheduler.decode_ready, expected_decodes);
+                        assert_eq!(slots.active_count(), decode_count + 3);
+                        assert_eq!(scheduler.active_len(), decode_count + 3);
+                    }
+                    assert!(scheduler.prefill_queue.is_empty());
+                    for id in decode_count + 1..=decode_count + 3 {
+                        let sequence = scheduler.active_sequence(SessionId(id as u64)).unwrap();
+                        assert_eq!(sequence.prompt_cursor, 3);
+                        assert_eq!(sequence.position, 3);
+                    }
+                    let action = scheduler
+                        .next_admitted_action_policy(true)
+                        .unwrap()
+                        .unwrap();
+                    assert_eq!(execution_parts(&action).1.len(), budget);
+                    assert_bounded_fairness_action(&scheduler, &action);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn scheduler_fairness_decode_only_keeps_full_budget_and_fifo() {
+        for mixed in [false, true] {
+            let (mut scheduler, _) = fairness_fixture(
+                ResidentSchedulerConfig {
+                    max_decode_batch: 40,
+                    max_batch_tokens: 32,
+                    prefill_reserve_tokens: usize::MAX,
+                    ..Default::default()
+                },
+                40,
+                &[],
+            );
+            for tick in 0..3 {
+                let action = scheduler
+                    .next_admitted_action_policy(mixed)
+                    .unwrap()
+                    .unwrap();
+                let (prefills, decodes) = execution_parts(&action);
+                assert!(prefills.is_empty());
+                assert_eq!(decodes.len(), 32);
+                for (row, decode) in decodes.iter().enumerate() {
+                    assert_eq!(
+                        decode.session_id,
+                        SessionId(((tick * 32 + row) % 40 + 1) as u64)
+                    );
+                }
+                commit_and_restage_decodes(&mut scheduler, &action);
+            }
+        }
+    }
+
+    #[test]
+    fn scheduler_fairness_prefill_only_visits_each_request_once_per_tick() {
+        for mixed in [false, true] {
+            let (mut scheduler, _) = fairness_fixture(
+                ResidentSchedulerConfig {
+                    prefill_chunk_size: 2,
+                    max_batch_tokens: 32,
+                    ..Default::default()
+                },
+                0,
+                &[vec![1; 5], vec![2; 3]],
+            );
+            for _ in 0..5 {
+                if scheduler.prefill_queue.is_empty() {
+                    break;
+                }
+                let front = scheduler.prefill_queue[0];
+                let action = scheduler
+                    .next_admitted_action_policy(mixed)
+                    .unwrap()
+                    .unwrap();
+                let (prefills, decodes) = execution_parts(&action);
+                assert!(decodes.is_empty());
+                assert_eq!(prefills[0].session_id, front);
+                assert!(prefills.len() <= if mixed { 2 } else { 1 });
+                commit_and_restage_decodes(&mut scheduler, &action);
+            }
+            assert!(scheduler.prefill_queue.is_empty());
+            assert!(
+                scheduler
+                    .next_admitted_action_policy(mixed)
+                    .unwrap()
+                    .is_none()
+            );
+        }
+    }
+
+    #[test]
+    fn scheduler_fairness_preserves_under_budget_and_opt_out_packing() {
+        assert_eq!(ResidentSchedulerConfig::default().prefill_reserve_tokens, 1);
+        // A larger reserve does not affect unsaturated batches, decode batch
+        // limits, or the existing unlimited-budget convention.
+        for (budget, max_decodes, reserve, expected_decode, expected_prefill) in [
+            (4, 4, 3, 2, 2),
+            (2, 1, 9, 1, 1),
+            (2, 2, 0, 2, 0),
+            (0, 2, usize::MAX, 2, 8),
+        ] {
+            let (mut scheduler, _) = fairness_fixture(
+                ResidentSchedulerConfig {
+                    prefill_chunk_size: 8,
+                    max_decode_batch: max_decodes,
+                    max_batch_tokens: budget,
+                    prefill_reserve_tokens: reserve,
+                    ..Default::default()
+                },
+                2,
+                &[vec![3; 10]],
+            );
+            let action = scheduler
+                .next_admitted_action_policy(true)
+                .unwrap()
+                .unwrap();
+            assert_bounded_fairness_action(&scheduler, &action);
+            let (prefills, decodes) = execution_parts(&action);
+            assert_eq!(decodes.len(), expected_decode);
+            assert_eq!(
+                prefills.iter().map(|p| p.tokens.len()).sum::<usize>(),
+                expected_prefill
+            );
+        }
+    }
+
+    #[test]
+    fn scheduler_fairness_alternates_when_work_cannot_share_a_batch() {
+        for (mixed, budget) in [(true, 1), (false, 1), (false, 32)] {
+            let decode_count = budget + 2;
+            let (mut scheduler, _) = fairness_fixture(
+                ResidentSchedulerConfig {
+                    prefill_chunk_size: 1,
+                    max_decode_batch: decode_count,
+                    max_batch_tokens: budget,
+                    ..Default::default()
+                },
+                decode_count,
+                &[vec![10; 3], vec![20; 3]],
+            );
+            for tick in 0..12 {
+                let action = scheduler
+                    .next_admitted_action_policy(mixed)
+                    .unwrap()
+                    .unwrap();
+                let (prefills, decodes) = execution_parts(&action);
+                if tick % 2 == 0 {
+                    assert!(prefills.is_empty());
+                    assert_eq!(decodes.len(), budget);
+                } else {
+                    assert!(decodes.is_empty());
+                    assert_eq!(prefills.len(), 1);
+                    assert_eq!(
+                        prefills[0].session_id,
+                        SessionId((decode_count + 1 + (tick / 2) % 2) as u64)
+                    );
+                }
+                commit_and_restage_decodes(&mut scheduler, &action);
+            }
+            assert!(scheduler.prefill_queue.is_empty());
+            assert!(!scheduler.prefill_turn_due);
+        }
+    }
+
+    #[test]
+    fn scheduler_fairness_mixed_cancellation_and_decode_requeue_keep_exact_ownership() {
+        let (mut scheduler, mut slots) = fairness_fixture(
+            ResidentSchedulerConfig {
+                prefill_chunk_size: 4,
+                max_decode_batch: 4,
+                max_batch_tokens: 2,
+                decode_cohort_target: 4,
+                decode_cohort_max_deferrals: 3,
+                ..Default::default()
+            },
+            3,
+            &[vec![10; 3], vec![20; 3]],
+        );
+        scheduler.submit(request(6, vec![6]));
+        assert_eq!(scheduler.admit_waiting(&mut slots).unwrap(), 0);
+        let action = scheduler
+            .next_admitted_action_policy(true)
+            .unwrap()
+            .unwrap();
+        assert_bounded_fairness_action(&scheduler, &action);
+        let (prefills, decodes) = execution_parts(&action);
+        assert_eq!(prefills[0].request_id, Some(RequestId(4)));
+        assert_eq!(decodes[0].request_id, Some(RequestId(1)));
+        assert_eq!(scheduler.decode_cohort_deferrals, 0);
+        // An unexecuted mixed batch can lose its prefill request while its
+        // decode actions are restored with their original token/position/slot.
+        scheduler.cancel_request(RequestId(4), &mut slots).unwrap();
+        scheduler.requeue_decode_actions_front(decodes).unwrap();
+        let action = scheduler
+            .next_admitted_action_policy(true)
+            .unwrap()
+            .unwrap();
+        let (prefills, restored) = execution_parts(&action);
+        assert_eq!(restored, decodes);
+        assert_eq!(prefills[0].request_id, Some(RequestId(5)));
+        commit_and_restage_decodes(&mut scheduler, &action);
+        scheduler.cancel_request(RequestId(2), &mut slots).unwrap();
+        assert_eq!(slots.active_count(), 3);
+        assert_eq!(scheduler.admit_waiting(&mut slots).unwrap(), 1);
+        for _ in 0..3 {
+            let action = scheduler
+                .next_admitted_action_policy(true)
+                .unwrap()
+                .unwrap();
+            assert_bounded_fairness_action(&scheduler, &action);
+            let (prefills, decodes) = execution_parts(&action);
+            assert!(!prefills.is_empty());
+            assert_eq!(decodes.len(), 1);
+            assert!(decodes.iter().all(|d| d.request_id != Some(RequestId(2))));
+            assert!(prefills.iter().all(|p| p.request_id != Some(RequestId(4))));
+            commit_and_restage_decodes(&mut scheduler, &action);
+        }
+        assert!(scheduler.prefill_queue.is_empty());
+        assert_eq!(slots.active_count(), 4);
+        assert_eq!(scheduler.active_len(), 4);
+    }
+
+    #[test]
+    fn scheduler_fairness_turn_counts_toward_cohort_deferrals() {
+        let (mut scheduler, _) = fairness_fixture(
+            ResidentSchedulerConfig {
+                prefill_chunk_size: 1,
+                max_decode_batch: 3,
+                max_batch_tokens: 1,
+                decode_cohort_target: 3,
+                decode_cohort_max_deferrals: 1,
+                ..Default::default()
+            },
+            2,
+            &[vec![3; 8]],
+        );
+        for tick in 0..6 {
+            let action = scheduler
+                .next_admitted_action_policy(false)
+                .unwrap()
+                .unwrap();
+            let (prefills, decodes) = execution_parts(&action);
+            if tick % 2 == 0 {
+                assert_eq!(prefills.len(), 1);
+                assert!(decodes.is_empty());
+                assert_eq!(scheduler.decode_cohort_deferrals, 1);
+            } else {
+                assert!(prefills.is_empty());
+                assert_eq!(decodes.len(), 1);
+                assert_eq!(scheduler.decode_cohort_deferrals, 0);
+            }
+            commit_and_restage_decodes(&mut scheduler, &action);
+        }
+    }
+
+    #[test]
+    fn scheduler_fairness_cancellation_clears_turn_and_preserves_capacity() {
+        for mixed in [false, true] {
+            let (mut scheduler, mut slots) = fairness_fixture(
+                ResidentSchedulerConfig {
+                    max_decode_batch: 2,
+                    max_batch_tokens: 1,
+                    ..Default::default()
+                },
+                2,
+                &[vec![3; 3]],
+            );
+            let action = scheduler
+                .next_admitted_action_policy(mixed)
+                .unwrap()
+                .unwrap();
+            commit_and_restage_decodes(&mut scheduler, &action);
+            assert!(scheduler.prefill_turn_due);
+            let decode_order = scheduler.decode_ready.clone();
+            scheduler.submit(request(4, vec![4]));
+            assert_eq!(scheduler.admit_waiting(&mut slots).unwrap(), 0);
+            scheduler.cancel_request(RequestId(3), &mut slots).unwrap();
+            assert!(!scheduler.prefill_turn_due);
+            assert_eq!(slots.active_count(), 2);
+            assert_eq!(scheduler.decode_ready, decode_order);
+            assert_eq!(scheduler.admit_waiting(&mut slots).unwrap(), 1);
+            let action = scheduler
+                .next_admitted_action_policy(mixed)
+                .unwrap()
+                .unwrap();
+            assert_eq!(execution_parts(&action).1[0].session_id, decode_order[0]);
+            commit_and_restage_decodes(&mut scheduler, &action);
+            scheduler.cancel_request(RequestId(1), &mut slots).unwrap();
+            let action = scheduler
+                .next_admitted_action_policy(mixed)
+                .unwrap()
+                .unwrap();
+            assert_eq!(execution_parts(&action).0[0].request_id, Some(RequestId(4)));
+            commit_and_restage_decodes(&mut scheduler, &action);
+            scheduler.cancel_request(RequestId(2), &mut slots).unwrap();
+            scheduler.cancel_request(RequestId(4), &mut slots).unwrap();
+            assert_eq!(slots.active_count(), 0);
+            assert!(scheduler.is_idle());
+            assert!(
+                scheduler
+                    .next_admitted_action_policy(mixed)
+                    .unwrap()
+                    .is_none()
+            );
+        }
+    }
+
+    #[test]
     fn resident_scheduler_cancel_frees_kv_and_drains_cancelled() {
         let mut scheduler = ResidentScheduler::default();
         let mut kv = FixedSequenceSlotPool::new(1);
@@ -1873,5 +2391,38 @@ mod tests {
         assert_eq!(scheduler.admit_waiting(&mut kv).unwrap(), 1);
         assert_eq!(scheduler.waiting_len(), 1);
         assert_eq!(scheduler.active_len(), 1);
+    }
+    #[test]
+    fn pr12_identity_queries_cover_waiting_active_and_all_terminals() {
+        for kind in ["finished", "cancelled", "failed"] {
+            let mut scheduler = ResidentScheduler::default();
+            let mut slots = FixedSequenceSlotPool::new(1);
+            let mut request = request(12, vec![1]);
+            request.session_id = Some(SessionId(12));
+            scheduler.submit(request);
+            assert!(scheduler.contains_request_identity(RequestId(12)));
+            assert!(scheduler.contains_session_identity(SessionId(12)));
+            scheduler.admit_waiting(&mut slots).unwrap();
+            assert!(scheduler.contains_request_identity(RequestId(12)));
+            match kind {
+                "finished" => {
+                    scheduler
+                        .finish_sequence(SessionId(12), SequenceFinishReason::MaxTokens, &mut slots)
+                        .unwrap();
+                }
+                "cancelled" => {
+                    scheduler
+                        .cancel_sequence(SessionId(12), &mut slots)
+                        .unwrap();
+                }
+                _ => scheduler.fail_sequence(SessionId(12), &mut slots).unwrap(),
+            }
+            assert!(scheduler.contains_request_identity(RequestId(12)));
+            assert!(scheduler.contains_session_identity(SessionId(12)));
+            assert_eq!(scheduler.identity_sessions(), vec![SessionId(12)]);
+            assert!(scheduler.take_request_terminal(RequestId(12)).is_some());
+            assert!(!scheduler.contains_request_identity(RequestId(12)));
+            assert!(!scheduler.contains_session_identity(SessionId(12)));
+        }
     }
 }

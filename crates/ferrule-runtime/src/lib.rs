@@ -36,15 +36,17 @@ pub use cache::{
 };
 pub use engine::{
     BackendSelection, BuiltinModelResolver, InferenceCancelProgress, InferenceCompletionOwner,
-    InferenceCompletionReactor, InferenceEngine, InferenceShutdownProgress,
-    LocalResidentInferenceEngine, ModelFactoryOptions, NativeMultiSessionExecutor,
-    PipelineInferenceEngine, ResidentActionKind, ResidentCancelProgress,
+    InferenceCompletionReactor, InferenceEngine, InferenceRequestCleanup,
+    InferenceShutdownProgress, LocalResidentInferenceEngine, ModelFactoryOptions,
+    NativeMultiSessionExecutor, PipelineInferenceEngine, RequestCleanupOwner,
+    RequestCleanupReceipt, ResidentActionKind, ResidentCancelProgress,
     ResidentDriverShutdownReport, ResidentDriverStep, ResidentEngineObservability,
     ResidentExternalTokenObservability, ResidentInferenceEngine, ResidentKvCacheObservability,
     ResidentMaterializationObservability, ResidentMaterializationStageObservability,
     ResidentModelBuildObservability, ResidentModelBuildPlan, ResidentModelPlanner,
     ResidentPrefixCacheStats, ResidentShutdownProgress, ResidentTokenEvent, ResidentTopKDriver,
-    ResidentTopKDriverConfig, ResidentTopKDriverStats, ResolvedModelBackend,
+    ResidentTopKDriverConfig, ResidentTopKDriverStats, ResolvedModelBackend, RuntimeAdmissionError,
+    RuntimeAdmissionOptions, RuntimeAdmissionResource, RuntimeAdmissionSnapshot,
 };
 pub use expert_residency::{
     ExpertInstallIntent, ExpertInstallPrepareOutcome, ExpertInstallReason, ExpertKey, ExpertLease,

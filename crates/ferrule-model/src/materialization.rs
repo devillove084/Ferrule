@@ -6,6 +6,8 @@
 //! experts, dense parameter bundles, activation checkpoints, gradients, and
 //! optimizer shards use this same protocol.
 
+use ferrule_common::io_protocol::{ProviderFault, ProviderProgress};
+
 mod source;
 
 pub use source::{MaterializationSourceCatalog, MaterializationSourceEntry};
@@ -561,7 +563,12 @@ pub trait MaterializationProvider: std::fmt::Debug + Send {
         reason: CancellationReason,
     ) -> std::result::Result<(), FailureReason>;
 
-    fn next_completion(&mut self) -> Option<CompletionEvent>;
+    fn next_progress(&mut self) -> ProviderProgress;
+
+    /// Compatibility polling preserves faults instead of turning them into Idle.
+    fn next_completion(&mut self) -> std::result::Result<Option<CompletionEvent>, ProviderFault> {
+        self.next_progress().into_completion()
+    }
 }
 
 /// Model-facing resolver for exact physical resource identities.

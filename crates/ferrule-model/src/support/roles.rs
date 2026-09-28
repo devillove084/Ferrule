@@ -47,7 +47,10 @@ pub enum TensorRole {
     RoutedExpertGate,
     RoutedExpertUp,
     RoutedExpertDown,
+    /// SwiGLU activation projection, not the scalar output gate.
     SharedExpertGate,
+    /// Bias-free hidden -> 1 projection; sigmoid broadcasts across shared output.
+    SharedExpertOutputGate,
     SharedExpertUp,
     SharedExpertDown,
     AuxIndexer,
@@ -101,6 +104,7 @@ impl TensorRole {
             Self::RoutedExpertUp => "routed_expert_up",
             Self::RoutedExpertDown => "routed_expert_down",
             Self::SharedExpertGate => "shared_expert_gate",
+            Self::SharedExpertOutputGate => "shared_expert_output_gate",
             Self::SharedExpertUp => "shared_expert_up",
             Self::SharedExpertDown => "shared_expert_down",
             Self::AuxIndexer => "aux_indexer",

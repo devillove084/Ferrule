@@ -1,0 +1,6 @@
+# Concrete src/models family roots. common is shared, not a family.
+# DeepSeek V4; dense/MoE Qwen3; dense/MoE Qwen3.5.
+# Adding a root never exempts provider references or its file/LOC boundary.
+deepseek_v4
+qwen3
+qwen35

@@ -153,6 +153,10 @@ impl ExpertDispatchPlan {
     /// `width` is both the input and output width of each routed expert.
     /// Like `RouterRoutes`, a plan is non-empty; individual owner buckets may
     /// be empty. No equal-sized partition or per-owner load balance is assumed.
+    /// `context.source_rank` identifies the caller, not an expert worker. It may
+    /// be external to `members`; the attachment must authenticate it before
+    /// construction. This plan freezes that exact source and transaction and
+    /// checks both on every token/result, independently of worker membership.
     pub fn new(
         context: ExpertDispatchContext,
         members: Vec<ParallelRankId>,
@@ -186,9 +190,6 @@ impl ExpertDispatchPlan {
             if member_indexes.insert(member, index).is_some() {
                 return Err(protocol_error("duplicate dispatch member"));
             }
-        }
-        if !member_indexes.contains_key(&context.source_rank) {
-            return Err(protocol_error("unknown source rank"));
         }
         let mut owner_counts = vec![0; members.len()];
         let mut expected = Vec::with_capacity(token_count);
@@ -370,6 +371,47 @@ impl ExpertDispatchPlan {
         )
     }
 
+    /// Admit all owner buckets, then authenticate replies independently of
+    /// arrival order before allowing the immutable plan to combine them.
+    pub(crate) fn execute_results(
+        &self,
+        executor: &mut dyn ExpertResultExecutor,
+        buckets: Vec<ExpertTokenBucket>,
+        check_active: &mut dyn FnMut(ExecutionTransactionId) -> Result<()>,
+    ) -> Result<Vec<ExpertResult>> {
+        check_active(self.context.transaction)?;
+        if !executor.supports_batch() {
+            let mut results = Vec::with_capacity(self.token_count());
+            for bucket in buckets {
+                check_active(self.context.transaction)?;
+                let owner = bucket.owner_rank;
+                let reply = executor.execute(bucket)?;
+                check_active(self.context.transaction)?;
+                self.ordered_results(&reply, Some(owner))?;
+                results.extend(reply);
+            }
+            return Ok(results);
+        }
+        let mut expected = buckets
+            .iter()
+            .map(|b| b.owner_rank)
+            .collect::<BTreeSet<_>>();
+        let replies = executor.execute_batch(buckets)?;
+        check_active(self.context.transaction)?;
+        let mut results = Vec::with_capacity(self.token_count());
+        for (owner, reply) in replies {
+            if !expected.remove(&owner) {
+                return Err(protocol_error("duplicate or unexpected batch owner"));
+            }
+            self.ordered_results(&reply, Some(owner))?;
+            results.extend(reply);
+        }
+        if !expected.is_empty() {
+            return Err(protocol_error("missing batch owner"));
+        }
+        Ok(results)
+    }
+
     fn owner_index(&self, owner: ParallelRankId) -> Result<usize> {
         self.members
             .iter()
@@ -539,15 +581,7 @@ impl RoutedSwiGluExecutor for ExpertParallelRoutedExecutor<'_> {
             self.limits,
         )?;
         let buckets = plan.dispatch(input.values(), check_active)?;
-        let mut results = Vec::with_capacity(plan.token_count());
-        for bucket in buckets {
-            check_active(request.context.transaction)?;
-            let owner = bucket.owner_rank;
-            let reply = self.results.execute(bucket)?;
-            check_active(request.context.transaction)?;
-            plan.ordered_results(&reply, Some(owner))?;
-            results.extend(reply);
-        }
+        let results = plan.execute_results(self.results, buckets, check_active)?;
         let output = plan.combine(&results, check_active)?;
         Ok(OperatorProgress::Ready(Rows::Host(HostRows::new(
             output.shape(),

@@ -228,7 +228,7 @@ async fn factory_shutdown_and_drop_share_the_owner_thread() {
 }
 
 #[tokio::test]
-async fn shutdown_returns_typed_runtime_and_quarantine_errors_after_owner_drop() {
+async fn shutdown_returns_typed_errors_without_dropping_unknown_ownership() {
     for error in [
         ferrule_runtime::Error::ShutdownIncomplete {
             message: "retirement acknowledgement missing".into(),
@@ -260,13 +260,22 @@ async fn shutdown_returns_typed_runtime_and_quarantine_errors_after_owner_drop()
             WorkerConfig::default(),
         )
         .unwrap();
+        let handle = worker.handle();
         let error = tokio::time::timeout(std::time::Duration::from_secs(2), worker.shutdown())
             .await
             .unwrap()
             .unwrap_err();
-        assert_eq!(error.to_string(), expected);
+        assert!(error.to_string().contains(&expected));
+        let fatal = handle
+            .snapshot()
+            .first_fatal
+            .expect("first fatal close error is retained");
+        let ferrule_common::WorkerExecutionError::Runtime { source } = fatal.as_ref() else {
+            panic!("missing runtime source: {fatal:?}")
+        };
+        assert_eq!(source.to_string(), expected);
         assert!(matches!(
-            error,
+            source,
             ferrule_runtime::Error::ShutdownIncomplete { .. }
                 | ferrule_runtime::Error::EngineUnavailable
                 | ferrule_runtime::Error::Backend {
@@ -274,10 +283,13 @@ async fn shutdown_returns_typed_runtime_and_quarantine_errors_after_owner_drop()
                 }
         ));
         assert!(shutdown_called.load(Ordering::Acquire));
-        assert_eq!(
-            drop_receiver.recv().unwrap(),
-            owner_receiver.recv().unwrap()
-        );
+        assert_ne!(owner_receiver.recv().unwrap(), std::thread::current().id());
+        assert!(matches!(
+            drop_receiver.try_recv(),
+            Err(std::sync::mpsc::TryRecvError::Empty)
+        ));
+        assert!(handle.snapshot().shutdown_report.quarantine);
+        assert_ne!(handle.phase(), ferrule_server::WorkerPhase::Stopped);
     }
 }
 

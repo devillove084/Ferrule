@@ -12,6 +12,8 @@ categories = ["science", "machine-learning"]
 [features]
 default = []
 cuda = ["ferrule-backend/cuda"]
+# Explicit opt-in for real materialization composition tests only.
+cuda-test-support = ["cuda"]
 
 [dependencies]
 ferrule-common = { version = "0.2.0", path = "../ferrule-common" }
@@ -31,6 +33,14 @@ rayon = "1.10"
 io-uring = "0.7.13"
 libc = "0.2"
 tokio = { version = "1", features = ["net", "rt", "sync"] }
+
+[dev-dependencies]
+ferrule-runtime = { path = "../ferrule-runtime", default-features = false }
+
+# The real-provider composition test is excluded unless explicitly enabled.
+[[test]]
+name = "cuda_materialization_registry"
+required-features = ["cuda-test-support"]
 
 [lints]
 workspace = true

@@ -12,8 +12,8 @@ mod state;
 mod traits;
 mod transaction;
 pub use batch::{
-    DecoderKvPageStatus, DecoderKvPageView, LogitsPlan, LogitsPlanRow, PackedDecoderBatch,
-    PackedDecoderSequence,
+    DecoderKvPageStatus, DecoderKvPageView, KvCommitProjection, LogicalExecutionIdentity,
+    LogitsPlan, LogitsPlanRow, PackedDecoderBatch, PackedDecoderSequence,
 };
 pub use kv::{
     CpuKvPlaneStorage, CpuKvView, CpuPagedKvBackend, CpuPagedKvPool, CpuPagedKvTransaction,
@@ -49,7 +49,8 @@ pub use state::{
 pub use traits::{
     DecoderCancelProgress, DecoderContinuationWait, DecoderKvBackend, DecoderKvCapacity,
     DecoderKvCommitBackend, DecoderKvPageSnapshot, DecoderKvPrepare, DecoderKvSequenceCustody,
-    DecoderWait, KvCommitBinding, KvEndProgress, KvRankAck,
+    DecoderWait, KvCapacityInspector, KvCommitBinding, KvCommitParticipant, KvEndProgress,
+    KvRankAck,
 };
 #[cfg(test)]
 pub(crate) use transaction::DecoderTransactionPhase;
@@ -72,5 +73,6 @@ mod hybrid_cuda;
 pub use hybrid_cuda::{
     CudaGatedDeltaState, CudaHybridLayerStates, CudaHybridSequenceLifecycle,
     CudaHybridSequenceState, HybridCudaCompletionUnknown, HybridCudaDecoder, HybridCudaDevice,
-    HybridCudaKvBackend, HybridCudaMemoryBudget, HybridCudaMemoryEstimate,
+    HybridCudaExpertProgress, HybridCudaKvBackend, HybridCudaMemoryBudget,
+    HybridCudaMemoryEstimate, HybridCudaRoutedExecutor, HybridCudaRoutedExperts,
 };

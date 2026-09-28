@@ -16,7 +16,7 @@ fn floats(v: &Value) -> Vec<f32> {
         .map(|v| v.as_f64().unwrap() as f32)
         .collect()
 }
-fn spec() -> DecoderModelSpec {
+fn spec(context: usize) -> DecoderModelSpec {
     let norm = |width| RmsNorm::new(width, 1e-6).unwrap().with_one_plus_weight();
     let rope = RotaryEmbedding::new(
         8,
@@ -58,7 +58,7 @@ fn spec() -> DecoderModelSpec {
         architecture: "synthetic-hybrid".into(),
         hidden_size: 8,
         vocab_size: 11,
-        max_sequence_length: Some(32),
+        max_sequence_length: Some(context),
         token_embedding: Embedding::new(11, 8, None).unwrap(),
         layers,
         final_norm: norm(8),
@@ -145,7 +145,10 @@ impl Fixture {
         Self { dir, oracle }
     }
     pub(crate) fn resources(&self) -> BoundDecoderResources {
-        self.resources_for(spec())
+        self.resources_with_context(32)
+    }
+    pub(crate) fn resources_with_context(&self, context: usize) -> BoundDecoderResources {
+        self.resources_for(spec(context))
     }
     pub(crate) fn resources_for(&self, spec: DecoderModelSpec) -> BoundDecoderResources {
         let mut schema = StateDictSchema::builder();

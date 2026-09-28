@@ -18,6 +18,7 @@ pub mod error;
 pub mod plan;
 
 pub use error::{BackendError, BackendResult};
+pub use ferrule_common::numeric_fp8;
 
 #[cfg(feature = "cuda")]
 pub mod cuda;

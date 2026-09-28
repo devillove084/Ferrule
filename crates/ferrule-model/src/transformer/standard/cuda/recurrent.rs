@@ -59,11 +59,32 @@ impl CudaStandardDecoderOperators {
                 }
                 let ff = layer.feed_forward().block();
                 this.bindings.norm(&this.ops, &ff.norm)?;
-                let super::super::PreparedFeedForwardKind::Dense(ff) = &ff.kind else {
-                    return Err(unsupported("hybrid CUDA dense FFN only"));
+                let dense = match &ff.kind {
+                    super::super::PreparedFeedForwardKind::Dense(ff) => Some(ff),
+                    super::super::PreparedFeedForwardKind::Routed {
+                        router,
+                        shared,
+                        shared_gate,
+                        ..
+                    } if this.numeric.is_some() => {
+                        this.bindings.linear(&this.ops, router)?;
+                        if let Some(gate) = shared_gate {
+                            this.bindings.linear(&this.ops, gate)?;
+                        }
+                        // Routed weights remain lazy and enter only through the
+                        // bounded expert lease in the existing routed operator.
+                        shared.as_ref()
+                    }
+                    _ => {
+                        return Err(unsupported(
+                            "hybrid CUDA routed FFN requires numeric profile",
+                        ));
+                    }
                 };
-                for l in [ff.gate(), ff.up(), ff.down()] {
-                    this.bindings.linear(&this.ops, l)?;
+                if let Some(ff) = dense {
+                    for l in [ff.gate(), ff.up(), ff.down()] {
+                        this.bindings.linear(&this.ops, l)?;
+                    }
                 }
             }
             this.bindings.norm(&this.ops, output.norm())?;
@@ -251,6 +272,24 @@ impl CudaStandardDecoderOperators {
                         value_dim: shape.value_dim,
                     },
                 )?;
+                for (name, buffer, n, w) in [
+                    ("gdn.convolved", &convolved, indices.len(), channels),
+                    (
+                        "gdn.recurrent_output",
+                        &recurrent_output,
+                        indices.len(),
+                        width,
+                    ),
+                    ("gdn.conv_state", &state.conv, 1, state.conv.len()),
+                    (
+                        "gdn.recurrent_state",
+                        &state.recurrent,
+                        1,
+                        state.recurrent.len(),
+                    ),
+                ] {
+                    this.trace_buffer(name, buffer, RowsShape::new(n, w)?, None, None, None)?;
+                }
                 this.ops.rms_norm_f32_into(
                     &recurrent_output,
                     indices.len() * shape.value_heads,
@@ -267,6 +306,22 @@ impl CudaStandardDecoderOperators {
                         width,
                     },
                     GateActivation::Silu,
+                )?;
+                this.trace_buffer(
+                    "gdn.normalized",
+                    &normalized,
+                    RowsShape::new(indices.len(), width)?,
+                    None,
+                    None,
+                    None,
+                )?;
+                this.trace_buffer(
+                    "gdn.gated",
+                    &gated,
+                    RowsShape::new(indices.len(), width)?,
+                    None,
+                    None,
+                    None,
                 )?;
                 for (local, &row) in indices.iter().enumerate() {
                     this.ops.copy_f32_range(

@@ -1445,6 +1445,102 @@ fn physical_bridge_cancel_one_waiter_retains_shared_operation() {
 }
 
 #[test]
+fn admission_policies_rescue_pending_but_reject_submitted_cancellation() {
+    use ferrule_runtime::io::{PrefetchOwner, RegistryError};
+
+    for required in [false, true] {
+        for submitted in [false, true] {
+            let (mut registry, handle) = registry(false);
+            let key = key(1);
+            let operation = attach(&mut registry, waiter(1, 1), key, 1);
+            assert!(registry.schedule_one(2).unwrap());
+            assert!(registry.schedule_one(3).unwrap());
+            assert_eq!(
+                registry.operation(operation).unwrap().stage(),
+                LoadStage::ReadSubmitted
+            );
+            if !submitted {
+                handle.fail_next_cancel(FailureReason::DeviceUnavailable);
+            }
+            let cancelled =
+                registry.detach_waiter(waiter(1, 1), CancellationReason::ExternalRequest, 4);
+            assert_eq!(cancelled.is_ok(), submitted);
+            assert!(
+                registry
+                    .operation(operation)
+                    .unwrap()
+                    .cancellation_requested()
+            );
+            let demand = if required {
+                ResourceDemand::required(ExecutionPhase::Decode)
+            } else {
+                ResourceDemand::prefetch(ExecutionPhase::Decode)
+            };
+            let request = load_request(&registry, key, uniform_plan(), demand);
+            let commands = handle.commands();
+            let before = format!("{registry:?}");
+            let read_credits = registry.resources().in_use(ResourceKind::ReadSlot);
+            let owner = PrefetchOwner::external(NonZeroU64::new(2).unwrap());
+            let admitted = if required {
+                registry
+                    .attach_waiter(waiter(2, 2), demand, [request], 5)
+                    .map(|report| (report.created, report.joined))
+            } else {
+                registry
+                    .prefetch(owner, [request], 5)
+                    .map(|report| (report.created, report.joined))
+            };
+            assert_eq!(
+                registry.resources().in_use(ResourceKind::ReadSlot),
+                read_credits
+            );
+            if submitted {
+                assert!(matches!(
+                    admitted,
+                    Err(RegistryError::CancelledOperationStillDraining { key: rejected }) if *rejected == key
+                ));
+                assert_eq!(format!("{registry:?}"), before);
+                assert_eq!(handle.commands(), commands);
+                registry.collect_provider_completions(1);
+                registry.process_one_completion().unwrap();
+                assert!(registry.retirement(operation).is_some());
+            } else {
+                let (created, joined) = admitted.unwrap();
+                assert!(created.is_empty());
+                assert_eq!(joined, [operation]);
+                assert!(
+                    !registry
+                        .operation(operation)
+                        .unwrap()
+                        .cancellation_requested()
+                );
+                let expected_demand = if required {
+                    ResourceDemand::required(ExecutionPhase::Prefill).merge(demand)
+                } else {
+                    demand
+                };
+                assert_eq!(
+                    registry.operation(operation).unwrap().demand(),
+                    expected_demand
+                );
+                // The original execution preparation already holds its lease;
+                // rescuing it must not reissue physical work or promotion.
+                assert_eq!(handle.commands(), commands);
+                if required {
+                    registry
+                        .detach_waiter(waiter(2, 2), CancellationReason::ExternalRequest, 6)
+                        .unwrap();
+                } else {
+                    registry.cancel_prefetch(owner, 6).unwrap();
+                }
+            }
+            assert!(registry.shutdown(7, 32).unwrap().drained);
+            assert_eq!(registry.resources().active_grants(), 0);
+        }
+    }
+}
+
+#[test]
 fn physical_bridge_cancel_last_queued_skips_physical_cancel() {
     let (mut registry, handle) = registry(false);
     attach(&mut registry, waiter(1, 1), key(1), 1);
@@ -1879,9 +1975,9 @@ fn physical_bridge_preserves_nonuniform_resource_plan() {
         .poll_install(direct_operation, key, &reservation, plan)
         .unwrap();
     let completions = [
-        backend.next_completion().unwrap(),
-        backend.next_completion().unwrap(),
-        backend.next_completion().unwrap(),
+        backend.next_completion().unwrap().unwrap(),
+        backend.next_completion().unwrap().unwrap(),
+        backend.next_completion().unwrap().unwrap(),
     ];
     assert_eq!(
         completions.map(|event| (event.stage, event.bytes)),
@@ -2004,5 +2100,417 @@ fn physical_bridge_preserves_nonuniform_resource_plan() {
     assert_eq!(
         high_water(ResourceKind::InstallSlot),
         plan.requirements.install_slots
+    );
+}
+
+#[test]
+fn admission_discard_failure_preserves_created_owner_and_retry() {
+    let (physical, handle) = MockPhysicalProvider::manual();
+    let provider = SharedMaterializationProvider::new(Box::new(physical));
+    let preparation = provider
+        .prepare(request(1), MaterializationPurpose::Prefetch)
+        .unwrap();
+    let key = preparation.key();
+    let mut registry =
+        LoadRegistry::new(provider, physical_resources(), FairQueueConfig::default()).unwrap();
+    handle.fail_next_promotion(key, FailureReason::DeviceUnavailable);
+    handle.fail_next_discard(
+        key,
+        FailureReason::ContractViolation {
+            message: "discard failure".into(),
+        },
+    );
+    let error = registry
+        .attach_waiter(
+            waiter(81, 81),
+            ResourceDemand::required(ExecutionPhase::Prefill),
+            [stage_request(
+                preparation,
+                uniform_plan(),
+                ResourceDemand::required(ExecutionPhase::Prefill),
+            )],
+            1,
+        )
+        .unwrap_err();
+    let operation = registry
+        .operation_for_key(key)
+        .expect("failed discard retains key index");
+    assert!(
+        registry.operation(operation).is_some(),
+        "failed discard retains operation owner"
+    );
+    assert!(
+        error.to_string().contains("device") && error.to_string().contains("discard failure"),
+        "both errors: {error}"
+    );
+    registry.drive(2, 1).unwrap();
+    assert_eq!(registry.operation_for_key(key), None);
+    assert!(registry.retirement(operation).is_some());
+    assert_eq!(registry.resources().active_grants(), 0);
+    assert_eq!(
+        handle.command_count(
+            |c| matches!(c, MockPhysicalCommand::DiscardPreparation(k) if *k == key)
+        ),
+        2
+    );
+    assert!(registry.shutdown(3, 16).unwrap().drained);
+}
+
+#[test]
+fn admission_promotion_undo_double_failure_continues_independent_cleanup() {
+    let (physical, handle) = MockPhysicalProvider::manual();
+    let provider = SharedMaterializationProvider::new(Box::new(physical));
+    let mut preparations = [1, 2, 3].map(|seed| {
+        provider
+            .prepare(request(seed), MaterializationPurpose::Prefetch)
+            .unwrap()
+    });
+    preparations.sort_unstable_by_key(|p| p.key());
+    let [joined, successful_discard, failed_discard] = preparations.map(|p| p.key());
+    let mut registry =
+        LoadRegistry::new(provider, physical_resources(), FairQueueConfig::default()).unwrap();
+    let owner = ferrule_runtime::io::PrefetchOwner::external(NonZeroU64::new(82).unwrap());
+    let operation = registry
+        .prefetch(
+            owner,
+            [stage_request(
+                preparations[0],
+                uniform_plan(),
+                ResourceDemand::ModelWarmup,
+            )],
+            1,
+        )
+        .unwrap()
+        .created[0];
+    handle.fail_next_promotion(failed_discard, FailureReason::DeviceUnavailable);
+    handle.fail_next_release(FailureReason::ContractViolation {
+        message: "promotion undo failure".into(),
+    });
+    handle.fail_next_discard(
+        failed_discard,
+        FailureReason::ContractViolation {
+            message: "discard undo failure".into(),
+        },
+    );
+    let error = registry
+        .attach_waiter(
+            waiter(82, 82),
+            ResourceDemand::required(ExecutionPhase::Prefill),
+            preparations.map(|p| {
+                stage_request(
+                    p,
+                    uniform_plan(),
+                    ResourceDemand::required(ExecutionPhase::Prefill),
+                )
+            }),
+            2,
+        )
+        .unwrap_err();
+    assert_eq!(
+        handle.command_count(
+            |c| matches!(c, MockPhysicalCommand::DiscardPreparation(k) if *k == failed_discard)
+        ),
+        1,
+        "release failure must not short circuit discard"
+    );
+    assert_eq!(registry.operation_for_key(successful_discard), None);
+    assert!(
+        registry
+            .operation_for_key(failed_discard)
+            .and_then(|id| registry.operation(id))
+            .is_some()
+    );
+    assert_eq!(registry.resources().in_use(ResourceKind::Waiter), 0);
+    assert_eq!(registry.resources().in_use(ResourceKind::Continuation), 0);
+    let errors = error.to_string();
+    assert!(
+        errors.contains("device")
+            && errors.contains("promotion undo failure")
+            && errors.contains("discard undo failure"),
+        "{errors}"
+    );
+    registry.drive(3, 1).unwrap();
+    assert_eq!(registry.active_operations(), 1);
+    assert_eq!(registry.operation_for_key(joined), Some(operation));
+    assert_eq!(
+        registry.operation(operation).unwrap().demand(),
+        ResourceDemand::ModelWarmup
+    );
+    assert_eq!(
+        handle.command_count(
+            |c| matches!(c, MockPhysicalCommand::DiscardPreparation(k) if *k == successful_discard)
+        ),
+        1,
+        "successful undo is consumed"
+    );
+    assert_eq!(
+        handle.command_count(
+            |c| matches!(c, MockPhysicalCommand::ReleaseExecutionLease(k) if *k == joined)
+        ),
+        2
+    );
+    assert!(registry.shutdown(4, 16).unwrap().drained);
+}
+
+#[test]
+fn provider_detached_not_quiescent_fault_retains_read_credit_until_proof() {
+    use ferrule_common::{CompletionExpectation, ProviderFault, QuiescenceEvidence};
+    for evidence in [QuiescenceEvidence::Pending, QuiescenceEvidence::Unknown] {
+        let (mut registry, handle, key, operation) = manual_at_read();
+        handle.defer_cancellation_completion();
+        let scope =
+            CompletionExpectation::new(operation, key, LoadStage::ReadSubmitted, BYTES).unwrap();
+        let failure = FailureReason::Cleanup {
+            primary: Box::new(FailureReason::StorageUnavailable),
+            cleanup: Box::new(FailureReason::ReadRejected),
+        };
+        handle.push_fault(ProviderFault {
+            scope: Some(scope),
+            failure: failure.clone(),
+            quiescence: evidence,
+        });
+        let grants = registry.resources().active_grants();
+        assert_eq!(registry.collect_provider_completions(8), 1);
+        assert!(registry.process_one_completion().is_err());
+        assert_eq!(
+            registry.operation(operation).unwrap().stage(),
+            LoadStage::ReadSubmitted
+        );
+        assert_eq!(registry.resources().active_grants(), grants);
+        assert_eq!(registry.resources().in_use(ResourceKind::ReadSlot), 1);
+        assert_eq!(
+            registry.resources().in_use(ResourceKind::PinnedHostBytes),
+            BYTES
+        );
+        assert_eq!(
+            registry.resources().in_use(ResourceKind::StorageReadBytes),
+            BYTES
+        );
+        assert!(registry.shutdown(10, 8).is_err());
+        assert_eq!(registry.resources().in_use(ResourceKind::ReadSlot), 1);
+        handle.push_fault(ProviderFault {
+            scope: Some(scope),
+            failure,
+            quiescence: QuiescenceEvidence::Quiescent,
+        });
+        assert!(registry.shutdown(11, 8).unwrap().drained);
+        assert_eq!(registry.resources().active_grants(), 0);
+        assert_eq!(registry.provider_faults().len(), 2);
+    }
+}
+
+#[test]
+fn provider_global_fault_has_no_fabricated_operation_and_cannot_be_idle() {
+    use ferrule_common::{ProviderFault, QuiescenceEvidence};
+    let (mut registry, handle, _, operation) = manual_at_read();
+    handle.defer_cancellation_completion();
+    let fault = ProviderFault {
+        scope: None,
+        failure: FailureReason::StorageUnavailable,
+        quiescence: QuiescenceEvidence::Unknown,
+    };
+    handle.push_fault(fault.clone());
+    assert_eq!(
+        registry.provider_mut().next_completion(),
+        Err(fault.clone())
+    );
+    handle.push_fault(fault.clone());
+    registry.collect_provider_completions(8);
+    assert!(registry.process_one_completion().is_err());
+    assert_eq!(registry.provider_faults(), &[fault]);
+    assert_eq!(
+        registry.operation(operation).unwrap().stage(),
+        LoadStage::ReadSubmitted
+    );
+    assert_eq!(registry.resources().in_use(ResourceKind::ReadSlot), 1);
+    assert!(registry.shutdown(10, 8).is_err());
+    assert_eq!(registry.resources().in_use(ResourceKind::ReadSlot), 1);
+
+    let (physical, handle) = MockPhysicalProvider::manual();
+    let mut empty = LoadRegistry::new(
+        SharedMaterializationProvider::new(Box::new(physical)),
+        physical_resources(),
+        FairQueueConfig::default(),
+    )
+    .unwrap();
+    handle.push_fault(ProviderFault {
+        scope: None,
+        failure: FailureReason::StorageUnavailable,
+        quiescence: QuiescenceEvidence::Unknown,
+    });
+    assert!(empty.shutdown(1, 8).is_err());
+    assert_eq!(empty.active_operations(), 0);
+    assert!(
+        empty.shutdown(2, 8).is_err(),
+        "consuming a fault does not discharge the shutdown barrier"
+    );
+}
+
+#[test]
+fn admission_adopted_release_failure_does_not_block_created_discard() {
+    let (physical, handle) = MockPhysicalProvider::manual();
+    let provider = SharedMaterializationProvider::new(Box::new(physical));
+    handle.set_resident(true);
+    let resident = provider
+        .prepare(request(1), MaterializationPurpose::Execution)
+        .unwrap();
+    handle.set_resident(false);
+    let transfer = provider
+        .prepare(request(2), MaterializationPurpose::Prefetch)
+        .unwrap();
+    let mut registry =
+        LoadRegistry::new(provider, physical_resources(), FairQueueConfig::default()).unwrap();
+    handle.fail_next_promotion(transfer.key(), FailureReason::DeviceUnavailable);
+    handle.fail_next_release(FailureReason::StorageUnavailable);
+    let requests = [resident, transfer].map(|p| {
+        stage_request(
+            p,
+            uniform_plan(),
+            ResourceDemand::required(ExecutionPhase::Prefill),
+        )
+    });
+    assert!(
+        registry
+            .attach_waiter(
+                waiter(84, 84),
+                ResourceDemand::required(ExecutionPhase::Prefill),
+                requests,
+                1
+            )
+            .is_err()
+    );
+    assert_eq!(registry.operation_for_key(transfer.key()), None);
+    assert!(registry.residency_binding(resident.key()).is_some());
+    assert_eq!(
+        registry.resources().in_use(ResourceKind::ResidentBytes),
+        BYTES
+    );
+    assert_eq!(registry.resources().in_use(ResourceKind::Waiter), 0);
+    assert_eq!(registry.resources().in_use(ResourceKind::Continuation), 0);
+    assert!(
+        !registry.schedule_one(2).unwrap(),
+        "no admission while undo is pending"
+    );
+    registry.drive(3, 1).unwrap();
+    assert!(registry.residency_binding(resident.key()).is_none());
+    assert_eq!(registry.resources().active_grants(), 0);
+    assert_eq!(
+        handle.command_count(
+            |c| matches!(c, MockPhysicalCommand::DiscardPreparation(k) if *k == transfer.key())
+        ),
+        1
+    );
+    assert_eq!(
+        handle.command_count(
+            |c| matches!(c, MockPhysicalCommand::ReleaseExecutionLease(k) if *k == resident.key())
+        ),
+        2
+    );
+}
+
+#[test]
+fn provider_unknown_upload_and_install_hold_credits_until_exact_stage_proof() {
+    use ferrule_common::{CompletionExpectation, ProviderFault, QuiescenceEvidence};
+    for stage in [LoadStage::UploadSubmitted, LoadStage::Installing] {
+        let (mut registry, handle, key, operation) = manual_at_read();
+        handle.defer_cancellation_completion();
+        handle.push_outcome(
+            operation,
+            key,
+            LoadStage::ReadSubmitted,
+            CompletionOutcome::Succeeded,
+        );
+        apply_physical(&mut registry, 8);
+        registry.schedule_one(10).unwrap();
+        if stage == LoadStage::Installing {
+            handle.push_outcome(
+                operation,
+                key,
+                LoadStage::UploadSubmitted,
+                CompletionOutcome::Succeeded,
+            );
+            apply_physical(&mut registry, 8);
+            registry.schedule_one(11).unwrap();
+        }
+        let fault = ProviderFault {
+            scope: Some(CompletionExpectation::new(operation, key, stage, BYTES).unwrap()),
+            failure: FailureReason::DeviceUnavailable,
+            quiescence: QuiescenceEvidence::Unknown,
+        };
+        handle.push_fault(fault.clone());
+        registry.collect_provider_completions(8);
+        assert!(registry.process_one_completion().is_err());
+        let grants = registry.resources().active_grants();
+        assert_eq!(registry.operation(operation).unwrap().stage(), stage);
+        assert!(registry.shutdown(12, 8).is_err());
+        assert!(registry.resources().active_grants() > 0);
+        assert!(registry.resources().active_grants() <= grants);
+        assert_eq!(
+            registry.resources().in_use(ResourceKind::ResidentBytes),
+            BYTES
+        );
+        handle.push_fault(ProviderFault {
+            quiescence: QuiescenceEvidence::Quiescent,
+            ..fault
+        });
+        assert!(registry.shutdown(13, 8).unwrap().drained);
+        assert_eq!(registry.resources().active_grants(), 0);
+    }
+}
+
+#[test]
+fn admission_invalid_promotion_descriptor_retains_successful_mutation_undo() {
+    let (physical, handle) = MockPhysicalProvider::manual();
+    let provider = SharedMaterializationProvider::new(Box::new(physical));
+    let original = provider
+        .prepare(request(1), MaterializationPurpose::Prefetch)
+        .unwrap();
+    let wrong = provider
+        .prepare(request(2), MaterializationPurpose::Prefetch)
+        .unwrap();
+    let mut registry =
+        LoadRegistry::new(provider, physical_resources(), FairQueueConfig::default()).unwrap();
+    let owner = ferrule_runtime::io::PrefetchOwner::external(NonZeroU64::new(85).unwrap());
+    let operation = registry
+        .prefetch(
+            owner,
+            [stage_request(
+                original,
+                uniform_plan(),
+                ResourceDemand::ModelWarmup,
+            )],
+            1,
+        )
+        .unwrap()
+        .created[0];
+    handle.override_next_promotion(wrong);
+    handle.fail_next_release(FailureReason::StorageUnavailable);
+    let error = registry
+        .attach_waiter(
+            waiter(85, 85),
+            ResourceDemand::required(ExecutionPhase::Prefill),
+            [stage_request(
+                original,
+                uniform_plan(),
+                ResourceDemand::required(ExecutionPhase::Prefill),
+            )],
+            2,
+        )
+        .unwrap_err();
+    assert!(error.to_string().contains("frozen key or binding"));
+    assert_eq!(registry.operation_for_key(original.key()), Some(operation));
+    assert!(registry.has_pending_owner_work());
+    assert_eq!(registry.resources().active_grants(), 0);
+    registry.drive(3, 1).unwrap();
+    assert!(!registry.has_pending_owner_work());
+    assert_eq!(
+        handle.command_count(
+            |c| matches!(c, MockPhysicalCommand::ReleaseExecutionLease(k) if *k == original.key())
+        ),
+        2
+    );
+    assert_eq!(
+        registry.provider().preparation(original.key()).unwrap(),
+        original
     );
 }

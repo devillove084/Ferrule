@@ -20,7 +20,8 @@ use ferrule_common::{
 };
 use io_uring::{IoUring, opcode, types};
 
-use super::streaming::{ExpertIoStats, ExpertIoTransport, ExpertTensorPayload, ExpertTensorSlice};
+use super::streaming::source::{ExpertTensorPayload, ExpertTensorSlice};
+use super::streaming::storage::{ExpertIoStats, ExpertIoTransport};
 use crate::runner::ModelCompletionReactor;
 
 pub(crate) const DIRECT_IO_ALIGNMENT: usize = 4096;
@@ -31,10 +32,7 @@ const FIXED_FILE_CAPACITY: usize = 64;
 struct AlignedBlock([u8; DIRECT_IO_ALIGNMENT]);
 
 #[cfg(feature = "cuda")]
-pub(crate) struct PinnedExpertTensorPayload {
-    pub(crate) slice: ExpertTensorSlice,
-    pub(crate) bytes: CudaPinnedU8HostBuffer,
-}
+pub(crate) use super::streaming::storage::PinnedExpertTensorPayload;
 
 #[cfg(feature = "cuda")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -408,11 +406,11 @@ fn reap_detached_pinned_operations<T>(
     let mut pending = VecDeque::with_capacity(detached.len());
     let mut reaped = 0usize;
     while let Some(operation_id) = detached.pop_front() {
-        if !operations.contains_key(&operation_id)
-            || take_terminal_pinned_operation(operations, operation_id).is_some()
-        {
+        if take_terminal_pinned_operation(operations, operation_id).is_some() {
             reaped = reaped.saturating_add(1);
         } else {
+            // A missing map entry is not evidence that the reactor drained the
+            // exact ticket; retain it in quarantine until a reaper proves it.
             pending.push_back(operation_id);
         }
     }
@@ -2039,6 +2037,7 @@ pub(crate) struct IoUringExpertReader {
     completion_hub: CompletionHub,
     _completion_eventfd: OwnedFd,
     reactor_eventfd: Mutex<Option<OwnedFd>>,
+    reactor_failure: Mutex<Option<ferrule_common::FailureReason>>,
 }
 
 impl IoUringExpertReader {
@@ -2083,6 +2082,7 @@ impl IoUringExpertReader {
             completion_hub,
             _completion_eventfd: completion_eventfd,
             reactor_eventfd: Mutex::new(Some(reactor_eventfd)),
+            reactor_failure: Mutex::new(None),
         })
     }
 
@@ -2099,23 +2099,60 @@ impl IoUringExpertReader {
         };
         Some(Box::pin(async move {
             let _registration = registration;
-            let eventfd = tokio::io::unix::AsyncFd::new(reactor_eventfd).map_err(|error| {
-                Error::context(
-                    "attach expert io_uring completion eventfd to Tokio",
-                    error.into(),
-                )
-            })?;
-            loop {
-                let mut ready = eventfd.readable().await.map_err(|error| {
-                    Error::context("await expert io_uring completion eventfd", error.into())
+            let result: Result<()> = async {
+                let eventfd = tokio::io::unix::AsyncFd::new(reactor_eventfd).map_err(|error| {
+                    Error::context(
+                        "attach expert io_uring completion eventfd to Tokio",
+                        error.into(),
+                    )
                 })?;
-                drain_completion_eventfd(eventfd.get_ref())?;
-                ready.clear_ready();
-                let progress = reader.react_to_completions();
-                completion_hub.notify();
-                progress?;
+                loop {
+                    let mut ready = eventfd.readable().await.map_err(|error| {
+                        Error::context("await expert io_uring completion eventfd", error.into())
+                    })?;
+                    drain_completion_eventfd(eventfd.get_ref())?;
+                    ready.clear_ready();
+                    let progress = reader.react_to_completions();
+                    completion_hub.notify();
+                    progress?;
+                }
             }
+            .await;
+            if let Err(error) = &result {
+                *reader
+                    .reactor_failure
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                    Some(ferrule_common::FailureReason::ContractViolation {
+                        message: error.to_string(),
+                    });
+                completion_hub.notify();
+            }
+            result
         }))
+    }
+
+    #[cfg(feature = "cuda")]
+    pub(crate) fn take_reactor_failure(&self) -> Option<ferrule_common::FailureReason> {
+        self.reactor_failure
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+    }
+
+    /// Unlike detach, success here proves the exact ticket's final CQE was consumed.
+    #[cfg(feature = "cuda")]
+    pub(crate) fn quiesce_slices_pinned(&self, ticket: PinnedExpertReadTicket) -> Result<bool> {
+        let mut state = self.state.lock().map_err(|_| Error::Internal {
+            message: "expert io_uring state lock poisoned".into(),
+        })?;
+        state.cancel_slices_pinned(ticket)?;
+        if take_terminal_pinned_operation(&mut state.pinned_operations, ticket.operation_id)
+            .is_some()
+        {
+            return Ok(true);
+        }
+        Ok(false)
     }
 
     fn react_to_completions(&self) -> Result<()> {
@@ -2392,6 +2429,240 @@ mod tests {
         ));
         std::fs::write(&path, vec![0u8; DIRECT_IO_ALIGNMENT]).unwrap();
         path
+    }
+
+    #[cfg(feature = "cuda")]
+    fn gpu_reader_fixture(
+        name: &str,
+    ) -> (
+        ferrule_backend::cuda::operators::moe::CudaOperators,
+        IoUringExpertReader,
+        Vec<ExpertTensorSlice>,
+        MaterializationKey,
+        PathBuf,
+    ) {
+        use crate::moe::streaming::{ExpertMatrixKind, ExpertTensorComponent, ExpertTensorKey};
+        use ferrule_common::{
+            BackendId, ContentHash, DestinationGeneration, DeviceId, ExpertId, LayerId,
+            MaterializedResourceId, ModelInstanceId, PayloadEncodingId, SourceGeneration,
+            SourceIdentityHash,
+        };
+        let ops = ferrule_backend::cuda::operators::moe::CudaOperators::new_on_device(0)
+            .expect("real CUDA pinned allocator required");
+        let reader = IoUringExpertReader::new_cuda_pinned(
+            1,
+            DIRECT_IO_ALIGNMENT,
+            2,
+            &ops.pinned_host_allocator(),
+            ExpertIoTransport::DirectIoUring,
+            CompletionHub::new(),
+        )
+        .expect("real registered-buffer io_uring required; no fallback");
+        let path = temporary_shard(name);
+        std::fs::write(&path, vec![0x3f; 2 * DIRECT_IO_ALIGNMENT]).unwrap();
+        let slices = [0, DIRECT_IO_ALIGNMENT]
+            .map(|offset| ExpertTensorSlice {
+                key: ExpertTensorKey::new(0, 0, ExpertMatrixKind::Gate),
+                component: ExpertTensorComponent::Weight,
+                path: path.clone(),
+                offset: offset as u64,
+                bytes: DIRECT_IO_ALIGNMENT as u64,
+                dtype: "BF16".into(),
+                shape: vec![32, 64],
+            })
+            .to_vec();
+        let key = MaterializationKey::new(
+            ModelInstanceId::new(1),
+            SourceIdentityHash::new([1; 32]),
+            ContentHash::new([2; 32]),
+            MaterializedResourceId::routed_expert(LayerId::new(0), ExpertId::new(0)),
+            PayloadEncodingId::new(1),
+            BackendId::new(1),
+            DeviceId::new(0),
+            SourceGeneration::new(1),
+            DestinationGeneration::new(1),
+        )
+        .unwrap();
+        (ops, reader, slices, key, path)
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    #[ignore = "requires real CUDA pinned memory and Linux direct io_uring"]
+    fn gpu_read_cancel_retains_submitted_slab_until_exact_cqe() {
+        let (_ops, reader, slices, key, path) = gpu_reader_fixture("cancel-cqe");
+        let read = reader
+            .reserve_slices_pinned(
+                reader.plan_slices_pinned(&slices).unwrap(),
+                OperationId::new(901),
+                key,
+            )
+            .unwrap();
+        reader.submit_reserved_slices_pinned(read.ticket).unwrap();
+        {
+            let state = reader.state.lock().unwrap();
+            let operation = &state.pinned_operations[&read.ticket.operation_id];
+            assert_eq!((operation.next_extent, operation.outstanding), (1, 1));
+            assert_eq!(state.pinned_buffer_busy, [true, true]);
+        }
+        assert!(reader.cancel_slices_pinned(read.ticket).unwrap());
+        assert!(
+            !reader.quiesce_slices_pinned(read.ticket).unwrap(),
+            "cancel is not a CQE"
+        );
+        {
+            let state = reader.state.lock().unwrap();
+            assert_eq!(state.pinned_buffer_busy, [true, false]);
+            assert_eq!(state.pinned_submissions.len(), 1);
+        }
+        let deadline = Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            reader.react_to_completions().unwrap();
+            if reader.quiesce_slices_pinned(read.ticket).unwrap() {
+                break;
+            }
+            assert!(Instant::now() < deadline, "cancelled read CQE timeout");
+            std::thread::yield_now();
+        }
+        assert!(
+            reader.quiesce_slices_pinned(read.ticket).is_err(),
+            "no second consumption"
+        );
+        let state = reader.state.lock().unwrap();
+        assert!(state.pinned_operations.is_empty());
+        assert!(state.pinned_submissions.is_empty());
+        assert_eq!(state.pinned_buffer_busy, [false, false]);
+        assert_eq!(state.stats.submitted_extents, 1);
+        assert!(state.buffers.iter().all(RegisteredBuffer::is_available));
+        drop(state);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    #[ignore = "requires real CUDA pinned memory and Linux direct io_uring"]
+    fn gpu_read_outer_poll_error_detaches_and_reaps_real_cqe_once() {
+        let (_ops, reader, slices, key, path) = gpu_reader_fixture("detach-cqe");
+        let read = reader
+            .reserve_slices_pinned(
+                reader.plan_slices_pinned(&slices).unwrap(),
+                OperationId::new(902),
+                key,
+            )
+            .unwrap();
+        reader.submit_reserved_slices_pinned(read.ticket).unwrap();
+        assert!(reader.poll_slices_pinned(read.ticket, 0).is_err());
+        {
+            let state = reader.state.lock().unwrap();
+            assert_eq!(
+                state.pinned_operations[&read.ticket.operation_id].outstanding,
+                1
+            );
+            assert_eq!(state.pinned_buffer_busy, [true, true]);
+        }
+        reader.detach_slices_pinned(read.ticket).unwrap();
+        let deadline = Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            reader.react_to_completions().unwrap();
+            let state = reader.state.lock().unwrap();
+            if state.pinned_operations.is_empty() {
+                break;
+            }
+            assert!(Instant::now() < deadline, "detached read CQE timeout");
+            drop(state);
+            std::thread::yield_now();
+        }
+        let mut state = reader.state.lock().unwrap();
+        assert!(state.detached_pinned_operations.is_empty());
+        assert!(state.pinned_submissions.is_empty());
+        assert_eq!(state.pinned_buffer_busy, [false, false]);
+        assert_eq!(state.reap_detached_pinned_operations(), 0);
+        assert!(state.poll_slices_pinned(read.ticket, 1).is_err());
+        assert!(state.buffers.iter().all(RegisteredBuffer::is_available));
+        drop(state);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    #[ignore = "requires real CUDA and io_uring; BF16 transfer, not routed FP4 success"]
+    fn gpu_read_payload_custody_outlives_cqe_through_real_h2d_event() {
+        use ferrule_backend::cuda::operators::moe::CudaArtifactLinearShape;
+        let (ops, reader, slices, key, path) = gpu_reader_fixture("read-h2d");
+        let read = reader
+            .reserve_slices_pinned(
+                reader.plan_slices_pinned(&slices[..1]).unwrap(),
+                OperationId::new(903),
+                key,
+            )
+            .unwrap();
+        reader.submit_reserved_slices_pinned(read.ticket).unwrap();
+        let deadline = Instant::now() + std::time::Duration::from_secs(10);
+        let mut result = loop {
+            match reader.poll_slices_pinned(read.ticket, 1).unwrap() {
+                PinnedExpertReadPoll::Ready(result) => break result,
+                PinnedExpertReadPoll::Pending => {
+                    assert!(Instant::now() < deadline, "read CQE timeout");
+                    std::thread::yield_now();
+                }
+                _ => panic!("read unexpectedly failed or cancelled"),
+            }
+        };
+        assert!(reader.poll_slices_pinned(read.ticket, 1).is_err());
+        let payload = result.payloads.pop().unwrap();
+        assert_eq!(payload.bytes.as_slice(), vec![0x3f; DIRECT_IO_ALIGNMENT]);
+        let shape = CudaArtifactLinearShape::Bf16Bytes {
+            out_features: 32,
+            in_features: 64,
+        };
+        let mut frame = ops.allocate_artifact_linear_device(shape).unwrap();
+        ops.reset_counters();
+        let upload = ops
+            .overwrite_artifact_linear_from_pinned_async(&mut frame, shape, payload.bytes, None)
+            .unwrap();
+        {
+            let state = reader.state.lock().unwrap();
+            assert_eq!(
+                state.pinned_buffer_busy,
+                [false, false],
+                "CQE releases read reservation only"
+            );
+            assert!(
+                !state.buffers[0].is_available(),
+                "H2D ticket still owns the read slab"
+            );
+        }
+        upload.synchronize().unwrap();
+        assert!(upload.is_complete().unwrap());
+        assert_eq!(ops.counters().host_to_device_copies, 1);
+        assert_eq!(
+            ops.counters().host_to_device_bytes,
+            DIRECT_IO_ALIGNMENT as u64
+        );
+        assert_eq!(ops.counters().stream_wide_syncs, 0);
+        drop(upload);
+        assert!(
+            reader
+                .state
+                .lock()
+                .unwrap()
+                .buffers
+                .iter()
+                .all(RegisteredBuffer::is_available)
+        );
+        // Reuse the original slab only after its upload ticket releases custody.
+        let next = reader
+            .reserve_slices_pinned(
+                reader.plan_slices_pinned(&slices[..1]).unwrap(),
+                OperationId::new(904),
+                key,
+            )
+            .unwrap();
+        assert_eq!(next.slabs[0].slab(), read.slabs[0].slab());
+        assert!(reader.quiesce_slices_pinned(next.ticket).unwrap());
+        drop(frame);
+        assert_eq!(ops.allocator_metrics().live_requested_bytes, 0);
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]
@@ -2738,6 +3009,21 @@ mod tests {
             0
         );
         assert!(take_terminal_pinned_operation(&mut operations, operation_id).is_none());
+    }
+
+    #[test]
+    fn detached_missing_operation_is_not_quiescence_proof() {
+        let mut operations = HashMap::<u64, PinnedReadOperation<()>>::new();
+        let mut detached = VecDeque::from([7]);
+        assert_eq!(
+            reap_detached_pinned_operations(&mut operations, &mut detached),
+            0
+        );
+        assert_eq!(
+            detached,
+            VecDeque::from([7]),
+            "unknown owner stays quarantined"
+        );
     }
 
     #[test]

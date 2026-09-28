@@ -218,3 +218,59 @@ fn cuda_expert_factory_rejects_cpu_workers_without_initializing_cuda() {
         "{error}"
     );
 }
+
+#[test]
+#[ignore = "requires one CUDA device; PR07 shadow regression, --test-threads=1"]
+fn cuda_single_logical_page_two_tokens_reuses_bounded_shadow() {
+    let fixture = Fixture::new(true);
+    let path = fixture.0.clone();
+    let cfg = PipelineConfig {
+        max_pages: 1,
+        max_positions: 2,
+        max_batch_tokens: 2,
+        session_capacity: 1,
+        ..config(ExecutionPrecisionPolicy::f32())
+    };
+    let mut pipeline =
+        PipelineParallelExecutor::new_with_program(topology(2), plans(2), cfg, move |_, plan| {
+            let resources = load(&path)?;
+            let ops = Rc::new(CudaOperators::new_on_device(0)?);
+            PipelineStage::prepare_cuda(&resources, plan, cfg, ops)
+        })
+        .unwrap();
+    assert_eq!(pipeline.page_manager().max_pages(), 1);
+    let mut oracle = Oracle::new(&fixture, ExecutionPrecisionPolicy::f32());
+    for (tokens, phase) in [
+        (&[1][..], ForwardPhase::Prefill),
+        (&[2][..], ForwardPhase::Decode),
+    ] {
+        let expected = oracle.forward(tokens, phase);
+        close(
+            &pipeline
+                .forward(SessionId(1), tokens, phase)
+                .unwrap()
+                .logits,
+            &expected,
+        );
+        drained(&pipeline);
+        for owner in pipeline.owner_stats().unwrap() {
+            assert_eq!(
+                (
+                    owner.kv.physical_pages,
+                    owner.kv.resident_pages,
+                    owner.kv.free_pages
+                ),
+                (2, 1, 1)
+            );
+        }
+    }
+    assert!(
+        pipeline
+            .forward(SessionId(1), &[3], ForwardPhase::Decode)
+            .is_err()
+    );
+    assert_eq!(pipeline.page_manager().allocated_pages(), 1);
+    pipeline.release_session(SessionId(1)).unwrap();
+    zero(&pipeline);
+    pipeline.shutdown().unwrap();
+}

@@ -16,4 +16,7 @@ pub use ferrule_common::{
     WorkerOperation, WorkerRequestError, WorkerShutdownError, WorkerStartError,
 };
 pub use http::{ServerState, router, serve_with_shutdown};
-pub use worker::{ModelWorker, ModelWorkerHandle, spawn_model_worker_with};
+pub use worker::{
+    ModelWorker, ModelWorkerHandle, ShutdownStage, WorkerPhase, WorkerShutdownReport,
+    WorkerSnapshot, spawn_model_worker_with,
+};

@@ -1,5 +1,6 @@
 //! Runtime-owned global single-flight materialization registry.
 
+use ferrule_common::io_protocol::{ProviderFault, ProviderProgress, QuiescenceEvidence};
 use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::num::NonZeroU64;
 
@@ -126,6 +127,13 @@ pub enum RegistryError {
         continuation: ContinuationId,
         expected: ExecutionTransactionId,
         requested: ExecutionTransactionId,
+    },
+    #[snafu(display("materialization admission compensation is still pending"))]
+    AdmissionCleanupPending,
+    #[snafu(display("{primary}; admission cleanup also failed: {cleanup:?}"))]
+    AdmissionCleanup {
+        primary: Box<RegistryError>,
+        cleanup: Vec<RegistryError>,
     },
     #[snafu(display("materialization registry is shutting down"))]
     RegistryShuttingDown,
@@ -309,6 +317,8 @@ pub struct LoadOp {
     install_grant: Option<PhysicalResourceGrant>,
     retirement: Option<RetirementToken>,
     cancellation: Option<OperationCancellation>,
+    provider_failure: Option<FailureReason>,
+    rollback_cleaned: bool,
     install_submitted: bool,
     replaced: Option<MaterializationKey>,
     stage_started_ns: u64,
@@ -482,6 +492,55 @@ pub enum TransactionCustodyOutcome {
     Cancelled,
 }
 
+#[derive(Debug, Clone, Copy)]
+enum AdmissionPolicy {
+    Required(ResourceDemand),
+    Prefetch,
+}
+
+/// Classification only: no grants, provider custody, or new operation identities.
+/// Consumed synchronously by an attempt before the registry can advance again.
+#[derive(Debug)]
+struct AdmissionPlan {
+    requests: Vec<LoadRequest>,
+    demand: ResourceDemand,
+    joined: Vec<OperationId>,
+    resident_preparations: Vec<LoadRequest>,
+    new_requests: Vec<LoadRequest>,
+    already_resident: usize,
+}
+
+/// Undo cursor only: grants and physical owners remain in the original registry maps.
+#[derive(Debug, Default)]
+struct AdmissionAttempt {
+    created: Vec<OperationId>,
+    adopted: Vec<MaterializationKey>,
+    promotions: Vec<MaterializationKey>,
+    waiter: Option<WaiterId>,
+    continuation: Option<ContinuationId>,
+    continuation_restore: Option<(ContinuationId, ResourceDemand, bool)>,
+    operation_restores: Vec<(
+        OperationId,
+        ResourceDemand,
+        bool,
+        Option<OperationCancellation>,
+    )>,
+    prefetch: Option<PrefetchOwner>,
+}
+
+impl AdmissionAttempt {
+    fn is_empty(&self) -> bool {
+        self.created.is_empty()
+            && self.adopted.is_empty()
+            && self.promotions.is_empty()
+            && self.waiter.is_none()
+            && self.continuation.is_none()
+            && self.continuation_restore.is_none()
+            && self.operation_restores.is_empty()
+            && self.prefetch.is_none()
+    }
+}
+
 /// Runtime-wide authoritative owner of materialization, waiters, credits,
 /// completion validation, publication, and retirement.
 #[derive(Debug)]
@@ -500,6 +559,7 @@ pub struct LoadRegistry<P: RuntimeMaterializationProvider> {
     pending_cleanups: VecDeque<OperationId>,
     queued_cleanups: BTreeSet<OperationId>,
     pending_execution_downgrades: BTreeSet<OperationId>,
+    admission_attempt: Option<AdmissionAttempt>,
     pending_lease_releases: BTreeSet<MaterializationKey>,
     waiters: WaiterIndex,
     prefetches: HashMap<PrefetchOwner, PrefetchState, RandomState>,
@@ -514,7 +574,9 @@ pub struct LoadRegistry<P: RuntimeMaterializationProvider> {
     failed_continuations: VecDeque<FailedContinuation>,
     failed_set: BTreeSet<ContinuationId>,
     runnable: FairQueue<LoadAction>,
-    completions: VecDeque<CompletionEvent>,
+    completions: VecDeque<ProviderProgress>,
+    provider_faults: Vec<ProviderFault>,
+    provider_quiescence_unknown: bool,
     rejected_completions: Vec<CompletionRejection>,
     wait_started: HashMap<(WaiterId, OperationId), u64, RandomState>,
     transactions: HashMap<ExecutionTransactionId, TransactionState, RandomState>,
@@ -546,6 +608,7 @@ impl<P: RuntimeMaterializationProvider> LoadRegistry<P> {
             pending_cleanups: VecDeque::new(),
             queued_cleanups: BTreeSet::new(),
             pending_execution_downgrades: BTreeSet::new(),
+            admission_attempt: None,
             pending_lease_releases: BTreeSet::new(),
             waiters: WaiterIndex::new(),
             prefetches: HashMap::default(),
@@ -561,6 +624,8 @@ impl<P: RuntimeMaterializationProvider> LoadRegistry<P> {
             failed_set: BTreeSet::new(),
             runnable: FairQueue::new(fairness)?,
             completions: VecDeque::new(),
+            provider_faults: Vec::new(),
+            provider_quiescence_unknown: false,
             rejected_completions: Vec::new(),
             wait_started: HashMap::default(),
             transactions: HashMap::default(),
@@ -638,7 +703,10 @@ impl<P: RuntimeMaterializationProvider> LoadRegistry<P> {
     }
 
     pub fn has_pending_owner_work(&self) -> bool {
-        !self.pending_execution_downgrades.is_empty() || !self.pending_lease_releases.is_empty()
+        !self.pending_execution_downgrades.is_empty()
+            || self.admission_attempt.is_some()
+            || self.provider_quiescence_unknown
+            || !self.pending_lease_releases.is_empty()
     }
 
     pub fn prefetch_active(&self, prefetch: PrefetchOwner) -> bool {
@@ -865,6 +933,10 @@ impl<P: RuntimeMaterializationProvider> LoadRegistry<P> {
         Ok(())
     }
 
+    pub fn provider_faults(&self) -> &[ProviderFault] {
+        &self.provider_faults
+    }
+
     pub fn rejected_completions(&self) -> &[CompletionRejection] {
         &self.rejected_completions
     }
@@ -926,78 +998,60 @@ impl<P: RuntimeMaterializationProvider> LoadRegistry<P> {
         requests: impl IntoIterator<Item = LoadRequest>,
         now_ns: u64,
     ) -> Result<PrefetchReport, RegistryError> {
+        if let Some(fault) = self
+            .provider_faults
+            .iter()
+            .rev()
+            .find(|fault| fault.scope.is_none() || self.provider_quiescence_unknown)
+        {
+            return Err(RegistryError::Provider {
+                source: fault.failure.clone(),
+            });
+        }
+        if self.admission_attempt.is_some() {
+            return Err(RegistryError::AdmissionCleanupPending);
+        }
         if self.shutting_down {
             return Err(RegistryError::RegistryShuttingDown);
         }
         if self.prefetches.contains_key(&owner) || self.prefetch_failures.contains_key(&owner) {
             return Err(RegistryError::DuplicatePrefetch { owner });
         }
-
-        let mut requests = requests.into_iter().collect::<Vec<_>>();
-        requests.sort_unstable_by_key(|request| request.key);
-        for request in &requests {
-            if !request.demand.is_prefetch() {
-                return Err(RegistryError::InvalidPrefetchDemand {
-                    key: Box::new(request.key),
-                });
+        let plan = self.classify_admission(AdmissionPolicy::Prefetch, requests)?;
+        self.admission_attempt = Some(AdmissionAttempt::default());
+        match self.prefetch_attempt(owner, plan, now_ns) {
+            Ok(report) => {
+                self.admission_attempt = None;
+                Ok(report)
             }
-            self.validate_request(request)?;
-        }
-        let demand = requests
-            .iter()
-            .fold(ResourceDemand::ModelWarmup, |demand, request| {
-                demand.merge(request.demand)
-            });
-        if let Some(duplicate) = requests
-            .windows(2)
-            .find(|window| window[0].key == window[1].key)
-        {
-            return Err(RegistryError::DuplicateDependency {
-                key: Box::new(duplicate[0].key),
-            });
-        }
-
-        let mut joined = Vec::new();
-        let mut resident_preparations = Vec::new();
-        let mut new_requests = Vec::new();
-        let mut already_resident = 0;
-        for request in &requests {
-            if let Some(resident) = self.residencies.get(&request.key) {
-                if resident.binding != request.preparation.binding()
-                    || !matches!(request.preparation, MaterializationPreparation::Resident(_))
-                {
-                    return Err(RegistryError::PublishedResidencyConflict {
-                        key: Box::new(request.key),
-                    });
+            Err(primary) => {
+                let cleanup = self.undo_admission(now_ns);
+                if cleanup.is_empty() {
+                    Err(primary)
+                } else {
+                    Err(RegistryError::AdmissionCleanup {
+                        primary: Box::new(primary),
+                        cleanup,
+                    })
                 }
-                already_resident += 1;
-                continue;
-            }
-            if let Some(operation) = self.key_to_operation.get(&request.key).copied() {
-                let active = self
-                    .operations
-                    .get(&operation)
-                    .expect("active key index must point to an operation");
-                self.validate_join(active, request)?;
-                if active.cancellation.as_ref().is_some_and(|cancellation| {
-                    matches!(cancellation, OperationCancellation::Submitted { .. })
-                }) {
-                    return Err(RegistryError::CancelledOperationStillDraining {
-                        key: Box::new(request.key),
-                    });
-                }
-                joined.push(operation);
-                continue;
-            }
-            match request.preparation {
-                MaterializationPreparation::Resident(_) => {
-                    resident_preparations.push(*request);
-                    already_resident += 1;
-                }
-                MaterializationPreparation::Transfer(_) => new_requests.push(*request),
             }
         }
+    }
 
+    fn prefetch_attempt(
+        &mut self,
+        owner: PrefetchOwner,
+        plan: AdmissionPlan,
+        now_ns: u64,
+    ) -> Result<PrefetchReport, RegistryError> {
+        let AdmissionPlan {
+            demand,
+            joined,
+            resident_preparations,
+            new_requests,
+            already_resident,
+            ..
+        } = plan;
         let resident_bytes = resident_preparations
             .iter()
             .try_fold(0_u64, |total, request| {
@@ -1017,35 +1071,22 @@ impl<P: RuntimeMaterializationProvider> LoadRegistry<P> {
             )?;
         }
 
-        let mut adopted = Vec::new();
         for request in &resident_preparations {
-            if let Err(error) = self.adopt_prepared_residency(
+            self.adopt_prepared_residency(
                 *request,
                 request.preparation.binding(),
                 ExecutionLeaseState::Released,
-            ) {
-                for key in adopted.into_iter().rev() {
-                    self.rollback_adopted_residency(key)?;
-                }
-                return Err(error);
-            }
-            adopted.push(request.key);
+            )?;
+            self.admission_attempt
+                .as_mut()
+                .unwrap()
+                .adopted
+                .push(request.key);
         }
 
         let mut created = Vec::new();
         for request in new_requests {
-            match self.create_operation(request, now_ns) {
-                Ok(operation) => created.push(operation),
-                Err(error) => {
-                    while let Some(operation) = created.pop() {
-                        self.rollback_reserved_operation(operation, now_ns)?;
-                    }
-                    for key in adopted.into_iter().rev() {
-                        self.rollback_adopted_residency(key)?;
-                    }
-                    return Err(error);
-                }
-            }
+            created.push(self.create_operation(request, now_ns)?);
         }
 
         let operations = joined
@@ -1053,7 +1094,11 @@ impl<P: RuntimeMaterializationProvider> LoadRegistry<P> {
             .chain(&created)
             .copied()
             .collect::<BTreeSet<_>>();
+        for operation in &joined {
+            self.record_admission_operation_restore(*operation);
+        }
         if !operations.is_empty() {
+            self.admission_attempt.as_mut().unwrap().prefetch = Some(owner);
             for operation in &operations {
                 self.operation_prefetches
                     .entry(*operation)
@@ -1106,6 +1151,19 @@ impl<P: RuntimeMaterializationProvider> LoadRegistry<P> {
         requests: impl IntoIterator<Item = LoadRequest>,
         now_ns: u64,
     ) -> Result<AttachReport, RegistryError> {
+        if let Some(fault) = self
+            .provider_faults
+            .iter()
+            .rev()
+            .find(|fault| fault.scope.is_none() || self.provider_quiescence_unknown)
+        {
+            return Err(RegistryError::Provider {
+                source: fault.failure.clone(),
+            });
+        }
+        if self.admission_attempt.is_some() {
+            return Err(RegistryError::AdmissionCleanupPending);
+        }
         if !demand.is_required() {
             return Err(RegistryError::InvalidWaiterDemand { demand });
         }
@@ -1139,69 +1197,42 @@ impl<P: RuntimeMaterializationProvider> LoadRegistry<P> {
             }
         }
 
-        let mut requests: Vec<_> = requests.into_iter().collect();
-        requests.sort_unstable_by_key(|request| request.key);
-        for request in &requests {
-            if !request.demand.is_required() {
-                return Err(RegistryError::InvalidExecutionDemand {
-                    key: Box::new(request.key),
-                });
+        let plan = self.classify_admission(AdmissionPolicy::Required(demand), requests)?;
+        self.admission_attempt = Some(AdmissionAttempt::default());
+        match self.attach_waiter_attempt(waiter, plan, now_ns) {
+            Ok(report) => {
+                self.admission_attempt = None;
+                Ok(report)
             }
-            self.validate_request(request)?;
+            Err(primary) => {
+                let cleanup = self.undo_admission(now_ns);
+                if cleanup.is_empty() {
+                    Err(primary)
+                } else {
+                    Err(RegistryError::AdmissionCleanup {
+                        primary: Box::new(primary),
+                        cleanup,
+                    })
+                }
+            }
         }
-        if let Some(duplicate) = requests
-            .windows(2)
-            .find(|window| window[0].key == window[1].key)
-        {
-            return Err(RegistryError::DuplicateDependency {
-                key: Box::new(duplicate[0].key),
-            });
-        }
-        let demand = requests
-            .iter()
-            .fold(demand, |demand, request| demand.merge(request.demand));
+    }
 
-        let mut joined = Vec::new();
-        let mut resident_preparations = Vec::new();
-        let mut new_requests = Vec::new();
-        let mut already_resident = 0;
-        for request in &requests {
-            if let Some(resident) = self.residencies.get(&request.key) {
-                if resident.binding != request.preparation.binding()
-                    || !matches!(request.preparation, MaterializationPreparation::Resident(_))
-                {
-                    return Err(RegistryError::PublishedResidencyConflict {
-                        key: Box::new(request.key),
-                    });
-                }
-                already_resident += 1;
-                continue;
-            }
-            if let Some(operation) = self.key_to_operation.get(&request.key).copied() {
-                let active = self
-                    .operations
-                    .get(&operation)
-                    .expect("active key index must point to an operation");
-                self.validate_join(active, request)?;
-                if active.cancellation.as_ref().is_some_and(|cancellation| {
-                    matches!(cancellation, OperationCancellation::Submitted { .. })
-                }) {
-                    return Err(RegistryError::CancelledOperationStillDraining {
-                        key: Box::new(request.key),
-                    });
-                }
-                joined.push(operation);
-            } else {
-                match request.preparation {
-                    MaterializationPreparation::Resident(_) => {
-                        resident_preparations.push(*request);
-                        already_resident += 1;
-                    }
-                    MaterializationPreparation::Transfer(_) => new_requests.push(*request),
-                }
-            }
-        }
-
+    fn attach_waiter_attempt(
+        &mut self,
+        waiter: WaiterId,
+        plan: AdmissionPlan,
+        now_ns: u64,
+    ) -> Result<AttachReport, RegistryError> {
+        let AdmissionPlan {
+            requests,
+            demand,
+            joined,
+            resident_preparations,
+            new_requests,
+            already_resident,
+        } = plan;
+        let continuation = waiter.continuation();
         let continuation_is_new = !self.continuations.contains_key(&continuation);
         let mut preflight = vec![PhysicalResourceClaim::new(ResourceKind::Waiter, 1)];
         if continuation_is_new {
@@ -1225,34 +1256,21 @@ impl<P: RuntimeMaterializationProvider> LoadRegistry<P> {
         }
         self.resources.can_acquire(demand, preflight)?;
 
-        let mut adopted = Vec::new();
         for request in &resident_preparations {
-            if let Err(error) = self.adopt_prepared_residency(
+            self.adopt_prepared_residency(
                 *request,
                 request.preparation.binding(),
                 ExecutionLeaseState::Held,
-            ) {
-                for key in adopted.into_iter().rev() {
-                    self.rollback_adopted_residency(key)?;
-                }
-                return Err(error);
-            }
-            adopted.push(request.key);
+            )?;
+            self.admission_attempt
+                .as_mut()
+                .unwrap()
+                .adopted
+                .push(request.key);
         }
         let mut created = Vec::new();
         for request in new_requests {
-            match self.create_operation(request, now_ns) {
-                Ok(operation) => created.push(operation),
-                Err(error) => {
-                    while let Some(operation) = created.pop() {
-                        self.rollback_reserved_operation(operation, now_ns)?;
-                    }
-                    for key in adopted.into_iter().rev() {
-                        self.rollback_adopted_residency(key)?;
-                    }
-                    return Err(error);
-                }
-            }
+            created.push(self.create_operation(request, now_ns)?);
         }
 
         if continuation_is_new {
@@ -1273,11 +1291,17 @@ impl<P: RuntimeMaterializationProvider> LoadRegistry<P> {
                         .any(|request| request.retention == ResourceRetention::ThroughStage),
                 },
             );
+            self.admission_attempt.as_mut().unwrap().continuation = Some(continuation);
         } else {
             let state = self
                 .continuations
                 .get_mut(&continuation)
                 .expect("continuation state is created together with grant");
+            self.admission_attempt
+                .as_mut()
+                .unwrap()
+                .continuation_restore =
+                Some((continuation, state.demand, state.owns_stage_custody));
             let merged = state.demand.merge(demand);
             if merged != state.demand {
                 self.resources.reclassify(&state.grant, merged)?;
@@ -1294,71 +1318,40 @@ impl<P: RuntimeMaterializationProvider> LoadRegistry<P> {
         )?;
 
         let operations: Vec<_> = joined.iter().chain(&created).copied().collect();
-        let joined_keys = joined
-            .iter()
-            .map(|operation| {
-                self.operations
-                    .get(operation)
-                    .expect("joined operation remains active")
-                    .key
-            })
-            .collect::<BTreeSet<_>>();
-        let mut waiter_grant = waiter_grant;
-        let mut promoted_joined = Vec::new();
+        self.waiter_grants.insert(waiter, waiter_grant);
+        self.admission_attempt.as_mut().unwrap().waiter = Some(waiter);
         for request in &requests {
-            let promotion = match self.provider.promote_to_execution(request.key) {
-                Ok(promotion) => promotion,
-                Err(error) => {
-                    for key in promoted_joined.into_iter().rev() {
-                        self.provider.release_execution_lease(key)?;
-                    }
-                    self.resources.release_all_held(&mut waiter_grant)?;
-                    if continuation_is_new {
-                        self.release_continuation(continuation)?;
-                    }
-                    while let Some(operation) = created.pop() {
-                        self.rollback_reserved_operation(operation, now_ns)?;
-                    }
-                    for key in adopted.into_iter().rev() {
-                        self.rollback_adopted_residency(key)?;
-                    }
-                    return Err(RegistryError::Provider { source: error });
+            let promotion = self.provider.promote_to_execution(request.key)?;
+            if promotion.changed() {
+                let attempt = self.admission_attempt.as_mut().unwrap();
+                if !created
+                    .iter()
+                    .any(|id| self.operation_to_key.get(id) == Some(&request.key))
+                    && !attempt.adopted.contains(&request.key)
+                {
+                    attempt.promotions.push(request.key);
                 }
-            };
+            }
+            if let Some(reason) = promotion.rejection() {
+                return Err(RegistryError::Provider {
+                    source: reason.clone(),
+                });
+            }
             let preparation = promotion.preparation();
             if preparation.key() != request.key
                 || preparation.binding() != request.preparation.binding()
             {
-                if promotion.changed() && joined_keys.contains(&request.key) {
-                    self.provider.release_execution_lease(request.key)?;
-                }
-                for key in promoted_joined.into_iter().rev() {
-                    self.provider.release_execution_lease(key)?;
-                }
-                self.resources.release_all_held(&mut waiter_grant)?;
-                if continuation_is_new {
-                    self.release_continuation(continuation)?;
-                }
-                while let Some(operation) = created.pop() {
-                    self.rollback_reserved_operation(operation, now_ns)?;
-                }
-                for key in adopted.into_iter().rev() {
-                    self.rollback_adopted_residency(key)?;
-                }
                 return Err(RegistryError::PublishedResidencyConflict {
                     key: Box::new(request.key),
                 });
             }
-            if promotion.changed() && joined_keys.contains(&request.key) {
-                promoted_joined.push(request.key);
-            }
         }
         for operation in &joined {
+            self.record_admission_operation_restore(*operation);
             self.promote_operation_for_execution(*operation, demand)?;
         }
 
         let continuation_ready = self.waiters.register(waiter, operations.clone())?;
-        self.waiter_grants.insert(waiter, waiter_grant);
         self.waiter_demands.insert(waiter, demand);
         self.transactions
             .entry(waiter.transaction())
@@ -1459,6 +1452,9 @@ impl<P: RuntimeMaterializationProvider> LoadRegistry<P> {
         now_ns: u64,
         allow_model_warmup_reserve: bool,
     ) -> Result<bool, RegistryError> {
+        if self.admission_attempt.is_some() || self.provider_quiescence_unknown {
+            return Ok(false);
+        }
         let operations = &self.operations;
         let resources = &self.resources;
         let Some(action) = self.runnable.pop_next_by(now_ns, |action| {
@@ -1540,16 +1536,18 @@ impl<P: RuntimeMaterializationProvider> LoadRegistry<P> {
     }
 
     pub fn enqueue_completion(&mut self, event: CompletionEvent) {
-        self.completions.push_back(event);
+        self.completions
+            .push_back(ProviderProgress::Completion(event));
     }
 
     pub fn collect_provider_completions(&mut self, maximum: usize) -> usize {
         let mut collected = 0;
         while collected < maximum {
-            let Some(event) = self.provider.next_completion() else {
+            let progress = self.provider.next_progress();
+            if progress == ProviderProgress::Idle {
                 break;
-            };
-            self.completions.push_back(event);
+            }
+            self.completions.push_back(progress);
             collected += 1;
         }
         collected
@@ -1572,8 +1570,52 @@ impl<P: RuntimeMaterializationProvider> LoadRegistry<P> {
         &mut self,
         observed_ns: Option<u64>,
     ) -> Result<CompletionDisposition, RegistryError> {
-        let Some(event) = self.completions.pop_front() else {
+        let Some(progress) = self.completions.pop_front() else {
             return Ok(CompletionDisposition::QueueEmpty);
+        };
+        let mut event = match progress {
+            ProviderProgress::Idle => return Ok(CompletionDisposition::QueueEmpty),
+            ProviderProgress::Completion(event) => event,
+            ProviderProgress::Fault(fault) => {
+                self.provider_faults.push(fault.clone());
+                let Some(scope) = fault.scope else {
+                    self.provider_quiescence_unknown =
+                        fault.quiescence != QuiescenceEvidence::Quiescent;
+                    return Err(RegistryError::Provider {
+                        source: fault.failure,
+                    });
+                };
+                let matches = self.operations.get(&scope.operation).is_some_and(|active| {
+                    active.key == scope.key
+                        && active.stage == scope.stage
+                        && active.plan.completion_bytes(scope.stage) == Some(scope.bytes)
+                });
+                if !matches {
+                    // No matching owner means there is no authority to release any credit.
+                    self.provider_quiescence_unknown = true;
+                    return Err(RegistryError::Provider {
+                        source: fault.failure,
+                    });
+                }
+                if fault.quiescence != QuiescenceEvidence::Quiescent {
+                    let active = self.operations.get_mut(&scope.operation).unwrap();
+                    if active.provider_failure.is_none() {
+                        active.provider_failure = Some(fault.failure.clone());
+                    }
+                    return Err(RegistryError::Provider {
+                        source: fault.failure,
+                    });
+                }
+                CompletionEvent::new(
+                    scope.operation,
+                    scope.key,
+                    scope.stage,
+                    CompletionOutcome::Failed(fault.failure),
+                    0,
+                    CompletionGeneration::for_key(scope.key),
+                    CompletionTimestamp::from_nanos(observed_ns.unwrap_or(0)),
+                )
+            }
         };
         let operation_id = event.operation;
         let Some(active) = self.operations.get(&operation_id) else {
@@ -1613,6 +1655,17 @@ impl<P: RuntimeMaterializationProvider> LoadRegistry<P> {
             return Ok(CompletionDisposition::Rejected(reason));
         }
 
+        if let Some(primary) = &active.provider_failure {
+            event.outcome = CompletionOutcome::Failed(match &event.outcome {
+                CompletionOutcome::Failed(cleanup) if cleanup != primary => {
+                    FailureReason::Cleanup {
+                        primary: Box::new(primary.clone()),
+                        cleanup: Box::new(cleanup.clone()),
+                    }
+                }
+                _ => primary.clone(),
+            });
+        }
         let mut operation = self
             .operations
             .remove(&operation_id)
@@ -1701,6 +1754,10 @@ impl<P: RuntimeMaterializationProvider> LoadRegistry<P> {
         allow_model_warmup_reserve: bool,
     ) -> Result<usize, RegistryError> {
         let mut progressed = 0;
+        if maximum != 0 && self.admission_attempt.is_some() {
+            self.retry_admission(now_ns)?;
+            progressed += 1;
+        }
         while progressed < maximum {
             let round_start = progressed;
             while progressed < maximum && self.retry_one_execution_downgrade()?.is_some() {
@@ -2062,6 +2119,7 @@ impl<P: RuntimeMaterializationProvider> LoadRegistry<P> {
 
     pub fn begin_shutdown(&mut self, now_ns: u64) -> Result<(), RegistryError> {
         self.shutting_down = true;
+        self.retry_admission(now_ns)?;
         let prefetches = self.prefetches.keys().copied().collect::<Vec<_>>();
         for prefetch in prefetches {
             self.release_prefetch(prefetch, CancellationReason::OwnerShutdown, now_ns)?;
@@ -2158,10 +2216,12 @@ impl<P: RuntimeMaterializationProvider> LoadRegistry<P> {
                 active_grants,
             });
         }
-        let drained = pending_operations == 0
+        let drained = !self.provider_quiescence_unknown
+            && pending_operations == 0
             && pending_completions == 0
             && active_grants == 0
             && self.pending_execution_downgrades.is_empty()
+            && self.admission_attempt.is_none()
             && self.waiters.is_empty()
             && self.prefetches.is_empty()
             && self.operation_prefetches.is_empty();
@@ -2177,6 +2237,96 @@ impl<P: RuntimeMaterializationProvider> LoadRegistry<P> {
             pending_operations,
             pending_completions,
             active_grants,
+        })
+    }
+
+    fn classify_admission(
+        &self,
+        policy: AdmissionPolicy,
+        requests: impl IntoIterator<Item = LoadRequest>,
+    ) -> Result<AdmissionPlan, RegistryError> {
+        let mut requests = requests.into_iter().collect::<Vec<_>>();
+        requests.sort_unstable_by_key(|request| request.key);
+        for request in &requests {
+            match policy {
+                AdmissionPolicy::Required(_) if !request.demand.is_required() => {
+                    return Err(RegistryError::InvalidExecutionDemand {
+                        key: Box::new(request.key),
+                    });
+                }
+                AdmissionPolicy::Prefetch if !request.demand.is_prefetch() => {
+                    return Err(RegistryError::InvalidPrefetchDemand {
+                        key: Box::new(request.key),
+                    });
+                }
+                _ => {}
+            }
+            self.validate_request(request)?;
+        }
+        if let Some(duplicate) = requests
+            .windows(2)
+            .find(|window| window[0].key == window[1].key)
+        {
+            return Err(RegistryError::DuplicateDependency {
+                key: Box::new(duplicate[0].key),
+            });
+        }
+        let initial_demand = match policy {
+            AdmissionPolicy::Required(demand) => demand,
+            AdmissionPolicy::Prefetch => ResourceDemand::ModelWarmup,
+        };
+        let demand = requests.iter().fold(initial_demand, |demand, request| {
+            demand.merge(request.demand)
+        });
+        let mut joined = Vec::new();
+        let mut resident_preparations = Vec::new();
+        let mut new_requests = Vec::new();
+        let mut already_resident = 0;
+        for request in &requests {
+            if let Some(resident) = self.residencies.get(&request.key) {
+                if resident.binding != request.preparation.binding()
+                    || !matches!(request.preparation, MaterializationPreparation::Resident(_))
+                {
+                    return Err(RegistryError::PublishedResidencyConflict {
+                        key: Box::new(request.key),
+                    });
+                }
+                already_resident += 1;
+                continue;
+            }
+            if let Some(operation) = self.key_to_operation.get(&request.key).copied() {
+                let active = self
+                    .operations
+                    .get(&operation)
+                    .expect("active key index must point to an operation");
+                self.validate_join(active, request)?;
+                match &active.cancellation {
+                    Some(OperationCancellation::Submitted { .. }) => {
+                        return Err(RegistryError::CancelledOperationStillDraining {
+                            key: Box::new(request.key),
+                        });
+                    }
+                    // Joining may rescue pending cancellation, but only the attempt
+                    // may clear it after recording the original operation state.
+                    None | Some(OperationCancellation::Pending(_)) => joined.push(operation),
+                }
+                continue;
+            }
+            match request.preparation {
+                MaterializationPreparation::Resident(_) => {
+                    resident_preparations.push(*request);
+                    already_resident += 1;
+                }
+                MaterializationPreparation::Transfer(_) => new_requests.push(*request),
+            }
+        }
+        Ok(AdmissionPlan {
+            requests,
+            demand,
+            joined,
+            resident_preparations,
+            new_requests,
+            already_resident,
         })
     }
 
@@ -2400,6 +2550,8 @@ impl<P: RuntimeMaterializationProvider> LoadRegistry<P> {
                 install_grant: None,
                 retirement: Some(retirement),
                 cancellation: None,
+                provider_failure: None,
+                rollback_cleaned: false,
                 install_submitted: false,
                 replaced: match request.preparation {
                     MaterializationPreparation::Transfer(transfer) => transfer.evicted(),
@@ -2408,6 +2560,11 @@ impl<P: RuntimeMaterializationProvider> LoadRegistry<P> {
                 stage_started_ns: now_ns,
             },
         );
+        self.admission_attempt
+            .as_mut()
+            .expect("operation creation is admission-owned")
+            .created
+            .push(operation);
         self.runnable.push(
             LoadAction {
                 operation,
@@ -2418,6 +2575,133 @@ impl<P: RuntimeMaterializationProvider> LoadRegistry<P> {
             now_ns,
         )?;
         Ok(operation)
+    }
+
+    fn record_admission_operation_restore(&mut self, operation: OperationId) {
+        let active = &self.operations[&operation];
+        self.admission_attempt
+            .as_mut()
+            .unwrap()
+            .operation_restores
+            .push((
+                operation,
+                active.demand,
+                active.execution_required,
+                active.cancellation.clone(),
+            ));
+    }
+
+    fn undo_admission(&mut self, now_ns: u64) -> Vec<RegistryError> {
+        let Some(mut attempt) = self.admission_attempt.take() else {
+            return Vec::new();
+        };
+        let mut errors = Vec::new();
+        if let Some(owner) = attempt.prefetch.take()
+            && let Some(prefetch) = self.prefetches.remove(&owner)
+        {
+            for operation in prefetch.operations {
+                if let Some(owners) = self.operation_prefetches.get_mut(&operation) {
+                    owners.remove(&owner);
+                    if owners.is_empty() {
+                        self.operation_prefetches.remove(&operation);
+                    }
+                }
+            }
+        }
+        attempt
+            .operation_restores
+            .retain(|(operation, demand, required, cancellation)| {
+                match self.set_operation_demand(*operation, *demand) {
+                    Ok(()) => {
+                        if let Some(active) = self.operations.get_mut(operation) {
+                            active.execution_required = *required;
+                            active.cancellation = cancellation.clone();
+                        }
+                        false
+                    }
+                    Err(error) => {
+                        errors.push(error);
+                        true
+                    }
+                }
+            });
+        attempt
+            .promotions
+            .retain(|key| match self.provider.release_execution_lease(*key) {
+                Ok(()) => false,
+                Err(source) => {
+                    errors.push(RegistryError::Provider { source });
+                    true
+                }
+            });
+        if let Some(waiter) = attempt.waiter {
+            let result = self
+                .waiter_grants
+                .get_mut(&waiter)
+                .map_or(Ok(()), |grant| self.resources.release_all_held(grant));
+            match result {
+                Ok(()) => {
+                    self.waiter_grants.remove(&waiter);
+                    attempt.waiter = None;
+                }
+                Err(error) => errors.push(error.into()),
+            }
+        }
+        if let Some(continuation) = attempt.continuation {
+            match self.release_continuation(continuation) {
+                Ok(()) => attempt.continuation = None,
+                Err(error) => errors.push(error),
+            }
+        }
+        if let Some((continuation, demand, owns_stage_custody)) = attempt.continuation_restore {
+            let restored: Result<(), PhysicalResourceError> = self
+                .continuations
+                .get_mut(&continuation)
+                .map_or(Ok(()), |state| {
+                    self.resources.reclassify(&state.grant, demand)?;
+                    state.demand = demand;
+                    state.owns_stage_custody = owns_stage_custody;
+                    Ok(())
+                });
+            match restored {
+                Ok(()) => attempt.continuation_restore = None,
+                Err(error) => errors.push(error.into()),
+            }
+        }
+        attempt.created.retain(|operation| {
+            match self.rollback_reserved_operation(*operation, now_ns) {
+                Ok(()) => false,
+                Err(error) => {
+                    errors.push(error);
+                    true
+                }
+            }
+        });
+        attempt
+            .adopted
+            .retain(|key| match self.rollback_adopted_residency(*key) {
+                Ok(()) => false,
+                Err(error) => {
+                    errors.push(error);
+                    true
+                }
+            });
+        if !attempt.is_empty() {
+            self.admission_attempt = Some(attempt);
+        }
+        errors
+    }
+
+    fn retry_admission(&mut self, now_ns: u64) -> Result<(), RegistryError> {
+        let mut errors = self.undo_admission(now_ns);
+        if errors.is_empty() {
+            return Ok(());
+        }
+        let primary = Box::new(errors.remove(0));
+        Err(RegistryError::AdmissionCleanup {
+            primary,
+            cleanup: errors,
+        })
     }
 
     fn rollback_adopted_residency(&mut self, key: MaterializationKey) -> Result<(), RegistryError> {
@@ -2447,21 +2731,37 @@ impl<P: RuntimeMaterializationProvider> LoadRegistry<P> {
         let Some(mut operation) = self.operations.remove(&operation) else {
             return Ok(());
         };
-        if operation.reservation.is_some() {
+        let cleanup = if operation.rollback_cleaned {
+            Ok(())
+        } else if operation.reservation.is_some() {
             self.provider.cancel(
                 operation.operation,
                 operation.key,
                 LoadStage::Reserved,
                 CancellationReason::Superseded,
-            )?;
+            )
         } else {
-            self.provider.discard_preparation(operation.key)?;
+            self.provider.discard_preparation(operation.key)
+        };
+        if let Err(error) = cleanup {
+            operation.cancellation = Some(OperationCancellation::Pending(
+                CancellationReason::Superseded,
+            ));
+            let operation_id = operation.operation;
+            self.operations.insert(operation_id, operation);
+            return Err(RegistryError::Provider { source: error });
         }
-        self.retire_owned(
+        operation.rollback_cleaned = true;
+        if let Err(error) = self.retire_owned(
             &mut operation,
             RetirementReason::Cancelled(CancellationReason::Superseded),
             now_ns,
-        )
+        ) {
+            let operation_id = operation.operation;
+            self.operations.insert(operation_id, operation);
+            return Err(error);
+        }
+        Ok(())
     }
 
     fn reserve(
@@ -3510,7 +3810,7 @@ impl<P: RuntimeMaterializationProvider> LoadRegistry<P> {
         reason: FailureReason,
         now_ns: u64,
     ) {
-        self.completions.push_back(CompletionEvent::new(
+        self.enqueue_completion(CompletionEvent::new(
             operation.operation,
             operation.key,
             stage,
@@ -3609,5 +3909,244 @@ fn terminal_post(outcome: &CompletionOutcome) -> Result<PostCompletion, Registry
             retirement: RetirementReason::Stale(reason.clone()),
             failure: Some(ContinuationFailure::Stale(reason.clone())),
         }),
+    }
+}
+
+#[cfg(test)]
+mod admission_fault_tests {
+    use super::*;
+    use crate::io::testing;
+    use crate::scheduling::ExecutionPhase;
+
+    #[test]
+    fn admission_classification_is_read_only_for_both_policies() {
+        use ferrule_model::MaterializationPurpose;
+
+        let (physical, handle) = testing::MockPhysicalProvider::manual();
+        let provider = crate::io::SharedMaterializationProvider::new(Box::new(physical));
+        handle.set_resident(true);
+        let resident = provider
+            .prepare(testing::request(1), MaterializationPurpose::Prefetch)
+            .unwrap();
+        let adopt = provider
+            .prepare(testing::request(2), MaterializationPurpose::Prefetch)
+            .unwrap();
+        handle.set_resident(false);
+        let join = provider
+            .prepare(testing::request(3), MaterializationPurpose::Prefetch)
+            .unwrap();
+        let create = provider
+            .prepare(testing::request(4), MaterializationPurpose::Prefetch)
+            .unwrap();
+        let mut registry = LoadRegistry::with_testing_resources(provider).unwrap();
+        let report = registry
+            .prefetch(
+                PrefetchOwner::ModelWarmup,
+                [resident, join].map(|preparation| {
+                    testing::stage_request(
+                        preparation,
+                        testing::uniform_plan(),
+                        ResourceDemand::ModelWarmup,
+                    )
+                }),
+                1,
+            )
+            .unwrap();
+        let operation = report.created[0];
+        registry
+            .operations
+            .get_mut(&operation)
+            .unwrap()
+            .cancellation = Some(OperationCancellation::Pending(
+            CancellationReason::Superseded,
+        ));
+
+        let before = format!("{registry:?}");
+        let commands = handle.commands();
+        let required = ResourceDemand::required(ExecutionPhase::Prefill);
+        for (policy, demand) in [
+            (AdmissionPolicy::Prefetch, ResourceDemand::ModelWarmup),
+            (AdmissionPolicy::Required(required), required),
+        ] {
+            let plan = registry
+                .classify_admission(
+                    policy,
+                    [create, join, adopt, resident].map(|preparation| {
+                        testing::stage_request(preparation, testing::uniform_plan(), demand)
+                    }),
+                )
+                .unwrap();
+            assert_eq!(plan.demand, demand);
+            assert_eq!(plan.already_resident, 2);
+            assert_eq!(plan.joined, [operation]);
+            assert_eq!(plan.resident_preparations.len(), 1);
+            assert_eq!(plan.resident_preparations[0].preparation, adopt);
+            assert_eq!(plan.new_requests.len(), 1);
+            assert_eq!(plan.new_requests[0].preparation, create);
+            assert!(
+                plan.requests
+                    .windows(2)
+                    .all(|pair| pair[0].key < pair[1].key)
+            );
+            // Includes original grants, indexes, undo, cancellation, and queue state.
+            assert_eq!(format!("{registry:?}"), before);
+            assert_eq!(handle.commands(), commands);
+            assert!(registry.admission_attempt.is_none());
+        }
+    }
+
+    #[test]
+    fn prefetch_mid_batch_failure_retains_discard_owner_and_primary() {
+        let (mut registry, handle) = testing::registry(false);
+        let mut keys = [testing::key(1), testing::key(2)];
+        keys.sort();
+        let requests = keys.map(|key| {
+            testing::load_request(
+                &registry,
+                key,
+                testing::uniform_plan(),
+                ResourceDemand::ModelWarmup,
+            )
+        });
+        registry.next_operation = u64::MAX - 1;
+        handle.fail_next_discard(keys[0], FailureReason::StorageUnavailable);
+        let owner = PrefetchOwner::external(NonZeroU64::new(1).unwrap());
+        let error = registry.prefetch(owner, requests, 1).unwrap_err();
+        assert!(
+            matches!(error, RegistryError::AdmissionCleanup { primary, .. } if matches!(*primary, RegistryError::OperationIdExhausted))
+        );
+        let operation = registry.operation_for_key(keys[0]).unwrap();
+        assert!(registry.operation(operation).is_some());
+        assert!(registry.prefetch(owner, [], 2).is_err());
+        registry.drive(3, 1).unwrap();
+        assert_eq!(registry.active_operations(), 0);
+        assert_eq!(registry.active_prefetches(), 0);
+        assert_eq!(registry.resources.active_grants(), 0);
+    }
+
+    #[test]
+    fn admission_waiter_and_continuation_grant_failures_keep_original_owners() {
+        let (mut registry, _) = testing::registry(false);
+        let waiter = testing::waiter(1, 1);
+        let demand = ResourceDemand::required(ExecutionPhase::Prefill);
+        let mut waiter_grant = registry
+            .resources
+            .acquire(
+                1,
+                demand,
+                [PhysicalResourceClaim::new(ResourceKind::Waiter, 1)],
+            )
+            .unwrap();
+        let mut continuation_grant = registry
+            .resources
+            .acquire(
+                1,
+                demand,
+                [PhysicalResourceClaim::new(ResourceKind::Continuation, 1)],
+            )
+            .unwrap();
+        registry
+            .resources
+            .mark_submitted(&mut waiter_grant, &[ResourceKind::Waiter])
+            .unwrap();
+        registry
+            .resources
+            .mark_submitted(&mut continuation_grant, &[ResourceKind::Continuation])
+            .unwrap();
+        registry.waiter_grants.insert(waiter, waiter_grant);
+        registry.continuations.insert(
+            waiter.continuation(),
+            ContinuationState {
+                transaction: waiter.transaction(),
+                grant: continuation_grant,
+                demand,
+                ready_grant: None,
+                owns_stage_custody: false,
+            },
+        );
+        registry.admission_attempt = Some(AdmissionAttempt {
+            waiter: Some(waiter),
+            continuation: Some(waiter.continuation()),
+            ..AdmissionAttempt::default()
+        });
+        assert_eq!(registry.undo_admission(1).len(), 2);
+        assert_eq!(registry.resources.active_grants(), 2);
+        registry
+            .resources
+            .mark_returned(
+                registry.waiter_grants.get_mut(&waiter).unwrap(),
+                &[ResourceKind::Waiter],
+            )
+            .unwrap();
+        registry
+            .resources
+            .mark_returned(
+                &mut registry
+                    .continuations
+                    .get_mut(&waiter.continuation())
+                    .unwrap()
+                    .grant,
+                &[ResourceKind::Continuation],
+            )
+            .unwrap();
+        registry.retry_admission(2).unwrap();
+        registry.retry_admission(3).unwrap();
+        assert_eq!(registry.resources.active_grants(), 0);
+        assert!(registry.waiter_grants.is_empty());
+        assert!(registry.continuations.is_empty());
+    }
+
+    #[test]
+    fn finish_resume_bookkeeping_failure_returns_grant_once_and_keeps_continuation() {
+        let (mut registry, _) = testing::registry(true);
+        let waiter = testing::waiter(1, 1);
+        let key = testing::key(1);
+        testing::attach(&mut registry, waiter, key, 1);
+        registry.drive(10, 32).unwrap();
+        registry.pop_ready(11).unwrap().unwrap();
+        let dependencies =
+            DependencySet::new(
+                [ferrule_common::LogicalDependency::resource_resident(key).unwrap()],
+            )
+            .unwrap();
+        let mut resume = registry
+            .prepare_resume(waiter.continuation(), &dependencies)
+            .unwrap();
+        let _leases = resume.take().unwrap();
+        registry
+            .resources
+            .mark_submitted(
+                registry.waiter_grants.get_mut(&waiter).unwrap(),
+                &[ResourceKind::Waiter],
+            )
+            .unwrap();
+        assert!(
+            registry
+                .finish_resume(&mut resume, ResumeDisposition::Consumed, 12, 13)
+                .is_err()
+        );
+        assert!(resume.grant.is_none());
+        assert!(registry.continuations.contains_key(&waiter.continuation()));
+        assert_eq!(registry.resources.in_use(ResourceKind::Arena), 0);
+        assert_eq!(registry.resources.in_use(ResourceKind::ResidencyLease), 0);
+        let remaining = registry.resources.active_grants();
+        assert!(
+            registry
+                .finish_resume(&mut resume, ResumeDisposition::Consumed, 14, 15)
+                .is_err()
+        );
+        assert_eq!(registry.resources.active_grants(), remaining);
+        registry
+            .resources
+            .mark_returned(
+                registry.waiter_grants.get_mut(&waiter).unwrap(),
+                &[ResourceKind::Waiter],
+            )
+            .unwrap();
+        registry
+            .finish_resume(&mut resume, ResumeDisposition::Consumed, 16, 17)
+            .unwrap();
+        assert!(!registry.continuations.contains_key(&waiter.continuation()));
+        assert!(registry.shutdown(18, 32).unwrap().drained);
     }
 }

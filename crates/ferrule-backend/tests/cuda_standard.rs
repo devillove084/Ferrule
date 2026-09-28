@@ -629,45 +629,159 @@ fn standard_router_combine_and_owner_rejection() {
         committed_lengths: &[0, 0],
     };
     let q = op.zero_f32_buffer(l.query_elements().unwrap()).unwrap();
-    let append = op.zero_f32_buffer(l.append_elements().unwrap()).unwrap();
-    let wrong_append = foreign.zero_f32_buffer(append.len()).unwrap();
+    let append = op
+        .upload_f32_buffer(&vec![1.0; l.append_elements().unwrap()])
+        .unwrap();
+    let wrong_append = foreign.upload_f32_buffer(&vec![1.0; append.len()]).unwrap();
+    let wrong_query = foreign.zero_f32_buffer(q.len()).unwrap();
+    let mut wrong_output = foreign.zero_f32_buffer(q.len()).unwrap();
     let mut cache = op.zero_f32_buffer(l.cache_elements().unwrap()).unwrap();
     let mut other_cache = op.zero_f32_buffer(cache.len()).unwrap();
     let mut wrong_cache = foreign.zero_f32_buffer(cache.len()).unwrap();
+    let mut wrong_key_cache = foreign.zero_f32_buffer(cache.len()).unwrap();
     let mut out = op.zero_f32_buffer(q.len()).unwrap();
-    assert!(
-        op.append_and_attend_paged_f32(
-            PagedF32GqaBuffers {
-                query: &q,
-                append_key: &wrong_append,
-                append_value: &append,
-                key_cache: &mut cache,
-                value_cache: &mut other_cache,
-                output: &mut out
-            },
-            m,
-            l
-        )
-        .is_err()
-    );
-    assert!(
-        op.append_and_attend_paged_f32(
-            PagedF32GqaBuffers {
-                query: &q,
-                append_key: &append,
-                append_value: &append,
-                key_cache: &mut cache,
-                value_cache: &mut wrong_cache,
-                output: &mut out
-            },
-            m,
-            l
-        )
-        .is_err()
-    );
+    // Every operand must reject a different owner even on the same GPU, before
+    // any append can mutate either local or foreign cache planes.
+    for operand in 0..6 {
+        assert!(
+            op.append_and_attend_paged_f32(
+                PagedF32GqaBuffers {
+                    query: if operand == 0 { &wrong_query } else { &q },
+                    append_key: if operand == 1 { &wrong_append } else { &append },
+                    append_value: if operand == 2 { &wrong_append } else { &append },
+                    key_cache: if operand == 3 {
+                        &mut wrong_key_cache
+                    } else {
+                        &mut cache
+                    },
+                    value_cache: if operand == 4 {
+                        &mut wrong_cache
+                    } else {
+                        &mut other_cache
+                    },
+                    output: if operand == 5 {
+                        &mut wrong_output
+                    } else {
+                        &mut out
+                    },
+                },
+                m,
+                l,
+            )
+            .is_err(),
+            "foreign operand {operand} was accepted"
+        );
+    }
+    for buffer in [&other_cache, &out] {
+        close(
+            &op.download_f32_buffer(buffer).unwrap(),
+            &vec![0.0; buffer.len()],
+            0.0,
+        );
+    }
+    for buffer in [&wrong_key_cache, &wrong_cache, &wrong_output] {
+        close(
+            &foreign.download_f32_buffer(buffer).unwrap(),
+            &vec![0.0; buffer.len()],
+            0.0,
+        );
+    }
     close(
         &op.download_f32_buffer(&cache).unwrap(),
         &vec![0.0; cache.len()],
         0.0,
     );
+}
+
+#[test]
+#[ignore = "requires native CUDA; shared-score cap, COW history and nonstandard heads"]
+fn standard_f32_gqa_shared_scores_history_and_fallback() {
+    let op = CudaOperators::new_on_device(0).unwrap();
+    for (context, head_dim, q_heads, kv_heads, rows) in [
+        (1usize, 3, 3, 1, 1),
+        (16, 31, 6, 2, 1),
+        (64, 128, 9, 3, 1),
+        (1024, 256, 16, 2, 1),
+        (2048, 33, 6, 2, 1),
+        (2049, 256, 16, 2, 1),
+        (2049, 33, 3, 3, 4), // Mixed cooperative/fallback rows in one launch.
+        (18, 257, 5, 1, 4),  // Prefill crosses a COW page boundary.
+    ] {
+        let pages = context.div_ceil(16);
+        let l = PagedF32GqaLayout {
+            rows,
+            sequences: 2,
+            q_heads,
+            kv_heads,
+            head_dim,
+            page_tokens: 16,
+            layer_index: 1,
+            layer_count: 3,
+            physical_slots: pages * 2 + 1,
+            softmax_scale: 1.0 / (head_dim as f32).sqrt(),
+        };
+        let per_sequence = rows.div_ceil(2);
+        let committed = context - per_sequence;
+        let mut slots: Vec<_> = (1..=pages * 2).rev().map(|s| s as i32).collect();
+        // Share only complete committed pages; the page containing an append
+        // is private. This is the model owner's page table after COW.
+        for page in 0..committed / 16 {
+            slots[pages + page] = slots[page];
+        }
+        let sequences: Vec<_> = (0..rows).map(|r| (r % 2) as i32).collect();
+        let positions: Vec<_> = (0..rows).map(|r| (committed + r / 2) as i32).collect();
+        let offsets = [0, pages as i32, (pages * 2) as i32];
+        let lengths = [committed as i32; 2];
+        let metadata = PagedF32GqaMetadata {
+            block_slots: &slots,
+            block_offsets: &offsets,
+            row_sequence_ids: &sequences,
+            row_positions: &positions,
+            committed_lengths: &lengths,
+        };
+        metadata.validate(l).unwrap();
+        let mut kc = vec![-777.25; l.cache_elements().unwrap()];
+        let mut vc = kc.clone();
+        for sequence in 0..2 {
+            for position in 0..committed {
+                for head in 0..kv_heads {
+                    for d in 0..head_dim {
+                        let index = cache_index(l, &slots, &offsets, sequence, position, head, d);
+                        kc[index] = ((position * 13 + head * 7 + d * 3) as f32 * 0.037).sin();
+                        vc[index] = ((position * 11 + head * 3 + d * 7) as f32 * 0.041).cos();
+                    }
+                }
+            }
+        }
+        let q: Vec<_> = (0..l.query_elements().unwrap())
+            .map(|i| (i as f32 * 0.071).sin())
+            .collect();
+        let k: Vec<_> = (0..l.append_elements().unwrap())
+            .map(|i| (i as f32 * 0.137).cos())
+            .collect();
+        let v: Vec<_> = (0..k.len()).map(|i| (i as f32 * 0.193).sin()).collect();
+        let qd = op.upload_f32_buffer(&q).unwrap();
+        let ak = op.upload_f32_buffer(&k).unwrap();
+        let av = op.upload_f32_buffer(&v).unwrap();
+        let mut kd = op.upload_f32_buffer(&kc).unwrap();
+        let mut vd = op.upload_f32_buffer(&vc).unwrap();
+        let mut out = op.zero_f32_buffer(q.len()).unwrap();
+        let expected = gqa_reference(l, metadata, &q, &k, &v, &mut kc, &mut vc);
+        op.append_and_attend_paged_f32(
+            PagedF32GqaBuffers {
+                query: &qd,
+                append_key: &ak,
+                append_value: &av,
+                key_cache: &mut kd,
+                value_cache: &mut vd,
+                output: &mut out,
+            },
+            metadata,
+            l,
+        )
+        .unwrap();
+        close(&op.download_f32_buffer(&out).unwrap(), &expected, 3e-6);
+        close(&op.download_f32_buffer(&kd).unwrap(), &kc, 0.0);
+        close(&op.download_f32_buffer(&vd).unwrap(), &vc, 0.0);
+    }
 }

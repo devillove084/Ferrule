@@ -4,7 +4,7 @@
 //! optional attention sink. Execution is delegated through the semantic CUDA
 //! operator façade; unsupported shapes fail closed without a scalar fallback.
 
-use crate::cuda::operators::{
+use crate::cuda::operators::attention::hybrid::{
     HybridMlaExplicitSelectionBuffers, HybridMlaExplicitSelectionLayout, HybridMlaKvStorageKind,
     hybrid_mla_explicit_selection_launch,
 };

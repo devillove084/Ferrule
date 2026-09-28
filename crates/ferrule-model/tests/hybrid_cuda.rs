@@ -1,5 +1,7 @@
 //! Same generic hybrid forward on CUDA, with no device-state downloads.
 #![cfg(feature = "cuda")]
+#[path = "hybrid_cuda/numeric.rs"]
+mod numeric;
 #[path = "hybrid_cpu.rs"]
 mod reference;
 use ferrule_common::execution::*;

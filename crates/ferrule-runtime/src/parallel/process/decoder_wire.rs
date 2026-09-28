@@ -728,11 +728,18 @@ impl DecoderReply {
                     statuses,
                 },
                 DecoderCommand::Prepare {
+                    key,
                     batch: expected,
                     reservation: wanted,
-                    ..
                 },
             ) => {
+                let owner = boot.stage_boot()?;
+                let key = key.decode()?;
+                if key.rank() != owner.rank
+                    || boot.description(d.hidden, d.vocabulary, d.kv_heads, d.head_dim)? != *d
+                {
+                    return Err(error("prepared reply owner/capacity differs from boot"));
+                }
                 if &batch != expected
                     || &reservation != wanted
                     || statuses.len() > d.config.max_pages
@@ -755,7 +762,7 @@ impl DecoderReply {
                         })
                         .collect(),
                 };
-                projection.clone().into_commit_batch(
+                projection.clone().into_commit_projection(
                     &expected.decode(d)?,
                     &wanted.decode(d)?,
                     d,
@@ -813,5 +820,252 @@ impl DecoderReply {
             d.validate_output(output, rows)?;
         }
         Ok(reply)
+    }
+}
+
+#[cfg(test)]
+mod projection_tests {
+    use super::super::decoder::{
+        DECODER_WIRE_VERSION, DecoderDevice, DecoderPrecision, DecoderRecipeKind, KvConfigFrame,
+        SegmentFrame,
+    };
+    use super::*;
+    use crate::parallel::pipeline::PipelineConfig;
+    use ferrule_common::ParallelismPlan;
+    use ferrule_model::execution::ExecutionPrecisionPolicy;
+
+    fn fixture() -> (
+        DecoderBoot,
+        PipelineStageDescription,
+        DecoderCommand,
+        DecoderReply,
+    ) {
+        let config = PipelineConfig {
+            page_size: 4,
+            max_pages: 4,
+            max_positions: 16,
+            max_batch_tokens: 4,
+            session_capacity: 1,
+            max_parameter_bytes: 1024,
+            max_ack_polls: 2,
+            precision: ExecutionPrecisionPolicy::f32(),
+        };
+        let boot = DecoderBoot {
+            version: DECODER_WIRE_VERSION,
+            rank: 0,
+            checkpoint: "metadata-only-fixture".into(),
+            recipe: DecoderRecipeKind::Synthetic,
+            segment: SegmentFrame {
+                total_layers: 1,
+                layers: 0..1,
+                embedding: true,
+                output: true,
+            },
+            precision: DecoderPrecision::F32,
+            device: DecoderDevice::Cpu,
+            kv: KvConfigFrame::encode(config),
+            experts: None,
+        };
+        let description = boot.description(4, 8, 1, 4).unwrap();
+        let batch = BatchFrame {
+            decode: false,
+            tokens: vec![1, 2],
+            positions: vec![0, 1],
+            writes: vec![Some(0), Some(1)],
+            full_logits: vec![false, true],
+            state_slot: 0,
+            context_len: 0,
+            sequence_len: 2,
+            blocks: vec![0],
+        };
+        let reservation = ReservationFrame {
+            state_slot: 0,
+            execution_state_slot: 0,
+            positions: 0..2,
+            new_pages: vec![0],
+            generation: 0,
+            execution_generation: 0,
+            cow: None,
+        };
+        let key = KeyFrame {
+            transaction: 1,
+            topology: 9,
+            world_size: 1,
+            plan: ParallelismPlan::validated(1, 1, 1, 1, 1, 1).unwrap(),
+            participants: vec![0],
+            generation: 1,
+            rank: 0,
+            session: 7,
+        };
+        let command = DecoderCommand::Prepare {
+            key,
+            batch: batch.clone(),
+            reservation: reservation.clone(),
+        };
+        let reply = DecoderReply::Prepared {
+            batch,
+            reservation,
+            page_size: 4,
+            statuses: vec![(0, PageStatusFrame::Vacant)],
+        };
+        (boot, description, command, reply)
+    }
+
+    #[test]
+    fn prepared_wire_roundtrip_keeps_full_request_and_capacity() {
+        let (boot, description, command, reply) = fixture();
+        let encoded = serde_json::to_vec(&reply).unwrap();
+        let reply: DecoderReply = serde_json::from_slice(&encoded).unwrap();
+        let PipelineReply::Prepared { projection } =
+            reply.decode(&command, &description, &boot).unwrap()
+        else {
+            panic!("prepared")
+        };
+        let DecoderCommand::Prepare {
+            key,
+            batch,
+            reservation,
+        } = command
+        else {
+            unreachable!()
+        };
+        let batch = batch.decode(&description).unwrap();
+        let reservation = reservation.decode(&description).unwrap();
+        let weak = projection
+            .clone()
+            .into_commit_projection(&batch, &reservation, &description)
+            .unwrap();
+        let strong = projection
+            .into_execution_identity(&batch, &reservation, &description, &[key.session])
+            .unwrap();
+        assert_eq!(strong.commit_projection(), weak);
+        assert_eq!(strong.rows(), 2);
+        assert_eq!(boot.kv.max_pages, 4);
+        assert_eq!(boot.kv.physical_pages, 4);
+        assert_eq!(DECODER_WIRE_VERSION, 3);
+    }
+
+    #[test]
+    fn prepared_wire_rejects_every_batch_reservation_and_snapshot_dimension() {
+        for axis in 0..22 {
+            let (boot, d, command, mut reply) = fixture();
+            let DecoderReply::Prepared {
+                batch,
+                reservation,
+                page_size,
+                statuses,
+            } = &mut reply
+            else {
+                unreachable!()
+            };
+            match axis {
+                0 => batch.tokens[0] += 1,
+                1 => batch.positions[0] += 1,
+                2 => batch.writes[0] = Some(4),
+                3 => batch.full_logits[0] = true,
+                4 => batch.decode = true,
+                5 => batch.state_slot = 1,
+                6 => batch.context_len = 1,
+                7 => batch.sequence_len = 3,
+                8 => batch.blocks[0] = 1,
+                9 => reservation.state_slot = 1,
+                10 => reservation.execution_state_slot = 1,
+                11 => reservation.positions = 1..3,
+                12 => reservation.new_pages[0] = 1,
+                13 => reservation.generation += 1,
+                14 => reservation.execution_generation += 1,
+                15 => reservation.cow = Some((0, 0, 1)),
+                16 => *page_size = 8,
+                17 => statuses.clear(),
+                18 => statuses.push((0, PageStatusFrame::Vacant)),
+                19 => statuses[0].1 = PageStatusFrame::Resident,
+                20 => statuses[0].1 = PageStatusFrame::Preempted,
+                21 => statuses.push((1, PageStatusFrame::Resident)),
+                _ => unreachable!(),
+            }
+            assert!(
+                reply.decode(&command, &d, &boot).is_err(),
+                "wire axis {axis}"
+            );
+        }
+    }
+
+    #[test]
+    fn prepared_wire_rejects_old_version_capacity_and_wrong_owner() {
+        for axis in 0..5 {
+            let (mut boot, d, mut command, reply) = fixture();
+            match axis {
+                0 => boot.version = 1,
+                1 => boot.kv.physical_pages += 1,
+                2 => boot.kv.max_pages += 1,
+                3 => boot.rank = 1,
+                4 => {
+                    if let DecoderCommand::Prepare { key, .. } = &mut command {
+                        key.transaction = 0;
+                    }
+                }
+                _ => unreachable!(),
+            }
+            assert!(
+                reply.decode(&command, &d, &boot).is_err(),
+                "boot axis {axis}"
+            );
+        }
+        let (boot, _, _, _) = fixture();
+        let mut json = serde_json::to_value(boot).unwrap();
+        json["kv"].as_object_mut().unwrap().remove("physical_pages");
+        assert!(serde_json::from_value::<DecoderBoot>(json).is_err());
+    }
+
+    #[test]
+    fn serial_wire_rejects_unrepresentable_intent_phase_logits_and_shapes() {
+        let (_, d, command, _) = fixture();
+        let DecoderCommand::Prepare { batch, .. } = command else {
+            unreachable!()
+        };
+        let source = batch.decode(&d).unwrap();
+        assert!(
+            BatchFrame::encode(
+                &source
+                    .clone()
+                    .with_intent(ExecutionIntent::ProvisionalVerification)
+            )
+            .is_err()
+        );
+        for axis in 0..4 {
+            let mut sequences = source.sequences().to_vec();
+            let mut logits = source.logits().to_vec();
+            match axis {
+                0 => sequences[0].phase = ForwardPhase::Decode,
+                1 => sequences[0].query = 1..2,
+                2 => sequences[0].block_table = 1..2,
+                3 => logits[0] = LogitsRequest::TopK(std::num::NonZeroU32::new(1).unwrap()),
+                _ => unreachable!(),
+            }
+            let changed = ExecutionBatch::new(
+                source.mode(),
+                source.token_ids().to_vec(),
+                source.positions().to_vec(),
+                source.kv_write_slots().to_vec(),
+                logits,
+                sequences,
+                source.kv_block_ids().to_vec(),
+            );
+            assert!(BatchFrame::encode(&changed).is_err());
+        }
+        for axis in 0..7 {
+            let mut changed = batch.clone();
+            match axis {
+                0 => changed.positions.pop().map(|_| ()).unwrap(),
+                1 => changed.writes.pop().map(|_| ()).unwrap(),
+                2 => changed.full_logits.pop().map(|_| ()).unwrap(),
+                3 => changed.state_slot = u32::MAX,
+                4 => changed.context_len = u32::MAX,
+                5 => changed.tokens[0] = d.vocabulary as u32,
+                6 => changed.blocks.clear(),
+                _ => unreachable!(),
+            }
+            assert!(changed.decode(&d).is_err(), "malformed batch axis {axis}");
+        }
     }
 }

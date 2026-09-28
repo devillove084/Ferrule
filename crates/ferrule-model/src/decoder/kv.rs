@@ -34,13 +34,13 @@ pub use cuda::{
 
 /// Borrowed input. A successful preflight transfers the non-cloneable handle
 /// out of this slot; failure leaves all handles and the logical token untouched.
-pub struct KvCommitOwner<'a, B: DecoderKvCommitBackend> {
+pub struct KvCommitOwner<'a, B: super::KvCommitParticipant> {
     rank: ferrule_common::ParallelRankId,
     backend: &'a mut B,
     slot: &'a mut Option<B::Transaction>,
     sources: &'a [B::SequenceState],
 }
-impl<'a, B: DecoderKvCommitBackend> KvCommitOwner<'a, B> {
+impl<'a, B: super::KvCommitParticipant> KvCommitOwner<'a, B> {
     pub fn new(
         rank: ferrule_common::ParallelRankId,
         backend: &'a mut B,
@@ -76,14 +76,14 @@ enum OwnerEnd {
 /// }
 /// ```
 #[must_use = "retain physical custody until every owner ACK"]
-pub struct PhysicalKvCommitReady<'a, B: DecoderKvCommitBackend> {
+pub struct PhysicalKvCommitReady<'a, B: super::KvCommitParticipant> {
     owner: KvCommitOwner<'a, B>,
     transaction: ManuallyDrop<Option<B::Transaction>>,
     binding: KvCommitBinding,
     generation: u64,
     end: OwnerEnd,
 }
-impl<B: DecoderKvCommitBackend> PhysicalKvCommitReady<'_, B> {
+impl<B: super::KvCommitParticipant> PhysicalKvCommitReady<'_, B> {
     pub const fn binding(&self) -> &KvCommitBinding {
         &self.binding
     }
@@ -112,29 +112,29 @@ impl<B: DecoderKvCommitBackend> PhysicalKvCommitReady<'_, B> {
 }
 
 /// Contains every original input on failure, without automatic physical abort.
-pub struct PrepareKvCommitError<'a, B: DecoderKvCommitBackend, L> {
+pub struct PrepareKvCommitError<'a, B: super::KvCommitParticipant, L> {
     error: ferrule_common::Error,
     logical: L,
     owners: Vec<KvCommitOwner<'a, B>>,
 }
-impl<'a, B: DecoderKvCommitBackend, L> PrepareKvCommitError<'a, B, L> {
+impl<'a, B: super::KvCommitParticipant, L> PrepareKvCommitError<'a, B, L> {
     pub fn into_parts(self) -> (ferrule_common::Error, L, Vec<KvCommitOwner<'a, B>>) {
         (self.error, self.logical, self.owners)
     }
 }
-impl<B: DecoderKvCommitBackend, L> std::fmt::Debug for PrepareKvCommitError<'_, B, L> {
+impl<B: super::KvCommitParticipant, L> std::fmt::Debug for PrepareKvCommitError<'_, B, L> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PrepareKvCommitError")
             .field("error", &self.error)
             .finish_non_exhaustive()
     }
 }
-impl<B: DecoderKvCommitBackend, L> std::fmt::Display for PrepareKvCommitError<'_, B, L> {
+impl<B: super::KvCommitParticipant, L> std::fmt::Display for PrepareKvCommitError<'_, B, L> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         std::fmt::Display::fmt(&self.error, f)
     }
 }
-impl<B: DecoderKvCommitBackend, L> std::error::Error for PrepareKvCommitError<'_, B, L> {}
+impl<B: super::KvCommitParticipant, L> std::error::Error for PrepareKvCommitError<'_, B, L> {}
 
 /// KV-only custody, not a decision coordinator. L must be the existing logical
 /// owner's already-prepared reservation for this exact cohort. The callback at
@@ -152,12 +152,12 @@ impl<B: DecoderKvCommitBackend, L> std::error::Error for PrepareKvCommitError<'_
 /// }
 /// ```
 #[must_use = "publish or explicitly abort sealed KV custody"]
-pub struct PreparedKvCommit<'a, B: DecoderKvCommitBackend, L> {
+pub struct PreparedKvCommit<'a, B: super::KvCommitParticipant, L> {
     binding: KvCommitBinding,
     logical: Option<ManuallyDrop<L>>,
     owners: Vec<PhysicalKvCommitReady<'a, B>>,
 }
-impl<'a, B: DecoderKvCommitBackend, L> PreparedKvCommit<'a, B, L> {
+impl<'a, B: super::KvCommitParticipant, L> PreparedKvCommit<'a, B, L> {
     pub fn prepare_commit_ready(
         binding: KvCommitBinding,
         logical: L,
@@ -190,13 +190,13 @@ impl<'a, B: DecoderKvCommitBackend, L> PreparedKvCommit<'a, B, L> {
             }
             let first = owners[0]
                 .backend
-                .commit_batch(owners[0].slot.as_ref().expect("checked owner"))?;
+                .commit_projection(owners[0].slot.as_ref().expect("checked owner"))?;
             for owner in &owners[1..] {
                 validate_commit_projection(
-                    first,
-                    owner
+                    &first,
+                    &owner
                         .backend
-                        .commit_batch(owner.slot.as_ref().expect("checked owner"))?,
+                        .commit_projection(owner.slot.as_ref().expect("checked owner"))?,
                 )?;
             }
             Ok(())
@@ -258,11 +258,22 @@ impl<'a, B: DecoderKvCommitBackend, L> PreparedKvCommit<'a, B, L> {
         &self,
         rank: ferrule_common::ParallelRankId,
         page: KvPageId,
-    ) -> Result<DecoderKvPageStatus> {
-        Ok(self.owner(rank)?.owner.backend.page_status(page))
+    ) -> Result<DecoderKvPageStatus>
+    where
+        B: super::KvCapacityInspector,
+    {
+        Ok(super::KvCapacityInspector::inspect_page_status(
+            self.owner(rank)?.owner.backend,
+            page,
+        ))
     }
-    pub fn capacity(&self, rank: ferrule_common::ParallelRankId) -> Result<DecoderKvCapacity> {
-        Ok(self.owner(rank)?.owner.backend.capacity())
+    pub fn capacity(&self, rank: ferrule_common::ParallelRankId) -> Result<DecoderKvCapacity>
+    where
+        B: super::KvCapacityInspector,
+    {
+        Ok(super::KvCapacityInspector::inspect_capacity(
+            self.owner(rank)?.owner.backend,
+        ))
     }
     fn check(&self, expected: &KvCommitBinding) -> Result<()> {
         if &self.binding != expected || self.logical.is_none() {
@@ -437,14 +448,14 @@ impl<'a, B: DecoderKvCommitBackend, L> PreparedKvCommit<'a, B, L> {
 /// Owns the existing logical quarantine token until every physical release ACK.
 /// Failures are retryable. Dropping this token retains quarantine and ledger pins.
 #[must_use = "retirement needs every owner/fence ACK before logical reuse"]
-pub struct PreparedKvRetirement<'a, B: DecoderKvCommitBackend, R> {
+pub struct PreparedKvRetirement<'a, B: super::KvCommitParticipant, R> {
     binding: KvCommitBinding,
     retirement: Option<ManuallyDrop<R>>,
     pages: Vec<KvPageId>,
     owners: Vec<PhysicalKvCommitReady<'a, B>>,
     checked: bool,
 }
-impl<B: DecoderKvCommitBackend, R> PreparedKvRetirement<'_, B, R> {
+impl<B: super::KvCommitParticipant, R> PreparedKvRetirement<'_, B, R> {
     pub fn pages(&self) -> &[KvPageId] {
         &self.pages
     }
@@ -516,31 +527,14 @@ fn check_ack(progress: KvEndProgress) -> Result<()> {
     }
     Ok(())
 }
-fn validate_commit_projection(a: &PackedDecoderBatch, b: &PackedDecoderBatch) -> Result<()> {
-    if a.page_size() != b.page_size()
-        || a.new_pages() != b.new_pages()
-        || a.writable_pages() != b.writable_pages()
-        || a.cow_replacements() != b.cow_replacements()
-        || a.protected_pages() != b.protected_pages()
-        || a.row_to_sequence() != b.row_to_sequence()
-        || a.positions() != b.positions()
-        || a.sequences().len() != b.sequences().len()
-    {
+fn validate_commit_projection(
+    a: &super::KvCommitProjection,
+    b: &super::KvCommitProjection,
+) -> Result<()> {
+    if a != b {
         return Err(kv_error(
-            "KV participants disagree on page/COW/shape projection",
+            "KV participants disagree on logical page/COW/shape projection",
         ));
-    }
-    for (x, y) in a.sequences().iter().zip(b.sequences()) {
-        if x.page_state_slot() != y.page_state_slot()
-            || x.page_generation() != y.page_generation()
-            || x.context_len() != y.context_len()
-            || x.query_len() != y.query_len()
-            || x.block_table() != y.block_table()
-        {
-            return Err(kv_error(
-                "KV participants disagree on logical mapping/generation",
-            ));
-        }
     }
     Ok(())
 }
@@ -2306,6 +2300,93 @@ mod ownership_tests {
     }
 
     #[test]
+    fn pr15_api_baseline_keeps_ordinary_pools_independent_of_prepared_opt_in() {
+        fn executable<P: PhysicalKvPool>() {
+            fn backend<B: DecoderKvBackend>() {}
+            backend::<PagedKvBackend<P>>();
+        }
+        fn prepared<P: PhysicalKvPreparedPool>() {
+            fn backend<B: DecoderKvCommitBackend>() {}
+            backend::<PagedKvBackend<P>>();
+        }
+        executable::<CpuPagedKvPool>();
+        prepared::<CpuPagedKvPool>();
+        executable::<TypedCpuPagedKvPool<crate::decoder::HybridDecoderSequenceState>>();
+        prepared::<TypedCpuPagedKvPool<crate::decoder::HybridDecoderSequenceState>>();
+        #[cfg(feature = "cuda")]
+        {
+            executable::<CudaPagedKvPool>();
+            prepared::<CudaPagedKvPool>();
+            executable::<TypedCudaPagedKvPool<crate::decoder::CudaHybridSequenceState>>();
+            prepared::<TypedCudaPagedKvPool<crate::decoder::CudaHybridSequenceState>>();
+            fn legacy<B: DecoderKvBackend>() {}
+            legacy::<<crate::models::deepseek_v4::DeepSeekDecoderComposition as crate::decoder::DecoderComposition>::KvBackend>();
+        }
+    }
+
+    #[test]
+    fn pr15_legacy_bridge_preserves_exact_types_and_inspection_is_independent() {
+        fn adapted<B: DecoderKvCommitBackend>() {
+            fn participant<
+                P: crate::decoder::KvCommitParticipant<SequenceState = S, Transaction = T>,
+                S,
+                T,
+            >() {
+            }
+            participant::<
+                B,
+                <B as DecoderKvBackend>::SequenceState,
+                <B as DecoderKvBackend>::Transaction,
+            >();
+        }
+        adapted::<CpuPagedKvBackend>();
+        adapted::<PagedKvBackend<TypedCpuPagedKvPool<crate::decoder::HybridDecoderSequenceState>>>(
+        );
+        #[cfg(feature = "cuda")]
+        {
+            adapted::<CudaPagedKvBackend>();
+            adapted::<PagedKvBackend<TypedCudaPagedKvPool<crate::decoder::CudaHybridSequenceState>>>(
+            );
+            type LegacyMla = <crate::models::deepseek_v4::DeepSeekDecoderComposition as crate::decoder::DecoderComposition>::KvBackend;
+            trait NotPrepared<A> {
+                fn check() {}
+            }
+            impl<T: ?Sized> NotPrepared<()> for T {}
+            impl<T: crate::decoder::KvCommitParticipant + ?Sized> NotPrepared<u8> for T {}
+            let _ = <LegacyMla as NotPrepared<_>>::check;
+            fn inspector<B: crate::decoder::KvCapacityInspector>() {}
+            inspector::<LegacyMla>();
+        }
+        struct InspectorOnly;
+        impl crate::decoder::KvCapacityInspector for InspectorOnly {
+            fn inspect_capacity(&self) -> DecoderKvCapacity {
+                DecoderKvCapacity::default()
+            }
+            fn inspect_page_status(&self, _: KvPageId) -> DecoderKvPageStatus {
+                DecoderKvPageStatus::Vacant
+            }
+        }
+        assert_eq!(
+            crate::decoder::KvCapacityInspector::inspect_capacity(&InspectorOnly),
+            DecoderKvCapacity::default()
+        );
+        let pool = CpuPagedKvPool::from_strategy(
+            &StandardGqaPlanes::new(1, 1, 1, 4, 16, KvElementType::F32).unwrap(),
+            4,
+        )
+        .unwrap();
+        let backend = PagedKvBackend::new(pool);
+        assert_eq!(
+            crate::decoder::KvCapacityInspector::inspect_capacity(&backend),
+            backend.capacity()
+        );
+        assert_eq!(
+            crate::decoder::KvCapacityInspector::inspect_page_status(&backend, KvPageId(1)),
+            DecoderKvBackend::page_status(&backend, KvPageId(1))
+        );
+    }
+
+    #[test]
     fn standard_gqa_cpu_pool_preserves_descriptor_identity() {
         let strategy = StandardGqaPlanes::new(2, 3, 4, 8, 64, KvElementType::Bf16).unwrap();
         let descriptors = KvLayoutSchema::planes(&strategy).to_vec();
@@ -2443,6 +2524,314 @@ mod distributed_kv_tests {
     fn binding() -> KvCommitBinding {
         scope(1, 1, 2, &[0, 1])
     }
+
+    // Host metadata and ACK observations only: no physical execution backend.
+    struct ParticipantOnly {
+        identity: Rc<()>,
+        projection: super::super::KvCommitProjection,
+        rank: ParallelRankId,
+        control: Rc<ParticipantControl>,
+    }
+    struct ParticipantToken {
+        identity: Rc<()>,
+        binding: KvCommitBinding,
+        generation: Option<u64>,
+    }
+    #[derive(Default)]
+    struct ParticipantControl {
+        installs: Cell<usize>,
+        polls: Cell<usize>,
+        published: Cell<bool>,
+        finished: Cell<bool>,
+        unknown: Cell<bool>,
+        cleanup_ready: Cell<bool>,
+    }
+    impl ParticipantOnly {
+        fn fixture(r: u32) -> (Self, Option<ParticipantToken>, Rc<ParticipantControl>) {
+            let mut physical = Fixture::fresh();
+            let projection = physical
+                .backend
+                .commit_batch(physical.handle.as_ref().unwrap())
+                .unwrap()
+                .commit_projection();
+            physical.backend.rollback(&mut physical.handle).unwrap();
+            let identity = Rc::new(());
+            let control = Rc::new(ParticipantControl::default());
+            let token = ParticipantToken {
+                identity: identity.clone(),
+                binding: binding(),
+                generation: None,
+            };
+            (
+                Self {
+                    identity,
+                    projection,
+                    rank: rank(r),
+                    control: control.clone(),
+                },
+                Some(token),
+                control,
+            )
+        }
+        fn check(&self, token: &ParticipantToken) -> Result<()> {
+            if !Rc::ptr_eq(&self.identity, &token.identity) || token.binding != binding() {
+                return Err(kv_error("foreign participant custody"));
+            }
+            Ok(())
+        }
+        fn generation(&self, token: &ParticipantToken, generation: u64) -> Result<()> {
+            self.check(token)?;
+            if generation == 0 || token.generation != Some(generation) {
+                return Err(kv_error("stale participant nonce"));
+            }
+            Ok(())
+        }
+        fn cleanup(&self) -> Result<KvEndProgress> {
+            if self.control.unknown.get() {
+                return Err(kv_error("unknown participant custody"));
+            }
+            Ok(if self.control.cleanup_ready.get() {
+                KvEndProgress::Complete
+            } else {
+                KvEndProgress::Pending
+            })
+        }
+    }
+    impl crate::decoder::KvCommitParticipant for ParticipantOnly {
+        type SequenceState = ();
+        type Transaction = ParticipantToken;
+        fn preflight_commit_ready(
+            &self,
+            token: &ParticipantToken,
+            binding: &KvCommitBinding,
+            rank: ParallelRankId,
+            _: &[()],
+        ) -> Result<()> {
+            self.check(token)?;
+            if &token.binding != binding || self.rank != rank {
+                return Err(kv_error("participant binding/rank mismatch"));
+            }
+            Ok(())
+        }
+        fn commit_projection(
+            &self,
+            token: &ParticipantToken,
+        ) -> Result<super::super::KvCommitProjection> {
+            self.check(token)?;
+            Ok(self.projection.clone())
+        }
+        fn install_commit(
+            &mut self,
+            token: &mut ParticipantToken,
+            generation: u64,
+        ) -> Result<KvEndProgress> {
+            self.check(token)?;
+            assert!(generation != 0 && token.generation.is_none());
+            token.generation = Some(generation);
+            self.control.installs.set(self.control.installs.get() + 1);
+            if self.control.unknown.get() {
+                return Err(kv_error("lost install ACK"));
+            }
+            Ok(KvEndProgress::Pending)
+        }
+        fn poll_install_ack(
+            &mut self,
+            token: &mut ParticipantToken,
+            generation: u64,
+        ) -> Result<KvEndProgress> {
+            self.generation(token, generation)?;
+            self.control.polls.set(self.control.polls.get() + 1);
+            if self.control.unknown.get() {
+                return Err(kv_error("unknown install ACK"));
+            }
+            Ok(KvEndProgress::Complete)
+        }
+        fn abort_prepared(
+            &mut self,
+            token: &mut ParticipantToken,
+            generation: u64,
+        ) -> Result<KvEndProgress> {
+            self.check(token)?;
+            token.generation.get_or_insert(generation);
+            self.generation(token, generation)?;
+            self.cleanup()
+        }
+        fn publish_committed(&mut self, token: &ParticipantToken) {
+            self.check(token).unwrap();
+            assert_eq!(self.control.installs.get(), 1);
+            assert!(!self.control.published.replace(true));
+        }
+        fn preflight_retirement(&self, token: &ParticipantToken, pages: &[KvPageId]) -> Result<()> {
+            self.check(token)?;
+            assert!(self.control.published.get());
+            assert_eq!(pages, &[KvPageId(10)]);
+            Ok(())
+        }
+        fn retire_prepared(
+            &mut self,
+            token: &mut ParticipantToken,
+            generation: u64,
+            pages: &[KvPageId],
+        ) -> Result<KvEndProgress> {
+            self.generation(token, generation)?;
+            assert_eq!(pages, &[KvPageId(10)]);
+            self.cleanup()
+        }
+        fn finish_prepared(&mut self, token: ParticipantToken) {
+            self.check(&token).unwrap();
+            assert!(self.control.cleanup_ready.get());
+            assert!(!self.control.finished.replace(true));
+        }
+    }
+
+    #[test]
+    fn participant_only_full_cohort_lifecycle_preserves_every_ack_gate() {
+        // Inference becomes ambiguous if either capability is added to the fake.
+        trait NotExecution<A> {
+            fn check() {}
+        }
+        impl<T: ?Sized> NotExecution<()> for T {}
+        impl<T: DecoderKvBackend + ?Sized> NotExecution<u8> for T {}
+        let _ = <ParticipantOnly as NotExecution<_>>::check;
+        trait NotCapacity<A> {
+            fn check() {}
+        }
+        impl<T: ?Sized> NotCapacity<()> for T {}
+        impl<T: crate::decoder::KvCapacityInspector + ?Sized> NotCapacity<u8> for T {}
+        let _ = <ParticipantOnly as NotCapacity<_>>::check;
+
+        let (mut a, mut sa, ca) = ParticipantOnly::fixture(0);
+        let (mut b, mut sb, cb) = ParticipantOnly::fixture(1);
+        let bind = binding();
+        let (logical, drops) = reservation();
+        let mut ready = PreparedKvCommit::prepare_commit_ready(
+            bind.clone(),
+            logical,
+            vec![
+                KvCommitOwner::new(rank(0), &mut a, &mut sa, &[]),
+                KvCommitOwner::new(rank(1), &mut b, &mut sb, &[]),
+            ],
+        )
+        .unwrap();
+        assert!(ready.poll_install_ack(&bind, rank(0)).is_err());
+        assert!(
+            ready
+                .install_commit(&scope(1, 2, 2, &[0, 1]), rank(0))
+                .is_err()
+        );
+        assert!(ready.install_commit(&bind, rank(2)).is_err());
+        let first = ready.install_commit(&bind, rank(0)).unwrap();
+        assert_eq!(first.progress(), KvEndProgress::Pending);
+        assert_eq!(first.binding(), &bind);
+        assert_eq!(first.rank(), rank(0));
+        assert_eq!(
+            first.owner_generation(),
+            ready.owner(rank(0)).unwrap().generation()
+        );
+        assert!(ready.install_commit(&bind, rank(0)).is_err());
+        assert!(
+            ready
+                .publish_logical::<()>(&bind, |_| panic!("early publish"))
+                .is_err()
+        );
+        ca.unknown.set(true);
+        assert!(ready.poll_install_ack(&bind, rank(0)).is_err());
+        ca.unknown.set(false);
+        ready.poll_install_ack(&bind, rank(0)).unwrap();
+        cb.unknown.set(true);
+        assert!(ready.install_commit(&bind, rank(1)).is_err());
+        assert!(ready.install_commit(&bind, rank(1)).is_err());
+        assert!(
+            ready
+                .publish_logical::<()>(&bind, |_| panic!("lost ACK published"))
+                .is_err()
+        );
+        cb.unknown.set(false);
+        ready.poll_install_ack(&bind, rank(1)).unwrap();
+        assert!(ready.abort_prepared(&bind, rank(0)).is_err());
+        assert_eq!((ca.installs.get(), cb.installs.get()), (1, 1));
+        assert_eq!((ca.polls.get(), cb.polls.get()), (2, 1));
+        let mut retirement = ready
+            .publish_logical(&bind, |logical| (logical, vec![KvPageId(10)]))
+            .unwrap();
+        assert!(ca.published.get() && cb.published.get());
+        assert!(retirement.finish_retirement(&bind).is_err());
+        assert_eq!(
+            retirement.retire_owner(&bind, rank(0)).unwrap().progress(),
+            KvEndProgress::Pending
+        );
+        ca.cleanup_ready.set(true);
+        retirement.retire_owner(&bind, rank(0)).unwrap();
+        cb.unknown.set(true);
+        assert!(retirement.retire_owner(&bind, rank(1)).is_err());
+        assert!(retirement.finish_retirement(&bind).is_err());
+        assert!(!ca.finished.get() && !cb.finished.get());
+        assert_eq!(drops.get(), 0);
+        cb.unknown.set(false);
+        cb.cleanup_ready.set(true);
+        retirement.retire_owner(&bind, rank(1)).unwrap();
+        drop(retirement.finish_retirement(&bind).unwrap());
+        assert!(ca.finished.get() && cb.finished.get());
+        assert_eq!(drops.get(), 1);
+        assert!(retirement.finish_retirement(&bind).is_err());
+        drop(retirement);
+        drop(ready);
+        assert!(sa.is_none() && sb.is_none());
+    }
+
+    #[test]
+    fn participant_only_foreign_handles_and_unknown_abort_retain_custody() {
+        let (mut a, mut sa, ca) = ParticipantOnly::fixture(0);
+        let (mut b, mut sb, cb) = ParticipantOnly::fixture(1);
+        std::mem::swap(&mut sa, &mut sb);
+        let failed = PreparedKvCommit::prepare_commit_ready(
+            binding(),
+            (),
+            vec![
+                KvCommitOwner::new(rank(0), &mut a, &mut sa, &[]),
+                KvCommitOwner::new(rank(1), &mut b, &mut sb, &[]),
+            ],
+        )
+        .err()
+        .unwrap();
+        let (error, (), owners) = failed.into_parts();
+        assert!(error.to_string().contains("foreign participant custody"));
+        drop(owners);
+        assert!(sa.is_some() && sb.is_some());
+        std::mem::swap(&mut sa, &mut sb);
+        let (logical, drops) = reservation();
+        let mut ready = PreparedKvCommit::prepare_commit_ready(
+            binding(),
+            logical,
+            vec![
+                KvCommitOwner::new(rank(0), &mut a, &mut sa, &[]),
+                KvCommitOwner::new(rank(1), &mut b, &mut sb, &[]),
+            ],
+        )
+        .unwrap();
+        ca.cleanup_ready.set(true);
+        ready.abort_prepared(&binding(), rank(0)).unwrap();
+        cb.unknown.set(true);
+        assert!(ready.abort_prepared(&binding(), rank(1)).is_err());
+        assert!(ready.abort_logical(&binding(), drop).is_err());
+        assert!(ready.install_commit(&binding(), rank(1)).is_err());
+        assert!(!ca.finished.get() && !cb.finished.get());
+        cb.unknown.set(false);
+        assert_eq!(
+            ready
+                .abort_prepared(&binding(), rank(1))
+                .unwrap()
+                .progress(),
+            KvEndProgress::Pending
+        );
+        cb.cleanup_ready.set(true);
+        ready.abort_prepared(&binding(), rank(1)).unwrap();
+        ready.abort_logical(&binding(), drop).unwrap();
+        assert!(ca.finished.get() && cb.finished.get());
+        assert_eq!(drops.get(), 1);
+        assert_eq!((ca.installs.get(), cb.installs.get()), (0, 0));
+    }
+
     #[derive(Default)]
     struct Faults {
         preflight: Cell<bool>,

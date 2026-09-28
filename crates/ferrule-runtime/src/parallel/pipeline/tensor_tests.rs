@@ -212,6 +212,7 @@ fn build(
             let description = PipelineStageDescription {
                 plan: plan.clone(),
                 config: config(),
+                physical_pages: config().max_pages,
                 hidden: 4,
                 vocabulary: 4,
                 kv_heads: 4 / tp,

@@ -847,6 +847,24 @@ impl TensorParallelLinearPlan {
         self.read_weight_shard_with_source(reader, tensor, rank, &source)
     }
 
+    /// Preserve raw numeric FP8 plus the intersecting scale rectangle for a
+    /// ragged rank shard. This is not a dense/native-E8M0 CUDA weight shard.
+    pub fn read_numeric_fp8_shard(
+        &self,
+        reader: &CheckpointTensorReader,
+        source: &crate::checkpoint::NumericFp8Source,
+        expert: Option<usize>,
+        rank: ParallelRankId,
+    ) -> Result<crate::checkpoint::NumericFp8Artifact> {
+        if source.matrix_shape() != [self.out_features, self.in_features] {
+            return Err(invalid("numeric FP8 matrix shape differs from TP plan"));
+        }
+        let (rows, columns) = self.matrix_range(rank)?;
+        source
+            .plan_tile(reader, expert, rows, columns)?
+            .read(reader)
+    }
+
     pub fn read_weight_shard_with_source(
         &self,
         reader: &CheckpointTensorReader,

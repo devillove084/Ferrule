@@ -169,6 +169,12 @@ impl CudaStandardDecoderSegment {
     ) -> SegmentResult<DeviceSegmentOutput> {
         let result = (|| {
             self.operators
+                .preflight_expert_metadata()
+                .map_err(|source| SegmentError::Execution {
+                    stage: SegmentStage::Input,
+                    source,
+                })?;
+            self.operators
                 .begin_tensor(kv.transaction())
                 .map_err(|source| SegmentError::Execution {
                     stage: SegmentStage::Input,
@@ -222,6 +228,12 @@ impl CudaStandardDecoderSegment {
                 source: super::cuda_error("MoE/EP injection is unsupported with TP"),
             });
         }
+        self.operators
+            .preflight_expert_metadata()
+            .map_err(|source| SegmentError::Execution {
+                stage: SegmentStage::Input,
+                source,
+            })?;
         let mut binding =
             CudaStandardKvBinding::new(kv, batch).map_err(|source| SegmentError::Execution {
                 stage: SegmentStage::Input,

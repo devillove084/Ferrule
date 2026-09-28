@@ -80,7 +80,99 @@ cuda-info:
 
 # ── Test ───────────────────────────────────────────────────────────────
 
+# Local convenience only: optional CUDA may remain UNVERIFIED. CI uses ci-cpu.
 test: test-nextest test-docs test-cuda
+
+# Required CPU lane: every non-ignored workspace target plus doctests. Do not
+# exclude model tests to hide missing fixtures; hermetic failures must stay red.
+ci-cpu:
+    @command -v cargo-nextest >/dev/null 2>&1 || { echo "error: required cargo-nextest missing (JUnit cannot be produced)"; exit 1; }
+    FERRULE_NO_CUDA=1 CUDA_VISIBLE_DEVICES="" CARGO_TARGET_DIR=target cargo nextest run --locked --workspace --all-targets --profile ci --no-tests fail
+    FERRULE_NO_CUDA=1 CUDA_VISIBLE_DEVICES="" CARGO_TARGET_DIR=target cargo test --locked --workspace --doc
+
+# Compile AND link all workspace CUDA targets, including both native providers.
+# CUDA stubs may be supplied through LIBRARY_PATH on a GPU-less devel image;
+# never put stubs in LD_LIBRARY_PATH or run these binaries as GPU evidence.
+[positional-arguments]
+ci-cuda-compile arch='sm_86':
+    #!/usr/bin/env bash
+    set -euo pipefail
+    mkdir -p target/validation/ci/cuda-compile
+    echo 'FAILED_OR_INTERRUPTED: CUDA compilation not verified' > target/validation/ci/cuda-compile/status.txt
+    case "${FERRULE_NO_CUDA:-0}" in 0) ;; *) echo 'error: CUDA compile lane requires FERRULE_NO_CUDA unset or 0'; exit 1;; esac
+    case "$1" in sm_[0-9][0-9]|sm_[0-9][0-9][0-9]) ;; *) echo 'error: expected explicit sm_XX or sm_XXX'; exit 1;; esac
+    command -v nvcc >/dev/null || { echo 'error: nvcc missing'; exit 1; }
+    just cutlass-setup
+    export FERRULE_CUDA_ARCH="$1" FERRULE_NO_CUDA=0 CUDA_VISIBLE_DEVICES=""
+    export CARGO_TARGET_DIR="target/validation/cuda-compile/$1"
+    cargo check --locked --workspace --features cuda --all-targets
+    cargo test --locked --workspace --features cuda --all-targets --no-run
+    echo 'VERIFIED_COMPILE_ONLY: feature/native/CUTLASS all-targets check and link; GPU execution UNVERIFIED' > target/validation/ci/cuda-compile/status.txt
+
+# A successful probe is only a prerequisite, never evidence of GPU tests passing.
+# Numeric visible-device ordinals are intentional: no implicit selection of a
+# different GPU when CUDA_VISIBLE_DEVICES is empty, hidden, or malformed.
+[positional-arguments]
+ci-gpu-preflight arch='sm_86' devices='1':
+    #!/usr/bin/env bash
+    set -euo pipefail
+    case "${FERRULE_NO_CUDA:-0}" in 0) ;; *) echo 'UNVERIFIED: GPU lane requires FERRULE_NO_CUDA unset or 0'; exit 1;; esac
+    command -v nvcc >/dev/null || { echo 'UNVERIFIED: nvcc missing'; exit 1; }
+    command -v nvidia-smi >/dev/null || { echo 'UNVERIFIED: nvidia-smi missing'; exit 1; }
+    case "$2" in 1|4) ;; *) echo 'error: supported device requirements are 1 or 4'; exit 1;; esac
+    query=(--query-gpu=compute_cap --format=csv,noheader)
+    if [[ -v CUDA_VISIBLE_DEVICES ]]; then
+        [[ "$CUDA_VISIBLE_DEVICES" =~ ^[0-9]+(,[0-9]+)*$ ]] || { echo 'UNVERIFIED: CUDA_VISIBLE_DEVICES must expose explicit numeric ordinals'; exit 1; }
+        IFS=, read -ra ordinals <<< "$CUDA_VISIBLE_DEVICES"
+        declare -A seen=()
+        for ordinal in "${ordinals[@]}"; do
+            [[ "$ordinal" = 0 || "$ordinal" =~ ^[1-9][0-9]*$ ]] || { echo 'UNVERIFIED: noncanonical CUDA ordinal'; exit 1; }
+            [[ ! -v seen[$ordinal] ]] || { echo 'UNVERIFIED: duplicate CUDA ordinal'; exit 1; }
+            seen[$ordinal]=1
+        done
+        query+=(--id="$CUDA_VISIBLE_DEVICES")
+    fi
+    caps=$(nvidia-smi "${query[@]}") || { echo 'UNVERIFIED: GPU enumeration failed'; exit 1; }
+    count=0
+    while IFS= read -r cap; do
+        cap=${cap//[[:space:]]/}
+        [[ "sm_${cap//./}" = "$1" ]] || { echo "UNVERIFIED: requested $1 does not match visible capability $cap"; exit 1; }
+        count=$((count + 1))
+    done <<< "$caps"
+    (( count >= $2 )) || { echo "UNVERIFIED: requires $2 GPUs, found $count"; exit 1; }
+    echo 'GPU prerequisites present; CUDA initialization and execution must still pass the selected tests'
+
+[positional-arguments]
+ci-gpu-smoke arch='sm_86':
+    #!/usr/bin/env bash
+    set -euo pipefail
+    mkdir -p target/validation/ci/gpu-smoke
+    echo 'FAILED_OR_INTERRUPTED: required GPU smoke not verified' > target/validation/ci/gpu-smoke/status.txt
+    rm -f target/nextest/gpu-smoke/junit.xml
+    just ci-gpu-preflight "$1" 1
+    command -v cargo-nextest >/dev/null || { echo 'error: required cargo-nextest missing'; exit 1; }
+    just cutlass-setup
+    FERRULE_NO_CUDA=0 FERRULE_CUDA_ARCH="$1" CARGO_TARGET_DIR=target cargo nextest run --locked -p ferrule-backend --features cuda --profile gpu-smoke --run-ignored all --no-tests fail
+    echo 'VERIFIED: selected required GPU smoke tests passed' > target/validation/ci/gpu-smoke/status.txt
+
+# Optional nightly classification is performed BEFORE starting tests. No model
+# download and no blanket ignored run. Once started, every test failure is fatal.
+ci-gpu-nightly-preflight arch='sm_86': (ci-gpu-preflight arch '4')
+    @test -n "${FERRULE_QWEN35_08B_DIR:-}" && test -r "$FERRULE_QWEN35_08B_DIR/config.json" || { echo 'UNVERIFIED: explicit local Qwen3.5-0.8B fixture required'; exit 1; }
+    @test -n "${FERRULE_QWEN35_ORACLE_DIR:-}" && test -r "$FERRULE_QWEN35_ORACLE_DIR/manifest.json" || { echo 'UNVERIFIED: explicit Qwen3.5 oracle manifest required'; exit 1; }
+
+[positional-arguments]
+ci-gpu-nightly arch='sm_86':
+    #!/usr/bin/env bash
+    set -euo pipefail
+    mkdir -p target/validation/ci/gpu-nightly
+    echo 'FAILED_OR_INTERRUPTED: nightly GPU execution not verified' > target/validation/ci/gpu-nightly/status.txt
+    rm -f target/nextest/gpu-nightly/junit.xml
+    just ci-gpu-nightly-preflight "$1"
+    command -v cargo-nextest >/dev/null || { echo 'error: cargo-nextest missing'; exit 1; }
+    just cutlass-setup
+    FERRULE_NO_CUDA=0 FERRULE_CUDA_ARCH="$1" CARGO_TARGET_DIR=target cargo nextest run --locked --workspace --features cuda --profile gpu-nightly --run-ignored only --no-tests fail
+    echo 'VERIFIED: selected nightly GPU tests passed (not all ignored tests)' > target/validation/ci/gpu-nightly/status.txt
 
 test-nextest:
     @if command -v cargo-nextest >/dev/null 2>&1; then cargo nextest run --locked --workspace; else cargo test --locked --workspace --all-targets; fi
@@ -97,17 +189,20 @@ test-model:
 test-server:
     cargo test --locked -p ferrule-server
 
-test-cuda *args='':
-    @if [ "{{ _use-cuda }}" = "1" ]; then arch="{{ _cuda-arch }}"; echo "→ CUDA backend tests (arch: $arch)"; FERRULE_CUDA_ARCH="$arch" cargo test --locked -p ferrule-backend --features cuda {{ args }} -- --test-threads=1; else echo "→ CUDA tests skipped (nvcc={{ _has-nvcc }}, gpu={{ _has-gpu }}, FERRULE_NO_CUDA=${FERRULE_NO_CUDA:-})"; echo "  Run 'just test-cuda-required' to require CUDA."; fi
+# These entry points now select the audited smoke profile, including ignored
+# contracts; arbitrary Cargo filters must not bypass the required selection.
+test-cuda:
+    @case "${FERRULE_NO_CUDA:-0}" in 0|1) ;; *) echo 'error: FERRULE_NO_CUDA must be 0 or 1'; exit 1;; esac
+    @if [ "{{ _use-cuda }}" = "1" ]; then just ci-gpu-smoke "{{ _cuda-arch }}"; else echo "→ UNVERIFIED: optional CUDA tests not run (nvcc={{ _has-nvcc }}, gpu={{ _has-gpu }}, FERRULE_NO_CUDA=${FERRULE_NO_CUDA:-})"; echo "  Run 'just test-cuda-required' to require CUDA."; fi
 
-test-cuda-required *args='': cutlass-setup
-    @test "{{ _has-nvcc }}" = "1" || { echo "error: nvcc not found"; exit 1; }; test "{{ _has-gpu }}" = "1" || { echo "error: no NVIDIA GPU detected"; exit 1; }; arch="{{ _cuda-arch }}"; test -n "$arch" || { echo "error: could not detect CUDA architecture; set FERRULE_CUDA_ARCH"; exit 1; }; echo "→ CUDA backend tests (arch: $arch)"; FERRULE_CUDA_ARCH="$arch" cargo test --locked -p ferrule-backend --features cuda {{ args }} -- --test-threads=1
+test-cuda-required:
+    just ci-gpu-smoke "{{ _cuda-arch }}"
 
 test-cli:
     cargo test --locked -p ferrule-cli
 
 test-all: test
-    @echo "=== All tests passed ==="
+    @echo "=== Selected tests completed; optional CUDA may be UNVERIFIED (see above) ==="
 
 # ── Code quality ───────────────────────────────────────────────────────
 
@@ -139,10 +234,10 @@ coverage:
     @if ! command -v cargo-llvm-cov >/dev/null 2>&1; then echo "error: cargo-llvm-cov not found"; exit 1; fi
     rm -rf target/coverage
     mkdir -p target/coverage
-    cargo llvm-cov nextest --locked --workspace --no-report
-    cargo llvm-cov report --lcov --output-path target/coverage/lcov.info
-    cargo llvm-cov report --html --output-dir target/coverage
-    cargo llvm-cov report --summary-only --output-path target/coverage/summary.txt --fail-under-lines 60
+    FERRULE_NO_CUDA=1 CUDA_VISIBLE_DEVICES="" CARGO_TARGET_DIR=target cargo llvm-cov nextest --locked --workspace --all-targets --profile ci --no-report
+    CARGO_TARGET_DIR=target cargo llvm-cov report --lcov --output-path target/coverage/lcov.info
+    CARGO_TARGET_DIR=target cargo llvm-cov report --html --output-dir target/coverage
+    CARGO_TARGET_DIR=target cargo llvm-cov report --summary-only --output-path target/coverage/summary.txt --fail-under-lines 60
 
 udeps:
     cargo udeps

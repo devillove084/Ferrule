@@ -143,17 +143,104 @@ impl PackedDecoderSequence {
         &self.block_table
     }
 }
-/// Fully validated model-neutral packed decoder input and KV custody plan.
+/// Commit equality only; no tokens, intent, phase, logits or owner-local execution proof.
+///
+/// ```compile_fail
+/// use ferrule_model::decoder::{DecoderKvBackend, KvCommitProjection};
+/// fn enter<B: DecoderKvBackend>(b: &mut B, tx: &mut B::Transaction,
+///     p: &KvCommitProjection, states: &mut [B::SequenceState]) {
+///     b.enter(tx, p, states).unwrap();
+/// }
+/// ```
+/// ```compile_fail
+/// use ferrule_model::decoder::{KvCommitProjection, PackedDecoderBatch};
+/// fn executable(p: KvCommitProjection) -> PackedDecoderBatch { p.into() }
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PackedDecoderBatch {
-    source_batch: ExecutionBatch,
+pub struct KvCommitProjection {
+    page_size: usize,
+    new_pages: Box<[KvPageId]>,
+    writable_pages: Box<[KvPageId]>,
+    cow_replacements: Box<[KvCowReplacement]>,
+    protected_pages: Box<[KvPageId]>,
+    row_to_sequence: Box<[usize]>,
+    positions: Box<[usize]>,
+    sequences: Box<[CommitSequence]>,
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CommitSequence {
+    page_state_slot: StateSlot,
+    page_generation: u64,
+    context_len: usize,
+    query_len: usize,
+    block_table: Box<[KvPageId]>,
+}
+impl From<&LogicalSequence> for CommitSequence {
+    fn from(s: &LogicalSequence) -> Self {
+        Self {
+            page_state_slot: s.page_state_slot,
+            page_generation: s.page_generation,
+            context_len: s.context_len,
+            query_len: s.query.len(),
+            block_table: s.block_table.clone(),
+        }
+    }
+}
+impl KvCommitProjection {
+    /// Validate logical reservations and page custody without constructing executable state.
+    pub fn validate(
+        batch: &ExecutionBatch,
+        reservations: &[KvReservationView],
+        capabilities: &ExecutionCapabilities,
+        page_size: usize,
+        pages: &impl DecoderKvPageView,
+    ) -> Result<Self> {
+        Ok(
+            ValidatedLayout::validate(batch, reservations, capabilities, page_size, pages)?
+                .projection(),
+        )
+    }
+    pub fn protected_pages(&self) -> &[KvPageId] {
+        &self.protected_pages
+    }
+}
+/// Exact logical execution identity including session order, tokens, intent, mode,
+/// phase, write slots and logits. Excludes rank-local execution slots/generations,
+/// topology IDs and physical pool slots. It cannot construct executable input.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LogicalExecutionIdentity {
+    sessions: Box<[u64]>,
+    layout: ValidatedLayout,
+}
+impl LogicalExecutionIdentity {
+    pub fn validate(
+        batch: &ExecutionBatch,
+        reservations: &[KvReservationView],
+        capabilities: &ExecutionCapabilities,
+        page_size: usize,
+        pages: &impl DecoderKvPageView,
+        sessions: &[u64],
+    ) -> Result<Self> {
+        ValidatedLayout::validate(batch, reservations, capabilities, page_size, pages)?
+            .identity(sessions)
+    }
+    pub fn rows(&self) -> usize {
+        self.layout.token_ids.len()
+    }
+    pub fn commit_projection(&self) -> KvCommitProjection {
+        self.layout.projection()
+    }
+}
+// Private proof only: no public builder can skip a validation phase.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ValidatedLayout {
     intent: ExecutionIntent,
     mode: ForwardMode,
     page_size: usize,
     token_ids: Box<[u32]>,
     positions: Box<[usize]>,
     write_slots: Box<[KvWriteSlot]>,
-    sequences: Box<[PackedDecoderSequence]>,
+    sequences: Box<[LogicalSequence]>,
     row_to_sequence: Box<[usize]>,
     sequence_major_rows: Box<[usize]>,
     new_pages: Box<[KvPageId]>,
@@ -162,27 +249,38 @@ pub struct PackedDecoderBatch {
     protected_pages: Box<[KvPageId]>,
     logits_plan: LogitsPlan,
 }
-impl PackedDecoderBatch {
-    /// Unifies `ExecutionBatch` and runtime `KvReservationView` lowering.
-    ///
-    /// This validates logical state, physical page layout, write destinations,
-    /// reservation generations, and transaction custody before a backend transaction is
-    /// created. No partial backend mutation occurs on failure.
-    pub fn lower<S>(
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LogicalSequence {
+    page_state_slot: StateSlot,
+    page_generation: u64,
+    phase: ForwardPhase,
+    query: Range<usize>,
+    context_len: usize,
+    sequence_len: usize,
+    block_table: Box<[KvPageId]>,
+}
+impl ValidatedLayout {
+    fn validate(
         batch: &ExecutionBatch,
         reservations: &[KvReservationView],
-        states: &[S],
         capabilities: &ExecutionCapabilities,
         page_size: usize,
         pages: &impl DecoderKvPageView,
-    ) -> Result<Self>
-    where
-        S: DecoderSequence,
-    {
+    ) -> Result<Self> {
         if page_size == 0 {
             return Err(execution_error("decoder KV page size must be non-zero"));
         }
-        batch.validate(states.len(), capabilities)?;
+        validate_logical_layout(batch, capabilities)?;
+        Self::accumulate_custody(batch, reservations, capabilities, page_size, pages)
+    }
+
+    fn accumulate_custody(
+        batch: &ExecutionBatch,
+        reservations: &[KvReservationView],
+        capabilities: &ExecutionCapabilities,
+        page_size: usize,
+        pages: &impl DecoderKvPageView,
+    ) -> Result<Self> {
         if reservations.len() != batch.sequences().len() {
             return Err(execution_error(format!(
                 "packed decoder batch has {} sequences but {} KV reservations",
@@ -227,17 +325,6 @@ impl PackedDecoderBatch {
         for (sequence_index, (sequence, reservation)) in
             batch.sequences().iter().zip(reservations).enumerate()
         {
-            let state_index = sequence.state_slot.try_as_usize().map_err(|_| {
-                execution_error(format!(
-                    "decoder sequence {sequence_index} state slot cannot be represented as usize"
-                ))
-            })?;
-            let state = states.get(state_index).ok_or_else(|| {
-                execution_error(format!(
-                    "decoder sequence {sequence_index} state slot {state_index} is missing from {} states",
-                    states.len()
-                ))
-            })?;
             let query =
                 checked_range(sequence.query.clone(), batch.len(), "query", sequence_index)?;
             if query.start != expected_query_start {
@@ -260,24 +347,11 @@ impl PackedDecoderBatch {
                     "decoder sequence {sequence_index} length exceeds usize"
                 ))
             })?;
-            if state.core().position() != context_len {
-                return Err(execution_error(format!(
-                    "decoder state slot {state_index} is at position {}, batch context is {context_len}",
-                    state.core().position()
-                )));
-            }
             if reservation.execution_state_slot != sequence.state_slot {
                 return Err(execution_error(format!(
                     "decoder reservation {sequence_index} is bound to execution state slot {}, expected {}",
                     reservation.execution_state_slot.get(),
                     sequence.state_slot.get()
-                )));
-            }
-            if reservation.execution_generation != state.core().generation() {
-                return Err(execution_error(format!(
-                    "decoder reservation {sequence_index} execution generation {} is stale; state slot {state_index} is generation {}",
-                    reservation.execution_generation,
-                    state.core().generation()
                 )));
             }
             if reservation.state_slot == reservation.execution_state_slot
@@ -411,8 +485,9 @@ impl PackedDecoderBatch {
                     .or_default()
                     .insert(sequence_index);
                 protected_pages.insert(page);
-                let locally_created = reservation.newly_allocated.contains(&page)
-                    || local_cow_replacement == Some(page);
+                // Exact per-sequence suffix validated above; no repeated membership scan.
+                let locally_created =
+                    logical_page >= pages_before || local_cow_replacement == Some(page);
                 if (new_page_set.contains(&page) || cow_replacement_set.contains(&page))
                     && !locally_created
                 {
@@ -470,12 +545,9 @@ impl PackedDecoderBatch {
                     )?;
                 }
             }
-            lowered_sequences.push(PackedDecoderSequence {
-                state_index,
-                topology_id: state.topology_id(),
+            lowered_sequences.push(LogicalSequence {
                 page_state_slot: reservation.state_slot,
                 page_generation: reservation.generation,
-                execution_generation: reservation.execution_generation,
                 phase: sequence.phase,
                 query,
                 context_len,
@@ -495,21 +567,11 @@ impl PackedDecoderBatch {
                 batch.kv_block_ids().len()
             )));
         }
-        for (page, owner) in &mutation_owners {
-            if let Some(readers) = table_readers.get(page)
-                && (readers.len() != 1 || !readers.contains(owner))
-            {
-                return Err(execution_error(format!(
-                    "mutated decoder KV page {} is shared with another packed sequence without independent custody",
-                    page.0
-                )));
-            }
-        }
+        finalize_conflicts(&mutation_owners, &table_readers)?;
         for page in &new_pages {
             protected_pages.insert(*page);
         }
         Ok(Self {
-            source_batch: batch.clone(),
             intent: batch.intent(),
             mode: batch.mode(),
             page_size,
@@ -525,6 +587,232 @@ impl PackedDecoderBatch {
             protected_pages: protected_pages.into_iter().collect(),
             logits_plan: LogitsPlan::from_validated_batch(batch, capabilities)?,
         })
+    }
+    fn projection(&self) -> KvCommitProjection {
+        KvCommitProjection {
+            page_size: self.page_size,
+            new_pages: self.new_pages.clone(),
+            writable_pages: self.writable_pages.clone(),
+            cow_replacements: self.cow_replacements.clone(),
+            protected_pages: self.protected_pages.clone(),
+            row_to_sequence: self.row_to_sequence.clone(),
+            positions: self.positions.clone(),
+            sequences: self.sequences.iter().map(CommitSequence::from).collect(),
+        }
+    }
+    fn identity(self, sessions: &[u64]) -> Result<LogicalExecutionIdentity> {
+        if self.token_ids.is_empty() || sessions.len() != self.sequences.len() {
+            return Err(execution_error(
+                "logical identity requires exact nonempty session order",
+            ));
+        }
+        Ok(LogicalExecutionIdentity {
+            sessions: sessions.into(),
+            layout: self,
+        })
+    }
+}
+fn validate_logical_layout(
+    batch: &ExecutionBatch,
+    capabilities: &ExecutionCapabilities,
+) -> Result<()> {
+    // Slot uniqueness/ranges without fabricated sequence states or allocation by slot ID.
+    let state_bound = batch
+        .sequences()
+        .iter()
+        .try_fold(0usize, |bound, sequence| {
+            let end = sequence
+                .state_slot
+                .try_as_usize()
+                .ok()
+                .and_then(|slot| slot.checked_add(1))
+                .ok_or_else(|| execution_error("decoder execution state slot overflow"))?;
+            Ok::<_, Error>(bound.max(end))
+        })?;
+    batch.validate(state_bound, capabilities)
+}
+fn finalize_conflicts(
+    mutation_owners: &BTreeMap<KvPageId, usize>,
+    table_readers: &BTreeMap<KvPageId, BTreeSet<usize>>,
+) -> Result<()> {
+    for (page, owner) in mutation_owners {
+        if let Some(readers) = table_readers.get(page)
+            && (readers.len() != 1 || !readers.contains(owner))
+        {
+            return Err(execution_error(format!(
+                "mutated decoder KV page {} is shared with another packed sequence without independent custody",
+                page.0
+            )));
+        }
+    }
+    Ok(())
+}
+fn bind_local_states<S: DecoderSequence>(
+    batch: &ExecutionBatch,
+    reservations: &[KvReservationView],
+    logical: &[LogicalSequence],
+    states: &[S],
+) -> Result<Box<[PackedDecoderSequence]>> {
+    let mut bound = Vec::with_capacity(logical.len());
+    for (index, ((sequence, reservation), logical)) in batch
+        .sequences()
+        .iter()
+        .zip(reservations)
+        .zip(logical)
+        .enumerate()
+    {
+        let state_index = sequence
+            .state_slot
+            .try_as_usize()
+            .map_err(|_| execution_error("decoder state slot exceeds usize"))?;
+        let state = states.get(state_index).ok_or_else(|| {
+            execution_error(format!(
+                "decoder sequence {index} state slot {state_index} is missing from {} states",
+                states.len()
+            ))
+        })?;
+        if state.core().position() != logical.context_len {
+            return Err(execution_error(format!(
+                "decoder state slot {state_index} is at position {}, batch context is {}",
+                state.core().position(),
+                logical.context_len
+            )));
+        }
+        if reservation.execution_generation != state.core().generation() {
+            return Err(execution_error(format!(
+                "decoder reservation {index} execution generation {} is stale; state slot {state_index} is generation {}",
+                reservation.execution_generation,
+                state.core().generation()
+            )));
+        }
+        bound.push(PackedDecoderSequence {
+            state_index,
+            topology_id: state.topology_id(),
+            execution_generation: reservation.execution_generation,
+            page_state_slot: logical.page_state_slot,
+            page_generation: logical.page_generation,
+            phase: logical.phase,
+            query: logical.query.clone(),
+            context_len: logical.context_len,
+            sequence_len: logical.sequence_len,
+            block_table: logical.block_table.clone(),
+        });
+    }
+    Ok(bound.into_boxed_slice())
+}
+
+/// Fully validated model-neutral packed decoder input and KV custody plan.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PackedDecoderBatch {
+    source_batch: ExecutionBatch,
+    intent: ExecutionIntent,
+    mode: ForwardMode,
+    page_size: usize,
+    token_ids: Box<[u32]>,
+    positions: Box<[usize]>,
+    write_slots: Box<[KvWriteSlot]>,
+    sequences: Box<[PackedDecoderSequence]>,
+    row_to_sequence: Box<[usize]>,
+    sequence_major_rows: Box<[usize]>,
+    new_pages: Box<[KvPageId]>,
+    writable_pages: Box<[KvPageId]>,
+    cow_replacements: Box<[KvCowReplacement]>,
+    protected_pages: Box<[KvPageId]>,
+    logits_plan: LogitsPlan,
+}
+impl PackedDecoderBatch {
+    /// Unifies `ExecutionBatch` and runtime `KvReservationView` lowering.
+    ///
+    /// This validates logical state, physical page layout, write destinations,
+    /// reservation generations, and transaction custody before a backend transaction is
+    /// created. No partial backend mutation occurs on failure.
+    pub fn lower<S>(
+        batch: &ExecutionBatch,
+        reservations: &[KvReservationView],
+        states: &[S],
+        capabilities: &ExecutionCapabilities,
+        page_size: usize,
+        pages: &impl DecoderKvPageView,
+    ) -> Result<Self>
+    where
+        S: DecoderSequence,
+    {
+        let layout =
+            ValidatedLayout::validate(batch, reservations, capabilities, page_size, pages)?;
+        let sequences = bind_local_states(batch, reservations, &layout.sequences, states)?;
+        Ok(Self {
+            source_batch: batch.clone(),
+            sequences,
+            intent: layout.intent,
+            mode: layout.mode,
+            page_size: layout.page_size,
+            token_ids: layout.token_ids,
+            positions: layout.positions,
+            write_slots: layout.write_slots,
+            row_to_sequence: layout.row_to_sequence,
+            sequence_major_rows: layout.sequence_major_rows,
+            new_pages: layout.new_pages,
+            writable_pages: layout.writable_pages,
+            cow_replacements: layout.cow_replacements,
+            protected_pages: layout.protected_pages,
+            logits_plan: layout.logits_plan,
+        })
+    }
+    /// One-way logical metadata; never permission to enter a physical backend.
+    pub fn commit_projection(&self) -> KvCommitProjection {
+        KvCommitProjection {
+            page_size: self.page_size,
+            new_pages: self.new_pages.clone(),
+            writable_pages: self.writable_pages.clone(),
+            cow_replacements: self.cow_replacements.clone(),
+            protected_pages: self.protected_pages.clone(),
+            row_to_sequence: self.row_to_sequence.clone(),
+            positions: self.positions.clone(),
+            sequences: self
+                .sequences
+                .iter()
+                .map(|s| CommitSequence {
+                    page_state_slot: s.page_state_slot,
+                    page_generation: s.page_generation,
+                    context_len: s.context_len,
+                    query_len: s.query.len(),
+                    block_table: s.block_table.clone(),
+                })
+                .collect(),
+        }
+    }
+    pub fn logical_execution_identity(&self, sessions: &[u64]) -> Result<LogicalExecutionIdentity> {
+        self.logical_layout().identity(sessions)
+    }
+    fn logical_layout(&self) -> ValidatedLayout {
+        ValidatedLayout {
+            intent: self.intent,
+            mode: self.mode,
+            page_size: self.page_size,
+            token_ids: self.token_ids.clone(),
+            positions: self.positions.clone(),
+            write_slots: self.write_slots.clone(),
+            row_to_sequence: self.row_to_sequence.clone(),
+            sequence_major_rows: self.sequence_major_rows.clone(),
+            new_pages: self.new_pages.clone(),
+            writable_pages: self.writable_pages.clone(),
+            cow_replacements: self.cow_replacements.clone(),
+            protected_pages: self.protected_pages.clone(),
+            logits_plan: self.logits_plan.clone(),
+            sequences: self
+                .sequences
+                .iter()
+                .map(|s| LogicalSequence {
+                    page_state_slot: s.page_state_slot,
+                    page_generation: s.page_generation,
+                    phase: s.phase,
+                    query: s.query.clone(),
+                    context_len: s.context_len,
+                    sequence_len: s.sequence_len,
+                    block_table: s.block_table.clone(),
+                })
+                .collect(),
+        }
     }
     pub const fn intent(&self) -> ExecutionIntent {
         self.intent
@@ -700,5 +988,168 @@ fn require_page_status(
 fn execution_error(message: impl Into<String>) -> Error {
     Error::Execution {
         message: message.into(),
+    }
+}
+
+#[cfg(test)]
+mod identity_tests {
+    use super::super::GenericDecoderSequenceState;
+    use super::*;
+    use ferrule_common::execution::{ExecutionSequence, KvBindingMode, KvBlockId, LogitsRowPolicy};
+    use std::num::NonZeroU32;
+
+    fn packed() -> PackedDecoderBatch {
+        let caps = ExecutionCapabilities {
+            max_batch_tokens: 4,
+            max_sequences: 2,
+            max_prefill_query_tokens_per_sequence: 4,
+            max_decode_query_tokens_per_sequence: 4,
+            max_top_k: NonZeroU32::new(4),
+            supports_prefill: true,
+            supports_decode: true,
+            supports_mixed: true,
+            full_logits_width: NonZeroU32::new(4),
+            kv_binding_mode: KvBindingMode::Paged,
+            logits_row_policy: LogitsRowPolicy::Any,
+        };
+        let batch = ExecutionBatch::new(
+            ForwardMode::Decode,
+            vec![3],
+            vec![1],
+            vec![Some(KvWriteSlot::new(15))],
+            vec![LogitsRequest::Full],
+            vec![ExecutionSequence::new(
+                StateSlot::new(0),
+                ForwardPhase::Decode,
+                0..1,
+                1,
+                2,
+                0..1,
+            )],
+            vec![KvBlockId::new(7)],
+        );
+        PackedDecoderBatch::lower(
+            &batch,
+            &[KvReservationView {
+                state_slot: StateSlot::new(9),
+                execution_state_slot: StateSlot::new(0),
+                positions: 1..2,
+                newly_allocated: vec![],
+                generation: 5,
+                execution_generation: 0,
+                cow_replacement: None,
+            }],
+            &[GenericDecoderSequenceState::with_position(1, (), ())],
+            &caps,
+            2,
+            &|_| DecoderKvPageStatus::Resident,
+        )
+        .unwrap()
+    }
+    #[test]
+    fn every_strong_identity_axis_remains_significant_after_type_split() {
+        let original = packed().logical_execution_identity(&[11]).unwrap();
+        let mutations: &[fn(&mut LogicalExecutionIdentity)] = &[
+            |x| x.sessions[0] += 1,
+            |x| x.layout.token_ids[0] += 1,
+            |x| x.layout.intent = ExecutionIntent::ProvisionalVerification,
+            |x| x.layout.mode = ForwardMode::Prefill,
+            |x| x.layout.page_size += 1,
+            |x| x.layout.positions[0] += 1,
+            |x| x.layout.write_slots[0] = KvWriteSlot::new(14),
+            |x| x.layout.sequences[0].phase = ForwardPhase::Prefill,
+            |x| x.layout.sequences[0].page_state_slot = StateSlot::new(10),
+            |x| x.layout.sequences[0].page_generation += 1,
+            |x| x.layout.sequences[0].query = 1..2,
+            |x| x.layout.sequences[0].context_len = 0,
+            |x| x.layout.sequences[0].sequence_len += 1,
+            |x| x.layout.sequences[0].block_table[0] = KvPageId(8),
+            |x| x.layout.row_to_sequence[0] = 1,
+            |x| x.layout.sequence_major_rows[0] = 1,
+            |x| x.layout.new_pages = vec![KvPageId(9)].into(),
+            |x| x.layout.writable_pages = vec![KvPageId(9)].into(),
+            |x| x.layout.protected_pages = vec![KvPageId(9)].into(),
+            |x| {
+                x.layout.cow_replacements = vec![KvCowReplacement {
+                    logical_page: 0,
+                    source: KvPageId(7),
+                    replacement: KvPageId(8),
+                }]
+                .into()
+            },
+            |x| x.layout.logits_plan.rows[0].request = LogitsRequest::None,
+            |x| x.layout.logits_plan.full_logits_width = Some(8),
+        ];
+        for (axis, mutate) in mutations.iter().enumerate() {
+            let mut changed = original.clone();
+            mutate(&mut changed);
+            assert_ne!(changed, original, "identity axis {axis}");
+        }
+    }
+
+    #[test]
+    fn projection_equality_exactly_matches_legacy_comparator_for_every_axis() {
+        fn legacy(a: &PackedDecoderBatch, b: &PackedDecoderBatch) -> bool {
+            a.page_size() == b.page_size()
+                && a.new_pages() == b.new_pages()
+                && a.writable_pages() == b.writable_pages()
+                && a.cow_replacements() == b.cow_replacements()
+                && a.protected_pages() == b.protected_pages()
+                && a.row_to_sequence() == b.row_to_sequence()
+                && a.positions() == b.positions()
+                && a.sequences().len() == b.sequences().len()
+                && a.sequences().iter().zip(b.sequences()).all(|(x, y)| {
+                    x.page_state_slot() == y.page_state_slot()
+                        && x.page_generation() == y.page_generation()
+                        && x.context_len() == y.context_len()
+                        && x.query_len() == y.query_len()
+                        && x.block_table() == y.block_table()
+                })
+        }
+        let original = packed();
+        let mutations: &[fn(&mut PackedDecoderBatch)] = &[
+            |x| x.token_ids[0] += 1,
+            |x| x.intent = ExecutionIntent::ProvisionalVerification,
+            |x| x.mode = ForwardMode::Prefill,
+            |x| x.sequences[0].phase = ForwardPhase::Prefill,
+            |x| x.write_slots[0] = KvWriteSlot::new(14),
+            |x| x.logits_plan.rows[0].request = LogitsRequest::None,
+            |x| x.sequence_major_rows[0] = 1,
+            |x| x.sequences[0].state_index = 1,
+            |x| x.sequences[0].execution_generation += 1,
+            |x| x.sequences[0].query = 1..2,
+            |x| x.sequences[0].sequence_len += 1,
+            |x| x.page_size += 1,
+            |x| x.new_pages = vec![KvPageId(9)].into(),
+            |x| x.writable_pages = vec![KvPageId(9)].into(),
+            |x| {
+                x.cow_replacements = vec![KvCowReplacement {
+                    logical_page: 0,
+                    source: KvPageId(7),
+                    replacement: KvPageId(8),
+                }]
+                .into()
+            },
+            |x| x.protected_pages = vec![KvPageId(9)].into(),
+            |x| x.row_to_sequence[0] = 1,
+            |x| x.positions[0] += 1,
+            |x| x.sequences = vec![x.sequences[0].clone(), x.sequences[0].clone()].into(),
+            |x| x.sequences[0].page_state_slot = StateSlot::new(10),
+            |x| x.sequences[0].page_generation += 1,
+            |x| x.sequences[0].context_len = 0,
+            |x| x.sequences[0].query = 0..2,
+            |x| x.sequences[0].block_table[0] = KvPageId(8),
+        ];
+        let mut variants = vec![original.clone()];
+        for mutate in mutations {
+            let mut changed = original.clone();
+            mutate(&mut changed);
+            variants.push(changed);
+        }
+        for a in &variants {
+            for b in &variants {
+                assert_eq!(legacy(a, b), a.commit_projection() == b.commit_projection());
+            }
+        }
     }
 }

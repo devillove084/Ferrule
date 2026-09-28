@@ -52,6 +52,13 @@ pub mod quant;
 pub mod support;
 pub mod transformer;
 
+/// Opt-in access to the existing physical provider, never an alternate authority.
+#[cfg(all(feature = "cuda-test-support", target_os = "linux"))]
+#[doc(hidden)]
+pub mod cuda_test_support {
+    pub use crate::moe::cuda_materialization::CudaExpertMaterializationProvider;
+}
+
 // ── Re-exports: execution ─────────────────────────────────────────────────
 pub use execution::{
     ArenaLease, ExecutableStage, ExecutionPlanError, ExecutionShapeKey, MaterializedStage,

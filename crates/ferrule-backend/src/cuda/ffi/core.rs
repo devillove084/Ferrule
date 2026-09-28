@@ -46,6 +46,8 @@ pub(crate) const NORM_OFFSET_AFFINE_F32: u32 = 6;
 pub(crate) const DATA_QUERY_GATE_SPLIT: u32 = 13;
 pub(crate) const DATA_SIGMOID_GATE: u32 = 14;
 pub(crate) const DATA_SILU_GATE: u32 = 15;
+/// DataArgs.flags for sigmoid/SiLU gates; gate index = output index / width.
+pub(crate) const DATA_GATE_ROW_BROADCAST: u32 = 1;
 
 pub(crate) const ROPE_YARN: u32 = 1;
 pub(crate) const ROPE_TAIL_STRIDED: u32 = 2;

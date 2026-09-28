@@ -38,32 +38,28 @@ pub fn cmd_chat(
         .map(BackendSelection::parse)
         .transpose()?
         .unwrap_or_default();
-    let mut driver_config = resident_driver_config(generation.ctx_size, generation.stop_at_eos);
-    if config.descriptor().spec.family == ferrule_model::ModelFamily::Qwen35 {
-        driver_config.enable_native_proposals = false;
-    }
-    let prepared = ResidentModelPlanner::new().prepare(
-        &config,
-        backend,
-        chat_template_override,
-        ModelFactoryOptions {
-            max_layers: None,
-            max_tensor_mebibytes: if config.descriptor().spec.family
-                == ferrule_model::ModelFamily::Qwen35
-            {
-                1024
-            } else {
-                128
+    let options = chat_model_options(&config, &generation, sampling)?;
+    let planner = ResidentModelPlanner::new();
+    let prepared = if sampling.expert_parallel != 1 || sampling.devices.is_some() {
+        planner.prepare_qwen35_expert_parallel(
+            &config,
+            backend,
+            chat_template_override,
+            options,
+            ferrule_runtime::engine::model_factory::PipelineBuildOptions {
+                parallelism: ferrule_common::ParallelismPlan {
+                    expert_parallel: sampling.expert_parallel,
+                    ..Default::default()
+                },
+                devices: sampling.devices.clone(),
+                ..Default::default()
             },
-            output_head_chunk_rows: 4096,
-            expert_reader_max_tensor_mebibytes: 64,
-            expert_cache: ExpertCacheOptions::default(),
-            moe_hotset_experts: 0,
-            kv_cache_mebibytes: None,
-            scheduler_config: single_sequence_scheduler_config(4096),
-            driver_config,
-        },
-    )?;
+        )?
+    } else {
+        planner.prepare(&config, backend, chat_template_override, options)?
+    };
+    // Print before chat redirects stderr: adjustments must remain user-visible.
+    eprintln!("[model plan] {}", prepared.resolution_report());
     let model_name = prepared.model_name();
     let backend_profile = prepared.backend_profile();
     let chat_template = prepared.chat_template();
@@ -76,6 +72,43 @@ pub fn cmd_chat(
         chat_template,
         sampling,
     )
+}
+
+fn chat_model_options(
+    config: &AutoConfig,
+    generation: &GenerationConfig,
+    sampling: &SamplingArgs,
+) -> anyhow::Result<ModelFactoryOptions> {
+    let mut driver_config = resident_driver_config(generation.ctx_size, generation.stop_at_eos);
+    if matches!(
+        config.descriptor().spec.family,
+        ferrule_model::ModelFamily::Qwen35 | ferrule_model::ModelFamily::Qwen35Moe
+    ) {
+        driver_config.enable_native_proposals = false;
+    }
+    Ok(ModelFactoryOptions {
+        max_layers: None,
+        max_tensor_mebibytes: if matches!(
+            config.descriptor().spec.family,
+            ferrule_model::ModelFamily::Qwen35 | ferrule_model::ModelFamily::Qwen35Moe
+        ) {
+            1024
+        } else {
+            128
+        },
+        output_head_chunk_rows: 4096,
+        expert_reader_max_tensor_mebibytes: 64,
+        expert_cache: ExpertCacheOptions::default(),
+        qwen35_moe_capacity: sampling.cuda_expert_device.capacity_limits(),
+        qwen35_host_cache: sampling.expert_prewarm.options(
+            sampling.expert_host_cache_entries,
+            sampling.expert_host_cache_mb,
+        )?,
+        moe_hotset_experts: 0,
+        kv_cache_mebibytes: None,
+        scheduler_config: single_sequence_scheduler_config(4096),
+        driver_config,
+    })
 }
 
 fn run_greedy_chat_loop(
@@ -108,9 +141,13 @@ async fn run_greedy_chat_loop_async(
     use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
     use rustyline::error::ReadlineError;
 
-    // Redirect stderr (tracing INFO lines) to a tmp file for a clean terminal.
+    // Full host prewarm may take minutes on cold NAS: keep its startup admission
+    // and progress visible rather than hiding them behind an apparently stuck REPL.
+    let show_host_prewarm = prepared.qwen35_host_cache_options().is_some();
+    // Other profiles retain the historical clean-terminal log redirection.
     let log_path = std::env::temp_dir().join(format!("ferrule-chat-{}.log", std::process::id()));
-    let _log_guard = if std::env::var_os("FERRULE_CHAT_KEEP_STDERR").is_none() {
+    let _log_guard = if !show_host_prewarm && std::env::var_os("FERRULE_CHAT_KEEP_STDERR").is_none()
+    {
         let log_file = std::fs::File::create(&log_path)?;
         let log_fd = log_file.as_raw_fd();
         // SAFETY: dup2 replaces stderr fd before any multi-threaded work starts.
@@ -125,7 +162,9 @@ async fn run_greedy_chat_loop_async(
     } else {
         None
     };
-    eprintln!("[log] stderr -> {}", log_path.display());
+    if _log_guard.is_some() {
+        eprintln!("[log] stderr -> {}", log_path.display());
+    }
 
     let session_id = SessionId(0);
     let load_started = Instant::now();
@@ -137,6 +176,9 @@ async fn run_greedy_chat_loop_async(
         "[load] {adapter_name} artifact and {backend_profile} owner initialized in {:.2}s",
         load_started.elapsed().as_secs_f64()
     );
+    if show_host_prewarm && let Some(report) = driver.expert_report() {
+        println!("{report}");
+    }
     let mut generated_tokens = 0usize;
     let mut turns = 0u64;
     println!(
@@ -340,4 +382,98 @@ async fn run_greedy_chat_loop_async(
 
     driver.shutdown().await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod plan_tests {
+    use super::*;
+    use crate::args::{Cli, Command};
+    use clap::Parser;
+    use ferrule_model::{
+        AttentionKind, ModelDescriptor, ModelFamily, MoeSpec, TransformerSemantics,
+        TransformerSpec, WeightSource,
+    };
+
+    #[test]
+    fn parsed_chat_defaults_and_context_reach_requested_effective_report() {
+        let config = AutoConfig::from_descriptor(ModelDescriptor {
+            path: "metadata-only-no-model".into(),
+            spec: TransformerSpec {
+                family: ModelFamily::Qwen35,
+                architecture: Some("Qwen3_5ForConditionalGeneration".into()),
+                weight_source: WeightSource::Safetensors,
+                hidden_size: Some(64),
+                num_layers: Some(24),
+                vocab_size: Some(128),
+                num_heads: Some(4),
+                num_kv_heads: Some(4),
+                head_dim: Some(16),
+                attention: AttentionKind::GroupedQuery,
+                moe: MoeSpec::none(),
+                semantics: TransformerSemantics::default(),
+                tensor_count: None,
+                quantization: Vec::new(),
+                notes: Vec::new(),
+            },
+            tensor_classes: Vec::new(),
+        });
+        for flags in [
+            vec![],
+            vec!["--ctx-size", "4096"],
+            vec!["--ctx-size", "8", "--backend", "cpu"],
+        ] {
+            let mut argv = vec!["ferrule", "chat", "metadata-only-no-model"];
+            argv.extend(flags);
+            let Command::Chat {
+                sampling,
+                max_tokens,
+                backend,
+                chat_template,
+                ..
+            } = Cli::try_parse_from(argv).unwrap().command
+            else {
+                panic!("chat parse")
+            };
+            let generation = sampling.generation_config(max_tokens);
+            let options = chat_model_options(&config, &generation, &sampling).unwrap();
+            let selection = backend
+                .as_deref()
+                .map(BackendSelection::parse)
+                .transpose()
+                .unwrap()
+                .unwrap_or_default();
+            let plan = ResidentModelPlanner
+                .prepare(&config, selection, chat_template.as_deref(), options)
+                .unwrap();
+            assert_eq!(plan.requested_backend(), selection);
+            assert_eq!(
+                plan.requested_options().scheduler_config.prefill_chunk_size,
+                4096
+            );
+            assert_eq!(
+                plan.requested_options().driver_config.ctx_size,
+                generation.ctx_size
+            );
+            let effective = plan.effective_options();
+            assert_eq!(
+                effective.scheduler_config.max_batch_tokens,
+                32.min(generation.ctx_size)
+            );
+            assert_eq!(
+                effective.scheduler_config.prefill_chunk_size,
+                effective.scheduler_config.max_batch_tokens
+            );
+            assert!(!effective.driver_config.enable_native_proposals);
+            assert!(
+                plan.adjustment_report()
+                    .render()
+                    .contains("min(32, context)")
+            );
+            assert!(
+                plan.resolution_report()
+                    .contains("owner live admission required")
+            );
+            assert_eq!(plan.backend_profile(), "cpu-hybrid-f32-qwen35-0.8b");
+        }
+    }
 }

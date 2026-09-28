@@ -685,6 +685,11 @@ pub enum FailureReason {
         message: String,
         cleanup: Box<FailureReason>,
     },
+    #[snafu(display("{primary}; physical cleanup also failed: {cleanup}"))]
+    Cleanup {
+        primary: Box<FailureReason>,
+        cleanup: Box<FailureReason>,
+    },
 }
 
 /// Why logical demand was detached without pretending submitted work disappeared.
@@ -868,6 +873,42 @@ impl CompletionEvent {
         };
         self.stage.validate_transition(next)?;
         Ok(next)
+    }
+}
+
+/// Failure observation is not proof that physical references have been released.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuiescenceEvidence {
+    Pending,
+    Unknown,
+    Quiescent,
+}
+
+/// `scope == None` is a provider/reactor-global fault, not a fabricated operation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderFault {
+    pub scope: Option<CompletionExpectation>,
+    pub failure: FailureReason,
+    pub quiescence: QuiescenceEvidence,
+}
+
+/// Completion proves that the named physical stage returned custody. Faults
+/// independently report whether that proof is available.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProviderProgress {
+    Idle,
+    Completion(CompletionEvent),
+    Fault(ProviderFault),
+}
+
+impl ProviderProgress {
+    /// Lossless compatibility boundary: a fault can never become `None`/Idle.
+    pub fn into_completion(self) -> Result<Option<CompletionEvent>, ProviderFault> {
+        match self {
+            Self::Idle => Ok(None),
+            Self::Completion(event) => Ok(Some(event)),
+            Self::Fault(fault) => Err(fault),
+        }
     }
 }
 

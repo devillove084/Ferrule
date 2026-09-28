@@ -1,7 +1,9 @@
 #![cfg(feature = "cuda")]
 
 use ferrule_backend::cuda::compile_model_plan;
+use ferrule_backend::cuda::operators::attention::hybrid;
 use ferrule_backend::cuda::operators::linear::CudaOperators;
+use ferrule_backend::cuda::operators::proposal;
 use ferrule_backend::cuda::providers::cutlass::{self, CutlassKernelId};
 use ferrule_backend::cuda::providers::{COMPILED_TARGET, CudaContext, CudaTarget, DeviceBuffer};
 use ferrule_backend::plan::{
@@ -497,7 +499,7 @@ fn cuda_proposal_head_keeps_markov_dependency_on_device() {
         DeviceBuffer::<f32>::zeroed(&stream, ROWS).expect("confidence output");
     let mut status = DeviceBuffer::<i32>::zeroed(&stream, 1).expect("device status");
 
-    cutlass::proposal_head(
+    proposal::proposal_head(
         &stream,
         &hc_state,
         &hc_function,
@@ -516,7 +518,7 @@ fn cuda_proposal_head_keeps_markov_dependency_on_device() {
         &mut token_ids,
         &mut confidence_output,
         &mut status,
-        cutlass::ProposalHeadLayout {
+        proposal::ProposalHeadLayout {
             rows: ROWS,
             hc: HC,
             hidden: HIDDEN,
@@ -646,14 +648,14 @@ fn cuda_hybrid_mla_attention_matches_full_block_reference() {
     let stream = context.default_stream();
 
     const SEQUENCE_TOKENS: usize = 18;
-    const PAGE_TOKENS: usize = cutlass::HYBRID_MLA_ATTENTION_PAGE_TOKENS;
+    const PAGE_TOKENS: usize = hybrid::HYBRID_MLA_ATTENTION_PAGE_TOKENS;
     const LAYER_COUNT: usize = 2;
     const LAYER_INDEX: usize = 1;
     const PHYSICAL_SLOTS: usize = 2;
-    const ROWS: usize = cutlass::PROPOSAL_ROWS;
-    const HEADS: usize = cutlass::HYBRID_MLA_ATTENTION_HEADS;
-    const DIM: usize = cutlass::HYBRID_MLA_ATTENTION_HEAD_DIM;
-    const CAPACITY: usize = cutlass::HYBRID_MLA_ATTENTION_TOKEN_CAPACITY;
+    const ROWS: usize = proposal::PROPOSAL_ROWS;
+    const HEADS: usize = hybrid::HYBRID_MLA_ATTENTION_HEADS;
+    const DIM: usize = hybrid::HYBRID_MLA_ATTENTION_HEAD_DIM;
+    const CAPACITY: usize = hybrid::HYBRID_MLA_ATTENTION_TOKEN_CAPACITY;
 
     // Logical page zero is deliberately stored in physical slot one and page
     // one in slot zero. The tested layer is also nonzero.
@@ -708,9 +710,9 @@ fn cuda_hybrid_mla_attention_matches_full_block_reference() {
         block_rows_visible: impl Fn(usize) -> usize,
         scale: f32,
     ) -> Vec<f32> {
-        const ROWS: usize = cutlass::PROPOSAL_ROWS;
-        const HEADS: usize = cutlass::HYBRID_MLA_ATTENTION_HEADS;
-        const DIM: usize = cutlass::HYBRID_MLA_ATTENTION_HEAD_DIM;
+        const ROWS: usize = proposal::PROPOSAL_ROWS;
+        const HEADS: usize = hybrid::HYBRID_MLA_ATTENTION_HEADS;
+        const DIM: usize = hybrid::HYBRID_MLA_ATTENTION_HEAD_DIM;
         let context_tokens = context.len() / DIM;
         let mut output = vec![0.0f32; ROWS * HEADS * DIM];
         for row in 0..ROWS {
@@ -735,7 +737,7 @@ fn cuda_hybrid_mla_attention_matches_full_block_reference() {
                 let mut denominator = 0.0f32;
                 let mut accumulator = vec![0.0f32; DIM];
                 for (tile_index, score_tile) in scores
-                    .chunks(cutlass::HYBRID_MLA_ATTENTION_ONLINE_SOFTMAX_TILE)
+                    .chunks(hybrid::HYBRID_MLA_ATTENTION_ONLINE_SOFTMAX_TILE)
                     .enumerate()
                 {
                     let tile_maximum = score_tile.iter().copied().fold(f32::NEG_INFINITY, f32::max);
@@ -749,7 +751,7 @@ fn cuda_hybrid_mla_attention_matches_full_block_reference() {
                     for value in &mut accumulator {
                         *value *= rescale;
                     }
-                    let tile_base = tile_index * cutlass::HYBRID_MLA_ATTENTION_ONLINE_SOFTMAX_TILE;
+                    let tile_base = tile_index * hybrid::HYBRID_MLA_ATTENTION_ONLINE_SOFTMAX_TILE;
                     for (tile_token, score) in score_tile.iter().copied().enumerate() {
                         let token = tile_base + tile_token;
                         let exponent = (score - next_maximum).exp();
@@ -812,7 +814,7 @@ fn cuda_hybrid_mla_attention_matches_full_block_reference() {
         .expect("proposal probability scratch");
     let mut online_rescales = DeviceBuffer::<f32>::zeroed(
         &stream,
-        ROWS * HEADS * cutlass::HYBRID_MLA_ATTENTION_ONLINE_SOFTMAX_TILES,
+        ROWS * HEADS * hybrid::HYBRID_MLA_ATTENTION_ONLINE_SOFTMAX_TILES,
     )
     .expect("proposal online-softmax rescale scratch");
     let mut denominators = DeviceBuffer::<f32>::zeroed(&stream, ROWS * HEADS)
@@ -821,7 +823,7 @@ fn cuda_hybrid_mla_attention_matches_full_block_reference() {
         .expect("proposal attention output");
     let mut status = DeviceBuffer::<i32>::zeroed(&stream, 1).expect("proposal device status");
 
-    cutlass::hybrid_mla_attention(
+    hybrid::hybrid_mla_attention(
         &stream,
         &query,
         &context_plane,
@@ -836,7 +838,7 @@ fn cuda_hybrid_mla_attention_matches_full_block_reference() {
         &mut denominators,
         &mut output,
         &mut status,
-        cutlass::HybridMlaAttentionLayout {
+        hybrid::HybridMlaAttentionLayout {
             sequence_tokens: SEQUENCE_TOKENS,
             page_tokens: PAGE_TOKENS,
             elements_per_token: DIM,
@@ -913,7 +915,7 @@ struct HybridMlaExplicitSelectionHostCase<'a> {
     attention_sink: &'a [f32],
     expected_gathered: &'a [f32],
     expected_valid: &'a [i32],
-    layout: cutlass::HybridMlaExplicitSelectionLayout,
+    layout: hybrid::HybridMlaExplicitSelectionLayout,
 }
 
 fn hybrid_mla_explicit_selection_f32_scalar_reference(
@@ -1202,7 +1204,7 @@ fn run_hybrid_mla_explicit_selection_case(case: HybridMlaExplicitSelectionHostCa
     });
     let attention_sink = DeviceBuffer::from_host(&stream, case.attention_sink)
         .expect("upload selected attention sink");
-    let requirements = cutlass::hybrid_mla_explicit_selection_workspace_requirements(case.layout)
+    let requirements = hybrid::workspace_requirements(case.layout)
         .expect("query hybrid MLA explicit selection workspace");
     let workspace_bytes =
         usize::try_from(requirements.bytes).expect("workspace requirement fits usize");
@@ -1216,7 +1218,7 @@ fn run_hybrid_mla_explicit_selection_case(case: HybridMlaExplicitSelectionHostCa
     let mut status =
         DeviceBuffer::from_host(&stream, &[i32::MIN]).expect("selected attention status");
 
-    let mut buffers = cutlass::HybridMlaExplicitSelectionBuffers {
+    let mut buffers = hybrid::HybridMlaExplicitSelectionBuffers {
         query: &query,
         #[cfg(ferrule_cuda_test_oracle)]
         oracle_output: &mut oracle_output,
@@ -1236,7 +1238,7 @@ fn run_hybrid_mla_explicit_selection_case(case: HybridMlaExplicitSelectionHostCa
         output: &mut output,
         status: &mut status,
     };
-    cutlass::hybrid_mla_explicit_selection_launch(&stream, &mut buffers, case.layout)
+    hybrid::hybrid_mla_explicit_selection_launch(&stream, &mut buffers, case.layout)
         .expect("launch hybrid MLA explicit selection");
 
     assert_eq!(
@@ -1528,8 +1530,8 @@ fn cuda_hybrid_mla_explicit_selection_contiguous_production_widths_match_numeric
             softmax_scale,
         );
 
-        let layout = cutlass::HybridMlaExplicitSelectionLayout {
-            kind: cutlass::HybridMlaKvStorageKind::Contiguous,
+        let layout = hybrid::HybridMlaExplicitSelectionLayout {
+            kind: hybrid::HybridMlaKvStorageKind::Contiguous,
             rows: ROWS,
             tokens_per_sequence: 0,
             kv_len: KV_LEN,
@@ -1554,7 +1556,7 @@ fn cuda_hybrid_mla_explicit_selection_contiguous_production_widths_match_numeric
             .expect("upload stress selected indices");
         let attention_sink = DeviceBuffer::from_host(&stream, &attention_sink)
             .expect("upload stress attention sink");
-        let requirements = cutlass::hybrid_mla_explicit_selection_workspace_requirements(layout)
+        let requirements = hybrid::workspace_requirements(layout)
             .expect("query production-width explicit selection workspace");
         let mut workspace = DeviceBuffer::<u8>::zeroed(
             &stream,
@@ -1573,7 +1575,7 @@ fn cuda_hybrid_mla_explicit_selection_contiguous_production_widths_match_numeric
         )
         .expect("stress oracle output");
         let mut status = DeviceBuffer::from_host(&stream, &[i32::MIN]).expect("stress status");
-        let mut buffers = cutlass::HybridMlaExplicitSelectionBuffers {
+        let mut buffers = hybrid::HybridMlaExplicitSelectionBuffers {
             query: &query,
             #[cfg(ferrule_cuda_test_oracle)]
             oracle_output: &mut oracle_output,
@@ -1593,7 +1595,7 @@ fn cuda_hybrid_mla_explicit_selection_contiguous_production_widths_match_numeric
             output: &mut output,
             status: &mut status,
         };
-        cutlass::hybrid_mla_explicit_selection_launch(&stream, &mut buffers, layout)
+        hybrid::hybrid_mla_explicit_selection_launch(&stream, &mut buffers, layout)
             .expect("launch production-width hybrid MLA explicit selection attention");
 
         let label =
@@ -1709,8 +1711,8 @@ fn cuda_hybrid_mla_explicit_selection_latency() {
                     selected_width,
                     softmax_scale,
                 );
-                let layout = cutlass::HybridMlaExplicitSelectionLayout {
-                    kind: cutlass::HybridMlaKvStorageKind::Contiguous,
+                let layout = hybrid::HybridMlaExplicitSelectionLayout {
+                    kind: hybrid::HybridMlaKvStorageKind::Contiguous,
                     rows,
                     tokens_per_sequence: 0,
                     kv_len: KV_LEN,
@@ -1735,9 +1737,8 @@ fn cuda_hybrid_mla_explicit_selection_latency() {
                     .expect("upload benchmark selected indices");
                 let attention_sink = DeviceBuffer::from_host(&stream, &attention_sink_host)
                     .expect("upload benchmark attention sink");
-                let requirements =
-                    cutlass::hybrid_mla_explicit_selection_workspace_requirements(layout)
-                        .expect("query benchmark explicit selection workspace");
+                let requirements = hybrid::workspace_requirements(layout)
+                    .expect("query benchmark explicit selection workspace");
                 let mut workspace = DeviceBuffer::<u8>::zeroed(
                     &stream,
                     usize::try_from(requirements.bytes).expect("workspace bytes fit usize"),
@@ -1753,7 +1754,7 @@ fn cuda_hybrid_mla_explicit_selection_latency() {
                     .expect("allocate benchmark status");
                 let start = context.new_event(true).expect("create CUDA start event");
                 let end = context.new_event(true).expect("create CUDA end event");
-                let mut buffers = cutlass::HybridMlaExplicitSelectionBuffers {
+                let mut buffers = hybrid::HybridMlaExplicitSelectionBuffers {
                     query: &query,
                     first_plane: &values,
                     second_plane: None,
@@ -1773,7 +1774,7 @@ fn cuda_hybrid_mla_explicit_selection_latency() {
                 };
 
                 for warmup in 0..warmup_iterations {
-                    cutlass::hybrid_mla_explicit_selection_launch(&stream, &mut buffers, layout)
+                    hybrid::hybrid_mla_explicit_selection_launch(&stream, &mut buffers, layout)
                         .unwrap_or_else(|error| {
                             panic!(
                                 "warmup explicit-selection launch {warmup}/{warmup_iterations} \
@@ -1787,7 +1788,7 @@ fn cuda_hybrid_mla_explicit_selection_latency() {
 
                 start.record(&stream).expect("record CUDA start event");
                 for iteration in 0..timed_iterations {
-                    cutlass::hybrid_mla_explicit_selection_launch(&stream, &mut buffers, layout)
+                    hybrid::hybrid_mla_explicit_selection_launch(&stream, &mut buffers, layout)
                         .unwrap_or_else(|error| {
                             panic!(
                                 "timed explicit-selection launch {iteration}/{timed_iterations} \
@@ -1874,8 +1875,8 @@ fn cuda_hybrid_mla_explicit_selection_reuses_workspace_across_43_async_launches(
         MAX_SELECTED_WIDTH,
         softmax_scale,
     );
-    let maximum_layout = cutlass::HybridMlaExplicitSelectionLayout {
-        kind: cutlass::HybridMlaKvStorageKind::Contiguous,
+    let maximum_layout = hybrid::HybridMlaExplicitSelectionLayout {
+        kind: hybrid::HybridMlaKvStorageKind::Contiguous,
         rows: ROWS,
         tokens_per_sequence: 0,
         kv_len: KV_LEN,
@@ -1901,9 +1902,8 @@ fn cuda_hybrid_mla_explicit_selection_reuses_workspace_across_43_async_launches(
         .expect("upload repeated selected indices");
     let attention_sink = DeviceBuffer::from_host(&stream, &attention_sink_host)
         .expect("upload repeated attention sink");
-    let requirements =
-        cutlass::hybrid_mla_explicit_selection_workspace_requirements(maximum_layout)
-            .expect("query repeated explicit selection workspace");
+    let requirements = hybrid::workspace_requirements(maximum_layout)
+        .expect("query repeated explicit selection workspace");
     let mut workspace = DeviceBuffer::<u8>::zeroed(
         &stream,
         usize::try_from(requirements.bytes).expect("workspace bytes fit usize"),
@@ -1931,7 +1931,7 @@ fn cuda_hybrid_mla_explicit_selection_reuses_workspace_across_43_async_launches(
         let selected_indices_view = selected_indices
             .slice(0, selected_width)
             .expect("selected-index prefix view");
-        let mut buffers = cutlass::HybridMlaExplicitSelectionBuffers {
+        let mut buffers = hybrid::HybridMlaExplicitSelectionBuffers {
             query: &query,
             #[cfg(ferrule_cuda_test_oracle)]
             oracle_output: &mut oracle_output,
@@ -1951,11 +1951,11 @@ fn cuda_hybrid_mla_explicit_selection_reuses_workspace_across_43_async_launches(
             output: &mut output,
             status: &mut status,
         };
-        cutlass::hybrid_mla_explicit_selection_launch(
+        hybrid::hybrid_mla_explicit_selection_launch(
             &stream,
             &mut buffers,
-            cutlass::HybridMlaExplicitSelectionLayout {
-                kind: cutlass::HybridMlaKvStorageKind::Contiguous,
+            hybrid::HybridMlaExplicitSelectionLayout {
+                kind: hybrid::HybridMlaKvStorageKind::Contiguous,
                 rows: ROWS,
                 tokens_per_sequence: 0,
                 kv_len: KV_LEN,
@@ -2205,8 +2205,8 @@ fn cuda_hybrid_mla_explicit_selection_multi_row_paged_workspace_stress() {
     let attention_sink = DeviceBuffer::from_host(&stream, &attention_sink_host)
         .expect("upload stress attention sink");
 
-    let paged_layout = cutlass::HybridMlaExplicitSelectionLayout {
-        kind: cutlass::HybridMlaKvStorageKind::Paged,
+    let paged_layout = hybrid::HybridMlaExplicitSelectionLayout {
+        kind: hybrid::HybridMlaKvStorageKind::Paged,
         rows: PAGED_ROWS,
         tokens_per_sequence: 0,
         kv_len: 0,
@@ -2222,8 +2222,8 @@ fn cuda_hybrid_mla_explicit_selection_multi_row_paged_workspace_stress() {
         row_kv_lens: true,
         softmax_scale,
     };
-    let dual_layout = cutlass::HybridMlaExplicitSelectionLayout {
-        kind: cutlass::HybridMlaKvStorageKind::DualPaged,
+    let dual_layout = hybrid::HybridMlaExplicitSelectionLayout {
+        kind: hybrid::HybridMlaKvStorageKind::DualPaged,
         rows: DUAL_ROWS,
         tokens_per_sequence: 0,
         kv_len: 0,
@@ -2239,12 +2239,10 @@ fn cuda_hybrid_mla_explicit_selection_multi_row_paged_workspace_stress() {
         row_kv_lens: true,
         softmax_scale,
     };
-    let paged_requirements =
-        cutlass::hybrid_mla_explicit_selection_workspace_requirements(paged_layout)
-            .expect("query paged explicit selection workspace");
-    let dual_requirements =
-        cutlass::hybrid_mla_explicit_selection_workspace_requirements(dual_layout)
-            .expect("query dual-paged explicit selection workspace");
+    let paged_requirements = hybrid::workspace_requirements(paged_layout)
+        .expect("query paged explicit selection workspace");
+    let dual_requirements = hybrid::workspace_requirements(dual_layout)
+        .expect("query dual-paged explicit selection workspace");
     let workspace_bytes = paged_requirements.bytes.max(dual_requirements.bytes);
     let mut workspace = DeviceBuffer::<u8>::zeroed(
         &stream,
@@ -2319,7 +2317,7 @@ fn cuda_hybrid_mla_explicit_selection_multi_row_paged_workspace_stress() {
         let mut oracle_output_view = oracle_output
             .slice(0, output_values)
             .unwrap_or_else(|error| panic!("{label}: oracle output view: {error}"));
-        let mut buffers = cutlass::HybridMlaExplicitSelectionBuffers {
+        let mut buffers = hybrid::HybridMlaExplicitSelectionBuffers {
             query,
             #[cfg(ferrule_cuda_test_oracle)]
             oracle_output: &mut oracle_output_view,
@@ -2339,7 +2337,7 @@ fn cuda_hybrid_mla_explicit_selection_multi_row_paged_workspace_stress() {
             output: &mut output_view,
             status: &mut status,
         };
-        cutlass::hybrid_mla_explicit_selection_launch(&stream, &mut buffers, layout)
+        hybrid::hybrid_mla_explicit_selection_launch(&stream, &mut buffers, layout)
             .unwrap_or_else(|error| panic!("{label}: launch failed: {error}"));
         drop(buffers);
 
@@ -2395,8 +2393,8 @@ fn cuda_hybrid_mla_explicit_selection_oracle_compare_zero_smoke() {
         DeviceBuffer::from_host(&stream, &[0i32]).expect("oracle selected index");
     let attention_sink = DeviceBuffer::<f32>::zeroed(&stream, HYBRID_MLA_EXPLICIT_SELECTION_HEADS)
         .expect("zero oracle sink");
-    let layout = cutlass::HybridMlaExplicitSelectionLayout {
-        kind: cutlass::HybridMlaKvStorageKind::Contiguous,
+    let layout = hybrid::HybridMlaExplicitSelectionLayout {
+        kind: hybrid::HybridMlaKvStorageKind::Contiguous,
         rows: 1,
         tokens_per_sequence: 0,
         kv_len: 1,
@@ -2412,8 +2410,8 @@ fn cuda_hybrid_mla_explicit_selection_oracle_compare_zero_smoke() {
         row_kv_lens: false,
         softmax_scale: 1.0,
     };
-    let requirements = cutlass::hybrid_mla_explicit_selection_workspace_requirements(layout)
-        .expect("oracle compare workspace requirements");
+    let requirements =
+        hybrid::workspace_requirements(layout).expect("oracle compare workspace requirements");
     let mut workspace = DeviceBuffer::<u8>::zeroed(
         &stream,
         usize::try_from(requirements.bytes).expect("oracle workspace fits usize"),
@@ -2430,7 +2428,7 @@ fn cuda_hybrid_mla_explicit_selection_oracle_compare_zero_smoke() {
     )
     .expect("oracle reference output");
     let mut status = DeviceBuffer::from_host(&stream, &[i32::MIN]).expect("oracle status");
-    let mut buffers = cutlass::HybridMlaExplicitSelectionBuffers {
+    let mut buffers = hybrid::HybridMlaExplicitSelectionBuffers {
         query: &query,
         oracle_output: &mut oracle_output,
         first_plane: &first_plane,
@@ -2450,7 +2448,7 @@ fn cuda_hybrid_mla_explicit_selection_oracle_compare_zero_smoke() {
         status: &mut status,
     };
 
-    cutlass::hybrid_mla_explicit_selection_launch(&stream, &mut buffers, layout)
+    hybrid::hybrid_mla_explicit_selection_launch(&stream, &mut buffers, layout)
         .expect("production and scalar-oracle compare launch");
     assert_eq!(status.to_host_vec(&stream).expect("oracle status"), [0]);
     assert!(
@@ -2507,8 +2505,8 @@ fn cuda_hybrid_mla_explicit_selection_contiguous_matches_f32_semantics() {
         attention_sink: &attention_sink,
         expected_gathered: &gathered,
         expected_valid: &valid,
-        layout: cutlass::HybridMlaExplicitSelectionLayout {
-            kind: cutlass::HybridMlaKvStorageKind::Contiguous,
+        layout: hybrid::HybridMlaExplicitSelectionLayout {
+            kind: hybrid::HybridMlaKvStorageKind::Contiguous,
             rows: ROWS,
             tokens_per_sequence: 0,
             kv_len: KV_LEN,
@@ -2603,8 +2601,8 @@ fn cuda_hybrid_mla_explicit_selection_paged_row_metadata_matches_f32_semantics()
         attention_sink: &attention_sink,
         expected_gathered: &gathered,
         expected_valid: &valid,
-        layout: cutlass::HybridMlaExplicitSelectionLayout {
-            kind: cutlass::HybridMlaKvStorageKind::Paged,
+        layout: hybrid::HybridMlaExplicitSelectionLayout {
+            kind: hybrid::HybridMlaKvStorageKind::Paged,
             rows: ROWS,
             tokens_per_sequence: 0,
             kv_len: 0,
@@ -2714,8 +2712,8 @@ fn cuda_hybrid_mla_explicit_selection_dual_paged_uses_selector_stride() {
         attention_sink: &attention_sink,
         expected_gathered: &gathered,
         expected_valid: &valid,
-        layout: cutlass::HybridMlaExplicitSelectionLayout {
-            kind: cutlass::HybridMlaKvStorageKind::DualPaged,
+        layout: hybrid::HybridMlaExplicitSelectionLayout {
+            kind: hybrid::HybridMlaKvStorageKind::DualPaged,
             rows: ROWS,
             tokens_per_sequence: 0,
             kv_len: 0,
@@ -2741,12 +2739,12 @@ fn cuda_hybrid_mla_attention_formal_shape_latency() {
     context.bind_to_thread().expect("bind CUDA context");
     let stream = context.default_stream();
 
-    const SEQUENCE_TOKENS: usize = cutlass::HYBRID_MLA_ATTENTION_WINDOW;
-    const PAGE_TOKENS: usize = cutlass::HYBRID_MLA_ATTENTION_PAGE_TOKENS;
-    const ROWS: usize = cutlass::PROPOSAL_ROWS;
-    const HEADS: usize = cutlass::HYBRID_MLA_ATTENTION_HEADS;
-    const DIM: usize = cutlass::HYBRID_MLA_ATTENTION_HEAD_DIM;
-    const CAPACITY: usize = cutlass::HYBRID_MLA_ATTENTION_TOKEN_CAPACITY;
+    const SEQUENCE_TOKENS: usize = hybrid::HYBRID_MLA_ATTENTION_WINDOW;
+    const PAGE_TOKENS: usize = hybrid::HYBRID_MLA_ATTENTION_PAGE_TOKENS;
+    const ROWS: usize = proposal::PROPOSAL_ROWS;
+    const HEADS: usize = hybrid::HYBRID_MLA_ATTENTION_HEADS;
+    const DIM: usize = hybrid::HYBRID_MLA_ATTENTION_HEAD_DIM;
+    const CAPACITY: usize = hybrid::HYBRID_MLA_ATTENTION_TOKEN_CAPACITY;
     const ITERATIONS: usize = 100;
 
     let query = DeviceBuffer::from_host(&stream, &vec![0.03125f32; ROWS * HEADS * DIM])
@@ -2772,7 +2770,7 @@ fn cuda_hybrid_mla_attention_formal_shape_latency() {
         .expect("proposal benchmark probabilities");
     let mut online_rescales = DeviceBuffer::<f32>::zeroed(
         &stream,
-        ROWS * HEADS * cutlass::HYBRID_MLA_ATTENTION_ONLINE_SOFTMAX_TILES,
+        ROWS * HEADS * hybrid::HYBRID_MLA_ATTENTION_ONLINE_SOFTMAX_TILES,
     )
     .expect("proposal benchmark online-softmax rescales");
     let mut denominators = DeviceBuffer::<f32>::zeroed(&stream, ROWS * HEADS)
@@ -2780,7 +2778,7 @@ fn cuda_hybrid_mla_attention_formal_shape_latency() {
     let mut output = DeviceBuffer::<f32>::zeroed(&stream, ROWS * HEADS * DIM)
         .expect("proposal benchmark output");
     let mut status = DeviceBuffer::<i32>::zeroed(&stream, 1).expect("proposal benchmark status");
-    let layout = cutlass::HybridMlaAttentionLayout {
+    let layout = hybrid::HybridMlaAttentionLayout {
         sequence_tokens: SEQUENCE_TOKENS,
         page_tokens: PAGE_TOKENS,
         elements_per_token: DIM,
@@ -2792,7 +2790,7 @@ fn cuda_hybrid_mla_attention_formal_shape_latency() {
     };
 
     for _ in 0..5 {
-        cutlass::hybrid_mla_attention(
+        hybrid::hybrid_mla_attention(
             &stream,
             &query,
             &context_plane,
@@ -2815,7 +2813,7 @@ fn cuda_hybrid_mla_attention_formal_shape_latency() {
 
     let started = std::time::Instant::now();
     for _ in 0..ITERATIONS {
-        cutlass::hybrid_mla_attention(
+        hybrid::hybrid_mla_attention(
             &stream,
             &query,
             &context_plane,

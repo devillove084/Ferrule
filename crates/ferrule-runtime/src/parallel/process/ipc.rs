@@ -12,6 +12,145 @@ use super::{
 
 pub(super) const HARD_MAX_FRAME_BYTES: usize = 128 * 1024 * 1024;
 
+/// Compile-time opt-in diagnostics (`FERRULE_PROCESS_IPC_INSTRUMENT=1`). Normal
+/// builds take a constant disabled path: no runtime flag lookup, clocks, TLS
+/// counters or file I/O. Instrumented builds additionally require a sink path;
+/// aggregate per thread and emit once at thread exit, never inside an I/O loop.
+/// Timings are inclusive wall observations, not an additive latency ledger.
+mod timing {
+    use std::cell::RefCell;
+    use std::io::Write;
+    use std::path::PathBuf;
+    use std::sync::OnceLock;
+    use std::time::Instant;
+
+    static PATH: OnceLock<Option<PathBuf>> = OnceLock::new();
+    pub(super) const INSTRUMENTED: bool = match option_env!("FERRULE_PROCESS_IPC_INSTRUMENT") {
+        Some(value) => matches!(value.as_bytes(), [b'1']),
+        None => false,
+    };
+
+    #[inline]
+    fn enabled() -> bool {
+        INSTRUMENTED
+            && PATH
+                .get_or_init(|| {
+                    std::env::var_os("FERRULE_PROCESS_IPC_TIMING")
+                        .filter(|path| !path.is_empty())
+                        .map(PathBuf::from)
+                })
+                .is_some()
+    }
+    const PHASES: [&str; 7] = [
+        "encode",
+        "payload_decode",
+        "frame_decode",
+        "frame_write",
+        "frame_read",
+        "pipe_wait",
+        "copy",
+    ];
+    #[derive(Clone, Copy)]
+    pub(super) enum Phase {
+        Encode,
+        PayloadDecode,
+        FrameDecode,
+        FrameWrite,
+        FrameRead,
+        PipeWait,
+        Copy,
+    }
+    #[derive(Clone, Copy, Default, serde::Serialize)]
+    struct Counter {
+        calls: u64,
+        completed: u64,
+        completed_bytes: u64,
+        wall_ns: u128,
+    }
+    #[derive(Default)]
+    struct Counters([Counter; 7]);
+    thread_local! { static COUNTERS: RefCell<Counters> = RefCell::new(Counters::default()); }
+    impl Drop for Counters {
+        fn drop(&mut self) {
+            let Some(Some(path)) = PATH.get() else {
+                return;
+            };
+            let phases = PHASES
+                .into_iter()
+                .zip(self.0)
+                .collect::<std::collections::BTreeMap<_, _>>();
+            let record = serde_json::json!({"schema":"ferrule.ipc-timing.v1",
+                "pid":std::process::id(), "thread":format!("{:?}", std::thread::current().id()),
+                "phases":phases});
+            // Best-effort diagnostics never replace a transport error or ACK.
+            // The benchmark runner requires valid, nonempty artifacts separately.
+            if let Ok(mut bytes) = serde_json::to_vec(&record) {
+                bytes.push(b'\n');
+                if let Ok(mut file) = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(path)
+                {
+                    let _ = file.write_all(&bytes);
+                }
+            }
+        }
+    }
+    pub(super) struct Span {
+        phase: Phase,
+        start: Option<Instant>,
+        completed_bytes: Option<usize>,
+    }
+    impl Span {
+        #[inline]
+        pub(super) fn instrumented() -> bool {
+            enabled()
+        }
+
+        #[inline]
+        pub(super) fn new(phase: Phase) -> Self {
+            if !INSTRUMENTED {
+                return Self {
+                    phase,
+                    start: None,
+                    completed_bytes: None,
+                };
+            }
+
+            Self {
+                phase,
+                start: enabled().then(Instant::now),
+                completed_bytes: None,
+            }
+        }
+        #[inline]
+        pub(super) fn complete(&mut self, bytes: usize) {
+            if INSTRUMENTED {
+                self.completed_bytes = Some(bytes);
+            }
+        }
+    }
+    impl Drop for Span {
+        #[inline]
+        fn drop(&mut self) {
+            let Some(start) = self.start else {
+                return;
+            };
+            let ns = start.elapsed().as_nanos();
+            COUNTERS.with(|counters| {
+                let mut counters = counters.borrow_mut();
+                let c = &mut counters.0[self.phase as usize];
+                c.calls = c.calls.saturating_add(1);
+                c.wall_ns = c.wall_ns.saturating_add(ns);
+                if let Some(bytes) = self.completed_bytes {
+                    c.completed = c.completed.saturating_add(1);
+                    c.completed_bytes = c.completed_bytes.saturating_add(bytes as u64);
+                }
+            });
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Envelope {
@@ -62,6 +201,7 @@ struct LimitedBuffer {
     bytes: Vec<u8>,
     limit: usize,
     exceeded: bool,
+    timing: bool,
 }
 impl Write for LimitedBuffer {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
@@ -69,7 +209,13 @@ impl Write for LimitedBuffer {
             self.exceeded = true;
             return Err(io::Error::other("serialization byte limit"));
         }
-        self.bytes.extend_from_slice(bytes);
+        if timing::INSTRUMENTED && self.timing {
+            let mut measured = timing::Span::new(timing::Phase::Copy);
+            self.bytes.extend_from_slice(bytes);
+            measured.complete(bytes.len());
+        } else {
+            self.bytes.extend_from_slice(bytes);
+        }
         Ok(bytes.len())
     }
     fn flush(&mut self) -> io::Result<()> {
@@ -81,10 +227,12 @@ pub(super) fn serialize<T: Serialize + ?Sized>(
     value: &T,
     limit: usize,
 ) -> Result<Vec<u8>, ProcessError> {
+    let mut measured = timing::Span::new(timing::Phase::Encode);
     let mut writer = LimitedBuffer {
         bytes: Vec::new(),
         limit,
         exceeded: false,
+        timing: timing::Span::instrumented(),
     };
     let result = serde_json::to_writer(&mut writer, value);
     if writer.exceeded {
@@ -94,6 +242,7 @@ pub(super) fn serialize<T: Serialize + ?Sized>(
         operation: "serialize process value",
         source,
     })?;
+    measured.complete(writer.bytes.len());
     Ok(writer.bytes)
 }
 
@@ -101,10 +250,16 @@ pub(super) fn payload<T: Serialize + ?Sized>(
     value: &T,
     limit: usize,
 ) -> Result<Value, ProcessError> {
-    serde_json::from_slice(&serialize(value, limit)?).map_err(|source| ProcessError::Json {
+    let bytes = serialize(value, limit)?;
+    let mut measured = timing::Span::new(timing::Phase::PayloadDecode);
+    let result = serde_json::from_slice(&bytes).map_err(|source| ProcessError::Json {
         operation: "decode bounded process value",
         source,
-    })
+    });
+    if result.is_ok() {
+        measured.complete(bytes.len());
+    }
+    result
 }
 
 pub(super) fn encode(message: Message, limit: usize) -> Result<Vec<u8>, ProcessError> {
@@ -132,11 +287,14 @@ pub(super) fn send_observed<W: Write + AsRawFd>(
     observe: &mut dyn FnMut(),
     sent: &mut bool,
 ) -> Result<(), ProcessError> {
+    let mut measured = timing::Span::new(timing::Phase::FrameWrite);
     let count = u32::try_from(body.len()).map_err(|_| ProcessError::FrameTooLarge {
         limit: HARD_MAX_FRAME_BYTES,
     })?;
     write_all(writer, &count.to_be_bytes(), deadline, observe, sent)?;
-    write_all(writer, body, deadline, observe, sent)
+    write_all(writer, body, deadline, observe, sent)?;
+    measured.complete(body.len() + 4);
+    Ok(())
 }
 
 /// Only the wait for a new frame is unbounded. Once the pipe becomes readable,
@@ -165,6 +323,7 @@ pub(super) fn receive_observed<R: Read + AsRawFd>(
     deadline: Instant,
     observe: &mut dyn FnMut(),
 ) -> Result<Message, ProcessError> {
+    let mut measured = timing::Span::new(timing::Phase::FrameRead);
     let mut prefix = [0u8; 4];
     read_all(reader, &mut prefix, deadline, false, observe)?;
     let count = u32::from_be_bytes(prefix) as usize;
@@ -176,12 +335,17 @@ pub(super) fn receive_observed<R: Read + AsRawFd>(
     }
     let mut body = vec![0u8; count];
     read_all(reader, &mut body, deadline, true, observe)?;
+    measured.complete(body.len() + 4);
+    drop(measured);
     check_deadline(deadline)?;
+    let mut decoded = timing::Span::new(timing::Phase::FrameDecode);
     let envelope: Envelope =
         serde_json::from_slice(&body).map_err(|source| ProcessError::Json {
             operation: "decode process frame",
             source,
         })?;
+    decoded.complete(body.len());
+    drop(decoded);
     if envelope.version != PROCESS_PROTOCOL_VERSION {
         return Err(protocol("unsupported protocol version"));
     }
@@ -288,6 +452,7 @@ fn poll_fd(
     deadline: Option<Instant>,
     observe: &mut dyn FnMut(),
 ) -> Result<(), ProcessError> {
+    let mut measured = deadline.map(|_| timing::Span::new(timing::Phase::PipeWait));
     loop {
         observe();
         let millis = if let Some(deadline) = deadline {
@@ -316,6 +481,9 @@ fn poll_fd(
             }
             // HUP may coexist with readable bytes. Let read consume them or
             // report EOF/truncation; write similarly reports EPIPE on POLLERR.
+            if let Some(measured) = &mut measured {
+                measured.complete(0);
+            }
             return Ok(());
         }
         if result == 0 {
@@ -339,6 +507,10 @@ pub(super) fn clip_error(mut failure: ProcessHandlerError, limit: usize) -> Proc
     failure.message.truncate(end);
     failure
 }
+
+#[cfg(test)]
+#[path = "../../../tests/support/pr26_ipc_contracts.rs"]
+mod pr26_contracts;
 
 #[cfg(test)]
 mod tests {

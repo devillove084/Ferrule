@@ -6,11 +6,13 @@
 //! from HF safetensors inventory byte ranges to small reference payloads and,
 //! later, GPU/streaming tensor handles.
 
-use std::io::{Read, Seek, SeekFrom};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use super::read_session::{
+    CheckpointReadCounters, DEFAULT_MAX_OPEN_SHARDS, ShardHandlePool, VerifiedReadSession,
+};
 use super::{CheckpointReadExtent, CheckpointReadPlan, CheckpointSourceFileIdentity};
 
 use crate::{HfSafetensorsTensorInfo, TensorRole};
@@ -188,11 +190,33 @@ impl CheckpointMatrixPayload {
 #[derive(Debug, Clone)]
 pub struct CheckpointTensorReader {
     max_tensor_bytes: u64,
+    handles: ShardHandlePool,
 }
 
 impl CheckpointTensorReader {
     pub fn new(max_tensor_bytes: u64) -> Self {
-        Self { max_tensor_bytes }
+        Self::with_max_shards(max_tensor_bytes, DEFAULT_MAX_OPEN_SHARDS)
+            .expect("default shard limit is nonzero")
+    }
+
+    /// Clones share this bounded cache and its counters, not a global FD pool.
+    pub fn with_max_shards(max_tensor_bytes: u64, max_shards: usize) -> Result<Self> {
+        Ok(Self {
+            max_tensor_bytes,
+            handles: ShardHandlePool::new(max_shards)?,
+        })
+    }
+
+    pub fn max_shards(&self) -> usize {
+        self.handles.max_shards()
+    }
+
+    pub fn read_counters(&self) -> CheckpointReadCounters {
+        self.handles.counters()
+    }
+
+    pub fn verified_read_session(&self, plan: &CheckpointReadPlan) -> Result<VerifiedReadSession> {
+        self.handles.begin(plan, self.max_tensor_bytes)
     }
 
     pub fn max_tensor_bytes(&self) -> u64 {
@@ -253,9 +277,32 @@ impl CheckpointTensorReader {
         columns: Range<usize>,
         source: &CheckpointSourceFileIdentity,
     ) -> Result<CheckpointMatrixRead> {
+        if !matches!(slice.dtype, CheckpointDType::F32 | CheckpointDType::Bf16) {
+            return Err(matrix_error(format!(
+                "matrix slicing supports only dense BF16/F32, got {}",
+                slice.dtype.as_str()
+            )));
+        }
+        let read = self.plan_2d_storage_range(slice, rows, columns, source)?;
+        read.plan
+            .validate_source_identity()
+            .map_err(|e| matrix_error(format!("stale matrix source: {e:?}")))?;
+        Ok(read)
+    }
+
+    // Raw FP8 rectangles are available only through the paired numeric artifact
+    // API, so a caller cannot accidentally discard the scale contract.
+    pub(super) fn plan_2d_storage_range(
+        &self,
+        slice: &CheckpointTensorSlice,
+        rows: Range<usize>,
+        columns: Range<usize>,
+        source: &CheckpointSourceFileIdentity,
+    ) -> Result<CheckpointMatrixRead> {
         let element_bytes = match slice.dtype {
             CheckpointDType::F32 => 4usize,
             CheckpointDType::Bf16 => 2usize,
+            CheckpointDType::F8E4M3 => 1usize,
             _ => {
                 return Err(matrix_error(format!(
                     "matrix slicing supports only dense BF16/F32, got {}",
@@ -328,8 +375,6 @@ impl CheckpointTensorReader {
         }
         let sources: Arc<[CheckpointSourceFileIdentity]> = Arc::from([source.clone()]);
         let plan = CheckpointReadPlan::new(extents, sources)?;
-        plan.validate_source_identity()
-            .map_err(|e| matrix_error(format!("stale matrix source: {e:?}")))?;
         Ok(CheckpointMatrixRead {
             tensor: slice.clone(),
             rows,
@@ -341,41 +386,8 @@ impl CheckpointTensorReader {
     /// Read directly into one local packed allocation, using one file handle even
     /// for noncontiguous columns. Never allocates or decodes the full tensor.
     pub fn read_matrix(&self, read: &CheckpointMatrixRead) -> Result<CheckpointMatrixPayload> {
-        let length = self.check_matrix_read_limit(read.plan.storage_bytes())?;
-        read.plan
-            .validate_source_identity()
-            .map_err(|e| matrix_error(format!("stale matrix source: {e:?}")))?;
-        let mut file = std::fs::File::open(&read.tensor.path).map_err(|error| {
-            matrix_error(format!(
-                "open '{}' for tensor '{}': {error}",
-                read.tensor.path.display(),
-                read.tensor.name
-            ))
-        })?;
-        let mut bytes = Vec::new();
-        bytes
-            .try_reserve_exact(length)
-            .map_err(|e| matrix_error(format!("allocate local matrix: {e}")))?;
-        bytes.resize(length, 0);
-        let mut cursor = 0;
-        for extent in read.plan.extents() {
-            let end = cursor + extent.bytes() as usize;
-            file.seek(SeekFrom::Start(extent.offset()))
-                .and_then(|_| file.read_exact(&mut bytes[cursor..end]))
-                .map_err(|error| {
-                    matrix_error(format!(
-                        "read '{}' tensor '{}' extent {}..{}: {error}",
-                        extent.path().display(),
-                        read.tensor.name,
-                        extent.offset(),
-                        extent.end()
-                    ))
-                })?;
-            cursor = end;
-        }
-        read.plan
-            .validate_source_identity()
-            .map_err(|e| matrix_error(format!("stale matrix source: {e:?}")))?;
+        self.check_matrix_read_limit(read.plan.storage_bytes())?;
+        let bytes = self.verified_read_session(&read.plan)?.read()?;
         Ok(CheckpointMatrixPayload {
             provenance: read.clone(),
             bytes,
@@ -410,18 +422,22 @@ impl CheckpointTensorReader {
                 ),
             });
         }
-        let mut file = std::fs::File::open(&slice.path).map_err(|e| Error::Model {
-            message: format!("checkpoint tensor open '{}': {e}", slice.path.display()),
-        })?;
-        file.seek(SeekFrom::Start(offset))
-            .map_err(|e| Error::Model {
-                message: format!("checkpoint tensor seek '{}': {e}", slice.path.display()),
-            })?;
-        let mut payload_bytes = vec![0u8; bytes as usize];
-        file.read_exact(&mut payload_bytes)
-            .map_err(|e| Error::Model {
-                message: format!("checkpoint tensor read '{}': {e}", slice.path.display()),
-            })?;
+        // This legacy convenience API binds to the current generation. Bound
+        // consumers use a catalog-backed plan/session instead of recapturing.
+        let source = CheckpointSourceFileIdentity::capture(&slice.path)?;
+        let payload_bytes = if bytes == 0 {
+            Vec::new()
+        } else {
+            let plan = CheckpointReadPlan::new(
+                [CheckpointReadExtent::new(
+                    slice.path.clone(),
+                    offset,
+                    bytes,
+                )?],
+                Arc::<[CheckpointSourceFileIdentity]>::from([source]),
+            )?;
+            self.verified_read_session(&plan)?.read()?
+        };
         let mut range_slice = slice.clone();
         range_slice.offset = offset;
         range_slice.bytes = bytes;

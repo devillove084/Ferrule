@@ -105,6 +105,7 @@ fn generic_default_program_rejects_tp2_before_factory_but_retains_non_tp_pp() {
                 let description = PipelineStageDescription {
                     plan: plan.clone(),
                     config: config(),
+                    physical_pages: config().max_pages,
                     hidden: 4,
                     vocabulary: 4,
                     kv_heads: 1,

@@ -115,6 +115,8 @@ pub fn cmd_bench_interactive(
             output_head_chunk_rows,
             expert_reader_max_tensor_mebibytes: 64,
             expert_cache: ExpertCacheOptions::default(),
+            qwen35_moe_capacity: None,
+            qwen35_host_cache: None,
             moe_hotset_experts,
             kv_cache_mebibytes: None,
             scheduler_config: single_sequence_scheduler_config(prefill_chunk_size),

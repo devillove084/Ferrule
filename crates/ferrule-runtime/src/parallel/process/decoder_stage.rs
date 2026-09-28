@@ -76,7 +76,7 @@ pub(super) fn prepare(
         let backend = match ferrule_model::decoder::CudaPagedKvPool::from_strategy(
             Rc::clone(&ops),
             &planes,
-            stage_boot.config.max_pages,
+            stage_boot.physical_pages,
         ) {
             Ok(pool) => PagedKvBackend::new(pool),
             Err(e) => {

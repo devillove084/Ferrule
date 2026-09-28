@@ -1,14 +1,9 @@
 //! Logical packed-row identity for standard TP. No physical KV slots, sequence
 //! topology IDs, device pointers or rank-local execution indices participate.
 
-use std::ops::Range;
-
-use ferrule_common::execution::{
-    ExecutionIntent, ForwardMode, ForwardPhase, KvCowReplacement, KvPageId, KvWriteSlot,
-};
 use ferrule_common::{ParallelRankId, Result};
 use ferrule_model::TensorRole;
-use ferrule_model::decoder::{KvCommitBinding, LogitsPlan, PackedDecoderBatch};
+use ferrule_model::decoder::{KvCommitBinding, PackedDecoderBatch};
 use ferrule_model::transformer::parallel::{
     TensorParallelLinearPartition, TensorParallelLinearPlan,
 };
@@ -20,36 +15,11 @@ use super::{PipelineExecutionContext, PipelineStageProgram, error};
 use crate::parallel::collective::HostCollectiveKind;
 use crate::parallel::tensor::decoder_collective::DecoderTensorCollectiveControl;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct LogicalSequence {
-    session: u64,
-    generation: u64,
-    phase: ForwardPhase,
-    query: Range<usize>,
-    context_len: usize,
-    sequence_len: usize,
-    block_table: Vec<KvPageId>,
-}
-
-/// Exact identity, not a hash. Logical page IDs/write slots are included, but
-/// physical pool-slot mappings and owner-local sequence generations are not.
+/// Binding plus the model's exact logical identity, never a weak commit projection.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TensorBatchIdentity {
     binding: KvCommitBinding,
-    intent: ExecutionIntent,
-    mode: ForwardMode,
-    page_size: usize,
-    tokens: Vec<u32>,
-    positions: Vec<usize>,
-    logical_write_slots: Vec<KvWriteSlot>,
-    sequences: Vec<LogicalSequence>,
-    row_to_sequence: Vec<usize>,
-    sequence_major_rows: Vec<usize>,
-    new_pages: Vec<KvPageId>,
-    writable_pages: Vec<KvPageId>,
-    protected_pages: Vec<KvPageId>,
-    cow: Vec<KvCowReplacement>,
-    logits: LogitsPlan,
+    logical: ferrule_model::decoder::LogicalExecutionIdentity,
 }
 impl TensorBatchIdentity {
     pub fn from_packed(
@@ -57,47 +27,25 @@ impl TensorBatchIdentity {
         batch: &PackedDecoderBatch,
         sessions: &[u64],
     ) -> Result<Self> {
-        if batch.is_empty() || sessions.len() != batch.sequences().len() {
-            return Err(error(
-                "tensor batch identity requires the exact packed session order",
-            ));
-        }
-        Ok(Self {
+        Ok(Self::from_logical(
+            binding,
+            batch.logical_execution_identity(sessions)?,
+        ))
+    }
+    pub fn from_logical(
+        binding: &KvCommitBinding,
+        logical: ferrule_model::decoder::LogicalExecutionIdentity,
+    ) -> Self {
+        Self {
             binding: binding.clone(),
-            intent: batch.intent(),
-            mode: batch.mode(),
-            page_size: batch.page_size(),
-            tokens: batch.token_ids().to_vec(),
-            positions: batch.positions().to_vec(),
-            logical_write_slots: batch.write_slots().to_vec(),
-            sequences: batch
-                .sequences()
-                .iter()
-                .zip(sessions)
-                .map(|(sequence, &session)| LogicalSequence {
-                    session,
-                    generation: sequence.page_generation(),
-                    phase: sequence.phase(),
-                    query: sequence.query(),
-                    context_len: sequence.context_len(),
-                    sequence_len: sequence.sequence_len(),
-                    block_table: sequence.block_table().to_vec(),
-                })
-                .collect(),
-            row_to_sequence: batch.row_to_sequence().to_vec(),
-            sequence_major_rows: batch.sequence_major_rows().to_vec(),
-            new_pages: batch.new_pages().to_vec(),
-            writable_pages: batch.writable_pages().to_vec(),
-            protected_pages: batch.protected_pages().to_vec(),
-            cow: batch.cow_replacements().to_vec(),
-            logits: batch.logits_plan().clone(),
-        })
+            logical,
+        }
     }
     pub fn binding(&self) -> &KvCommitBinding {
         &self.binding
     }
     pub fn rows(&self) -> usize {
-        self.tokens.len()
+        self.logical.rows()
     }
 }
 
@@ -226,8 +174,8 @@ mod tests {
     use crate::parallel::collective::HostCollectiveLimits;
     use crate::parallel::tensor::decoder_collective::DecoderTensorCollective;
     use ferrule_common::execution::{
-        ExecutionBatch, ExecutionSequence, ExecutionTransactionId, KvBlockId, KvReservationView,
-        LogitsRequest, StateSlot,
+        ExecutionBatch, ExecutionSequence, ExecutionTransactionId, ForwardMode, ForwardPhase,
+        KvBlockId, KvReservationView, KvWriteSlot, LogitsRequest, StateSlot,
     };
     use ferrule_common::{
         ParallelGroupId, ParallelTopologyId, ParallelismPlan, ValidatedParallelTopology,
@@ -263,9 +211,10 @@ mod tests {
         )
         .unwrap()
     }
-    fn packed(phase: ForwardPhase, local_slot: u32, generation: u64) -> PackedDecoderBatch {
-        let description = super::super::PipelineStageDescription {
+    fn description() -> super::super::PipelineStageDescription {
+        super::super::PipelineStageDescription {
             plan: LayerSegmentPlan::new(1, 0..1, true, true).unwrap(),
+            physical_pages: 8,
             config: super::super::PipelineConfig {
                 page_size: 2,
                 max_pages: 8,
@@ -281,7 +230,10 @@ mod tests {
             kv_heads: 1,
             head_dim: 2,
             expert_group: None,
-        };
+        }
+    }
+    fn packed(phase: ForwardPhase, local_slot: u32, generation: u64) -> PackedDecoderBatch {
+        let description = description();
         let batch = ExecutionBatch::new(
             if phase == ForwardPhase::Prefill {
                 ForwardMode::Prefill
@@ -425,8 +377,95 @@ mod tests {
             assert_ne!(actual, expected);
         }
     }
+    fn changed_logical_identities() -> Vec<ferrule_model::decoder::LogicalExecutionIdentity> {
+        use ferrule_common::execution::ExecutionIntent;
+        use ferrule_model::decoder::{DecoderKvPageSnapshot, LogicalExecutionIdentity};
+        let mut changed = Vec::new();
+        for axis in 0..7 {
+            let packed = packed(ForwardPhase::Decode, 0, 5);
+            let mut metadata = super::super::PipelinePreparedProjection::from_packed(
+                &packed,
+                vec![DecoderKvPageSnapshot {
+                    page: ferrule_common::execution::KvPageId(7),
+                    status: DecoderKvPageStatus::Resident,
+                }],
+            )
+            .unwrap();
+            let batch = &metadata.batch;
+            let mut tokens = batch.token_ids().to_vec();
+            let mut positions = batch.positions().to_vec();
+            let mut writes = batch.kv_write_slots().to_vec();
+            let mut logits = batch.logits().to_vec();
+            let mut sequences = batch.sequences().to_vec();
+            let mut blocks = batch.kv_block_ids().to_vec();
+            let mut mode = batch.mode();
+            let mut intent = batch.intent();
+            let mut status = DecoderKvPageStatus::Resident;
+            match axis {
+                0 => tokens[0] = 2,
+                1 => {
+                    mode = ForwardMode::Prefill;
+                    sequences[0].phase = ForwardPhase::Prefill;
+                    intent = ExecutionIntent::ProvisionalVerification;
+                }
+                2 => logits[0] = LogitsRequest::None,
+                3 => {
+                    blocks[0] = KvBlockId::new(8);
+                    writes[0] = Some(KvWriteSlot::new(17));
+                }
+                4 => metadata.reservation.state_slot = StateSlot::new(10),
+                5 => {
+                    positions[0] = 0;
+                    writes[0] = Some(KvWriteSlot::new(14));
+                    sequences[0].context_len = 0;
+                    sequences[0].sequence_len = 1;
+                    metadata.reservation.positions = 0..1;
+                    metadata.reservation.newly_allocated =
+                        vec![ferrule_common::execution::KvPageId(7)];
+                    status = DecoderKvPageStatus::Vacant;
+                }
+                6 => {
+                    mode = ForwardMode::Prefill;
+                    sequences[0].phase = ForwardPhase::Prefill;
+                    tokens.push(2);
+                    positions.push(2);
+                    writes.push(Some(KvWriteSlot::new(16)));
+                    logits.push(LogitsRequest::Full);
+                    sequences[0].query = 0..2;
+                    sequences[0].sequence_len = 3;
+                    sequences[0].block_table = 0..2;
+                    blocks.push(KvBlockId::new(8));
+                    metadata.reservation.positions = 1..3;
+                    metadata.reservation.newly_allocated =
+                        vec![ferrule_common::execution::KvPageId(8)];
+                }
+                _ => unreachable!(),
+            }
+            let input =
+                ExecutionBatch::new(mode, tokens, positions, writes, logits, sequences, blocks)
+                    .with_intent(intent);
+            changed.push(
+                LogicalExecutionIdentity::validate(
+                    &input,
+                    &[metadata.reservation],
+                    &description().execution_capabilities().unwrap(),
+                    2,
+                    &|page: ferrule_common::execution::KvPageId| {
+                        if axis == 6 && page.0 == 8 {
+                            DecoderKvPageStatus::Vacant
+                        } else {
+                            status
+                        }
+                    },
+                    &[11],
+                )
+                .unwrap(),
+            );
+        }
+        changed
+    }
     #[test]
-    fn sealed_cohort_rejects_every_logical_layout_axis_and_kv_binding_change() {
+    fn sealed_cohort_rejects_strong_logical_identity_and_kv_binding_change() {
         let original = identity();
         let mut variants = Vec::new();
         let mut change = |mutate: fn(&mut TensorBatchIdentity)| {
@@ -434,18 +473,21 @@ mod tests {
             mutate(&mut value);
             variants.push(value);
         };
-        change(|x| x.tokens[0] = 2);
-        change(|x| x.positions[0] = 0);
-        change(|x| x.mode = ForwardMode::Prefill);
-        change(|x| x.sequences[0].phase = ForwardPhase::Prefill);
-        change(|x| x.sequences[0].generation += 1);
-        change(|x| x.sequences[0].context_len = 0);
-        change(|x| x.sequences[0].query = 1..2);
-        change(|x| x.sequences[0].session = 12);
-        change(|x| x.row_to_sequence[0] = 1);
-        change(|x| x.sequence_major_rows[0] = 1);
-        change(|x| x.logical_write_slots[0] = KvWriteSlot::new(14));
-        change(|x| x.sequences[0].block_table[0] = KvPageId(8));
+        change(|x| {
+            x.logical = packed(ForwardPhase::Prefill, 0, 5)
+                .logical_execution_identity(&[11])
+                .unwrap()
+        });
+        change(|x| {
+            x.logical = packed(ForwardPhase::Decode, 0, 6)
+                .logical_execution_identity(&[11])
+                .unwrap()
+        });
+        change(|x| {
+            x.logical = packed(ForwardPhase::Decode, 0, 5)
+                .logical_execution_identity(&[12])
+                .unwrap()
+        });
         change(|x| {
             x.binding = KvCommitBinding::new(
                 tx(1),
@@ -464,6 +506,11 @@ mod tests {
             )
             .unwrap()
         });
+        variants.extend(
+            changed_logical_identities()
+                .into_iter()
+                .map(|logical| TensorBatchIdentity::from_logical(&binding(), logical)),
+        );
         for actual in variants {
             let peers = peers();
             let control = peers[0].control();
@@ -733,6 +780,7 @@ mod tests {
                     let description = PipelineStageDescription {
                         plan,
                         config: cfg,
+                        physical_pages: cfg.max_pages,
                         hidden: 4,
                         vocabulary: 4,
                         kv_heads: 1,

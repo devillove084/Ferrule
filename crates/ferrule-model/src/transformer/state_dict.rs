@@ -453,6 +453,63 @@ impl BoundParameter {
         self.storage.scale.as_ref()
     }
 
+    /// Inspect physical dtypes only; no family/profile inference or payload I/O.
+    /// The returned encoding is a candidate: `numeric_fp8_source` validates the
+    /// complete shape, transform, range and paired source-identity contract.
+    pub fn numeric_fp8_encoding(&self) -> Option<crate::checkpoint::NumericFp8Encoding> {
+        use crate::checkpoint::NumericFp8Encoding;
+        if self.weight().slice().dtype != CheckpointDType::F8E4M3 {
+            return None;
+        }
+        match self.scale()?.slice().dtype {
+            CheckpointDType::Bf16 => Some(NumericFp8Encoding::E4M3FnBlock128Bf16),
+            CheckpointDType::F32 => Some(NumericFp8Encoding::E4M3FnBlock128F32),
+            _ => None,
+        }
+    }
+
+    /// Explicit numeric FP8 binding, separate from native E8M0 storage. The
+    /// schema uses physical FP8 and required dense BF16/F32 scale specs; this
+    /// validates their paired block contract without reading either payload.
+    /// Layout transforms must be handled explicitly by an adapter, not silently
+    /// reinterpreted as row-major block scales.
+    pub fn numeric_fp8_source(
+        &self,
+        encoding: crate::checkpoint::NumericFp8Encoding,
+    ) -> ferrule_common::Result<crate::checkpoint::NumericFp8Source> {
+        let source = self.numeric_fp8_source_metadata(encoding)?;
+        source.validate_source_identity()?;
+        Ok(source)
+    }
+
+    pub(crate) fn numeric_fp8_source_metadata(
+        &self,
+        encoding: crate::checkpoint::NumericFp8Encoding,
+    ) -> ferrule_common::Result<crate::checkpoint::NumericFp8Source> {
+        let invalid = |message: &str| ferrule_common::Error::Model {
+            message: format!("numeric FP8 parameter '{}': {message}", self.path()),
+        };
+        let scale = self
+            .scale()
+            .ok_or_else(|| invalid("missing numeric scale"))?;
+        if self.weight().transform() != &TensorTransform::Identity
+            || scale.transform() != &TensorTransform::Identity
+            || self.weight().encoding() != StorageEncoding::Dense
+            || scale.encoding() != StorageEncoding::Dense
+        {
+            return Err(invalid(
+                "requires untransformed physical storage, not native E8M0 encoding",
+            ));
+        }
+        crate::checkpoint::NumericFp8Source::from_metadata(
+            self.weight().slice().clone(),
+            scale.slice().clone(),
+            encoding,
+            self.weight().source_identity().clone(),
+            scale.source_identity().clone(),
+        )
+    }
+
     pub fn is_alias(&self) -> bool {
         self.id() != self.canonical_id
     }

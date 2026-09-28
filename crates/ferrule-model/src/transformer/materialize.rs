@@ -8,6 +8,7 @@ use ferrule_common::{Error, ParallelRankId, Result};
 
 use crate::checkpoint::{
     CheckpointDType, CheckpointTensorPayload, CheckpointTensorReader, LinearWeight,
+    NumericFp8Artifact,
 };
 use crate::nn::{ParameterId, ParameterResidency};
 use crate::support::TensorRole;
@@ -184,17 +185,39 @@ impl<R, O, A> PreparedDecoder<R, O, A> {
 #[derive(Debug, Clone)]
 pub struct PreparedParameter {
     binding: BoundParameter,
-    weight: PreparedParameterWeight,
+    weight: PreparedParameterStorage,
     scale: Option<CheckpointTensorPayload>,
 }
 
+/// Physical parameter storage. Numeric FP8 is a paired compressed artifact,
+/// never a dense float payload or a native exponent-only E8M0 linear.
 #[derive(Debug, Clone)]
-enum PreparedParameterWeight {
+pub enum PreparedParameterStorage {
     Full(CheckpointTensorPayload),
     Tensor(Arc<TensorParallelWeightShard>),
+    NumericFp8(Arc<NumericFp8Artifact>),
 }
 
 impl PreparedParameter {
+    pub(crate) fn from_host_numeric(binding: BoundParameter, artifact: NumericFp8Artifact) -> Self {
+        Self {
+            binding,
+            weight: PreparedParameterStorage::NumericFp8(Arc::new(artifact)),
+            scale: None,
+        }
+    }
+
+    pub fn storage(&self) -> &PreparedParameterStorage {
+        &self.weight
+    }
+
+    pub fn numeric_fp8(&self) -> Option<&NumericFp8Artifact> {
+        match &self.weight {
+            PreparedParameterStorage::NumericFp8(artifact) => Some(artifact),
+            _ => None,
+        }
+    }
+
     pub fn binding(&self) -> &BoundParameter {
         &self.binding
     }
@@ -214,8 +237,9 @@ impl PreparedParameter {
     /// Packed TP rectangles have no contiguous on-disk tensor slice.
     pub fn weight(&self) -> Result<&CheckpointTensorPayload> {
         match &self.weight {
-            PreparedParameterWeight::Full(weight) => Ok(weight),
-            PreparedParameterWeight::Tensor(_) => Err(model_error(
+            PreparedParameterStorage::Full(weight) => Ok(weight),
+            PreparedParameterStorage::NumericFp8(_) => Err(numeric_unsupported("parameter.weight")),
+            PreparedParameterStorage::Tensor(_) => Err(model_error(
                 "TP parameter requires its typed rank-local shard",
             )),
         }
@@ -223,19 +247,22 @@ impl PreparedParameter {
 
     pub fn tensor_shard(&self) -> Option<&TensorParallelWeightShard> {
         match &self.weight {
-            PreparedParameterWeight::Tensor(shard) => Some(shard),
-            PreparedParameterWeight::Full(_) => None,
+            PreparedParameterStorage::Tensor(shard) => Some(shard),
+            PreparedParameterStorage::Full(_) | PreparedParameterStorage::NumericFp8(_) => None,
         }
     }
 
+    /// Legacy contiguous scale payload. Numeric scales live exclusively in the
+    /// paired `numeric_fp8()` artifact; `None` does not imply unscaled storage.
     pub fn scale(&self) -> Option<&CheckpointTensorPayload> {
         self.scale.as_ref()
     }
 
     pub fn values_f32(&self) -> Result<Vec<f32>> {
         match &self.weight {
-            PreparedParameterWeight::Full(weight) => decode_float_payload(weight),
-            PreparedParameterWeight::Tensor(shard) => shard.values_f32(),
+            PreparedParameterStorage::Full(weight) => decode_float_payload(weight),
+            PreparedParameterStorage::Tensor(shard) => shard.values_f32(),
+            PreparedParameterStorage::NumericFp8(_) => Err(numeric_unsupported("values_f32")),
         }
     }
 
@@ -334,12 +361,23 @@ impl PreparedParameter {
     }
 }
 
-/// Global linear descriptor with a full matrix or a typed rank-local payload.
-/// Feature counts stay global; TP operators use `tensor_shard().local_shape()`.
+/// Discriminate storage before backend binding. `Native` preserves all legacy
+/// BF16/F32/E8M0/FP4 contracts. Numeric FP8 has no implicit native/CPU conversion.
+#[derive(Debug, Clone)]
+pub enum PreparedLinearStorage {
+    Native(LinearWeight),
+    Tensor(Arc<TensorParallelWeightShard>),
+    NumericFp8(Arc<NumericFp8Artifact>),
+}
+
+/// Global linear descriptor with native, rank-local, or compressed numeric storage.
+/// Feature counts stay global; numeric layout and paired provenance live in
+/// `numeric_fp8()`. Creating a numeric linear never constructs `LinearWeight`.
+/// Expert payloads are owned only by returned handles, not a materializer cache.
 #[derive(Debug, Clone)]
 pub struct PreparedLinear {
     parameter: Arc<PreparedParameter>,
-    weight: Option<LinearWeight>,
+    storage: PreparedLinearStorage,
     role: TensorRole,
     bias: Option<Arc<[f32]>>,
 }
@@ -351,17 +389,25 @@ impl PreparedLinear {
                 "TP linear cannot reinterpret a shard as another role",
             ));
         }
-        let weight = match &parameter.weight {
-            PreparedParameterWeight::Full(weight) => Some(LinearWeight::from_weight_and_scale(
-                role.clone(),
-                weight.clone(),
-                parameter.scale.clone(),
-            )?),
-            PreparedParameterWeight::Tensor(_) => None,
+        let storage = match &parameter.weight {
+            PreparedParameterStorage::Full(weight) => {
+                PreparedLinearStorage::Native(LinearWeight::from_weight_and_scale(
+                    role.clone(),
+                    weight.clone(),
+                    parameter.scale.clone(),
+                )?)
+            }
+            PreparedParameterStorage::Tensor(shard) => {
+                PreparedLinearStorage::Tensor(Arc::clone(shard))
+            }
+            PreparedParameterStorage::NumericFp8(artifact) => {
+                artifact.provenance().source().validate_source_identity()?;
+                PreparedLinearStorage::NumericFp8(Arc::clone(artifact))
+            }
         };
         Ok(Self {
             parameter,
-            weight,
+            storage,
             role,
             bias: None,
         })
@@ -389,9 +435,22 @@ impl PreparedLinear {
     }
 
     pub fn weight(&self) -> Result<&LinearWeight> {
-        self.weight
-            .as_ref()
-            .ok_or_else(|| model_error("TP linear requires rank-local operators and collectives"))
+        match &self.storage {
+            PreparedLinearStorage::Native(weight) => Ok(weight),
+            PreparedLinearStorage::Tensor(_) => Err(model_error(
+                "TP linear requires rank-local operators and collectives",
+            )),
+            PreparedLinearStorage::NumericFp8(_) => Err(numeric_unsupported("linear")),
+        }
+    }
+
+    /// Backend dispatch must discriminate here before calling legacy `weight()`.
+    pub fn storage(&self) -> &PreparedLinearStorage {
+        &self.storage
+    }
+
+    pub fn numeric_fp8(&self) -> Option<&NumericFp8Artifact> {
+        self.parameter.numeric_fp8()
     }
 
     pub fn role(&self) -> &TensorRole {
@@ -406,27 +465,28 @@ impl PreparedLinear {
         self.bias.as_deref()
     }
 
+    /// Global [out_features, in_features], never a packed byte/scale shape.
+    pub fn global_shape(&self) -> [usize; 2] {
+        [self.out_features(), self.in_features()]
+    }
+
     pub fn in_features(&self) -> usize {
-        match self.tensor_shard() {
-            Some(shard) => shard.full_shape()[1],
-            None => self
-                .weight
-                .as_ref()
-                .expect("full linear")
-                .format
-                .in_features(),
+        match &self.storage {
+            PreparedLinearStorage::Native(weight) => weight.format.in_features(),
+            PreparedLinearStorage::Tensor(shard) => shard.full_shape()[1],
+            PreparedLinearStorage::NumericFp8(artifact) => {
+                artifact.provenance().source().matrix_shape()[1]
+            }
         }
     }
 
     pub fn out_features(&self) -> usize {
-        match self.tensor_shard() {
-            Some(shard) => shard.full_shape()[0],
-            None => self
-                .weight
-                .as_ref()
-                .expect("full linear")
-                .format
-                .out_features(),
+        match &self.storage {
+            PreparedLinearStorage::Native(weight) => weight.format.out_features(),
+            PreparedLinearStorage::Tensor(shard) => shard.full_shape()[0],
+            PreparedLinearStorage::NumericFp8(artifact) => {
+                artifact.provenance().source().matrix_shape()[0]
+            }
         }
     }
 }
@@ -662,6 +722,7 @@ pub struct StateDictMaterializer {
     static_parameters: Mutex<BTreeMap<ParameterId, Arc<PreparedParameter>>>,
     tensor: Option<(StandardTensorPlan, ParallelRankId)>,
     tensor_reads: Mutex<Vec<TensorParallelPreparationRead>>,
+    host_experts: OnceLock<Arc<super::host_experts::HostExpertCache>>,
 }
 
 impl StateDictMaterializer {
@@ -675,7 +736,23 @@ impl StateDictMaterializer {
             static_parameters: Mutex::new(BTreeMap::new()),
             tensor: None,
             tensor_reads: Mutex::new(Vec::new()),
+            host_experts: OnceLock::new(),
         })
+    }
+
+    /// Bind the exact resource image's single host residency authority. Repeated
+    /// layer preparation may share it; mixing images is never a cache miss.
+    pub fn attach_host_experts(
+        &self,
+        cache: &Arc<super::host_experts::HostExpertCache>,
+    ) -> Result<()> {
+        let installed = self.host_experts.get_or_init(|| Arc::clone(cache));
+        if self.tensor.is_some() || !Arc::ptr_eq(installed, cache) {
+            return Err(model_error(
+                "host expert cache belongs to another materializer image/profile",
+            ));
+        }
+        Ok(())
     }
 
     /// Projection payloads use checkpoint rectangles, never the replicated cache.
@@ -692,6 +769,23 @@ impl StateDictMaterializer {
         Ok(materializer)
     }
 
+    /// Materialize raw numeric FP8 storage for a bounded row/tile/expert view.
+    /// Both parts count against the parameter budget; this never installs a
+    /// native E8M0 linear or expands the complete parameter to F32.
+    pub fn numeric_fp8_tile(
+        &self,
+        binding: &BoundParameter,
+        encoding: crate::checkpoint::NumericFp8Encoding,
+        expert: Option<usize>,
+        rows: std::ops::Range<usize>,
+        columns: std::ops::Range<usize>,
+    ) -> Result<crate::checkpoint::NumericFp8Artifact> {
+        binding
+            .numeric_fp8_source(encoding)?
+            .plan_tile(&self.reader, expert, rows, columns)?
+            .read(&self.reader)
+    }
+
     pub fn tensor_reads(&self) -> Result<Vec<TensorParallelPreparationRead>> {
         self.tensor_reads
             .lock()
@@ -699,6 +793,9 @@ impl StateDictMaterializer {
             .map_err(|_| model_error("TP read accounting is poisoned"))
     }
 
+    /// Materialize one linear on demand. Physical FP8 + BF16/F32 scale dtypes
+    /// select compressed numeric storage, independently of model family. Static
+    /// aliases may share it; expert/attachment/noncached layer reads are per call.
     pub fn prepared_linear(
         &self,
         binding: &BoundParameter,
@@ -727,7 +824,7 @@ impl StateDictMaterializer {
         PreparedLinear::from_parameter(
             Arc::new(PreparedParameter {
                 binding: binding.clone(),
-                weight: PreparedParameterWeight::Tensor(Arc::new(shard)),
+                weight: PreparedParameterStorage::Tensor(Arc::new(shard)),
                 scale: None,
             }),
             role,
@@ -755,9 +852,16 @@ impl StateDictMaterializer {
         self.max_parameter_bytes
     }
 
+    pub fn checkpoint_read_counters(&self) -> crate::checkpoint::CheckpointReadCounters {
+        self.reader.read_counters()
+    }
+
     /// Materialize one bound parameter as a typed linear weight. Family
     /// execution policies are applied by the caller, not here.
     pub fn linear(&self, binding: &BoundParameter) -> Result<LinearWeight> {
+        if binding.numeric_fp8_encoding().is_some() {
+            return Err(numeric_unsupported("linear"));
+        }
         let parameter = self.parameter(binding)?;
         LinearWeight::from_weight_and_scale(
             binding.role().clone(),
@@ -805,17 +909,20 @@ impl StateDictMaterializer {
             .get(&canonical)
             .cloned()
         {
-            return Ok(parameter);
+            return numeric_cached_view(binding, parameter);
         }
         let parameter = Arc::new(self.read_parameter(binding)?);
         let mut cache = self
             .static_parameters
             .lock()
             .map_err(|_| model_error("static parameter cache is poisoned"))?;
-        Ok(cache
-            .entry(canonical)
-            .or_insert_with(|| Arc::clone(&parameter))
-            .clone())
+        numeric_cached_view(
+            binding,
+            cache
+                .entry(canonical)
+                .or_insert_with(|| Arc::clone(&parameter))
+                .clone(),
+        )
     }
 
     pub fn layer_parameter(
@@ -833,7 +940,7 @@ impl StateDictMaterializer {
         }
         self.validate_full_read(binding)?;
         if let Some(parameter) = cache.get(binding.canonical_id()) {
-            return Ok(parameter);
+            return numeric_cached_view(binding, parameter);
         }
         let parameter = Arc::new(self.read_parameter(binding)?);
         cache.insert(Arc::clone(&parameter));
@@ -874,6 +981,21 @@ impl StateDictMaterializer {
                 binding.path(),
                 binding.residency()
             )));
+        }
+        if let Some(cache) = self.host_experts.get() {
+            // Content proof is immutable, but direct materializer callers still
+            // need a freshness boundary. GPU metadata hits never enter here.
+            let parameter = cache.parameter(binding)?;
+            let artifact = parameter
+                .numeric_fp8()
+                .expect("host residency is numeric FP8");
+            if artifact.storage_bytes() > self.max_parameter_bytes {
+                return Err(model_error(
+                    "cached expert exceeds materializer read budget",
+                ));
+            }
+            artifact.provenance().source().validate_source_identity()?;
+            return Ok(parameter);
         }
         Ok(Arc::new(self.read_parameter(binding)?))
     }
@@ -916,6 +1038,23 @@ impl StateDictMaterializer {
         if let Some(scale) = binding.scale() {
             ensure_current(scale, binding)?;
         }
+        if let Some(encoding) = binding.numeric_fp8_encoding() {
+            let source = binding.numeric_fp8_source(encoding)?;
+            if source.expert_count().is_some() {
+                return Err(model_error(
+                    "a prepared numeric linear requires one 2D matrix; select a stacked expert with numeric_fp8_tile",
+                ));
+            }
+            let [rows, columns] = source.matrix_shape();
+            let artifact = source
+                .plan_tile(&self.reader, None, 0..rows, 0..columns)?
+                .read(&self.reader)?;
+            return Ok(PreparedParameter {
+                binding: binding.clone(),
+                weight: PreparedParameterStorage::NumericFp8(Arc::new(artifact)),
+                scale: None,
+            });
+        }
         let mut weight = read_transformed(&self.reader, binding.weight())?;
         weight.slice.role = binding.role().clone();
         let scale = binding
@@ -944,10 +1083,44 @@ impl StateDictMaterializer {
         }
         Ok(PreparedParameter {
             binding: binding.clone(),
-            weight: PreparedParameterWeight::Full(weight),
+            weight: PreparedParameterStorage::Full(weight),
             scale,
         })
     }
+}
+
+fn numeric_unsupported(operation: &'static str) -> Error {
+    Error::ModelSource {
+        source: Box::new(super::UnsupportedOperator::new(
+            operation,
+            "numeric FP8 requires a compressed-storage backend; use numeric_fp8().decode_f32(output_budget) only as an explicit CPU oracle",
+        )),
+    }
+}
+
+fn numeric_cached_view(
+    binding: &BoundParameter,
+    parameter: Arc<PreparedParameter>,
+) -> Result<Arc<PreparedParameter>> {
+    if parameter.numeric_fp8().is_some() || binding.numeric_fp8_encoding().is_some() {
+        if !binding.shares_storage_with(parameter.binding()) {
+            return Err(model_error(
+                "numeric FP8 cache entry belongs to another state dict",
+            ));
+        }
+        ensure_current(binding.weight(), binding)?;
+        if let Some(scale) = binding.scale() {
+            ensure_current(scale, binding)?;
+        }
+        if binding.id() != parameter.binding().id() {
+            return Ok(Arc::new(PreparedParameter {
+                binding: binding.clone(),
+                weight: parameter.weight.clone(),
+                scale: parameter.scale.clone(),
+            }));
+        }
+    }
+    Ok(parameter)
 }
 
 fn ensure_current(part: &BoundTensorPart, binding: &BoundParameter) -> Result<()> {

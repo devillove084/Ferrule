@@ -13,8 +13,8 @@
 
 use super::{CudaF32Buffer, CudaOperators};
 use crate::cuda::ffi::core::{
-    ConvArgs, DATA_QUERY_GATE_SPLIT, DATA_SIGMOID_GATE, DATA_SILU_GATE, DataArgs, DeltaArgs,
-    NORM_OFFSET_AFFINE_F32, NormArgs,
+    ConvArgs, DATA_GATE_ROW_BROADCAST, DATA_QUERY_GATE_SPLIT, DATA_SIGMOID_GATE, DATA_SILU_GATE,
+    DataArgs, DeltaArgs, NORM_OFFSET_AFFINE_F32, NormArgs,
 };
 use ferrule_common::{Error, Result};
 
@@ -157,6 +157,46 @@ impl F32RowsLayout {
     }
     pub fn elements(self) -> Result<usize> {
         elements(&[self.rows, self.width])
+    }
+}
+
+/// Gate indexing for packed F32 input/output `[rows,width]`.
+/// Read inputs may alias each other; output must be disjoint from both reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum F32GateLayout {
+    /// One gate logit per input element: gate `[rows,width]`.
+    Elementwise(F32RowsLayout),
+    /// One gate logit per row: gate `[rows,1]`, broadcast over width.
+    RowBroadcast(F32RowsLayout),
+}
+
+impl From<F32RowsLayout> for F32GateLayout {
+    fn from(rows: F32RowsLayout) -> Self {
+        Self::Elementwise(rows)
+    }
+}
+
+impl F32GateLayout {
+    pub const fn rows_layout(self) -> F32RowsLayout {
+        match self {
+            Self::Elementwise(rows) | Self::RowBroadcast(rows) => rows,
+        }
+    }
+
+    pub fn validate(self) -> Result<()> {
+        self.rows_layout().validate()
+    }
+
+    pub fn input_elements(self) -> Result<usize> {
+        self.rows_layout().elements()
+    }
+
+    pub fn gate_elements(self) -> Result<usize> {
+        let len = self.input_elements()?;
+        Ok(match self {
+            Self::Elementwise(_) => len,
+            Self::RowBroadcast(rows) => rows.rows,
+        })
     }
 }
 
@@ -307,6 +347,13 @@ impl CudaOperators {
     }
 
     /// output = input * activation(gate), all F32; not a fused normalization.
+    /// Passing `F32RowsLayout` retains elementwise gating. Use
+    /// `F32GateLayout::RowBroadcast(rows)` for `[rows,1]` gate logits.
+    ///
+    /// Shape/owner/disjoint-write checks precede launch. Exactly one kernel is
+    /// enqueued, without allocations, copies, or synchronization. No host-side
+    /// finite-value scan or clamping: NaN/Inf follow the same arithmetic as the
+    /// original elementwise sigmoid/SiLU kernel (including Inf * 0 -> NaN).
     /// DeltaNet gated norm uses ordinary rms_norm_f32_into then Silu here;
     /// it must NOT use the offset RMSNorm variant.
     pub fn elementwise_gate_f32_into(
@@ -314,12 +361,15 @@ impl CudaOperators {
         input: &CudaF32Buffer,
         gate: &CudaF32Buffer,
         output: &mut CudaF32Buffer,
-        layout: F32RowsLayout,
+        layout: impl Into<F32GateLayout>,
         activation: GateActivation,
     ) -> Result<()> {
-        let len = layout.elements()?;
+        let layout = layout.into();
+        let len = layout.input_elements()?;
+        let gate_len = layout.gate_elements()?;
+        let rows = layout.rows_layout();
         self.recurrent_buffer(input, len, "gate input")?;
-        self.recurrent_buffer(gate, len, "gate logits")?;
+        self.recurrent_buffer(gate, gate_len, "gate logits")?;
         self.recurrent_buffer(output, len, "gate output")?;
         Self::recurrent_no_alias(&[input, gate], &[output])?;
         let args = DataArgs {
@@ -328,6 +378,12 @@ impl CudaOperators {
                 GateActivation::Silu => DATA_SILU_GATE,
             },
             count: len as u32,
+            rows: rows.rows as u32,
+            width: rows.width as u32,
+            flags: match layout {
+                F32GateLayout::Elementwise(_) => 0,
+                F32GateLayout::RowBroadcast(_) => DATA_GATE_ROW_BROADCAST,
+            },
             input0: input.buffer.cu_deviceptr(),
             input1: gate.buffer.cu_deviceptr(),
             output0: output.buffer.cu_deviceptr(),
@@ -364,5 +420,116 @@ impl CudaOperators {
             ..Default::default()
         };
         self.launched(unsafe { self.module.standard_norm(&self.stream, args) })
+    }
+}
+
+#[cfg(test)]
+mod gate_tests {
+    use super::*;
+
+    #[test]
+    #[ignore = "requires actual CUDA GPU; checked allocation views, no fabricated Rust aliases"]
+    fn row_broadcast_gate_rejects_write_aliases_but_allows_read_aliases() {
+        let op = CudaOperators::new_on_device(0).unwrap();
+        let storage = op.upload_f32_buffer(&[0.37; 64]).unwrap();
+        let layout = F32GateLayout::RowBroadcast(F32RowsLayout { rows: 3, width: 5 });
+        // Separate typed handles retain the shared allocation and preserve its
+        // owner. This covers future views without creating &/&mut Rust aliases.
+        let view = |offset, len| {
+            CudaF32Buffer::from_device_buffer(storage.buffer.slice(offset, len).unwrap())
+        };
+        for (input_offset, gate_offset, output_offset) in
+            [(0, 32, 0), (0, 32, 1), (0, 32, 31), (0, 32, 34)]
+        {
+            let input = view(input_offset, 15);
+            let gate = view(gate_offset, 3);
+            let mut output = view(output_offset, 15);
+            for activation in [GateActivation::Sigmoid, GateActivation::Silu] {
+                op.reset_counters();
+                let error = op
+                    .elementwise_gate_f32_into(&input, &gate, &mut output, layout, activation)
+                    .unwrap_err();
+                assert!(
+                    error
+                        .to_string()
+                        .contains("overlapping writable buffer ranges")
+                );
+                assert_eq!(op.counters(), Default::default());
+                assert_eq!(op.download_f32_buffer(&storage).unwrap(), vec![0.37; 64]);
+            }
+        }
+        // Read-only input and gate overlap; adjacent output does not overlap.
+        let input = view(0, 15);
+        let gate = view(2, 3);
+        let mut output = view(15, 15);
+        op.reset_counters();
+        op.elementwise_gate_f32_into(&input, &gate, &mut output, layout, GateActivation::Sigmoid)
+            .unwrap();
+        let counters = op.counters();
+        assert_eq!(counters.kernel_launches, 1);
+        assert_eq!(counters.device_allocation_attempts, 0);
+        assert_eq!(counters.device_to_host_copies, 0);
+        assert_eq!(counters.host_to_device_copies, 0);
+        assert_eq!(counters.stream_wide_syncs, 0);
+        let expected = 0.37 / (1.0 + (-0.37f32).exp());
+        assert!(
+            op.download_f32_buffer(&output)
+                .unwrap()
+                .iter()
+                .all(|v| (v - expected).abs() < 1e-6)
+        );
+        assert_eq!(op.download_f32_buffer(&input).unwrap(), vec![0.37; 15]);
+    }
+
+    #[test]
+    fn row_broadcast_native_guard_rejects_invalid_layout_without_launch() {
+        // All cases must fail in the native prelaunch guard, even without a GPU
+        // context. Non-null sentinels must never reach the device kernel.
+        let valid = DataArgs {
+            kind: DATA_SIGMOID_GATE,
+            count: 15,
+            rows: 3,
+            width: 5,
+            flags: DATA_GATE_ROW_BROADCAST,
+            input0: 4,
+            input1: 8,
+            output0: 12,
+            ..Default::default()
+        };
+        for args in [
+            DataArgs { rows: 0, ..valid },
+            DataArgs { width: 0, ..valid },
+            DataArgs { count: 0, ..valid },
+            DataArgs { count: 14, ..valid },
+            DataArgs {
+                rows: u32::MAX,
+                width: u32::MAX,
+                ..valid
+            },
+            DataArgs {
+                count: i32::MAX as u32 + 1,
+                rows: 1,
+                width: i32::MAX as u32 + 1,
+                ..valid
+            },
+            DataArgs {
+                flags: DATA_GATE_ROW_BROADCAST | 2,
+                ..valid
+            },
+            DataArgs { input0: 0, ..valid },
+            DataArgs { input1: 0, ..valid },
+            DataArgs {
+                output0: 0,
+                ..valid
+            },
+        ] {
+            for kind in [DATA_SIGMOID_GATE, DATA_SILU_GATE] {
+                let args = DataArgs { kind, ..args };
+                // SAFETY: invalid descriptors must be rejected before any pointer
+                // access or CUDA launch; this exercises that native ABI contract.
+                let status = unsafe { crate::cuda::ffi::core::ferrule_core_data_launch(&args) };
+                assert_ne!(status, 0);
+            }
+        }
     }
 }

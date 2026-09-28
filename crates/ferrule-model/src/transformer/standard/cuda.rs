@@ -1,6 +1,6 @@
 //! Synchronous, owner-local standard CUDA decoder operators.
 //!
-//! BF16 checkpoints are converted once to resident F32 weights. Activations,
+//! BF16 checkpoints are converted on admission to resident F32 weights. Activations,
 //! KV and logits are genuinely F32; this is NOT BF16 compatibility execution.
 
 mod hybrid;
@@ -8,18 +8,29 @@ mod recurrent;
 pub use hybrid::CudaHybridModule;
 mod binding;
 mod boundary;
+mod diagnostic;
+pub use diagnostic::CudaDiagnosticEvent;
 mod expert;
 mod kv_binding;
+mod numeric_binding;
+mod residency;
 mod stage;
 
+use super::expert_cache::{ExpertCachePolicy, ExpertCacheStats};
 pub use expert::{CudaExpertParallelRoutedExecutor, CudaExpertWorker, CudaHostRoutedExecutor};
 pub use kv_binding::CudaStandardKvBinding;
+pub type NumericWorkspaceStats = numeric_binding::NumericWorkspaceStats;
 pub use stage::CudaStandardDecoderSegment;
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fmt;
 use std::rc::Rc;
 use std::sync::Arc;
+
+use super::expert_cache::{Cache as BoundedExpertCache, ExpertCacheKey};
+use diagnostic::DiagnosticTrace;
+use ferrule_backend::cuda::providers::DeviceBuffer;
+use numeric_binding::NumericState;
 
 use crate::transformer::parallel::{TensorParallelLinearPartition, TensorParallelStagePlan};
 use crate::transformer::{StandardTensorCollective, StandardTensorPlan};
@@ -32,20 +43,38 @@ use crate::execution::ExecutionPrecisionPolicy;
 use crate::transformer::operators::{standard_rope_unsupported, standard_router_unsupported};
 use crate::transformer::{
     BoundParameter, CudaRows, ExpertAvailability, ExpertProvider, GqaRequest, HostRows, KvView,
-    MoeRouterSpec, OperatorProgress, OperatorWaiting, PreparedEmbedding, PreparedLinear,
-    PreparedNorm, PreparedRope, PreparedSwiGlu, RotaryEmbedding, RotaryPairing, RotaryRegion,
-    RouterRoutes, Rows, RowsArenaId, RowsDType, RowsShape, StandardDecoderOperators,
-    UnsupportedOperator,
+    MoeRouterSpec, OperatorProgress, PreparedEmbedding, PreparedLinear, PreparedNorm, PreparedRope,
+    PreparedSwiGlu, RotaryEmbedding, RotaryPairing, RotaryRegion, RouterRoutes, Rows, RowsArenaId,
+    RowsDType, RowsShape, StandardDecoderOperators, UnsupportedOperator,
 };
 
 use binding::Bindings;
 use boundary::Boundary;
+
+/// Owner-local metadata accounting; counters never act as freshness evidence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExpertMetadataPreflightStats {
+    pub prepared_experts: usize,
+    pub source_snapshots: usize,
+    pub preflights: u64,
+    pub source_checks: u64,
+}
 
 pub struct CudaStandardDecoderOperators {
     ops: Rc<CudaOperators>,
     deltas: BTreeMap<usize, recurrent::ResidentDelta>,
     bindings: Bindings,
     experts: BTreeMap<(usize, usize), Arc<PreparedSwiGlu>>,
+    bounded_experts: Option<BoundedExpertCache<ExpertCacheKey>>,
+    expert_hold: Vec<DeviceBuffer<f32>>,
+    route_hold: Vec<DeviceBuffer<f32>>,
+    route_ids: Vec<DeviceBuffer<i32>>,
+    route_scratch_bytes: usize,
+    numeric: Option<NumericState>,
+    diagnostic: DiagnosticTrace,
+    #[cfg(test)]
+    lose_next_consumer_proof: bool,
+
     boundary: Boundary,
     poisoned: bool,
     tensor_collective: Option<Box<dyn StandardTensorCollective>>,
@@ -60,6 +89,7 @@ impl fmt::Debug for CudaStandardDecoderOperators {
             .field("ordinal", &self.ops.device_ordinal())
             .field("generation", &self.bindings.generation)
             .field("resident_bytes", &self.bindings.resident_bytes())
+            .field("expert_cache", &self.expert_cache_stats())
             .field("poisoned", &self.poisoned)
             .finish()
     }
@@ -73,14 +103,68 @@ impl CudaStandardDecoderOperators {
         precision: ExecutionPrecisionPolicy,
         parameters: &[BoundParameter],
     ) -> Result<Self> {
+        Self::new_with_expert_cache(ops, precision, parameters, ExpertCachePolicy::KeepAll)
+    }
+
+    /// Construct an owner with an explicit bounded routed-expert cache. The
+    /// default constructor remains the historical image-local KeepAll policy.
+    ///
+    /// Bounded mode currently accepts non-aliased, bias-free TP1 routed F32 or
+    /// BF16 weights, executed as F32. Numeric FP8 is not bound here. The budget
+    /// excludes non-expert weights, KV and allocator segment slack; leave room
+    /// for them when choosing limits. Activations and results stay on this CUDA
+    /// owner, and no persistent host expert payload cache is installed.
+    pub fn new_with_expert_cache(
+        ops: Rc<CudaOperators>,
+        precision: ExecutionPrecisionPolicy,
+        parameters: &[BoundParameter],
+        policy: ExpertCachePolicy,
+    ) -> Result<Self> {
+        Self::new_with_expert_profile(ops, precision, parameters, policy, false)
+    }
+
+    fn new_with_expert_profile(
+        ops: Rc<CudaOperators>,
+        precision: ExecutionPrecisionPolicy,
+        parameters: &[BoundParameter],
+        policy: ExpertCachePolicy,
+        numeric_fp8: bool,
+    ) -> Result<Self> {
         validate_precision(precision)?;
-        let bindings = Bindings::new(parameters)?;
+        let mut bindings = Bindings::new(parameters)?;
+        bindings.bounded_experts = matches!(policy, ExpertCachePolicy::Bounded(_));
+        bindings.numeric_fp8 = numeric_fp8;
+        if (bindings.bounded_experts || numeric_fp8)
+            && parameters.iter().any(|p| {
+                matches!(p.residency(), crate::nn::ParameterResidency::Expert { .. })
+                    && p.id() != p.canonical_id()
+            })
+        {
+            return Err(cuda_error(
+                "bounded experts require non-aliased parameter bindings",
+            ));
+        }
+        bindings.prepare_expert_metadata()?;
         let boundary = Boundary::new(&ops)?;
+        let bounded_experts = match policy {
+            ExpertCachePolicy::KeepAll => None,
+            ExpertCachePolicy::Bounded(limits) => Some(BoundedExpertCache::new(limits)?),
+        };
         Ok(Self {
             deltas: BTreeMap::new(),
             ops,
             bindings,
             experts: BTreeMap::new(),
+            bounded_experts,
+            expert_hold: Vec::new(),
+            route_hold: Vec::new(),
+            route_ids: Vec::new(),
+            route_scratch_bytes: 0,
+            numeric: None,
+            diagnostic: DiagnosticTrace::default(),
+            #[cfg(test)]
+            lose_next_consumer_proof: false,
+
             boundary,
             poisoned: false,
             tensor_collective: None,
@@ -96,6 +180,11 @@ impl CudaStandardDecoderOperators {
         rank: ParallelRankId,
         collective: Box<dyn StandardTensorCollective>,
     ) -> Result<()> {
+        if self.bounded_experts.is_some() {
+            return Err(cuda_error(
+                "bounded expert cache does not yet support TP collectives",
+            ));
+        }
         let placement = plan.placement(rank)?;
         if placement.device != self.ops.device_ordinal()
             || placement.owner != collective.owner()
@@ -171,8 +260,16 @@ impl CudaStandardDecoderOperators {
                 this.bindings.norm(&this.ops, &feed_forward.norm)?;
                 let dense = match &feed_forward.kind {
                     super::PreparedFeedForwardKind::Dense(expert) => Some(expert),
-                    super::PreparedFeedForwardKind::Routed { router, shared, .. } => {
+                    super::PreparedFeedForwardKind::Routed {
+                        router,
+                        shared,
+                        shared_gate,
+                        ..
+                    } => {
                         this.bindings.linear(&this.ops, router)?;
+                        if let Some(gate) = shared_gate {
+                            this.bindings.linear(&this.ops, gate)?;
+                        }
                         shared.as_ref()
                     }
                 };
@@ -193,10 +290,12 @@ impl CudaStandardDecoderOperators {
     /// Upload one owner-assigned expert without executing any activation math.
     pub fn prepare_expert(&mut self, expert: &PreparedSwiGlu) -> Result<()> {
         self.synchronous(|this| {
-            for linear in [expert.gate(), expert.up(), expert.down()] {
-                this.bindings.linear(&this.ops, linear)?;
-            }
-            Ok(())
+            this.expert_operation(expert, 0, |this| {
+                for linear in [expert.gate(), expert.up(), expert.down()] {
+                    this.bindings.linear(&this.ops, linear)?;
+                }
+                Ok(())
+            })
         })
     }
 
@@ -206,11 +305,33 @@ impl CudaStandardDecoderOperators {
     pub fn resident_parameter_bytes(&self) -> usize {
         self.bindings.resident_bytes()
     }
+
+    /// `None` for compatibility KeepAll. Operation scratch is released after
+    /// proven completion; the numeric workspace reservation remains charged.
+    /// Unknown completion freezes all charges and permanently poisons reuse.
+    pub fn expert_cache_stats(&self) -> Option<ExpertCacheStats> {
+        self.bounded_experts.as_ref().map(|cache| cache.stats())
+    }
+
+    /// Metadata-only forward preflight; must precede KV/recurrent mutation.
+    pub fn preflight_expert_metadata(&self) -> Result<()> {
+        self.bindings.preflight_experts()
+    }
+
+    pub fn expert_metadata_preflight_stats(&self) -> ExpertMetadataPreflightStats {
+        self.bindings.metadata_stats()
+    }
+
     pub fn image_generation(&self) -> u64 {
         self.bindings.generation.get()
     }
     pub fn needs_quarantine(&self) -> bool {
-        self.poisoned || self.boundary.needs_quarantine()
+        self.poisoned
+            || self.boundary.needs_quarantine()
+            || self
+                .bounded_experts
+                .as_ref()
+                .is_some_and(|cache| cache.stats().quarantined)
     }
 
     /// Never acknowledges unknown CUDA completion. A failed fence poisons this
@@ -227,10 +348,11 @@ impl CudaStandardDecoderOperators {
         }
         // A caller may catch panics; such an owner must not silently become reusable.
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(self)));
+        let event = self.consumer_proof();
         let drain = self.boundary.drain();
         let compute = self.ops.sync_stream();
         let upload = self.ops.sync_upload_stream();
-        let failures = [drain, compute, upload]
+        let failures = [event, drain, compute, upload]
             .into_iter()
             .filter_map(Result::err)
             .collect::<Vec<_>>();
@@ -238,11 +360,13 @@ impl CudaStandardDecoderOperators {
             Ok(result) => result,
             Err(panic) => {
                 self.poisoned = true;
+                self.cache_quarantine();
                 std::panic::resume_unwind(panic)
             }
         };
-        if !failures.is_empty() || self.boundary.needs_quarantine() {
+        if !failures.is_empty() || self.needs_quarantine() {
             self.poisoned = true;
+            self.cache_quarantine();
             // Successful output may still be referenced by queued work.
             let source = match result {
                 Ok(value) => {
@@ -256,6 +380,7 @@ impl CudaStandardDecoderOperators {
                 source, cleanup, false, true,
             ));
         }
+        self.finish_cache_operation()?;
         result
     }
 
@@ -266,29 +391,54 @@ impl CudaStandardDecoderOperators {
             .ok_or_else(|| cuda_error("standard CUDA requires F32 activations"))
     }
 
+    pub(super) fn set_diagnostic_layer(&self, layer: Option<usize>) {
+        self.diagnostic.layer.set(layer);
+    }
+
     fn linear_rows(
         &mut self,
         linear: &PreparedLinear,
         input: &Rows,
         arena: Option<RowsArenaId>,
     ) -> Result<Rows> {
-        let input_buffer = self.f32(input)?;
-        let weight = self.bindings.linear(&self.ops, linear)?;
-        if input.shape().width() != weight.shape.1 {
-            return Err(cuda_error("linear input width mismatch"));
+        self.f32(input)?;
+        self.trace_buffer(
+            "linear.input",
+            self.f32(input)?,
+            input.shape(),
+            Some(linear),
+            None,
+            None,
+        )?;
+        if self.numeric.is_some() {
+            let width = linear
+                .out_features()
+                .checked_mul(if linear.bias().is_some() { 2 } else { 1 })
+                .and_then(|n| n.checked_add(linear.in_features()))
+                .and_then(|n| n.checked_add(usize::from(linear.bias().is_some())))
+                .ok_or_else(|| cuda_error("linear scratch overflow"))?;
+            let bytes = width
+                .checked_mul(input.shape().rows())
+                .and_then(|n| n.checked_mul(4))
+                .ok_or_else(|| cuda_error("linear scratch overflow"))?;
+            self.reserve_numeric_temporaries(bytes)?;
         }
+        let weight = self.bindings.linear(&self.ops, linear)?;
         let rows = input.shape().rows();
         let shape = RowsShape::new(rows, weight.shape.0)?;
-        let mut output = self.ops.zero_f32_buffer(shape.elements())?;
-        self.ops
-            .linear_f32_into(&weight.handle, input_buffer, rows, &mut output)?;
+        let mut output = self.resident_linear_buffer(&weight, input)?;
         if let Some(bias) = &weight.bias {
             let ids = self.ops.upload_i32_buffer(&vec![0; rows])?;
+            if self.numeric.is_some() {
+                self.route_ids.push(ids.as_device_buffer().slice(0, rows)?);
+            }
             let bias = self
                 .ops
                 .gather_f32_rows(bias, &ids, rows, linear.out_features())?;
+            self.hold_expert_buffer(&bias)?;
             self.ops.saxpy_into(1.0, &bias, &mut output)?;
         }
+        self.trace_buffer("linear.output", &output, shape, Some(linear), None, None)?;
         let Some((tensor, rank)) = &self.bindings.tensor else {
             return device_rows(shape, arena, output);
         };
@@ -321,28 +471,150 @@ impl CudaStandardDecoderOperators {
         device_rows(RowsShape::new(rows, stage.out_features())?, arena, output)
     }
 
+    fn resident_linear_buffer(
+        &mut self,
+        weight: &binding::ResidentLinear,
+        input: &Rows,
+    ) -> Result<CudaF32Buffer> {
+        self.f32(input)?;
+        if input.shape().width() != weight.shape.1 {
+            return Err(cuda_error("linear input width mismatch"));
+        }
+        if self.bindings.expert_admission.is_some() || self.numeric.is_some() {
+            self.expert_hold.push(
+                self.f32(input)?
+                    .as_device_buffer()
+                    .slice(0, input.shape().elements())?,
+            );
+        }
+        let shape = RowsShape::new(input.shape().rows(), weight.shape.0)?;
+        let mut output = self.ops.zero_f32_buffer(shape.elements())?;
+        self.hold_expert_buffer(&output)?;
+        match &weight.storage {
+            binding::ResidentLinearStorage::Dense(handle) => {
+                self.ops.linear_f32_into(
+                    handle,
+                    self.f32(input)?,
+                    input.shape().rows(),
+                    &mut output,
+                )?;
+            }
+            binding::ResidentLinearStorage::Numeric(numeric) => {
+                self.numeric_linear_into(numeric, input, &mut output)?;
+            }
+        }
+        Ok(output)
+    }
+
     fn swiglu_rows(
         &mut self,
         expert: &PreparedSwiGlu,
         input: &Rows,
         arena: Option<RowsArenaId>,
     ) -> Result<Rows> {
-        let gate = self.linear_rows(expert.gate(), input, arena)?;
-        let up = self.linear_rows(expert.up(), input, arena)?;
-        let mut product = self.ops.zero_f32_buffer(gate.shape().elements())?;
-        match expert.activation_limit() {
-            Some(limit) => self.ops.swiglu_f32_clamped_into(
-                self.f32(&gate)?,
-                self.f32(&up)?,
+        self.expert_operation(expert, input.shape().rows(), |this| {
+            let projections = [expert.gate(), expert.up(), expert.down()];
+            this.swiglu_compute(
+                input,
+                arena,
+                expert.activation_limit(),
+                |this, index, rows| this.linear_rows(projections[index], rows, arena),
+            )
+        })
+    }
+
+    fn swiglu_compute(
+        &mut self,
+        input: &Rows,
+        arena: Option<RowsArenaId>,
+        activation_limit: Option<f32>,
+        mut linear: impl FnMut(&mut Self, usize, &Rows) -> Result<Rows>,
+    ) -> Result<Rows> {
+        let this = self;
+        let gate = linear(this, 0, input)?;
+        let up = linear(this, 1, input)?;
+        let mut product = this.ops.zero_f32_buffer(gate.shape().elements())?;
+        this.hold_expert_buffer(&product)?;
+        match activation_limit {
+            Some(limit) => this.ops.swiglu_f32_clamped_into(
+                this.f32(&gate)?,
+                this.f32(&up)?,
                 &mut product,
                 limit,
             )?,
-            None => self
+            None => this
                 .ops
-                .swiglu_f32_into(self.f32(&gate)?, self.f32(&up)?, &mut product)?,
+                .swiglu_f32_into(this.f32(&gate)?, this.f32(&up)?, &mut product)?,
         }
         let product = device_rows(gate.shape(), arena, product)?;
-        self.linear_rows(expert.down(), &product, arena)
+        let output = linear(this, 2, &product)?;
+        this.trace_rows("swiglu.output", &output)?;
+        Ok(output)
+    }
+
+    fn metadata_swiglu_rows(
+        &mut self,
+        metadata: &crate::transformer::ExpertMetadata,
+        provider: &mut dyn ExpertProvider,
+        input: &Rows,
+        arena: Option<RowsArenaId>,
+    ) -> Result<Rows> {
+        let crate::nn::ParameterResidency::Expert { layer, expert: id } =
+            *metadata.parameters()[0].residency()
+        else {
+            return Err(cuda_error("routed expert metadata residency required"));
+        };
+        let (key, bytes, scratch) = self.metadata_plan(
+            metadata,
+            layer,
+            id,
+            input.shape().rows(),
+            input.shape().width(),
+        )?;
+        self.admitted_expert_operation(key, bytes, scratch, |this| {
+            // Admission may evict a previous hit while reserving scratch. Check
+            // physical residency only after the lease has pinned this expert.
+            metadata.validate_sources()?;
+            if !this.bindings.has_metadata_expert(metadata)? {
+                let expert = match provider.expert(layer, id)? {
+                    ExpertAvailability::Ready(expert) => expert,
+                    ExpertAvailability::Waiting => {
+                        return Err(cuda_error("metadata-ready expert became unavailable"));
+                    }
+                    ExpertAvailability::Unsupported(reason) => return Err(cuda_error(reason)),
+                };
+                metadata.validate_payload(&expert)?;
+                this.expert_plan(&expert, input.shape().rows())?;
+                for projection in [expert.gate(), expert.up(), expert.down()] {
+                    this.bindings.linear(&this.ops, projection)?;
+                }
+                // No payload survives the upload; execution borrows GPU handles
+                // and immutable BoundParameter metadata, not PreparedLinear.
+            }
+            let output = this.swiglu_compute(
+                input,
+                arena,
+                metadata.activation_limit(),
+                |this, index, rows| {
+                    let parameter = &metadata.parameters()[index];
+                    let resident = this
+                        .bindings
+                        .metadata_linear(parameter)?
+                        .ok_or_else(|| cuda_error("admitted expert projection is missing"))?;
+                    this.trace_expert_linear(
+                        "linear.input",
+                        this.f32(rows)?,
+                        rows.shape(),
+                        parameter,
+                    )?;
+                    let output = this.resident_linear_buffer(&resident, rows)?;
+                    let shape = RowsShape::new(rows.shape().rows(), resident.shape.0)?;
+                    this.trace_expert_linear("linear.output", &output, shape, parameter)?;
+                    device_rows(shape, arena, output)
+                },
+            )?;
+            Ok(output)
+        })
     }
 }
 
@@ -364,6 +636,53 @@ impl StandardDecoderOperators for CudaStandardDecoderOperators {
     fn sigmoid_gate(&mut self, input: Rows, gate: &Rows) -> Result<OperatorProgress<Rows>> {
         self.gate_rows(input, gate)
     }
+    fn shared_expert_gate(&mut self, input: Rows, gate: &Rows) -> Result<OperatorProgress<Rows>> {
+        use ferrule_backend::cuda::operators::recurrent::{
+            F32GateLayout, F32RowsLayout, GateActivation,
+        };
+        self.synchronous(|this| {
+            this.f32(&input)?;
+            this.f32(gate)?;
+            let shape = input.shape();
+            if gate.shape().rows() != shape.rows() || gate.shape().width() != 1 {
+                return Err(cuda_error(
+                    "shared expert gate requires [rows,width] and [rows,1]",
+                ));
+            }
+            let bytes = shape
+                .elements()
+                .checked_mul(2)
+                .and_then(|n| n.checked_add(shape.rows()))
+                .and_then(|n| n.checked_mul(4))
+                .ok_or_else(|| cuda_error("shared gate scratch overflow"))?;
+            this.cache_scratch(bytes)?;
+            this.route_hold.push(
+                this.f32(&input)?
+                    .as_device_buffer()
+                    .slice(0, shape.elements())?,
+            );
+            this.route_hold
+                .push(this.f32(gate)?.as_device_buffer().slice(0, shape.rows())?);
+            let mut output = this.ops.zero_f32_buffer(shape.elements())?;
+            // Also protects the compatibility profile's newly added gate path.
+            this.route_hold
+                .push(output.as_device_buffer().slice(0, shape.elements())?);
+            this.ops.elementwise_gate_f32_into(
+                this.f32(&input)?,
+                this.f32(gate)?,
+                &mut output,
+                F32GateLayout::RowBroadcast(F32RowsLayout {
+                    rows: shape.rows(),
+                    width: shape.width(),
+                }),
+                GateActivation::Sigmoid,
+            )?;
+            let result = device_rows(shape, input.arena(), output)?;
+            this.trace_rows("shared_gate.output", &result)?;
+            Ok(OperatorProgress::Ready(result))
+        })
+    }
+
     fn attention_heads(&self, query: usize, kv: usize) -> Result<(usize, usize)> {
         let degree = self
             .bindings
@@ -376,7 +695,10 @@ impl StandardDecoderOperators for CudaStandardDecoderOperators {
         Ok((query / degree, kv / degree))
     }
     fn backend_name(&self) -> &'static str {
-        "cuda-standard-f32"
+        self.numeric_fp8_precision()
+            .map_or("cuda-standard-f32", |precision| {
+                precision.standard_backend_name()
+            })
     }
     fn precision(&self) -> ExecutionPrecisionPolicy {
         ExecutionPrecisionPolicy::f32()
@@ -430,6 +752,7 @@ impl StandardDecoderOperators for CudaStandardDecoderOperators {
                 .bindings
                 .vector(&this.ops, embedding.linear().parameter())?;
             let output = this.ops.embedding_f32(&weight, &ids, shape.width())?;
+            this.trace_buffer("embedding", &output, shape, None, None, None)?;
             device_rows(shape, arena, output).map(OperatorProgress::Ready)
         })
     }
@@ -458,6 +781,14 @@ impl StandardDecoderOperators for CudaStandardDecoderOperators {
                 return Err(cuda_error("RMSNorm head layout mismatch"));
             }
             let input_buffer = this.f32(input)?;
+            this.trace_buffer(
+                "norm.input",
+                input_buffer,
+                input.shape(),
+                None,
+                Some(norm),
+                None,
+            )?;
             let weight = this.bindings.norm(&this.ops, norm)?;
             let rows = input
                 .shape()
@@ -485,6 +816,14 @@ impl StandardDecoderOperators for CudaStandardDecoderOperators {
                     &mut output,
                 )?;
             }
+            this.trace_buffer(
+                "norm.output",
+                &output,
+                input.shape(),
+                None,
+                Some(norm),
+                None,
+            )?;
             device_rows(input.shape(), arena, output).map(OperatorProgress::Ready)
         })
     }
@@ -567,8 +906,27 @@ impl StandardDecoderOperators for CudaStandardDecoderOperators {
                 top_k: policy.experts_per_token(),
                 output_scale: policy.route_scale(),
             };
-            let mut ids = this.ops.zero_i32_buffer(layout.output_elements()?)?;
-            let mut weights = this.ops.zero_f32_buffer(layout.output_elements()?)?;
+            let elements = layout.output_elements()?;
+            if this.numeric.is_some() {
+                let bytes = elements
+                    .checked_mul(2)
+                    .and_then(|n| n.checked_add(logits.shape().elements()))
+                    .and_then(|n| n.checked_mul(4))
+                    .ok_or_else(|| cuda_error("router scratch overflow"))?;
+                this.reserve_numeric_temporaries(bytes)?;
+                this.expert_hold.push(
+                    this.f32(logits)?
+                        .as_device_buffer()
+                        .slice(0, logits.shape().elements())?,
+                );
+            }
+            let mut ids = this.ops.zero_i32_buffer(elements)?;
+            if this.numeric.is_some() {
+                this.route_ids
+                    .push(ids.as_device_buffer().slice(0, elements)?);
+            }
+            let mut weights = this.ops.zero_f32_buffer(elements)?;
+            this.hold_expert_buffer(&weights)?;
             this.ops.router_softmax_topk_f32_into(
                 this.f32(logits)?,
                 &mut ids,
@@ -588,7 +946,16 @@ impl StandardDecoderOperators for CudaStandardDecoderOperators {
                 })
                 .collect::<Result<Vec<_>>>()?;
             let weights = this.ops.download_f32_buffer(&weights)?;
-            RouterRoutes::new(layout.rows, layout.top_k, ids, weights).map(OperatorProgress::Ready)
+            let routes = RouterRoutes::new(layout.rows, layout.top_k, ids, weights)?;
+            this.trace_buffer(
+                "router",
+                this.f32(logits)?,
+                logits.shape(),
+                None,
+                None,
+                Some(&routes),
+            )?;
+            Ok(OperatorProgress::Ready(routes))
         })
     }
 
@@ -614,65 +981,13 @@ impl StandardDecoderOperators for CudaStandardDecoderOperators {
     ) -> Result<OperatorProgress<Rows>> {
         self.synchronous(|this| {
             this.f32(input)?;
+            this.trace_rows("routed.input", input)?;
             if routes.rows() != input.shape().rows()
                 || routes.weights().iter().any(|w| !w.is_finite())
             {
                 return Err(cuda_error("invalid routed rows/weights"));
             }
-            let mut prepared = BTreeMap::new();
-            let mut waiting = Vec::new();
-            for id in routes.expert_ids().iter().copied().collect::<BTreeSet<_>>() {
-                if let Some(expert) = this.experts.get(&(layer, id)) {
-                    prepared.insert(id, Arc::clone(expert));
-                    continue;
-                }
-                match experts.expert(layer, id)? {
-                    ExpertAvailability::Ready(expert) => {
-                        for linear in [expert.gate(), expert.up(), expert.down()] {
-                            this.bindings.linear(&this.ops, linear)?;
-                        }
-                        this.experts.insert((layer, id), Arc::clone(&expert));
-                        prepared.insert(id, expert);
-                    }
-                    ExpertAvailability::Waiting => waiting.push(id),
-                    ExpertAvailability::Unsupported(reason) => {
-                        return Ok(OperatorProgress::Unsupported(UnsupportedOperator::new(
-                            "routed_swiglu",
-                            reason,
-                        )));
-                    }
-                }
-            }
-            if !waiting.is_empty() {
-                return Ok(OperatorProgress::Waiting(OperatorWaiting::Experts {
-                    layer,
-                    experts: waiting,
-                }));
-            }
-            let width = input.shape().width();
-            let mut output = this.ops.zero_f32_buffer(input.shape().elements())?;
-            for row in 0..routes.rows() {
-                let ids =
-                    this.ops
-                        .upload_i32_buffer(&[i32::try_from(row)
-                            .map_err(|_| cuda_error("route row exceeds i32 ABI"))?])?;
-                let values = this.ops.gather_f32_rows(this.f32(input)?, &ids, 1, width)?;
-                let row_input = device_rows(RowsShape::new(1, width)?, arena, values)?;
-                let mut row_output = this.ops.zero_f32_buffer(width)?;
-                let (expert_ids, weights) = routes.row(row)?;
-                for (&id, &weight) in expert_ids.iter().zip(weights) {
-                    let expert = prepared.get(&id).expect("prepared route");
-                    if expert.output_width() != width {
-                        return Err(cuda_error("routed output width mismatch"));
-                    }
-                    let values = this.swiglu_rows(expert, &row_input, arena)?;
-                    this.ops
-                        .saxpy_into(weight, this.f32(&values)?, &mut row_output)?;
-                }
-                this.ops
-                    .scatter_add_f32_rows(&row_output, &ids, &mut output, 1, width)?;
-            }
-            device_rows(input.shape(), arena, output).map(OperatorProgress::Ready)
+            this.routed_swiglu_batched(layer, input, routes, experts, arena)
         })
     }
 
@@ -682,12 +997,16 @@ impl StandardDecoderOperators for CudaStandardDecoderOperators {
             if residual.shape() != update.shape() {
                 return Err(cuda_error("residual shape mismatch"));
             }
+            this.trace_rows("residual.input", &residual)?;
+            this.trace_rows("residual.update", update)?;
             let mut residual = residual.into_cuda()?;
             this.ops.residual_add_f32_in_place(
                 this.f32(update)?,
                 residual.f32_buffer_mut().expect("validated F32"),
             )?;
-            Ok(OperatorProgress::Ready(Rows::Cuda(residual)))
+            let residual = Rows::Cuda(residual);
+            this.trace_rows("residual.output", &residual)?;
+            Ok(OperatorProgress::Ready(residual))
         })
     }
 
@@ -895,7 +1214,8 @@ impl Drop for CudaStandardDecoderOperators {
             let upload = self.ops.sync_upload_stream();
             drain.is_ok() && compute.is_ok() && upload.is_ok()
         }));
-        if !matches!(proof, Ok(true)) {
+        if self.needs_quarantine() || !matches!(proof, Ok(true)) {
+            self.retain_cache_on_unknown();
             self.bindings.retain_on_unknown_completion();
             std::mem::forget(std::mem::take(&mut self.deltas));
             std::mem::forget(Rc::clone(&self.ops));

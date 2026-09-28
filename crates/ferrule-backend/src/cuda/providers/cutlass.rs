@@ -4,6 +4,10 @@
 //! tensor lifetimes. The native boundary contains only POD arguments for
 //! complete semantic operators; architecture and launch-policy selection remain
 //! private to the native provider.
+//!
+//! Public raw launch, sizing, and preparation paths in this module are legacy
+//! compatibility APIs. Semantic types are re-exported from operator families;
+//! new owner-facing callers should not depend on the raw scratch representation.
 
 use crate::cuda::ffi::cutlass::{self as ffi, CutlassWorkspaceRequirements};
 use crate::cuda::operators::OperatorWorkspaceRequirements;
@@ -15,25 +19,61 @@ use ferrule_common::{Error, Result};
 #[cfg(ferrule_cuda_test_oracle)]
 use std::sync::atomic::{AtomicU64, Ordering};
 
-#[path = "cutlass_f32.rs"]
-mod f32_linear;
-pub(crate) use f32_linear::f32_gemm_bytes;
-pub use f32_linear::{
-    F32GemmError, F32GemmLayout, f32_gemm, f32_gemm_can_implement, f32_gemm_workspace_requirements,
+#[path = "cutlass_bf16.rs"]
+mod bf16_linear;
+
+#[cfg(ferrule_cuda_test_oracle)]
+pub use crate::cuda::operators::attention::hybrid::HYBRID_MLA_EXPLICIT_SELECTION_TEST_COMPARE_RESULT_WORDS;
+/// Compatibility aliases for semantic operator contracts.
+/// New code should import family contracts from `cuda::operators`.
+pub use crate::cuda::operators::attention::hybrid::{
+    HYBRID_MLA_ATTENTION_HEAD_DIM, HYBRID_MLA_ATTENTION_HEADS,
+    HYBRID_MLA_ATTENTION_ONLINE_SOFTMAX_TILE, HYBRID_MLA_ATTENTION_ONLINE_SOFTMAX_TILES,
+    HYBRID_MLA_ATTENTION_PAGE_TOKENS, HYBRID_MLA_ATTENTION_TOKEN_CAPACITY,
+    HYBRID_MLA_ATTENTION_WINDOW, HYBRID_MLA_EXPLICIT_SELECTION_MAXIMUM_WIDTH,
+    HybridMlaAttentionLayout, HybridMlaExplicitSelectionBuffers, HybridMlaExplicitSelectionLayout,
+    HybridMlaKvStorageKind,
+};
+pub use crate::cuda::operators::moe::grouped_fp4::{GroupedFp4MoeBuffers, GroupedFp4MoeLayout};
+pub use crate::cuda::operators::proposal::{PROPOSAL_ROWS, ProposalHeadLayout};
+
+// Compatibility provider entry points: new callers use operators::linear.
+// Keep these exports until downstream raw-buffer callers have migrated.
+pub use bf16_linear::{
+    bf16_gemm, bf16_gemm_can_implement, bf16_gemm_workspace_requirements, numeric_fp8_linear,
 };
 
-pub const PROPOSAL_ROWS: usize = 5;
-pub const HYBRID_MLA_ATTENTION_HEADS: usize = 64;
-pub const HYBRID_MLA_ATTENTION_HEAD_DIM: usize = 512;
-pub const HYBRID_MLA_ATTENTION_WINDOW: usize = 128;
-pub const HYBRID_MLA_ATTENTION_PAGE_TOKENS: usize = 16;
-pub const HYBRID_MLA_ATTENTION_TOKEN_CAPACITY: usize = HYBRID_MLA_ATTENTION_WINDOW + PROPOSAL_ROWS;
-pub const HYBRID_MLA_ATTENTION_ONLINE_SOFTMAX_TILE: usize = 64;
-pub const HYBRID_MLA_ATTENTION_ONLINE_SOFTMAX_TILES: usize =
-    HYBRID_MLA_ATTENTION_TOKEN_CAPACITY.div_ceil(HYBRID_MLA_ATTENTION_ONLINE_SOFTMAX_TILE);
-pub const HYBRID_MLA_EXPLICIT_SELECTION_MAXIMUM_WIDTH: usize = 640;
-#[cfg(ferrule_cuda_test_oracle)]
-pub const HYBRID_MLA_EXPLICIT_SELECTION_TEST_COMPARE_RESULT_WORDS: usize = 5;
+/// Compatibility paths for operator-owned numeric FP8 contracts.
+/// New callers should import these from `cuda::operators::linear`.
+pub use crate::cuda::operators::linear::{
+    CudaNumericFp8Artifact, CudaNumericFp8Workspace, NumericFp8Layout, NumericFp8LinearPlan,
+    NumericFp8Precision, NumericFp8ScaleType,
+};
+pub use ferrule_common::numeric_fp8::ImmutableValidatedNumericFp8Payload;
+
+#[path = "cutlass_legacy.rs"]
+mod legacy;
+#[allow(deprecated)]
+pub use legacy::{
+    NumericFp8PrecisionExt, bf16_compressor, fp8_projection, fp8_query_a_kv, hc_producer,
+    main_project_norm, mla_output, shared_ffn,
+};
+
+/// Compatibility alias; the layout now belongs to the semantic linear facade.
+#[deprecated(
+    note = "use cuda::operators::linear::Bf16GemmLayout; provider paths are compatibility-only"
+)]
+pub type Bf16GemmLayout = crate::cuda::operators::linear::Bf16GemmLayout;
+
+#[path = "cutlass_f32.rs"]
+mod f32_linear;
+/// Legacy type paths; definitions and validation belong to the linear operator.
+pub use crate::cuda::operators::linear::{F32GemmError, F32GemmLayout};
+pub(crate) use f32_linear::f32_gemm_bytes as f32_gemm_bytes_native;
+// Internal compatibility import used by context::standard until that module is split.
+pub(crate) use crate::cuda::operators::linear::f32_gemm_bytes;
+pub use f32_linear::{f32_gemm, f32_gemm_can_implement, f32_gemm_workspace_requirements};
+
 #[cfg(ferrule_cuda_test_oracle)]
 static HYBRID_MLA_EXPLICIT_SELECTION_TEST_COMPARE_CALL_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -51,6 +91,7 @@ pub enum CutlassKernelId {
     ProposalHead = 9,
     Fp8Projection = 10,
     F32Gemm = 11,
+    Bf16Gemm = 12,
 }
 
 impl CutlassKernelId {
@@ -71,6 +112,7 @@ impl CutlassKernelId {
             Self::ProposalHead => "proposal-head",
             Self::Fp8Projection => "fp8-projection",
             Self::F32Gemm => "f32-gemm-tf32x3",
+            Self::Bf16Gemm => "bf16-gemm-f32-accum",
         }
     }
 }
@@ -327,84 +369,6 @@ pub(crate) struct CutlassProposalHeadArgs {
     confidence_f32: u64,
     status_i32: u64,
     stream: u64,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct ProposalHeadLayout {
-    pub rows: usize,
-    pub hc: usize,
-    pub hidden: usize,
-    pub vocab: usize,
-    pub markov_rank: usize,
-    pub partial_capacity: usize,
-    pub hc_eps: f32,
-    pub norm_eps: f32,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct HybridMlaAttentionLayout {
-    pub sequence_tokens: usize,
-    pub page_tokens: usize,
-    pub elements_per_token: usize,
-    pub layer_index: usize,
-    pub layer_count: usize,
-    pub block_slot_offset: usize,
-    pub block_slot_count: usize,
-    pub softmax_scale: f32,
-}
-
-/// KV storage topology for hybrid MLA with explicit selection.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u32)]
-pub enum HybridMlaKvStorageKind {
-    Contiguous = 1,
-    Paged = 2,
-    DualPaged = 3,
-}
-
-/// Dimensions and paging metadata for hybrid MLA with explicit selection.
-/// Fields unused by a storage topology must be zero.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct HybridMlaExplicitSelectionLayout {
-    pub kind: HybridMlaKvStorageKind,
-    pub rows: usize,
-    pub tokens_per_sequence: usize,
-    pub kv_len: usize,
-    pub heads: usize,
-    pub head_dim: usize,
-    pub selected_width: usize,
-    pub page_tokens: usize,
-    pub first_elements_per_token: usize,
-    pub second_elements_per_token: usize,
-    pub layer_index: usize,
-    pub layer_count: usize,
-    pub row_sequence_ids: bool,
-    pub row_kv_lens: bool,
-    pub softmax_scale: f32,
-}
-
-/// Caller-owned inputs, outputs, metadata, and opaque provider workspace for
-/// hybrid MLA with explicit selection. Paged metadata is present only for paged
-/// topologies; the second plane and selectors are present only for `DualPaged`.
-pub struct HybridMlaExplicitSelectionBuffers<'a> {
-    pub query: &'a DeviceBuffer<f32>,
-    #[cfg(ferrule_cuda_test_oracle)]
-    pub oracle_output: &'a mut DeviceBuffer<f32>,
-    pub first_plane: &'a DeviceBuffer<f32>,
-    pub second_plane: Option<&'a DeviceBuffer<f32>>,
-    pub block_slots: Option<&'a DeviceBuffer<i32>>,
-    pub block_offsets: Option<&'a DeviceBuffer<i32>>,
-    pub sequence_kv_lens: Option<&'a DeviceBuffer<i32>>,
-    pub second_sequence_kv_lens: Option<&'a DeviceBuffer<i32>>,
-    pub row_sequence_ids: Option<&'a DeviceBuffer<i32>>,
-    pub row_kv_lens: Option<&'a DeviceBuffer<i32>>,
-    pub row_second_kv_lens: Option<&'a DeviceBuffer<i32>>,
-    pub selected_indices: &'a DeviceBuffer<i32>,
-    pub selectors: Option<&'a DeviceBuffer<i32>>,
-    pub attention_sink: &'a DeviceBuffer<f32>,
-    pub workspace: &'a mut DeviceBuffer<u8>,
-    pub output: &'a mut DeviceBuffer<f32>,
-    pub status: &'a mut DeviceBuffer<i32>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1701,7 +1665,7 @@ fn checked_u64(value: usize, name: &str) -> Result<u64> {
 /// Launch one semantic BF16 compressor bundle. The native CUDA provider owns
 /// small-M versus tiled schedule selection.
 #[allow(clippy::too_many_arguments)]
-pub fn bf16_compressor(
+pub(crate) fn submit_bf16_compressor(
     stream: &CudaStream,
     activation: &DeviceBuffer<f32>,
     projection1_weight: &DeviceBuffer<u8>,
@@ -1740,7 +1704,7 @@ pub fn bf16_compressor(
 /// Launch one semantic FP8 QueryA+KV bundle. The executable plan does not bind
 /// an M bucket or expose a native schedule variant.
 #[allow(clippy::too_many_arguments)]
-pub fn fp8_query_a_kv(
+pub(crate) fn submit_fp8_query_a_kv(
     stream: &CudaStream,
     activation: &DeviceBuffer<u8>,
     activation_scales: &DeviceBuffer<u8>,
@@ -1784,7 +1748,7 @@ pub fn fp8_query_a_kv(
 
 /// Launch one small-M FP8 projection through the native pipeline.
 #[allow(clippy::too_many_arguments)]
-pub fn fp8_projection(
+pub(crate) fn submit_fp8_projection(
     stream: &CudaStream,
     activation: &DeviceBuffer<u8>,
     activation_scales: &DeviceBuffer<u8>,
@@ -1821,7 +1785,7 @@ pub fn fp8_projection(
 /// Launch the checkpoint-native proposal stage-zero target-tap projection and
 /// RMSNorm as one cooperative semantic operation.
 #[allow(clippy::too_many_arguments)]
-pub fn main_project_norm(
+pub(crate) fn submit_main_project_norm(
     stream: &CudaStream,
     input: &DeviceBuffer<f32>,
     activation: &mut DeviceBuffer<u8>,
@@ -2145,7 +2109,7 @@ pub fn proposal_head(
 
 /// Launch the complete HC-pre + layer RMSNorm + FP8 producer bundle.
 #[allow(clippy::too_many_arguments)]
-pub fn hc_producer(
+pub(crate) fn submit_hc_producer(
     stream: &CudaStream,
     state: &DeviceBuffer<f32>,
     function_row_major: &DeviceBuffer<f32>,
@@ -2298,7 +2262,7 @@ pub fn hc_producer(
 
 /// Launch the complete shared gate/up -> SwiGLU -> down bundle.
 #[allow(clippy::too_many_arguments)]
-pub fn shared_ffn(
+pub(crate) fn submit_shared_ffn(
     stream: &CudaStream,
     input_fp8: &DeviceBuffer<u8>,
     input_scales: &DeviceBuffer<u8>,
@@ -2453,7 +2417,7 @@ pub fn shared_ffn(
 
 /// Launch grouped output-A -> BF16 boundary -> FP8 pack -> output-B as one MLA bundle.
 #[allow(clippy::too_many_arguments)]
-pub fn mla_output(
+pub(crate) fn submit_mla_output(
     stream: &CudaStream,
     context: &DeviceBuffer<f32>,
     output_a_weight: &DeviceBuffer<u8>,
@@ -2577,44 +2541,6 @@ pub fn mla_output(
     } else {
         Err(native_error("launch MLA output", status))
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct GroupedFp4MoeLayout {
-    pub active_group_count: usize,
-    pub small_group_count: usize,
-    pub slot_capacity: usize,
-    pub max_group_rows: usize,
-    pub total_routed_rows: usize,
-    pub num_tokens: usize,
-    pub num_routes: usize,
-    pub input_size: usize,
-    pub intermediate_size: usize,
-    pub hidden_size: usize,
-    pub swiglu_limit: f32,
-}
-
-pub struct GroupedFp4MoeBuffers<'a> {
-    pub active_expert_slots: &'a DeviceBuffer<i32>,
-    pub active_group_generations: &'a DeviceBuffer<i32>,
-    pub expert_route_indptr: &'a DeviceBuffer<i32>,
-    pub expert_route_counts: &'a DeviceBuffer<i32>,
-    pub route_token_indices: &'a DeviceBuffer<i32>,
-    pub route_indices: &'a DeviceBuffer<i32>,
-    pub route_weights: &'a DeviceBuffer<f32>,
-    pub slot_generations: &'a DeviceBuffer<i32>,
-    pub gate_ptrs: &'a DeviceBuffer<u64>,
-    pub gate_scale_ptrs: &'a DeviceBuffer<u64>,
-    pub up_ptrs: &'a DeviceBuffer<u64>,
-    pub up_scale_ptrs: &'a DeviceBuffer<u64>,
-    pub down_ptrs: &'a DeviceBuffer<u64>,
-    pub down_scale_ptrs: &'a DeviceBuffer<u64>,
-    pub input_fp8: &'a DeviceBuffer<u8>,
-    pub input_ue8m0: &'a DeviceBuffer<u8>,
-    pub route_output: &'a mut DeviceBuffer<f32>,
-    pub route_written: &'a mut DeviceBuffer<i32>,
-    pub route_error: &'a mut DeviceBuffer<i32>,
-    pub workspace: &'a mut DeviceBuffer<u8>,
 }
 
 impl FerruleCutlassGroupedFp4MoeArgs {
@@ -2835,6 +2761,10 @@ fn validate_grouped_fp4_moe_layout(layout: GroupedFp4MoeLayout) -> Result<()> {
         });
     }
     Ok(())
+}
+
+pub(crate) fn grouped_fp4_moe_available() -> Result<bool> {
+    Ok(discover_provider()?.supports(CutlassKernelId::GroupedFp4Moe))
 }
 
 /// Return the caller-owned workspace required by a grouped FP4 MoE launch.
@@ -3319,7 +3249,7 @@ mod tests {
             crate::plan::ExecutionMode::Inference
         ));
         if crate::cuda::architecture::COMPILED_TARGET == "sm_86" {
-            assert_eq!(native.kernel_mask, 0x586);
+            assert_eq!(native.kernel_mask, 0xd86);
             assert_eq!(execution.operations.len(), 7);
         }
     }

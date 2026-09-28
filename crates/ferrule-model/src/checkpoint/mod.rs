@@ -8,7 +8,9 @@ pub mod encoding;
 pub(crate) mod hash;
 pub mod index;
 pub mod inventory;
+pub mod numeric_fp8;
 mod read_plan;
+pub mod read_session;
 mod source;
 pub mod tensor;
 pub mod weight;
@@ -26,8 +28,13 @@ pub use inventory::{
     HfRoutedExpertTensorInfo, HfRouterTensorInfo, HfSafetensorsInventory,
     HfSafetensorsShardSummary, HfSafetensorsTensorInfo, HfSharedExpertTensorInfo, TensorRoleCount,
 };
+pub use numeric_fp8::{NumericFp8Artifact, NumericFp8Encoding, NumericFp8Read, NumericFp8Source};
 pub use read_plan::{CheckpointPositionedReader, CheckpointReadExtent, CheckpointReadPlan};
-pub use source::{CheckpointBundleSource, CheckpointSourceCatalog, CheckpointSourceFileIdentity};
+pub use read_session::{CheckpointReadCounters, DEFAULT_MAX_OPEN_SHARDS, VerifiedReadSession};
+pub use source::{
+    CheckpointBundleSource, CheckpointSourceCatalog, CheckpointSourceCounters,
+    CheckpointSourceFileIdentity,
+};
 pub(crate) use source::{CheckpointSourceTensor, checkpoint_resource_source};
 pub use tensor::{
     CheckpointDType, CheckpointMatrixSlice, CheckpointTensorPayload, CheckpointTensorReader,

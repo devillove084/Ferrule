@@ -59,6 +59,14 @@ impl<R: MultiSessionRunner> NativeMultiSessionExecutor<R> {
         self.runner
     }
 
+    /// Borrow the same authority: a failed physical close must not consume it.
+    pub(crate) fn shutdown_physical(&mut self) -> Result<()>
+    where
+        R: ferrule_model::ResidentModelRunner,
+    {
+        Ok(self.runner.shutdown_physical()?)
+    }
+
     pub fn reset(&mut self) -> Result<()> {
         Ok(self.runner.reset_session()?)
     }
@@ -102,6 +110,37 @@ impl<R: MultiSessionRunner> NativeMultiSessionExecutor<R> {
     ) -> Result<T> {
         self.ensure_execution_ready()?;
         Ok(self.runner.with_sequence_state(state, execute)?)
+    }
+
+    pub fn begin_native_proposal_for(
+        &mut self,
+        state: &mut R::SequenceState,
+        transaction: ExecutionTransactionId,
+        anchor_token_id: u32,
+    ) -> Result<ferrule_model::NativeProposalProgress>
+    where
+        R: ferrule_model::ResidentModelRunner,
+    {
+        self.ensure_execution_ready()?;
+        Ok(self
+            .runner
+            .begin_native_proposal_for(state, transaction, anchor_token_id)?)
+    }
+
+    pub fn resume_native_proposal_for(
+        &mut self,
+        state: &mut R::SequenceState,
+        transaction: ExecutionTransactionId,
+        continuation: ContinuationId,
+        leases: ResidencyLeaseSet,
+    ) -> Result<ferrule_model::NativeProposalProgress>
+    where
+        R: ferrule_model::ResidentModelRunner,
+    {
+        self.ensure_execution_ready()?;
+        Ok(self
+            .runner
+            .resume_native_proposal_for(state, transaction, continuation, leases)?)
     }
 
     pub fn release_kv_pages(

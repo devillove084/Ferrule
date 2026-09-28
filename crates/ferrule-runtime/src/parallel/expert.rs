@@ -2,8 +2,9 @@
 //!
 //! Explicit groups are independent of common's PP/DP/TP mesh. `ExpertRank::slot`
 //! addresses a private DP pool; `owner` and `ExpertGroup::source_rank` are global
-//! expert identities, NOT PP slots, KV participants or device ordinals. Pipeline
-//! integration requires disjoint owner IDs across groups and from KV ranks.
+//! identities, NOT pool slots or device ordinals. The source is the caller and
+//! may be a root KV rank outside the expert owners. Pipeline integration requires
+//! disjoint owner IDs across groups and from KV ranks.
 //!
 //! There is no transaction allocator, publication, retry or KV state here. The
 //! caller supplies the existing transaction and its liveness check on every call.
@@ -17,7 +18,7 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use ferrule_common::execution::ExecutionTransactionId;
 use ferrule_common::{
@@ -36,10 +37,25 @@ use ferrule_model::transformer::{
 };
 
 use super::data::{
-    CompletionOutcome, DataParallelConfig, DataParallelExecutor, PanicQuiescence, ReplicaWorker,
-    WorkRequest,
+    BuildError, CompletionOutcome, DataParallelConfig, DataParallelExecutor, OwnerFailureKind,
+    PanicQuiescence, ReplicaWorker, WorkRequest,
 };
 use crate::SessionId;
+
+/// The already-prewarmed image authority, shared by every CUDA owner.
+#[cfg(feature = "cuda")]
+pub type ArcHostExpertCache = Arc<ferrule_model::transformer::host_experts::HostExpertCache>;
+
+#[cfg(feature = "cuda")]
+#[derive(Debug, Clone, Copy)]
+pub struct NumericExpertConfig {
+    pub max_parameter_bytes: u64,
+    /// All owned compressed weights + workspace + worst admitted activation
+    /// scratch. Physical-card/root/allocator admission remains the factory's job.
+    pub max_device_bytes: usize,
+    pub workspace_bytes: usize,
+    pub dispatch_timeout: Duration,
+}
 
 fn error(message: impl std::fmt::Display) -> Error {
     Error::Execution {
@@ -54,7 +70,9 @@ pub struct ExpertRank {
 }
 
 /// Explicit per-segment EP membership and dispatch bounds. Member order is the
-/// model dispatch order. The source must be a member (it may own no experts).
+/// model dispatch order and creates exactly one worker per member. The source
+/// is the explicitly attached caller: it may be a member (legacy PP/EP) or an
+/// external root, but is never implicitly added to the workers or placement.
 /// Placement coordinates and layer range are global decoder coordinates.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExpertGroup {
@@ -68,6 +86,9 @@ pub struct ExpertGroup {
 impl ExpertGroup {
     /// Bind this existing dispatch group to mesh metadata without changing its
     /// slot order, placement, or activation-only execution/transaction protocol.
+    /// This legacy PP mesh attachment retains its member-source and disjoint-KV
+    /// contract. An external-root hybrid attachment binds the source directly
+    /// through this group instead; it does not extend the PP mesh membership.
     pub fn dispatch_members(
         &self,
         topology: &ValidatedParallelTopology,
@@ -91,10 +112,11 @@ impl ExpertGroup {
             || self.layers.is_empty()
             || self.limits.max_tokens == 0
             || self.limits.max_bytes == 0
-            || !self.members.contains(&self.source_rank)
             || self.members.iter().collect::<BTreeSet<_>>().len() != self.members.len()
         {
-            return Err(error("invalid group, source membership or dispatch limits"));
+            return Err(error(
+                "invalid expert owners, layer range or dispatch limits",
+            ));
         }
         Ok(())
     }
@@ -127,14 +149,19 @@ impl ExpertGroup {
         Ok(())
     }
 
+    fn validate_context(&self, context: ExpertDispatchContext) -> Result<()> {
+        if context.source_rank != self.source_rank || !self.layers.contains(&context.layer) {
+            return Err(error("unknown expert source or layer"));
+        }
+        Ok(())
+    }
+
     fn validate_bucket(
         &self,
         context: ExpertDispatchContext,
         bucket: &ExpertTokenBucket,
     ) -> Result<()> {
-        if context.source_rank != self.source_rank || !self.layers.contains(&context.layer) {
-            return Err(error("unknown expert source or layer"));
-        }
+        self.validate_context(context)?;
         if !self.members.contains(&bucket.owner_rank) {
             return Err(error("unknown expert owner"));
         }
@@ -193,6 +220,8 @@ pub struct ExpertRankWorker {
     stats: ExpertOwnerStats,
     #[cfg(feature = "cuda")]
     cuda: Option<ferrule_model::transformer::CudaStandardDecoderOperators>,
+    #[cfg(feature = "cuda")]
+    resident_failed: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -203,6 +232,8 @@ pub struct ExpertOwnerStats {
     pub calls: usize,
     pub tokens: usize,
     pub last_context: Option<ExpertDispatchContext>,
+    #[cfg(feature = "cuda")]
+    pub cuda_cache: Option<ferrule_model::transformer::ExpertCacheStats>,
 }
 
 impl ExpertRankWorker {
@@ -221,11 +252,20 @@ impl ExpertRankWorker {
         group: &ExpertGroup,
         max_parameter_bytes: u64,
     ) -> Result<Self> {
+        let materializer = StateDictMaterializer::new(max_parameter_bytes)?;
+        Self::prepare_with_materializer(resources, rank, group, &materializer)
+    }
+
+    fn prepare_with_materializer(
+        resources: &BoundDecoderResources,
+        rank: ExpertRank,
+        group: &ExpertGroup,
+        materializer: &StateDictMaterializer,
+    ) -> Result<Self> {
         group.validate_resources(resources)?;
         if group.members.get(rank.slot.get() as usize) != Some(&rank.owner) {
             return Err(error("expert slot/owner mismatch"));
         }
-        let materializer = StateDictMaterializer::new(max_parameter_bytes)?;
         let mut experts = BTreeMap::new();
         for layer in group.layers.clone() {
             let FeedForward::Moe(moe) = resources.spec().layers()[layer].feed_forward() else {
@@ -267,6 +307,8 @@ impl ExpertRankWorker {
             calls: 0,
             tokens: 0,
             last_context: None,
+            #[cfg(feature = "cuda")]
+            cuda_cache: None,
         };
         Ok(Self {
             rank,
@@ -275,6 +317,8 @@ impl ExpertRankWorker {
             stats,
             #[cfg(feature = "cuda")]
             cuda: None,
+            #[cfg(feature = "cuda")]
+            resident_failed: false,
         })
     }
 
@@ -316,12 +360,109 @@ impl ExpertRankWorker {
         Ok(worker)
     }
 
+    /// Eager bounded all-owned residency. Never prewarms or reads the full
+    /// checkpoint here; prepared parameters are Arc hits in the shared image.
+    #[cfg(feature = "cuda")]
+    pub fn prepare_cuda_numeric_f32(
+        resources: &BoundDecoderResources,
+        rank: ExpertRank,
+        group: &ExpertGroup,
+        host: &ArcHostExpertCache,
+        config: NumericExpertConfig,
+        ops: std::rc::Rc<ferrule_backend::cuda::operators::linear::CudaOperators>,
+    ) -> Result<Self> {
+        use ferrule_model::transformer::{
+            CudaStandardDecoderOperators, ExpertCacheLimits, ExpertCachePolicy, NumericFp8Precision,
+        };
+        host.preflight()?;
+        let materializer = StateDictMaterializer::new(config.max_parameter_bytes)?;
+        materializer.attach_host_experts(host)?;
+        let mut worker = Self::prepare_with_materializer(resources, rank, group, &materializer)?;
+        let mut payload = 0usize;
+        let mut scratch = 0usize;
+        let mut parameters = Vec::new();
+        for expert in worker.experts.0.values() {
+            for linear in [expert.gate(), expert.up(), expert.down()] {
+                let artifact = linear
+                    .numeric_fp8()
+                    .ok_or_else(|| error("numeric EP requires compressed FP8 experts"))?;
+                payload = usize::try_from(artifact.storage_bytes())
+                    .ok()
+                    .and_then(|n| payload.checked_add(n))
+                    .ok_or_else(|| error("resident expert payload overflow"))?;
+                parameters.push(linear.parameter().binding().clone());
+            }
+            let bytes = expert
+                .gate()
+                .out_features()
+                .checked_mul(3)
+                .and_then(|n| n.checked_add(expert.input_width()))
+                .and_then(|n| n.checked_add(expert.output_width()))
+                .and_then(|n| n.checked_mul(group.limits.max_tokens))
+                .and_then(|n| n.checked_mul(4))
+                .ok_or_else(|| error("expert scratch overflow"))?;
+            scratch = scratch.max(bytes);
+        }
+        let required = payload
+            .checked_add(config.workspace_bytes)
+            .and_then(|n| n.checked_add(scratch))
+            .ok_or_else(|| error("resident expert budget overflow"))?;
+        if config.workspace_bytes == 0 || required > config.max_device_bytes {
+            return Err(error(format!(
+                "all-owned residency requires {required} bytes, budget {}",
+                config.max_device_bytes
+            )));
+        }
+        let count = worker.experts.0.len();
+        let mut operators = CudaStandardDecoderOperators::new_numeric_fp8_with_precision(
+            ops,
+            &parameters,
+            ExpertCachePolicy::Bounded(ExpertCacheLimits {
+                // Exactly the declared owned set; not the historical 1024 cap.
+                max_experts: count.max(1),
+                max_bytes: config.max_device_bytes,
+            }),
+            config.workspace_bytes,
+            NumericFp8Precision::F32Tf32x3,
+        )?;
+        for expert in worker.experts.0.values() {
+            let prepared = operators.prepare_expert(expert);
+            if operators.needs_quarantine() {
+                std::mem::forget(operators);
+                std::mem::forget(worker);
+                std::mem::forget(prepared);
+                std::panic::panic_any(PanicQuiescence::Unknown);
+            }
+            prepared?;
+        }
+        let stats = operators
+            .expert_cache_stats()
+            .expect("bounded numeric profile");
+        if stats.resident_experts != count
+            || stats.resident_bytes != payload
+            || stats.evictions != 0
+            || stats.pending_upload_bytes != 0
+            || stats.quarantined
+        {
+            return Err(error(
+                "incomplete all-owned CUDA residency at Ready barrier",
+            ));
+        }
+        worker.cuda = Some(operators);
+        Ok(worker)
+    }
+
     fn compute(
         &mut self,
         tokens: &[ferrule_model::transformer::ExpertToken],
     ) -> Result<Vec<ExpertResult>> {
         #[cfg(feature = "cuda")]
         if let Some(operators) = self.cuda.as_mut() {
+            if self.resident_failed {
+                return Err(error(
+                    "resident expert owner failed; reload/retry is disabled",
+                ));
+            }
             let result = ferrule_model::transformer::CudaExpertWorker::new(
                 self.rank.owner,
                 &self.group.placement,
@@ -332,6 +473,20 @@ impl ExpertRankWorker {
             if operators.needs_quarantine() {
                 std::mem::forget(result);
                 std::panic::panic_any(PanicQuiescence::Unknown);
+            }
+            if operators.numeric_fp8_precision().is_some() {
+                // A failed numeric operation may evict its local lease. This
+                // all-owned profile must never reload weights during a retry.
+                let stats = operators
+                    .expert_cache_stats()
+                    .expect("bounded resident owner");
+                self.resident_failed = result.is_err()
+                    || stats.evictions != 0
+                    || stats.resident_experts != self.experts.0.len()
+                    || stats.uploads != self.experts.0.len() as u64;
+                if self.resident_failed && result.is_ok() {
+                    return Err(error("resident expert set changed after Ready"));
+                }
             }
             return result;
         }
@@ -364,7 +519,14 @@ impl ReplicaWorker<Command> for ExpertRankWorker {
             return Err(error("incorrect expert pool slot"));
         }
         match request.input {
-            Command::Stats => Ok(Reply::Stats(self.stats.clone())),
+            Command::Stats => {
+                #[cfg(feature = "cuda")]
+                {
+                    self.stats.cuda_cache =
+                        self.cuda.as_ref().and_then(|ops| ops.expert_cache_stats());
+                }
+                Ok(Reply::Stats(self.stats.clone()))
+            }
             Command::Compute { context, bucket } => {
                 self.group.validate_bucket(context, &bucket)?;
                 if bucket.owner_rank != self.rank.owner {
@@ -410,14 +572,45 @@ impl ReplicaWorker<Command> for ExpertRankWorker {
 }
 
 /// One bounded persistent pool per explicit group. At most one command is
-/// outstanding globally (and one credit per owner); routes are bounded by group
-/// size. Payloads are bounded before admission, replies by the concrete CPU
+/// outstanding per owner; all owners are admitted before collection. Routes
+/// are bounded by group size. Payloads are bounded before admission, replies by the
 /// worker's shape-preserving SwiGLU. No test-supplied worker loop is necessary.
 pub struct ExpertRankWorkers {
     group: Arc<ExpertGroup>,
-    pool: DataParallelExecutor<Command, Reply, Error>,
+    pool: Option<DataParallelExecutor<Command, Reply, Error>>,
     next_serial: u64,
     closed: bool,
+    unknown: bool,
+    timeout: Duration,
+    tickets: BTreeMap<ExecutionTransactionId, ExpertTicket>,
+}
+
+struct ExpertTicket {
+    slot: ParallelRankId,
+    route: SessionId,
+    outer: Option<ExecutionTransactionId>,
+    index: usize,
+}
+
+impl Drop for ExpertRankWorkers {
+    fn drop(&mut self) {
+        let Some(mut pool) = self.pool.take() else {
+            return;
+        };
+        if !self.unknown {
+            pool.begin_shutdown();
+            let deadline = Instant::now() + self.timeout;
+            while !pool.shutdown_ready() && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_micros(50));
+            }
+            self.unknown = !pool.shutdown_ready();
+        }
+        if self.unknown {
+            // Never block Drop indefinitely or release unresolved ticket custody.
+            std::mem::forget(pool);
+            std::mem::forget(std::mem::take(&mut self.tickets));
+        }
+    }
 }
 
 impl ExpertRankWorkers {
@@ -452,12 +645,25 @@ impl ExpertRankWorkers {
                 Ok(worker)
             },
         )
-        .map_err(|e| error(format!("owner construction: {e:?}")))?;
+        .map_err(|e| {
+            if let BuildError::Owners(failures) = &e {
+                if failures
+                    .iter()
+                    .any(|f| matches!(f.kind, OwnerFailureKind::QuiescenceUnknown))
+                {
+                    std::panic::panic_any(PanicQuiescence::Unknown);
+                }
+            }
+            error(format!("owner construction: {e:?}"))
+        })?;
         Ok(Self {
             group,
-            pool,
+            pool: Some(pool),
             next_serial: 1,
             closed: false,
+            unknown: false,
+            timeout: Duration::from_secs(30),
+            tickets: BTreeMap::new(),
         })
     }
 
@@ -465,7 +671,164 @@ impl ExpertRankWorkers {
         &self.group
     }
     pub fn outstanding(&self) -> usize {
-        self.pool.outstanding()
+        self.tickets.len()
+    }
+
+    /// Bounds an entire dispatch, including cancellation drain. Expiry loses
+    /// proof permanently; a later host reply cannot retroactively acknowledge it.
+    pub fn set_timeout(&mut self, timeout: Duration) -> Result<()> {
+        if timeout.is_zero() || Instant::now().checked_add(timeout).is_none() {
+            return Err(error("invalid expert dispatch timeout"));
+        }
+        self.timeout = timeout;
+        Ok(())
+    }
+
+    fn pool(&mut self) -> &mut DataParallelExecutor<Command, Reply, Error> {
+        self.pool.as_mut().expect("live expert transport")
+    }
+
+    fn lose_proof(&mut self) -> ! {
+        self.unknown = true;
+        self.closed = true;
+        self.cancel_all();
+        self.pool().begin_shutdown();
+        std::panic::panic_any(PanicQuiescence::Unknown);
+    }
+
+    /// Cancellation intent for the enclosing transaction, never a private DP
+    /// serial. This does not retire tickets or claim a device acknowledgement.
+    pub fn cancel_transaction(&mut self, transaction: ExecutionTransactionId) {
+        for (serial, ticket) in &self.tickets {
+            if ticket.outer == Some(transaction) {
+                let _ = self.pool.as_mut().unwrap().cancel(*serial);
+            }
+        }
+    }
+
+    fn cancel_all(&mut self) {
+        for serial in self.tickets.keys() {
+            let _ = self.pool.as_mut().unwrap().cancel(*serial);
+        }
+    }
+
+    fn admit(&mut self, owner: ParallelRankId, command: Command, index: usize) -> Result<()> {
+        let index_owner = self
+            .group
+            .members
+            .iter()
+            .position(|&m| m == owner)
+            .ok_or_else(|| error("unknown expert owner"))?;
+        let slot = ParallelRankId::new(index_owner as u32);
+        let route = SessionId(index_owner as u64 + 1);
+        let serial = ExecutionTransactionId::new(self.next_serial)?;
+        self.next_serial = self
+            .next_serial
+            .checked_add(1)
+            .ok_or_else(|| error("command serial exhausted"))?;
+        let outer = match &command {
+            Command::Compute { context, .. } => Some(context.transaction),
+            Command::Stats => None,
+        };
+        self.pool()
+            .try_submit_to(route, slot, serial, command)
+            .map_err(|e| error(format!("owner admission: {:?}", e.kind)))?;
+        self.tickets.insert(
+            serial,
+            ExpertTicket {
+                slot,
+                route,
+                outer,
+                index,
+            },
+        );
+        Ok(())
+    }
+
+    fn receive(&mut self) -> Option<(usize, Result<Reply>)> {
+        let completion = self.pool().try_recv()?;
+        let Some(ticket) = self.tickets.get(&completion.transaction) else {
+            self.lose_proof();
+        };
+        if completion.rank != ticket.slot || completion.session != ticket.route {
+            self.lose_proof();
+        }
+        if matches!(completion.outcome, CompletionOutcome::QuiescenceUnknown) {
+            self.lose_proof();
+        }
+        let ticket = self.tickets.remove(&completion.transaction).unwrap();
+        let reply = match completion.outcome {
+            CompletionOutcome::Success(reply) => Ok(reply),
+            CompletionOutcome::Failed(source) => Err(source),
+            CompletionOutcome::Cancelled => Err(error("cancelled expert work")),
+            CompletionOutcome::QuiescenceUnknown => self.lose_proof(),
+            other => {
+                self.closed = true;
+                Err(error(format!("expert owner unavailable: {other:?}")))
+            }
+        };
+        Some((ticket.index, reply))
+    }
+
+    fn call_many(
+        &mut self,
+        commands: Vec<(ParallelRankId, Command)>,
+        check: &mut dyn FnMut() -> Result<()>,
+    ) -> Result<Vec<Reply>> {
+        if self.closed || !self.tickets.is_empty() {
+            return Err(error("expert workers closed or busy"));
+        }
+        check()?;
+        let deadline = Instant::now() + self.timeout;
+        let mut replies = (0..commands.len()).map(|_| None).collect::<Vec<_>>();
+        let mut rejected = None;
+        // No waits between admissions: every legal owner can execute at once.
+        for (index, (owner, command)) in commands.into_iter().enumerate() {
+            let admission = check().and_then(|()| {
+                if Instant::now() >= deadline {
+                    Err(error("expert admission deadline expired"))
+                } else {
+                    self.admit(owner, command, index)
+                }
+            });
+            if let Err(source) = admission {
+                rejected = Some(source);
+                self.cancel_all();
+                break;
+            }
+        }
+        while !self.tickets.is_empty() {
+            if rejected.is_none()
+                && let Err(source) = check()
+            {
+                rejected = Some(source);
+                self.cancel_all();
+            }
+            if let Some((index, result)) = self.receive() {
+                match result {
+                    Ok(reply) => replies[index] = Some(reply),
+                    Err(source) => {
+                        if rejected.is_none() {
+                            rejected = Some(source);
+                        }
+                        self.cancel_all();
+                    }
+                }
+            } else {
+                if Instant::now() >= deadline {
+                    self.lose_proof();
+                }
+                std::thread::sleep(Duration::from_micros(50));
+            }
+        }
+        if let Some(source) = rejected {
+            return Err(source);
+        }
+        check()?;
+        replies
+            .into_iter()
+            .map(|reply| reply.ok_or_else(|| error("missing expert reply")))
+            .collect()
     }
 
     fn call(
@@ -474,64 +837,70 @@ impl ExpertRankWorkers {
         command: Command,
         check: &mut dyn FnMut() -> Result<()>,
     ) -> Result<Reply> {
+        self.call_many(vec![(owner, command)], check)
+            .map(|mut replies| replies.remove(0))
+    }
+
+    /// Validate the entire outer plan before admitting its first nonempty owner.
+    pub fn execute_batch(
+        &mut self,
+        context: ExpertDispatchContext,
+        buckets: Vec<ExpertTokenBucket>,
+        check_active: &mut dyn FnMut(ExecutionTransactionId) -> Result<()>,
+    ) -> Result<Vec<(ParallelRankId, Vec<ExpertResult>)>> {
         if self.closed {
             return Err(error("expert workers closed or unavailable"));
         }
-        check()?;
-        let index = self
-            .group
-            .members
-            .iter()
-            .position(|&member| member == owner)
-            .ok_or_else(|| error("unknown expert owner"))?;
-        let slot = ParallelRankId::new(index as u32);
-        let route = SessionId(index as u64 + 1);
-        let serial = ExecutionTransactionId::new(self.next_serial)?;
-        self.next_serial = self
-            .next_serial
-            .checked_add(1)
-            .ok_or_else(|| error("command serial exhausted"))?;
-        self.pool
-            .try_submit_to(route, slot, serial, command)
-            .map_err(|e| error(format!("owner admission: {:?}", e.kind)))?;
-        let mut rejected = None;
-        let completion = loop {
-            if rejected.is_none()
-                && let Err(source) = check()
-            {
-                rejected = Some(source);
-                let _ = self.pool.cancel(serial);
+        check_active(context.transaction)?;
+        self.group.validate_context(context)?;
+        let mut seen = BTreeSet::new();
+        let mut identities = BTreeSet::new();
+        let mut tokens = 0usize;
+        let mut bytes = 0usize;
+        for bucket in &buckets {
+            self.group.validate_bucket(context, bucket)?;
+            if !seen.insert(bucket.owner_rank) {
+                return Err(error("duplicate batch owner"));
             }
-            if let Some(completion) = self.pool.try_recv() {
-                break completion;
+            tokens = tokens
+                .checked_add(bucket.tokens.len())
+                .ok_or_else(|| error("token overflow"))?;
+            for token in &bucket.tokens {
+                if !identities.insert((token.source_row, token.route_slot)) {
+                    return Err(error("duplicate dispatch route identity"));
+                }
+                bytes = token
+                    .payload
+                    .len()
+                    .checked_mul(4)
+                    .and_then(|n| bytes.checked_add(n))
+                    .ok_or_else(|| error("activation byte overflow"))?;
             }
-            std::thread::sleep(Duration::from_micros(50));
-        };
-        if completion.transaction != serial
-            || completion.rank != slot
-            || completion.session != route
-        {
-            self.closed = true;
-            std::panic::panic_any(PanicQuiescence::Unknown);
         }
-        let reply = match completion.outcome {
-            CompletionOutcome::Success(reply) => Ok(reply),
-            CompletionOutcome::Failed(source) => Err(source),
-            CompletionOutcome::Cancelled => Err(error("cancelled expert work")),
-            CompletionOutcome::QuiescenceUnknown => {
-                self.closed = true;
-                std::panic::panic_any(PanicQuiescence::Unknown);
-            }
-            other => {
-                self.closed = true;
-                Err(error(format!("expert owner unavailable: {other:?}")))
-            }
-        };
-        if let Some(source) = rejected {
-            return Err(source);
+        if tokens > self.group.limits.max_tokens || bytes > self.group.limits.max_bytes {
+            return Err(error("outer dispatch exceeds limits"));
         }
-        check()?;
-        reply
+        let owners = buckets.iter().map(|b| b.owner_rank).collect::<Vec<_>>();
+        let mut nonempty = Vec::new();
+        let mut output = owners
+            .into_iter()
+            .map(|owner| (owner, Vec::new()))
+            .collect::<Vec<_>>();
+        let mut commands = Vec::new();
+        for (index, bucket) in buckets.into_iter().enumerate() {
+            if !bucket.tokens.is_empty() {
+                nonempty.push(index);
+                commands.push((bucket.owner_rank, Command::Compute { context, bucket }));
+            }
+        }
+        let replies = self.call_many(commands, &mut || check_active(context.transaction))?;
+        for (index, reply) in nonempty.into_iter().zip(replies) {
+            let Reply::Results(results) = reply else {
+                return Err(error("unexpected expert reply"));
+            };
+            output[index].1 = results;
+        }
+        Ok(output)
     }
 
     /// Low-level activation/result call with caller authority. The model routed
@@ -577,9 +946,28 @@ impl ExpertRankWorkers {
 
     pub fn shutdown(&mut self) -> Result<()> {
         self.closed = true;
-        self.pool
-            .shutdown()
-            .map_err(|e| error(format!("owner shutdown: {e:?}")))
+        if self.unknown {
+            self.lose_proof();
+        }
+        self.pool().begin_shutdown();
+        let deadline = Instant::now() + self.timeout;
+        while !self.pool().shutdown_ready() {
+            if Instant::now() >= deadline {
+                self.lose_proof();
+            }
+            std::thread::sleep(Duration::from_micros(50));
+        }
+        let result = self.pool().shutdown();
+        if let Err(failure) = &result {
+            if failure
+                .failures
+                .iter()
+                .any(|f| matches!(f.kind, OwnerFailureKind::QuiescenceUnknown))
+            {
+                self.lose_proof();
+            }
+        }
+        result.map_err(|e| error(format!("owner shutdown: {e:?}")))
     }
 }
 
@@ -624,6 +1012,62 @@ impl ExpertParallelExecutor {
         })
     }
 
+    /// Resources/cache cross threads only as immutable Send metadata/host
+    /// payloads. Each CUDA context is constructed inside its persistent owner.
+    /// Returning proves every owner's eager uploads completed (DP Ready barrier).
+    #[cfg(feature = "cuda")]
+    pub fn new_numeric_f32(
+        group: ExpertGroup,
+        resources: Arc<BoundDecoderResources>,
+        host: ArcHostExpertCache,
+        devices: Vec<usize>,
+        config: NumericExpertConfig,
+    ) -> Result<Self> {
+        group.validate_resources(&resources)?;
+        if devices.len() != group.members.len()
+            || config.dispatch_timeout.is_zero()
+            || Instant::now()
+                .checked_add(config.dispatch_timeout)
+                .is_none()
+        {
+            return Err(error(
+                "numeric EP requires explicit devices and finite timeout",
+            ));
+        }
+        let mut executor = Self::new_cuda(group, move |rank, group| {
+            let ops = std::rc::Rc::new(
+                ferrule_backend::cuda::operators::linear::CudaOperators::new_on_device(
+                    devices[rank.slot.get() as usize],
+                )?,
+            );
+            ExpertRankWorker::prepare_cuda_numeric_f32(&resources, rank, group, &host, config, ops)
+        })?;
+        executor.workers.set_timeout(config.dispatch_timeout)?;
+        Ok(executor)
+    }
+
+    /// Root GPU combine only: no second model weight directory, context or
+    /// mutable borrow of the hybrid module's operators.
+    #[cfg(feature = "cuda")]
+    pub fn into_hybrid_cuda(
+        self,
+        ops: std::rc::Rc<ferrule_backend::cuda::operators::linear::CudaOperators>,
+    ) -> Result<HybridCudaExpertAdapter> {
+        if !self.cuda {
+            return Err(error("hybrid attachment requires CUDA owners"));
+        }
+        let combine = ferrule_model::transformer::CudaStandardDecoderOperators::new(
+            ops,
+            ferrule_model::execution::ExecutionPrecisionPolicy::f32(),
+            &[],
+        )?;
+        Ok(HybridCudaExpertAdapter {
+            executor: self,
+            combine,
+            shutdown_started: None,
+        })
+    }
+
     #[cfg(feature = "cuda")]
     pub fn is_cuda(&self) -> bool {
         self.cuda
@@ -640,11 +1084,7 @@ impl ExpertParallelExecutor {
             return Err(error("CUDA routed execution requires CUDA expert owners"));
         }
         let group = Arc::clone(&self.workers.group);
-        if request.context.source_rank != group.source_rank
-            || !group.layers.contains(&request.context.layer)
-        {
-            return Err(error("unknown expert source or layer"));
-        }
+        group.validate_context(request.context)?;
         let check = RefCell::new(check_active);
         let mut results = ActiveResults {
             workers: &mut self.workers,
@@ -691,11 +1131,7 @@ impl RoutedSwiGluExecutor for ExpertParallelExecutor {
             return Err(error("CUDA experts require the GPU result-combine seam"));
         }
         let group = Arc::clone(&self.workers.group);
-        if request.context.source_rank != group.source_rank
-            || !group.layers.contains(&request.context.layer)
-        {
-            return Err(error("unknown expert source or layer"));
-        }
+        group.validate_context(request.context)?;
         // These borrows are sequential: model checks and transport polling both
         // consult the SAME caller authority, without an EP transaction registry.
         let check = RefCell::new(check_active);
@@ -721,8 +1157,124 @@ struct ActiveResults<'a, 'b> {
 }
 
 impl ExpertResultExecutor for ActiveResults<'_, '_> {
+    fn supports_batch(&self) -> bool {
+        true
+    }
+
+    fn execute_batch(
+        &mut self,
+        buckets: Vec<ExpertTokenBucket>,
+    ) -> Result<Vec<(ParallelRankId, Vec<ExpertResult>)>> {
+        self.workers
+            .execute_batch(self.context, buckets, &mut |id| self.check.borrow_mut()(id))
+    }
+
     fn execute(&mut self, bucket: ExpertTokenBucket) -> Result<Vec<ExpertResult>> {
         self.workers
             .execute_bucket(self.context, bucket, &mut |id| self.check.borrow_mut()(id))
     }
 }
+
+/// Owner-local adapter around the same EP lifecycle/tickets, not another pool
+/// or logical transaction manager. Unknown is a permanent custody state.
+#[cfg(feature = "cuda")]
+pub struct HybridCudaExpertAdapter {
+    executor: ExpertParallelExecutor,
+    combine: ferrule_model::transformer::CudaStandardDecoderOperators,
+    shutdown_started: Option<Instant>,
+}
+
+#[cfg(feature = "cuda")]
+impl HybridCudaExpertAdapter {
+    /// Query the actual owners after drain completes, without changing expert
+    /// weights or compute counters. Uses the same bounded transport tickets;
+    /// never fabricates startup counters for a closed/unknown owner.
+    pub fn owner_stats(&mut self) -> Result<Vec<ExpertOwnerStats>> {
+        use ferrule_model::decoder::{HybridCudaExpertProgress, HybridCudaRoutedExecutor};
+        if self.drain()? != HybridCudaExpertProgress::Complete || self.shutdown_started.is_some() {
+            return Err(error(
+                "owner statistics require drained, open expert owners",
+            ));
+        }
+        self.executor.owner_stats()
+    }
+}
+
+#[cfg(feature = "cuda")]
+impl RoutedSwiGluExecutor for HybridCudaExpertAdapter {
+    fn routed_swiglu(
+        &mut self,
+        request: RoutedSwiGluRequest<'_>,
+        check_active: &mut dyn FnMut(ExecutionTransactionId) -> Result<()>,
+    ) -> Result<OperatorProgress<Rows>> {
+        if self.shutdown_started.is_some() || self.executor.workers.unknown {
+            return Err(error("hybrid expert attachment closed or unknown"));
+        }
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.executor
+                .routed_swiglu_cuda(&mut self.combine, request, check_active)
+        })) {
+            Ok(result) => result,
+            Err(payload) => {
+                self.executor.workers.unknown = true;
+                self.executor.workers.closed = true;
+                self.executor.workers.cancel_all();
+                self.executor.workers.pool().begin_shutdown();
+                std::mem::forget(payload);
+                Err(error("expert completion unknown; retaining owner custody"))
+            }
+        }
+    }
+}
+
+#[cfg(feature = "cuda")]
+impl ferrule_model::decoder::HybridCudaRoutedExecutor for HybridCudaExpertAdapter {
+    fn drain(&mut self) -> Result<ferrule_model::decoder::HybridCudaExpertProgress> {
+        use ferrule_model::decoder::HybridCudaExpertProgress as Progress;
+        if self.executor.workers.unknown || self.combine.needs_quarantine() {
+            self.executor.workers.unknown = true;
+            return Ok(Progress::Unknown);
+        }
+        // Synchronous successful/failed dispatch drains its admitted tickets.
+        // The only escaped in-flight path is caught above and permanently unknown.
+        Ok(if self.executor.outstanding() == 0 {
+            Progress::Complete
+        } else {
+            Progress::Pending
+        })
+    }
+
+    fn shutdown(&mut self) -> Result<ferrule_model::decoder::HybridCudaExpertProgress> {
+        use ferrule_model::decoder::HybridCudaExpertProgress as Progress;
+        if self.drain()? != Progress::Complete {
+            return self.drain();
+        }
+        let workers = &mut self.executor.workers;
+        let started = *self.shutdown_started.get_or_insert_with(Instant::now);
+        workers.closed = true;
+        workers.pool().begin_shutdown();
+        if !workers.pool().shutdown_ready() {
+            if started.elapsed() >= workers.timeout {
+                workers.unknown = true;
+                return Ok(Progress::Unknown);
+            }
+            return Ok(Progress::Pending);
+        }
+        if let Err(failure) = workers.pool().shutdown() {
+            // A shutdown failure may hide device custody. Never turn a consumed
+            // one-shot DP error into Complete on the next adapter poll.
+            workers.unknown = true;
+            tracing::error!(?failure, "expert owner shutdown unknown");
+            return Ok(Progress::Unknown);
+        }
+        Ok(Progress::Complete)
+    }
+
+    fn on_error(&mut self, transaction: ExecutionTransactionId) {
+        self.executor.workers.cancel_transaction(transaction);
+    }
+}
+
+#[cfg(all(test, unix))]
+#[path = "expert_tests.rs"]
+mod tests;

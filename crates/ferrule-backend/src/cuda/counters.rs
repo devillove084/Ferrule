@@ -10,6 +10,9 @@ use std::cell::Cell;
 pub struct CudaFailpoints {
     /// Fail the next device allocation attempt.
     next_allocation: Cell<bool>,
+    next_stream_sync: Cell<bool>,
+    next_copy_event: Cell<bool>,
+    next_submitted_cleanup: Cell<bool>,
     /// Fail the next arena acquire or grow attempt.
     next_arena_acquire: Cell<bool>,
     /// Fail the next D2D preservation copy during arena growth.
@@ -25,6 +28,33 @@ pub struct CudaFailpoints {
 }
 
 impl CudaFailpoints {
+    /// Fail event creation after a pinned copy, without invalid driver calls.
+    pub fn arm_copy_event(&self) {
+        self.next_copy_event.set(true);
+    }
+
+    /// Withhold completion evidence for the next submitted-copy drain.
+    pub fn arm_submitted_cleanup(&self) {
+        self.next_submitted_cleanup.set(true);
+    }
+
+    pub(crate) fn check_copy_event(&self) -> bool {
+        self.next_copy_event.replace(false)
+    }
+    pub(crate) fn check_submitted_cleanup(&self) -> bool {
+        self.next_submitted_cleanup.replace(false)
+    }
+
+    /// Reject the next ordinary sync operation before its copy/sync closure.
+    /// This does not suppress draining an already submitted pinned copy.
+    pub fn arm_stream_sync(&self) {
+        self.next_stream_sync.set(true);
+    }
+
+    pub(crate) fn check_stream_sync(&self) -> bool {
+        self.next_stream_sync.replace(false)
+    }
+
     pub fn arm_allocation(&self) {
         self.next_allocation.set(true);
     }
@@ -116,6 +146,9 @@ impl CudaFailpoints {
 
     pub fn disarm_all(&self) {
         self.next_allocation.set(false);
+        self.next_stream_sync.set(false);
+        self.next_copy_event.set(false);
+        self.next_submitted_cleanup.set(false);
         self.next_arena_acquire.set(false);
         self.next_d2d_preserve.set(false);
         self.next_expert_upload.set(false);
@@ -143,7 +176,9 @@ pub struct CudaOpCounters {
     pub device_allocations: u64,
     pub device_allocation_failures: u64,
     pub device_allocation_bytes: u64,
-    /// Successful whole-stream synchronizations requested by Ferrule.
+    /// Successful explicit whole-stream synchronizations requested by the facade.
+    /// Internal syncs in DeviceBuffer::from_host/to_host_vec are NOT included;
+    /// zero here is not proof that no native synchronization occurred.
     pub stream_wide_syncs: u64,
     pub stream_wide_sync_failures: u64,
     pub moe_calls: u64,
@@ -177,6 +212,7 @@ pub(crate) struct CudaOpCounterCells {
     device_allocations: Cell<u64>,
     device_allocation_failures: Cell<u64>,
     device_allocation_bytes: Cell<u64>,
+    stream_wide_sync_attempts: Cell<u64>,
     stream_wide_syncs: Cell<u64>,
     stream_wide_sync_failures: Cell<u64>,
     moe_calls: Cell<u64>,
@@ -236,6 +272,7 @@ impl CudaOpCounterCells {
         self.device_allocations.set(0);
         self.device_allocation_failures.set(0);
         self.device_allocation_bytes.set(0);
+        self.stream_wide_sync_attempts.set(0);
         self.stream_wide_syncs.set(0);
         self.stream_wide_sync_failures.set(0);
         self.moe_calls.set(0);
@@ -289,6 +326,58 @@ impl CudaOpCounterCells {
             .set(self.artifact_upload_bytes.get().saturating_add(bytes));
     }
 
+    pub(crate) fn checked_allocation<T>(
+        &self,
+        precheck: impl FnOnce() -> ferrule_common::Result<()>,
+        failpoints: &CudaFailpoints,
+        bytes: u64,
+        execute: impl FnOnce() -> ferrule_common::Result<T>,
+    ) -> ferrule_common::Result<T> {
+        precheck()?;
+        if failpoints.check_allocation() {
+            return Err(ferrule_common::Error::Internal {
+                message: "deterministic failpoint: device allocation".into(),
+            });
+        }
+        self.begin_device_allocation();
+        match execute() {
+            Ok(value) => {
+                self.complete_device_allocation(bytes);
+                Ok(value)
+            }
+            Err(error) => {
+                self.fail_device_allocation();
+                Err(error)
+            }
+        }
+    }
+
+    pub(crate) fn checked_sync<T>(
+        &self,
+        precheck: impl FnOnce() -> ferrule_common::Result<()>,
+        failpoint: impl FnOnce() -> bool,
+        execute: impl FnOnce() -> ferrule_common::Result<T>,
+    ) -> ferrule_common::Result<T> {
+        precheck()?;
+        if failpoint() {
+            return Err(ferrule_common::Error::Internal {
+                message: "deterministic failpoint: stream-wide sync".into(),
+            });
+        }
+        self.stream_wide_sync_attempts
+            .set(self.stream_wide_sync_attempts.get().saturating_add(1));
+        match execute() {
+            Ok(value) => {
+                self.complete_stream_wide_sync();
+                Ok(value)
+            }
+            Err(error) => {
+                self.fail_stream_wide_sync();
+                Err(error)
+            }
+        }
+    }
+
     pub(crate) fn begin_device_allocation(&self) {
         self.device_allocation_attempts
             .set(self.device_allocation_attempts.get().saturating_add(1));
@@ -304,6 +393,10 @@ impl CudaOpCounterCells {
     pub(crate) fn fail_device_allocation(&self) {
         self.device_allocation_failures
             .set(self.device_allocation_failures.get().saturating_add(1));
+    }
+
+    pub(crate) fn stream_wide_sync_attempts(&self) -> u64 {
+        self.stream_wide_sync_attempts.get()
     }
 
     pub(crate) fn complete_stream_wide_sync(&self) {
@@ -449,5 +542,117 @@ mod tests {
         assert!(!fp.check_main_compressor_transition());
         assert!(!fp.check_indexer_compressor_transition());
         assert!(!fp.check_resource_install());
+    }
+}
+
+#[cfg(test)]
+mod checked_tests {
+    use super::*;
+    use ferrule_common::{Error, Result};
+    fn rejected() -> Result<()> {
+        Err(Error::Internal {
+            message: "injected".into(),
+        })
+    }
+
+    #[test]
+    fn lazy_allocation_orders_check_failpoint_attempt_execute_result() {
+        let counters = CudaOpCounterCells::default();
+        let failpoints = CudaFailpoints::default();
+        let calls = Cell::new(0);
+        let execute = || {
+            calls.set(calls.get() + 1);
+            Ok(())
+        };
+        failpoints.arm_allocation();
+        assert!(
+            counters
+                .checked_allocation(rejected, &failpoints, 4, execute)
+                .is_err()
+        );
+        assert_eq!(calls.get(), 0);
+        assert!(
+            counters
+                .checked_allocation(|| Ok(()), &failpoints, 4, execute)
+                .is_err()
+        );
+        assert_eq!(calls.get(), 0);
+        assert_eq!(counters.snapshot().device_allocation_attempts, 0);
+        counters
+            .checked_allocation(
+                || Ok(()),
+                &failpoints,
+                4,
+                || {
+                    assert_eq!(counters.snapshot().device_allocation_attempts, 1);
+                    execute()
+                },
+            )
+            .unwrap();
+        assert!(
+            counters
+                .checked_allocation(|| Ok(()), &failpoints, 8, rejected)
+                .is_err()
+        );
+        let got = counters.snapshot();
+        assert_eq!(
+            (
+                got.device_allocation_attempts,
+                got.device_allocations,
+                got.device_allocation_failures,
+                got.device_allocation_bytes
+            ),
+            (2, 1, 1, 4)
+        );
+    }
+
+    #[test]
+    fn lazy_sync_rejection_never_executes_or_counts_attempt() {
+        let counters = CudaOpCounterCells::default();
+        let failpoints = CudaFailpoints::default();
+        failpoints.arm_stream_sync();
+        assert!(
+            counters
+                .checked_sync(
+                    rejected,
+                    || failpoints.check_stream_sync(),
+                    || -> Result<()> { panic!("executed before check") }
+                )
+                .is_err()
+        );
+        assert!(
+            counters
+                .checked_sync(
+                    || Ok(()),
+                    || failpoints.check_stream_sync(),
+                    || -> Result<()> { panic!("executed despite failpoint") }
+                )
+                .is_err()
+        );
+        assert_eq!(counters.stream_wide_sync_attempts(), 0);
+        counters
+            .checked_sync(
+                || Ok(()),
+                || false,
+                || {
+                    assert_eq!(counters.stream_wide_sync_attempts(), 1);
+                    Ok(())
+                },
+            )
+            .unwrap();
+        assert!(
+            counters
+                .checked_sync(|| Ok(()), || false, rejected)
+                .is_err()
+        );
+        let got = counters.snapshot();
+        assert_eq!(
+            (
+                counters.stream_wide_sync_attempts(),
+                got.stream_wide_syncs,
+                got.stream_wide_sync_failures
+            ),
+            (2, 1, 1)
+        );
     }
 }

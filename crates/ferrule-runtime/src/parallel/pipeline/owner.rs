@@ -6,8 +6,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use ferrule_common::execution::{ExecutionBatch, KvPageId, KvReservationView, StateSlot};
 use ferrule_model::decoder::{
-    DecoderKvBackend, DecoderKvCapacity, DecoderKvCommitBackend, DecoderKvPageSnapshot,
-    DecoderKvPrepare, DecoderKvSequenceCustody, GenericDecoderSequenceState, KvEndProgress,
+    DecoderKvBackend, DecoderKvCapacity, DecoderKvPageSnapshot, DecoderKvPrepare,
+    DecoderKvSequenceCustody, GenericDecoderSequenceState, KvCommitParticipant, KvEndProgress,
     KvPrepareQuiescenceUnknown, PackedDecoderBatch,
 };
 use ferrule_model::transformer::SegmentInput;
@@ -67,7 +67,11 @@ pub struct PipelineOwnerStats {
 
 impl<B, P> PipelineStageWorker<B, P>
 where
-    B: DecoderKvCommitBackend<SequenceState = GenericDecoderSequenceState>,
+    B: DecoderKvBackend<SequenceState = GenericDecoderSequenceState>
+        + KvCommitParticipant<
+            SequenceState = GenericDecoderSequenceState,
+            Transaction = <B as DecoderKvBackend>::Transaction,
+        >,
     P: PipelineStageProgram<KvView = B::KvView>,
 {
     /// Shared thread/process stage bootstrap. Reject mismatched boot metadata on
@@ -76,7 +80,11 @@ where
         let validation = (|| {
             boot.validate()?;
             stage.validate()?;
-            if stage.description.plan != boot.plan || stage.description.config != boot.config {
+            if stage.description.plan != boot.plan
+                || stage.description.config != boot.config
+                || stage.backend.capacity().physical_pages != boot.physical_pages
+                || stage.backend.capacity().free_pages != boot.physical_pages
+            {
                 return Err(error("owner factory returned a different plan or capacity"));
             }
             Ok(())
@@ -555,7 +563,11 @@ where
 
 impl<B, P> ReplicaWorker<Command> for PipelineStageWorker<B, P>
 where
-    B: DecoderKvCommitBackend<SequenceState = GenericDecoderSequenceState>,
+    B: DecoderKvBackend<SequenceState = GenericDecoderSequenceState>
+        + KvCommitParticipant<
+            SequenceState = GenericDecoderSequenceState,
+            Transaction = <B as DecoderKvBackend>::Transaction,
+        >,
     P: PipelineStageProgram<KvView = B::KvView>,
 {
     type Output = Reply;
@@ -584,7 +596,11 @@ where
 
 impl<B, P> StageWorkerDispatch for PipelineStageWorker<B, P>
 where
-    B: DecoderKvCommitBackend<SequenceState = GenericDecoderSequenceState>,
+    B: DecoderKvBackend<SequenceState = GenericDecoderSequenceState>
+        + KvCommitParticipant<
+            SequenceState = GenericDecoderSequenceState,
+            Transaction = <B as DecoderKvBackend>::Transaction,
+        >,
     P: PipelineStageProgram<KvView = B::KvView>,
 {
     fn dispatch(&mut self, command: Command) -> Result<Reply> {

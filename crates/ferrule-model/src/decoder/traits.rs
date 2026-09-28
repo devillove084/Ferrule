@@ -1,4 +1,4 @@
-use super::{DecoderKvPageStatus, PackedDecoderBatch};
+use super::{DecoderKvPageStatus, KvCommitProjection, PackedDecoderBatch};
 use crate::execution::{ResolvedStage, SequenceTopologyId};
 use ferrule_common::execution::{ExecutionTransactionId, KvCowReplacement, KvPageId, StateSlot};
 use ferrule_common::{ContinuationId, DependencySet, ResidencyLeaseSet, Result};
@@ -132,6 +132,169 @@ impl KvRankAck {
 /// `PagedKvBackend<P>` opts in only through `PhysicalKvPreparedPool`; legacy MLA
 /// pools retain their ordinary commit contract. CUDA F32 GQA uses the same
 /// ledger/cohort with owner-local shadow slots and exact compute-stream fences.
+///
+/// Narrow prepared-KV participant used by the cohort protocol. This contract
+/// carries only already-owned transaction custody and host commit metadata;
+/// it does not imply execution, capacity inspection, or page lifecycle access.
+///
+/// Execution is not available through a participant-only bound:
+/// ```compile_fail
+/// use ferrule_model::decoder::{KvCommitParticipant, PackedDecoderBatch};
+/// fn enter<P: KvCommitParticipant>(p: &mut P, tx: &mut P::Transaction,
+///     batch: &PackedDecoderBatch, states: &mut [P::SequenceState]) {
+///     p.enter(tx, batch, states).unwrap();
+/// }
+/// ```
+/// Nor does sealing custody grant local capacity inspection:
+/// ```compile_fail
+/// use ferrule_model::decoder::{KvCommitParticipant, PreparedKvCommit};
+/// use ferrule_common::ParallelRankId;
+/// fn capacity<P: KvCommitParticipant>(token: &PreparedKvCommit<'_, P, ()>) {
+///     token.capacity(ParallelRankId::new(0)).unwrap();
+/// }
+/// ```
+/// ```compile_fail
+/// use ferrule_model::decoder::{KvCommitParticipant, PreparedKvCommit};
+/// use ferrule_common::{ParallelRankId, execution::KvPageId};
+/// fn status<P: KvCommitParticipant>(token: &PreparedKvCommit<'_, P, ()>) {
+///     token.page_status(ParallelRankId::new(0), KvPageId(0)).unwrap();
+/// }
+/// ```
+pub trait KvCommitParticipant {
+    type SequenceState;
+    /// Linear transaction custody; never reconstructed from an addressing key.
+    type Transaction;
+
+    /// Read-only: validate the exact existing physical reservation and sources.
+    fn preflight_commit_ready(
+        &self,
+        transaction: &Self::Transaction,
+        binding: &KvCommitBinding,
+        rank: ferrule_common::ParallelRankId,
+        sources: &[Self::SequenceState],
+    ) -> Result<()>;
+    /// Describe the already-validated logical projection, in packed order.
+    /// Rank-local sequence identities may differ; logical page generations may not.
+    fn commit_projection(&self, transaction: &Self::Transaction) -> Result<KvCommitProjection>;
+    /// Exactly one dispatch. All retries use poll_install_ack, including after Err.
+    fn install_commit(
+        &mut self,
+        transaction: &mut Self::Transaction,
+        generation: u64,
+    ) -> Result<KvEndProgress>;
+    fn poll_install_ack(
+        &mut self,
+        transaction: &mut Self::Transaction,
+        generation: u64,
+    ) -> Result<KvEndProgress>;
+    /// Retry cleanup, including a lost owner ACK, without guessing unknown pages free.
+    fn abort_prepared(
+        &mut self,
+        transaction: &mut Self::Transaction,
+        generation: u64,
+    ) -> Result<KvEndProgress>;
+    /// Infallible after all install ACKs. Keep page pins until finish_prepared.
+    fn publish_committed(&mut self, transaction: &Self::Transaction);
+    fn preflight_retirement(
+        &self,
+        transaction: &Self::Transaction,
+        pages: &[KvPageId],
+    ) -> Result<()>;
+    /// Retry-safe release. Complete includes every physical release fence.
+    fn retire_prepared(
+        &mut self,
+        transaction: &mut Self::Transaction,
+        generation: u64,
+        pages: &[KvPageId],
+    ) -> Result<KvEndProgress>;
+    /// Infallible after all cleanup/retirement ACKs; consumes ledger custody only.
+    fn finish_prepared(&mut self, transaction: Self::Transaction);
+}
+
+/// Local-only capacity and page-state witness. Remote participants do not
+/// implement this capability. The distinct method names preserve legacy method
+/// lookup when callers import both this inspector and `DecoderKvBackend`.
+pub trait KvCapacityInspector {
+    fn inspect_capacity(&self) -> DecoderKvCapacity;
+    fn inspect_page_status(&self, page: KvPageId) -> super::DecoderKvPageStatus;
+}
+
+impl<T: DecoderKvBackend + ?Sized> KvCapacityInspector for T {
+    fn inspect_capacity(&self) -> DecoderKvCapacity {
+        DecoderKvBackend::capacity(self)
+    }
+
+    fn inspect_page_status(&self, page: KvPageId) -> super::DecoderKvPageStatus {
+        DecoderKvBackend::page_status(self, page)
+    }
+}
+
+/// Compatibility adapter for local executable backends. Legacy MLA and
+/// ordinary pools keep their existing public implementation; only opted-in
+/// prepared pools implement this old trait and therefore bridge to the narrow
+/// participant contract below.
+impl<T: DecoderKvCommitBackend + ?Sized> KvCommitParticipant for T {
+    type SequenceState = <T as DecoderKvBackend>::SequenceState;
+    type Transaction = <T as DecoderKvBackend>::Transaction;
+
+    fn preflight_commit_ready(
+        &self,
+        transaction: &Self::Transaction,
+        binding: &KvCommitBinding,
+        rank: ferrule_common::ParallelRankId,
+        sources: &[Self::SequenceState],
+    ) -> Result<()> {
+        DecoderKvCommitBackend::preflight_commit_ready(self, transaction, binding, rank, sources)
+    }
+    fn commit_projection(&self, transaction: &Self::Transaction) -> Result<KvCommitProjection> {
+        Ok(DecoderKvCommitBackend::commit_batch(self, transaction)?.commit_projection())
+    }
+    fn install_commit(
+        &mut self,
+        transaction: &mut Self::Transaction,
+        generation: u64,
+    ) -> Result<KvEndProgress> {
+        DecoderKvCommitBackend::install_commit(self, transaction, generation)
+    }
+    fn poll_install_ack(
+        &mut self,
+        transaction: &mut Self::Transaction,
+        generation: u64,
+    ) -> Result<KvEndProgress> {
+        DecoderKvCommitBackend::poll_install_ack(self, transaction, generation)
+    }
+    fn abort_prepared(
+        &mut self,
+        transaction: &mut Self::Transaction,
+        generation: u64,
+    ) -> Result<KvEndProgress> {
+        DecoderKvCommitBackend::abort_prepared(self, transaction, generation)
+    }
+    fn publish_committed(&mut self, transaction: &Self::Transaction) {
+        DecoderKvCommitBackend::publish_committed(self, transaction)
+    }
+    fn preflight_retirement(
+        &self,
+        transaction: &Self::Transaction,
+        pages: &[KvPageId],
+    ) -> Result<()> {
+        DecoderKvCommitBackend::preflight_retirement(self, transaction, pages)
+    }
+    fn retire_prepared(
+        &mut self,
+        transaction: &mut Self::Transaction,
+        generation: u64,
+        pages: &[KvPageId],
+    ) -> Result<KvEndProgress> {
+        DecoderKvCommitBackend::retire_prepared(self, transaction, generation, pages)
+    }
+    fn finish_prepared(&mut self, transaction: Self::Transaction) {
+        DecoderKvCommitBackend::finish_prepared(self, transaction)
+    }
+}
+
+/// Legacy executable prepared backend. Existing implementations are adapted
+/// one way to `KvCommitParticipant`; ordinary backends do not opt in implicitly.
 pub trait DecoderKvCommitBackend: DecoderKvBackend {
     /// Read-only: validate the exact existing physical reservation and sources.
     fn preflight_commit_ready(

@@ -10,14 +10,118 @@ use ferrule_common::execution::KvLayoutSchema;
 use ferrule_common::{Error, Result};
 use std::{cell::Cell, fmt, rc::Rc};
 
+/// Completion evidence for external expert work, independent of root KV fences.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HybridCudaExpertProgress {
+    Complete,
+    Pending,
+    /// Permanent loss of completion evidence. The owner must retain custody.
+    Unknown,
+}
+
+/// Owner-local attachment to the existing routed operator seam (no Send bound).
+///
+/// The executor must never publish KV or allocate a decoder transaction. It must
+/// return same-owner F32 CUDA rows, and own all transport tickets/device resources
+/// until `drain` proves completion. Borrowed request metadata cannot escape a call.
+/// Waiting/Unsupported are fail-closed on this synchronous forward, not fallbacks.
+/// A blocked model thread cannot process cancellation callbacks: transport waits
+/// must have their own bounded deadline/ticket failure policy.
+pub trait HybridCudaRoutedExecutor:
+    crate::transformer::expert_parallel::RoutedSwiGluExecutor
+{
+    /// Poll all submitted work. Complete proves every ticket retired; Pending
+    /// and Err retain custody and may be retried. Lost evidence MUST be Unknown,
+    /// not Err followed by a later optimistic Complete.
+    fn drain(&mut self) -> Result<HybridCudaExpertProgress>;
+    /// Close external owners after drain; the same completion contract applies.
+    fn shutdown(&mut self) -> Result<HybridCudaExpertProgress>;
+    /// Notify transport cancellation after a forward failure; does not release custody.
+    fn on_error(&mut self, _transaction: ferrule_common::execution::ExecutionTransactionId) {}
+}
+
+/// Optional external routed-only execution. Router/shared experts remain on root.
+/// Construct on the root owner thread; use `HybridCudaDevice::operators()` for
+/// the existing CUDA result-combine adapter, not another same-ordinal context.
+pub struct HybridCudaRoutedExperts {
+    pub(crate) closed: bool,
+    pub(crate) owner: Option<HybridCudaDevice>,
+    pub(crate) source_rank: ferrule_common::ParallelRankId,
+    pub(crate) executor: Option<Box<dyn HybridCudaRoutedExecutor>>,
+    pub(crate) check_active:
+        Option<Box<dyn FnMut(ferrule_common::execution::ExecutionTransactionId) -> Result<()>>>,
+}
+impl HybridCudaRoutedExperts {
+    pub fn new(
+        source_rank: ferrule_common::ParallelRankId,
+        executor: Box<dyn HybridCudaRoutedExecutor>,
+    ) -> Self {
+        Self {
+            closed: false,
+            owner: None,
+            source_rank,
+            executor: Some(executor),
+            check_active: None,
+        }
+    }
+    /// Optional already-registered cancellation authority. This supplements,
+    /// never replaces, the model's exact transaction/batch/phase checks. The
+    /// callback must not require processing events on the blocked owner thread.
+    pub fn with_active_check(
+        mut self,
+        check: impl FnMut(ferrule_common::execution::ExecutionTransactionId) -> Result<()> + 'static,
+    ) -> Self {
+        self.check_active = Some(Box::new(check));
+        self
+    }
+}
+impl fmt::Debug for HybridCudaRoutedExperts {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("HybridCudaRoutedExperts")
+            .field("source_rank", &self.source_rank)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Drop for HybridCudaRoutedExperts {
+    fn drop(&mut self) {
+        if self.closed {
+            return;
+        }
+        // Also covers rejected preparation before a module takes custody.
+        let complete = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let Some(executor) = self.executor.as_mut() else {
+                return true;
+            };
+            matches!(executor.drain(), Ok(HybridCudaExpertProgress::Complete))
+                && matches!(executor.shutdown(), Ok(HybridCudaExpertProgress::Complete))
+        }));
+        if !matches!(complete, Ok(true))
+            || self
+                .owner
+                .as_ref()
+                .is_some_and(HybridCudaDevice::needs_quarantine)
+        {
+            if let Some(owner) = self.owner.take() {
+                owner.quarantine();
+                std::mem::forget(owner);
+            }
+            std::mem::forget(self.executor.take());
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct HybridCudaMemoryBudget {
     /// Physical slots including transaction shadows/COW, not just committed pages.
     pub kv_pages: usize,
     /// Default state, active sequences, forks and working copies all consume this cap.
     pub state_bytes: usize,
+    /// Non-expert resident bindings plus the expert cache ceiling less its
+    /// numeric scratch reservation. Obtain this from `for_resources`.
     pub weight_bytes: usize,
-    /// Conservative admission bound, not an allocator reservation.
+    /// Conservative operation workspace plus numeric scratch (counted once),
+    /// not an allocator reservation. Obtain this from `for_resources`.
     pub workspace_bytes: usize,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -27,84 +131,8 @@ pub struct HybridCudaMemoryEstimate {
     pub weight_bytes_upper_bound: usize,
     pub workspace_bytes_upper_bound: usize,
 }
-impl HybridCudaMemoryEstimate {
-    pub fn for_resources(
-        resources: &BoundDecoderResources,
-        options: &GenericDecoderOptions,
-        kv_pages: usize,
-    ) -> Result<Self> {
-        let spec = resources.spec();
-        let layers = options.active_layers().unwrap_or(spec.layers().len());
-        let schema = HybridStateSchema::from_spec(spec, layers)?;
-        let planes = schema.kv_planes(options.page_size(), options.max_positions())?;
-        let kv_bytes = KvLayoutSchema::checked_page_bytes(&planes)
-            .and_then(|n| n.checked_mul(kv_pages))
-            .ok_or_else(|| error("CUDA KV budget overflow"))?;
-        let mut weights = 0usize;
-        let mut width = spec.hidden_size().max(spec.vocab_size());
-        for p in resources.state_dict().parameters() {
-            // Conservative: alias/vector/matrix binding duplicates are charged twice.
-            let elements = p
-                .weight()
-                .slice()
-                .shape
-                .iter()
-                .try_fold(1usize, |n, d| n.checked_mul(*d))
-                .ok_or_else(|| error("CUDA weight size overflow"))?;
-            weights = weights
-                .checked_add(
-                    elements
-                        .checked_mul(8)
-                        .ok_or_else(|| error("CUDA weight bytes overflow"))?,
-                )
-                .ok_or_else(|| error("CUDA weight budget overflow"))?;
-        }
-        let mut scores = 0usize;
-        for layer in &spec.layers()[..layers] {
-            match layer.attention() {
-                Attention::Gqa(g) => {
-                    width = width.max(g.query().out_features());
-                    let rope = options
-                        .max_positions()
-                        .checked_mul(g.rotary().region().dimensions())
-                        .and_then(|n| n.checked_mul(4))
-                        .ok_or_else(|| error("CUDA rotary budget overflow"))?;
-                    weights = weights
-                        .checked_add(rope)
-                        .ok_or_else(|| error("CUDA rotary budget overflow"))?;
-                    scores = scores.max(
-                        g.num_heads()
-                            .checked_mul(options.max_positions())
-                            .ok_or_else(|| error("CUDA attention budget overflow"))?,
-                    );
-                }
-                Attention::GatedDeltaNet(d) => {
-                    width = width.max(d.conv_dim()).max(d.z().out_features());
-                }
-                _ => return Err(unsupported("CUDA hybrid supports GQA/GatedDeltaNet only")),
-            }
-            if let FeedForward::SwiGlu(ff) = layer.feed_forward() {
-                width = width.max(ff.gate().out_features());
-            } else {
-                return Err(unsupported(
-                    "CUDA hybrid is dense, single-device only; MoE/TP/PP unsupported",
-                ));
-            }
-        }
-        let workspace = width
-            .checked_mul(32)
-            .and_then(|n| n.checked_add(scores))
-            .and_then(|n| n.checked_mul(options.capabilities().max_batch_tokens))
-            .and_then(|n| n.checked_mul(4))
-            .ok_or_else(|| error("CUDA workspace budget overflow"))?;
-        Ok(Self {
-            per_sequence_state_bytes: state_bytes(&schema)?,
-            kv_bytes,
-            weight_bytes_upper_bound: weights,
-            workspace_bytes_upper_bound: workspace,
-        })
-    }
-}
+#[path = "hybrid_cuda_admission.rs"]
+mod admission;
 
 #[derive(Clone)]
 pub struct HybridCudaDevice {
@@ -166,6 +194,8 @@ impl HybridCudaDevice {
     pub fn needs_quarantine(&self) -> bool {
         self.inner.poisoned.get()
     }
+    /// Shared owner-local context for external routed result combine. Cloning
+    /// this Rc preserves allocator/stream identity; it grants no KV authority.
     pub fn operators(&self) -> &Rc<CudaOperators> {
         &self.inner.ops
     }
@@ -205,8 +235,11 @@ impl HybridCudaDevice {
             .and_then(|n| n.checked_add(b.state_bytes))
             .and_then(|n| n.checked_add(estimate.kv_bytes))
             .ok_or_else(|| error("hybrid total budget overflow"))?;
-        if required > self.inner.ops.memory_info()?.0 {
-            return Err(error("hybrid CUDA budget exceeds free memory"));
+        let (free, total) = self.inner.ops.memory_info()?;
+        if required > free || required > total {
+            return Err(error(format!(
+                "hybrid CUDA budget exceeds device memory: required={required}, free={free}, total={total}, estimate={estimate:?}, budget={b:?}"
+            )));
         }
         if self.inner.claimed.replace(true) {
             return Err(error("hybrid device factory already owns an image"));
@@ -344,6 +377,20 @@ impl CudaGatedDeltaState {
     }
     pub fn shape(&self) -> GatedDeltaShape {
         self.shape
+    }
+    /// Explicit diagnostic readback, never used by forward, fork or rollback.
+    /// Returns owned host snapshots without exposing mutable device custody.
+    pub fn diagnostic_snapshot(&self) -> Result<(Vec<f32>, Vec<f32>)> {
+        self.device.fence()?;
+        let result = (|| {
+            Ok((
+                self.device.operators().download_f32_buffer(&self.conv)?,
+                self.device
+                    .operators()
+                    .download_f32_buffer(&self.recurrent)?,
+            ))
+        })();
+        self.device.complete(result)
     }
     pub(crate) fn validate_owner(&self, ops: &CudaOperators) -> Result<()> {
         self.device.ensure_ready()?;
@@ -644,13 +691,53 @@ impl DecoderComposition for HybridCudaDecoder {
     type TerminalGuard = NoTerminalGuard;
 }
 impl GenericDecoderRunner<HybridCudaDecoder> {
-    /// Single-device F32 activations/KV/state. No runtime/family factory is involved.
+    /// Single-device F32 activations/KV/state on the generic transaction path.
+    /// Default options retain dense F32/BF16-checkpoint behavior. Explicit
+    /// `options.with_hybrid_cuda_numeric_fp8(limits, scratch_bytes)` enables
+    /// compressed linear bindings and bounded routed/shared MoE execution with
+    /// BF16-RNE operands. Use `with_hybrid_cuda_numeric_fp8_precision` with
+    /// `NumericFp8Precision::F32Tf32x3` for unrounded F32 operands. Neither mode
+    /// changes the generic forward or enables a CPU fallback.
+    ///
+    /// Call `HybridCudaMemoryEstimate::for_resources` with these exact options
+    /// before creating the device. The state budget must cover the default state
+    /// plus committed/working sequences (at least `2 * max_sequences + 1` copies);
+    /// callers wanting additional live forks must budget those copies too.
     pub fn hybrid_cuda(
         resources: BoundDecoderResources,
         tokenizer: crate::tokenizer::TokenizerHandle,
         options: GenericDecoderOptions,
         device: HybridCudaDevice,
     ) -> Result<Self> {
+        Self::hybrid_cuda_inner(resources, tokenizer, options, device, None)
+    }
+
+    /// External routed-only execution on the same forward/root KV/recurrent path.
+    /// Use `for_resources_with_routed_experts` for root admission; runtime owns
+    /// separate external-device budgets. No local routed fallback is installed.
+    /// The seam receives each packed row's stable sequence topology ID, preserved
+    /// across transaction checkouts and changed by logical forks. These are model
+    /// sequence identities, not runtime request IDs or transient packed indices.
+    pub fn hybrid_cuda_with_routed_experts(
+        resources: BoundDecoderResources,
+        tokenizer: crate::tokenizer::TokenizerHandle,
+        options: GenericDecoderOptions,
+        device: HybridCudaDevice,
+        experts: HybridCudaRoutedExperts,
+    ) -> Result<Self> {
+        Self::hybrid_cuda_inner(resources, tokenizer, options, device, Some(experts))
+    }
+
+    fn hybrid_cuda_inner(
+        resources: BoundDecoderResources,
+        tokenizer: crate::tokenizer::TokenizerHandle,
+        options: GenericDecoderOptions,
+        device: HybridCudaDevice,
+        mut experts: Option<HybridCudaRoutedExperts>,
+    ) -> Result<Self> {
+        if let Some(experts) = &mut experts {
+            experts.owner = Some(device.clone());
+        }
         options.validate(&resources)?;
         if options.precision() != crate::execution::ExecutionPrecisionPolicy::f32() {
             return Err(unsupported("CUDA hybrid requires F32 execution"));
@@ -661,22 +748,27 @@ impl GenericDecoderRunner<HybridCudaDecoder> {
                 .active_layers()
                 .unwrap_or(resources.spec().layers().len()),
         )?;
-        let estimate = HybridCudaMemoryEstimate::for_resources(
-            &resources,
-            &options,
-            device.budget().kv_pages,
-        )?;
+        let estimate = if experts.is_some() {
+            HybridCudaMemoryEstimate::for_resources_with_routed_experts
+        } else {
+            HybridCudaMemoryEstimate::for_resources
+        }(&resources, &options, device.budget().kv_pages)?;
         let claim = device.admit(estimate, options.capabilities().max_sequences)?;
         // Drop all temporaries before evaluating claim rollback.
         let result = (|| {
             let planes = schema.kv_planes(options.page_size(), options.max_positions())?;
             let mut model_info = super::runner::standard_model_info(&resources, &options);
-            model_info.backend = "cuda-hybrid-f32";
+            model_info.backend = options
+                .hybrid_cuda_numeric_fp8_precision()
+                .map_or("cuda-hybrid-f32", |precision| {
+                    precision.hybrid_backend_name()
+                });
             let resources = std::sync::Arc::new(resources);
-            let module = crate::transformer::CudaHybridModule::prepare(
+            let module = crate::transformer::CudaHybridModule::prepare_with_routed_experts(
                 resources.clone(),
                 device.clone(),
                 &options,
+                experts,
             )?;
             let pool = device.complete(
                 TypedCudaPagedKvPool::<CudaHybridSequenceState>::from_strategy(

@@ -25,6 +25,7 @@ tracing = "0.1"
 futures-core = "0.3"
 
 [dev-dependencies]
+tokio = { version = "1", features = ["test-util"] }
 http-body-util = "0.1"
 tower = { version = "0.5", features = ["util"] }
 

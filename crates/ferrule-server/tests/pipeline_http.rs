@@ -1,8 +1,11 @@
 //! Real tiny checkpoint -> catalog/build plan -> pipeline -> worker -> HTTP/SSE.
 //! Test wrappers observe/control owner boundaries; they never implement decoder
 //! math, page allocation, pipeline dispatch or a substitute HTTP server.
-//! Process tests require `cargo build -p ferrule-server --example pipeline_process_child`
-//! (also pass `--features cuda` for the GPU tests).
+//! Process tests build their matching child once, unless FERRULE_PIPELINE_CHILD is explicit.
+
+#[cfg(unix)]
+#[path = "../../ferrule-runtime/tests/support/build_process_child.rs"]
+mod build_process_child;
 
 use std::future::Future;
 use std::path::PathBuf;
@@ -178,6 +181,8 @@ impl Fixture {
             output_head_chunk_rows: 8,
             expert_reader_max_tensor_mebibytes: 1,
             expert_cache: Default::default(),
+            qwen35_moe_capacity: None,
+            qwen35_host_cache: None,
             moe_hotset_experts: 0,
             kv_cache_mebibytes: None,
             scheduler_config: ResidentSchedulerConfig {
@@ -262,17 +267,18 @@ impl Fixture {
         devices: Option<Vec<usize>>,
     ) -> ResidentModelBuildPlan {
         let config = AutoConfig::from_pretrained(&self.0).unwrap();
-        let executable = std::env::var_os("FERRULE_PIPELINE_CHILD")
-            .map(PathBuf::from)
-            .or_else(|| {
-                std::env::current_exe().ok().and_then(|current| {
-                    current
-                        .ancestors()
-                        .map(|directory| directory.join("examples/pipeline_process_child"))
-                        .find(|candidate| candidate.is_file())
+        static CHILD: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+        let executable = CHILD.get_or_init(|| {
+            std::env::var_os("FERRULE_PIPELINE_CHILD")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| {
+                    build_process_child::build(
+                        "ferrule-server",
+                        "example",
+                        "pipeline_process_child",
+                    )
                 })
-            })
-            .expect("build pipeline_process_child example first");
+        });
         let evidence = self.0.join("process-owners");
         std::fs::create_dir_all(&evidence).unwrap();
         let mut launch =
@@ -327,6 +333,21 @@ impl Fixture {
             assert!(ranks.insert(rank));
             let wrapper = &record["config"];
             let boot = wrapper.get("expert_boot").unwrap_or(wrapper);
+            assert_eq!(
+                boot["version"],
+                ferrule_runtime::parallel::process::decoder::DECODER_WIRE_VERSION
+            );
+            if ep > 1 {
+                let experts = &boot["experts"];
+                assert_eq!(experts["source_scope"], "external_stage");
+                assert_eq!(experts["source"], boot["rank"]);
+                assert!(
+                    !experts["members"]
+                        .as_array()
+                        .unwrap()
+                        .contains(&boot["rank"])
+                );
+            }
             let precision = if cuda || ep > 1 {
                 "f32"
             } else {
@@ -397,6 +418,9 @@ impl InferenceEngine for ObservedEngine {
     }
     fn submit(&mut self, request: GenerateRequest) {
         self.inner.submit(request);
+    }
+    fn request_cleanup(&self, request: RequestId) -> ferrule_runtime::InferenceRequestCleanup {
+        self.inner.request_cleanup(request)
     }
     fn try_submit(&mut self, request: GenerateRequest) -> RuntimeResult<()> {
         self.inner.try_submit(request)
@@ -494,6 +518,7 @@ fn start_plan(
         },
         WorkerConfig {
             event_queue_capacity: events,
+            max_inflight_requests: 2,
             ..Default::default()
         },
     )
@@ -530,6 +555,19 @@ async fn stop_worker(worker: ModelWorker, probe: &Probe) {
         .unwrap();
     assert_eq!(probe.shutdowns.load(Ordering::Acquire), 1);
 }
+async fn wait_credits_returned(handle: &ferrule_server::ModelWorkerHandle) {
+    tokio::time::timeout(DEADLINE, async {
+        while handle.admission_snapshot().held_requests != 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let snapshot = handle.admission_snapshot();
+    assert_eq!(snapshot.available_requests, 2);
+    assert_eq!(snapshot.held_prompt_bytes, 0);
+}
+
 async fn wait_cancel(probe: &Probe) {
     tokio::time::timeout(DEADLINE, async {
         while probe.cancelled.load(Ordering::Acquire) == 0 {
@@ -742,6 +780,96 @@ async fn tiny_checkpoint_eos_and_ignore_eos_use_the_real_tokenizer() {
     }
 }
 
+#[test]
+fn pr13_real_pipeline_receipt_is_terminal_consumed_and_generation_exact() {
+    let fixture = Fixture::new(7);
+    let mut engine = fixture.pipeline_plan(2).build().unwrap();
+    let mut previous: Option<ferrule_runtime::RequestCleanupReceipt> = None;
+    for round in 0..10 {
+        let request = GenerateRequest {
+            id: RequestId(1),
+            session_id: Some(SessionId(1)),
+            prompt_tokens: vec![2],
+            max_new_tokens: 1,
+            stop: vec![],
+            ignore_eos: false,
+        };
+        engine.try_submit(request).unwrap();
+        let ferrule_runtime::InferenceRequestCleanup::Tracked(receipt) =
+            engine.request_cleanup(RequestId(1))
+        else {
+            panic!("pipeline must issue exact proof");
+        };
+        assert!(!receipt.is_released());
+        if let Some(old) = previous.take() {
+            assert!(old.is_released());
+        }
+        if round % 2 == 0 {
+            engine.cancel_request(RequestId(1)).unwrap();
+        } else {
+            for _ in 0..4 {
+                engine.step(&mut |_| Ok(())).unwrap();
+            }
+        }
+        assert!(
+            !receipt.is_released(),
+            "even physical cleanup needs terminal consumption"
+        );
+        assert!(engine.take_request_terminal(RequestId(1)).is_some());
+        assert!(receipt.is_released());
+        assert!(engine.take_request_terminal(RequestId(1)).is_none());
+        assert!(matches!(
+            engine.request_cleanup(RequestId(1)),
+            ferrule_runtime::InferenceRequestCleanup::Unavailable
+        ));
+        previous = Some(receipt);
+    }
+    assert_eq!(
+        engine.shutdown().unwrap(),
+        InferenceShutdownProgress::Complete
+    );
+}
+
+#[tokio::test]
+async fn pr13_pipeline_and_direct_resident_http_reuse_two_credits_for_ten_rounds() {
+    let fixture = Fixture::new(0);
+    for pipeline in [false, true] {
+        let plan = if pipeline {
+            fixture.pipeline_plan(1)
+        } else {
+            fixture.plan(1)
+        };
+        let (app, worker, probe) = start_plan(plan, 64, None, false);
+        let handle = worker.handle();
+        for round in 0..10 {
+            let response = tokio::time::timeout(
+                DEADLINE,
+                app.clone()
+                    .oneshot(post("/v1/completions", completion(round % 2 == 0, 1))),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "round {round}");
+            let body = text(response).await;
+            if round % 2 == 0 {
+                assert_eq!(body.matches("data: [DONE]").count(), 1);
+            }
+            tokio::time::timeout(DEADLINE, async {
+                while handle.admission_snapshot().held_requests != 0 {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+            let snapshot = handle.admission_snapshot();
+            assert_eq!(snapshot.available_requests, 2);
+            assert_eq!(snapshot.held_prompt_bytes, 0);
+        }
+        stop_worker(worker, &probe).await;
+    }
+}
+
 #[tokio::test]
 async fn tiny_checkpoint_invalid_admission_is_400_and_does_not_poison_worker() {
     let fixture = Fixture::new(7);
@@ -754,7 +882,9 @@ async fn tiny_checkpoint_invalid_admission_is_400_and_does_not_poison_worker() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    assert!(text(response).await.contains("context capacity"));
+    let body = text(response).await;
+    assert!(body.contains("\"code\":\"invalid_request\""));
+    assert!(!body.contains("context capacity"));
     let response = app
         .oneshot(post("/v1/completions", completion(false, 1)))
         .await
@@ -778,6 +908,7 @@ async fn tiny_checkpoint_disconnect_cancels_and_releases_before_reuse() {
         }),
         false,
     );
+    let handle = worker.handle();
     let response = app
         .clone()
         .oneshot(post("/v1/completions", completion(true, 32)))
@@ -795,12 +926,16 @@ async fn tiny_checkpoint_disconnect_cancels_and_releases_before_reuse() {
     drop(body);
     release.send(()).unwrap();
     wait_cancel(&probe).await;
+    wait_credits_returned(&handle).await;
+    assert_eq!(probe.cancelled.load(Ordering::Acquire), 1);
     let response = app
         .oneshot(post("/v1/completions", completion(false, 1)))
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     assert!(text(response).await.contains("\"completion_tokens\":1"));
+    wait_credits_returned(&handle).await;
+    assert_eq!(probe.cancelled.load(Ordering::Acquire), 1);
     stop_worker(worker, &probe).await;
 }
 
@@ -850,15 +985,20 @@ async fn tiny_checkpoint_capacity_is_429_without_accepting_a_second_session() {
 async fn slow_stream_preserves_a_terminal_slot_instead_of_succeeding_with_truncated_text() {
     let fixture = Fixture::new(7);
     let (app, worker, probe) = start(&fixture, 2, None, false);
+    let handle = worker.handle();
     let response = app
         .oneshot(post("/v1/completions", completion(true, 32)))
         .await
         .unwrap();
     wait_cancel(&probe).await;
+    assert_eq!(handle.admission_snapshot().held_requests, 1);
+    assert_eq!(handle.admission_snapshot().held_prompt_bytes, 0);
     let body = text(response).await;
     assert!(body.contains("request_cancelled"));
     assert_eq!(body.matches("data: [DONE]").count(), 1);
     assert!(!body.contains("\"finish_reason\":\"length\""));
+    wait_credits_returned(&handle).await;
+    assert_eq!(probe.cancelled.load(Ordering::Acquire), 1);
     stop_worker(worker, &probe).await;
 }
 
@@ -872,7 +1012,8 @@ async fn execution_error_after_real_prefill_emits_sse_error_and_shutdown_drains_
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     let body = text(response).await;
-    assert!(body.contains("injected serving failure"));
+    assert!(body.contains("\"code\":\"execution_failed\""));
+    assert!(!body.contains("injected serving failure"));
     assert_eq!(body.matches("data: [DONE]").count(), 1);
     assert_eq!(probe.prefills.load(Ordering::Acquire), 1);
     let error = tokio::time::timeout(DEADLINE, worker.shutdown())
@@ -1117,6 +1258,12 @@ fn pipeline_plan_rejects_unintegrated_capabilities_and_runs_retained_turns() {
                 ignore_eos: false,
             })
             .unwrap();
+        let ferrule_runtime::InferenceRequestCleanup::Tracked(receipt) =
+            engine.request_cleanup(RequestId(id))
+        else {
+            panic!("missing retained turn proof")
+        };
+        assert!(!receipt.is_released());
         let mut tokens = Vec::new();
         for _ in 0..10 {
             engine
@@ -1129,6 +1276,7 @@ fn pipeline_plan_rejects_unintegrated_capabilities_and_runs_retained_turns() {
                 break;
             }
         }
+        assert!(receipt.is_released());
         assert_eq!(tokens, vec![1, 1]);
         assert_eq!(
             engine.retained_session_position(session),

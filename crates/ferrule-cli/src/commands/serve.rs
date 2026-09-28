@@ -20,7 +20,17 @@ use crate::args::{RankBackend, ServeArgs, ServeEngine};
 use super::resident::resident_driver_config;
 
 pub fn cmd_serve(args: ServeArgs) -> anyhow::Result<()> {
+    let worker_config = worker_config(&args)?;
     let prepared = prepare_model(&args)?;
+    eprintln!("[model plan] {}", prepared.resolution_report());
+    if let Some(placement) = prepared.qwen35_expert_placement() {
+        eprintln!(
+            "Qwen3.5 resident GPU-thread EP{}: root CUDA {}, expert CUDA {:?}; F32, full shared host warm and all owned experts resident; physical root+expert0 admission required",
+            placement.expert_parallel(),
+            placement.root_device(),
+            placement.expert_devices(),
+        );
+    }
     if let Some(options) = prepared.pipeline_options() {
         eprintln!(
             "pipeline PP={} TP={} EP={} {} {:?} owners, precision={:?}; serial greedy decode, no mixed batches/cohort deferral, cancellation at chunk/token boundaries; no restart/replay",
@@ -60,13 +70,6 @@ pub fn cmd_serve(args: ServeArgs) -> anyhow::Result<()> {
         .served_model_name
         .clone()
         .unwrap_or_else(|| adapter_name.to_owned());
-    let worker_config = WorkerConfig {
-        command_queue_capacity: args.request_queue_capacity,
-        event_queue_capacity: args.event_queue_capacity,
-        admission_timeout: Duration::from_secs(args.admission_timeout_secs),
-        ..WorkerConfig::default()
-    };
-
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .thread_name("ferrule-http")
@@ -89,32 +92,48 @@ pub fn cmd_serve(args: ServeArgs) -> anyhow::Result<()> {
     runtime.block_on(async move {
         eprintln!("Ferrule OpenAI API listening on http://{address}");
         eprintln!("  GET  /health");
+        eprintln!("  GET  /readyz");
         eprintln!("  GET  /v1/models");
         eprintln!("  POST /v1/chat/completions");
         eprintln!("  POST /v1/completions");
-        let server_result = serve_until_signal(address, state, signal).await;
-        let shutdown_result = worker
-            .shutdown()
-            .await
-            .context("failed to shut down model worker");
-        combine_shutdown_results(server_result, shutdown_result)
+        serve_until_signal(address, state, worker, signal).await
     })
 }
 
 fn prepare_model(args: &ServeArgs) -> anyhow::Result<ResidentModelBuildPlan> {
-    validate_args(args)?;
-    let mut factory = model_factory_options(args)?;
+    validate_common_args(args)?;
     let config = AutoConfig::from_pretrained(&args.model)?;
-    if config.descriptor().spec.family == ferrule_model::ModelFamily::Qwen35 {
-        if args.expert_host_cache_entries.is_some()
-            || args.expert_host_cache_mb.is_some()
+    let qwen35_parallel = matches!(
+        config.descriptor().spec.family,
+        ferrule_model::ModelFamily::Qwen35 | ferrule_model::ModelFamily::Qwen35Moe
+    ) && (parallel_requested(args) || args.engine == ServeEngine::Pipeline);
+    if !qwen35_parallel {
+        validate_args(args)?;
+    }
+    let mut factory = if qwen35_parallel {
+        model_factory_options_for_engine(args, false)?
+    } else {
+        model_factory_options(args)?
+    };
+    if matches!(
+        config.descriptor().spec.family,
+        ferrule_model::ModelFamily::Qwen35 | ferrule_model::ModelFamily::Qwen35Moe
+    ) {
+        let moe = config.descriptor().spec.family == ferrule_model::ModelFamily::Qwen35Moe;
+        if (!moe
+            && (args.expert_host_cache_entries.is_some() || args.expert_host_cache_mb.is_some()))
             || args.expert_pinned_cache_entries.is_some()
             || args.expert_pinned_cache_mb.is_some()
             || args.moe_hotset_experts.is_some()
         {
             anyhow::bail!(
-                "dense Qwen3.5 does not implement explicit MoE expert cache/hotset options"
+                "Qwen3.5 does not implement explicit MoE host/pinned expert cache/hotset options"
             );
+        }
+        if moe {
+            factory.qwen35_host_cache = args
+                .expert_prewarm
+                .options(args.expert_host_cache_entries, args.expert_host_cache_mb)?;
         }
         factory.driver_config.enable_native_proposals = false;
         factory.expert_cache = ExpertCacheOptions::default();
@@ -127,7 +146,15 @@ fn prepare_model(args: &ServeArgs) -> anyhow::Result<ResidentModelBuildPlan> {
         .transpose()?
         .unwrap_or_default();
     let planner = ResidentModelPlanner::new();
-    Ok(if uses_pipeline(args)? {
+    Ok(if qwen35_parallel {
+        planner.prepare_qwen35_expert_parallel(
+            &config,
+            backend,
+            args.chat_template.as_deref(),
+            factory,
+            pipeline_options(args)?,
+        )?
+    } else if uses_pipeline(args)? {
         planner.prepare_pipeline(
             &config,
             backend,
@@ -141,7 +168,17 @@ fn prepare_model(args: &ServeArgs) -> anyhow::Result<ResidentModelBuildPlan> {
 }
 
 fn model_factory_options(args: &ServeArgs) -> anyhow::Result<ModelFactoryOptions> {
-    let expert_cache = if uses_pipeline(args)? {
+    model_factory_options_for_engine(args, uses_pipeline(args)?)
+}
+
+fn model_factory_options_for_engine(
+    args: &ServeArgs,
+    pipeline: bool,
+) -> anyhow::Result<ModelFactoryOptions> {
+    let expert_cache = if pipeline {
+        if args.expert_prewarm.mode.is_some() || args.expert_prewarm.workers.is_some() {
+            anyhow::bail!("pipeline serving does not implement expert prewarm");
+        }
         // Even an explicit value equal to a runtime default is a user policy
         // request. Pipeline does not implement these limits, so never erase it.
         for (flag, present) in [
@@ -183,6 +220,8 @@ fn model_factory_options(args: &ServeArgs) -> anyhow::Result<ModelFactoryOptions
         output_head_chunk_rows: args.output_head_chunk_rows,
         expert_reader_max_tensor_mebibytes: args.expert_reader_max_slice_mb,
         expert_cache,
+        qwen35_moe_capacity: args.cuda_expert_device.capacity_limits(),
+        qwen35_host_cache: args.expert_prewarm.options(None, None)?,
         moe_hotset_experts: args.moe_hotset_experts.unwrap_or(0),
         kv_cache_mebibytes: Some(args.kv_cache_mb),
         scheduler_config: ResidentSchedulerConfig {
@@ -221,6 +260,7 @@ fn shutdown_signal() -> std::io::Result<impl Future<Output = std::io::Result<()>
 async fn serve_until_signal(
     address: SocketAddr,
     state: ServerState,
+    worker: ferrule_server::ModelWorker,
     signal: impl Future<Output = std::io::Result<()>>,
 ) -> anyhow::Result<()> {
     let (stop, stopped) = tokio::sync::oneshot::channel();
@@ -229,12 +269,29 @@ async fn serve_until_signal(
     });
     tokio::pin!(server);
     tokio::select! {
-        result = &mut server => result.context("HTTP server failed"),
-        result = signal => {
-            let _ = stop.send(());
+        result = &mut server => {
+            worker.handle().begin_shutdown();
             combine_shutdown_results(
-                result.context("shutdown signal handler failed"),
-                server.await.context("HTTP server failed"),
+                result.context("HTTP server failed"),
+                worker.shutdown().await.context("failed to shut down model worker"),
+            )
+        }
+        result = signal => {
+            // Close admission before asking Axum to drain. Cancel/close must run
+            // concurrently with HTTP drain so a live stream cannot form a cycle.
+            let deadline = worker.handle().begin_shutdown();
+            let _ = stop.send(());
+            let (http, close) = tokio::join!(
+                tokio::time::timeout_at(deadline, &mut server),
+                worker.shutdown(),
+            );
+            let http = match http {
+                Ok(result) => result.context("HTTP server failed"),
+                Err(error) => Err(anyhow::Error::new(error).context("HTTP graceful drain exceeded cooperative shutdown deadline")),
+            };
+            combine_shutdown_results(
+                combine_shutdown_results(result.context("shutdown signal handler failed"), http),
+                close.context("failed to shut down model worker"),
             )
         }
     }
@@ -292,14 +349,18 @@ fn pipeline_options(args: &ServeArgs) -> anyhow::Result<PipelineBuildOptions> {
     })
 }
 
-fn uses_pipeline(args: &ServeArgs) -> anyhow::Result<bool> {
-    let requested = args.pipeline_parallel != 1
+fn parallel_requested(args: &ServeArgs) -> bool {
+    args.pipeline_parallel != 1
         || args.tensor_parallel != 1
         || args.expert_parallel != 1
         || args.rank_backend != RankBackend::Thread
         || args.devices.is_some()
         || args.rank_restarts != 0
-        || args.rank_timeout_ms != 30000;
+        || args.rank_timeout_ms != 30000
+}
+
+fn uses_pipeline(args: &ServeArgs) -> anyhow::Result<bool> {
+    let requested = parallel_requested(args);
     if args.engine == ServeEngine::Resident && requested {
         anyhow::bail!("parallel/rank options require --engine pipeline (or auto)");
     }
@@ -311,6 +372,45 @@ fn validate_args(args: &ServeArgs) -> anyhow::Result<()> {
     if args.pipeline_parallel == 0 || args.tensor_parallel == 0 || args.expert_parallel == 0 {
         anyhow::bail!("parallel degrees must be greater than zero");
     }
+    validate_common_args(args)
+}
+
+fn worker_config(args: &ServeArgs) -> anyhow::Result<WorkerConfig> {
+    let runtime_admission_options = if args.runtime_max_waiting_requests.is_some()
+        || args.runtime_max_request_identities.is_some()
+        || args.runtime_max_session_identities.is_some()
+    {
+        let defaults = ferrule_runtime::RuntimeAdmissionOptions::default();
+        Some(ferrule_runtime::RuntimeAdmissionOptions {
+            max_waiting_requests: args
+                .runtime_max_waiting_requests
+                .unwrap_or(defaults.max_waiting_requests),
+            max_request_identities: args
+                .runtime_max_request_identities
+                .unwrap_or(defaults.max_request_identities),
+            max_session_identities: args
+                .runtime_max_session_identities
+                .unwrap_or(defaults.max_session_identities),
+        })
+    } else {
+        None
+    };
+    let config = WorkerConfig {
+        command_queue_capacity: args.request_queue_capacity,
+        event_queue_capacity: args.event_queue_capacity,
+        admission_timeout: Duration::from_secs(args.admission_timeout_secs),
+        max_inflight_requests: args.max_inflight_requests,
+        max_prompt_bytes: args.max_prompt_bytes,
+        max_body_bytes: args.max_body_bytes,
+        runtime_admission_options,
+        ..WorkerConfig::default()
+    };
+    config.validate_admission()?;
+    Ok(config)
+}
+
+fn validate_common_args(args: &ServeArgs) -> anyhow::Result<()> {
+    worker_config(args)?;
     if args
         .served_model_name
         .as_deref()
@@ -360,6 +460,110 @@ mod tests {
             panic!("expected serve")
         };
         args
+    }
+
+    #[test]
+    fn admission_cli_defaults_overrides_and_boundaries() {
+        let args = serve(&["ferrule", "serve", "missing-model"]);
+        let config = worker_config(&args).unwrap();
+        let defaults = WorkerConfig::default();
+        assert_eq!(config.max_inflight_requests, defaults.max_inflight_requests);
+        assert_eq!(config.max_prompt_bytes, defaults.max_prompt_bytes);
+        assert_eq!(config.max_body_bytes, defaults.max_body_bytes);
+        assert_eq!(config.runtime_admission_options, None);
+        let args = serve(&[
+            "ferrule",
+            "serve",
+            "missing-model",
+            "--max-inflight-requests",
+            "7",
+            "--max-prompt-bytes",
+            "1024",
+            "--max-body-bytes",
+            "2048",
+            "--runtime-max-waiting-requests",
+            "2",
+            "--runtime-max-request-identities",
+            "3",
+            "--runtime-max-session-identities",
+            "1",
+            "--request-queue-capacity",
+            "5",
+            "--event-queue-capacity",
+            "2",
+        ]);
+        let config = worker_config(&args).unwrap();
+        assert_eq!(
+            (
+                config.max_inflight_requests,
+                config.max_prompt_bytes,
+                config.max_body_bytes
+            ),
+            (7, 1024, 2048)
+        );
+        assert_eq!(
+            (config.command_queue_capacity, config.event_queue_capacity),
+            (5, 2)
+        );
+        assert_eq!(
+            config.runtime_admission_options,
+            Some(ferrule_runtime::RuntimeAdmissionOptions {
+                max_waiting_requests: 2,
+                max_request_identities: 3,
+                max_session_identities: 1,
+            })
+        );
+        let args = serve(&[
+            "ferrule",
+            "serve",
+            "missing-model",
+            "--runtime-max-session-identities",
+            "1",
+        ]);
+        let options = worker_config(&args)
+            .unwrap()
+            .runtime_admission_options
+            .unwrap();
+        assert_eq!(options.max_waiting_requests, 1024);
+        assert_eq!(options.max_request_identities, 4096);
+        for flags in [
+            vec!["--runtime-max-request-identities", "1"],
+            vec![
+                "--runtime-max-waiting-requests",
+                "3",
+                "--runtime-max-request-identities",
+                "2",
+            ],
+            vec!["--request-queue-capacity", "18446744073709551615"],
+            vec!["--event-queue-capacity", "18446744073709551615"],
+            vec!["--admission-timeout-secs", "18446744073709551615"],
+        ] {
+            let mut argv = vec!["ferrule", "serve", "missing-model"];
+            argv.extend(flags);
+            if let Ok(cli) = Cli::try_parse_from(argv) {
+                let Command::Serve(args) = cli.command else {
+                    unreachable!()
+                };
+                assert!(validate_common_args(&args).is_err());
+            }
+        }
+        for flag in [
+            "--max-inflight-requests",
+            "--max-prompt-bytes",
+            "--max-body-bytes",
+            "--runtime-max-waiting-requests",
+            "--runtime-max-request-identities",
+            "--runtime-max-session-identities",
+        ] {
+            for value in ["0", "-1", "18446744073709551616", "18446744073709551615"] {
+                assert!(
+                    Cli::try_parse_from(["ferrule", "serve", "missing-model", flag, value])
+                        .is_err(),
+                    "{flag}={value}"
+                );
+            }
+            assert!(Cli::try_parse_from(["ferrule", "serve", "missing-model", flag, "1"]).is_ok());
+        }
     }
 
     struct PlanFixture(std::path::PathBuf);
@@ -456,9 +660,65 @@ mod tests {
             .unwrap();
         file.write_all(&header).unwrap();
         file.set_len(8 + header.len() as u64 + bytes).unwrap();
+        for flags in [
+            vec![],
+            vec!["--max-batch-tokens", "512", "--prefill-chunk-size", "512"],
+            vec![
+                "--max-batch-tokens",
+                "32",
+                "--prefill-chunk-size",
+                "32",
+                "--ctx-size",
+                "8",
+            ],
+            vec!["--max-batch-tokens", "8", "--prefill-chunk-size", "4"],
+        ] {
+            let args = fixture.args(&flags);
+            let plan = prepare_model(&args).unwrap();
+            let requested = plan.requested_options();
+            let effective = plan.effective_options();
+            assert_eq!(
+                requested.scheduler_config.max_batch_tokens,
+                args.max_batch_tokens
+            );
+            assert_eq!(
+                requested.scheduler_config.prefill_chunk_size,
+                args.prefill_chunk_size
+            );
+            assert_eq!(
+                effective.scheduler_config.max_batch_tokens,
+                args.max_batch_tokens.min(32).min(args.ctx_size)
+            );
+            assert_eq!(
+                effective.scheduler_config.prefill_chunk_size,
+                args.prefill_chunk_size
+                    .min(effective.scheduler_config.max_batch_tokens)
+            );
+            assert_eq!(plan.observability().ctx_size, args.ctx_size);
+            if args.max_batch_tokens != effective.scheduler_config.max_batch_tokens {
+                let report = plan.adjustment_report();
+                let change = report
+                    .adjustments()
+                    .iter()
+                    .find(|a| a.field == "scheduler_config.max_batch_tokens")
+                    .unwrap();
+                assert_eq!(change.requested, args.max_batch_tokens.to_string());
+                assert_eq!(
+                    change.effective,
+                    effective.scheduler_config.max_batch_tokens.to_string()
+                );
+                assert!(change.reason.contains("min(32, context)"));
+            }
+            assert!(
+                plan.resolution_report()
+                    .contains("owner live admission required")
+            );
+            eprintln!("{}", plan.resolution_report());
+        }
         let args = fixture.args(&[]);
         let plan = prepare_model(&args).unwrap();
         assert_eq!(plan.model_name(), "qwen3.5-0.8b");
+        assert!(prepare_model(&fixture.args(&["--cuda-expert-device-entries", "1024"])).is_err());
         assert_eq!(plan.chat_template(), ferrule_model::ChatTemplate::Qwen35);
         for (flag, values) in [
             ("--expert-host-cache-entries", ["64", "0"]),
@@ -479,6 +739,245 @@ mod tests {
         }
         for args in [
             ["--max-layers", "1"],
+            ["--tensor-parallel", "2"],
+            ["--pipeline-parallel", "2"],
+        ] {
+            assert!(prepare_model(&fixture.args(&args)).is_err());
+        }
+        if cfg!(feature = "cuda") {
+            assert!(prepare_model(&fixture.args(&["--backend", "cuda"])).is_ok());
+        }
+    }
+
+    #[test]
+    fn qwen35_35b_default_cli_uses_proven_f32_and_rejects_unused_overrides() {
+        use ferrule_model::models::qwen35::{
+            Qwen35Config, Qwen35HfNameMapper, Qwen35TensorPartitionKind,
+        };
+        use std::io::Write;
+        let fixture = PlanFixture::new(false);
+        let value: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../ferrule-model/tests/qwen35_35b_fp8_config.json"
+        ))
+        .unwrap();
+        std::fs::write(fixture.0.join("config.json"), value.to_string()).unwrap();
+        let mapper = Qwen35HfNameMapper::new(&Qwen35Config::from_value(&value).unwrap());
+        let mut header = serde_json::Map::new();
+        let mut bytes = 0;
+        for tensor in mapper
+            .tensors()
+            .filter(|t| t.partition == Qwen35TensorPartitionKind::Text)
+        {
+            header.insert(tensor.external_name.clone(), serde_json::json!({"dtype":tensor.dtype.as_str(), "shape":tensor.shape, "data_offsets":[bytes,bytes+tensor.bytes()]}));
+            bytes += tensor.bytes();
+        }
+        let mut header = serde_json::to_vec(&header).unwrap();
+        while !header.len().is_multiple_of(8) {
+            header.push(b' ');
+        }
+        let mut file = std::fs::File::create(fixture.0.join("model.safetensors")).unwrap();
+        file.write_all(&(header.len() as u64).to_le_bytes())
+            .unwrap();
+        file.write_all(&header).unwrap();
+        file.set_len(8 + header.len() as u64 + bytes).unwrap();
+        for engine in ["auto", "resident", "pipeline"] {
+            for (degree, devices) in [("2", "3,1"), ("4", "3,2,1,0"), ("8", "0,1,2,3,4,5,6,7")] {
+                let ep = prepare_model(&fixture.args(&[
+                    "--engine",
+                    engine,
+                    "--expert-parallel",
+                    degree,
+                    "--devices",
+                    devices,
+                    "--expert-prewarm",
+                    "full",
+                    "--expert-host-cache-mb",
+                    "32768",
+                ]));
+                if cfg!(feature = "cuda") {
+                    let ep = ep.unwrap();
+                    assert!(
+                        ep.pipeline_options().is_none(),
+                        "EP must not select generic Pipeline"
+                    );
+                    assert!(
+                        ep.qwen35_moe_capacity_limits().unwrap().is_none(),
+                        "EP must not charge the single root's 4 GiB routed cache"
+                    );
+                    let placement = ep.qwen35_expert_placement().unwrap();
+                    assert_eq!(
+                        placement.expert_parallel(),
+                        degree.parse::<usize>().unwrap()
+                    );
+                    assert_eq!(
+                        placement.expert_devices(),
+                        devices
+                            .split(',')
+                            .map(|v| v.parse::<usize>().unwrap())
+                            .collect::<Vec<_>>()
+                    );
+                    assert_eq!(placement.root_device(), placement.expert_devices()[0]);
+                    assert_eq!(
+                        ep.qwen35_host_cache_options().unwrap().max_bytes,
+                        32768u64 << 20
+                    );
+                } else {
+                    let error = ep.err().expect("CUDA feature is required");
+                    let runtime = error.downcast_ref::<ferrule_runtime::Error>().unwrap();
+                    assert!(
+                        matches!(
+                            runtime,
+                            ferrule_runtime::Error::Backend {
+                                source: ferrule_common::Error::ModelSource { .. },
+                            }
+                        ),
+                        "{error:#}"
+                    );
+                }
+            }
+        }
+        for invalid in [
+            vec!["--backend", "cpu"],
+            vec!["--tensor-parallel", "2"],
+            vec!["--pipeline-parallel", "2"],
+            vec!["--rank-backend", "process"],
+            vec!["--rank-restarts", "1"],
+            vec!["--rank-timeout-ms", "1"],
+            vec!["--expert-prewarm", "lazy"],
+            vec!["--cuda-expert-device-entries", "1024"],
+        ] {
+            let mut flags = vec!["--expert-parallel", "2", "--devices", "0,1"];
+            flags.extend(invalid);
+            let error = prepare_model(&fixture.args(&flags))
+                .err()
+                .expect("unsupported EP option");
+            let ferrule_runtime::Error::Backend {
+                source: ferrule_common::Error::ModelSource { source },
+            } = error.downcast_ref::<ferrule_runtime::Error>().unwrap()
+            else {
+                panic!("{error:#}")
+            };
+            assert_eq!(
+                source
+                    .downcast_ref::<ferrule_model::transformer::UnsupportedOperator>()
+                    .unwrap()
+                    .operator,
+                "qwen35_moe_expert_parallel"
+            );
+        }
+        let args = fixture.args(&[]);
+        let result = prepare_model(&args);
+        if cfg!(feature = "cuda") {
+            let plan = result.unwrap();
+            assert_eq!(plan.model_name(), "qwen3.5-35b-a3b-fp8");
+            assert!(
+                plan.qwen35_expert_placement().is_none(),
+                "default stays single"
+            );
+            assert!(plan.backend_profile().contains("fp8-f32-tf32x3"));
+            assert_eq!(plan.chat_template(), ferrule_model::ChatTemplate::Qwen35);
+            assert_eq!(plan.observability().max_layers, 40);
+            let limits = plan.qwen35_moe_capacity_limits().unwrap().unwrap();
+            assert_eq!(
+                (limits.max_experts, limits.max_bytes, limits.scratch_bytes),
+                (1024, 4usize << 30, 64 << 20)
+            );
+            use ferrule_model::transformer::host_experts::{
+                ExpertPrewarmMode, HostExpertCacheOptions,
+            };
+            assert_eq!(
+                plan.qwen35_host_cache_options(),
+                Some(HostExpertCacheOptions::default())
+            );
+            let explicit = prepare_model(&fixture.args(&[
+                "--expert-host-cache-entries",
+                "10240",
+                "--expert-host-cache-mb",
+                "40960",
+                "--expert-prewarm-workers",
+                "8",
+            ]))
+            .unwrap();
+            assert_eq!(explicit.qwen35_host_cache_options().unwrap().workers, 8);
+            let lazy = prepare_model(&fixture.args(&[
+                "--expert-prewarm",
+                "lazy",
+                "--expert-host-cache-mb",
+                "0",
+            ]))
+            .unwrap();
+            assert_eq!(
+                lazy.qwen35_host_cache_options().unwrap().mode,
+                ExpertPrewarmMode::Lazy
+            );
+            #[cfg(feature = "cuda")]
+            {
+                use ferrule_runtime::engine::model_factory::Qwen35MoeCudaAdmission;
+                for (entries, bytes) in [(1024, 4usize << 30), (320, 2usize << 30)] {
+                    let custom = prepare_model(&fixture.args(&[
+                        "--cuda-expert-device-entries",
+                        &entries.to_string(),
+                        "--cuda-expert-device-bytes",
+                        &bytes.to_string(),
+                    ]))
+                    .unwrap();
+                    let limits = custom.qwen35_moe_capacity_limits().unwrap().unwrap();
+                    let admission =
+                        Qwen35MoeCudaAdmission::open_hf(&fixture.0, limits, 1 << 30).unwrap();
+                    let (cache, scratch) = admission
+                        .runner_options()
+                        .hybrid_cuda_numeric_fp8()
+                        .unwrap();
+                    assert_eq!(
+                        (cache.max_experts, cache.max_bytes, scratch),
+                        (entries, bytes, 64 << 20)
+                    );
+                    assert!(admission.check_available_device_bytes(0).is_err());
+                }
+                for (flag, value) in [
+                    ("--cuda-expert-device-entries", "0"),
+                    ("--cuda-expert-device-bytes", "0"),
+                ] {
+                    assert!(prepare_model(&fixture.args(&[flag, value])).is_err());
+                }
+                // A huge cache must fail metadata admission, before loading or CUDA allocation.
+                let oversized =
+                    prepare_model(&fixture.args(&["--cuda-expert-device-bytes", "25769803776"]))
+                        .unwrap();
+                assert!(
+                    Qwen35MoeCudaAdmission::open_hf(
+                        &fixture.0,
+                        oversized.qwen35_moe_capacity_limits().unwrap().unwrap(),
+                        1 << 30
+                    )
+                    .is_err()
+                );
+            }
+        } else {
+            assert!(result.err().unwrap().to_string().contains("cuda"));
+        }
+        assert!(prepare_model(&fixture.args(&["--backend", "cpu"])).is_err());
+        for (flag, values) in [
+            ("--expert-pinned-cache-entries", ["16", "0"]),
+            ("--expert-pinned-cache-mb", ["256", "0"]),
+            ("--moe-hotset-experts", ["1", "0"]),
+        ] {
+            for value in values {
+                assert!(
+                    prepare_model(&fixture.args(&[flag, value]))
+                        .err()
+                        .unwrap()
+                        .to_string()
+                        .contains("explicit MoE")
+                );
+            }
+        }
+        for args in [
+            ["--max-layers", "1"],
+            ["--rank-backend", "process"],
+            ["--expert-parallel", "2"],
+            ["--expert-max-slice-mb", "32"],
+            ["--output-head-chunk-rows", "32"],
             ["--tensor-parallel", "2"],
             ["--pipeline-parallel", "2"],
         ] {
@@ -531,6 +1030,23 @@ mod tests {
                             ferrule_model::ModelExecutionBackend::Cuda
                         };
                         assert_eq!(plan.backend(), expected_backend);
+                        assert_eq!(
+                            plan.requested_backend(),
+                            BackendSelection::parse(backend).unwrap()
+                        );
+                        assert_eq!(
+                            plan.requested_options().scheduler_config.max_decode_batch,
+                            args.max_active_sequences
+                        );
+                        let effective = plan.effective_options();
+                        assert_eq!(effective.scheduler_config.max_decode_batch, 1);
+                        assert_eq!(effective.scheduler_config.decode_cohort_max_deferrals, 0);
+                        assert!(!effective.driver_config.enable_native_proposals);
+                        assert!(
+                            plan.adjustment_report()
+                                .render()
+                                .contains("generic pipeline is serial")
+                        );
                         assert_eq!(plan.observability().max_layers, 2);
                         assert_eq!(
                             plan.pipeline_options()
@@ -767,10 +1283,11 @@ mod tests {
     #[test]
     fn parsed_tensor_kv_budget_is_global_f32_not_replicated_per_rank() {
         let fixture = PlanFixture::tensor();
-        // 2 layers * 2 K/V * 4 heads * 2 dim * 4 bytes * 64 tokens
-        // = 8192 bytes/session, so exactly 128 sessions fit in 1 MiB.
+        // Logical KV: 2 layers * 2 K/V * 4 heads * 2 dim * 4 bytes * 64 tokens
+        // = 8192 bytes/session. PR07 physical P=2L includes transaction shadows:
+        // 16384 bytes/session, so 64 sessions fit in 1 MiB, independently of PP/TP.
         for (pp, tp) in [(1, 2), (1, 4), (2, 2)] {
-            for (sessions, fits) in [(128, true), (129, false)] {
+            for (sessions, fits) in [(64, true), (65, false), (128, false)] {
                 let args = fixture.args(&[
                     "--backend",
                     "cuda",

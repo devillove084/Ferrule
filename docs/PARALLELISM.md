@@ -8,13 +8,14 @@ Ferrule production runtime 不依赖、链接或调用 NCCL；外部 Python/NCCL
 
 **证据时序**：标准 linear 的 GEMM 已切换到 CUTLASS TF32x3。下文明确标记的
 旧 GPU 数值和 serving 记录属于更换 GEMM 前的历史验收，不能作为当前实现的
-回归通过证据。下方“最终串行验证”已同步更换 GEMM 后的新实测，Qwen35 与
+回归通过证据。下方分别保留更换 GEMM 后的历史批次与当前 35B thread EP 实测，Qwen35 与
 Qwen3 分开列出；选定测试通过不等于无跳过的全 workspace / 全 GPU / strict Clippy
 全部通过。文档更新只核查已有报告与日志，不运行 Cargo。
 
 ## Qwen3.5-0.8B：完整 text CPU / 单卡 CUDA 已接通
 
-Qwen35 当前只支持严格 dense 0.8B profile，完整 **24 层（18 GDN + 6 full GQA）**。
+本节为严格 dense 0.8B profile，完整 **24 层（18 GDN + 6 full GQA）**；另有下节的
+精确 35B-A3B FP8 单卡/thread EP profile，不能混用默认 backend、精度或验收数字。
 真实 CPU/单卡 CUDA 数值验收已通过（本轮既有结果，文档收尾未重跑）；CLI 默认 CPU，
 显式 `--backend cuda` 已经由 model factory 接入 resident engine / model worker / HTTP/SSE。
 最终日志确认 `hybrid_cuda` **13 tests 通过**，其中 **6 个实际 CUDA 测试、
@@ -35,17 +36,115 @@ SSE 输出 `Hello` 和 ` Paris`，SIGTERM exit 0，退出后无残留 GPU proces
   不是严格 IEEE F32 SGEMM，也不承诺 bitwise 相同；
   GDN 专用 CUDA kernels 经共享 operators 接入，不走 Python 或 CPU fallback。
 - 只执行 text；vision/MTP 附件严格校验后排除，不代表附件推理支持。
-  **MoE/35B/FP8、hybrid TP/PP/EP、process ranks、prefix cache、partial retain 和
-  speculation 均 unsupported**。下面标准 Qwen3 的并行能力不能外推到 Qwen35。
+  **0.8B 的 hybrid TP/PP/EP、process ranks、prefix cache、partial retain 和 speculation
+  均 unsupported**。35B/FP8 单卡与 dedicated EP2/4/8 另见下节，不能混用两者。
 - 每个 recurrent sequence state 为 **20,643,840 bytes**；预算计入 live、transaction
   working copies 和 default state，默认 4 sequences 共 **185,794,560 bytes**。
   KV compact 分配到 6 个 full-attention 层，默认 physical KV 为 192 MiB；
   weights/workspace 单独核算，不能把 KV budget 当成总显存预算。
-- 性能尚未优化：本地 debug CLI 后续 decode 约 **15 s/token**，仅为观测，不是承诺。
+- 历史 0.8B debug CLI 后续 decode 约 **15 s/token**，不是当前 35B release 性能。
   离线 Transformers 5.2 oracle、HF 多 token cached continuation 陷阱及本次未重跑的
   验收 targets 也在专页说明；临时启动验证脚本不是 production engine。
 
-## 四项已集成能力
+## Qwen3.5-35B-A3B FP8：单 owner 与 dedicated GPU-thread EP
+
+精确 35B profile 是 **FP8 E4M3FN raw storage + numeric BF16 block scales，
+F32/TF32x3 compute**。默认是单 GPU resident root；另有独立的 resident GPU-thread
+expert-parallel path，当前只支持 **EP2、EP4、EP8**。这不是 generic pipeline 的
+TP/PP/process placement，也不是 RTX 3090 native FP8 MMA。显式 CUDA plan 为
+`Executable`；CPU、无 CUDA feature 和 generic pipeline TP/PP/process 仍为
+`Unsupported`，不会回退 CPU。F32/TF32x3 路径通过 strict oracle 不意味着 bitwise
+IEEE SGEMM；**BF16-RNE/F32-accumulate full40 仍是 diagnostic-only / known-unaccepted**，
+没有放宽容差，也不能用孤立 BF16 kernel 或 tiny fixture 的通过替代全模型验收。
+
+### 支持矩阵与 EP8 证据
+
+| 路径 | 状态 | 说明 |
+| --- | --- | --- |
+| 单 GPU resident | supported | root、KV 和 bounded device cache 在一个 CUDA owner 上 |
+| dedicated GPU-thread EP2/4/8 | supported | resident root + expert owners；显式 distinct `--devices`，`devices[0]` 是 root，owners 使用同一有序列表 |
+| generic pipeline TP/PP/process | unsupported | 不创建 hybrid TP/PP/process owners；`--engine auto` 只为专用 EP 请求选择该 resident path |
+| NCCL / multi-host | unsupported | production runtime 不依赖、链接或调用 NCCL |
+
+EP8 的 actual CLI/HTTP acceptance 使用 `--engine auto --expert-parallel 8`
+和 `--devices 0,1,2,3,4,5,6,7`。8 个 owner 都执行了 routed calls/tokens；每个 owner
+固定常驻 1,280 个专家，即 `4,027,023,360 B`（约 3.75 GiB），uploads/evictions
+在 ready 后保持 `1280 → 1280` / `0`，pending uploads=0，root 的 routed cache 为零。root 卡的
+combined physical-card admission 是 **`17,014,960,768 B`**；实测 ready usage 约
+**9907 MiB**，其余七卡约 **4170 MiB**。这是八个 active owners 的 residency/lifecycle
+证据；另有下文独立 EP8 release 性能报告，不能将旧 one-token smoke 当作吞吐测量。
+
+严格 full40 factory oracle 已通过：Hello/capital 各自 prefill + decode，共
+**1,986,560 logits**，最大绝对误差 **`4.196166992e-5`**，原始
+`2e-4 + 2e-4 * abs(ref)` 规则通过。原始 rank-slot route 共 **2,560 selected IDs
+及 2,560 weights**，IDs mismatch=0、weights 通过；**120 个 conv 与 120 个 recurrent snapshots** 均在原始
+阈值内。报告保留在 ignored artifacts 的
+[`EP8 acceptance`](../target/validation/qwen35-ep-acceptance/REPORT.md) 与
+[`strict metrics`](../target/validation/qwen35-ep-strict/metrics.json)。这些是数值、
+route、state 和 lifecycle proof，不是 EP8 性能报告。
+
+### Host image、device residency 与安全边界
+
+默认 `full` host prewarm 在 ready 前读取压缩 routed payload **32,216,186,880 B**，
+4 workers，40 GiB accounting cap（`42,949,672,960 B`）；这是 compressed host-image
+上限，不是整个进程的 RSS 上限。最新 EP8 ready **29.723 s**、host warm **7.006 s**，
+ready RSS **36.889 GiB**、sampled startup/process peak **40.678 GiB**；该批 remaining host/cgroup
+admission 为 **`43,429,916,112 B`**（含 headroom），不是跨配置常数。源码按实际剩余
+allocation 的 warm/model 峰值与 headroom 计费，而非机械地要求整个 cap + headroom；
+不能把 cap、RSS 和 remaining-memory ledger 混成一个数字。EP8 的一次 full image 是 `Arc` 共享的；root
+和 owner 不重复 warm，也不重复读 checkpoint。
+
+`--expert-prewarm full` 是 EP 的严格要求；`--expert-prewarm lazy` 会明确拒绝，
+单卡则允许显式 lazy，不能把这个选项外推到 EP。source FD
+生命周期、source replacement preflight、payload identity/proof checks 和 failed
+warm cleanup 都是 readiness gate 的安全条件；ready 后没有 request-time weight reads。
+CUDA image、graph/replay buffer 与 host/device cache 是不同的 residency abstractions，
+不要把 cache counters 或 planned/admission bytes 写成全量 F32 resident。
+
+### EP8 release 性能与证据边界
+
+[EP8 REPORT](../target/validation/performance/ep8-20260926/REPORT.md) 与
+[summary.json](../target/validation/performance/ep8-20260926/summary.json)实测如下；完整表
+与 launch example 见 [QWEN35.md](QWEN35.md)。一次新进程、进程内重复，正常 INFO
+logging，无 profiler/strace；full40、F32/TF32x3、greedy、prefix cache off、ctx1024。
+
+| 请求（首次 / 重复） | TTFT，s | stream decode tok/s | 完整 HTTP，s |
+| --- | ---: | ---: | ---: |
+| Hello 1 → 8 | 0.192 / 0.167 | 5.783 / 5.806 | 1.546 / 1.517 |
+| chat 23 → 32 | 0.458 / 0.456 | 5.796 / 5.807 | 5.956 / 5.945 |
+| prompt 184 → 32 | 2.875 / 2.869 | 5.670 / 5.643 | 8.491 / 8.515 |
+
+stream rate 排除 TTFT/terminal completion；完整 HTTP rate 则包含这些等待，chat
+约 **5.37 tok/s**、184-token prompt 约 **3.76 tok/s**，不可把两种吞吐混称。
+**这些八卡实测场景已交互可用**，不代表多用户容量、数千 token context 或线性八倍扩展性。
+保留的 [post-GQA 单卡报告](../target/validation/performance/final-20260925/REPORT.md)
+中 184-token prompt TTFT 约 **20 s**、HTTP 约 **32 s**，EP8 为 **2.87 s / 8.5 s**。
+双方 full host warm，但单卡 ready 时 GPU cache 为空、1024 entries / 4 GiB bounded；
+EP8 全专家 resident。这是不同 residency 部署配置的比较，不是相同 cache 条件的纯
+计算扩展性实验。OS cache 未清空，首请求不等于全冷 NAS；单卡本次未重跑。
+
+**71 项输出/协议/I/O/lifecycle checks 全通过**；**178 transactions × 8 owners =
+1,424 snapshots**，各 owner resident=1280、uploads 始终1280、evictions=0，全部有
+实际 calls/tokens。每个请求及 ready→shutdown 的 rchar/syscr/read_bytes delta 均为0；
+不表示零 activation transfer 或取消 source checks。断连后恢复、stop/EOS、SIGTERM
+exit0、`physically_closed=true`、无残留 PID/compute apps 通过，显存回到3/2 MiB。
+本次性能运行**没有重跑数值 oracle**；上文独立 strict full40 logits/routes/state proof
+仍是数值依据，不能用文本一致性或这71 checks 替代。
+
+[最终 CPU gate 汇总](../target/validation/performance-ep8-final-cpu-20260926T140807Z-summary.txt)：
+**1,389 passed / 0 failed / 13 ignored / 2 known-fixture filters**，doctest另 **9 passed**；
+CPU/CUDA compile-only checks、fmt通过，warning lines=0。过滤项、ignored 不计通过，
+不代表全GPU、strict Clippy 或 BF16 full40 已验收；详细范围见 QWEN35 专页。
+
+生命周期语义也必须分开写：early emission 只提前发送可见 token，不丢弃最终 KV append；
+logical drain、cancel pending/unknown 和 physical shutdown 不是同一个完成状态。pending
+或 unknown 不得写成成功清理，也不构成 physical driver-fault recovery 证据。
+
+EP8 的可复制命令、完整 owner ledger、strict test ID 和旧 historical reports 见
+[QWEN35.md](QWEN35.md)。
+上述日志为本地 Git ignored 产物。
+
+## 标准 Qwen3 的四项已集成能力
 
 | 能力 | 当前集成边界 | 主要入口 |
 | --- | --- | --- |
@@ -63,14 +162,19 @@ tensor boundary、accumulation 和 output 为 F32；F32 precision enum 或 F32 t
 也不新增 CLI precision knob。更换 GEMM 后的实测见下一节，历史数字仍单独保留。
 
 `sm_86` canonical manifest → native/Rust discovery → plan/execution 已验证贯通：
-`F32Gemm ID=11`、mask **`0x586`**、F32 TF32x3 / LinearF32 inference 为 true，
-FP8 QueryAKv/Projection 为 false。standard linear graph replay 在原地址写入新输入，
+`F32Gemm ID=11`、当前 mask **`0xD86`**，F32 TF32x3 / LinearF32 和 BF16 GEMM
+为 true，FP8 QueryAKv/Projection 仍为 false；当前 mask 见
+[manifest 日志](../target/validation/qwen35-35b-final-gpu-15-current-f32-manifest.log)。
+旧 0.8B 批次的 `0x586` 不含新增 BF16 GEMM bit。
+standard linear graph replay 在原地址写入新输入，
 并预先用 NaN / -777 污染输出 D 后仍得到正确结果，device consumer 读取也正确；
 不是重放旧输出。证据见 [backend lib 日志](../target/validation/qwen35-final-gpu-01-backend-lib.log)
 和 [standard linear / capability 日志](../target/validation/qwen35-final-gpu-02-backend.log)。
 
-### 最终串行验证：更换 GEMM 后的当前证据
+### 先前串行验证：更换 GEMM 后的 0.8B / 标准 Qwen3 批次
 
+本节保留较早的独立批次，不覆盖后续 35B 变更；历史 postfix 计数见
+[QWEN35.md](QWEN35.md)，当前 EP8 strict proof 见上节。
 来源：[GPU 汇总](../target/validation/qwen35-final-gpu-summary.md)及其分项
 `target/validation/qwen35-final-gpu-*.log`、
 [CPU 汇总](../target/validation/qwen35-final-cpu-summary.md)。这些是 **Git ignored 的
@@ -143,7 +247,7 @@ TP2、TP4、PP2TP2、thread PP/EP、process PP/EP 五个 targets 本次 **5 pass
 
 BF16 是上述 GPU decoder 的 **checkpoint 存储格式，不是 BF16 compute**。
 F32-weight MoE decoder 另由 `full_gpu_decoder` fixture 覆盖；完整 MoE checkpoint
-GPU EP/35B FP8 模型不在本轮已验证范围。
+GPU EP/35B FP8 模型不在**该历史批次**范围；当前精确 35B dedicated EP 的证据见上节。
 
 ### P1 prepare custody：已修复
 
@@ -270,17 +374,20 @@ partial `--max-layers`、nonzero `--moe-hotset-experts` 和 expert-cache policy 
 在 pipeline build 前拒绝。未传 `--expert-host-cache-*` / `--expert-pinned-cache-*`
 时，pipeline 保留 runtime 默认策略，不把 resident CLI 默认值当作 override；显式传入
 任意一个 cache 参数（包括 0 或恰好等于 runtime 默认值）仍会拒绝，不能承诺未实现的限额。
-resident 未传时仍为 host 64 entries / 1024 MiB、pinned 16 entries / 256 MiB。
+其他 resident 模型未传时仍为 host 64 entries / 1024 MiB、pinned 16 entries / 256 MiB；
+35B 的 compressed host prewarm 是上文独立的 10240 entries / 40 GiB，不套用这些默认值。
 默认 `--engine auto` 不等于自动 CUDA，CUDA 必须显式选择。
 
 Unix CLI 同时监听 SIGTERM 和 SIGINT：停止 HTTP admission，等待连接 drain，再等待
 model worker shutdown/join（含 process owners 的 shutdown/reap）。非 Unix 使用 Ctrl-C。
 HTTP 或 worker shutdown 失败会返回非零退出码；同时失败时也保留 worker shutdown 错误。
 
-`--expert-parallel N` 只用于受支持的 Qwen3-MoE checkpoint，不能用于上面的 dense
-Qwen3-0.6B。CUDA ordinal 顺序是 PP owners 在前，再按 stage 排列 EP owners；
+**本节 generic pipeline** 的 `--expert-parallel N` 用于受支持的 Qwen3-MoE checkpoint，
+不能用于上面的 dense Qwen3-0.6B。CUDA ordinal 顺序是 PP owners 在前，再按 stage 排列 EP owners；
 PP2EP2 需要六个 ordinal，如 `0,1,2,3,4,5`。重复 ordinal 可显式 colocate owners，
-但不会合并 owner identity。未提供经过本轮验收的完整 35B FP8 MoE serve 示例。
+但不会合并 owner identity。35B 的 **dedicated resident EP2/4/8** 不是此拓扑：
+N 个 distinct devices、root 为第一个、expert owners 使用同一列表；不能照搬六 ordinal
+PP2EP2 或 colocation 示例。其单卡/EP8 release 启动命令见 [QWEN35.md](QWEN35.md)。
 
 ## Dense TP：CLI / serving 接入
 
@@ -515,6 +622,63 @@ timeout --signal=TERM --kill-after=20s 300s \
   -- --ignored --exact --nocapture --test-threads=1
 ```
 
+## Process wire v3 与 IPC 复现
+
+Process PP×EP 使用 `ExpertSourceScope::ExternalStage`：source 必须是附属 PP
+stage/boot rank，EP members 仅包含 workers，不增加 KV、协调或 replay authority。
+Decoder wire 为 **v3**；parent/child 必须一起升级、重建并重启。旧版本、缺失或
+错误 source scope 在 factory/checkpoint/device startup 前拒绝；运行中的错误
+source command/token 保持 Unknown/quarantine，不构成 fence。外层 envelope
+协议独立不变，thread `Member` 兼容保留，不扩展到 TP×EP 或 multihost。
+
+IPC 保留 bounded JSON、独立 payload/envelope limits、非零 length prefix、
+version validation 和不滑动 absolute deadlines。Timing 是观测，不生成 ACK、
+不延长 deadline，也不证明 completion/quiescence。
+
+### CPU IPC measurement
+
+编译时 `FERRULE_PROCESS_IPC_INSTRUMENT=1` 才启用实验 instrumentation；运行时
+`FERRULE_PROCESS_IPC_TIMING` 必须是非空绝对 JSONL 路径，在首次使用时缓存并传给
+children。普通构建不读取该 timing 环境变量、不运行 clocks/counters/sinks；
+instrumented-off 仍有 cached runtime gate，不能与普通构建混为一谈。
+Counters 在线程正常退出时 best-effort 写入，不记录 payload；丢失记录不是零成本。
+`copy` 嵌套在 `encode`、`pipe_wait` 嵌套在 frame I/O，parent/child wall 也有
+重叠，不能将所有 phase 时间或不同层次 byte counts 相加。正常/off/on 分别报告，
+不把共享主机差异写成 speedup 或 correctness gate。
+
+从仓库根目录分别构建普通与 instrumented test binary 及匹配 child：
+
+```sh
+CARGO_TARGET_DIR=target/pr26 FERRULE_NO_CUDA=1 \
+  cargo build --locked -p ferrule-runtime --example process_rank_child
+CARGO_TARGET_DIR=target/pr26 FERRULE_NO_CUDA=1 \
+  cargo test --locked -p ferrule-runtime --test process_ipc_measurement --no-run
+CARGO_TARGET_DIR=target/pr26-instrumented FERRULE_NO_CUDA=1 \
+  FERRULE_PROCESS_IPC_INSTRUMENT=1 \
+  cargo build --locked -p ferrule-runtime --example process_rank_child
+CARGO_TARGET_DIR=target/pr26-instrumented FERRULE_NO_CUDA=1 \
+  FERRULE_PROCESS_IPC_INSTRUMENT=1 \
+  cargo test --locked -p ferrule-runtime --test process_ipc_measurement --no-run
+python3 scripts/bench_process_ipc.py --help
+python3 scripts/test_bench_process_ipc.py
+```
+
+向 [runner](../scripts/bench_process_ipc.py) 传入 instrumented 构建的
+`--test-binary` 和 `--child`，可选再传普通构建的 `--default-test-binary` /
+`--default-child`。Test executable 必须取自 Cargo 的 `Executable` 输出或
+`compiler-artifact.executable`，不要猜 hash 或复用旧 binary。不要关闭 Python
+assertions。Runner 固定 CPU/thread/log 环境，保存 executable/source hashes 与
+revision/dirty status，仅写 ignored `target/` 下的新目录，不覆盖已有产物。
+所有实验共用 **100 秒 deadline**，不含编译。
+
+实验为真实 child pipe echo、synthetic CPU MoE PP2 activation（PP1 数值 oracle）
+和独立 codec/copy，每项 4 warmups / 32 measured iterations。不下载权重、不访问
+网络，不代表生产模型/GPU 吞吐。CPU download 为 not-applicable/null，不是零。
+可选 `process_ipc_download` CUDA test 需支持硬件、`--features cuda`，设置
+`FERRULE_PR26_ARTIFACT_DIR` 为 ignored 目录，在外部 100 秒 timeout 下只运行
+`activation_download_boundary_baseline --exact --ignored --test-threads=1`。
+这仅测真实 pinned D2H boundary，不是 GPU child inference；缺硬件不能算通过。
+
 ## 协议与 transport 边界
 
 [`DistributedTransaction`](../crates/ferrule-runtime/src/distributed.rs) 仍是唯一
@@ -540,8 +704,13 @@ HostCollective 仍是同步 CPU rendezvous，不是端到端异步 collective，
 
 ## 明确不作的宣称
 
-- 完整 35B FP8 checkpoint/decoder、完整 MoE checkpoint GPU EP；
-- GPU BF16 compute；
+- 35B hybrid TP/PP/process ranks、任意 MoE profile 的 GPU EP，或未经 benchmark 的八卡加速；
+  精确 35B FP8/F32 单卡与 dedicated thread EP2/4/8 已支持，EP8 strict full40 已通过，
+  EP8 实测交互可用限于上述场景，不外推多用户、数千 token context 或线性八倍加速；
+- 把 BF16-RNE full35B 模型数值写成已接受生产契约（它仍是 diagnostic-only），或把
+  RTX 3090 native FP8 MMA 写成受支持；
+- 把 shutdown service criteria 通过改写成旧完整 SSE launcher all-green，或当成
+  full-logits 重跑与物理 driver-fault 恢复证明；
 - full-model GPU DP serving、MoE/process TP，或未经上述 GPU HTTP targets 实跑验证的 TP serving 结果；
 - CUDA IPC、无 host staging/transport 的零 host 路径；
 - multi-host / multi-node；

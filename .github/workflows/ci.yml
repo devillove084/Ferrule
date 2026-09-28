@@ -5,6 +5,13 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      gpu_nightly:
+        description: Run the optional provisioned four-GPU/model/oracle suite
+        type: boolean
+        default: false
+  schedule:
+    - cron: '23 3 * * *'
 
 permissions:
   contents: read
@@ -16,9 +23,31 @@ concurrency:
 env:
   CARGO_INCREMENTAL: "0"
   CARGO_TERM_COLOR: always
+  # CPU default only; CUDA jobs explicitly override this to 0.
   FERRULE_NO_CUDA: "1"
   RUST_BACKTRACE: "1"
 
+# External administrator setup (NOT configured by this file):
+# - Preserve existing required checks and require CPU tests, CPU coverage,
+#   CUDA compile-only and GPU required smoke in branch protection/rulesets.
+#   A job name is not proof that a remote required check is enabled.
+# - Register existing isolated/ephemeral Linux x64 GPU runners with labels
+#   [self-hosted, linux, x64, cuda, sm_86]; no paid runner is created here.
+# - Set repository variable FERRULE_GPU_CI=1 only after smoke capacity exists.
+#   Protect environment cuda-required with reviewers before enabling it.
+#   Untrusted fork PR code is never sent to a self-hosted runner. Its required
+#   gate fails UNVERIFIED; maintainers must review/promote the exact code to a
+#   trusted branch and rerun, not waive the missing GPU result as a pass.
+# - Optional nightly also needs label cuda-nightly, four sm_86 GPUs, protected
+#   environment cuda-nightly, variable FERRULE_GPU_NIGHTLY=1, and explicit local
+#   FERRULE_QWEN35_08B_DIR / FERRULE_QWEN35_ORACLE_DIR repository variables.
+#   No fixture downloads or credentials are supplied. Offline/absent runners
+#   leave jobs queued/unverified, never evidence that tests passed.
+# - GPU jobs use host CUDA (nvcc, driver, C++ toolchain, rg). Compile-only uses
+#   a versioned public CUDA devel image on a hosted runner and link-only driver
+#   stubs, without GPU access. Fork PR compilation never uses self-hosted hosts.
+# - Coverage remains a regression gate: 60% lines; Codecov 70% patch remains
+#   informational. Neither replaces GPU execution or ownership tests.
 jobs:
   lint:
     name: Lint and docs
@@ -65,7 +94,7 @@ jobs:
         with:
           shared-key: test
       - name: Run CPU test suite
-        run: just test
+        run: just ci-cpu
       - name: Upload Nextest JUnit report
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -107,6 +136,7 @@ jobs:
       - name: Generate coverage reports
         run: just coverage
       - name: Upload coverage reports
+        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: cpu-coverage
@@ -175,3 +205,216 @@ jobs:
         uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
         with:
           fail-on-severity: moderate
+
+  cuda-compile:
+    name: CUDA compile-only
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    container:
+      image: nvidia/cuda:12.9.1-devel-ubuntu24.04
+    env:
+      FERRULE_NO_CUDA: "0"
+      CUDA_VISIBLE_DEVICES: ""
+      # Link stubs only; do not add them to the runtime loader search path.
+      LIBRARY_PATH: /usr/local/cuda/lib64/stubs
+    steps:
+      - name: Install native build prerequisites
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates curl git build-essential pkg-config libssl-dev ripgrep
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master
+        with:
+          toolchain: nightly-2026-08-01
+      - name: Install just
+        uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4.0.0
+      - name: Compile and link CUDA feature, native and CUTLASS all targets
+        shell: bash
+        run: |
+          mkdir -p target/validation/ci/cuda-compile
+          set -o pipefail
+          just ci-cuda-compile sm_86 2>&1 | tee target/validation/ci/cuda-compile/build.log
+      - name: Upload compile-only evidence (not GPU execution)
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cuda-compile
+          path: target/validation/ci/cuda-compile
+          if-no-files-found: error
+          retention-days: 14
+
+  gpu-smoke:
+    name: GPU smoke execution
+    if: >-
+      github.event_name != 'schedule' && vars.FERRULE_GPU_CI == '1' &&
+      (github.event_name != 'pull_request' ||
+       github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: [self-hosted, linux, x64, cuda, sm_86]
+    environment: cuda-required
+    timeout-minutes: 60
+    env:
+      FERRULE_NO_CUDA: "0"
+      CUDA_VISIBLE_DEVICES: "0"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master
+        with:
+          toolchain: nightly-2026-08-01
+      - name: Install just
+        uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4.0.0
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@6d9ce389421e24f7b73aff5e841bbe5a6b4c974c # nextest
+        with:
+          tool: nextest
+      - name: Require and run selected native GPU contracts
+        shell: bash
+        run: |
+          mkdir -p target/validation/ci/gpu-smoke
+          set -o pipefail
+          just ci-gpu-smoke sm_86 2>&1 | tee target/validation/ci/gpu-smoke/run.log
+      - name: Upload GPU smoke evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: gpu-smoke
+          path: target/validation/ci/gpu-smoke
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload required GPU JUnit
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: gpu-smoke-junit
+          path: target/nextest/gpu-smoke/junit.xml
+          if-no-files-found: error
+          retention-days: 14
+
+  gpu-required:
+    name: GPU required smoke
+    needs: [cuda-compile, gpu-smoke]
+    if: always() && github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      COMPILE_RESULT: ${{ needs.cuda-compile.result }}
+      GPU_RESULT: ${{ needs.gpu-smoke.result }}
+    steps:
+      - name: Fail closed when required GPU execution is absent
+        run: |
+          if [ "$COMPILE_RESULT" != success ] || [ "$GPU_RESULT" != success ]; then
+            echo 'UNVERIFIED/FAILED: required CUDA compile and GPU smoke must both succeed' >> "$GITHUB_STEP_SUMMARY"
+            echo "compile=$COMPILE_RESULT gpu=$GPU_RESULT" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          echo 'Selected required GPU smoke executed successfully; nightly is separate' >> "$GITHUB_STEP_SUMMARY"
+
+  gpu-nightly:
+    name: GPU nightly optional execution
+    if: >-
+      (github.event_name == 'schedule' ||
+       (github.event_name == 'workflow_dispatch' && inputs.gpu_nightly)) &&
+      vars.FERRULE_GPU_NIGHTLY == '1'
+    runs-on: [self-hosted, linux, x64, cuda, sm_86, cuda-nightly]
+    environment: cuda-nightly
+    timeout-minutes: 120
+    env:
+      FERRULE_NO_CUDA: "0"
+      CUDA_VISIBLE_DEVICES: "0,1,2,3"
+      FERRULE_QWEN35_08B_DIR: ${{ vars.FERRULE_QWEN35_08B_DIR }}
+      FERRULE_QWEN35_ORACLE_DIR: ${{ vars.FERRULE_QWEN35_ORACLE_DIR }}
+    outputs:
+      ready: ${{ steps.probe.outputs.ready }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install just
+        uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4.0.0
+      - name: Classify optional environment (not a test result)
+        id: probe
+        shell: bash
+        run: |
+          mkdir -p target/validation/ci/gpu-nightly
+          if just ci-gpu-nightly-preflight sm_86 > target/validation/ci/gpu-nightly/preflight.log 2>&1; then
+            echo 'ready=true' >> "$GITHUB_OUTPUT"
+            echo 'PENDING: prerequisites present, tests not yet verified' > target/validation/ci/gpu-nightly/status.txt
+          else
+            echo 'ready=false' >> "$GITHUB_OUTPUT"
+            echo 'UNVERIFIED: optional GPU/model/oracle environment absent; no tests ran' > target/validation/ci/gpu-nightly/status.txt
+          fi
+          cat target/validation/ci/gpu-nightly/status.txt >> "$GITHUB_STEP_SUMMARY"
+      - name: Install Rust toolchain
+        if: steps.probe.outputs.ready == 'true'
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master
+        with:
+          toolchain: nightly-2026-08-01
+      - name: Install cargo-nextest
+        if: steps.probe.outputs.ready == 'true'
+        uses: taiki-e/install-action@6d9ce389421e24f7b73aff5e841bbe5a6b4c974c # nextest
+        with:
+          tool: nextest
+      - name: Run bounded nightly selection
+        id: tests
+        if: steps.probe.outputs.ready == 'true'
+        shell: bash
+        run: |
+          set -o pipefail
+          just ci-gpu-nightly sm_86 2>&1 | tee target/validation/ci/gpu-nightly/run.log
+      - name: Upload nightly classification and evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: gpu-nightly
+          path: target/validation/ci/gpu-nightly
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload nightly JUnit only when tests were attempted
+        if: always() && steps.tests.outcome != 'skipped' && steps.probe.outputs.ready == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: gpu-nightly-junit
+          path: target/nextest/gpu-nightly/junit.xml
+          if-no-files-found: error
+          retention-days: 14
+
+  gpu-nightly-status:
+    name: GPU nightly classification (not a test)
+    needs: gpu-nightly
+    if: >-
+      always() && (github.event_name == 'schedule' ||
+      (github.event_name == 'workflow_dispatch' && inputs.gpu_nightly))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      NIGHTLY_RESULT: ${{ needs.gpu-nightly.result }}
+      NIGHTLY_READY: ${{ needs.gpu-nightly.outputs.ready }}
+    steps:
+      - name: Report unverified separately from verified execution
+        run: |
+          mkdir -p target/validation/ci/gpu-nightly
+          if [ "$NIGHTLY_READY" != true ]; then
+            echo 'UNVERIFIED: optional nightly prerequisites unavailable or job not enabled; no passing GPU evidence' > target/validation/ci/gpu-nightly/classification.txt
+          elif [ "$NIGHTLY_RESULT" = success ]; then
+            echo 'VERIFIED: bounded nightly selection executed successfully' > target/validation/ci/gpu-nightly/classification.txt
+          else
+            echo 'FAILED_OR_INTERRUPTED: optional nightly execution did not complete successfully' > target/validation/ci/gpu-nightly/classification.txt
+          fi
+          cat target/validation/ci/gpu-nightly/classification.txt >> "$GITHUB_STEP_SUMMARY"
+          test "$NIGHTLY_RESULT" != failure && test "$NIGHTLY_RESULT" != cancelled
+      - name: Upload nightly classification even when execution was skipped
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: gpu-nightly-classification
+          path: target/validation/ci/gpu-nightly/classification.txt
+          if-no-files-found: error
+          retention-days: 14

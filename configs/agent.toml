@@ -1,3 +1,9 @@
+# LEGACY / NON-EXECUTABLE EXAMPLE
+# Historical design sketch only; the Ferrule CLI does not load this TOML file.
+# No agent/train/rollout command or runtime configuration parser is provided.
+# Fields below do not configure models, logging, or a metrics endpoint.
+# See ../docs/ARCHITECTURE.md#observability-and-configuration for supported observability inputs and scope.
+
 [observability]
 service_name = "ferrule"
 log_level = "info"

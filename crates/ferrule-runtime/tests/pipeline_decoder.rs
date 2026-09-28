@@ -1131,3 +1131,47 @@ fn composed_mesh_metadata_does_not_enable_pipeline_execution() {
         assert!(result.is_err());
     }
 }
+
+#[test]
+fn cpu_single_logical_page_two_tokens_needs_no_physical_shadow() {
+    let fixture = Fixture::new(true);
+    for precision in [
+        ExecutionPrecisionPolicy::f32(),
+        ExecutionPrecisionPolicy::bf16_compatibility(),
+    ] {
+        let cfg = PipelineConfig {
+            max_pages: 1,
+            max_positions: 2,
+            max_batch_tokens: 2,
+            session_capacity: 1,
+            ..config(precision)
+        };
+        let mut pipeline = fixture.pipeline(cfg, 2, Spy::new());
+        assert_eq!(pipeline.page_manager().max_pages(), 1);
+        pipeline
+            .forward(SessionId(1), &[1], ForwardPhase::Prefill)
+            .unwrap();
+        pipeline
+            .forward(SessionId(1), &[2], ForwardPhase::Decode)
+            .unwrap();
+        for owner in pipeline.owner_stats().unwrap() {
+            assert_eq!(
+                (
+                    owner.kv.physical_pages,
+                    owner.kv.resident_pages,
+                    owner.kv.free_pages
+                ),
+                (1, 1, 0)
+            );
+        }
+        assert!(
+            pipeline
+                .forward(SessionId(1), &[3], ForwardPhase::Decode)
+                .is_err()
+        );
+        assert_eq!(pipeline.page_manager().allocated_pages(), 1);
+        pipeline.release_session(SessionId(1)).unwrap();
+        zero(&pipeline);
+        pipeline.shutdown().unwrap();
+    }
+}

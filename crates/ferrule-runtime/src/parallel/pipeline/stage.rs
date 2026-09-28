@@ -32,6 +32,17 @@ pub struct PipelineExecutionContext<'a> {
 /// (including an error) must make host input/output storage safe to drop. Device
 /// work and physical KV fences remain under the backend's custody contract; a lost
 /// fence must never be reported as successful rollback or retirement.
+///
+/// Commit metadata cannot execute a stage, even when a caller already owns a KV view:
+/// ```compile_fail
+/// use ferrule_model::decoder::KvCommitProjection;
+/// use ferrule_model::transformer::SegmentInput;
+/// use ferrule_runtime::parallel::pipeline::{PipelineStageProgram, PipelineExecutionContext};
+/// fn execute<P: PipelineStageProgram>(program: &mut P, projection: &KvCommitProjection,
+///     input: SegmentInput, view: &mut P::KvView, context: PipelineExecutionContext<'_>) {
+///     program.execute(projection, input, view, context).unwrap();
+/// }
+/// ```
 pub trait PipelineStageProgram: 'static {
     type KvView: 'static;
 

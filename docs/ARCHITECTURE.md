@@ -262,6 +262,37 @@ non-streaming OpenAI-compatible completion endpoints share the same model
 ownership. The implemented DeepSeek-V4 path accepts deterministic greedy
 semantics and rejects unsupported sampling rather than silently changing it.
 
+### Observability and configuration
+
+`ferrule-common::observability::Metrics` is a process-local cumulative
+accumulator; runtime/driver snapshots are separate owner-local observations
+and must not be repeatedly added to process counters. The worker active owner
+holds a non-cloneable `RequestMetricsGuard`, created only after successful
+`engine.try_submit`. Removal/drop ends that observation exactly once. Rejected
+or queued requests do not start it; cancellation acceptance or failure delivery
+alone does not finish a retained owner. Do not also increment finished counters
+in HTTP/terminal paths. Finished means an admitted-generation observation ended,
+not successful generation, HTTP delivery, permit release, or physical cleanup.
+Unknown cleanup retains its existing ownership obligations independently.
+Token/latency/cache/GPU counters require explicit owner-defined observations.
+
+`FERRULE_LOG` selects the tracing filter (default `info`), and
+`FERRULE_LOG_FORMAT=json` selects JSON on stderr. Initialization is idempotent
+and retains an embedded subscriber. `FERRULE_METRICS_INTERVAL` is a minimum dump
+interval in seconds; missing, invalid or zero disables it. Dumping requires
+explicit polling, does not reset counters, and creates no exporter, background
+thread or endpoint. `shutdown()` remains a compatibility no-op.
+
+[agent.toml](../configs/agent.toml), [train.toml](../configs/train.toml), and
+[rollout.toml](../configs/rollout.toml) are legacy, non-executable TOML examples.
+The CLI has no corresponding commands, `--config` option or TOML loader;
+fields such as `metrics_bind` do not configure a live service. Serving CLI
+runtime-limit overrides apply before owner Ready; omission preserves defaults
+and unsupported engines reject explicit overrides. `/admission` is a read-only
+owner-local admission/capacity sample with separately sampled HTTP leases, not
+a globally atomic snapshot, cumulative metrics update or quiescence proof.
+Unsupported physical capacity remains unknown/null.
+
 ## 10. Kernel provider boundary
 
 Model and runtime code create provider-neutral semantic plans. CUDA, CUTLASS,

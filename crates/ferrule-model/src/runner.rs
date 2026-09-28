@@ -642,6 +642,17 @@ impl NativeProposal {
 pub trait ResidentModelRunner: MultiSessionRunner {
     type ObservabilitySnapshot: Clone;
 
+    /// Close model-owned physical execution resources after runtime transactions,
+    /// sequences and materialization ownership have drained. Errors must retain
+    /// custody in this runner; retry must not clear unknown-completion quarantine.
+    /// Success must be idempotent. Drop is not a substitute for this fallible call.
+    ///
+    /// Compatibility default for legacy runners with no separate physical owner.
+    /// Device-owning runners must override this (all GenericDecoder compositions do).
+    fn shutdown_physical(&mut self) -> Result<()> {
+        Ok(())
+    }
+
     /// Return one model-owned typed observability snapshot. Runtime transports the
     /// associated type without knowing model-specific fields.
     fn observability_snapshot(&self) -> Self::ObservabilitySnapshot;
@@ -656,6 +667,39 @@ pub trait ResidentModelRunner: MultiSessionRunner {
     fn take_completion_reactors(&mut self) -> Vec<ModelCompletionReactor>;
 
     fn native_proposal_source(&self) -> Result<Option<NativeProposalSource>>;
+
+    /// Begin a proposal owned by an explicit sequence, without changing the
+    /// runner's default session. A waiting proposal retains that sequence's owner.
+    ///
+    /// Compatibility adapter for existing runners. Runners whose generic state
+    /// swap rejects active proposal owners must override these explicit hooks,
+    /// not relax availability checks for arbitrary sequence work.
+    fn begin_native_proposal_for(
+        &mut self,
+        state: &mut Self::SequenceState,
+        transaction: ExecutionTransactionId,
+        anchor_token_id: u32,
+    ) -> Result<NativeProposalProgress> {
+        self.with_sequence_state(state, |runner| {
+            runner.begin_native_proposal(transaction, anchor_token_id)
+        })
+    }
+
+    /// Resume only the continuation owned by this transaction and sequence.
+    /// Implementations must reject mismatched owners and stale state bindings
+    /// before entering model work, retaining existing continuation/lease custody.
+    /// An accepted resume that fails active remains cancellable by Abort.
+    fn resume_native_proposal_for(
+        &mut self,
+        state: &mut Self::SequenceState,
+        transaction: ExecutionTransactionId,
+        continuation: ContinuationId,
+        leases: ResidencyLeaseSet,
+    ) -> Result<NativeProposalProgress> {
+        self.with_sequence_state(state, |runner| {
+            runner.resume_native_proposal(transaction, continuation, leases)
+        })
+    }
 
     /// Begin a checkpoint-native proposal without synchronously waiting for
     /// model-owned I/O or device result transfers.

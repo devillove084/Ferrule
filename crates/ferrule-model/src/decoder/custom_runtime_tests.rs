@@ -24,7 +24,7 @@ use ferrule_common::materialization_io::{
     MaterializationResourceLimits, MaterializationResourcePlan,
 };
 use ferrule_common::{
-    BackendId, CancellationReason, CompletionEvent, CompletionHub, ContentHash, ContinuationId,
+    BackendId, CancellationReason, CompletionHub, ContentHash, ContinuationId,
     DestinationGeneration, DestinationSlotId, DeviceId, DispatchFenceContract, Error,
     FailureReason, FenceId, LoadStage, MappingEpoch, MaterializationKey, MaterializationPurpose,
     MaterializationResolveResult, MaterializedResourceId, MaterializedResourceKind,
@@ -54,6 +54,7 @@ struct CustomTrace {
     proposal_kv_views: usize,
     proposal_ids: Vec<ContinuationId>,
     proposal_resume_lease_sizes: Vec<usize>,
+    proposal_wait_again: bool,
     retained_working_rows: Vec<Vec<u32>>,
     provider_prepares: usize,
     resolver_calls: usize,
@@ -747,6 +748,20 @@ impl DecoderProposalExecutor<CustomSequenceState, CustomKvBackend> for CustomPro
         trace(&self.trace)
             .proposal_resume_lease_sizes
             .push(lease.len());
+        if std::mem::take(&mut trace(&self.trace).proposal_wait_again) {
+            let use_ = StageResourceUse::new(
+                self.request.resource(),
+                ResourceAccess::Read,
+                ResourceRetention::ThroughTransaction,
+            );
+            let stage = context.resolve_stage(
+                vec![StageMaterializationRequest::new(use_, self.request)?],
+                WorkspaceClaim::NONE,
+            )?;
+            return Ok(DecoderProposalResumeProgress::Waiting(
+                DecoderWait::ResolvedStage(stage),
+            ));
+        }
         let first = continuation
             .anchor_token_id
             .checked_add(1)
@@ -975,8 +990,8 @@ impl MaterializationProvider for CustomMaterializationProvider {
     ) -> std::result::Result<(), FailureReason> {
         Err(Self::unsupported_transfer())
     }
-    fn next_completion(&mut self) -> Option<CompletionEvent> {
-        None
+    fn next_progress(&mut self) -> ferrule_common::ProviderProgress {
+        ferrule_common::ProviderProgress::Idle
     }
 }
 struct CustomMaterializationResolver {
@@ -1737,9 +1752,12 @@ fn custom_runtime_forwards_proposal_materialization_observer_and_shutdown() {
     );
     let explicit_proposal = transaction(8);
     assert!(matches!(
-        MultiSessionRunner::with_sequence_state(&mut runner, &mut explicit_state, |runner| {
-            ResidentModelRunner::begin_native_proposal(runner, explicit_proposal, 80)
-        },)
+        ResidentModelRunner::begin_native_proposal_for(
+            &mut runner,
+            &mut explicit_state,
+            explicit_proposal,
+            80,
+        )
         .unwrap(),
         NativeProposalProgress::Waiting(_)
     ));
@@ -1880,6 +1898,590 @@ fn generic_decoder_is_the_only_resolver_owner() {
             .unwrap(),
         dependency
     );
+}
+
+#[test]
+fn explicit_proposal_waiting_resumes_with_original_owner() {
+    let CustomRuntimeFixture {
+        mut runner,
+        dependency,
+        trace: shared_trace,
+        ..
+    } = custom_runtime();
+    let mut state = runner.create_sequence_state().unwrap();
+    let transaction = transaction(80);
+    let NativeProposalProgress::Waiting(pending) = runner
+        .begin_native_proposal_for(&mut state, transaction, 80)
+        .unwrap()
+    else {
+        panic!("custom proposal must wait");
+    };
+    assert_eq!(pending.transaction(), transaction);
+    let progress = runner
+        .resume_native_proposal_for(
+            &mut state,
+            transaction,
+            pending.continuation(),
+            lease(dependency),
+        )
+        .unwrap();
+    let NativeProposalProgress::Complete(proposal) = progress else {
+        panic!("custom proposal must complete");
+    };
+    assert_eq!(proposal.token_ids, [81, 82]);
+    assert_eq!(trace(&shared_trace).proposal_resumes, 1);
+    assert_eq!(runner.observability_snapshot().primary.active_proposals, 0);
+    runner.try_release_sequence_state(state).unwrap();
+    runner.shutdown().unwrap();
+}
+
+#[test]
+fn explicit_proposal_can_resume_legacy_begin_adapter() {
+    let CustomRuntimeFixture {
+        mut runner,
+        dependency,
+        ..
+    } = custom_runtime();
+    let mut state = runner.create_sequence_state().unwrap();
+    let active = transaction(93);
+    let NativeProposalProgress::Waiting(pending) = runner
+        .with_sequence_state(&mut state, |runner| {
+            runner.begin_native_proposal(active, 10)
+        })
+        .unwrap()
+    else {
+        panic!("custom proposal must wait")
+    };
+    assert!(runner.with_sequence_state(&mut state, |_| Ok(())).is_err());
+    assert!(matches!(
+        runner
+            .resume_native_proposal_for(
+                &mut state,
+                active,
+                pending.continuation(),
+                lease(dependency),
+            )
+            .unwrap(),
+        NativeProposalProgress::Complete(_)
+    ));
+    runner.try_release_sequence_state(state).unwrap();
+    runner.shutdown().unwrap();
+}
+
+fn explicit_proposal_wait(
+    runner: &mut CustomRunner,
+    state: &mut CustomSequenceState,
+    transaction: ExecutionTransactionId,
+    anchor: u32,
+) -> crate::runner::PendingModelProgress {
+    match runner
+        .begin_native_proposal_for(state, transaction, anchor)
+        .unwrap()
+    {
+        NativeProposalProgress::Waiting(pending) => pending,
+        NativeProposalProgress::Complete(_) => panic!("custom proposal must wait"),
+    }
+}
+
+#[test]
+fn explicit_proposal_rejects_mismatched_owners_without_consuming_slots() {
+    let CustomRuntimeFixture {
+        mut runner,
+        dependency,
+        trace: shared_trace,
+        ..
+    } = custom_runtime();
+    let mut first = runner.create_sequence_state().unwrap();
+    let mut second = runner.create_sequence_state().unwrap();
+    let active = transaction(82);
+    let first_wait = explicit_proposal_wait(&mut runner, &mut first, active, 10);
+    let second_wait = explicit_proposal_wait(&mut runner, &mut second, active, 20);
+    assert_ne!(first_wait.continuation(), second_wait.continuation());
+
+    for (owner, continuation) in [
+        (transaction(83), first_wait.continuation()),
+        (active, second_wait.continuation()),
+        (active, ContinuationId::new(u64::MAX)),
+    ] {
+        assert!(
+            runner
+                .resume_native_proposal_for(&mut first, owner, continuation, lease(dependency),)
+                .is_err()
+        );
+    }
+    assert!(
+        runner
+            .resume_native_proposal_for(
+                &mut second,
+                active,
+                first_wait.continuation(),
+                lease(dependency),
+            )
+            .is_err()
+    );
+    assert!(
+        runner
+            .resume_native_proposal(active, first_wait.continuation(), lease(dependency),)
+            .is_err()
+    );
+    let mut foreign = custom_runtime().runner;
+    let mut foreign_state = foreign.create_sequence_state().unwrap();
+    let foreign_wait = explicit_proposal_wait(&mut foreign, &mut foreign_state, active, 30);
+    // Runner-local allocators can issue the same numeric continuation. Topology
+    // ownership must still prevent one runner from resuming another's state.
+    assert_eq!(foreign_wait.continuation(), first_wait.continuation());
+    assert!(
+        foreign
+            .resume_native_proposal_for(
+                &mut first,
+                active,
+                first_wait.continuation(),
+                lease(dependency),
+            )
+            .is_err()
+    );
+    assert!(matches!(
+        foreign
+            .resume_native_proposal_for(
+                &mut foreign_state,
+                active,
+                foreign_wait.continuation(),
+                lease(dependency),
+            )
+            .unwrap(),
+        NativeProposalProgress::Complete(_)
+    ));
+    foreign.try_release_sequence_state(foreign_state).unwrap();
+    foreign.shutdown().unwrap();
+    assert_eq!(trace(&shared_trace).proposal_resumes, 0);
+    assert_eq!(trace(&shared_trace).proposal_kv_views, 2);
+    assert_eq!(runner.observability_snapshot().primary.active_proposals, 2);
+    for (state, pending, expected) in [
+        (&mut first, first_wait, [11, 12]),
+        (&mut second, second_wait, [21, 22]),
+    ] {
+        assert_eq!(
+            runner
+                .proposal_held_resume_lease_count(pending.continuation())
+                .unwrap(),
+            0
+        );
+        let NativeProposalProgress::Complete(proposal) = runner
+            .resume_native_proposal_for(state, active, pending.continuation(), lease(dependency))
+            .unwrap()
+        else {
+            panic!("custom proposal must complete")
+        };
+        assert_eq!(proposal.token_ids, expected);
+        assert!(
+            runner
+                .resume_native_proposal_for(
+                    state,
+                    active,
+                    pending.continuation(),
+                    lease(dependency),
+                )
+                .is_err()
+        );
+    }
+    runner.try_release_sequence_state(first).unwrap();
+    runner.try_release_sequence_state(second).unwrap();
+    runner.shutdown().unwrap();
+}
+
+#[test]
+fn explicit_proposal_keeps_other_state_availability_gates() {
+    let CustomRuntimeFixture {
+        mut runner,
+        dependency,
+        trace: shared_trace,
+        ..
+    } = custom_runtime();
+    let mut state = runner.create_sequence_state().unwrap();
+    let active = transaction(84);
+    let pending = explicit_proposal_wait(&mut runner, &mut state, active, 10);
+    for transaction in [active, transaction(85)] {
+        assert!(
+            runner
+                .begin_native_proposal_for(&mut state, transaction, 20)
+                .is_err()
+        );
+    }
+    assert!(runner.with_sequence_state(&mut state, |_| Ok(())).is_err());
+    assert!(runner.reset_sequence_state(&mut state).is_err());
+    assert!(runner.fork_sequence_state_from(&state, 0).is_err());
+    let error = runner.try_release_sequence_state(state).unwrap_err();
+    let (_, mut state) = error.into_parts();
+    let (batch, reservations) = packed_input(&state, KvPageId(50), &[11]);
+    assert!(
+        runner
+            .prepare_multi_session_batch(
+                transaction(85),
+                std::slice::from_mut(&mut state),
+                &batch,
+                &reservations,
+            )
+            .is_err()
+    );
+    assert_eq!(trace(&shared_trace).proposal_starts, 1);
+    assert_eq!(trace(&shared_trace).reset_count, 0);
+    assert_eq!(runner.backend().capacity().active_transactions, 0);
+
+    // Explicit work does not swap or materialize the unrelated default session.
+    let default_topology = runner.default_state().topology_id;
+    let default_core = runner.default_state().core.clone();
+    let NativeProposalProgress::Waiting(default_wait) =
+        runner.begin_native_proposal(transaction(86), 30).unwrap()
+    else {
+        panic!("default proposal must wait")
+    };
+    let mut unrelated = runner.create_sequence_state().unwrap();
+    assert!(
+        runner
+            .with_sequence_state(&mut unrelated, |_| Ok(()))
+            .is_err()
+    );
+    assert!(matches!(
+        runner
+            .resume_native_proposal_for(
+                &mut state,
+                active,
+                pending.continuation(),
+                lease(dependency),
+            )
+            .unwrap(),
+        NativeProposalProgress::Complete(_)
+    ));
+    assert_eq!(runner.default_state().topology_id, default_topology);
+    assert_eq!(runner.default_state().core, default_core);
+    assert!(matches!(
+        runner
+            .resume_native_proposal(
+                transaction(86),
+                default_wait.continuation(),
+                lease(dependency),
+            )
+            .unwrap(),
+        NativeProposalProgress::Complete(_)
+    ));
+
+    runner.reset_sequence_state(&mut state).unwrap();
+    let (batch, reservations) = packed_input(&state, KvPageId(50), &[11]);
+    runner
+        .prepare_multi_session_batch(
+            transaction(87),
+            std::slice::from_mut(&mut state),
+            &batch,
+            &reservations,
+        )
+        .unwrap();
+    assert!(
+        runner
+            .begin_native_proposal_for(&mut state, transaction(88), 20)
+            .is_err()
+    );
+    assert_eq!(
+        runner
+            .end_transaction(
+                transaction(87),
+                std::slice::from_mut(&mut state),
+                TransactionEndIntent::Abort,
+            )
+            .unwrap(),
+        TransactionEndProgress::Complete
+    );
+    runner.try_release_sequence_state(state).unwrap();
+    runner.try_release_sequence_state(unrelated).unwrap();
+    runner.shutdown().unwrap();
+}
+
+#[test]
+fn explicit_proposal_rejects_reset_topology_position_and_poisoned_state() {
+    let CustomRuntimeFixture {
+        mut runner,
+        dependency,
+        trace: shared_trace,
+        ..
+    } = custom_runtime();
+    let mut state = runner.create_sequence_state().unwrap();
+    let active = transaction(89);
+    let pending = explicit_proposal_wait(&mut runner, &mut state, active, 10);
+    let original_core = state.core.clone();
+    let original_topology = state.topology_id;
+    // Simulate stale caller-owned state independently of the guarded public reset.
+    for mutation in 0..4 {
+        match mutation {
+            0 => state.core.reset(),
+            1 => state.topology_id = SequenceTopologyId::take(),
+            2 => state
+                .core
+                .commit_step(state.core.begin_step().unwrap(), 1)
+                .unwrap(),
+            _ => state.core.poison(),
+        }
+        assert!(
+            runner
+                .resume_native_proposal_for(
+                    &mut state,
+                    active,
+                    pending.continuation(),
+                    lease(dependency),
+                )
+                .is_err()
+        );
+        assert_eq!(
+            runner
+                .proposal_held_resume_lease_count(pending.continuation())
+                .unwrap(),
+            0
+        );
+        assert_eq!(trace(&shared_trace).proposal_resumes, 0);
+        state.core = original_core.clone();
+        state.topology_id = original_topology;
+    }
+    assert!(matches!(
+        runner
+            .resume_native_proposal_for(
+                &mut state,
+                active,
+                pending.continuation(),
+                lease(dependency),
+            )
+            .unwrap(),
+        NativeProposalProgress::Complete(_)
+    ));
+    runner.try_release_sequence_state(state).unwrap();
+    runner.shutdown().unwrap();
+}
+
+#[test]
+fn explicit_proposal_spurious_wake_and_repeated_wait_preserve_custody() {
+    let CustomRuntimeFixture {
+        mut runner,
+        dependency,
+        completion_hub,
+        trace: shared_trace,
+        ..
+    } = custom_runtime();
+    let mut state = runner.create_sequence_state().unwrap();
+    let active = transaction(90);
+    let pending = explicit_proposal_wait(&mut runner, &mut state, active, 10);
+    completion_hub.notify();
+    let empty = ResidencyLeaseSet::new(
+        [],
+        [],
+        MappingEpoch::new(1),
+        DispatchFenceContract::new(
+            OperationId::new(91),
+            FenceId::new(92),
+            dependency.backend(),
+            dependency.device(),
+        ),
+    )
+    .unwrap();
+    assert!(
+        runner
+            .resume_native_proposal_for(&mut state, active, pending.continuation(), empty,)
+            .is_err()
+    );
+    assert_eq!(trace(&shared_trace).proposal_resumes, 0);
+    assert_eq!(
+        runner
+            .proposal_held_resume_lease_count(pending.continuation())
+            .unwrap(),
+        0
+    );
+    trace(&shared_trace).proposal_wait_again = true;
+    let NativeProposalProgress::Waiting(again) = runner
+        .resume_native_proposal_for(
+            &mut state,
+            active,
+            pending.continuation(),
+            lease(dependency),
+        )
+        .unwrap()
+    else {
+        panic!("injected second wait")
+    };
+    assert_eq!(again, pending);
+    assert_eq!(
+        runner
+            .proposal_held_resume_lease_count(pending.continuation())
+            .unwrap(),
+        1
+    );
+    assert!(
+        runner
+            .resume_native_proposal_for(
+                &mut state,
+                transaction(91),
+                pending.continuation(),
+                lease(dependency),
+            )
+            .is_err()
+    );
+    assert_eq!(
+        runner
+            .proposal_held_resume_lease_count(pending.continuation())
+            .unwrap(),
+        1
+    );
+    assert!(matches!(
+        runner
+            .resume_native_proposal_for(
+                &mut state,
+                active,
+                pending.continuation(),
+                lease(dependency),
+            )
+            .unwrap(),
+        NativeProposalProgress::Complete(_)
+    ));
+    assert_eq!(trace(&shared_trace).proposal_resumes, 2);
+    assert!(
+        runner
+            .proposal_held_resume_lease_count(pending.continuation())
+            .is_err()
+    );
+    runner.try_release_sequence_state(state).unwrap();
+    runner.shutdown().unwrap();
+}
+
+#[test]
+fn explicit_proposal_resume_errors_retain_leases_until_abort_quiesces() {
+    for fail_in_executor in [false, true] {
+        let CustomRuntimeFixture {
+            mut runner,
+            dependency,
+            trace: shared_trace,
+            ..
+        } = custom_runtime();
+        let mut state = runner.create_sequence_state().unwrap();
+        let active = transaction(92);
+        let anchor = if fail_in_executor { u32::MAX } else { 10 };
+        let pending = explicit_proposal_wait(&mut runner, &mut state, active, anchor);
+        if !fail_in_executor {
+            runner.backend_mut().fail_next_proposal_view();
+        }
+        let error = runner
+            .resume_native_proposal_for(
+                &mut state,
+                active,
+                pending.continuation(),
+                lease(dependency),
+            )
+            .unwrap_err();
+        assert!(error.to_string().contains(if fail_in_executor {
+            "token overflow"
+        } else {
+            "proposal KV view failure"
+        }));
+        assert_eq!(
+            runner
+                .proposal_held_resume_lease_count(pending.continuation())
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            trace(&shared_trace).proposal_resumes,
+            usize::from(fail_in_executor)
+        );
+        if fail_in_executor {
+            let error = runner
+                .resume_native_proposal_for(
+                    &mut state,
+                    active,
+                    pending.continuation(),
+                    lease(dependency),
+                )
+                .unwrap_err();
+            assert!(error.to_string().contains("must be cancelled"));
+            assert_eq!(
+                runner
+                    .proposal_held_resume_lease_count(pending.continuation())
+                    .unwrap(),
+                1
+            );
+        }
+        assert!(
+            runner
+                .end_transaction(active, &mut [], TransactionEndIntent::Abort)
+                .is_err()
+        );
+        assert!(
+            runner
+                .end_transaction(
+                    active,
+                    std::slice::from_mut(&mut state),
+                    TransactionEndIntent::Publish,
+                )
+                .is_err()
+        );
+        assert_eq!(trace(&shared_trace).proposal_cancels, 0);
+        runner.backend_mut().fail_next_proposal_view();
+        assert!(
+            runner
+                .end_transaction(
+                    active,
+                    std::slice::from_mut(&mut state),
+                    TransactionEndIntent::Abort,
+                )
+                .is_err()
+        );
+        assert_eq!(
+            runner
+                .proposal_held_resume_lease_count(pending.continuation())
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            runner
+                .end_transaction(
+                    active,
+                    std::slice::from_mut(&mut state),
+                    TransactionEndIntent::Abort,
+                )
+                .unwrap(),
+            TransactionEndProgress::Pending
+        );
+        assert_eq!(
+            runner
+                .proposal_held_resume_lease_count(pending.continuation())
+                .unwrap(),
+            1
+        );
+        assert!(runner.reset_sequence_state(&mut state).is_err());
+        assert!(runner.shutdown().is_err());
+        assert_eq!(
+            runner
+                .end_transaction(
+                    active,
+                    std::slice::from_mut(&mut state),
+                    TransactionEndIntent::Abort,
+                )
+                .unwrap(),
+            TransactionEndProgress::Complete
+        );
+        assert_eq!(trace(&shared_trace).proposal_cancels, 2);
+        assert!(
+            runner
+                .proposal_held_resume_lease_count(pending.continuation())
+                .is_err()
+        );
+        assert!(
+            runner
+                .resume_native_proposal_for(
+                    &mut state,
+                    active,
+                    pending.continuation(),
+                    lease(dependency),
+                )
+                .is_err()
+        );
+        runner.reset_sequence_state(&mut state).unwrap();
+        runner.try_release_sequence_state(state).unwrap();
+        runner.shutdown().unwrap();
+    }
 }
 
 #[test]

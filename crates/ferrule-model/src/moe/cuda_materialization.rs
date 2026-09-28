@@ -6,15 +6,15 @@
 
 #![cfg(feature = "cuda")]
 
+use ferrule_common::{CompletionExpectation, ProviderFault, ProviderProgress, QuiescenceEvidence};
+
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use ferrule_backend::cuda::operators::moe::{
-    CudaComputeStreamAuthority, CudaExpertSlotBinding, CudaExpertSlotInstallTarget,
-    CudaExpertSlotInstallTicket, CudaExpertSlotPointers, CudaExpertSlotTable, CudaOperators,
-    CudaPinnedU8HostBuffer, CudaPreparedRoutedExpert, CudaRoutedExpertArena,
-    CudaRoutedExpertMaterialization, CudaRoutedExpertShape,
+    CudaComputeStreamAuthority, CudaExpertSlotPointers, CudaExpertSlotTable, CudaOperators,
+    CudaPreparedRoutedExpert, CudaRoutedExpertArena, CudaRoutedExpertShape,
 };
 use ferrule_common::materialization_io::{
     MaterializationResourceLimits, MaterializationResourcePlan,
@@ -37,11 +37,23 @@ use crate::materialization::{
     PhysicalMaterializationTopology,
 };
 use crate::moe::streaming::{
-    ExpertId, ExpertLinearFormat, ExpertLoadSource, ExpertMatrixKind, ExpertStreamingReader,
-    PinnedExpertArtifactPayload, PinnedExpertLoadPlan, PinnedExpertReadPoll,
-    PinnedExpertReadTicket, infer_expert_linear_format,
+    ExpertId, ExpertLoadSource, ExpertStreamingReader, PinnedExpertLoadPlan, PinnedExpertReadPoll,
+    PinnedExpertReadTicket,
 };
-use crate::runner::completion_notify_callback;
+
+#[path = "cuda_install.rs"]
+mod install;
+#[path = "cuda_payload.rs"]
+mod payload;
+#[path = "cuda_upload.rs"]
+mod upload;
+
+#[cfg(all(feature = "cuda-test-support", target_os = "linux"))]
+#[path = "cuda_materialization_test_support.rs"]
+mod test_support;
+
+use payload::{PinnedExpertBundle, source_routed_expert_shape};
+use upload::CudaExpertUploadTicket;
 
 #[derive(Clone)]
 pub(crate) struct CudaSharedExpertSubsystem {
@@ -360,6 +372,86 @@ struct SlotReservation {
     evicted: Option<MaterializationKey>,
 }
 
+/// A failed reserve has no submitted operation to own its prepared slot. Keep
+/// the exact token until cancellation succeeds, then retain an acknowledgement
+/// for a racing registry discard/shutdown retry. Neither state is a new load.
+enum PreparationCleanup {
+    Pending {
+        request: MaterializationRequest,
+        prepared: PreparedExpertInstall,
+        failure: FailureReason,
+    },
+    Cancelled,
+}
+
+impl PreparationCleanup {
+    fn failure(&self) -> Option<&FailureReason> {
+        match self {
+            Self::Pending { failure, .. } => Some(failure),
+            Self::Cancelled => None,
+        }
+    }
+
+    fn retry(
+        &mut self,
+        key: MaterializationKey,
+        selected: &mut SelectedLeaseTracker,
+        request_keys: &mut BTreeMap<MaterializationRequest, MaterializationKey>,
+        resource_plans: &mut BTreeMap<MaterializationKey, MaterializationResourcePlan>,
+        cancel: impl FnOnce(PreparedExpertInstall) -> Result<()>,
+    ) -> std::result::Result<(), FailureReason> {
+        let Self::Pending {
+            request,
+            prepared,
+            failure,
+        } = self
+        else {
+            return Ok(());
+        };
+        if let Err(error) = cancel(*prepared) {
+            let secondary = protocol_failure(error);
+            // Repeated causes, including alternating failures, must not grow
+            // an unbounded error chain on every progress poll.
+            let mut recorded = &*failure;
+            while let FailureReason::Cleanup { primary, cleanup } = recorded {
+                if **cleanup == secondary {
+                    return Err(failure.clone());
+                }
+                recorded = primary;
+            }
+            *failure = FailureReason::Cleanup {
+                primary: Box::new(failure.clone()),
+                cleanup: Box::new(secondary),
+            };
+            return Err(failure.clone());
+        }
+        selected.cancel_unbound(key);
+        if request_keys.get(request) == Some(&key) {
+            request_keys.remove(request);
+        }
+        resource_plans.remove(&key);
+        *self = Self::Cancelled;
+        Ok(())
+    }
+}
+
+fn preparation_cleanup_quiescence<'a>(
+    cleanups: impl IntoIterator<Item = &'a PreparationCleanup>,
+    operations_empty: bool,
+    reactor_quiescence_unknown: bool,
+) -> QuiescenceEvidence {
+    if reactor_quiescence_unknown || !operations_empty {
+        QuiescenceEvidence::Unknown
+    } else if cleanups
+        .into_iter()
+        .any(|cleanup| cleanup.failure().is_some())
+    {
+        QuiescenceEvidence::Pending
+    } else {
+        QuiescenceEvidence::Quiescent
+    }
+}
+
 struct MaterializationOperation {
     key: MaterializationKey,
     request: MaterializationRequest,
@@ -371,6 +463,9 @@ struct MaterializationOperation {
     binding: ResidencyBinding,
     evicted: Option<MaterializationKey>,
     pending_terminal: Option<CompletionOutcome>,
+    quarantined: bool,
+    cleanup_pending: bool,
+    cleanup_completion: Option<(LoadStage, CompletionOutcome, u64)>,
     state: Option<CudaMaterializationOperationState>,
 }
 
@@ -671,54 +766,9 @@ fn write_debug_artifact(path: &Path, bytes: &[u8]) -> Result<()> {
     })
 }
 
-struct PinnedExpertLinear {
-    matrix: ExpertMatrixKind,
-    format: ExpertLinearFormat,
-    weight: CudaPinnedU8HostBuffer,
-    scale: CudaPinnedU8HostBuffer,
-}
-
-struct PinnedExpertBundle {
-    expert: ExpertId,
-    gate: PinnedExpertLinear,
-    up: PinnedExpertLinear,
-    down: PinnedExpertLinear,
-    bytes: u64,
-}
-
-struct CudaExpertUploadTicket {
-    materialization: CudaRoutedExpertMaterialization,
-    frame: Option<CudaExpertFrame>,
-}
-
-impl CudaExpertUploadTicket {
-    fn is_complete(&self) -> Result<bool> {
-        self.materialization.is_complete()
-    }
-
-    fn drain_into_frame(mut self) -> Result<CudaExpertFrame> {
-        self.materialization.synchronize()?;
-        self.frame.take().ok_or_else(|| Error::Internal {
-            message: "CUDA expert upload lost its frame".into(),
-        })
-    }
-}
-
-impl Drop for CudaExpertUploadTicket {
-    fn drop(&mut self) {
-        if self.frame.is_some()
-            && !matches!(self.materialization.is_complete(), Ok(true))
-            && self.materialization.synchronize().is_err()
-            && let Some(frame) = self.frame.take()
-        {
-            std::mem::forget(frame);
-        }
-    }
-}
-
 struct CudaExpertInstallTicket {
     frame: CudaExpertFrame,
-    physical: CudaExpertSlotInstallTicket,
+    physical: install::SlotInstallTicket,
     eviction: Option<(ExpertId, ExpertSlotBinding, MaterializationKey)>,
 }
 
@@ -753,12 +803,15 @@ pub struct CudaExpertMaterializationProvider {
     resource_plans: BTreeMap<MaterializationKey, MaterializationResourcePlan>,
     selected_lease_ownership: SelectedLeaseTracker,
     reservations: BTreeMap<MaterializationKey, SlotReservation>,
+    preparation_cleanup: BTreeMap<MaterializationKey, PreparationCleanup>,
+    preparation_cleanup_fault: Option<FailureReason>,
+    reactor_quiescence_unknown: bool,
     operations: BTreeMap<OperationId, MaterializationOperation>,
     execution_order: VecDeque<OperationId>,
     prefetch_order: VecDeque<OperationId>,
     seen_operations: HashSet<OperationId>,
     terminal_operations: HashSet<OperationId>,
-    completions: VecDeque<CompletionEvent>,
+    completions: VecDeque<ProviderProgress>,
     clock_ns: u64,
 }
 
@@ -769,6 +822,14 @@ impl std::fmt::Debug for CudaExpertMaterializationProvider {
             .field("placement", &self.placement)
             .field("source_entries", &self.sources.len())
             .field("reservations", &self.reservations.len())
+            .field(
+                "pending_preparation_cleanup",
+                &self
+                    .preparation_cleanup
+                    .values()
+                    .filter(|cleanup| cleanup.failure().is_some())
+                    .count(),
+            )
             .field(
                 "active_selected_leases",
                 &self.selected_lease_ownership.active_count(),
@@ -1058,6 +1119,9 @@ impl CudaExpertMaterializationProvider {
             resource_plans: BTreeMap::new(),
             selected_lease_ownership: SelectedLeaseTracker::default(),
             reservations: BTreeMap::new(),
+            preparation_cleanup: BTreeMap::new(),
+            preparation_cleanup_fault: None,
+            reactor_quiescence_unknown: false,
             operations: BTreeMap::new(),
             execution_order: VecDeque::new(),
             prefetch_order: VecDeque::new(),
@@ -1235,17 +1299,85 @@ impl CudaExpertMaterializationProvider {
         prepared: PreparedExpertInstall,
         primary: FailureReason,
     ) -> FailureReason {
-        let cleanup = self.cancel_prepared(prepared);
-        self.selected_lease_ownership.cancel_unbound(key);
-        self.remove_request_key(request, key);
-        match cleanup {
-            Ok(()) => primary,
-            Err(error) => FailureReason::ContractViolation {
-                message: format!(
-                    "physical reservation failed ({primary:?}); prepared slot rollback also failed ({error})"
-                ),
+        self.preparation_cleanup.insert(
+            key,
+            PreparationCleanup::Pending {
+                request,
+                prepared,
+                failure: primary.clone(),
             },
+        );
+        match self.retry_preparation_cleanup(key) {
+            Ok(()) => primary,
+            Err(failure) => {
+                self.completion_hub.notify();
+                failure
+            }
         }
+    }
+
+    fn retry_preparation_cleanup(
+        &mut self,
+        key: MaterializationKey,
+    ) -> std::result::Result<(), FailureReason> {
+        let cleanup = self
+            .preparation_cleanup
+            .get_mut(&key)
+            .expect("preparation cleanup retains its cancellation token");
+        let shared = &self.shared;
+        let result = cleanup.retry(
+            key,
+            &mut self.selected_lease_ownership,
+            &mut self.request_keys,
+            &mut self.resource_plans,
+            |prepared| {
+                shared
+                    .lock()
+                    .residency
+                    .as_mut()
+                    .ok_or_else(|| Error::Execution {
+                        message: "physical residency control is not installed".into(),
+                    })?
+                    .cancel_install(prepared)
+            },
+        );
+        if let Err(failure) = &result {
+            // Completion delivery may win this poll and the next retry may
+            // succeed. Latch the full chain before Pending can be cleared.
+            self.preparation_cleanup_fault = Some(failure.clone());
+        }
+        result
+    }
+
+    fn progress_preparation_cleanup(&mut self) {
+        let pending = self
+            .preparation_cleanup
+            .iter()
+            .filter_map(|(key, cleanup)| cleanup.failure().is_some().then_some(*key))
+            .collect::<Vec<_>>();
+        for key in pending {
+            let _ = self.retry_preparation_cleanup(key);
+        }
+    }
+
+    fn preparation_cleanup_progress(&mut self) -> Option<ProviderProgress> {
+        let failure = self.preparation_cleanup_fault.as_ref()?.clone();
+        // Reserve has no accepted operation/completion scope. A global fault
+        // prevents shutdown from declaring a lost preparation drained. Clearing
+        // it requires proof for the whole provider, not just one cancelled slot.
+        let quiescence = preparation_cleanup_quiescence(
+            self.preparation_cleanup.values(),
+            self.operations.is_empty(),
+            self.reactor_quiescence_unknown,
+        );
+        if quiescence == QuiescenceEvidence::Quiescent {
+            self.preparation_cleanup_fault = None;
+        }
+        Some(ProviderProgress::Fault(ProviderFault {
+            scope: None,
+            failure,
+            quiescence,
+        }))
     }
 
     fn emit(
@@ -1258,15 +1390,16 @@ impl CudaExpertMaterializationProvider {
     ) {
         let timestamp = CompletionTimestamp::from_nanos(self.clock_ns);
         self.clock_ns = self.clock_ns.saturating_add(1);
-        self.completions.push_back(CompletionEvent::new(
-            operation,
-            key,
-            stage,
-            outcome,
-            bytes,
-            CompletionGeneration::for_key(key),
-            timestamp,
-        ));
+        self.completions
+            .push_back(ProviderProgress::Completion(CompletionEvent::new(
+                operation,
+                key,
+                stage,
+                outcome,
+                bytes,
+                CompletionGeneration::for_key(key),
+                timestamp,
+            )));
         self.completion_hub.notify();
     }
 
@@ -1275,7 +1408,7 @@ impl CudaExpertMaterializationProvider {
     }
 
     fn allocate_frame(&self, bundle: &PinnedExpertBundle) -> Result<CudaExpertFrame> {
-        let shape = pinned_routed_expert_shape(bundle)?;
+        let shape = bundle.shape()?;
         let mut shared = self.shared.lock();
         if let Some(index) = shared
             .free_frames
@@ -1302,42 +1435,20 @@ impl CudaExpertMaterializationProvider {
         Ok(CudaExpertFrame { expert })
     }
 
-    fn submit_bundle_upload(&self, bundle: PinnedExpertBundle) -> Result<CudaExpertUploadTicket> {
-        if let Some(directory) = debug_expert_artifact_directory(bundle.expert) {
-            bundle.debug_dump_pinned(&directory)?;
+    fn submit_bundle_upload(
+        &self,
+        bundle: PinnedExpertBundle,
+    ) -> std::result::Result<(CudaExpertUploadTicket, Option<Error>), (Error, QuiescenceEvidence)>
+    {
+        if let Some(directory) = debug_expert_artifact_directory(bundle.expert()) {
+            bundle
+                .debug_dump_pinned(&directory)
+                .map_err(|error| (error, QuiescenceEvidence::Quiescent))?;
         }
-        let mut frame = self.allocate_frame(&bundle)?;
-        let PinnedExpertBundle {
-            gate,
-            up,
-            down,
-            bytes: _,
-            expert: _,
-        } = bundle;
-        let submitted = (|| {
-            let materialization = self.ops.materialize_routed_expert_from_pinned_async(
-                &mut frame.expert,
-                gate.weight,
-                gate.scale,
-                up.weight,
-                up.scale,
-                down.weight,
-                down.scale,
-            )?;
-            self.ops
-                .notify_upload_stream(completion_notify_callback(self.completion_hub.clone()))?;
-            Ok(materialization)
-        })();
-        match submitted {
-            Ok(materialization) => Ok(CudaExpertUploadTicket {
-                materialization,
-                frame: Some(frame),
-            }),
-            Err(error) => {
-                self.recycle_frame(frame);
-                Err(error)
-            }
-        }
+        let frame = self
+            .allocate_frame(&bundle)
+            .map_err(|error| (error, QuiescenceEvidence::Quiescent))?;
+        upload::submit(&self.ops, &self.completion_hub, bundle, frame)
     }
 
     fn operation_identity_outcome(
@@ -1533,24 +1644,15 @@ impl CudaExpertMaterializationProvider {
             shared.free_frames.push(frame);
             return Err(CompletionOutcome::Stale(StaleReason::SourceIdentityChanged));
         }
-        let target = if let Some((evicted, old, _)) = eviction {
-            let consumer_quiescence = match self.consumer_compute.record_event() {
-                Ok(event) => event,
-                Err(error) => {
-                    shared.free_frames.push(frame);
-                    return Err(CompletionOutcome::Failed(protocol_failure(error)));
-                }
-            };
-            CudaExpertSlotInstallTarget::Replacement {
-                previous_expert: evicted.expert,
-                previous_binding: CudaExpertSlotBinding {
-                    slot: i32::try_from(old.slot.get()).unwrap_or(-1),
-                    generation: i32::try_from(old.generation.get()).unwrap_or(-1),
-                },
-                consumer_quiescence,
+        let target = match install::target(
+            &self.consumer_compute,
+            eviction.map(|(evicted, old, _)| (evicted, old)),
+        ) {
+            Ok(target) => target,
+            Err(error) => {
+                shared.free_frames.push(frame);
+                return Err(CompletionOutcome::Failed(protocol_failure(error)));
             }
-        } else {
-            CudaExpertSlotInstallTarget::Empty
         };
         if let Some(directory) = debug_expert_artifact_directory(operation.expert) {
             let text = format!(
@@ -1575,7 +1677,8 @@ impl CudaExpertMaterializationProvider {
                 return Err(CompletionOutcome::Failed(protocol_failure(error)));
             }
         }
-        let physical = self.ops.submit_expert_slot_install(
+        let physical = install::submit(
+            &self.ops,
             shared
                 .tables
                 .get_mut(&operation.expert.layer)
@@ -1585,8 +1688,7 @@ impl CudaExpertMaterializationProvider {
                 .map_err(|error| CompletionOutcome::Failed(protocol_failure(error)))?,
             target,
             operation.expert.expert,
-            expected.slot.get(),
-            expected.generation.get(),
+            expected,
             pointers,
         );
         let physical = match physical {
@@ -1598,19 +1700,15 @@ impl CudaExpertMaterializationProvider {
                     .is_some_and(|table| table.is_poisoned())
                 {
                     shared.poisoned_layers.insert(operation.expert.layer);
+                    std::mem::forget(frame);
+                } else {
+                    shared.free_frames.push(frame);
                 }
-                shared.free_frames.push(frame);
                 return Err(CompletionOutcome::Failed(protocol_failure(error)));
             }
         };
         drop(shared);
-        if self
-            .ops
-            .notify_upload_stream(completion_notify_callback(self.completion_hub.clone()))
-            .is_err()
-        {
-            self.completion_hub.notify();
-        }
+        install::notify(&self.ops, &self.completion_hub);
         Ok(CudaExpertInstallTicket {
             frame,
             physical,
@@ -1740,49 +1838,29 @@ impl CudaExpertMaterializationProvider {
     fn cleanup_operation(
         &mut self,
         operation_id: OperationId,
-        mut operation: MaterializationOperation,
+        operation: &mut MaterializationOperation,
         state: Option<CudaMaterializationOperationState>,
-        reader_consumed: bool,
     ) -> Result<()> {
         let mut first_error = None;
         match state {
-            Some(MaterializationOperationState::Reserved(ticket)) => {
-                record_first_error(
-                    &mut first_error,
-                    self.reader.detach_load_source_pinned(ticket),
-                );
-            }
-            Some(MaterializationOperationState::ReadSubmitted(ticket)) => {
-                if !reader_consumed {
-                    record_first_error(
-                        &mut first_error,
-                        self.reader.detach_load_source_pinned(ticket),
-                    );
-                }
-            }
-            Some(MaterializationOperationState::UploadSubmitted(ticket)) => {
-                match ticket.drain_into_frame() {
-                    Ok(frame) => self.recycle_frame(frame),
-                    Err(error) => first_error = Some(error),
-                }
+            Some(MaterializationOperationState::Reserved(_))
+            | Some(MaterializationOperationState::ReadSubmitted(_))
+            | Some(MaterializationOperationState::UploadSubmitted(_))
+            | Some(MaterializationOperationState::Installing(_)) => {
+                unreachable!("submitted custody must be proved before cleanup")
             }
             Some(MaterializationOperationState::UploadReady(frame))
             | Some(MaterializationOperationState::InstallQueued(frame)) => {
                 self.recycle_frame(frame);
             }
-            Some(MaterializationOperationState::Installing(ticket)) => {
-                std::mem::forget(ticket);
-                first_error = Some(Error::Internal {
-                    message:
-                        "attempted to clean up a submitted CUDA expert install before publication"
-                            .into(),
-                });
-            }
             Some(MaterializationOperationState::HostReady(bundle)) => drop(bundle),
             None => {}
         }
-        if let Some(prepared) = operation.prepared.take() {
-            record_first_error(&mut first_error, self.cancel_prepared(prepared));
+        if let Some(prepared) = operation.prepared {
+            match self.cancel_prepared(prepared) {
+                Ok(()) => operation.prepared = None,
+                Err(error) => record_first_error(&mut first_error, Err(error)),
+            }
         }
         if self
             .selected_lease_ownership
@@ -1798,33 +1876,188 @@ impl CudaExpertMaterializationProvider {
                     }),
             );
         }
-        self.selected_lease_ownership
-            .cancel_operation(operation.key, operation_id);
-        self.remove_request_key(operation.request, operation.key);
+        if first_error.is_none() {
+            self.selected_lease_ownership
+                .cancel_operation(operation.key, operation_id);
+            self.remove_request_key(operation.request, operation.key);
+        }
         first_error.map_or(Ok(()), Err)
+    }
+
+    fn emit_fault(
+        &mut self,
+        operation_id: OperationId,
+        operation: &MaterializationOperation,
+        stage: LoadStage,
+        failure: FailureReason,
+        quiescence: QuiescenceEvidence,
+    ) {
+        let scope = operation
+            .resource_plan
+            .completion_bytes(stage)
+            .map(|bytes| CompletionExpectation {
+                operation: operation_id,
+                key: operation.key,
+                stage,
+                bytes,
+            });
+        self.completions
+            .push_back(ProviderProgress::Fault(ProviderFault {
+                scope,
+                failure,
+                quiescence,
+            }));
+        self.completion_hub.notify();
+    }
+
+    fn quarantine_operation(
+        &mut self,
+        operation_id: OperationId,
+        mut operation: MaterializationOperation,
+        stage: LoadStage,
+        failure: FailureReason,
+    ) {
+        operation.quarantined = true;
+        operation.pending_terminal = Some(CompletionOutcome::Failed(failure.clone()));
+        self.remove_operation_order(operation_id);
+        self.emit_fault(
+            operation_id,
+            &operation,
+            stage,
+            failure,
+            QuiescenceEvidence::Unknown,
+        );
+        self.operations.insert(operation_id, operation);
     }
 
     fn finish_terminal_operation(
         &mut self,
         operation_id: OperationId,
-        operation: MaterializationOperation,
-        state: Option<CudaMaterializationOperationState>,
+        mut operation: MaterializationOperation,
+        mut state: Option<CudaMaterializationOperationState>,
         completion: Option<(LoadStage, CompletionOutcome, u64)>,
         reader_consumed: bool,
     ) -> Result<()> {
         self.remove_operation_order(operation_id);
-        let first_terminal = self.terminal_operations.insert(operation_id);
-        let key = operation.key;
-        let cleanup = self.cleanup_operation(operation_id, operation, state, reader_consumed);
-        if first_terminal && let Some((stage, mut outcome, bytes)) = completion {
-            if let Err(error) = &cleanup {
-                outcome = CompletionOutcome::Failed(protocol_failure(Error::Internal {
-                    message: format!("terminal resource cleanup failed: {error}"),
-                }));
+        if !reader_consumed
+            || matches!(
+                &state,
+                Some(MaterializationOperationState::Reserved(_))
+                    | Some(MaterializationOperationState::ReadSubmitted(_))
+            )
+        {
+            let ticket = match &state {
+                Some(MaterializationOperationState::Reserved(ticket))
+                | Some(MaterializationOperationState::ReadSubmitted(ticket)) => Some(*ticket),
+                _ => None,
+            };
+            if let Some(ticket) = ticket {
+                match self.reader.quiesce_load_source_pinned(ticket) {
+                    Ok(true) => state = None,
+                    result => {
+                        let error = match result {
+                            Err(error) => error,
+                            _ => Error::Internal {
+                                message: "pinned read still awaiting its terminal CQE".into(),
+                            },
+                        };
+                        let outcome = completion.as_ref().map(|(_, outcome, _)| outcome.clone());
+                        let failure =
+                            terminal_cleanup_failure(outcome.as_ref(), protocol_failure(&error));
+                        let retained = if let Some((stage, _, _)) = &completion {
+                            operation.pending_terminal =
+                                Some(CompletionOutcome::Failed(failure.clone()));
+                            self.emit_fault(
+                                operation_id,
+                                &operation,
+                                *stage,
+                                failure,
+                                QuiescenceEvidence::Pending,
+                            );
+                            MaterializationOperationState::ReadSubmitted(ticket)
+                        } else {
+                            state.expect("pending read retains its ticket")
+                        };
+                        self.keep_operation(operation_id, operation, retained);
+                        return Err(error);
+                    }
+                }
             }
+        }
+        let key = operation.key;
+        let stage = completion
+            .as_ref()
+            .map_or(LoadStage::Reserved, |(stage, _, _)| *stage);
+        // Submitted upload/install without a fence must never flow through cleanup.
+        if matches!(
+            &state,
+            Some(MaterializationOperationState::UploadSubmitted(_))
+                | Some(MaterializationOperationState::Installing(_))
+        ) {
+            operation.state = state;
+            self.quarantine_operation(
+                operation_id,
+                operation,
+                stage,
+                FailureReason::ContractViolation {
+                    message: "terminal cleanup lacks submitted device quiescence proof".into(),
+                },
+            );
+            return Err(Error::Internal {
+                message: "submitted device cleanup is quarantined".into(),
+            });
+        }
+        let cleanup = self.cleanup_operation(operation_id, &mut operation, state);
+        if let Err(error) = &cleanup {
+            let failure = terminal_cleanup_failure(
+                completion.as_ref().map(|(_, outcome, _)| outcome),
+                protocol_failure(error),
+            );
+            operation.cleanup_pending = true;
+            operation.cleanup_completion = completion.map(|(stage, _, bytes)| {
+                (stage, CompletionOutcome::Failed(failure.clone()), bytes)
+            });
+            if operation.cleanup_completion.is_some() {
+                self.emit_fault(
+                    operation_id,
+                    &operation,
+                    stage,
+                    failure,
+                    QuiescenceEvidence::Pending,
+                );
+            }
+            let purpose = operation.purpose;
+            self.operations.insert(operation_id, operation);
+            self.enqueue_operation(operation_id, purpose);
+            return cleanup;
+        }
+        if self.terminal_operations.insert(operation_id)
+            && let Some((stage, outcome, bytes)) = completion
+        {
             self.emit(operation_id, key, stage, outcome, bytes);
         }
         cleanup
+    }
+
+    fn reject_operation(
+        &mut self,
+        operation_id: OperationId,
+        operation: MaterializationOperation,
+        state: Option<CudaMaterializationOperationState>,
+        stage: LoadStage,
+        primary: FailureReason,
+        reader_consumed: bool,
+    ) -> std::result::Result<(), FailureReason> {
+        // Once an operation owns physical custody, a command Err would let the
+        // runtime synthesize a quiescent completion. Report through progress instead.
+        let _ = self.finish_terminal_operation(
+            operation_id,
+            operation,
+            state,
+            Some((stage, CompletionOutcome::Failed(primary), 0)),
+            reader_consumed,
+        );
+        Ok(())
     }
 
     fn finish_successful_install(
@@ -1864,19 +2097,19 @@ impl CudaExpertMaterializationProvider {
         operation_id: OperationId,
         mut operation: MaterializationOperation,
     ) {
+        if operation.cleanup_pending {
+            let completion = operation.cleanup_completion.take();
+            let _ = self.finish_terminal_operation(operation_id, operation, None, completion, true);
+            return;
+        }
         let Some(state) = operation.state.take() else {
-            let _ = self.finish_terminal_operation(
+            self.quarantine_operation(
                 operation_id,
                 operation,
-                None,
-                Some((
-                    LoadStage::Installing,
-                    CompletionOutcome::Failed(FailureReason::ContractViolation {
-                        message: "active physical operation had no resource owner".into(),
-                    }),
-                    0,
-                )),
-                false,
+                LoadStage::Installing,
+                FailureReason::ContractViolation {
+                    message: "active physical operation had no resource owner".into(),
+                },
             );
             return;
         };
@@ -1940,8 +2173,8 @@ impl CudaExpertMaterializationProvider {
                         }
                         match PinnedExpertBundle::from_payload(payload) {
                             Ok(bundle)
-                                if bundle.expert == operation.expert
-                                    && bundle.bytes
+                                if bundle.expert() == operation.expert
+                                    && bundle.bytes()
                                         == operation.resource_plan.requirements.h2d_bytes =>
                             {
                                 self.emit(
@@ -2004,10 +2237,10 @@ impl CudaExpertMaterializationProvider {
                     }
                     Ok(PinnedExpertReadPoll::Failed(error)) => {
                         Self::mark_source_stale(&mut operation);
-                        let outcome = operation
-                            .pending_terminal
-                            .take()
-                            .unwrap_or_else(|| CompletionOutcome::Failed(protocol_failure(error)));
+                        let outcome = CompletionOutcome::Failed(terminal_cleanup_failure(
+                            operation.pending_terminal.as_ref(),
+                            protocol_failure(error),
+                        ));
                         let _ = self.finish_terminal_operation(
                             operation_id,
                             operation,
@@ -2018,16 +2251,37 @@ impl CudaExpertMaterializationProvider {
                     }
                     Err(error) => {
                         Self::mark_source_stale(&mut operation);
-                        let outcome = operation
-                            .pending_terminal
-                            .take()
-                            .unwrap_or_else(|| CompletionOutcome::Failed(protocol_failure(error)));
-                        let _ = self.finish_terminal_operation(
+                        // The outer poll error is only an observation failure. The
+                        // ticket still owns submitted slabs until its exact CQE is
+                        // consumed by the reader/reaper, so do not emit a terminal
+                        // completion or return runtime READ credit here.
+                        if !matches!(
+                            operation.pending_terminal,
+                            Some(CompletionOutcome::Failed(_))
+                        ) {
+                            let mut failure = terminal_cleanup_failure(
+                                operation.pending_terminal.as_ref(),
+                                protocol_failure(error),
+                            );
+                            if let Err(cleanup) = self.reader.cancel_load_source_pinned(ticket) {
+                                failure = FailureReason::Cleanup {
+                                    primary: Box::new(failure),
+                                    cleanup: Box::new(protocol_failure(cleanup)),
+                                };
+                            }
+                            self.emit_fault(
+                                operation_id,
+                                &operation,
+                                LoadStage::ReadSubmitted,
+                                failure.clone(),
+                                QuiescenceEvidence::Unknown,
+                            );
+                            operation.pending_terminal = Some(CompletionOutcome::Failed(failure));
+                        }
+                        self.keep_operation(
                             operation_id,
                             operation,
-                            Some(MaterializationOperationState::ReadSubmitted(ticket)),
-                            Some((LoadStage::ReadSubmitted, outcome, 0)),
-                            false,
+                            MaterializationOperationState::ReadSubmitted(ticket),
                         );
                     }
                 }
@@ -2041,7 +2295,13 @@ impl CudaExpertMaterializationProvider {
                         MaterializationOperationState::UploadSubmitted(ticket),
                     ),
                     completion => {
-                        let query_error = completion.err();
+                        if let Some(error) = completion.err() {
+                            operation.pending_terminal =
+                                Some(CompletionOutcome::Failed(terminal_cleanup_failure(
+                                    operation.pending_terminal.as_ref(),
+                                    protocol_failure(error),
+                                )));
+                        }
                         match ticket.drain_into_frame() {
                             Ok(frame) => {
                                 if let Some(directory) =
@@ -2079,18 +2339,6 @@ impl CudaExpertMaterializationProvider {
                                         Some((LoadStage::UploadSubmitted, outcome, 0)),
                                         true,
                                     );
-                                } else if let Some(error) = query_error {
-                                    let _ = self.finish_terminal_operation(
-                                        operation_id,
-                                        operation,
-                                        Some(MaterializationOperationState::UploadReady(frame)),
-                                        Some((
-                                            LoadStage::UploadSubmitted,
-                                            CompletionOutcome::Failed(protocol_failure(error)),
-                                            0,
-                                        )),
-                                        true,
-                                    );
                                 } else if let Some(outcome) = Self::operation_identity_outcome(
                                     &operation,
                                     self.expert_capacity,
@@ -2118,16 +2366,15 @@ impl CudaExpertMaterializationProvider {
                                 }
                             }
                             Err(error) => {
-                                let outcome =
-                                    operation.pending_terminal.take().unwrap_or_else(|| {
-                                        CompletionOutcome::Failed(protocol_failure(error))
-                                    });
-                                let _ = self.finish_terminal_operation(
+                                let failure = terminal_cleanup_failure(
+                                    operation.pending_terminal.as_ref(),
+                                    protocol_failure(error),
+                                );
+                                self.quarantine_operation(
                                     operation_id,
                                     operation,
-                                    None,
-                                    Some((LoadStage::UploadSubmitted, outcome, 0)),
-                                    true,
+                                    LoadStage::UploadSubmitted,
+                                    failure,
                                 );
                             }
                         }
@@ -2162,13 +2409,31 @@ impl CudaExpertMaterializationProvider {
                                 MaterializationOperationState::Installing(ticket),
                             ),
                             Err(outcome) => {
-                                let _ = self.finish_terminal_operation(
-                                    operation_id,
-                                    operation,
-                                    None,
-                                    Some((LoadStage::Installing, outcome, 0)),
-                                    true,
-                                );
+                                let poisoned = self
+                                    .shared
+                                    .lock()
+                                    .poisoned_layers
+                                    .contains(&operation.expert.layer);
+                                if poisoned {
+                                    let failure = match outcome {
+                                        CompletionOutcome::Failed(failure) => failure,
+                                        other => protocol_failure(format!("{other:?}")),
+                                    };
+                                    self.quarantine_operation(
+                                        operation_id,
+                                        operation,
+                                        LoadStage::Installing,
+                                        failure,
+                                    );
+                                } else {
+                                    let _ = self.finish_terminal_operation(
+                                        operation_id,
+                                        operation,
+                                        None,
+                                        Some((LoadStage::Installing, outcome, 0)),
+                                        true,
+                                    );
+                                }
                             }
                         }
                     }
@@ -2209,23 +2474,18 @@ impl CudaExpertMaterializationProvider {
                         .lock()
                         .poisoned_layers
                         .insert(operation.expert.layer);
-                    let _ = self.finish_terminal_operation(
+                    self.quarantine_operation(
                         operation_id,
                         operation,
-                        None,
-                        Some((
-                            LoadStage::Installing,
-                            CompletionOutcome::Failed(protocol_failure(error)),
-                            0,
-                        )),
-                        true,
+                        LoadStage::Installing,
+                        protocol_failure(error),
                     );
                 }
             },
         }
     }
 
-    fn progress_ordered_operation(&mut self, execution: bool) -> Option<CompletionEvent> {
+    fn progress_ordered_operation(&mut self, execution: bool) -> Option<ProviderProgress> {
         let operation_id = if execution {
             self.execution_order.pop_front()
         } else {
@@ -2237,7 +2497,8 @@ impl CudaExpertMaterializationProvider {
         self.completions.pop_front()
     }
 
-    fn progress_one(&mut self) -> Option<CompletionEvent> {
+    fn progress_one(&mut self) -> Option<ProviderProgress> {
+        self.progress_preparation_cleanup();
         if let Some(completion) = self.completions.pop_front() {
             return Some(completion);
         }
@@ -2254,7 +2515,7 @@ impl CudaExpertMaterializationProvider {
                 return Some(completion);
             }
         }
-        None
+        self.preparation_cleanup_progress()
     }
 }
 
@@ -2408,6 +2669,7 @@ impl MaterializationProvider for CudaExpertMaterializationProvider {
                     }
                     return Err(reason);
                 }
+                self.preparation_cleanup.remove(&key);
                 self.request_keys.insert(request, key);
                 self.resource_plans.insert(key, resource_plan);
                 MaterializationResident::new(key, validated.binding())
@@ -2457,6 +2719,7 @@ impl MaterializationProvider for CudaExpertMaterializationProvider {
                     let _ = self.cancel_prepared(prepared);
                     return Err(reason);
                 }
+                self.preparation_cleanup.remove(&key);
                 self.request_keys.insert(request, key);
                 self.resource_plans.insert(key, resource_plan);
                 self.reservations.insert(
@@ -2485,6 +2748,13 @@ impl MaterializationProvider for CudaExpertMaterializationProvider {
         &mut self,
         key: MaterializationKey,
     ) -> std::result::Result<MaterializationPreparation, FailureReason> {
+        if let Some(failure) = self
+            .preparation_cleanup
+            .get(&key)
+            .and_then(PreparationCleanup::failure)
+        {
+            return Err(failure.clone());
+        }
         let (request, expert, read_plan, _) = self.source_for_key(key)?;
         read_plan
             .validate_source_identity()
@@ -2681,6 +2951,9 @@ impl MaterializationProvider for CudaExpertMaterializationProvider {
         &mut self,
         key: MaterializationKey,
     ) -> std::result::Result<(), FailureReason> {
+        if self.preparation_cleanup.contains_key(&key) {
+            return self.retry_preparation_cleanup(key);
+        }
         if self
             .operations
             .values()
@@ -2691,11 +2964,17 @@ impl MaterializationProvider for CudaExpertMaterializationProvider {
             });
         }
         if let Some(reservation) = self.reservations.remove(&key) {
-            self.cancel_prepared(reservation.prepared)
-                .map_err(protocol_failure)?;
-            self.selected_lease_ownership.cancel_unbound(key);
-            self.remove_key(key);
-            return Ok(());
+            self.preparation_cleanup.insert(
+                key,
+                PreparationCleanup::Pending {
+                    request: reservation.request,
+                    prepared: reservation.prepared,
+                    failure: FailureReason::ContractViolation {
+                        message: "preparation discard requested".into(),
+                    },
+                },
+            );
+            return self.retry_preparation_cleanup(key);
         }
         if self.selected_lease_ownership.contains(key) {
             self.release_execution_lease(key)?;
@@ -2755,6 +3034,13 @@ impl MaterializationProvider for CudaExpertMaterializationProvider {
             return Err(FailureReason::ContractViolation {
                 message: "duplicate or zero physical materialization operation".into(),
             });
+        }
+        if let Some(failure) = self
+            .preparation_cleanup
+            .get(&key)
+            .and_then(PreparationCleanup::failure)
+        {
+            return Err(failure.clone());
         }
         if self.operations.values().any(|active| active.key == key) {
             return Err(FailureReason::ContractViolation {
@@ -2822,41 +3108,37 @@ impl MaterializationProvider for CudaExpertMaterializationProvider {
             Ok(descriptor) => descriptor,
             Err(error) => {
                 let primary = protocol_failure(error);
-                let cleanup = self.reader.detach_load_source_pinned(read.ticket);
-                let reason = self.rollback_slot_reservation(
+                let primary = match self.reader.detach_load_source_pinned(read.ticket) {
+                    Ok(()) => primary,
+                    Err(error) => FailureReason::Cleanup {
+                        primary: Box::new(primary),
+                        cleanup: Box::new(protocol_failure(error)),
+                    },
+                };
+                return Err(self.rollback_slot_reservation(
                     key,
                     reservation.request,
                     reservation.prepared,
                     primary,
-                );
-                return Err(match cleanup {
-                    Ok(()) => reason,
-                    Err(error) => FailureReason::ContractViolation {
-                        message: format!(
-                            "physical reservation rollback failed ({reason:?}); read reservation detach also failed ({error})"
-                        ),
-                    },
-                });
+                ));
             }
         };
         if reservation.purpose == MaterializationPurpose::Execution
             && let Err(reason) = self.selected_lease_ownership.bind_operation(key, operation)
         {
-            let cleanup = self.reader.detach_load_source_pinned(read.ticket);
-            let reason = self.rollback_slot_reservation(
+            let reason = match self.reader.detach_load_source_pinned(read.ticket) {
+                Ok(()) => reason,
+                Err(error) => FailureReason::Cleanup {
+                    primary: Box::new(reason),
+                    cleanup: Box::new(protocol_failure(error)),
+                },
+            };
+            return Err(self.rollback_slot_reservation(
                 key,
                 reservation.request,
                 reservation.prepared,
                 reason,
-            );
-            return Err(match cleanup {
-                Ok(()) => reason,
-                Err(error) => FailureReason::ContractViolation {
-                    message: format!(
-                        "physical lease bind rollback failed ({reason:?}); read reservation detach also failed ({error})"
-                    ),
-                },
-            });
+            ));
         }
         self.operations.insert(
             operation,
@@ -2871,6 +3153,9 @@ impl MaterializationProvider for CudaExpertMaterializationProvider {
                 binding: reservation.binding,
                 evicted: reservation.evicted,
                 pending_terminal: None,
+                quarantined: false,
+                cleanup_pending: false,
+                cleanup_completion: None,
                 state: Some(MaterializationOperationState::Reserved(read.ticket)),
             },
         );
@@ -2895,12 +3180,24 @@ impl MaterializationProvider for CudaExpertMaterializationProvider {
         if let Err(reason) =
             validate_operation_reservation(&active, operation, key, reservation, plan)
         {
-            let _ = self.finish_terminal_operation(operation, active, state, None, false);
-            return Err(reason);
+            return self.reject_operation(
+                operation,
+                active,
+                state,
+                LoadStage::ReadSubmitted,
+                reason,
+                false,
+            );
         }
         let Some(MaterializationOperationState::Reserved(ticket)) = state else {
-            let _ = self.finish_terminal_operation(operation, active, state, None, false);
-            return Err(FailureReason::ReadRejected);
+            return self.reject_operation(
+                operation,
+                active,
+                state,
+                LoadStage::ReadSubmitted,
+                FailureReason::ReadRejected,
+                false,
+            );
         };
         if let Some(outcome) = Self::operation_identity_outcome(&active, self.expert_capacity) {
             let _ = self.finish_terminal_operation(
@@ -2913,15 +3210,27 @@ impl MaterializationProvider for CudaExpertMaterializationProvider {
             return Ok(());
         }
         if let Err(error) = self.reader.submit_reserved_load_source_pinned(ticket) {
-            let reason = protocol_failure(error);
-            let _ = self.finish_terminal_operation(
+            let mut reason = protocol_failure(error);
+            if let Err(cleanup) = self.reader.cancel_load_source_pinned(ticket) {
+                reason = FailureReason::Cleanup {
+                    primary: Box::new(reason),
+                    cleanup: Box::new(protocol_failure(cleanup)),
+                };
+            }
+            self.emit_fault(
+                operation,
+                &active,
+                LoadStage::ReadSubmitted,
+                reason.clone(),
+                QuiescenceEvidence::Unknown,
+            );
+            active.pending_terminal = Some(CompletionOutcome::Failed(reason));
+            self.keep_operation(
                 operation,
                 active,
-                Some(MaterializationOperationState::Reserved(ticket)),
-                None,
-                false,
+                MaterializationOperationState::ReadSubmitted(ticket),
             );
-            return Err(reason);
+            return Ok(());
         }
         active.state = Some(MaterializationOperationState::ReadSubmitted(ticket));
         let purpose = active.purpose;
@@ -2947,12 +3256,24 @@ impl MaterializationProvider for CudaExpertMaterializationProvider {
         if let Err(reason) =
             validate_operation_reservation(&active, operation, key, reservation, plan)
         {
-            let _ = self.finish_terminal_operation(operation, active, state, None, true);
-            return Err(reason);
+            return self.reject_operation(
+                operation,
+                active,
+                state,
+                LoadStage::UploadSubmitted,
+                reason,
+                true,
+            );
         }
         let Some(MaterializationOperationState::HostReady(bundle)) = state else {
-            let _ = self.finish_terminal_operation(operation, active, state, None, true);
-            return Err(FailureReason::UploadRejected);
+            return self.reject_operation(
+                operation,
+                active,
+                state,
+                LoadStage::UploadSubmitted,
+                FailureReason::UploadRejected,
+                true,
+            );
         };
         if let Some(outcome) = Self::operation_identity_outcome(&active, self.expert_capacity) {
             let _ = self.finish_terminal_operation(
@@ -2965,17 +3286,41 @@ impl MaterializationProvider for CudaExpertMaterializationProvider {
             return Ok(());
         }
         match self.submit_bundle_upload(bundle) {
-            Ok(ticket) => {
-                active.state = Some(MaterializationOperationState::UploadSubmitted(ticket));
-                let purpose = active.purpose;
-                self.operations.insert(operation, active);
-                self.enqueue_operation(operation, purpose);
+            Ok((ticket, notify_error)) => {
+                if let Some(error) = notify_error {
+                    let failure = protocol_failure(error);
+                    self.emit_fault(
+                        operation,
+                        &active,
+                        LoadStage::UploadSubmitted,
+                        failure.clone(),
+                        QuiescenceEvidence::Pending,
+                    );
+                    active.pending_terminal = Some(CompletionOutcome::Failed(failure));
+                }
+                self.keep_operation(
+                    operation,
+                    active,
+                    MaterializationOperationState::UploadSubmitted(ticket),
+                );
                 Ok(())
             }
-            Err(error) => {
-                let reason = protocol_failure(error);
-                let _ = self.finish_terminal_operation(operation, active, None, None, true);
-                Err(reason)
+            Err((error, QuiescenceEvidence::Quiescent)) => self.reject_operation(
+                operation,
+                active,
+                None,
+                LoadStage::UploadSubmitted,
+                protocol_failure(error),
+                true,
+            ),
+            Err((error, _)) => {
+                self.quarantine_operation(
+                    operation,
+                    active,
+                    LoadStage::UploadSubmitted,
+                    protocol_failure(error),
+                );
+                Ok(())
             }
         }
     }
@@ -2997,12 +3342,24 @@ impl MaterializationProvider for CudaExpertMaterializationProvider {
         if let Err(reason) =
             validate_operation_reservation(&active, operation, key, reservation, plan)
         {
-            let _ = self.finish_terminal_operation(operation, active, state, None, true);
-            return Err(reason);
+            return self.reject_operation(
+                operation,
+                active,
+                state,
+                LoadStage::Installing,
+                reason,
+                true,
+            );
         }
         let Some(MaterializationOperationState::UploadReady(frame)) = state else {
-            let _ = self.finish_terminal_operation(operation, active, state, None, true);
-            return Err(FailureReason::InstallationRejected);
+            return self.reject_operation(
+                operation,
+                active,
+                state,
+                LoadStage::Installing,
+                FailureReason::InstallationRejected,
+                true,
+            );
         };
         if let Some(outcome) = Self::operation_identity_outcome(&active, self.expert_capacity) {
             let _ = self.finish_terminal_operation(
@@ -3037,19 +3394,33 @@ impl MaterializationProvider for CudaExpertMaterializationProvider {
             }
             return Ok(());
         };
-        let Some(state) = active.state.take() else {
-            let _ = self.finish_terminal_operation(operation, active, None, None, false);
-            return Err(FailureReason::ContractViolation {
-                message: "cancel found an ownerless physical operation".into(),
-            });
-        };
+        // Cleanup retries still exercise the exact operation's physical authority.
+        // Reject stale identities before cancellation can consume its prepared token.
         if active.key != key {
-            active.state = Some(state);
             self.operations.insert(operation, active);
             return Err(FailureReason::ContractViolation {
                 message: "cancel key does not match physical operation identity".into(),
             });
         }
+        if active.quarantined {
+            self.operations.insert(operation, active);
+            return Err(FailureReason::ContractViolation {
+                message: "physical operation quiescence remains unknown".into(),
+            });
+        }
+        if active.cleanup_pending {
+            let completion = active.cleanup_completion.take();
+            return self
+                .finish_terminal_operation(operation, active, None, completion, true)
+                .map_err(protocol_failure);
+        }
+        let Some(state) = active.state.take() else {
+            let failure = FailureReason::ContractViolation {
+                message: "cancel found an ownerless physical operation".into(),
+            };
+            self.quarantine_operation(operation, active, stage, failure.clone());
+            return Err(failure);
+        };
         if active.pending_terminal.is_some() {
             active.state = Some(state);
             self.operations.insert(operation, active);
@@ -3124,7 +3495,11 @@ impl MaterializationProvider for CudaExpertMaterializationProvider {
                 Ok(())
             }
             MaterializationOperationState::Installing(ticket) => {
-                self.release_execution_lease(key)?;
+                if let Err(error) = self.release_execution_lease(key) {
+                    active.state = Some(MaterializationOperationState::Installing(ticket));
+                    self.operations.insert(operation, active);
+                    return Err(error);
+                }
                 active.pending_terminal = Some(CompletionOutcome::Cancelled(reason));
                 active.state = Some(MaterializationOperationState::Installing(ticket));
                 self.operations.insert(operation, active);
@@ -3133,8 +3508,16 @@ impl MaterializationProvider for CudaExpertMaterializationProvider {
         }
     }
 
-    fn next_completion(&mut self) -> Option<CompletionEvent> {
-        self.progress_one()
+    fn next_progress(&mut self) -> ProviderProgress {
+        if let Some(failure) = self.reader.take_pinned_reactor_failure() {
+            self.reactor_quiescence_unknown = true;
+            return ProviderProgress::Fault(ProviderFault {
+                scope: None,
+                failure,
+                quiescence: QuiescenceEvidence::Unknown,
+            });
+        }
+        self.progress_one().unwrap_or(ProviderProgress::Idle)
     }
 }
 
@@ -3150,8 +3533,14 @@ impl Drop for CudaExpertMaterializationProvider {
             );
         }
 
+        let mut unknown_operations = HashSet::new();
         let operations = std::mem::take(&mut self.operations);
         for (operation_id, mut operation) in operations {
+            if operation.quarantined {
+                unknown_operations.insert(operation_id);
+                std::mem::forget(operation);
+                continue;
+            }
             let state = operation.state.take();
             if let Err(error) =
                 self.finish_terminal_operation(operation_id, operation, state, None, false)
@@ -3163,25 +3552,67 @@ impl Drop for CudaExpertMaterializationProvider {
                 );
             }
         }
+        for (operation_id, operation) in std::mem::take(&mut self.operations) {
+            unknown_operations.insert(operation_id);
+            std::mem::forget(operation);
+        }
         self.execution_order.clear();
         self.prefetch_order.clear();
 
         let reservations = std::mem::take(&mut self.reservations);
         for (key, reservation) in reservations {
-            self.remove_request_key(reservation.request, key);
-            self.selected_lease_ownership.cancel_unbound(key);
-            if let Err(error) = self.cancel_prepared(reservation.prepared) {
-                tracing::error!(
-                    error = %error,
-                    "failed to cancel a routed-expert slot reservation during drop"
-                );
-            }
+            self.preparation_cleanup.insert(
+                key,
+                PreparationCleanup::Pending {
+                    request: reservation.request,
+                    prepared: reservation.prepared,
+                    failure: FailureReason::ContractViolation {
+                        message: "provider drop requested preparation cleanup".into(),
+                    },
+                },
+            );
+        }
+        self.progress_preparation_cleanup();
+        let pending_cleanup = std::mem::take(&mut self.preparation_cleanup)
+            .into_iter()
+            .filter(|(_, cleanup)| cleanup.failure().is_some())
+            .collect::<BTreeMap<_, _>>();
+        if !pending_cleanup.is_empty() {
+            tracing::error!(
+                pending = pending_cleanup.len(),
+                "prepared slot cancellation still failed during drop; retaining custody"
+            );
+            let pending_selected = pending_cleanup
+                .keys()
+                .filter_map(|key| {
+                    self.selected_lease_ownership
+                        .ownership
+                        .remove(key)
+                        .map(|owner| (*key, owner))
+                })
+                .collect::<HashMap<_, _>>();
+            // Drop cannot promise a later retry. As for quarantined operations,
+            // retain the controller and exact retry credentials rather than imply
+            // that failed cancellation made its slots available for reuse.
+            std::mem::forget((
+                self.shared.clone(),
+                pending_cleanup,
+                pending_selected,
+                std::mem::take(&mut self.request_keys),
+                std::mem::take(&mut self.resource_plans),
+            ));
         }
 
         let selected_ownership = std::mem::take(&mut self.selected_lease_ownership.ownership);
         if !selected_ownership.is_empty() {
             let mut shared = self.shared.lock();
             for (_, ownership) in selected_ownership {
+                if ownership
+                    .operation
+                    .is_some_and(|operation| unknown_operations.contains(&operation))
+                {
+                    continue;
+                }
                 let SelectedLeaseState::Active(lease) = ownership.state else {
                     tracing::error!(
                         operation = ?ownership.operation.map(OperationId::get),
@@ -3207,291 +3638,6 @@ impl Drop for CudaExpertMaterializationProvider {
     }
 }
 
-impl PinnedExpertBundle {
-    fn debug_dump_pinned(&self, directory: &Path) -> Result<()> {
-        let prefix = format!("layer{}.expert{}", self.expert.layer, self.expert.expert);
-        for (matrix, linear) in [("gate", &self.gate), ("up", &self.up), ("down", &self.down)] {
-            write_debug_artifact(
-                &directory.join(format!("{prefix}.{matrix}.weight.pinned.bin")),
-                linear.weight.as_slice(),
-            )?;
-            write_debug_artifact(
-                &directory.join(format!("{prefix}.{matrix}.scale.pinned.bin")),
-                linear.scale.as_slice(),
-            )?;
-        }
-        Ok(())
-    }
-
-    fn from_payload(payload: PinnedExpertArtifactPayload) -> Result<Self> {
-        let expert = payload.expert;
-        let mut grouped = BTreeMap::<
-            ExpertMatrixKind,
-            Vec<crate::moe::io_uring_reader::PinnedExpertTensorPayload>,
-        >::new();
-        for tensor in payload.tensors {
-            if tensor.slice.key.expert != expert {
-                return Err(Error::Model {
-                    message: "physical pinned expert payload identity mismatch".into(),
-                });
-            }
-            grouped
-                .entry(tensor.slice.key.matrix)
-                .or_default()
-                .push(tensor);
-        }
-        let gate = PinnedExpertLinear::from_tensors(
-            expert,
-            ExpertMatrixKind::Gate,
-            grouped.remove(&ExpertMatrixKind::Gate).unwrap_or_default(),
-        )?;
-        let up = PinnedExpertLinear::from_tensors(
-            expert,
-            ExpertMatrixKind::Up,
-            grouped.remove(&ExpertMatrixKind::Up).unwrap_or_default(),
-        )?;
-        let down = PinnedExpertLinear::from_tensors(
-            expert,
-            ExpertMatrixKind::Down,
-            grouped.remove(&ExpertMatrixKind::Down).unwrap_or_default(),
-        )?;
-        let bytes = [
-            gate.weight.len(),
-            gate.scale.len(),
-            up.weight.len(),
-            up.scale.len(),
-            down.weight.len(),
-            down.scale.len(),
-        ]
-        .into_iter()
-        .try_fold(0u64, |total, bytes| {
-            let bytes = u64::try_from(bytes).map_err(|_| Error::Model {
-                message: "physical pinned expert payload component exceeds u64".into(),
-            })?;
-            total.checked_add(bytes).ok_or_else(|| Error::Model {
-                message: "physical pinned expert payload byte total overflow".into(),
-            })
-        })?;
-        Ok(Self {
-            expert,
-            gate,
-            up,
-            down,
-            bytes,
-        })
-    }
-}
-
-impl PinnedExpertLinear {
-    fn from_tensors(
-        expert: ExpertId,
-        matrix: ExpertMatrixKind,
-        tensors: Vec<crate::moe::io_uring_reader::PinnedExpertTensorPayload>,
-    ) -> Result<Self> {
-        let mut weight = None;
-        let mut scale = None;
-        for tensor in tensors {
-            if tensor.slice.key.expert != expert || tensor.slice.key.matrix != matrix {
-                return Err(Error::Model {
-                    message: "physical pinned expert tensor identity mismatch".into(),
-                });
-            }
-            match tensor.slice.component {
-                crate::moe::streaming::ExpertTensorComponent::Weight => {
-                    if weight.replace(tensor).is_some() {
-                        return Err(Error::Model {
-                            message: "duplicate physical expert weight".into(),
-                        });
-                    }
-                }
-                crate::moe::streaming::ExpertTensorComponent::Scale => {
-                    if scale.replace(tensor).is_some() {
-                        return Err(Error::Model {
-                            message: "duplicate physical expert scale".into(),
-                        });
-                    }
-                }
-                crate::moe::streaming::ExpertTensorComponent::Other(component) => {
-                    return Err(Error::Model {
-                        message: format!(
-                            "unsupported physical expert tensor component {component}"
-                        ),
-                    });
-                }
-            }
-        }
-        let weight = weight.ok_or_else(|| Error::Model {
-            message: "missing physical expert weight".into(),
-        })?;
-        let scale = scale.ok_or_else(|| Error::Model {
-            message: "missing physical expert scale".into(),
-        })?;
-        let format = infer_expert_linear_format(
-            &weight.slice,
-            weight.bytes.len(),
-            Some((&scale.slice, scale.bytes.len())),
-        )?;
-        Ok(Self {
-            matrix,
-            format,
-            weight: weight.bytes,
-            scale: scale.bytes,
-        })
-    }
-}
-
-fn pinned_linear_dimensions(linear: &PinnedExpertLinear) -> Result<(usize, usize)> {
-    let ExpertLinearFormat::Fp4E2M1PackedWithE8M0Scale {
-        out_features,
-        in_features,
-        block_size: 32,
-    } = linear.format
-    else {
-        return Err(Error::Model {
-            message: format!(
-                "CUDA physical expert {:?} requires FP4 E2M1/E8M0 block_size=32",
-                linear.matrix
-            ),
-        });
-    };
-    validate_mxfp4_linear_storage(
-        out_features,
-        in_features,
-        linear.weight.len(),
-        linear.scale.len(),
-    )?;
-    Ok((out_features, in_features))
-}
-
-fn pinned_routed_expert_shape(bundle: &PinnedExpertBundle) -> Result<CudaRoutedExpertShape> {
-    let (gate_out, gate_in) = pinned_linear_dimensions(&bundle.gate)?;
-    let (up_out, up_in) = pinned_linear_dimensions(&bundle.up)?;
-    let (down_out, down_in) = pinned_linear_dimensions(&bundle.down)?;
-    if (up_out, up_in) != (gate_out, gate_in) || down_in != gate_out {
-        return Err(Error::Model {
-            message: format!(
-                "inconsistent CUDA routed-expert projection dimensions: gate={gate_out}x{gate_in} up={up_out}x{up_in} down={down_out}x{down_in}"
-            ),
-        });
-    }
-    CudaRoutedExpertShape::new(gate_in, gate_out, down_out)
-}
-
-fn validate_mxfp4_linear_storage(
-    out_features: usize,
-    in_features: usize,
-    weight_bytes: usize,
-    scale_bytes: usize,
-) -> Result<()> {
-    if out_features == 0
-        || in_features == 0
-        || !in_features.is_multiple_of(32)
-        || !in_features.is_multiple_of(2)
-    {
-        return Err(Error::Model {
-            message: format!(
-                "invalid CUDA physical expert FP4 shape: out={out_features} in={in_features}"
-            ),
-        });
-    }
-    let expected_weight =
-        out_features
-            .checked_mul(in_features / 2)
-            .ok_or_else(|| Error::Model {
-                message: "physical expert FP4 weight storage overflow".into(),
-            })?;
-    let expected_scale =
-        out_features
-            .checked_mul(in_features / 32)
-            .ok_or_else(|| Error::Model {
-                message: "physical expert linear scale storage overflow".into(),
-            })?;
-    if weight_bytes != expected_weight || scale_bytes != expected_scale {
-        return Err(Error::Model {
-            message: format!(
-                "physical expert FP4 storage mismatch: weight={weight_bytes}/{expected_weight} scale={scale_bytes}/{expected_scale}"
-            ),
-        });
-    }
-    Ok(())
-}
-
-fn source_routed_expert_shape(source: &ExpertLoadSource) -> Result<CudaRoutedExpertShape> {
-    let tensors = match source {
-        ExpertLoadSource::LocalTensorSet { tensors }
-        | ExpertLoadSource::HfLocalTensorSet { tensors, .. } => tensors,
-        _ => {
-            return Err(Error::Model {
-                message: "CUDA physical expert source does not expose tensor shapes".into(),
-            });
-        }
-    };
-    let mut dimensions = BTreeMap::new();
-    for matrix in [
-        ExpertMatrixKind::Gate,
-        ExpertMatrixKind::Up,
-        ExpertMatrixKind::Down,
-    ] {
-        let mut weight = None;
-        let mut scale = None;
-        for tensor in tensors.iter().filter(|tensor| tensor.key.matrix == matrix) {
-            match tensor.component {
-                crate::moe::streaming::ExpertTensorComponent::Weight => {
-                    if weight.replace(tensor).is_some() {
-                        return Err(Error::Model {
-                            message: "duplicate physical expert source weight".into(),
-                        });
-                    }
-                }
-                crate::moe::streaming::ExpertTensorComponent::Scale => {
-                    if scale.replace(tensor).is_some() {
-                        return Err(Error::Model {
-                            message: "duplicate physical expert source scale".into(),
-                        });
-                    }
-                }
-                crate::moe::streaming::ExpertTensorComponent::Other(_) => {}
-            }
-        }
-        let weight = weight.ok_or_else(|| Error::Model {
-            message: "missing physical expert source weight".into(),
-        })?;
-        let scale = scale.ok_or_else(|| Error::Model {
-            message: "missing physical expert source scale".into(),
-        })?;
-        let weight_bytes = usize::try_from(weight.bytes).map_err(|_| Error::Model {
-            message: "physical expert source weight exceeds usize".into(),
-        })?;
-        let scale_bytes = usize::try_from(scale.bytes).map_err(|_| Error::Model {
-            message: "physical expert source scale exceeds usize".into(),
-        })?;
-        let format = infer_expert_linear_format(weight, weight_bytes, Some((scale, scale_bytes)))?;
-        let ExpertLinearFormat::Fp4E2M1PackedWithE8M0Scale {
-            out_features,
-            in_features,
-            block_size: 32,
-        } = format
-        else {
-            return Err(Error::Model {
-                message: "CUDA physical expert source requires FP4 E2M1/E8M0 block_size=32".into(),
-            });
-        };
-        validate_mxfp4_linear_storage(out_features, in_features, weight_bytes, scale_bytes)?;
-        dimensions.insert(matrix, (out_features, in_features));
-    }
-    let (gate_out, gate_in) = dimensions[&ExpertMatrixKind::Gate];
-    let (up_out, up_in) = dimensions[&ExpertMatrixKind::Up];
-    let (down_out, down_in) = dimensions[&ExpertMatrixKind::Down];
-    if (up_out, up_in) != (gate_out, gate_in) || down_in != gate_out {
-        return Err(Error::Model {
-            message: format!(
-                "inconsistent CUDA routed-expert source dimensions: gate={gate_out}x{gate_in} up={up_out}x{up_in} down={down_out}x{down_in}"
-            ),
-        });
-    }
-    CudaRoutedExpertShape::new(gate_in, gate_out, down_out)
-}
-
 fn validate_operation_reservation(
     active: &MaterializationOperation,
     operation: OperationId,
@@ -3515,7 +3661,29 @@ fn validate_operation_reservation(
 
 fn record_first_error(first: &mut Option<Error>, result: Result<()>) {
     if let Err(error) = result {
-        first.get_or_insert(error);
+        *first = Some(match first.take() {
+            Some(primary) => Error::Internal {
+                message: format!("{primary}; additional cleanup failed: {error}"),
+            },
+            None => error,
+        });
+    }
+}
+
+fn terminal_cleanup_failure(
+    primary: Option<&CompletionOutcome>,
+    cleanup: FailureReason,
+) -> FailureReason {
+    match primary {
+        Some(CompletionOutcome::Failed(primary)) => FailureReason::Cleanup {
+            primary: Box::new(primary.clone()),
+            cleanup: Box::new(cleanup),
+        },
+        Some(primary) => FailureReason::ContractCleanup {
+            message: format!("terminal outcome {primary:?}"),
+            cleanup: Box::new(cleanup),
+        },
+        None => cleanup,
     }
 }
 
@@ -3582,6 +3750,606 @@ mod tests {
             DestinationGeneration::new(generation),
         )
         .unwrap()
+    }
+
+    fn cleanup_request() -> MaterializationRequest {
+        MaterializationRequest::routed_expert(
+            ModelInstanceId::new(17),
+            crate::materialization::ResourceSource::new(
+                SourceIdentityHash::new([1; 32]),
+                ContentHash::new([1; 32]),
+                PayloadEncodingId::new(1),
+                SourceGeneration::new(2),
+            )
+            .unwrap(),
+            LayerId::new(3),
+            ProtocolExpertId::new(1),
+            BackendId::new(4),
+            DeviceId::new(0),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn prepared_rollback_double_failure_retains_exact_custody_until_retry() {
+        for reason in [ExpertInstallReason::Selected, ExpertInstallReason::Prefetch] {
+            let mut residency = ferrule_common::ExpertResidencyCoordinator::new(1).unwrap();
+            let prepared = residency
+                .try_prepare_install(ExpertKey::new(17, 3, 1), reason)
+                .unwrap()
+                .unwrap();
+            let request = cleanup_request();
+            let key = request
+                .materialization_key(DestinationGeneration::new(1))
+                .unwrap();
+            let plan = MaterializationResourcePlan::uniform_payload(16).unwrap();
+            let mut selected = SelectedLeaseTracker::default();
+            if reason == ExpertInstallReason::Selected {
+                selected.begin_pending(key).unwrap();
+            }
+            let mut requests = BTreeMap::from([(request, key)]);
+            let mut plans = BTreeMap::from([(key, plan)]);
+            let primary = FailureReason::ReadRejected;
+            let mut cleanup = PreparationCleanup::Pending {
+                request,
+                prepared,
+                failure: primary.clone(),
+            };
+            let mut previous = primary;
+            for message in ["cancel failed", "cancel retry failed"] {
+                let failure = cleanup
+                    .retry(key, &mut selected, &mut requests, &mut plans, |token| {
+                        assert_eq!(token, prepared);
+                        Err(Error::Execution {
+                            message: message.into(),
+                        })
+                    })
+                    .unwrap_err();
+                let FailureReason::Cleanup {
+                    primary,
+                    cleanup: secondary,
+                } = &failure
+                else {
+                    panic!("rollback must preserve structured primary and secondary errors");
+                };
+                assert_eq!(**primary, previous);
+                assert!(secondary.to_string().contains(message));
+                previous = failure;
+                assert!(
+                    matches!(&cleanup, PreparationCleanup::Pending { prepared: token, .. } if *token == prepared)
+                );
+                assert_eq!(requests.get(&request), Some(&key));
+                assert_eq!(plans.get(&key), Some(&plan));
+                assert_eq!(
+                    selected.contains(key),
+                    reason == ExpertInstallReason::Selected
+                );
+                assert_eq!(residency.stats().prepare_cancellations, 0);
+                assert!(
+                    residency
+                        .try_prepare_install(ExpertKey::new(17, 3, 2), reason)
+                        .unwrap()
+                        .is_none()
+                );
+                assert_eq!(
+                    preparation_cleanup_quiescence([&cleanup], true, false),
+                    QuiescenceEvidence::Pending
+                );
+            }
+            // Logical release does not prove cancellation or remove pending custody.
+            if reason == ExpertInstallReason::Selected {
+                assert!(matches!(
+                    selected.request_release(key),
+                    SelectedLeaseRelease::Deferred
+                ));
+            }
+            cleanup
+                .retry(key, &mut selected, &mut requests, &mut plans, |token| {
+                    assert_eq!(token, prepared);
+                    residency.cancel_install(token)
+                })
+                .unwrap();
+            assert!(matches!(cleanup, PreparationCleanup::Cancelled));
+            assert!(requests.is_empty() && plans.is_empty());
+            assert!(!selected.contains(key));
+            assert_eq!(residency.stats().prepare_cancellations, 1);
+            assert_eq!(
+                preparation_cleanup_quiescence([&cleanup], true, false),
+                QuiescenceEvidence::Quiescent
+            );
+            for _ in 0..2 {
+                cleanup
+                    .retry(key, &mut selected, &mut requests, &mut plans, |_| {
+                        panic!("completed cleanup must not cancel or release twice")
+                    })
+                    .unwrap();
+            }
+            let next = residency
+                .try_prepare_install(ExpertKey::new(17, 3, 2), reason)
+                .unwrap()
+                .unwrap();
+            residency.cancel_install(next).unwrap();
+        }
+    }
+
+    #[test]
+    fn prepared_cleanup_never_upgrades_unrelated_unknown_to_quiescent() {
+        let cleanup = PreparationCleanup::Cancelled;
+        assert_eq!(
+            preparation_cleanup_quiescence([&cleanup], false, false),
+            QuiescenceEvidence::Unknown
+        );
+        assert_eq!(
+            preparation_cleanup_quiescence([&cleanup], true, true),
+            QuiescenceEvidence::Unknown
+        );
+        assert_eq!(
+            preparation_cleanup_quiescence([&cleanup], true, false),
+            QuiescenceEvidence::Quiescent
+        );
+    }
+
+    #[test]
+    fn prepared_cleanup_persistent_failure_keeps_credentials_without_error_growth() {
+        let mut residency = ferrule_common::ExpertResidencyCoordinator::new(1).unwrap();
+        let prepared = residency.prepare_install(ExpertKey::new(17, 3, 1)).unwrap();
+        let request = cleanup_request();
+        let key = request
+            .materialization_key(DestinationGeneration::new(1))
+            .unwrap();
+        let mut selected = SelectedLeaseTracker::default();
+        selected.begin_pending(key).unwrap();
+        let mut requests = BTreeMap::from([(request, key)]);
+        let mut plans = BTreeMap::from([(
+            key,
+            MaterializationResourcePlan::uniform_payload(16).unwrap(),
+        )]);
+        let mut cleanup = PreparationCleanup::Pending {
+            request,
+            prepared,
+            failure: FailureReason::ReadRejected,
+        };
+        let mut expected = FailureReason::ReadRejected;
+        for (index, message) in ["E1", "E2"].into_iter().cycle().take(64).enumerate() {
+            if index < 2 {
+                expected = FailureReason::Cleanup {
+                    primary: Box::new(expected),
+                    cleanup: Box::new(protocol_failure(Error::Execution {
+                        message: message.into(),
+                    })),
+                };
+            }
+            let error = cleanup
+                .retry(key, &mut selected, &mut requests, &mut plans, |_| {
+                    Err(Error::Execution {
+                        message: message.into(),
+                    })
+                })
+                .unwrap_err();
+            assert_eq!(error, expected);
+            assert!(selected.contains(key));
+            assert_eq!(requests.get(&request), Some(&key));
+        }
+        cleanup
+            .retry(key, &mut selected, &mut requests, &mut plans, |token| {
+                residency.cancel_install(token)
+            })
+            .unwrap();
+        assert_eq!(residency.stats().prepare_cancellations, 1);
+    }
+
+    struct CancelFaultState {
+        residency: ferrule_common::ExpertResidencyCoordinator,
+        failures: VecDeque<&'static str>,
+        attempts: Vec<PreparedExpertInstall>,
+    }
+
+    struct CancelFaultControl(Arc<Mutex<CancelFaultState>>);
+
+    // These provider tests exercise reservation rollback without uploading an
+    // expert, so the fixture needs only the real coordinator cancellation path.
+    impl ExpertResidencyControl for CancelFaultControl {
+        fn requirements(&self) -> ferrule_common::ExpertResidencyRequirements {
+            unreachable!("cancellation-only fixture")
+        }
+        fn binding(&self, _: ExpertKey) -> Result<Option<ExpertSlotBinding>> {
+            unreachable!("cancellation-only fixture")
+        }
+        fn acquire_selected(
+            &mut self,
+            _: ExpertKey,
+        ) -> Result<Option<ferrule_common::ExpertResidencyGrant>> {
+            unreachable!("cancellation-only fixture")
+        }
+        fn release(&mut self, _: ExpertLease) -> Result<()> {
+            panic!("an unpublished preparation must never release an active lease")
+        }
+        fn prepare_install(
+            &mut self,
+            _: ExpertInstallIntent,
+        ) -> Result<ExpertInstallPrepareOutcome> {
+            unreachable!("cancellation-only fixture")
+        }
+        fn promote_install(&mut self, _: PreparedExpertInstall) -> Result<PreparedExpertInstall> {
+            panic!("pending cleanup must not be promoted")
+        }
+        fn activate_install(
+            &mut self,
+            _: PreparedExpertInstall,
+        ) -> Result<ExpertInstallActivationOutcome> {
+            unreachable!("cancellation-only fixture")
+        }
+        fn publish_install(
+            &mut self,
+            _: PreparedExpertInstall,
+        ) -> Result<ferrule_common::ExpertResidencyGrant> {
+            unreachable!("cancellation-only fixture")
+        }
+        fn cancel_install(&mut self, prepared: PreparedExpertInstall) -> Result<()> {
+            let mut state = self.0.lock().unwrap();
+            state.attempts.push(prepared);
+            if let Some(message) = state.failures.pop_front() {
+                return Err(Error::Execution {
+                    message: message.into(),
+                });
+            }
+            state.residency.cancel_install(prepared)
+        }
+        fn stats(&self) -> ferrule_common::ExpertResidencyStats {
+            unreachable!("cancellation-only fixture")
+        }
+    }
+
+    fn gpu_cleanup_provider(
+        failures: usize,
+    ) -> (
+        CudaExpertMaterializationProvider,
+        Arc<Mutex<CancelFaultState>>,
+        PreparedExpertInstall,
+    ) {
+        let ops = CudaOperators::new_on_device(0).expect("cleanup test requires CUDA");
+        let mut provider = CudaExpertMaterializationProvider::new(
+            MaterializationPlacement::new(
+                ModelInstanceId::new(17),
+                BackendId::new(4),
+                DeviceId::new(0),
+            )
+            .unwrap(),
+            MaterializationResourceLimits {
+                capacity: Default::default(),
+                execution_reserve: Default::default(),
+            },
+            Arc::new(MaterializationSourceCatalog::new([]).unwrap()),
+            ExpertStreamingReader::new(16),
+            1,
+            &[],
+            ops.compute_stream_authority(),
+        )
+        .unwrap();
+        let mut residency = ferrule_common::ExpertResidencyCoordinator::new(1).unwrap();
+        let prepared = residency.prepare_install(ExpertKey::new(17, 3, 1)).unwrap();
+        let state = Arc::new(Mutex::new(CancelFaultState {
+            residency,
+            failures: vec!["injected prepared cancellation failure"; failures].into(),
+            attempts: Vec::new(),
+        }));
+        provider.shared.lock().residency = Some(Box::new(CancelFaultControl(state.clone())));
+        let request = cleanup_request();
+        let key = request
+            .materialization_key(DestinationGeneration::new(1))
+            .unwrap();
+        provider.request_keys.insert(request, key);
+        provider.resource_plans.insert(
+            key,
+            MaterializationResourcePlan::uniform_payload(16).unwrap(),
+        );
+        provider
+            .selected_lease_ownership
+            .begin_pending(key)
+            .unwrap();
+        (provider, state, prepared)
+    }
+
+    #[test]
+    #[ignore = "requires CUDA provider; cancellation-only, no FP4 upload success claim"]
+    fn gpu_cleanup_retry_rejects_wrong_key_before_cancelling_exact_token() {
+        use crate::checkpoint::{CheckpointReadExtent, CheckpointSourceFileIdentity};
+        let (mut provider, control, prepared) = gpu_cleanup_provider(1);
+        let request = cleanup_request();
+        let key = request
+            .materialization_key(DestinationGeneration::new(1))
+            .unwrap();
+        let operation_id = OperationId::new(905);
+        let path = std::env::temp_dir().join(format!("ferrule-cleanup-key-{}", std::process::id()));
+        std::fs::write(&path, [0; 16]).unwrap();
+        let read_plan = CheckpointReadPlan::new(
+            [CheckpointReadExtent::new(path.clone(), 0, 16).unwrap()],
+            vec![CheckpointSourceFileIdentity::capture(&path).unwrap()],
+        )
+        .unwrap();
+        provider
+            .selected_lease_ownership
+            .bind_operation(key, operation_id)
+            .unwrap();
+        let operation = MaterializationOperation {
+            key,
+            request,
+            expert: ExpertId::new(3, 1),
+            read_plan,
+            resource_plan: provider.resource_plans[&key],
+            prepared: Some(prepared),
+            purpose: MaterializationPurpose::Execution,
+            binding: ResidencyBinding::new(
+                key.model(),
+                key.resource(),
+                key.backend(),
+                key.device(),
+                DestinationSlotId::new(3),
+                key.destination_generation(),
+            ),
+            evicted: None,
+            pending_terminal: None,
+            quarantined: false,
+            cleanup_pending: false,
+            cleanup_completion: None,
+            state: None,
+        };
+        // No DMA was submitted: this isolates controller cleanup after physical quiescence.
+        assert!(
+            provider
+                .finish_terminal_operation(
+                    operation_id,
+                    operation,
+                    None,
+                    Some((
+                        LoadStage::ReadSubmitted,
+                        CompletionOutcome::Failed(FailureReason::ReadRejected),
+                        0
+                    )),
+                    true
+                )
+                .is_err()
+        );
+        assert!(provider.operations[&operation_id].cleanup_pending);
+        assert_eq!(control.lock().unwrap().attempts, [prepared]);
+        let completions = provider.completions.clone();
+        let wrong_key = request
+            .materialization_key(DestinationGeneration::new(2))
+            .unwrap();
+        assert!(
+            provider
+                .cancel(
+                    operation_id,
+                    wrong_key,
+                    LoadStage::ReadSubmitted,
+                    CancellationReason::ExternalRequest
+                )
+                .is_err(),
+            "wrong key must not advance cleanup"
+        );
+        assert_eq!(control.lock().unwrap().attempts, [prepared]);
+        assert_eq!(provider.completions, completions);
+        assert!(provider.operations[&operation_id].cleanup_pending);
+        assert_eq!(provider.operations[&operation_id].prepared, Some(prepared));
+        assert!(provider.selected_lease_ownership.contains(key));
+        provider
+            .cancel(
+                operation_id,
+                key,
+                LoadStage::ReadSubmitted,
+                CancellationReason::ExternalRequest,
+            )
+            .unwrap();
+        assert!(!provider.operations.contains_key(&operation_id));
+        assert_eq!(control.lock().unwrap().attempts, [prepared; 2]);
+        assert_eq!(
+            control
+                .lock()
+                .unwrap()
+                .residency
+                .stats()
+                .prepare_cancellations,
+            1
+        );
+        assert_eq!(provider.completions.len(), completions.len() + 1);
+        assert!(matches!(
+            provider.completions.back(),
+            Some(ProviderProgress::Completion(_))
+        ));
+        provider
+            .cancel(
+                operation_id,
+                key,
+                LoadStage::ReadSubmitted,
+                CancellationReason::ExternalRequest,
+            )
+            .unwrap();
+        assert_eq!(control.lock().unwrap().attempts, [prepared; 2]);
+        assert_eq!(provider.completions.len(), completions.len() + 1);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    #[ignore = "requires CUDA GPU; only tests cancellation, no FP4 provider required"]
+    fn gpu_prepared_rollback_double_failure_progress_and_shutdown_retry() {
+        for retry_via_shutdown in [false, true] {
+            let (mut provider, state, prepared) = gpu_cleanup_provider(2);
+            let request = cleanup_request();
+            let key = request
+                .materialization_key(DestinationGeneration::new(1))
+                .unwrap();
+            let failure = provider.rollback_slot_reservation(
+                key,
+                request,
+                prepared,
+                FailureReason::ReadRejected,
+            );
+            assert!(
+                matches!(&failure, FailureReason::Cleanup { primary, .. } if **primary == FailureReason::ReadRejected)
+            );
+            assert_eq!(provider.prepared(key).unwrap_err(), failure);
+            assert_eq!(provider.promote_to_execution(key).unwrap_err(), failure);
+            assert_eq!(
+                provider
+                    .reserve(OperationId::new(801), key, provider.resource_plans[&key])
+                    .unwrap_err(),
+                failure
+            );
+            let ProviderProgress::Fault(fault) = provider.next_progress() else {
+                panic!("failed cleanup retry must not become Idle or a terminal completion");
+            };
+            assert!(fault.scope.is_none());
+            assert_eq!(fault.quiescence, QuiescenceEvidence::Pending);
+            assert_eq!(fault.failure, failure);
+            assert_eq!(provider.request_keys.get(&request), Some(&key));
+            assert!(provider.selected_lease_ownership.contains(key));
+            assert!(provider.resource_plans.contains_key(&key));
+            assert_eq!(
+                state
+                    .lock()
+                    .unwrap()
+                    .residency
+                    .stats()
+                    .prepare_cancellations,
+                0
+            );
+            provider.release_execution_lease(key).unwrap();
+            assert!(provider.selected_lease_ownership.contains(key));
+            if retry_via_shutdown {
+                provider.discard_preparation(key).unwrap();
+            }
+            let ProviderProgress::Fault(fault) = provider.next_progress() else {
+                panic!("successful cleanup must acknowledge the earlier global pending fault");
+            };
+            assert_eq!(fault.quiescence, QuiescenceEvidence::Quiescent);
+            assert_eq!(fault.failure, failure);
+            assert!(!provider.request_keys.contains_key(&request));
+            assert!(!provider.resource_plans.contains_key(&key));
+            assert!(!provider.selected_lease_ownership.contains(key));
+            for _ in 0..2 {
+                provider.discard_preparation(key).unwrap();
+                assert_eq!(provider.next_progress(), ProviderProgress::Idle);
+            }
+            drop(provider);
+            let state = state.lock().unwrap();
+            assert_eq!(state.attempts, vec![prepared; 3]);
+            assert_eq!(state.residency.stats().prepare_cancellations, 1);
+            assert_eq!(state.residency.stats().stale_releases, 0);
+        }
+    }
+
+    #[test]
+    #[ignore = "requires CUDA GPU; only tests cancellation, no FP4 provider required"]
+    fn gpu_prepared_cleanup_keeps_distinct_errors_across_interleaved_completions() {
+        for previous_fault_delivered in [false, true] {
+            let (mut provider, state, prepared) = gpu_cleanup_provider(0);
+            state.lock().unwrap().failures = VecDeque::from(["E1", "E2"]);
+            let request = cleanup_request();
+            let key = request
+                .materialization_key(DestinationGeneration::new(1))
+                .unwrap();
+            let first = provider.rollback_slot_reservation(
+                key,
+                request,
+                prepared,
+                FailureReason::ReadRejected,
+            );
+            let expected_first = FailureReason::Cleanup {
+                primary: Box::new(FailureReason::ReadRejected),
+                cleanup: Box::new(protocol_failure(Error::Execution {
+                    message: "E1".into(),
+                })),
+            };
+            assert_eq!(first, expected_first);
+            if previous_fault_delivered {
+                let Some(ProviderProgress::Fault(fault)) = provider.preparation_cleanup_progress()
+                else {
+                    panic!("first failure must be observable before retry");
+                };
+                assert_eq!(fault.failure, expected_first);
+                assert_eq!(fault.quiescence, QuiescenceEvidence::Pending);
+            }
+            let expected_latest = FailureReason::Cleanup {
+                primary: Box::new(expected_first),
+                cleanup: Box::new(protocol_failure(Error::Execution {
+                    message: "E2".into(),
+                })),
+            };
+            let other_key = lease_key(2, 1);
+            for stage in [LoadStage::ReadSubmitted, LoadStage::UploadSubmitted] {
+                provider.emit(
+                    OperationId::new(802),
+                    other_key,
+                    stage,
+                    CompletionOutcome::Succeeded,
+                    16,
+                );
+            }
+            let completions = provider.completions.clone();
+            // E2 must survive even though this poll delivers another operation's
+            // completion instead of the cleanup fault.
+            assert_eq!(provider.next_progress(), completions[0]);
+            assert_eq!(
+                provider.preparation_cleanup[&key].failure(),
+                Some(&expected_latest)
+            );
+            assert_eq!(
+                state
+                    .lock()
+                    .unwrap()
+                    .residency
+                    .stats()
+                    .prepare_cancellations,
+                0
+            );
+            assert_eq!(provider.request_keys.get(&request), Some(&key));
+            assert!(provider.selected_lease_ownership.contains(key));
+            // This retry succeeds and clears Pending; the second completion
+            // still takes priority over fault delivery.
+            assert_eq!(provider.next_progress(), completions[1]);
+            assert!(matches!(
+                provider.preparation_cleanup[&key],
+                PreparationCleanup::Cancelled
+            ));
+            assert!(!provider.request_keys.contains_key(&request));
+            assert!(!provider.selected_lease_ownership.contains(key));
+            let ProviderProgress::Fault(fault) = provider.next_progress() else {
+                panic!("successful cancellation must not erase the undelivered E2 fault");
+            };
+            assert_eq!(fault.failure, expected_latest);
+            assert!(fault.scope.is_none());
+            assert_eq!(fault.quiescence, QuiescenceEvidence::Quiescent);
+            for _ in 0..2 {
+                provider.discard_preparation(key).unwrap();
+                assert_eq!(provider.next_progress(), ProviderProgress::Idle);
+            }
+            drop(provider);
+            let state = state.lock().unwrap();
+            assert_eq!(state.attempts, vec![prepared; 3]);
+            assert_eq!(state.residency.stats().prepare_cancellations, 1);
+            assert_eq!(state.residency.stats().stale_releases, 0);
+        }
+    }
+
+    #[test]
+    #[ignore = "requires CUDA GPU; only tests cancellation, no FP4 provider required"]
+    fn gpu_prepared_rollback_drop_retries_retained_token_once() {
+        let (mut provider, state, prepared) = gpu_cleanup_provider(1);
+        let request = cleanup_request();
+        let key = request
+            .materialization_key(DestinationGeneration::new(1))
+            .unwrap();
+        let failure = provider.rollback_slot_reservation(
+            key,
+            request,
+            prepared,
+            FailureReason::StorageUnavailable,
+        );
+        assert!(matches!(failure, FailureReason::Cleanup { .. }));
+        drop(provider);
+        let state = state.lock().unwrap();
+        assert_eq!(state.attempts, vec![prepared; 2]);
+        assert_eq!(state.residency.stats().prepare_cancellations, 1);
     }
 
     fn lease_set(entries: &[(MaterializationKey, u32)]) -> ResidencyLeaseSet {
@@ -3769,6 +4537,42 @@ mod tests {
         assert_eq!(selected.pending_count(), 0);
         residency.release(lease).unwrap();
         assert_eq!(residency.stats().active_leases, 0);
+    }
+
+    #[test]
+    fn terminal_some_cleanup_keeps_primary_and_every_secondary() {
+        let primary = CompletionOutcome::Failed(FailureReason::StorageUnavailable);
+        let mut cleanup = None;
+        record_first_error(
+            &mut cleanup,
+            Err(Error::Internal {
+                message: "slot cleanup".into(),
+            }),
+        );
+        record_first_error(
+            &mut cleanup,
+            Err(Error::Internal {
+                message: "lease cleanup".into(),
+            }),
+        );
+        let outcome = terminal_cleanup_failure(Some(&primary), protocol_failure(cleanup.unwrap()));
+        let FailureReason::Cleanup { primary, cleanup } = outcome else {
+            panic!("typed primary is retained");
+        };
+        assert_eq!(*primary, FailureReason::StorageUnavailable);
+        assert!(cleanup.to_string().contains("slot cleanup"));
+        assert!(cleanup.to_string().contains("lease cleanup"));
+    }
+
+    #[test]
+    fn terminal_none_cleanup_remains_an_error_not_idle() {
+        let failure = terminal_cleanup_failure(None, FailureReason::InstallationRejected);
+        let progress = ProviderProgress::Fault(ProviderFault {
+            scope: None,
+            failure: failure.clone(),
+            quiescence: QuiescenceEvidence::Unknown,
+        });
+        assert_eq!(progress.into_completion().unwrap_err().failure, failure);
     }
 
     type MockState = MaterializationOperationState<u64, u64, u64, u64, u64>;
@@ -4593,6 +5397,40 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn host_mock_outer_read_fault_retains_original_ticket_until_cqe() {
+        let mut mock = HostMockProvider::default();
+        assert!(mock.reserve(901, 901));
+        assert!(mock.submit_read(901));
+        let active = mock.operations.get_mut(&901).unwrap();
+        let failure = terminal_cleanup_failure(
+            Some(&CompletionOutcome::Failed(
+                FailureReason::StorageUnavailable,
+            )),
+            FailureReason::ReadRejected,
+        );
+        active.pending_terminal = Some(CompletionOutcome::Failed(failure.clone()));
+        assert!(matches!(active.state, Some(MockState::ReadSubmitted(901))));
+        assert_eq!(mock.resources.read_slabs, 1);
+        assert_eq!(mock.terminal_completion_count(901), 0);
+        assert!(!mock.reserve(902, 901));
+        assert!(mock.complete_read(901, false));
+        assert_eq!(mock.resources.read_slabs, 0);
+        assert_eq!(mock.terminal_completion_count(901), 1);
+        assert_eq!(
+            mock.completions.last().unwrap().2,
+            CompletionOutcome::Failed(failure)
+        );
+        assert!(!mock.complete_read(901, false));
+    }
+
+    #[test]
+    fn provider_progress_and_cuda_provider_remain_send() {
+        fn assert_send<T: Send>() {}
+        assert_send::<CudaExpertMaterializationProvider>();
+        assert_send::<ProviderProgress>();
     }
 
     #[test]

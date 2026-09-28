@@ -41,6 +41,7 @@ pub struct PipelineInferenceEngine {
     scheduler: ResidentScheduler,
     slots: FixedSequenceSlotPool,
     requests: HashMap<RequestId, SessionId>,
+    cleanup_receipts: HashMap<RequestId, (super::RequestCleanupOwner, bool)>,
     retained: HashSet<SessionId>,
     text: HashMap<SessionId, StopText>,
     outbox: VecDeque<ResidentTokenEvent>,
@@ -91,7 +92,7 @@ impl PipelineInferenceEngine {
             ));
         }
         if config.max_pages < full_pages
-            || kv_plan.configured_pages != config.max_pages
+            || kv_plan.full_capacity_pages != config.max_pages
             || kv_plan.full_capacity_pages != full_pages
         {
             return Err(invalid(
@@ -102,6 +103,23 @@ impl PipelineInferenceEngine {
             .stage_descriptions()
             .first()
             .ok_or_else(|| invalid("pipeline has no stages"))?;
+        if kv_plan.configured_pages != first.physical_pages {
+            return Err(invalid("pipeline physical capacity differs from KV budget"));
+        }
+        let physical_bytes =
+            pipeline
+                .stage_descriptions()
+                .iter()
+                .try_fold(0u64, |sum, stage| {
+                    sum.checked_add(stage.physical_bytes()?)
+                        .ok_or_else(|| invalid("pipeline physical byte total overflow"))
+                })?;
+        if kv_plan
+            .configured_bytes
+            .is_some_and(|bytes| bytes != physical_bytes)
+        {
+            return Err(invalid("pipeline physical bytes differ from KV budget"));
+        }
         if info.vocab_size != first.vocabulary || info.num_layers != first.plan.total_layers() {
             return Err(invalid(
                 "pipeline serving model metadata differs from its stages",
@@ -114,6 +132,7 @@ impl PipelineInferenceEngine {
             scheduler: ResidentScheduler::new(scheduler),
             slots: FixedSequenceSlotPool::new(config.session_capacity),
             requests: HashMap::new(),
+            cleanup_receipts: HashMap::new(),
             retained: HashSet::new(),
             text: HashMap::new(),
             outbox: VecDeque::new(),
@@ -233,10 +252,44 @@ impl PipelineInferenceEngine {
         Ok(())
     }
 
+    fn reap_cleanup_receipts(&mut self) {
+        // `requests` is removed only after the pipeline's physical release
+        // succeeds (or ownership remains with an explicitly retained session).
+        // Never infer physical return from a terminal, idle, or fault flag.
+        let released = self
+            .cleanup_receipts
+            .iter()
+            .filter_map(|(request, (_, consumed))| {
+                (*consumed
+                    && !self.requests.contains_key(request)
+                    && !self.pending_terminals.contains(request)
+                    && !self
+                        .outbox
+                        .iter()
+                        .any(|event| event.request_id == Some(*request)))
+                .then_some(*request)
+            })
+            .collect::<Vec<_>>();
+        for request in released {
+            let (owner, _) = self
+                .cleanup_receipts
+                .remove(&request)
+                .expect("cleanup owner");
+            owner.release();
+        }
+    }
+
+    fn consume_cleanup_terminal(&mut self, request: RequestId) {
+        if let Some((_, consumed)) = self.cleanup_receipts.get_mut(&request) {
+            *consumed = true;
+        }
+    }
+
     fn consume_terminals(&mut self, sequences: &[SequenceState]) {
         for sequence in sequences {
             if let Some(request) = sequence.request_id {
                 self.pending_terminals.remove(&request);
+                self.consume_cleanup_terminal(request);
             }
         }
     }
@@ -393,10 +446,18 @@ impl InferenceEngine for PipelineInferenceEngine {
         Ok(self.tokenizer.encode(prompt)?)
     }
 
+    fn request_cleanup(&self, request: RequestId) -> super::InferenceRequestCleanup {
+        self.cleanup_receipts.get(&request).map_or(
+            super::InferenceRequestCleanup::Unavailable,
+            |(receipt, _)| super::InferenceRequestCleanup::Tracked(receipt.receipt()),
+        )
+    }
+
     fn try_submit(&mut self, mut request: GenerateRequest) -> Result<()> {
         self.available()?;
         let session = request.session_id.unwrap_or(SessionId(request.id.0));
         if self.requests.contains_key(&request.id)
+            || self.cleanup_receipts.contains_key(&request.id)
             || self.pending_terminals.contains(&request.id)
             || self.requests.values().any(|&id| id == session)
         {
@@ -442,6 +503,8 @@ impl InferenceEngine for PipelineInferenceEngine {
         }
         request.session_id = Some(session);
         self.requests.insert(request.id, session);
+        self.cleanup_receipts
+            .insert(request.id, (super::RequestCleanupOwner::default(), false));
         self.text.insert(session, StopText::default());
         self.scheduler.submit_at_position(request, position);
         Ok(())
@@ -469,6 +532,7 @@ impl InferenceEngine for PipelineInferenceEngine {
         on_token: &mut dyn FnMut(&ResidentTokenEvent) -> Result<()>,
     ) -> Result<ResidentDriverStep> {
         let result = self.step_inner(on_token);
+        self.reap_cleanup_receipts();
         if result.is_err() {
             self.faulted = true;
         }
@@ -496,17 +560,20 @@ impl InferenceEngine for PipelineInferenceEngine {
     fn drain_finished(&mut self) -> Vec<SequenceState> {
         let sequences = self.scheduler.drain_finished();
         self.consume_terminals(&sequences);
+        self.reap_cleanup_receipts();
         sequences
     }
     fn drain_cancelled(&mut self) -> Vec<SequenceState> {
         let sequences = self.scheduler.drain_cancelled();
         self.consume_terminals(&sequences);
+        self.reap_cleanup_receipts();
         sequences
     }
     fn drain_failed(&mut self) -> Vec<SequenceState> {
         let mut sequences = self.scheduler.drain_failed();
         sequences.append(&mut self.rejected);
         self.consume_terminals(&sequences);
+        self.reap_cleanup_receipts();
         sequences
     }
 
@@ -584,6 +651,8 @@ impl SessionInferenceEngine for PipelineInferenceEngine {
             self.scheduler.take_request_terminal(request)?
         };
         self.pending_terminals.remove(&request);
+        self.consume_cleanup_terminal(request);
+        self.reap_cleanup_receipts();
         Some(terminal)
     }
 }
