@@ -14,6 +14,18 @@ pub(crate) fn observer_fields(diagnostic: bool) -> Value {
         "gpu_overlap_claim":false,"concurrent_scheduler_claim":false})
 }
 
+fn configuration_matches(
+    value: &ExpertReadPipelineObservation,
+    requested: ExpertReadPipelineOptions,
+) -> bool {
+    value.enabled
+        && value.requested_mode == Some(requested.schedule)
+        && value.limits == Some(requested)
+        && value
+            .effective_mode
+            .is_none_or(|mode| mode == requested.schedule)
+}
+
 fn bounded(value: &ExpertReadPipelineObservation, requested: ExpertReadPipelineOptions) -> bool {
     let payload = requested.max_host_bytes
         - requested.max_metadata_bytes
@@ -76,6 +88,7 @@ impl ReadQualityLog {
             json!({"label":label,"operation":operation,"requested":self.requested,
             "before":snapshot_json(&before),"after":null,"delta":null,"same_owner":null,
             "configuration_matches":null,"within_charged_limits":null,"unambiguous":null,
+            "configuration_pair":{"before":null,"after":null},
             "positive_worker_read":null,"evidence_complete":false}),
         );
         index
@@ -100,11 +113,10 @@ impl ReadQualityLog {
             }
             _ => None,
         };
+        let before_observed = before.expert_read_pipeline.value();
         let observed = after.expert_read_pipeline.value();
-        let delta = before
-            .expert_read_pipeline
-            .value()
-            .zip(observed)
+        let pair = before_observed.zip(observed);
+        let delta = pair
             .filter(|_| same_owner == Some(true))
             .and_then(|(a, b)| b.stats.checked_delta(a.stats));
         let requested = self.requested;
@@ -115,15 +127,26 @@ impl ReadQualityLog {
         record["delta_scope"] = json!(
             "owner counters only; peak fields remain lifetime gauges; reader intervals not certified per-ticket syscalls"
         );
-        record["configuration_matches"] = json!(observed.map(|o| {
-            o.enabled
-                && o.requested_mode == Some(requested.schedule)
-                && o.limits == Some(requested)
-                && o.effective_mode
-                    .is_none_or(|mode| mode == requested.schedule)
-        }));
-        record["within_charged_limits"] = json!(observed.map(|o| bounded(o, requested)));
-        record["unambiguous"] = json!(observed.map(unambiguous));
+        // Keep v1 aggregate flag names, but qualify the entire interval. Missing
+        // endpoint evidence remains null; configuration_pair identifies which
+        // endpoint failed without changing counter-delta or worker-read evidence.
+        record["configuration_matches"] = json!(pair.map(|(a, b)| configuration_matches(
+            a, requested
+        ) && configuration_matches(
+            b, requested
+        )));
+        record["within_charged_limits"] =
+            json!(pair.map(|(a, b)| bounded(a, requested) && bounded(b, requested)));
+        record["unambiguous"] = json!(pair.map(|(a, b)| unambiguous(a) && unambiguous(b)));
+        let endpoint = |value: Option<&ExpertReadPipelineObservation>| {
+            json!({
+                "configuration_matches":value.map(|o|configuration_matches(o,requested)),
+                "within_charged_limits":value.map(|o|bounded(o,requested)),
+                "unambiguous":value.map(unambiguous),
+            })
+        };
+        record["configuration_pair"] =
+            json!({"before":endpoint(before_observed),"after":endpoint(observed)});
         record["positive_worker_read"] = json!(delta.map(|s| s.submitted_reads > 0
             && s.completed_reads > 0
             && s.verified_reads > 0
@@ -148,7 +171,9 @@ impl ReadQualityLog {
     }
 
     pub(crate) fn json(&self) -> Value {
-        json!({"schema":"ferrule.expert-read-quality-evidence.v1","requested":self.requested,
+        json!({"schema":"ferrule.expert-read-quality-evidence.v1","interval_validation_revision":2,
+            "interval_validation_contract":"aggregate configuration_matches, within_charged_limits and unambiguous require both observed endpoints; configuration_pair records each endpoint; missing evidence is null; initial effective_mode may be null",
+            "requested":self.requested,
             "observation_scope":observer_fields(self.diagnostic),"passed":self.passed(),
             "positive_worker_read_calls":self.calls.iter().filter(|r| r["positive_worker_read"] == true).count(),
             "sampled_operations":self.calls.len(),"calls":self.calls,
@@ -454,6 +479,326 @@ mod tests {
             assert!(!log.passed());
         }
     }
+    fn positive_after(
+        before: &PhysicalResourceObservation,
+        schedule: ExpertReadSchedule,
+    ) -> PhysicalResourceObservation {
+        let mut after = before.clone();
+        after.expert_read_pipeline = ResourceEvidence::Observed(ExpertReadPipelineObservation {
+            effective_mode: Some(schedule),
+            worker_read_observed: true,
+            stats: ExpertReadPipelineStats {
+                submitted_reads: 1,
+                completed_reads: 1,
+                verified_reads: 1,
+                io_started_reads: 1,
+                proved_read_bytes: 128,
+                ..Default::default()
+            },
+            ..*before.expert_read_pipeline.value().unwrap()
+        });
+        after
+    }
+
+    #[test]
+    fn read_quality_interval_configuration_rejects_bad_before_with_matching_positive_after() {
+        for schedule in [ExpertReadSchedule::Blocking, ExpertReadSchedule::Lookahead] {
+            let read = options(schedule);
+            let before = sample(read);
+            let after = positive_after(&before, schedule);
+            let other = if schedule == ExpertReadSchedule::Blocking {
+                ExpertReadSchedule::Lookahead
+            } else {
+                ExpertReadSchedule::Blocking
+            };
+            assert_eq!(
+                before.expert_read_pipeline.value().unwrap().effective_mode,
+                None
+            );
+            assert!(
+                !before
+                    .expert_read_pipeline
+                    .value()
+                    .unwrap()
+                    .worker_read_observed
+            );
+            let mut valid = ReadQualityLog::new(read, false);
+            let i = valid.begin("configured first read", "prediction", before.clone());
+            valid.finish(i, &before, after.clone());
+            assert!(valid.passed());
+            for field in [
+                "disabled",
+                "requested_mode",
+                "missing_limits",
+                "host_limit",
+                "metadata_limit",
+                "stack_limit",
+                "limits_schedule",
+                "effective_mode",
+            ] {
+                let mut bad = before.clone();
+                let mut observed = *before.expert_read_pipeline.value().unwrap();
+                match field {
+                    "disabled" => observed.enabled = false,
+                    "requested_mode" => observed.requested_mode = Some(other),
+                    "missing_limits" => observed.limits = None,
+                    "host_limit" => observed.limits.as_mut().unwrap().max_host_bytes += 1,
+                    "metadata_limit" => observed.limits.as_mut().unwrap().max_metadata_bytes += 1,
+                    "stack_limit" => observed.limits.as_mut().unwrap().worker_stack_bytes += 1,
+                    "limits_schedule" => observed.limits.as_mut().unwrap().schedule = other,
+                    "effective_mode" => observed.effective_mode = Some(other),
+                    _ => unreachable!(),
+                }
+                bad.expert_read_pipeline = ResourceEvidence::Observed(observed);
+                let mut log = ReadQualityLog::new(read, false);
+                let i = log.begin(field, "prediction", bad.clone());
+                log.finish(i, &bad, after.clone());
+                assert_eq!(log.calls[i]["same_owner"], true, "{schedule:?}/{field}");
+                assert_eq!(
+                    log.calls[i]["positive_worker_read"], true,
+                    "{schedule:?}/{field}"
+                );
+                assert_eq!(
+                    log.calls[i]["configuration_matches"], false,
+                    "{schedule:?}/{field}"
+                );
+                assert!(!log.passed(), "{schedule:?}/{field}");
+            }
+        }
+    }
+
+    #[test]
+    fn read_quality_interval_rejects_before_overbudget_or_unknown_with_positive_after() {
+        for schedule in [ExpertReadSchedule::Blocking, ExpertReadSchedule::Lookahead] {
+            let read = options(schedule);
+            let before = sample(read);
+            let after = positive_after(&before, schedule);
+            let payload =
+                read.max_host_bytes - read.max_metadata_bytes - read.worker_stack_bytes as u64;
+            for field in [
+                "packed",
+                "artifact",
+                "payload",
+                "metadata",
+                "stack",
+                "host",
+                "slots",
+                "peak_packed",
+                "peak_artifact",
+                "peak_payload",
+                "peak_metadata",
+                "peak_stack",
+                "peak_host",
+                "unknown_packed",
+                "unknown_stack",
+                "unknown_slots",
+                "quarantined",
+            ] {
+                let mut bad = before.clone();
+                let mut observed = *before.expert_read_pipeline.value().unwrap();
+                let (flag, expected) = match field {
+                    "packed" => {
+                        observed.current_charge.packed_bytes = payload / 2 + 1;
+                        ("within_charged_limits", false)
+                    }
+                    "artifact" => {
+                        observed.current_charge.artifact_bytes = payload / 2 + 1;
+                        ("within_charged_limits", false)
+                    }
+                    "payload" => {
+                        observed.current_charge.payload_bytes = payload + 1;
+                        ("within_charged_limits", false)
+                    }
+                    "metadata" => {
+                        observed.current_charge.metadata_bytes = read.max_metadata_bytes + 1;
+                        ("within_charged_limits", false)
+                    }
+                    "stack" => {
+                        observed.current_charge.requested_stack_bytes =
+                            read.worker_stack_bytes as u64 + 1;
+                        ("within_charged_limits", false)
+                    }
+                    "host" => {
+                        observed.current_charge.host_charged_bytes = read.max_host_bytes + 1;
+                        ("within_charged_limits", false)
+                    }
+                    "slots" => {
+                        observed.current_charge.reserved_read_slots = 3;
+                        ("within_charged_limits", false)
+                    }
+                    "peak_packed" => {
+                        observed.stats.peak_packed_bytes = payload / 2 + 1;
+                        ("within_charged_limits", false)
+                    }
+                    "peak_artifact" => {
+                        observed.stats.peak_artifact_bytes = payload / 2 + 1;
+                        ("within_charged_limits", false)
+                    }
+                    "peak_payload" => {
+                        observed.stats.peak_payload_bytes = payload + 1;
+                        ("within_charged_limits", false)
+                    }
+                    "peak_metadata" => {
+                        observed.stats.peak_metadata_bytes = read.max_metadata_bytes + 1;
+                        ("within_charged_limits", false)
+                    }
+                    "peak_stack" => {
+                        observed.stats.peak_requested_stack_bytes =
+                            read.worker_stack_bytes as u64 + 1;
+                        ("within_charged_limits", false)
+                    }
+                    "peak_host" => {
+                        observed.stats.peak_host_charged_bytes = read.max_host_bytes + 1;
+                        ("within_charged_limits", false)
+                    }
+                    "unknown_packed" => {
+                        observed.current_charge.unknown_packed_bytes = 1;
+                        ("unambiguous", false)
+                    }
+                    "unknown_stack" => {
+                        observed.current_charge.unknown_stack_bytes = 1;
+                        ("unambiguous", false)
+                    }
+                    "unknown_slots" => {
+                        observed.current_charge.unknown_read_slots = 1;
+                        ("unambiguous", false)
+                    }
+                    "quarantined" => {
+                        observed.status = "quarantined";
+                        ("unambiguous", false)
+                    }
+                    _ => unreachable!(),
+                };
+                bad.expert_read_pipeline = ResourceEvidence::Observed(observed);
+                let mut log = ReadQualityLog::new(read, false);
+                let i = log.begin(field, "prediction", bad.clone());
+                log.finish(i, &bad, after.clone());
+                assert_eq!(log.calls[i]["same_owner"], true, "{schedule:?}/{field}");
+                assert_eq!(
+                    log.calls[i]["positive_worker_read"], true,
+                    "{schedule:?}/{field}"
+                );
+                assert_eq!(log.calls[i][flag], expected, "{schedule:?}/{field}");
+                assert!(!log.passed(), "{schedule:?}/{field}");
+            }
+        }
+    }
+
+    #[test]
+    fn read_quality_interval_missing_before_and_counter_reset_remain_unqualified() {
+        for schedule in [ExpertReadSchedule::Blocking, ExpertReadSchedule::Lookahead] {
+            let read = options(schedule);
+            let before = sample(read);
+            let after = positive_after(&before, schedule);
+            for evidence in [ResourceEvidence::Unobserved, ResourceEvidence::Unknown] {
+                let mut bad = before.clone();
+                bad.expert_read_pipeline = evidence;
+                let mut log = ReadQualityLog::new(read, false);
+                let i = log.begin("missing before", "prediction", bad.clone());
+                log.finish(i, &bad, after.clone());
+                for field in [
+                    "delta",
+                    "positive_worker_read",
+                    "configuration_matches",
+                    "within_charged_limits",
+                    "unambiguous",
+                ] {
+                    assert!(log.calls[i][field].is_null(), "{schedule:?}/{field}");
+                }
+                assert!(!log.passed());
+            }
+            let mut reset = before.clone();
+            reset.expert_read_pipeline =
+                ResourceEvidence::Observed(ExpertReadPipelineObservation {
+                    stats: ExpertReadPipelineStats {
+                        submitted_reads: 2,
+                        ..Default::default()
+                    },
+                    ..*before.expert_read_pipeline.value().unwrap()
+                });
+            let mut log = ReadQualityLog::new(read, false);
+            let i = log.begin("counter reset", "prediction", reset.clone());
+            log.finish(i, &reset, after);
+            assert!(log.calls[i]["delta"].is_null());
+            assert!(log.calls[i]["positive_worker_read"].is_null());
+            assert!(!log.passed());
+        }
+    }
+
+    #[test]
+    fn read_quality_interval_report_keeps_v1_flags_and_documents_both_endpoints() {
+        for schedule in [ExpertReadSchedule::Blocking, ExpertReadSchedule::Lookahead] {
+            let read = options(schedule);
+            let before = sample(read);
+            let after = positive_after(&before, schedule);
+            let mut log = ReadQualityLog::new(read, false);
+            let i = log.begin("configured", "prediction", before.clone());
+            assert!(log.calls[i]["configuration_pair"]["before"].is_null());
+            assert!(log.calls[i]["configuration_pair"]["after"].is_null());
+            log.finish(i, &before, after.clone());
+            let report = log.json();
+            assert_eq!(report["schema"], "ferrule.expert-read-quality-evidence.v1");
+            assert_eq!(report["interval_validation_revision"], 2);
+            assert_eq!(report["passed"], true);
+            assert!(
+                report["interval_validation_contract"]
+                    .as_str()
+                    .unwrap()
+                    .contains("both observed endpoints")
+            );
+            for field in [
+                "configuration_matches",
+                "within_charged_limits",
+                "unambiguous",
+            ] {
+                assert_eq!(report["calls"][i][field], true);
+                assert_eq!(
+                    report["calls"][i]["configuration_pair"]["before"][field],
+                    true
+                );
+                assert_eq!(
+                    report["calls"][i]["configuration_pair"]["after"][field],
+                    true
+                );
+            }
+            assert!(
+                report["calls"][i]["before"]["expert_read_pipeline"]["value"]["effective_mode"]
+                    .is_null()
+            );
+            let mut disabled = before.clone();
+            disabled.expert_read_pipeline =
+                ResourceEvidence::Observed(ExpertReadPipelineObservation {
+                    enabled: false,
+                    ..*before.expert_read_pipeline.value().unwrap()
+                });
+            let i = log.begin("disabled before", "prediction", disabled.clone());
+            log.finish(i, &disabled, after.clone());
+            assert_eq!(
+                log.calls[i]["configuration_pair"]["before"]["configuration_matches"],
+                false
+            );
+            assert_eq!(
+                log.calls[i]["configuration_pair"]["after"]["configuration_matches"],
+                true
+            );
+            assert_eq!(log.calls[i]["configuration_matches"], false);
+            assert!(!log.passed());
+            let mut missing = before;
+            missing.expert_read_pipeline = ResourceEvidence::Unknown;
+            let i = log.begin("unknown before", "prediction", missing.clone());
+            log.finish(i, &missing, after);
+            for field in [
+                "configuration_matches",
+                "within_charged_limits",
+                "unambiguous",
+            ] {
+                assert!(log.calls[i][field].is_null());
+                assert!(log.calls[i]["configuration_pair"]["before"][field].is_null());
+                assert_eq!(log.calls[i]["configuration_pair"]["after"][field], true);
+            }
+        }
+    }
+
     #[test]
     fn read_quality_disabled_reports_omit_fields_and_ordinary_never_claims_routes() {
         let mut legacy = json!({"ordinary_no_observer_claim":false,"metrics":[]});
