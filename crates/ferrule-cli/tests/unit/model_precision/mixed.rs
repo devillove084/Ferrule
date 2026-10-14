@@ -3,7 +3,7 @@ use crate::args::ServeModelProfile;
 use ferrule_model::transformer::{NumericFp8Bf16HybridCudaProfile, NumericFp8Precision};
 
 #[path = "../../../../ferrule-composition/tests/qwen35_memory_plan/mixed_fixture.rs"]
-pub(super) mod fixture;
+pub(crate) mod fixture;
 
 fn mixed_args(model: &str, extra: &[&str]) -> ServeArgs {
     let mut flags = vec![

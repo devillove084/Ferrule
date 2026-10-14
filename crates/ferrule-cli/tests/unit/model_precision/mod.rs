@@ -90,4 +90,5 @@ fn native_bf16_cli_selects_executable_standard_profile_and_preserves_defaults() 
 }
 
 mod mixed;
+pub(super) use mixed::fixture;
 mod mixed_tp2;
