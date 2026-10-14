@@ -109,6 +109,16 @@ fn expert_read_invalid_bounds_reject_before_source_io() {
             max_metadata_bytes: u64::MAX,
             ..read(ExpertReadSchedule::Blocking)
         },
+        ExpertReadPipelineOptions {
+            max_metadata_bytes: u64::MAX - (1 << 20),
+            worker_stack_bytes: 2 << 20,
+            ..read(ExpertReadSchedule::Lookahead)
+        },
+        ExpertReadPipelineOptions {
+            max_metadata_bytes: 62 << 20,
+            worker_stack_bytes: 2 << 20,
+            ..read(ExpertReadSchedule::Blocking)
+        },
     ] {
         let error = ServingModelOptions {
             expert_read_pipeline: Some(value),
@@ -131,6 +141,7 @@ fn expert_read_both_schedules_reuse_admission_and_preserve_device_ledger() {
     assert!(disabled.prepared_source_plan.is_none());
     let base = disabled.numeric_bf16_memory_plan().unwrap().unwrap();
     assert_eq!(base.expert_read_pipeline_options(), None);
+    assert_eq!(base.runner_options().expert_read_pipeline_options(), None);
     for schedule in [ExpertReadSchedule::Blocking, ExpertReadSchedule::Lookahead] {
         let plan = prepare(&f, Some(read(schedule))).unwrap();
         assert_eq!(plan.expert_read_pipeline_options(), Some(read(schedule)));
@@ -140,6 +151,17 @@ fn expert_read_both_schedules_reuse_admission_and_preserve_device_ledger() {
             admitted.expert_read_pipeline_options(),
             Some(read(schedule))
         );
+        assert_eq!(
+            admitted.runner_options().expert_read_pipeline_options(),
+            Some(read(schedule))
+        );
+        assert_eq!(
+            admitted
+                .runner_options()
+                .hybrid_cuda_numeric_fp8_precision(),
+            base.runner_options().hybrid_cuda_numeric_fp8_precision()
+        );
+        assert_eq!(admitted.model_estimate(), base.model_estimate());
         assert_eq!(admitted.model_budget(), base.model_budget());
         assert_eq!(admitted.total_device_bytes(), base.total_device_bytes());
         assert!(admitted.resources().host_experts().is_none());

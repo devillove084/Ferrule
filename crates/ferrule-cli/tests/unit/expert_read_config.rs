@@ -1,7 +1,10 @@
 //! CPU-only CLI/read-policy tests; no model payload or device owner.
 use super::*;
 use crate::args::ExpertReadArgs;
-use ferrule_model::transformer::ExpertReadSchedule;
+use ferrule_model::transformer::{ExpertReadPipelineOptions, ExpertReadSchedule};
+
+#[path = "../../../ferrule-composition/tests/qwen35_memory_plan/mixed_fixture.rs"]
+mod fixture;
 
 #[test]
 fn expert_read_disabled_is_not_an_implicit_blocking_pipeline() {
@@ -162,6 +165,42 @@ fn expert_read_unsupported_profiles_reject_before_model_io() {
         vec![
             "--model-profile",
             "qwen35-mixed-bf16",
+            "--tensor-parallel",
+            "2",
+        ],
+        vec![
+            "--model-profile",
+            "qwen35-mixed-bf16",
+            "--engine",
+            "pipeline",
+        ],
+        vec![
+            "--model-profile",
+            "qwen35-mixed-bf16",
+            "--kv-execution-policy",
+            "host-kv-decode",
+        ],
+        vec![
+            "--model-profile",
+            "qwen35-mixed-bf16",
+            "--expert-prewarm-workers",
+            "1",
+        ],
+        vec![
+            "--model-profile",
+            "qwen35-mixed-bf16",
+            "--expert-host-cache-entries",
+            "1",
+        ],
+        vec![
+            "--model-profile",
+            "qwen35-mixed-bf16",
+            "--numeric-fp8-precision",
+            "w8a16-bf16",
+        ],
+        vec![
+            "--model-profile",
+            "qwen35-mixed-bf16",
             "--expert-prewarm",
             "full",
         ],
@@ -183,8 +222,200 @@ fn expert_read_unsupported_profiles_reject_before_model_io() {
         assert!(
             error.to_string().contains("expert read")
                 || error.to_string().contains("prewarm")
+                || error.to_string().contains("expert options")
                 || error.to_string().contains("CPU execution is test-only"),
             "{error}"
         );
     }
+}
+
+#[test]
+fn expert_read_stack_and_metadata_sum_overflow_rejects_before_model_io() {
+    let args = serve(&[
+        "ferrule",
+        "serve",
+        "not-opened",
+        "--expert-read-host-mb",
+        "64",
+        "--expert-read-metadata-mb",
+        "17592186044415",
+        "--expert-read-worker-stack-mb",
+        "2",
+    ]);
+    let error = prepare_model(&args).err().expect("host overhead overflow");
+    assert!(
+        error.to_string().contains("host overhead overflows"),
+        "{error}"
+    );
+}
+
+fn storage_middle64_args(model: &str, schedule: Option<&str>) -> ServeArgs {
+    let mut argv = vec![
+        "ferrule",
+        "serve",
+        model,
+        "--model-profile",
+        "qwen35-mixed-bf16",
+        "--expert-prewarm",
+        "lazy",
+        "--kv-execution-policy",
+        "resident",
+        "--ctx-size",
+        "128",
+        "--max-active-sequences",
+        "2",
+        "--max-batch-tokens",
+        "8",
+        "--prefill-chunk-size",
+        "8",
+        "--decode-cohort-target",
+        "1",
+        "--decode-cohort-max-deferrals",
+        "0",
+        "--kv-cache-mb",
+        "16",
+        "--max-tensor-mb",
+        "1024",
+        "--cuda-expert-device-entries",
+        "64",
+        "--cuda-expert-device-bytes",
+        "335544320",
+        "--cuda-expert-scratch-mb",
+        "8",
+        "--cuda-workspace-mb",
+        "2048",
+        "--cuda-device-budget-mb",
+        "7168",
+    ];
+    if let Some(schedule) = schedule {
+        argv.extend([
+            "--expert-read-host-mb",
+            "64",
+            "--expert-read-schedule",
+            schedule,
+            "--expert-read-metadata-mb",
+            "8",
+            "--expert-read-worker-stack-mb",
+            "2",
+        ]);
+    }
+    serve(&argv)
+}
+
+#[test]
+fn expert_read_cli_lowering_freezes_both_schedules_on_existing_storage_middle64_owner() {
+    fixture::with_workspace(
+        concat!(
+            module_path!(),
+            "::expert_read_cli_lowering_freezes_both_schedules_on_existing_storage_middle64_owner"
+        ),
+        || {
+            let f = fixture::Fixture::new();
+            let model = f.dir.path().to_str().unwrap();
+            let base_args = storage_middle64_args(model, None);
+            let base = prepare_model(&base_args).unwrap();
+            let base_memory = base.numeric_bf16_memory_plan().unwrap().unwrap();
+            assert_eq!(base.expert_read_pipeline_options(), None);
+            assert_eq!(
+                base_memory.runner_options().expert_read_pipeline_options(),
+                None
+            );
+            assert!(base_memory.resources().host_experts().is_none());
+            assert!(
+                execution_report(&base, base_args.rank_timeout_ms)
+                    .iter()
+                    .all(|line| !line.contains("expert read host staging"))
+            );
+            let base_limits = base.qwen35_moe_capacity_limits().unwrap().unwrap();
+            assert_eq!(
+                (
+                    base_limits.max_experts,
+                    base_limits.max_bytes,
+                    base_limits.scratch_bytes
+                ),
+                (64, 320 << 20, 8 << 20)
+            );
+            assert_eq!(
+                (
+                    base_limits.device_bytes,
+                    base_limits.workspace_bytes,
+                    base_limits.kv_bytes
+                ),
+                (7 << 30, 2 << 30, 16 << 20)
+            );
+            assert_eq!(base_limits.allocator_margin_bytes, 512 << 20);
+            for (schedule, expected) in [
+                ("blocking", ExpertReadSchedule::Blocking),
+                ("lookahead", ExpertReadSchedule::Lookahead),
+            ] {
+                let read = ExpertReadPipelineOptions {
+                    schedule: expected,
+                    max_host_bytes: 64 << 20,
+                    max_metadata_bytes: 8 << 20,
+                    worker_stack_bytes: 2 << 20,
+                };
+                let args = storage_middle64_args(model, Some(schedule));
+                assert_eq!(
+                    serving_options(&args).unwrap().expert_read_pipeline,
+                    Some(read)
+                );
+                assert!(
+                    model_factory_options(&args)
+                        .unwrap()
+                        .qwen35_host_cache
+                        .is_none()
+                );
+                let plan = prepare_model(&args).unwrap();
+                let memory = plan.numeric_bf16_memory_plan().unwrap().unwrap();
+                assert_eq!(
+                    plan.selected_implementation().kind,
+                    SelectedImplementationKind::Resident
+                );
+                assert_eq!(plan.backend_profile(), base.backend_profile());
+                assert_eq!(plan.expert_read_pipeline_options(), Some(read));
+                assert_eq!(memory.expert_read_pipeline_options(), Some(read));
+                assert_eq!(
+                    memory.runner_options().expert_read_pipeline_options(),
+                    Some(read)
+                );
+                assert!(memory.resources().host_experts().is_none());
+                assert_eq!(memory.model_budget(), base_memory.model_budget());
+                assert_eq!(
+                    memory.total_device_bytes(),
+                    base_memory.total_device_bytes()
+                );
+                assert_eq!(
+                    plan.qwen35_moe_capacity_limits().unwrap().unwrap(),
+                    base_limits
+                );
+                assert_eq!(
+                    plan.effective_options().scheduler_config,
+                    base.effective_options().scheduler_config
+                );
+                assert_eq!(
+                    plan.effective_options().scheduler_config.max_decode_batch,
+                    2
+                );
+                assert_eq!(
+                    read.max_host_bytes - read.max_metadata_bytes - read.worker_stack_bytes as u64,
+                    54 << 20
+                );
+                assert_eq!(
+                    base_limits.device_bytes as u64 + read.max_host_bytes,
+                    7_583_301_632
+                );
+                let report = execution_report(&plan, args.rank_timeout_ms);
+                let expected_report = format!(
+                    "expert read host staging: schedule={expected:?} host_cap_bytes=67108864 metadata_bytes=8388608 worker_stack_bytes=2097152; metadata and requested stack included in host cap; separate from CUDA cache/device budgets; OS/TLS/allocator headroom not included; no GPU-overlap claim"
+                );
+                assert_eq!(
+                    report
+                        .iter()
+                        .filter(|line| line.starts_with("expert read host staging:"))
+                        .collect::<Vec<_>>(),
+                    vec![&expected_report]
+                );
+            }
+        },
+    );
 }

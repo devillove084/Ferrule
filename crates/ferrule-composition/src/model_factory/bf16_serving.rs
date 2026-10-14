@@ -260,11 +260,12 @@ impl Qwen35NumericBf16MemoryPlan {
             limits.scratch_bytes,
             numeric_precision,
         )?;
-        if let Some(read) = read {
+        let options = if let Some(read) = read {
             expert_read_policy::validate_sources(&resources, &options, read)?;
-            let mut materializer = StateDictMaterializer::new(options.max_parameter_bytes())?;
-            materializer.configure_expert_read_pipeline(read)?;
-        }
+            options.with_expert_read_pipeline(read)?
+        } else {
+            options
+        };
         let planes =
             HybridStateSchema::from_spec(resources.spec(), resources.spec().layers().len())?
                 .kv_planes_with_dtype(
@@ -648,11 +649,6 @@ pub(super) fn build_numeric_bf16(
         };
         if let Some(read) = plan.expert_read_pipeline {
             expert_read_policy::validate_available_host(read)?;
-            // The landed materializer API is not yet an input of the normal
-            // decoder constructor. Never silently drop this admitted policy.
-            return Err(invalid(
-                "expert read pipeline requires model lazy-decoder constructor integration; no synchronous fallback",
-            ));
         }
         let device = HybridCudaDevice::new_on_device(0, plan.budget)?;
         if device.operators().memory_info()?.0 < plan.total_device_bytes {

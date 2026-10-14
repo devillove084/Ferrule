@@ -17,7 +17,9 @@ use std::{
     rc::Rc,
 };
 
-use ferrule_model::transformer::NumericFp8Precision;
+use ferrule_model::transformer::{
+    ExpertReadPipelineOptions, ExpertReadSchedule, NumericFp8Precision,
+};
 
 type Runner = GenericDecoderRunner<HybridCudaDecoder>;
 
@@ -47,6 +49,8 @@ const TILED_FULL40_CAPACITY: Qwen35MoeCapacityLimits = Qwen35MoeCapacityLimits {
 enum Full40TestConfig {
     Historical8,
     StorageMiddle64,
+    StorageMiddle64Blocking,
+    StorageMiddle64Lookahead,
 }
 
 impl Full40TestConfig {
@@ -54,6 +58,8 @@ impl Full40TestConfig {
         match self {
             Self::Historical8 => "historical8",
             Self::StorageMiddle64 => "storage-middle64",
+            Self::StorageMiddle64Blocking => "storage-middle64-blocking",
+            Self::StorageMiddle64Lookahead => "storage-middle64-lookahead",
         }
     }
 
@@ -67,7 +73,9 @@ impl Full40TestConfig {
         };
         match self {
             Self::Historical8 => historical,
-            Self::StorageMiddle64 => {
+            Self::StorageMiddle64
+            | Self::StorageMiddle64Blocking
+            | Self::StorageMiddle64Lookahead => {
                 assert_eq!(precision, NumericFp8Precision::Bf16ModelMixedF32Accumulate);
                 Qwen35MoeCapacityLimits {
                     max_experts: 64,
@@ -82,7 +90,9 @@ impl Full40TestConfig {
             max_active_sequences: 2,
             max_decode_batch: match self {
                 Self::Historical8 => 1,
-                Self::StorageMiddle64 => 2,
+                Self::StorageMiddle64
+                | Self::StorageMiddle64Blocking
+                | Self::StorageMiddle64Lookahead => 2,
             },
             max_batch_tokens: 8,
             prefill_chunk_size: 8,
@@ -94,12 +104,31 @@ impl Full40TestConfig {
         }
     }
 
+    fn expert_read_pipeline(self) -> Option<ExpertReadPipelineOptions> {
+        let schedule = match self {
+            Self::Historical8 | Self::StorageMiddle64 => return None,
+            Self::StorageMiddle64Blocking => ExpertReadSchedule::Blocking,
+            Self::StorageMiddle64Lookahead => ExpertReadSchedule::Lookahead,
+        };
+        Some(ExpertReadPipelineOptions {
+            schedule,
+            max_host_bytes: 64 << 20,
+            max_metadata_bytes: 8 << 20,
+            worker_stack_bytes: 2 << 20,
+        })
+    }
+
     fn manifest(self, precision: NumericFp8Precision) -> Value {
         let options = full40_options(self, precision);
-        json!({"name":self.name(),"capacity_and_options":full40_options_manifest(&options),
+        let mut manifest = json!({"name":self.name(),"capacity_and_options":full40_options_manifest(&options),
             "cache_bytes_include_scratch":true,"model_precision":"Bf16",
             "numeric_precision":format!("{precision:?}"),"storage_policy":"E4M3FnBf16Scales",
-            "serving_model_profile":null,"topology":{"pp":1,"tp":1,"ep":1}})
+            "serving_model_profile":null,"topology":{"pp":1,"tp":1,"ep":1}});
+        // Disabled receipts retain their historical manifest identity.
+        if self.expert_read_pipeline().is_some() {
+            manifest["expert_read_pipeline"] = expert_read_manifest(self.expert_read_pipeline());
+        }
+        manifest
     }
 
     fn assert_options(self, options: &ModelFactoryOptions, precision: NumericFp8Precision) {
@@ -116,6 +145,14 @@ impl Full40TestConfig {
         assert_eq!(options.moe_hotset_experts, 0);
         assert!(options.numeric_fp8_profile.is_none());
     }
+}
+
+fn expert_read_manifest(read: Option<ExpertReadPipelineOptions>) -> Value {
+    read.map_or(Value::Null, |read| {
+        json!({"schedule":format!("{:?}",read.schedule),"max_host_bytes":read.max_host_bytes,
+            "max_metadata_bytes":read.max_metadata_bytes,"worker_stack_bytes":read.worker_stack_bytes,
+            "metadata_and_stack_included_in_host_cap":true,"device_budget_separate":true})
+    })
 }
 
 fn full40_options(
@@ -201,6 +238,17 @@ fn full40_effective_config(
         host.mode,
         ferrule_model::transformer::host_experts::ExpertPrewarmMode::Lazy
     );
+    let requested_read = test_config.expert_read_pipeline();
+    let effective_read = plan.expert_read_pipeline_options();
+    assert_eq!(effective_read, requested_read);
+    let memory = plan.numeric_bf16_memory_plan().unwrap().unwrap();
+    assert_eq!(memory.expert_read_pipeline_options(), requested_read);
+    assert_eq!(
+        memory.runner_options().expert_read_pipeline_options(),
+        requested_read
+    );
+    assert!(memory.resources().host_experts().is_none());
+    let admitted_device_bytes = memory.total_device_bytes();
     let topology = plan.topology_placement();
     assert_eq!(
         [
@@ -215,6 +263,10 @@ fn full40_effective_config(
     );
     json!({"assertions_passed":true,"requested":full40_options_manifest(requested),
         "effective":full40_options_manifest(&effective),"backend_profile":plan.backend_profile(),
+        "requested_expert_read_pipeline":expert_read_manifest(requested_read),
+        "effective_expert_read_pipeline":expert_read_manifest(effective_read),
+        "admitted_device_bytes":admitted_device_bytes,
+        "combined_host_and_device_cap_bytes":test_config.capacity(precision).device_bytes as u64 + requested_read.map_or(0, |read| read.max_host_bytes),
         "factory_entry":"ResidentModelPlanner::prepare_numeric_fp8_bf16_serving_with_precision",
         "source_lowering":{"model_precision":"Bf16","storage_policy":"E4M3FnBf16Scales",
             "numeric_precision":format!("{precision:?}"),"kv_execution_policy":"Resident",
@@ -263,6 +315,60 @@ fn full40_frozen_profiles_preserve_historical8_and_storage_middle64() {
         assert_eq!(values[name].as_u64(), Some(expected), "{name}");
     }
     assert_eq!(values["scheduler"]["max_decode_batch"], 2);
+}
+
+#[test]
+fn full40_enabled_storage_middle64_schedules_freeze_same_host_and_device_budgets() {
+    let precision = NumericFp8Precision::Bf16ModelMixedF32Accumulate;
+    let legacy = Full40TestConfig::StorageMiddle64;
+    assert_eq!(Full40TestConfig::Historical8.expert_read_pipeline(), None);
+    assert_eq!(legacy.expert_read_pipeline(), None);
+    assert!(
+        legacy
+            .manifest(precision)
+            .get("expert_read_pipeline")
+            .is_none()
+    );
+    for (config, schedule) in [
+        (
+            Full40TestConfig::StorageMiddle64Blocking,
+            ExpertReadSchedule::Blocking,
+        ),
+        (
+            Full40TestConfig::StorageMiddle64Lookahead,
+            ExpertReadSchedule::Lookahead,
+        ),
+    ] {
+        let read = config.expert_read_pipeline().unwrap();
+        read.validate().unwrap();
+        assert_eq!(
+            read,
+            ExpertReadPipelineOptions {
+                schedule,
+                max_host_bytes: 64 << 20,
+                max_metadata_bytes: 8 << 20,
+                worker_stack_bytes: 2 << 20,
+            }
+        );
+        assert_eq!(config.capacity(precision), legacy.capacity(precision));
+        assert_eq!(config.scheduler(), legacy.scheduler());
+        assert_eq!(
+            config.manifest(precision)["capacity_and_options"],
+            legacy.manifest(precision)["capacity_and_options"]
+        );
+        assert_eq!(
+            config.manifest(precision)["expert_read_pipeline"],
+            expert_read_manifest(Some(read))
+        );
+        assert_eq!(
+            read.max_host_bytes - read.max_metadata_bytes - read.worker_stack_bytes as u64,
+            54 << 20
+        );
+        assert_eq!(
+            config.capacity(precision).device_bytes as u64 + read.max_host_bytes,
+            7_583_301_632
+        );
+    }
 }
 
 #[test]
@@ -654,6 +760,28 @@ fn numeric_bf16_mixed_storage_middle64_public_factory_full40_logits_routes_state
     );
 }
 
+#[test]
+#[ignore = "sole GPU owner; enabled Blocking host reads; unchanged storage-middle64 full40 reference/tolerances"]
+fn numeric_bf16_mixed_storage_middle64_blocking_public_factory_full40_logits_routes_states_match_profile_reference()
+ {
+    full40_run(
+        Full40TestConfig::StorageMiddle64Blocking,
+        NumericFp8Precision::Bf16ModelMixedF32Accumulate,
+        None,
+    );
+}
+
+#[test]
+#[ignore = "sole GPU owner; enabled Lookahead host reads; unchanged storage-middle64 full40 reference/tolerances"]
+fn numeric_bf16_mixed_storage_middle64_lookahead_public_factory_full40_logits_routes_states_match_profile_reference()
+ {
+    full40_run(
+        Full40TestConfig::StorageMiddle64Lookahead,
+        NumericFp8Precision::Bf16ModelMixedF32Accumulate,
+        None,
+    );
+}
+
 fn prepare_full40(
     model: &std::path::Path,
     precision: NumericFp8Precision,
@@ -675,6 +803,7 @@ fn prepare_full40_with_config(
             None,
             options,
             ServingModelOptions {
+                expert_read_pipeline: test_config.expert_read_pipeline(),
                 model_precision: Some(ModelPrecision::Bf16),
                 max_tensor_mebibytes: Some(1024),
                 ..Default::default()
@@ -860,6 +989,7 @@ fn full40_run(
     crate::model_factory::bf16_serving::NUMERIC_BF16_TEST_RUNNER.with(|slot| {
         assert!(slot.borrow().is_none());
         *slot.borrow_mut() = Some(Box::new(move |runner| {
+            assert_eq!(runner.forward_executor().module().expert_read_pipeline_options(), test_config.expert_read_pipeline());
             assert!(
                 runner
                     .forward_executor()

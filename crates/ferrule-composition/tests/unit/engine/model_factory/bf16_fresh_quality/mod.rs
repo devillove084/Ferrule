@@ -40,6 +40,30 @@ fn mixed_storage_middle64_fresh_quality_cold_owner_restart() {
     run(true, Full40TestConfig::StorageMiddle64);
 }
 
+#[test]
+#[ignore = "sole GPU owner; enabled Blocking host reads; unchanged three-prompt storage-middle64 fresh reference"]
+fn mixed_storage_middle64_blocking_fresh_quality_retained_generation() {
+    run(false, Full40TestConfig::StorageMiddle64Blocking);
+}
+
+#[test]
+#[ignore = "sole GPU owner; enabled Lookahead host reads; unchanged three-prompt storage-middle64 fresh reference"]
+fn mixed_storage_middle64_lookahead_fresh_quality_retained_generation() {
+    run(false, Full40TestConfig::StorageMiddle64Lookahead);
+}
+
+#[test]
+#[ignore = "sole GPU owner; cold Blocking owner; requires primary pass with identical frozen config/reference"]
+fn mixed_storage_middle64_blocking_fresh_quality_cold_owner_restart() {
+    run(true, Full40TestConfig::StorageMiddle64Blocking);
+}
+
+#[test]
+#[ignore = "sole GPU owner; cold Lookahead owner; requires primary pass with identical frozen config/reference"]
+fn mixed_storage_middle64_lookahead_fresh_quality_cold_owner_restart() {
+    run(true, Full40TestConfig::StorageMiddle64Lookahead);
+}
+
 fn assert_cold_primary(
     prior: &Value,
     test_config: Full40TestConfig,
@@ -52,7 +76,7 @@ fn assert_cold_primary(
     );
     // Historical receipts predate explicit config fields and remain historical.
     // They cannot admit a new storage-middle64 cold-owner trial.
-    if test_config == Full40TestConfig::StorageMiddle64 {
+    if test_config != Full40TestConfig::Historical8 {
         assert_eq!(prior["complete"], true);
         assert_eq!(prior["cold_owner_restart"], false);
         assert_eq!(prior["test_config"], test_config.manifest(precision));
@@ -86,11 +110,50 @@ fn storage_middle64_cold_primary_requires_same_frozen_profile_and_reference() {
     }
 }
 
+#[test]
+fn enabled_storage_middle64_cold_primary_rejects_schedule_and_host_budget_drift() {
+    let precision = NumericFp8Precision::Bf16ModelMixedF32Accumulate;
+    for config in [
+        Full40TestConfig::StorageMiddle64Blocking,
+        Full40TestConfig::StorageMiddle64Lookahead,
+    ] {
+        let prior = json!({"passed":true,"complete":true,"cold_owner_restart":false,
+            "test_config":config.manifest(precision),"oracle_manifest_sha256":"test-pin",
+            "ordinary_no_observer_claim":false});
+        assert_cold_primary(&prior, config, precision, "test-pin");
+        for field in [
+            "schedule",
+            "max_host_bytes",
+            "max_metadata_bytes",
+            "worker_stack_bytes",
+        ] {
+            let mut bad = prior.clone();
+            bad["test_config"]["expert_read_pipeline"][field] = Value::Null;
+            assert!(
+                std::panic::catch_unwind(|| assert_cold_primary(
+                    &bad, config, precision, "test-pin"
+                ))
+                .is_err(),
+                "{field}"
+            );
+        }
+        let other = if config == Full40TestConfig::StorageMiddle64Blocking {
+            Full40TestConfig::StorageMiddle64Lookahead
+        } else {
+            Full40TestConfig::StorageMiddle64Blocking
+        };
+        assert!(
+            std::panic::catch_unwind(|| assert_cold_primary(&prior, other, precision, "test-pin"))
+                .is_err()
+        );
+    }
+}
+
 fn run(cold: bool, test_config: Full40TestConfig) {
     let precision = NumericFp8Precision::Bf16ModelMixedF32Accumulate;
     let config_manifest = test_config.manifest(precision);
     let limits = test_config.capacity(precision);
-    if test_config == Full40TestConfig::StorageMiddle64 {
+    if test_config != Full40TestConfig::Historical8 {
         assert_eq!(
             std::env::var("FERRULE_NUMERIC_BF16_FACTORY_GPU").as_deref(),
             Ok("1")
@@ -189,6 +252,7 @@ fn run(cold: bool, test_config: Full40TestConfig) {
     crate::model_factory::bf16_serving::NUMERIC_BF16_TEST_RUNNER.with(|slot| {
         assert!(slot.borrow().is_none());
         *slot.borrow_mut()=Some(Box::new(move |runner| {
+            assert_eq!(runner.forward_executor().module().expert_read_pipeline_options(), test_config.expert_read_pipeline());
             assert_eq!(runner.forward_executor().module().numeric_fp8_precision(), Some(precision));
             assert!(runner.forward_executor().module().numeric_bf16_profile().is_some());
             let routes=Rc::new(RefCell::new(BTreeMap::new()));let capture=Rc::clone(&routes);
