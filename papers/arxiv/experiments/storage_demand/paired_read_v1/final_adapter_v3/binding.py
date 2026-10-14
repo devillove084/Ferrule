@@ -2,6 +2,7 @@
 """Append-only binding for the reviewed immutable corrected-cut final layout."""
 from __future__ import annotations
 
+import argparse
 import importlib.util
 import json
 from pathlib import Path
@@ -16,7 +17,7 @@ from runnerhelpers.evidence_v2 import ct, require
 from runnerhelpers.build_receipts_v1 import immutable
 
 ADAPTER = 'ferrule.storage-demand.final-layout-reviewed-cli.v3'
-OUT = HERE / 'bindings-final-v3-20261015-01'
+OUT = HERE / 'bindings-final-v3-20261015-02'
 BINDING_PATH = OUT / 'actual-binding-v3.json'
 REVIEW_PATH = OUT / 'actual-build-review-v3.json'
 EXECUTION_PATH = OUT / 'execution-sealed-v3.json'
@@ -179,7 +180,35 @@ def execution_value():
 _base.review, _base.binding_value, _base.execution_value = review, binding_value, execution_value
 validate_binding, validate_execution = _base.validate_binding, _base.validate_execution
 raw_options, case_for_mode = original.raw_options, original.case_for_mode
-main = _base.main
+def seal_to(path, value):
+    path = Path(path)
+    require(path in (BINDING_PATH, EXECUTION_PATH) and path.parent == OUT
+            and not OUT.is_symlink() and OUT.resolve() == OUT and not path.exists(),
+            'new exclusive final-layout binding output required')
+    ct.write(path, dict(value, digest=ct.digest(value)))
+
+
+def main(argv=None):
+    ct.require_cpu_python()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('mode', choices=('review-and-bind', 'seal-execution', 'check'))
+    parser.add_argument('--qualification', type=Path)
+    args = parser.parse_args(argv)
+    if args.mode == 'review-and-bind':
+        require(args.qualification is not None and not OUT.is_symlink()
+                and OUT.resolve() == OUT and OUT.is_dir(), 'explicit candidate/output directory required')
+        require(not any(p.exists() for p in (REVIEW_PATH, BINDING_PATH, EXECUTION_PATH)),
+                'final-layout review/binding exclusive; never replace')
+        record = review(args.qualification)
+        ct.write(REVIEW_PATH, record)
+        seal_to(BINDING_PATH, binding_value(record))
+    elif args.mode == 'seal-execution':
+        seal_to(EXECUTION_PATH, execution_value())
+    else:
+        validate_execution()
+    print(json.dumps(dict(status=args.mode + '_complete', protocol_id=plan.ID,
+                          gpu_workloads=0, cli_serving_accepted=False)))
+    return 0
 
 if __name__ == '__main__':
     raise SystemExit(main())

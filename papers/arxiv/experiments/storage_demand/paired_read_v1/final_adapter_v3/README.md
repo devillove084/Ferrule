@@ -23,7 +23,7 @@ there is no extension-based exemption or unclassified extra allowance.
 old fixture failures. It binds the real `staged-final/cli` and final runtime pin
 manifest. It never claims CLI mathematical equivalence or a clean full CPU
 suite. New private bindings are written exclusively under
-`bindings-final-v3-20261015-01/`; raw receipts and credentials are not committed.
+`bindings-final-v3-20261015-02/`; raw receipts and credentials are not committed.
 All five adapter source/test/document files are pinned by review and execution.
 
 Use the repository's CPU-only Python 3.12 with `-S -B`:
@@ -46,3 +46,8 @@ foreign signals, warmup/probe workloads, cache flushing, or runtime NVTX.
 Physical post-drop release remains unobserved, distinct from retained observed
 closure and runtime Unknown. NFS counters are timed shared-client coverage,
 not backend disk bytes or workload-exclusive attribution.
+
+The earlier `bindings-final-v3-20261015-01/actual-build-review-v3.json` is
+preserved as a pre-binding attempt: the historical root-only seal writer
+rejected its child-directory destination. No binding or GPU job was issued.
+The adapter now uses its own exact-destination exclusive seal writer.

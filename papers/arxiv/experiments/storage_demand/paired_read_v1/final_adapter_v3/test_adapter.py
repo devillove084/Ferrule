@@ -2,6 +2,7 @@
 import copy
 from pathlib import Path
 import sys
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -63,6 +64,18 @@ class PolicyTests(unittest.TestCase):
         self.assertFalse(b.ct.successful_process(dict(returncode=0, timed_out=False)))
         self.assertFalse(b.ct.successful_process(dict(returncode=0, timed_out=False,
             custody=dict(echild=True), descendant_custody='proven_drained')))
+
+    def test_seal_writer_is_exclusive_and_exact_destination_only(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            path = root / 'binding.json'
+            with patch.object(b, 'OUT', root), patch.object(b, 'BINDING_PATH', path):
+                b.seal_to(path, dict(schema='cpu-test'))
+                self.assertEqual(b.ct.load(path)['digest'], b.ct.digest(dict(schema='cpu-test')))
+                with self.assertRaises(ValueError):
+                    b.seal_to(path, dict(schema='replacement'))
+                with self.assertRaises(ValueError):
+                    b.seal_to(root / 'other.json', {})
 
     def test_new_globals_do_not_relabel_historical_binding(self):
         self.assertNotEqual(b.ADAPTER, old.ADAPTER)
