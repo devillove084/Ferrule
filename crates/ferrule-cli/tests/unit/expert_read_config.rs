@@ -303,6 +303,53 @@ fn storage_middle64_args(model: &str, schedule: Option<&str>) -> ServeArgs {
 }
 
 #[test]
+fn expert_read_v3_study_cohort_is_explicit_without_changing_cli_defaults() {
+    let defaults = serve(&["ferrule", "serve", "not-opened"]);
+    let scheduler = model_factory_options(&defaults).unwrap().scheduler_config;
+    assert_eq!(defaults.decode_cohort_target, 4);
+    assert_eq!(defaults.decode_cohort_max_deferrals, 3);
+    assert_eq!(scheduler.decode_cohort_target, 4);
+    assert_eq!(scheduler.decode_cohort_max_deferrals, 3);
+    for schedule in [None, Some("blocking"), Some("lookahead")] {
+        let args = storage_middle64_args("not-opened", schedule);
+        let scheduler = model_factory_options(&args).unwrap().scheduler_config;
+        assert_eq!(args.decode_cohort_target, 1);
+        assert_eq!(args.decode_cohort_max_deferrals, 0);
+        assert_eq!(scheduler.decode_cohort_target, 1);
+        assert_eq!(scheduler.decode_cohort_max_deferrals, 0);
+    }
+}
+
+#[test]
+fn expert_read_cli_resource_report_rejects_stale_prepared_sources_before_owner() {
+    fixture::with_workspace(
+        concat!(
+            module_path!(),
+            "::expert_read_cli_resource_report_rejects_stale_prepared_sources_before_owner"
+        ),
+        || {
+            for schedule in ["blocking", "lookahead"] {
+                for name in ["config.json", "model.safetensors"] {
+                    let f = fixture::Fixture::new();
+                    let args =
+                        storage_middle64_args(f.dir.path().to_str().unwrap(), Some(schedule));
+                    let plan = prepare_model(&args).unwrap();
+                    assert!(serving_resource_report(&plan).unwrap().is_none());
+                    let path = f.dir.path().join(name);
+                    let file = std::fs::OpenOptions::new().write(true).open(path).unwrap();
+                    file.set_len(file.metadata().unwrap().len() + 1).unwrap();
+                    let error = serving_resource_report(&plan).unwrap_err();
+                    assert!(
+                        error.to_string().contains("stale"),
+                        "{schedule} {name}: {error}"
+                    );
+                }
+            }
+        },
+    );
+}
+
+#[test]
 fn expert_read_cli_lowering_freezes_both_schedules_on_existing_storage_middle64_owner() {
     fixture::with_workspace(
         concat!(
@@ -315,6 +362,9 @@ fn expert_read_cli_lowering_freezes_both_schedules_on_existing_storage_middle64_
             let base_args = storage_middle64_args(model, None);
             let base = prepare_model(&base_args).unwrap();
             let base_memory = base.numeric_bf16_memory_plan().unwrap().unwrap();
+            assert!(base.mixed_tp2_cache_requirements().unwrap().is_none());
+            assert!(base.serving_resource_requirements().unwrap().is_none());
+            assert!(serving_resource_report(&base).unwrap().is_none());
             assert_eq!(base.expert_read_pipeline_options(), None);
             assert_eq!(
                 base_memory.runner_options().expert_read_pipeline_options(),
@@ -367,6 +417,9 @@ fn expert_read_cli_lowering_freezes_both_schedules_on_existing_storage_middle64_
                 );
                 let plan = prepare_model(&args).unwrap();
                 let memory = plan.numeric_bf16_memory_plan().unwrap().unwrap();
+                assert!(plan.mixed_tp2_cache_requirements().unwrap().is_none());
+                assert!(plan.serving_resource_requirements().unwrap().is_none());
+                assert!(serving_resource_report(&plan).unwrap().is_none());
                 assert_eq!(
                     plan.selected_implementation().kind,
                     SelectedImplementationKind::Resident
@@ -392,10 +445,10 @@ fn expert_read_cli_lowering_freezes_both_schedules_on_existing_storage_middle64_
                     plan.effective_options().scheduler_config,
                     base.effective_options().scheduler_config
                 );
-                assert_eq!(
-                    plan.effective_options().scheduler_config.max_decode_batch,
-                    2
-                );
+                let scheduler = plan.effective_options().scheduler_config;
+                assert_eq!(scheduler.max_decode_batch, 2);
+                assert_eq!(scheduler.decode_cohort_target, 1);
+                assert_eq!(scheduler.decode_cohort_max_deferrals, 0);
                 assert_eq!(
                     read.max_host_bytes - read.max_metadata_bytes - read.worker_stack_bytes as u64,
                     54 << 20

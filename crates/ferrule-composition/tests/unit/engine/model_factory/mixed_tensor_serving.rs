@@ -338,6 +338,10 @@ fn mixed_tp2_prepared_once_accessors_and_consuming_build() {
             let preview_clock = std::time::Instant::now();
             let first = plan.mixed_tp2_cache_requirements().unwrap().unwrap();
             assert_eq!(first, plan.mixed_tp2_cache_requirements().unwrap().unwrap());
+            assert_eq!(
+                first,
+                plan.serving_resource_requirements().unwrap().unwrap()
+            );
             let preview_elapsed = preview_clock.elapsed();
             assert_eq!(ADMISSION_CONSTRUCTIONS.with(|n| n.get()), 1);
             let owner_clock = std::time::Instant::now();
@@ -424,15 +428,20 @@ fn mixed_tp2_prepared_rejects_final_request_changes() {
         || {
             let f = fixture::Fixture::new();
             let config = AutoConfig::from_pretrained(f.dir.path()).unwrap();
-            let plan = ResidentModelPlanner
+            let mut plan = ResidentModelPlanner
                 .prepare_serving(&config, BackendSelection::Cuda, None, options(), serving())
                 .unwrap();
-            let p = prepared(&plan.prepared_source_plan).unwrap();
+            let source = plan.prepared_source_plan.clone();
+            let p = prepared(&source).unwrap();
             macro_rules! reject {
                 ($change:expr) => {{
                     let mut request = plan.request.clone();
                     ($change)(&mut request);
                     assert!(p.validate(&request).is_err());
+                    let frozen = std::mem::replace(&mut plan.request, request.clone());
+                    assert!(plan.serving_resource_requirements().is_err());
+                    assert!(plan.mixed_tp2_cache_requirements().is_err());
+                    plan.request = frozen;
                     let build = ModelBuildRequest {
                         resolved: request,
                         prepared_source_plan: plan.prepared_source_plan.clone(),
@@ -442,6 +451,11 @@ fn mixed_tp2_prepared_rejects_final_request_changes() {
             }
             reject!(|r: &mut ResolvedModelRequest| r.model_path = f.dir.path().join("other"));
             reject!(|r: &mut ResolvedModelRequest| r.max_layers -= 1);
+            reject!(|r: &mut ResolvedModelRequest| r.pipeline = None);
+            reject!(
+                |r: &mut ResolvedModelRequest| r.execution.serving_resource_requirements =
+                    no_serving_resource_requirements
+            );
             reject!(|r: &mut ResolvedModelRequest| r.max_tensor_bytes += 1);
             reject!(|r: &mut ResolvedModelRequest| r.kv_cache_bytes = Some(32 << 20));
             reject!(|r: &mut ResolvedModelRequest| r.driver_config.ctx_size += 1);
@@ -520,6 +534,7 @@ fn mixed_tp2_prepared_rejects_source_replacement_and_metadata_mutation() {
                         assert_ne!(original.ino(), replaced.ino());
                     }
                 }
+                assert!(plan.serving_resource_requirements().is_err());
                 assert!(plan.mixed_tp2_cache_requirements().is_err());
                 assert!(
                     plan.build_with(|r| consume_prepared(&r).map(|_| ()))
@@ -624,6 +639,7 @@ fn mixed_tp2_prepared_rejects_weight_or_scale_snapshot_mutation() {
                 });
                 let file = std::fs::OpenOptions::new().write(true).open(path).unwrap();
                 file.set_len(file.metadata().unwrap().len() + 1).unwrap();
+                assert!(plan.serving_resource_requirements().is_err());
                 assert!(plan.mixed_tp2_cache_requirements().is_err());
                 assert!(
                     plan.build_with(|r| consume_prepared(&r).map(|_| ()))

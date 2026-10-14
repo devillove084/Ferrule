@@ -162,6 +162,15 @@ pub(super) fn no_provider_admission(_: &mut ResidentModelBuildPlan) -> Result<()
     Ok(())
 }
 
+pub(super) fn no_serving_resource_requirements(
+    plan: &ResidentModelBuildPlan,
+) -> Result<Option<Vec<ServingResourceRequirements>>> {
+    if let Some(prepared) = &plan.prepared_source_plan {
+        prepared.validate(&plan.request)?;
+    }
+    Ok(None)
+}
+
 pub(super) fn common_serving_options(
     _: &ModelFamily,
     serving: &ServingModelOptions,
@@ -539,6 +548,10 @@ pub(super) fn same_final_request(
             right.execution.construction.builder(),
         )
         && execution.construction.kind() == right.execution.construction.kind()
+        && std::ptr::fn_addr_eq(
+            execution.serving_resource_requirements,
+            right.execution.serving_resource_requirements,
+        )
         && execution.expert_read_pipeline == right.execution.expert_read_pipeline
         && execution.numeric_bf16_precision == right.execution.numeric_bf16_precision
         && execution.numeric_profile == right.execution.numeric_profile

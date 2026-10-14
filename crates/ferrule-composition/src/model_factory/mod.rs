@@ -600,6 +600,8 @@ struct ResolvedExecution {
     adjustment_reason: &'static str,
     kv_execution_policy: ferrule_runtime::engine::KvExecutionPolicy,
     construction: ResolvedConstruction,
+    serving_resource_requirements:
+        fn(&ResidentModelBuildPlan) -> Result<Option<Vec<ServingResourceRequirements>>>,
     support: ModelSupport,
 }
 
@@ -622,6 +624,7 @@ impl ResolvedExecution {
             adjustment_reason: "selected execution policy",
             kv_execution_policy: ferrule_runtime::engine::KvExecutionPolicy::Resident,
             construction,
+            serving_resource_requirements: no_serving_resource_requirements,
             support: ModelSupport {
                 required_feature: cuda.then_some("cuda"),
                 cuda_feature_enabled: cfg!(feature = "cuda"),
@@ -785,6 +788,21 @@ pub struct ResidentModelBuildPlan {
     provider_adjustments: AdjustmentReport,
 }
 
+/// Per-owner complete source-derived device/workspace/cache admission.
+/// These are requirements and ceilings, not reservations or sampled free VRAM.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub struct ServingResourceRequirements {
+    pub device: usize,
+    pub cache_enabled: bool,
+    pub cache_capacity_grants: usize,
+    pub pinned_grants: usize,
+    pub routed_working_set_grants: usize,
+    pub required_workspace_bytes: u64,
+    pub workspace_ceiling_bytes: usize,
+    pub required_device_bytes: u64,
+    pub device_ceiling_bytes: usize,
+}
+
 /// Model-neutral metadata for one prepared resident engine build.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ResidentModelBuildObservability {
@@ -801,6 +819,15 @@ pub struct ResidentModelBuildObservability {
 }
 
 impl ResidentModelBuildPlan {
+    /// Query the selected plan's complete owner ledger without constructing a model.
+    /// `None` means this capability is not applicable, not that source validation
+    /// or the selected implementation's other memory admission can be skipped.
+    pub fn serving_resource_requirements(
+        &self,
+    ) -> Result<Option<Vec<ServingResourceRequirements>>> {
+        (self.request.execution.serving_resource_requirements)(self)
+    }
+
     pub fn expert_read_pipeline_options(
         &self,
     ) -> Option<ferrule_model::transformer::ExpertReadPipelineOptions> {

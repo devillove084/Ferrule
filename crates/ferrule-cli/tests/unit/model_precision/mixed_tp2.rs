@@ -64,7 +64,11 @@ fn mixed_tp2_cli_accepts_authorized_catalog_plan_without_starting_server() {
                     .workspace_bytes,
                 4 << 30
             );
-            let cache = plan.mixed_tp2_cache_requirements().unwrap().unwrap();
+            let cache = plan.serving_resource_requirements().unwrap().unwrap();
+            assert_eq!(cache, plan.mixed_tp2_cache_requirements().unwrap().unwrap());
+            let report = serving_resource_report(&plan).unwrap().unwrap();
+            assert!(report.contains("complete_owner_ledger="));
+            assert!(report.contains("not a VRAM reservation"));
             assert_eq!(cache.len(), 2);
             for owner in cache {
                 assert!(owner.cache_enabled);
@@ -73,6 +77,7 @@ fn mixed_tp2_cli_accepts_authorized_catalog_plan_without_starting_server() {
                 assert!(owner.required_workspace_bytes > 3 << 30);
                 assert!(owner.required_workspace_bytes <= owner.workspace_ceiling_bytes as u64);
                 assert!(owner.required_device_bytes <= 22 << 30);
+                assert_eq!(owner.device_ceiling_bytes, 22 << 30);
             }
             assert_eq!(
                 plan.qwen35_moe_capacity_limits()

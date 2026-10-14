@@ -139,6 +139,8 @@ fn expert_read_both_schedules_reuse_admission_and_preserve_device_ledger() {
     let f = fixture::Fixture::new();
     let disabled = prepare(&f, None).unwrap();
     assert!(disabled.prepared_source_plan.is_none());
+    assert!(disabled.serving_resource_requirements().unwrap().is_none());
+    assert!(disabled.mixed_tp2_cache_requirements().unwrap().is_none());
     let base = disabled.numeric_bf16_memory_plan().unwrap().unwrap();
     assert_eq!(base.expert_read_pipeline_options(), None);
     assert_eq!(base.runner_options().expert_read_pipeline_options(), None);
@@ -146,6 +148,9 @@ fn expert_read_both_schedules_reuse_admission_and_preserve_device_ledger() {
         let plan = prepare(&f, Some(read(schedule))).unwrap();
         assert_eq!(plan.expert_read_pipeline_options(), Some(read(schedule)));
         let source = plan.prepared_source_plan.as_ref().unwrap().clone();
+        assert!(plan.serving_resource_requirements().unwrap().is_none());
+        assert!(plan.mixed_tp2_cache_requirements().unwrap().is_none());
+        assert!(plan.mixed_tp2_device_requirements().unwrap().is_none());
         let admitted = plan.numeric_bf16_memory_plan().unwrap().unwrap();
         assert_eq!(
             admitted.expert_read_pipeline_options(),
@@ -182,6 +187,64 @@ fn expert_read_both_schedules_reuse_admission_and_preserve_device_ledger() {
         })
         .unwrap();
     }
+}
+
+#[test]
+fn expert_read_resource_queries_reject_missing_tp2_and_crossed_source_payloads() {
+    fixture::with_workspace(
+        concat!(
+            module_path!(),
+            "::expert_read_resource_queries_reject_missing_tp2_and_crossed_source_payloads"
+        ),
+        || {
+            let f = fixture::Fixture::new();
+            let mut tp1 = prepare(&f, Some(read(ExpertReadSchedule::Lookahead))).unwrap();
+            let mut tp2_options = options();
+            tp2_options.max_layers = None;
+            tp2_options.qwen35_moe_capacity = None;
+            tp2_options.scheduler_config.prefill_chunk_size = 8;
+            tp2_options.kv_cache_mebibytes = Some(16);
+            let mut tp2 = ResidentModelPlanner
+                .prepare_serving(
+                    &AutoConfig::from_pretrained(f.dir.path()).unwrap(),
+                    BackendSelection::Cuda,
+                    None,
+                    tp2_options,
+                    ServingModelOptions {
+                        model_profile: Some(ServingModelProfile::Qwen35MixedBf16),
+                        parallel: Some(PipelineBuildOptions {
+                            parallelism: ferrule_common::ParallelismPlan {
+                                tensor_parallel: 2,
+                                ..Default::default()
+                            },
+                            devices: Some(vec![3, 1]),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+            assert!(tp1.serving_resource_requirements().unwrap().is_none());
+            assert_eq!(
+                tp2.serving_resource_requirements().unwrap().unwrap().len(),
+                2
+            );
+            let source = tp2.prepared_source_plan.take();
+            assert!(tp2.serving_resource_requirements().is_err());
+            assert!(tp2.mixed_tp2_cache_requirements().is_err());
+            tp2.prepared_source_plan = source;
+            std::mem::swap(&mut tp1.prepared_source_plan, &mut tp2.prepared_source_plan);
+            for mut plan in [tp1, tp2] {
+                assert!(plan.serving_resource_requirements().is_err());
+                assert!(plan.mixed_tp2_cache_requirements().is_err());
+                assert!(plan.refresh_facts().is_err());
+                assert!(
+                    plan.build_with(|_| -> Result<()> { panic!("owner must not run") })
+                        .is_err()
+                );
+            }
+        },
+    );
 }
 
 #[test]
@@ -233,6 +296,8 @@ fn expert_read_readonly_budget_and_schedule_drift_invalidates_prepared_admission
                 .to_string()
                 .contains("changed")
         );
+        assert!(plan.serving_resource_requirements().is_err());
+        assert!(plan.mixed_tp2_cache_requirements().is_err());
         assert!(
             plan.prepared_source_plan
                 .as_ref()
@@ -263,6 +328,8 @@ fn expert_read_metadata_and_payload_snapshot_drift_reject_before_owner() {
     let mut changed = original.clone();
     changed.push(b' ');
     std::fs::write(&config, &changed).unwrap();
+    assert!(plan.serving_resource_requirements().is_err());
+    assert!(plan.mixed_tp2_cache_requirements().is_err());
     assert!(
         plan.build_with(|_| -> Result<()> { panic!("owner must not run") })
             .unwrap_err()
@@ -279,6 +346,8 @@ fn expert_read_metadata_and_payload_snapshot_drift_reject_before_owner() {
         .unwrap()
         .set_len(len + 1)
         .unwrap();
+    assert!(plan.serving_resource_requirements().is_err());
+    assert!(plan.mixed_tp2_cache_requirements().is_err());
     assert!(
         plan.build_with(|_| -> Result<()> { panic!("owner must not run") })
             .unwrap_err()

@@ -35,14 +35,8 @@ pub fn cmd_serve(args: ServeArgs) -> anyhow::Result<()> {
             budget.model_budget(),
         );
     }
-    if let Some(required) = prepared.mixed_tp2_cache_requirements()? {
-        eprintln!(
-            "[Mixed TP2 device budget] cache_enabled=true decoded_cache_and_full_ledger={required:?}; ceiling_bytes_per_card={}; resident FP8 local expert shards plus bounded decoded BF16 cache, no host offload; BF16 activation/KV/conv, F32 SSM/accumulation; source-bound claims and live admission remain required; not a VRAM reservation",
-            prepared
-                .qwen35_moe_capacity_limits()?
-                .expect("Mixed capacity")
-                .device_bytes
-        );
+    if let Some(report) = serving_resource_report(&prepared)? {
+        eprintln!("{report}");
     }
     for line in execution_report(&prepared, args.rank_timeout_ms) {
         eprintln!("{line}");
@@ -83,6 +77,14 @@ pub fn cmd_serve(args: ServeArgs) -> anyhow::Result<()> {
         eprintln!("  POST /v1/completions");
         serve_until_signal(address, state, worker, signal).await
     })
+}
+
+fn serving_resource_report(prepared: &ResidentModelBuildPlan) -> anyhow::Result<Option<String>> {
+    Ok(prepared.serving_resource_requirements()?.map(|required| {
+        format!(
+            "[serving device budget] complete_owner_ledger={required:?}; source-bound claims and live admission remain required; not a VRAM reservation"
+        )
+    }))
 }
 
 fn execution_report(prepared: &ResidentModelBuildPlan, rank_timeout_ms: u64) -> Vec<String> {

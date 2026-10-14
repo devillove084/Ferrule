@@ -19,19 +19,8 @@ const DECODED_CACHE_GRANTS: usize = 3 << 30;
 /// Strict Mixed TP2 only; includes the decoded-cache ceiling, unlike TP1.
 pub const MIXED_TP2_DEFAULT_WORKSPACE_BYTES: usize = 4 << 30;
 
-/// Per-owner complete source-derived admission, not a VRAM reservation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
-pub struct MixedTp2CacheRequirements {
-    pub device: usize,
-    pub cache_enabled: bool,
-    pub cache_capacity_grants: usize,
-    pub pinned_grants: usize,
-    pub routed_working_set_grants: usize,
-    pub required_workspace_bytes: u64,
-    pub workspace_ceiling_bytes: usize,
-    pub required_device_bytes: u64,
-    pub device_ceiling_bytes: usize,
-}
+/// Compatibility name for the complete source-derived per-owner ledger.
+pub type MixedTp2CacheRequirements = ServingResourceRequirements;
 const HOST_LIMIT: u64 = 256 << 20;
 const PROFILE: &str = "cuda-qwen35-mixed-bf16-tp2-local-shards-serial";
 
@@ -185,6 +174,7 @@ pub(in crate::model_factory) fn select(request: &SelectionRequest) -> Result<Res
     );
     execution.numeric_bf16_precision = Some(NumericFp8Precision::Bf16ModelMixedF32Accumulate);
     execution.topology_policy = Some(TOPOLOGY);
+    execution.serving_resource_requirements = ResidentModelBuildPlan::mixed_tp2_cache_requirements;
     execution.conversion = PipelineConversion::Frozen(
         "Mixed TP2 topology and precision are frozen by catalog selection",
     );
@@ -272,12 +262,11 @@ impl ResidentModelBuildPlan {
         }))
     }
 
+    /// Compatibility query for Mixed TP2. Other plans validate their own source
+    /// payload and return `None`; prefer `serving_resource_requirements` in callers.
     pub fn mixed_tp2_cache_requirements(&self) -> Result<Option<Vec<MixedTp2CacheRequirements>>> {
         if !is_selected(&self.request) {
-            if self.prepared_source_plan.is_some() {
-                return Err(invalid("prepared source profile changed"));
-            }
-            return Ok(None);
+            return no_serving_resource_requirements(self);
         }
         let prepared = prepared(&self.prepared_source_plan)?;
         prepared.validate(&self.request)?;
