@@ -1,0 +1,42 @@
+{
+  "cargo": {
+    "argv": [
+      "/root/.cargo/bin/cargo",
+      "-V"
+    ],
+    "returncode": 0,
+    "stdout": "cargo 1.99.0-nightly (7c83d4cc0 2026-07-29)\n",
+    "stderr": ""
+  },
+  "rustc": {
+    "argv": [
+      "/root/.rustup/toolchains/nightly-2026-08-01-x86_64-unknown-linux-gnu/bin/rustc",
+      "-vV"
+    ],
+    "returncode": 0,
+    "stdout": "rustc 1.99.0-nightly (ad3d0bc14 2026-07-31)\nbinary: rustc\ncommit-hash: ad3d0bc141a02cf446e384136d250a1f6950fed5\ncommit-date: 2026-07-31\nhost: x86_64-unknown-linux-gnu\nrelease: 1.99.0-nightly\nLLVM version: 22.1.8\n",
+    "stderr": ""
+  },
+  "nvcc": {
+    "argv": [
+      "/home/admin/wxw403883/anaconda3/envs/tao/bin/nvcc",
+      "--version"
+    ],
+    "returncode": 0,
+    "stdout": "nvcc: NVIDIA (R) Cuda compiler driver\nCopyright (c) 2005-2024 NVIDIA Corporation\nBuilt on Tue_Feb_27_16:19:38_PST_2024\nCuda compilation tools, release 12.4, V12.4.99\nBuild cuda_12.4.r12.4/compiler.33961263_0\n",
+    "stderr": ""
+  },
+  "cutlass": {
+    "argv": [
+      "git",
+      "--no-pager",
+      "-C",
+      "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/cutlass",
+      "rev-parse",
+      "HEAD"
+    ],
+    "returncode": 0,
+    "stdout": "e05f953a5b3d38adc240df2ff928e0421c2abba3\n",
+    "stderr": ""
+  }
+}

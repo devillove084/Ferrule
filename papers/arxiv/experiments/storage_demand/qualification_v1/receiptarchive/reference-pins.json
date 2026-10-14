@@ -1,0 +1,32 @@
+{
+  "schema": "ferrule.storage-middle64.reference-pins.v1",
+  "numeric_manifest_sha256": "351495921233e0158eb2a4507c415d173c895a6086d5905b7a72d82de71849f9",
+  "fresh_manifest_sha256": "102c798baeb5200bc8ed8386eabed6146870b3b6da2a90fc6010677041352c7e",
+  "bf16_atol": 0.00025,
+  "bf16_rtol": 0.012,
+  "route_policy": "lower_expert_id",
+  "reference_files": {
+    "/home/admin/luhuanbing.lhb/Ferrule/target/validation/numeric-bf16-gate-20261004-v2/profile-reference/manifest.json": "351495921233e0158eb2a4507c415d173c895a6086d5905b7a72d82de71849f9",
+    "/home/admin/luhuanbing.lhb/Ferrule/target/validation/numeric-bf16-gate-20261004-v2/profile-reference/hello.safetensors": "224217500f282bd3366e5c7743d1aea68499877ca668e3bf344007fd83091274",
+    "/home/admin/luhuanbing.lhb/Ferrule/target/validation/numeric-bf16-gate-20261004-v2/profile-reference/hello.json": "82e31c01dc8820109ed2c3a905127d375ac694805996341f476962b2414b71a1",
+    "/home/admin/luhuanbing.lhb/Ferrule/target/validation/numeric-bf16-gate-20261004-v2/profile-reference/capital.safetensors": "4f0feffe1ae013397406e8a6a01a92aba91fb716fac82ba8e2024be84b23138b",
+    "/home/admin/luhuanbing.lhb/Ferrule/target/validation/numeric-bf16-gate-20261004-v2/profile-reference/capital.json": "01b5b9b393d64e769a3b64f3e4fa216b23595ee774862559f9492ac7fe44389d",
+    "/home/admin/luhuanbing.lhb/Ferrule/target/validation/numeric-bf16-gate-20261004-v2/profile-reference/source-payloads.json": "6b80c0d6d57d5cfb1c07468fa00fdd0e4b4dfc2cadfc1c4a34cc064ae2c7432a",
+    "/home/admin/luhuanbing.lhb/Ferrule/target/validation/numeric-bf16-gate-20261004-v2/profile-reference/loading-semantics.json": "931c7ba585f54d7923e67cf4982ac53879e32427c14d08a81e3ebc20d7774420",
+    "/home/admin/luhuanbing.lhb/Ferrule/target/validation/bf16-fresh-quality-20261007/oracle/manifest.json": "102c798baeb5200bc8ed8386eabed6146870b3b6da2a90fc6010677041352c7e",
+    "/home/admin/luhuanbing.lhb/Ferrule/target/validation/bf16-fresh-quality-20261007/oracle/qa.safetensors": "dd6dd7523e3e453ab56356d538f57c14205562c65af1a07d18f965bd120406c8",
+    "/home/admin/luhuanbing.lhb/Ferrule/target/validation/bf16-fresh-quality-20261007/oracle/qa.json": "188e3f557eaef7576e5b4619a4498abf0715eb2b237c53ab2b3a39d2281d24e7",
+    "/home/admin/luhuanbing.lhb/Ferrule/target/validation/bf16-fresh-quality-20261007/oracle/arithmetic.safetensors": "48d48943cb990f4195f1acb45a243c99871f259dacecd614d392ec72cc01117b",
+    "/home/admin/luhuanbing.lhb/Ferrule/target/validation/bf16-fresh-quality-20261007/oracle/arithmetic.json": "9c97268959e1d12dae5f8a9118934004f1c9bee9a0dc73086ec16c95c154deed",
+    "/home/admin/luhuanbing.lhb/Ferrule/target/validation/bf16-fresh-quality-20261007/oracle/chinese.safetensors": "7b657e73986431a6ed6c313f859fba0e4ff9e2e893103ea8b03b965ba9044608",
+    "/home/admin/luhuanbing.lhb/Ferrule/target/validation/bf16-fresh-quality-20261007/oracle/chinese.json": "8e579b8bafded26b8370279b3687e3109ed5f8bfb65e9a249a4623357c0ee52b",
+    "/home/admin/luhuanbing.lhb/Ferrule/target/validation/bf16-fresh-quality-20261007/oracle/source-payloads.json": "dfd08736bfa58d6d7adf917c8e5d63928573304d7ebdb5c8039584755c8646ef",
+    "/home/admin/luhuanbing.lhb/Ferrule/target/validation/bf16-fresh-quality-20261007/INPUT.json": "1341fe3212b8fd23096cec393aae8ac2be085aae2a6380557bfa7454bf20bf46"
+  },
+  "model_metadata": {
+    "/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8/config.json": "236c373b0682a4f40c2fa49ef8e5f722a87a8dbfe265286b6d5260b23d7cb229",
+    "/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8/model.safetensors.index.json": "b009f7a49c442fce959a2ff6fee41c69248879b90d7ff5636ec6d2068ac4876d",
+    "/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8/tokenizer.json": "5f9e4d4901a92b997e463c1f46055088b6cca5ca61a6522d1b9f64c4bb81cb42",
+    "/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8/tokenizer_config.json": "316230d6a809701f4db5ea8f8fc862bc3a6f3229c937c174e674ff3ca0a64ac8"
+  }
+}

@@ -1,0 +1,41 @@
+
+Displaying notes found in: .note.ABI-tag
+  Owner                Data size 	Description
+  GNU                  0x00000010	NT_GNU_ABI_TAG (ABI version tag)
+    OS: Linux, ABI: 3.2.0
+
+Displaying notes found in: .note.gnu.build-id
+  Owner                Data size 	Description
+  GNU                  0x00000014	NT_GNU_BUILD_ID (unique build ID bitstring)
+    Build ID: fc1cbf4509a75b22e93a27e94d74ce6b55357dd8
+
+Displaying notes found in: .gnu.build.attributes
+  Owner                Data size 	Description
+  GA$<version>3a1      0x00000010	OPEN
+    Applies to region from 0x429740 to 0x42976f
+  GA$<version>3a1      0x00000010	OPEN
+    Applies to region from 0
+  GA$<version>3a1      0x00000010	OPEN
+    Applies to region from 0x8546d4 to 0x8546ea
+  GA$<version>3a1      0x00000010	OPEN
+    Applies to region from 0x8546f0 to 0x8546f8
+  GA$<version>3a1      0x00000010	OPEN
+    Applies to region from 0x429770 to 0x429829
+  GA$<version>3a1      0x00000010	OPEN
+    Applies to region from 0x8545e0 to 0x854655
+  GA$<version>3a1      0x00000010	OPEN
+    Applies to region from 0x854660 to 0x854672
+  GA$<version>3a1      0x00000010	OPEN
+    Applies to region from 0x854680 to 0x854694
+  GA$<version>3a1      0x00000010	OPEN
+    Applies to region from 0x8546a0 to 0x8546b3
+  GA$<version>3a1      0x00000010	OPEN
+    Applies to region from 0x8546c0 to 0x8546d4
+  GA$<version>3a1      0x00000010	OPEN
+    Applies to region from 0
+  GA$<version>3a1      0x00000010	OPEN
+    Applies to region from 0
+  GA$<version>3a1      0x00000010	OPEN
+    Applies to region from 0x8546ea to 0x8546ef
+  GA$<version>3a1      0x00000010	OPEN
+    Applies to region from 0x8546f8 to 0x8546fd

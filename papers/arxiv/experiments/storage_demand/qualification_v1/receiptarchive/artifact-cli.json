@@ -1,0 +1,119 @@
+{
+  "role": "cli",
+  "compiled_artifact": {
+    "reason": "compiler-artifact",
+    "package_id": "path+file:///home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/frozen-source/crates/ferrule-cli#0.2.0",
+    "manifest_path": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/frozen-source/crates/ferrule-cli/Cargo.toml",
+    "target": {
+      "kind": [
+        "bin"
+      ],
+      "crate_types": [
+        "bin"
+      ],
+      "name": "ferrule",
+      "src_path": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/frozen-source/crates/ferrule-cli/src/main.rs",
+      "edition": "2024",
+      "doc": true,
+      "doctest": false,
+      "test": true
+    },
+    "profile": {
+      "opt_level": "3",
+      "debuginfo": 0,
+      "debug_assertions": false,
+      "overflow_checks": false,
+      "test": false
+    },
+    "features": [
+      "cuda",
+      "nvtx-profile"
+    ],
+    "filenames": [
+      "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/cargo-target/release/ferrule"
+    ],
+    "executable": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/cargo-target/release/ferrule",
+    "fresh": false
+  },
+  "executable": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/staged/cli",
+  "sha256": "de5159951fe724e97e35c0fc86367642d33735994328eee1a5e604cf9d2b037b",
+  "bytes": 26036536,
+  "common_artifacts": [
+    {
+      "reason": "compiler-artifact",
+      "package_id": "path+file:///home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/frozen-source/crates/ferrule-common#0.2.0",
+      "manifest_path": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/frozen-source/crates/ferrule-common/Cargo.toml",
+      "target": {
+        "kind": [
+          "custom-build"
+        ],
+        "crate_types": [
+          "bin"
+        ],
+        "name": "build-script-build",
+        "src_path": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/frozen-source/crates/ferrule-common/build.rs",
+        "edition": "2024",
+        "doc": false,
+        "doctest": false,
+        "test": false
+      },
+      "profile": {
+        "opt_level": "0",
+        "debuginfo": 0,
+        "debug_assertions": false,
+        "overflow_checks": false,
+        "test": false
+      },
+      "features": [
+        "default",
+        "nvtx-profile"
+      ],
+      "filenames": [
+        "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/cargo-target/release/build/ferrule-common/57185cf84eee6910/out/build_script_build"
+      ],
+      "executable": null,
+      "fresh": false
+    },
+    {
+      "reason": "compiler-artifact",
+      "package_id": "path+file:///home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/frozen-source/crates/ferrule-common#0.2.0",
+      "manifest_path": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/frozen-source/crates/ferrule-common/Cargo.toml",
+      "target": {
+        "kind": [
+          "lib"
+        ],
+        "crate_types": [
+          "lib"
+        ],
+        "name": "ferrule_common",
+        "src_path": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/frozen-source/crates/ferrule-common/src/lib.rs",
+        "edition": "2024",
+        "doc": true,
+        "doctest": true,
+        "test": true
+      },
+      "profile": {
+        "opt_level": "3",
+        "debuginfo": 0,
+        "debug_assertions": false,
+        "overflow_checks": false,
+        "test": false
+      },
+      "features": [
+        "default",
+        "nvtx-profile"
+      ],
+      "filenames": [
+        "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/cargo-target/release/build/ferrule-common/7c42b0017834aa68/out/libferrule_common-7c42b0017834aa68.rlib",
+        "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/cargo-target/release/build/ferrule-common/7c42b0017834aa68/out/libferrule_common-7c42b0017834aa68.rmeta"
+      ],
+      "executable": null,
+      "fresh": false
+    }
+  ],
+  "source_digest": "a4dceb084e21b80f6b45ff7ac980c6fa80ac8f17e902fd28c65f3d5bc7bb0efa",
+  "nvtx_compiled": true,
+  "qualification_nvtx_runtime_enabled": false,
+  "build_adapter_v1_accepted": false,
+  "adapter_caveat": "Explicit nvtx-profile build differs from strict legacy CUDA-only build adapter; no paper protocol binding claimed"
+}

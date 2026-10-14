@@ -1,0 +1,22 @@
+{
+  "original_pins": {
+    "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/cargo-target/release/build/ferrule-backend/d715b88df5f5d32c/out/libferrule_cpu_native.a": "1dbf3c534de2819f61a2eee8b9d91ec490491b8cf17228eb962012af1d158815",
+    "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/cargo-target/release/build/ferrule-backend/d715b88df5f5d32c/out/libferrule_cuda_core.a": "1d57635ca1440b6d4a230d8a311d869b6682a2138d8242de36aaf7c3e05198d6",
+    "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/cargo-target/release/build/ferrule-backend/d715b88df5f5d32c/out/libferrule_cuda_cutlass.a": "e89c530be48673c31f6c7fcfd3d13dda88d6fa34922ad9c9c91f403d855ecd8a",
+    "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/cargo-target/release/build/ferrule-common/5e5d742e5490971f/out/libferrule_nvtx_host.a": "e1e3912bea7bfd7a1c420477dfe900ee2702df9871f1fe14d4e7d810333516c2",
+    "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/cargo-target/release/build/onig_sys/10f0bbbf87d889b8/out/libonig.a": "d3bd56a756525ef3cda575cdffb0846f82e3ddc9aa816081c0b5d4a8781d32f6",
+    "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/cargo-target/release/build/ring/fc8078c4ac62fec1/out/libring_core_0_17_14_.a": "43448d257eced040e5e844bf88565c637894f88d300d5a796f8f7134b773a8c0",
+    "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/cargo-target/release/build/ring/fc8078c4ac62fec1/out/libring_core_0_17_14__test.a": "b3af0bcbe4e3194fc6bdb0d66015da06c79cfbf07f40aad73c211766d2f0002f"
+  },
+  "immutable_copies": {
+    "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/native-archives/0-libferrule_cpu_native.a": "1dbf3c534de2819f61a2eee8b9d91ec490491b8cf17228eb962012af1d158815",
+    "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/native-archives/1-libferrule_cuda_core.a": "1d57635ca1440b6d4a230d8a311d869b6682a2138d8242de36aaf7c3e05198d6",
+    "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/native-archives/2-libferrule_cuda_cutlass.a": "e89c530be48673c31f6c7fcfd3d13dda88d6fa34922ad9c9c91f403d855ecd8a",
+    "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/native-archives/3-libferrule_nvtx_host.a": "e1e3912bea7bfd7a1c420477dfe900ee2702df9871f1fe14d4e7d810333516c2",
+    "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/native-archives/4-libonig.a": "d3bd56a756525ef3cda575cdffb0846f82e3ddc9aa816081c0b5d4a8781d32f6",
+    "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/native-archives/5-libring_core_0_17_14_.a": "43448d257eced040e5e844bf88565c637894f88d300d5a796f8f7134b773a8c0",
+    "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/native-archives/6-libring_core_0_17_14__test.a": "b3af0bcbe4e3194fc6bdb0d66015da06c79cfbf07f40aad73c211766d2f0002f"
+  },
+  "all_roles_same_new_target": true,
+  "duplicate_basenames_retained": true
+}

@@ -1,0 +1,42 @@
+test_actual_complete_archive_passes_without_subprocess_or_gpu (__main__.QualificationTests) ... ok
+test_both_memory_endpoints_bounded (__main__.QualificationTests) ... ok
+test_candidate_binary_changed_rejected (__main__.QualificationTests) ... ok
+test_cold_primary_config_mismatch_rejected (__main__.QualificationTests) ... ok
+test_component_peak_memory_bound_rejected (__main__.QualificationTests) ... ok
+test_current_primary_fingerprint_mismatch_rejected (__main__.QualificationTests) ... ok
+test_current_primary_hash_rejected (__main__.QualificationTests) ... ok
+test_duplicate_and_nonfinite_json_rejected (__main__.QualificationTests) ... ok
+test_duplicate_or_old_gate_pass_cannot_be_pooled (__main__.QualificationTests) ... ok
+test_effective_schedule_unknown_rejected (__main__.QualificationTests) ... ok
+test_exact_selector_list_missing_rejected (__main__.QualificationTests) ... ok
+test_external_candidate_hash_rejected (__main__.QualificationTests) ... ok
+test_final_cleanup_unknown_rejected (__main__.QualificationTests) ... ok
+test_fingerprint_64_and_28_coverage_rejected (__main__.QualificationTests) ... ok
+test_fingerprint_shape_or_greedy_unknown_rejected (__main__.QualificationTests) ... ok
+test_gzip_is_lossless_and_original_hashed_separately (__main__.QualificationTests) ... ok
+test_idle_acceptance_is_actual_all_eight_zero (__main__.QualificationTests) ... ok
+test_last_sampled_lifetime_counters_not_reinterpreted (__main__.QualificationTests) ... ok
+test_logical_memory_charge_not_rss_rejected (__main__.QualificationTests) ... ok
+test_metric_count_rejected (__main__.QualificationTests) ... ok
+test_missing_authenticated_echild_rejected (__main__.QualificationTests) ... ok
+test_missing_report_rejected (__main__.QualificationTests) ... ok
+test_nine_gate_count_rejected (__main__.QualificationTests) ... ok
+test_no_raw_worker_credentials_or_executable_payloads (__main__.QualificationTests) ... ok
+test_nonfinite_or_failed_numerical_metric_rejected (__main__.QualificationTests) ... ok
+test_numerical_stderr_failure_or_count_rejected (__main__.QualificationTests) ... ok
+test_path_traversal_rejected (__main__.QualificationTests) ... ok
+test_per_stream_denominator_or_pooling_rejected (__main__.QualificationTests) ... ok
+test_physical_release_must_remain_unknown (__main__.QualificationTests) ... ok
+test_pid_birth_authentication_mismatch_rejected (__main__.QualificationTests) ... ok
+test_rehashed_tampered_copy_still_fails_original_seal (__main__.QualificationTests) ... ok
+test_skipped_test_and_pooled_stdout_rejected (__main__.QualificationTests) ... ok
+test_source_pin_digest_rejected (__main__.QualificationTests) ... ok
+test_source_verified_read_and_timestamps_required (__main__.QualificationTests) ... ok
+test_stale_source_cut_rejected (__main__.QualificationTests) ... ok
+test_stale_stored_hash_rejected (__main__.QualificationTests) ... ok
+test_unissued_or_retry_gate_rejected (__main__.QualificationTests) ... ok
+
+----------------------------------------------------------------------
+Ran 37 tests in 7.026s
+
+OK

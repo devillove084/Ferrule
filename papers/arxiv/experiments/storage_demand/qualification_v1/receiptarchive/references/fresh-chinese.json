@@ -1,0 +1,115 @@
+{
+  "id": "chinese",
+  "file": "chinese.safetensors",
+  "sha256": "7b657e73986431a6ed6c313f859fba0e4ff9e2e893103ea8b03b965ba9044608",
+  "calls": [
+    {
+      "stage": "step.00",
+      "input_token_ids": [
+        96328,
+        102357,
+        96878
+      ],
+      "position_start": 0,
+      "sequence_length_after": 3,
+      "next_token_id": 98116
+    },
+    {
+      "stage": "step.01",
+      "input_token_ids": [
+        98116
+      ],
+      "position_start": 3,
+      "sequence_length_after": 4,
+      "next_token_id": 3709
+    },
+    {
+      "stage": "step.02",
+      "input_token_ids": [
+        3709
+      ],
+      "position_start": 4,
+      "sequence_length_after": 5,
+      "next_token_id": 98116
+    },
+    {
+      "stage": "step.03",
+      "input_token_ids": [
+        98116
+      ],
+      "position_start": 5,
+      "sequence_length_after": 6,
+      "next_token_id": 108820
+    },
+    {
+      "stage": "step.04",
+      "input_token_ids": [
+        108820
+      ],
+      "position_start": 6,
+      "sequence_length_after": 7,
+      "next_token_id": 102357
+    },
+    {
+      "stage": "step.05",
+      "input_token_ids": [
+        102357
+      ],
+      "position_start": 7,
+      "sequence_length_after": 8,
+      "next_token_id": 95983
+    },
+    {
+      "stage": "step.06",
+      "input_token_ids": [
+        95983
+      ],
+      "position_start": 8,
+      "sequence_length_after": 9,
+      "next_token_id": 1710
+    },
+    {
+      "stage": "step.07",
+      "input_token_ids": [
+        1710
+      ],
+      "position_start": 9,
+      "sequence_length_after": 10,
+      "next_token_id": 97486
+    },
+    {
+      "stage": "step.08",
+      "input_token_ids": [
+        97486
+      ],
+      "position_start": 10,
+      "sequence_length_after": 11,
+      "next_token_id": 3709
+    }
+  ],
+  "profile": "cuda-hybrid-numeric-fp8-model-bf16-f32-ssm",
+  "router": {
+    "policy": "lower_expert_id",
+    "native_policy": "native_unstable",
+    "canonicalization": "equal_raw_logits_only",
+    "unique_raw_logits": "native selection unchanged, including softmax collisions",
+    "probabilities": "native F32 full softmax unchanged",
+    "weights": "native F32 selected renormalized weights unchanged",
+    "raw_logits": "same-input BF16 F.linear observation, checked against native probabilities",
+    "unmodified_native_router": false
+  },
+  "generated_ids": [
+    98116,
+    3709,
+    98116,
+    108820,
+    102357,
+    95983,
+    1710,
+    97486,
+    3709
+  ],
+  "generated_text": "\u5317\u4eac\uff0c\u5317\u4eac\u662f\u4e2d\u56fd\u7684\u9996\u90fd\u3002\u90a3\u4e48\uff0c",
+  "prompt": "\u4e2d\u56fd\u7684\u9996\u90fd\u662f",
+  "capture_bytes": 596832880
+}

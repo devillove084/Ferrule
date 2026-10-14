@@ -1,0 +1,51 @@
+{
+  "schema": "ferrule.gpu-idle-window.v2",
+  "status": "verified",
+  "all_eight_idle": true,
+  "samples": [
+    {
+      "monotonic_started": 8946452.312684968,
+      "recorded_unix_ns": 1792003509276167196,
+      "gpu": "0, GPU-b980f22b-58a3-fc88-21c1-ae86053d8535, 0 MiB, 0 %\n1, GPU-63f1bd01-ddf9-a742-ee48-9389892493d9, 0 MiB, 0 %\n2, GPU-0bc01d70-2ade-0714-8959-b25ae75469b6, 0 MiB, 0 %\n3, GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011, 0 MiB, 0 %\n4, GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86, 0 MiB, 0 %\n5, GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685, 0 MiB, 0 %\n6, GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d, 0 MiB, 0 %\n7, GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f, 0 MiB, 0 %\n",
+      "apps": "",
+      "monotonic_finished": 8946452.534628572,
+      "classification": "idle",
+      "consecutive_idle": 1
+    },
+    {
+      "monotonic_started": 8946453.534752198,
+      "recorded_unix_ns": 1792003510498238429,
+      "gpu": "0, GPU-b980f22b-58a3-fc88-21c1-ae86053d8535, 0 MiB, 0 %\n1, GPU-63f1bd01-ddf9-a742-ee48-9389892493d9, 0 MiB, 0 %\n2, GPU-0bc01d70-2ade-0714-8959-b25ae75469b6, 0 MiB, 0 %\n3, GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011, 0 MiB, 0 %\n4, GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86, 0 MiB, 0 %\n5, GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685, 0 MiB, 0 %\n6, GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d, 0 MiB, 0 %\n7, GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f, 0 MiB, 0 %\n",
+      "apps": "",
+      "monotonic_finished": 8946453.767902648,
+      "classification": "idle",
+      "consecutive_idle": 2
+    },
+    {
+      "monotonic_started": 8946454.768024059,
+      "recorded_unix_ns": 1792003511731511511,
+      "gpu": "0, GPU-b980f22b-58a3-fc88-21c1-ae86053d8535, 0 MiB, 0 %\n1, GPU-63f1bd01-ddf9-a742-ee48-9389892493d9, 0 MiB, 0 %\n2, GPU-0bc01d70-2ade-0714-8959-b25ae75469b6, 0 MiB, 0 %\n3, GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011, 0 MiB, 0 %\n4, GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86, 0 MiB, 0 %\n5, GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685, 0 MiB, 0 %\n6, GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d, 0 MiB, 0 %\n7, GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f, 0 MiB, 0 %\n",
+      "apps": "",
+      "monotonic_finished": 8946454.990277724,
+      "classification": "idle",
+      "consecutive_idle": 3
+    }
+  ],
+  "deadline_seconds": 15,
+  "required_consecutive": 3,
+  "interval_seconds": 1,
+  "zero_memory_mib": 0,
+  "zero_utilization_percent": 0,
+  "no_compute_apps_required": true,
+  "physical_owner_release": "unverified",
+  "mode": "strict_preflight",
+  "authenticated_echild": false,
+  "recorded_owners_absent": false,
+  "accepted_sample_indices": [
+    0,
+    1,
+    2
+  ],
+  "consecutive_idle": 3,
+  "elapsed_seconds": 2.677669793367386
+}

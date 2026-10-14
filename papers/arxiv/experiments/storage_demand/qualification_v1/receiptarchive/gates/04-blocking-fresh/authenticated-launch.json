@@ -1,0 +1,56 @@
+{
+  "identity": {
+    "worker": {
+      "pid": 251126,
+      "birth_ticks": 131017793,
+      "ppid": 251125,
+      "pgrp": 251126,
+      "session": 251126
+    },
+    "helper": {
+      "pid": 251125,
+      "birth_ticks": 131017790,
+      "ppid": 250316,
+      "pgrp": 251125,
+      "session": 251125
+    },
+    "coordinator": {
+      "pid": 250316,
+      "birth_ticks": 131002362,
+      "ppid": 88644,
+      "pgrp": 250316,
+      "session": 250316
+    },
+    "launch_id": "a5eb8bb7247e4950b0e1b3f09e5c562f"
+  },
+  "argv": [
+    "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/staged/composition",
+    "model_factory::dense_bf16_tests::full40::fresh_quality::mixed_storage_middle64_blocking_fresh_quality_retained_generation",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+  ],
+  "environment": {
+    "PATH": "/usr/bin:/bin",
+    "HOME": "/root",
+    "CUDA_VISIBLE_DEVICES": "0",
+    "NVIDIA_VISIBLE_DEVICES": "0",
+    "CUBLAS_WORKSPACE_CONFIG": ":0:0",
+    "LD_LIBRARY_PATH": "/home/admin/wxw403883/anaconda3/envs/tao/lib:/usr/lib64",
+    "FERRULE_PROFILE_NVTX": "0",
+    "FERRULE_NUMERIC_BF16_FACTORY_GPU": "1",
+    "FERRULE_NUMERIC_BF16_MODEL": "/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8",
+    "FERRULE_NUMERIC_BF16_REFERENCE_DIR": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/numeric-bf16-gate-20261004-v2/profile-reference",
+    "FERRULE_NUMERIC_BF16_REFERENCE_SHA256": "351495921233e0158eb2a4507c415d173c895a6086d5905b7a72d82de71849f9",
+    "FERRULE_BF16_FRESH_DIR": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/bf16-fresh-quality-20261007",
+    "FERRULE_BF16_FRESH_SHA256": "102c798baeb5200bc8ed8386eabed6146870b3b6da2a90fc6010677041352c7e",
+    "FERRULE_BF16_FRESH_REPORT": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/gates/04-blocking-fresh/quality.json"
+  },
+  "gate_id": "04-blocking-fresh",
+  "executable_sha256": "8810c3418f4b39b4c9203003b91e53a6106a833624db4d13a516fdfd63453d6a",
+  "all_eight_uuid_locks_validated": true,
+  "exec_preserves_authenticated_root_pid_birth": true,
+  "seconds": 1200,
+  "no_probe_no_warmup_no_retry": true
+}

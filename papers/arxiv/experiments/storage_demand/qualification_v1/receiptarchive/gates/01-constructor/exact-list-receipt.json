@@ -1,0 +1,24 @@
+{
+  "argv": [
+    "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/staged/constructor",
+    "normal_cuda_constructor_reaches_configured_provider_for_both_model_boundaries",
+    "--list",
+    "--ignored",
+    "--exact"
+  ],
+  "environment": {
+    "PATH": "/usr/bin:/bin",
+    "HOME": "/root",
+    "CUDA_VISIBLE_DEVICES": "",
+    "NVIDIA_VISIBLE_DEVICES": "none",
+    "CUBLAS_WORKSPACE_CONFIG": ":0:0",
+    "LD_LIBRARY_PATH": "/home/admin/wxw403883/anaconda3/envs/tao/lib:/usr/lib64",
+    "FERRULE_PROFILE_NVTX": "0"
+  },
+  "timeout_seconds": 30,
+  "gpu_hidden": true,
+  "returncode": 0,
+  "stdout": "normal_cuda_constructor_reaches_configured_provider_for_both_model_boundaries: test\n\n1 test, 0 benchmarks\n",
+  "stderr": "",
+  "wall_seconds": 0.0432711374014616
+}

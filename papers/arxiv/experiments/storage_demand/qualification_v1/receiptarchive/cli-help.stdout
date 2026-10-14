@@ -1,0 +1,17 @@
+Usage: cli <COMMAND>
+
+Commands:
+  info                Print model architecture and vocabulary size
+  cuda                Verify CUDA and benchmark GEMV
+  chat                Interactive chat REPL
+  serve               Serve an OpenAI-compatible asynchronous HTTP API
+  bench-interactive   Benchmark multi-turn chat latency and runtime-owned materialization critical paths
+  bench-parallel      Benchmark CUDA F32 linear DP/TP using production executors (host-to-host)
+  rank-serve          One-shot mutually authenticated TLS linear rank endpoint (Unix + CUDA only)
+  analyze-kvset       Analyze a bounded KV trace offline; token IDs may contain sensitive data
+  inspect-weightpack  Inspect a WeightPack file header
+  help                Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help     Print help
+  -V, --version  Print version

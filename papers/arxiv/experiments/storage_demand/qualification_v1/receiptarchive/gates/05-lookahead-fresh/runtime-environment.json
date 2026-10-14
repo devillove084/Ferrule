@@ -1,0 +1,16 @@
+{
+  "PATH": "/usr/bin:/bin",
+  "HOME": "/root",
+  "CUDA_VISIBLE_DEVICES": "0",
+  "NVIDIA_VISIBLE_DEVICES": "0",
+  "CUBLAS_WORKSPACE_CONFIG": ":0:0",
+  "LD_LIBRARY_PATH": "/home/admin/wxw403883/anaconda3/envs/tao/lib:/usr/lib64",
+  "FERRULE_PROFILE_NVTX": "0",
+  "FERRULE_NUMERIC_BF16_FACTORY_GPU": "1",
+  "FERRULE_NUMERIC_BF16_MODEL": "/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8",
+  "FERRULE_NUMERIC_BF16_REFERENCE_DIR": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/numeric-bf16-gate-20261004-v2/profile-reference",
+  "FERRULE_NUMERIC_BF16_REFERENCE_SHA256": "351495921233e0158eb2a4507c415d173c895a6086d5905b7a72d82de71849f9",
+  "FERRULE_BF16_FRESH_DIR": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/bf16-fresh-quality-20261007",
+  "FERRULE_BF16_FRESH_SHA256": "102c798baeb5200bc8ed8386eabed6146870b3b6da2a90fc6010677041352c7e",
+  "FERRULE_BF16_FRESH_REPORT": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/gates/05-lookahead-fresh/quality.json"
+}

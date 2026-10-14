@@ -1,0 +1,8 @@
+   Compiling ferrule-common v0.2.0 (/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/frozen-source/crates/ferrule-common)
+   Compiling ferrule-backend v0.2.0 (/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/frozen-source/crates/ferrule-backend)
+   Compiling ferrule-model v0.2.0 (/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/frozen-source/crates/ferrule-model)
+   Compiling ferrule-runtime v0.2.0 (/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/frozen-source/crates/ferrule-runtime)
+   Compiling ferrule-composition v0.2.0 (/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/frozen-source/crates/ferrule-composition)
+   Compiling ferrule-server v0.2.0 (/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/frozen-source/crates/ferrule-server)
+   Compiling ferrule-cli v0.2.0 (/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/frozen-source/crates/ferrule-cli)
+    Finished `release` profile [optimized] target(s) in 4m 41s

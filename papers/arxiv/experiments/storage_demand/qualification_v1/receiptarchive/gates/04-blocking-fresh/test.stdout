@@ -1,0 +1,6 @@
+
+running 1 test
+test model_factory::dense_bf16_tests::full40::fresh_quality::mixed_storage_middle64_blocking_fresh_quality_retained_generation ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 239 filtered out; finished in 138.52s
+

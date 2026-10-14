@@ -1,0 +1,135 @@
+{
+  "schema": "ferrule.bf16-fresh-quality-reference.v1",
+  "status": "complete",
+  "profile": "cuda-hybrid-numeric-fp8-model-bf16-f32-ssm",
+  "router": {
+    "policy": "lower_expert_id",
+    "native_policy": "native_unstable",
+    "canonicalization": "equal_raw_logits_only",
+    "unique_raw_logits": "native selection unchanged, including softmax collisions",
+    "probabilities": "native F32 full softmax unchanged",
+    "weights": "native F32 selected renormalized weights unchanged",
+    "raw_logits": "same-input BF16 F.linear observation, checked against native probabilities",
+    "unmodified_native_router": false
+  },
+  "native_source": {
+    "modeling_qwen3_5_moe": {
+      "file": "/opt/conda310/lib/python3.10/site-packages/transformers/models/qwen3_5_moe/modeling_qwen3_5_moe.py",
+      "sha256": "0f8ca77e875c31d448137c9ac291bed505c6b9927a85b5b8460af29d1e1ee647"
+    },
+    "cache_utils": {
+      "file": "/opt/conda310/lib/python3.10/site-packages/transformers/cache_utils.py",
+      "sha256": "a51d2cd525f4458941a20cb5b3b8a8d989d8ca5bcd451855a27bb41743fed586"
+    },
+    "modeling_utils": {
+      "file": "/opt/conda310/lib/python3.10/site-packages/transformers/modeling_utils.py",
+      "sha256": "b8467e1ada952862d2e4d76632475ac2f9fa198121d0e1ce64fa393ea3773e16"
+    }
+  },
+  "versions": {
+    "torch": "2.13.0+cu129",
+    "transformers": "5.5.3"
+  },
+  "precision_contract": {
+    "profile": "cuda-hybrid-numeric-fp8-model-bf16-f32-ssm",
+    "model_boundary": "bf16",
+    "fp8": "E4M3FN",
+    "scale": "original numeric BF16 multiplicative 128x128",
+    "weight": "FP8 times BF16 scale in F32, then BF16 RNE; native BF16 words preserved",
+    "activation": "BF16",
+    "accumulation": "F32",
+    "output": "BF16",
+    "kv": "BF16",
+    "conv": "BF16",
+    "ssm": "F32 explicitly preallocated; NOT the HF default cache dtype",
+    "fp32_parameters": "only GDN A_log/norm: once BF16 RNE on load, as pinned native from_pretrained(dtype=BF16)",
+    "rope_frequency": "native F32 construction, never blanket model.to(BF16)",
+    "router_weights": "F32 native full softmax/topk/renormalize",
+    "tf32": false,
+    "bf16_reduced_precision_reduction": false,
+    "baseline": "decoded-storage native eager BF16 model, NOT the HF dynamic-FP8 quantizer"
+  },
+  "input_sha256": "1341fe3212b8fd23096cec393aae8ac2be085aae2a6380557bfa7454bf20bf46",
+  "original_reference": {
+    "directory": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/numeric-bf16-gate-20261004-v2/profile-reference",
+    "sha256": "351495921233e0158eb2a4507c415d173c895a6086d5905b7a72d82de71849f9"
+  },
+  "cases": [
+    {
+      "id": "qa",
+      "file": "qa.safetensors",
+      "sha256": "dd6dd7523e3e453ab56356d538f57c14205562c65af1a07d18f965bd120406c8",
+      "report": "qa.json",
+      "report_sha256": "188e3f557eaef7576e5b4619a4498abf0715eb2b237c53ab2b3a39d2281d24e7"
+    },
+    {
+      "id": "arithmetic",
+      "file": "arithmetic.safetensors",
+      "sha256": "48d48943cb990f4195f1acb45a243c99871f259dacecd614d392ec72cc01117b",
+      "report": "arithmetic.json",
+      "report_sha256": "9c97268959e1d12dae5f8a9118934004f1c9bee9a0dc73086ec16c95c154deed"
+    },
+    {
+      "id": "chinese",
+      "file": "chinese.safetensors",
+      "sha256": "7b657e73986431a6ed6c313f859fba0e4ff9e2e893103ea8b03b965ba9044608",
+      "report": "chinese.json",
+      "report_sha256": "8e579b8bafded26b8370279b3687e3109ed5f8bfb65e9a249a4623357c0ee52b"
+    }
+  ],
+  "devices": [
+    {
+      "device": "cuda:0",
+      "peak_allocated": 1441860608,
+      "peak_reserved": 1514143744,
+      "peak_operand_cache": 268435456
+    },
+    {
+      "device": "cuda:1",
+      "peak_allocated": 424754688,
+      "peak_reserved": 488636416,
+      "peak_operand_cache": 267132928
+    },
+    {
+      "device": "cuda:2",
+      "peak_allocated": 424754688,
+      "peak_reserved": 492830720,
+      "peak_operand_cache": 267132928
+    },
+    {
+      "device": "cuda:3",
+      "peak_allocated": 420434432,
+      "peak_reserved": 488636416,
+      "peak_operand_cache": 267132928
+    },
+    {
+      "device": "cuda:4",
+      "peak_allocated": 424744960,
+      "peak_reserved": 509607936,
+      "peak_operand_cache": 267132928
+    },
+    {
+      "device": "cuda:5",
+      "peak_allocated": 424754688,
+      "peak_reserved": 509607936,
+      "peak_operand_cache": 267132928
+    },
+    {
+      "device": "cuda:6",
+      "peak_allocated": 424754688,
+      "peak_reserved": 492830720,
+      "peak_operand_cache": 267132928
+    },
+    {
+      "device": "cuda:7",
+      "peak_allocated": 1072214528,
+      "peak_reserved": 1463812096,
+      "peak_operand_cache": 267132928
+    }
+  ],
+  "wall_seconds": 809.5596136189997,
+  "source_payloads": {
+    "file": "source-payloads.json",
+    "sha256": "dfd08736bfa58d6d7adf917c8e5d63928573304d7ebdb5c8039584755c8646ef"
+  }
+}

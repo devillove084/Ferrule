@@ -1,0 +1,50 @@
+{
+  "identity": {
+    "worker": {
+      "pid": 250464,
+      "birth_ticks": 131003403,
+      "ppid": 250463,
+      "pgrp": 250464,
+      "session": 250464
+    },
+    "helper": {
+      "pid": 250463,
+      "birth_ticks": 131003399,
+      "ppid": 250316,
+      "pgrp": 250463,
+      "session": 250463
+    },
+    "coordinator": {
+      "pid": 250316,
+      "birth_ticks": 131002362,
+      "ppid": 88644,
+      "pgrp": 250316,
+      "session": 250316
+    },
+    "launch_id": "40052ac149ff40d1a9dcaa7f7f01e6da"
+  },
+  "argv": [
+    "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/staged/constructor",
+    "normal_cuda_constructor_reaches_configured_provider_for_both_model_boundaries",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+  ],
+  "environment": {
+    "PATH": "/usr/bin:/bin",
+    "HOME": "/root",
+    "CUDA_VISIBLE_DEVICES": "0",
+    "NVIDIA_VISIBLE_DEVICES": "0",
+    "CUBLAS_WORKSPACE_CONFIG": ":0:0",
+    "LD_LIBRARY_PATH": "/home/admin/wxw403883/anaconda3/envs/tao/lib:/usr/lib64",
+    "FERRULE_PROFILE_NVTX": "0",
+    "FERRULE_EXPERT_READ_CONSTRUCTOR_REPORT": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/gates/01-constructor/quality.json"
+  },
+  "gate_id": "01-constructor",
+  "executable_sha256": "cb9b8c998449b8f73a6a6919be19bcd8e1d743711a1c06d36e5332af57db4a23",
+  "all_eight_uuid_locks_validated": true,
+  "exec_preserves_authenticated_root_pid_birth": true,
+  "seconds": 1200,
+  "no_probe_no_warmup_no_retry": true
+}

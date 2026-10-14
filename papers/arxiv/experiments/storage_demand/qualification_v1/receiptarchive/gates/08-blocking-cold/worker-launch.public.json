@@ -1,0 +1,121 @@
+{
+  "all_uuid_locks": [
+    {
+      "coordinator_pid": 250316,
+      "device": 64785,
+      "fd": 3,
+      "global_reservation": false,
+      "inode": 58519119,
+      "mode": "local_nonblocking_flock",
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/GPU-b980f22b-58a3-fc88-21c1-ae86053d8535.lock"
+    },
+    {
+      "coordinator_pid": 250316,
+      "device": 64785,
+      "fd": 4,
+      "global_reservation": false,
+      "inode": 58519247,
+      "mode": "local_nonblocking_flock",
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/GPU-63f1bd01-ddf9-a742-ee48-9389892493d9.lock"
+    },
+    {
+      "coordinator_pid": 250316,
+      "device": 64785,
+      "fd": 5,
+      "global_reservation": false,
+      "inode": 58518656,
+      "mode": "local_nonblocking_flock",
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/GPU-0bc01d70-2ade-0714-8959-b25ae75469b6.lock"
+    },
+    {
+      "coordinator_pid": 250316,
+      "device": 64785,
+      "fd": 6,
+      "global_reservation": false,
+      "inode": 58519444,
+      "mode": "local_nonblocking_flock",
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011.lock"
+    },
+    {
+      "coordinator_pid": 250316,
+      "device": 64785,
+      "fd": 7,
+      "global_reservation": false,
+      "inode": 58519167,
+      "mode": "local_nonblocking_flock",
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86.lock"
+    },
+    {
+      "coordinator_pid": 250316,
+      "device": 64785,
+      "fd": 8,
+      "global_reservation": false,
+      "inode": 58519446,
+      "mode": "local_nonblocking_flock",
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685.lock"
+    },
+    {
+      "coordinator_pid": 250316,
+      "device": 64785,
+      "fd": 9,
+      "global_reservation": false,
+      "inode": 58519156,
+      "mode": "local_nonblocking_flock",
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d.lock"
+    },
+    {
+      "coordinator_pid": 250316,
+      "device": 64785,
+      "fd": 10,
+      "global_reservation": false,
+      "inode": 58516170,
+      "mode": "local_nonblocking_flock",
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f.lock"
+    }
+  ],
+  "coordinator": {
+    "birth_ticks": 131002362,
+    "pgrp": 250316,
+    "pid": 250316,
+    "ppid": 88644,
+    "session": 250316
+  },
+  "directory": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/gates/08-blocking-cold",
+  "environment": {
+    "CUBLAS_WORKSPACE_CONFIG": ":0:0",
+    "CUDA_VISIBLE_DEVICES": "0",
+    "FERRULE_BF16_FRESH_DIR": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/bf16-fresh-quality-20261007",
+    "FERRULE_BF16_FRESH_PRIMARY_REPORT": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/gates/04-blocking-fresh/quality.json",
+    "FERRULE_BF16_FRESH_REPORT": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/gates/08-blocking-cold/quality.json",
+    "FERRULE_BF16_FRESH_SHA256": "102c798baeb5200bc8ed8386eabed6146870b3b6da2a90fc6010677041352c7e",
+    "FERRULE_NUMERIC_BF16_FACTORY_GPU": "1",
+    "FERRULE_NUMERIC_BF16_MODEL": "/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8",
+    "FERRULE_NUMERIC_BF16_REFERENCE_DIR": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/numeric-bf16-gate-20261004-v2/profile-reference",
+    "FERRULE_NUMERIC_BF16_REFERENCE_SHA256": "351495921233e0158eb2a4507c415d173c895a6086d5905b7a72d82de71849f9",
+    "FERRULE_PROFILE_NVTX": "0",
+    "HOME": "/root",
+    "LD_LIBRARY_PATH": "/home/admin/wxw403883/anaconda3/envs/tao/lib:/usr/lib64",
+    "NVIDIA_VISIBLE_DEVICES": "0",
+    "PATH": "/usr/bin:/bin"
+  },
+  "gate": {
+    "binary_sha256": "8810c3418f4b39b4c9203003b91e53a6106a833624db4d13a516fdfd63453d6a",
+    "executable": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/staged/composition",
+    "id": "08-blocking-cold",
+    "kind": "cold",
+    "role": "composition",
+    "schedule": "blocking",
+    "seconds": 1200,
+    "selection_receipt": "list-08-blocking-cold-receipt.json",
+    "selector": "model_factory::dense_bf16_tests::full40::fresh_quality::mixed_storage_middle64_blocking_fresh_quality_cold_owner_restart"
+  },
+  "gate_id": "08-blocking-cold",
+  "granted": true,
+  "manifest": {
+    "protocol": "ferrule.paper.m7.worker.v2"
+  },
+  "owner_note": "Explicit actual GPU qualification authority, only this sealed selector, zero retries/probes/warmups/profiling",
+  "qualification_plan_sha256": "f83ab450578b574c25fa48d4039f66f6df1a91725d586e1c029b7f0b1f7a066d",
+  "seconds": 1200,
+  "worker_source_sha256": "0aae631cf46bb99f567527d8dbe20b0a56e61c57ca7267858e1eb3e4cc67e16c"
+}

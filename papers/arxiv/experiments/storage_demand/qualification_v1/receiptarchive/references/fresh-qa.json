@@ -1,0 +1,117 @@
+{
+  "id": "qa",
+  "file": "qa.safetensors",
+  "sha256": "dd6dd7523e3e453ab56356d538f57c14205562c65af1a07d18f965bd120406c8",
+  "calls": [
+    {
+      "stage": "step.00",
+      "input_token_ids": [
+        760,
+        6511,
+        314,
+        6124,
+        369
+      ],
+      "position_start": 0,
+      "sequence_length_after": 5,
+      "next_token_id": 25358
+    },
+    {
+      "stage": "step.01",
+      "input_token_ids": [
+        25358
+      ],
+      "position_start": 5,
+      "sequence_length_after": 6,
+      "next_token_id": 13
+    },
+    {
+      "stage": "step.02",
+      "input_token_ids": [
+        13
+      ],
+      "position_start": 6,
+      "sequence_length_after": 7,
+      "next_token_id": 198
+    },
+    {
+      "stage": "step.03",
+      "input_token_ids": [
+        198
+      ],
+      "position_start": 7,
+      "sequence_length_after": 8,
+      "next_token_id": 760
+    },
+    {
+      "stage": "step.04",
+      "input_token_ids": [
+        760
+      ],
+      "position_start": 8,
+      "sequence_length_after": 9,
+      "next_token_id": 6511
+    },
+    {
+      "stage": "step.05",
+      "input_token_ids": [
+        6511
+      ],
+      "position_start": 9,
+      "sequence_length_after": 10,
+      "next_token_id": 314
+    },
+    {
+      "stage": "step.06",
+      "input_token_ids": [
+        314
+      ],
+      "position_start": 10,
+      "sequence_length_after": 11,
+      "next_token_id": 6124
+    },
+    {
+      "stage": "step.07",
+      "input_token_ids": [
+        6124
+      ],
+      "position_start": 11,
+      "sequence_length_after": 12,
+      "next_token_id": 369
+    },
+    {
+      "stage": "step.08",
+      "input_token_ids": [
+        369
+      ],
+      "position_start": 12,
+      "sequence_length_after": 13,
+      "next_token_id": 25358
+    }
+  ],
+  "profile": "cuda-hybrid-numeric-fp8-model-bf16-f32-ssm",
+  "router": {
+    "policy": "lower_expert_id",
+    "native_policy": "native_unstable",
+    "canonicalization": "equal_raw_logits_only",
+    "unique_raw_logits": "native selection unchanged, including softmax collisions",
+    "probabilities": "native F32 full softmax unchanged",
+    "weights": "native F32 selected renormalized weights unchanged",
+    "raw_logits": "same-input BF16 F.linear observation, checked against native probabilities",
+    "unmodified_native_router": false
+  },
+  "generated_ids": [
+    25358,
+    13,
+    198,
+    760,
+    6511,
+    314,
+    6124,
+    369,
+    25358
+  ],
+  "generated_text": " Tokyo.\nThe capital of Japan is Tokyo",
+  "prompt": "The capital of Japan is",
+  "capture_bytes": 599313680
+}

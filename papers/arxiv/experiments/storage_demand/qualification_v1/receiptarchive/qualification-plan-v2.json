@@ -1,0 +1,576 @@
+{
+  "schema": "ferrule.expert-read.sealed-current-nine-gates.v3",
+  "commit": "033519c3def098ce417e4b6ff0f141a9f30bddb1",
+  "source_digest": "a4dceb084e21b80f6b45ff7ac980c6fa80ac8f17e902fd28c65f3d5bc7bb0efa",
+  "gates": [
+    {
+      "id": "01-constructor",
+      "kind": "constructor",
+      "schedule": null,
+      "selector": "normal_cuda_constructor_reaches_configured_provider_for_both_model_boundaries",
+      "role": "constructor",
+      "executable": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/staged/constructor",
+      "binary_sha256": "cb9b8c998449b8f73a6a6919be19bcd8e1d743711a1c06d36e5332af57db4a23",
+      "seconds": 1200,
+      "selection_receipt": "list-01-constructor-receipt.json"
+    },
+    {
+      "id": "02-blocking-full40",
+      "kind": "full40",
+      "schedule": "blocking",
+      "selector": "model_factory::dense_bf16_tests::full40::numeric_bf16_mixed_storage_middle64_blocking_public_factory_full40_logits_routes_states_match_profile_reference",
+      "role": "composition",
+      "executable": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/staged/composition",
+      "binary_sha256": "8810c3418f4b39b4c9203003b91e53a6106a833624db4d13a516fdfd63453d6a",
+      "seconds": 1200,
+      "selection_receipt": "list-02-blocking-full40-receipt.json"
+    },
+    {
+      "id": "03-lookahead-full40",
+      "kind": "full40",
+      "schedule": "lookahead",
+      "selector": "model_factory::dense_bf16_tests::full40::numeric_bf16_mixed_storage_middle64_lookahead_public_factory_full40_logits_routes_states_match_profile_reference",
+      "role": "composition",
+      "executable": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/staged/composition",
+      "binary_sha256": "8810c3418f4b39b4c9203003b91e53a6106a833624db4d13a516fdfd63453d6a",
+      "seconds": 1200,
+      "selection_receipt": "list-03-lookahead-full40-receipt.json"
+    },
+    {
+      "id": "04-blocking-fresh",
+      "kind": "fresh",
+      "schedule": "blocking",
+      "selector": "model_factory::dense_bf16_tests::full40::fresh_quality::mixed_storage_middle64_blocking_fresh_quality_retained_generation",
+      "role": "composition",
+      "executable": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/staged/composition",
+      "binary_sha256": "8810c3418f4b39b4c9203003b91e53a6106a833624db4d13a516fdfd63453d6a",
+      "seconds": 1200,
+      "selection_receipt": "list-04-blocking-fresh-receipt.json"
+    },
+    {
+      "id": "05-lookahead-fresh",
+      "kind": "fresh",
+      "schedule": "lookahead",
+      "selector": "model_factory::dense_bf16_tests::full40::fresh_quality::mixed_storage_middle64_lookahead_fresh_quality_retained_generation",
+      "role": "composition",
+      "executable": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/staged/composition",
+      "binary_sha256": "8810c3418f4b39b4c9203003b91e53a6106a833624db4d13a516fdfd63453d6a",
+      "seconds": 1200,
+      "selection_receipt": "list-05-lookahead-fresh-receipt.json"
+    },
+    {
+      "id": "06-blocking-ordinary",
+      "kind": "ordinary",
+      "schedule": "blocking",
+      "selector": "model_factory::dense_bf16_tests::full40::fresh_quality::mixed_storage_middle64_blocking_fresh_quality_no_observer_equality",
+      "role": "composition",
+      "executable": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/staged/composition",
+      "binary_sha256": "8810c3418f4b39b4c9203003b91e53a6106a833624db4d13a516fdfd63453d6a",
+      "seconds": 1200,
+      "selection_receipt": "list-06-blocking-ordinary-receipt.json"
+    },
+    {
+      "id": "07-lookahead-ordinary",
+      "kind": "ordinary",
+      "schedule": "lookahead",
+      "selector": "model_factory::dense_bf16_tests::full40::fresh_quality::mixed_storage_middle64_lookahead_fresh_quality_no_observer_equality",
+      "role": "composition",
+      "executable": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/staged/composition",
+      "binary_sha256": "8810c3418f4b39b4c9203003b91e53a6106a833624db4d13a516fdfd63453d6a",
+      "seconds": 1200,
+      "selection_receipt": "list-07-lookahead-ordinary-receipt.json"
+    },
+    {
+      "id": "08-blocking-cold",
+      "kind": "cold",
+      "schedule": "blocking",
+      "selector": "model_factory::dense_bf16_tests::full40::fresh_quality::mixed_storage_middle64_blocking_fresh_quality_cold_owner_restart",
+      "role": "composition",
+      "executable": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/staged/composition",
+      "binary_sha256": "8810c3418f4b39b4c9203003b91e53a6106a833624db4d13a516fdfd63453d6a",
+      "seconds": 1200,
+      "selection_receipt": "list-08-blocking-cold-receipt.json"
+    },
+    {
+      "id": "09-lookahead-cold",
+      "kind": "cold",
+      "schedule": "lookahead",
+      "selector": "model_factory::dense_bf16_tests::full40::fresh_quality::mixed_storage_middle64_lookahead_fresh_quality_cold_owner_restart",
+      "role": "composition",
+      "executable": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/staged/composition",
+      "binary_sha256": "8810c3418f4b39b4c9203003b91e53a6106a833624db4d13a516fdfd63453d6a",
+      "seconds": 1200,
+      "selection_receipt": "list-09-lookahead-cold-receipt.json"
+    }
+  ],
+  "pins": {
+    "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/source-freeze.json": "3d1955a2ba25f9fab694d22c286bda8d5ac3dff60c84b354f2139edb8d2b26f2",
+    "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/source.tar": "ac072e0d1bac7efcc85b7f26ce68723f412b0e22b5ee868104b1f6073dd2a82f",
+    "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/external-input-pins.json": "6aee8927a62017ff4dad9a5892df0f7ba274c05c3c19105ed3eaefafd06c25f2",
+    "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/reference-pins.json": "13cf27435e776aba9280b393c3e39639fde164ace578340e1beaabf480023e56",
+    "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/model-shard-identities.json": "4772b415075dcf7b5f4c7803e9ff55ed7ab87337105d3f381dc8bf3a6079e3d1",
+    "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/runtime-library-pins.json": "1bb7d896444fd7bdf914aab662f3b2a6afb7d7449597ce329a4c79ad1144cc98",
+    "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/native-archive-pins.json": "4943a9efa07c2e6b867280a1eafebcd53d5ea69544ed8ae8054e0b72cbe2d9da",
+    "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/compiled-dependency-pins.json": "2b6aaedd21dcfe9b362a9897a9f19ccae5c1e76bd56cf5c7b3d79fc50c90113f",
+    "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/build-environment.json": "ebd753f178b995fd723de5539bf10adb9ea19398d460481bf836a14dbc150257",
+    "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/build_candidate.py": "7eabe7ceae7546442aff4a0bd439d8bb4e6ec560e6bf002faf7fd06660ef5805",
+    "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/prepare_launch.py": "a3546c729cce08f30b8fba8dd41a5f1c00930469cf10bf75287874cf07b7e938",
+    "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/staged/cli": "de5159951fe724e97e35c0fc86367642d33735994328eee1a5e604cf9d2b037b",
+    "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/artifact-cli.json": "4550b004f0bd9f8a3f59b02acfb66b7a3116f8cd145fd3ca275a4def45f843b0",
+    "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/staged/constructor": "cb9b8c998449b8f73a6a6919be19bcd8e1d743711a1c06d36e5332af57db4a23",
+    "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/artifact-constructor.json": "14d3bfc25c6ca124388bc84f315badd87201c4d0f0a3be46bea7f040f9c35a5d",
+    "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/staged/composition": "8810c3418f4b39b4c9203003b91e53a6106a833624db4d13a516fdfd63453d6a",
+    "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/artifact-composition.json": "6cf5386b173c9d07f516a78ebab828b91e9559f1d3259d3d381c9c4f1b2daa23",
+    "/home/admin/luhuanbing.lhb/Ferrule/scripts/test_vllm_qwen35.py": "1c330dac0727d54254a1c1648adcb9a4b747a2303fe183c2ba38f9ccd83ec2a1",
+    "/home/admin/luhuanbing.lhb/Ferrule/scripts/_owned_subreaper.py": "19ef9006089cde1abdca87177e01d26b925dcf996bfebaf6e3dc51ea71a77ff0",
+    "/home/admin/luhuanbing.lhb/Ferrule/scripts/gpu_idle_window_v2.py": "db2dceff8f2a1eb090a03be597d512d7e53cbd3ade2c7804bd512add505e823f",
+    "/home/admin/luhuanbing.lhb/Ferrule/scripts/run_pinned_jobs.py": "0133e8e59baf77b5dc6af67b83fa7ba96d0f33eea0ad88e85691fc26ce53aa60",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/contract.py": "05da87fb7f5d795a843b25674fc062c6d4e8d7b8be32f50613a3174e78d1fbe4",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/launch_guard.py": "b4ec4dc1b1e7e61fe322847e4a07ce2c3b2ed43d8d3e9bc3bd6602979ad00b9f",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runner.py": "0aae631cf46bb99f567527d8dbe20b0a56e61c57ca7267858e1eb3e4cc67e16c",
+    "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/qualify.py": "ed540d8022a9463e48c794c73437602e33cf30ef8cc4d5897c1fcf2f970a4b1c",
+    "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/launch-plan.json": "bb5c5d0c7a5bbdcb3e1d8323f1ed0596c6b94fbafbe53bfaab28ae7d6e25c7d8",
+    "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/archive-exact-members.json": "05cc59c1273713716b3b3f2d4704518833eb52b4c06614b7ae71ccba6f0f0b36",
+    "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/qualify_v2.py": "c4714ccf8fae69ff584be9ae80909ae906597086f547416cf060a14869c1369f"
+  },
+  "uuid_inventory": [
+    "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+    "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+    "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6",
+    "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011",
+    "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86",
+    "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685",
+    "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d",
+    "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f"
+  ],
+  "conditioning_probe_count": 0,
+  "extra_warmups": 0,
+  "retries": 0,
+  "profiling_captures": 0,
+  "nvtx_runtime": "0",
+  "stop_on_first_failure_or_unknown": true,
+  "deadline_per_test_seconds": 1200,
+  "cleanup_seconds": 45,
+  "artifacts": {
+    "cli": {
+      "role": "cli",
+      "compiled_artifact": {
+        "reason": "compiler-artifact",
+        "package_id": "path+file:///home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/frozen-source/crates/ferrule-cli#0.2.0",
+        "manifest_path": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/frozen-source/crates/ferrule-cli/Cargo.toml",
+        "target": {
+          "kind": [
+            "bin"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "ferrule",
+          "src_path": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/frozen-source/crates/ferrule-cli/src/main.rs",
+          "edition": "2024",
+          "doc": true,
+          "doctest": false,
+          "test": true
+        },
+        "profile": {
+          "opt_level": "3",
+          "debuginfo": 0,
+          "debug_assertions": false,
+          "overflow_checks": false,
+          "test": false
+        },
+        "features": [
+          "cuda",
+          "nvtx-profile"
+        ],
+        "filenames": [
+          "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/cargo-target/release/ferrule"
+        ],
+        "executable": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/cargo-target/release/ferrule",
+        "fresh": false
+      },
+      "executable": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/staged/cli",
+      "sha256": "de5159951fe724e97e35c0fc86367642d33735994328eee1a5e604cf9d2b037b",
+      "bytes": 26036536,
+      "common_artifacts": [
+        {
+          "reason": "compiler-artifact",
+          "package_id": "path+file:///home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/frozen-source/crates/ferrule-common#0.2.0",
+          "manifest_path": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/frozen-source/crates/ferrule-common/Cargo.toml",
+          "target": {
+            "kind": [
+              "custom-build"
+            ],
+            "crate_types": [
+              "bin"
+            ],
+            "name": "build-script-build",
+            "src_path": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/frozen-source/crates/ferrule-common/build.rs",
+            "edition": "2024",
+            "doc": false,
+            "doctest": false,
+            "test": false
+          },
+          "profile": {
+            "opt_level": "0",
+            "debuginfo": 0,
+            "debug_assertions": false,
+            "overflow_checks": false,
+            "test": false
+          },
+          "features": [
+            "default",
+            "nvtx-profile"
+          ],
+          "filenames": [
+            "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/cargo-target/release/build/ferrule-common/57185cf84eee6910/out/build_script_build"
+          ],
+          "executable": null,
+          "fresh": false
+        },
+        {
+          "reason": "compiler-artifact",
+          "package_id": "path+file:///home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/frozen-source/crates/ferrule-common#0.2.0",
+          "manifest_path": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/frozen-source/crates/ferrule-common/Cargo.toml",
+          "target": {
+            "kind": [
+              "lib"
+            ],
+            "crate_types": [
+              "lib"
+            ],
+            "name": "ferrule_common",
+            "src_path": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/frozen-source/crates/ferrule-common/src/lib.rs",
+            "edition": "2024",
+            "doc": true,
+            "doctest": true,
+            "test": true
+          },
+          "profile": {
+            "opt_level": "3",
+            "debuginfo": 0,
+            "debug_assertions": false,
+            "overflow_checks": false,
+            "test": false
+          },
+          "features": [
+            "default",
+            "nvtx-profile"
+          ],
+          "filenames": [
+            "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/cargo-target/release/build/ferrule-common/7c42b0017834aa68/out/libferrule_common-7c42b0017834aa68.rlib",
+            "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/cargo-target/release/build/ferrule-common/7c42b0017834aa68/out/libferrule_common-7c42b0017834aa68.rmeta"
+          ],
+          "executable": null,
+          "fresh": false
+        }
+      ],
+      "source_digest": "a4dceb084e21b80f6b45ff7ac980c6fa80ac8f17e902fd28c65f3d5bc7bb0efa",
+      "nvtx_compiled": true,
+      "qualification_nvtx_runtime_enabled": false,
+      "build_adapter_v1_accepted": false,
+      "adapter_caveat": "Explicit nvtx-profile build differs from strict legacy CUDA-only build adapter; no paper protocol binding claimed"
+    },
+    "constructor": {
+      "role": "constructor",
+      "compiled_artifact": {
+        "reason": "compiler-artifact",
+        "package_id": "path+file:///home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/frozen-source/crates/ferrule-model#0.2.0",
+        "manifest_path": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/frozen-source/crates/ferrule-model/Cargo.toml",
+        "target": {
+          "kind": [
+            "test"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "expert_read_constructor",
+          "src_path": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/frozen-source/crates/ferrule-model/tests/expert_read_constructor.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": true
+        },
+        "profile": {
+          "opt_level": "3",
+          "debuginfo": 0,
+          "debug_assertions": false,
+          "overflow_checks": false,
+          "test": true
+        },
+        "features": [
+          "cuda",
+          "default"
+        ],
+        "filenames": [
+          "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/cargo-target/release/build/ferrule-model/fe2059910894df75/out/expert_read_constructor-fe2059910894df75"
+        ],
+        "executable": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/cargo-target/release/build/ferrule-model/fe2059910894df75/out/expert_read_constructor-fe2059910894df75",
+        "fresh": false
+      },
+      "executable": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/staged/constructor",
+      "sha256": "cb9b8c998449b8f73a6a6919be19bcd8e1d743711a1c06d36e5332af57db4a23",
+      "bytes": 8976616,
+      "common_artifacts": [
+        {
+          "reason": "compiler-artifact",
+          "package_id": "path+file:///home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/frozen-source/crates/ferrule-common#0.2.0",
+          "manifest_path": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/frozen-source/crates/ferrule-common/Cargo.toml",
+          "target": {
+            "kind": [
+              "custom-build"
+            ],
+            "crate_types": [
+              "bin"
+            ],
+            "name": "build-script-build",
+            "src_path": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/frozen-source/crates/ferrule-common/build.rs",
+            "edition": "2024",
+            "doc": false,
+            "doctest": false,
+            "test": false
+          },
+          "profile": {
+            "opt_level": "0",
+            "debuginfo": 0,
+            "debug_assertions": false,
+            "overflow_checks": false,
+            "test": false
+          },
+          "features": [
+            "default",
+            "nvtx-profile"
+          ],
+          "filenames": [
+            "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/cargo-target/release/build/ferrule-common/57185cf84eee6910/out/build_script_build"
+          ],
+          "executable": null,
+          "fresh": true
+        },
+        {
+          "reason": "compiler-artifact",
+          "package_id": "path+file:///home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/frozen-source/crates/ferrule-common#0.2.0",
+          "manifest_path": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/frozen-source/crates/ferrule-common/Cargo.toml",
+          "target": {
+            "kind": [
+              "lib"
+            ],
+            "crate_types": [
+              "lib"
+            ],
+            "name": "ferrule_common",
+            "src_path": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/frozen-source/crates/ferrule-common/src/lib.rs",
+            "edition": "2024",
+            "doc": true,
+            "doctest": true,
+            "test": true
+          },
+          "profile": {
+            "opt_level": "3",
+            "debuginfo": 0,
+            "debug_assertions": false,
+            "overflow_checks": false,
+            "test": false
+          },
+          "features": [
+            "default",
+            "nvtx-profile"
+          ],
+          "filenames": [
+            "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/cargo-target/release/build/ferrule-common/dd03912a51c64ddf/out/libferrule_common-dd03912a51c64ddf.rlib",
+            "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/cargo-target/release/build/ferrule-common/dd03912a51c64ddf/out/libferrule_common-dd03912a51c64ddf.rmeta"
+          ],
+          "executable": null,
+          "fresh": true
+        }
+      ],
+      "source_digest": "a4dceb084e21b80f6b45ff7ac980c6fa80ac8f17e902fd28c65f3d5bc7bb0efa",
+      "nvtx_compiled": true,
+      "qualification_nvtx_runtime_enabled": false,
+      "build_adapter_v1_accepted": false,
+      "adapter_caveat": "Explicit nvtx-profile build differs from strict legacy CUDA-only build adapter; no paper protocol binding claimed"
+    },
+    "composition": {
+      "role": "composition",
+      "compiled_artifact": {
+        "reason": "compiler-artifact",
+        "package_id": "path+file:///home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/frozen-source/crates/ferrule-composition#0.2.0",
+        "manifest_path": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/frozen-source/crates/ferrule-composition/Cargo.toml",
+        "target": {
+          "kind": [
+            "lib"
+          ],
+          "crate_types": [
+            "lib"
+          ],
+          "name": "ferrule_composition",
+          "src_path": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/frozen-source/crates/ferrule-composition/src/lib.rs",
+          "edition": "2024",
+          "doc": true,
+          "doctest": true,
+          "test": true
+        },
+        "profile": {
+          "opt_level": "3",
+          "debuginfo": 0,
+          "debug_assertions": false,
+          "overflow_checks": false,
+          "test": true
+        },
+        "features": [
+          "cuda"
+        ],
+        "filenames": [
+          "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/cargo-target/release/build/ferrule-composition/06189b5d788a3959/out/ferrule_composition-06189b5d788a3959"
+        ],
+        "executable": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/cargo-target/release/build/ferrule-composition/06189b5d788a3959/out/ferrule_composition-06189b5d788a3959",
+        "fresh": false
+      },
+      "executable": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/staged/composition",
+      "sha256": "8810c3418f4b39b4c9203003b91e53a6106a833624db4d13a516fdfd63453d6a",
+      "bytes": 23045272,
+      "common_artifacts": [
+        {
+          "reason": "compiler-artifact",
+          "package_id": "path+file:///home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/frozen-source/crates/ferrule-common#0.2.0",
+          "manifest_path": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/frozen-source/crates/ferrule-common/Cargo.toml",
+          "target": {
+            "kind": [
+              "custom-build"
+            ],
+            "crate_types": [
+              "bin"
+            ],
+            "name": "build-script-build",
+            "src_path": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/frozen-source/crates/ferrule-common/build.rs",
+            "edition": "2024",
+            "doc": false,
+            "doctest": false,
+            "test": false
+          },
+          "profile": {
+            "opt_level": "0",
+            "debuginfo": 0,
+            "debug_assertions": false,
+            "overflow_checks": false,
+            "test": false
+          },
+          "features": [
+            "default",
+            "nvtx-profile"
+          ],
+          "filenames": [
+            "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/cargo-target/release/build/ferrule-common/57185cf84eee6910/out/build_script_build"
+          ],
+          "executable": null,
+          "fresh": true
+        },
+        {
+          "reason": "compiler-artifact",
+          "package_id": "path+file:///home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/frozen-source/crates/ferrule-common#0.2.0",
+          "manifest_path": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/frozen-source/crates/ferrule-common/Cargo.toml",
+          "target": {
+            "kind": [
+              "lib"
+            ],
+            "crate_types": [
+              "lib"
+            ],
+            "name": "ferrule_common",
+            "src_path": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/frozen-source/crates/ferrule-common/src/lib.rs",
+            "edition": "2024",
+            "doc": true,
+            "doctest": true,
+            "test": true
+          },
+          "profile": {
+            "opt_level": "3",
+            "debuginfo": 0,
+            "debug_assertions": false,
+            "overflow_checks": false,
+            "test": false
+          },
+          "features": [
+            "default",
+            "nvtx-profile"
+          ],
+          "filenames": [
+            "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/cargo-target/release/build/ferrule-common/dd03912a51c64ddf/out/libferrule_common-dd03912a51c64ddf.rlib",
+            "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/cargo-target/release/build/ferrule-common/dd03912a51c64ddf/out/libferrule_common-dd03912a51c64ddf.rmeta"
+          ],
+          "executable": null,
+          "fresh": false
+        }
+      ],
+      "source_digest": "a4dceb084e21b80f6b45ff7ac980c6fa80ac8f17e902fd28c65f3d5bc7bb0efa",
+      "nvtx_compiled": true,
+      "qualification_nvtx_runtime_enabled": false,
+      "build_adapter_v1_accepted": false,
+      "adapter_caveat": "Explicit nvtx-profile build differs from strict legacy CUDA-only build adapter; no paper protocol binding claimed"
+    }
+  },
+  "raw_build_adapter": "new explicit nvtx-capable features; legacy v1 CUDA-only adapter not claimed accepted",
+  "binary_hashes_equal": false,
+  "source_maps_identical": true,
+  "numerical_scope": "full40 metrics804, diagnostic fresh5427, cold1809; ordinary report and per-stream actual denominators retained, no cross-stream sums",
+  "expected_fresh_fingerprint_calls": 64,
+  "runtime_base_environment": {
+    "PATH": "/usr/bin:/bin",
+    "HOME": "/root",
+    "CUDA_VISIBLE_DEVICES": "0",
+    "NVIDIA_VISIBLE_DEVICES": "0",
+    "CUBLAS_WORKSPACE_CONFIG": ":0:0",
+    "LD_LIBRARY_PATH": "/home/admin/wxw403883/anaconda3/envs/tao/lib:/usr/lib64",
+    "FERRULE_PROFILE_NVTX": "0"
+  },
+  "full40_reference_sha256": "351495921233e0158eb2a4507c415d173c895a6086d5905b7a72d82de71849f9",
+  "fresh_reference_sha256": "102c798baeb5200bc8ed8386eabed6146870b3b6da2a90fc6010677041352c7e",
+  "composition_capacity_and_options": {
+    "allocator_margin_bytes": 536870912,
+    "ctx_size": 128,
+    "device_bytes": 7516192768,
+    "enable_native_proposals": false,
+    "expert_cache": "ExpertCacheOptions { host_entries: 256, host_mebibytes: 0, pinned_entries: 64, pinned_mebibytes: 0 }",
+    "expert_reader_max_tensor_mebibytes": 64,
+    "kv_bytes": 16777216,
+    "kv_cache_mebibytes": 16,
+    "max_batch_tokens": 8,
+    "max_bytes": 335544320,
+    "max_experts": 64,
+    "max_layers": null,
+    "max_positions": 128,
+    "max_sequences": 2,
+    "max_tensor_mebibytes": 1024,
+    "moe_hotset_experts": 0,
+    "numeric_fp8_profile": "None",
+    "output_head_chunk_rows": 4096,
+    "qwen35_host_cache": "None",
+    "scheduler": {
+      "allow_mixed_batches": true,
+      "decode_cohort_max_deferrals": 0,
+      "decode_cohort_target": 1,
+      "max_active_sequences": 2,
+      "max_batch_tokens": 8,
+      "max_decode_batch": 2,
+      "prefill_chunk_size": 8,
+      "prefill_reserve_tokens": 1,
+      "prefix_cache_capacity_pages": 0
+    },
+    "scratch_bytes": 8388608,
+    "stop_at_eos": false,
+    "workspace_bytes": 2147483648
+  },
+  "primary_binding_rule": "Only same-schedule gate04/05 newly accepted report; exact SHA sealed in runtime environment/launch before gate06/07; same primary SHA retained for cold08/09",
+  "before_each_gate": "Re-list exact ignored selector selected1; strict all-eight idle; authenticated worker strict pre-CUDA idle",
+  "after_each_gate": "Maintained subreaper authenticated ECHILD, all recorded PID/birth owners absent, idleV2 fixed15s three consecutive zero; memory/apps fail immediately",
+  "observer_vs_ordinary_scope": "actual logits little-endian SHA256 plus shape/greedy paired separately from tolerance oracle; no mathematical binary equivalence proof",
+  "physical_release": "unobserved; no physical CUDA release certificate",
+  "supervisor_cleanup_seconds": 5,
+  "source_archive_exact_members": true,
+  "prelaunch_adapter_revision": {
+    "prior_adapter_preserved": true,
+    "prior_plan_preserved": true,
+    "actual_tests_issued_before_revision": 0,
+    "reason": "CPU inspection corrected serde lowercase constructor schedules and exact composition manifest shape before first GPU launch; monitor retains unique mappings rather than every RSS variation"
+  }
+}

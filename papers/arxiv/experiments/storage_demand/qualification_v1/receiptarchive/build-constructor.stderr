@@ -1,0 +1,4 @@
+   Compiling ferrule-backend v0.2.0 (/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/frozen-source/crates/ferrule-backend)
+   Compiling ferrule-model v0.2.0 (/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/frozen-source/crates/ferrule-model)
+   Compiling ferrule-runtime v0.2.0 (/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/frozen-source/crates/ferrule-runtime)
+    Finished `release` profile [optimized] target(s) in 2m 29s

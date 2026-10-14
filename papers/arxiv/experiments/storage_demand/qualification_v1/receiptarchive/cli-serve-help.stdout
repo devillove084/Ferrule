@@ -1,0 +1,232 @@
+Serve an OpenAI-compatible asynchronous HTTP API
+
+Usage: cli serve [OPTIONS] <MODEL>
+
+Arguments:
+  <MODEL>
+          Local Hugging Face model directory
+
+Options:
+      --expert-read-schedule <SCHEDULE>
+          Opt-in host schedule; omitted with a host budget selects blocking
+          
+          [possible values: blocking, lookahead]
+
+      --expert-read-host-mb <HOST_MB>
+          Combined host staging, metadata and requested worker stack cap in MiB. Required to enable the pipeline; not deducted from CUDA expert cache bytes
+
+      --expert-read-metadata-mb <METADATA_MB>
+          Metadata allowance INCLUDED in the host cap (default when enabled: 8 MiB)
+
+      --expert-read-worker-stack-mb <WORKER_STACK_MB>
+          Requested worker stack INCLUDED in the host cap (default when enabled: 2 MiB). OS rounding/TLS/allocator overhead require separate host headroom
+
+      --expert-prewarm <MODE>
+          35B startup: full retains every compressed routed expert before ready; lazy explicitly allows demand NAS reads and disables host retention
+          
+          [possible values: full, lazy]
+
+      --expert-prewarm-workers <WORKERS>
+          Bounded CPU pread/validation workers for full host prewarm (default: 4, max: 8)
+
+      --numeric-fp8-precision <NUMERIC_PRECISION>
+          Numeric FP8 arithmetic (Qwen3.5 MoE CUDA only; default f32). W8A16 uses BF16-RNE operands, F32 accumulation/output/model/KV/state boundaries
+          
+          [possible values: f32, w8a16-bf16]
+
+      --cuda-expert-device-entries <ENTRIES>
+          Qwen3.5 FP8 CUDA cache entries across all layers (default: 1024)
+
+      --cuda-expert-device-bytes <BYTES>
+          Qwen3.5 FP8 CUDA cache hard byte cap, INCLUDING 64 MiB scratch (default: 4294967296). Admission also enforces the model's total device budget and actual free VRAM
+
+      --served-model-name <SERVED_MODEL_NAME>
+          Public model ID returned by /v1/models and accepted by requests. Defaults to the resolved model adapter ID
+
+      --backend <BACKEND>
+          Execution backend (default: cuda; cpu requires a cpu-reference test build)
+
+      --engine <ENGINE>
+          Serial greedy CPU/CUDA PP, MoE EP, dense TP or Qwen3.5 CUDA thread TP x EP
+          
+          [default: auto]
+          [possible values: auto, resident, pipeline]
+
+      --model-precision <MODEL_PRECISION>
+          Model storage/boundary precision, separate from --numeric-fp8-precision. BF16: native BF16 dense Qwen3 only, CUDA TP1/PP1/EP1, resident typed KV, engine auto/pipeline. No GDN/MoE/HostKV/IdleReclaim. Omitted preserves defaults
+          
+          [possible values: f32, bf16]
+
+      --model-profile <MODEL_PROFILE>
+          Explicit experimental model/storage/arithmetic bundle; omitted keeps defaults. qwen35-mixed-bf16 implies BF16 boundaries, not --numeric-fp8-precision
+
+          Possible values:
+          - qwen35-mixed-bf16: Experimental 35B numeric FP8/BF16-scale Mixed: BF16 activation/KV/conv, F32 SSM/accumulation. Public TP1: single CUDA owner, lazy experts, resident KV. Public TP2 is restricted to PP1/TP2/EP1 CUDA threads, two distinct devices, resident local expert shards and the authorized full40 multistep/lifecycle gate. TP2: context<=128, batch<=8, sequences<=2; no process/PP>1/EP>1. TP1 frozen two-prompt PASS is not universal; fresh quality is blocking. Unverified process/PP/EP/profile combinations remain rejected. Requires startup CUBLAS_WORKSPACE_CONFIG=:0:0. Not legacy W8A16
+
+      --cuda-device-budget-mb <CUDA_DEVICE_BUDGET_MB>
+          Mixed-only total device admission ceiling in MiB, including allocator margin. TP1 uses its existing budget; TP2 uses at most 22528 MiB PER CARD. Not a physical VRAM reservation; live source-bound admission still applies
+
+      --cuda-workspace-mb <CUDA_WORKSPACE_MB>
+          Mixed-only operator workspace ceiling in MiB per owner (TP1 excludes expert scratch). Strict TP2 includes its 3072 MiB decoded BF16 cache; default 4096 MiB. Explicit 1024 MiB cannot admit TP2 cache-on. The total ceiling remains 22528 MiB/card; TP1 and legacy defaults are unchanged
+
+      --cuda-expert-scratch-mb <CUDA_EXPERT_SCRATCH_MB>
+          Mixed-only scratch in MiB, INCLUDED in --cuda-expert-device-bytes
+
+      --kv-execution-policy <KV_EXECUTION_POLICY>
+          HostKV: resident prefill warming, then synchronous decode on local dense F32 all-GQA CUDA (full-depth dense Qwen3). Requires max-active-sequences=1; rejects GDN/numeric/TP/EP. Scratch cap: 64 MiB per byte domain, block=16 tokens. Does not evict resident KV or reduce device KV capacity
+          
+          [default: resident]
+          [possible values: resident, host-kv-decode]
+
+      --pipeline-parallel <PIPELINE_PARALLEL>
+          [default: 1]
+
+      --tensor-parallel <TENSOR_PARALLEL>
+          CUDA tensor owners per stage (1, 2 or 4); thread only. Qwen3.5-35B supports PP1/2 TP2/4 EP2; dense Qwen3 requires EP1
+          
+          [default: 1]
+
+      --expert-parallel <EXPERT_PARALLEL>
+          Stage expert owners: Qwen3-MoE pipeline or Qwen3.5 CUDA EP2/4/8. Qwen3.5 PP2 TP1 EP2/4/8 and PP1/2 TP2/4 EP2 are thread-only. Resident PP1 TP1 EP also supports process ranks
+          
+          [default: 1]
+
+      --rank-backend <RANK_BACKEND>
+          Rank isolation. Process uses private child pipes; there is no automatic replay
+          
+          [default: thread]
+          [possible values: thread, process]
+
+      --devices <DEVICES>
+          CUDA ordinals: dense TP uses PP-stage-major then TP-rank order (PP * TP distinct devices). Hybrid TP: PP-major TP roots, then stage-ordered EP children; colocation is budgeted. Qwen3.5 requires explicit placement: PP1 EP uses a distinct list (root = first); Pipeline hybrid uses PP*(TP+EP) ordinals (not PP*TP*EP), roots then stage EP. Other models default to 0..owner-count
+
+      --rank-timeout-ms <RANK_TIMEOUT_MS>
+          Process startup/command/shutdown deadline (ms), also applied to expert children. Thread mode only accepts the default; it cannot preempt a kernel
+          
+          [default: 30000]
+
+      --rank-restarts <RANK_RESTARTS>
+          Reserved replay budget. Only 0 is supported
+          
+          [default: 0]
+
+      --host <HOST>
+          Listening address
+          
+          [default: 127.0.0.1]
+
+      --port <PORT>
+          Listening TCP port
+          
+          [default: 8000]
+
+      --chat-template <CHAT_TEMPLATE>
+          Override the model-family default chat template
+
+      --ctx-size <CTX_SIZE>
+          Maximum context tokens retained per active request
+          
+          [default: 1024]
+
+      --max-active-sequences <MAX_ACTIVE_SEQUENCES>
+          Maximum simultaneously resident requests
+          
+          [default: 4]
+
+      --decode-cohort-target <DECODE_COHORT_TARGET>
+          Desired number of ready decode requests before dispatching a cohort
+          
+          [default: 4]
+
+      --decode-cohort-max-deferrals <DECODE_COHORT_MAX_DEFERRALS>
+          Maximum prefill decisions used to form a decode cohort before forcing progress
+          
+          [default: 3]
+
+      --prefill-chunk-size <PREFILL_CHUNK_SIZE>
+          Maximum prompt tokens processed by one prefill chunk
+          
+          [default: 512]
+
+      --max-batch-tokens <MAX_BATCH_TOKENS>
+          Maximum packed prefill plus decode tokens in one scheduler action. Qwen3.5 resolves this to min(requested, 32, context); adjustments are reported
+          
+          [default: 512]
+
+      --kv-cache-mb <KV_CACHE_MB>
+          Hard budget for the model's physical KV data planes in MiB
+          
+          [default: 1024]
+
+      --request-queue-capacity <REQUEST_QUEUE_CAPACITY>
+          Bounded requests waiting for model-worker admission
+          
+          [default: 256]
+
+      --event-queue-capacity <EVENT_QUEUE_CAPACITY>
+          Bounded token events buffered independently per request
+          
+          [default: 32]
+
+      --max-inflight-requests <MAX_INFLIGHT_REQUESTS>
+          Maximum server request leases, including responses and pending cleanup
+          
+          [default: 1024]
+
+      --max-prompt-bytes <MAX_PROMPT_BYTES>
+          Aggregate UTF-8 ingress and prompt byte budget (not tokenizer/GPU memory)
+          
+          [default: 67108864]
+
+      --max-body-bytes <MAX_BODY_BYTES>
+          Maximum bytes per HTTP body; aggregate prompt capacity may reject earlier
+          
+          [default: 16777216]
+
+      --runtime-max-waiting-requests <RUNTIME_MAX_WAITING_REQUESTS>
+          Override runtime waiting capacity (resident default: 1024)
+
+      --runtime-max-request-identities <RUNTIME_MAX_REQUEST_IDENTITIES>
+          Override runtime request identities (resident default: 4096)
+
+      --runtime-max-session-identities <RUNTIME_MAX_SESSION_IDENTITIES>
+          Override runtime session identities (resident default: 4096)
+
+      --admission-timeout-secs <ADMISSION_TIMEOUT_SECS>
+          Maximum time in seconds to wait for tokenizer/runtime admission
+          
+          [default: 30]
+
+      --max-layers <MAX_LAYERS>
+          Maximum model layers to execute (defaults to the descriptor layer count)
+
+      --output-head-chunk-rows <OUTPUT_HEAD_CHUNK_ROWS>
+          lm_head chunk size in rows for full-vocabulary top-1 scans
+          
+          [default: 4096]
+
+      --max-tensor-mb <MAX_TENSOR_MB>
+          Single tensor materialization limit in MiB (Qwen3.5: 1024, others: 128). Qwen3.5-35B TP x EP requires explicit --max-tensor-mb 2048 for its replicated F32 embedding
+
+      --expert-max-slice-mb <EXPERT_READER_MAX_SLICE_MB>
+          Maximum single expert artifact read size
+          
+          [default: 64]
+
+      --moe-hotset-experts <MOE_HOTSET_EXPERTS>
+          Routed-expert slots per layer (0 = automatic device-budget planning)
+
+      --expert-host-cache-entries <EXPERT_HOST_CACHE_ENTRIES>
+          Maximum whole experts retained in pageable host memory (0 disables retention). 35B full-prewarm default: 10240 (including hybrid PP/TP x EP); other resident models: 64
+
+      --expert-host-cache-mb <EXPERT_HOST_CACHE_MB>
+          Pageable host expert-cache budget in MiB (0 = entry-limited only). 35B default: 40960, including staging/metadata (0 is invalid for full prewarm). Other resident models: 1024. Generic pipeline unsupported
+
+      --expert-pinned-cache-entries <EXPERT_PINNED_CACHE_ENTRIES>
+          Maximum whole experts retained in pinned host memory (0 disables retention). Resident default: 16. Explicit cache options are unsupported by pipeline/Qwen3.5
+
+      --expert-pinned-cache-mb <EXPERT_PINNED_CACHE_MB>
+          Pinned host expert-cache budget in MiB (0 = entry-limited only). Resident default: 256. Explicit cache options are unsupported by pipeline/Qwen3.5
+
+  -h, --help
+          Print help (see a summary with '-h')

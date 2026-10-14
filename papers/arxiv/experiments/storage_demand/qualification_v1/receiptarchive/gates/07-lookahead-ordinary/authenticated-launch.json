@@ -1,0 +1,59 @@
+{
+  "identity": {
+    "worker": {
+      "pid": 261742,
+      "birth_ticks": 131050728,
+      "ppid": 261741,
+      "pgrp": 261742,
+      "session": 261742
+    },
+    "helper": {
+      "pid": 261741,
+      "birth_ticks": 131050725,
+      "ppid": 250316,
+      "pgrp": 261741,
+      "session": 261741
+    },
+    "coordinator": {
+      "pid": 250316,
+      "birth_ticks": 131002362,
+      "ppid": 88644,
+      "pgrp": 250316,
+      "session": 250316
+    },
+    "launch_id": "6411134b4fbe4f5dbb7a79152bd0b890"
+  },
+  "argv": [
+    "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/staged/composition",
+    "model_factory::dense_bf16_tests::full40::fresh_quality::mixed_storage_middle64_lookahead_fresh_quality_no_observer_equality",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+  ],
+  "environment": {
+    "PATH": "/usr/bin:/bin",
+    "HOME": "/root",
+    "CUDA_VISIBLE_DEVICES": "0",
+    "NVIDIA_VISIBLE_DEVICES": "0",
+    "CUBLAS_WORKSPACE_CONFIG": ":0:0",
+    "LD_LIBRARY_PATH": "/home/admin/wxw403883/anaconda3/envs/tao/lib:/usr/lib64",
+    "FERRULE_PROFILE_NVTX": "0",
+    "FERRULE_NUMERIC_BF16_FACTORY_GPU": "1",
+    "FERRULE_NUMERIC_BF16_MODEL": "/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8",
+    "FERRULE_NUMERIC_BF16_REFERENCE_DIR": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/numeric-bf16-gate-20261004-v2/profile-reference",
+    "FERRULE_NUMERIC_BF16_REFERENCE_SHA256": "351495921233e0158eb2a4507c415d173c895a6086d5905b7a72d82de71849f9",
+    "FERRULE_BF16_FRESH_DIR": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/bf16-fresh-quality-20261007",
+    "FERRULE_BF16_FRESH_SHA256": "102c798baeb5200bc8ed8386eabed6146870b3b6da2a90fc6010677041352c7e",
+    "FERRULE_BF16_FRESH_REPORT": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/gates/07-lookahead-ordinary/quality.json",
+    "FERRULE_BF16_FRESH_PRIMARY_REPORT": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/gates/05-lookahead-fresh/quality.json",
+    "FERRULE_BF16_FRESH_OBSERVED_REPORT": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/gates/05-lookahead-fresh/quality.json",
+    "FERRULE_BF16_FRESH_OBSERVED_REPORT_SHA256": "8063e1c747aff46da1493f4151f2053a3f860d230ffac153eff79af8c448228f"
+  },
+  "gate_id": "07-lookahead-ordinary",
+  "executable_sha256": "8810c3418f4b39b4c9203003b91e53a6106a833624db4d13a516fdfd63453d6a",
+  "all_eight_uuid_locks_validated": true,
+  "exec_preserves_authenticated_root_pid_birth": true,
+  "seconds": 1200,
+  "no_probe_no_warmup_no_retry": true
+}

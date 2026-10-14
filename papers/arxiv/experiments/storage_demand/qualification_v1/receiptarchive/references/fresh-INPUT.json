@@ -1,0 +1,63 @@
+{
+  "schema": "ferrule.bf16-fresh-quality-input.v1",
+  "cases": [
+    {
+      "id": "qa",
+      "prompt": "The capital of Japan is",
+      "input_ids": [
+        760,
+        6511,
+        314,
+        6124,
+        369
+      ],
+      "answer_literal_diagnostic_only": "Tokyo"
+    },
+    {
+      "id": "arithmetic",
+      "prompt": "7 + 8 =",
+      "input_ids": [
+        22,
+        478,
+        220,
+        23,
+        283
+      ],
+      "answer_literal_diagnostic_only": "15"
+    },
+    {
+      "id": "chinese",
+      "prompt": "中国的首都是",
+      "input_ids": [
+        96328,
+        102357,
+        96878
+      ],
+      "answer_literal_diagnostic_only": "北京"
+    }
+  ],
+  "decode_steps": 8,
+  "greedy_predictions": 9,
+  "tokenizer": {
+    "add_special_tokens": false,
+    "chat_template": false,
+    "files": {
+      "tokenizer.json": "5f9e4d4901a92b997e463c1f46055088b6cca5ca61a6522d1b9f64c4bb81cb42",
+      "tokenizer_config.json": "316230d6a809701f4db5ea8f8fc862bc3a6f3229c937c174e674ff3ca0a64ac8"
+    }
+  },
+  "decode": {
+    "temperature": 0,
+    "top_p": 1,
+    "ignore_eos": true,
+    "tie_policy": "lower_token_id",
+    "seed": 0
+  },
+  "state": {
+    "fresh_each_prompt": true,
+    "ssm": "F32",
+    "kv_conv": "BF16",
+    "prefix_cache": false
+  },
+  "original_reference_manifest_sha256": "351495921233e0158eb2a4507c415d173c895a6086d5905b7a72d82de71849f9"
+}

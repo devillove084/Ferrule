@@ -1,0 +1,25 @@
+{
+  "argv": [
+    "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/staged/cli",
+    "serve",
+    "--help"
+  ],
+  "environment": {
+    "PATH": "/usr/bin:/bin",
+    "HOME": "/root",
+    "CUDA_VISIBLE_DEVICES": "",
+    "NVIDIA_VISIBLE_DEVICES": "none",
+    "LD_LIBRARY_PATH": "/home/admin/wxw403883/anaconda3/envs/tao/lib:/usr/lib64",
+    "FERRULE_PROFILE_NVTX": "0",
+    "PYTHONDONTWRITEBYTECODE": "1"
+  },
+  "cwd": "/home/admin/luhuanbing.lhb/Ferrule",
+  "timeout_seconds": 30,
+  "gpu_hidden": true,
+  "profiling_enabled": false,
+  "returncode": 0,
+  "timed_out": false,
+  "wall_seconds": 0.0643927026540041,
+  "stdout_sha256": "5aad7c61c404c8d5bfb79cc85e731f4d496fbbe490c3473550630dee1d368e86",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}
