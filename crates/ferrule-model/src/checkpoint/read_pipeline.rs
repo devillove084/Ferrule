@@ -320,6 +320,14 @@ pub struct ReadBudgetSnapshot {
     pub worker_stack: ReadWorkerStackSnapshot,
 }
 
+/// Passive ledger sample, not recovery or progress. Poison makes every
+/// retained reservation ambiguous; it does not refund or quarantine an entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReadBudgetObservation {
+    pub budget: ReadBudgetSnapshot,
+    pub ledger_poisoned: bool,
+}
+
 impl ReadBudgetSnapshot {
     /// Sum of payload and requested-stack reservations without u64 overflow.
     /// This excludes unobserved OS/allocator overhead and separately staged artifacts.
@@ -378,6 +386,11 @@ impl ReadJoinHandoff {
 
     pub fn budget(&self) -> ReadBudgetSnapshot {
         self.shared.lock().snapshot()
+    }
+
+    /// Never repairs poison, delivers a waker, joins, or releases custody.
+    pub fn observe_budget(&self) -> ReadBudgetObservation {
+        self.shared.observe_budget()
     }
 }
 
@@ -491,6 +504,49 @@ struct Shared {
 }
 
 impl Shared {
+    fn observe_budget(&self) -> ReadBudgetObservation {
+        match self.state.lock() {
+            Ok(state) => ReadBudgetObservation {
+                budget: state.snapshot(),
+                ledger_poisoned: false,
+            },
+            Err(poisoned) => {
+                let state = poisoned.into_inner();
+                let mut budget = state.budget;
+                // A panic may interrupt bookkeeping between the entry map and
+                // aggregate counters. Neither representation may lower the
+                // other's retained charge, including caller-held Taken entries.
+                let entry_bytes = state.entries.values().fold(0u64, |total, entry| {
+                    total.saturating_add(entry.receipt.requested_bytes)
+                });
+                budget.reserved_bytes = budget
+                    .reserved_bytes
+                    .max(entry_bytes)
+                    .max(budget.unknown_bytes);
+                budget.reserved_slots = budget
+                    .reserved_slots
+                    .max(state.entries.len())
+                    .max(budget.unknown_slots);
+                budget.peak_bytes = budget.peak_bytes.max(budget.reserved_bytes);
+                budget.peak_slots = budget.peak_slots.max(budget.reserved_slots);
+                budget.unknown_bytes = budget.reserved_bytes;
+                budget.unknown_slots = budget.reserved_slots;
+                // A poisoned zero is not independent proof of worker joining.
+                // Preserve its configured request as ambiguous, not measured RSS.
+                budget.worker_stack.reserved_bytes = budget
+                    .worker_stack
+                    .reserved_bytes
+                    .max(budget.worker_stack.unknown_bytes)
+                    .max(budget.worker_stack.configured_bytes);
+                budget.worker_stack.unknown_bytes = budget.worker_stack.reserved_bytes;
+                ReadBudgetObservation {
+                    budget,
+                    ledger_poisoned: true,
+                }
+            }
+        }
+    }
+
     fn lock(&self) -> MutexGuard<'_, State> {
         loop {
             match self.state.lock() {
@@ -932,6 +988,11 @@ impl CheckpointReadPipeline {
 
     pub fn budget(&self) -> ReadBudgetSnapshot {
         self.shared.lock().snapshot()
+    }
+
+    /// Never repairs poison, delivers a waker, joins, or releases custody.
+    pub fn observe_budget(&self) -> ReadBudgetObservation {
+        self.shared.observe_budget()
     }
 
     /// Arm BEFORE polling/draining; await only if the owner found no ready work.

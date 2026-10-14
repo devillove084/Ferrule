@@ -476,3 +476,224 @@ fn lost_handoff_does_not_detach_or_refund_finished_worker() {
         },
     );
 }
+
+#[test]
+fn poisoned_model_observation_is_passive_and_operational_wake_can_reenter() {
+    isolated(
+        "poisoned_model_observation_is_passive_and_operational_wake_can_reenter",
+        || {
+            use crate::transformer::expert_reads::tests::{Fixture as ExpertFixture, IMAGE};
+            use crate::transformer::{ExpertReadSchedule, PreparedLinear, PreparedSwiGlu};
+            let fixture = ExpertFixture::new(1);
+            let materializer = Arc::new(fixture.materializer(ExpertReadSchedule::Lookahead));
+            let mut sequence = materializer
+                .expert_read_sequence(IMAGE, &[&fixture.metadata[0]])
+                .unwrap()
+                .unwrap();
+            let handoff = sequence.observation_test_handoff();
+            let read = sequence.demand(0, 0).unwrap();
+            let linear = |index| {
+                PreparedLinear::from_parameter(
+                    materializer
+                        .expert_parameter_from_read(read, index, &read.plan.parameters[index])
+                        .unwrap(),
+                    read.plan.parameters[index].role().clone(),
+                )
+                .unwrap()
+            };
+            let prepared = PreparedSwiGlu::new(linear(0), linear(1), linear(2), None).unwrap();
+            sequence.track_artifacts(&prepared).unwrap();
+            let before = materializer.expert_read_pipeline_observation();
+            let read_counters = materializer.checkpoint_read_counters();
+            let expected_identity = before.current_read.unwrap();
+            let calls = Arc::new(AtomicUsize::new(0));
+            let callback_calls = Arc::clone(&calls);
+            let callback_materializer = Arc::clone(&materializer);
+            let callback_handoff = handoff.clone();
+            let mut listener = handoff.shared.wake.listen();
+            let waker = Waker::from(Arc::new(Callback(Box::new(move || {
+                callback_calls.fetch_add(1, Ordering::Relaxed);
+                // Recovery has dropped its core guard before closing the wake hub.
+                // This reentry must not encounter an outer observation/stats lock.
+                let observed = callback_materializer.expert_read_pipeline_observation();
+                assert_eq!(observed.current_read, Some(expected_identity));
+                assert_eq!(observed.current_charge, before.current_charge);
+                assert!(!callback_handoff.shared.state.is_poisoned());
+            }))));
+            assert!(
+                Pin::new(&mut listener)
+                    .poll(&mut Context::from_waker(&waker))
+                    .is_pending()
+            );
+            assert!(
+                catch_unwind(AssertUnwindSafe(|| {
+                    let _state = handoff.shared.state.lock().unwrap();
+                    panic!("controlled retained-completion ledger poison");
+                }))
+                .is_err()
+            );
+            assert!(handoff.shared.state.is_poisoned());
+            for _ in 0..3 {
+                let observed = materializer.expert_read_pipeline_observation();
+                assert_eq!(observed.status, "unknown_ledger_poisoned");
+                assert_eq!(observed.current_read, Some(expected_identity));
+                assert_eq!(observed.stats, before.stats);
+                assert_eq!(
+                    observed.current_charge.packed_bytes,
+                    before.current_charge.packed_bytes
+                );
+                assert_eq!(
+                    observed.current_charge.artifact_bytes,
+                    before.current_charge.artifact_bytes
+                );
+                assert_eq!(
+                    observed.current_charge.metadata_bytes,
+                    before.current_charge.metadata_bytes
+                );
+                assert_eq!(
+                    observed.current_charge.requested_stack_bytes,
+                    before.current_charge.requested_stack_bytes
+                );
+                assert_eq!(
+                    observed.current_charge.host_charged_bytes,
+                    before.current_charge.host_charged_bytes
+                );
+                assert_eq!(
+                    observed.current_charge.unknown_packed_bytes,
+                    before.current_charge.packed_bytes
+                );
+                assert_eq!(
+                    observed.current_charge.unknown_stack_bytes,
+                    before.current_charge.requested_stack_bytes
+                );
+                assert!(handoff.shared.state.is_poisoned());
+                assert_eq!(calls.load(Ordering::Relaxed), 0);
+                assert_eq!(materializer.checkpoint_read_counters(), read_counters);
+                let state = handoff.shared.state.lock().unwrap_err().into_inner();
+                assert!(state.accepting);
+                assert!(matches!(
+                    state
+                        .entries
+                        .values()
+                        .find(|entry| entry.ticket.operation().get() == expected_identity.operation)
+                        .unwrap()
+                        .phase,
+                    Phase::Taken
+                ));
+            }
+            // Operational access, unlike observation, still performs the existing
+            // recovery and callback delivery. It cannot release the held completion.
+            let recovered = handoff.budget();
+            assert_eq!(calls.load(Ordering::Relaxed), 1);
+            assert!(!handoff.shared.state.is_poisoned());
+            assert_eq!(recovered.reserved_bytes, before.current_charge.packed_bytes);
+            assert!(!handoff.shared.lock().accepting);
+            drop(prepared);
+            drop(sequence);
+            assert_eq!(
+                materializer
+                    .expert_read_pipeline_observation()
+                    .current_charge
+                    .host_charged_bytes,
+                0
+            );
+            drop(listener);
+        },
+    );
+}
+
+#[test]
+fn passive_poisoned_budget_preserves_entries_and_aggregate_without_wake_or_repair() {
+    isolated(
+        "passive_poisoned_budget_preserves_entries_and_aggregate_without_wake_or_repair",
+        || {
+            let fixture = Fixture::new();
+            let reader = CheckpointTensorReader::new(32);
+            let gate = Gate::new(TestPhase::SessionOpened);
+            let mut pipeline = fixture.pipeline(&reader, Some(gate.action.clone()));
+            let ticket = pipeline.submit(GENERATION, fixture.plan.clone()).unwrap();
+            gate.entered();
+            let handoff = pipeline.join_handoff();
+            let original = pipeline.budget();
+            let calls = Arc::new(AtomicUsize::new(0));
+            let callback_calls = Arc::clone(&calls);
+            let listener = arm(&pipeline, move || {
+                callback_calls.fetch_add(1, Ordering::Relaxed);
+            });
+            for interrupted_bytes in [0, original.reserved_bytes + 4] {
+                assert!(
+                    catch_unwind(AssertUnwindSafe(|| {
+                        let mut state = handoff
+                            .shared
+                            .state
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner());
+                        // Exercise both directions of a panic between map and aggregate
+                        // bookkeeping. Passive inspection cannot choose the lower charge.
+                        state.budget.reserved_bytes = interrupted_bytes;
+                        state.budget.worker_stack.reserved_bytes = 0;
+                        panic!("controlled interrupted budget bookkeeping");
+                    }))
+                    .is_err()
+                );
+                for sample in [pipeline.observe_budget(), handoff.observe_budget()] {
+                    assert!(sample.ledger_poisoned);
+                    assert_eq!(
+                        sample.budget.reserved_bytes,
+                        original.reserved_bytes.max(interrupted_bytes)
+                    );
+                    assert_eq!(sample.budget.unknown_bytes, sample.budget.reserved_bytes);
+                    assert_eq!(sample.budget.reserved_slots, original.reserved_slots);
+                    assert_eq!(sample.budget.unknown_slots, sample.budget.reserved_slots);
+                    assert_eq!(
+                        sample.budget.worker_stack.reserved_bytes,
+                        original.worker_stack.reserved_bytes
+                    );
+                    assert_eq!(
+                        sample.budget.worker_stack.unknown_bytes,
+                        original.worker_stack.reserved_bytes
+                    );
+                }
+                assert_eq!(calls.load(Ordering::Relaxed), 0);
+                assert!(handoff.shared.state.is_poisoned());
+                let state = handoff.shared.state.lock().unwrap_err().into_inner();
+                assert!(state.accepting);
+                assert_eq!(state.budget.reserved_bytes, interrupted_bytes);
+                assert_eq!(state.budget.worker_stack.reserved_bytes, 0);
+                assert_eq!(state.budget.worker_stack.unknown_bytes, 0);
+                assert_eq!(state.entries[&ticket.operation()].ticket, ticket);
+                assert!(matches!(
+                    state.entries[&ticket.operation()].phase,
+                    Phase::Reading
+                ));
+            }
+            // Restore only the deliberately interrupted test aggregate, leaving
+            // poison intact. Normal progress must still recover and quarantine.
+            {
+                let mut state = handoff.shared.state.lock().unwrap_err().into_inner();
+                state.budget.reserved_bytes = original.reserved_bytes;
+                state.budget.worker_stack.reserved_bytes = original.worker_stack.reserved_bytes;
+            }
+            let recovered = pipeline.budget();
+            assert!(!handoff.shared.state.is_poisoned());
+            assert_eq!(calls.load(Ordering::Relaxed), 1);
+            assert_eq!(recovered.unknown_bytes, original.reserved_bytes);
+            gate.release();
+            let shutdown = pipeline.shutdown();
+            assert!(!shutdown.join_pending && !shutdown.join_failed);
+            assert_eq!(shutdown.unknown.len(), 1);
+            assert_eq!(shutdown.unknown[0].ticket, ticket);
+            assert_eq!(shutdown.unknown[0].reason, ReadUnknownReason::StatePoisoned);
+            assert_eq!(
+                pipeline.observe_budget().budget.unknown_bytes,
+                original.reserved_bytes
+            );
+            assert!(pipeline.drain().is_empty());
+            assert_eq!(
+                pipeline.observe_budget().budget.reserved_bytes,
+                original.reserved_bytes
+            );
+            drop(listener);
+        },
+    );
+}

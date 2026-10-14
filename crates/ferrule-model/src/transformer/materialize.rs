@@ -939,10 +939,16 @@ impl StateDictMaterializer {
     /// Read-only custody gauges and bounded last identity/receipt. Sampling
     /// neither drains/joins nor releases even aliases whose liveness has ended.
     pub fn expert_read_pipeline_observation(&self) -> super::ExpertReadPipelineObservation {
-        self.expert_read_stats
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .snapshot()
+        let view = {
+            self.expert_read_stats
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .clone()
+        };
+        // No observation lock may span checkpoint or admission sampling: an
+        // operational checkpoint lock can recover poison via an inline waker
+        // that reenters this getter. The copied handles retain the same custody.
+        view.snapshot()
     }
 
     pub(crate) fn expert_read_sequence(

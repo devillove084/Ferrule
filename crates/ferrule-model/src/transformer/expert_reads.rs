@@ -476,7 +476,7 @@ impl Default for ExpertReadPipelineObservation {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub(crate) struct ExpertReadObservationState {
     pub observation: ExpertReadPipelineObservation,
     join: Option<ReadJoinHandoff>,
@@ -490,7 +490,8 @@ impl ExpertReadObservationState {
     pub fn snapshot(&self) -> ExpertReadPipelineObservation {
         let mut observed = self.observation;
         if let (Some(join), Some(options)) = (&self.join, observed.limits) {
-            let budget = join.budget(); // immutable gauge; never polls/joins.
+            let sample = join.observe_budget();
+            let budget = sample.budget;
             let artifacts_live = self
                 .admission_state
                 .as_ref()
@@ -536,10 +537,12 @@ impl ExpertReadObservationState {
             if observed.status == "closed" && retained {
                 observed.status = "closed_retained";
             }
-            if budget.unknown_slots != 0 || budget.worker_stack.unknown_bytes != 0 {
+            if sample.ledger_poisoned {
+                observed.status = "unknown_ledger_poisoned";
+            } else if budget.unknown_slots != 0 || budget.worker_stack.unknown_bytes != 0 {
                 observed.status = "quarantined";
             }
-            if !self.scope_open && budget.reserved_slots == 0 {
+            if !self.scope_open && budget.reserved_slots == 0 && !sample.ledger_poisoned {
                 observed.pending_read = None;
             }
         }
@@ -738,6 +741,11 @@ pub(crate) struct ExpertReadSequence {
 }
 
 impl ExpertReadSequence {
+    #[cfg(test)]
+    pub(crate) fn observation_test_handoff(&self) -> ReadJoinHandoff {
+        self.join.clone()
+    }
+
     pub fn new(
         options: ExpertReadPipelineOptions,
         image: u64,
