@@ -822,6 +822,20 @@ impl CudaStandardDecoderOperators {
         self.metadata_swiglu_consume_lookahead(metadata, provider, input, arena, None, consume)
     }
 
+    // Host submission only: the callee borrows already-resident GPU bindings.
+    // Neither the caller's upload/read nor its consumer wait is in this range.
+    // GPU time requires the auditor's globalPid/Tid and API/kernel correlation.
+    fn profile_expert_submission(
+        &self,
+        layer: usize,
+        expert: usize,
+        rows: usize,
+    ) -> tracing::span::EnteredSpan {
+        tracing::debug_span!(target: "ferrule_profile", "layer.expert",
+            image_generation = self.image_generation(), layer, expert, rows)
+        .entered()
+    }
+
     fn metadata_swiglu_consume_lookahead<T>(
         &mut self,
         metadata: &crate::transformer::ExpertMetadata,
@@ -856,13 +870,22 @@ impl CudaStandardDecoderOperators {
             }
             if this.bf16.is_none()
                 && this.bounded_experts.is_some()
-                && let Some(output) = this.resident_numeric_swiglu(
-                    metadata.parameters(),
-                    None,
-                    metadata.activation_limit(),
-                    input,
-                    arena,
-                )?
+                && let Some(output) = {
+                    // A cache miss returns without submitting compute. Do not
+                    // label provider reads/uploads or the consumer proof below.
+                    let _range = (already_resident
+                        && this.numeric.is_some()
+                        && this.bindings.tensor.is_none()
+                        && this.bindings.expert_admission.is_some())
+                    .then(|| this.profile_expert_submission(layer, id, input.shape().rows()));
+                    this.resident_numeric_swiglu(
+                        metadata.parameters(),
+                        None,
+                        metadata.activation_limit(),
+                        input,
+                        arena,
+                    )?
+                }
             {
                 return consume(this, output);
             }
@@ -876,8 +899,15 @@ impl CudaStandardDecoderOperators {
                 };
                 metadata.validate_payload(&expert)?;
                 this.expert_plan(&expert, input.shape().rows())?;
-                for projection in [expert.gate(), expert.up(), expert.down()] {
-                    this.bindings.linear(&this.ops, projection)?;
+                {
+                    let _upload =
+                        tracing::debug_span!(target: "ferrule_profile", "layer.expert.upload",
+                        image_generation = this.image_generation(), layer, expert = id,
+                        rows = input.shape().rows())
+                        .entered();
+                    for projection in [expert.gate(), expert.up(), expert.down()] {
+                        this.bindings.linear(&this.ops, projection)?;
+                    }
                 }
                 // No payload survives the upload; execution borrows GPU handles
                 // and immutable BoundParameter metadata, not PreparedLinear.
@@ -886,31 +916,37 @@ impl CudaStandardDecoderOperators {
                 this.expert_read_lookahead(provider, metadata, next);
             }
             if this.bf16.is_some() {
-                let output = this.bf16_metadata_swiglu(metadata, input, arena)?;
+                let output = {
+                    let _range = this.profile_expert_submission(layer, id, input.shape().rows());
+                    this.bf16_metadata_swiglu(metadata, input, arena)?
+                };
                 return consume(this, output);
             }
-            let output = this.swiglu_compute(
-                input,
-                arena,
-                metadata.activation_limit(),
-                |this, index, rows| {
-                    let parameter = &metadata.parameters()[index];
-                    let resident = this
-                        .bindings
-                        .metadata_linear(parameter)?
-                        .ok_or_else(|| cuda_error("admitted expert projection is missing"))?;
-                    this.trace_expert_linear(
-                        "linear.input",
-                        this.f32(rows)?,
-                        rows.shape(),
-                        parameter,
-                    )?;
-                    let output = this.resident_linear_buffer(&resident, rows)?;
-                    let shape = RowsShape::new(rows.shape().rows(), resident.shape.0)?;
-                    this.trace_expert_linear("linear.output", &output, shape, parameter)?;
-                    device_rows(shape, arena, output)
-                },
-            )?;
+            let output = {
+                let _range = this.profile_expert_submission(layer, id, input.shape().rows());
+                this.swiglu_compute(
+                    input,
+                    arena,
+                    metadata.activation_limit(),
+                    |this, index, rows| {
+                        let parameter = &metadata.parameters()[index];
+                        let resident = this
+                            .bindings
+                            .metadata_linear(parameter)?
+                            .ok_or_else(|| cuda_error("admitted expert projection is missing"))?;
+                        this.trace_expert_linear(
+                            "linear.input",
+                            this.f32(rows)?,
+                            rows.shape(),
+                            parameter,
+                        )?;
+                        let output = this.resident_linear_buffer(&resident, rows)?;
+                        let shape = RowsShape::new(rows.shape().rows(), resident.shape.0)?;
+                        this.trace_expert_linear("linear.output", &output, shape, parameter)?;
+                        device_rows(shape, arena, output)
+                    },
+                )?
+            };
             consume(this, output)
         })
     }

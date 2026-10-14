@@ -38,6 +38,7 @@ tempfile = "3"
 
 [features]
 default = []
+nvtx-profile = ["ferrule-common/nvtx-profile"]
 cpu-reference = [
     "ferrule-runtime/cpu-reference",
     "ferrule-server/cpu-reference",

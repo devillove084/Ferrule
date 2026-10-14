@@ -9,6 +9,14 @@ readme = "../../README.md"
 keywords = ["llm", "inference", "moe", "cuda", "rust"]
 categories = ["science", "machine-learning"]
 
+[features]
+default = []
+# Host-only NVTX3 annotations; also require FERRULE_PROFILE_NVTX=1 at runtime.
+nvtx-profile = ["dep:cc"]
+
+[build-dependencies]
+cc = { version = "1.2", optional = true }
+
 [dependencies]
 atomic-waker = "1"
 snafu.workspace = true

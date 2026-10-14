@@ -686,6 +686,12 @@ impl Drop for WorkerExit {
     }
 }
 
+#[derive(Debug)]
+struct ReadWork {
+    ticket: ReadTicket,
+    dispatch: tracing::Dispatch,
+}
+
 /// Single owner; only the worker performs checkpoint I/O. A bounded request
 /// channel has depth one, independent of the configurable custody-slot bound.
 /// `wait` and `shutdown` block; `poll`, `take`, `cancel` never perform disk I/O.
@@ -695,7 +701,7 @@ pub struct CheckpointReadPipeline {
     max_read_bytes: u64,
     options: ReadPipelineOptions,
     shared: Arc<Shared>,
-    sender: Option<SyncSender<ReadTicket>>,
+    sender: Option<SyncSender<ReadWork>>,
     worker: Option<JoinHandle<()>>,
 }
 
@@ -782,21 +788,26 @@ impl CheckpointReadPipeline {
             worker_id: OnceLock::new(),
             join: Mutex::new(JoinCustody::default()),
         });
-        let (sender, receiver) = mpsc::sync_channel(1);
+        let (sender, receiver) = mpsc::sync_channel::<ReadWork>(1);
         let worker_shared = Arc::clone(&shared);
         let spawned = thread::Builder::new()
             .name("checkpoint-read".into())
             .stack_size(options.worker_stack_bytes)
             .spawn(move || {
                 let _exit = WorkerExit(Arc::clone(&worker_shared));
-                while let Ok(ticket) = receiver.recv() {
-                    if !read_one(
-                        &reader,
-                        &worker_shared,
-                        ticket,
-                        #[cfg(test)]
-                        hook.as_ref(),
-                    ) {
+                while let Ok(work) = receiver.recv() {
+                    // Capture per submission, not at worker spawn: embedded
+                    // callers and scoped test subscribers retain their owner.
+                    let published = tracing::dispatcher::with_default(&work.dispatch, || {
+                        read_one(
+                            &reader,
+                            &worker_shared,
+                            work.ticket,
+                            #[cfg(test)]
+                            hook.as_ref(),
+                        )
+                    });
+                    if !published {
                         break;
                     }
                 }
@@ -881,7 +892,11 @@ impl CheckpointReadPipeline {
         );
         state.budget.reserved_bytes += bytes;
         state.budget.reserved_slots += 1;
-        match sender.try_send(ticket.clone()) {
+        let work = ReadWork {
+            ticket: ticket.clone(),
+            dispatch: tracing::dispatcher::get_default(Clone::clone),
+        };
+        match sender.try_send(work) {
             Ok(()) => {
                 state.budget.peak_bytes = state.budget.peak_bytes.max(state.budget.reserved_bytes);
                 state.budget.peak_slots = state.budget.peak_slots.max(state.budget.reserved_slots);
@@ -1114,7 +1129,16 @@ fn read_one(
                     receipt.io_started_at = Some(Instant::now());
                     #[cfg(test)]
                     call_hook(hook, TestPhase::IoStarted, &mut ticket.clone());
-                    let result = session.read_subset(ticket.read_plan());
+                    let result = {
+                        // Actual worker allocation/pread envelope, excluding
+                        // session opening and pre/post source verification.
+                        let _range = tracing::debug_span!(target: "ferrule_profile", "read_subset",
+                            operation = ticket.operation.get(),
+                            source_generation = ticket.source_generation.get(),
+                            requested_bytes = ticket.read_plan().storage_bytes())
+                        .entered();
+                        session.read_subset(ticket.read_plan())
+                    };
                     receipt.io_finished_at = Some(Instant::now());
                     if let Ok(bytes) = &result {
                         receipt.io_bytes = Some(bytes.len() as u64);

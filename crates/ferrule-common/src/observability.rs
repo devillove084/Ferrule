@@ -13,6 +13,9 @@
 //! Environment:
 //!   FERRULE_LOG=info                    → log filter (env-filter syntax)
 //!   FERRULE_LOG_FORMAT=json             → JSON log output on stderr
+//!   FERRULE_PROFILE_NVTX=1              → host ranges (requires nvtx-profile)
+//! NVTX ranges measure host submission/read time, never GPU execution. The
+//! optional build uses external NVTX3 headers via FERRULE_NVTX_INCLUDE_DIR.
 //!   FERRULE_METRICS_INTERVAL=5          → minimum dump interval when polled (seconds)
 //! Missing/invalid/zero metrics interval disables dumps.
 
@@ -23,6 +26,9 @@ use std::time::{Duration, Instant};
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(feature = "nvtx-profile")]
+mod nvtx;
 
 // ── Tracing init ───────────────────────────────────────────────────────
 
@@ -53,6 +59,42 @@ fn install_tracing() -> TracingInitStatus {
 
     let env_filter =
         EnvFilter::try_from_env("FERRULE_LOG").unwrap_or_else(|_| EnvFilter::new("info"));
+
+    #[cfg(feature = "nvtx-profile")]
+    if nvtx::runtime_enabled() {
+        use tracing_subscriber::Layer;
+        use tracing_subscriber::filter::filter_fn;
+
+        // Only this opt-in branch changes the global filter into a fmt-local
+        // filter: DEBUG profile ranges must survive FERRULE_LOG=info/off.
+        let registry = tracing_subscriber::registry()
+            .with(nvtx::NvtxLayer::new().with_filter(filter_fn(nvtx::allows)));
+        let result = match std::env::var("FERRULE_LOG_FORMAT").as_deref() {
+            Ok("json") => registry
+                .with(
+                    tracing_subscriber::fmt::layer()
+                        .with_writer(std::io::stderr)
+                        .json()
+                        .with_filter(env_filter),
+                )
+                .try_init(),
+            _ => registry
+                .with(
+                    tracing_subscriber::fmt::layer()
+                        .with_writer(std::io::stderr)
+                        .with_target(false)
+                        .with_thread_ids(false)
+                        .compact()
+                        .with_filter(env_filter),
+                )
+                .try_init(),
+        };
+        return if result.is_ok() {
+            TracingInitStatus::Installed
+        } else {
+            TracingInitStatus::AlreadyInstalled
+        };
+    }
 
     let result = match std::env::var("FERRULE_LOG_FORMAT").as_deref() {
         Ok("json") => tracing_subscriber::registry()
