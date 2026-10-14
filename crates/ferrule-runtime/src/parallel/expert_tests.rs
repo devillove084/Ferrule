@@ -287,6 +287,7 @@ fn observed(fixture: &Fixture, spy: Arc<Spy>) -> ExpertParallelExecutor {
             unknown: false,
             timeout: Duration::from_secs(5),
             tickets: BTreeMap::new(),
+            processes: None,
         },
         #[cfg(feature = "cuda")]
         cuda: false,
@@ -465,7 +466,7 @@ fn deadline_retains_tickets_and_rejects_duplicate_or_invalid_outer_routes() {
 #[ignore = "tiny numeric MoE only; explicitly uses physical devices 1 and 2"]
 fn numeric_resident_two_and_four_owners_devices_1_2_match_local_and_share_host_image() {
     use ferrule_backend::cuda::operators::linear::CudaOperators;
-    use ferrule_model::decoder::{HybridCudaExpertProgress, HybridCudaRoutedExecutor};
+    use ferrule_model::decoder::{HybridCudaRoutedExecutor, WorkProgress};
     use ferrule_model::execution::ExecutionPrecisionPolicy;
     use ferrule_model::transformer::host_experts::{HostExpertCacheOptions, HostExpertWarmPlan};
     use ferrule_model::transformer::{CudaStandardDecoderOperators, StandardDecoderOperators};
@@ -553,7 +554,7 @@ fn numeric_resident_two_and_four_owners_devices_1_2_match_local_and_share_host_i
                 call.context.source_rank = spoof;
                 assert!(adapter.routed_swiglu(call, &mut |_| Ok(())).is_err());
             }
-            assert_eq!(adapter.drain().unwrap(), HybridCudaExpertProgress::Complete);
+            assert_eq!(adapter.drain().unwrap(), WorkProgress::Complete);
             assert!(adapter.owner_stats().unwrap().iter().all(|s| s.calls == 0));
         }
         let mut old_uploads = initial
@@ -586,7 +587,7 @@ fn numeric_resident_two_and_four_owners_devices_1_2_match_local_and_share_host_i
                     "numeric {a}, local {e}"
                 );
             }
-            assert_eq!(adapter.drain().unwrap(), HybridCudaExpertProgress::Complete);
+            assert_eq!(adapter.drain().unwrap(), WorkProgress::Complete);
             let stats = adapter.owner_stats().unwrap();
             for (slot, stats) in stats.into_iter().enumerate() {
                 assert_eq!(stats.rank.owner, members[slot]);
@@ -616,16 +617,13 @@ fn numeric_resident_two_and_four_owners_devices_1_2_match_local_and_share_host_i
                 .is_err()
         );
         assert_eq!(adapter.executor.outstanding(), 0);
-        assert_eq!(adapter.drain().unwrap(), HybridCudaExpertProgress::Complete);
+        assert_eq!(adapter.drain().unwrap(), WorkProgress::Complete);
         let deadline = Instant::now() + Duration::from_secs(10);
-        while adapter.shutdown().unwrap() != HybridCudaExpertProgress::Complete {
+        while adapter.shutdown().unwrap() != WorkProgress::Complete {
             assert!(Instant::now() < deadline);
             std::thread::sleep(Duration::from_millis(1));
         }
-        assert_eq!(
-            adapter.shutdown().unwrap(),
-            HybridCudaExpertProgress::Complete
-        );
+        assert_eq!(adapter.shutdown().unwrap(), WorkProgress::Complete);
         assert!(adapter.owner_stats().is_err()); // never fake closed-owner stats
         assert_eq!(cache.hits() - before_hits, 24);
     }
@@ -649,7 +647,7 @@ fn numeric_resident_two_and_four_owners_devices_1_2_match_local_and_share_host_i
 #[ignore = "tiny numeric owners with forced overlap and loss; devices 1 and 2 only"]
 fn numeric_devices_1_2_overlap_and_hybrid_unknown_never_acknowledges() {
     use ferrule_backend::cuda::operators::linear::CudaOperators;
-    use ferrule_model::decoder::{HybridCudaExpertProgress, HybridCudaRoutedExecutor};
+    use ferrule_model::decoder::{HybridCudaRoutedExecutor, WorkProgress};
     use ferrule_model::execution::ExecutionPrecisionPolicy;
     use ferrule_model::transformer::host_experts::{HostExpertCacheOptions, HostExpertWarmPlan};
     use ferrule_model::transformer::{CudaStandardDecoderOperators, StandardDecoderOperators};
@@ -728,6 +726,7 @@ fn numeric_devices_1_2_overlap_and_hybrid_unknown_never_acknowledges() {
                 unknown: false,
                 timeout: config.dispatch_timeout,
                 tickets: BTreeMap::new(),
+                processes: None,
             },
         };
         let mut adapter = executor.into_hybrid_cuda(ops.clone()).unwrap();
@@ -738,12 +737,9 @@ fn numeric_devices_1_2_overlap_and_hybrid_unknown_never_acknowledges() {
             adapter.on_error(context().transaction);
             for _ in 0..3 {
                 std::thread::sleep(Duration::from_millis(100));
-                assert_eq!(adapter.drain().unwrap(), HybridCudaExpertProgress::Unknown);
+                assert_eq!(adapter.drain().unwrap(), WorkProgress::Unknown);
                 assert!(adapter.owner_stats().is_err());
-                assert_eq!(
-                    adapter.shutdown().unwrap(),
-                    HybridCudaExpertProgress::Unknown
-                );
+                assert_eq!(adapter.shutdown().unwrap(), WorkProgress::Unknown);
                 assert!(adapter.executor.outstanding() > 0);
             }
         } else {
@@ -756,9 +752,9 @@ fn numeric_devices_1_2_overlap_and_hybrid_unknown_never_acknowledges() {
             {
                 assert!((a - e).abs() <= 2e-7 + 2e-5 * e.abs());
             }
-            assert_eq!(adapter.drain().unwrap(), HybridCudaExpertProgress::Complete);
+            assert_eq!(adapter.drain().unwrap(), WorkProgress::Complete);
             let deadline = Instant::now() + Duration::from_secs(5);
-            while adapter.shutdown().unwrap() != HybridCudaExpertProgress::Complete {
+            while adapter.shutdown().unwrap() != WorkProgress::Complete {
                 assert!(Instant::now() < deadline);
                 std::thread::sleep(Duration::from_millis(1));
             }
@@ -787,7 +783,7 @@ fn numeric_devices_1_2_overlap_and_hybrid_unknown_never_acknowledges() {
                 .routed_swiglu(request(&device_input, &routes), &mut |_| Ok(()))
                 .is_err()
         );
-        assert_eq!(adapter.drain().unwrap(), HybridCudaExpertProgress::Complete);
+        assert_eq!(adapter.drain().unwrap(), WorkProgress::Complete);
     }
     for (before, after) in before.iter().zip(adapter.executor.owner_stats().unwrap()) {
         assert_eq!(
@@ -796,7 +792,7 @@ fn numeric_devices_1_2_overlap_and_hybrid_unknown_never_acknowledges() {
         );
     }
     let deadline = Instant::now() + Duration::from_secs(5);
-    while adapter.shutdown().unwrap() != HybridCudaExpertProgress::Complete {
+    while adapter.shutdown().unwrap() != WorkProgress::Complete {
         assert!(Instant::now() < deadline);
         std::thread::sleep(Duration::from_millis(1));
     }
@@ -987,3 +983,6 @@ fn external_root_is_not_a_worker_and_exact_source_group_and_transaction_still_ga
         );
     }
 }
+
+#[path = "../../tests/unit/parallel/expert_process.rs"]
+mod process_tests;

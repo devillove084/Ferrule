@@ -1,0 +1,83 @@
+{
+  "returncode": 1,
+  "timed_out": false,
+  "wall_seconds": 117.85067205317318,
+  "stdout": "",
+  "stderr": "",
+  "cleanup_errors": [],
+  "cleanup_scope": "isolated_subreaper_direct_children",
+  "descendant_custody": "proven_drained",
+  "gpu_quiescence": "unverified",
+  "custody": {
+    "status": "proven_drained",
+    "method": "linux-subreaper-waitid",
+    "containment_verified": true,
+    "launch_id": "3ccf696d6be74561bd68542b952eacb9",
+    "helper_identity": {
+      "pid": 171170,
+      "birth_ticks": 77769697,
+      "ppid": 170967,
+      "pgrp": 171170,
+      "session": 171170
+    },
+    "root_identity": {
+      "pid": 171171,
+      "birth_ticks": 77769700,
+      "ppid": 171170,
+      "pgrp": 171170,
+      "session": 171170
+    },
+    "boot_id": "4dd3497d-570c-4693-a876-5c26e06ab360",
+    "entries": [
+      {
+        "identity": {
+          "pid": 171171,
+          "birth_ticks": 77769700,
+          "ppid": 171170,
+          "pgrp": 171170,
+          "session": 171170
+        },
+        "role": "root",
+        "signals": [],
+        "reaped": true,
+        "exit_code": 1,
+        "first_observed_at": 8413817.351299938,
+        "reaped_at": 8413935.147597237
+      },
+      {
+        "identity": {
+          "pid": 171535,
+          "birth_ticks": 77772936,
+          "ppid": 171170,
+          "pgrp": 171171,
+          "session": 171171
+        },
+        "role": "adopted",
+        "signals": [],
+        "reaped": true,
+        "exit_code": 0,
+        "first_observed_at": 8413934.778526599,
+        "reaped_at": 8413934.78136722
+      }
+    ],
+    "errors": [],
+    "reporting_errors": [],
+    "echild": true
+  },
+  "handshake": {
+    "kind": "ready",
+    "protocol": 1,
+    "launch_id": "3ccf696d6be74561bd68542b952eacb9",
+    "helper_identity": {
+      "pid": 171170,
+      "birth_ticks": 77769697,
+      "ppid": 170967,
+      "pgrp": 171170,
+      "session": 171170
+    },
+    "containment_verified": true,
+    "method": "linux-subreaper-waitid"
+  },
+  "stdout_truncated": false,
+  "stderr_truncated": false
+}

@@ -1,0 +1,10 @@
+QdstrmImporter allowed options:
+  -h [ --help ]             Prints this help message
+  -v [ --version ]          Prints the build version
+  -b [ --build-id ]         Prints the build id
+  -i [ --input-file ] arg   Path of the qdstrm file to be imported
+  -o [ --output-file ] arg  Use this option to provide a different file name or
+                            path for the resulting report file. Default is the 
+                            same name and path as the qdstrm file.
+  -f [ --force-overwrite ]  Overwrite the output file if it already exists.
+

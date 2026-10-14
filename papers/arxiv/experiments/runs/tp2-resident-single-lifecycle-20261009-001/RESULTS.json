@@ -1,0 +1,893 @@
+{
+  "schema": "ferrule.paper.tp2.single-lifecycle.result.v1",
+  "status": "complete",
+  "run": "tp2-resident-single-lifecycle-20261009-001",
+  "launch_id": "d826244b213947d4b5ce2843f1537961",
+  "server_pid": 14168,
+  "server_identity": {
+    "pid": 14168,
+    "birth_ticks": 78375109,
+    "ppid": 14155,
+    "state": "R"
+  },
+  "server_starts": 1,
+  "startup_seconds": 65.73253656737506,
+  "worker_wall_seconds": 75.51268525607884,
+  "supervisor_wall_seconds": 88.14027047902346,
+  "phases": {
+    "hello2": {
+      "status": "complete",
+      "first_phase_request": null,
+      "warmups": [],
+      "measured": [
+        {
+          "prompt_id": "prompt-0",
+          "population": "measured",
+          "status": "success",
+          "actual_input_tokens": 1,
+          "actual_output_tokens": 2,
+          "ttft_seconds": 0.2304521296173334,
+          "request_e2e_seconds": 0.3112587872892618,
+          "text": ", I",
+          "finish_reason": "length"
+        }
+      ],
+      "summaries": [
+        {
+          "scheduled": 1,
+          "offered": 1,
+          "not_issued": 0,
+          "statuses": {
+            "success": 1
+          },
+          "success": 1,
+          "failed": 0,
+          "success_fraction": 1.0,
+          "scheduled_success_fraction": 1.0,
+          "wall_seconds": 0.31159354746341705,
+          "successful_output_tokens": 2,
+          "known_usage_output_tokens": 2,
+          "requests_without_usage": 0,
+          "committed_visible_token_rate": null,
+          "committed_visible_token_rate_reason": "SSE text is not token IDs; usage may include hidden/EOS tokens; partial counts unknown",
+          "actual_output_counts": {
+            "2": 1
+          },
+          "actual_input_counts": {
+            "1": 1
+          },
+          "length_matched_success": 1,
+          "slo_qualified_success": null,
+          "successful_requests_per_second": 3.2093090763293355,
+          "successful_output_tokens_per_second": 6.418618152658671,
+          "length_matched_requests_per_second": 3.2093090763293355,
+          "length_matched_output_tokens_per_second": 6.418618152658671,
+          "slo_goodput_requests_per_second": null,
+          "distributions": {
+            "success_ttft_seconds": {
+              "count": 1,
+              "mean": 0.2304521296173334,
+              "p50": 0.2304521296173334,
+              "p95": 0.2304521296173334
+            },
+            "success_request_e2e_seconds": {
+              "count": 1,
+              "mean": 0.3112587872892618,
+              "p50": 0.3112587872892618,
+              "p95": 0.3112587872892618
+            },
+            "success_mean_tpot_usage_proxy_seconds": {
+              "count": 1,
+              "mean": 0.08061163686215878,
+              "p50": 0.08061163686215878,
+              "p95": 0.08061163686215878
+            },
+            "success_content_event_itl_seconds": {
+              "count": 1,
+              "mean": 0.08061163686215878,
+              "p50": 0.08061163686215878,
+              "p95": 0.08061163686215878
+            },
+            "failure_ttft_seconds": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null
+            },
+            "failure_request_e2e_seconds": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null
+            },
+            "failure_mean_tpot_usage_proxy_seconds": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null
+            },
+            "failure_content_event_itl_seconds": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null
+            }
+          },
+          "window_kind": "fixed-work",
+          "denominator": "first measured HTTP send (dispatch fallback if none) to last client-observed terminal/deadline, including failures and client overhead",
+          "denominator_seconds": 0.31159354746341705,
+          "time_to_complete_seconds": 0.31159354746341705
+        }
+      ],
+      "gate": {
+        "status": "pass",
+        "quality_claim": false
+      }
+    },
+    "canary8": {
+      "status": "complete",
+      "first_phase_request": null,
+      "warmups": [],
+      "measured": [
+        {
+          "prompt_id": "qa",
+          "population": "measured",
+          "status": "success",
+          "actual_input_tokens": 5,
+          "actual_output_tokens": 8,
+          "ttft_seconds": 0.21371500752866268,
+          "request_e2e_seconds": 0.782509695738554,
+          "text": " Tokyo.\nThe capital of Japan is",
+          "finish_reason": "length"
+        },
+        {
+          "prompt_id": "arithmetic",
+          "population": "measured",
+          "status": "success",
+          "actual_input_tokens": 5,
+          "actual_output_tokens": 8,
+          "ttft_seconds": 0.1314002387225628,
+          "request_e2e_seconds": 0.7026089299470186,
+          "text": " ?\n\n7 + 8 = ",
+          "finish_reason": "length"
+        },
+        {
+          "prompt_id": "chinese",
+          "population": "measured",
+          "status": "success",
+          "actual_input_tokens": 3,
+          "actual_output_tokens": 8,
+          "ttft_seconds": 0.1308149490505457,
+          "request_e2e_seconds": 0.7033604122698307,
+          "text": "\u5317\u4eac\uff0c\u5317\u4eac\u662f\u4e2d\u56fd\u7684\u9996\u90fd\u3002\u90a3\u4e48",
+          "finish_reason": "length"
+        }
+      ],
+      "summaries": [
+        {
+          "scheduled": 3,
+          "offered": 3,
+          "not_issued": 0,
+          "statuses": {
+            "success": 3
+          },
+          "success": 3,
+          "failed": 0,
+          "success_fraction": 1.0,
+          "scheduled_success_fraction": 1.0,
+          "wall_seconds": 2.189620839431882,
+          "successful_output_tokens": 24,
+          "known_usage_output_tokens": 24,
+          "requests_without_usage": 0,
+          "committed_visible_token_rate": null,
+          "committed_visible_token_rate_reason": "SSE text is not token IDs; usage may include hidden/EOS tokens; partial counts unknown",
+          "actual_output_counts": {
+            "8": 3
+          },
+          "actual_input_counts": {
+            "5": 2,
+            "3": 1
+          },
+          "length_matched_success": 3,
+          "slo_qualified_success": null,
+          "successful_requests_per_second": 1.370100222821399,
+          "successful_output_tokens_per_second": 10.960801782571192,
+          "length_matched_requests_per_second": 1.370100222821399,
+          "length_matched_output_tokens_per_second": 10.960801782571192,
+          "slo_goodput_requests_per_second": null,
+          "distributions": {
+            "success_ttft_seconds": {
+              "count": 3,
+              "mean": 0.15864339843392372,
+              "p50": 0.1314002387225628,
+              "p95": 0.2054835306480527
+            },
+            "success_request_e2e_seconds": {
+              "count": 3,
+              "mean": 0.7294930126518011,
+              "p50": 0.7033604122698307,
+              "p95": 0.7745947673916816
+            },
+            "success_mean_tpot_usage_proxy_seconds": {
+              "count": 3,
+              "mean": 0.08152455348698866,
+              "p50": 0.08157899603247643,
+              "p95": 0.08174921117190803
+            },
+            "success_content_event_itl_seconds": {
+              "count": 21,
+              "mean": 0.08152455348698866,
+              "p50": 0.08121010661125183,
+              "p95": 0.08239816874265671
+            },
+            "failure_ttft_seconds": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null
+            },
+            "failure_request_e2e_seconds": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null
+            },
+            "failure_mean_tpot_usage_proxy_seconds": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null
+            },
+            "failure_content_event_itl_seconds": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null
+            }
+          },
+          "window_kind": "fixed-work",
+          "denominator": "first measured HTTP send (dispatch fallback if none) to last client-observed terminal/deadline, including failures and client overhead",
+          "denominator_seconds": 2.189620839431882,
+          "time_to_complete_seconds": 2.189620839431882
+        }
+      ],
+      "gate": {
+        "status": "pass",
+        "checks": [
+          {
+            "id": "qa",
+            "expected_text": " Tokyo.\nThe capital of Japan is",
+            "observed_text": " Tokyo.\nThe capital of Japan is",
+            "reference_ids": [
+              25358,
+              13,
+              198,
+              760,
+              6511,
+              314,
+              6124,
+              369
+            ],
+            "observed_ids": null,
+            "actual_output_tokens": 8,
+            "actual_input_tokens": 5,
+            "passed": true
+          },
+          {
+            "id": "arithmetic",
+            "expected_text": " ?\n\n7 + 8 = ",
+            "observed_text": " ?\n\n7 + 8 = ",
+            "reference_ids": [
+              907,
+              271,
+              22,
+              478,
+              220,
+              23,
+              283,
+              220
+            ],
+            "observed_ids": null,
+            "actual_output_tokens": 8,
+            "actual_input_tokens": 5,
+            "passed": true
+          },
+          {
+            "id": "chinese",
+            "expected_text": "\u5317\u4eac\uff0c\u5317\u4eac\u662f\u4e2d\u56fd\u7684\u9996\u90fd\u3002\u90a3\u4e48",
+            "observed_text": "\u5317\u4eac\uff0c\u5317\u4eac\u662f\u4e2d\u56fd\u7684\u9996\u90fd\u3002\u90a3\u4e48",
+            "reference_ids": [
+              98116,
+              3709,
+              98116,
+              108820,
+              102357,
+              95983,
+              1710,
+              97486
+            ],
+            "observed_ids": null,
+            "actual_output_tokens": 8,
+            "actual_input_tokens": 3,
+            "passed": true
+          }
+        ],
+        "limitation": "Exact visible first8 text + usage only; not observed token IDs/logits/routes or full numerical oracle"
+      }
+    },
+    "qa8-V1": {
+      "status": "complete",
+      "first_phase_request": {
+        "prompt_id": "qa",
+        "population": "first_after_ready",
+        "status": "success",
+        "actual_input_tokens": 5,
+        "actual_output_tokens": 8,
+        "ttft_seconds": 0.13527991250157356,
+        "request_e2e_seconds": 0.7093425802886486,
+        "text": " Tokyo.\nThe capital of Japan is",
+        "finish_reason": "length"
+      },
+      "warmups": [
+        {
+          "prompt_id": "qa",
+          "population": "warmup",
+          "status": "success",
+          "actual_input_tokens": 5,
+          "actual_output_tokens": 8,
+          "ttft_seconds": 0.13100901059806347,
+          "request_e2e_seconds": 0.7027868311852217,
+          "text": " Tokyo.\nThe capital of Japan is",
+          "finish_reason": "length"
+        },
+        {
+          "prompt_id": "qa",
+          "population": "warmup",
+          "status": "success",
+          "actual_input_tokens": 5,
+          "actual_output_tokens": 8,
+          "ttft_seconds": 0.132268238812685,
+          "request_e2e_seconds": 0.6999643482267857,
+          "text": " Tokyo.\nThe capital of Japan is",
+          "finish_reason": "length"
+        }
+      ],
+      "measured": [
+        {
+          "prompt_id": "qa",
+          "population": "measured",
+          "status": "success",
+          "actual_input_tokens": 5,
+          "actual_output_tokens": 8,
+          "ttft_seconds": 0.13173078373074532,
+          "request_e2e_seconds": 0.7013896629214287,
+          "text": " Tokyo.\nThe capital of Japan is",
+          "finish_reason": "length"
+        },
+        {
+          "prompt_id": "qa",
+          "population": "measured",
+          "status": "success",
+          "actual_input_tokens": 5,
+          "actual_output_tokens": 8,
+          "ttft_seconds": 0.12905621901154518,
+          "request_e2e_seconds": 0.7030363120138645,
+          "text": " Tokyo.\nThe capital of Japan is",
+          "finish_reason": "length"
+        },
+        {
+          "prompt_id": "qa",
+          "population": "measured",
+          "status": "success",
+          "actual_input_tokens": 5,
+          "actual_output_tokens": 8,
+          "ttft_seconds": 0.12954917550086975,
+          "request_e2e_seconds": 0.6983378250151873,
+          "text": " Tokyo.\nThe capital of Japan is",
+          "finish_reason": "length"
+        },
+        {
+          "prompt_id": "qa",
+          "population": "measured",
+          "status": "success",
+          "actual_input_tokens": 5,
+          "actual_output_tokens": 8,
+          "ttft_seconds": 0.13275600038468838,
+          "request_e2e_seconds": 0.7178506571799517,
+          "text": " Tokyo.\nThe capital of Japan is",
+          "finish_reason": "length"
+        },
+        {
+          "prompt_id": "qa",
+          "population": "measured",
+          "status": "success",
+          "actual_input_tokens": 5,
+          "actual_output_tokens": 8,
+          "ttft_seconds": 0.1301948819309473,
+          "request_e2e_seconds": 0.6960688643157482,
+          "text": " Tokyo.\nThe capital of Japan is",
+          "finish_reason": "length"
+        }
+      ],
+      "summaries": [
+        {
+          "scheduled": 5,
+          "offered": 5,
+          "not_issued": 0,
+          "statuses": {
+            "success": 5
+          },
+          "success": 5,
+          "failed": 0,
+          "success_fraction": 1.0,
+          "scheduled_success_fraction": 1.0,
+          "wall_seconds": 3.5362640488892794,
+          "successful_output_tokens": 40,
+          "known_usage_output_tokens": 40,
+          "requests_without_usage": 0,
+          "committed_visible_token_rate": null,
+          "committed_visible_token_rate_reason": "SSE text is not token IDs; usage may include hidden/EOS tokens; partial counts unknown",
+          "actual_output_counts": {
+            "8": 5
+          },
+          "actual_input_counts": {
+            "5": 5
+          },
+          "length_matched_success": 5,
+          "slo_qualified_success": null,
+          "successful_requests_per_second": 1.4139215654923936,
+          "successful_output_tokens_per_second": 11.311372523939148,
+          "length_matched_requests_per_second": 1.4139215654923936,
+          "length_matched_output_tokens_per_second": 11.311372523939148,
+          "slo_goodput_requests_per_second": null,
+          "distributions": {
+            "success_ttft_seconds": {
+              "count": 5,
+              "mean": 0.13065741211175919,
+              "p50": 0.1301948819309473,
+              "p95": 0.13255095705389977
+            },
+            "success_request_e2e_seconds": {
+              "count": 5,
+              "mean": 0.703336664289236,
+              "p50": 0.7013896629214287,
+              "p95": 0.7148877881467343
+            },
+            "success_mean_tpot_usage_proxy_seconds": {
+              "count": 5,
+              "mean": 0.08178832781101977,
+              "p50": 0.08135873877576419,
+              "p95": 0.08324692632470812
+            },
+            "success_content_event_itl_seconds": {
+              "count": 35,
+              "mean": 0.08178832781101976,
+              "p50": 0.08097060397267342,
+              "p95": 0.0869401767849922
+            },
+            "failure_ttft_seconds": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null
+            },
+            "failure_request_e2e_seconds": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null
+            },
+            "failure_mean_tpot_usage_proxy_seconds": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null
+            },
+            "failure_content_event_itl_seconds": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null
+            }
+          },
+          "window_kind": "fixed-work",
+          "denominator": "first measured HTTP send (dispatch fallback if none) to last client-observed terminal/deadline, including failures and client overhead",
+          "denominator_seconds": 3.5362640488892794,
+          "time_to_complete_seconds": 3.5362640488892794
+        }
+      ],
+      "gate": {
+        "status": "pass",
+        "quality_claim": false
+      }
+    }
+  },
+  "resources": {
+    "status": "observed_within_targets",
+    "errors": [],
+    "gpu_peak_bytes": {
+      "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 20706230272,
+      "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 20706230272
+    },
+    "tree_pss_peak_bytes": 7385981952,
+    "tree_rss_peak_bytes": 9201651712,
+    "complete_host_samples": 31,
+    "incomplete_host_samples": 1,
+    "gpu_samples": 32,
+    "missing_gpu_attempts": 0,
+    "baseline": {
+      "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": {
+        "index": 0,
+        "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+        "total_bytes": 25769803776,
+        "gpu_bytes": 0,
+        "utilization": 0
+      },
+      "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": {
+        "index": 1,
+        "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+        "total_bytes": 25769803776,
+        "gpu_bytes": 0,
+        "utilization": 0
+      },
+      "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6": {
+        "index": 2,
+        "uuid": "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6",
+        "total_bytes": 25769803776,
+        "gpu_bytes": 0,
+        "utilization": 0
+      },
+      "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011": {
+        "index": 3,
+        "uuid": "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011",
+        "total_bytes": 25769803776,
+        "gpu_bytes": 0,
+        "utilization": 0
+      },
+      "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86": {
+        "index": 4,
+        "uuid": "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86",
+        "total_bytes": 25769803776,
+        "gpu_bytes": 0,
+        "utilization": 0
+      },
+      "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685": {
+        "index": 5,
+        "uuid": "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685",
+        "total_bytes": 25769803776,
+        "gpu_bytes": 0,
+        "utilization": 0
+      },
+      "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d": {
+        "index": 6,
+        "uuid": "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d",
+        "total_bytes": 25769803776,
+        "gpu_bytes": 0,
+        "utilization": 0
+      },
+      "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f": {
+        "index": 7,
+        "uuid": "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f",
+        "total_bytes": 25769803776,
+        "gpu_bytes": 0,
+        "utilization": 0
+      }
+    },
+    "delta_high_water_bytes": {
+      "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 20706230272,
+      "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 20706230272,
+      "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6": 0,
+      "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011": 0,
+      "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86": 0,
+      "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685": 0,
+      "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d": 0,
+      "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f": 0
+    },
+    "owned_gpu_attribution": "unknown",
+    "owned_process_gpu_peak_bytes": null,
+    "exact_peaks": false,
+    "hard_memory_partition": false,
+    "continuous_coverage": false
+  },
+  "observer_events": [
+    {
+      "kind": "host_sample_incomplete",
+      "monotonic": 8419901.260969508,
+      "pss_bytes": null,
+      "omitted_branches": {
+        "15844": "FileNotFoundError: [Errno 2] No such file or directory: '/proc/15844/smaps_rollup'"
+      }
+    },
+    {
+      "kind": "monitor_terminal",
+      "errors": [],
+      "samples": 32,
+      "monotonic": 8419945.62664638
+    }
+  ],
+  "authenticated_drained": true,
+  "custody_echild": true,
+  "final_idle": true,
+  "locks_released": true,
+  "fairmatch": false,
+  "exact_speedup": null,
+  "no_hf_regeneration": true,
+  "reference_manifest_sha256": "102c798baeb5200bc8ed8386eabed6146870b3b6da2a90fc6010677041352c7e",
+  "quality_scope": "Three independent frozen visible prefixes + usage counts, not token ID/logit/route/state/full numerical equivalence",
+  "performance_scope": "same-server QA8 descriptive only, first QA-phase request excluded +2 warmups +5 measured; no F/V pairing or extrapolation",
+  "runtime": {
+    "evidence": {
+      "linear_marlin": [
+        "(Worker_TP0 pid=15060) INFO 10-09 00:29:18 [__init__.py:689] Selected MarlinFP8ScaledMMLinearKernel for Fp8LinearMethod"
+      ],
+      "moe_marlin": [
+        "(Worker_TP0 pid=15060) INFO 10-09 00:29:18 [fp8.py:325] Using MARLIN Fp8 MoE backend out of potential backends: ['AITER', 'FLASHINFER_TRTLLM', 'FLASHINFER_CUTLASS', 'DEEPGEMM', 'VLLM_CUTLASS', 'TRITON', 'MARLIN', 'HUMMING', 'BATCHED_DEEPGEMM', 'BATCHED_VLLM_CUTLASS', 'BATCHED_TRITON', 'XPU', 'CPU', 'HPC']."
+      ],
+      "model_load": [
+        "(Worker_TP0 pid=15060) INFO 10-09 00:29:46 [gpu_model_runner.py:5515] Model loading took 17.04 GiB memory and 27.429580 seconds"
+      ],
+      "offload": [],
+      "topology": [
+        "(EngineCore pid=14764) INFO 10-09 00:29:08 [core.py:122] Initializing a V1 LLM engine (v0.28.0) with config: model='/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8', speculative_config=None, tokenizer='/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.bfloat16, max_seq_len=128, download_dir=None, load_format=auto, tensor_parallel_size=2, pipeline_parallel_size=1, data_parallel_size=1, decode_context_parallel_size=1, dcp_comm_backend=ag_rs, disable_custom_all_reduce=False, quantization=fp8, quantization_config=None, enforce_eager=True, enable_return_routed_experts=False, kv_cache_dtype=auto, device_config=cuda, structured_outputs_config=StructuredOutputsConfig(backend='auto', disable_any_whitespace=False, disable_additional_properties=False, reasoning_parser='', reasoning_parser_plugin='', enable_in_reasoning=False), observability_config=ObservabilityConfig(show_hidden_metrics_for_version=None, otlp_traces_endpoint=None, collect_detailed_traces=None, kv_cache_metrics=False, kv_cache_metrics_sample=0.01, cudagraph_metrics=False, enable_layerwise_nvtx_tracing=False, enable_mfu_metrics=False, enable_mm_processor_stats=False, enable_logging_iteration_details=False, jit_monitor_mode='warn', jit_monitor_verbose=False), seed=1, served_model_name=qwen35-vllm-tp2-resident-paper, enable_prefix_caching=False, enable_chunked_prefill=True, pooler_config=None, compilation_config={'mode': <CompilationMode.NONE: 0>, 'debug_dump_path': None, 'cache_dir': '', 'compile_cache_save_format': 'binary', 'backend': 'inductor', 'custom_ops': ['+quant_fp8', 'all', '+quant_fp8'], 'ir_enable_torch_wrap': False, 'splitting_ops': [], 'compile_mm_encoder': False, 'cudagraph_mm_encoder': False, 'encoder_cudagraph_token_budgets': [], 'encoder_cudagraph_max_vision_items_per_batch': 0, 'encoder_cudagraph_max_frames_per_batch': None, 'compile_sizes': [], 'compile_ranges_endpoints': [8], 'inductor_compile_config': {'enable_auto_functionalized_v2': False, 'combo_kernels': True, 'benchmark_combo_kernel': True}, 'inductor_passes': {}, 'cudagraph_mode': <CUDAGraphMode.NONE: 0>, 'cudagraph_num_of_warmups': 0, 'cudagraph_capture_sizes': [], 'cudagraph_copy_inputs': False, 'cudagraph_specialize_lora': True, 'use_inductor_graph_partition': False, 'pass_config': {'fuse_norm_quant': True, 'fuse_act_quant': True, 'fuse_attn_quant': False, 'enable_sp': False, 'fuse_gemm_comms': False, 'fuse_allreduce_rms': False, 'enable_qk_norm_rope_fusion': False, 'fuse_rope_kvcache_cat_mla': False, 'fuse_act_padding': False, 'fuse_qk_norm_rope_kvcache': False}, 'max_cudagraph_capture_size': 0, 'dynamic_shapes_config': {'type': <DynamicShapesType.BACKED: 'backed'>, 'evaluate_guards': False, 'assume_32_bit_indexing': False}, 'local_cache_dir': None, 'fast_moe_cold_start': False, 'static_all_moe_layers': []}, kernel_config=KernelConfig(ir_op_priority=IrOpPriorityConfig(rms_norm=['vllm_c', 'native'], fused_add_rms_norm=['vllm_c', 'native']), enable_flashinfer_autotune=True, enable_cutedsl_warmup=True, enable_jit_warmup=True, enable_bf16x3_router_gemm=False, moe_backend='marlin', linear_backend='marlin')",
+        "(EngineCore pid=14764) INFO 10-09 00:29:08 [multiproc_executor.py:150] DP group leader: node_rank=0, node_rank_within_dp=0, master_addr=127.0.0.1, mq_connect_ip=11.166.42.141 (local), world_size=2, local_world_size=2",
+        "(Worker pid=15060) INFO 10-09 00:29:16 [parallel_state.py:1638] world_size=2 rank=0 local_rank=0 distributed_init_method=file:///tmp/vllm_dist_d72878d1fd6148e5b109b3b48f20cd24 backend=nccl",
+        "(Worker pid=15061) INFO 10-09 00:29:16 [parallel_state.py:1638] world_size=2 rank=1 local_rank=1 distributed_init_method=file:///tmp/vllm_dist_d72878d1fd6148e5b109b3b48f20cd24 backend=nccl",
+        "(Worker pid=15060) INFO 10-09 00:29:17 [parallel_state.py:1982] rank 0 in world size 2 is assigned as DP rank 0, PP rank 0, PCP rank 0, TP rank 0, EP rank 0, EPLB rank N/A"
+      ],
+      "gdn": [
+        "(Worker_TP0 pid=15060) INFO 10-09 00:29:18 [qwen_gdn_linear_attn.py:158] Using Triton/FLA GDN prefill kernel (requested=auto, head_k_dim=128).",
+        "(Worker_TP0 pid=15060) INFO 10-09 00:29:18 [qwen_gdn_linear_attn.py:500] Falling back to the Triton GDN decode path: torch.ops._C.fused_gdn_decode_post_conv_mtp is not built",
+        "(Worker_TP0 pid=15060) INFO 10-09 00:29:18 [qwen_gdn_linear_attn.py:505] GDN decode kernel: triton",
+        "(Worker_TP0 pid=15060) WARNING 10-09 00:29:54 [jit_monitor.py:141] Triton kernel JIT compilation during inference: fused_recurrent_gated_delta_rule_packed_decode_kernel. This causes a latency spike; consider extending warmup to cover this shape/config."
+      ],
+      "transport": [
+        "(Worker pid=15060) INFO 10-09 00:29:16 [parallel_state.py:1638] world_size=2 rank=0 local_rank=0 distributed_init_method=file:///tmp/vllm_dist_d72878d1fd6148e5b109b3b48f20cd24 backend=nccl",
+        "(Worker pid=15061) INFO 10-09 00:29:16 [parallel_state.py:1638] world_size=2 rank=1 local_rank=1 distributed_init_method=file:///tmp/vllm_dist_d72878d1fd6148e5b109b3b48f20cd24 backend=nccl",
+        "(Worker pid=15060) INFO 10-09 00:29:16 [pynccl.py:113] vLLM is using nccl==2.29.7",
+        "gpu-public011166042141:15061:15061 [1] NCCL INFO ENV/Plugin: Could not find: libnccl-env.so",
+        "gpu-public011166042141:15061:15061 [1] NCCL INFO cudaDriverVersion 12090",
+        "gpu-public011166042141:15061:15061 [1] NCCL INFO NCCL version 2.29.7+cuda12.9",
+        "gpu-public011166042141:15061:15061 [1] NCCL INFO NCCL git version stable b81d6a5a3",
+        "gpu-public011166042141:15061:15061 [1] NCCL INFO NET/Plugin: Could not find: libnccl-net.so",
+        "gpu-public011166042141:15061:15061 [1] NCCL INFO NET/IB : No device found.",
+        "gpu-public011166042141:15061:15061 [1] NCCL INFO NET/IB : Using [RO]; OOB eth0:11.166.42.141<0>",
+        "gpu-public011166042141:15061:15061 [1] NCCL INFO Failed to initialize NET plugin IB",
+        "gpu-public011166042141:15061:15061 [1] NCCL INFO NET/Socket : Using [0]eth0:11.166.42.141<0> [1]underlay:10.0.130.204<0>",
+        "gpu-public011166042141:15061:15061 [1] NCCL INFO Initialized NET plugin Socket",
+        "gpu-public011166042141:15061:15061 [1] NCCL INFO Could not get speed from /sys/class/net/eth0/speed. Defaulting to 10 Gbps.",
+        "gpu-public011166042141:15061:15061 [1] NCCL INFO Assigned NET plugin Socket to comm",
+        "gpu-public011166042141:15061:15061 [1] NCCL INFO GIN/Plugin: Could not find: libnccl-gin.so",
+        "gpu-public011166042141:15061:15061 [1] NCCL INFO Failed to initialize any GIN plugin",
+        "gpu-public011166042141:15061:15061 [1] NCCL INFO Using network Socket",
+        "gpu-public011166042141:15061:15061 [1] NCCL INFO [Rank 1] ncclCommInitRank comm 0x155f9910 rank 1 nranks 2 cudaDev 1 nvmlDev 1 busId 6a000 commId 0xb6c2a077f0b54bfe - Init START",
+        "gpu-public011166042141:15061:15061 [1] NCCL INFO RAS client listening socket at 127.0.0.1<28028>",
+        "gpu-public011166042141:15061:15061 [1] NCCL INFO NCCL_P2P_DISABLE set by environment to 1",
+        "gpu-public011166042141:15061:15061 [1] NCCL INFO TOPO/NET : Importing network plugins to topology",
+        "gpu-public011166042141:15061:15061 [1] NCCL INFO Could not get speed from /sys/class/net/eth0/speed. Defaulting to 10 Gbps.",
+        "gpu-public011166042141:15061:15061 [1] NCCL INFO Topology detection: network path (name = eth0) /sys/devices/pci0000:0f/0000:0f:02.0/0000:10:00.0/0000:11:11.0/0000:23:00.0/virtio1 is not a PCI device (virtio). Attaching to first CPU",
+        "gpu-public011166042141:15061:15061 [1] NCCL INFO NET/Socket : GPU Direct RDMA Disabled for HCA 0 'eth0'",
+        "gpu-public011166042141:15061:15061 [1] NCCL INFO ncclTopoPopulateNics : Filled eth0 in topo with pciPath=/sys/devices/pci0000:0f/0000:0f:02.0/0000:10:00.0/0000:11:11.0/0000:23:00.0/virtio1 net=1 gin=(null) keep=1 coll=(null)",
+        "gpu-public011166042141:15061:15061 [1] NCCL INFO Could not get speed from /sys/class/net/underlay/speed. Defaulting to 10 Gbps.",
+        "gpu-public011166042141:15061:15061 [1] NCCL INFO NET/Socket : GPU Direct RDMA Disabled for HCA 1 'underlay'",
+        "gpu-public011166042141:15061:15061 [1] NCCL INFO ncclTopoPopulateNics : Filled underlay in topo with pciPath=(null) net=1 gin=(null) keep=1 coll=(null)",
+        "gpu-public011166042141:15061:15061 [1] NCCL INFO === System : maxBw 24.0 totalBw 24.0 ===",
+        "gpu-public011166042141:15061:15061 [1] NCCL INFO CPU/0-0 (1/1/2)",
+        "gpu-public011166042141:15061:15061 [1] NCCL INFO + PCI[5000.0] - NIC/0-0",
+        "gpu-public011166042141:15061:15061 [1] NCCL INFO                 + NET[1.2] - NET/0-0 (0/0/0/1.250000)",
+        "gpu-public011166042141:15061:15061 [1] NCCL INFO                 + NET[1.2] - NET/0-1 (0/1/0/1.250000)",
+        "gpu-public011166042141:15061:15061 [1] NCCL INFO + PCI[24.0] - PCI/0-65000 (1000c0101000ffff)",
+        "gpu-public011166042141:15061:15061 [1] NCCL INFO               + PCI[24.0] - GPU/0-69000 (0)",
+        "gpu-public011166042141:15061:15061 [1] NCCL INFO               + PCI[24.0] - GPU/0-6a000 (1)",
+        "gpu-public011166042141:15061:15061 [1] NCCL INFO ==========================================",
+        "gpu-public011166042141:15061:15061 [1] NCCL INFO GPU/0-69000 :GPU/0-69000 (0/5000.0/LOC) GPU/0-6a000 (4/24.0/PHB) CPU/0-0 (2/24.0/PHB) NET/0-0 (4/1.2/PHB) NET/0-1 (4/1.2/PHB) ",
+        "gpu-public011166042141:15061:15061 [1] NCCL INFO GPU/0-6a000 :GPU/0-69000 (4/24.0/PHB) GPU/0-6a000 (0/5000.0/LOC) CPU/0-0 (2/24.0/PHB) NET/0-0 (4/1.2/PHB) NET/0-1 (4/1.2/PHB) ",
+        "gpu-public011166042141:15061:15061 [1] NCCL INFO NET/0-0 :GPU/0-69000 (4/gpu-public011166042141:15060:15060 [0] NCCL INFO ENV/Plugin: Could not find: libnccl-env.so",
+        "gpu-public011166042141:15060:15060 [0] NCCL INFO cudaDriverVersion 12090",
+        "gpu-public011166042141:15060:15060 [0] NCCL INFO NCCL version 2.29.7+cuda12.9",
+        "gpu-public011166042141:15060:15060 [0] NCCL INFO NCCL git version stable b81d6a5a3",
+        "gpu-public011166042141:15060:15060 [0] NCCL INFO NET/Plugin: Could not find: libnccl-net.so",
+        "gpu-public011166042141:15060:15060 [0] NCCL INFO NET/IB : No device found.",
+        "gpu-public011166042141:15060:15060 [0] NCCL INFO NET/IB : Using [RO]; OOB eth0:11.166.42.141<0>",
+        "gpu-public011166042141:15060:15060 [0] NCCL INFO Failed to initialize NET plugin IB",
+        "gpu-public011166042141:15060:15060 [0] NCCL INFO NET/Socket : Using [0]eth0:11.166.42.141<0> [1]underlay:10.0.130.204<0>",
+        "gpu-public011166042141:15060:15060 [0] NCCL INFO Initialized NET plugin Socket",
+        "gpu-public011166042141:15060:15060 [0] NCCL INFO Could not get speed from /sys/class/net/eth0/speed. Defaulting to 10 Gbps.",
+        "gpu-public011166042141:15060:15060 [0] NCCL INFO Assigned NET plugin Socket to comm",
+        "gpu-public011166042141:15060:15060 [0] NCCL INFO GIN/Plugin: Could not find: libnccl-gin.so",
+        "gpu-public011166042141:15060:15060 [0] NCCL INFO Failed to initialize any GIN plugin",
+        "gpu-public011166042141:15060:15060 [0] NCCL INFO Using network Socket",
+        "gpu-public011166042141:15060:15060 [0] NCCL INFO [Rank 0] ncclCommInitRank comm 0x14d9e570 rank 0 nranks 2 cudaDev 0 nvmlDev 0 busId 69000 commId 0xb6c2a077f0b54bfe - Init START",
+        "gpu-public011166042141:15060:15060 [0] NCCL INFO RAS client listening socket at 127.0.0.1<28028>",
+        "gpu-public011166042141:15060:15060 [0] NCCL INFO NCCL_P2P_DISABLE set by environment to 1",
+        "gpu-public011166042141:15060:15060 [0] NCCL INFO TOPO/NET : Importing network plugins to topology",
+        "gpu-public011166042141:15060:15060 [0] NCCL INFO Could not get speed from /sys/class/net/eth0/speed. Defaulting to 10 Gbps.",
+        "gpu-public011166042141:15060:15060 [0] NCCL INFO Topology detection: network path (name = eth0) /sys/devices/pci0000:0f/0000:0f:02.0/0000:10:00.0/0000:11:11.0/0000:23:00.0/virtio1 is not a PCI device (virtio). Attaching to first CPU",
+        "gpu-public011166042141:15060:15060 [0] NCCL INFO NET/Socket : GPU Direct RDMA Disabled for HCA 0 'eth0'",
+        "gpu-public011166042141:15060:15060 [0] NCCL INFO ncclTopoPopulateNics : Filled eth0 in topo with pciPath=/sys/devices/pci0000:0f/0000:0f:02.0/0000:10:00.0/0000:11:11.0/0000:23:00.0/virtio1 net=1 gin=(null) keep=1 coll=(null)",
+        "gpu-public011166042141:15060:15060 [0] NCCL INFO Could not get speed from /sys/class/net/underlay/speed. Defaulting to 10 Gbps.",
+        "gpu-public011166042141:15060:15060 [0] NCCL INFO NET/Socket : GPU Direct RDMA Disabled for HCA 1 'underlay'",
+        "gpu-public011166042141:15060:15060 [0] NCCL INFO ncclTopoPopulateNics : Filled underlay in topo with pciPath=(null) net=1 gin=(null) keep=1 coll=(null)",
+        "gpu-public011166042141:15060:15060 [0] NCCL INFO === System : maxBw 24.0 totalBw 24.0 ===",
+        "gpu-public011166042141:15060:15060 [0] NCCL INFO CPU/0-0 (1/1/2)",
+        "gpu-public011166042141:15060:15060 [0] NCCL INFO + PCI[5000.0] - NIC/0-0",
+        "gpu-public011166042141:15060:15060 [0] NCCL INFO                 + NET[1.2] - NET/0-0 (0/0/0/1.250000)",
+        "gpu-public011166042141:15060:15060 [0] NCCL INFO                 + NET[1.2] - NET/0-1 (0/1/0/1.250000)",
+        "gpu-public011166042141:15060:15060 [0] NCCL INFO + PCI[24.0] - PCI/0-65000 (1000c0101000ffff)",
+        "gpu-public011166042141:15060:15060 [0] NCCL INFO               + PCI[24.0] - GPU/0-69000 (0)",
+        "gpu-public011166042141:15060:15060 [0] NCCL INFO               + PCI[24.0] - GPU/0-6a000 (1)",
+        "gpu-public011166042141:15060:15060 [0] NCCL INFO ==========================================",
+        "gpu-public011166042141:15060:15060 [0] NCCL INFO GPU/0-69000 :GPU/0-69000 (0/5000.0/LOC) GPU/0-6a000 (4/24.0/PHB) CPU/0-0 (2/24.0/PHB) NET/0-0 (4/1.2/PHB) NET/0-1 (4/1.2/PHB) ",
+        "gpu-public011166042141:15060:15060 [0] NCCL INFO GPU/0-6a000 :GPU/0-69000 (4/24.0/PHB) GPU/0-6a000 (0/5000.0/LOC) CPU/0-0 (2/24.0/PHB) NET/0-0 (4/1.2/PHB) NET/0-1 (4/1.2/PHB) ",
+        "gpu-public011166042141:15060:15060 [0] NCCL INFO NET/0-0 :GPU/0-69000 (4/1.2/PHB) GPU/0-6a000 (4/1.2/PHB) CPU/0-0 (2/1.2/PHB) NET/0-0 (0/5000.0/LOC) NET/0-1 (2/1.2/LOC) ",
+        "gpu-public011166042141:15061:15061 [1] NCCL INFO NET/0-1 :GPU/0-69000 (4/1.2/PHB) GPU/0-6a000 (4/1.2/PHB) CPU/0-0 (2/1.2/PHB) NET/0-0 (2/1.2/LOC) NET/0-1 (0/5000.0/LOC) ",
+        "gpu-public011166042141:15061:15061 [1] NCCL INFO ncclTopoGetCpuAffinity: Affinity for GPU 1 is 0-127. (GPU affinity = 0-127 ; CPU affinity = 0-127).",
+        "gpu-public011166042141:15061:15061 [1] NCCL INFO NVLS multicast support is not available on dev 1 (NVLS_NCHANNELS 0)",
+        "gpu-public011166042141:15061:15061 [1] NCCL INFO Pattern 4, crossNic 0, nChannels 1, bw 10.000000/10.000000, type PHB/PIX, sameChannels 1",
+        "gpu-public011166042141:15061:15061 [1] NCCL INFO  0 : GPU/0-69000 GPU/0-6a000",
+        "gpu-public011166042141:15061:15061 [1] NCCL INFO Pattern 1, crossNic 0, nChannels 1, bw 20.000000/20.000000, type PHB/PIX, sameChannels 1",
+        "gpu-public011166042141:15061:15061 [1] NCCL INFO  0 : GPU/0-69000 GPU/0-6a000",
+        "gpu-public011166042141:15061:15061 [1] NCCL INFO Could not get speed from /sys/class/net/eth0/speed. Defaulting to 10 Gbps.",
+        "gpu-public011166042141:15061:15061 [1] NCCL INFO Could not get speed from /sys/class/net/underlay/speed. Defaulting to 10 Gbps.",
+        "gpu-public011166042141:15061:15061 [1] NCCL INFO comm 0x155f9910 rank 1 nRanks 2 nNodes 1 localRanks 2 localRank 1 MNNVL 0",
+        "gpu-public011166042141:15061:15061 [1] NCCL INFO Tree 0 : 0 -> 1 -> -1/-1/-1",
+        "gpu-public011166042141:15061:15061 [1] NCCL INFO Tree 1 : 0 -> 1 -> -1/-1/-1",
+        "gpu-public011166042141:15061:15061 [1] NCCL INFO Ring 00 : 0 -> 1 -> 0",
+        "gpu-public011166042141:15061:15061 [1] NCCL INFO Ring 01 : 0 -> 1 -> 0",
+        "gpu-public011166042141:15061:15061 [1] NCCL INFO Trees [0] -1/-1/-1->1->0 [1] -1/-1/-1->1->0",
+        "gpu-public011166042141:15061:15061 [1] NCCL INFO P2P Chunksize set to 131072",
+        "gpu-public011166042141:15061:15061 [1] NCCL INFO PROFILER/Plugin: Could not find: libnccl-profiler.so",
+        "gpu-public011166042141:15061:15061 [1] NCCL INFO Check P2P Type isAllDirectP2p 0 directMode 0 isAllCudaP2p 0",
+        "gpu-public011166042141:15061:15061 [1] NCCL INFO ncclP2pSchedule: group size used is 2",
+        "gpu-public011166042141:15061:15779 [0] NCCL INFO [Proxy Service] Device 1 CPU core 97",
+        "gpu-public011166042141:15061:15781 [0] NCCL INFO [Proxy Service UDS] Device 1 CPU core 98",
+        "gpu-public011166042141:15061:15061 [1] NCCL INFO TUNER/Plugin: Could not find: libnccl-tuner.so"
+      ],
+      "transport_channels": [
+        "gpu-public011166042141:15061:15061 [1] NCCL INFO NCCL_P2P_DISABLE set by environment to 1",
+        "gpu-public011166042141:15060:15060 [0] NCCL INFO NCCL_P2P_DISABLE set by environment to 1",
+        "(Worker pid=15061) WARNING 10-09 00:29:17 [custom_all_reduce.py:195] Custom allreduce is disabled because your platform lacks GPU P2P capability or P2P test failed. To silence this warning, specify disable_custom_all_reduce=True explicitly.",
+        "(Worker pid=15060) WARNING 10-09 00:29:17 [custom_all_reduce.py:195] Custom allreduce is disabled because your platform lacks GPU P2P capability or P2P test failed. To silence this warning, specify disable_custom_all_reduce=True explicitly.",
+        "gpu-public011166042141:15060:15060 [0] NCCL INFO Channel 00 : 0[0] -> 1[1] via SHM/direct/direct",
+        "gpu-public011166042141:15060:15060 [0] NCCL INFO Channel 01 : 0[0] -> 1[1] via SHM/direct/direct",
+        "gpu-public011166042141:15061:15061 [1] NCCL INFO Channel 00 : 1[1] -> 0[0] via SHM/direct/direct",
+        "gpu-public011166042141:15061:15061 [1] NCCL INFO Channel 01 : 1[1] -> 0[0] via SHM/direct/direct"
+      ],
+      "cache_dtype": [
+        "(APIServer pid=14168) INFO 10-09 00:28:54 [api_utils.py:272] non-default args: {'model_tag': '/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8', 'host': '127.0.0.1', 'port': 18367, 'model': '/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8', 'dtype': 'bfloat16', 'seed': 1, 'max_model_len': 128, 'enforce_eager': True, 'served_model_name': ['qwen35-vllm-tp2-resident-paper'], 'generation_config': 'vllm', 'tensor_parallel_size': 2, 'gpu_memory_utilization': 0.8, 'enable_prefix_caching': False, 'mamba_cache_dtype': 'bfloat16', 'mamba_ssm_cache_dtype': 'float32', 'language_model_only': True, 'max_num_batched_tokens': 8, 'max_num_seqs': 2, 'enable_chunked_prefill': True, 'moe_backend': 'marlin', 'linear_backend': 'marlin'}",
+        "(EngineCore pid=14764) INFO 10-09 00:29:08 [core.py:122] Initializing a V1 LLM engine (v0.28.0) with config: model='/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8', speculative_config=None, tokenizer='/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.bfloat16, max_seq_len=128, download_dir=None, load_format=auto, tensor_parallel_size=2, pipeline_parallel_size=1, data_parallel_size=1, decode_context_parallel_size=1, dcp_comm_backend=ag_rs, disable_custom_all_reduce=False, quantization=fp8, quantization_config=None, enforce_eager=True, enable_return_routed_experts=False, kv_cache_dtype=auto, device_config=cuda, structured_outputs_config=StructuredOutputsConfig(backend='auto', disable_any_whitespace=False, disable_additional_properties=False, reasoning_parser='', reasoning_parser_plugin='', enable_in_reasoning=False), observability_config=ObservabilityConfig(show_hidden_metrics_for_version=None, otlp_traces_endpoint=None, collect_detailed_traces=None, kv_cache_metrics=False, kv_cache_metrics_sample=0.01, cudagraph_metrics=False, enable_layerwise_nvtx_tracing=False, enable_mfu_metrics=False, enable_mm_processor_stats=False, enable_logging_iteration_details=False, jit_monitor_mode='warn', jit_monitor_verbose=False), seed=1, served_model_name=qwen35-vllm-tp2-resident-paper, enable_prefix_caching=False, enable_chunked_prefill=True, pooler_config=None, compilation_config={'mode': <CompilationMode.NONE: 0>, 'debug_dump_path': None, 'cache_dir': '', 'compile_cache_save_format': 'binary', 'backend': 'inductor', 'custom_ops': ['+quant_fp8', 'all', '+quant_fp8'], 'ir_enable_torch_wrap': False, 'splitting_ops': [], 'compile_mm_encoder': False, 'cudagraph_mm_encoder': False, 'encoder_cudagraph_token_budgets': [], 'encoder_cudagraph_max_vision_items_per_batch': 0, 'encoder_cudagraph_max_frames_per_batch': None, 'compile_sizes': [], 'compile_ranges_endpoints': [8], 'inductor_compile_config': {'enable_auto_functionalized_v2': False, 'combo_kernels': True, 'benchmark_combo_kernel': True}, 'inductor_passes': {}, 'cudagraph_mode': <CUDAGraphMode.NONE: 0>, 'cudagraph_num_of_warmups': 0, 'cudagraph_capture_sizes': [], 'cudagraph_copy_inputs': False, 'cudagraph_specialize_lora': True, 'use_inductor_graph_partition': False, 'pass_config': {'fuse_norm_quant': True, 'fuse_act_quant': True, 'fuse_attn_quant': False, 'enable_sp': False, 'fuse_gemm_comms': False, 'fuse_allreduce_rms': False, 'enable_qk_norm_rope_fusion': False, 'fuse_rope_kvcache_cat_mla': False, 'fuse_act_padding': False, 'fuse_qk_norm_rope_kvcache': False}, 'max_cudagraph_capture_size': 0, 'dynamic_shapes_config': {'type': <DynamicShapesType.BACKED: 'backed'>, 'evaluate_guards': False, 'assume_32_bit_indexing': False}, 'local_cache_dir': None, 'fast_moe_cold_start': False, 'static_all_moe_layers': []}, kernel_config=KernelConfig(ir_op_priority=IrOpPriorityConfig(rms_norm=['vllm_c', 'native'], fused_add_rms_norm=['vllm_c', 'native']), enable_flashinfer_autotune=True, enable_cutedsl_warmup=True, enable_jit_warmup=True, enable_bf16x3_router_gemm=False, moe_backend='marlin', linear_backend='marlin')"
+      ]
+    },
+    "contradictions": [],
+    "no_cpu_offload": "source-default/config verified; Noop selection may be debug-only; residency telemetry/logs retained",
+    "exact_arithmetic_match": false,
+    "effective_full_dtype_and_kernel_closure": "unknown; logged operations only"
+  },
+  "declared_inference_spec": {
+    "engine": "vllm",
+    "argv": [
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-single-lifecycle-20261009-001/staged/ferrule",
+      "serve",
+      "/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8",
+      "--host",
+      "127.0.0.1",
+      "--port",
+      "18367",
+      "--served-model-name",
+      "qwen35-vllm-tp2-resident-paper",
+      "--language-model-only",
+      "--tensor-parallel-size",
+      "2",
+      "--pipeline-parallel-size",
+      "1",
+      "--data-parallel-size",
+      "1",
+      "--dtype",
+      "bfloat16",
+      "--kv-cache-dtype",
+      "auto",
+      "--mamba-cache-dtype",
+      "bfloat16",
+      "--mamba-ssm-cache-dtype",
+      "float32",
+      "--linear-backend",
+      "marlin",
+      "--moe-backend",
+      "marlin",
+      "--cpu-offload-gb",
+      "0",
+      "--max-model-len",
+      "128",
+      "--max-num-seqs",
+      "2",
+      "--max-num-batched-tokens",
+      "8",
+      "--enable-chunked-prefill",
+      "--gpu-memory-utilization",
+      "0.8",
+      "--no-enable-prefix-caching",
+      "--generation-config",
+      "vllm",
+      "--seed",
+      "1",
+      "--enforce-eager"
+    ],
+    "environment": {
+      "HOME": "/home/admin",
+      "PYTHONDONTWRITEBYTECODE": "1",
+      "PYTHONNOUSERSITE": "1",
+      "CUDA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "NVIDIA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
+      "HF_HUB_OFFLINE": "1",
+      "TRANSFORMERS_OFFLINE": "1",
+      "CUDA_HOME": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86",
+      "CUDA_PATH": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86",
+      "CUDACXX": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86/bin/nvcc",
+      "NVCC": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86/bin/nvcc",
+      "FLASHINFER_NVCC": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86/bin/nvcc",
+      "PATH": "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/bin:/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86/bin:/root/.cargo/bin:/usr/share/Modules/bin:/sbin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/root/bin:/usr/X11R6/bin",
+      "FLASHINFER_WORKSPACE_BASE": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/flashinfer-cu129",
+      "MAX_JOBS": "4",
+      "NCCL_P2P_DISABLE": "1",
+      "NCCL_DEBUG": "INFO",
+      "NCCL_DEBUG_SUBSYS": "INIT,GRAPH,P2P,SHM,NET"
+    },
+    "model": "qwen35-vllm-tp2-resident-paper",
+    "url": "http://127.0.0.1:18367/v1/completions"
+  },
+  "loaded_library_evidence": "loaded-library-evidence.json",
+  "mixed_library_closure_observed": [
+    "/usr/local/cuda-13.2/targets/x86_64-linux/lib/libcudart.so.13.2.86",
+    "/usr/local/cuda-13.2/targets/x86_64-linux/lib/libnvrtc.so.13.2.86"
+  ],
+  "failure_investigation": "comparison.json; no declared env/runtime drift; 003 observer-interrupted lazy init; 004 CUDA init failure before NCCL, numeric CUDA code unavailable; underlying driver root cause unresolved",
+  "validations": {
+    "original_tests": 42,
+    "observer_tests": 37,
+    "status": "pass",
+    "source_runtime_reference_driver_pins_rechecked": true,
+    "all_prior_run_pins_rechecked": true
+  },
+  "model_identity_limitations": "partial: metadata hashes + shard stat pins; payloads NOT hashed",
+  "no_foreign_signals": true,
+  "no_model_runtime_transport_changes": true,
+  "artifact_pins": {
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-single-lifecycle-20261009-001/final-owner-release.json": "df1677afc059dacc7b9875865dd8c07b90ad34d2dd4bea7267a88602d37ae5f1",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-single-lifecycle-20261009-001/topology.json": "ef2c30a474eb84b709762d9df80e6c853451640671cd142f0a4cc1f44009a50b",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-single-lifecycle-20261009-001/driver-loader.json": "d6015c1d93f524f599a0516815130b04a865a2d29b2959c37246d801d29fd5c2",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-single-lifecycle-20261009-001/loaded-library-evidence.json": "e363be5399305e11bd7d380f01f8e12413abcc9fb3e13f6759f22ab8d33243fb",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-single-lifecycle-20261009-001/final-owner-recheck.json": "c0b55beca66f00f12bf1b618602e0eaafc18ee6610f576a291b28afa2e91bf5f",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-single-lifecycle-20261009-001/lock-release.json": "39ae688106ea715f00f8c7694b2a52e2819bb6f666208c5b1c0cb4e273e3df79",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-single-lifecycle-20261009-001/canaries.json": "854238c428d68832a2806538f300bac32f53a0c8d47ff2e85bcfba5e5ace6fea",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-single-lifecycle-20261009-001/prepared.json": "4dcf93fd7b62be3e2bdc31710e728115bb1f1623573f568852d30228d409cc11",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-single-lifecycle-20261009-001/observer-tests.log": "1013890fb0d6dc498d850f71fa341ad03f3f05da59ed75251d2e1a5cc4967c1b",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-single-lifecycle-20261009-001/coordinator.log": "b28d9022d5ad1af88d9936586fdd75d8c20b79b8c501056f249a75e8563623ae",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-single-lifecycle-20261009-001/comparison.json": "fd3ebfe93b0ca7b4283e94a0a5160570abc4592dc847c577af07cfb84ad9e217",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-single-lifecycle-20261009-001/original-tests.log": "3a3302e8a3dd12f5b1b2d2c2cefeee7a4d6877c13b604b92d5ebf60b6393b49d",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-single-lifecycle-20261009-001/execution.json": "cefae776d15665058a56f7ff0e357bb28822b1b344d27124d2b8f30839773a21",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-single-lifecycle-20261009-001/staged/ferrule": "fa5be271423d704d89b038d89ee8b75e0e62d6de8a7072fc5c22c7c8ab00d18a",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-single-lifecycle-20261009-001/session/requests.json": "67d77a11196edcbe3546c1d84566e05f97f0a9202de11a79bfe9776765b4678e",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-single-lifecycle-20261009-001/session/case.json": "0156248c98a3336d09ac112a9758ea9e7a0726dc962fc25b47d887455e5999bf",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-single-lifecycle-20261009-001/session/custody.json": "896820f4a1dfad343b26c3464d2edfb83e2af5826f06cf9c5b9c57a0b9df83e2",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-single-lifecycle-20261009-001/session/before.json": "1cf713b711e34d24c81b42acebcd39d1c552da46cbcb201474d4255310934213",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-single-lifecycle-20261009-001/session/worker-launch.json": "f3d5108d6514b2fbc68ff1052d0d2f48c56aa58addf30c3557c2ba4aded3a0ae",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-single-lifecycle-20261009-001/session/server.log": "704f84bb3d9b80912c44e4d46539b2ccd217da781afb9a7cbfcfa150bdeb57e1",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-single-lifecycle-20261009-001/session/prelaunch.json": "bc87980832104662a05693e397d041cdf26db3c9045d99bc9c9c816c559f31f2",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-single-lifecycle-20261009-001/session/after.json": "7298ece0c6b8989606e440fac5cf2f69fb83030089094111a6d6e176bbe0baf1",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-single-lifecycle-20261009-001/session/canaries.json": "854238c428d68832a2806538f300bac32f53a0c8d47ff2e85bcfba5e5ace6fea",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-single-lifecycle-20261009-001/session/samples.jsonl": "63bed4a27724aa201fccb249d1b91a5b5bc862f37a65ee09e154bfad12d0d317",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-single-lifecycle-20261009-001/session/supervisor.json": "bd2f6a2483e1e21805a02bb9db93b70a47e0ba405c3390337d9daf631c705694",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-single-lifecycle-20261009-001/session/baseline.json": "3c2bd642756c89eefb40a77c82d66cda42ca4d6a3584092b8d2f1620932ab368",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-single-lifecycle-20261009-001/session/hello2/gate.json": "51deb79f36c32b3bd4384d8a60c236a2448ae04d753222c05640a1066e4f5136",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-single-lifecycle-20261009-001/session/hello2/http.json": "4bd2570e59ff995c3e2510d3ad0f1bebd9cabda33123be786fdee0945cb1fcbb",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-single-lifecycle-20261009-001/session/hello2/metadata.json": "ece7db2b6fc34be4a2a77465ab0ed66785e7134bbb1f7072faec7abf68be55c1",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-single-lifecycle-20261009-001/session/qa8-V1/gate.json": "51deb79f36c32b3bd4384d8a60c236a2448ae04d753222c05640a1066e4f5136",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-single-lifecycle-20261009-001/session/qa8-V1/http.json": "25fae69c237ffd68ee1c39ea028dd4b30408a265b0adcb3c15cbc1119aafa5fd",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-single-lifecycle-20261009-001/session/qa8-V1/prompts.json": "bc8efcdf040ead134df38f60371a0a0cd9aa516a2ecf013947fbe036dcf7dc1f",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-single-lifecycle-20261009-001/session/qa8-V1/metadata.json": "ece7db2b6fc34be4a2a77465ab0ed66785e7134bbb1f7072faec7abf68be55c1",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-single-lifecycle-20261009-001/session/canary8/gate.json": "db63934a1f9681f77ce2c03bbbdb2a8ad84716394b613427c98cbff6c615e4e3",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-single-lifecycle-20261009-001/session/canary8/http.json": "7e1614bec2d86480f0e5b6295211b558ceed7d9edb9d95a3e5ad999a93588498",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-single-lifecycle-20261009-001/session/canary8/prompts.json": "42db4c2cc82a5130a3272a91e13738b309b8bfdaf3f796425e9a021d77f73af6",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-single-lifecycle-20261009-001/session/canary8/metadata.json": "ece7db2b6fc34be4a2a77465ab0ed66785e7134bbb1f7072faec7abf68be55c1"
+  }
+}

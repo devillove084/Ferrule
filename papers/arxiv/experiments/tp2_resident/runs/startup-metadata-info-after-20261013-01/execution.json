@@ -1,0 +1,809 @@
+{
+  "protocol": "tp2-resident-fv-qa8-descriptive",
+  "purpose": "fused_after",
+  "status": "complete_descriptive_only",
+  "sole_gpu_owner_granted": true,
+  "owner_note": "20261013 sole GPU owner: one ordinary info F1 exact current startup_metadata TP2; 3warm5measure; rankperf off; no V/Nsight/storage TP1",
+  "fairmatch": false,
+  "exact_speedup": null,
+  "slots": [
+    {
+      "id": "F1",
+      "status": "complete",
+      "launch_id": "3650602396d64b6e897c45df03fcd9d2",
+      "execution_sha256": "5d42f312f58d86cceb84419df9e6556241ac9e640743d9e7066078c00972f983",
+      "supervisor_sha256": "4006e55d95703f551c6660a0564d1304363a4549655bdd863a95f5a47510e8d0",
+      "observation": {
+        "status": "complete",
+        "started_monotonic": 8772033.37049614,
+        "fairmatch": false,
+        "exact_speedup": null,
+        "launch_monotonic": 8772034.109616201,
+        "server_pid": 60760,
+        "server_identity": {
+          "pid": 60760,
+          "birth_ticks": 113591381,
+          "ppid": 60744,
+          "state": "R"
+        },
+        "startup_seconds": 140.05203882232308,
+        "request_gate": {
+          "status": "complete",
+          "phases": [
+            {
+              "stage": "hello2",
+              "gate": {
+                "status": "pass",
+                "engine": "ferrule",
+                "checks": [
+                  {
+                    "index": 0,
+                    "passed": true,
+                    "actual_input_tokens": 1,
+                    "actual_output_tokens": 2
+                  }
+                ],
+                "first_qa_requests": 0,
+                "warmup_requests": 0,
+                "measured_requests": 1,
+                "http_receipt_sha256": "19ff13dd102c4da86d1a2e24869ddb6b51b9b271913641f82975817e8ed58cda",
+                "coverage": "visible text/usage only; separate pinned numerical acceptance, not arithmetic parity",
+                "fairmatch": false,
+                "exact_speedup": null
+              }
+            },
+            {
+              "stage": "canary8",
+              "gate": {
+                "status": "pass",
+                "engine": "ferrule",
+                "checks": [
+                  {
+                    "index": 0,
+                    "passed": true,
+                    "actual_input_tokens": 5,
+                    "actual_output_tokens": 8
+                  },
+                  {
+                    "index": 1,
+                    "passed": true,
+                    "actual_input_tokens": 5,
+                    "actual_output_tokens": 8
+                  },
+                  {
+                    "index": 2,
+                    "passed": true,
+                    "actual_input_tokens": 3,
+                    "actual_output_tokens": 8
+                  }
+                ],
+                "first_qa_requests": 0,
+                "warmup_requests": 0,
+                "measured_requests": 3,
+                "http_receipt_sha256": "7fa3512f655974fa40c59f0cdcdfdfcdd7e6c921b2f348f3a2e91085ae008757",
+                "coverage": "visible text/usage only; separate pinned numerical acceptance, not arithmetic parity",
+                "fairmatch": false,
+                "exact_speedup": null
+              }
+            },
+            {
+              "stage": "qa8",
+              "gate": {
+                "status": "pass",
+                "engine": "ferrule",
+                "checks": [
+                  {
+                    "index": 0,
+                    "passed": true,
+                    "actual_input_tokens": 5,
+                    "actual_output_tokens": 8
+                  },
+                  {
+                    "index": 1,
+                    "passed": true,
+                    "actual_input_tokens": 5,
+                    "actual_output_tokens": 8
+                  },
+                  {
+                    "index": 2,
+                    "passed": true,
+                    "actual_input_tokens": 5,
+                    "actual_output_tokens": 8
+                  },
+                  {
+                    "index": 3,
+                    "passed": true,
+                    "actual_input_tokens": 5,
+                    "actual_output_tokens": 8
+                  },
+                  {
+                    "index": 4,
+                    "passed": true,
+                    "actual_input_tokens": 5,
+                    "actual_output_tokens": 8
+                  },
+                  {
+                    "index": 5,
+                    "passed": true,
+                    "actual_input_tokens": 5,
+                    "actual_output_tokens": 8
+                  },
+                  {
+                    "index": 6,
+                    "passed": true,
+                    "actual_input_tokens": 5,
+                    "actual_output_tokens": 8
+                  },
+                  {
+                    "index": 7,
+                    "passed": true,
+                    "actual_input_tokens": 5,
+                    "actual_output_tokens": 8
+                  }
+                ],
+                "first_qa_requests": 1,
+                "warmup_requests": 2,
+                "measured_requests": 5,
+                "http_receipt_sha256": "070d9e846df0746d354869236968234a2289ebfc3f2d73f367496d64c6d80955",
+                "coverage": "visible text/usage only; separate pinned numerical acceptance, not arithmetic parity",
+                "fairmatch": false,
+                "exact_speedup": null
+              }
+            }
+          ],
+          "same_server": true
+        },
+        "resources": {
+          "status": "observed_within_targets",
+          "errors": [],
+          "memory_components": {
+            "sample_count": 63,
+            "complete_host_samples": 63,
+            "gpu_samples": 63,
+            "gpu_peak_bytes": {
+              "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 22593667072,
+              "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 22593667072
+            },
+            "tree_pss_peak_bytes": 46785965056,
+            "tree_rss_peak_bytes": 46788718592,
+            "tree_anonymous_peak_bytes": 46544408576,
+            "tree_pss_anon_peak_bytes": null,
+            "tree_pss_file_peak_bytes": null,
+            "tree_private_dirty_peak_bytes": 46587002880,
+            "component_sample_counts": {
+              "anonymous_bytes": 63,
+              "pss_anon_bytes": 0,
+              "pss_file_bytes": 0,
+              "private_dirty_bytes": 63
+            },
+            "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+            "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+          },
+          "phase_memory": {
+            "bounds": {
+              "ready_monotonic": 8772174.161655024,
+              "first_sent_monotonic": 8772175.957299478,
+              "first_terminal_monotonic": 8772176.285904244
+            },
+            "phases": {
+              "startup": {
+                "sample_count": 59,
+                "complete_host_samples": 59,
+                "gpu_samples": 59,
+                "gpu_peak_bytes": {
+                  "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 22490906624,
+                  "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 21473787904
+                },
+                "tree_pss_peak_bytes": 46785965056,
+                "tree_rss_peak_bytes": 46788718592,
+                "tree_anonymous_peak_bytes": 46544408576,
+                "tree_pss_anon_peak_bytes": null,
+                "tree_pss_file_peak_bytes": null,
+                "tree_private_dirty_peak_bytes": 46587002880,
+                "component_sample_counts": {
+                  "anonymous_bytes": 59,
+                  "pss_anon_bytes": 0,
+                  "pss_file_bytes": 0,
+                  "private_dirty_bytes": 59
+                },
+                "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+                "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+              },
+              "ready_before_first": {
+                "sample_count": 1,
+                "complete_host_samples": 1,
+                "gpu_samples": 1,
+                "gpu_peak_bytes": {
+                  "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 22593667072,
+                  "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 22593667072
+                },
+                "tree_pss_peak_bytes": 45861399552,
+                "tree_rss_peak_bytes": 45864153088,
+                "tree_anonymous_peak_bytes": 45618335744,
+                "tree_pss_anon_peak_bytes": null,
+                "tree_pss_file_peak_bytes": null,
+                "tree_private_dirty_peak_bytes": 45660930048,
+                "component_sample_counts": {
+                  "anonymous_bytes": 1,
+                  "pss_anon_bytes": 0,
+                  "pss_file_bytes": 0,
+                  "private_dirty_bytes": 1
+                },
+                "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+                "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+              },
+              "first_request": {
+                "sample_count": 0,
+                "complete_host_samples": 0,
+                "gpu_samples": 0,
+                "gpu_peak_bytes": {
+                  "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": null,
+                  "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": null
+                },
+                "tree_pss_peak_bytes": null,
+                "tree_rss_peak_bytes": null,
+                "tree_anonymous_peak_bytes": null,
+                "tree_pss_anon_peak_bytes": null,
+                "tree_pss_file_peak_bytes": null,
+                "tree_private_dirty_peak_bytes": null,
+                "component_sample_counts": {
+                  "anonymous_bytes": 0,
+                  "pss_anon_bytes": 0,
+                  "pss_file_bytes": 0,
+                  "private_dirty_bytes": 0
+                },
+                "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+                "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+              },
+              "after_first_request": {
+                "sample_count": 3,
+                "complete_host_samples": 3,
+                "gpu_samples": 3,
+                "gpu_peak_bytes": {
+                  "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 22593667072,
+                  "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 22593667072
+                },
+                "tree_pss_peak_bytes": 45862746112,
+                "tree_rss_peak_bytes": 45865558016,
+                "tree_anonymous_peak_bytes": 45618561024,
+                "tree_pss_anon_peak_bytes": null,
+                "tree_pss_file_peak_bytes": null,
+                "tree_private_dirty_peak_bytes": 45661401088,
+                "component_sample_counts": {
+                  "anonymous_bytes": 3,
+                  "pss_anon_bytes": 0,
+                  "pss_file_bytes": 0,
+                  "private_dirty_bytes": 3
+                },
+                "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+                "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+              }
+            },
+            "unassigned_or_boundary_samples": 0,
+            "steady_state_claim": false,
+            "policy": "after first request includes later canaries/warmup/requests; not a steady-state proof"
+          },
+          "phase_metadata_error": null,
+          "gpu_peak_bytes": {
+            "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 22593667072,
+            "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 22593667072
+          },
+          "tree_pss_peak_bytes": 46785965056,
+          "tree_rss_peak_bytes": 46788718592,
+          "complete_host_samples": 63,
+          "incomplete_host_samples": 0,
+          "gpu_samples": 63,
+          "missing_gpu_attempts": 0,
+          "baseline": {
+            "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": {
+              "index": 0,
+              "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+              "total_bytes": 25769803776,
+              "gpu_bytes": 0,
+              "utilization": 0
+            },
+            "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": {
+              "index": 1,
+              "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+              "total_bytes": 25769803776,
+              "gpu_bytes": 0,
+              "utilization": 0
+            },
+            "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6": {
+              "index": 2,
+              "uuid": "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6",
+              "total_bytes": 25769803776,
+              "gpu_bytes": 0,
+              "utilization": 0
+            },
+            "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011": {
+              "index": 3,
+              "uuid": "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011",
+              "total_bytes": 25769803776,
+              "gpu_bytes": 0,
+              "utilization": 0
+            },
+            "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86": {
+              "index": 4,
+              "uuid": "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86",
+              "total_bytes": 25769803776,
+              "gpu_bytes": 0,
+              "utilization": 0
+            },
+            "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685": {
+              "index": 5,
+              "uuid": "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685",
+              "total_bytes": 25769803776,
+              "gpu_bytes": 0,
+              "utilization": 0
+            },
+            "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d": {
+              "index": 6,
+              "uuid": "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d",
+              "total_bytes": 25769803776,
+              "gpu_bytes": 0,
+              "utilization": 0
+            },
+            "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f": {
+              "index": 7,
+              "uuid": "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f",
+              "total_bytes": 25769803776,
+              "gpu_bytes": 0,
+              "utilization": 0
+            }
+          },
+          "delta_high_water_bytes": {
+            "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 22593667072,
+            "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 22593667072,
+            "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6": 1048576,
+            "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011": 1048576,
+            "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86": 1048576,
+            "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685": 1048576,
+            "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d": 1048576,
+            "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f": 1048576
+          },
+          "final_process_diagnostics": [
+            {
+              "identity": {
+                "pid": 60760,
+                "birth_ticks": 113591381,
+                "ppid": 60744,
+                "state": "S"
+              },
+              "command": "/proc/self/fd/4 serve /mnt/nas1/hf/Qwen3.5-35B-A3B-FP8 --backend cuda --engine pipeline --model-profile qwen35-mixed-bf16 --tensor-parallel 2 --pipeline-parallel 1 --expert-parallel 1 --rank-backend thread --devices 0,1 --rank-restarts 0 --kv-execution-policy resident --ctx-size 128 --max-active-sequences 2 --max-batch-tokens 8 --prefill-chunk-size 8 --cuda-device-budget-mb 22528 --kv-cache-mb 16 --max-tensor-mb 2048 --cuda-workspace-mb 4096 --host 127.0.0.1 --port 18367 --served-model-name qwen35-ferrule-tp2-resident-paper ",
+              "environment": {
+                "HOME": "/root",
+                "PATH": "/home/admin/wxw403883/anaconda3/envs/tao/bin:/root/.cargo/bin:/usr/bin:/bin",
+                "PYTHONDONTWRITEBYTECODE": "1",
+                "CUDA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+                "NVIDIA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+                "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
+                "HF_HUB_OFFLINE": "1",
+                "TRANSFORMERS_OFFLINE": "1",
+                "CUDA_HOME": "/home/admin/wxw403883/anaconda3/envs/tao",
+                "NVCC": "/home/admin/wxw403883/anaconda3/envs/tao/bin/nvcc",
+                "LD_LIBRARY_PATH": "/home/admin/wxw403883/anaconda3/envs/tao/lib:/usr/lib64",
+                "CUBLAS_WORKSPACE_CONFIG": ":0:0",
+                "FERRULE_LOG": "info",
+                "FERRULE_LOG_FORMAT": "json"
+              },
+              "libraries": [
+                "/home/admin/wxw403883/anaconda3/envs/tao/lib/libcudart.so.12.4.99",
+                "/usr/lib64/libcuda.so.575.57.08"
+              ]
+            }
+          ],
+          "owned_gpu_attribution": "unknown",
+          "owned_process_gpu_peak_bytes": null,
+          "exact_peaks": false,
+          "hard_memory_partition": false,
+          "continuous_coverage": false
+        },
+        "shutdown": {
+          "status": "root_exited_descendants_unknown",
+          "seconds": 4.270942164584994,
+          "timed_out": false,
+          "gpu_quiescence": "unverified; no GPU probe",
+          "returncode": 0
+        },
+        "wall_seconds": 156.47667070291936,
+        "optimization": "startup_metadata"
+      },
+      "runtime": {
+        "evidence": {
+          "profile": [
+            "[model plan] qwen3.5-35b-a3b-numeric-bf16 Pipeline: backend Cuda -> Cuda, profile=cuda-qwen35-mixed-bf16-tp2-local-shards-serial; numeric arithmetic=not applicable; ModelSupport { required_feature: Some(\"cuda\"), cuda_feature_enabled: true, static_constraints: \"Mixed PP1 TP2 EP1 CUDA threads; two distinct devices; resident local expert shards; BF16 activation/KV/conv, F32 SSM/accumulation; serial greedy; context<=128 batch<=8 sessions<=2; decoded BF16 cache=3 GiB per owner (fixed pins + bounded routed backing and segment slack); workspace includes cache; <=22 GiB/card; no offload/process/restart; public quality gate required\", static_supported: true, buildability: CatalogValidated, admission: OwnerLiveAdmissionRequired, storage: NumericFp8E4m3fnBf16Scales, arithmetic: Bf16Compatibility }; topology=ModelTopologyPlacement { rank_backend: Some(Thread), logical: LogicalTopology { pipeline_parallel: 1, tensor_parallel: 2, expert_parallel: 1, data_parallel: 1, sequence_parallel: 1, context_parallel: 1 }, physical: PhysicalPlacement { devices: Some([0, 1]), root_device: None, expert_devices: None, source_identity: None } }; scheduler requested=ResidentSchedulerConfig { prefill_chunk_size: 8, max_active_sequences: 2, max_decode_batch: 2, decode_cohort_target: 4, decode_cohort_max_deferrals: 3, max_batch_tokens: 8, prefill_reserve_tokens: 1, allow_mixed_batches: true, prefix_cache_capacity_pages: 0 }, effective=ResidentSchedulerConfig { prefill_chunk_size: 8, max_active_sequences: 2, max_decode_batch: 1, decode_cohort_target: 1, decode_cohort_max_deferrals: 0, max_batch_tokens: 8, prefill_reserve_tokens: 1, allow_mixed_batches: false, prefix_cache_capacity_pages: 0 }; context=128; adjustments=[max_layers: descriptor default -> 40 (use the descriptor layer count); scheduler_config.max_decode_batch: 2 -> 1 (generic pipeline is serial; batch <= context and prefill <= batch; no mixed batches/cohort deferral/native proposals); scheduler_config.allow_mixed_batches: true -> false (generic pipeline is serial; batch <= context and prefill <= batch; no mixed batches/cohort deferral/native proposals); scheduler_config.decode_cohort_target: 4 -> 1 (generic pipeline is serial; batch <= context and prefill <= batch; no mixed batches/cohort deferral/native proposals); scheduler_config.decode_cohort_max_deferrals: 3 -> 0 (generic pipeline is serial; batch <= context and prefill <= batch; no mixed batches/cohort deferral/native proposals)]; metadata only, owner live admission required (source identity, free memory, allocator/headroom and cleanup are not guaranteed); KV logical pages L and physical transaction slots P remain separately owner-planned",
+            "loading qwen35-ferrule-tp2-resident-paper with qwen3.5-35b-a3b-numeric-bf16 on cuda-qwen35-mixed-bf16-tp2-local-shards-serial (cuda backend) in the dedicated model worker...",
+            "{\"timestamp\":\"2026-10-12T18:18:39.928775Z\",\"level\":\"INFO\",\"fields\":{\"message\":\"resident model build entering owner-local admission\",\"report\":\"qwen3.5-35b-a3b-numeric-bf16 Pipeline: backend Cuda -> Cuda, profile=cuda-qwen35-mixed-bf16-tp2-local-shards-serial; numeric arithmetic=not applicable; ModelSupport { required_feature: Some(\\\"cuda\\\"), cuda_feature_enabled: true, static_constraints: \\\"Mixed PP1 TP2 EP1 CUDA threads; two distinct devices; resident local expert shards; BF16 activation/KV/conv, F32 SSM/accumulation; serial greedy; context<=128 batch<=8 sessions<=2; decoded BF16 cache=3 GiB per owner (fixed pins + bounded routed backing and segment slack); workspace includes cache; <=22 GiB/card; no offload/process/restart; public quality gate required\\\", static_supported: true, buildability: CatalogValidated, admission: OwnerLiveAdmissionRequired, storage: NumericFp8E4m3fnBf16Scales, arithmetic: Bf16Compatibility }; topology=ModelTopologyPlacement { rank_backend: Some(Thread), logical: LogicalTopology { pipeline_parallel: 1, tensor_parallel: 2, expert_parallel: 1, data_parallel: 1, sequence_parallel: 1, context_parallel: 1 }, physical: PhysicalPlacement { devices: Some([0, 1]), root_device: None, expert_devices: None, source_identity: None } }; scheduler requested=ResidentSchedulerConfig { prefill_chunk_size: 8, max_active_sequences: 2, max_decode_batch: 2, decode_cohort_target: 4, decode_cohort_max_deferrals: 3, max_batch_tokens: 8, prefill_reserve_tokens: 1, allow_mixed_batches: true, prefix_cache_capacity_pages: 0 }, effective=ResidentSchedulerConfig { prefill_chunk_size: 8, max_active_sequences: 2, max_decode_batch: 1, decode_cohort_target: 1, decode_cohort_max_deferrals: 0, max_batch_tokens: 8, prefill_reserve_tokens: 1, allow_mixed_batches: false, prefix_cache_capacity_pages: 0 }; context=128; adjustments=[max_layers: descriptor default -> 40 (use the descriptor layer count); scheduler_config.max_decode_batch: 2 -> 1 (generic pipeline is serial; batch <= context and prefill <= batch; no mixed batches/cohort deferral/native proposals); scheduler_config.allow_mixed_batches: true -> false (generic pipeline is serial; batch <= context and prefill <= batch; no mixed batches/cohort deferral/native proposals); scheduler_config.decode_cohort_target: 4 -> 1 (generic pipeline is serial; batch <= context and prefill <= batch; no mixed batches/cohort deferral/native proposals); scheduler_config.decode_cohort_max_deferrals: 3 -> 0 (generic pipeline is serial; batch <= context and prefill <= batch; no mixed batches/cohort deferral/native proposals)]; metadata only, owner live admission required (source identity, free memory, allocator/headroom and cleanup are not guaranteed); KV logical pages L and physical transaction slots P remain separately owner-planned\"},\"target\":\"ferrule_composition::model_factory\"}"
+          ],
+          "budget": [
+            "[Mixed TP2 device budget] cache_enabled=true decoded_cache_and_full_ledger=[MixedTp2CacheRequirements { device: 0, cache_enabled: true, cache_capacity_grants: 3221225472, pinned_grants: 1405091840, routed_working_set_grants: 805306368, required_workspace_bytes: 3875940352, workspace_ceiling_bytes: 4294967296, required_device_bytes: 23041274368, device_ceiling_bytes: 23622320128 }, MixedTp2CacheRequirements { device: 1, cache_enabled: true, cache_capacity_grants: 3221225472, pinned_grants: 1405091840, routed_working_set_grants: 805306368, required_workspace_bytes: 3875940352, workspace_ceiling_bytes: 4294967296, required_device_bytes: 23041274368, device_ceiling_bytes: 23622320128 }]; ceiling_bytes_per_card=23622320128; resident FP8 local expert shards plus bounded decoded BF16 cache, no host offload; BF16 activation/KV/conv, F32 SSM/accumulation; source-bound claims and live admission remain required; not a VRAM reservation"
+          ],
+          "resident": [
+            "[model plan] qwen3.5-35b-a3b-numeric-bf16 Pipeline: backend Cuda -> Cuda, profile=cuda-qwen35-mixed-bf16-tp2-local-shards-serial; numeric arithmetic=not applicable; ModelSupport { required_feature: Some(\"cuda\"), cuda_feature_enabled: true, static_constraints: \"Mixed PP1 TP2 EP1 CUDA threads; two distinct devices; resident local expert shards; BF16 activation/KV/conv, F32 SSM/accumulation; serial greedy; context<=128 batch<=8 sessions<=2; decoded BF16 cache=3 GiB per owner (fixed pins + bounded routed backing and segment slack); workspace includes cache; <=22 GiB/card; no offload/process/restart; public quality gate required\", static_supported: true, buildability: CatalogValidated, admission: OwnerLiveAdmissionRequired, storage: NumericFp8E4m3fnBf16Scales, arithmetic: Bf16Compatibility }; topology=ModelTopologyPlacement { rank_backend: Some(Thread), logical: LogicalTopology { pipeline_parallel: 1, tensor_parallel: 2, expert_parallel: 1, data_parallel: 1, sequence_parallel: 1, context_parallel: 1 }, physical: PhysicalPlacement { devices: Some([0, 1]), root_device: None, expert_devices: None, source_identity: None } }; scheduler requested=ResidentSchedulerConfig { prefill_chunk_size: 8, max_active_sequences: 2, max_decode_batch: 2, decode_cohort_target: 4, decode_cohort_max_deferrals: 3, max_batch_tokens: 8, prefill_reserve_tokens: 1, allow_mixed_batches: true, prefix_cache_capacity_pages: 0 }, effective=ResidentSchedulerConfig { prefill_chunk_size: 8, max_active_sequences: 2, max_decode_batch: 1, decode_cohort_target: 1, decode_cohort_max_deferrals: 0, max_batch_tokens: 8, prefill_reserve_tokens: 1, allow_mixed_batches: false, prefix_cache_capacity_pages: 0 }; context=128; adjustments=[max_layers: descriptor default -> 40 (use the descriptor layer count); scheduler_config.max_decode_batch: 2 -> 1 (generic pipeline is serial; batch <= context and prefill <= batch; no mixed batches/cohort deferral/native proposals); scheduler_config.allow_mixed_batches: true -> false (generic pipeline is serial; batch <= context and prefill <= batch; no mixed batches/cohort deferral/native proposals); scheduler_config.decode_cohort_target: 4 -> 1 (generic pipeline is serial; batch <= context and prefill <= batch; no mixed batches/cohort deferral/native proposals); scheduler_config.decode_cohort_max_deferrals: 3 -> 0 (generic pipeline is serial; batch <= context and prefill <= batch; no mixed batches/cohort deferral/native proposals)]; metadata only, owner live admission required (source identity, free memory, allocator/headroom and cleanup are not guaranteed); KV logical pages L and physical transaction slots P remain separately owner-planned",
+            "{\"timestamp\":\"2026-10-12T18:18:39.928775Z\",\"level\":\"INFO\",\"fields\":{\"message\":\"resident model build entering owner-local admission\",\"report\":\"qwen3.5-35b-a3b-numeric-bf16 Pipeline: backend Cuda -> Cuda, profile=cuda-qwen35-mixed-bf16-tp2-local-shards-serial; numeric arithmetic=not applicable; ModelSupport { required_feature: Some(\\\"cuda\\\"), cuda_feature_enabled: true, static_constraints: \\\"Mixed PP1 TP2 EP1 CUDA threads; two distinct devices; resident local expert shards; BF16 activation/KV/conv, F32 SSM/accumulation; serial greedy; context<=128 batch<=8 sessions<=2; decoded BF16 cache=3 GiB per owner (fixed pins + bounded routed backing and segment slack); workspace includes cache; <=22 GiB/card; no offload/process/restart; public quality gate required\\\", static_supported: true, buildability: CatalogValidated, admission: OwnerLiveAdmissionRequired, storage: NumericFp8E4m3fnBf16Scales, arithmetic: Bf16Compatibility }; topology=ModelTopologyPlacement { rank_backend: Some(Thread), logical: LogicalTopology { pipeline_parallel: 1, tensor_parallel: 2, expert_parallel: 1, data_parallel: 1, sequence_parallel: 1, context_parallel: 1 }, physical: PhysicalPlacement { devices: Some([0, 1]), root_device: None, expert_devices: None, source_identity: None } }; scheduler requested=ResidentSchedulerConfig { prefill_chunk_size: 8, max_active_sequences: 2, max_decode_batch: 2, decode_cohort_target: 4, decode_cohort_max_deferrals: 3, max_batch_tokens: 8, prefill_reserve_tokens: 1, allow_mixed_batches: true, prefix_cache_capacity_pages: 0 }, effective=ResidentSchedulerConfig { prefill_chunk_size: 8, max_active_sequences: 2, max_decode_batch: 1, decode_cohort_target: 1, decode_cohort_max_deferrals: 0, max_batch_tokens: 8, prefill_reserve_tokens: 1, allow_mixed_batches: false, prefix_cache_capacity_pages: 0 }; context=128; adjustments=[max_layers: descriptor default -> 40 (use the descriptor layer count); scheduler_config.max_decode_batch: 2 -> 1 (generic pipeline is serial; batch <= context and prefill <= batch; no mixed batches/cohort deferral/native proposals); scheduler_config.allow_mixed_batches: true -> false (generic pipeline is serial; batch <= context and prefill <= batch; no mixed batches/cohort deferral/native proposals); scheduler_config.decode_cohort_target: 4 -> 1 (generic pipeline is serial; batch <= context and prefill <= batch; no mixed batches/cohort deferral/native proposals); scheduler_config.decode_cohort_max_deferrals: 3 -> 0 (generic pipeline is serial; batch <= context and prefill <= batch; no mixed batches/cohort deferral/native proposals)]; metadata only, owner live admission required (source identity, free memory, allocator/headroom and cleanup are not guaranteed); KV logical pages L and physical transaction slots P remain separately owner-planned\"},\"target\":\"ferrule_composition::model_factory\"}"
+          ],
+          "precision": [
+            "[model plan] qwen3.5-35b-a3b-numeric-bf16 Pipeline: backend Cuda -> Cuda, profile=cuda-qwen35-mixed-bf16-tp2-local-shards-serial; numeric arithmetic=not applicable; ModelSupport { required_feature: Some(\"cuda\"), cuda_feature_enabled: true, static_constraints: \"Mixed PP1 TP2 EP1 CUDA threads; two distinct devices; resident local expert shards; BF16 activation/KV/conv, F32 SSM/accumulation; serial greedy; context<=128 batch<=8 sessions<=2; decoded BF16 cache=3 GiB per owner (fixed pins + bounded routed backing and segment slack); workspace includes cache; <=22 GiB/card; no offload/process/restart; public quality gate required\", static_supported: true, buildability: CatalogValidated, admission: OwnerLiveAdmissionRequired, storage: NumericFp8E4m3fnBf16Scales, arithmetic: Bf16Compatibility }; topology=ModelTopologyPlacement { rank_backend: Some(Thread), logical: LogicalTopology { pipeline_parallel: 1, tensor_parallel: 2, expert_parallel: 1, data_parallel: 1, sequence_parallel: 1, context_parallel: 1 }, physical: PhysicalPlacement { devices: Some([0, 1]), root_device: None, expert_devices: None, source_identity: None } }; scheduler requested=ResidentSchedulerConfig { prefill_chunk_size: 8, max_active_sequences: 2, max_decode_batch: 2, decode_cohort_target: 4, decode_cohort_max_deferrals: 3, max_batch_tokens: 8, prefill_reserve_tokens: 1, allow_mixed_batches: true, prefix_cache_capacity_pages: 0 }, effective=ResidentSchedulerConfig { prefill_chunk_size: 8, max_active_sequences: 2, max_decode_batch: 1, decode_cohort_target: 1, decode_cohort_max_deferrals: 0, max_batch_tokens: 8, prefill_reserve_tokens: 1, allow_mixed_batches: false, prefix_cache_capacity_pages: 0 }; context=128; adjustments=[max_layers: descriptor default -> 40 (use the descriptor layer count); scheduler_config.max_decode_batch: 2 -> 1 (generic pipeline is serial; batch <= context and prefill <= batch; no mixed batches/cohort deferral/native proposals); scheduler_config.allow_mixed_batches: true -> false (generic pipeline is serial; batch <= context and prefill <= batch; no mixed batches/cohort deferral/native proposals); scheduler_config.decode_cohort_target: 4 -> 1 (generic pipeline is serial; batch <= context and prefill <= batch; no mixed batches/cohort deferral/native proposals); scheduler_config.decode_cohort_max_deferrals: 3 -> 0 (generic pipeline is serial; batch <= context and prefill <= batch; no mixed batches/cohort deferral/native proposals)]; metadata only, owner live admission required (source identity, free memory, allocator/headroom and cleanup are not guaranteed); KV logical pages L and physical transaction slots P remain separately owner-planned",
+            "[Mixed TP2 device budget] cache_enabled=true decoded_cache_and_full_ledger=[MixedTp2CacheRequirements { device: 0, cache_enabled: true, cache_capacity_grants: 3221225472, pinned_grants: 1405091840, routed_working_set_grants: 805306368, required_workspace_bytes: 3875940352, workspace_ceiling_bytes: 4294967296, required_device_bytes: 23041274368, device_ceiling_bytes: 23622320128 }, MixedTp2CacheRequirements { device: 1, cache_enabled: true, cache_capacity_grants: 3221225472, pinned_grants: 1405091840, routed_working_set_grants: 805306368, required_workspace_bytes: 3875940352, workspace_ceiling_bytes: 4294967296, required_device_bytes: 23041274368, device_ceiling_bytes: 23622320128 }]; ceiling_bytes_per_card=23622320128; resident FP8 local expert shards plus bounded decoded BF16 cache, no host offload; BF16 activation/KV/conv, F32 SSM/accumulation; source-bound claims and live admission remain required; not a VRAM reservation",
+            "{\"timestamp\":\"2026-10-12T18:18:39.928775Z\",\"level\":\"INFO\",\"fields\":{\"message\":\"resident model build entering owner-local admission\",\"report\":\"qwen3.5-35b-a3b-numeric-bf16 Pipeline: backend Cuda -> Cuda, profile=cuda-qwen35-mixed-bf16-tp2-local-shards-serial; numeric arithmetic=not applicable; ModelSupport { required_feature: Some(\\\"cuda\\\"), cuda_feature_enabled: true, static_constraints: \\\"Mixed PP1 TP2 EP1 CUDA threads; two distinct devices; resident local expert shards; BF16 activation/KV/conv, F32 SSM/accumulation; serial greedy; context<=128 batch<=8 sessions<=2; decoded BF16 cache=3 GiB per owner (fixed pins + bounded routed backing and segment slack); workspace includes cache; <=22 GiB/card; no offload/process/restart; public quality gate required\\\", static_supported: true, buildability: CatalogValidated, admission: OwnerLiveAdmissionRequired, storage: NumericFp8E4m3fnBf16Scales, arithmetic: Bf16Compatibility }; topology=ModelTopologyPlacement { rank_backend: Some(Thread), logical: LogicalTopology { pipeline_parallel: 1, tensor_parallel: 2, expert_parallel: 1, data_parallel: 1, sequence_parallel: 1, context_parallel: 1 }, physical: PhysicalPlacement { devices: Some([0, 1]), root_device: None, expert_devices: None, source_identity: None } }; scheduler requested=ResidentSchedulerConfig { prefill_chunk_size: 8, max_active_sequences: 2, max_decode_batch: 2, decode_cohort_target: 4, decode_cohort_max_deferrals: 3, max_batch_tokens: 8, prefill_reserve_tokens: 1, allow_mixed_batches: true, prefix_cache_capacity_pages: 0 }, effective=ResidentSchedulerConfig { prefill_chunk_size: 8, max_active_sequences: 2, max_decode_batch: 1, decode_cohort_target: 1, decode_cohort_max_deferrals: 0, max_batch_tokens: 8, prefill_reserve_tokens: 1, allow_mixed_batches: false, prefix_cache_capacity_pages: 0 }; context=128; adjustments=[max_layers: descriptor default -> 40 (use the descriptor layer count); scheduler_config.max_decode_batch: 2 -> 1 (generic pipeline is serial; batch <= context and prefill <= batch; no mixed batches/cohort deferral/native proposals); scheduler_config.allow_mixed_batches: true -> false (generic pipeline is serial; batch <= context and prefill <= batch; no mixed batches/cohort deferral/native proposals); scheduler_config.decode_cohort_target: 4 -> 1 (generic pipeline is serial; batch <= context and prefill <= batch; no mixed batches/cohort deferral/native proposals); scheduler_config.decode_cohort_max_deferrals: 3 -> 0 (generic pipeline is serial; batch <= context and prefill <= batch; no mixed batches/cohort deferral/native proposals)]; metadata only, owner live admission required (source identity, free memory, allocator/headroom and cleanup are not guaranteed); KV logical pages L and physical transaction slots P remain separately owner-planned\"},\"target\":\"ferrule_composition::model_factory\"}"
+          ]
+        },
+        "missing": [],
+        "contradictions": [],
+        "transport": "raw log retained; Ferrule local thread collectives are not asserted to be NCCL",
+        "exact_arithmetic_match": false,
+        "current_runtime": {
+          "status": "pass",
+          "root_identity": {
+            "pid": 60760,
+            "birth_ticks": 113591381,
+            "ppid": 60744,
+            "state": "R"
+          },
+          "binary_sha256": "36e6aaa54d1aff7c8cc35d63dcee0df1cad91fcc8f6d3e746369504f2c70a58c",
+          "executable_link": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/admission/startup-metadata-20261013-02/staged/ferrule",
+          "actual_argv": [
+            "/proc/self/fd/4",
+            "serve",
+            "/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8",
+            "--backend",
+            "cuda",
+            "--engine",
+            "pipeline",
+            "--model-profile",
+            "qwen35-mixed-bf16",
+            "--tensor-parallel",
+            "2",
+            "--pipeline-parallel",
+            "1",
+            "--expert-parallel",
+            "1",
+            "--rank-backend",
+            "thread",
+            "--devices",
+            "0,1",
+            "--rank-restarts",
+            "0",
+            "--kv-execution-policy",
+            "resident",
+            "--ctx-size",
+            "128",
+            "--max-active-sequences",
+            "2",
+            "--max-batch-tokens",
+            "8",
+            "--prefill-chunk-size",
+            "8",
+            "--cuda-device-budget-mb",
+            "22528",
+            "--kv-cache-mb",
+            "16",
+            "--max-tensor-mb",
+            "2048",
+            "--cuda-workspace-mb",
+            "4096",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "18367",
+            "--served-model-name",
+            "qwen35-ferrule-tp2-resident-paper"
+          ],
+          "spec_digest": "65a7effc404ff6936bf98531c5160b741e47033c141e18cd393517f5ba5ece04",
+          "mapped_paths": [
+            "/dev/nvidia-uvm",
+            "/dev/nvidia0",
+            "/dev/nvidia1",
+            "/dev/nvidiactl",
+            "/dev/zero (deleted)",
+            "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/admission/startup-metadata-20261013-02/staged/ferrule",
+            "/home/admin/wxw403883/anaconda3/envs/tao/lib/libcublas.so.12.4.5.8",
+            "/home/admin/wxw403883/anaconda3/envs/tao/lib/libcublasLt.so.12.4.5.8",
+            "/home/admin/wxw403883/anaconda3/envs/tao/lib/libcudart.so.12.4.99",
+            "/home/admin/wxw403883/anaconda3/envs/tao/lib/libgcc_s.so.1",
+            "/usr/lib64/ld-2.32.so",
+            "/usr/lib64/libc-2.32.so",
+            "/usr/lib64/libcuda.so.575.57.08",
+            "/usr/lib64/libdl-2.32.so",
+            "/usr/lib64/libm-2.32.so",
+            "/usr/lib64/libpthread-2.32.so",
+            "/usr/lib64/librt-2.32.so",
+            "/usr/lib64/libstdc++.so.6.0.28"
+          ],
+          "runtime_pins": {
+            "/home/admin/wxw403883/anaconda3/envs/tao/lib/libcublas.so.12.4.5.8": "88397a191cfc25f94c272b638ffa942be58d5594ba5d41ac4b766c2cd3fe54ac",
+            "/home/admin/wxw403883/anaconda3/envs/tao/lib/libcublasLt.so.12.4.5.8": "a18a341a9b6de15918e410a2337a74f2a644fd80c0600e61d69ddad69be15687",
+            "/home/admin/wxw403883/anaconda3/envs/tao/lib/libcudart.so.12.4.99": "e8023d1aa80d86175f22986faf55e23c0a9286ff625cede0b560220c6cd8a560",
+            "/home/admin/wxw403883/anaconda3/envs/tao/lib/libgcc_s.so.1": "f43f5563b8e01388eacf8f0b4898a53b88fe8aea535a2424ffb576d85845677e",
+            "/usr/lib64/ld-2.32.so": "385218198df39d3931fbb0666db2838bce66a7658c82c61454d4903a4e1d2ed3",
+            "/usr/lib64/libc-2.32.so": "d589c6aea9b813d2392b1c8bdeda73afe694d399687ab867bd26735175faadf1",
+            "/usr/lib64/libcuda.so.575.57.08": "f2470aa637fa72422534edeaeb9de19afe3d0646388baf7ffb5337b2edafc59e",
+            "/usr/lib64/libdl-2.32.so": "4eec77f1e5131f2b84aaa83c21772dc233ff9a44d2715a195249fee9d1dd3cae",
+            "/usr/lib64/libm-2.32.so": "3ad871eb16ece2c91050642503aa18757d3b018b1491afb662aec555fff683dd",
+            "/usr/lib64/libpthread-2.32.so": "6fd5dbf2a630b845af36c36e4d4509fef9da415b48fa25c6661184000bc3f3ce",
+            "/usr/lib64/librt-2.32.so": "68bf882c5011e80b654ace48ac7e4164d62fb6991d475514f299c6da57892196",
+            "/usr/lib64/libstdc++.so.6.0.28": "729ce0312dcd9dd2301f66a1c157fade62d60809dcb0647a5906b3f7e28c88d7"
+          },
+          "model": {
+            "checkpoint_identity": {
+              "path": "/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8",
+              "metadata_sha256": {
+                "config.json": "236c373b0682a4f40c2fa49ef8e5f722a87a8dbfe265286b6d5260b23d7cb229",
+                "model.safetensors.index.json": "b009f7a49c442fce959a2ff6fee41c69248879b90d7ff5636ec6d2068ac4876d",
+                "tokenizer.json": "5f9e4d4901a92b997e463c1f46055088b6cca5ca61a6522d1b9f64c4bb81cb42",
+                "tokenizer_config.json": "316230d6a809701f4db5ea8f8fc862bc3a6f3229c937c174e674ff3ca0a64ac8"
+              },
+              "shard_stats": {
+                "model.safetensors-00001-of-00014.safetensors": {
+                  "bytes": 2685395560,
+                  "mtime_ns": 1772424992657055256,
+                  "inode": 38524559,
+                  "device": 236
+                },
+                "model.safetensors-00002-of-00014.safetensors": {
+                  "bytes": 2685393512,
+                  "mtime_ns": 1772424806750938380,
+                  "inode": 38524557,
+                  "device": 236
+                },
+                "model.safetensors-00003-of-00014.safetensors": {
+                  "bytes": 2685393512,
+                  "mtime_ns": 1772425351626122160,
+                  "inode": 38524563,
+                  "device": 236
+                },
+                "model.safetensors-00004-of-00014.safetensors": {
+                  "bytes": 2685394536,
+                  "mtime_ns": 1772425557825932903,
+                  "inode": 38524564,
+                  "device": 236
+                },
+                "model.safetensors-00005-of-00014.safetensors": {
+                  "bytes": 2685395560,
+                  "mtime_ns": 1772425889647579315,
+                  "inode": 38524566,
+                  "device": 236
+                },
+                "model.safetensors-00006-of-00014.safetensors": {
+                  "bytes": 2685394536,
+                  "mtime_ns": 1772425164292942735,
+                  "inode": 38524561,
+                  "device": 236
+                },
+                "model.safetensors-00007-of-00014.safetensors": {
+                  "bytes": 2685393512,
+                  "mtime_ns": 1772426151999313636,
+                  "inode": 38524567,
+                  "device": 236
+                },
+                "model.safetensors-00008-of-00014.safetensors": {
+                  "bytes": 2685393512,
+                  "mtime_ns": 1772426339785901318,
+                  "inode": 38524569,
+                  "device": 236
+                },
+                "model.safetensors-00009-of-00014.safetensors": {
+                  "bytes": 3645492144,
+                  "mtime_ns": 1772426665613745394,
+                  "inode": 38524570,
+                  "device": 236
+                },
+                "model.safetensors-00010-of-00014.safetensors": {
+                  "bytes": 2685398632,
+                  "mtime_ns": 1772426854560705584,
+                  "inode": 38524571,
+                  "device": 236
+                },
+                "model.safetensors-00011-of-00014.safetensors": {
+                  "bytes": 2685400680,
+                  "mtime_ns": 1772427035405551264,
+                  "inode": 38524573,
+                  "device": 236
+                },
+                "model.safetensors-00012-of-00014.safetensors": {
+                  "bytes": 2685399144,
+                  "mtime_ns": 1772427235837349585,
+                  "inode": 38524574,
+                  "device": 236
+                },
+                "model.safetensors-00013-of-00014.safetensors": {
+                  "bytes": 3011229472,
+                  "mtime_ns": 1772427400537041055,
+                  "inode": 38524576,
+                  "device": 236
+                },
+                "model.safetensors-00014-of-00014.safetensors": {
+                  "bytes": 1267650368,
+                  "mtime_ns": 1772427480416081771,
+                  "inode": 38524577,
+                  "device": 236
+                }
+              }
+            },
+            "identity_strength": "partial: metadata hashes + shard stat pins; payloads NOT hashed",
+            "tokenizer_identity": {
+              "tokenizer.json": "5f9e4d4901a92b997e463c1f46055088b6cca5ca61a6522d1b9f64c4bb81cb42",
+              "tokenizer_config.json": "316230d6a809701f4db5ea8f8fc862bc3a6f3229c937c174e674ff3ca0a64ac8"
+            }
+          },
+          "read_cost_seconds": 0.807835204526782,
+          "nccl_loaded": false,
+          "claims": "Source-bound strict TP2 real checkpoint startup, actual executable and library maps; greedy gates assessed separately; not fresh 14M numerical proof"
+        },
+        "decoded_cache_snapshots": [
+          {
+            "owner": 0,
+            "stage": "ready",
+            "schema_version": 2,
+            "snapshot": {
+              "image_generation": 2,
+              "phase": "idle",
+              "published": true,
+              "quarantined": false,
+              "capacity_grants": 3221225472,
+              "arena_backing_grants": 3221225472,
+              "pin_target_grants": 1405091840,
+              "pinned_grants": 1405091840,
+              "unallocated_pin_grants": 0,
+              "active_routed_grants": 0,
+              "pooled_grants": 0,
+              "free_slot_grants": 1816133632,
+              "unused_tail_bytes": 0,
+              "slot_padding_bytes": 0,
+              "pending_reserved_grants": 0,
+              "pending_allocation_count": 0,
+              "pending_lease_count": 0,
+              "borrowed_key_count": 0,
+              "segment_slack_bytes": 0,
+              "pending_segment_slack_bytes": 0,
+              "physical_current_bytes": 3221225472,
+              "physical_peak_bytes": 3221225472,
+              "driver_allocation_growth_bytes": 3221225472,
+              "unknown_reserved_bytes": 0,
+              "backing_reuses": 0,
+              "native_fallbacks": 0,
+              "evictions": 0,
+              "rank_performance_enabled": false,
+              "rank_performance_active": false,
+              "profiled_activity": null
+            },
+            "profiled_hit_fraction": null,
+            "activity_scope": "Cumulative rankperf-enabled invocations only; not a measured-request or GPU-completion counter"
+          },
+          {
+            "owner": 0,
+            "stage": "shutdown",
+            "schema_version": 2,
+            "snapshot": {
+              "image_generation": 2,
+              "phase": "idle",
+              "published": true,
+              "quarantined": false,
+              "capacity_grants": 3221225472,
+              "arena_backing_grants": 3221225472,
+              "pin_target_grants": 1405091840,
+              "pinned_grants": 1405091840,
+              "unallocated_pin_grants": 0,
+              "active_routed_grants": 1816133632,
+              "pooled_grants": 0,
+              "free_slot_grants": 0,
+              "unused_tail_bytes": 0,
+              "slot_padding_bytes": 0,
+              "pending_reserved_grants": 0,
+              "pending_allocation_count": 0,
+              "pending_lease_count": 0,
+              "borrowed_key_count": 0,
+              "segment_slack_bytes": 0,
+              "pending_segment_slack_bytes": 0,
+              "physical_current_bytes": 3221225472,
+              "physical_peak_bytes": 3221225472,
+              "driver_allocation_growth_bytes": 3221225472,
+              "unknown_reserved_bytes": 0,
+              "backing_reuses": 54621,
+              "native_fallbacks": 0,
+              "evictions": 54621,
+              "rank_performance_enabled": false,
+              "rank_performance_active": false,
+              "profiled_activity": null
+            },
+            "profiled_hit_fraction": null,
+            "activity_scope": "Cumulative rankperf-enabled invocations only; not a measured-request or GPU-completion counter"
+          },
+          {
+            "owner": 1,
+            "stage": "ready",
+            "schema_version": 2,
+            "snapshot": {
+              "image_generation": 1,
+              "phase": "idle",
+              "published": true,
+              "quarantined": false,
+              "capacity_grants": 3221225472,
+              "arena_backing_grants": 3221225472,
+              "pin_target_grants": 1405091840,
+              "pinned_grants": 1405091840,
+              "unallocated_pin_grants": 0,
+              "active_routed_grants": 0,
+              "pooled_grants": 0,
+              "free_slot_grants": 1816133632,
+              "unused_tail_bytes": 0,
+              "slot_padding_bytes": 0,
+              "pending_reserved_grants": 0,
+              "pending_allocation_count": 0,
+              "pending_lease_count": 0,
+              "borrowed_key_count": 0,
+              "segment_slack_bytes": 0,
+              "pending_segment_slack_bytes": 0,
+              "physical_current_bytes": 3221225472,
+              "physical_peak_bytes": 3221225472,
+              "driver_allocation_growth_bytes": 3221225472,
+              "unknown_reserved_bytes": 0,
+              "backing_reuses": 0,
+              "native_fallbacks": 0,
+              "evictions": 0,
+              "rank_performance_enabled": false,
+              "rank_performance_active": false,
+              "profiled_activity": null
+            },
+            "profiled_hit_fraction": null,
+            "activity_scope": "Cumulative rankperf-enabled invocations only; not a measured-request or GPU-completion counter"
+          },
+          {
+            "owner": 1,
+            "stage": "shutdown",
+            "schema_version": 2,
+            "snapshot": {
+              "image_generation": 1,
+              "phase": "idle",
+              "published": true,
+              "quarantined": false,
+              "capacity_grants": 3221225472,
+              "arena_backing_grants": 3221225472,
+              "pin_target_grants": 1405091840,
+              "pinned_grants": 1405091840,
+              "unallocated_pin_grants": 0,
+              "active_routed_grants": 1816133632,
+              "pooled_grants": 0,
+              "free_slot_grants": 0,
+              "unused_tail_bytes": 0,
+              "slot_padding_bytes": 0,
+              "pending_reserved_grants": 0,
+              "pending_allocation_count": 0,
+              "pending_lease_count": 0,
+              "borrowed_key_count": 0,
+              "segment_slack_bytes": 0,
+              "pending_segment_slack_bytes": 0,
+              "physical_current_bytes": 3221225472,
+              "physical_peak_bytes": 3221225472,
+              "driver_allocation_growth_bytes": 3221225472,
+              "unknown_reserved_bytes": 0,
+              "backing_reuses": 54621,
+              "native_fallbacks": 0,
+              "evictions": 54621,
+              "rank_performance_enabled": false,
+              "rank_performance_active": false,
+              "profiled_activity": null
+            },
+            "profiled_hit_fraction": null,
+            "activity_scope": "Cumulative rankperf-enabled invocations only; not a measured-request or GPU-completion counter"
+          }
+        ],
+        "observation_scope": "cache-only host ledger; profile activity excludes unprofiled/preparation work"
+      },
+      "fairmatch": false,
+      "exact_speedup": null
+    }
+  ],
+  "performance_policy": {
+    "log": "info",
+    "smoke_timing_included": false,
+    "rankperf": false,
+    "profiler": false,
+    "planned_measured_requests": 5,
+    "planned_input_tokens_per_request": 5,
+    "planned_output_tokens_per_request": 8,
+    "comparison": "historical descriptive only; no causal, statistics, cross-AB or V claim",
+    "auxiliary_kernel_count": null
+  }
+}

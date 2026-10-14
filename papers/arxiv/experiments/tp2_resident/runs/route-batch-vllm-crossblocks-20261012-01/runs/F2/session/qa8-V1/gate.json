@@ -1,0 +1,61 @@
+{
+  "status": "pass",
+  "engine": "ferrule",
+  "checks": [
+    {
+      "index": 0,
+      "passed": true,
+      "actual_input_tokens": 5,
+      "actual_output_tokens": 8
+    },
+    {
+      "index": 1,
+      "passed": true,
+      "actual_input_tokens": 5,
+      "actual_output_tokens": 8
+    },
+    {
+      "index": 2,
+      "passed": true,
+      "actual_input_tokens": 5,
+      "actual_output_tokens": 8
+    },
+    {
+      "index": 3,
+      "passed": true,
+      "actual_input_tokens": 5,
+      "actual_output_tokens": 8
+    },
+    {
+      "index": 4,
+      "passed": true,
+      "actual_input_tokens": 5,
+      "actual_output_tokens": 8
+    },
+    {
+      "index": 5,
+      "passed": true,
+      "actual_input_tokens": 5,
+      "actual_output_tokens": 8
+    },
+    {
+      "index": 6,
+      "passed": true,
+      "actual_input_tokens": 5,
+      "actual_output_tokens": 8
+    },
+    {
+      "index": 7,
+      "passed": true,
+      "actual_input_tokens": 5,
+      "actual_output_tokens": 8
+    }
+  ],
+  "first_qa_requests": 1,
+  "warmup_requests": 2,
+  "measured_requests": 5,
+  "http_receipt_sha256": "a9136054b1d9c4ce6ed4a510f98332520966d9b16a9b7e75580478b7e5dd7946",
+  "coverage": "visible text/usage only; separate pinned numerical acceptance, not arithmetic parity",
+  "fairmatch": false,
+  "exact_speedup": null
+}

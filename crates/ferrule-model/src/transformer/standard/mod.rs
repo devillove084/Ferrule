@@ -3,12 +3,24 @@
 #[cfg(feature = "cuda")]
 pub mod cuda;
 
-#[path = "cuda/expert_cache.rs"]
-pub mod expert_cache;
-
-mod hybrid;
-mod numeric_precision;
 #[cfg(any(feature = "cuda", test))]
+mod decoded_snapshot;
+pub mod expert_cache;
+#[cfg(any(feature = "cuda", test))]
+mod mixed_decoded;
+#[cfg(any(feature = "cuda", test))]
+mod performance;
+
+mod bf16_hybrid_profile;
+mod bf16_precision;
+pub(super) mod hybrid;
+mod layer_execution;
+#[cfg(feature = "cuda")]
+mod mixed_retirement;
+mod numeric_precision;
+pub use bf16_hybrid_profile::{Bf16HybridCudaProfile, NumericFp8Bf16HybridCudaProfile};
+pub use bf16_precision::Bf16DenseCudaProfile;
+pub(super) use layer_execution::LayerOperators;
 pub(crate) mod scratch;
 pub use hybrid::{PreparedAttentionBlock, PreparedGatedDeltaNetBlock, PreparedStandardLayer};
 pub use numeric_precision::NumericFp8Precision;
@@ -26,6 +38,7 @@ use crate::decoder::{
     PackedDecoderBatch,
 };
 use crate::execution::ExecutionPrecisionPolicy;
+use crate::moe::catalog::{ExpertSemantics, ValidatedExpertCatalog};
 use crate::support::TensorRole;
 
 use super::expert_parallel::{ExpertDispatchContext, RoutedSwiGluExecutor, RoutedSwiGluRequest};
@@ -71,7 +84,7 @@ enum PreparedFeedForwardKind {
         descriptor: Moe,
         shared: Option<PreparedSwiGlu>,
         shared_gate: Option<PreparedLinear>,
-        experts: Box<[[BoundParameter; 3]]>,
+        experts: Box<[ExpertSemantics]>,
     },
 }
 
@@ -130,10 +143,9 @@ pub struct CpuStandardModule<S> {
 
 struct StateDictExpertProvider<'a> {
     layer: usize,
-    bindings: &'a [[BoundParameter; 3]],
-
-    activation_limit: Option<f32>,
+    bindings: &'a [ExpertSemantics],
     materializer: &'a StateDictMaterializer,
+    reads: Option<super::expert_reads::ExpertReadSequence>,
 }
 
 impl ExpertProvider for StateDictExpertProvider<'_> {
@@ -152,8 +164,8 @@ impl ExpertProvider for StateDictExpertProvider<'_> {
             .get(expert)
             .ok_or_else(|| model_error(format!("missing expert {layer}:{expert}")))?;
         Ok(Some(super::ExpertMetadataBindings {
-            parameters,
-            activation_limit: self.activation_limit,
+            parameters: parameters.parameters(),
+            activation_limit: parameters.activation_limit(),
         }))
     }
 
@@ -171,7 +183,61 @@ impl ExpertProvider for StateDictExpertProvider<'_> {
             .bindings
             .get(expert)
             .ok_or_else(|| model_error(format!("missing expert {layer}:{expert}")))?;
-        super::ExpertMetadata::new(layer, expert, bindings.clone(), self.activation_limit).map(Some)
+        super::ExpertMetadata::new(
+            layer,
+            expert,
+            bindings.parameters().clone(),
+            bindings.activation_limit(),
+        )
+        .map(Some)
+    }
+
+    fn preflight_expert_reads(
+        &mut self,
+        image: u64,
+        selected: &[&super::ExpertMetadata],
+    ) -> Result<()> {
+        for metadata in selected {
+            let crate::nn::ParameterResidency::Expert { layer, expert } =
+                *metadata.parameters()[0].residency()
+            else {
+                return Err(model_error(
+                    "expert read selection requires expert residency",
+                ));
+            };
+            let bindings = self
+                .expert_metadata_bindings(layer, expert)?
+                .expect("state-dict metadata bindings");
+            for (expected, actual) in bindings.parameters.iter().zip(metadata.parameters()) {
+                if !expected.shares_storage_with(actual)
+                    || expected.id() != actual.id()
+                    || expected.role() != actual.role()
+                    || expected.residency() != actual.residency()
+                {
+                    return Err(model_error(
+                        "expert read selection belongs to another bound image",
+                    ));
+                }
+            }
+        }
+        self.reads = self.materializer.expert_read_sequence(image, selected)?;
+        Ok(())
+    }
+
+    fn lookahead_expert_read(
+        &mut self,
+        current: &super::ExpertMetadata,
+        next: Option<&super::ExpertMetadata>,
+        resident: bool,
+    ) {
+        if let Some(reads) = &mut self.reads {
+            let key = |metadata: &super::ExpertMetadata| match *metadata.parameters()[0].residency()
+            {
+                crate::nn::ParameterResidency::Expert { layer, expert } => (layer, expert),
+                _ => unreachable!("preflight expert residency"),
+            };
+            reads.lookahead(key(current), next.map(key), resident);
+        }
     }
 
     fn expert(&mut self, layer: usize, expert: usize) -> Result<ExpertAvailability> {
@@ -184,18 +250,15 @@ impl ExpertProvider for StateDictExpertProvider<'_> {
             .bindings
             .get(expert)
             .ok_or_else(|| model_error(format!("missing expert {layer}:{expert}")))?;
-        let linear = |binding: &BoundParameter| {
-            PreparedLinear::from_parameter(
-                self.materializer.expert_parameter(layer, expert, binding)?,
-                binding.role().clone(),
-            )
+        let prepared = if let Some(reads) = &mut self.reads {
+            let prepared =
+                bindings.prepare_from_read(self.materializer, reads.demand(layer, expert)?)?;
+            reads.track_artifacts(&prepared)?;
+            prepared
+        } else {
+            bindings.prepare(self.materializer)?
         };
-        Ok(ExpertAvailability::Ready(Arc::new(PreparedSwiGlu::new(
-            linear(&bindings[0])?,
-            linear(&bindings[1])?,
-            linear(&bindings[2])?,
-            self.activation_limit,
-        )?)))
+        Ok(ExpertAvailability::Ready(Arc::new(prepared)))
     }
 }
 
@@ -241,6 +304,7 @@ impl<S: crate::decoder::StandardSequenceState> CpuStandardModule<S> {
         }
         hybrid::validate_cpu_profile(spec, precision)?;
         validate_hybrid_descriptors(spec, spec.layers())?;
+        ValidatedExpertCatalog::for_decoder_range(&resources, 0..active_layers)?;
         let schema = crate::decoder::HybridStateSchema::from_spec(spec, active_layers)?;
         S::validate_standard_schema(&schema)?;
         let embedding = prepare_embedding(&resources, &materializer)?;
@@ -323,7 +387,7 @@ impl RoutedLayerExecution<'_> {
 /// The single device-neutral layer implementation used by runners and segments.
 /// Weight/expert coordinates stay global; the caller supplies the KV-local layer.
 pub(super) fn execute_standard_layer(
-    operators: &mut dyn StandardDecoderOperators,
+    operators: &mut LayerOperators<'_>,
     materializer: &StateDictMaterializer,
     layer: &PreparedGqaMoeLayer,
     kv_layer: usize,
@@ -331,8 +395,7 @@ pub(super) fn execute_standard_layer(
     kv: &mut dyn KvView,
     routed_execution: Option<&mut RoutedLayerExecution<'_>>,
 ) -> Result<()> {
-    execute_standard_layer_inner(
-        operators,
+    operators.execute_layer(
         materializer,
         layer.index(),
         hybrid::AttentionBlockRef::Gqa(layer.attention().block()),
@@ -346,7 +409,7 @@ pub(super) fn execute_standard_layer(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn execute_standard_layer_inner(
+pub(super) fn execute_standard_layer_inner(
     operators: &mut dyn StandardDecoderOperators,
     materializer: &StateDictMaterializer,
     layer_index: usize,
@@ -417,6 +480,7 @@ fn execute_feed_forward(
                 shared = Some(ready(operators.shared_expert_gate(output, &gate)?)?);
             }
             let mut routed = if let Some(execution) = routed_execution {
+                operators.before_external_routed_execution()?;
                 ready(execution.executor.routed_swiglu(
                     RoutedSwiGluRequest {
                         context: ExpertDispatchContext {
@@ -435,9 +499,8 @@ fn execute_feed_forward(
                 let mut experts = StateDictExpertProvider {
                     layer: layer_index,
                     bindings,
-
-                    activation_limit: descriptor.expert().activation_limit(),
                     materializer,
+                    reads: None,
                 };
                 ready(operators.routed_swiglu(
                     layer_index,
@@ -452,7 +515,7 @@ fn execute_feed_forward(
             if let Some(shared) = &shared {
                 routed = ready(operators.residual(routed, shared)?)?;
             }
-            routed
+            operators.finish_routed_feed_forward(layer_index, routed)?
         }
     };
     Ok(update)
@@ -521,7 +584,19 @@ fn execute_gqa(
     } else {
         update
     };
-    ready(operators.linear(&attention.output, &update, arena)?)
+    let projected = ready(operators.linear(&attention.output, &update, arena)?)?;
+    drop(update);
+    // SAFETY: the same layer/operator owner produced and consumed the attention
+    // output through gate and output-linear. Its last Rows alias is dropped above;
+    // the CUDA adapter drains owner-retained operands before its physical fence.
+    #[expect(
+        unsafe_code,
+        reason = "Scoped standard GQA composition returns output after its last consumer"
+    )]
+    unsafe {
+        kv.finish_gqa_consumers(operators)?;
+    }
+    Ok(projected)
 }
 
 impl<S: crate::decoder::StandardSequenceState> TransformerModule for CpuStandardModule<S> {
@@ -729,13 +804,12 @@ pub(super) fn prepare_embedding(
     resources: &BoundDecoderResources,
     materializer: &StateDictMaterializer,
 ) -> Result<PreparedEmbedding> {
-    Ok(PreparedEmbedding::new(PreparedLinear::from_parameter(
-        materializer.static_parameter(resources.require_static_shape(
+    Ok(PreparedEmbedding::new(
+        materializer.prepared_embedding_linear(resources.require_static_shape(
             TensorRole::TokenEmbedding,
             &resources.spec().token_embedding().weight_shape(),
         )?)?,
-        TensorRole::TokenEmbedding,
-    )?))
+    ))
 }
 
 pub(super) fn prepare_output(
@@ -803,7 +877,10 @@ pub(super) fn validate_standard_descriptors(
     validate_hybrid_descriptors(spec, layers)
 }
 
-fn validate_hybrid_descriptors(spec: &DecoderModelSpec, layers: &[DecoderLayer]) -> Result<()> {
+pub(super) fn validate_hybrid_descriptors(
+    spec: &DecoderModelSpec,
+    layers: &[DecoderLayer],
+) -> Result<()> {
     if spec.output().has_bias() {
         return Err(unsupported_error(UnsupportedOperator::new(
             "lm_head",
@@ -980,57 +1057,48 @@ fn prepare_feed_forward(
             cache,
             false,
         )?),
-        FeedForward::Moe(moe) => PreparedFeedForwardKind::Routed {
-            experts: (0..moe.router_spec().num_experts())
-                .map(|expert| {
-                    let binding = |role, shape: [usize; 2]| {
-                        resources
-                            .experts()
-                            .require_shape(layer, expert, role, &shape)
-                            .cloned()
-                    };
-                    Ok([
-                        binding(
-                            TensorRole::RoutedExpertGate,
-                            moe.expert().gate().weight_shape(),
-                        )?,
-                        binding(TensorRole::RoutedExpertUp, moe.expert().up().weight_shape())?,
-                        binding(
-                            TensorRole::RoutedExpertDown,
-                            moe.expert().down().weight_shape(),
-                        )?,
-                    ])
-                })
-                .collect::<Result<Vec<_>>>()?
-                .into_boxed_slice(),
-
-            router: prepare_layer_linear(
-                layer,
-                TensorRole::RouterLogits,
-                moe.router(),
-                resources,
-                materializer,
-                cache,
-            )?,
-            descriptor: moe.clone(),
-            shared_gate: moe
+        FeedForward::Moe(moe) => {
+            let catalog = ValidatedExpertCatalog::new(resources, layer..layer + 1)?;
+            let semantics = &catalog.layers()[0];
+            let linear = |descriptor: &Linear,
+                          binding: &BoundParameter,
+                          cache: &mut MemoryLayerWeightCache| {
+                prepare_bound_layer_linear(
+                    layer,
+                    binding.role().clone(),
+                    descriptor,
+                    binding,
+                    resources,
+                    materializer,
+                    cache,
+                )
+            };
+            let router = linear(moe.router(), semantics.router(), cache)?;
+            let shared_gate = moe
                 .shared_expert_gate()
-                .map(|gate| {
-                    prepare_layer_linear(
-                        layer,
-                        TensorRole::SharedExpertOutputGate,
-                        gate,
-                        resources,
-                        materializer,
-                        cache,
+                .zip(semantics.shared_output_gate())
+                .map(|(gate, binding)| linear(gate, binding, cache))
+                .transpose()?;
+            let shared = moe
+                .shared_expert()
+                .zip(semantics.shared())
+                .map(|(shared, bindings)| {
+                    PreparedSwiGlu::new(
+                        linear(shared.gate(), bindings[0], cache)?,
+                        linear(shared.up(), bindings[1], cache)?,
+                        linear(shared.down(), bindings[2], cache)?,
+                        shared.activation_limit(),
                     )
                 })
-                .transpose()?,
-            shared: moe
-                .shared_expert()
-                .map(|shared| prepare_swiglu(layer, shared, resources, materializer, cache, true))
-                .transpose()?,
-        },
+                .transpose()?;
+            PreparedFeedForwardKind::Routed {
+                router,
+                descriptor: moe.clone(),
+                shared,
+                shared_gate,
+                experts: catalog.into_experts(),
+            }
+        }
     };
     Ok(PreparedFeedForwardBlock { norm, kind })
 }
@@ -1093,12 +1161,28 @@ fn prepare_layer_linear(
     materializer: &StateDictMaterializer,
     cache: &mut MemoryLayerWeightCache,
 ) -> Result<PreparedLinear> {
-    let linear = materializer.prepared_layer_linear(
+    prepare_bound_layer_linear(
         layer,
-        resources.require_layer_shape(layer, role.clone(), &descriptor.weight_shape())?,
         role.clone(),
+        descriptor,
+        resources.require_layer_shape(layer, role, &descriptor.weight_shape())?,
+        resources,
+        materializer,
         cache,
-    )?;
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn prepare_bound_layer_linear(
+    layer: usize,
+    role: TensorRole,
+    descriptor: &Linear,
+    binding: &BoundParameter,
+    resources: &BoundDecoderResources,
+    materializer: &StateDictMaterializer,
+    cache: &mut MemoryLayerWeightCache,
+) -> Result<PreparedLinear> {
+    let linear = materializer.prepared_layer_linear(layer, binding, role.clone(), cache)?;
     if descriptor.has_bias() {
         let bias_shape = descriptor
             .bias_shape()
@@ -1269,5 +1353,8 @@ fn model_error(message: impl Into<String>) -> Error {
     }
 }
 
+#[cfg(test)]
+#[path = "../../../tests/expert_read_pipeline/provider.rs"]
+mod expert_read_provider_tests;
 #[cfg(test)]
 mod shared_gate_tests;

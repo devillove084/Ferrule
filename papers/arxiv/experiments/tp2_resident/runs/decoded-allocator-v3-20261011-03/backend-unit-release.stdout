@@ -1,0 +1,303 @@
+
+running 292 tests
+test cpu::gated_delta::tests::scalar_step_matches_causal_state_contract ... ok
+test cpu::gated_delta::tests::shape_rejects_non_integral_head_replication ... ok
+test cpu::paged_kv::prepared_commit_tests::cow_and_shadow_read_sets_do_not_revive_stale_views_on_id_reuse ... ok
+test cpu::paged_kv::prepared_commit_tests::dropping_any_unfinished_phase_keeps_shared_physical_custody ... ok
+test cpu::paged_kv::prepared_commit_tests::foreign_pool_authority_rejected_even_with_matching_id_and_nonce ... ok
+test cpu::paged_kv::prepared_commit_tests::nonce_exhaustion_rejects_before_install_and_preserves_abort_custody ... ok
+test cpu::paged_kv::prepared_commit_tests::ordinary_commit_and_abort_do_not_leave_prepared_pins ... ok
+test cpu::paged_kv::prepared_commit_tests::prepared_abort_keeps_cow_dependencies_and_slots_until_finish_or_after_drop ... ok
+test cpu::paged_kv::prepared_commit_tests::prepared_commit_pins_every_clone_until_exact_finish ... ok
+test cpu::paged_kv::prepared_commit_tests::retirement_cannot_bypass_another_active_or_prepared_cow_reader ... ok
+test cpu::paged_kv::prepared_commit_tests::retirement_retries_keep_ids_and_slots_quarantined_until_finish ... ok
+test cpu::paged_kv::prepared_commit_tests::stale_nonce_cannot_finish_a_reused_transaction_id ... ok
+test cpu::paged_kv::prepared_commit_tests::view_protected_history_and_new_pages_remain_readable ... ok
+test cpu::paged_kv::prepared_commit_tests::view_rejects_undeclared_resident_reads_and_mapping_queries ... ok
+test cuda::allocator::dedicated_kv_tests::dedicated_kv_segment_never_lends_free_extent_to_weights_or_scratch ... ok
+test cuda::allocator::tests::alignment_applies_to_the_absolute_device_address ... ok
+test cuda::allocator::tests::deterministic_allocation_churn_preserves_capacity_and_alignment ... ok
+test cuda::allocator::tests::device_block_auto_traits_follow_its_owners ... ok
+test cuda::allocator::tests::fragmentation_formulas_are_bounded ... ok
+test cuda::allocator::tests::free_ranges_coalesce_in_both_directions ... ok
+test cuda::allocator::tests::size_classes_cover_small_large_and_huge ... ok
+test cuda::architecture::tests::instruction_families_do_not_follow_product_buckets ... ok
+test cuda::architecture::tests::malformed_target_has_no_capabilities ... ok
+test cuda::architecture::tests::parses_supported_architecture_families ... ok
+test cuda::architecture::tests::sm103_publishes_its_block_scaled_fp4_capability ... ok
+test cuda::counters::checked_tests::lazy_allocation_orders_check_failpoint_attempt_execute_result ... ok
+test cuda::counters::checked_tests::lazy_sync_rejection_never_executes_or_counts_attempt ... ok
+test cuda::counters::tests::allocation_and_sync_counters_distinguish_success_and_failure ... ok
+test cuda::counters::tests::arena_counters_track_hit_miss_grow_reuse ... ok
+test cuda::counters::tests::disarm_all_clears_all_failpoints ... ok
+test cuda::counters::tests::failpoints_fire_once_then_disarm ... ok
+test cuda::ffi::core::recurrent_abi_tests::recurrent_pods_match_native_layout ... ok
+test cuda::ffi::core::streaming_gqa_abi_tests::streaming_gqa_abi_layout ... ok
+test cuda::graph::gpu_lifecycle_tests::begin_error_closure_error_and_panic_end_exactly_once ... ignored, actual CUDA GPU; scoped begin/Err/panic/end lifecycle
+test cuda::graph::gpu_lifecycle_tests::cached_failures_are_terminal_without_fallback ... ignored, actual CUDA GPU; cache construction failure transitions
+test cuda::graph::gpu_lifecycle_tests::cold_error_and_panic_are_unknown ... ignored, actual CUDA GPU; cold execution Err and panic cannot warm or fallback
+test cuda::graph::gpu_lifecycle_tests::end_code3_unknown_preserves_depth_and_operand_retirement ... ignored, actual CUDA GPU; injected end code 3 retains unknown and both errors
+test cuda::graph::gpu_lifecycle_tests::exact_owner_precheck_precedes_launch_upload_and_cached_closures ... ignored, actual CUDA GPU; exact owner mismatch makes zero native calls
+test cuda::graph::gpu_lifecycle_tests::native_submission_unknown_is_sticky_and_keeps_graph ... ignored, actual CUDA GPU; first launch/replay/upload unknown preserves graph custody
+test cuda::graph::gpu_lifecycle_tests::panic_plus_end_failure_keeps_unknown_without_damaging_driver ... ignored, actual CUDA GPU; unwind cleanup unknown does not double end
+test cuda::graph::protocol::protocol_tests::begin_failure_never_arms_or_ends ... ok
+test cuda::graph::protocol::protocol_tests::capture_error_and_double_error_end_exactly_once ... ok
+test cuda::graph::protocol::protocol_tests::structured_key_distinguishes_pointer_shape_partition_and_lengths ... ok
+test cuda::graph::protocol::protocol_tests::successful_finish_and_end_error_never_double_end ... ok
+test cuda::graph::protocol::protocol_tests::terminal_state_never_resets_or_drops_custody_on_key_change ... ok
+test cuda::graph::protocol::protocol_tests::unwind_ends_once_even_if_cleanup_fails_or_panics ... ok
+test cuda::graph::protocol::tests::graph_flag_is_fail_closed ... ok
+test cuda::graph::protocol::tests::property_change_invalidates_cached_state ... ok
+test cuda::operator_owner::capture_scope_tests::assertion_scope_restores_previous_value_through_nested_unwind ... ok
+test cuda::operator_owner::expert_slot_generation_tests::exact_binding_mismatches_are_failure_atomic ... ok
+test cuda::operator_owner::expert_slot_generation_tests::exact_install_evict_and_reuse_follow_external_generations ... ok
+test cuda::operator_owner::expert_slot_generation_tests::exact_install_validates_coordinates_generation_and_full_pointer_tuple ... ok
+test cuda::operator_owner::expert_slot_generation_tests::terminal_generation_is_free_but_exhausted ... ok
+test cuda::operator_owner::numeric_fp8::gemv_tests::fixed_input_layer2_attention_output_gemv ... ignored, sole GPU owner; pinned independent layer2 HF BF16 out projection, no full40
+test cuda::operator_owner::pr01_tests::pinned_creation_and_update_double_faults_retain_operands ... ignored, actual CUDA GPU; all four submitted pinned H2D error exits
+test cuda::operator_owner::pr01_tests::submitted_cleanup_drains_despite_assertion_and_retains_double_failure ... ignored, actual CUDA GPU; submitted cleanup must bypass assertion and retain custody
+test cuda::operator_owner::recurrent::gate_tests::row_broadcast_gate_rejects_write_aliases_but_allows_read_aliases ... ignored, requires actual CUDA GPU; checked allocation views, no fabricated Rust aliases
+test cuda::operator_owner::recurrent::gate_tests::row_broadcast_native_guard_rejects_invalid_layout_without_launch ... ok
+test cuda::operator_owner::streaming_attention::tests::budget_includes_size_classes_and_checks_overflow ... ok
+test cuda::operator_owner::streaming_attention::tests::real_cuda_alias_rejection_and_transfer_poison ... ignored, requires an explicitly selected idle CUDA device
+test cuda::operator_owner::tests::cuda_observability_is_disabled_by_default ... ok
+test cuda::operator_owner::tests::cuda_observability_parses_explicit_boolean_values ... ok
+test cuda::operator_owner::tests::dsv4_paged_decode_rows_shape_accepts_fixed_stride_outputs ... ok
+test cuda::operator_owner::tests::dsv4_paged_decode_rows_shape_rejects_bad_metadata_and_overflow ... ok
+test cuda::operator_owner::tests::expert_slot_host_resolves_resident_and_rejects_miss ... ok
+test cuda::operator_owner::tests::expert_slot_host_reuses_slot_with_new_generation ... ok
+test cuda::operator_owner::tests::fp8_e4m3fn_cpu_decoder_matches_known_values ... ok
+test cuda::operator_owner::tests::fp8_e4m3fn_e8m0_gemv_matches_cpu_reference_when_cuda_available ... ok
+test cuda::operator_owner::tests::hc_device_layout_preserves_each_rows_accumulation_order ... ok
+test cuda::operator_owner::tests::indexed_rope_cpu_reference_matches_strided_row_positions ... ok
+test cuda::operator_owner::tests::indexed_rope_cuda_matches_cpu_and_supports_inverse ... ignored, requires a CUDA device
+test cuda::operator_owner::tests::moe_ranked_reducer_matches_host_left_fold ... ignored, requires a CUDA device
+test cuda::operator_owner::tests::payload_encoding_gpu_kernels_smoke ... ok
+test cuda::operator_owner::tests::recent_rows_cuda_materialization_matches_logical_window ... ok
+test cuda::operator_owner::tests::routed_expert_physical_bytes_include_raw_and_private_storage ... ok
+test cuda::operator_owner::tests::routed_expert_physical_bytes_reject_dimension_overflow ... ok
+test cuda::operator_owner::tests::routed_expert_shape_validates_logical_dimensions ... ok
+test cuda::operator_owner::tests::split_moe_reducer_respects_nonzero_output_offset ... ignored, requires a CUDA device
+test cuda::operators::attention::prepared_bf16::tests::failed_rust_completion_quarantines_successful_native_setup ... ok
+test cuda::operators::attention::prepared_bf16::tests::native_plan_preserves_every_checked_region ... ok
+test cuda::operators::attention::prepared_bf16::tests::native_unknown_is_sticky_without_retry_fence ... ok
+test cuda::operators::attention::prepared_bf16::tests::ordinary_setup_failure_still_requires_completion ... ok
+test cuda::operators::attention::prepared_bf16::tests::review::admission_family_keys_sum_charges_without_excluding_other_owners ... ok
+test cuda::operators::attention::prepared_bf16::tests::review::review_download_preflight_is_not_unknown ... ignored, owned GPU; preflight no DMA
+test cuda::operators::attention::prepared_bf16::tests::review::review_invalid_query_precedes_append ... ignored, owned GPU; malformed F32 query rejected before append writes
+test cuda::operators::attention::prepared_bf16::tests::review::review_legitimate_invocation_allocations_allowed ... ignored, owned GPU; legitimate unrelated allocations allowed
+test cuda::operators::attention::prepared_bf16::tests::review::review_maxcap_changed_views_and_sticky_status ... ignored, owned GPU; 128 decode views plus M5 reuse one owner
+test cuda::operators::attention::prepared_bf16::tests::review::review_output_copy_unknown ... ignored, isolated owned GPU
+test cuda::operators::attention::prepared_bf16::tests::review::review_output_fence_unknown ... ignored, isolated owned GPU
+test cuda::operators::attention::prepared_bf16::tests::review::review_shared_admission_same_device ... ignored, owned GPU
+test cuda::operators::attention::prepared_bf16::tests::review::review_shared_admission_two_devices ... ignored, owned two GPUs
+test cuda::operators::attention::prepared_bf16::tests::review::review_status_copy_unknown ... ignored, isolated owned GPU
+test cuda::operators::attention::prepared_bf16::tests::review::review_status_fence_unknown ... ignored, isolated owned GPU
+test cuda::operators::attention::selection::tests::cuda_conversion_matches_cpu_for_batched_rows_and_wraps ... ignored, requires a CUDA device
+test cuda::operators::attention::selection::tests::rows_stride_and_compressed_indices_are_supported ... ok
+test cuda::operators::attention::selection::tests::unfilled_and_just_filled_slots_are_logical_positions ... ok
+test cuda::operators::attention::selection::tests::wrapped_slots_map_to_absolute_positions_across_multiple_turns ... ok
+test cuda::operators::attention::sparse::tests::dual_plane_mapping_uses_selector_specific_stride ... ok
+test cuda::operators::attention::sparse::tests::paged_address_mapping_handles_boundaries_layers_and_invalid_slots ... ok
+test cuda::operators::attention::sparse::tests::paged_shape_validation_rejects_short_or_out_of_range_tables ... ok
+test cuda::operators::attention::sparse::tests::selected_row_mapping_reorders_sequences_and_enforces_row_visibility ... ok
+test cuda::operators::attention::sparse::tests::sparse_attention_shape_rejects_zero_topk ... ok
+test cuda::operators::attention::sparse::tests::sparse_attention_shape_validates_large_decode ... ok
+test cuda::operators::contracts::core_layout_tests::f32_to_bf16_layout_keeps_independent_byte_strides ... ok
+test cuda::operators::contracts::core_layout_tests::gqa_requires_query_heads_divisible_by_kv_heads ... ok
+test cuda::operators::contracts::core_layout_tests::packed_gqa_layout_maps_independent_kv_planes ... ok
+test cuda::operators::contracts::core_layout_tests::paged_transformer_status_values_are_checked ... ok
+test cuda::operators::contracts::core_layout_tests::split_half_and_router_shapes_are_overflow_checked ... ok
+test cuda::operators::impls::projection::resource_tests::borrowed_resources_preserve_storage_and_pack_capture_contract ... ignored, actual CUDA device; independent family borrows, FP8 pack and real capture replay
+test cuda::operators::kv::committed_gqa::tests::every_submission_stage_requires_cancel_reap_then_finish ... ignored, requires an explicitly selected idle CUDA device
+test cuda::operators::kv::committed_gqa::tests::unknown_with_submitted_consumer_stays_pinned_until_explicit_reap ... ignored, requires an explicitly selected idle CUDA device
+test cuda::operators::kv::compressor::tests::cuda_prefill_seed_matches_final_reference_with_one_launch ... ignored, requires a CUDA device
+test cuda::operators::kv::compressor::tests::cuda_recurrent_checkpoint_slab_restores_arbitrary_slot ... ignored, requires a CUDA device
+test cuda::operators::kv::compressor::tests::cuda_recurrent_state_matches_reference_without_allocations_or_d2h ... ignored, requires a CUDA device
+test cuda::operators::kv::compressor::tests::non_overlap_appends_positions_and_compresses_at_boundaries ... ok
+test cuda::operators::kv::compressor::tests::overlap_uses_previous_left_and_current_right_then_advances ... ok
+test cuda::operators::kv::compressor::tests::prefill_seed_mapping_covers_remainder_and_last_complete_group ... ok
+test cuda::operators::kv::compressor::tests::prefill_seed_reference_resets_and_copies_exact_final_rows ... ok
+test cuda::operators::kv::page_pool::tests::compact_table_and_fragmentation_are_deterministic ... ok
+test cuda::operators::kv::page_pool::tests::compressed_boundaries_resolve_in_token_scaled_pages ... ok
+test cuda::operators::kv::page_pool::tests::cuda_compressed_boundary_scatter_isolates_cow_token_pages ... ignored, requires a CUDA device
+test cuda::operators::kv::page_pool::tests::cuda_cow_touches_only_destination_and_rollback_preserves_old_mapping ... ignored, requires a CUDA device
+test cuda::operators::kv::page_pool::tests::cuda_mixed_f32_bf16_scatter_cow_rollback_preempt_restore ... ignored, requires a CUDA device
+test cuda::operators::kv::page_pool::tests::cuda_paged_indexer_decode_matches_cpu_reference_across_page_boundary ... ignored, requires a CUDA device
+test cuda::operators::kv::page_pool::tests::cuda_paged_plane_scatter_rows_matches_cpu_addresses_and_mask ... ignored, requires a CUDA device
+test cuda::operators::kv::page_pool::tests::cuda_paged_plane_scatter_selected_rows_matches_cpu_addresses ... ignored, requires a CUDA device
+test cuda::operators::kv::page_pool::tests::distinct_pair_mut_preserves_requested_order_without_aliasing ... ok
+test cuda::operators::kv::page_pool::tests::layout_and_metadata_are_cuda_independent ... ok
+test cuda::operators::kv::page_pool::tests::paged_plane_row_mapping_crosses_page_at_nonzero_layer ... ok
+test cuda::operators::kv::page_pool::tests::paged_plane_scatter_addresses_cover_packed_sequences_and_bounds ... ok
+test cuda::operators::kv::page_pool::tests::selected_rows_can_share_and_reorder_sequence_block_ranges ... ok
+test cuda::operators::kv::page_pool::tests::typed_host_snapshot_exposes_raw_physical_payloads ... ok
+test cuda::operators::kv::page_pool::tests::typed_layout_rejects_element_and_byte_overflow_without_cuda ... ok
+test cuda::operators::kv::page_pool::tests::typed_layout_uses_physical_plane_widths_and_byte_ranges ... ok
+test cuda::operators::kv::page_pool::tests::uncommitted_and_rolled_back_pages_do_not_change_old_mapping ... ok
+test cuda::operators::kv::read_protocol::tests::dma_is_not_consumer_ack_and_cancel_is_not_a_fence ... ok
+test cuda::operators::kv::read_protocol::tests::partial_reaper_failure_keeps_pins_and_can_be_retried ... ok
+test cuda::operators::kv::read_protocol::tests::physical_page_layer_byte_geometry_and_tail_are_exact ... ok
+test cuda::operators::kv::read_protocol::tests::six_domains_include_allocator_grants_and_overflow ... ok
+test cuda::operators::kv::read_protocol::tests::unknown_retains_custody_until_explicit_two_domain_reap ... ok
+test cuda::operators::kv::transaction::append_dma_cuda_tests::transaction_prefix_dma_reads_original_and_holds_budget_until_consumer ... ignored, requires an explicitly selected idle CUDA device; no GPU run during implementation
+test cuda::operators::kv::transaction::bf16::tests::bf16_layout_rejects_dtype_shape_alignment_and_capacity_forgery ... ok
+test cuda::operators::kv::transaction::bf16::tests::bf16_layout_uses_exact_physical_bytes_and_nonzero_layer ... ok
+test cuda::operators::kv::transaction::bf16::tests::bf16_operand_ranges_check_alignment_overflow_and_overlap ... ok
+test cuda::operators::kv::transaction::bf16::tests::bf16_prepare_failure_retains_typed_custody ... ignored, requires CUDA GPU; BF16 failed submission retains shared Entry/pins until exact cleanup
+test cuda::operators::kv::transaction::bf16::tests::prepared_custody_view_is_composed_from_authenticated_batch ... ok
+test cuda::operators::kv::transaction::chunked_entry_faults::dma_final_event_failure_retains_pinned_source_destination_and_mapping ... ignored, requires idle CUDA GPU; compile only during implementation
+test cuda::operators::kv::transaction::chunked_entry_faults::same_slot_reload_advances_physical_epoch_without_changing_logical_page ... ignored, requires idle CUDA GPU; compile only during implementation
+test cuda::operators::kv::transaction::chunked_entry_faults::submission_failure_keeps_entry_slots_and_partial_allocations_charged ... ignored, requires idle CUDA GPU; compile only during implementation
+test cuda::operators::kv::transaction::committed_read::tests::equal_ids_and_nonces_do_not_share_physical_reader_custody ... ignored, requires an explicitly selected idle CUDA device
+test cuda::operators::kv::transaction::committed_read::tests::recycled_same_slot_epoch_rejects_release_without_consuming_pin ... ignored, requires an explicitly selected idle CUDA device
+test cuda::operators::kv::transaction::diagnostic::gpu_tests::committed_bf16_native_prefix_append_and_active_rejection ... ignored, explicit GPU grant; native committed-prefix readback and provisional exclusion
+test cuda::operators::kv::transaction::diagnostic::tests::committed_bf16_trace_checks_schema_incarnation_and_allows_generation_zero ... ok
+test cuda::operators::kv::transaction::diagnostic::tests::committed_bf16_trace_requires_full_bound_quiescent_frontier ... ok
+test cuda::operators::kv::transaction::prepare_tests::failed_clear_copy_or_event_submission_reports_retained_custody ... ignored, requires CUDA device and native providers
+test cuda::operators::kv::transaction::prepare_tests::prepare_validation_failure_does_not_submit_or_retain_resources ... ignored, requires CUDA device and native providers
+test cuda::operators::kv::transaction::tests::stale_nonce_and_abandoned_handles_cannot_release_reused_transaction_custody ... ignored, requires CUDA device and native providers
+test cuda::operators::kv::transaction::tests::unknown_exact_fence_retains_mapping_slots_and_all_clone_pins ... ignored, requires CUDA device and native providers
+test cuda::operators::linear::numeric::owner_tests::poisoned_workspace_owner_api_preserves_quarantine_and_capture_scope ... ignored, actual CUDA sm80+; public owner API rejects poisoned scratch during real capture
+test cuda::operators::linear::numeric::w8a16_poison_tests::w8a16_poison_survives_both_input_apis_and_capture ... ignored, GPU owner required; injected quarantine is not an asynchronous device-fault test
+test cuda::operators::recurrent_bf16::tests::bf16_aliases_are_rejected_before_submission ... ignored, requires CUDA GPU; legitimate shared allocation views, no forged Rust references
+test cuda::operators::recurrent_bf16::tests::legacy_and_plan_storage_paths_are_the_same_type ... ok
+test cuda::operators::recurrent_bf16::tests::mixed_byte_ranges_and_overflow ... ok
+test cuda::operators::recurrent_bf16::tests::native_guards_reject_invalid_descriptors_without_cuda ... ok
+test cuda::operators::standard_bf16::tests::legacy_and_plan_gate_paths_are_the_same_type ... ok
+test cuda::operators::standard_bf16::tests::native_bf16_guards_reject_invalid_descriptors_without_cuda ... ok
+test cuda::operators::standard_bf16::tests::ordinary_offset_norm_typed_aliases_and_no_hidden_allocation ... ignored, sole GPU owner; ordinary offset BF16 norm slices and capture-safe resources
+test cuda::operators::standard_bf16::tests::writable_aliases_rejected_and_read_aliases_keep_grants ... ignored, requires sole-owner GPU assignment; real allocation slices and grant accounting
+test cuda::providers::bf16_gemmex::admission_tests::clean_native_preflight_and_pending_second_fence_are_distinct ... ok
+test cuda::providers::bf16_gemmex::admission_tests::first_native_completion_failure_cannot_be_recovered_by_second_fence ... ok
+test cuda::providers::bf16_gemmex::admission_tests::owner_ledger_keeps_graph_or_unknown_charge_without_global_exclusion ... ok
+test cuda::providers::bf16_gemmex::admission_tests::owner_ledger_rejects_overflow_atomically ... ok
+test cuda::providers::bf16_gemmex::mixed_decode_reuse_tests::mixed_decode_pair_rejections ... ignored, sole GPU owner; resident decode/pair preflight owner, extent, strides, capture, Unknown
+test cuda::providers::bf16_gemmex::mixed_decode_reuse_tests::mixed_decode_preflight_without_device_calls ... ok
+test cuda::providers::bf16_gemmex::mixed_decode_reuse_tests::mixed_decode_resident_single_pair_m1_m5 ... ignored, sole GPU owner; CUDA12.4/sm86 M1/M5 real geometry cold/native/resident bit identity
+test cuda::providers::bf16_gemmex::mixed_decode_reuse_tests::mixed_pair_decode_preflight_without_device_calls ... ok
+test cuda::providers::bf16_gemmex::mixed_decode_reuse_tests::mixed_pair_preflight_without_device_calls ... ok
+test cuda::providers::bf16_gemmex::resident_control_tests::resident_control_frozen_all ... ignored, sole GPU owner; frozen actual A/B, SAMEINPUT HF, one reusable pool
+test cuda::providers::bf16_gemmex::resident_control_tests::resident_control_tails_and_rejections ... ignored, sole GPU owner; aligned non128 tails, rejection, allocation-free shape reuse
+test cuda::providers::bf16_gemmex::resident_control_tests::resident_tail_admission_is_distinct_from_fp8_and_charges_grants ... ok
+test cuda::providers::bf16_gemmex::resident_router_tests::resident_native_preflight_rejects_alias_alignment_and_overflow_without_cuda ... ok
+test cuda::providers::bf16_gemmex::resident_router_tests::resident_router_frozen_and_rejection ... ignored, sole GPU owner; frozen BF16 router M1/M5 and packed/alias/owner/capture rejection
+test cuda::providers::bf16_gemmex::resident_scalar_tests::positive_resident_dimensions_and_element_alignment_are_checked ... ok
+test cuda::providers::bf16_gemmex::resident_scalar_tests::resident_scalar_and_tails_match_public_gemmex ... ignored, sole GPU owner; frozen HF scalar and public GemmEx positive tails, reusable pool
+test cuda::providers::bf16_gemmex::tests::backend_gemmex_lifecycle ... ignored, sole GPU owner; actual graph, alias, owner and allocation lifecycle
+test cuda::providers::bf16_gemmex::tests::backend_gemmex_preflight_without_device_calls ... ok
+test cuda::providers::bf16_gemmex::tests::backend_gemmex_rejects_unavailable_runtime ... ignored, isolated diagnostic negative gate: CUDA12.4 binary with pinned cuBLAS12.9
+test cuda::providers::bf16_gemmex::tests::backend_gemmex_unknown_quarantine ... ignored, isolated sole-GPU process; injected terminal graph failure retains bound storage
+test cuda::providers::bf16_gemmex::tests::frozen_backend_gemmex ... ignored, sole GPU owner, pinned fixture and fresh report, CUDA12.4/sm86
+test cuda::providers::bf16_gemmex::view_tests::bf16_gemmex_bad_startup_rejects_before_provider_allocation ... ignored, sole GPU owner; launch this child with literal bad config to prove early rejection
+test cuda::providers::bf16_gemmex::view_tests::bf16_gemmex_graph_destroy_unknown ... ignored, isolated sole-GPU child; graph destruction failure
+test cuda::providers::bf16_gemmex::view_tests::bf16_gemmex_graph_download_copy_unknown ... ignored, isolated sole-GPU child; submitted result copy failure
+test cuda::providers::bf16_gemmex::view_tests::bf16_gemmex_graph_download_sync_unknown ... ignored, isolated sole-GPU child; submitted result completion failure
+test cuda::providers::bf16_gemmex::view_tests::bf16_gemmex_graph_exec_destroy_unknown ... ignored, isolated sole-GPU child; executable destruction failure
+test cuda::providers::bf16_gemmex::view_tests::bf16_gemmex_graph_retained_pool_blocks_reprepare ... ignored, sole GPU owner; prepared/graph-retained physical reservation slot
+test cuda::providers::bf16_gemmex::view_tests::bf16_gemmex_pair_preflight_without_device_calls ... ok
+test cuda::providers::bf16_gemmex::view_tests::bf16_gemmex_rejects_bad_process_config_before_cuda ... ok
+test cuda::providers::bf16_gemmex::view_tests::bf16_gemmex_shared_shapes_resource_gate ... ignored, sole GPU owner; bounded multi-shape provider warmup/reuse and rejection gate
+test cuda::providers::bf16_gemmex::view_tests::bf16_gemmex_startup_config_is_not_late_mutable_cpu ... 
+running 1 test
+test cuda::providers::bf16_gemmex::view_tests::bf16_gemmex_startup_config_is_not_late_mutable_cpu ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 291 filtered out; finished in 0.00s
+
+ok
+test cuda::providers::bf16_gemmex::view_tests::owner_completion::bf16_gemmex_completion_pending_and_preflight_are_retryable ... ignored, GPU owner; NOT_READY and capture preflight don't poison healthy graph
+test cuda::providers::bf16_gemmex::view_tests::owner_completion::bf16_gemmex_external_event_query_unknown ... ignored, isolated GPU child; external event query failure after graph submission
+test cuda::providers::bf16_gemmex::view_tests::owner_completion::bf16_gemmex_external_event_sync_unknown ... ignored, isolated GPU child; external event sync failure after graph submission
+test cuda::providers::bf16_gemmex::view_tests::owner_completion::bf16_gemmex_external_operator_sync_unknown ... ignored, isolated GPU child; facade sync failure after graph submission
+test cuda::providers::bf16_gemmex::view_tests::owner_completion::bf16_gemmex_external_stream_sync_unknown ... ignored, isolated GPU child; raw owner-stream sync failure after graph submission
+test cuda::providers::bf16_gemmex::view_tests::owner_completion::bf16_gemmex_independent_owners_same_device_coexist ... ignored, sole GPU owner; two independent owners on one GPU coexist with separate ledger charges
+test cuda::providers::bf16_gemmex::view_tests::owner_completion::bf16_gemmex_initial_warmup_unknown_is_sticky ... ignored, isolated GPU child; native first warmup fence Unknown, second fence succeeds
+test cuda::providers::bf16_gemmex::view_tests::owner_completion::bf16_gemmex_prehandle_failure_retires_before_readmission ... ignored, GPU owner; failed setup without a native handle retires backing before readmission
+test cuda::providers::bf16_gemmex::view_tests::owner_completion::bf16_gemmex_shape_warmup_unknown_is_sticky ... ignored, isolated GPU child; shape warmup fence Unknown, second fence succeeds
+test cuda::providers::bf16_gemmex::view_tests::owner_completion::bf16_gemmex_two_devices_coexist ... ignored, GPU owner must expose two idle sm86 GPUs; run later, never silently skip
+test cuda::providers::catalog::tests::capability_catalog_uses_only_the_native_kernel_mask ... ok
+test cuda::providers::catalog::tests::f32_missing_native_bit_is_rejected_by_execution_and_plan_views ... ok
+test cuda::providers::core::tests::core_pod_layouts_match_native_abi ... ok
+test cuda::providers::core::tests::expert_group_route_plan_layout_is_stable ... ok
+test cuda::providers::core::tests::rope_preserves_the_bf16_activation_boundary_in_both_directions ... ok
+test cuda::providers::core::tests::standard_f32_kinds_match_native_without_changing_bf16_contracts ... ok
+test cuda::providers::cutlass::bf16_linear::gemv_preflight_tests::gemv_create_rejects_wrapped_warmup_storage_without_device_calls ... ok
+test cuda::providers::cutlass::bf16_linear::gemv_preflight_tests::gemv_preflight_checks_operand_spans_and_initialization_output ... ok
+test cuda::providers::cutlass::bf16_linear::tests::abi ... ok
+test cuda::providers::cutlass::bf16_linear::tests::m1_native_preflight_is_host_only_and_bounded ... ok
+test cuda::providers::cutlass::bf16_linear::tests::poisoned_workspace_stays_quarantined_for_both_profiles ... ignored, requires CUDA; poisoned workspace cannot be reused under either profile
+test cuda::providers::cutlass::bf16_linear::tests::precision_uses_independent_existing_manifest_bits ... ok
+test cuda::providers::cutlass::bf16_linear::tests::zero_scratch_span_does_not_weaken_operand_overlap_checks ... ok
+test cuda::providers::cutlass::bf16_linear::typed_tiled_tests::sliced_k2_preflight_bounds_match_explicit_profile ... ok
+test cuda::providers::cutlass::bf16_linear::typed_tiled_tests::tiled_and_sliced_native_preflight_reject_wrapped_spans ... ok
+test cuda::providers::cutlass::bf16_linear::typed_tiled_tests::tiled_native_preflight_bounds_strided_byte_extents ... ok
+test cuda::providers::cutlass::bf16_linear::typed_tiled_tests::typed_tiled_byte_ranges_reject_aliases ... ok
+test cuda::providers::cutlass::bf16_linear::typed_tiled_tests::typed_tiled_native_preflight_alignment_and_scratch ... ok
+test cuda::providers::cutlass::bf16_linear::typed_tiled_tests::typed_tiled_poison_fails_before_submission ... ignored, GPU owner only; typed tiled injected quarantine checks, not a device fault
+test cuda::providers::cutlass::f32_linear::tests::byte_weights_reject_misalignment_before_launch ... ignored, requires native CUDA GPU; byte-backed weight alignment rejection
+test cuda::providers::cutlass::f32_linear::tests::capability_and_shape_errors_are_distinct ... ok
+test cuda::providers::cutlass::f32_linear::tests::native_f32_abi ... ok
+test cuda::providers::cutlass::tests::f32_native_manifest_ffi_discovery_and_execution_views_agree ... ok
+test cuda::providers::cutlass::tests::ffi_pod_layouts_match_native_contract ... ok
+test cuda::providers::cutlass::tests::native_provider_publishes_semantic_capabilities ... ok
+test cuda::runtime::capture_state_tests::end_evidence_controls_depth_and_unknown_is_sticky ... ok
+test cuda::runtime::context_drop_gpu_tests::gpu_context_drop_query_fault_cannot_be_washed_by_later_event ... ignored, agent322 sole GPU owner; real event query with injected failure; intentional quarantine
+test cuda::runtime::context_drop_gpu_tests::gpu_context_drop_quiescent_releases_primary_once ... ignored, agent322 sole GPU owner; fresh subprocess; real CUDA positive teardown
+test cuda::runtime::context_drop_gpu_tests::gpu_context_drop_shutdown_sync_fault_retains_primary_and_segments ... ignored, agent322 sole GPU owner; injected status after real context sync; intentional quarantine
+test cuda::runtime::context_drop_gpu_tests::gpu_context_drop_unknown_before_does_not_attempt_release ... ignored, agent322 sole GPU owner; Unknown before final Drop; intentional quarantine
+test cuda::runtime::gemmex_completion_tests::completion_status_pending_is_not_unknown_but_driver_failure_is ... ok
+test cuda::runtime::tests::allocator_metrics_and_trim_track_driver_segments ... ok
+test cuda::runtime::tests::device_and_managed_allocations_report_distinct_memory_tiers ... ok
+test cuda::runtime::tests::explicit_shutdown_preserves_capture_retirements ... ok
+test cuda::runtime::tests::graph_capture_rejects_allocator_growth ... ok
+test cuda::runtime::tests::graph_capture_rejects_managed_allocations ... ok
+test cuda::runtime::tests::graph_capture_rejects_reusing_a_free_block ... ok
+test cuda::runtime::tests::retirement_never_reuses_a_block_before_all_streams_finish ... ok
+test cuda::runtime::tests::shutdown_wins_before_final_allocation_commit ... ok
+test cuda::runtime::tests::typed_slices_keep_allocator_block_alive ... ok
+test cuda::transport::completion_wait::tests::default_policy_only_yields_even_after_long_pending_sequences ... ok
+test cuda::transport::completion_wait::tests::query_error_keeps_custody_outside_the_wait_helper ... ok
+test cuda::transport::completion_wait::tests::ready_and_error_paths_do_not_pause_or_retry ... ok
+test cuda::transport::completion_wait::tests::yielding_does_not_turn_pending_into_completion ... ok
+test cuda::transport::error_tests::backend_conversion_preserves_the_common_error_source ... ok
+test cuda::transport::error_tests::drain_keeps_completed_identities_and_typed_failure ... ok
+test cuda::transport::error_tests::submission_keeps_primary_and_cleanup_typed_and_separate ... ok
+test cuda::transport::error_tests::transfer_errors_stay_below_the_large_result_threshold ... ok
+test cuda::transport::tests::checked_fixed_budgets_and_id_exhaustion ... ok
+test cuda::transport::tests::drop_failure_or_unwind_retains_the_entire_bundle ... ok
+test cuda::transport::tests::failed_record_and_failed_fallback_retain_custody_until_retry_proves_completion ... ok
+test cuda::transport::tests::identity_requires_exact_event_generation_owner_direction_and_slot ... ok
+test cuda::transport::tests::recorded_event_error_does_not_fall_back_to_an_unrelated_fence ... ok
+test cuda_plan::gemv_tests::gemv_fixed_geometry_and_provider_reserve_are_separate ... ok
+test cuda_plan::gemv_tests::gemv_rejects_uncovered_shapes_scales_origins_and_multirow ... ok
+test cuda_plan::gemv_tests::old_numeric_profiles_never_charge_or_select_gemv ... ok
+test physical_placement::tests::abandoned_submission_pending_and_unknown_all_leak_instead_of_recycle ... ok
+test physical_placement::tests::canceled_placement_cannot_restart_even_after_proof ... ok
+test physical_placement::tests::chunks_are_page_bounded_aligned_and_identity_bound ... ok
+test physical_placement::tests::complete_physical_drain_is_terminal_not_a_way_to_wash_sticky_unknown ... ok
+test physical_placement::tests::every_domain_must_complete_before_proof_and_release ... ok
+test physical_placement::tests::failed_or_panicking_probe_quarantines_without_dropping_backing ... ok
+test physical_placement::tests::foreign_submission_and_proof_cannot_release_custody ... ok
+test physical_placement::tests::foreign_wrong_domain_and_late_ack_tokens_cannot_be_drains ... ok
+test physical_placement::tests::generation_exhaustion_fails_without_wrap_or_releasing_backing ... ok
+test physical_placement::tests::invalid_extents_foreign_domains_and_single_page_slicing_are_rejected ... ok
+test physical_placement::tests::opaque_submission_incarnation_and_generation_both_bind_completion ... ok
+test physical_placement::tests::overlap_checks_absolute_ranges_not_only_identity_or_slot ... ok
+test physical_placement::tests::rebinding_same_slot_and_reallocating_same_address_cannot_resurrect_metadata ... ok
+test physical_placement::tests::shared_fixed_plane_is_charged_once_and_disjoint_writes_are_allowed ... ok
+test physical_placement::tests::slot_reuse_changes_generation_but_never_reports_vram_savings ... ok
+test physical_placement::tests::unknown_and_cancel_reject_late_acks_and_partial_or_failed_reap ... ok
+test plan::tests::kernel_id_construction ... ok
+test plan::tests::launch_descriptor_flags ... ok
+test plan::tests::launch_descriptor_has_stable_pod_layout ... ok
+test plan::tests::layer_kernel_plan_binds_operations_not_phases ... ok
+test plan::tests::model_kernel_plan_layer_access ... ok
+test plan::tests::operation_modes_are_independent_bindings ... ok
+test plan::tests::provider_registry_checks_mode_and_determinism ... ok
+test plan::tests::semantic_operations_use_expected_phases ... ok
+test plan::tests::weight_layout_repr ... ok
+test resources::host_memory::tests::ancestor_usage_high_limit_and_rss_are_not_double_subtracted ... ok
+test resources::host_memory::tests::available_units_and_container_hierarchy_resolution ... ok
+
+test result: ok. 203 passed; 0 failed; 89 ignored; 0 measured; 0 filtered out; finished in 1.94s
+

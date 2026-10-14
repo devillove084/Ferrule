@@ -1,0 +1,16 @@
+% These labels abstract several protocols; they are not literal Rust variants.
+\begin{figure}[tbp]
+  \centering
+  \includegraphics[width=\linewidth]{figures/operation-state.pdf}
+  \caption{Conceptual, profile-scoped operation/custody states, not one Rust
+  enum. Only validated success and publication preflight authorize new
+  publication. Operation, key, stage, bytes, generations and any retained fence
+  must match; rejected stale or mismatched evidence cannot mutate state or return
+  credits. Known non-success follows drain/abort, not readiness, and proves at
+  most the named stage's custody return. Cancellation preserves irreversible
+  ending intent. Ambiguous physical evidence retains the dashed, sticky Unknown
+  owner with no automatic recovery or reuse edge. Closing a registry obligation
+  does not heal a separately poisoned owner. Logical outcomes and resource
+  credits remain separate axes.}
+  \label{fig:operation-state}
+\end{figure}

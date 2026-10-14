@@ -1,13 +1,21 @@
 [profile.default]
 slow-timeout = { period = "60s", terminate-after = 2 }
 
-# CPU required: no filter/exclusion of workspace tests or missing model fixtures.
+# Default CPU contracts plus the separate explicit reference lane cover all targets.
 # Only explicitly #[ignore] tests are opt-in; a missing hermetic fixture is a failure.
 [profile.ci]
 fail-fast = false
 retries = 0
 
 [profile.ci.junit]
+path = "junit.xml"
+
+# No filters: required-features targets must actually run in this lane.
+[profile.cpu-reference]
+fail-fast = false
+retries = 0
+
+[profile.cpu-reference.junit]
 path = "junit.xml"
 
 # Audited single-GPU contracts only, including library lifecycle tests. The
@@ -27,7 +35,7 @@ package(=ferrule-backend) & (
     binary(=cuda_standard) |
     (kind(lib) & (
         test(/cuda::graph::gpu_lifecycle_tests::/) |
-        test(/cuda::context::pr01_tests::/)
+        test(/cuda::operator_owner::pr01_tests::/)
     ))
 )
 '''
@@ -52,9 +60,9 @@ default-filter = '''
 )) |
 (package(=ferrule-runtime) & (
     (binary(=standard_tensor_cuda) & test(/^(pp1_tp2_tp4_logits_decode_cow_match_cpu_and_gpu_tp1|tp_rejects_foreign_placement_owner_and_unsharded_or_bf16_kv)$/)) |
-    (binary(=pipeline_decoder) & test(=cuda_pipeline::cuda_pp2_prefill_decode_cow_and_cancel_use_the_existing_kv_cohort)) |
-    (kind(lib) & test(/::tiny_ep2_full_hybrid_matches_local_and_lifecycle$/))
-))
+    (binary(=pipeline_decoder) & test(=cuda_pipeline::cuda_pp2_prefill_decode_cow_and_cancel_use_the_existing_kv_cohort))
+)) |
+(package(=ferrule-composition) & kind(lib) & test(/::tiny_ep2_full_hybrid_matches_local_and_lifecycle$/))
 '''
 
 [profile.gpu-nightly.junit]

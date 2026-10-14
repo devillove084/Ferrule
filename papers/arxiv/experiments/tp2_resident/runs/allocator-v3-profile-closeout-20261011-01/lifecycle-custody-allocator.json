@@ -1,0 +1,2756 @@
+{
+  "rows": [
+    {
+      "label": "before",
+      "binary": {
+        "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/admission/indexed-lru-20261010-01/staged/ferrule",
+        "sha256": "9ef9841598b4694fb611250bf8876c4314d252400136ddb23f606a979cadb656",
+        "kind": "public_serving"
+      },
+      "launch_id": "6829678857574b849851bb8d51e17c9d",
+      "custody": {
+        "status": "proven_drained",
+        "method": "linux-subreaper-waitid",
+        "containment_verified": true,
+        "launch_id": "6829678857574b849851bb8d51e17c9d",
+        "helper_identity": {
+          "pid": 186616,
+          "birth_ticks": 100662824,
+          "ppid": 186582,
+          "pgrp": 186616,
+          "session": 186616
+        },
+        "root_identity": {
+          "pid": 186617,
+          "birth_ticks": 100662827,
+          "ppid": 186616,
+          "pgrp": 186616,
+          "session": 186616
+        },
+        "boot_id": "4dd3497d-570c-4693-a876-5c26e06ab360",
+        "entries": [
+          {
+            "identity": {
+              "pid": 186617,
+              "birth_ticks": 100662827,
+              "ppid": 186616,
+              "pgrp": 186616,
+              "session": 186616
+            },
+            "role": "root",
+            "signals": [],
+            "reaped": true,
+            "exit_code": 0,
+            "first_observed_at": 8642748.623300081,
+            "reaped_at": 8643180.877335213
+          },
+          {
+            "identity": {
+              "pid": 186711,
+              "birth_ticks": 100664518,
+              "ppid": 186616,
+              "pgrp": 186711,
+              "session": 186711
+            },
+            "role": "adopted",
+            "signals": [],
+            "reaped": true,
+            "exit_code": 0,
+            "first_observed_at": 8642765.55830954,
+            "reaped_at": 8643180.47550136
+          },
+          {
+            "identity": {
+              "pid": 186723,
+              "birth_ticks": 100664728,
+              "ppid": 186616,
+              "pgrp": 186617,
+              "session": 186617
+            },
+            "role": "adopted",
+            "signals": [],
+            "reaped": true,
+            "exit_code": 0,
+            "first_observed_at": 8643180.147376847,
+            "reaped_at": 8643180.149264066
+          },
+          {
+            "identity": {
+              "pid": 186721,
+              "birth_ticks": 100664728,
+              "ppid": 186616,
+              "pgrp": 186617,
+              "session": 186617
+            },
+            "role": "adopted",
+            "signals": [],
+            "reaped": true,
+            "exit_code": 0,
+            "first_observed_at": 8643180.815491917,
+            "reaped_at": 8643180.845107598
+          }
+        ],
+        "errors": [],
+        "reporting_errors": [],
+        "echild": true
+      },
+      "returncode": 0,
+      "timed_out": false,
+      "B1": {
+        "raw": {
+          "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": {
+            "index": 0,
+            "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 0,
+            "utilization": 0
+          },
+          "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": {
+            "index": 1,
+            "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 0,
+            "utilization": 0
+          },
+          "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6": {
+            "index": 2,
+            "uuid": "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 0,
+            "utilization": 0
+          },
+          "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011": {
+            "index": 3,
+            "uuid": "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 0,
+            "utilization": 0
+          },
+          "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86": {
+            "index": 4,
+            "uuid": "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 0,
+            "utilization": 0
+          },
+          "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685": {
+            "index": 5,
+            "uuid": "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 0,
+            "utilization": 0
+          },
+          "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d": {
+            "index": 6,
+            "uuid": "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 0,
+            "utilization": 0
+          },
+          "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f": {
+            "index": 7,
+            "uuid": "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 0,
+            "utilization": 0
+          }
+        },
+        "instrumentation": {
+          "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": {
+            "index": 0,
+            "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 4194304,
+            "utilization": 0
+          },
+          "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": {
+            "index": 1,
+            "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 4194304,
+            "utilization": 0
+          },
+          "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6": {
+            "index": 2,
+            "uuid": "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 1048576,
+            "utilization": 0
+          },
+          "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011": {
+            "index": 3,
+            "uuid": "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 1048576,
+            "utilization": 0
+          },
+          "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86": {
+            "index": 4,
+            "uuid": "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 1048576,
+            "utilization": 0
+          },
+          "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685": {
+            "index": 5,
+            "uuid": "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 1048576,
+            "utilization": 0
+          },
+          "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d": {
+            "index": 6,
+            "uuid": "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 1048576,
+            "utilization": 0
+          },
+          "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f": {
+            "index": 7,
+            "uuid": "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 1048576,
+            "utilization": 0
+          }
+        },
+        "instrumentation_delta_bytes": {
+          "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f": 1048576,
+          "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6": 1048576,
+          "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d": 1048576,
+          "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 4194304,
+          "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86": 1048576,
+          "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 4194304,
+          "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011": 1048576,
+          "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685": 1048576
+        },
+        "nonselected_model_delta_tolerance_bytes": 1048576,
+        "instrumentation_ceiling_bytes": 16777216,
+        "collector_identity": {
+          "pid": 186702,
+          "birth_ticks": 100664376,
+          "ppid": 186617,
+          "state": "R",
+          "launch_id": "6829678857574b849851bb8d51e17c9d"
+        },
+        "model_gpu_uuids": [
+          "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+          "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9"
+        ],
+        "probe_lock_uuids": [
+          "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f",
+          "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6",
+          "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d",
+          "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+          "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86",
+          "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+          "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011",
+          "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685"
+        ],
+        "attribution": "exclusive probe assumption, not NVML PID attribution",
+        "execute_allowed": false,
+        "samples": [
+          {
+            "index": 0,
+            "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 4194304,
+            "utilization": 0,
+            "devices": [
+              {
+                "index": 0,
+                "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+                "total_bytes": 25769803776,
+                "gpu_bytes": 4194304,
+                "utilization": 0
+              },
+              {
+                "index": 1,
+                "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+                "total_bytes": 25769803776,
+                "gpu_bytes": 4194304,
+                "utilization": 0
+              },
+              {
+                "index": 2,
+                "uuid": "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6",
+                "total_bytes": 25769803776,
+                "gpu_bytes": 1048576,
+                "utilization": 0
+              },
+              {
+                "index": 3,
+                "uuid": "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011",
+                "total_bytes": 25769803776,
+                "gpu_bytes": 1048576,
+                "utilization": 0
+              },
+              {
+                "index": 4,
+                "uuid": "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86",
+                "total_bytes": 25769803776,
+                "gpu_bytes": 1048576,
+                "utilization": 0
+              },
+              {
+                "index": 5,
+                "uuid": "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685",
+                "total_bytes": 25769803776,
+                "gpu_bytes": 1048576,
+                "utilization": 0
+              },
+              {
+                "index": 6,
+                "uuid": "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d",
+                "total_bytes": 25769803776,
+                "gpu_bytes": 1048576,
+                "utilization": 0
+              },
+              {
+                "index": 7,
+                "uuid": "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f",
+                "total_bytes": 25769803776,
+                "gpu_bytes": 1048576,
+                "utilization": 0
+              }
+            ],
+            "apps": [],
+            "monotonic": 8642768.12554411,
+            "diagnostic_retry": false,
+            "missing_attempts": []
+          },
+          {
+            "index": 0,
+            "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 4194304,
+            "utilization": 0,
+            "devices": [
+              {
+                "index": 0,
+                "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+                "total_bytes": 25769803776,
+                "gpu_bytes": 4194304,
+                "utilization": 0
+              },
+              {
+                "index": 1,
+                "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+                "total_bytes": 25769803776,
+                "gpu_bytes": 4194304,
+                "utilization": 0
+              },
+              {
+                "index": 2,
+                "uuid": "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6",
+                "total_bytes": 25769803776,
+                "gpu_bytes": 1048576,
+                "utilization": 0
+              },
+              {
+                "index": 3,
+                "uuid": "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011",
+                "total_bytes": 25769803776,
+                "gpu_bytes": 1048576,
+                "utilization": 0
+              },
+              {
+                "index": 4,
+                "uuid": "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86",
+                "total_bytes": 25769803776,
+                "gpu_bytes": 1048576,
+                "utilization": 0
+              },
+              {
+                "index": 5,
+                "uuid": "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685",
+                "total_bytes": 25769803776,
+                "gpu_bytes": 1048576,
+                "utilization": 0
+              },
+              {
+                "index": 6,
+                "uuid": "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d",
+                "total_bytes": 25769803776,
+                "gpu_bytes": 1048576,
+                "utilization": 0
+              },
+              {
+                "index": 7,
+                "uuid": "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f",
+                "total_bytes": 25769803776,
+                "gpu_bytes": 1048576,
+                "utilization": 0
+              }
+            ],
+            "apps": [],
+            "monotonic": 8642770.35751234,
+            "diagnostic_retry": false,
+            "missing_attempts": []
+          },
+          {
+            "index": 0,
+            "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 4194304,
+            "utilization": 0,
+            "devices": [
+              {
+                "index": 0,
+                "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+                "total_bytes": 25769803776,
+                "gpu_bytes": 4194304,
+                "utilization": 0
+              },
+              {
+                "index": 1,
+                "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+                "total_bytes": 25769803776,
+                "gpu_bytes": 4194304,
+                "utilization": 0
+              },
+              {
+                "index": 2,
+                "uuid": "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6",
+                "total_bytes": 25769803776,
+                "gpu_bytes": 1048576,
+                "utilization": 0
+              },
+              {
+                "index": 3,
+                "uuid": "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011",
+                "total_bytes": 25769803776,
+                "gpu_bytes": 1048576,
+                "utilization": 0
+              },
+              {
+                "index": 4,
+                "uuid": "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86",
+                "total_bytes": 25769803776,
+                "gpu_bytes": 1048576,
+                "utilization": 0
+              },
+              {
+                "index": 5,
+                "uuid": "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685",
+                "total_bytes": 25769803776,
+                "gpu_bytes": 1048576,
+                "utilization": 0
+              },
+              {
+                "index": 6,
+                "uuid": "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d",
+                "total_bytes": 25769803776,
+                "gpu_bytes": 1048576,
+                "utilization": 0
+              },
+              {
+                "index": 7,
+                "uuid": "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f",
+                "total_bytes": 25769803776,
+                "gpu_bytes": 1048576,
+                "utilization": 0
+              }
+            ],
+            "apps": [],
+            "monotonic": 8642772.589807605,
+            "diagnostic_retry": false,
+            "missing_attempts": []
+          }
+        ]
+      },
+      "returned_B1": {
+        "status": "b1_returned",
+        "samples": [
+          {
+            "index": 0,
+            "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 4194304,
+            "utilization": 0,
+            "devices": [
+              {
+                "index": 0,
+                "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+                "total_bytes": 25769803776,
+                "gpu_bytes": 4194304,
+                "utilization": 0
+              },
+              {
+                "index": 1,
+                "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+                "total_bytes": 25769803776,
+                "gpu_bytes": 4194304,
+                "utilization": 0
+              },
+              {
+                "index": 2,
+                "uuid": "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6",
+                "total_bytes": 25769803776,
+                "gpu_bytes": 1048576,
+                "utilization": 0
+              },
+              {
+                "index": 3,
+                "uuid": "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011",
+                "total_bytes": 25769803776,
+                "gpu_bytes": 1048576,
+                "utilization": 0
+              },
+              {
+                "index": 4,
+                "uuid": "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86",
+                "total_bytes": 25769803776,
+                "gpu_bytes": 1048576,
+                "utilization": 0
+              },
+              {
+                "index": 5,
+                "uuid": "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685",
+                "total_bytes": 25769803776,
+                "gpu_bytes": 1048576,
+                "utilization": 0
+              },
+              {
+                "index": 6,
+                "uuid": "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d",
+                "total_bytes": 25769803776,
+                "gpu_bytes": 1048576,
+                "utilization": 0
+              },
+              {
+                "index": 7,
+                "uuid": "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f",
+                "total_bytes": 25769803776,
+                "gpu_bytes": 1048576,
+                "utilization": 0
+              }
+            ],
+            "apps": [],
+            "monotonic": 8643179.612723552,
+            "diagnostic_retry": false,
+            "missing_attempts": []
+          },
+          {
+            "index": 0,
+            "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 4194304,
+            "utilization": 0,
+            "devices": [
+              {
+                "index": 0,
+                "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+                "total_bytes": 25769803776,
+                "gpu_bytes": 4194304,
+                "utilization": 0
+              },
+              {
+                "index": 1,
+                "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+                "total_bytes": 25769803776,
+                "gpu_bytes": 4194304,
+                "utilization": 0
+              },
+              {
+                "index": 2,
+                "uuid": "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6",
+                "total_bytes": 25769803776,
+                "gpu_bytes": 1048576,
+                "utilization": 0
+              },
+              {
+                "index": 3,
+                "uuid": "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011",
+                "total_bytes": 25769803776,
+                "gpu_bytes": 1048576,
+                "utilization": 0
+              },
+              {
+                "index": 4,
+                "uuid": "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86",
+                "total_bytes": 25769803776,
+                "gpu_bytes": 1048576,
+                "utilization": 0
+              },
+              {
+                "index": 5,
+                "uuid": "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685",
+                "total_bytes": 25769803776,
+                "gpu_bytes": 1048576,
+                "utilization": 0
+              },
+              {
+                "index": 6,
+                "uuid": "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d",
+                "total_bytes": 25769803776,
+                "gpu_bytes": 1048576,
+                "utilization": 0
+              },
+              {
+                "index": 7,
+                "uuid": "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f",
+                "total_bytes": 25769803776,
+                "gpu_bytes": 1048576,
+                "utilization": 0
+              }
+            ],
+            "apps": [],
+            "monotonic": 8643180.077181244,
+            "diagnostic_retry": false,
+            "missing_attempts": []
+          }
+        ],
+        "target": {
+          "identity": {
+            "pid": 186722,
+            "birth_ticks": 100664728,
+            "ppid": 186721,
+            "state": "R"
+          },
+          "manifest_sha256": "fc8736572648c10d47cb63172b9ae428602a81473406c6107d0118861a8dade4",
+          "nonce": "09537047b61f98b41445e26aa29461a10387421db7af32dbb2d99e9dc04d6376"
+        },
+        "wrapper_sha256": "2c34aef09de1ce48558ddbd02e35c64ab509f9600664a5567c5c4b61ec8b401f"
+      },
+      "probe_release": {
+        "local_contexts_closed": true,
+        "probe_gpu_uuids": [
+          "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f",
+          "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6",
+          "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d",
+          "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+          "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86",
+          "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+          "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011",
+          "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685"
+        ],
+        "model_gpu_uuids": [
+          "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+          "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9"
+        ],
+        "authenticated_drained": true,
+        "original_b0_verified": true
+      },
+      "model_environment": {
+        "model_pid": 186757,
+        "samples": 62,
+        "environment": {
+          "HOME": "/root",
+          "PATH": "/home/admin/wxw403883/anaconda3/envs/tao/bin:/root/.cargo/bin:/usr/bin:/bin",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "CUDA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+          "NVIDIA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+          "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
+          "HF_HUB_OFFLINE": "1",
+          "TRANSFORMERS_OFFLINE": "1",
+          "CUDA_HOME": "/home/admin/wxw403883/anaconda3/envs/tao",
+          "NVCC": "/home/admin/wxw403883/anaconda3/envs/tao/bin/nvcc",
+          "LD_LIBRARY_PATH": "/home/admin/wxw403883/anaconda3/envs/tao/lib:/usr/lib64",
+          "CUBLAS_WORKSPACE_CONFIG": ":0:0",
+          "FERRULE_LOG": "info",
+          "FERRULE_LOG_FORMAT": "json",
+          "TMPDIR": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-before-20261011-01/runs/P1/session/nsys-tmp"
+        },
+        "identity": {
+          "pid": 186757,
+          "birth_ticks": 100665230,
+          "ppid": 186722,
+          "state": "D"
+        }
+      },
+      "loaded_cupti": [
+        "Loaded CUPTI library: /home/admin/luhuanbing.lhb/Ferrule/target/vendor/nsight-systems-cli-2025.3.1/opt/nvidia/nsight-systems-cli/2025.3.1/target-linux-x64/libcupti.so.12.9"
+      ],
+      "allocator": {
+        "schema": "ferrule.paper.operator-retirement-boundaries.v1",
+        "binary_sha256": "9ef9841598b4694fb611250bf8876c4314d252400136ddb23f606a979cadb656",
+        "metric_schema": "historical_9ef",
+        "rows": [
+          {
+            "owner": 0,
+            "stage": "ready",
+            "metrics": {
+              "allocation_requests": 62372,
+              "allocation_failures": 0,
+              "reuse_allocations": 62114,
+              "small_allocations": 62254,
+              "large_allocations": 113,
+              "huge_allocations": 5,
+              "requested_bytes": 22230461572,
+              "granted_bytes": 22244231936,
+              "live_requested_bytes": 22198021252,
+              "live_granted_bytes": 22211791616,
+              "peak_live_requested_bytes": 22230461572,
+              "peak_live_granted_bytes": 22244231936,
+              "reserved_bytes": 22307405824,
+              "peak_reserved_bytes": 22307405824,
+              "free_bytes": 95614208,
+              "largest_free_extent": 67108864,
+              "pending_retirement_blocks": 0,
+              "pending_retirement_bytes": 0,
+              "capture_retirement_bytes": 0,
+              "internal_fragmentation": 0.0006199573739058799,
+              "external_fragmentation": 0.29812874672349954,
+              "segments": 258,
+              "driver_allocations": 258,
+              "driver_allocation_bytes": 22307405824,
+              "driver_frees": 0,
+              "driver_free_bytes": 0
+            }
+          },
+          {
+            "owner": 1,
+            "stage": "ready",
+            "metrics": {
+              "allocation_requests": 62372,
+              "allocation_failures": 0,
+              "reuse_allocations": 62114,
+              "small_allocations": 62254,
+              "large_allocations": 113,
+              "huge_allocations": 5,
+              "requested_bytes": 22230461572,
+              "granted_bytes": 22244231936,
+              "live_requested_bytes": 22198021252,
+              "live_granted_bytes": 22211791616,
+              "peak_live_requested_bytes": 22230461572,
+              "peak_live_granted_bytes": 22244231936,
+              "reserved_bytes": 22307405824,
+              "peak_reserved_bytes": 22307405824,
+              "free_bytes": 95614208,
+              "largest_free_extent": 67108864,
+              "pending_retirement_blocks": 0,
+              "pending_retirement_bytes": 0,
+              "capture_retirement_bytes": 0,
+              "internal_fragmentation": 0.0006199573739058799,
+              "external_fragmentation": 0.29812874672349954,
+              "segments": 258,
+              "driver_allocations": 258,
+              "driver_allocation_bytes": 22307405824,
+              "driver_frees": 0,
+              "driver_free_bytes": 0
+            }
+          },
+          {
+            "owner": 1,
+            "stage": "shutdown",
+            "metrics": {
+              "allocation_requests": 282081,
+              "allocation_failures": 0,
+              "reuse_allocations": 281823,
+              "small_allocations": 281949,
+              "large_allocations": 127,
+              "huge_allocations": 5,
+              "requested_bytes": 25087548028,
+              "granted_bytes": 25252534784,
+              "live_requested_bytes": 22198021252,
+              "live_granted_bytes": 22211791616,
+              "peak_live_requested_bytes": 22270351492,
+              "peak_live_granted_bytes": 22287158016,
+              "reserved_bytes": 22307405824,
+              "peak_reserved_bytes": 22307405824,
+              "free_bytes": 95614208,
+              "largest_free_extent": 67108864,
+              "pending_retirement_blocks": 0,
+              "pending_retirement_bytes": 0,
+              "capture_retirement_bytes": 0,
+              "internal_fragmentation": 0.0006199573739058799,
+              "external_fragmentation": 0.29812874672349954,
+              "segments": 258,
+              "driver_allocations": 258,
+              "driver_allocation_bytes": 22307405824,
+              "driver_frees": 0,
+              "driver_free_bytes": 0
+            }
+          },
+          {
+            "owner": 0,
+            "stage": "shutdown",
+            "metrics": {
+              "allocation_requests": 282081,
+              "allocation_failures": 0,
+              "reuse_allocations": 281823,
+              "small_allocations": 281949,
+              "large_allocations": 127,
+              "huge_allocations": 5,
+              "requested_bytes": 25087548028,
+              "granted_bytes": 25252534784,
+              "live_requested_bytes": 22198021252,
+              "live_granted_bytes": 22211791616,
+              "peak_live_requested_bytes": 22270351492,
+              "peak_live_granted_bytes": 22287158016,
+              "reserved_bytes": 22307405824,
+              "peak_reserved_bytes": 22307405824,
+              "free_bytes": 95614208,
+              "largest_free_extent": 67108864,
+              "pending_retirement_blocks": 0,
+              "pending_retirement_bytes": 0,
+              "capture_retirement_bytes": 0,
+              "internal_fragmentation": 0.0006199573739058799,
+              "external_fragmentation": 0.29812874672349954,
+              "segments": 258,
+              "driver_allocations": 258,
+              "driver_allocation_bytes": 22307405824,
+              "driver_frees": 0,
+              "driver_free_bytes": 0
+            }
+          }
+        ],
+        "arena_bytes_per_owner": 3221225472,
+        "quiescent_pending_zero": true,
+        "ordinary_pressure_failure_count": 0,
+        "observed_boundary_pending_bytes": 0,
+        "pending_peak": null,
+        "unknown_peak": null,
+        "unknown_pressure": null,
+        "observation_scope": "Ready/shutdown only; absent high-watermarks remain null, never zero. V3 fences count successful complete event sets, not all CUDA event calls; BEFORE fields stay historical."
+      },
+      "snapshots": [
+        {
+          "owner": 0,
+          "stage": "ready",
+          "schema_version": 2,
+          "snapshot": {
+            "image_generation": 1,
+            "phase": "idle",
+            "published": true,
+            "quarantined": false,
+            "capacity_grants": 3221225472,
+            "arena_backing_grants": 3221225472,
+            "pin_target_grants": 1405091840,
+            "pinned_grants": 1405091840,
+            "unallocated_pin_grants": 0,
+            "active_routed_grants": 0,
+            "pooled_grants": 0,
+            "free_slot_grants": 1816133632,
+            "unused_tail_bytes": 0,
+            "slot_padding_bytes": 0,
+            "pending_reserved_grants": 0,
+            "pending_allocation_count": 0,
+            "pending_lease_count": 0,
+            "borrowed_key_count": 0,
+            "segment_slack_bytes": 0,
+            "pending_segment_slack_bytes": 0,
+            "physical_current_bytes": 3221225472,
+            "physical_peak_bytes": 3221225472,
+            "driver_allocation_growth_bytes": 3221225472,
+            "unknown_reserved_bytes": 0,
+            "backing_reuses": 0,
+            "native_fallbacks": 0,
+            "evictions": 0,
+            "rank_performance_enabled": false,
+            "rank_performance_active": false,
+            "profiled_activity": null
+          },
+          "profiled_hit_fraction": null,
+          "activity_scope": "Cumulative rankperf-enabled invocations only; not a measured-request or GPU-completion counter"
+        },
+        {
+          "owner": 0,
+          "stage": "shutdown",
+          "schema_version": 2,
+          "snapshot": {
+            "image_generation": 1,
+            "phase": "idle",
+            "published": true,
+            "quarantined": false,
+            "capacity_grants": 3221225472,
+            "arena_backing_grants": 3221225472,
+            "pin_target_grants": 1405091840,
+            "pinned_grants": 1405091840,
+            "unallocated_pin_grants": 0,
+            "active_routed_grants": 1816133632,
+            "pooled_grants": 0,
+            "free_slot_grants": 0,
+            "unused_tail_bytes": 0,
+            "slot_padding_bytes": 0,
+            "pending_reserved_grants": 0,
+            "pending_allocation_count": 0,
+            "pending_lease_count": 0,
+            "borrowed_key_count": 0,
+            "segment_slack_bytes": 0,
+            "pending_segment_slack_bytes": 0,
+            "physical_current_bytes": 3221225472,
+            "physical_peak_bytes": 3221225472,
+            "driver_allocation_growth_bytes": 3221225472,
+            "unknown_reserved_bytes": 0,
+            "backing_reuses": 24663,
+            "native_fallbacks": 0,
+            "evictions": 24663,
+            "rank_performance_enabled": false,
+            "rank_performance_active": false,
+            "profiled_activity": null
+          },
+          "profiled_hit_fraction": null,
+          "activity_scope": "Cumulative rankperf-enabled invocations only; not a measured-request or GPU-completion counter"
+        },
+        {
+          "owner": 1,
+          "stage": "ready",
+          "schema_version": 2,
+          "snapshot": {
+            "image_generation": 2,
+            "phase": "idle",
+            "published": true,
+            "quarantined": false,
+            "capacity_grants": 3221225472,
+            "arena_backing_grants": 3221225472,
+            "pin_target_grants": 1405091840,
+            "pinned_grants": 1405091840,
+            "unallocated_pin_grants": 0,
+            "active_routed_grants": 0,
+            "pooled_grants": 0,
+            "free_slot_grants": 1816133632,
+            "unused_tail_bytes": 0,
+            "slot_padding_bytes": 0,
+            "pending_reserved_grants": 0,
+            "pending_allocation_count": 0,
+            "pending_lease_count": 0,
+            "borrowed_key_count": 0,
+            "segment_slack_bytes": 0,
+            "pending_segment_slack_bytes": 0,
+            "physical_current_bytes": 3221225472,
+            "physical_peak_bytes": 3221225472,
+            "driver_allocation_growth_bytes": 3221225472,
+            "unknown_reserved_bytes": 0,
+            "backing_reuses": 0,
+            "native_fallbacks": 0,
+            "evictions": 0,
+            "rank_performance_enabled": false,
+            "rank_performance_active": false,
+            "profiled_activity": null
+          },
+          "profiled_hit_fraction": null,
+          "activity_scope": "Cumulative rankperf-enabled invocations only; not a measured-request or GPU-completion counter"
+        },
+        {
+          "owner": 1,
+          "stage": "shutdown",
+          "schema_version": 2,
+          "snapshot": {
+            "image_generation": 2,
+            "phase": "idle",
+            "published": true,
+            "quarantined": false,
+            "capacity_grants": 3221225472,
+            "arena_backing_grants": 3221225472,
+            "pin_target_grants": 1405091840,
+            "pinned_grants": 1405091840,
+            "unallocated_pin_grants": 0,
+            "active_routed_grants": 1816133632,
+            "pooled_grants": 0,
+            "free_slot_grants": 0,
+            "unused_tail_bytes": 0,
+            "slot_padding_bytes": 0,
+            "pending_reserved_grants": 0,
+            "pending_allocation_count": 0,
+            "pending_lease_count": 0,
+            "borrowed_key_count": 0,
+            "segment_slack_bytes": 0,
+            "pending_segment_slack_bytes": 0,
+            "physical_current_bytes": 3221225472,
+            "physical_peak_bytes": 3221225472,
+            "driver_allocation_growth_bytes": 3221225472,
+            "unknown_reserved_bytes": 0,
+            "backing_reuses": 24663,
+            "native_fallbacks": 0,
+            "evictions": 24663,
+            "rank_performance_enabled": false,
+            "rank_performance_active": false,
+            "profiled_activity": null
+          },
+          "profiled_hit_fraction": null,
+          "activity_scope": "Cumulative rankperf-enabled invocations only; not a measured-request or GPU-completion counter"
+        }
+      ],
+      "resources": {
+        "status": "observed_within_targets",
+        "errors": [],
+        "memory_components": {
+          "sample_count": 167,
+          "complete_host_samples": 167,
+          "gpu_samples": 167,
+          "gpu_peak_bytes": {
+            "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 22624075776,
+            "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 22624075776
+          },
+          "tree_pss_peak_bytes": 66658866176,
+          "tree_rss_peak_bytes": 66694688768,
+          "tree_anonymous_peak_bytes": 66379993088,
+          "tree_pss_anon_peak_bytes": null,
+          "tree_pss_file_peak_bytes": null,
+          "tree_private_dirty_peak_bytes": 66422583296,
+          "component_sample_counts": {
+            "anonymous_bytes": 167,
+            "pss_anon_bytes": 0,
+            "pss_file_bytes": 0,
+            "private_dirty_bytes": 167
+          },
+          "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+          "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+        },
+        "phase_memory": {
+          "bounds": {
+            "ready_monotonic": 8643130.66050811,
+            "first_sent_monotonic": 8643131.111785997,
+            "first_terminal_monotonic": 8643131.679763844
+          },
+          "phases": {
+            "startup": {
+              "sample_count": 152,
+              "complete_host_samples": 152,
+              "gpu_samples": 152,
+              "gpu_peak_bytes": {
+                "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 22556966912,
+                "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 22556966912
+              },
+              "tree_pss_peak_bytes": 66658866176,
+              "tree_rss_peak_bytes": 66694688768,
+              "tree_anonymous_peak_bytes": 66379993088,
+              "tree_pss_anon_peak_bytes": null,
+              "tree_pss_file_peak_bytes": null,
+              "tree_private_dirty_peak_bytes": 66422583296,
+              "component_sample_counts": {
+                "anonymous_bytes": 152,
+                "pss_anon_bytes": 0,
+                "pss_file_bytes": 0,
+                "private_dirty_bytes": 152
+              },
+              "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+              "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+            },
+            "ready_before_first": {
+              "sample_count": 0,
+              "complete_host_samples": 0,
+              "gpu_samples": 0,
+              "gpu_peak_bytes": {
+                "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": null,
+                "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": null
+              },
+              "tree_pss_peak_bytes": null,
+              "tree_rss_peak_bytes": null,
+              "tree_anonymous_peak_bytes": null,
+              "tree_pss_anon_peak_bytes": null,
+              "tree_pss_file_peak_bytes": null,
+              "tree_private_dirty_peak_bytes": null,
+              "component_sample_counts": {
+                "anonymous_bytes": 0,
+                "pss_anon_bytes": 0,
+                "pss_file_bytes": 0,
+                "private_dirty_bytes": 0
+              },
+              "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+              "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+            },
+            "first_request": {
+              "sample_count": 0,
+              "complete_host_samples": 0,
+              "gpu_samples": 0,
+              "gpu_peak_bytes": {
+                "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": null,
+                "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": null
+              },
+              "tree_pss_peak_bytes": null,
+              "tree_rss_peak_bytes": null,
+              "tree_anonymous_peak_bytes": null,
+              "tree_pss_anon_peak_bytes": null,
+              "tree_pss_file_peak_bytes": null,
+              "tree_private_dirty_peak_bytes": null,
+              "component_sample_counts": {
+                "anonymous_bytes": 0,
+                "pss_anon_bytes": 0,
+                "pss_file_bytes": 0,
+                "private_dirty_bytes": 0
+              },
+              "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+              "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+            },
+            "after_first_request": {
+              "sample_count": 15,
+              "complete_host_samples": 15,
+              "gpu_samples": 15,
+              "gpu_peak_bytes": {
+                "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 22624075776,
+                "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 22624075776
+              },
+              "tree_pss_peak_bytes": 65708607488,
+              "tree_rss_peak_bytes": 65756569600,
+              "tree_anonymous_peak_bytes": 65438466048,
+              "tree_pss_anon_peak_bytes": null,
+              "tree_pss_file_peak_bytes": null,
+              "tree_private_dirty_peak_bytes": 65481445376,
+              "component_sample_counts": {
+                "anonymous_bytes": 15,
+                "pss_anon_bytes": 0,
+                "pss_file_bytes": 0,
+                "private_dirty_bytes": 15
+              },
+              "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+              "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+            }
+          },
+          "unassigned_or_boundary_samples": 0,
+          "steady_state_claim": false,
+          "policy": "after first request includes later canaries/warmup/requests; not a steady-state proof"
+        },
+        "phase_metadata_error": null,
+        "gpu_peak_bytes": {
+          "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 22624075776,
+          "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 22624075776
+        },
+        "tree_pss_peak_bytes": 66658866176,
+        "tree_rss_peak_bytes": 66694688768,
+        "complete_host_samples": 167,
+        "incomplete_host_samples": 0,
+        "gpu_samples": 167,
+        "missing_gpu_attempts": 0,
+        "baseline": {
+          "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": {
+            "index": 0,
+            "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 4194304,
+            "utilization": 0
+          },
+          "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": {
+            "index": 1,
+            "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 4194304,
+            "utilization": 0
+          },
+          "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6": {
+            "index": 2,
+            "uuid": "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 1048576,
+            "utilization": 0
+          },
+          "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011": {
+            "index": 3,
+            "uuid": "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 1048576,
+            "utilization": 0
+          },
+          "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86": {
+            "index": 4,
+            "uuid": "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 1048576,
+            "utilization": 0
+          },
+          "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685": {
+            "index": 5,
+            "uuid": "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 1048576,
+            "utilization": 0
+          },
+          "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d": {
+            "index": 6,
+            "uuid": "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 1048576,
+            "utilization": 0
+          },
+          "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f": {
+            "index": 7,
+            "uuid": "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 1048576,
+            "utilization": 0
+          }
+        },
+        "delta_high_water_bytes": {
+          "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 22619881472,
+          "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 22619881472,
+          "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6": 0,
+          "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011": 0,
+          "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86": 0,
+          "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685": 0,
+          "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d": 0,
+          "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f": 0
+        },
+        "final_process_diagnostics": [
+          {
+            "identity": {
+              "pid": 186702,
+              "birth_ticks": 100664376,
+              "ppid": 186617,
+              "state": "S"
+            },
+            "command": "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/nsight-systems-cli-2025.3.1/opt/nvidia/nsight-systems-cli/2025.3.1/target-linux-x64/nsys profile --session-new=FerruleProfile_allocator-v3-profile-before-20261011-01 --start-later=true --trace=cuda,nvtx,osrt,cublas --gpu-metrics-devices=none --gpuctxsw=false --sample=none --cpuctxsw=none --trace-fork-before-exec=false --kill=none --wait=primary --stop-on-exit=true --duration=240 --cuda-flush-interval=0 --force-overwrite=false --output=/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-before-20261011-01/runs/P1/session/nsight/nsys /home/admin/wxw403883/anaconda3/bin/python3.12 -S -B /home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/instrumentation_capture.py --directory /home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-before-20261011-01/runs/P1/session --manifest-sha256 fc8736572648c10d47cb63172b9ae428602a81473406c6107d0118861a8dade4 -- /home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/admission/indexed-lru-20261010-01/staged/ferrule serve /mnt/nas1/hf/Qwen3.5-35B-A3B-FP8 --backend cuda --engine pipeline --model-profile qwen35-mixed-bf16 --tensor-parallel 2 --pipeline-parallel 1 --expert-parallel 1 --rank-backend thread --devices 0,1 --rank-restarts 0 --kv-execution-policy resident --ctx-size 128 --max-active-sequences 2 --max-batch-tokens 8 --prefill-chunk-size 8 --cuda-device-budget-mb 22528 --kv-cache-mb 16 --max-tensor-mb 2048 --cuda-workspace-mb 4096 --host 127.0.0.1 --port 18367 --served-model-name qwen35-ferrule-tp2-resident-paper ",
+            "environment": {
+              "HOME": "/root",
+              "PATH": "/home/admin/wxw403883/anaconda3/envs/tao/bin:/root/.cargo/bin:/usr/bin:/bin",
+              "PYTHONDONTWRITEBYTECODE": "1",
+              "CUDA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+              "NVIDIA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+              "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
+              "HF_HUB_OFFLINE": "1",
+              "TRANSFORMERS_OFFLINE": "1",
+              "CUDA_HOME": "/home/admin/wxw403883/anaconda3/envs/tao",
+              "NVCC": "/home/admin/wxw403883/anaconda3/envs/tao/bin/nvcc",
+              "LD_LIBRARY_PATH": "/home/admin/wxw403883/anaconda3/envs/tao/lib:/usr/lib64",
+              "CUBLAS_WORKSPACE_CONFIG": ":0:0",
+              "FERRULE_LOG": "info",
+              "FERRULE_LOG_FORMAT": "json",
+              "TMPDIR": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-before-20261011-01/runs/P1/session/nsys-tmp"
+            },
+            "libraries": [
+              "/usr/lib64/libcuda.so.575.57.08",
+              "/usr/lib64/libnvidia-cfg.so.575.57.08",
+              "/usr/lib64/libnvidia-ml.so.575.57.08"
+            ]
+          },
+          {
+            "identity": {
+              "pid": 186721,
+              "birth_ticks": 100664728,
+              "ppid": 186702,
+              "state": "S"
+            },
+            "command": "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/nsight-systems-cli-2025.3.1/opt/nvidia/nsight-systems-cli/2025.3.1/target-linux-x64/nsys-launcher /home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-before-20261011-01/runs/P1/session/nsys-tmp/fc15-c517-18fc-1cdf 81 ",
+            "environment": {
+              "HOME": "/root",
+              "PATH": "/home/admin/wxw403883/anaconda3/envs/tao/bin:/root/.cargo/bin:/usr/bin:/bin",
+              "PYTHONDONTWRITEBYTECODE": "1",
+              "CUDA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+              "NVIDIA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+              "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
+              "HF_HUB_OFFLINE": "1",
+              "TRANSFORMERS_OFFLINE": "1",
+              "CUDA_HOME": "/home/admin/wxw403883/anaconda3/envs/tao",
+              "NVCC": "/home/admin/wxw403883/anaconda3/envs/tao/bin/nvcc",
+              "LD_LIBRARY_PATH": "/home/admin/wxw403883/anaconda3/envs/tao/lib:/usr/lib64",
+              "CUBLAS_WORKSPACE_CONFIG": ":0:0",
+              "FERRULE_LOG": "info",
+              "FERRULE_LOG_FORMAT": "json",
+              "TMPDIR": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-before-20261011-01/runs/P1/session/nsys-tmp"
+            },
+            "libraries": []
+          },
+          {
+            "identity": {
+              "pid": 186722,
+              "birth_ticks": 100664728,
+              "ppid": 186721,
+              "state": "S"
+            },
+            "command": "/home/admin/wxw403883/anaconda3/bin/python3.12 -S -B /home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/instrumentation_capture.py --directory /home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-before-20261011-01/runs/P1/session --manifest-sha256 fc8736572648c10d47cb63172b9ae428602a81473406c6107d0118861a8dade4 -- /home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/admission/indexed-lru-20261010-01/staged/ferrule serve /mnt/nas1/hf/Qwen3.5-35B-A3B-FP8 --backend cuda --engine pipeline --model-profile qwen35-mixed-bf16 --tensor-parallel 2 --pipeline-parallel 1 --expert-parallel 1 --rank-backend thread --devices 0,1 --rank-restarts 0 --kv-execution-policy resident --ctx-size 128 --max-active-sequences 2 --max-batch-tokens 8 --prefill-chunk-size 8 --cuda-device-budget-mb 22528 --kv-cache-mb 16 --max-tensor-mb 2048 --cuda-workspace-mb 4096 --host 127.0.0.1 --port 18367 --served-model-name qwen35-ferrule-tp2-resident-paper ",
+            "environment": {
+              "HOME": "/root",
+              "PATH": "/home/admin/wxw403883/anaconda3/envs/tao/bin:/root/.cargo/bin:/usr/bin:/bin",
+              "PYTHONDONTWRITEBYTECODE": "1",
+              "CUDA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+              "NVIDIA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+              "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
+              "HF_HUB_OFFLINE": "1",
+              "TRANSFORMERS_OFFLINE": "1",
+              "CUDA_HOME": "/home/admin/wxw403883/anaconda3/envs/tao",
+              "NVCC": "/home/admin/wxw403883/anaconda3/envs/tao/bin/nvcc",
+              "LD_LIBRARY_PATH": "/home/admin/wxw403883/anaconda3/envs/tao/lib:/usr/lib64",
+              "CUBLAS_WORKSPACE_CONFIG": ":0:0",
+              "FERRULE_LOG": "info",
+              "FERRULE_LOG_FORMAT": "json",
+              "TMPDIR": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-before-20261011-01/runs/P1/session/nsys-tmp"
+            },
+            "libraries": []
+          },
+          {
+            "identity": {
+              "pid": 186723,
+              "birth_ticks": 100664728,
+              "ppid": 186721,
+              "state": "S"
+            },
+            "command": "nsys-tee 3 5 6 7 ",
+            "environment": {
+              "HOME": "/root",
+              "PATH": "/home/admin/wxw403883/anaconda3/envs/tao/bin:/root/.cargo/bin:/usr/bin:/bin",
+              "PYTHONDONTWRITEBYTECODE": "1",
+              "CUDA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+              "NVIDIA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+              "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
+              "HF_HUB_OFFLINE": "1",
+              "TRANSFORMERS_OFFLINE": "1",
+              "CUDA_HOME": "/home/admin/wxw403883/anaconda3/envs/tao",
+              "NVCC": "/home/admin/wxw403883/anaconda3/envs/tao/bin/nvcc",
+              "LD_LIBRARY_PATH": "/home/admin/wxw403883/anaconda3/envs/tao/lib:/usr/lib64",
+              "CUBLAS_WORKSPACE_CONFIG": ":0:0",
+              "FERRULE_LOG": "info",
+              "FERRULE_LOG_FORMAT": "json",
+              "TMPDIR": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-before-20261011-01/runs/P1/session/nsys-tmp"
+            },
+            "libraries": []
+          },
+          {
+            "identity": {
+              "pid": 186757,
+              "birth_ticks": 100665230,
+              "ppid": 186722,
+              "state": "S"
+            },
+            "command": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/admission/indexed-lru-20261010-01/staged/ferrule serve /mnt/nas1/hf/Qwen3.5-35B-A3B-FP8 --backend cuda --engine pipeline --model-profile qwen35-mixed-bf16 --tensor-parallel 2 --pipeline-parallel 1 --expert-parallel 1 --rank-backend thread --devices 0,1 --rank-restarts 0 --kv-execution-policy resident --ctx-size 128 --max-active-sequences 2 --max-batch-tokens 8 --prefill-chunk-size 8 --cuda-device-budget-mb 22528 --kv-cache-mb 16 --max-tensor-mb 2048 --cuda-workspace-mb 4096 --host 127.0.0.1 --port 18367 --served-model-name qwen35-ferrule-tp2-resident-paper ",
+            "environment": {
+              "HOME": "/root",
+              "PATH": "/home/admin/wxw403883/anaconda3/envs/tao/bin:/root/.cargo/bin:/usr/bin:/bin",
+              "PYTHONDONTWRITEBYTECODE": "1",
+              "CUDA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+              "NVIDIA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+              "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
+              "HF_HUB_OFFLINE": "1",
+              "TRANSFORMERS_OFFLINE": "1",
+              "CUDA_HOME": "/home/admin/wxw403883/anaconda3/envs/tao",
+              "NVCC": "/home/admin/wxw403883/anaconda3/envs/tao/bin/nvcc",
+              "LD_LIBRARY_PATH": "/home/admin/wxw403883/anaconda3/envs/tao/lib:/usr/lib64",
+              "CUBLAS_WORKSPACE_CONFIG": ":0:0",
+              "FERRULE_LOG": "info",
+              "FERRULE_LOG_FORMAT": "json",
+              "TMPDIR": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-before-20261011-01/runs/P1/session/nsys-tmp"
+            },
+            "libraries": [
+              "/home/admin/wxw403883/anaconda3/envs/tao/lib/libcudart.so.12.4.99",
+              "/usr/lib64/libcuda.so.575.57.08"
+            ]
+          }
+        ],
+        "owned_gpu_attribution": "unknown",
+        "owned_process_gpu_peak_bytes": null,
+        "exact_peaks": false,
+        "hard_memory_partition": false,
+        "continuous_coverage": false
+      }
+    },
+    {
+      "label": "after",
+      "binary": {
+        "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/admission/allocator-v3-release-20261011-01/staged/ferrule",
+        "sha256": "7e1c23a88143cb6455e3c6e10bfe43a567fc97b5fd45745800eae3a1e39a0e73",
+        "kind": "public_serving"
+      },
+      "launch_id": "c4cde017c4a34161a1add10e29acf86d",
+      "custody": {
+        "status": "proven_drained",
+        "method": "linux-subreaper-waitid",
+        "containment_verified": true,
+        "launch_id": "c4cde017c4a34161a1add10e29acf86d",
+        "helper_identity": {
+          "pid": 188373,
+          "birth_ticks": 100787565,
+          "ppid": 188359,
+          "pgrp": 188373,
+          "session": 188373
+        },
+        "root_identity": {
+          "pid": 188374,
+          "birth_ticks": 100787569,
+          "ppid": 188373,
+          "pgrp": 188373,
+          "session": 188373
+        },
+        "boot_id": "4dd3497d-570c-4693-a876-5c26e06ab360",
+        "entries": [
+          {
+            "identity": {
+              "pid": 188374,
+              "birth_ticks": 100787569,
+              "ppid": 188373,
+              "pgrp": 188373,
+              "session": 188373
+            },
+            "role": "root",
+            "signals": [],
+            "reaped": true,
+            "exit_code": 0,
+            "first_observed_at": 8643996.043358969,
+            "reaped_at": 8644429.80552877
+          },
+          {
+            "identity": {
+              "pid": 188392,
+              "birth_ticks": 100790407,
+              "ppid": 188373,
+              "pgrp": 188392,
+              "session": 188392
+            },
+            "role": "adopted",
+            "signals": [
+              19,
+              19,
+              15,
+              18,
+              19,
+              9,
+              19,
+              9,
+              19,
+              9,
+              19,
+              9,
+              19,
+              9,
+              19,
+              9,
+              19,
+              9,
+              19,
+              9,
+              19,
+              9,
+              19,
+              9,
+              19,
+              9,
+              19,
+              9,
+              19,
+              9,
+              19,
+              9,
+              19,
+              9,
+              19,
+              9,
+              19,
+              9,
+              19,
+              9,
+              19,
+              9,
+              19,
+              9,
+              19,
+              9,
+              19,
+              9,
+              19,
+              9,
+              19,
+              9,
+              19,
+              9,
+              19,
+              9,
+              19,
+              9,
+              19,
+              9,
+              19,
+              9,
+              19,
+              9,
+              19,
+              9,
+              19,
+              9,
+              19,
+              9,
+              19,
+              9,
+              19,
+              9,
+              19,
+              9
+            ],
+            "reaped": true,
+            "exit_code": 0,
+            "first_observed_at": 8644024.447710449,
+            "reaped_at": 8644430.327906825
+          },
+          {
+            "identity": {
+              "pid": 188404,
+              "birth_ticks": 100790545,
+              "ppid": 188373,
+              "pgrp": 188374,
+              "session": 188374
+            },
+            "role": "adopted",
+            "signals": [],
+            "reaped": true,
+            "exit_code": 0,
+            "first_observed_at": 8644429.598399105,
+            "reaped_at": 8644429.606019543
+          },
+          {
+            "identity": {
+              "pid": 188402,
+              "birth_ticks": 100790545,
+              "ppid": 188373,
+              "pgrp": 188374,
+              "session": 188374
+            },
+            "role": "adopted",
+            "signals": [],
+            "reaped": true,
+            "exit_code": 0,
+            "first_observed_at": 8644429.739016602,
+            "reaped_at": 8644429.743383221
+          }
+        ],
+        "errors": [],
+        "reporting_errors": [],
+        "echild": true
+      },
+      "returncode": 0,
+      "timed_out": false,
+      "B1": {
+        "raw": {
+          "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": {
+            "index": 0,
+            "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 0,
+            "utilization": 0
+          },
+          "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": {
+            "index": 1,
+            "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 0,
+            "utilization": 0
+          },
+          "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6": {
+            "index": 2,
+            "uuid": "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 0,
+            "utilization": 0
+          },
+          "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011": {
+            "index": 3,
+            "uuid": "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 0,
+            "utilization": 0
+          },
+          "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86": {
+            "index": 4,
+            "uuid": "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 0,
+            "utilization": 0
+          },
+          "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685": {
+            "index": 5,
+            "uuid": "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 0,
+            "utilization": 0
+          },
+          "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d": {
+            "index": 6,
+            "uuid": "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 0,
+            "utilization": 0
+          },
+          "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f": {
+            "index": 7,
+            "uuid": "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 0,
+            "utilization": 0
+          }
+        },
+        "instrumentation": {
+          "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": {
+            "index": 0,
+            "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 4194304,
+            "utilization": 0
+          },
+          "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": {
+            "index": 1,
+            "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 4194304,
+            "utilization": 0
+          },
+          "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6": {
+            "index": 2,
+            "uuid": "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 1048576,
+            "utilization": 0
+          },
+          "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011": {
+            "index": 3,
+            "uuid": "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 1048576,
+            "utilization": 0
+          },
+          "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86": {
+            "index": 4,
+            "uuid": "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 1048576,
+            "utilization": 0
+          },
+          "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685": {
+            "index": 5,
+            "uuid": "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 1048576,
+            "utilization": 0
+          },
+          "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d": {
+            "index": 6,
+            "uuid": "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 1048576,
+            "utilization": 0
+          },
+          "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f": {
+            "index": 7,
+            "uuid": "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 1048576,
+            "utilization": 0
+          }
+        },
+        "instrumentation_delta_bytes": {
+          "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f": 1048576,
+          "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6": 1048576,
+          "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d": 1048576,
+          "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 4194304,
+          "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86": 1048576,
+          "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 4194304,
+          "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011": 1048576,
+          "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685": 1048576
+        },
+        "nonselected_model_delta_tolerance_bytes": 1048576,
+        "instrumentation_ceiling_bytes": 16777216,
+        "collector_identity": {
+          "pid": 188383,
+          "birth_ticks": 100790265,
+          "ppid": 188374,
+          "state": "R",
+          "launch_id": "c4cde017c4a34161a1add10e29acf86d"
+        },
+        "model_gpu_uuids": [
+          "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+          "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9"
+        ],
+        "probe_lock_uuids": [
+          "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f",
+          "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6",
+          "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d",
+          "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+          "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86",
+          "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+          "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011",
+          "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685"
+        ],
+        "attribution": "exclusive probe assumption, not NVML PID attribution",
+        "execute_allowed": false,
+        "samples": [
+          {
+            "index": 0,
+            "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 4194304,
+            "utilization": 0,
+            "devices": [
+              {
+                "index": 0,
+                "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+                "total_bytes": 25769803776,
+                "gpu_bytes": 4194304,
+                "utilization": 0
+              },
+              {
+                "index": 1,
+                "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+                "total_bytes": 25769803776,
+                "gpu_bytes": 4194304,
+                "utilization": 0
+              },
+              {
+                "index": 2,
+                "uuid": "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6",
+                "total_bytes": 25769803776,
+                "gpu_bytes": 1048576,
+                "utilization": 0
+              },
+              {
+                "index": 3,
+                "uuid": "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011",
+                "total_bytes": 25769803776,
+                "gpu_bytes": 1048576,
+                "utilization": 0
+              },
+              {
+                "index": 4,
+                "uuid": "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86",
+                "total_bytes": 25769803776,
+                "gpu_bytes": 1048576,
+                "utilization": 0
+              },
+              {
+                "index": 5,
+                "uuid": "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685",
+                "total_bytes": 25769803776,
+                "gpu_bytes": 1048576,
+                "utilization": 0
+              },
+              {
+                "index": 6,
+                "uuid": "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d",
+                "total_bytes": 25769803776,
+                "gpu_bytes": 1048576,
+                "utilization": 0
+              },
+              {
+                "index": 7,
+                "uuid": "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f",
+                "total_bytes": 25769803776,
+                "gpu_bytes": 1048576,
+                "utilization": 0
+              }
+            ],
+            "apps": [],
+            "monotonic": 8644026.294904023,
+            "diagnostic_retry": false,
+            "missing_attempts": []
+          },
+          {
+            "index": 0,
+            "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 4194304,
+            "utilization": 0,
+            "devices": [
+              {
+                "index": 0,
+                "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+                "total_bytes": 25769803776,
+                "gpu_bytes": 4194304,
+                "utilization": 0
+              },
+              {
+                "index": 1,
+                "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+                "total_bytes": 25769803776,
+                "gpu_bytes": 4194304,
+                "utilization": 0
+              },
+              {
+                "index": 2,
+                "uuid": "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6",
+                "total_bytes": 25769803776,
+                "gpu_bytes": 1048576,
+                "utilization": 0
+              },
+              {
+                "index": 3,
+                "uuid": "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011",
+                "total_bytes": 25769803776,
+                "gpu_bytes": 1048576,
+                "utilization": 0
+              },
+              {
+                "index": 4,
+                "uuid": "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86",
+                "total_bytes": 25769803776,
+                "gpu_bytes": 1048576,
+                "utilization": 0
+              },
+              {
+                "index": 5,
+                "uuid": "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685",
+                "total_bytes": 25769803776,
+                "gpu_bytes": 1048576,
+                "utilization": 0
+              },
+              {
+                "index": 6,
+                "uuid": "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d",
+                "total_bytes": 25769803776,
+                "gpu_bytes": 1048576,
+                "utilization": 0
+              },
+              {
+                "index": 7,
+                "uuid": "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f",
+                "total_bytes": 25769803776,
+                "gpu_bytes": 1048576,
+                "utilization": 0
+              }
+            ],
+            "apps": [],
+            "monotonic": 8644028.534957709,
+            "diagnostic_retry": false,
+            "missing_attempts": []
+          },
+          {
+            "index": 0,
+            "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 4194304,
+            "utilization": 0,
+            "devices": [
+              {
+                "index": 0,
+                "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+                "total_bytes": 25769803776,
+                "gpu_bytes": 4194304,
+                "utilization": 0
+              },
+              {
+                "index": 1,
+                "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+                "total_bytes": 25769803776,
+                "gpu_bytes": 4194304,
+                "utilization": 0
+              },
+              {
+                "index": 2,
+                "uuid": "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6",
+                "total_bytes": 25769803776,
+                "gpu_bytes": 1048576,
+                "utilization": 0
+              },
+              {
+                "index": 3,
+                "uuid": "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011",
+                "total_bytes": 25769803776,
+                "gpu_bytes": 1048576,
+                "utilization": 0
+              },
+              {
+                "index": 4,
+                "uuid": "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86",
+                "total_bytes": 25769803776,
+                "gpu_bytes": 1048576,
+                "utilization": 0
+              },
+              {
+                "index": 5,
+                "uuid": "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685",
+                "total_bytes": 25769803776,
+                "gpu_bytes": 1048576,
+                "utilization": 0
+              },
+              {
+                "index": 6,
+                "uuid": "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d",
+                "total_bytes": 25769803776,
+                "gpu_bytes": 1048576,
+                "utilization": 0
+              },
+              {
+                "index": 7,
+                "uuid": "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f",
+                "total_bytes": 25769803776,
+                "gpu_bytes": 1048576,
+                "utilization": 0
+              }
+            ],
+            "apps": [],
+            "monotonic": 8644030.76861806,
+            "diagnostic_retry": false,
+            "missing_attempts": []
+          }
+        ]
+      },
+      "returned_B1": {
+        "status": "b1_returned",
+        "samples": [
+          {
+            "index": 0,
+            "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 4194304,
+            "utilization": 0,
+            "devices": [
+              {
+                "index": 0,
+                "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+                "total_bytes": 25769803776,
+                "gpu_bytes": 4194304,
+                "utilization": 0
+              },
+              {
+                "index": 1,
+                "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+                "total_bytes": 25769803776,
+                "gpu_bytes": 4194304,
+                "utilization": 0
+              },
+              {
+                "index": 2,
+                "uuid": "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6",
+                "total_bytes": 25769803776,
+                "gpu_bytes": 1048576,
+                "utilization": 0
+              },
+              {
+                "index": 3,
+                "uuid": "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011",
+                "total_bytes": 25769803776,
+                "gpu_bytes": 1048576,
+                "utilization": 0
+              },
+              {
+                "index": 4,
+                "uuid": "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86",
+                "total_bytes": 25769803776,
+                "gpu_bytes": 1048576,
+                "utilization": 0
+              },
+              {
+                "index": 5,
+                "uuid": "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685",
+                "total_bytes": 25769803776,
+                "gpu_bytes": 1048576,
+                "utilization": 0
+              },
+              {
+                "index": 6,
+                "uuid": "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d",
+                "total_bytes": 25769803776,
+                "gpu_bytes": 1048576,
+                "utilization": 0
+              },
+              {
+                "index": 7,
+                "uuid": "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f",
+                "total_bytes": 25769803776,
+                "gpu_bytes": 1048576,
+                "utilization": 0
+              }
+            ],
+            "apps": [],
+            "monotonic": 8644429.041340033,
+            "diagnostic_retry": false,
+            "missing_attempts": []
+          },
+          {
+            "index": 0,
+            "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 4194304,
+            "utilization": 0,
+            "devices": [
+              {
+                "index": 0,
+                "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+                "total_bytes": 25769803776,
+                "gpu_bytes": 4194304,
+                "utilization": 0
+              },
+              {
+                "index": 1,
+                "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+                "total_bytes": 25769803776,
+                "gpu_bytes": 4194304,
+                "utilization": 0
+              },
+              {
+                "index": 2,
+                "uuid": "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6",
+                "total_bytes": 25769803776,
+                "gpu_bytes": 1048576,
+                "utilization": 0
+              },
+              {
+                "index": 3,
+                "uuid": "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011",
+                "total_bytes": 25769803776,
+                "gpu_bytes": 1048576,
+                "utilization": 0
+              },
+              {
+                "index": 4,
+                "uuid": "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86",
+                "total_bytes": 25769803776,
+                "gpu_bytes": 1048576,
+                "utilization": 0
+              },
+              {
+                "index": 5,
+                "uuid": "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685",
+                "total_bytes": 25769803776,
+                "gpu_bytes": 1048576,
+                "utilization": 0
+              },
+              {
+                "index": 6,
+                "uuid": "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d",
+                "total_bytes": 25769803776,
+                "gpu_bytes": 1048576,
+                "utilization": 0
+              },
+              {
+                "index": 7,
+                "uuid": "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f",
+                "total_bytes": 25769803776,
+                "gpu_bytes": 1048576,
+                "utilization": 0
+              }
+            ],
+            "apps": [],
+            "monotonic": 8644429.50165113,
+            "diagnostic_retry": false,
+            "missing_attempts": []
+          }
+        ],
+        "target": {
+          "identity": {
+            "pid": 188403,
+            "birth_ticks": 100790545,
+            "ppid": 188402,
+            "state": "R"
+          },
+          "manifest_sha256": "065be171bee62259110591ad3fd104063cf8021a8249eaa004b0d80c7b48b3d5",
+          "nonce": "d6dce529addb6bdf48c49aaf5ecb21d75997424371b4012322f3cabe4f9815f5"
+        },
+        "wrapper_sha256": "5887ebca8d54b9b70d5a190c5b8fbaad975464ae432f720c0e70d3a2e8b4d312"
+      },
+      "probe_release": {
+        "local_contexts_closed": true,
+        "probe_gpu_uuids": [
+          "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f",
+          "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6",
+          "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d",
+          "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+          "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86",
+          "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+          "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011",
+          "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685"
+        ],
+        "model_gpu_uuids": [
+          "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+          "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9"
+        ],
+        "authenticated_drained": true,
+        "original_b0_verified": true
+      },
+      "model_environment": {
+        "model_pid": 188424,
+        "samples": 60,
+        "environment": {
+          "HOME": "/root",
+          "PATH": "/home/admin/wxw403883/anaconda3/envs/tao/bin:/root/.cargo/bin:/usr/bin:/bin",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "CUDA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+          "NVIDIA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+          "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
+          "HF_HUB_OFFLINE": "1",
+          "TRANSFORMERS_OFFLINE": "1",
+          "CUDA_HOME": "/home/admin/wxw403883/anaconda3/envs/tao",
+          "NVCC": "/home/admin/wxw403883/anaconda3/envs/tao/bin/nvcc",
+          "LD_LIBRARY_PATH": "/home/admin/wxw403883/anaconda3/envs/tao/lib:/usr/lib64",
+          "CUBLAS_WORKSPACE_CONFIG": ":0:0",
+          "FERRULE_LOG": "info",
+          "FERRULE_LOG_FORMAT": "json",
+          "TMPDIR": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/session/nsys-tmp"
+        },
+        "identity": {
+          "pid": 188424,
+          "birth_ticks": 100791052,
+          "ppid": 188403,
+          "state": "R"
+        }
+      },
+      "loaded_cupti": [
+        "Loaded CUPTI library: /home/admin/luhuanbing.lhb/Ferrule/target/vendor/nsight-systems-cli-2025.3.1/opt/nvidia/nsight-systems-cli/2025.3.1/target-linux-x64/libcupti.so.12.9"
+      ],
+      "allocator": {
+        "schema": "ferrule.paper.operator-retirement-boundaries.v1",
+        "binary_sha256": "7e1c23a88143cb6455e3c6e10bfe43a567fc97b5fd45745800eae3a1e39a0e73",
+        "metric_schema": "allocator_v3",
+        "rows": [
+          {
+            "owner": 0,
+            "stage": "ready",
+            "metrics": {
+              "allocation_requests": 62372,
+              "allocation_failures": 0,
+              "reuse_allocations": 62114,
+              "small_allocations": 62254,
+              "large_allocations": 113,
+              "huge_allocations": 5,
+              "requested_bytes": 22230461572,
+              "granted_bytes": 22244231936,
+              "live_requested_bytes": 22198021252,
+              "live_granted_bytes": 22211791616,
+              "peak_live_requested_bytes": 22230461572,
+              "peak_live_granted_bytes": 22244231936,
+              "reserved_bytes": 22307405824,
+              "peak_reserved_bytes": 22307405824,
+              "free_bytes": 95614208,
+              "largest_free_extent": 67108864,
+              "pending_retirement_blocks": 0,
+              "pending_retirement_bytes": 0,
+              "capture_retirement_bytes": 0,
+              "retired_blocks": 60,
+              "retirement_batches": 1,
+              "retirement_created_fences": 3,
+              "pending_retirement_batches": 0,
+              "pending_unfenced_bytes": 0,
+              "shutdown_quiescent": false,
+              "shutdown_retained": false,
+              "internal_fragmentation": 0.0006199573739058799,
+              "external_fragmentation": 0.29812874672349954,
+              "segments": 258,
+              "driver_allocations": 258,
+              "driver_allocation_bytes": 22307405824,
+              "driver_frees": 0,
+              "driver_free_bytes": 0
+            }
+          },
+          {
+            "owner": 1,
+            "stage": "ready",
+            "metrics": {
+              "allocation_requests": 62372,
+              "allocation_failures": 0,
+              "reuse_allocations": 62114,
+              "small_allocations": 62254,
+              "large_allocations": 113,
+              "huge_allocations": 5,
+              "requested_bytes": 22230461572,
+              "granted_bytes": 22244231936,
+              "live_requested_bytes": 22198021252,
+              "live_granted_bytes": 22211791616,
+              "peak_live_requested_bytes": 22230461572,
+              "peak_live_granted_bytes": 22244231936,
+              "reserved_bytes": 22307405824,
+              "peak_reserved_bytes": 22307405824,
+              "free_bytes": 95614208,
+              "largest_free_extent": 67108864,
+              "pending_retirement_blocks": 0,
+              "pending_retirement_bytes": 0,
+              "capture_retirement_bytes": 0,
+              "retired_blocks": 60,
+              "retirement_batches": 1,
+              "retirement_created_fences": 3,
+              "pending_retirement_batches": 0,
+              "pending_unfenced_bytes": 0,
+              "shutdown_quiescent": false,
+              "shutdown_retained": false,
+              "internal_fragmentation": 0.0006199573739058799,
+              "external_fragmentation": 0.29812874672349954,
+              "segments": 258,
+              "driver_allocations": 258,
+              "driver_allocation_bytes": 22307405824,
+              "driver_frees": 0,
+              "driver_free_bytes": 0
+            }
+          },
+          {
+            "owner": 1,
+            "stage": "shutdown",
+            "metrics": {
+              "allocation_requests": 282081,
+              "allocation_failures": 0,
+              "reuse_allocations": 281823,
+              "small_allocations": 281949,
+              "large_allocations": 127,
+              "huge_allocations": 5,
+              "requested_bytes": 25087548028,
+              "granted_bytes": 25252534784,
+              "live_requested_bytes": 22198021252,
+              "live_granted_bytes": 22211791616,
+              "peak_live_requested_bytes": 22270351492,
+              "peak_live_granted_bytes": 22287158016,
+              "reserved_bytes": 22307405824,
+              "peak_reserved_bytes": 22307405824,
+              "free_bytes": 95614208,
+              "largest_free_extent": 67108864,
+              "pending_retirement_blocks": 0,
+              "pending_retirement_bytes": 0,
+              "capture_retirement_bytes": 0,
+              "retired_blocks": 219769,
+              "retirement_batches": 50447,
+              "retirement_created_fences": 151341,
+              "pending_retirement_batches": 0,
+              "pending_unfenced_bytes": 0,
+              "shutdown_quiescent": false,
+              "shutdown_retained": false,
+              "internal_fragmentation": 0.0006199573739058799,
+              "external_fragmentation": 0.29812874672349954,
+              "segments": 258,
+              "driver_allocations": 258,
+              "driver_allocation_bytes": 22307405824,
+              "driver_frees": 0,
+              "driver_free_bytes": 0
+            }
+          },
+          {
+            "owner": 0,
+            "stage": "shutdown",
+            "metrics": {
+              "allocation_requests": 282081,
+              "allocation_failures": 0,
+              "reuse_allocations": 281823,
+              "small_allocations": 281949,
+              "large_allocations": 127,
+              "huge_allocations": 5,
+              "requested_bytes": 25087548028,
+              "granted_bytes": 25252534784,
+              "live_requested_bytes": 22198021252,
+              "live_granted_bytes": 22211791616,
+              "peak_live_requested_bytes": 22270351492,
+              "peak_live_granted_bytes": 22287158016,
+              "reserved_bytes": 22307405824,
+              "peak_reserved_bytes": 22307405824,
+              "free_bytes": 95614208,
+              "largest_free_extent": 67108864,
+              "pending_retirement_blocks": 0,
+              "pending_retirement_bytes": 0,
+              "capture_retirement_bytes": 0,
+              "retired_blocks": 219769,
+              "retirement_batches": 50447,
+              "retirement_created_fences": 151341,
+              "pending_retirement_batches": 0,
+              "pending_unfenced_bytes": 0,
+              "shutdown_quiescent": false,
+              "shutdown_retained": false,
+              "internal_fragmentation": 0.0006199573739058799,
+              "external_fragmentation": 0.29812874672349954,
+              "segments": 258,
+              "driver_allocations": 258,
+              "driver_allocation_bytes": 22307405824,
+              "driver_frees": 0,
+              "driver_free_bytes": 0
+            }
+          }
+        ],
+        "arena_bytes_per_owner": 3221225472,
+        "quiescent_pending_zero": true,
+        "ordinary_pressure_failure_count": 0,
+        "observed_boundary_pending_bytes": 0,
+        "pending_peak": null,
+        "unknown_peak": null,
+        "unknown_pressure": null,
+        "observation_scope": "Ready/shutdown only; absent high-watermarks remain null, never zero. V3 fences count successful complete event sets, not all CUDA event calls; BEFORE fields stay historical."
+      },
+      "snapshots": [
+        {
+          "owner": 0,
+          "stage": "ready",
+          "schema_version": 2,
+          "snapshot": {
+            "image_generation": 1,
+            "phase": "idle",
+            "published": true,
+            "quarantined": false,
+            "capacity_grants": 3221225472,
+            "arena_backing_grants": 3221225472,
+            "pin_target_grants": 1405091840,
+            "pinned_grants": 1405091840,
+            "unallocated_pin_grants": 0,
+            "active_routed_grants": 0,
+            "pooled_grants": 0,
+            "free_slot_grants": 1816133632,
+            "unused_tail_bytes": 0,
+            "slot_padding_bytes": 0,
+            "pending_reserved_grants": 0,
+            "pending_allocation_count": 0,
+            "pending_lease_count": 0,
+            "borrowed_key_count": 0,
+            "segment_slack_bytes": 0,
+            "pending_segment_slack_bytes": 0,
+            "physical_current_bytes": 3221225472,
+            "physical_peak_bytes": 3221225472,
+            "driver_allocation_growth_bytes": 3221225472,
+            "unknown_reserved_bytes": 0,
+            "backing_reuses": 0,
+            "native_fallbacks": 0,
+            "evictions": 0,
+            "rank_performance_enabled": false,
+            "rank_performance_active": false,
+            "profiled_activity": null
+          },
+          "profiled_hit_fraction": null,
+          "activity_scope": "Cumulative rankperf-enabled invocations only; not a measured-request or GPU-completion counter"
+        },
+        {
+          "owner": 0,
+          "stage": "shutdown",
+          "schema_version": 2,
+          "snapshot": {
+            "image_generation": 1,
+            "phase": "idle",
+            "published": true,
+            "quarantined": false,
+            "capacity_grants": 3221225472,
+            "arena_backing_grants": 3221225472,
+            "pin_target_grants": 1405091840,
+            "pinned_grants": 1405091840,
+            "unallocated_pin_grants": 0,
+            "active_routed_grants": 1816133632,
+            "pooled_grants": 0,
+            "free_slot_grants": 0,
+            "unused_tail_bytes": 0,
+            "slot_padding_bytes": 0,
+            "pending_reserved_grants": 0,
+            "pending_allocation_count": 0,
+            "pending_lease_count": 0,
+            "borrowed_key_count": 0,
+            "segment_slack_bytes": 0,
+            "pending_segment_slack_bytes": 0,
+            "physical_current_bytes": 3221225472,
+            "physical_peak_bytes": 3221225472,
+            "driver_allocation_growth_bytes": 3221225472,
+            "unknown_reserved_bytes": 0,
+            "backing_reuses": 24663,
+            "native_fallbacks": 0,
+            "evictions": 24663,
+            "rank_performance_enabled": false,
+            "rank_performance_active": false,
+            "profiled_activity": null
+          },
+          "profiled_hit_fraction": null,
+          "activity_scope": "Cumulative rankperf-enabled invocations only; not a measured-request or GPU-completion counter"
+        },
+        {
+          "owner": 1,
+          "stage": "ready",
+          "schema_version": 2,
+          "snapshot": {
+            "image_generation": 2,
+            "phase": "idle",
+            "published": true,
+            "quarantined": false,
+            "capacity_grants": 3221225472,
+            "arena_backing_grants": 3221225472,
+            "pin_target_grants": 1405091840,
+            "pinned_grants": 1405091840,
+            "unallocated_pin_grants": 0,
+            "active_routed_grants": 0,
+            "pooled_grants": 0,
+            "free_slot_grants": 1816133632,
+            "unused_tail_bytes": 0,
+            "slot_padding_bytes": 0,
+            "pending_reserved_grants": 0,
+            "pending_allocation_count": 0,
+            "pending_lease_count": 0,
+            "borrowed_key_count": 0,
+            "segment_slack_bytes": 0,
+            "pending_segment_slack_bytes": 0,
+            "physical_current_bytes": 3221225472,
+            "physical_peak_bytes": 3221225472,
+            "driver_allocation_growth_bytes": 3221225472,
+            "unknown_reserved_bytes": 0,
+            "backing_reuses": 0,
+            "native_fallbacks": 0,
+            "evictions": 0,
+            "rank_performance_enabled": false,
+            "rank_performance_active": false,
+            "profiled_activity": null
+          },
+          "profiled_hit_fraction": null,
+          "activity_scope": "Cumulative rankperf-enabled invocations only; not a measured-request or GPU-completion counter"
+        },
+        {
+          "owner": 1,
+          "stage": "shutdown",
+          "schema_version": 2,
+          "snapshot": {
+            "image_generation": 2,
+            "phase": "idle",
+            "published": true,
+            "quarantined": false,
+            "capacity_grants": 3221225472,
+            "arena_backing_grants": 3221225472,
+            "pin_target_grants": 1405091840,
+            "pinned_grants": 1405091840,
+            "unallocated_pin_grants": 0,
+            "active_routed_grants": 1816133632,
+            "pooled_grants": 0,
+            "free_slot_grants": 0,
+            "unused_tail_bytes": 0,
+            "slot_padding_bytes": 0,
+            "pending_reserved_grants": 0,
+            "pending_allocation_count": 0,
+            "pending_lease_count": 0,
+            "borrowed_key_count": 0,
+            "segment_slack_bytes": 0,
+            "pending_segment_slack_bytes": 0,
+            "physical_current_bytes": 3221225472,
+            "physical_peak_bytes": 3221225472,
+            "driver_allocation_growth_bytes": 3221225472,
+            "unknown_reserved_bytes": 0,
+            "backing_reuses": 24663,
+            "native_fallbacks": 0,
+            "evictions": 24663,
+            "rank_performance_enabled": false,
+            "rank_performance_active": false,
+            "profiled_activity": null
+          },
+          "profiled_hit_fraction": null,
+          "activity_scope": "Cumulative rankperf-enabled invocations only; not a measured-request or GPU-completion counter"
+        }
+      ],
+      "resources": {
+        "status": "observed_within_targets",
+        "errors": [],
+        "memory_components": {
+          "sample_count": 164,
+          "complete_host_samples": 164,
+          "gpu_samples": 164,
+          "gpu_peak_bytes": {
+            "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 22624075776,
+            "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 22624075776
+          },
+          "tree_pss_peak_bytes": 66528199680,
+          "tree_rss_peak_bytes": 66564231168,
+          "tree_anonymous_peak_bytes": 66249191424,
+          "tree_pss_anon_peak_bytes": null,
+          "tree_pss_file_peak_bytes": null,
+          "tree_private_dirty_peak_bytes": 66291781632,
+          "component_sample_counts": {
+            "anonymous_bytes": 164,
+            "pss_anon_bytes": 0,
+            "pss_file_bytes": 0,
+            "private_dirty_bytes": 164
+          },
+          "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+          "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+        },
+        "phase_memory": {
+          "bounds": {
+            "ready_monotonic": 8644394.967828862,
+            "first_sent_monotonic": 8644395.428412138,
+            "first_terminal_monotonic": 8644395.94981435
+          },
+          "phases": {
+            "startup": {
+              "sample_count": 154,
+              "complete_host_samples": 154,
+              "gpu_samples": 154,
+              "gpu_peak_bytes": {
+                "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 22556966912,
+                "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 21504196608
+              },
+              "tree_pss_peak_bytes": 66528199680,
+              "tree_rss_peak_bytes": 66564231168,
+              "tree_anonymous_peak_bytes": 66249191424,
+              "tree_pss_anon_peak_bytes": null,
+              "tree_pss_file_peak_bytes": null,
+              "tree_private_dirty_peak_bytes": 66291781632,
+              "component_sample_counts": {
+                "anonymous_bytes": 154,
+                "pss_anon_bytes": 0,
+                "pss_file_bytes": 0,
+                "private_dirty_bytes": 154
+              },
+              "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+              "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+            },
+            "ready_before_first": {
+              "sample_count": 0,
+              "complete_host_samples": 0,
+              "gpu_samples": 0,
+              "gpu_peak_bytes": {
+                "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": null,
+                "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": null
+              },
+              "tree_pss_peak_bytes": null,
+              "tree_rss_peak_bytes": null,
+              "tree_anonymous_peak_bytes": null,
+              "tree_pss_anon_peak_bytes": null,
+              "tree_pss_file_peak_bytes": null,
+              "tree_private_dirty_peak_bytes": null,
+              "component_sample_counts": {
+                "anonymous_bytes": 0,
+                "pss_anon_bytes": 0,
+                "pss_file_bytes": 0,
+                "private_dirty_bytes": 0
+              },
+              "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+              "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+            },
+            "first_request": {
+              "sample_count": 0,
+              "complete_host_samples": 0,
+              "gpu_samples": 0,
+              "gpu_peak_bytes": {
+                "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": null,
+                "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": null
+              },
+              "tree_pss_peak_bytes": null,
+              "tree_rss_peak_bytes": null,
+              "tree_anonymous_peak_bytes": null,
+              "tree_pss_anon_peak_bytes": null,
+              "tree_pss_file_peak_bytes": null,
+              "tree_private_dirty_peak_bytes": null,
+              "component_sample_counts": {
+                "anonymous_bytes": 0,
+                "pss_anon_bytes": 0,
+                "pss_file_bytes": 0,
+                "private_dirty_bytes": 0
+              },
+              "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+              "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+            },
+            "after_first_request": {
+              "sample_count": 9,
+              "complete_host_samples": 9,
+              "gpu_samples": 9,
+              "gpu_peak_bytes": {
+                "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 22624075776,
+                "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 22624075776
+              },
+              "tree_pss_peak_bytes": 65500160000,
+              "tree_rss_peak_bytes": 65548357632,
+              "tree_anonymous_peak_bytes": 65229004800,
+              "tree_pss_anon_peak_bytes": null,
+              "tree_pss_file_peak_bytes": null,
+              "tree_private_dirty_peak_bytes": 65271980032,
+              "component_sample_counts": {
+                "anonymous_bytes": 9,
+                "pss_anon_bytes": 0,
+                "pss_file_bytes": 0,
+                "private_dirty_bytes": 9
+              },
+              "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+              "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+            }
+          },
+          "unassigned_or_boundary_samples": 1,
+          "steady_state_claim": false,
+          "policy": "after first request includes later canaries/warmup/requests; not a steady-state proof"
+        },
+        "phase_metadata_error": null,
+        "gpu_peak_bytes": {
+          "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 22624075776,
+          "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 22624075776
+        },
+        "tree_pss_peak_bytes": 66528199680,
+        "tree_rss_peak_bytes": 66564231168,
+        "complete_host_samples": 164,
+        "incomplete_host_samples": 0,
+        "gpu_samples": 164,
+        "missing_gpu_attempts": 0,
+        "baseline": {
+          "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": {
+            "index": 0,
+            "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 4194304,
+            "utilization": 0
+          },
+          "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": {
+            "index": 1,
+            "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 4194304,
+            "utilization": 0
+          },
+          "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6": {
+            "index": 2,
+            "uuid": "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 1048576,
+            "utilization": 0
+          },
+          "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011": {
+            "index": 3,
+            "uuid": "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 1048576,
+            "utilization": 0
+          },
+          "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86": {
+            "index": 4,
+            "uuid": "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 1048576,
+            "utilization": 0
+          },
+          "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685": {
+            "index": 5,
+            "uuid": "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 1048576,
+            "utilization": 0
+          },
+          "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d": {
+            "index": 6,
+            "uuid": "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 1048576,
+            "utilization": 0
+          },
+          "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f": {
+            "index": 7,
+            "uuid": "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 1048576,
+            "utilization": 0
+          }
+        },
+        "delta_high_water_bytes": {
+          "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 22619881472,
+          "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 22619881472,
+          "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6": 0,
+          "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011": 0,
+          "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86": 0,
+          "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685": 0,
+          "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d": 0,
+          "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f": 0
+        },
+        "final_process_diagnostics": [
+          {
+            "identity": {
+              "pid": 188383,
+              "birth_ticks": 100790265,
+              "ppid": 188374,
+              "state": "S"
+            },
+            "command": "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/nsight-systems-cli-2025.3.1/opt/nvidia/nsight-systems-cli/2025.3.1/target-linux-x64/nsys profile --session-new=FerruleProfile_allocator-v3-profile-after-20261011-01 --start-later=true --trace=cuda,nvtx,osrt,cublas --gpu-metrics-devices=none --gpuctxsw=false --sample=none --cpuctxsw=none --trace-fork-before-exec=false --kill=none --wait=primary --stop-on-exit=true --duration=240 --cuda-flush-interval=0 --force-overwrite=false --output=/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/session/nsight/nsys /home/admin/wxw403883/anaconda3/bin/python3.12 -S -B /home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/instrumentation_capture.py --directory /home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/session --manifest-sha256 065be171bee62259110591ad3fd104063cf8021a8249eaa004b0d80c7b48b3d5 -- /home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/admission/allocator-v3-release-20261011-01/staged/ferrule serve /mnt/nas1/hf/Qwen3.5-35B-A3B-FP8 --backend cuda --engine pipeline --model-profile qwen35-mixed-bf16 --tensor-parallel 2 --pipeline-parallel 1 --expert-parallel 1 --rank-backend thread --devices 0,1 --rank-restarts 0 --kv-execution-policy resident --ctx-size 128 --max-active-sequences 2 --max-batch-tokens 8 --prefill-chunk-size 8 --cuda-device-budget-mb 22528 --kv-cache-mb 16 --max-tensor-mb 2048 --cuda-workspace-mb 4096 --host 127.0.0.1 --port 18367 --served-model-name qwen35-ferrule-tp2-resident-paper ",
+            "environment": {
+              "HOME": "/root",
+              "PATH": "/home/admin/wxw403883/anaconda3/envs/tao/bin:/root/.cargo/bin:/usr/bin:/bin",
+              "PYTHONDONTWRITEBYTECODE": "1",
+              "CUDA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+              "NVIDIA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+              "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
+              "HF_HUB_OFFLINE": "1",
+              "TRANSFORMERS_OFFLINE": "1",
+              "CUDA_HOME": "/home/admin/wxw403883/anaconda3/envs/tao",
+              "NVCC": "/home/admin/wxw403883/anaconda3/envs/tao/bin/nvcc",
+              "LD_LIBRARY_PATH": "/home/admin/wxw403883/anaconda3/envs/tao/lib:/usr/lib64",
+              "CUBLAS_WORKSPACE_CONFIG": ":0:0",
+              "FERRULE_LOG": "info",
+              "FERRULE_LOG_FORMAT": "json",
+              "TMPDIR": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/session/nsys-tmp"
+            },
+            "libraries": [
+              "/usr/lib64/libcuda.so.575.57.08",
+              "/usr/lib64/libnvidia-cfg.so.575.57.08",
+              "/usr/lib64/libnvidia-ml.so.575.57.08"
+            ]
+          },
+          {
+            "identity": {
+              "pid": 188402,
+              "birth_ticks": 100790545,
+              "ppid": 188383,
+              "state": "S"
+            },
+            "command": "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/nsight-systems-cli-2025.3.1/opt/nvidia/nsight-systems-cli/2025.3.1/target-linux-x64/nsys-launcher /home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/session/nsys-tmp/5014-7a71-88fa-a7ca 81 ",
+            "environment": {
+              "HOME": "/root",
+              "PATH": "/home/admin/wxw403883/anaconda3/envs/tao/bin:/root/.cargo/bin:/usr/bin:/bin",
+              "PYTHONDONTWRITEBYTECODE": "1",
+              "CUDA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+              "NVIDIA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+              "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
+              "HF_HUB_OFFLINE": "1",
+              "TRANSFORMERS_OFFLINE": "1",
+              "CUDA_HOME": "/home/admin/wxw403883/anaconda3/envs/tao",
+              "NVCC": "/home/admin/wxw403883/anaconda3/envs/tao/bin/nvcc",
+              "LD_LIBRARY_PATH": "/home/admin/wxw403883/anaconda3/envs/tao/lib:/usr/lib64",
+              "CUBLAS_WORKSPACE_CONFIG": ":0:0",
+              "FERRULE_LOG": "info",
+              "FERRULE_LOG_FORMAT": "json",
+              "TMPDIR": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/session/nsys-tmp"
+            },
+            "libraries": []
+          },
+          {
+            "identity": {
+              "pid": 188403,
+              "birth_ticks": 100790545,
+              "ppid": 188402,
+              "state": "S"
+            },
+            "command": "/home/admin/wxw403883/anaconda3/bin/python3.12 -S -B /home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/instrumentation_capture.py --directory /home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/session --manifest-sha256 065be171bee62259110591ad3fd104063cf8021a8249eaa004b0d80c7b48b3d5 -- /home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/admission/allocator-v3-release-20261011-01/staged/ferrule serve /mnt/nas1/hf/Qwen3.5-35B-A3B-FP8 --backend cuda --engine pipeline --model-profile qwen35-mixed-bf16 --tensor-parallel 2 --pipeline-parallel 1 --expert-parallel 1 --rank-backend thread --devices 0,1 --rank-restarts 0 --kv-execution-policy resident --ctx-size 128 --max-active-sequences 2 --max-batch-tokens 8 --prefill-chunk-size 8 --cuda-device-budget-mb 22528 --kv-cache-mb 16 --max-tensor-mb 2048 --cuda-workspace-mb 4096 --host 127.0.0.1 --port 18367 --served-model-name qwen35-ferrule-tp2-resident-paper ",
+            "environment": {
+              "HOME": "/root",
+              "PATH": "/home/admin/wxw403883/anaconda3/envs/tao/bin:/root/.cargo/bin:/usr/bin:/bin",
+              "PYTHONDONTWRITEBYTECODE": "1",
+              "CUDA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+              "NVIDIA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+              "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
+              "HF_HUB_OFFLINE": "1",
+              "TRANSFORMERS_OFFLINE": "1",
+              "CUDA_HOME": "/home/admin/wxw403883/anaconda3/envs/tao",
+              "NVCC": "/home/admin/wxw403883/anaconda3/envs/tao/bin/nvcc",
+              "LD_LIBRARY_PATH": "/home/admin/wxw403883/anaconda3/envs/tao/lib:/usr/lib64",
+              "CUBLAS_WORKSPACE_CONFIG": ":0:0",
+              "FERRULE_LOG": "info",
+              "FERRULE_LOG_FORMAT": "json",
+              "TMPDIR": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/session/nsys-tmp"
+            },
+            "libraries": []
+          },
+          {
+            "identity": {
+              "pid": 188404,
+              "birth_ticks": 100790545,
+              "ppid": 188402,
+              "state": "S"
+            },
+            "command": "nsys-tee 3 5 6 7 ",
+            "environment": {
+              "HOME": "/root",
+              "PATH": "/home/admin/wxw403883/anaconda3/envs/tao/bin:/root/.cargo/bin:/usr/bin:/bin",
+              "PYTHONDONTWRITEBYTECODE": "1",
+              "CUDA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+              "NVIDIA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+              "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
+              "HF_HUB_OFFLINE": "1",
+              "TRANSFORMERS_OFFLINE": "1",
+              "CUDA_HOME": "/home/admin/wxw403883/anaconda3/envs/tao",
+              "NVCC": "/home/admin/wxw403883/anaconda3/envs/tao/bin/nvcc",
+              "LD_LIBRARY_PATH": "/home/admin/wxw403883/anaconda3/envs/tao/lib:/usr/lib64",
+              "CUBLAS_WORKSPACE_CONFIG": ":0:0",
+              "FERRULE_LOG": "info",
+              "FERRULE_LOG_FORMAT": "json",
+              "TMPDIR": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/session/nsys-tmp"
+            },
+            "libraries": []
+          },
+          {
+            "identity": {
+              "pid": 188424,
+              "birth_ticks": 100791052,
+              "ppid": 188403,
+              "state": "S"
+            },
+            "command": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/admission/allocator-v3-release-20261011-01/staged/ferrule serve /mnt/nas1/hf/Qwen3.5-35B-A3B-FP8 --backend cuda --engine pipeline --model-profile qwen35-mixed-bf16 --tensor-parallel 2 --pipeline-parallel 1 --expert-parallel 1 --rank-backend thread --devices 0,1 --rank-restarts 0 --kv-execution-policy resident --ctx-size 128 --max-active-sequences 2 --max-batch-tokens 8 --prefill-chunk-size 8 --cuda-device-budget-mb 22528 --kv-cache-mb 16 --max-tensor-mb 2048 --cuda-workspace-mb 4096 --host 127.0.0.1 --port 18367 --served-model-name qwen35-ferrule-tp2-resident-paper ",
+            "environment": {
+              "HOME": "/root",
+              "PATH": "/home/admin/wxw403883/anaconda3/envs/tao/bin:/root/.cargo/bin:/usr/bin:/bin",
+              "PYTHONDONTWRITEBYTECODE": "1",
+              "CUDA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+              "NVIDIA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+              "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
+              "HF_HUB_OFFLINE": "1",
+              "TRANSFORMERS_OFFLINE": "1",
+              "CUDA_HOME": "/home/admin/wxw403883/anaconda3/envs/tao",
+              "NVCC": "/home/admin/wxw403883/anaconda3/envs/tao/bin/nvcc",
+              "LD_LIBRARY_PATH": "/home/admin/wxw403883/anaconda3/envs/tao/lib:/usr/lib64",
+              "CUBLAS_WORKSPACE_CONFIG": ":0:0",
+              "FERRULE_LOG": "info",
+              "FERRULE_LOG_FORMAT": "json",
+              "TMPDIR": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/session/nsys-tmp"
+            },
+            "libraries": [
+              "/home/admin/wxw403883/anaconda3/envs/tao/lib/libcudart.so.12.4.99",
+              "/usr/lib64/libcuda.so.575.57.08"
+            ]
+          }
+        ],
+        "owned_gpu_attribution": "unknown",
+        "owned_process_gpu_peak_bytes": null,
+        "exact_peaks": false,
+        "hard_memory_partition": false,
+        "continuous_coverage": false
+      }
+    }
+  ],
+  "all_echild": true,
+  "all8_locks_released": true,
+  "allocator_scope": "Ready/shutdown whole lifecycle, independent of formal HTTP/CUDA API counts"
+}

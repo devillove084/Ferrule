@@ -1,0 +1,15 @@
+{
+  "case": "call-05",
+  "error": null,
+  "input_token_ids": [
+    760,
+    6511,
+    314,
+    9338,
+    369
+  ],
+  "phase": "prefill",
+  "published": true,
+  "session": 2,
+  "transaction": 6
+}

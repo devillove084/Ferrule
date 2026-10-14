@@ -1,0 +1,27 @@
+{
+  "schema": "ferrule.paper.collector-handoff.v1",
+  "manifest_sha256": "e6a729c0b325baa663a0a31516d4c111de5ae94163b838216935fabb9085cae9",
+  "baseline_sha256": "cb31a89e9eea3f890e244d37e11bed87fede5aba77376fa7f69e9ef411aea4a7",
+  "target": {
+    "identity": {
+      "pid": 167196,
+      "birth_ticks": 88074124,
+      "ppid": 167195,
+      "state": "R"
+    },
+    "manifest_sha256": "e6a729c0b325baa663a0a31516d4c111de5ae94163b838216935fabb9085cae9",
+    "nonce": "59d0ed4b77e3ecde195f76f3f0b7ef8622ac977d175871dba754f16fe93c0eb3"
+  },
+  "collector": {
+    "pid": 167176,
+    "birth_ticks": 88073832,
+    "ppid": 167167,
+    "state": "R"
+  },
+  "nonce": "59d0ed4b77e3ecde195f76f3f0b7ef8622ac977d175871dba754f16fe93c0eb3",
+  "launch_id": "5db02dc599db490bae8f6f79797859f1",
+  "model_gpu_uuids": [
+    "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+    "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9"
+  ]
+}

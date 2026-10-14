@@ -1,0 +1,14 @@
+{
+  "unix": 1791538915.0757294,
+  "status": "released",
+  "gpu_uuids": [
+    "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+    "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9"
+  ],
+  "all_eight_idle": true,
+  "old_servers_gone": true,
+  "foreign_signals": false,
+  "server_starts": 6,
+  "smoke_starts": 2,
+  "paired_starts": 4
+}

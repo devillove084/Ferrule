@@ -1,0 +1,329 @@
+# Current paper experiment entry points
+
+## Cache-on release preparation — final v2 CPU-audited, GPU authorization pending
+
+[Prepared scopes, official-tool selection, remaining gates and measurement rules](CACHE-ON-PREPARATION.md).
+The explicit 4 GiB workspace scope keeps the 22 GiB device ceiling; the new
+official-tool policy does not bypass current release or same-binary smoke
+validation. The source-different final v2 release `dadf831e…2625e5a` now has a
+CPU-audited fresh smoke admission and prepared S1/S2 metadata. All 215 paper CPU
+tests pass. No new HTTP smoke, GPU run, performance or trace acceptance is claimed.
+
+## Official Nsight closeout — CPU audit v2, full trace still rejected
+
+[Official tools and verified entry points](OFFICIAL-NVIDIA-TOOLS.md).
+Nsight **2025.3.1.90-253135822126v0** standalone CLI/importer/bundled CUPTI passed
+an [official two-GPU vectorAdd micro](runs/nsys-official-micro-20261009-002/acceptance.json). The subsequently authorized single
+`tp2-official-full-profile-20261010-001` used qualified binary `4d40c347…b3173`
+and the existing collector-first supervised lifecycle; no no-trace pilot was repeated.
+Lifecycle/request checks and historical drain/release passed; raw trace was exported,
+but **`full_trace_accepted=false`** remains mandatory.
+
+The [CPU-only bidirectional v2 audit](runs/tp2-official-full-profile-20261010-001/profile-audit-v2.json)
+labels request6 **`observed_correlation_closed`**: [2622335777,5112115777] ns,
+117232 kernels, 26284 copies, 70014 memsets, 1881862 APIs; runtime115380 +
+driver1852 launches match kernels, with unique two-way correlation, correct
+GPU0/1 UUIDs, no cross-window/startup counterpart or same-thread API overlap.
+This cannot exclude paired API/activity loss or prove collection complete.
+Warmup has 4 copies + 12 memsets missing APIs, and successful `cuLaunchKernel`
+correlations **687294/687352** have no activity in the entire export.
+The generic `libAnalysis` TraceSummaryVerifier warning is not limited to
+CUDA-event dependencies. Capture-boundary causation and buffer overflow are
+**unproven**; absence of explicit CUPTI-drop logging does not establish a cause.
+
+Observed request6 `decode_weights` **26592 / 270507218 ns** and activation pack
+**19228 / 30012786 ns** remain local quantities, not optimization wins or benchmark
+comparisons. Pure prefill/decode, GemmEx API and CPU-collective attribution remain
+unavailable. [Corrected summary](runs/tp2-official-full-profile-20261010-001/PROFILE-SUMMARY.md).
+The [W8 real-operand gate](../../../../crates/ferrule-model/tests/mixed_routed_down/RESULT.md)
+failed two BF16 words (16382/16384); the candidate remains default-off, not promoted.
+
+This closeout performed **CPU reads/tests only**, no GPU query/lock/workload or new
+capture. Old raw, audit and execution/release receipts are retained; v2 is separate.
+`fairmatch=false`, `exact_speedup=null`; **E2 remains unchecked**.
+[Initial CPU closeout](runs/tp2-official-full-profile-20261010-001/cpu-closeout-v2/closeout-manifest.json)
+and [recovery completion manifest](runs/tp2-official-full-profile-20261010-001/cpu-closeout-v2/completion-manifest.json)
+record separate provenance; neither rewrites historical receipts.
+
+## Historical optimized execution — smoke/pair PASS, 2026.1.3 trace blocked
+
+[Optimized execution and profiling results](RESULTS-optimized-pilot.md).
+Release `4d40c347…b3173` passed same-binary S1/S2 smoke and fresh no-trace
+F1,V1 / V2,F2: 48 normal HTTP requests, 20 measured QA8 requests/160 tokens.
+Ferrule startup **243.480/241.209 s** versus old **385.979/367.234 s**;
+tok/s **5.5483/5.5586** versus **5.5213/5.5414**. No causal/statistical attribution.
+No smoke or paired slot was repeated during the latest profiling continuation.
+
+The import-time visibility bug is fixed with explicit CPU-entry isolation, not
+arbitrary import-time environment mutation or broad target visibility. The bounded
+post-model B1 cleanup waits for selected utilization to settle; foreign, missing,
+nonselected-delta and identity failures still fail closed. CPU validation:
+**134 TP2 + 42 original tests PASS**. The prior pinned `pre_serving.py` is archived
+under `history/pre-software-cuda-trace/`, with its SHA checked against run003.
+
+Historical `tp2-optimized-collector-profile-20261009-004` used explicitly pinned
+`--trace=cuda-sw,nvtx,osrt`, the same release/workload, and fresh eight-lock grant.
+**Lifecycle/Hello/canaries/warm8/measured8/B1/B0/drain PASS**. Startup 256.384 s;
+B1 selected 4 MiB/card, nonselected 1 MiB/card; nonselected model-phase delta 0.
+Both requests lie inside the 6.429226301 s capture. However, kernel data is absent:
+`NumTpcs` initialization failure plus **428 StringStorage bucket errors** persist.
+API records name both owner threads, but trace completeness and kernel attribution
+are rejected. See [offline coverage audit and partial counters](runs/tp2-optimized-collector-profile-20261009-004/trace-audit.json).
+This disproves software-trace selection as a sufficient fix; underlying Nsight
+failure remains unresolved for that tool/raw. No further GPU retry was made in
+that continuation; the later separately authorized 2025.3 micro/profile is above.
+
+Final independent verification: **all eight 0 MiB/0%, no compute PID, authenticated
+drain, all eight locks available and released**. [Receipt](runs/tp2-optimized-collector-profile-20261009-004/final-owner-release.json).
+No production/oracle changes, tolerance relaxation or foreign signals.
+`fairmatch=false`, `exact_speedup=null`, E2 incomplete. Profile timings are not
+performance comparison data. Historical dated notes below are not pending launch
+instructions; consumed runs must not be resumed.
+
+## Historical CPU-only preparation while runtime owned the GPUs
+
+[Collector-first scope and observer decomposition](INSTRUMENTATION-BASELINE.md)
+now define separate eight-card instrumentation custody versus two-card model
+visibility. Metrics/video/GPU context tracing are explicitly off; this is not a
+claim of no enumeration. Three stable collector-only samples freeze B1 while
+retaining original B0; model-phase tolerance remains 1 MiB, final idle returns B0.
+The policy/atomic locks and the sealed collector/model gate now have CPU tests;
+`paired.py` profiling wiring is executable only after a fresh explicit eight-UUID
+probe grant and sole-owner grant. No GPU execution is authorized by this document.
+Observer adds Anonymous/Pss_Anon/Pss_File/Private_Dirty with null/coverage semantics
+and startup/first/post-first phase peaks. New optimized release still needs a
+separate no-trace paired pilot. No GPU query, profiler, lock or server was run in
+this update; current runtime GPU activity is neither inspected nor interrupted. The live entry point is:
+
+```sh
+CUDA_VISIBLE_DEVICES='' NVIDIA_VISIBLE_DEVICES=none \
+/home/admin/wxw403883/anaconda3/bin/python3.12 -S -B \
+papers/arxiv/experiments/tp2_resident/paired.py run --purpose profiling \
+  --id <fresh-id> --sole-gpu-owner-granted --owner-note '<fresh grant>' \
+  --probe-grant <run-bound-eight-uuid-grant.json>
+```
+
+The probe grant must contain the eight UUIDs discovered and authorized for that
+run plus the ordered model UUIDs; it is not inferred from the old M7/G10 files.
+
+The optimized release now has a separate CPU-audited
+[smoke admission](admission/optimized-20261009/smoke-admission.json).
+See [executable preparation/launch steps](INSTRUMENTATION-BASELINE.md#executable-entry-points)
+for same-release smoke, no-trace pairing and collector-first profiling.
+`compare_pilots.py` rejects workload/precision/environment drift before producing
+an offline old/new descriptive table; profiler durations never enter it.
+
+CPU validation: **124 TP2 + 42 original tests PASS**. The
+[new executable plan](plans/collector-handoff-20261009/plan.json) supersedes, but
+does not rewrite, the earlier policy-only plan. Optimized release/source/quality
+are CPU-audited; same-release HTTP smoke, no-trace pair and GPU trace are pending.
+[CPU preparation receipt](plans/collector-handoff-20261009/cpu-preparation.json)
+records zero GPU queries/locks/servers and the historical pin rechecks.
+
+Optimized-release checklist (updated through official 2025.3 closeout):
+
+- [x] Actual optimized handoff/build/runtime/source audit, SHA `4d40c347…b3173`.
+- [x] Full40 + six-recipe fresh comparator closure: 37 calls / 40,293 exact metrics;
+  19 successful gates, failed attempt retained. **Test binary, not serving smoke.**
+- [x] Collector-first existing-supervisor wiring and 124+42 CPU tests.
+- [x] Prepared and consumed `runs/tp2-optimized-smoke-20261009-001`; actual receipts linked above.
+- [x] Renewed GPU authorization and same-release S1/S2 HTTP smoke PASS.
+- [x] Fresh no-trace F1,V1 / V2,F2 QA8 and offline old/new descriptive comparison.
+- [x] Separate eight-UUID grant and actual B1/B0 cleanup, including run004.
+- [x] Official 2025.3 micro acceptance and request6 observed two-way correlation closure (links above).
+- [ ] Complete two-owner CUDA kernel trace: historical run004 lacks kernels; the official 2025.3 run has kernels but retains the whole-trace warning and warmup missing correlations. Neither is a full-trace PASS.
+- [ ] Paper E2 completion; `fairmatch=false`, `exact_speedup=null` unchanged.
+
+## Historical pre-collector diagnostic attempt: blocked, no retry
+
+[One short Nsight attempt](RESULTS-short-profile.md) aborted before readiness in
+3.179 s on nonselected GPU2/3 +4 MiB and GPU4 +2 MiB deltas (1 MiB tolerance).
+No target CUDA report or HTTP requests; kernel/sync/copy numbers unavailable.
+Authenticated drain and final all-eight idle/release PASS; 83+42 CPU tests PASS.
+Three source-supported candidates and historical startup intervals are recorded,
+not claimed as measured bottleneck shares. No production or numerical changes.
+
+## Latest completed serving pilot (2026-10-09)
+
+**[Same-release smoke and fresh F1,V1 / V2,F2 results](RESULTS-serving-pilot.md)**
+are complete. Public quality gate is now true; release `e017a3a8…26c1b0b`
+passed two authenticated HTTP lifecycles (canaries, reuse, cancel, normal exit,
+fresh CPU owner). Full40 each 2,178 fields and lifecycle 33 calls / 35,937 metrics
+remain separate **test-binary** quality evidence. The fresh paired QA8 blocks
+observed F1/F2 **5.5213 / 5.5414 tok/s**, V1/V2 **10.3966 / 10.5621 tok/s**;
+all canaries and 20 measured requests passed. No throughput parity, optimality,
+statistical conclusion or arithmetic equivalence: **E2 incomplete,
+`fairmatch=false`, `exact_speedup=null`**. CPU collective vs NCCL, Mixed/HF
+reference vs Marlin, and Ferrule effective decode batch1 are explicit differences.
+
+Six actual servers were drained and exited; independent final verification found
+all eight GPUs idle and released both UUID locks. CPU tests: **42 + 78 PASS**.
+`paired.py`/`pre_serving.py` reuse the sealed runner; `summarize_pilot.py` is an
+offline receipt projection, not another launch harness. Exact executed adapters
+are archived as text under `history/serving-pilot-20261009/`.
+The dated progress notes below preserve earlier checkpoints, not current blockers.
+
+Use `experiment_current.py` for the single-server lifecycle and `observer.py`
+for current GPU/PSS observation. `test_observer.py` tests root identity, incomplete
+leaf branches, bounded NVML diagnostic retry, and same-server quality gating.
+No `v5` harness is introduced. Historical versioned files are retained verbatim
+because existing run manifests hash their paths and contents.
+
+The current driver imports reviewed pin/config/lock/custodian/HTTP primitives from
+`experiment_v4.py` and the maintained helpers rather than copying another
+versioned runner. Its own orchestration is one server, sequential Hello2,
+three frozen canaries, then one QA8 descriptive block only on canary success.
+The pure baseline-delta policy is shared with the historical module; new process
+snapshot and diagnostic behavior is centralized in `observer.py`.
+
+## Safety and scope
+
+- Same exact inference argv/environment/runtime identity as the prior TP2 runs.
+- Normal smoke/pair: GPU0/GPU1 physical UUID locks only. Collector-first profiling
+  additionally requires the explicit eight-card instrumentation grant; model
+  visibility stays ordered GPU0/GPU1. Both observe all eight for baseline/release.
+- Root identity bound by PID/start time/parent at launch. Vanished branches are
+  omitted and reported as incomplete PSS, never zero or root-custody loss.
+- Missing valid GPU/PSS coverage has a 60-second deadline, independent of the
+  900-second readiness deadline. Proven resource violations still stop the root.
+- NVML diagnostic retry runs in the observer thread: normal 3-second queries,
+  one pair retry with a 15-second total budget; no missing sample fabrication.
+- No foreign signals. Maintained sealed custodian proves final ECHILD drain.
+- Original quality reference, greedy seed1, max8, natural EOS; no regeneration.
+- Five QA8 measurements are same-server observations after canaries, not cold
+  replicas or an F/V paired benchmark. No exact speedup/fairmatch claim.
+
+## Validation
+
+```sh
+/home/admin/wxw403883/anaconda3/bin/python3.12 -S -B -m unittest papers/arxiv/experiments/test_experiments.py
+/home/admin/wxw403883/anaconda3/bin/python3.12 -S -B -m unittest discover -s papers/arxiv/experiments/tp2_resident -p 'test_*.py'
+```
+
+42 original and 37 observer/contract tests passed for the completed run.
+The single authorized retry has been consumed; no additional launch is pending.
+
+See [successful single-lifecycle results](RESULTS-single-lifecycle.md).
+
+
+## Ferrule admission progress and future pairing (2026-10-09)
+
+[CPU-verified receipts](claim-gates-audit-20261009.json) for
+`target/validation/tp2-mixed-claim-gates/shared-full40-01` and `shared-tiny-01`
+confirm the shared/dense separate gate/up fix: physical PP1/TP2/EP1 GPU0/1,
+1,986,560 exact finite Hello/Capital prefill + first-decode logits, tiny
+lifecycle and full40 claims/shutdown PASS. This is test-only logits/lifecycle
+coverage; **all-boundary/state, multistep and CLI acceptance remain closed**.
+See the [results addendum](RESULTS-single-lifecycle.md#later-ferrule-progress--cpu-receipt-audit-2026-10-09).
+E2 remains incomplete, `fairmatch=false`, `exact_speedup=null`.
+
+`pair_contract.py` is a CPU-only metadata preflight/request planner, **not a
+new runner or execution authorization**. It reuses the current baseline config,
+protocol bounds, frozen HF reference reader, F/V order, and existing HTTP helper
+parser. `http_plan(engine, spec, stage, directory)` supports explicit `ferrule`
+and `vllm` HTTP identities; it returns args/corpus/expected canaries without
+writing artifacts, contacting a server, inventing server flags or executing
+`shared.request_block` under a relabeled vLLM identity. Natural EOS, raw greedy
+seed1, Hello2 → three max8 canaries → gated QA8 remain the intended lifecycle.
+The first QA-phase request is excluded, then two warmups and five measured;
+Hello2, not that QA request, is the actual first request after readiness.
+
+`review_pair(ferrule, vllm)` retains separate engine spec/environment,
+source/runtime/binary pins and effective arithmetic/transport evidence, alongside
+common scope/topology/boundaries/workload/resources. Inputs are **declarations**,
+not independently authenticated receipts. Complete synthetic declarations still
+return `status=blocked`, `execute_allowed=false`: no metadata switch opens the
+CLI or authorizes GPU ownership. `test_pair_contract.py` tests these negative
+contracts and checks generated args with the maintained HTTP parser.
+
+Historical integration plan (subsequently completed for this bounded pilot; no new CLI options assumed):
+
+1. Complete all-boundary/state and multistep acceptance, then publish/admit a
+   real TP2 serving CLI/profile. Audit documented argv statically; pin its binary,
+   source and runtime separately from the staged test executable. Bind quality
+   and service lifecycle receipts to that same serving binary/source.
+2. Independently verify those receipt hashes and effective metadata. Preserve
+   HF-eager TP2 versus Marlin arithmetic differences; boundary-aligned system
+   comparison is not arithmetic equivalence. Unknown effective evidence blocks
+   admission. Model shard-stat identity remains weaker than full payload hashes.
+3. Wire the explicit-engine request plan into the maintained worker, using the
+   existing HTTP helper and per-phase result/canary checks. Do **not** call it
+   outside `guard.seal/authenticate`, `base.supervisor.run_process`, pinned
+   executable binding and `observer.Monitor`. Retain one owner, sorted atomic
+   two-UUID locks, PID/start-time custody, no foreign signals, all-device
+   baseline/delta checks and proven drain before the next slot.
+4. Prepare fresh pins (the workflow inventory gains these new Python files;
+   old manifests are not rewritten). Independently isolate each engine's env;
+   never copy Ferrule CUDA12.4 into the vLLM CUDA12.9 JIT environment. Freeze and
+   report actual per-engine transport; no silent NCCL/P2P fallback.
+5. Only after admission and renewed sole-owner authorization: fresh sequential
+   `F1,V1 / V2,F2` descriptive blocks, each server's Hello/canaries before QA8.
+   Stop on quality failure or unknown custody/drain/idle. Preserve every slot
+   and request status, actual tokens/TTFT/E2E/client wall, startup, per-card GPU
+   and PSS samples (missing ≠ zero). Do not splice archived V timings into a pair
+   or treat same-server requests as independent replicas.
+
+Each lifecycle retains startup ≤900 s, request ≤120 s, all requests ≤440 s,
+teardown ≤120 s, worker supervisor 1600 s and overall ceiling 1700 s. These are
+not a single 1700-second budget for all four fresh servers. Common observational
+ceilings remain 22 GiB/card and 128 GiB tree PSS, not physical hard partitions;
+vLLM planning remains 19.2 GiB/card. No server, lock or GPU operation was performed
+for this paper-only update, and all historical hashed harness files are unchanged.
+
+
+CPU validation for this historical update: **42 original + 49 TP2 tests passed**, including
+12 new pair-contract tests. Local document links resolve and all five E2 boxes
+remain unchecked. The [follow-up pin check](claim-gates-recheck-20261009.json)
+found archived artifacts/binaries unchanged and all current pins matching on
+its completed pass. The preceding check briefly found an external
+`tp2_mixed/oracle/protocol.json` mismatch; its cause is unknown and the file was
+not changed here. This is not proof that concurrently edited pin paths stay
+stable; every fresh preparation must revalidate them.
+
+
+## Native whole-capture full40 and paired wiring (2026-10-09)
+
+The newer raw/comparator chain is recorded in [full-boundary-audit.json](full-boundary-audit.json). `native-whole-capture-full40-02` and `native-whole-capture-comparison-01.json` now show **2,178/2,178 exact fields for each Hello and Capital case**, including the captured prefill and first decode calls; all field failures, max absolute error and RMSE are zero, and greedy IDs match. This is a stronger full-boundary/two-call receipt than the earlier 1,986,560-logit summary, but it is still a bounded capture/comparator artifact, not serving or arithmetic-equivalence admission.
+
+Independent multistep references and the fresh greedy4-02 quality/lifecycle closure are now complete: 33 calls and 35,937 metrics are exact, with zero failures and greedy4-02 supervisor/drain/release PASS. The old greedy4-01 supervisor failure remains preserved; greedy4-02 closes its provenance, not the old receipt. The CPU audit is [model-runtime-quality.json](model-runtime-quality.json). Catalog subsequently opened `PUBLIC_QUALITY_ACCEPTED=true` and published the pinned release; the latest authorized smoke/pilot results are linked above. The checked-in CLI/profile audit binds the future envelope to `qwen35-mixed-bf16`, thread TP2, PP1/EP1, explicit devices `0,1`, resident KV, BF16 activation/KV/conv, F32 SSM/accumulation, context 128, max batch 8, max active sequences 2, prefill chunk 8, and no host expert cache/offload. The adapter does not invent `--strict`, `--no-offload`, `--cpu-offload-gb`, `--model-precision`, or `--enable-expert-parallel` flags.
+
+`pre_serving.py` and `paired.py` form the future F/V integration layer, not another runner. The bootstrap first verifies test-binary model/runtime quality plus the immutable release binary/source/profile; it deliberately does **not** require a same-release HTTP receipt that smoke has not produced. It then privately reuses the existing single-lifecycle module's sealed worker, sorted UUID custody, observer, timeout, request helper and release receipts; it does not mutate the pinned module. Its planned descriptive schedule is `F1,V1 / V2,F2`, with each fresh server gated by Hello2, three frozen canaries, then QA8 (excluded first QA-phase request, two warmups, five measured). A false `PUBLIC_QUALITY_ACCEPTED` is still rejected before metadata reads, locks or supervisor calls; the executed source gate was true. The bounded pre-serving smoke plan covers same-server reuse, an intentional disconnect requiring matching worker cancellation/cleanup, normal shutdown, and a second distinct authenticated owner/server; only after those receipts are produced does downstream paired admission require same serving binary/source/spec-bound smoke receipts. Failed or unknown slots retain receipts and leave remaining slots `not_run`; no fairmatch, speedup or extrapolation is generated.
+
+CPU-only audit/tests for this update: full-boundary and greedy4-02 raw/canonical/comparator hashes verified; **42 original + 74 TP2 tests passed** (14 paired plus 11 pre-serving smoke tests). No server, GPU query, lock, numerical rerun, production edit or oracle edit was performed.
+The optimized handoff was CPU-audited from
+`target/validation/tp2-mixed-optimized-release-20261009/handoff.json`:
+serving SHA `4d40c34738d36a1c78f62c0e400dd732da40e34c316ce4bd3c356dc4d29b3173`,
+quality 19/20 successful gates, 37 calls, 40,293 exact metrics. This is test
+quality/build provenance, not same-release serving smoke; `fairmatch=false`,
+`exact_speedup=null`, and E2 remains incomplete.
+
+
+### Maintained admission / execution contract
+
+- Historical `paired-plan.json` and `paired-handoff.json` remain unchanged;
+  their old false-gate/preparation status is not today's serving result.
+- Bootstrap: `paired.py prepare --purpose serving_smoke --id ID --admission PATH`
+  requires the real release build/source/profile plus test-binary quality, **not**
+  its own future HTTP receipt. `pre_serving.catalog_build` verifies the actual
+  catalog handoff and records that build-supervisor custody is unavailable;
+  it never fabricates an authenticated build PASS.
+- Exact release/live-source inventory excludes unrelated papers and generated
+  nested target artifacts; complete historical manifests remain hash-bound.
+  All execution Python/config/tools, runtime, model metadata and frozen refs are
+  pinned separately. `--kv-cache-mb 16`, `--max-tensor-mb 2048`, and
+  `--cuda-workspace-mb 1024` are real audited CLI flags, not offload overrides.
+- Downstream `--purpose paired` requires the completed same-release smoke plus
+  reviewed vLLM public-CLI/service/visible-quality receipts. The baseline wrapper
+  in `admission/review_pair.py` rechecks genuine historical vLLM evidence; those
+  timings never substitute for fresh V1/V2. No Marlin numerical oracle is invented.
+- `run` additionally requires `--sole-gpu-owner-granted --owner-note NOTE` and
+  the production quality constant. Every slot uses the existing seal/authenticate,
+  observer, sorted UUID locks, pinned executable, bounded HTTP and final drain.
+  Normal root exit code is recorded by a small helper adapter; it does not replace
+  the subreaper's descendant proof or the separate GPU-idle proof.
+- Failed/incomplete stages stop subsequent slots; receipts are append-only.
+  Fresh S1/S2 prove rebuilding a server/CPU owner, not an undocumented in-process
+  API. `/admission` observes host/request accounting, not device quiescence.
+- Current run IDs are consumed; no retry/resume. The completed authorization does
+  not authorize further GPU work. Preserve all receipts and request populations;
+  a new experiment needs a reviewed protocol and fresh sole-owner grant.

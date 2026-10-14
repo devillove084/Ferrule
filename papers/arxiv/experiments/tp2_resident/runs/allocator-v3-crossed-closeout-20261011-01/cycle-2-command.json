@@ -1,0 +1,28 @@
+{
+  "argv": [
+    "/home/admin/wxw403883/anaconda3/bin/python3.12",
+    "-S",
+    "-B",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/paired.py",
+    "run",
+    "--id",
+    "allocator-v3-crossed-c2-20261011-01",
+    "--purpose",
+    "operator_retirement_ab",
+    "--sole-gpu-owner-granted",
+    "--owner-note",
+    "User explicit sole GPU owner authorization 2026-10-11: fixed 7e1c S1/S2 then two crossed 9ef/7e1c cycles only; no profile, no foreign kill"
+  ],
+  "cwd": "/home/admin/luhuanbing.lhb/Ferrule",
+  "started_unix": 1791697392.956165,
+  "environment": {
+    "CUDA_VISIBLE_DEVICES": "",
+    "NVIDIA_VISIBLE_DEVICES": "none"
+  },
+  "wrapper_pid": 180186,
+  "per_lifecycle_supervisor_seconds": 1600,
+  "exit_code": 0,
+  "elapsed_seconds": 1006.2649221420288,
+  "log": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-crossed-closeout-20261011-01/cycle-2-command.log",
+  "log_sha256": "e54e535c405ab8b700798875ed443e0d37deda06db0cb7cc55a55fd352e33e9b"
+}

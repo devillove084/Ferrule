@@ -1,0 +1,49 @@
+{
+  "schema": "ferrule.paper.operator-retirement-cpu-source-review.v1",
+  "status": "qualification_identity_only_AFTER_build_pending",
+  "qualification_handoff": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-allocator-v3-20261011-03/handoff.json",
+    "sha256": "faa71361682e8b454b2e85feffd456c06598bcc4ff4572a34bfaa54367e83fd4"
+  },
+  "source_relation": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-allocator-v3-20261011-03/source-relation.json",
+    "sha256": "875aa86a7187591c3865529e8a695c42f40aa03a30fda209130f51e5b9e591d1"
+  },
+  "before_binary_sha256": "9ef9841598b4694fb611250bf8876c4314d252400136ddb23f606a979cadb656",
+  "before_source_inventory": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/tp2-mixed-arena-indexed-lru-release-20261010-01/source-pins-before.json",
+    "sha256": "3bc44528e361b7e7b8bd331ab589440557a357fde3ea88cae390e1f5b2c0df2b"
+  },
+  "before_inventory_digest": "eb90c51d5128388ee3dc26b92e4ad277ef0a505fd071b73481649bb3fe852951",
+  "before_production_inventory_count": 584,
+  "exact_production_changes": {
+    "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-backend/src/cuda/allocator.rs": {
+      "before": "49ba582f3ad4f267ff8bbd0f6b3fe0351c1cf1a3e560e1c7d8e78c218cd6b98c",
+      "after": "adb5db878dfd2700d5576ca4acb96f3be0b80e4cbd2a4d95b955cc39799fd052"
+    },
+    "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-backend/src/cuda/runtime.rs": {
+      "before": "f7f36d50be4a5ddbd37d880da46c982d11cc7b83ed82f94e56655851d82bebfb",
+      "after": "bfe1a40b5666834d9b87a60c8011e355febb1007695d2806b5bac2ddfecf91e8"
+    }
+  },
+  "test_only_source_patch": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-backend/src/cuda/providers/cutlass.rs",
+    "before_sha256": "cf567b42135279ea1de45fb61a7ba935ab9be03497713067d4d0c7d2d393a3b5",
+    "after_sha256": "389ee1596b3af387fcb4782bceed8ce54d6870de56a93f4979f8df97209dbce4"
+  },
+  "cfg_test_reverse_patch_restores_exact_before_sha": true,
+  "qualification_native_cc_coverage_gaps": [
+    "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-backend/native/cpu/attention.cc",
+    "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-backend/native/cpu/dense.cc",
+    "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-backend/native/cpu/moe.cc",
+    "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-backend/native/cpu/provider.cc"
+  ],
+  "after_release_handoff": null,
+  "after_binary_sha256": null,
+  "fixed_build_review_manifest": null,
+  "full_qualification_receipts_reaudited": false,
+  "serving_admitted": false,
+  "execute_allowed": false,
+  "unknown_pressure": null,
+  "pending_peak": null
+}

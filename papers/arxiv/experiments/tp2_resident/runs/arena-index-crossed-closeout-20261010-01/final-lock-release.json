@@ -1,0 +1,32 @@
+{
+  "released": true,
+  "gpu_uuids": [
+    "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+    "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9"
+  ],
+  "lock_identity": {
+    "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/GPU-63f1bd01-ddf9-a742-ee48-9389892493d9.lock",
+      "device": 64785,
+      "inode": 58519247,
+      "coordinator_pid": 126959,
+      "mode": "local_nonblocking_flock",
+      "global_reservation": false
+    },
+    "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/GPU-b980f22b-58a3-fc88-21c1-ae86053d8535.lock",
+      "device": 64785,
+      "inode": 58519119,
+      "coordinator_pid": 126959,
+      "mode": "local_nonblocking_flock",
+      "global_reservation": false
+    }
+  },
+  "all_eight_idle_zero": true,
+  "final_idle": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/arena-index-crossed-closeout-20261010-01/final-idle.json",
+    "sha256": "f343e6e067c4574cab78b072234b62aebd9bd1b3ec44127e637418ea43eb6755"
+  },
+  "foreign_process_signals_sent": false,
+  "scope": "Selected UUID nonblocking locks reacquired for final read-only idle check and released at context exit"
+}

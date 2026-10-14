@@ -1,0 +1,12 @@
+{
+  "toolphase": "offline analysis script creation",
+  "cancel_source": "unknown",
+  "script_exists": false,
+  "model_launch_attempt": false,
+  "subsequent_model_launches_allowed": false,
+  "timestamp_unix": 1791701894.9030652,
+  "both_profile_commands_exited": [
+    0,
+    0
+  ]
+}

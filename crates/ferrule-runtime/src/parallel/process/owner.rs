@@ -110,7 +110,7 @@ impl<C: Serialize, I: Serialize, O: DeserializeOwned> ProcessRankOwner<C, I, O> 
 
     // EP children stay in the PP leader's isolation group. Their direct owner
     // signals only the EP process; the root can terminate the entire PP tree.
-    pub(super) fn spawn_inherited(
+    pub(crate) fn spawn_inherited(
         launch: ProcessLaunch,
         identity: ProcessIdentity,
         config: &C,
@@ -128,8 +128,9 @@ impl<C: Serialize, I: Serialize, O: DeserializeOwned> ProcessRankOwner<C, I, O> 
     ) -> Result<Self, ProcessStartError<C, I, O>> {
         options.validate()?;
         let deadline = deadline_after(options.startup_timeout)?;
-        let config = ipc::payload(config, options.frame_limits.max_config_bytes)?;
-        let boot = ipc::encode(
+        let config_bytes = ipc::serialize(config, options.frame_limits.max_config_bytes)?;
+        let config = ipc::raw_payload(&config_bytes)?;
+        let boot = ipc::encode_message(
             Message::Boot {
                 identity,
                 limits: options.frame_limits,
@@ -137,6 +138,7 @@ impl<C: Serialize, I: Serialize, O: DeserializeOwned> ProcessRankOwner<C, I, O> 
             },
             options.frame_limits.max_frame_bytes,
         )?;
+        drop(config_bytes);
         let slot = Slot::reserve()?;
         ipc::check_deadline(deadline)?;
         let mut command = Command::new(launch.executable);
@@ -187,7 +189,7 @@ impl<C: Serialize, I: Serialize, O: DeserializeOwned> ProcessRankOwner<C, I, O> 
                     .as_raw_fd(),
             )?;
             owner.send_frame(&boot, deadline)?;
-            match owner.receive(deadline)? {
+            match owner.receive(deadline)?.message()? {
                 Message::Ready {
                     identity: actual,
                     limits,
@@ -272,8 +274,9 @@ impl<C: Serialize, I: Serialize, O: DeserializeOwned> ProcessRankOwner<C, I, O> 
             command: ProcessCommandId::new(self.next_command)?,
             transaction: transaction.into(),
         };
-        let payload = ipc::payload(input, self.options.frame_limits.max_command_bytes)?;
-        let frame = ipc::encode(
+        let payload_bytes = ipc::serialize(input, self.options.frame_limits.max_command_bytes)?;
+        let payload = ipc::raw_payload(&payload_bytes)?;
+        let frame = ipc::encode_message(
             Message::Execute {
                 identity: key,
                 session,
@@ -281,6 +284,7 @@ impl<C: Serialize, I: Serialize, O: DeserializeOwned> ProcessRankOwner<C, I, O> 
             },
             self.options.frame_limits.max_frame_bytes,
         )?;
+        drop(payload_bytes);
         ipc::check_deadline(deadline)?;
         let mut sent = false;
         let result = (|| {
@@ -296,18 +300,21 @@ impl<C: Serialize, I: Serialize, O: DeserializeOwned> ProcessRankOwner<C, I, O> 
                 self.options.frame_limits.max_frame_bytes,
                 deadline,
                 observe,
-            )? {
+            )?
+            .message()?
+            {
                 Message::Complete {
                     identity,
                     session: actual,
                     payload,
                 } if identity == key && actual == session => {
-                    ipc::serialize(&payload, self.options.frame_limits.max_output_bytes)?;
-                    let output =
-                        serde_json::from_value(payload).map_err(|source| ProcessError::Json {
+                    ipc::check_payload(payload, self.options.frame_limits.max_output_bytes)?;
+                    let output = serde_json::from_str(payload.get()).map_err(|source| {
+                        ProcessError::Json {
                             operation: "decode process output",
                             source,
-                        })?;
+                        }
+                    })?;
                     ipc::check_deadline(deadline)?;
                     Ok(output)
                 }
@@ -364,6 +371,15 @@ impl<C, I, O> ProcessRankOwner<C, I, O> {
     /// Only a validated shutdown acknowledgement AND reap count as graceful
     /// shutdown. Forced termination never converts a lost fence into success.
     pub fn shutdown(&mut self) -> Result<ProcessTerminationReport, ProcessError> {
+        self.shutdown_until(deadline_after(self.options.command_timeout)?)
+    }
+
+    /// One deadline covers serialization, ACK and reap; cleanup grace remains
+    /// independently bounded and never supplies a missing device fence.
+    pub fn shutdown_until(
+        &mut self,
+        absolute_deadline: Instant,
+    ) -> Result<ProcessTerminationReport, ProcessError> {
         if self.shutdown_complete {
             return Ok(reaped_report());
         }
@@ -371,15 +387,17 @@ impl<C, I, O> ProcessRankOwner<C, I, O> {
             return Err(self.fail(ProcessError::OwnerUnavailable, UnknownCause::Shutdown));
         }
         let result = (|| {
-            let deadline = deadline_after(self.options.command_timeout)?;
+            let deadline = absolute_deadline.min(deadline_after(self.options.command_timeout)?);
+            ipc::check_deadline(deadline)?;
             let frame = ipc::encode(
                 Message::Shutdown {
                     owner: self.identity,
                 },
                 self.options.frame_limits.max_frame_bytes,
             )?;
+            ipc::check_deadline(deadline)?;
             self.send_frame(&frame, deadline)?;
-            match self.receive(deadline)? {
+            match self.receive(deadline)?.message()? {
                 Message::ShutdownAck { owner } if owner == self.identity => {}
                 Message::Failure {
                     owner,
@@ -398,6 +416,7 @@ impl<C, I, O> ProcessRankOwner<C, I, O> {
             if !self.reap_until(deadline) {
                 return Err(ProcessError::Deadline);
             }
+            ipc::check_deadline(deadline)?;
             Ok(())
         })();
         match result {
@@ -476,7 +495,7 @@ impl<C, I, O> ProcessRankOwner<C, I, O> {
             deadline,
         )
     }
-    fn receive(&mut self, deadline: Instant) -> Result<Message, ProcessError> {
+    fn receive(&mut self, deadline: Instant) -> Result<ipc::Frame, ProcessError> {
         ipc::receive(
             self.stdout.as_mut().ok_or(ProcessError::OwnerUnavailable)?,
             self.options.frame_limits.max_frame_bytes,

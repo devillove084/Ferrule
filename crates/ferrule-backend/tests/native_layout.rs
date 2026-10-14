@@ -10,11 +10,18 @@ const CUDA_NATIVE_FILES: &[&str] = &[
     "native/cuda/core/abi.h",
     "native/cuda/core/attention_ops.cuh",
     "native/cuda/core/bindings.cuh",
+    "native/cuda/core/bf16_boundary.cuh",
+    "native/cuda/core/bf16_rms_reduction.cuh",
     "native/cuda/core/cutlass_f32.cuh",
     "native/cuda/core/dense_ops.cuh",
     "native/cuda/core/device.cuh",
     "native/cuda/core/moe_ops.cuh",
     "native/cuda/core/provider.cu",
+    "native/cuda/core/tp_reduce.cuh",
+    "native/cuda/core/tp_ownership_probe.cuh",
+    "native/cuda/core/tp_reduce_abi.h",
+    "native/cuda/core/recurrent_bf16.cuh",
+    "native/cuda/core/recurrent_bf16_abi.h",
     "native/cuda/core/sequence_ops.cuh",
     "native/cuda/core/tensor_ops.cuh",
     "native/cuda/core/validation.cuh",
@@ -29,6 +36,8 @@ const CUDA_NATIVE_FILES: &[&str] = &[
     "native/cuda/cutlass/fp8.cuh",
     "native/cuda/cutlass/manifest.cuh",
     "native/cuda/cutlass/moe.cuh",
+    "native/cuda/cutlass/numeric_w8a16.cuh",
+    "native/cuda/cutlass/numeric_bf16_gemv.cuh",
     "native/cuda/cutlass/projections.cuh",
     "native/cuda/cutlass/provider.cu",
     "native/cuda/cutlass/target.cuh",
@@ -63,6 +72,8 @@ const NATIVE_SOURCE_EXTENSIONS: &[&str] = &[
 const PRIVATE_EXTERN_BLOCK_FILES: &[&str] = &[
     "src/cpu/provider.rs",
     "src/cuda/ffi/core.rs",
+    "src/cuda/ffi/tp_reduce.rs",
+    "src/cuda/ffi/recurrent_bf16.rs",
     "src/cuda/ffi/cutlass.rs",
     "src/cuda/runtime.rs",
 ];
@@ -175,7 +186,7 @@ fn cuda_aggregate_translation_units_cover_each_file_once() {
         .collect::<BTreeSet<_>>();
     assert_eq!(
         native_files, expected_files,
-        "CUDA native layout must contain the audited 10 core and 13 CUTLASS files"
+        "CUDA native layout must contain the audited core and CUTLASS files, including numeric_w8a16.cuh"
     );
 
     let translation_units = native_files

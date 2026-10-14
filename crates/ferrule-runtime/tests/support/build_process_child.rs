@@ -17,6 +17,9 @@ pub fn build(package: &str, kind: &str, name: &str) -> PathBuf {
         ])
         .arg(format!("--{kind}"))
         .arg(name);
+    if cfg!(feature = "cpu-reference") {
+        command.args(["--features", "cpu-reference"]);
+    }
     if cfg!(feature = "cuda") {
         command.args(["--features", "cuda"]);
     }

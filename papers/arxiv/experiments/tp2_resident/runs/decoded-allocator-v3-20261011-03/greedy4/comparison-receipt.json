@@ -1,0 +1,10 @@
+{
+  "all_exact": true,
+  "report": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-allocator-v3-20261011-03/greedy4-comparison.json",
+    "sha256": "afda11e42b3e5f912381d04371c78d102fb1b3e7055d2673a90a073867cd78b7"
+  },
+  "raw_sha256": "8701dacc0c38625a9153b7d178499097b367d011a11c4525f75b0542e68e824c",
+  "reference_sha256": "4fafda33e51d7cec3d82beb59aac73eb12dc6b9904dc0a74535ea35e9d68df81",
+  "public_e2e_accepted": false
+}

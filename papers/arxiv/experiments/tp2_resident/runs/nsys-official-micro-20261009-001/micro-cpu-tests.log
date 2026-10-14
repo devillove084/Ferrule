@@ -1,0 +1,9 @@
+test_eight_lock_scope_keeps_original_tolerances (test_nsys_micro.OfficialMicro.test_eight_lock_scope_keeps_original_tolerances) ... ok
+test_exact_official_collector_and_bounded_application_trace (test_nsys_micro.OfficialMicro.test_exact_official_collector_and_bounded_application_trace) ... ok
+test_singleton_samples_preserve_injection_and_only_narrow_visibility (test_nsys_micro.OfficialMicro.test_singleton_samples_preserve_injection_and_only_narrow_visibility) ... ok
+test_widened_or_reordered_parent_is_rejected (test_nsys_micro.OfficialMicro.test_widened_or_reordered_parent_is_rejected) ... ok
+
+----------------------------------------------------------------------
+Ran 4 tests in 0.001s
+
+OK

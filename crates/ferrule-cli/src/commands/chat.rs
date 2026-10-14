@@ -1,10 +1,10 @@
 use crate::{GenerationConfig, SamplingArgs};
+use ferrule_composition::model_factory::ExpertCacheOptions;
+use ferrule_composition::{ModelFactoryOptions, ResidentModelBuildPlan, ResidentModelPlanner};
 use ferrule_model::AutoConfig;
 use ferrule_runtime::engine::LocalSessionInferenceEngine;
-use ferrule_runtime::engine::model_factory::ExpertCacheOptions;
 use ferrule_runtime::{
-    BackendSelection, GenerateRequest, ModelFactoryOptions, RequestId, ResidentActionKind,
-    ResidentDriverStep, ResidentModelBuildPlan, ResidentModelPlanner, SequenceFinishReason,
+    GenerateRequest, RequestId, ResidentActionKind, ResidentDriverStep, SequenceFinishReason,
     SessionId,
 };
 use std::io::Write;
@@ -32,12 +32,9 @@ pub fn cmd_chat(
         );
     }
 
+    let backend = super::backend_policy::select(backend_override)?;
     let config = AutoConfig::from_pretrained(model_dir)?;
     let generation = sampling.generation_config(max_tokens);
-    let backend = backend_override
-        .map(BackendSelection::parse)
-        .transpose()?
-        .unwrap_or_default();
     let options = chat_model_options(&config, &generation, sampling)?;
     let planner = ResidentModelPlanner::new();
     let prepared = if sampling.expert_parallel != 1 || sampling.devices.is_some() {
@@ -46,7 +43,7 @@ pub fn cmd_chat(
             backend,
             chat_template_override,
             options,
-            ferrule_runtime::engine::model_factory::PipelineBuildOptions {
+            ferrule_composition::model_factory::PipelineBuildOptions {
                 parallelism: ferrule_common::ParallelismPlan {
                     expert_parallel: sampling.expert_parallel,
                     ..Default::default()
@@ -100,6 +97,7 @@ fn chat_model_options(
         expert_reader_max_tensor_mebibytes: 64,
         expert_cache: ExpertCacheOptions::default(),
         qwen35_moe_capacity: sampling.cuda_expert_device.capacity_limits(),
+        numeric_fp8_profile: sampling.cuda_expert_device.numeric_profile(),
         qwen35_host_cache: sampling.expert_prewarm.options(
             sampling.expert_host_cache_entries,
             sampling.expert_host_cache_mb,
@@ -384,96 +382,6 @@ async fn run_greedy_chat_loop_async(
     Ok(())
 }
 
-#[cfg(test)]
-mod plan_tests {
-    use super::*;
-    use crate::args::{Cli, Command};
-    use clap::Parser;
-    use ferrule_model::{
-        AttentionKind, ModelDescriptor, ModelFamily, MoeSpec, TransformerSemantics,
-        TransformerSpec, WeightSource,
-    };
-
-    #[test]
-    fn parsed_chat_defaults_and_context_reach_requested_effective_report() {
-        let config = AutoConfig::from_descriptor(ModelDescriptor {
-            path: "metadata-only-no-model".into(),
-            spec: TransformerSpec {
-                family: ModelFamily::Qwen35,
-                architecture: Some("Qwen3_5ForConditionalGeneration".into()),
-                weight_source: WeightSource::Safetensors,
-                hidden_size: Some(64),
-                num_layers: Some(24),
-                vocab_size: Some(128),
-                num_heads: Some(4),
-                num_kv_heads: Some(4),
-                head_dim: Some(16),
-                attention: AttentionKind::GroupedQuery,
-                moe: MoeSpec::none(),
-                semantics: TransformerSemantics::default(),
-                tensor_count: None,
-                quantization: Vec::new(),
-                notes: Vec::new(),
-            },
-            tensor_classes: Vec::new(),
-        });
-        for flags in [
-            vec![],
-            vec!["--ctx-size", "4096"],
-            vec!["--ctx-size", "8", "--backend", "cpu"],
-        ] {
-            let mut argv = vec!["ferrule", "chat", "metadata-only-no-model"];
-            argv.extend(flags);
-            let Command::Chat {
-                sampling,
-                max_tokens,
-                backend,
-                chat_template,
-                ..
-            } = Cli::try_parse_from(argv).unwrap().command
-            else {
-                panic!("chat parse")
-            };
-            let generation = sampling.generation_config(max_tokens);
-            let options = chat_model_options(&config, &generation, &sampling).unwrap();
-            let selection = backend
-                .as_deref()
-                .map(BackendSelection::parse)
-                .transpose()
-                .unwrap()
-                .unwrap_or_default();
-            let plan = ResidentModelPlanner
-                .prepare(&config, selection, chat_template.as_deref(), options)
-                .unwrap();
-            assert_eq!(plan.requested_backend(), selection);
-            assert_eq!(
-                plan.requested_options().scheduler_config.prefill_chunk_size,
-                4096
-            );
-            assert_eq!(
-                plan.requested_options().driver_config.ctx_size,
-                generation.ctx_size
-            );
-            let effective = plan.effective_options();
-            assert_eq!(
-                effective.scheduler_config.max_batch_tokens,
-                32.min(generation.ctx_size)
-            );
-            assert_eq!(
-                effective.scheduler_config.prefill_chunk_size,
-                effective.scheduler_config.max_batch_tokens
-            );
-            assert!(!effective.driver_config.enable_native_proposals);
-            assert!(
-                plan.adjustment_report()
-                    .render()
-                    .contains("min(32, context)")
-            );
-            assert!(
-                plan.resolution_report()
-                    .contains("owner live admission required")
-            );
-            assert_eq!(plan.backend_profile(), "cpu-hybrid-f32-qwen35-0.8b");
-        }
-    }
-}
+#[cfg(all(test, feature = "cpu-reference"))]
+#[path = "../../tests/unit/chat_reference.rs"]
+mod plan_tests;

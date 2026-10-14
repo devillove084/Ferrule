@@ -25,12 +25,12 @@ pub enum PreparedAttentionBlock {
     Gqa(PreparedGqaBlock),
     GatedDeltaNet(PreparedGatedDeltaNetBlock),
 }
-pub(super) enum AttentionBlockRef<'a> {
+pub(in crate::transformer) enum AttentionBlockRef<'a> {
     Gqa(&'a PreparedGqaBlock),
     GatedDeltaNet(&'a PreparedGatedDeltaNetBlock),
 }
 impl PreparedAttentionBlock {
-    pub(super) fn as_ref(&self) -> AttentionBlockRef<'_> {
+    pub(in crate::transformer) fn as_ref(&self) -> AttentionBlockRef<'_> {
         match self {
             Self::Gqa(block) => AttentionBlockRef::Gqa(block),
             Self::GatedDeltaNet(block) => AttentionBlockRef::GatedDeltaNet(block),
@@ -70,7 +70,7 @@ pub(super) fn validate_cpu_profile(
     Ok(())
 }
 
-pub(super) fn prepare_standard_layer(
+pub(in crate::transformer) fn prepare_standard_layer(
     descriptor: &DecoderLayer,
     resources: &BoundDecoderResources,
     materializer: &StateDictMaterializer,
@@ -161,9 +161,20 @@ pub(super) fn prepare_standard_layer(
     let conv_parameter = parameter(TensorRole::LinearAttentionConv, &d.conv_weight_shape())?;
     let a_log_parameter = parameter(TensorRole::LinearAttentionALog, &[d.num_value_heads()])?;
     let dt_bias_parameter = parameter(TensorRole::LinearAttentionDtBias, &[d.num_value_heads()])?;
-    let conv = conv_parameter.values_f32()?.into();
-    let a_log = a_log_parameter.values_f32()?.into();
-    let dt_bias = dt_bias_parameter.values_f32()?.into();
+    let vector_values = |p: &crate::transformer::PreparedParameter| -> Result<Arc<[f32]>> {
+        // The native rank path consumes vector_parameters directly. Do not
+        // synthesize a legacy F32 mirror merely to populate host-only operands.
+        #[cfg(feature = "cuda")]
+        if p.hybrid_rank()
+            .is_some_and(|r| matches!(r.storage(), crate::transformer::HybridRankStorage::Bf16(_)))
+        {
+            return Ok(Arc::from([]));
+        }
+        p.prepared_f32_values()
+    };
+    let conv = vector_values(&conv_parameter)?;
+    let a_log = vector_values(&a_log_parameter)?;
+    let dt_bias = vector_values(&dt_bias_parameter)?;
     let norm = prepare_layer_norm(
         layer,
         TensorRole::LinearAttentionNorm,

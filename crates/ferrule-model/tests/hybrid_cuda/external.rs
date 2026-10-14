@@ -14,11 +14,11 @@ enum Reply {
 }
 struct Control {
     reply: Cell<Reply>,
-    drain: Cell<HybridCudaExpertProgress>,
+    drain: Cell<WorkProgress>,
     drain_error: Cell<bool>,
     drain_calls: Cell<usize>,
     pending_at: Cell<usize>,
-    shutdown: Cell<HybridCudaExpertProgress>,
+    shutdown: Cell<WorkProgress>,
     shutdown_calls: Cell<usize>,
     errors: RefCell<Vec<ExecutionTransactionId>>,
     calls: RefCell<Vec<(ExecutionTransactionId, usize, Vec<u64>)>>,
@@ -29,11 +29,11 @@ impl Control {
     fn new(reply: Reply) -> Rc<Self> {
         Rc::new(Self {
             reply: Cell::new(reply),
-            drain: Cell::new(HybridCudaExpertProgress::Complete),
+            drain: Cell::new(WorkProgress::Complete),
             drain_error: Cell::new(false),
             drain_calls: Cell::new(0),
             pending_at: Cell::new(usize::MAX),
-            shutdown: Cell::new(HybridCudaExpertProgress::Complete),
+            shutdown: Cell::new(WorkProgress::Complete),
             shutdown_calls: Cell::new(0),
             errors: RefCell::new(Vec::new()),
             calls: RefCell::new(Vec::new()),
@@ -91,18 +91,18 @@ impl RoutedSwiGluExecutor for Fake {
     }
 }
 impl HybridCudaRoutedExecutor for Fake {
-    fn drain(&mut self) -> Result<HybridCudaExpertProgress> {
+    fn drain(&mut self) -> Result<WorkProgress> {
         let calls = self.control.drain_calls.get() + 1;
         self.control.drain_calls.set(calls);
         if self.control.drain_error.get() {
             return Err(failure("fake drain failure"));
         }
         if calls == self.control.pending_at.get() {
-            self.control.drain.set(HybridCudaExpertProgress::Pending);
+            self.control.drain.set(WorkProgress::Pending);
         }
         Ok(self.control.drain.get())
     }
-    fn shutdown(&mut self) -> Result<HybridCudaExpertProgress> {
+    fn shutdown(&mut self) -> Result<WorkProgress> {
         self.control
             .shutdown_calls
             .set(self.control.shutdown_calls.get() + 1);
@@ -338,7 +338,7 @@ fn external_failure_and_waiting_retain_module_cancel_and_root_pins() {
     for reply in [Reply::Failure, Reply::Waiting] {
         let f = fixture::Fixture::new();
         let control = Control::new(reply);
-        control.drain.set(HybridCudaExpertProgress::Pending);
+        control.drain.set(WorkProgress::Pending);
         let (mut runner, device) = runner(&f, &control);
         let mut states = vec![runner.create_sequence_state().unwrap()];
         let bytes = device.live_state_bytes();
@@ -350,6 +350,10 @@ fn external_failure_and_waiting_retain_module_cancel_and_root_pins() {
                 .is_err()
         );
         assert_eq!(*control.errors.borrow(), vec![tx()]);
+        assert!(
+            !device.needs_quarantine(),
+            "proven root production must not turn an externally drainable failure into Unknown"
+        );
         assert_no_local_experts(&runner);
         assert!(
             runner
@@ -365,6 +369,10 @@ fn external_failure_and_waiting_retain_module_cancel_and_root_pins() {
             );
             assert_pinned(&mut probe);
             assert!(runner.shutdown().is_err());
+            assert!(
+                !device.needs_quarantine(),
+                "remote Pending must remain retryable"
+            );
         }
         control.drain_error.set(true);
         assert!(
@@ -374,13 +382,14 @@ fn external_failure_and_waiting_retain_module_cancel_and_root_pins() {
         );
         assert_pinned(&mut probe);
         control.drain_error.set(false);
-        control.drain.set(HybridCudaExpertProgress::Complete);
+        control.drain.set(WorkProgress::Complete);
         assert_eq!(
             runner
                 .end_transaction(tx(), &mut states, TransactionEndIntent::Abort)
                 .unwrap(),
             TransactionEndProgress::Complete
         );
+        assert!(!device.needs_quarantine());
         assert_eq!(device.live_state_bytes(), bytes);
         assert_eq!(states[0].core().position(), 0);
         assert_eq!(probe.active_transaction_count(), 0);
@@ -415,7 +424,7 @@ fn external_finish_pending_cannot_publish_and_shutdown_retries() {
         TransactionEndProgress::Pending
     );
     assert_pinned(&mut probe);
-    control.drain.set(HybridCudaExpertProgress::Complete);
+    control.drain.set(WorkProgress::Complete);
     assert_eq!(
         runner
             .end_transaction(tx(), &mut states, TransactionEndIntent::Abort)
@@ -425,10 +434,10 @@ fn external_finish_pending_cannot_publish_and_shutdown_retries() {
     runner
         .try_release_sequence_state(states.pop().unwrap())
         .unwrap();
-    control.shutdown.set(HybridCudaExpertProgress::Pending);
+    control.shutdown.set(WorkProgress::Pending);
     assert!(runner.shutdown().is_err());
     assert!(!control.dropped.get());
-    control.shutdown.set(HybridCudaExpertProgress::Complete);
+    control.shutdown.set(WorkProgress::Complete);
     runner.shutdown().unwrap();
     assert_eq!(control.shutdown_calls.get(), 2);
 }
@@ -447,7 +456,7 @@ fn external_unknown_is_permanent_even_after_root_fence_and_drop() {
             .execute_multi_session_batch_progress(tx(), &mut states, &batch)
             .is_err()
     );
-    control.drain.set(HybridCudaExpertProgress::Unknown);
+    control.drain.set(WorkProgress::Unknown);
     assert!(
         runner
             .end_transaction(tx(), &mut states, TransactionEndIntent::Abort)
@@ -457,7 +466,7 @@ fn external_unknown_is_permanent_even_after_root_fence_and_drop() {
     let drains = control.drain_calls.get();
     assert!(device.needs_quarantine());
     device.operators().sync_stream().unwrap();
-    control.drain.set(HybridCudaExpertProgress::Complete);
+    control.drain.set(WorkProgress::Complete);
     assert!(
         runner
             .end_transaction(tx(), &mut states, TransactionEndIntent::Abort)
@@ -565,7 +574,7 @@ fn external_rejected_preparation_unknown_quarantines_root_owner() {
     )
     .unwrap();
     let control = Control::new(Reply::Ready);
-    control.drain.set(HybridCudaExpertProgress::Unknown);
+    control.drain.set(WorkProgress::Unknown);
     let attachment = HybridCudaRoutedExperts::new(
         ParallelRankId::new(7),
         Box::new(Fake {
@@ -594,12 +603,12 @@ fn external_physical_shutdown_unknown_is_not_forgiven_by_local_fence() {
     let f = fixture::Fixture::new();
     let control = Control::new(Reply::Ready);
     let (mut runner, device) = runner(&f, &control);
-    control.shutdown.set(HybridCudaExpertProgress::Unknown);
+    control.shutdown.set(WorkProgress::Unknown);
     assert!(runner.shutdown().is_err());
     assert!(device.needs_quarantine());
     let bytes = device.live_state_bytes();
     device.operators().sync_stream().unwrap();
-    control.shutdown.set(HybridCudaExpertProgress::Complete);
+    control.shutdown.set(WorkProgress::Complete);
     assert!(runner.shutdown().is_err());
     assert_eq!(control.shutdown_calls.get(), 1);
     drop(runner);

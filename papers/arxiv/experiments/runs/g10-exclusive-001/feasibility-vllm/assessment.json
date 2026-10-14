@@ -1,0 +1,305 @@
+{
+  "stage": [
+    "feasibility-vllm",
+    "vllm",
+    "feasibility"
+  ],
+  "observation": {
+    "status": "failed",
+    "fairmatch": false,
+    "exact_speedup": null,
+    "started_monotonic": 8413837.841464406,
+    "server_launch_monotonic": 8413837.843668563,
+    "error": "ValueError: Resource monitor failed during startup",
+    "startup_failure_seconds": 89.35886846296489,
+    "resources": {
+      "status": "blocked",
+      "sampled_device_high_water_bytes": 11801722880,
+      "sampled_tree_pss_high_water_bytes": 37366041600,
+      "sampled_tree_rss_high_water_bytes": 37784666112,
+      "samples": 37,
+      "errors": [
+        "Sampled GPU target exceeded"
+      ],
+      "sample_interval_seconds": 2,
+      "exact_peaks": false,
+      "hard_memory_partition": false,
+      "pinned_bytes": null,
+      "caveats": [
+        "CUDA pinning not measured by VmLck/VmPin alone",
+        "PSS excludes unmapped OS file cache; not a total physical-host-memory proof",
+        "Device samples include baseline; between-sample peaks may be missed"
+      ],
+      "identity_mode": "device_exclusive_local_custody",
+      "measurement_scope": "whole_selected_device",
+      "owned_process_gpu_peak_bytes": null,
+      "owned_gpu_attribution": "unknown",
+      "nvml_pid_set_changes": 1,
+      "absence_of_foreign_interference_proven": false
+    },
+    "shutdown": {
+      "status": "root_exited_descendants_unknown",
+      "seconds": 7.624922821298242,
+      "timed_out": false,
+      "gpu_quiescence": "unverified; no GPU probe"
+    },
+    "runtime": {
+      "status": "blocked",
+      "evidence": {
+        "moe_marlin": [
+          "Using MARLIN Fp8 MoE backend"
+        ],
+        "linear_marlin": [
+          "MarlinFP8ScaledMMLinearKernel"
+        ],
+        "offloader_uva": [
+          "Offloader set to UVAOffloader"
+        ],
+        "offloaded_amount": [
+          "Total CPU offloaded parameters: 30.0"
+        ],
+        "model_bf16": [
+          "dtype=torch.bfloat16"
+        ]
+      },
+      "contradictions": [],
+      "fallback_observations": [
+        "(EngineCore pid=171536) INFO 10-08 22:48:35 [qwen_gdn_linear_attn.py:500] Falling back to the Triton GDN decode path: torch.ops._C.fused_gdn_decode_post_conv_mtp is not built"
+      ],
+      "missing": [],
+      "reasons": [
+        "Effective KV/conv/SSM dtype and physical pinning need runtime evidence",
+        "UVA selection log alone does not prove UVA path rather than functional_call fallback"
+      ],
+      "exact_arithmetic_match": false,
+      "log_sha256": "75f22a9b54e0d01acb7b59c5aec08b83a6cb068972628f946ee472bcfb259f9d"
+    },
+    "wall_seconds": 97.2738318387419
+  },
+  "supervisor": {
+    "returncode": 1,
+    "timed_out": false,
+    "wall_seconds": 117.85067205317318,
+    "stdout": "",
+    "stderr": "",
+    "cleanup_errors": [],
+    "cleanup_scope": "isolated_subreaper_direct_children",
+    "descendant_custody": "proven_drained",
+    "gpu_quiescence": "unverified",
+    "custody": {
+      "status": "proven_drained",
+      "method": "linux-subreaper-waitid",
+      "containment_verified": true,
+      "launch_id": "3ccf696d6be74561bd68542b952eacb9",
+      "helper_identity": {
+        "pid": 171170,
+        "birth_ticks": 77769697,
+        "ppid": 170967,
+        "pgrp": 171170,
+        "session": 171170
+      },
+      "root_identity": {
+        "pid": 171171,
+        "birth_ticks": 77769700,
+        "ppid": 171170,
+        "pgrp": 171170,
+        "session": 171170
+      },
+      "boot_id": "4dd3497d-570c-4693-a876-5c26e06ab360",
+      "entries": [
+        {
+          "identity": {
+            "pid": 171171,
+            "birth_ticks": 77769700,
+            "ppid": 171170,
+            "pgrp": 171170,
+            "session": 171170
+          },
+          "role": "root",
+          "signals": [],
+          "reaped": true,
+          "exit_code": 1,
+          "first_observed_at": 8413817.351299938,
+          "reaped_at": 8413935.147597237
+        },
+        {
+          "identity": {
+            "pid": 171535,
+            "birth_ticks": 77772936,
+            "ppid": 171170,
+            "pgrp": 171171,
+            "session": 171171
+          },
+          "role": "adopted",
+          "signals": [],
+          "reaped": true,
+          "exit_code": 0,
+          "first_observed_at": 8413934.778526599,
+          "reaped_at": 8413934.78136722
+        }
+      ],
+      "errors": [],
+      "reporting_errors": [],
+      "echild": true
+    },
+    "handshake": {
+      "kind": "ready",
+      "protocol": 1,
+      "launch_id": "3ccf696d6be74561bd68542b952eacb9",
+      "helper_identity": {
+        "pid": 171170,
+        "birth_ticks": 77769697,
+        "ppid": 170967,
+        "pgrp": 171170,
+        "session": 171170
+      },
+      "containment_verified": true,
+      "method": "linux-subreaper-waitid"
+    },
+    "stdout_truncated": false,
+    "stderr_truncated": false
+  },
+  "after": {
+    "status": "verified",
+    "observations": [
+      {
+        "index": 0,
+        "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+        "total_bytes": 25769803776,
+        "gpu_bytes": 0,
+        "utilization": 0,
+        "devices": [
+          {
+            "index": 0,
+            "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 0,
+            "utilization": 0
+          },
+          {
+            "index": 1,
+            "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 0,
+            "utilization": 0
+          },
+          {
+            "index": 2,
+            "uuid": "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 0,
+            "utilization": 0
+          },
+          {
+            "index": 3,
+            "uuid": "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 0,
+            "utilization": 0
+          },
+          {
+            "index": 4,
+            "uuid": "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 0,
+            "utilization": 0
+          },
+          {
+            "index": 5,
+            "uuid": "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 0,
+            "utilization": 0
+          },
+          {
+            "index": 6,
+            "uuid": "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 0,
+            "utilization": 0
+          },
+          {
+            "index": 7,
+            "uuid": "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 0,
+            "utilization": 0
+          }
+        ],
+        "apps": [],
+        "monotonic": 8413935.395574398
+      },
+      {
+        "index": 0,
+        "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+        "total_bytes": 25769803776,
+        "gpu_bytes": 0,
+        "utilization": 0,
+        "devices": [
+          {
+            "index": 0,
+            "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 0,
+            "utilization": 0
+          },
+          {
+            "index": 1,
+            "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 0,
+            "utilization": 0
+          },
+          {
+            "index": 2,
+            "uuid": "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 0,
+            "utilization": 0
+          },
+          {
+            "index": 3,
+            "uuid": "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 0,
+            "utilization": 0
+          },
+          {
+            "index": 4,
+            "uuid": "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 0,
+            "utilization": 0
+          },
+          {
+            "index": 5,
+            "uuid": "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 0,
+            "utilization": 0
+          },
+          {
+            "index": 6,
+            "uuid": "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 0,
+            "utilization": 0
+          },
+          {
+            "index": 7,
+            "uuid": "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 0,
+            "utilization": 0
+          }
+        ],
+        "apps": [],
+        "monotonic": 8413935.865471333
+      }
+    ],
+    "scope": "all eight physical GPUs"
+  },
+  "eligible_observation": false,
+  "fairmatch": false,
+  "exact_speedup": null
+}

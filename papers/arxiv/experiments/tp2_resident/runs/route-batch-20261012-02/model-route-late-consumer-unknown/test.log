@@ -1,0 +1,6 @@
+
+running 1 test
+test transformer::standard::cuda::hybrid_rank::mixed::decoded_gpu_tests::route_batch::late_consumer_unknown_retains_metadata_gather_and_image ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 769 filtered out; finished in 0.78s
+

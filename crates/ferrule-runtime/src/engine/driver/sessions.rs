@@ -90,8 +90,14 @@ impl<S> SessionCustody<S> {
         &mut self,
         session: SessionId,
         slot: StateSlot,
-        schedule: SuspendedSequenceSchedule,
+        schedule: impl Into<SuspendedSessionSchedule>,
     ) {
+        let schedule = schedule.into();
+        assert_eq!(
+            schedule.session_id(),
+            session,
+            "suspension must retain the same session identity"
+        );
         let model_state = self
             .sequence_states
             .remove(&session)
@@ -111,7 +117,7 @@ impl<S> SessionCustody<S> {
         );
     }
 
-    pub(super) fn suspend_into_cleanup(&mut self, session: SessionId) -> SuspendedSequenceSchedule {
+    pub(super) fn suspend_into_cleanup(&mut self, session: SessionId) -> SuspendedSessionSchedule {
         let pending = self
             .suspended_sequences
             .remove(&session)
@@ -251,7 +257,7 @@ impl<S> SessionCustody<S> {
         &mut self,
         scheduler: &mut ResidentScheduler,
         page_manager: &mut Option<KvPageManager>,
-        executor: &mut NativeMultiSessionExecutor<R>,
+        executor: &mut RunnerMultiSessionExecutor<R>,
         #[cfg(test)] stage_faults: &mut VecDeque<&'static str>,
         session_id: SessionId,
     ) -> Result<()> {
@@ -354,7 +360,9 @@ impl<S> SessionCustody<S> {
                     }
                     RestoreScheduler => {
                         let schedule = self.suspended(&session_id).unwrap().schedule.clone();
-                        scheduler.restore_suspended(schedule)?;
+                        if let SuspendedSessionSchedule::Active(schedule) = schedule {
+                            scheduler.restore_suspended(*schedule)?;
+                        }
                         let pending = self
                             .remove_suspended(&session_id)
                             .expect("transition owner");
@@ -610,11 +618,38 @@ pub(super) enum SuspendedDriverPhase {
     Quarantined,
 }
 
+/// An idle retained session has no scheduler slot to fabricate or restore.
+/// Both variants use the existing suspended record and one-use manager token.
+#[derive(Clone)]
+pub(super) enum SuspendedSessionSchedule {
+    Active(Box<SuspendedSequenceSchedule>),
+    Idle(SessionId),
+}
+impl From<SuspendedSequenceSchedule> for SuspendedSessionSchedule {
+    fn from(s: SuspendedSequenceSchedule) -> Self {
+        Self::Active(Box::new(s))
+    }
+}
+impl SuspendedSessionSchedule {
+    pub(super) fn session_id(&self) -> SessionId {
+        match self {
+            Self::Active(s) => s.session_id(),
+            Self::Idle(s) => *s,
+        }
+    }
+    pub(super) fn request_id(&self) -> Option<RequestId> {
+        match self {
+            Self::Active(s) => s.request_id(),
+            Self::Idle(_) => None,
+        }
+    }
+}
+
 pub(super) struct SuspendedDriverSequence<S> {
     pub(super) model_state: S,
     pub(super) page_slot: StateSlot,
     pub(super) kv_state: Option<PreemptedKvState>,
-    pub(super) schedule: SuspendedSequenceSchedule,
+    pub(super) schedule: SuspendedSessionSchedule,
     pub(super) phase: SuspendedDriverPhase,
     // Compensation proceeds to its original endpoint before a new operation.
     pub(super) rolling_back: bool,
@@ -651,6 +686,7 @@ where
 
     /// Suspend one active session, retaining all custody before changing KV.
     pub fn preempt_session(&mut self, session_id: SessionId) -> Result<()> {
+        self.trace_unsupported();
         self.ensure_no_suspended_execution("preempt a session")?;
         if self.sessions.is_suspended(&session_id) {
             return Err(Error::InvalidRequest {
@@ -672,13 +708,26 @@ where
         }
         #[cfg(test)]
         self.fail_stage("preempt scheduler")?;
-        let schedule = self.scheduler.suspend_sequence(session_id)?;
+        let schedule = if self.scheduler.active_sequence(session_id).is_some() {
+            SuspendedSessionSchedule::Active(Box::new(self.scheduler.suspend_sequence(session_id)?))
+        } else if self.executor.idle_kv_reclaim_enabled()
+            && self.sessions.is_retained(&session_id)
+            && !self.scheduler.contains_session_identity(session_id)
+            && !self.session_has_pending_ownership(session_id)
+        {
+            SuspendedSessionSchedule::Idle(session_id)
+        } else {
+            return Err(Error::InvalidRequest {
+                message: "session is neither runnable nor an idle retained reclaim session".into(),
+            });
+        };
         self.sessions.begin_suspension(session_id, slot, schedule);
         self.advance_session_transition(session_id)
     }
 
     /// Resume compensation first, without replaying completed physical stages.
     pub fn restore_session(&mut self, session_id: SessionId) -> Result<()> {
+        self.trace_unsupported();
         self.ensure_no_suspended_execution("restore a session")?;
         let pending =
             self.sessions
@@ -691,12 +740,12 @@ where
             pending.rolling_back = false;
         }
         self.advance_session_transition(session_id)?;
-        if let Some(pending) = self.sessions.suspended_mut(&session_id) {
-            if pending.phase == SuspendedDriverPhase::Suspended {
-                pending.phase = SuspendedDriverPhase::RestorePhysical;
-                pending.rolling_back = false;
-                return self.advance_session_transition(session_id);
-            }
+        if let Some(pending) = self.sessions.suspended_mut(&session_id)
+            && pending.phase == SuspendedDriverPhase::Suspended
+        {
+            pending.phase = SuspendedDriverPhase::RestorePhysical;
+            pending.rolling_back = false;
+            return self.advance_session_transition(session_id);
         }
         Ok(())
     }

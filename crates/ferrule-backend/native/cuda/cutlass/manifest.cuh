@@ -71,11 +71,20 @@ ferrule_cutlass_provider_manifest(void) {
                ? FERRULE_CUTLASS_KERNEL_BIT(
                      FERRULE_CUTLASS_KERNEL_FP8_PROJECTION)
                : 0ull) |
+          (ferrule_numeric_bf16_gemv_available() == 1
+               ? FERRULE_CUTLASS_KERNEL_BIT(FERRULE_CUTLASS_KERNEL_NUMERIC_BF16_M1_GEMV)
+               : 0ull) |
           (ferrule_cutlass_bf16_available() == 1
                ? FERRULE_CUTLASS_KERNEL_BIT(FERRULE_CUTLASS_KERNEL_BF16_GEMM)
                : 0ull) |
           (ferrule_cutlass_f32_available() == 1
                ? FERRULE_CUTLASS_KERNEL_BIT(FERRULE_CUTLASS_KERNEL_F32_GEMM)
+               : 0ull) |
+          (ferrule_cutlass_numeric_fp8_w8a16_available() == 1
+               ? FERRULE_CUTLASS_KERNEL_BIT(FERRULE_CUTLASS_KERNEL_NUMERIC_FP8_W8A16_FUSED)
+               : 0ull) |
+          (ferrule_cutlass_numeric_fp8_m1_available() == 1
+               ? FERRULE_CUTLASS_KERNEL_BIT(FERRULE_CUTLASS_KERNEL_NUMERIC_FP8_FUSED_M1)
                : 0ull),
   };
 }

@@ -1,0 +1,31 @@
+{
+  "status": "pass",
+  "engine": "ferrule",
+  "checks": [
+    {
+      "index": 0,
+      "passed": true,
+      "actual_input_tokens": 5,
+      "actual_output_tokens": 8
+    },
+    {
+      "index": 1,
+      "passed": true,
+      "actual_input_tokens": 5,
+      "actual_output_tokens": 8
+    },
+    {
+      "index": 2,
+      "passed": true,
+      "actual_input_tokens": 3,
+      "actual_output_tokens": 8
+    }
+  ],
+  "first_qa_requests": 0,
+  "warmup_requests": 0,
+  "measured_requests": 3,
+  "http_receipt_sha256": "9b9f5e87ba26442e453a8813f6a9cd85317535248e0aff236e7e0cc9901116af",
+  "coverage": "visible text/usage only; separate pinned numerical acceptance, not arithmetic parity",
+  "fairmatch": false,
+  "exact_speedup": null
+}

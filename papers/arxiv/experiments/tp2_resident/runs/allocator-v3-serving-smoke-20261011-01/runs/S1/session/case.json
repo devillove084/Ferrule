@@ -1,0 +1,603 @@
+{
+  "status": "complete",
+  "started_monotonic": 8638243.847842006,
+  "fairmatch": false,
+  "exact_speedup": null,
+  "launch_monotonic": 8638244.597756486,
+  "server_pid": 176917,
+  "server_identity": {
+    "pid": 176917,
+    "birth_ticks": 100212429,
+    "ppid": 176908,
+    "state": "R"
+  },
+  "startup_seconds": 348.4563069585711,
+  "request_gate": {
+    "status": "complete",
+    "phases": [
+      {
+        "stage": "hello2",
+        "gate": {
+          "status": "pass",
+          "engine": "ferrule",
+          "checks": [
+            {
+              "index": 0,
+              "passed": true,
+              "actual_input_tokens": 1,
+              "actual_output_tokens": 2
+            }
+          ],
+          "first_qa_requests": 0,
+          "warmup_requests": 0,
+          "measured_requests": 1,
+          "http_receipt_sha256": "b5ee0dae676e905ad480b3259f493ac947fc37b6ff005431ae555c17efb625b2",
+          "coverage": "visible text/usage only; separate pinned numerical acceptance, not arithmetic parity",
+          "fairmatch": false,
+          "exact_speedup": null,
+          "cleanup": {
+            "status": "pass",
+            "attempts": [
+              {
+                "snapshot": {
+                  "closed": false,
+                  "kv": null,
+                  "max_body_bytes": 16777216,
+                  "prompt_bytes": {
+                    "available": 67108864,
+                    "held": 0,
+                    "limit": 67108864
+                  },
+                  "requests": {
+                    "available": 1024,
+                    "held": 0,
+                    "limit": 1024
+                  },
+                  "runtime": {
+                    "status": "unsupported"
+                  },
+                  "scheduler": null
+                },
+                "clean": true
+              }
+            ],
+            "device_quiescence": "not inferred",
+            "runtime_cleanup": "unavailable"
+          }
+        }
+      },
+      {
+        "stage": "canary8",
+        "gate": {
+          "status": "pass",
+          "engine": "ferrule",
+          "checks": [
+            {
+              "index": 0,
+              "passed": true,
+              "actual_input_tokens": 5,
+              "actual_output_tokens": 8
+            },
+            {
+              "index": 1,
+              "passed": true,
+              "actual_input_tokens": 5,
+              "actual_output_tokens": 8
+            },
+            {
+              "index": 2,
+              "passed": true,
+              "actual_input_tokens": 3,
+              "actual_output_tokens": 8
+            }
+          ],
+          "first_qa_requests": 0,
+          "warmup_requests": 0,
+          "measured_requests": 3,
+          "http_receipt_sha256": "e1f30e62f8a1a711000e7303b8bc6ba4fa134378b210f7ba91cada70e27dff87",
+          "coverage": "visible text/usage only; separate pinned numerical acceptance, not arithmetic parity",
+          "fairmatch": false,
+          "exact_speedup": null,
+          "cleanup": {
+            "status": "pass",
+            "attempts": [
+              {
+                "snapshot": {
+                  "closed": false,
+                  "kv": null,
+                  "max_body_bytes": 16777216,
+                  "prompt_bytes": {
+                    "available": 67108864,
+                    "held": 0,
+                    "limit": 67108864
+                  },
+                  "requests": {
+                    "available": 1024,
+                    "held": 0,
+                    "limit": 1024
+                  },
+                  "runtime": {
+                    "status": "unsupported"
+                  },
+                  "scheduler": null
+                },
+                "clean": true
+              }
+            ],
+            "device_quiescence": "not inferred",
+            "runtime_cleanup": "unavailable"
+          }
+        }
+      },
+      {
+        "stage": "reuse",
+        "gate": {
+          "status": "pass",
+          "engine": "ferrule",
+          "checks": [
+            {
+              "index": 0,
+              "passed": true,
+              "actual_input_tokens": 5,
+              "actual_output_tokens": 8
+            },
+            {
+              "index": 1,
+              "passed": true,
+              "actual_input_tokens": 5,
+              "actual_output_tokens": 8
+            },
+            {
+              "index": 2,
+              "passed": true,
+              "actual_input_tokens": 3,
+              "actual_output_tokens": 8
+            }
+          ],
+          "first_qa_requests": 0,
+          "warmup_requests": 0,
+          "measured_requests": 3,
+          "http_receipt_sha256": "6b9df77b37e541b65c1ec886f297a6f301da61be4833ca6fa1ec565fc87ca00f",
+          "coverage": "visible text/usage only; separate pinned numerical acceptance, not arithmetic parity",
+          "fairmatch": false,
+          "exact_speedup": null,
+          "cleanup": {
+            "status": "pass",
+            "attempts": [
+              {
+                "snapshot": {
+                  "closed": false,
+                  "kv": null,
+                  "max_body_bytes": 16777216,
+                  "prompt_bytes": {
+                    "available": 67108864,
+                    "held": 0,
+                    "limit": 67108864
+                  },
+                  "requests": {
+                    "available": 1024,
+                    "held": 0,
+                    "limit": 1024
+                  },
+                  "runtime": {
+                    "status": "unsupported"
+                  },
+                  "scheduler": null
+                },
+                "clean": true
+              }
+            ],
+            "device_quiescence": "not inferred",
+            "runtime_cleanup": "unavailable"
+          }
+        }
+      },
+      {
+        "stage": "cancel",
+        "gate": {
+          "status": "pass",
+          "request_id": 8,
+          "intentional_disconnect": true,
+          "events": [
+            {
+              "kind": "start",
+              "at": 8638603.888471566,
+              "unix": 1791695660.8519533
+            },
+            {
+              "kind": "headers",
+              "at": 8638603.910112973,
+              "status": 200,
+              "content_type": "text/event-stream"
+            },
+            {
+              "kind": "event",
+              "data": "{\"id\":\"cmpl-ferrule-8\",\"object\":\"text_completion\",\"created\":1791695660,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\" Tokyo\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}",
+              "event": "",
+              "at": 8638604.36787034
+            },
+            {
+              "kind": "end",
+              "at": 8638604.368011232,
+              "status": "transport_error",
+              "error": "Disconnect: Intentional smoke client disconnect after first content"
+            }
+          ],
+          "terminal": {
+            "status": "pass",
+            "worker_terminal": {
+              "message": "production request reached worker terminal state",
+              "event": "request_worker_terminal",
+              "request_id": 8,
+              "session_id": 8,
+              "status": "cancelled",
+              "finish_reason": "cancelled",
+              "worker_request_us": 580978,
+              "generated_tokens": "Some(2)",
+              "emitted_token_events": 1,
+              "emission_timing_enabled": true,
+              "worker_first_emission_elapsed_us": 458834,
+              "worker_last_emission_elapsed_us": 458834,
+              "worker_emission_interval_count": 0,
+              "worker_emission_interval_sum_us": 0,
+              "cancellation_requested": true,
+              "cancellation_submitted": true,
+              "cancellation_failed": false,
+              "requires_restore_or_shutdown": false,
+              "tokens_reconcile": "Some(false)"
+            }
+          },
+          "cleanup": {
+            "status": "pass",
+            "attempts": [
+              {
+                "snapshot": {
+                  "closed": false,
+                  "kv": null,
+                  "max_body_bytes": 16777216,
+                  "prompt_bytes": {
+                    "available": 67108864,
+                    "held": 0,
+                    "limit": 67108864
+                  },
+                  "requests": {
+                    "available": 1024,
+                    "held": 0,
+                    "limit": 1024
+                  },
+                  "runtime": {
+                    "status": "unsupported"
+                  },
+                  "scheduler": null
+                },
+                "clean": true
+              }
+            ],
+            "device_quiescence": "not inferred",
+            "runtime_cleanup": "unavailable"
+          },
+          "actual_output_tokens": null,
+          "note": "partial output usage is unknown, not zero; disconnect alone is not cancellation or GPU quiescence"
+        }
+      },
+      {
+        "stage": "post_cancel",
+        "gate": {
+          "status": "pass",
+          "engine": "ferrule",
+          "checks": [
+            {
+              "index": 0,
+              "passed": true,
+              "actual_input_tokens": 5,
+              "actual_output_tokens": 8
+            },
+            {
+              "index": 1,
+              "passed": true,
+              "actual_input_tokens": 5,
+              "actual_output_tokens": 8
+            },
+            {
+              "index": 2,
+              "passed": true,
+              "actual_input_tokens": 3,
+              "actual_output_tokens": 8
+            }
+          ],
+          "first_qa_requests": 0,
+          "warmup_requests": 0,
+          "measured_requests": 3,
+          "http_receipt_sha256": "2d78d7f5be7219410619cec5e42cd9204115b5fc166452a72d0ed395aaa8cf16",
+          "coverage": "visible text/usage only; separate pinned numerical acceptance, not arithmetic parity",
+          "fairmatch": false,
+          "exact_speedup": null,
+          "cleanup": {
+            "status": "pass",
+            "attempts": [
+              {
+                "snapshot": {
+                  "closed": false,
+                  "kv": null,
+                  "max_body_bytes": 16777216,
+                  "prompt_bytes": {
+                    "available": 67108864,
+                    "held": 0,
+                    "limit": 67108864
+                  },
+                  "requests": {
+                    "available": 1024,
+                    "held": 0,
+                    "limit": 1024
+                  },
+                  "runtime": {
+                    "status": "unsupported"
+                  },
+                  "scheduler": null
+                },
+                "clean": true
+              }
+            ],
+            "device_quiescence": "not inferred",
+            "runtime_cleanup": "unavailable"
+          }
+        }
+      }
+    ],
+    "same_server": true
+  },
+  "resources": {
+    "status": "observed_within_targets",
+    "errors": [],
+    "memory_components": {
+      "sample_count": 154,
+      "complete_host_samples": 154,
+      "gpu_samples": 154,
+      "gpu_peak_bytes": {
+        "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 22593667072,
+        "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 22593667072
+      },
+      "tree_pss_peak_bytes": 65621636096,
+      "tree_rss_peak_bytes": 65623711744,
+      "tree_anonymous_peak_bytes": 65381732352,
+      "tree_pss_anon_peak_bytes": null,
+      "tree_pss_file_peak_bytes": null,
+      "tree_private_dirty_peak_bytes": 65424384000,
+      "component_sample_counts": {
+        "anonymous_bytes": 154,
+        "pss_anon_bytes": 0,
+        "pss_file_bytes": 0,
+        "private_dirty_bytes": 154
+      },
+      "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+      "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+    },
+    "phase_memory": {
+      "bounds": {
+        "ready_monotonic": 8638593.054063445,
+        "first_sent_monotonic": 8638593.569217322,
+        "first_terminal_monotonic": 8638594.07764991
+      },
+      "phases": {
+        "startup": {
+          "sample_count": 148,
+          "complete_host_samples": 148,
+          "gpu_samples": 148,
+          "gpu_peak_bytes": {
+            "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 21473787904,
+            "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 21473787904
+          },
+          "tree_pss_peak_bytes": 65621636096,
+          "tree_rss_peak_bytes": 65623711744,
+          "tree_anonymous_peak_bytes": 65381732352,
+          "tree_pss_anon_peak_bytes": null,
+          "tree_pss_file_peak_bytes": null,
+          "tree_private_dirty_peak_bytes": 65424384000,
+          "component_sample_counts": {
+            "anonymous_bytes": 148,
+            "pss_anon_bytes": 0,
+            "pss_file_bytes": 0,
+            "private_dirty_bytes": 148
+          },
+          "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+          "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+        },
+        "ready_before_first": {
+          "sample_count": 0,
+          "complete_host_samples": 0,
+          "gpu_samples": 0,
+          "gpu_peak_bytes": {
+            "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": null,
+            "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": null
+          },
+          "tree_pss_peak_bytes": null,
+          "tree_rss_peak_bytes": null,
+          "tree_anonymous_peak_bytes": null,
+          "tree_pss_anon_peak_bytes": null,
+          "tree_pss_file_peak_bytes": null,
+          "tree_private_dirty_peak_bytes": null,
+          "component_sample_counts": {
+            "anonymous_bytes": 0,
+            "pss_anon_bytes": 0,
+            "pss_file_bytes": 0,
+            "private_dirty_bytes": 0
+          },
+          "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+          "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+        },
+        "first_request": {
+          "sample_count": 0,
+          "complete_host_samples": 0,
+          "gpu_samples": 0,
+          "gpu_peak_bytes": {
+            "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": null,
+            "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": null
+          },
+          "tree_pss_peak_bytes": null,
+          "tree_rss_peak_bytes": null,
+          "tree_anonymous_peak_bytes": null,
+          "tree_pss_anon_peak_bytes": null,
+          "tree_pss_file_peak_bytes": null,
+          "tree_private_dirty_peak_bytes": null,
+          "component_sample_counts": {
+            "anonymous_bytes": 0,
+            "pss_anon_bytes": 0,
+            "pss_file_bytes": 0,
+            "private_dirty_bytes": 0
+          },
+          "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+          "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+        },
+        "after_first_request": {
+          "sample_count": 5,
+          "complete_host_samples": 5,
+          "gpu_samples": 5,
+          "gpu_peak_bytes": {
+            "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 22593667072,
+            "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 22593667072
+          },
+          "tree_pss_peak_bytes": 64562697216,
+          "tree_rss_peak_bytes": 64564772864,
+          "tree_anonymous_peak_bytes": 64317419520,
+          "tree_pss_anon_peak_bytes": null,
+          "tree_pss_file_peak_bytes": null,
+          "tree_private_dirty_peak_bytes": 64360316928,
+          "component_sample_counts": {
+            "anonymous_bytes": 5,
+            "pss_anon_bytes": 0,
+            "pss_file_bytes": 0,
+            "private_dirty_bytes": 5
+          },
+          "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+          "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+        }
+      },
+      "unassigned_or_boundary_samples": 1,
+      "steady_state_claim": false,
+      "policy": "after first request includes later canaries/warmup/requests; not a steady-state proof"
+    },
+    "phase_metadata_error": null,
+    "gpu_peak_bytes": {
+      "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 22593667072,
+      "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 22593667072
+    },
+    "tree_pss_peak_bytes": 65621636096,
+    "tree_rss_peak_bytes": 65623711744,
+    "complete_host_samples": 154,
+    "incomplete_host_samples": 0,
+    "gpu_samples": 154,
+    "missing_gpu_attempts": 0,
+    "baseline": {
+      "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": {
+        "index": 0,
+        "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+        "total_bytes": 25769803776,
+        "gpu_bytes": 0,
+        "utilization": 0
+      },
+      "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": {
+        "index": 1,
+        "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+        "total_bytes": 25769803776,
+        "gpu_bytes": 0,
+        "utilization": 0
+      },
+      "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6": {
+        "index": 2,
+        "uuid": "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6",
+        "total_bytes": 25769803776,
+        "gpu_bytes": 0,
+        "utilization": 0
+      },
+      "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011": {
+        "index": 3,
+        "uuid": "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011",
+        "total_bytes": 25769803776,
+        "gpu_bytes": 0,
+        "utilization": 0
+      },
+      "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86": {
+        "index": 4,
+        "uuid": "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86",
+        "total_bytes": 25769803776,
+        "gpu_bytes": 0,
+        "utilization": 0
+      },
+      "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685": {
+        "index": 5,
+        "uuid": "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685",
+        "total_bytes": 25769803776,
+        "gpu_bytes": 0,
+        "utilization": 0
+      },
+      "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d": {
+        "index": 6,
+        "uuid": "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d",
+        "total_bytes": 25769803776,
+        "gpu_bytes": 0,
+        "utilization": 0
+      },
+      "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f": {
+        "index": 7,
+        "uuid": "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f",
+        "total_bytes": 25769803776,
+        "gpu_bytes": 0,
+        "utilization": 0
+      }
+    },
+    "delta_high_water_bytes": {
+      "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 22593667072,
+      "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 22593667072,
+      "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6": 0,
+      "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011": 0,
+      "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86": 0,
+      "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685": 0,
+      "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d": 0,
+      "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f": 0
+    },
+    "final_process_diagnostics": [
+      {
+        "identity": {
+          "pid": 176917,
+          "birth_ticks": 100212429,
+          "ppid": 176908,
+          "state": "S"
+        },
+        "command": "/proc/self/fd/4 serve /mnt/nas1/hf/Qwen3.5-35B-A3B-FP8 --backend cuda --engine pipeline --model-profile qwen35-mixed-bf16 --tensor-parallel 2 --pipeline-parallel 1 --expert-parallel 1 --rank-backend thread --devices 0,1 --rank-restarts 0 --kv-execution-policy resident --ctx-size 128 --max-active-sequences 2 --max-batch-tokens 8 --prefill-chunk-size 8 --cuda-device-budget-mb 22528 --kv-cache-mb 16 --max-tensor-mb 2048 --cuda-workspace-mb 4096 --host 127.0.0.1 --port 18367 --served-model-name qwen35-ferrule-tp2-resident-paper ",
+        "environment": {
+          "HOME": "/root",
+          "PATH": "/home/admin/wxw403883/anaconda3/envs/tao/bin:/root/.cargo/bin:/usr/bin:/bin",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "CUDA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+          "NVIDIA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+          "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
+          "HF_HUB_OFFLINE": "1",
+          "TRANSFORMERS_OFFLINE": "1",
+          "CUDA_HOME": "/home/admin/wxw403883/anaconda3/envs/tao",
+          "NVCC": "/home/admin/wxw403883/anaconda3/envs/tao/bin/nvcc",
+          "LD_LIBRARY_PATH": "/home/admin/wxw403883/anaconda3/envs/tao/lib:/usr/lib64",
+          "CUBLAS_WORKSPACE_CONFIG": ":0:0",
+          "FERRULE_LOG": "info,ferrule_request=debug",
+          "FERRULE_LOG_FORMAT": "json"
+        },
+        "libraries": [
+          "/home/admin/wxw403883/anaconda3/envs/tao/lib/libcudart.so.12.4.99",
+          "/usr/lib64/libcuda.so.575.57.08"
+        ]
+      }
+    ],
+    "owned_gpu_attribution": "unknown",
+    "owned_process_gpu_peak_bytes": null,
+    "exact_peaks": false,
+    "hard_memory_partition": false,
+    "continuous_coverage": false
+  },
+  "shutdown": {
+    "status": "root_exited_descendants_unknown",
+    "seconds": 5.272119803354144,
+    "timed_out": false,
+    "gpu_quiescence": "unverified; no GPU probe",
+    "returncode": 0
+  },
+  "wall_seconds": 371.08052733913064
+}

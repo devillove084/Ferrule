@@ -1,0 +1,17 @@
+
+running 1 test
+test transformer::standard::cuda::hybrid_rank::mixed::decoded_gpu_tests::decoded_pair_single_cold_hot_fit_exact_and_no_cache_dma ... 
+thread 'transformer::standard::cuda::hybrid_rank::mixed::decoded_gpu_tests::decoded_pair_single_cold_hot_fit_exact_and_no_cache_dma' (50617) panicked at crates/ferrule-model/src/transformer/standard/cuda/hybrid_rank/../../../../../tests/unit/transformer/mixed_decoded_gpu.rs:325:9:
+assertion `left == right` failed
+  left: 2
+ right: 1
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    transformer::standard::cuda::hybrid_rank::mixed::decoded_gpu_tests::decoded_pair_single_cold_hot_fit_exact_and_no_cache_dma
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 750 filtered out; finished in 0.93s
+

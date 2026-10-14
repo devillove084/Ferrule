@@ -9,7 +9,10 @@ use ferrule_model::ResidentModelRunner;
 use crate::scheduling::{GenerateRequest, RequestId, SequenceSlotPool, SequenceState};
 use crate::{CancelRequestResult, Error, ResidentDriverStep, ResidentTokenEvent, Result};
 
-use super::{ResidentEngineObservability, ResidentKvPagePlan, ResidentTopKDriver};
+use super::{
+    ResidentEngineObservability, ResidentKvPagePlan, ResidentResourceObservability,
+    ResidentTopKDriver, RuntimeKvTraceConfig, RuntimeKvTraceSnapshot,
+};
 
 /// Fixed-size owner-local serving gauges. Unsupported domains remain `None`.
 /// No histories, request IDs, sequence states or materialization ledgers are read.
@@ -236,6 +239,10 @@ impl LocalSessionInferenceEngine {
         self.engine.observability_snapshot()
     }
 
+    pub fn resource_observability_snapshot(&self) -> Option<ResidentResourceObservability> {
+        self.engine.resource_observability_snapshot()
+    }
+
     pub fn retain_session(&mut self, session_id: crate::scheduling::SessionId) -> Result<()> {
         self.engine.retain_session(session_id)
     }
@@ -249,6 +256,17 @@ impl LocalSessionInferenceEngine {
 
     pub fn reset_session(&mut self, session_id: crate::scheduling::SessionId) -> Result<()> {
         self.engine.reset_session(session_id)
+    }
+
+    /// Opt-in idle/suspended KV physical reclaim through the existing session journal.
+    pub fn suspend_session_kv(&mut self, session_id: crate::scheduling::SessionId) -> Result<()> {
+        self.engine.suspend_session_kv(session_id)
+    }
+    pub fn restore_session_kv(&mut self, session_id: crate::scheduling::SessionId) -> Result<()> {
+        self.engine.restore_session_kv(session_id)
+    }
+    pub fn trim_idle_kv(&mut self) -> Result<()> {
+        self.engine.trim_idle_kv()
     }
 
     pub async fn initialize(&mut self) -> Result<()> {
@@ -269,6 +287,15 @@ impl LocalSessionInferenceEngine {
         Ok(())
     }
 
+    pub fn enable_kv_trace(&mut self, config: RuntimeKvTraceConfig) -> Result<()> {
+        self.engine.enable_kv_trace(config)
+    }
+    pub fn drain_kv_trace(&mut self) -> Option<RuntimeKvTraceSnapshot> {
+        self.engine.drain_kv_trace()
+    }
+    pub fn finalize_kv_trace(&mut self) -> Option<RuntimeKvTraceSnapshot> {
+        self.engine.finalize_kv_trace()
+    }
     pub fn submit(&mut self, request: GenerateRequest) {
         self.engine.submit(request);
     }
@@ -355,6 +382,10 @@ where
         self.engine.driver().model_observability_snapshot()
     }
 
+    pub fn resource_observability_snapshot(&self) -> ResidentResourceObservability {
+        self.engine.driver().resource_observability_snapshot()
+    }
+
     pub fn stats(&self) -> &super::ResidentTopKDriverStats {
         self.engine.driver().stats()
     }
@@ -405,6 +436,15 @@ where
         Ok(())
     }
 
+    pub fn enable_kv_trace(&mut self, config: RuntimeKvTraceConfig) -> Result<()> {
+        self.engine.enable_kv_trace(config)
+    }
+    pub fn drain_kv_trace(&mut self) -> Option<RuntimeKvTraceSnapshot> {
+        self.engine.drain_kv_trace()
+    }
+    pub fn finalize_kv_trace(&mut self) -> Option<RuntimeKvTraceSnapshot> {
+        self.engine.finalize_kv_trace()
+    }
     pub fn submit(&mut self, request: GenerateRequest) {
         self.engine.driver_mut().submit(request);
     }
@@ -557,6 +597,26 @@ pub enum InferenceRequestCleanup {
 /// require_send::<Box<dyn InferenceEngine>>();
 /// ```
 pub trait InferenceEngine: 'static {
+    /// Startup-only policy selection on the owner before background work/Ready.
+    /// Unsupported engines reject without submitting work. Supported resident
+    /// engines borrow live reservations only inside prepare/execute calls.
+    fn configure_kv_execution(&mut self, policy: super::KvExecutionPolicy) -> Result<()> {
+        policy.unsupported()
+    }
+
+    /// Opt-in lifecycle trace. Unsupported engines explicitly reject enable.
+    fn enable_kv_trace(&mut self, _config: RuntimeKvTraceConfig) -> Result<()> {
+        Err(Error::InvalidRequest {
+            message: "engine does not support KV tracing".into(),
+        })
+    }
+    fn drain_kv_trace(&mut self) -> Option<RuntimeKvTraceSnapshot> {
+        None
+    }
+    fn finalize_kv_trace(&mut self) -> Option<RuntimeKvTraceSnapshot> {
+        None
+    }
+
     /// Shared allocation-free wake source for all storage, staging, and device
     /// completion producers owned by this engine.
     fn completion_hub(&self) -> CompletionHub;
@@ -609,6 +669,12 @@ pub trait InferenceEngine: 'static {
         InferenceCapacitySnapshot::default()
     }
 
+    /// Read existing resource evidence without advancing any owner. Unsupported
+    /// engines return `None`, not fabricated zero gauges or closure evidence.
+    fn resource_observability_snapshot(&self) -> Option<ResidentResourceObservability> {
+        None
+    }
+
     fn set_admission_options(&mut self, _options: super::RuntimeAdmissionOptions) -> Result<()> {
         Err(Error::InvalidRequest {
             message: "engine does not support resident admission options".into(),
@@ -640,6 +706,19 @@ impl<T> InferenceEngine for Box<T>
 where
     T: InferenceEngine + ?Sized,
 {
+    fn configure_kv_execution(&mut self, policy: super::KvExecutionPolicy) -> Result<()> {
+        (**self).configure_kv_execution(policy)
+    }
+
+    fn enable_kv_trace(&mut self, config: RuntimeKvTraceConfig) -> Result<()> {
+        (**self).enable_kv_trace(config)
+    }
+    fn drain_kv_trace(&mut self) -> Option<RuntimeKvTraceSnapshot> {
+        (**self).drain_kv_trace()
+    }
+    fn finalize_kv_trace(&mut self) -> Option<RuntimeKvTraceSnapshot> {
+        (**self).finalize_kv_trace()
+    }
     fn completion_hub(&self) -> CompletionHub {
         (**self).completion_hub()
     }
@@ -684,6 +763,9 @@ where
     fn capacity_snapshot(&self) -> InferenceCapacitySnapshot {
         (**self).capacity_snapshot()
     }
+    fn resource_observability_snapshot(&self) -> Option<ResidentResourceObservability> {
+        (**self).resource_observability_snapshot()
+    }
     fn set_admission_options(&mut self, options: super::RuntimeAdmissionOptions) -> Result<()> {
         (**self).set_admission_options(options)
     }
@@ -717,6 +799,43 @@ where
 
 /// Object-safe session lifecycle used by model-neutral interactive frontends.
 pub trait SessionInferenceEngine: InferenceEngine {
+    /// Fork the exact committed prefix through the existing resident journal.
+    /// The source must be active and quiescent, with no uncommitted early token.
+    fn fork_session_exact(
+        &mut self,
+        _source: crate::scheduling::SessionId,
+        _target: GenerateRequest,
+        _position: usize,
+    ) -> Result<crate::scheduling::SessionId> {
+        Err(Error::InvalidRequest {
+            message: "engine does not expose exact resident session fork".into(),
+        })
+    }
+    /// Release an idle retained session through its existing cleanup authority.
+    fn release_session(&mut self, _session: crate::scheduling::SessionId) -> Result<()> {
+        Err(Error::InvalidRequest {
+            message: "engine does not expose retained session release".into(),
+        })
+    }
+
+    /// Suspend a quiescent session through its existing one-use runtime authority.
+    /// Available only on a runner constructed with idle KV reclamation enabled.
+    fn suspend_session_kv(&mut self, _session: crate::scheduling::SessionId) -> Result<()> {
+        Err(super::kv_policy::invalid(
+            "engine does not support idle KV reclaim",
+        ))
+    }
+    fn restore_session_kv(&mut self, _session: crate::scheduling::SessionId) -> Result<()> {
+        Err(super::kv_policy::invalid(
+            "engine does not support idle KV reclaim",
+        ))
+    }
+    fn trim_idle_kv(&mut self) -> Result<()> {
+        Err(super::kv_policy::invalid(
+            "engine does not support idle KV reclaim",
+        ))
+    }
+
     fn model_info(&self) -> ferrule_model::ModelInfo;
     fn observability_snapshot(&self) -> ResidentEngineObservability;
     fn bound_layer_count(&self) -> Option<usize>;
@@ -736,6 +855,27 @@ impl<T> SessionInferenceEngine for Box<T>
 where
     T: SessionInferenceEngine + ?Sized,
 {
+    fn fork_session_exact(
+        &mut self,
+        source: crate::scheduling::SessionId,
+        target: GenerateRequest,
+        position: usize,
+    ) -> Result<crate::scheduling::SessionId> {
+        (**self).fork_session_exact(source, target, position)
+    }
+    fn release_session(&mut self, session: crate::scheduling::SessionId) -> Result<()> {
+        (**self).release_session(session)
+    }
+
+    fn suspend_session_kv(&mut self, session: crate::scheduling::SessionId) -> Result<()> {
+        (**self).suspend_session_kv(session)
+    }
+    fn restore_session_kv(&mut self, session: crate::scheduling::SessionId) -> Result<()> {
+        (**self).restore_session_kv(session)
+    }
+    fn trim_idle_kv(&mut self) -> Result<()> {
+        (**self).trim_idle_kv()
+    }
     fn model_info(&self) -> ferrule_model::ModelInfo {
         (**self).model_info()
     }
@@ -812,12 +952,32 @@ where
         &self.driver
     }
 
-    fn driver_mut(&mut self) -> &mut ResidentTopKDriver<R, C> {
+    /// Read-only model access for owner-local shutdown and admission reports.
+    #[cfg(feature = "cuda")]
+    pub fn runner_for_report(&self) -> &R {
+        self.driver.runner_for_report()
+    }
+
+    pub(crate) fn driver_mut(&mut self) -> &mut ResidentTopKDriver<R, C> {
         &mut self.driver
     }
 
     pub fn into_driver(self) -> ResidentTopKDriver<R, C> {
         self.driver
+    }
+}
+
+#[cfg(feature = "cuda")]
+impl<C: SequenceSlotPool>
+    ResidentInferenceEngine<
+        ferrule_model::decoder::GenericDecoderRunner<ferrule_model::decoder::HybridCudaDecoder>,
+        C,
+    >
+{
+    /// Install the typed HostKV dispatch during application startup. This does
+    /// not expose the driver, runner mutation, or any additional KV authority.
+    pub fn install_cuda_host_kv_dispatch(&mut self) {
+        self.driver.install_cuda_host_kv_dispatch();
     }
 }
 
@@ -827,6 +987,28 @@ where
     R::SequenceState: 'static,
     C: SequenceSlotPool + 'static,
 {
+    fn fork_session_exact(
+        &mut self,
+        source: crate::scheduling::SessionId,
+        target: GenerateRequest,
+        position: usize,
+    ) -> Result<crate::scheduling::SessionId> {
+        self.driver_mut()
+            .fork_session_exact(source, target, position)
+    }
+    fn release_session(&mut self, session: crate::scheduling::SessionId) -> Result<()> {
+        self.driver_mut().release_session(session)
+    }
+
+    fn suspend_session_kv(&mut self, session: crate::scheduling::SessionId) -> Result<()> {
+        self.driver.suspend_session_kv(session)
+    }
+    fn restore_session_kv(&mut self, session: crate::scheduling::SessionId) -> Result<()> {
+        self.driver.restore_session_kv(session)
+    }
+    fn trim_idle_kv(&mut self) -> Result<()> {
+        self.driver.trim_idle_kv()
+    }
     fn model_info(&self) -> ferrule_model::ModelInfo {
         self.driver.model_info()
     }
@@ -869,6 +1051,18 @@ where
     R::SequenceState: 'static,
     C: SequenceSlotPool + 'static,
 {
+    fn configure_kv_execution(&mut self, policy: super::KvExecutionPolicy) -> Result<()> {
+        self.driver.configure_kv_execution(policy)
+    }
+    fn enable_kv_trace(&mut self, config: RuntimeKvTraceConfig) -> Result<()> {
+        self.driver.enable_kv_trace(config)
+    }
+    fn drain_kv_trace(&mut self) -> Option<RuntimeKvTraceSnapshot> {
+        self.driver.drain_kv_trace()
+    }
+    fn finalize_kv_trace(&mut self) -> Option<RuntimeKvTraceSnapshot> {
+        self.driver.finalize_kv_trace()
+    }
     fn completion_hub(&self) -> CompletionHub {
         self.driver.completion_hub()
     }
@@ -931,6 +1125,9 @@ where
             scheduler: Some(InferenceSchedulerSnapshot::read(self.driver.scheduler())),
             kv: self.driver.page_manager().map(InferenceKvSnapshot::read),
         }
+    }
+    fn resource_observability_snapshot(&self) -> Option<ResidentResourceObservability> {
+        Some(self.driver.resource_observability_snapshot())
     }
     fn set_admission_options(&mut self, options: super::RuntimeAdmissionOptions) -> Result<()> {
         self.driver.set_admission_options(options)

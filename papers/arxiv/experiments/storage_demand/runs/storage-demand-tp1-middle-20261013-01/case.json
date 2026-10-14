@@ -1,0 +1,85 @@
+{
+  "status": "target_failed",
+  "requests": [],
+  "started_monotonic": 8833650.487862617,
+  "token_ids_exposed": false,
+  "target_error": "AttributeError: 'types.SimpleNamespace' object has no attribute 'DEVNULL'",
+  "shutdown_contract": {
+    "normal_exit_observed": null,
+    "process_exit_success": null,
+    "resource_contract_complete": "unknown",
+    "pending_requests_observed": null,
+    "pending_operations_observed": null,
+    "custody_unknown_observed": null,
+    "quarantine_observed": null,
+    "ledger_credits_outstanding_observed": null,
+    "fence_quiescent_observed": null,
+    "source_completion_observed": null,
+    "resource_evidence_coverage": {
+      "required_fields": [
+        "pending_requests_observed",
+        "pending_operations_observed",
+        "custody_unknown_observed",
+        "quarantine_observed",
+        "ledger_credits_outstanding_observed",
+        "fence_quiescent_observed",
+        "source_completion_observed"
+      ],
+      "missing_fields": [
+        "pending_requests_observed",
+        "pending_operations_observed",
+        "custody_unknown_observed",
+        "quarantine_observed",
+        "ledger_credits_outstanding_observed",
+        "fence_quiescent_observed",
+        "source_completion_observed"
+      ],
+      "invalid_fields": [],
+      "failed_fields": []
+    },
+    "basis": "Process exit is supervision evidence only; resource verification requires explicit final owner ledger credits, fence quiescence, pending, Unknown/quarantine and current source-completion observations"
+  },
+  "all_invocation_counters": {
+    "invocations": 0,
+    "valid": false,
+    "deltas": {
+      "checkpoint_read_calls": null,
+      "checkpoint_read_bytes": null,
+      "checkpoint_source_checks": null,
+      "checkpoint_path_metadata_calls": null,
+      "checkpoint_handle_metadata_calls": null,
+      "h2d_copies": null,
+      "h2d_bytes": null,
+      "artifact_uploads": null,
+      "artifact_upload_bytes": null,
+      "expert_hits": null,
+      "expert_uploads": null,
+      "expert_evictions": null
+    },
+    "last_gauges": {
+      "expert_resident_entries": null,
+      "expert_resident_bytes": null,
+      "expert_pending_upload_bytes": null,
+      "expert_scratch_bytes": null,
+      "expert_owner_peak_bytes": null,
+      "expert_unknown_quarantine_bytes": null
+    },
+    "expert_cache_miss_counter": null,
+    "io_credits": null,
+    "physical_nas_bytes": null,
+    "proc_read_bytes": null,
+    "nfs_shared_mount_bytes": null,
+    "scope": "logical checkpoint reader and facade deltas; not physical NAS/device-kernel counts"
+  },
+  "runtime_log_evidence": [],
+  "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "pins_after": {
+    "status": "verified_scoped",
+    "legacy_manifest_entries": 702,
+    "production_source_scope": "597 pins via sealed compiled-source archive; current worktree not rehashed",
+    "active_workflow_scope": "explicit TP1 import/assets; unrelated paper workflow excluded",
+    "tensor_payload_bytes_hashed": 0,
+    "shard_headers_reread": false
+  },
+  "wall_seconds": 0.05517653748393059
+}

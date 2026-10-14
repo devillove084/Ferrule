@@ -1,0 +1,68 @@
+{
+  "returncode": 1,
+  "timed_out": false,
+  "wall_seconds": 221.83645723573864,
+  "stdout": "Authenticated CUDA small-fixture gate before full checkpoint reads\nCUDA small-fixture gate passed; hashing full checkpoint\nFull40 case hello prefill + cached decode\nCaptured hello: [{'stage': 'prefill', 'input_token_ids': [9419], 'position_start': 0, 'sequence_length_after': 1, 'next_token_id': 11}, {'stage': 'decode.0', 'input_token_ids': [11], 'position_start': 1, 'sequence_length_after': 2, 'next_token_id': 353}]\nFull40 case capital prefill + cached decode\nCaptured capital: [{'stage': 'prefill', 'input_token_ids': [760, 6511, 314, 9338, 369], 'position_start': 0, 'sequence_length_after': 5, 'next_token_id': 11751}, {'stage': 'decode.0', 'input_token_ids': [11751], 'position_start': 5, 'sequence_length_after': 6, 'next_token_id': 13}]\n",
+  "stderr": "The fast path is not available because one of the required library is not installed. Falling back to torch implementation. To install follow https://github.com/fla-org/flash-linear-attention#installation and https://github.com/Dao-AILab/causal-conv1d\n\rWriting model shards:   0%|          | 0/1 [00:00<?, ?it/s]\rWriting model shards: 100%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588| 1/1 [00:00<00:00, 692.70it/s]\n\rLoading weights:   0%|          | 0/36 [00:00<?, ?it/s]\rLoading weights: 100%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588| 36/36 [00:00<00:00, 8864.33it/s]\nTraceback (most recent call last):\n  File \"<string>\", line 1, in <module>\n  File \"/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_mixed/oracle/tp2_oracle.py\", line 736, in export\n    require(source_audit()==manifest['interception_audit'],'HF forward interception changed')\n  File \"/home/admin/luhuanbing.lhb/Ferrule/scripts/qwen35_fp8_cuda_reference.py\", line 38, in require\n    raise ValueError(message)\nValueError: HF forward interception changed\n",
+  "cleanup_errors": [],
+  "cleanup_scope": "isolated_subreaper_direct_children",
+  "descendant_custody": "proven_drained",
+  "gpu_quiescence": "unverified",
+  "custody": {
+    "status": "proven_drained",
+    "method": "linux-subreaper-waitid",
+    "containment_verified": true,
+    "launch_id": "f3618a4be6304af8b087bf99dc90f32f",
+    "helper_identity": {
+      "pid": 83133,
+      "birth_ticks": 80520640,
+      "ppid": 83128,
+      "pgrp": 83133,
+      "session": 83133
+    },
+    "root_identity": {
+      "pid": 83134,
+      "birth_ticks": 80520643,
+      "ppid": 83133,
+      "pgrp": 83133,
+      "session": 83133
+    },
+    "boot_id": "4dd3497d-570c-4693-a876-5c26e06ab360",
+    "entries": [
+      {
+        "identity": {
+          "pid": 83134,
+          "birth_ticks": 80520643,
+          "ppid": 83133,
+          "pgrp": 83133,
+          "session": 83133
+        },
+        "role": "root",
+        "signals": [],
+        "reaped": true,
+        "exit_code": 1,
+        "first_observed_at": 8441326.786661463,
+        "reaped_at": 8441548.499101259
+      }
+    ],
+    "errors": [],
+    "reporting_errors": [],
+    "echild": true
+  },
+  "handshake": {
+    "kind": "ready",
+    "protocol": 1,
+    "launch_id": "f3618a4be6304af8b087bf99dc90f32f",
+    "helper_identity": {
+      "pid": 83133,
+      "birth_ticks": 80520640,
+      "ppid": 83128,
+      "pgrp": 83133,
+      "session": 83133
+    },
+    "containment_verified": true,
+    "method": "linux-subreaper-waitid"
+  },
+  "stdout_truncated": false,
+  "stderr_truncated": false
+}

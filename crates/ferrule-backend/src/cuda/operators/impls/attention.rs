@@ -22,6 +22,7 @@ impl CudaOperators {
         output: &mut CudaF32Buffer,
         workspace: &mut CudaHybridMlaAttentionWorkspace,
     ) -> Result<()> {
+        Self::f32_no_alias(&[query, context_plane, block_kv, attention_sink], &[output])?;
         self.clear_operator_status(&mut workspace.status)?;
         self.submit_operator(1, |stream| {
             crate::cuda::operators::attention::hybrid::hybrid_mla_attention(

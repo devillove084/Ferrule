@@ -1,4 +1,4 @@
-use super::{DecoderSequence, DecoderSequenceCheckout, DecoderSequenceLifecycle};
+use super::sequence::{DecoderSequence, DecoderSequenceCheckout, DecoderSequenceLifecycle};
 use crate::execution::{SequenceStateCore, SequenceTopologyId};
 use crate::runner::SequenceStateReleaseError;
 use ferrule_common::{Error, Result};
@@ -17,20 +17,20 @@ pub struct DecoderSequenceState<Attachment, KvState> {
 }
 impl<Attachment, KvState> DecoderSequenceState<Attachment, KvState> {
     pub fn new(attachment: Attachment, kv_state: KvState) -> Self {
-        Self {
-            core: SequenceStateCore::new(),
-            topology_id: SequenceTopologyId::take(),
+        Self::from_parts(
+            SequenceStateCore::new(),
+            SequenceTopologyId::take(),
             attachment,
             kv_state,
-        }
+        )
     }
     pub fn with_position(position: usize, attachment: Attachment, kv_state: KvState) -> Self {
-        Self {
-            core: SequenceStateCore::with_position(position),
-            topology_id: SequenceTopologyId::take(),
+        Self::from_parts(
+            SequenceStateCore::with_position(position),
+            SequenceTopologyId::take(),
             attachment,
             kv_state,
-        }
+        )
     }
     pub const fn core(&self) -> &SequenceStateCore {
         &self.core
@@ -56,7 +56,6 @@ impl<Attachment, KvState> DecoderSequenceState<Attachment, KvState> {
     pub fn into_parts(self) -> (SequenceStateCore, SequenceTopologyId, Attachment, KvState) {
         (self.core, self.topology_id, self.attachment, self.kv_state)
     }
-    #[cfg(feature = "cuda")]
     pub(crate) fn from_parts(
         core: SequenceStateCore,
         topology_id: SequenceTopologyId,

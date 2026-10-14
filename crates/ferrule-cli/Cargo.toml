@@ -15,6 +15,7 @@ path = "src/main.rs"
 
 [dependencies]
 ferrule-common = { version = "0.2.0", path = "../ferrule-common" }
+ferrule-composition = { version = "0.2.0", path = "../ferrule-composition", default-features = false }
 ferrule-model = { version = "0.2.0", path = "../ferrule-model" }
 ferrule-runtime = { version = "0.2.0", path = "../ferrule-runtime" }
 ferrule-server = { version = "0.2.0", path = "../ferrule-server" }
@@ -31,14 +32,42 @@ libc = "0.2"
 tracing = "0.1"
 tokio = { version = "1", features = ["net", "rt-multi-thread", "signal"] }
 
+[dev-dependencies]
+rcgen = { version = "0.14.10", default-features = false, features = ["pem", "ring"] }
+tempfile = "3"
+
 [features]
 default = []
+cpu-reference = [
+    "ferrule-runtime/cpu-reference",
+    "ferrule-server/cpu-reference",
+    "ferrule-composition/cpu-reference",
+]
 cuda = [
     "dep:ferrule-backend",
     "ferrule-backend/cuda",
     "ferrule-runtime/cuda",
     "ferrule-model/cuda",
+    "ferrule-server/cuda",
+    "ferrule-composition/cuda",
 ]
+
+[[example]]
+name = "network_linear_test_child"
+path = "tests/support/network_linear_test_child.rs"
+test = false
 
 [lints]
 workspace = true
+
+[[test]]
+name = "bench_kv_trace"
+required-features = ["cpu-reference"]
+
+[[test]]
+name = "serve"
+required-features = ["cpu-reference"]
+
+[[test]]
+name = "serve_cuda"
+required-features = ["cuda"]

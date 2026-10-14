@@ -1,0 +1,118 @@
+{
+  "argv": [
+    "/root/.rustup/toolchains/nightly-2026-08-01-x86_64-unknown-linux-gnu/bin/cargo",
+    "clippy",
+    "--locked",
+    "--offline",
+    "-p",
+    "ferrule-backend",
+    "--features",
+    "cuda",
+    "--test",
+    "allocator_retirement_gpu",
+    "--test",
+    "cuda_allocator",
+    "--",
+    "-D",
+    "warnings"
+  ],
+  "environment": {
+    "PATH": "/home/admin/wxw403883/anaconda3/envs/tao/bin:/root/.cargo/bin:/usr/bin:/bin",
+    "CUDA_HOME": "/home/admin/wxw403883/anaconda3/envs/tao",
+    "NVCC": "/home/admin/wxw403883/anaconda3/envs/tao/bin/nvcc",
+    "LD_LIBRARY_PATH": "/home/admin/wxw403883/anaconda3/envs/tao/lib:/usr/lib64",
+    "FERRULE_CUDA_ARCH": "sm_86",
+    "FERRULE_CUTLASS_DIR": "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/cutlass",
+    "RUSTFLAGS": "-L native=/home/admin/luhuanbing.lhb/Ferrule/target/validation/qwen35-35b-current/toolchain/link -L native=/home/admin/luhuanbing.lhb/Ferrule/target/validation/bf16-mixed-qkv-20261005/link -L native=/home/admin/wxw403883/anaconda3/envs/tao/lib",
+    "HOME": "/root",
+    "CUDA_VISIBLE_DEVICES": "",
+    "NVIDIA_VISIBLE_DEVICES": "void",
+    "CUBLAS_WORKSPACE_CONFIG": ":0:0",
+    "CARGO_BUILD_JOBS": "2",
+    "CARGO_PROFILE_RELEASE_OPT_LEVEL": "3",
+    "CARGO_PROFILE_RELEASE_LTO": "fat",
+    "CARGO_PROFILE_RELEASE_CODEGEN_UNITS": "1",
+    "CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS": "false",
+    "PYTHONDONTWRITEBYTECODE": "1",
+    "RUSTUP_TOOLCHAIN": "nightly-2026-08-01",
+    "CC": "/usr/bin/gcc",
+    "CXX": "/usr/bin/g++",
+    "CUDAHOSTCXX": "/usr/bin/g++",
+    "CARGO_HOME": "/root/.cargo",
+    "RUSTUP_HOME": "/root/.rustup",
+    "RUSTUP_AUTO_INSTALL": "0",
+    "RUSTC": "/root/.rustup/toolchains/nightly-2026-08-01-x86_64-unknown-linux-gnu/bin/rustc",
+    "RUSTDOC": "/root/.rustup/toolchains/nightly-2026-08-01-x86_64-unknown-linux-gnu/bin/rustdoc",
+    "FERRULE_CUDA_TEST_ORACLE": "0",
+    "CARGO_TARGET_DIR": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/allocator-batch-v3/cargo-cuda124",
+    "FERRULE_NO_CUDA": "1"
+  },
+  "supervisor": {
+    "returncode": 0,
+    "timed_out": false,
+    "wall_seconds": 38.34696835651994,
+    "stdout": "",
+    "stderr": "    Checking once_cell v1.21.4\n    Checking serde_core v1.0.229\n    Checking tracing-core v0.1.36\n    Checking crossbeam-utils v0.8.21\n    Checking regex-syntax v0.8.11\n    Checking regex-automata v0.4.14\n    Checking serde v1.0.229\n    Checking crossbeam-epoch v0.9.20\n    Checking zmij v1.0.21\n    Checking log v0.4.33\n    Checking itoa v1.0.18\n    Checking pin-project-lite v0.2.17\n    Checking cfg-if v1.0.4\n    Checking memchr v2.8.2\n    Checking lazy_static v1.5.0\n    Checking sharded-slab v0.1.7\n    Checking serde_json v1.0.151\n    Checking matchers v0.2.0\n    Checking thread_local v1.1.9\n    Checking tracing v0.1.44\n    Checking tracing-log v0.2.0\n    Checking crossbeam-deque v0.8.6\n    Checking tracing-serde v0.2.0\n    Checking smallvec v1.15.2\n    Checking nu-ansi-term v0.50.3\n    Checking rayon-core v1.13.0\n    Checking tracing-subscriber v0.3.23\n    Checking libc v0.2.189\n    Checking snafu v0.8.9\n   Compiling ferrule-backend v0.2.0 (/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-backend)\n    Checking either v1.16.0\n    Checking atomic-waker v1.1.2\n    Checking ferrule-common v0.2.0 (/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-common)\n    Checking rayon v1.12.0\n    Checking memmap2 v0.9.11\n    Finished `dev` profile [optimized + debuginfo] target(s) in 38.21s\n",
+    "cleanup_errors": [],
+    "cleanup_scope": "isolated_subreaper_direct_children",
+    "descendant_custody": "proven_drained",
+    "gpu_quiescence": "unverified",
+    "custody": {
+      "status": "proven_drained",
+      "method": "linux-subreaper-waitid",
+      "containment_verified": true,
+      "launch_id": "cbf140ffea2a4d6cb7cc60d1462f5c5c",
+      "helper_identity": {
+        "pid": 146201,
+        "birth_ticks": 97099453,
+        "ppid": 146200,
+        "pgrp": 146201,
+        "session": 146201
+      },
+      "root_identity": {
+        "pid": 146202,
+        "birth_ticks": 97099456,
+        "ppid": 146201,
+        "pgrp": 146201,
+        "session": 146201
+      },
+      "boot_id": "4dd3497d-570c-4693-a876-5c26e06ab360",
+      "entries": [
+        {
+          "identity": {
+            "pid": 146202,
+            "birth_ticks": 97099456,
+            "ppid": 146201,
+            "pgrp": 146201,
+            "session": 146201
+          },
+          "role": "root",
+          "signals": [],
+          "reaped": true,
+          "exit_code": 0,
+          "first_observed_at": 8607114.917518845,
+          "reaped_at": 8607153.17184064
+        }
+      ],
+      "errors": [],
+      "reporting_errors": [],
+      "echild": true
+    },
+    "handshake": {
+      "kind": "ready",
+      "protocol": 1,
+      "launch_id": "cbf140ffea2a4d6cb7cc60d1462f5c5c",
+      "helper_identity": {
+        "pid": 146201,
+        "birth_ticks": 97099453,
+        "ppid": 146200,
+        "pgrp": 146201,
+        "session": 146201
+      },
+      "containment_verified": true,
+      "method": "linux-subreaper-waitid"
+    },
+    "stdout_truncated": false,
+    "stderr_truncated": false
+  }
+}

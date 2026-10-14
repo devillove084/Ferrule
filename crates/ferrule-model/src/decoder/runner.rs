@@ -12,6 +12,10 @@ use crate::execution::ExecutionPrecisionPolicy;
 use crate::materialization::{
     MaterializationProvider, MaterializationRequest, MaterializationResolver,
 };
+use crate::resource_observability::{
+    DefaultStateObservation, PhysicalResourceObservation, ResourceClosure, ResourceEvidence,
+    ResourceObservationScope,
+};
 use crate::runner::{
     ModelCompletionReactor, ModelInfo, ModelRunner, MultiSessionBatchProgress, MultiSessionRunner,
     NativeProposal, NativeProposalProgress, NativeProposalSource, PendingModelProgress,
@@ -30,7 +34,7 @@ use ferrule_common::execution::{
 use ferrule_common::expert_residency::{ExpertResidencyControl, ExpertResidencyRequirements};
 use ferrule_common::{CompletionHub, ContinuationId, Error, ResidencyLeaseSet, Result};
 use std::collections::HashMap;
-use std::num::NonZeroU32;
+use std::num::{NonZeroU32, NonZeroU64};
 use std::sync::Arc;
 
 /// Sequence state used by the standard model-independent decoder runner.
@@ -93,8 +97,12 @@ impl GenericDecoderOptions {
     /// state, KV and outputs stay F32. `scratch_bytes` is INCLUDED in
     /// `limits.max_bytes`, not an additional hidden budget. In F32 mode it
     /// bounds four-byte decoded weight tiles; input/output buffers are charged
-    /// separately as operation scratch. Resource admission validates the exact
-    /// selected backend plan without expanding checkpoint weights.
+    /// separately as operation scratch. W8A16 needs no global numeric workspace
+    /// for any row count and permits zero `scratch_bytes`; a supplied nonzero
+    /// reservation is still charged. Its operands round to BF16 inside the
+    /// kernel, not at model boundaries, and it is not bitwise Marlin arithmetic.
+    /// Resource admission validates the exact selected backend plan without
+    /// expanding checkpoint weights.
     ///
     /// This does not create a CPU fallback; CPU construction rejects the profile.
     pub fn with_hybrid_cuda_numeric_fp8_precision(
@@ -103,33 +111,71 @@ impl GenericDecoderOptions {
         scratch_bytes: usize,
         precision: crate::transformer::NumericFp8Precision,
     ) -> Result<Self> {
-        if self.precision != ExecutionPrecisionPolicy::f32()
+        if precision.has_bf16_model_boundaries()
+            || self.precision != ExecutionPrecisionPolicy::f32()
             || limits.max_experts == 0
-            || scratch_bytes == 0
+            || (scratch_bytes == 0 && !precision.allows_zero_scratch())
             || limits.max_bytes <= scratch_bytes
         {
             return Err(Error::ModelSource {
                 source: Box::new(crate::transformer::UnsupportedOperator::new(
                     "hybrid_cuda_numeric_fp8_profile",
-                    "requires F32 execution and nonzero bounded cache with room beyond numeric scratch",
+                    "requires F32 execution, nonzero bounded cache with room beyond numeric scratch, and nonzero scratch unless W8A16",
                 )),
             });
         }
         self.hybrid_numeric_fp8 = Some((limits, scratch_bytes, precision));
         Ok(self)
     }
+    /// Explicit compressed-storage/native-BF16 model path. Full depth, local
+    /// bounded experts and resident typed KV only; no CPU/EP/TP fallback.
+    pub fn with_hybrid_cuda_numeric_fp8_bf16(
+        self,
+        limits: crate::transformer::ExpertCacheLimits,
+        scratch_bytes: usize,
+    ) -> Result<Self> {
+        self.with_hybrid_cuda_numeric_fp8_bf16_precision(
+            limits,
+            scratch_bytes,
+            crate::transformer::NumericFp8Precision::Bf16ModelF32Accumulate,
+        )
+    }
+
+    /// Explicit BF16-model arithmetic. Tiled execution needs nonzero scratch,
+    /// included in the cache ceiling; admission checks every projection shape.
+    pub fn with_hybrid_cuda_numeric_fp8_bf16_precision(
+        mut self,
+        limits: crate::transformer::ExpertCacheLimits,
+        scratch_bytes: usize,
+        precision: crate::transformer::NumericFp8Precision,
+    ) -> Result<Self> {
+        if !precision.has_bf16_model_boundaries()
+            || (scratch_bytes == 0 && !precision.allows_zero_scratch())
+            || self.precision != ExecutionPrecisionPolicy::bf16_compatibility()
+            || self.hybrid_numeric_fp8.is_some()
+            || limits.max_experts == 0
+            || limits.max_bytes <= scratch_bytes
+        {
+            return Err(runner_error(
+                "numeric BF16 requires explicit BF16 model precision and a nonzero bounded cache beyond scratch",
+            ));
+        }
+        self.hybrid_numeric_fp8 = Some((limits, scratch_bytes, precision));
+        Ok(self)
+    }
+
     pub fn hybrid_cuda_numeric_fp8(
         &self,
     ) -> Option<(crate::transformer::ExpertCacheLimits, usize)> {
-        self.hybrid_numeric_fp8
+        self.hybrid_cuda_numeric_fp8_config()
             .map(|(limits, scratch, _)| (limits, scratch))
     }
     pub fn hybrid_cuda_numeric_fp8_precision(
         &self,
     ) -> Option<crate::transformer::NumericFp8Precision> {
-        self.hybrid_numeric_fp8.map(|(_, _, precision)| precision)
+        self.hybrid_cuda_numeric_fp8_config()
+            .map(|(_, _, precision)| precision)
     }
-    #[cfg(feature = "cuda")]
     pub(crate) fn hybrid_cuda_numeric_fp8_config(
         &self,
     ) -> Option<(
@@ -322,6 +368,7 @@ where
     control: DecoderControlPlane,
     completion_reactors: Vec<ModelCompletionReactor>,
     observability: GenericDecoderObservabilitySnapshot,
+    physical_resources: PhysicalResourceObservation,
     proposal: D::Proposal,
     resource_manager: D::ResourceManager,
     resolver: DecoderResolverHandle,
@@ -575,6 +622,13 @@ where
             control,
             completion_reactors,
             observability,
+            physical_resources: PhysicalResourceObservation {
+                scope: ResourceEvidence::Observed(ResourceObservationScope::fresh(
+                    NonZeroU64::new(prepared_plan_id).expect("validated prepared-plan identity"),
+                )),
+                prepared_plan_id: ResourceEvidence::Observed(prepared_plan_id),
+                ..Default::default()
+            },
             proposal,
             resource_manager,
             resolver,
@@ -629,10 +683,18 @@ where
         if self.shutdown {
             return Ok(());
         }
-        DecoderForwardExecutor::shutdown(&mut self.forward_executor)?;
-        self.resource_manager.shutdown()?;
-        self.backend.shutdown()?;
-        self.resolver.clear()?;
+        let before = self.physical_resource_snapshot();
+        self.physical_resources = self.physical_resources.snapshot_or_unknown(&before);
+        let result = (|| {
+            DecoderForwardExecutor::shutdown(&mut self.forward_executor)?;
+            self.resource_manager.shutdown()?;
+            self.backend.shutdown()?;
+            self.resolver.clear()
+        })();
+        let after = self.physical_resource_snapshot();
+        self.physical_resources = self.physical_resources.snapshot_or_unknown(&after);
+        self.physical_resources.record_close(result.is_ok());
+        result?;
         self.control.completion_hub().close();
         self.shutdown = true;
         self.observability.shutdown = true;
@@ -1033,6 +1095,19 @@ where
         }
         self.sequence_lifecycle.try_release(state)
     }
+    fn idle_kv_reclaim_config(&self) -> Option<super::IdleKvReclaimConfig> {
+        self.backend.idle_kv_reclaim_config()
+    }
+    fn idle_kv_physical_stats(&self) -> Option<super::IdleKvPhysicalStats> {
+        self.backend.idle_kv_physical_stats()
+    }
+    fn trim_idle_kv(&mut self) -> Result<()> {
+        self.ensure_running()?;
+        if !self.transactions.is_empty() {
+            return Err(runner_error("idle KV trim requires no transaction custody"));
+        }
+        self.backend.trim_idle_kv()
+    }
     fn configure_kv_page_capacity(&mut self, max_pages: usize) -> Result<()> {
         self.ensure_running()?;
         if !self.transactions.is_empty() {
@@ -1222,6 +1297,7 @@ where
     fn shutdown_physical(&mut self) -> Result<()> {
         GenericDecoderRunner::shutdown(self)
     }
+
     fn observability_snapshot(&self) -> Self::ObservabilitySnapshot {
         let mut core = self.observability.clone();
         core.active_transactions = self.transactions.len();
@@ -1229,6 +1305,33 @@ where
         let mut resources = self.resource_manager.observer_snapshot();
         resources.resolver_installed = self.resolver.installed();
         self.observer.snapshot(&core, &self.backend, &resources)
+    }
+    fn physical_resource_snapshot(&self) -> PhysicalResourceObservation {
+        let mut live = self
+            .forward_executor
+            .physical_resource_snapshot(&self.default_state);
+        live.scope = self.physical_resources.scope;
+        live.prepared_plan_id = ResourceEvidence::Observed(self.prepared_plan_id);
+        let resident_bytes = live
+            .default_state
+            .value()
+            .map(|state| state.resident_bytes)
+            .unwrap_or_default();
+        if !matches!(live.default_state, ResourceEvidence::Unknown) {
+            live.default_state = ResourceEvidence::Observed(DefaultStateObservation {
+                topology_id: self.default_state.topology_id().get(),
+                generation: self.default_state.core().generation(),
+                position: self.default_state.core().position(),
+                poisoned: self.default_state.core().is_poisoned(),
+                resident_bytes,
+            });
+        }
+        live.close = ResourceEvidence::Observed(if self.shutdown {
+            ResourceClosure::Closed
+        } else {
+            ResourceClosure::Open
+        });
+        self.physical_resources.snapshot_or_unknown(&live)
     }
     fn completion_hub(&self) -> CompletionHub {
         self.control.completion_hub().clone()
@@ -1528,5 +1631,39 @@ pub(crate) fn standard_model_info(
 fn runner_error(message: impl Into<String>) -> Error {
     Error::Execution {
         message: message.into(),
+    }
+}
+
+#[cfg(feature = "cuda")]
+impl GenericDecoderRunner<super::HybridCudaDecoder> {
+    /// Explicit owner pairing before prepare. No inference from page numbers or
+    /// rebinding of an active physical transaction is allowed by the backend.
+    pub fn bind_host_kv_owner(&mut self, owner: u64) -> Result<()> {
+        self.ensure_running()?;
+        if !self.transactions.is_empty() {
+            return Err(runner_error("bind HostKV before prepare"));
+        }
+        self.backend.bind_committed_logical_owner(owner)
+    }
+    /// Opt-in ordinary forward, using the existing transaction and layer loop.
+    /// The caller keeps its live runtime reservation borrowed for this call.
+    /// No prefill, empty-prefix, multi-query or asynchronous fallback is selected.
+    pub fn execute_host_kv_decode(
+        &mut self,
+        transaction: ExecutionTransactionId,
+        states: &mut [super::CudaHybridSequenceState],
+        batch: &ExecutionBatch,
+        append: &super::CudaHostKvAppendContext<'_>,
+    ) -> Result<MultiSessionBatchProgress> {
+        self.ensure_running()?;
+        let invocation = append.invocation_scope()?;
+        let progress = self.transactions.execute_batch_scoped(
+            transaction,
+            (states, batch),
+            &mut self.backend,
+            &mut self.forward_executor,
+            Some(&invocation),
+        )?;
+        self.map_progress(transaction, progress)
     }
 }

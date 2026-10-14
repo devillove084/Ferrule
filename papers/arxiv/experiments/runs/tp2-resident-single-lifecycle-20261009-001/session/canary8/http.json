@@ -1,0 +1,894 @@
+{
+  "schema": "ferrule.http_bench.v1",
+  "engine": "vllm",
+  "url": "http://127.0.0.1:18367/v1/completions",
+  "served_model": "qwen35-vllm-tp2-resident-paper",
+  "created_unix": 1791476994.5401037,
+  "status": "complete",
+  "metadata": {
+    "source": {
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/cli_audit.py": "5a84aebec98de43a997b7a92d88a25eab6a1749a79c32870e68e2dafdc54cbbf",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/contract.py": "96f9664cb16e4b861b4902f6c07b234ca08d89106d4d99a9ff8db74511de25bf",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/launch_guard.py": "b4ec4dc1b1e7e61fe322847e4a07ce2c3b2ed43d8d3e9bc3bd6602979ad00b9f",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runner.py": "f1e87f00822445a708c5ffe50124ea0d34e928fd56fe6943ccaf7a052bb9d95a",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/telemetry.py": "766a2e62730e3b56efd553d013554b18520c4883f6e5a3ee7ddeef4211091900",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/experiment.py": "ba59769f59a6be5a732acc3bd7c8237063031198fb069d9e15e71761b580f67f",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/experiment_current.py": "42901aa3d81a7dbe9b275cb68a1365d7f0fef4443ed459ae58a3865c638debb7",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/experiment_v2.py": "ff57bbba5c7e81e454b6793b413ef354af8b3085da2a5f4892c5593264b0be92",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/experiment_v3.py": "03fb60c61c42aef735c49c0c12e8bdca14c2884c338df0f44ae83fdc7844f85b",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/experiment_v4.py": "ee5d85c338a7851d61a322e0b00fedfb26a2edb669609d0ecb9e92c549bee1a4",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/observer.py": "dadab1c5c6fa5c4ffab2bc986b2cdd1ae76cdda8f8adba8dc86945e1e4f78f67",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/sampling_v2.py": "5cf4245642db39420f1e9592433129b11e215f2073edb1271b44858b6461dfc6",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/sampling_v3.py": "d03caeaaff13578c036ea106f0073fde042634032fdc7bc2ee671ec7b7f7f387",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/sampling_v4.py": "dcef3594941c3f9fdf214782434af934d7ab082dd2b7f8bd05472d3e9bbb5249",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/test_observer.py": "06b3239fc4f6650e855dbaed7dcd0f78b3296489236b1e4d87155331dc98b977",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/test_sampling_v2.py": "7290077427090c0dc1ed6a0775b98ed38fc2dfd60ee82b732a658afb77a7590f",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/test_sampling_v3.py": "d049332e666abe2fa9dbd88105e69159e3455ffc403e80cb5b4cb5da50f63052",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/test_sampling_v4.py": "eb9a6191b8491f5e0f06cd3374b1c31740d8be39749344b4381bd13f5a7b6a0b",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/test_tp2.py": "de1082be324604cb108f159fe9246b7227696e0bfa69284ead9dd94aef78ad1c",
+      "/home/admin/luhuanbing.lhb/Ferrule/scripts/_owned_subreaper.py": "19ef9006089cde1abdca87177e01d26b925dcf996bfebaf6e3dc51ea71a77ff0",
+      "/home/admin/luhuanbing.lhb/Ferrule/scripts/bench_ferrule_vllm.py": "0abc2a72eac5abe4430dd79d07ddcf7a457fccd921be9c55144e913c2f7617fd",
+      "/home/admin/luhuanbing.lhb/Ferrule/scripts/test_vllm_qwen35.py": "1c330dac0727d54254a1c1648adcb9a4b747a2303fe183c2ba38f9ccd83ec2a1",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-20261008-004/prepared.json": "6cdbe76ffe0f0315bfc5ca5f0310e5174cf4bdc122fc95a8d97bb22455a18e37"
+    },
+    "model": {
+      "path": "/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8",
+      "metadata_sha256": {
+        "config.json": "236c373b0682a4f40c2fa49ef8e5f722a87a8dbfe265286b6d5260b23d7cb229",
+        "model.safetensors.index.json": "b009f7a49c442fce959a2ff6fee41c69248879b90d7ff5636ec6d2068ac4876d",
+        "tokenizer.json": "5f9e4d4901a92b997e463c1f46055088b6cca5ca61a6522d1b9f64c4bb81cb42",
+        "tokenizer_config.json": "316230d6a809701f4db5ea8f8fc862bc3a6f3229c937c174e674ff3ca0a64ac8"
+      },
+      "shard_stats": {
+        "model.safetensors-00001-of-00014.safetensors": {
+          "bytes": 2685395560,
+          "mtime_ns": 1772424992657055256,
+          "inode": 38524559,
+          "device": 236
+        },
+        "model.safetensors-00002-of-00014.safetensors": {
+          "bytes": 2685393512,
+          "mtime_ns": 1772424806750938380,
+          "inode": 38524557,
+          "device": 236
+        },
+        "model.safetensors-00003-of-00014.safetensors": {
+          "bytes": 2685393512,
+          "mtime_ns": 1772425351626122160,
+          "inode": 38524563,
+          "device": 236
+        },
+        "model.safetensors-00004-of-00014.safetensors": {
+          "bytes": 2685394536,
+          "mtime_ns": 1772425557825932903,
+          "inode": 38524564,
+          "device": 236
+        },
+        "model.safetensors-00005-of-00014.safetensors": {
+          "bytes": 2685395560,
+          "mtime_ns": 1772425889647579315,
+          "inode": 38524566,
+          "device": 236
+        },
+        "model.safetensors-00006-of-00014.safetensors": {
+          "bytes": 2685394536,
+          "mtime_ns": 1772425164292942735,
+          "inode": 38524561,
+          "device": 236
+        },
+        "model.safetensors-00007-of-00014.safetensors": {
+          "bytes": 2685393512,
+          "mtime_ns": 1772426151999313636,
+          "inode": 38524567,
+          "device": 236
+        },
+        "model.safetensors-00008-of-00014.safetensors": {
+          "bytes": 2685393512,
+          "mtime_ns": 1772426339785901318,
+          "inode": 38524569,
+          "device": 236
+        },
+        "model.safetensors-00009-of-00014.safetensors": {
+          "bytes": 3645492144,
+          "mtime_ns": 1772426665613745394,
+          "inode": 38524570,
+          "device": 236
+        },
+        "model.safetensors-00010-of-00014.safetensors": {
+          "bytes": 2685398632,
+          "mtime_ns": 1772426854560705584,
+          "inode": 38524571,
+          "device": 236
+        },
+        "model.safetensors-00011-of-00014.safetensors": {
+          "bytes": 2685400680,
+          "mtime_ns": 1772427035405551264,
+          "inode": 38524573,
+          "device": 236
+        },
+        "model.safetensors-00012-of-00014.safetensors": {
+          "bytes": 2685399144,
+          "mtime_ns": 1772427235837349585,
+          "inode": 38524574,
+          "device": 236
+        },
+        "model.safetensors-00013-of-00014.safetensors": {
+          "bytes": 3011229472,
+          "mtime_ns": 1772427400537041055,
+          "inode": 38524576,
+          "device": 236
+        },
+        "model.safetensors-00014-of-00014.safetensors": {
+          "bytes": 1267650368,
+          "mtime_ns": 1772427480416081771,
+          "inode": 38524577,
+          "device": 236
+        }
+      },
+      "index_payload_bytes": 37454799072,
+      "identity_strength": "partial: metadata hashes + shard stat pins; payloads NOT hashed",
+      "full_checkpoint_sha256": null
+    },
+    "binary": {
+      "status": "unavailable",
+      "reason": "Not supplied by server owner"
+    },
+    "dependencies": {
+      "status": "unavailable",
+      "reason": "Not supplied by server owner"
+    },
+    "precision": {
+      "seed": 1,
+      "prompt": "Hello",
+      "input_tokens": 1,
+      "context": 128,
+      "batch_tokens": 8,
+      "active_sequences": 2,
+      "concurrency": 1,
+      "tp": 2,
+      "pp": 1,
+      "ep": 1,
+      "activation": "bfloat16",
+      "kv": "bfloat16",
+      "conv": "bfloat16",
+      "ssm": "float32",
+      "prefix_cache": false,
+      "eos": "natural",
+      "endpoint": "raw-completions",
+      "protocol_id": "vllm-tp2-resident-noep-observer-v4-baseline-delta-nvml-retry",
+      "identity_mode": "device_exclusive_local_custody",
+      "dp": 1,
+      "enable_expert_parallel": false,
+      "expert_policy": "MoE weights tensor-sharded; NOT TP2EP2"
+    },
+    "topology": {
+      "tp": 2,
+      "pp": 1,
+      "dp": 1,
+      "ep": 1,
+      "gpu_uuids": [
+        "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+        "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9"
+      ]
+    },
+    "resources": {
+      "gpu_target_bytes": 23622320128,
+      "host_target_bytes": 137438953472,
+      "gpu_expected_total_bytes": 25769803776,
+      "idle_max_device_mib": 0,
+      "sample_interval_seconds": 2,
+      "hard_memory_partition": false,
+      "host_policy": "128 GiB sampled server-tree PSS, predeclared common future Ferrule budget; not total physical host cap",
+      "gpu_policy": "22 GiB/card sampled ceiling; 0.8*24=19.2 GiB/card vLLM planning; not a partition",
+      "nonselected_gpu_delta_tolerance_bytes": 1048576,
+      "nvml_query_timeout_seconds": 3,
+      "nvml_timeout_retries": 1,
+      "nvml_missing_sample_policy": "One recorded timeout retry; never convert missing samples to zero or claim continuous coverage"
+    },
+    "cache": {
+      "status": "unavailable",
+      "reason": "Not supplied by server owner"
+    },
+    "startup": {
+      "status": "unavailable",
+      "reason": "Not supplied by server owner"
+    },
+    "quality_gate": {
+      "status": "unavailable",
+      "reason": "Not supplied by server owner"
+    },
+    "tokenizer": {
+      "status": "unavailable",
+      "reason": "Not supplied by server owner"
+    },
+    "engine_capability": {
+      "status": "unavailable",
+      "reason": "Not supplied by server owner"
+    },
+    "runtime_contract": {
+      "status": "unavailable",
+      "reason": "Not supplied by server owner"
+    },
+    "comparison_intent": {
+      "status": "unavailable",
+      "reason": "Not supplied by server owner"
+    },
+    "unavailable_categories": [
+      "binary",
+      "dependencies",
+      "cache",
+      "startup",
+      "quality_gate",
+      "tokenizer",
+      "engine_capability",
+      "runtime_contract",
+      "comparison_intent"
+    ],
+    "operator_extra": {
+      "fairmatch": false,
+      "exact_speedup": null,
+      "lifecycle": "same server for Hello2, all canaries and QA",
+      "qa_first_label": "HTTP helper first_after_ready here denotes excluded first QA-phase request, NOT first request after server readiness"
+    },
+    "verification": "Operator declarations only; HTTP client cannot verify remote runtime or physical resources",
+    "metadata_file_sha256": "ece7db2b6fc34be4a2a77465ab0ed66785e7134bbb1f7072faec7abf68be55c1"
+  },
+  "workload": {
+    "max_tokens": 8,
+    "seed": 1,
+    "temperature": 0,
+    "n": 1,
+    "endpoint": "raw completions",
+    "template": "none; literal UTF-8 prompt",
+    "input_tokens_expected": null,
+    "warmup": 0,
+    "requests": 3,
+    "repeat": 1,
+    "concurrency": 1,
+    "request_timeout_seconds": 120.0,
+    "measurement_seconds": 600.0,
+    "window_kind": "fixed-work",
+    "arrival": "finite closed-loop; no retries",
+    "ttft_slo": null,
+    "e2e_slo": null
+  },
+  "corpus": [
+    {
+      "id": "qa",
+      "prompt": "The capital of Japan is",
+      "input_tokens": 5,
+      "sha256": "729bebb2f0359fff1b03978118b4d7b01a59ce6c9c545fc4e9918d9e847066d2"
+    },
+    {
+      "id": "arithmetic",
+      "prompt": "7 + 8 =",
+      "input_tokens": 5,
+      "sha256": "eebbd604b42e3f9f7eeb9995c6e7dbbeb875ec2d00b3e364bccee16eadc4099f"
+    },
+    {
+      "id": "chinese",
+      "prompt": "\u4e2d\u56fd\u7684\u9996\u90fd\u662f",
+      "input_tokens": 3,
+      "sha256": "1a176247202551abe92187f32578f28f25601848c6f55d64acff7a261f030e56"
+    }
+  ],
+  "client": {
+    "script_sha256": "0abc2a72eac5abe4430dd79d07ddcf7a457fccd921be9c55144e913c2f7617fd",
+    "python": "3.12.4 | packaged by Anaconda, Inc. | (main, Jun 18 2024, 15:12:24) [GCC 11.2.0]",
+    "executable": "/home/admin/wxw403883/anaconda3/bin/python3.12",
+    "platform": "Linux-4.19.91-009.ali4000.alios7.x86_64-x86_64-with-glibc2.32",
+    "transport": "urllib HTTP/1.1, new TCP/TLS per request; no proxy; persistent CPU client workers",
+    "checkpointing": "atomic fsync at phases; no per-terminal measured checkpoint"
+  },
+  "definitions": {
+    "send": "client HTTP operation start, includes serialization/connect/TLS; not packet-level send",
+    "ttft": "send to first nonempty content SSE event; not exact token time",
+    "request_e2e": "send to full response EOF/error/deadline; DONE time is separately recorded",
+    "content_event_itl": "gaps between nonempty content events, possibly multi-token; NOT token ITL",
+    "mean_tpot_usage_proxy": "(last content event - first content event)/(usage.completion_tokens - 1); success, N>1, >=2 events, no observed reasoning; batching/hidden tokens can bias it",
+    "goodput": "successful usage tokens or length-matched requests divided by the selected common wall denominator; no quality claim; optional SLO thresholds explicit",
+    "percentiles": "linear interpolation at (count-1)*p; separate success/failure populations",
+    "repeats": "same-server windows, not independent cold replicas",
+    "wall": "fixed-time: measurement_seconds including padded idle; fixed-work: first measured HTTP send (dispatch fallback if none) to last client-observed terminal/deadline, no padded idle; failures stay in both denominators"
+  },
+  "warmups": [],
+  "runs": [
+    {
+      "repetition": 0,
+      "started_at": 8419937.65561207,
+      "cutoff_at": 8420537.65561207,
+      "observed_end_at": 8419939.845723921,
+      "stop_reason": null,
+      "requests": [
+        {
+          "index": 0,
+          "repetition": 0,
+          "population": "measured",
+          "prompt_id": "qa",
+          "prompt_sha256": "729bebb2f0359fff1b03978118b4d7b01a59ce6c9c545fc4e9918d9e847066d2",
+          "expected_input_tokens": 5,
+          "status": "success",
+          "error": null,
+          "sent_at": 8419937.656006927,
+          "client_dispatch_at": 8419937.655781725,
+          "http_status": 200,
+          "headers_at": 8419937.68071889,
+          "request_payload": {
+            "model": "qwen35-vllm-tp2-resident-paper",
+            "prompt": "The capital of Japan is",
+            "temperature": 0,
+            "seed": 1,
+            "n": 1,
+            "max_tokens": 8,
+            "stream": true,
+            "stream_options": {
+              "include_usage": true
+            }
+          },
+          "after_deadline_events": [],
+          "sent_unix": 1791476994.6194882,
+          "content_type": "text/event-stream",
+          "ended_at": 8419938.438516622,
+          "deadline_at": 8420057.655781725,
+          "text": " Tokyo.\nThe capital of Japan is",
+          "raw_sse_events": [
+            {
+              "at": 8419937.869721934,
+              "event": "",
+              "data": "{\"id\":\"cmpl-81afaceb3e86f25e\",\"object\":\"text_completion\",\"created\":1791476994,\"model\":\"qwen35-vllm-tp2-resident-paper\",\"choices\":[{\"index\":0,\"text\":\" Tokyo\",\"logprobs\":null,\"finish_reason\":null,\"stop_reason\":null,\"prompt_token_ids\":null,\"token_ids\":null}]}"
+            },
+            {
+              "at": 8419937.950493377,
+              "event": "",
+              "data": "{\"id\":\"cmpl-81afaceb3e86f25e\",\"object\":\"text_completion\",\"created\":1791476994,\"model\":\"qwen35-vllm-tp2-resident-paper\",\"choices\":[{\"index\":0,\"text\":\".\",\"logprobs\":null,\"finish_reason\":null,\"stop_reason\":null,\"prompt_token_ids\":null,\"token_ids\":null}]}"
+            },
+            {
+              "at": 8419938.031363271,
+              "event": "",
+              "data": "{\"id\":\"cmpl-81afaceb3e86f25e\",\"object\":\"text_completion\",\"created\":1791476994,\"model\":\"qwen35-vllm-tp2-resident-paper\",\"choices\":[{\"index\":0,\"text\":\"\\n\",\"logprobs\":null,\"finish_reason\":null,\"stop_reason\":null,\"prompt_token_ids\":null,\"token_ids\":null}]}"
+            },
+            {
+              "at": 8419938.112523288,
+              "event": "",
+              "data": "{\"id\":\"cmpl-81afaceb3e86f25e\",\"object\":\"text_completion\",\"created\":1791476994,\"model\":\"qwen35-vllm-tp2-resident-paper\",\"choices\":[{\"index\":0,\"text\":\"The\",\"logprobs\":null,\"finish_reason\":null,\"stop_reason\":null,\"prompt_token_ids\":null,\"token_ids\":null}]}"
+            },
+            {
+              "at": 8419938.193434576,
+              "event": "",
+              "data": "{\"id\":\"cmpl-81afaceb3e86f25e\",\"object\":\"text_completion\",\"created\":1791476994,\"model\":\"qwen35-vllm-tp2-resident-paper\",\"choices\":[{\"index\":0,\"text\":\" capital\",\"logprobs\":null,\"finish_reason\":null,\"stop_reason\":null,\"prompt_token_ids\":null,\"token_ids\":null}]}"
+            },
+            {
+              "at": 8419938.274003405,
+              "event": "",
+              "data": "{\"id\":\"cmpl-81afaceb3e86f25e\",\"object\":\"text_completion\",\"created\":1791476994,\"model\":\"qwen35-vllm-tp2-resident-paper\",\"choices\":[{\"index\":0,\"text\":\" of\",\"logprobs\":null,\"finish_reason\":null,\"stop_reason\":null,\"prompt_token_ids\":null,\"token_ids\":null}]}"
+            },
+            {
+              "at": 8419938.355909549,
+              "event": "",
+              "data": "{\"id\":\"cmpl-81afaceb3e86f25e\",\"object\":\"text_completion\",\"created\":1791476994,\"model\":\"qwen35-vllm-tp2-resident-paper\",\"choices\":[{\"index\":0,\"text\":\" Japan\",\"logprobs\":null,\"finish_reason\":null,\"stop_reason\":null,\"prompt_token_ids\":null,\"token_ids\":null}]}"
+            },
+            {
+              "at": 8419938.438307717,
+              "event": "",
+              "data": "{\"id\":\"cmpl-81afaceb3e86f25e\",\"object\":\"text_completion\",\"created\":1791476994,\"model\":\"qwen35-vllm-tp2-resident-paper\",\"choices\":[{\"index\":0,\"text\":\" is\",\"logprobs\":null,\"finish_reason\":\"length\",\"stop_reason\":null,\"prompt_token_ids\":null,\"token_ids\":null}]}"
+            },
+            {
+              "at": 8419938.438402018,
+              "event": "",
+              "data": "{\"id\":\"cmpl-81afaceb3e86f25e\",\"object\":\"text_completion\",\"created\":1791476994,\"model\":\"qwen35-vllm-tp2-resident-paper\",\"choices\":[],\"usage\":{\"prompt_tokens\":5,\"total_tokens\":13,\"completion_tokens\":8},\"system_fingerprint\":\"vllm-0.28.0-tp2-50c81650\"}"
+            },
+            {
+              "at": 8419938.43844728,
+              "event": "",
+              "data": "[DONE]"
+            }
+          ],
+          "content_event_times": [
+            8419937.869721934,
+            8419937.950493377,
+            8419938.031363271,
+            8419938.112523288,
+            8419938.193434576,
+            8419938.274003405,
+            8419938.355909549,
+            8419938.438307717
+          ],
+          "content_event_itl_seconds": [
+            0.08077144250273705,
+            0.0808698944747448,
+            0.08116001635789871,
+            0.08091128803789616,
+            0.08056882955133915,
+            0.08190614357590675,
+            0.08239816874265671
+          ],
+          "content_events": 8,
+          "usage": {
+            "prompt_tokens": 5,
+            "total_tokens": 13,
+            "completion_tokens": 8
+          },
+          "actual_output_tokens": 8,
+          "actual_input_tokens": 5,
+          "finish_reason": "length",
+          "finish_at": 8419938.438307717,
+          "usage_at": 8419938.438402018,
+          "done_at": 8419938.43844728,
+          "ttft_seconds": 0.21371500752866268,
+          "request_e2e_seconds": 0.782509695738554,
+          "mean_tpot_usage_proxy_seconds": 0.08122654046331133,
+          "token_itl_seconds": null,
+          "exact_token_tpot_seconds": null,
+          "reasoning_observed": false,
+          "output_token_ids": null,
+          "partial_token_count": 8,
+          "input_length_matches": true,
+          "output_length_matches": true,
+          "length_matched_success": true,
+          "client_observed_at": 8419938.438646762,
+          "right_censored": false
+        },
+        {
+          "index": 1,
+          "repetition": 0,
+          "population": "measured",
+          "prompt_id": "arithmetic",
+          "prompt_sha256": "eebbd604b42e3f9f7eeb9995c6e7dbbeb875ec2d00b3e364bccee16eadc4099f",
+          "expected_input_tokens": 5,
+          "status": "success",
+          "error": null,
+          "sent_at": 8419938.43896641,
+          "client_dispatch_at": 8419938.438783843,
+          "http_status": 200,
+          "headers_at": 8419938.460828524,
+          "request_payload": {
+            "model": "qwen35-vllm-tp2-resident-paper",
+            "prompt": "7 + 8 =",
+            "temperature": 0,
+            "seed": 1,
+            "n": 1,
+            "max_tokens": 8,
+            "stream": true,
+            "stream_options": {
+              "include_usage": true
+            }
+          },
+          "after_deadline_events": [],
+          "sent_unix": 1791476995.402448,
+          "content_type": "text/event-stream",
+          "ended_at": 8419939.14157534,
+          "deadline_at": 8420058.438783843,
+          "text": " ?\n\n7 + 8 = ",
+          "raw_sse_events": [
+            {
+              "at": 8419938.570366649,
+              "event": "",
+              "data": "{\"id\":\"cmpl-b274d18f10aa0674\",\"object\":\"text_completion\",\"created\":1791476995,\"model\":\"qwen35-vllm-tp2-resident-paper\",\"choices\":[{\"index\":0,\"text\":\" ?\",\"logprobs\":null,\"finish_reason\":null,\"stop_reason\":null,\"prompt_token_ids\":null,\"token_ids\":null}]}"
+            },
+            {
+              "at": 8419938.652156558,
+              "event": "",
+              "data": "{\"id\":\"cmpl-b274d18f10aa0674\",\"object\":\"text_completion\",\"created\":1791476995,\"model\":\"qwen35-vllm-tp2-resident-paper\",\"choices\":[{\"index\":0,\"text\":\"\\n\\n\",\"logprobs\":null,\"finish_reason\":null,\"stop_reason\":null,\"prompt_token_ids\":null,\"token_ids\":null}]}"
+            },
+            {
+              "at": 8419938.734370379,
+              "event": "",
+              "data": "{\"id\":\"cmpl-b274d18f10aa0674\",\"object\":\"text_completion\",\"created\":1791476995,\"model\":\"qwen35-vllm-tp2-resident-paper\",\"choices\":[{\"index\":0,\"text\":\"7\",\"logprobs\":null,\"finish_reason\":null,\"stop_reason\":null,\"prompt_token_ids\":null,\"token_ids\":null}]}"
+            },
+            {
+              "at": 8419938.81624335,
+              "event": "",
+              "data": "{\"id\":\"cmpl-b274d18f10aa0674\",\"object\":\"text_completion\",\"created\":1791476995,\"model\":\"qwen35-vllm-tp2-resident-paper\",\"choices\":[{\"index\":0,\"text\":\" +\",\"logprobs\":null,\"finish_reason\":null,\"stop_reason\":null,\"prompt_token_ids\":null,\"token_ids\":null}]}"
+            },
+            {
+              "at": 8419938.897920623,
+              "event": "",
+              "data": "{\"id\":\"cmpl-b274d18f10aa0674\",\"object\":\"text_completion\",\"created\":1791476995,\"model\":\"qwen35-vllm-tp2-resident-paper\",\"choices\":[{\"index\":0,\"text\":\" \",\"logprobs\":null,\"finish_reason\":null,\"stop_reason\":null,\"prompt_token_ids\":null,\"token_ids\":null}]}"
+            },
+            {
+              "at": 8419938.97896059,
+              "event": "",
+              "data": "{\"id\":\"cmpl-b274d18f10aa0674\",\"object\":\"text_completion\",\"created\":1791476995,\"model\":\"qwen35-vllm-tp2-resident-paper\",\"choices\":[{\"index\":0,\"text\":\"8\",\"logprobs\":null,\"finish_reason\":null,\"stop_reason\":null,\"prompt_token_ids\":null,\"token_ids\":null}]}"
+            },
+            {
+              "at": 8419939.060288878,
+              "event": "",
+              "data": "{\"id\":\"cmpl-b274d18f10aa0674\",\"object\":\"text_completion\",\"created\":1791476995,\"model\":\"qwen35-vllm-tp2-resident-paper\",\"choices\":[{\"index\":0,\"text\":\" =\",\"logprobs\":null,\"finish_reason\":null,\"stop_reason\":null,\"prompt_token_ids\":null,\"token_ids\":null}]}"
+            },
+            {
+              "at": 8419939.141419621,
+              "event": "",
+              "data": "{\"id\":\"cmpl-b274d18f10aa0674\",\"object\":\"text_completion\",\"created\":1791476995,\"model\":\"qwen35-vllm-tp2-resident-paper\",\"choices\":[{\"index\":0,\"text\":\" \",\"logprobs\":null,\"finish_reason\":\"length\",\"stop_reason\":null,\"prompt_token_ids\":null,\"token_ids\":null}]}"
+            },
+            {
+              "at": 8419939.141481124,
+              "event": "",
+              "data": "{\"id\":\"cmpl-b274d18f10aa0674\",\"object\":\"text_completion\",\"created\":1791476995,\"model\":\"qwen35-vllm-tp2-resident-paper\",\"choices\":[],\"usage\":{\"prompt_tokens\":5,\"total_tokens\":13,\"completion_tokens\":8},\"system_fingerprint\":\"vllm-0.28.0-tp2-50c81650\"}"
+            },
+            {
+              "at": 8419939.141517986,
+              "event": "",
+              "data": "[DONE]"
+            }
+          ],
+          "content_event_times": [
+            8419938.570366649,
+            8419938.652156558,
+            8419938.734370379,
+            8419938.81624335,
+            8419938.897920623,
+            8419938.97896059,
+            8419939.060288878,
+            8419939.141419621
+          ],
+          "content_event_itl_seconds": [
+            0.0817899089306593,
+            0.08221382088959217,
+            0.0818729717284441,
+            0.08167727291584015,
+            0.08103996701538563,
+            0.08132828772068024,
+            0.0811307430267334
+          ],
+          "content_events": 8,
+          "usage": {
+            "prompt_tokens": 5,
+            "total_tokens": 13,
+            "completion_tokens": 8
+          },
+          "actual_output_tokens": 8,
+          "actual_input_tokens": 5,
+          "finish_reason": "length",
+          "finish_at": 8419939.141419621,
+          "usage_at": 8419939.141481124,
+          "done_at": 8419939.141517986,
+          "ttft_seconds": 0.1314002387225628,
+          "request_e2e_seconds": 0.7026089299470186,
+          "mean_tpot_usage_proxy_seconds": 0.08157899603247643,
+          "token_itl_seconds": null,
+          "exact_token_tpot_seconds": null,
+          "reasoning_observed": false,
+          "output_token_ids": null,
+          "partial_token_count": 8,
+          "input_length_matches": true,
+          "output_length_matches": true,
+          "length_matched_success": true,
+          "client_observed_at": 8419939.141689941,
+          "right_censored": false
+        },
+        {
+          "index": 2,
+          "repetition": 0,
+          "population": "measured",
+          "prompt_id": "chinese",
+          "prompt_sha256": "1a176247202551abe92187f32578f28f25601848c6f55d64acff7a261f030e56",
+          "expected_input_tokens": 3,
+          "status": "success",
+          "error": null,
+          "sent_at": 8419939.141987575,
+          "client_dispatch_at": 8419939.141812336,
+          "http_status": 200,
+          "headers_at": 8419939.163897473,
+          "request_payload": {
+            "model": "qwen35-vllm-tp2-resident-paper",
+            "prompt": "\u4e2d\u56fd\u7684\u9996\u90fd\u662f",
+            "temperature": 0,
+            "seed": 1,
+            "n": 1,
+            "max_tokens": 8,
+            "stream": true,
+            "stream_options": {
+              "include_usage": true
+            }
+          },
+          "after_deadline_events": [],
+          "sent_unix": 1791476996.105469,
+          "content_type": "text/event-stream",
+          "ended_at": 8419939.845347987,
+          "deadline_at": 8420059.141812336,
+          "text": "\u5317\u4eac\uff0c\u5317\u4eac\u662f\u4e2d\u56fd\u7684\u9996\u90fd\u3002\u90a3\u4e48",
+          "raw_sse_events": [
+            {
+              "at": 8419939.272802524,
+              "event": "",
+              "data": "{\"id\":\"cmpl-8f70bc853a0e2905\",\"object\":\"text_completion\",\"created\":1791476996,\"model\":\"qwen35-vllm-tp2-resident-paper\",\"choices\":[{\"index\":0,\"text\":\"\u5317\u4eac\",\"logprobs\":null,\"finish_reason\":null,\"stop_reason\":null,\"prompt_token_ids\":null,\"token_ids\":null}]}"
+            },
+            {
+              "at": 8419939.35443023,
+              "event": "",
+              "data": "{\"id\":\"cmpl-8f70bc853a0e2905\",\"object\":\"text_completion\",\"created\":1791476996,\"model\":\"qwen35-vllm-tp2-resident-paper\",\"choices\":[{\"index\":0,\"text\":\"\uff0c\",\"logprobs\":null,\"finish_reason\":null,\"stop_reason\":null,\"prompt_token_ids\":null,\"token_ids\":null}]}"
+            },
+            {
+              "at": 8419939.440839522,
+              "event": "",
+              "data": "{\"id\":\"cmpl-8f70bc853a0e2905\",\"object\":\"text_completion\",\"created\":1791476996,\"model\":\"qwen35-vllm-tp2-resident-paper\",\"choices\":[{\"index\":0,\"text\":\"\u5317\u4eac\",\"logprobs\":null,\"finish_reason\":null,\"stop_reason\":null,\"prompt_token_ids\":null,\"token_ids\":null}]}"
+            },
+            {
+              "at": 8419939.520747766,
+              "event": "",
+              "data": "{\"id\":\"cmpl-8f70bc853a0e2905\",\"object\":\"text_completion\",\"created\":1791476996,\"model\":\"qwen35-vllm-tp2-resident-paper\",\"choices\":[{\"index\":0,\"text\":\"\u662f\u4e2d\u56fd\",\"logprobs\":null,\"finish_reason\":null,\"stop_reason\":null,\"prompt_token_ids\":null,\"token_ids\":null}]}"
+            },
+            {
+              "at": 8419939.60145872,
+              "event": "",
+              "data": "{\"id\":\"cmpl-8f70bc853a0e2905\",\"object\":\"text_completion\",\"created\":1791476996,\"model\":\"qwen35-vllm-tp2-resident-paper\",\"choices\":[{\"index\":0,\"text\":\"\u7684\u9996\",\"logprobs\":null,\"finish_reason\":null,\"stop_reason\":null,\"prompt_token_ids\":null,\"token_ids\":null}]}"
+            },
+            {
+              "at": 8419939.682668827,
+              "event": "",
+              "data": "{\"id\":\"cmpl-8f70bc853a0e2905\",\"object\":\"text_completion\",\"created\":1791476996,\"model\":\"qwen35-vllm-tp2-resident-paper\",\"choices\":[{\"index\":0,\"text\":\"\u90fd\",\"logprobs\":null,\"finish_reason\":null,\"stop_reason\":null,\"prompt_token_ids\":null,\"token_ids\":null}]}"
+            },
+            {
+              "at": 8419939.763641167,
+              "event": "",
+              "data": "{\"id\":\"cmpl-8f70bc853a0e2905\",\"object\":\"text_completion\",\"created\":1791476996,\"model\":\"qwen35-vllm-tp2-resident-paper\",\"choices\":[{\"index\":0,\"text\":\"\u3002\",\"logprobs\":null,\"finish_reason\":null,\"stop_reason\":null,\"prompt_token_ids\":null,\"token_ids\":null}]}"
+            },
+            {
+              "at": 8419939.845179392,
+              "event": "",
+              "data": "{\"id\":\"cmpl-8f70bc853a0e2905\",\"object\":\"text_completion\",\"created\":1791476996,\"model\":\"qwen35-vllm-tp2-resident-paper\",\"choices\":[{\"index\":0,\"text\":\"\u90a3\u4e48\",\"logprobs\":null,\"finish_reason\":\"length\",\"stop_reason\":null,\"prompt_token_ids\":null,\"token_ids\":null}]}"
+            },
+            {
+              "at": 8419939.845242994,
+              "event": "",
+              "data": "{\"id\":\"cmpl-8f70bc853a0e2905\",\"object\":\"text_completion\",\"created\":1791476996,\"model\":\"qwen35-vllm-tp2-resident-paper\",\"choices\":[],\"usage\":{\"prompt_tokens\":3,\"total_tokens\":11,\"completion_tokens\":8},\"system_fingerprint\":\"vllm-0.28.0-tp2-50c81650\"}"
+            },
+            {
+              "at": 8419939.845282922,
+              "event": "",
+              "data": "[DONE]"
+            }
+          ],
+          "content_event_times": [
+            8419939.272802524,
+            8419939.35443023,
+            8419939.440839522,
+            8419939.520747766,
+            8419939.60145872,
+            8419939.682668827,
+            8419939.763641167,
+            8419939.845179392
+          ],
+          "content_event_itl_seconds": [
+            0.08162770606577396,
+            0.08640929125249386,
+            0.07990824431180954,
+            0.08071095496416092,
+            0.08121010661125183,
+            0.0809723399579525,
+            0.08153822459280491
+          ],
+          "content_events": 8,
+          "usage": {
+            "prompt_tokens": 3,
+            "total_tokens": 11,
+            "completion_tokens": 8
+          },
+          "actual_output_tokens": 8,
+          "actual_input_tokens": 3,
+          "finish_reason": "length",
+          "finish_at": 8419939.845179392,
+          "usage_at": 8419939.845242994,
+          "done_at": 8419939.845282922,
+          "ttft_seconds": 0.1308149490505457,
+          "request_e2e_seconds": 0.7033604122698307,
+          "mean_tpot_usage_proxy_seconds": 0.08176812396517821,
+          "token_itl_seconds": null,
+          "exact_token_tpot_seconds": null,
+          "reasoning_observed": false,
+          "output_token_ids": null,
+          "partial_token_count": 8,
+          "input_length_matches": true,
+          "output_length_matches": true,
+          "length_matched_success": true,
+          "client_observed_at": 8419939.845475942,
+          "right_censored": false
+        }
+      ],
+      "not_issued_indices": [],
+      "measurements": {
+        "window_kind": "fixed-work",
+        "denominator": "first measured HTTP send (dispatch fallback if none) to last client-observed terminal/deadline, including failures and client overhead",
+        "denominator_seconds": 2.189620839431882,
+        "dispatch_start_at": 8419937.656006927,
+        "terminal_observed_at": 8419939.845627766,
+        "elapsed_to_last_terminal_seconds": 2.189620839431882,
+        "time_to_complete_seconds": 2.189620839431882,
+        "all_scheduled_requests_terminal": true,
+        "work_completed": true,
+        "all_requests_successful": true,
+        "intentional_idle_seconds": 0.0,
+        "deadline_limit_seconds": 600.0
+      },
+      "summary": {
+        "scheduled": 3,
+        "offered": 3,
+        "not_issued": 0,
+        "statuses": {
+          "success": 3
+        },
+        "success": 3,
+        "failed": 0,
+        "success_fraction": 1.0,
+        "scheduled_success_fraction": 1.0,
+        "wall_seconds": 2.189620839431882,
+        "successful_output_tokens": 24,
+        "known_usage_output_tokens": 24,
+        "requests_without_usage": 0,
+        "committed_visible_token_rate": null,
+        "committed_visible_token_rate_reason": "SSE text is not token IDs; usage may include hidden/EOS tokens; partial counts unknown",
+        "actual_output_counts": {
+          "8": 3
+        },
+        "actual_input_counts": {
+          "5": 2,
+          "3": 1
+        },
+        "length_matched_success": 3,
+        "slo_qualified_success": null,
+        "successful_requests_per_second": 1.370100222821399,
+        "successful_output_tokens_per_second": 10.960801782571192,
+        "length_matched_requests_per_second": 1.370100222821399,
+        "length_matched_output_tokens_per_second": 10.960801782571192,
+        "slo_goodput_requests_per_second": null,
+        "distributions": {
+          "success_ttft_seconds": {
+            "count": 3,
+            "mean": 0.15864339843392372,
+            "p50": 0.1314002387225628,
+            "p95": 0.2054835306480527
+          },
+          "success_request_e2e_seconds": {
+            "count": 3,
+            "mean": 0.7294930126518011,
+            "p50": 0.7033604122698307,
+            "p95": 0.7745947673916816
+          },
+          "success_mean_tpot_usage_proxy_seconds": {
+            "count": 3,
+            "mean": 0.08152455348698866,
+            "p50": 0.08157899603247643,
+            "p95": 0.08174921117190803
+          },
+          "success_content_event_itl_seconds": {
+            "count": 21,
+            "mean": 0.08152455348698866,
+            "p50": 0.08121010661125183,
+            "p95": 0.08239816874265671
+          },
+          "failure_ttft_seconds": {
+            "count": 0,
+            "mean": null,
+            "p50": null,
+            "p95": null
+          },
+          "failure_request_e2e_seconds": {
+            "count": 0,
+            "mean": null,
+            "p50": null,
+            "p95": null
+          },
+          "failure_mean_tpot_usage_proxy_seconds": {
+            "count": 0,
+            "mean": null,
+            "p50": null,
+            "p95": null
+          },
+          "failure_content_event_itl_seconds": {
+            "count": 0,
+            "mean": null,
+            "p50": null,
+            "p95": null
+          }
+        },
+        "window_kind": "fixed-work",
+        "denominator": "first measured HTTP send (dispatch fallback if none) to last client-observed terminal/deadline, including failures and client overhead",
+        "denominator_seconds": 2.189620839431882,
+        "time_to_complete_seconds": 2.189620839431882
+      }
+    }
+  ],
+  "errors": [],
+  "comparison_speedup": null,
+  "aggregate": {
+    "scheduled": 3,
+    "offered": 3,
+    "not_issued": 0,
+    "statuses": {
+      "success": 3
+    },
+    "success": 3,
+    "failed": 0,
+    "success_fraction": 1.0,
+    "scheduled_success_fraction": 1.0,
+    "wall_seconds": 2.189620839431882,
+    "successful_output_tokens": 24,
+    "known_usage_output_tokens": 24,
+    "requests_without_usage": 0,
+    "committed_visible_token_rate": null,
+    "committed_visible_token_rate_reason": "SSE text is not token IDs; usage may include hidden/EOS tokens; partial counts unknown",
+    "actual_output_counts": {
+      "8": 3
+    },
+    "actual_input_counts": {
+      "5": 2,
+      "3": 1
+    },
+    "length_matched_success": 3,
+    "slo_qualified_success": null,
+    "successful_requests_per_second": 1.370100222821399,
+    "successful_output_tokens_per_second": 10.960801782571192,
+    "length_matched_requests_per_second": 1.370100222821399,
+    "length_matched_output_tokens_per_second": 10.960801782571192,
+    "slo_goodput_requests_per_second": null,
+    "distributions": {
+      "success_ttft_seconds": {
+        "count": 3,
+        "mean": 0.15864339843392372,
+        "p50": 0.1314002387225628,
+        "p95": 0.2054835306480527
+      },
+      "success_request_e2e_seconds": {
+        "count": 3,
+        "mean": 0.7294930126518011,
+        "p50": 0.7033604122698307,
+        "p95": 0.7745947673916816
+      },
+      "success_mean_tpot_usage_proxy_seconds": {
+        "count": 3,
+        "mean": 0.08152455348698866,
+        "p50": 0.08157899603247643,
+        "p95": 0.08174921117190803
+      },
+      "success_content_event_itl_seconds": {
+        "count": 21,
+        "mean": 0.08152455348698866,
+        "p50": 0.08121010661125183,
+        "p95": 0.08239816874265671
+      },
+      "failure_ttft_seconds": {
+        "count": 0,
+        "mean": null,
+        "p50": null,
+        "p95": null
+      },
+      "failure_request_e2e_seconds": {
+        "count": 0,
+        "mean": null,
+        "p50": null,
+        "p95": null
+      },
+      "failure_mean_tpot_usage_proxy_seconds": {
+        "count": 0,
+        "mean": null,
+        "p50": null,
+        "p95": null
+      },
+      "failure_content_event_itl_seconds": {
+        "count": 0,
+        "mean": null,
+        "p50": null,
+        "p95": null
+      }
+    },
+    "unstarted_windows": 0,
+    "window_kind": "fixed-work",
+    "denominator": "sum of started-run wall_seconds; warmup/startup excluded",
+    "denominator_seconds": 2.189620839431882,
+    "unobserved_request_budget": 0
+  },
+  "finalized": true,
+  "checkpoint_unix": 1791476996.8092604,
+  "measurements": {
+    "window_kind": "fixed-work",
+    "denominator": "sum of started-run wall_seconds; warmup/startup excluded",
+    "denominator_seconds": 2.189620839431882,
+    "work_completed": true,
+    "all_requests_successful": true,
+    "time_to_complete_seconds": 2.189620839431882,
+    "intentional_idle_seconds": 0.0
+  },
+  "measurement_in_progress": false,
+  "active_requests": [],
+  "server_drain": "unverified; client completion/timeout/close does not prove GPU quiescence"
+}

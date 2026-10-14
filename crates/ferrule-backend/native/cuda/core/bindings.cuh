@@ -6,10 +6,13 @@
 #include "core/dense_ops.cuh"
 #include "core/cutlass_f32.cuh"
 #include "cutlass/bf16_linear.cuh"
+#include "cutlass/numeric_bf16_gemv.cuh"
+#include "cutlass/bf16_gemmex.cuh"
 #include "core/tensor_ops.cuh"
 #include "core/sequence_ops.cuh"
 #include "core/attention_ops.cuh"
 #include "core/moe_ops.cuh"
+#include "core/router_full_softmax.cuh"
 #include <cuda_runtime_api.h>
 #include <stdint.h>
 
@@ -98,7 +101,15 @@ extern "C" int32_t ferrule_core_data_launch(const FerruleCoreDataArgs *args) {
        !args->input0 || !args->output0 || !args->output1)) {
     return static_cast<int32_t>(cudaErrorInvalidValue);
   }
-  if (args->kind == FERRULE_CORE_DATA_SIGMOID_GATE ||
+  if (args->kind == FERRULE_CORE_DATA_SIGMOID_GATE_BF16 &&
+      (args->reserved || !args->rows || !args->width ||
+       !args->count || args->count > INT32_MAX ||
+       static_cast<uint64_t>(args->rows) * args->width != args->count ||
+       args->input0 % 2 || args->input1 % 2 || args->output0 % 2)) {
+    return static_cast<int32_t>(cudaErrorInvalidValue);
+  }
+  if (args->kind == FERRULE_CORE_DATA_SIGMOID_GATE_BF16 ||
+      args->kind == FERRULE_CORE_DATA_SIGMOID_GATE ||
       args->kind == FERRULE_CORE_DATA_SILU_GATE) {
     if (!args->count || !args->input0 || !args->input1 || !args->output0 ||
         (args->flags & ~static_cast<uint32_t>(FERRULE_CORE_GATE_ROW_BROADCAST))) {
@@ -159,6 +170,16 @@ ferrule_core_router_launch(const FerruleCoreRouterArgs *args) {
   if (!ferrule::cuda::core::valid(args)) {
     return static_cast<int32_t>(cudaErrorInvalidValue);
   }
+  if (args->kind == FERRULE_CORE_ROUTER_FULL_SOFTMAX_TOPK) {
+    if (!ferrule::cuda::core::full_router_valid(*args))
+      return static_cast<int32_t>(cudaErrorInvalidValue);
+    if (args->probabilities)
+      ferrule::cuda::core::launch_full_router<false, true>(*args);
+    else
+      ferrule::cuda::core::launch_full_router(*args);
+    return ferrule::cuda::core::launch_status();
+  }
+  if (args->probabilities) return static_cast<int32_t>(cudaErrorInvalidValue);
   ferrule::cuda::core::router_kernel<<<ferrule::cuda::core::blocks_for(args->rows), ferrule::cuda::core::kBlock, 0, ferrule::cuda::core::stream(args->stream)>>>(
       *args);
   return ferrule::cuda::core::launch_status();
@@ -240,6 +261,17 @@ extern "C" int32_t ferrule_core_moe_launch(const FerruleCoreMoeArgs *args) {
   case FERRULE_CORE_MOE_SWIGLU_STANDARD_F32:
     count = args->n;
     break;
+  case FERRULE_CORE_MOE_WEIGHTED_COMBINE_BF16:
+    if (!args->tokens || !args->hidden || !args->batch_columns ||
+        static_cast<uint64_t>(args->tokens) * args->hidden > INT32_MAX ||
+        static_cast<uint64_t>(args->batch_columns) * args->hidden > INT32_MAX ||
+        !args->input || !args->route_slots || !args->route_weights || !args->output ||
+        args->input % 2 || args->output % 2 || args->route_slots % 4 ||
+        args->route_weights % 4) {
+      return static_cast<int32_t>(cudaErrorInvalidValue);
+    }
+    count = static_cast<uint64_t>(args->tokens) * args->hidden;
+    break;
   case FERRULE_CORE_MOE_WEIGHTED_COMBINE_F32:
     count = static_cast<uint64_t>(args->tokens) * args->hidden;
     break;
@@ -319,14 +351,7 @@ ferrule_core_transformer_f32_launch(const FerruleCoreTransformerArgs *args) {
   }
   if (args->kind == FERRULE_CORE_TRANSFORMER_PAGED_F32_CAUSAL_GQA ||
       args->kind == FERRULE_CORE_TRANSFORMER_PAGED_F32_APPEND_CAUSAL_GQA) {
-    const uint64_t heads = static_cast<uint64_t>(args->rows) * args->q_heads;
-    // Keep the scalar launch beyond CUDA's one-dimensional grid limit.
-    if (heads <= INT32_MAX) {
-      transformer_causal_gqa_cooperative_f32_kernel<<<static_cast<uint32_t>(heads), kBlock, 0, stream(args->stream)>>>(*args);
-    } else {
-      const uint64_t count = heads * args->head_dim;
-      transformer_causal_gqa_kernel<float><<<blocks_for(count), kBlock, 0, stream(args->stream)>>>(*args);
-    }
+    launch_transformer_causal_gqa_f32(*args);
   }
   return launch_status();
 }
@@ -360,4 +385,18 @@ ferrule_core_transformer_launch(const FerruleCoreTransformerArgs *args) {
                                     ferrule::cuda::core::stream(args->stream)>>>(*args);
   }
   return ferrule::cuda::core::launch_status();
+}
+
+extern "C" int32_t
+ferrule_core_streaming_gqa_launch(const FerruleCoreStreamingGqaArgs *a) {
+  using namespace ferrule::cuda::core;
+  if (!a || !a->rows || !a->q_heads || !a->kv_heads || !a->head_dim ||
+      a->q_heads % a->kv_heads || uint64_t(a->rows) * a->q_heads > INT32_MAX ||
+      !a->query || !a->key || !a->value || !a->partial ||
+      !isfinite(a->softmax_scale) || a->softmax_scale <= 0 ||
+      a->query_start > UINT64_MAX - a->rows || a->kv_start > UINT64_MAX - a->tokens) {
+    return static_cast<int32_t>(cudaErrorInvalidValue);
+  }
+  streaming_gqa_partial_kernel<<<a->rows * a->q_heads, kBlock, 0, stream(a->stream)>>>(*a);
+  return launch_status();
 }

@@ -20,14 +20,18 @@ fn main() -> anyhow::Result<()> {
     // Reports and the private child protocol own stdout; diagnostics use stderr.
     if !matches!(
         &cli.command,
-        Command::BenchParallel(_) | Command::RankWorker(_)
+        Command::BenchParallel(_)
+            | Command::RankWorker(_)
+            | Command::AnalyzeKvset(_)
+            | Command::RankServe(_)
     ) {
         ferrule_common::observability::init_tracing();
     }
     match cli.command {
+        Command::AnalyzeKvset(args) => commands::analyze_kvset::run(*args),
         Command::Info { model } => cmd_info(&model),
         Command::Cuda => cmd_cuda(),
-        Command::Serve(args) => cmd_serve(args),
+        Command::Serve(args) => cmd_serve(*args),
         Command::Chat {
             model,
             max_tokens,
@@ -43,6 +47,7 @@ fn main() -> anyhow::Result<()> {
         ),
         Command::BenchInteractive {
             model,
+            backend,
             prompts,
             max_tokens,
             chat_template,
@@ -52,9 +57,11 @@ fn main() -> anyhow::Result<()> {
             output_head_chunk_rows,
             moe_hotset_experts,
             golden,
+            trace,
             json,
         } => cmd_bench_interactive(
             &model,
+            backend.as_deref(),
             &prompts,
             max_tokens,
             chat_template.as_deref(),
@@ -64,10 +71,12 @@ fn main() -> anyhow::Result<()> {
             output_head_chunk_rows,
             moe_hotset_experts,
             golden.as_deref(),
+            &trace,
             json,
         ),
         Command::BenchParallel(args) => cmd_bench_parallel(args),
         Command::RankWorker(args) => commands::rank_worker::serve(args),
+        Command::RankServe(args) => commands::network_rank::serve(args),
         Command::InspectWeightPack { path } => cmd_inspect_weightpack(&path),
     }
 }

@@ -1,0 +1,36 @@
+test_instrumentation_live (unittest.loader._FailedTest.test_instrumentation_live) ... ERROR
+test_actual_failed_cleanup_sample_reproduces_pending_without_relaxation (test_instrumentation_scope.InstrumentationScope.test_actual_failed_cleanup_sample_reproduces_pending_without_relaxation) ... ok
+test_b1_return_foreign_nonselected_and_missing_still_abort (test_instrumentation_scope.InstrumentationScope.test_b1_return_foreign_nonselected_and_missing_still_abort) ... ok
+test_compute_unknown_missing_or_unstable_probe_never_admitted (test_instrumentation_scope.InstrumentationScope.test_compute_unknown_missing_or_unstable_probe_never_admitted) ... ok
+test_locks_are_sorted_and_atomic_via_existing_context (test_instrumentation_scope.InstrumentationScope.test_locks_are_sorted_and_atomic_via_existing_context) ... ok
+test_missing_probe_grant_blocks_before_acquisition (test_instrumentation_scope.InstrumentationScope.test_missing_probe_grant_blocks_before_acquisition) ... ok
+test_model_delta_remains_one_mib_no_rebaseline_no_visibility_expansion (test_instrumentation_scope.InstrumentationScope.test_model_delta_remains_one_mib_no_rebaseline_no_visibility_expansion) ... ok
+test_model_visibility_stays_two_cards_and_final_returns_original_baseline (test_instrumentation_scope.InstrumentationScope.test_model_visibility_stays_two_cards_and_final_returns_original_baseline) ... ok
+test_partial_lock_failure_releases_in_reverse_order (test_instrumentation_scope.InstrumentationScope.test_partial_lock_failure_releases_in_reverse_order) ... ok
+test_plan_disables_metrics_but_does_not_claim_no_enumeration (test_instrumentation_scope.InstrumentationScope.test_plan_disables_metrics_but_does_not_claim_no_enumeration) ... ok
+test_root_identity_and_original_final_idle_required (test_instrumentation_scope.InstrumentationScope.test_root_identity_and_original_final_idle_required) ... ok
+test_selected_utilization_after_reap_is_pending_not_idle (test_instrumentation_scope.InstrumentationScope.test_selected_utilization_after_reap_is_pending_not_idle) ... ok
+test_stable_instrumentation_baseline_is_separate_from_original_zero (test_instrumentation_scope.InstrumentationScope.test_stable_instrumentation_baseline_is_separate_from_original_zero) ... ok
+test_unstable_baseline_does_not_rebaseline_or_relax_tolerance (test_instrumentation_scope.InstrumentationScope.test_unstable_baseline_does_not_rebaseline_or_relax_tolerance) ... ok
+
+======================================================================
+ERROR: test_instrumentation_live (unittest.loader._FailedTest.test_instrumentation_live)
+----------------------------------------------------------------------
+ImportError: Failed to import test module: test_instrumentation_live
+Traceback (most recent call last):
+  File "/home/admin/wxw403883/anaconda3/lib/python3.12/unittest/loader.py", line 396, in _find_test_path
+    module = self._get_module_from_name(name)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/admin/wxw403883/anaconda3/lib/python3.12/unittest/loader.py", line 339, in _get_module_from_name
+    __import__(name)
+  File "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/test_instrumentation_live.py", line 11, in <module>
+    import paired as p
+  File "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/paired.py", line 23, in <module>
+    import observed
+ModuleNotFoundError: No module named 'observed'
+
+
+----------------------------------------------------------------------
+Ran 14 tests in 0.002s
+
+FAILED (errors=1)

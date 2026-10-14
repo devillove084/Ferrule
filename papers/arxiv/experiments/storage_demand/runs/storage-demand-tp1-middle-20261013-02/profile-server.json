@@ -1,0 +1,19 @@
+{
+  "schema": "ferrule.profile-server.v1",
+  "started_monotonic": 8836694.43348697,
+  "started_unix_ns": 1791893751396968677,
+  "returncode": 0,
+  "stop_reason": "matrix_worker_stop_marker",
+  "environment": {
+    "FERRULE_PROCESS_IPC_TIMING": null,
+    "CUDA_VISIBLE_DEVICES": "",
+    "LD_LIBRARY_PATH": null,
+    "LD_PRELOAD": null
+  },
+  "instrumentation": "compile_time_unverified_until_sink",
+  "descendant_custody": "outer_subreaper_required",
+  "pid": 71457,
+  "shutdown_started_monotonic": 8836766.467877794,
+  "ended_monotonic": 8836767.53530671,
+  "ended_unix_ns": 1791893824498790464
+}

@@ -1,0 +1,157 @@
+<td colspan="2"><p>If true, stop collecting automatically when the launched process has exited or when the duration
+expires - whichever occurs first. If false, duration must be set and the collection stops only when
+the duration expires. Nsight Systems does not officially support runs longer than 5 minutes.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">--syscall</span></code> (beta)</p></td>
+<td><p>process-tree,
+pid-namespace,
+<strong>none</strong></p></td>
+<td colspan="2"><p>Collect system calls. The value defines the collection scope: <code class="docutils literal notranslate"><span class="pre">process-tree</span></code> makes it tracing the
+application processes only, <code class="docutils literal notranslate"><span class="pre">pid-namespace</span></code> - all processes in the current PID namespace and its
+child namespaces (similar to the <code class="docutils literal notranslate"><span class="pre">system-wide</span></code> mode of other features).</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--trace</span></code>
+or <code class="docutils literal notranslate"><span class="pre">-t</span></code></p></td>
+<td><p><strong>cuda</strong>, <strong>opengl</strong>,
+<strong>nvtx</strong>, <strong>osrt</strong>,
+cuda-sw, cudnn,
+cublas, cusolver,
+cublas-verbose,
+cusparse-verbose,
+cudla, cudla-verbose,
+cusolver-verbose,
+dx11, dx12, openacc,
+dx11-annotations,
+dx12-annotations,
+opengl-annotations,
+openmp, mpi, nvvideo,
+tegra-accelerators,
+ucx, openxr, oshmem,
+openxr-annotations,
+python-gil, gds, wddm,
+s3 (experimental),
+s3-verbose
+(experimental),
+vulkan-annotations,
+vulkan, none</p></td>
+<td colspan="2"><p>Select the API(s) to be traced. The osrt switch controls the OS runtime libraries tracing. Multiple
+APIs can be selected, separated by commas only (no spaces). Since OpenACC and cuXXX APIs
+are tightly linked with CUDA, selecting one of those APIs will automatically enable CUDA tracing.
+cublas, cudla, cusparse and cusolver all have XXX-verbose options available.
+Reflex SDK latency markers will be automatically collected when DX or vulkan API trace is enabled.
+See information on <code class="docutils literal notranslate"><span class="pre">--mpi-impl</span></code> option below if mpi is selected. If <code class="docutils literal notranslate"><span class="pre">&lt;api&gt;-annotations</span></code> is
+selected, the corresponding API will also be traced. If the none option is selected, no APIs are
+traced and no other API can be selected.</p>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>cuDNN is not available on Windows target.</p>
+</div>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>The <code class="docutils literal notranslate"><span class="pre">cuda</span></code> option uses the Hardware Event System which is available for GPUs beginning with
+Blackwell. This is a more performant technology. If the tool needs to it can fall back to software
+based legacy trace, <code class="docutils literal notranslate"><span class="pre">cuda-sw</span></code>. In this case the tool will generate a diagnostic message in the
+Diagnostics Summary report page.</p>
+</div>
+</td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">--trace-fork-before-exec</span></code></p></td>
+<td><p>true, <strong>false</strong></p></td>
+<td colspan="2"><p>If true, trace any child process after fork and before they call one of the exec functions. Beware,
+tracing in this interval relies on undefined behavior and might cause your application to crash or
+deadlock. This option is only available on Linux target platforms.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--vsync</span></code></p></td>
+<td><p>true, <strong>false</strong></p></td>
+<td colspan="2"><p>Collect vsync events. If collection of vsync events is enabled, display/display_scanline ftrace
+events will also be captured. Available in Nsight Systems Embedded Platforms Edition only.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">--vulkan-gpu-workload</span></code></p></td>
+<td><p>true, false,
+batch, ,none
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">--sampling-trigger</span></code></p></td>
+<td><p><strong>timer</strong>, <strong>sched</strong>,
+perf, cuda</p></td>
+<td><p>Specify backtrace collection trigger. Multiple APIs can be selected, separated by commas only
+(no spaces). Available on Nsight Systems Embedded Platforms Edition targets only.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--session</span></code></p></td>
+<td><p>session identifier,
+<strong>none</strong></p></td>
+<td><p>Launch the application in the indicated session. The option argument must represent a valid session
+name or ID as reported by <code class="docutils literal notranslate"><span class="pre">nsys</span> <span class="pre">sessions</span> <span class="pre">list</span></code>. Any <code class="docutils literal notranslate"><span class="pre">%q{ENV_VAR}</span></code> pattern will be substituted with
+the value of the environment variable. Any <code class="docutils literal notranslate"><span class="pre">%h</span></code> pattern will be substituted with the hostname of the
+system. Any <code class="docutils literal notranslate"><span class="pre">%%</span></code> pattern will be substituted with <code class="docutils literal notranslate"><span class="pre">%</span></code>.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">--session-new</span></code></p></td>
+<td><p>[a-Z][0-9,a-Z,spaces]</p></td>
+<td><p>Default is profile-&lt;id&gt;-&lt;application&gt;. Name the session created by the command. Name must start with an
+alphabetical character followed by printable or space characters. Any <code class="docutils literal notranslate"><span class="pre">%q{ENV_VAR}</span></code> pattern will be
+substituted with the value of the environment variable. Any <code class="docutils literal notranslate"><span class="pre">%h</span></code> pattern will be substituted with the
+hostname of the system. Any <code class="docutils literal notranslate"><span class="pre">%%</span></code> pattern will be substituted with <code class="docutils literal notranslate"><span class="pre">%</span></code>.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--show-output</span></code>
+or <code class="docutils literal notranslate"><span class="pre">-w</span></code></p></td>
+<td><p><strong>true</strong>, false</p></td>
+<td><p>If true, send the target process’s stdout and stderr streams to both the console and stdout/stderr
+files which are added to the report file. If false, only send the target process stdout and stderr
+streams to the stdout/stderr files which are added to the report file.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">--trace</span></code>
+or <code class="docutils literal notranslate"><span class="pre">-t</span></code></p></td>
+<td><p><strong>cuda</strong>, <strong>opengl</strong>,
+<strong>nvtx</strong>, <strong>osrt</strong>,
+cuda-sw, cudnn,
+cublas, cusolver,
+cublas-verbose,
+cusparse-verbose,
+cudla, cudla-verbose,
+cusolver-verbose,
+dx11, dx12, openacc,
+dx11-annotations,
+dx12-annotations,
+opengl-annotations,
+openmp, mpi, nvvideo,
+tegra-accelerators,
+ucx, openxr, oshmem,
+openxr-annotations,
+python-gil, gds,
+s3 (experimental),
+s3-verbose
+(experimental), wddm,
+vulkan-annotations,
+vulkan, none</p></td>
+<td><p>Select the API(s) to be traced. The osrt switch controls the OS runtime libraries tracing. Multiple
+APIs can be selected, separated by commas only (no spaces). Since OpenACC and cuXXX APIs
+are tightly linked with CUDA, selecting one of those APIs will automatically enable CUDA tracing.
+cublas, cudla, cusparse and cusolver all have XXX-verbose options available.
+Reflex SDK latency markers will be automatically collected when DX or vulkan API trace is enabled.
+See information on <code class="docutils literal notranslate"><span class="pre">--mpi-impl</span></code> option below if mpi is selected. If <code class="docutils literal notranslate"><span class="pre">&lt;api&gt;-annotations</span></code> is
+selected, the corresponding API will also be traced. If the none option is selected, no APIs are
+traced and no other API can be selected.</p>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>cuDNN is not available on Windows target.</p>
+</div>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>The <code class="docutils literal notranslate"><span class="pre">cuda</span></code> option uses the Hardware Event System which is available for GPUs beginning with
+Blackwell. This is a more performant technology. If the tool needs to it can fall back to software
+based legacy trace, <code class="docutils literal notranslate"><span class="pre">cuda-sw</span></code>. In this case the tool will generate a diagnostic message in the
+Diagnostics Summary report page.</p>
+</div>
+</td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--trace-fork-before-exec</span></code></p></td>
+<td><p>true, <strong>false</strong></p></td>
+<td><p>If true, trace any child process after fork and before they call one of the exec functions. Beware,
+tracing in this interval relies on undefined behavior and might cause your application to crash or
+deadlock. This option is only available on Linux target platforms.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">--vulkan-gpu-workload</span></code></p></td>
+<td><p>true, false,
+batch, ,none
+<strong>individual</strong></p></td>
+<td><p>Default is individual. If individual or true, trace each Vulkan workload’s GPU activity individually.
+If batch, trace Vulkan workloads’ GPU activity in <code class="docutils literal notranslate"><span class="pre">vkQueueSubmit</span></code> call batches. If none or false, do

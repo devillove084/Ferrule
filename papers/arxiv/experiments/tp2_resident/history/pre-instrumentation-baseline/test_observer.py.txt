@@ -1,0 +1,109 @@
+"""CPU regressions for the shared observer and one-server orchestration."""
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import unittest
+from unittest import mock
+
+sys.dont_write_bytecode=True
+sys.path.insert(0,str(Path(__file__).resolve().parent))
+import experiment_current as current
+import observer
+
+
+class Snapshot(unittest.TestCase):
+    def setUp(self):
+        self.root=dict(pid=10,birth_ticks=100,ppid=1,state='S')
+        self.leaf=dict(pid=11,birth_ticks=101,ppid=10,state='S')
+        self.ids={10:self.root,11:self.leaf}
+
+    def memory(self,pid):
+        return dict(pid=pid,Pss=4096,Rss=8192)
+
+    def test_departed_leaf_missing_not_zero_and_root_survives(self):
+        def memory(pid):
+            if pid==11: raise ProcessLookupError('leaf exited')
+            return self.memory(pid)
+        s=observer.host_snapshot(self.root,self.ids.__getitem__,memory,pids=[10,11])
+        self.assertEqual(s['status'],'incomplete')
+        self.assertIsNone(s['pss_bytes'])
+        self.assertEqual(s['partial_tree_pss_lower_bound_bytes'],4096)
+        self.assertIn(11,s['omitted_branches'])
+        self.assertEqual([r['pid'] for r in s['processes']],[10])
+
+    def test_next_complete_snapshot_recovers_without_restart(self):
+        s=observer.host_snapshot(self.root,self.ids.__getitem__,self.memory,pids=[10])
+        self.assertEqual(s['status'],'complete')
+        self.assertEqual(s['pss_bytes'],4096)
+
+    def test_missing_root_memory_is_incomplete_not_custody_loss(self):
+        def memory(pid): raise ProcessLookupError('smaps temporarily gone')
+        s=observer.host_snapshot(self.root,self.ids.__getitem__,memory,pids=[10])
+        self.assertEqual(s['status'],'incomplete')
+        self.assertIsNone(s['pss_bytes'])
+
+    def test_root_reuse_is_fatal(self):
+        with self.assertRaises(observer.CustodyLost):
+            observer.host_snapshot(self.root,lambda pid:dict(self.root,birth_ticks=999),self.memory,pids=[10])
+
+    def test_dead_intermediate_omits_whole_branch(self):
+        ids=dict(self.ids,**{})
+        ids[12]=dict(pid=12,birth_ticks=102,ppid=11,state='S')
+        def memory(pid):
+            if pid==11: raise FileNotFoundError('dead branch')
+            return self.memory(pid)
+        s=observer.host_snapshot(self.root,ids.__getitem__,memory,pids=[10,11,12])
+        self.assertEqual(set(s['omitted_branches']),{11,12})
+        self.assertEqual([r['pid'] for r in s['processes']],[10])
+
+    def test_enumeration_foreign_disappearance_does_not_lose_root(self):
+        def identity(pid):
+            if pid==99: raise ProcessLookupError('unrelated proc exit')
+            return self.ids[pid]
+        s=observer.host_snapshot(self.root,identity,self.memory,pids=[10,99])
+        self.assertEqual(s['status'],'complete')
+        self.assertEqual(s['unclassified_proc_enumeration_disappearances'],[99])
+
+
+class Queries(unittest.TestCase):
+    def test_single_diagnostic_retry_has_15s_total_budget(self):
+        uuids=[*current.UUIDS,*['GPU-'+str(i).zfill(36) for i in range(2,8)]]
+        output='\n'.join(f'{i}, {u}, 24576, 0, 0' for i,u in enumerate(uuids))
+        run=mock.Mock(side_effect=[subprocess.TimeoutExpired('gpu',3),
+                                  mock.Mock(stdout=output),mock.Mock(stdout='')])
+        events=[]
+        s=observer.all_gpu_sample(current.UUIDS[0],current.NOTE,event=events.append,run=run,clock=lambda:0)
+        self.assertEqual(run.call_count,3)
+        self.assertEqual([c.kwargs['timeout'] for c in run.call_args_list],[3,15,15])
+        self.assertTrue(s['diagnostic_retry'])
+        self.assertEqual(len(events),1)
+        self.assertIsNone(events[0]['gpu_bytes'])
+
+    def test_exhausted_query_records_both_missing_attempts(self):
+        events=[]
+        run=mock.Mock(side_effect=subprocess.TimeoutExpired('gpu',3))
+        with self.assertRaises(subprocess.TimeoutExpired):
+            observer.all_gpu_sample(current.UUIDS[0],current.NOTE,event=events.append,run=run,clock=lambda:0)
+        self.assertEqual(run.call_count,2)
+        self.assertEqual(len(events),2)
+        self.assertTrue(all(e['gpu_bytes'] is None for e in events))
+
+
+class Lifecycle(unittest.TestCase):
+    def test_canary_failure_blocks_qa_in_same_session(self):
+        with tempfile.TemporaryDirectory(dir=current.HERE) as name:
+            root=Path(name); case=root/'session'; case.mkdir()
+            current.ct.write(root/'canaries.json',[])
+            p=dict(config=current.shared.config(),source_pins={},model_identity={})
+            gates=[dict(status='pass'),dict(status='fail')]
+            with mock.patch.object(current.shared,'request_block',side_effect=gates) as request:
+                monitor=mock.Mock(); monitor.failed.is_set.return_value=False
+                result=current.requests(case,p,monitor)
+            self.assertEqual(result['status'],'canary_failed')
+            self.assertEqual(request.call_count,2)
+            self.assertFalse((case/'qa8-V1').exists())
+            self.assertEqual(current.PROTOCOL['server_starts'],1)
+
+
+if __name__=='__main__': unittest.main()

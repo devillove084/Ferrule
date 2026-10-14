@@ -638,6 +638,7 @@ impl<P: RuntimeMaterializationProvider> LoadRegistry<P> {
     }
 
     /// Constructs a registry with a generous deterministic resource catalog.
+    #[cfg(any(test, feature = "cpu-reference"))]
     pub fn with_testing_resources(provider: P) -> Result<Self, RegistryError> {
         Self::new(
             provider,

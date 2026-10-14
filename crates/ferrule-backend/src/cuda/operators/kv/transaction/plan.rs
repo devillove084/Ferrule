@@ -33,29 +33,90 @@ pub(super) fn validate_schema(
         || planes[1].name != "standard_gqa.value"
         || planes[0].elements_per_token != planes[1].elements_per_token
         || planes[0].layer_count != planes[1].layer_count
+        || planes[0].element_type != planes[1].element_type
     {
         return Err(error(
             "CUDA GQA requires matching standard key/value plane shapes",
         ));
     }
+    let mut total_bytes = 0usize;
     for plane in planes {
-        if plane.element_type != KvElementType::F32 {
-            return Err(error(
-                "unsupported CUDA transactional GQA KV dtype: only F32 is implemented; BF16 planes are not supported",
-            ));
-        }
         if plane.elements_per_token == 0 || plane.layer_count == 0 {
             return Err(error("CUDA GQA plane dimensions must be positive"));
         }
         for dim in [page_size, plane.elements_per_token, plane.layer_count] {
             u32::try_from(dim).map_err(|_| error("CUDA GQA layout exceeds u32 ABI"))?;
         }
-        plane
+        let bytes = plane
             .checked_page_bytes(page_size)
             .and_then(|bytes| bytes.checked_mul(capacity))
             .ok_or_else(|| error("CUDA GQA plane capacity overflow"))?;
+        total_bytes = total_bytes
+            .checked_add(bytes)
+            .ok_or_else(|| error("CUDA GQA total capacity overflow"))?;
     }
     Ok(())
+}
+
+/// Chunked staging and HostKV operators still have an explicitly F32 ABI.
+pub(super) fn validate_plane_type(
+    planes: &[KvPlaneDescriptor],
+    dtype: KvElementType,
+) -> Result<()> {
+    if planes.len() != 2 || planes.iter().any(|plane| plane.element_type != dtype) {
+        return Err(error(format!(
+            "CUDA transactional GQA requires two {dtype:?} planes"
+        )));
+    }
+    Ok(())
+}
+
+pub(super) fn validate_storage_mode(planes: &[KvPlaneDescriptor], chunked: bool) -> Result<()> {
+    if chunked {
+        validate_plane_type(planes, KvElementType::F32).map_err(|_| {
+            error("BF16 transactional KV does not support F32 chunked/HostKV staging")
+        })?;
+    }
+    Ok(())
+}
+
+/// Produce only transaction-authenticated row metadata. Duplicate physical
+/// writers would race the append kernel even when their sequence IDs differ.
+pub(super) fn bf16_row_metadata(
+    batch: &PagedKvBatch,
+    page_size: usize,
+    slots: &[i32],
+    offsets: &[i32],
+) -> Result<(Vec<i32>, Vec<i32>, Vec<i32>)> {
+    batch.validate(page_size)?;
+    if offsets.len() != batch.sequences.len() + 1 {
+        return Err(error("BF16 packed sequence offsets mismatch"));
+    }
+    let mut writers = BTreeSet::new();
+    let mut ids = Vec::with_capacity(batch.row_positions.len());
+    let mut positions = Vec::with_capacity(batch.row_positions.len());
+    let mut lengths = Vec::with_capacity(batch.row_positions.len());
+    for (&sequence, &position) in batch.row_sequence_ids.iter().zip(&batch.row_positions) {
+        let start =
+            usize::try_from(offsets[sequence]).map_err(|_| error("negative BF16 offset"))?;
+        let end =
+            usize::try_from(offsets[sequence + 1]).map_err(|_| error("negative BF16 offset"))?;
+        let index = start
+            .checked_add(position / page_size)
+            .filter(|&index| start <= end && index < end && end <= slots.len())
+            .ok_or_else(|| error("BF16 row outside packed slots"))?;
+        let slot = slots[index];
+        if slot < 0 || !writers.insert((slot, position % page_size)) {
+            return Err(error(
+                "BF16 append rows alias or have an invalid physical slot",
+            ));
+        }
+        let i32_dim = |n| i32::try_from(n).map_err(|_| error("BF16 row metadata exceeds i32 ABI"));
+        ids.push(i32_dim(sequence)?);
+        positions.push(i32_dim(position)?);
+        lengths.push(i32_dim(batch.sequences[sequence].sequence_len)?);
+    }
+    Ok((ids, positions, lengths))
 }
 
 /// Every write has a distinct provisional slot, including an existing writable

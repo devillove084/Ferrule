@@ -1,0 +1,19 @@
+{
+  "status": "pass",
+  "engine": "ferrule",
+  "checks": [
+    {
+      "index": 0,
+      "passed": true,
+      "actual_input_tokens": 1,
+      "actual_output_tokens": 2
+    }
+  ],
+  "first_qa_requests": 0,
+  "warmup_requests": 0,
+  "measured_requests": 1,
+  "http_receipt_sha256": "094ba879f077fd8c9019f40a73d5b1a9d8c352cca50af81e902120f67d6ec40a",
+  "coverage": "visible text/usage only; separate pinned numerical acceptance, not arithmetic parity",
+  "fairmatch": false,
+  "exact_speedup": null
+}

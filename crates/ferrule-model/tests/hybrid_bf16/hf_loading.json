@@ -1,0 +1,172 @@
+{
+  "parameter_load": {
+    "model.layers.0.linear_attn.A_log": {
+      "source_dtype": "torch.float32",
+      "loaded_dtype": "torch.bfloat16",
+      "source_values": [
+        0.12345000356435776,
+        0.23455999791622162,
+        0.3456699848175049,
+        0.45677998661994934
+      ],
+      "loaded_values": [
+        0.12353515625,
+        0.234375,
+        0.345703125,
+        0.45703125
+      ],
+      "equals_source_bf16_rne": true,
+      "differs_from_source_f32": true
+    },
+    "model.layers.0.linear_attn.norm.weight": {
+      "source_dtype": "torch.float32",
+      "loaded_dtype": "torch.bfloat16",
+      "source_values": [
+        0.12345000356435776,
+        0.23455999791622162,
+        0.3456699848175049,
+        0.45677998661994934
+      ],
+      "loaded_values": [
+        0.12353515625,
+        0.234375,
+        0.345703125,
+        0.45703125
+      ],
+      "equals_source_bf16_rne": true,
+      "differs_from_source_f32": true
+    }
+  },
+  "source_pins": {
+    "modeling_qwen3_5_moe": "0f8ca77e875c31d448137c9ac291bed505c6b9927a85b5b8460af29d1e1ee647",
+    "cache_utils": "a51d2cd525f4458941a20cb5b3b8a8d989d8ca5bcd451855a27bb41743fed586",
+    "modeling_utils": "b8467e1ada952862d2e4d76632475ac2f9fa198121d0e1ce64fa393ea3773e16"
+  },
+  "versions": {
+    "torch": "2.13.0+cu129",
+    "transformers": "5.5.3"
+  },
+  "device": "cpu",
+  "loader": "save_pretrained mixed native BF16/F32 state_dict -> from_pretrained(dtype=torch.bfloat16)",
+  "baseline": "decoded-storage native eager BF16 model, NOT the HF dynamic-FP8 quantizer",
+  "native_bf16_words_preserved": true,
+  "rope": {
+    "inv_freq_dtype": "torch.float32",
+    "original_inv_freq_dtype": "torch.float32",
+    "native_f32_exact": true,
+    "inv_freq_sha256": "9d877756a0997bd64e5c564ef48548b144e1fc500cee3eda442fbe375355f683"
+  },
+  "cache_runs": {
+    "hf_default": [
+      {
+        "tokens": [
+          1,
+          3,
+          2
+        ],
+        "conv": "torch.bfloat16",
+        "ssm": "torch.bfloat16",
+        "kv": "torch.bfloat16",
+        "logits": "torch.bfloat16"
+      },
+      {
+        "tokens": [
+          5
+        ],
+        "conv": "torch.bfloat16",
+        "ssm": "torch.bfloat16",
+        "kv": "torch.bfloat16",
+        "logits": "torch.bfloat16"
+      }
+    ],
+    "explicit_f32_ssm": [
+      {
+        "tokens": [
+          1,
+          3,
+          2
+        ],
+        "conv": "torch.bfloat16",
+        "ssm": "torch.float32",
+        "kv": "torch.bfloat16",
+        "logits": "torch.bfloat16"
+      },
+      {
+        "tokens": [
+          5
+        ],
+        "conv": "torch.bfloat16",
+        "ssm": "torch.float32",
+        "kv": "torch.bfloat16",
+        "logits": "torch.bfloat16"
+      }
+    ]
+  },
+  "native_exp_observations": [
+    {
+      "input_dtype": "torch.float32",
+      "output_dtype": "torch.float32"
+    },
+    {
+      "input_dtype": "torch.float32",
+      "output_dtype": "torch.float32"
+    },
+    {
+      "input_dtype": "torch.float32",
+      "output_dtype": "torch.float32"
+    },
+    {
+      "input_dtype": "torch.float32",
+      "output_dtype": "torch.float32"
+    },
+    {
+      "input_dtype": "torch.float32",
+      "output_dtype": "torch.float32"
+    },
+    {
+      "input_dtype": "torch.float32",
+      "output_dtype": "torch.float32"
+    },
+    {
+      "input_dtype": "torch.float32",
+      "output_dtype": "torch.float32"
+    },
+    {
+      "input_dtype": "torch.float32",
+      "output_dtype": "torch.float32"
+    },
+    {
+      "input_dtype": "torch.float32",
+      "output_dtype": "torch.float32"
+    },
+    {
+      "input_dtype": "torch.float32",
+      "output_dtype": "torch.float32"
+    },
+    {
+      "input_dtype": "torch.float32",
+      "output_dtype": "torch.float32"
+    },
+    {
+      "input_dtype": "torch.float32",
+      "output_dtype": "torch.float32"
+    },
+    {
+      "input_dtype": "torch.float32",
+      "output_dtype": "torch.float32"
+    },
+    {
+      "input_dtype": "torch.float32",
+      "output_dtype": "torch.float32"
+    },
+    {
+      "input_dtype": "torch.float32",
+      "output_dtype": "torch.float32"
+    },
+    {
+      "input_dtype": "torch.float32",
+      "output_dtype": "torch.float32"
+    }
+  ],
+  "ssm_policy": "F32 explicitly preallocated; NOT the HF default cache dtype"
+}

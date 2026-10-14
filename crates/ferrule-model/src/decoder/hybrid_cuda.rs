@@ -10,15 +10,6 @@ use ferrule_common::execution::KvLayoutSchema;
 use ferrule_common::{Error, Result};
 use std::{cell::Cell, fmt, rc::Rc};
 
-/// Completion evidence for external expert work, independent of root KV fences.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HybridCudaExpertProgress {
-    Complete,
-    Pending,
-    /// Permanent loss of completion evidence. The owner must retain custody.
-    Unknown,
-}
-
 /// Owner-local attachment to the existing routed operator seam (no Send bound).
 ///
 /// The executor must never publish KV or allocate a decoder transaction. It must
@@ -33,9 +24,9 @@ pub trait HybridCudaRoutedExecutor:
     /// Poll all submitted work. Complete proves every ticket retired; Pending
     /// and Err retain custody and may be retried. Lost evidence MUST be Unknown,
     /// not Err followed by a later optimistic Complete.
-    fn drain(&mut self) -> Result<HybridCudaExpertProgress>;
+    fn drain(&mut self) -> Result<WorkProgress>;
     /// Close external owners after drain; the same completion contract applies.
-    fn shutdown(&mut self) -> Result<HybridCudaExpertProgress>;
+    fn shutdown(&mut self) -> Result<WorkProgress>;
     /// Notify transport cancellation after a forward failure; does not release custody.
     fn on_error(&mut self, _transaction: ferrule_common::execution::ExecutionTransactionId) {}
 }
@@ -43,6 +34,13 @@ pub trait HybridCudaRoutedExecutor:
 /// Optional external routed-only execution. Router/shared experts remain on root.
 /// Construct on the root owner thread; use `HybridCudaDevice::operators()` for
 /// the existing CUDA result-combine adapter, not another same-ordinal context.
+///
+/// The same attachment is consumed by `CudaHybridModule` or
+/// [`crate::transformer::CudaHybridDecoderSegment::prepare_with_routed_experts`].
+/// A segment uses the caller's packed-sequence session IDs and its global layer
+/// range; attachment construction is not child readiness or memory admission.
+/// Runtime must establish both before preparing/executing the segment and keep
+/// its existing journal alive until segment quiescence proves completion.
 pub struct HybridCudaRoutedExperts {
     pub(crate) closed: bool,
     pub(crate) owner: Option<HybridCudaDevice>,
@@ -93,8 +91,8 @@ impl Drop for HybridCudaRoutedExperts {
             let Some(executor) = self.executor.as_mut() else {
                 return true;
             };
-            matches!(executor.drain(), Ok(HybridCudaExpertProgress::Complete))
-                && matches!(executor.shutdown(), Ok(HybridCudaExpertProgress::Complete))
+            matches!(executor.drain(), Ok(WorkProgress::Complete))
+                && matches!(executor.shutdown(), Ok(WorkProgress::Complete))
         }));
         if !matches!(complete, Ok(true))
             || self
@@ -111,19 +109,93 @@ impl Drop for HybridCudaRoutedExperts {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct HybridCudaMemoryBudget {
-    /// Physical slots including transaction shadows/COW, not just committed pages.
-    pub kv_pages: usize,
-    /// Default state, active sequences, forks and working copies all consume this cap.
-    pub state_bytes: usize,
-    /// Non-expert resident bindings plus the expert cache ceiling less its
-    /// numeric scratch reservation. Obtain this from `for_resources`.
-    pub weight_bytes: usize,
-    /// Conservative operation workspace plus numeric scratch (counted once),
-    /// not an allocator reservation. Obtain this from `for_resources`.
-    pub workspace_bytes: usize,
+/// Immutable Mixed program identity carried by the existing preparation claim.
+/// Construct with `HybridMixedRankProgramPlan::cuda_claim_inputs`; metadata is
+/// not authority to allocate, complete CUDA work, or publish an image.
+#[derive(Debug, Clone)]
+pub struct HybridCudaPreparationContext {
+    pub(crate) program: crate::transformer::hybrid_parallel::HybridMixedRankProgramPlan,
+    pub(crate) parameters: Vec<crate::transformer::BoundParameter>,
+    pub(crate) device_ordinal: usize,
+    pub(crate) physical_pages: usize,
+    pub(crate) max_parameter_bytes: u64,
+    pub(crate) estimate: HybridCudaMemoryEstimate,
+    pub(crate) projection_limits: [usize; 3],
+    pub(crate) auxiliary_grants: usize,
+    pub(crate) attention_shapes:
+        Vec<ferrule_backend::cuda_plan::bf16_attention::Bf16AttentionShape>,
+    pub(crate) attention_limits: [usize; 2],
 }
+impl PartialEq for HybridCudaPreparationContext {
+    fn eq(&self, other: &Self) -> bool {
+        self.program.layout() == other.program.layout()
+            && self.program.segment() == other.program.segment()
+            && self.program.collective_binding() == other.program.collective_binding()
+            && self.program.page_size() == other.program.page_size()
+            && self.program.max_positions() == other.program.max_positions()
+            && self.program.state_copies() == other.program.state_copies()
+            && self.program.decoded_cache == other.program.decoded_cache
+            && self.device_ordinal == other.device_ordinal
+            && self.physical_pages == other.physical_pages
+            && self.max_parameter_bytes == other.max_parameter_bytes
+            && self.estimate == other.estimate
+            && self.projection_limits == other.projection_limits
+            && self.auxiliary_grants == other.auxiliary_grants
+            && self.attention_shapes == other.attention_shapes
+            && self.attention_limits == other.attention_limits
+            && self.parameters.len() == other.parameters.len()
+            && self.parameters.iter().zip(&other.parameters).all(|(a, b)| {
+                a.shares_storage_with(b) && a.spec() == b.spec() && a.role() == b.role()
+            })
+    }
+}
+impl HybridCudaPreparationContext {
+    pub(crate) fn validate_for(&self, required: &Self) -> Result<()> {
+        if self != required {
+            return Err(error(
+                "Mixed rank claim context differs from compiled program",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Pure preflight; does not construct or query a CUDA owner.
+    pub fn validate_device_budget(
+        &self,
+        ordinal: usize,
+        budget: HybridCudaMemoryBudget,
+    ) -> Result<()> {
+        let state = self
+            .estimate
+            .per_sequence_state_bytes
+            .checked_mul(self.program.state_copies())
+            .ok_or_else(|| error("Mixed claim state capacity overflow"))?;
+        if ordinal != self.device_ordinal
+            || budget.kv_pages != self.physical_pages
+            || budget.weight_bytes < self.estimate.weight_bytes_upper_bound
+            || budget.workspace_bytes < self.estimate.workspace_bytes_upper_bound
+            || budget.state_bytes < state
+        {
+            return Err(error(
+                "Mixed preparation device/configuration budget mismatch",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Exact comparison used by the opaque claim before its first image phase.
+    pub fn validate_estimate(&self, estimate: HybridCudaMemoryEstimate) -> Result<()> {
+        if estimate != self.estimate {
+            return Err(error(
+                "Mixed preparation estimate differs from sealed context",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// CUDA image estimate, including native BF16's live provider validation.
+/// Use [`HybridMemoryPlan`] for pure F32-state and numeric FP8 planning.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HybridCudaMemoryEstimate {
     pub per_sequence_state_bytes: usize,
@@ -131,8 +203,70 @@ pub struct HybridCudaMemoryEstimate {
     pub weight_bytes_upper_bound: usize,
     pub workspace_bytes_upper_bound: usize,
 }
-#[path = "hybrid_cuda_admission.rs"]
-mod admission;
+impl From<HybridMemoryPlan> for HybridCudaMemoryEstimate {
+    fn from(plan: HybridMemoryPlan) -> Self {
+        Self {
+            per_sequence_state_bytes: plan.per_sequence_state_bytes,
+            kv_bytes: plan.kv_bytes,
+            weight_bytes_upper_bound: plan.weight_bytes_upper_bound,
+            workspace_bytes_upper_bound: plan.workspace_bytes_upper_bound,
+        }
+    }
+}
+impl HybridCudaMemoryEstimate {
+    pub fn for_resources(
+        resources: &BoundDecoderResources,
+        options: &GenericDecoderOptions,
+        kv_pages: usize,
+    ) -> Result<Self> {
+        if options.precision() == crate::execution::ExecutionPrecisionPolicy::bf16_compatibility() {
+            return Self::bf16_resources(resources, options, kv_pages, false);
+        }
+        HybridMemoryPlan::for_resources(resources, options, kv_pages).map(Into::into)
+    }
+    pub fn for_resources_with_routed_experts(
+        resources: &BoundDecoderResources,
+        options: &GenericDecoderOptions,
+        kv_pages: usize,
+    ) -> Result<Self> {
+        if options.precision() == crate::execution::ExecutionPrecisionPolicy::bf16_compatibility() {
+            return Self::bf16_resources(resources, options, kv_pages, true);
+        }
+        HybridMemoryPlan::for_resources_with_routed_experts(resources, options, kv_pages)
+            .map(Into::into)
+    }
+    pub fn for_resources_with_idle_kv_reclaim(
+        resources: &BoundDecoderResources,
+        options: &GenericDecoderOptions,
+        kv_pages: usize,
+        config: IdleKvReclaimConfig,
+    ) -> Result<Self> {
+        HybridMemoryPlan::for_resources_with_idle_kv_reclaim(resources, options, kv_pages, config)
+            .map(Into::into)
+    }
+    pub fn for_segment(
+        resources: &BoundDecoderResources,
+        options: &GenericDecoderOptions,
+        plan: &crate::transformer::LayerSegmentPlan,
+        kv_pages: usize,
+    ) -> Result<Self> {
+        HybridMemoryPlan::for_segment(resources, options, plan, kv_pages).map(Into::into)
+    }
+}
+impl GenericDecoderOptions {
+    pub(crate) fn validate_hybrid_cuda(&self, resources: &BoundDecoderResources) -> Result<()> {
+        if self.precision() == crate::execution::ExecutionPrecisionPolicy::bf16_compatibility() {
+            self.validate_bf16_hybrid(resources)
+        } else {
+            self.validate_hybrid_cuda_profile(resources)
+        }
+    }
+}
+#[path = "hybrid_bf16_admission.rs"]
+mod bf16_admission;
+#[path = "hybrid_bf16_state.rs"]
+mod bf16_state;
+pub use bf16_state::CudaBf16GatedDeltaState;
 
 #[derive(Clone)]
 pub struct HybridCudaDevice {
@@ -201,7 +335,9 @@ impl HybridCudaDevice {
     }
     pub(crate) fn ensure_ready(&self) -> Result<()> {
         if self.needs_quarantine() {
-            Err(unknown(error("hybrid CUDA owner is quarantined")))
+            Err(CompletionUnknown::wrap(error(
+                "hybrid CUDA owner is quarantined",
+            )))
         } else {
             Ok(())
         }
@@ -209,12 +345,45 @@ impl HybridCudaDevice {
     pub(crate) fn quarantine(&self) {
         self.inner.poisoned.set(true);
     }
-    pub(crate) fn admit(
+    /// Reserve the complete CUDA image budget. The returned opaque token must
+    /// be kept by the factory until image, pool and initial lifecycle creation
+    /// all succeed, then consumed by `HybridCudaPreparationClaim::finish`.
+    pub fn admit(
         &self,
         estimate: HybridCudaMemoryEstimate,
         max_sequences: usize,
     ) -> Result<HybridCudaPreparationClaim> {
+        self.admit_inner(estimate, max_sequences, None)
+    }
+
+    /// Mixed rank admission with the compiled program's non-memory context.
+    /// This is the same exclusive claim type used by the F32 rank path; the
+    /// context only prevents a claim for one rows/pages/workspace geometry from
+    /// being consumed by another compiled image.
+    pub fn admit_with_context(
+        &self,
+        estimate: HybridCudaMemoryEstimate,
+        context: HybridCudaPreparationContext,
+    ) -> Result<HybridCudaPreparationClaim> {
+        context.validate_estimate(estimate)?;
+        context.validate_device_budget(self.device_ordinal(), self.budget())?;
+        self.admit_inner(
+            estimate,
+            context.program.collective_binding().max_sequences,
+            Some(context),
+        )
+    }
+
+    fn admit_inner(
+        &self,
+        estimate: HybridCudaMemoryEstimate,
+        max_sequences: usize,
+        context: Option<HybridCudaPreparationContext>,
+    ) -> Result<HybridCudaPreparationClaim> {
         self.ensure_ready()?;
+        if self.inner.claimed.get() || self.live_state_bytes() != 0 {
+            return Err(error("hybrid device already owns an image or live state"));
+        }
         let b = self.budget();
         let minimum = max_sequences
             .checked_mul(2)
@@ -247,8 +416,13 @@ impl HybridCudaDevice {
         Ok(HybridCudaPreparationClaim {
             device: self.clone(),
             committed: false,
+            image: ImagePreparation::new(),
+            source_retirement: MixedSourceRetirement::default(),
+            estimate,
+            max_sequences,
             device_owners: Rc::strong_count(&self.inner),
             operator_owners: Rc::strong_count(self.operators()),
+            context,
         })
     }
     pub(crate) fn fence(&self) -> Result<()> {
@@ -256,7 +430,9 @@ impl HybridCudaDevice {
         #[cfg(test)]
         if self.inner.reject_next_fence.replace(false) {
             self.quarantine();
-            return Err(unknown(error("injected missing CUDA completion evidence")));
+            return Err(CompletionUnknown::wrap(error(
+                "injected missing CUDA completion evidence",
+            )));
         }
         let compute = self
             .inner
@@ -274,7 +450,7 @@ impl HybridCudaDevice {
             .collect::<Vec<_>>();
         if !failures.is_empty() {
             self.quarantine();
-            return Err(unknown(
+            return Err(CompletionUnknown::wrap(
                 Error::failures("hybrid CUDA completion fences", failures).unwrap_err(),
             ));
         }
@@ -301,33 +477,203 @@ impl HybridCudaDevice {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ImagePreparationPhase {
+    Admitted,
+    Preparing,
+    Prepared,
+}
+/// Owner-local completion observation. Only finish(Ok) after the final fence
+/// grants retirement; this never carries or mutates a shared payload.
+#[derive(Clone, Default)]
+pub(crate) struct MixedSourceRetirement(Rc<Cell<bool>>);
+impl MixedSourceRetirement {
+    pub(crate) fn is_complete(&self) -> bool {
+        self.0.get()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn completed_for_test() -> Self {
+        Self(Rc::new(Cell::new(true)))
+    }
+}
+
+struct ImagePreparation(Cell<ImagePreparationPhase>);
+impl ImagePreparation {
+    fn new() -> Self {
+        Self(Cell::new(ImagePreparationPhase::Admitted))
+    }
+    fn begin(&self) -> Result<()> {
+        if self.0.get() != ImagePreparationPhase::Admitted {
+            return Err(error("CUDA claim already used for an image"));
+        }
+        self.0.set(ImagePreparationPhase::Preparing);
+        Ok(())
+    }
+    fn prepared(&self) -> Result<()> {
+        if self.0.get() != ImagePreparationPhase::Preparing {
+            return Err(error("CUDA image preparation not in progress"));
+        }
+        self.0.set(ImagePreparationPhase::Prepared);
+        Ok(())
+    }
+    fn is_prepared(&self) -> bool {
+        self.0.get() == ImagePreparationPhase::Prepared
+    }
+}
+
+fn validate_claim_estimate(
+    admitted: HybridCudaMemoryEstimate,
+    admitted_sequences: usize,
+    required: HybridCudaMemoryEstimate,
+    sequences: usize,
+) -> Result<()> {
+    if sequences > admitted_sequences
+        || required.per_sequence_state_bytes > admitted.per_sequence_state_bytes
+        || required.kv_bytes > admitted.kv_bytes
+        || required.weight_bytes_upper_bound > admitted.weight_bytes_upper_bound
+        || required.workspace_bytes_upper_bound > admitted.workspace_bytes_upper_bound
+    {
+        return Err(error("CUDA image exceeds its preparation claim"));
+    }
+    Ok(())
+}
+
 /// Failed preparation returns its claim only after temporary owners have
 /// dropped and completion is proven. A successful image consumes the factory:
 /// clones, including surviving states, never gain a second image authority.
-pub(crate) struct HybridCudaPreparationClaim {
+/// Opaque exclusive image ownership token. Cloning a device never clones
+/// this token; dropping it only returns a clean, proven reservation.
+/// ```compile_fail
+/// use ferrule_model::decoder::HybridCudaPreparationClaim;
+/// fn clone_claim(claim: &HybridCudaPreparationClaim) -> HybridCudaPreparationClaim {
+///     claim.clone()
+/// }
+/// ```
+/// ```compile_fail
+/// use ferrule_model::decoder::HybridCudaPreparationClaim;
+/// fn forge_success(claim: &HybridCudaPreparationClaim) {
+///     claim.image_prepared().unwrap();
+/// }
+/// ```
+#[must_use = "finish the factory result or drop the token to prove rollback"]
+pub struct HybridCudaPreparationClaim {
     device: HybridCudaDevice,
     committed: bool,
+    image: ImagePreparation,
+    source_retirement: MixedSourceRetirement,
+    estimate: HybridCudaMemoryEstimate,
+    max_sequences: usize,
     device_owners: usize,
     operator_owners: usize,
+    context: Option<HybridCudaPreparationContext>,
 }
 impl HybridCudaPreparationClaim {
-    fn finish<T>(mut self, result: Result<T>) -> Result<T> {
-        match result {
-            Ok(value) => {
-                self.committed = true;
-                Ok(value)
-            }
-            Err(source) => {
-                let cleanup = self.rollback();
-                // Do not retry a failed cleanup from Drop.
-                self.committed = true;
-                Err(Error::with_cleanup(
-                    "hybrid CUDA preparation",
-                    source,
-                    cleanup,
-                ))
-            }
+    pub(crate) fn mixed_source_retirement(&self) -> MixedSourceRetirement {
+        self.source_retirement.clone()
+    }
+
+    /// Begin exactly one image on the admitted owner. Only model preparation
+    /// entry points can advance this token; factory code cannot forge success.
+    pub(crate) fn begin_image(&self, device: &HybridCudaDevice) -> Result<()> {
+        self.validate_device(device)?;
+        self.image.begin()
+    }
+
+    pub(crate) fn validate_device(&self, device: &HybridCudaDevice) -> Result<()> {
+        if !Rc::ptr_eq(&self.device.inner, &device.inner) {
+            return Err(error("CUDA preparation claim belongs to another device"));
         }
+        device.ensure_ready()
+    }
+
+    pub(crate) fn validate_estimate(
+        &self,
+        required: HybridCudaMemoryEstimate,
+        sequences: usize,
+    ) -> Result<()> {
+        validate_claim_estimate(self.estimate, self.max_sequences, required, sequences)
+    }
+
+    pub(crate) fn validate_exact_mixed(
+        &self,
+        required: HybridCudaMemoryEstimate,
+        context: HybridCudaPreparationContext,
+    ) -> Result<()> {
+        if self.estimate != required
+            || self.max_sequences != context.program.collective_binding().max_sequences
+        {
+            return Err(error(
+                "Mixed rank claim estimate differs from compiled program",
+            ));
+        }
+        self.context
+            .as_ref()
+            .ok_or_else(|| error("Mixed preparation requires a source-bound claim context"))?
+            .validate_for(&context)
+    }
+
+    pub(crate) fn validate_image_grants(&self, actual: u64) -> Result<()> {
+        let limit = self
+            .estimate
+            .weight_bytes_upper_bound
+            .checked_add(self.estimate.workspace_bytes_upper_bound)
+            .ok_or_else(|| error("CUDA image grant overflow"))?;
+        if actual > limit as u64 {
+            return Err(error("CUDA image actual grants exceed preparation claim"));
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn image_is_prepared(&self) -> bool {
+        self.image.is_prepared()
+    }
+
+    pub(crate) fn image_prepared(&self) -> Result<()> {
+        self.device.fence()?;
+        self.image.prepared()
+    }
+
+    /// Consume the exclusive token after image, pool and initial states have
+    /// been built. `Ok` is accepted only after a real model preparation marked
+    /// the image ready and a final completion proof succeeds. Temporary owners
+    /// must be dropped before passing `Err`; unknown custody is never refunded.
+    pub fn finish<T>(mut self, result: Result<T>) -> Result<T> {
+        let result: Result<()> = match result {
+            Ok(value) => {
+                // Even a malformed caller result may own submitted buffers.
+                // Prove completion before dropping it for missing image authority.
+                if let Err(error) = self.device.fence() {
+                    std::mem::forget(value);
+                    std::mem::forget(self.device.clone());
+                    self.committed = true;
+                    return Err(error);
+                }
+                if self.image.is_prepared() {
+                    self.committed = true;
+                    self.source_retirement.0.set(true);
+                    return Ok(value);
+                }
+                drop(value);
+                Err(error("CUDA preparation has no successfully prepared image"))
+            }
+            Err(source) => Err(source),
+        };
+        let cleanup = self.rollback_after_failure();
+        Err(Error::with_cleanup(
+            "hybrid CUDA preparation",
+            result.unwrap_err(),
+            cleanup,
+        ))
+    }
+
+    /// Consume a failed preparation without changing the caller's error type.
+    /// Shares exactly the same rollback path as finish(Err(...)).
+    pub(crate) fn rollback_after_failure(mut self) -> Result<()> {
+        let cleanup = self.rollback();
+        self.committed = true;
+        cleanup
     }
     fn rollback(&self) -> Result<()> {
         // Lower-level Drop may retain an owner on unknown completion without
@@ -355,6 +701,8 @@ impl Drop for HybridCudaPreparationClaim {
     }
 }
 
+/// Fallible lifecycle checkout/fork, never an implicit CUDA buffer clone.
+#[doc = include_str!("../../tests/compile/cuda_hybrid_state.md")]
 pub type CudaHybridSequenceState = DecoderSequenceState<(), CudaHybridLayerStates>;
 pub struct CudaGatedDeltaState {
     pub(crate) shape: GatedDeltaShape,
@@ -404,6 +752,7 @@ impl CudaGatedDeltaState {
 pub struct CudaHybridLayerStates {
     schema: HybridStateSchema,
     layers: Vec<Option<CudaGatedDeltaState>>,
+    bf16_layers: Option<Vec<Option<CudaBf16GatedDeltaState>>>,
     device: HybridCudaDevice,
     charged_bytes: usize,
     release_proven: bool,
@@ -423,6 +772,9 @@ impl CudaHybridLayerStates {
     }
     fn validate(&self, schema: &HybridStateSchema, position: usize) -> Result<()> {
         self.device.ensure_ready()?;
+        if self.bf16_layers.is_some() {
+            return self.validate_bf16(schema, position);
+        }
         if &self.schema != schema || self.layers.len() != schema.layers().len() {
             return Err(error("CUDA hybrid schema mismatch"));
         }
@@ -453,6 +805,7 @@ impl Drop for CudaHybridLayerStates {
         {
             // Never reclaim buffers, owner, or budget until completion is proven.
             std::mem::forget(std::mem::take(&mut self.layers));
+            std::mem::forget(self.bf16_layers.take());
             std::mem::forget(self.device.clone());
             return;
         }
@@ -473,12 +826,28 @@ impl StandardSequenceState for CudaHybridSequenceState {
     ) -> Result<()> {
         self.kv_state().validate(schema, position)
     }
-    fn linear_state_mut(&mut self, _: usize) -> Result<&mut GatedDeltaNetState> {
-        Err(unsupported("CUDA recurrent state has no CPU fallback"))
-    }
+
     fn linear_state(&mut self, layer: usize) -> Result<GatedDeltaStateRef<'_>> {
         self.kv_state().device.ensure_ready()?;
-        match self.kv_state_mut().layers.get_mut(layer) {
+        let slot = self
+            .kv_state()
+            .schema
+            .entry(layer)
+            .ok_or_else(|| error("global layer outside CUDA hybrid schema"))?
+            .state_slot;
+        if self.kv_state().bf16_layers.is_some() {
+            return match self
+                .kv_state_mut()
+                .bf16_layers
+                .as_mut()
+                .unwrap()
+                .get_mut(slot)
+            {
+                Some(Some(state)) => Ok(GatedDeltaStateRef::CudaBf16(state)),
+                _ => Err(error("missing BF16 CUDA linear state")),
+            };
+        }
+        match self.kv_state_mut().layers.get_mut(slot) {
             Some(Some(state)) => Ok(GatedDeltaStateRef::Cuda(state)),
             _ => Err(error("missing CUDA linear state")),
         }
@@ -488,13 +857,21 @@ impl StandardSequenceState for CudaHybridSequenceState {
 pub struct CudaHybridSequenceLifecycle {
     schema: HybridStateSchema,
     device: HybridCudaDevice,
+    bf16: bool,
 }
 impl CudaHybridSequenceLifecycle {
     pub fn new(schema: HybridStateSchema, device: HybridCudaDevice) -> Result<Self> {
         state_bytes(&schema)?;
-        Ok(Self { schema, device })
+        Ok(Self {
+            schema,
+            device,
+            bf16: false,
+        })
     }
     fn allocate(&self) -> Result<CudaHybridLayerStates> {
+        if self.bf16 {
+            return self.allocate_bf16();
+        }
         self.device.ensure_ready()?;
         let bytes = state_bytes(&self.schema)?;
         let charged = self
@@ -509,6 +886,7 @@ impl CudaHybridSequenceLifecycle {
         let mut state = CudaHybridLayerStates {
             schema: self.schema.clone(),
             layers: Vec::new(),
+            bf16_layers: None,
             device: self.device.clone(),
             charged_bytes: bytes,
             release_proven: false,
@@ -535,7 +913,9 @@ impl CudaHybridSequenceLifecycle {
         Ok(state)
     }
     fn validate(&self, source: &CudaHybridSequenceState) -> Result<()> {
-        if !Rc::ptr_eq(&self.device.inner, &source.kv_state().device.inner) {
+        if !Rc::ptr_eq(&self.device.inner, &source.kv_state().device.inner)
+            || self.bf16 != source.kv_state().bf16_layers.is_some()
+        {
             return Err(error("foreign hybrid CUDA lifecycle"));
         }
         source.validate_standard_state(&self.schema)
@@ -545,6 +925,10 @@ impl CudaHybridSequenceLifecycle {
         source.core().begin_step()?;
         self.device.fence()?;
         let mut destination = self.allocate()?;
+        if self.bf16 {
+            self.copy_bf16(source, &mut destination)?;
+            return Ok(destination);
+        }
         let copy = (|| {
             for (src, dst) in source.kv_state().layers.iter().zip(&mut destination.layers) {
                 if let (Some(src), Some(dst)) = (src, dst) {
@@ -620,6 +1004,7 @@ impl DecoderSequenceLifecycle<CudaHybridSequenceState> for CudaHybridSequenceLif
         // Aborted working states may have partial layer frontiers; custody still belongs here.
         if !Rc::ptr_eq(&self.device.inner, &state.kv_state().device.inner)
             || state.kv_state().schema != self.schema
+            || self.bf16 != state.kv_state().bf16_layers.is_some()
         {
             return Err(SequenceStateReleaseError::new(
                 error("CUDA hybrid release owner/schema mismatch"),
@@ -709,7 +1094,7 @@ impl GenericDecoderRunner<HybridCudaDecoder> {
         options: GenericDecoderOptions,
         device: HybridCudaDevice,
     ) -> Result<Self> {
-        Self::hybrid_cuda_inner(resources, tokenizer, options, device, None)
+        Self::hybrid_cuda_inner(resources, tokenizer, options, device, None, None)
     }
 
     /// External routed-only execution on the same forward/root KV/recurrent path.
@@ -725,7 +1110,19 @@ impl GenericDecoderRunner<HybridCudaDecoder> {
         device: HybridCudaDevice,
         experts: HybridCudaRoutedExperts,
     ) -> Result<Self> {
-        Self::hybrid_cuda_inner(resources, tokenizer, options, device, Some(experts))
+        Self::hybrid_cuda_inner(resources, tokenizer, options, device, Some(experts), None)
+    }
+
+    /// Opt-in idle/suspended dense F32 GQA reclamation, not HostKV decode.
+    /// Uses the same runner/Entry journal and restores before any forward.
+    pub fn hybrid_cuda_with_idle_kv_reclaim(
+        resources: BoundDecoderResources,
+        tokenizer: crate::tokenizer::TokenizerHandle,
+        options: GenericDecoderOptions,
+        device: HybridCudaDevice,
+        config: IdleKvReclaimConfig,
+    ) -> Result<Self> {
+        Self::hybrid_cuda_inner(resources, tokenizer, options, device, None, Some(config))
     }
 
     fn hybrid_cuda_inner(
@@ -734,13 +1131,18 @@ impl GenericDecoderRunner<HybridCudaDecoder> {
         options: GenericDecoderOptions,
         device: HybridCudaDevice,
         mut experts: Option<HybridCudaRoutedExperts>,
+        idle_reclaim: Option<IdleKvReclaimConfig>,
     ) -> Result<Self> {
         if let Some(experts) = &mut experts {
             experts.owner = Some(device.clone());
         }
-        options.validate(&resources)?;
-        if options.precision() != crate::execution::ExecutionPrecisionPolicy::f32() {
-            return Err(unsupported("CUDA hybrid requires F32 execution"));
+        options.validate_hybrid_cuda(&resources)?;
+        let bf16 =
+            options.precision() == crate::execution::ExecutionPrecisionPolicy::bf16_compatibility();
+        if bf16 && (experts.is_some() || idle_reclaim.is_some()) {
+            return Err(unsupported(
+                "native BF16 hybrid requires local resident experts/KV; no HostKV or external adapter",
+            ));
         }
         let schema = HybridStateSchema::from_spec(
             resources.spec(),
@@ -748,36 +1150,59 @@ impl GenericDecoderRunner<HybridCudaDecoder> {
                 .active_layers()
                 .unwrap_or(resources.spec().layers().len()),
         )?;
-        let estimate = if experts.is_some() {
+        let mut estimate = if experts.is_some() {
             HybridCudaMemoryEstimate::for_resources_with_routed_experts
         } else {
             HybridCudaMemoryEstimate::for_resources
         }(&resources, &options, device.budget().kv_pages)?;
+        if let Some(config) = idle_reclaim {
+            estimate = HybridCudaMemoryEstimate::for_resources_with_idle_kv_reclaim(
+                &resources,
+                &options,
+                device.budget().kv_pages,
+                config,
+            )?;
+        }
         let claim = device.admit(estimate, options.capabilities().max_sequences)?;
         // Drop all temporaries before evaluating claim rollback.
         let result = (|| {
-            let planes = schema.kv_planes(options.page_size(), options.max_positions())?;
+            let planes = schema.kv_planes_with_dtype(
+                options.page_size(),
+                options.max_positions(),
+                if bf16 {
+                    ferrule_common::execution::KvElementType::Bf16
+                } else {
+                    ferrule_common::execution::KvElementType::F32
+                },
+            )?;
             let mut model_info = super::runner::standard_model_info(&resources, &options);
             model_info.backend = options
                 .hybrid_cuda_numeric_fp8_precision()
                 .map_or("cuda-hybrid-f32", |precision| {
                     precision.hybrid_backend_name()
                 });
+            if bf16 && options.hybrid_cuda_numeric_fp8().is_none() {
+                model_info.backend = "cuda-hybrid-native-bf16-f32-ssm";
+            }
             let resources = std::sync::Arc::new(resources);
-            let module = crate::transformer::CudaHybridModule::prepare_with_routed_experts(
+            let module = crate::transformer::CudaHybridModule::prepare_with_claim(
                 resources.clone(),
                 device.clone(),
                 &options,
                 experts,
+                &claim,
             )?;
-            let pool = device.complete(
-                TypedCudaPagedKvPool::<CudaHybridSequenceState>::from_strategy(
-                    Rc::clone(device.operators()),
-                    &planes,
-                    device.budget().kv_pages,
-                ),
+            let pool = device.complete(match idle_reclaim {
+                Some(config) => TypedCudaPagedKvPool::<CudaHybridSequenceState>::from_strategy_with_idle_reclaim(
+                    Rc::clone(device.operators()), &planes, device.budget().kv_pages, config),
+                None => TypedCudaPagedKvPool::<CudaHybridSequenceState>::from_strategy(
+                    Rc::clone(device.operators()), &planes, device.budget().kv_pages),
+            })?;
+            let mut lifecycle = CudaHybridSequenceLifecycle::with_precision(
+                schema,
+                device.clone(),
+                options.precision(),
             )?;
-            let mut lifecycle = CudaHybridSequenceLifecycle::new(schema, device.clone())?;
             let default_state = lifecycle.create()?;
             Self::from_runtime(DecoderComponents {
                 resources,
@@ -801,36 +1226,11 @@ impl GenericDecoderRunner<HybridCudaDecoder> {
     }
 }
 
-/// Unknown completion is terminal for this owner, even if a later CUDA fence succeeds.
-#[derive(Debug)]
-pub struct HybridCudaCompletionUnknown {
-    source: Error,
-}
-impl std::fmt::Display for HybridCudaCompletionUnknown {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "hybrid CUDA completion unknown; quarantine required: {}",
-            self.source
-        )
-    }
-}
-impl std::error::Error for HybridCudaCompletionUnknown {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        Some(&self.source)
-    }
-}
-fn unknown(source: Error) -> Error {
-    Error::ModelSource {
-        source: Box::new(HybridCudaCompletionUnknown { source }),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::transformer::*;
-    fn schema() -> HybridStateSchema {
+    pub(super) fn schema() -> HybridStateSchema {
         let norm = RmsNorm::new(4, 1e-6).unwrap();
         let spec = DecoderModelSpec::new(DecoderModelParts {
             architecture: "state-test".into(),
@@ -859,7 +1259,7 @@ mod tests {
         .unwrap();
         HybridStateSchema::from_spec(&spec, 1).unwrap()
     }
-    fn device() -> HybridCudaDevice {
+    pub(super) fn device() -> HybridCudaDevice {
         HybridCudaDevice::new_on_device(
             0,
             HybridCudaMemoryBudget {
@@ -871,7 +1271,7 @@ mod tests {
         )
         .unwrap()
     }
-    fn claim(device: &HybridCudaDevice) -> Result<HybridCudaPreparationClaim> {
+    pub(super) fn claim(device: &HybridCudaDevice) -> Result<HybridCudaPreparationClaim> {
         device.admit(
             HybridCudaMemoryEstimate {
                 per_sequence_state_bytes: state_bytes(&schema())?,
@@ -984,11 +1384,7 @@ mod tests {
         let Error::ModelSource { source } = source else {
             panic!("expected typed unknown completion")
         };
-        assert!(
-            source
-                .downcast_ref::<HybridCudaCompletionUnknown>()
-                .is_some()
-        );
+        assert!(source.downcast_ref::<CompletionUnknown>().is_some());
         assert_eq!(state.topology_id(), topology);
         assert!(device.needs_quarantine());
         assert!(lifecycle.create().is_err());
@@ -1023,3 +1419,7 @@ mod tests {
         assert_eq!(device.live_state_bytes(), 0);
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/cuda_preparation_claim/mod.rs"]
+mod preparation_claim_tests;

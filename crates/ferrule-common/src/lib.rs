@@ -4,7 +4,10 @@ pub mod async_wake;
 pub mod error;
 pub mod execution;
 pub mod expert_residency;
+pub mod host_kv;
+pub mod host_kv_placement;
 pub mod io_protocol;
+pub mod kvset;
 
 pub mod materialization_io;
 pub mod memory;

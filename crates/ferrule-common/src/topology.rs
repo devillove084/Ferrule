@@ -483,12 +483,17 @@ impl TensorCollectiveParticipants {
 ///
 /// `Member` is the legacy thread path: the caller is one of the expert
 /// owners. `ExternalStage` is the process PP×EP path: the caller is the
-/// attached PP stage rank and expert members are workers only.
+/// attached PP stage rank and expert members are workers only. Explicit
+/// `ExternalTensorSource` attaches workers to any authenticated TP lane of that
+/// stage without changing the legacy scopes or expanding the KV participant set.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ExpertSourceScope {
     Member,
     ExternalStage,
+    /// An explicitly selected TP owner of the attached replica/stage calls
+    /// disjoint EP-only workers. Does not relax ExternalStage's TP1 contract.
+    ExternalTensorSource,
 }
 
 /// Attached activation owners for one replica/stage, shared by its TP peers.
@@ -554,6 +559,13 @@ impl ExpertDispatchMembers {
                     return Err(ParallelTopologyError::UnsupportedParallelism);
                 }
                 if source_rank != topology.rank_at(replica, stage, 0)? {
+                    return Err(ParallelTopologyError::ExpertSourceNotStageCaller);
+                }
+            }
+            ExpertSourceScope::ExternalTensorSource => {
+                if !(0..topology.plan.tensor_parallel)
+                    .any(|lane| topology.rank_at(replica, stage, lane as u32) == Ok(source_rank))
+                {
                     return Err(ParallelTopologyError::ExpertSourceNotStageCaller);
                 }
             }
@@ -1673,3 +1685,7 @@ mod external_expert_source_tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/unit/topology/tensor_source.rs"]
+mod tensor_source_tests;

@@ -1,0 +1,27 @@
+E.....................................................................{"stage": "hello2", "gate": {"status": "pass"}}
+{"stage": "canary8", "gate": {"status": "fail"}}
+...START single lifecycle; no retry
+{"status": "complete", "launch_id": "fixture", "server_starts": 1, "authenticated_drained": true, "after": "verified"}
+..........
+======================================================================
+ERROR: test_actual_final_release_and_all_96_builder_pins (test_allocator_v3_release.AllocatorV3Release.test_actual_final_release_and_all_96_builder_pins)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/test_allocator_v3_release.py", line 23, in test_actual_final_release_and_all_96_builder_pins
+    evidence = release.audit(self.link())
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/allocator_v3_release.py", line 300, in audit
+    summary, q = quality(e,qualification)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/allocator_v3_release.py", line 115, in quality
+    e.pin(actual, digest)
+  File "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/decoded_cache_release.py", line 53, in pin
+    ct.require(expected is None or digest == expected, 'Cache release evidence changed: '+str(path))
+  File "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/contract.py", line 46, in require
+    raise ValueError(reason)
+ValueError: Cache release evidence changed: /home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/test_indexed_release.py
+
+----------------------------------------------------------------------
+Ran 83 tests in 69.962s
+
+FAILED (errors=1)

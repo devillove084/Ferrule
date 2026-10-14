@@ -9,6 +9,7 @@ use std::fmt;
 use std::mem::size_of;
 use std::rc::Rc;
 
+use crate::decoder::CompletionUnknown;
 use ferrule_backend::cuda::context::CudaComputeEvent;
 use ferrule_backend::cuda::operators::linear::{CudaF32Buffer, CudaOperators};
 use ferrule_backend::cuda::{
@@ -30,6 +31,8 @@ pub(super) const DEFAULT_TRANSFER_CONFIG: CudaTransferConfig = CudaTransferConfi
 /// it to their own error type. `needs_quarantine()` means retain the worker and
 /// report an unknown/unsafe completion, never an ordinary failure ACK. A poisoned
 /// transport remains unusable even if a later drain proves physical quiescence.
+/// Such failures also expose [`CompletionUnknown`] in their source chain so
+/// generic callers do not need a CUDA-specific classifier.
 /// No runtime-specific panic or scheduling type is used in model code.
 #[derive(Debug)]
 pub struct CudaShardError {
@@ -51,12 +54,11 @@ impl CudaShardError {
     /// Recover the typed failure at the common error boundary.
     pub fn from_error(error: &Error) -> Option<&Self> {
         match error {
-            Error::ModelSource { source } => source.downcast_ref(),
             Error::Context { source, .. } => Self::from_error(source),
             Error::Cleanup {
                 source, cleanup, ..
             } => Self::from_error(cleanup).or_else(|| Self::from_error(source)),
-            _ => None,
+            _ => ferrule_common::error::ErrorChain::new(error).downcast_ref(),
         }
     }
 
@@ -66,13 +68,20 @@ impl CudaShardError {
         quiescent: bool,
         quarantined: bool,
     ) -> Error {
-        Error::ModelSource {
-            source: Box::new(Self {
-                source,
-                cleanup,
-                quiescent,
-                quarantined,
-            }),
+        let failure = Self {
+            source,
+            cleanup,
+            quiescent,
+            quarantined,
+        };
+        let unknown = failure.needs_quarantine();
+        let error = Error::ModelSource {
+            source: Box::new(failure),
+        };
+        if unknown {
+            CompletionUnknown::wrap(error)
+        } else {
+            error
         }
     }
 }
@@ -374,6 +383,34 @@ mod tests {
     }
 
     #[test]
+    fn cleanup_unknown_keeps_precedence_over_quiescent_primary() {
+        let failure = |quiescent| {
+            CudaShardError::wrap(
+                Error::Model {
+                    message: "shard failure".into(),
+                },
+                None,
+                quiescent,
+                !quiescent,
+            )
+        };
+        let error = Error::context(
+            "worker",
+            Error::with_cleanup("shard", failure(true), Err(failure(false))),
+        );
+        assert!(
+            CudaShardError::from_error(&error)
+                .unwrap()
+                .needs_quarantine()
+        );
+        assert!(
+            ferrule_common::error::ErrorChain::new(&error)
+                .downcast_ref::<CompletionUnknown>()
+                .is_some()
+        );
+    }
+
+    #[test]
     fn common_error_preserves_quiescence_and_sticky_quarantine() {
         for (quiescent, poisoned) in [(true, false), (false, true), (true, true)] {
             let error = CudaShardError::wrap(
@@ -383,6 +420,12 @@ mod tests {
                 None,
                 quiescent,
                 poisoned,
+            );
+            assert_eq!(
+                ferrule_common::error::ErrorChain::new(&error)
+                    .downcast_ref::<CompletionUnknown>()
+                    .is_some(),
+                !quiescent || poisoned,
             );
             let typed = CudaShardError::from_error(&error).unwrap();
             assert_eq!(typed.is_quiescent(), quiescent);

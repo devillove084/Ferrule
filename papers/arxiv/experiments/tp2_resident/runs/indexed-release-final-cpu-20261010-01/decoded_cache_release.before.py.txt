@@ -1,0 +1,814 @@
+"""CPU receipt/source adapter for cache-on public releases; no launch authority."""
+import hashlib
+import json
+from pathlib import Path
+import re
+
+import pre_serving as pre
+import decoded_cache_gate as gates
+
+ct = pre.ct
+SCHEMA = 'ferrule.tp2.decoded-cache-public-release-handoff.v1'
+FOLLOWUP_SCHEMA = 'ferrule.tp2.decoded-cache-public-release-handoff.v2'
+ARENA_SCHEMA = 'ferrule.tp2.uninitialized-arena-serving-release.v1'
+SCHEMAS = (SCHEMA,FOLLOWUP_SCHEMA,ARENA_SCHEMA)
+ARENA_RELEASE = ct.ROOT/'target/validation/tp2-mixed-arena-public-release-20261010-01'
+ARENA_HANDOFF_SHA = '4b1734652ab05dd38e20fc7f9d85e7e201539b35707160021eec1f4d2dbf264e'
+ARENA_BINARY_SHA = 'ae3e76d420cdff234be4262575b3bee29e89252c89bc2f21c744aefd47731bc7'
+ARENA_QUALITY = pre.HERE/'runs/decoded-arena-uninitialized-20261010-01'
+ARENA_QUALIFICATION_SHA = 'd6b15ddc6590f5f3b445ac5f02564bad45345365401044247e53ec01ecd5783e'
+ARENA_SUMMARY_SHA = '2068f9f200ec99a8e94054dbfd2e585b2abb3fca1264e140cad5bb8641b1434c'
+ARENA_WORKFLOW_HISTORY = pre.HERE/'history/pre-arena-release-adapter-20261010'
+ARENA_WORKFLOW_ADAPTERS = ('decoded_cache_release.py', 'optimized_release.py', 'test_decoded_cache_release.py')
+INDEXED_QUALIFICATION_SCHEMA = 'ferrule.paper.indexed-lru-handoff.v1'
+INDEXED_QUALITY = pre.HERE/'runs/decoded-arena-indexed-lru-20261010-01'
+INDEXED_QUALIFICATION_SHA = '514b0d8a7f5e05abf958c5e278d13f026d5bda9c4f4191e51e3e9a7e2fc56cf3'
+INDEXED_SUMMARY_SHA = '396710eeb5366b6a2aa607168e4cb33de01aea098790cb0e94f0d87e03b65165'
+INDEXED_WORKFLOW_HISTORY = pre.HERE/'history/pre-indexed-release-adapter-20261010'
+QUALITY_SCHEMA = 'ferrule.paper.tp2-decoded-cache-test-quality.v1'
+QUALITY = pre.HERE/'runs/decoded-cache-frozen-pair-20261010-02'
+SUMMARY_SHA = '575c99ce008f199f03d553742201e4c655658c2203c13d9ad46c360a4c62fa91'
+REVIEW = pre.HERE/'decoded-cache-source-review.json'
+CALLS = dict(full40=4, greedy4=10, fork2=6, canary2=5, recreate1=4,
+             **{'cold-owner1-01':4, 'cold-owner1-02':4})
+CACHE = dict(enabled=True, capacity_grants=3 << 30, pin_target_grants=1340 << 20,
+             routed_working_set_grants=768 << 20,
+             evidence='source-bound public policy; observed ready/shutdown ledgers required',
+             numerical_pass_inherited=False)
+PROFILE_LOG = 'info,ferrule_request=debug,ferrule_performance=debug'
+
+
+class Evidence:
+    def __init__(self):
+        self.pins = {}
+
+    def pin(self, path, expected=None):
+        path = Path(path).resolve()
+        digest = ct.sha(path)
+        ct.require(expected is None or digest == expected, 'Cache release evidence changed: '+str(path))
+        ct.require(str(path) not in self.pins or self.pins[str(path)] == digest,
+                   'Evidence changed during audit: '+str(path))
+        self.pins[str(path)] = digest
+        return path
+
+    def read(self, path, expected=None):
+        return ct.load(self.pin(path, expected))
+
+    def linked(self, link, path=None):
+        ct.require(isinstance(link, dict) and pre.contract._sha(link.get('sha256')),
+                   'Missing hashed cache evidence link')
+        if path is not None:
+            ct.require(Path(link['path']).resolve() == Path(path).resolve(), 'Cache evidence path differs')
+        return self.read(link['path'], link['sha256'])
+
+
+def quality(e):
+    """Authenticate named gates, not a movable aggregate success count."""
+    summary = e.read(QUALITY/'acceptance-summary.json', SUMMARY_SHA)
+    ct.require(summary['schema'] == 'ferrule.paper.decoded-cache-acceptance.v1'
+        and summary['all_exact'] is True and summary['failures'] == 0
+        and summary['public_e2e_accepted'] is False, 'Cache quality summary failed/overclaimed')
+    rows = summary['rows']
+    ct.require(len(rows) == len(gates.HISTORICAL_ALL_GATES) and {r['gate'] for r in rows} == set(gates.HISTORICAL_ALL_GATES),
+               'Required cache gate set missing/duplicated')
+    for row in rows:
+        name = row['gate']
+        kind = gates.HISTORICAL_SMALL_GATES[name][0] if name in gates.HISTORICAL_SMALL_GATES else 'composition'
+        ct.require(row['selector'] == gates.HISTORICAL_ALL_GATES[name]
+            and row['binary_sha256'] == summary['binaries'][kind]['sha256'],
+            'Cache gate selector/binary differs: '+name)
+    prepared = e.linked(summary['prepared'], QUALITY/'prepared.json')
+    ct.require(prepared['sources'] == summary['sources'] and prepared['binaries'] == summary['binaries'],
+               'Quality preparation/source/binary differs')
+    # Historical workflow/build artifacts remain checked; historical source hashes
+    # are compared separately, never rewritten to the new release's source set.
+    for path, digest in prepared['pins'].items():
+        e.pin(path, digest)
+    for binary in summary['binaries'].values():
+        e.pin(binary['path'], binary['sha256'])
+    calls = metrics = 0
+    audited = []
+    for row in rows:
+        name = row['gate']; directory = QUALITY/name
+        kind = gates.HISTORICAL_SMALL_GATES[name][0] if name in gates.HISTORICAL_SMALL_GATES else 'composition'
+        binary = summary['binaries'][kind]
+        ct.require(row['selector'] == gates.HISTORICAL_ALL_GATES[name] and row['binary_sha256'] == binary['sha256'],
+                   'Cache gate selector/binary differs: '+name)
+        launch = e.linked(row['supervisor'], directory/'supervisor.json')
+        exit = e.linked(row['test_exit'], directory/'test-exit.json')
+        release = e.linked(row['release'], directory/'release.json')
+        resource = e.linked(row['resources'], directory/'resources.json')
+        auth = e.read(directory/'authentication.json')
+        worker = e.read(directory/'worker-launch.json')
+        result = e.read(directory/'result.json')
+        ct.require(ct.successful_process(launch) and launch['custody']['echild'] is True
+            and auth['launch_id'] == launch['handshake']['launch_id']
+            and result['passed'] is True and result['drained'] is True
+            and release['gpu_owner_released'] is True and release['drained'] is True
+            and release['all_eight_idle'] is True, 'Cache gate authenticated closure failed: '+name)
+        ct.require(exit['one_test_passed'] is True and exit['returncode'] == 0
+            and exit['selector'] == gates.HISTORICAL_ALL_GATES[name] and exit['binary_sha256'] == binary['sha256']
+            and worker['gate'] == name and worker['binary_sha256'] == binary['sha256']
+            and worker['sources'] == summary['sources'], 'Executed gate/source differs: '+name)
+        for phase in ('before','after'):
+            ct.require(e.read(directory/(phase+'.json'))['status'] == 'verified', 'Cache gate idle missing')
+        e.pin(directory/'test.log')
+        ct.require(resource['status'] == 'observed_within_targets' and not resource['errors'], 'Cache gate resource observation failed')
+        item = dict(gate=name, selector=row['selector'], test_binary_sha256=binary['sha256'],
+                    launch_id=auth['launch_id'])
+        if name in CALLS:
+            comparison = e.linked(row['comparison'], QUALITY/(name+'-comparison.json'))
+            gates.exact_inventory(comparison, name)
+            groups = comparison['cases'] if name == 'full40' else comparison['calls']
+            n = sum(len(g['metrics']) for g in groups.values())
+            ct.require(all(m['rmse'] == 0 for g in groups.values() for m in g['metrics'].values()),
+                       'Nonzero exact comparison RMSE')
+            ct.require((row['calls'],row['metrics']) == (CALLS[name],n), 'Comparator counts differ')
+            reference, expected = gates.FULL if name == 'full40' else gates.RECIPES[name]
+            receipt = e.read(directory/'comparison-receipt.json')
+            ct.require(receipt['report'] == row['comparison'] and receipt['all_exact'] is True
+                and receipt['reference_sha256'] == comparison['reference_manifest_sha256'] == expected,
+                'Comparator/reference binding differs')
+            e.pin(gates.ORACLE/'runs'/reference/'manifest.json', expected)
+            e.pin(QUALITY/(name+'-canonical')/'manifest.json', comparison['actual_manifest_sha256'])
+            bindings = e.linked(row['cache_bindings'], directory/'cache-bindings.json')
+            ct.require(bindings == gates.trace_budgets(directory, name), 'Cache-on owner bindings differ')
+            for binding in bindings:
+                e.pin(binding['events']['path'], binding['events']['sha256'])
+            calls += CALLS[name]; metrics += n
+            item.update(calls=CALLS[name], metrics=n, comparison=row['comparison'], reference_sha256=expected)
+        audited.append(item)
+    ct.require((calls,metrics) == (summary['full_model_calls'],summary['quality_metrics']) == (37,40293),
+               'Exact cache quality totals differ')
+    return summary, dict(schema=QUALITY_SCHEMA, status='pass', kind='authenticated_test_binary_not_serving',
+        calls=calls, metrics=metrics, rows=audited, numerical_pass_inherited=False,
+        qualification='Frozen test binaries only; reviewed source-different public integration requires same-release HTTP smoke')
+
+
+def source_relation(e, quality_sources, sources, dependencies):
+    review = e.read(REVIEW)
+    ct.require(review['quality_summary_sha256'] == SUMMARY_SHA, 'Wrong source review qualification')
+    changed = []; unchanged = {}
+    # Include the three changed CPU test inputs, not only production compilation.
+    for path, old in quality_sources.items():
+        current = sources.get(path)
+        if current is None:
+            current = ct.sha(path)
+        if current == old:
+            if path in sources:
+                unchanged[path] = current
+            continue
+        rel = str(Path(path).relative_to(ct.ROOT))
+        approval = review['changed'].get(rel)
+        ct.require(approval is not None and approval['quality_sha256'] == old
+            and current in approval['approved_release_sha256'], 'Unreviewed quality source change: '+rel)
+        e.pin(path, current)
+        removed_proof = None
+        if 'observation_only_removals' in approval:
+            text = Path(path).read_text()
+            for addition in approval['observation_only_removals']:
+                ct.require(text.count(addition) == 1, 'Observation-only source proof drift: '+rel)
+                text = text.replace(addition, '', 1)
+            removed_proof = hashlib.sha256(text.encode()).hexdigest()
+            ct.require(removed_proof == old, 'Cache/operator algorithm changed: '+rel)
+        changed.append(dict(path=path, quality_sha256=old, current_sha256=current,
+            meaning=approval['meaning'], observation_removal_sha256=removed_proof,
+            additional_change=approval.get('additional_change')))
+    ct.require({str(Path(r['path']).relative_to(ct.ROOT)) for r in changed} == set(review['changed']),
+               'Reviewed changed-source set differs')
+    added = []
+    for path, digest in sources.items():
+        if path not in quality_sources:
+            rel = str(Path(path).relative_to(ct.ROOT)); approval = review['new_dependency_inputs'].get(rel)
+            ct.require(approval and approval['sha256'] == digest, 'Unreviewed added production input: '+rel)
+            added.append(dict(path=path, sha256=digest, meaning=approval['meaning']))
+    for row in dependencies:
+        if 'files' in row:
+            for path, digest in row['files'].items():
+                e.pin(ct.ROOT/path, digest)
+            continue
+        path = row['path']; digest = row['sha256']; e.pin(path,digest)
+        old = quality_sources.get(path)
+        ct.require(row['quality_sha256'] == old, 'Dependency quality hash relabelled')
+        if old is None:
+            rel = str(Path(path).relative_to(ct.ROOT)); approval = review['new_dependency_inputs'].get(rel)
+            ct.require(approval and approval['sha256'] == digest, 'Unreviewed new dependency: '+rel)
+        elif old != digest:
+            ct.require(any(r['path'] == path and r['current_sha256'] == digest for r in changed),
+                       'Unreviewed changed dependency')
+    ct.require(any('/ferrule-backend/' in p for p in unchanged)
+        and not any('/ferrule-backend/' in r['path'] for r in changed), 'Backend implementation changed')
+    return dict(changed=changed, added_production=added, unchanged_production_pins=unchanged,
+        new_dependency_inputs=review['new_dependency_inputs'], inherited_gpu_pass=False,
+        caveat='Three observation-removal hashes reconstruct tested implementation bytes; public policy/program wiring and new logs are separate inputs, not fresh GPU qualification')
+
+
+def metadata_ledger(ledger):
+    ct.require(ledger['measured_on_gpu'] is False and len(ledger['owners']) == 2,
+               'Public metadata ledger missing or relabelled as GPU observation')
+    for r in ledger['owners']:
+        ct.require(r['cache_enabled'] is True and r['cache_capacity_grants'] == 3 << 30
+            and r['pinned_grants'] == 1340 << 20 and r['routed_working_set_grants'] == 768 << 20
+            and r['required_workspace_bytes'] <= r['workspace_ceiling_bytes'] == 4 << 30
+            and r['required_device_bytes'] <= r['device_ceiling_bytes'] == 22 << 30,
+            'Cache metadata admission/cap differs')
+    return ledger
+
+
+def cpu_validation(e, handoff, directory, name, test=False, strict=False):
+    receipt = e.linked(handoff['validations'][name],directory/(name+'.json'))
+    ct.require(receipt['status'] == 'passed' and receipt['returncode'] == 0
+        and receipt['environment']['CUDA_VISIBLE_DEVICES'] == ''
+        and receipt['environment']['NVIDIA_VISIBLE_DEVICES'] == 'none', 'CPU validation failed: '+name)
+    expected=e.read(REVIEW)['cpu_validations'][name]
+    ct.require(receipt['argv'] == expected['argv'], 'CPU selector/argv differs: '+name)
+    if strict:
+        ct.require(receipt['argv'][-3:] == ['--','-D','warnings'], 'Strict Clippy not enforced')
+    if test:
+        output = e.pin(directory/(name+'.stdout')).read_text()
+        ct.require(re.search(r'test result: ok\. [1-9][0-9]* passed; 0 failed;', output)
+            and re.findall(r'^test (\S+) \.\.\. ok$',output,re.M) == expected['passed_selectors']
+            and re.findall(r'^test (\S+) \.\.\. ignored',output,re.M) == expected['ignored_selectors'],
+            'Required CPU selectors did not pass: '+name)
+    return receipt
+
+
+def public_cpu_evidence(e, h, directory, before):
+    if h['schema'] == SCHEMA:
+        for name in ('composition-public','composition-cache','runtime-snapshot','cli-public'):
+            cpu_validation(e,h,directory,name,test=True)
+        return metadata_ledger(e.read(directory/'public-metadata-ledger.json')), dict(reused_prior_tests=False)
+    prior_link = h['prior_cpu_tests']['receipt']
+    prior = e.linked(prior_link); old_dir = Path(prior_link['path']).resolve().parent
+    ct.require(prior['schema'] == SCHEMA and old_dir.parent == directory.parent
+        and h['prior_cpu_tests']['rerun_all'] is False
+        and (h['prior_cpu_tests']['passed'],h['prior_cpu_tests']['ignored'],h['cpu_tests_rerun_passed']) == (15,3,3),
+        'Follow-up prior CPU evidence relabelled')
+    preserved = e.linked(h['previous_receipts_preserved'])
+    old_files = e.linked(preserved['manifest'],old_dir/'handoff-file-pins.json')
+    ct.require(old_files['handoff.json'] == prior_link['sha256'] and preserved['all_files_verified_unchanged'] is True,
+               'Prior handoff custody differs')
+    for name,digest in old_files.items():
+        ct.require(Path(name).name == name,'Unsafe old builder inventory')
+        e.pin(old_dir/name,digest)
+    old_sources = e.linked(prior['source_pins_after'])
+    delta = e.linked(h['source_delta'])
+    differences = {path:dict(previous_sha256=old_sources.get(path),current_sha256=before.get(path))
+                   for path in old_sources.keys() | before.keys() if old_sources.get(path)!=before.get(path)}
+    path = 'crates/ferrule-runtime/src/parallel/pipeline/mixed_cuda_tensor.rs'
+    ct.require(set(differences) == {path} and delta['files'] == differences
+        and h['source_delta_scope'] == delta['scope'] == 'onlyunusedimport', 'Follow-up exceeds import-only scope')
+    text = (ct.ROOT/path).read_text()
+    restored = text.replace('CudaStandardDecoderOperators, DeviceSegmentInput, ExpertCachePolicy,\n',
+                           'CudaStandardDecoderOperators, DeviceSegmentInput, ExpertCachePolicy, MixedDecodedCacheSnapshot,\n')
+    ct.require(hashlib.sha256(restored.encode()).hexdigest() == old_sources[path], 'Import-only reconstruction failed')
+    e.pin(delta['patch']['path'],delta['patch']['sha256'])
+    rebuild = e.linked(h['binary_rebuild_relation'])
+    ct.require(rebuild['new'] == h['artifact'] and rebuild['previous'] == prior['artifact']
+        and rebuild['old_receipts_modified'] is False
+        and set(rebuild['recompiled_crates']) == {'ferrule_runtime','ferrule_composition','ferrule_server','ferrule'},
+        'Fresh rebuild relation differs')
+    previous_binary=e.pin(prior['artifact']['path'],prior['artifact']['sha256'])
+    new_binary=e.pin(h['artifact']['path'],h['artifact']['sha256'])
+    ct.require(not previous_binary.samefile(new_binary)
+        and rebuild['byte_identical'] == (prior['artifact']['sha256'] == h['artifact']['sha256']),
+        'Follow-up artifact reused or byte identity relabelled')
+    for name in ('composition-public','composition-cache','runtime-snapshot','cli-public'):
+        cpu_validation(e,prior,old_dir,name,test=True)
+    cpu_validation(e,h,directory,'runtime-snapshot',test=True)
+    cpu_validation(e,h,directory,'check-public')
+    for name in ('clippy-libs-strict','clippy-cli-strict','clippy-snapshot-strict','clippy-cache-plan-strict'):
+        cpu_validation(e,h,directory,name,strict=True)
+    flags=e.linked(h['observed_build_flags'])
+    ct.require(flags['cuda_compiled_target']=='sm_86'
+        and set(flags['rustc_invocations']) == set(rebuild['recompiled_crates']), 'Actual build target/recompilation differs')
+    for flag in ('-C opt-level=3','-C lto=fat','-C codegen-units=1','-C strip=symbols'):
+        ct.require(flag in flags['rustc_invocations']['ferrule']['command'], 'Actual release optimization differs')
+    return metadata_ledger(e.read(old_dir/'public-metadata-ledger.json')), dict(
+        reused_prior_tests=True,prior_receipt=prior_link,prior_counts=h['prior_cpu_tests'],
+        fresh_snapshot_tests=h['cpu_tests_rerun_passed'],source_delta=delta,
+        statement='Prior 15 CPU tests are reused with verified import-only relation; only 3 snapshot tests rerun. No inherited GPU/public pass.')
+
+
+def pin_links(e, value):
+    """Authenticate nested artifact references without treating binaries as JSON."""
+    if isinstance(value, dict):
+        if 'path' in value and pre.contract._sha(value.get('sha256')):
+            e.pin(value['path'], value['sha256'])
+        for item in value.values(): pin_links(e, item)
+    elif isinstance(value, list):
+        for item in value: pin_links(e, item)
+
+
+def arena_gate_inventory(summary):
+    rows = summary['rows']
+    ct.require(len(rows) == len(gates.ALL_GATES)
+        and {r['gate'] for r in rows} == set(gates.ALL_GATES), 'Required arena gate set missing/duplicated')
+    for row in rows:
+        name = row['gate']
+        kind = gates.SMALL_GATES[name][0] if name in gates.SMALL_GATES else 'composition'
+        ct.require(row['selector'] == gates.ALL_GATES[name]
+            and row['binary_sha256'] == summary['binaries'][kind]['sha256']
+            and row['reused_unchanged_backend'] is False, 'Arena gate selector/binary/reuse differs: '+name)
+
+
+def arena_prepared_plan(e, root, prepared):
+    """A historical preparation binds its own plan, not today's mutable runner."""
+    path = root/'plan.json'
+    ct.require(str(path) in prepared['pins'], 'Qualification plan is not pinned')
+    plan = e.read(path, prepared['pins'][str(path)])
+    ct.require(plan['schema']=='ferrule.paper.decoded-cache-plan.v1'
+        and plan['gpu_selectors']==gates.GATES
+        and {k:tuple(v) for k,v in plan['small_selectors'].items()}==gates.SMALL_GATES,
+        'Pinned named GPU gate plan differs')
+    ignored = {tuple(row) for row in plan.get('ignored_host_selectors',[])}
+    selectors = [(kind,selector,(kind,selector) in ignored) for kind,selector in plan['host_small_selectors']]
+    selectors += [('composition',selector,skip) for selector,skip in plan['cpu_selectors'].items()]
+    receipts = prepared['cpu_receipts']
+    ct.require(len(receipts)==len(selectors) and len({r['path'] for r in receipts})==len(receipts),
+               'Pinned CPU gate receipts missing/duplicated')
+    for index, (ref,(kind,selector,skip)) in enumerate(zip(receipts,selectors)):
+        receipt = e.linked(ref,root/('cpu-'+str(index)+'.json'))
+        argv = [prepared['binaries'][kind]['path'],selector,'--exact','--nocapture','--test-threads=1']
+        if skip: argv.append('--ignored')
+        ct.require(receipt['argv']==argv and ct.successful_process(receipt['supervisor']),
+                   'Pinned CPU selector/receipt differs')
+    return plan
+
+
+def indexed_qualification_extras(e, qualification, summary, prepared):
+    required = qualification['required_production_sources']
+    ct.require(required==gates.INDEXED_LRU_SOURCES
+        and all(summary['sources'].get(path)==digest for path,digest in required.items())
+        and qualification['fresh_gpu_gates']==23 and qualification['fresh_cpu_selectors']==len(prepared['cpu_receipts'])==38
+        and qualification['prior_gpu_passes_inherited'] is False
+        and qualification['release_built'] is False and qualification['public_e2e_accepted'] is False
+        and qualification['performance_accepted'] is False, 'Indexed qualification source/claims differ')
+    for key,command in (('cuda_check','check'),('strict_cuda_clippy','clippy')):
+        receipt=e.linked(qualification[key])
+        argv=receipt['argv']
+        ct.require(ct.successful_process(receipt['supervisor']) and argv[1:]==[
+            command,'--locked','--offline','-p','ferrule-model','--features','cuda','--lib','--tests','--target-dir',
+            str(ct.ROOT/'target/validation/qwen35-35b-current/toolchain/cargo-cuda124')]
+            + (['--','-D','warnings'] if command=='clippy' else []), 'Indexed CUDA check/strict Clippy differs')
+    benchmark=e.linked(qualification['cpu_benchmark'])
+    pin_links(e,benchmark)
+    ct.require(benchmark['schema']=='ferrule.paper.indexed-lru-cpu-benchmark.v1'
+        and benchmark['source_digest']==qualification['source_digest'] and benchmark['production_sources']==required
+        and benchmark['binary']==summary['binaries']['model']
+        and benchmark['equal_victim_sequence_stats_and_final_entries_asserted'] is True
+        and all(benchmark[key] is False for key in ('timing_assertion','gpu_used','end_to_end')),
+        'Indexed CPU benchmark source or scope differs')
+    receipt=e.linked(benchmark['supervisor_receipt'])
+    ct.require(ct.successful_process(receipt['supervisor']) and benchmark['supervisor_receipt'] in prepared['cpu_receipts']
+        and receipt['argv'][1]==benchmark['selector'] and '--ignored' in receipt['argv'],
+        'Indexed benchmark selector was not executed')
+    raw=e.pin(benchmark['raw_stderr']['path'],benchmark['raw_stderr']['sha256']).read_text()
+    ct.require(benchmark['summary_lines']==gates.benchmark_summary(raw),'Indexed benchmark report/raw differs')
+    idle=e.linked(qualification['final_idle']);released=e.linked(qualification['final_release'])
+    ct.require(idle['status']=='verified' and released['gpu_owner_released'] is True
+        and released['all_eight_idle'] is True, 'Indexed qualification final idle/release differs')
+
+
+def audit_qualification(link):
+    """Authenticate the frozen indexed test qualification, not a serving release."""
+    ct.require(Path(link['path']).resolve()==INDEXED_QUALITY/'handoff.json'
+        and link['sha256']==INDEXED_QUALIFICATION_SHA, 'Unreviewed indexed qualification handoff')
+    e=Evidence();handoff=e.linked(link)
+    ct.require(handoff['schema']==INDEXED_QUALIFICATION_SCHEMA,'Indexed qualification schema differs')
+    summary,quality=arena_quality(e,handoff)
+    quality.update(artifact_pins=dict(e.pins),numerical_source_pins=pre.numerical_sources(summary['sources']),
+        qualification_only=True,serving_release_accepted=False,public_smoke_required=True,
+        cpu_benchmark_scope='CPU-only equal-victim/stats assertions; timings are not E2E acceptance')
+    e.pin(link['path'],INDEXED_QUALIFICATION_SHA)
+    return quality
+
+
+def arena_quality(e, qualification):
+    indexed = qualification['schema'] == INDEXED_QUALIFICATION_SCHEMA
+    ct.require(indexed or qualification['schema'] == 'ferrule.paper.uninitialized-arena-handoff.v1',
+               'Unreviewed arena qualification schema')
+    quality_root = INDEXED_QUALITY if indexed else ARENA_QUALITY
+    summary_sha = INDEXED_SUMMARY_SHA if indexed else ARENA_SUMMARY_SHA
+    qualification_sha = INDEXED_QUALIFICATION_SHA if indexed else ARENA_QUALIFICATION_SHA
+    workflow_history = INDEXED_WORKFLOW_HISTORY if indexed else ARENA_WORKFLOW_HISTORY
+    e.pin(quality_root/'handoff.json', qualification_sha)
+    summary = e.linked(qualification['acceptance_summary'], quality_root/'acceptance-summary.json')
+    e.pin(quality_root/'acceptance-summary.json', summary_sha)
+    ct.require(summary['schema'] == 'ferrule.paper.decoded-cache-acceptance.v2'
+        and summary['all_exact'] is True and summary['failures'] == 0
+        and summary['prior_gpu_passes_inherited'] is False and summary['reused_backend_gates'] == []
+        and summary['public_e2e_accepted'] is False and summary['performance_accepted'] is False,
+        'Arena qualification failed/overclaimed')
+    arena_gate_inventory(summary)
+    prepared = e.linked(summary['prepared'], quality_root/'prepared.json')
+    ct.require(summary['prepared'] == qualification['prepared']
+        and prepared['schema'] == 'ferrule.paper.decoded-cache-prepared.v2'
+        and prepared['sources'] == summary['sources'] and prepared['binaries'] == summary['binaries']
+        and prepared['tools'] == summary['tools'] and qualification['binaries'] == summary['binaries']
+        and ct.digest(summary['sources']) == qualification['source_digest'], 'Arena preparation differs')
+    arena_prepared_plan(e, quality_root, prepared)
+    history = {}
+    for path, digest in prepared['pins'].items():
+        original = Path(path)
+        archived = original.parent == pre.HERE and original.name in ARENA_WORKFLOW_ADAPTERS
+        actual = workflow_history/(original.name+'.txt') if archived else original
+        e.pin(actual, digest)
+        if archived: history[path] = dict(path=str(actual), sha256=digest)
+    for path, digest in summary['sources'].items(): e.pin(path, digest)
+    ct.validate_inventory(ct.config(ct.EXCLUSIVE_PATH), prepared['tools'])
+    for pins in prepared['tools'].values():
+        for path, digest in pins.items():
+            ct.require(path not in e.pins or e.pins[path] == digest, 'Arena tool pin collision')
+            e.pins[path] = digest
+    for binary in summary['binaries'].values(): e.pin(binary['path'], binary['sha256'])
+    for link in prepared['cpu_receipts']:
+        receipt = e.linked(link)
+        ct.require(ct.successful_process(receipt['supervisor']), 'Arena CPU qualification failed')
+    pin_links(e, qualification)
+    libraries = e.linked(qualification['runtime_libraries'])
+    pin_links(e, libraries)
+    for path, digest in libraries['resolved_libraries'].items(): e.pin(path, digest)
+    calls = metrics = 0
+    audited = []
+    for row in summary['rows']:
+        name = row['gate']; directory = quality_root/name
+        docs = {key: e.linked(row[key], directory/(key+'.json')) for key in (
+            'supervisor','authentication','worker-launch','test-exit','resources','release','before','after','result')}
+        launch = docs['supervisor']; auth = docs['authentication']; worker = docs['worker-launch']
+        exit = docs['test-exit']; release = docs['release']; result = docs['result']
+        ct.require(ct.successful_process(launch) and launch['custody']['echild'] is True
+            and auth['launch_id'] == launch['handshake']['launch_id'] == row['launch_id']
+            and result['passed'] is True and result['drained'] is True
+            and all(release[k] is True for k in ('gpu_owner_released','drained','all_eight_idle')),
+            'Arena gate authenticated closure failed: '+name)
+        ct.require(exit['one_test_passed'] is True and exit['returncode'] == 0
+            and exit['selector'] == row['selector'] and exit['binary_sha256'] == row['binary_sha256']
+            and worker['gate'] == name and worker['binary_sha256'] == row['binary_sha256']
+            and worker['sources'] == summary['sources'], 'Arena executed gate/source differs: '+name)
+        gates.validate_execution_devices(name, worker['devices'])
+        ct.require(row['selected_and_visible'] == gates.execution_devices(name)
+            and docs['resources']['status'] == 'observed_within_targets' and not docs['resources']['errors']
+            and all(docs[k]['status'] == 'verified' for k in ('before','after')), 'Arena devices/resources/idle differ')
+        log = e.pin(row['log']['path'], row['log']['sha256'])
+        ct.require(log == directory/'test.log', 'Arena test log path differs')
+        if name in gates.SMALL_GATES:
+            small = e.linked(row['assertions'], directory/'small-receipt.json')
+            ct.require(small['assertions_passed'] is True and small['selector'] == row['selector']
+                and small['binary_sha256'] == row['binary_sha256']
+                and small['source_digest'] == qualification['source_digest'], 'Arena small assertions differ')
+            pin_links(e, small)
+        else:
+            comparison = e.linked(row['comparison'], quality_root/(name+'-comparison.json'))
+            gates.exact_inventory(comparison, name)
+            groups = comparison['cases'] if name == 'full40' else comparison['calls']
+            n = sum(len(g['metrics']) for g in groups.values())
+            ct.require(all(m['rmse'] == 0 for g in groups.values() for m in g['metrics'].values())
+                and (row['calls'],row['metrics']) == (CALLS[name],n), 'Arena exact comparator differs')
+            reference, expected = gates.FULL if name == 'full40' else gates.RECIPES[name]
+            receipt = e.linked(row['comparison_receipt'], directory/'comparison-receipt.json')
+            ct.require(receipt['report'] == row['comparison'] and receipt['all_exact'] is True
+                and receipt['reference_sha256'] == comparison['reference_manifest_sha256'] == expected,
+                'Arena comparator/reference binding differs')
+            e.pin(gates.ORACLE/'runs'/reference/'manifest.json', expected)
+            e.pin(quality_root/(name+'-canonical')/'manifest.json', comparison['actual_manifest_sha256'])
+            bindings = gates.trace_budgets(directory, name)
+            pin_links(e, bindings)
+            snapshots = e.linked(row['snapshots'], directory/'cache-snapshots.json')
+            ct.require(snapshots == gates.internal_snapshot_rows(log.read_text(), bindings), 'Arena snapshot evidence differs')
+            calls += CALLS[name]; metrics += n
+        audited.append(dict(gate=name, selector=row['selector'], test_binary_sha256=row['binary_sha256'],
+                            launch_id=row['launch_id']))
+    ct.require((calls,metrics) == (summary['full_model_calls'],summary['quality_metrics']) == (37,40293)
+        and (summary['fresh_gpu_gates'],summary['fresh_small_gates']) == (23,16), 'Arena quality totals differ')
+    if indexed:
+        indexed_qualification_extras(e, qualification, summary, prepared)
+    return summary, dict(schema=QUALITY_SCHEMA, status='pass', kind='authenticated_test_binary_not_serving',
+        calls=calls, metrics=metrics, rows=audited, numerical_pass_inherited=False,
+        historical_workflow_pins=history, qualification_handoff_sha256=qualification_sha,
+        qualification='23 named fresh arena test gates; serving binary still requires same-release S1/S2 HTTP smoke')
+
+
+def arena_source_relation(e, h, summary, build_sources, deps, relation):
+    all_build_sources = e.linked(h['source_pins_before'])
+    gaps = relation['native_cpu_source_pin_coverage_gaps']
+    expected = {str(ct.ROOT/'crates/ferrule-backend/native/cpu'/name)
+                for name in ('attention.cc','dense.cc','moe.cc','provider.cc')}
+    ct.require(len(gaps) == 4 and {r['path'] for r in gaps} == expected
+        and gaps == h['qualification_native_cpu_source_pin_coverage_gaps']
+        and relation['production_mismatches'] == [], 'Arena qualification coverage gaps relabelled')
+    dadf = ct.ROOT/'target/validation/tp2-mixed-decoded-cache-public-release-20261010-03'
+    old_h = e.read(dadf/'handoff.json', '90a8289e18334aaae4dde93f0ae763868faf3b78e666258fddedd96e6e7b09fd')
+    old_sources = pre.release_sources(e.linked(old_h['source_pins_after']))
+    for row in gaps:
+        path = row['path']
+        ct.require(row['quality_sha256'] is None and path not in summary['sources']
+            and row['sha256'] == row['dadf_source_sha256'] == old_sources[path] == build_sources[path]
+            and row['unchanged_since_dadf'] is True and row['stable_build_before_after'] is True,
+            'Arena native CPU coverage gap differs')
+        e.pin(path, row['sha256'])
+    for path, digest in build_sources.items():
+        if path in expected or Path(path).suffix == '.md': continue
+        ct.require(summary['sources'].get(path) == digest, 'Arena production source not qualified: '+path)
+    for row in deps:
+        if 'files' in row:
+            ct.require(set(row['unpinned_files']) == (set(row['files']) & expected), 'Arena native dependency gaps differ')
+            for path, digest in row['files'].items():
+                e.pin(path, digest)
+                ct.require(build_sources.get(path) == digest
+                    and (path in expected or summary['sources'].get(path) == digest), 'Arena native dependency differs')
+        else:
+            path = row['path']; digest = row['sha256']; e.pin(path, digest)
+            old = summary['sources'].get(path)
+            ct.require(row['quality_sha256'] == old, 'Arena dependency quality hash relabelled')
+            if row['relation'] == 'same_quality_source':
+                ct.require(old == digest, 'Arena dependency source differs')
+            elif row['relation'] == 'same_cutlass_tool_pin':
+                ct.require(summary['tools']['cutlass_tree'].get(path) == digest, 'Arena CUTLASS tool differs')
+            else:
+                ct.require(row['relation'] == 'supplemental_compile_documentation'
+                    and Path(path).suffix == '.md' and row in relation['supplemental']
+                    and all_build_sources.get(str(Path(path).relative_to(ct.ROOT))) == digest,
+                    'Arena unreviewed dependency')
+    return dict(changed=[], inherited_gpu_pass=False, native_cpu_source_pin_coverage_gaps=gaps,
+        caveat='Four CPU-native .cc inputs are build-hashed and unchanged since dadf, NOT covered by the GPU qualification source inventory; compile documentation is not GPU coverage')
+
+
+def arena_audit(link):
+    e = Evidence()
+    ct.require(Path(link['path']).resolve() == ARENA_RELEASE/'handoff.json'
+        and link['sha256'] == ARENA_HANDOFF_SHA, 'Unreviewed final arena handoff')
+    h = e.linked(link)
+    ct.require(h['schema'] == ARENA_SCHEMA and h['strict_clippy_passed'] is True
+        and all(h[k] is False for k in ('server_started','gpu_workload_started','release_gpu_smoke_passed',
+            'public_e2e_accepted','performance_accepted','old_gpu_passes_inherited','release_is_quality_test_binary'))
+        and h['release_snapshot_values'] is None, 'Arena release overclaims GPU acceptance')
+    files = e.read(ARENA_RELEASE/'handoff-file-pins.json')
+    ct.require(files['handoff.json'] == ARENA_HANDOFF_SHA, 'Arena builder inventory not final')
+    for name, digest in files.items():
+        ct.require(Path(name).name == name, 'Unsafe arena builder inventory')
+        e.pin(ARENA_RELEASE/name, digest)
+    receipts = {name:e.linked(ref, ARENA_RELEASE/(name+'.json')) for name,ref in h['receipts'].items()}
+    pin_links(e, receipts)
+    before = e.linked(h['source_pins_before'], ARENA_RELEASE/'source-pins-before.json')
+    after = e.linked(h['source_pins_after'], ARENA_RELEASE/'source-pins-after.json')
+    build_sources = pre.release_sources(before)
+    sources = {p:v for p,v in build_sources.items() if Path(p).suffix not in ('.md','.cc')}
+    ct.require(before == after and sources == pre.current_release_sources()
+        and receipts['source-stability'] == dict(changes={},stable=True), 'Arena release source drift/rebuild pending')
+    for path, digest in build_sources.items(): e.pin(path,digest)
+    state = receipts['release']; inputs = receipts['build-inputs']; env = inputs['environment']
+    expected = ['cargo','build','--locked','--offline','--release','-p','ferrule-cli',
+        '--no-default-features','--features','cuda','--bin','ferrule','--target-dir',
+        'target/catalog-tp2-cuda','--message-format=json-render-diagnostics','-vv']
+    ct.require(state['status'] == 'passed' and state['returncode'] == 0 and state['timed_out'] is False
+        and state['argv'] == expected and state['environment'] == env
+        and env['CUDA_VISIBLE_DEVICES'] == '' and env['NVIDIA_VISIBLE_DEVICES'] == 'none'
+        and env['FERRULE_CUDA_ARCH'] == 'sm_86' and 'RUSTFLAGS' not in env
+        and inputs['release_profile'] == dict(opt_level=3,lto='fat',codegen_units=1,panic='unwind',strip='symbols'),
+        'Arena build/environment/profile differs')
+    flags = receipts['observed-build-flags']
+    ct.require(['FERRULE_BACKEND_CUDA_COMPILED_TARGET','sm_86'] in flags['backend_build_script']['env']
+        and 'release 12.4' in flags['nvcc_version']['stdout'], 'Arena CUDA toolchain differs')
+    for flag in ('-C opt-level=3','-C lto=fat','-C codegen-units=1','-C strip=symbols'):
+        ct.require(flag in flags['rustc_invocations']['ferrule']['command'], 'Arena release optimization differs')
+    inventory = receipts['cpu-test-inventory']
+    ct.require((inventory['passed'],inventory['ignored'],inventory['gpu_visible']) == (16,3,False), 'Arena CPU inventory differs')
+    for name in ('composition-public','composition-cache','runtime-snapshot','cli-public',
+                 'clippy-libs-strict','clippy-cli-strict','clippy-snapshot-strict','clippy-cache-plan-strict'):
+        r = e.read(ARENA_RELEASE/(name+'.json'))
+        ct.require(r['status'] == 'passed' and r['returncode'] == 0 and r['timed_out'] is False
+            and r['environment']['CUDA_VISIBLE_DEVICES'] == '' and r['environment']['NVIDIA_VISIBLE_DEVICES'] == 'none',
+            'Arena CPU validation failed: '+name)
+        expected_argv = e.read(REVIEW)['cpu_validations'][name]['argv']
+        if name == 'clippy-libs-strict':
+            expected_argv = ['/root/.cargo/bin/cargo','clippy','--locked','--offline',
+                '-p','ferrule-backend','-p','ferrule-model','-p','ferrule-runtime',
+                '-p','ferrule-composition','-p','ferrule-server','--features','cuda','--lib','--','-D','warnings']
+        ct.require(r['argv'] == expected_argv, 'Arena CPU selector/argv differs: '+name)
+        if name.startswith('clippy-'):
+            ct.require(r['argv'][-3:] == ['--','-D','warnings'], 'Arena Clippy not strict')
+        else:
+            text = e.pin(ARENA_RELEASE/(name+'.stdout')).read_text()
+            rows = [row for row in inventory['tests'] if row['group'] == name]
+            ct.require(re.findall(r'^test (\S+) \.\.\. ok$',text,re.M) == [r['selector'] for r in rows if r['status']=='ok']
+                and re.findall(r'^test (\S+) \.\.\. ignored',text,re.M) == [r['selector'] for r in rows if r['status'].startswith('ignored')]
+                and re.search(r'test result: ok\. [1-9][0-9]* passed; 0 failed;',text), 'Arena CPU selectors did not pass')
+    qualification = e.linked(h['qualification_handoff'], ARENA_QUALITY/'handoff.json')
+    e.pin(ARENA_QUALITY/'handoff.json', ARENA_QUALIFICATION_SHA)
+    ct.require(qualification['schema'] == 'ferrule.paper.uninitialized-arena-handoff.v1'
+        and qualification['source_digest'] == h['qualification_source_digest'], 'Arena qualification differs')
+    summary, q = arena_quality(e, qualification)
+    relation = arena_source_relation(e,h,summary,build_sources,receipts['actual-release-dependencies'],
+                                     receipts['actual-dependency-quality-relation'])
+    ct.require(receipts['quality23-relation']['acceptance_summary'] == qualification['acceptance_summary']
+        and receipts['quality-postbuild-verification']['source_differences'] == {}
+        and receipts['quality-postbuild-verification']['artifact_differences'] == {}, 'Arena builder quality relation differs')
+    runtime = {}
+    for name, item in receipts['runtime-library-pins']['libraries'].items():
+        path = Path(name); load = Path(item['load_path'])
+        ct.require(load.resolve() == path and path.stat().st_size == item['bytes'], 'Arena runtime library differs')
+        e.pin(path,item['sha256']); runtime[str(load)] = item['sha256']
+    artifact = h['artifact']; binary = e.pin(artifact['path'], ARENA_BINARY_SHA)
+    ct.require(artifact['sha256'] == ARENA_BINARY_SHA and binary.parent == ARENA_RELEASE
+        and binary.stat().st_size == artifact['bytes'] and artifact['independent_copy'] is True
+        and artifact['is_quality_test_binary'] is False and not binary.samefile(artifact['source'])
+        and ARENA_BINARY_SHA not in {v['sha256'] for v in summary['binaries'].values()}, 'Arena serving artifact differs')
+    launch = receipts['owner-launch-plan']
+    ct.require(launch['artifact_sha256'] == ARENA_BINARY_SHA and launch['decoded_cache_bytes'] == 3 << 30
+        and launch['workspace_mib'] == 4096 and launch['device_ceiling_mib'] == 22528
+        and launch['cache_snapshot_schema_version'] == 2 and launch['executed'] is False, 'Arena launch scope differs')
+    ledger = metadata_ledger(receipts['public-metadata-ledger'])
+    q.update(source_relation=relation, numerical_source_pins=pre.numerical_sources(summary['sources']),
+        release_numerical_source_pins=pre.numerical_sources(sources), artifact_pins=dict(e.pins),
+        public_metadata_ledger=ledger, public_cpu_relation=dict(reused_prior_tests=False,passed=16,ignored=3),
+        fairmatch=False, exact_speedup=None)
+    e.pin(link['path'],ARENA_HANDOFF_SHA)
+    import paired
+    return dict(binary_path=str(binary), binary_sha256=ARENA_BINARY_SHA, source_pins=sources,
+        runtime_pins=runtime, evidence_pins=e.pins, quality=q, serving_scope=dict(paired.CACHE_WORKSPACE_SCOPE),
+        decoded_cache=dict(CACHE), build_custody='Pinned arena builder CPU receipts, sources, tools and libraries; four CPU-native qualification pin gaps disclosed; same-binary S1/S2 pending')
+
+
+def audit(link):
+    if ct.load(link['path']).get('schema') == ARENA_SCHEMA:
+        return arena_audit(link)
+    e = Evidence(); h = e.linked(link)
+    directory = Path(link['path']).resolve().parent
+    ct.require(h['schema'] in SCHEMAS and directory.parent == ct.ROOT/'target/validation'
+        and re.fullmatch(r'tp2-mixed-decoded-cache-public-release-\d{8}-\d{2}',directory.name),
+        'Unreviewed cache release handoff location/schema')
+    before = e.linked(h['source_pins_before'], directory/'source-pins-before.json')
+    after = e.linked(h['source_pins_after'], directory/'source-pins-after.json')
+    build_sources = pre.release_sources(before)
+    # Preserve the existing serving inventory shape; additional compile docs and
+    # CPU .cc inputs remain independently hashed in build_evidence_pins.
+    sources = {p:v for p,v in build_sources.items() if Path(p).suffix not in ('.md','.cc')}
+    ct.require(before == after and sources == pre.current_release_sources(), 'Cache release source drift/rebuild pending')
+    for path, digest in build_sources.items(): e.pin(path,digest)
+    state = e.linked(h['release_state'],directory/'release-state.json')
+    inputs = e.linked(h['build_inputs'],directory/'build-inputs.json')
+    expected = ['cargo','build','--locked','--offline','--release','-p','ferrule-cli',
+        '--no-default-features','--features','cuda','--bin','ferrule','--target-dir',
+        'target/catalog-tp2-cuda','--message-format=json-render-diagnostics','-vv']
+    ct.require(state['status'] == 'passed' and state['returncode'] == 0 and state['timed_out'] is False
+        and state['argv'] == expected and state['environment'] == inputs['environment'], 'Cache release build failed/different')
+    env = inputs['environment']
+    ct.require(env['CUDA_VISIBLE_DEVICES'] == '' and env['NVIDIA_VISIBLE_DEVICES'] == 'none'
+        and env['FERRULE_CUDA_ARCH'] == 'sm_86' and 'RUSTFLAGS' not in env
+        and inputs['release_profile'] == dict(opt_level=3,lto='fat',codegen_units=1,panic='unwind',strip='symbols'),
+        'Release CUDA-hidden environment/profile differs')
+    ct.require(h['strict_clippy_passed'] is True and h['server_started'] is False
+        and h['gpu_workload_started'] is False and h['new_binary_gpu_smoke_passed'] is False,
+        'Final strict build required; builder is not GPU smoke acceptance')
+    files = e.read(directory/'handoff-file-pins.json')
+    ct.require(files.get('handoff.json') == link['sha256'], 'Builder inventory not bound to final handoff')
+    for name, digest in files.items():
+        ct.require(Path(name).name == name, 'Unsafe builder inventory path')
+        e.pin(directory/name,digest)
+    ledger, cpu_relation = public_cpu_evidence(e,h,directory,before)
+    deps = e.linked(h['actual_dependencies'],directory/'actual-release-dependencies.json')
+    dep_relation = e.linked(h['actual_dependency_quality_relation'])
+    ct.require(dep_relation['changed'] == [d for d in deps if d.get('relation') == 'changed']
+        and dep_relation['not_in_quality'] == [d for d in deps if d.get('relation') == 'not_in_quality_source_map'],
+        'Dependency relation differs')
+    summary, q = quality(e)
+    relation = source_relation(e,summary['sources'],sources,deps)
+    builder_relation = e.linked(h['quality_relation'])
+    e.linked(builder_relation['summary'],QUALITY/'acceptance-summary.json')
+    ct.require(builder_relation['new_binary_inherits_gpu_pass'] is False
+        and builder_relation['source_differences'] == [
+            {k:r[k] for k in ('path','quality_sha256','current_sha256')} for r in relation['changed']],
+        'Builder source-difference ledger differs')
+    libraries = e.linked(h['dynamic_library_pins'])['libraries']; runtime = {}
+    for name,item in libraries.items():
+        path = Path(name)
+        ct.require(str(path.resolve()) == item['resolved'] and path.stat().st_size == item['bytes'], 'Runtime library differs')
+        e.pin(path,item['sha256']);runtime[name]=item['sha256']
+    artifact = h['artifact']; binary = e.pin(artifact['path'],artifact['sha256'])
+    ct.require(binary.parent == directory and binary.stat().st_size == artifact['bytes']
+        and artifact['independent_copy'] is True
+        and artifact['sha256'] not in {v['sha256'] for v in summary['binaries'].values()}, 'Invalid serving release artifact')
+    launch = e.linked(h['owner_launch_plan'])
+    ct.require(launch['decoded_cache_bytes'] == 3 << 30 and launch['workspace_mib'] == 4096
+        and launch['device_ceiling_mib'] == 22528 and launch['executed'] is False,
+        'Builder public cache scope differs')
+    import paired
+    q.update(source_relation=relation, numerical_source_pins=pre.numerical_sources(summary['sources']),
+        release_numerical_source_pins=pre.numerical_sources(sources), artifact_pins=dict(e.pins),
+        public_metadata_ledger=ledger, public_cpu_relation=cpu_relation, fairmatch=False, exact_speedup=None)
+    # Recheck the externally pinned handoff after all dependent reads (builder race).
+    e.pin(link['path'],link['sha256'])
+    return dict(binary_path=str(binary),binary_sha256=artifact['sha256'],source_pins=sources,
+        runtime_pins=runtime,evidence_pins=e.pins,quality=q,serving_scope=dict(paired.CACHE_WORKSPACE_SCOPE),
+        decoded_cache=dict(CACHE), build_custody='Pinned builder CPU receipts/stdout/stderr and dependency inventory; not an authenticated GPU build or serving pass')
+
+
+ARENA_FIELDS = ('arena_backing_grants', 'free_slot_grants', 'unused_tail_bytes', 'slot_padding_bytes')
+
+
+def snapshot_accounting(s, version):
+    """Check the actual ledger, including retained preallocation/Unknown states.
+
+    Passing this check is NOT readiness, successful completion or GPU memory proof.
+    Historical v1 sums segments; v2 partitions one full root reservation.
+    """
+    ct.require(type(version) is int and version in (1, 2) and isinstance(s, dict),
+               'Unexpected cache snapshot schema')
+    legacy = ('pinned_grants', 'active_routed_grants', 'pooled_grants', 'pending_reserved_grants',
+              'segment_slack_bytes', 'pending_segment_slack_bytes')
+    counters = (*legacy, 'physical_current_bytes', 'physical_peak_bytes', 'capacity_grants',
+        'pin_target_grants', 'unallocated_pin_grants', 'pending_allocation_count',
+        'pending_lease_count', 'borrowed_key_count', 'unknown_reserved_bytes', 'image_generation')
+    if version == 2:
+        counters += (*ARENA_FIELDS, 'driver_allocation_growth_bytes', 'backing_reuses',
+                     'native_fallbacks', 'evictions')
+    else:
+        ct.require(not any(k in s for k in ARENA_FIELDS), 'Arena fields cannot masquerade as legacy segments')
+    for name in counters:
+        ct.require(type(s.get(name)) is int and s[name] >= 0, 'Missing/invalid cache counter: ' + name)
+    for name in ('published', 'quarantined', 'rank_performance_enabled', 'rank_performance_active'):
+        ct.require(type(s.get(name)) is bool, 'Missing/invalid cache state: ' + name)
+    ct.require('profiled_activity' in s, 'Missing cache activity observation')
+    ct.require(s.get('phase') in ('preparing', 'executing', 'idle', 'quarantined'), 'Unknown cache phase')
+    current, peak, cap = (s[k] for k in ('physical_current_bytes', 'physical_peak_bytes', 'capacity_grants'))
+    ct.require(0 < cap <= 3 << 30 and current <= peak <= cap, 'Cache physical total/peak exceeds grant')
+    if version == 1:
+        ct.require(sum(s[k] for k in legacy) == current, 'Legacy cache physical partition differs')
+        return
+    partition = ('pinned_grants', 'active_routed_grants', 'pooled_grants', 'free_slot_grants',
+                 'unused_tail_bytes', 'pending_reserved_grants')
+    ct.require(current == peak == cap and sum(s[k] for k in partition) == current,
+               'Arena reservation/partition differs; root and padding are not extra charges')
+    ct.require(s['arena_backing_grants'] in (0, cap)
+        and s['segment_slack_bytes'] == s['pending_segment_slack_bytes'] == 0
+        and s['pin_target_grants'] == s['pinned_grants'] + s['unallocated_pin_grants']
+        and s['unallocated_pin_grants'] <= s['pending_reserved_grants']
+        and s['pin_target_grants'] <= cap
+        and s['slot_padding_bytes'] <= cap - s['unused_tail_bytes']
+        and s['driver_allocation_growth_bytes'] <= cap
+        and s['pending_allocation_count'] in (0, 1), 'Arena root/allocation/slot bounds differ')
+    quarantined = s['phase'] == 'quarantined'
+    ct.require(s['quarantined'] is quarantined
+        and s['unknown_reserved_bytes'] == (cap if quarantined else 0),
+        'Unknown must retain the entire arena reservation')
+    if not quarantined:
+        ct.require(s['published'] is (s['phase'] != 'preparing'), 'Arena publication/phase mismatch')
+    if s['arena_backing_grants'] == 0:
+        ct.require(not s['published'] and s['phase'] in ('preparing', 'quarantined')
+            and s['pending_reserved_grants'] == cap
+            and s['pending_lease_count'] == s['borrowed_key_count'] == 0
+            and (quarantined or s['pending_allocation_count'] == 1),
+            'Uninstalled root lost reservation or claimed publication')
+    else:
+        ct.require(s['pending_allocation_count'] == 0, 'Installed root still has allocation ticket')
+        if not quarantined or s['published']:
+            ct.require(s['pending_reserved_grants'] == s['unallocated_pin_grants'] == 0,
+                       'Installed healthy/published root has incomplete views')
+
+
+def snapshot_rows(log, profiling=False):
+    """Validate observed cache-only host ledgers, never substitute them for drain."""
+    rows = {}
+    versions = set()
+    for line in log.splitlines():
+        if not line.startswith('{'): continue
+        record = json.loads(line); f = record.get('fields',{})
+        if f.get('event') != 'mixed_decoded_cache_snapshot': continue
+        version = f.get('schema_version')
+        ct.require(record.get('target') == 'ferrule_cache' and type(version) is int and version in (1, 2),
+                   'Unexpected snapshot schema/target')
+        key = (f['owner'],f['stage'])
+        ct.require(key not in rows and f['owner'] in (0,1) and f['device'] == f['owner']
+            and f['stage'] in ('ready','shutdown'), 'Missing/duplicate/foreign or unproven cache owner snapshot')
+        s = json.loads(f['snapshot_json'])
+        snapshot_accounting(s, version)
+        versions.add(version)
+        ct.require(len(versions) == 1, 'Mixed cache schemas within one lifecycle')
+        ct.require(s['capacity_grants'] == 3 << 30 and s['pin_target_grants'] == 1340 << 20,
+                   'Cache capacity/pin target differs from admitted scope')
+        ct.require(s['published'] is True and s['phase'] == 'idle' and s['quarantined'] is False
+            and s['rank_performance_active'] is False and s['rank_performance_enabled'] is profiling
+            and all(s[k] == 0 for k in ('unallocated_pin_grants','pending_allocation_count',
+                'pending_lease_count','borrowed_key_count','unknown_reserved_bytes')),
+            'Cache snapshot readiness/quiescence/profiling state invalid')
+        activity = s['profiled_activity']
+        if not profiling or f['stage'] == 'ready':
+            ct.require(activity is None, 'Unprofiled/ready activity must be null, not synthetic zero')
+        else:
+            ct.require(isinstance(activity,dict) and all(type(activity.get(k)) is int and activity[k] >= 0
+                for k in ('profiled_invocations','hits','misses','decoded_bytes','evictions'))
+                and activity['profiled_invocations'] > 0, 'Profile activity not collected')
+        rows[key] = s
+    ct.require(set(rows) == {(o,s) for o in (0,1) for s in ('ready','shutdown')}, 'Missing ready/shutdown cache snapshots')
+    for owner in (0,1):
+        ct.require(rows[owner,'ready']['image_generation'] == rows[owner,'shutdown']['image_generation'],
+                   'Cache owner image changed within lifecycle')
+    result=[]
+    for owner,stage in sorted(rows):
+        snapshot=rows[owner,stage];activity=snapshot['profiled_activity']
+        total=None if activity is None else activity['hits']+activity['misses']
+        result.append(dict(owner=owner,stage=stage,schema_version=version,snapshot=snapshot,
+            profiled_hit_fraction=None if not total else activity['hits']/total,
+            activity_scope='Cumulative rankperf-enabled invocations only; not a measured-request or GPU-completion counter'))
+    return result

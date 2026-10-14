@@ -1,0 +1,70 @@
+[
+  {
+    "sql": "SELECT name FROM sqlite_master WHERE type='table'",
+    "parameters": []
+  },
+  {
+    "sql": "SELECT * FROM ANALYSIS_DETAILS",
+    "parameters": []
+  },
+  {
+    "sql": "SELECT * FROM TARGET_INFO_SESSION_START_TIME",
+    "parameters": []
+  },
+  {
+    "sql": "SELECT globalTid, count(*) calls, sum(end-start) duration_ns FROM CUPTI_ACTIVITY_KIND_RUNTIME WHERE start >= ? AND end <= ? GROUP BY globalTid",
+    "parameters": [
+      276330188,
+      3000511342
+    ]
+  },
+  {
+    "sql": "SELECT deviceId,copyKind,count(*) calls,sum(bytes) bytes,sum(end-start) duration_ns FROM CUPTI_ACTIVITY_KIND_MEMCPY WHERE start >= ? AND end <= ? GROUP BY deviceId,copyKind",
+    "parameters": [
+      276330188,
+      3000511342
+    ]
+  },
+  {
+    "sql": "SELECT globalTid, count(*) calls, sum(end-start) duration_ns FROM CUPTI_ACTIVITY_KIND_RUNTIME WHERE start >= ? AND end <= ? GROUP BY globalTid",
+    "parameters": [
+      3263626196,
+      6284737208
+    ]
+  },
+  {
+    "sql": "SELECT deviceId,copyKind,count(*) calls,sum(bytes) bytes,sum(end-start) duration_ns FROM CUPTI_ACTIVITY_KIND_MEMCPY WHERE start >= ? AND end <= ? GROUP BY deviceId,copyKind",
+    "parameters": [
+      3263626196,
+      6284737208
+    ]
+  },
+  {
+    "sql": "SELECT s.value name,count(*) calls,sum(r.end-r.start) duration_ns,max(r.end-r.start) max_ns FROM CUPTI_ACTIVITY_KIND_RUNTIME r JOIN StringIds s ON s.id=r.nameId GROUP BY s.value ORDER BY duration_ns DESC",
+    "parameters": []
+  },
+  {
+    "sql": "SELECT r.globalTid,s.value name,count(*) calls,min(r.start) start_ns,max(r.end) end_ns FROM CUPTI_ACTIVITY_KIND_RUNTIME r LEFT JOIN ThreadNames t ON t.globalTid=r.globalTid LEFT JOIN StringIds s ON s.id=t.nameId GROUP BY r.globalTid",
+    "parameters": []
+  },
+  {
+    "sql": "SELECT deviceId,copyKind,count(*) calls,sum(bytes) bytes,sum(end-start) duration_ns FROM CUPTI_ACTIVITY_KIND_MEMCPY GROUP BY deviceId,copyKind",
+    "parameters": []
+  },
+  {
+    "sql": "SELECT severity,text,count(*) count FROM DIAGNOSTIC_EVENT GROUP BY severity,text ORDER BY count(*) DESC",
+    "parameters": []
+  },
+  {
+    "sql": "SELECT id,uuid,name FROM TARGET_INFO_GPU ORDER BY id",
+    "parameters": []
+  },
+  {
+    "sql": "SELECT * FROM TARGET_INFO_CUDA_DEVICE",
+    "parameters": []
+  },
+  {
+    "sql": "SELECT s.value name,count(*) calls,sum(r.end-r.start) duration_ns FROM OSRT_API r JOIN StringIds s ON s.id=r.nameId GROUP BY s.value ORDER BY duration_ns DESC",
+    "parameters": []
+  }
+]

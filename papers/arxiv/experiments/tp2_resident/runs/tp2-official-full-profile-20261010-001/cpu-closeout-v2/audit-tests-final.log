@@ -1,0 +1,22 @@
+test_gemm_names_are_not_api_measurements (test_profile_trace_audit.Audit.test_gemm_names_are_not_api_measurements) ... ok
+test_iso_timestamp_is_not_decimal_and_keeps_microseconds (test_profile_trace_audit.Audit.test_iso_timestamp_is_not_decimal_and_keeps_microseconds) ... ok
+test_process_local_zero_maps_to_distinct_uuid (test_profile_trace_audit.Audit.test_process_local_zero_maps_to_distinct_uuid) ... ok
+test_union_does_not_double_count_overlap_or_invent_idle (test_profile_trace_audit.Audit.test_union_does_not_double_count_overlap_or_invent_idle) ... ok
+test_closed_export_is_never_complete_trace (test_profile_trace_audit_v2.BidirectionalAudit.test_closed_export_is_never_complete_trace) ... ok
+test_cross_boundary_row_is_not_silently_filtered (test_profile_trace_audit_v2.BidirectionalAudit.test_cross_boundary_row_is_not_silently_filtered) ... ok
+test_duplicate_api_or_activity_is_not_unique (test_profile_trace_audit_v2.BidirectionalAudit.test_duplicate_api_or_activity_is_not_unique) ... ok
+test_empty_export_cannot_qualify (test_profile_trace_audit_v2.BidirectionalAudit.test_empty_export_cannot_qualify) ... ok
+test_failed_submission_does_not_count_as_missing_successful_launch (test_profile_trace_audit_v2.BidirectionalAudit.test_failed_submission_does_not_count_as_missing_successful_launch) ... ok
+test_missing_copy_and_memset_apis_are_detected (test_profile_trace_audit_v2.BidirectionalAudit.test_missing_copy_and_memset_apis_are_detected) ... ok
+test_overlap_same_thread_only_and_touching_end_is_allowed (test_profile_trace_audit_v2.BidirectionalAudit.test_overlap_same_thread_only_and_touching_end_is_allowed) ... ok
+test_regression_two_successful_warmup_driver_launches_have_no_activity (test_profile_trace_audit_v2.BidirectionalAudit.test_regression_two_successful_warmup_driver_launches_have_no_activity) ... ok
+test_reverse_checks_memcpy_and_memset_not_only_launches (test_profile_trace_audit_v2.BidirectionalAudit.test_reverse_checks_memcpy_and_memset_not_only_launches) ... ok
+test_reverse_counterpart_in_another_window_is_rejected (test_profile_trace_audit_v2.BidirectionalAudit.test_reverse_counterpart_in_another_window_is_rejected) ... ok
+test_same_correlation_in_another_pid_cannot_close (test_profile_trace_audit_v2.BidirectionalAudit.test_same_correlation_in_another_pid_cannot_close) ... ok
+test_startup_counterpart_is_found_but_rejected_not_called_missing (test_profile_trace_audit_v2.BidirectionalAudit.test_startup_counterpart_is_found_but_rejected_not_called_missing) ... ok
+test_wrong_or_unsupported_api_kind_cannot_close (test_profile_trace_audit_v2.BidirectionalAudit.test_wrong_or_unsupported_api_kind_cannot_close) ... ok
+
+----------------------------------------------------------------------
+Ran 17 tests in 0.001s
+
+OK

@@ -1,0 +1,107 @@
+{
+  "argv": [
+    "/home/admin/luhuanbing.lhb/Ferrule/target/validation/allocator-batch-v3/cargo-cuda124/debug/build/ferrule-backend/3ae243ab5b8ff62e/out/allocator_batch_v3-3ae243ab5b8ff62e",
+    "tests::v3_",
+    "--nocapture",
+    "--test-threads=1"
+  ],
+  "environment": {
+    "PATH": "/home/admin/wxw403883/anaconda3/envs/tao/bin:/root/.cargo/bin:/usr/bin:/bin",
+    "CUDA_HOME": "/home/admin/wxw403883/anaconda3/envs/tao",
+    "NVCC": "/home/admin/wxw403883/anaconda3/envs/tao/bin/nvcc",
+    "LD_LIBRARY_PATH": "/home/admin/wxw403883/anaconda3/envs/tao/lib:/usr/lib64",
+    "FERRULE_CUDA_ARCH": "sm_86",
+    "FERRULE_CUTLASS_DIR": "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/cutlass",
+    "RUSTFLAGS": "-L native=/home/admin/luhuanbing.lhb/Ferrule/target/validation/qwen35-35b-current/toolchain/link -L native=/home/admin/luhuanbing.lhb/Ferrule/target/validation/bf16-mixed-qkv-20261005/link -L native=/home/admin/wxw403883/anaconda3/envs/tao/lib",
+    "HOME": "/root",
+    "CUDA_VISIBLE_DEVICES": "",
+    "NVIDIA_VISIBLE_DEVICES": "void",
+    "CUBLAS_WORKSPACE_CONFIG": ":0:0",
+    "CARGO_BUILD_JOBS": "2",
+    "CARGO_PROFILE_RELEASE_OPT_LEVEL": "3",
+    "CARGO_PROFILE_RELEASE_LTO": "fat",
+    "CARGO_PROFILE_RELEASE_CODEGEN_UNITS": "1",
+    "CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS": "false",
+    "PYTHONDONTWRITEBYTECODE": "1",
+    "RUSTUP_TOOLCHAIN": "nightly-2026-08-01",
+    "CC": "/usr/bin/gcc",
+    "CXX": "/usr/bin/g++",
+    "CUDAHOSTCXX": "/usr/bin/g++",
+    "CARGO_HOME": "/root/.cargo",
+    "RUSTUP_HOME": "/root/.rustup",
+    "RUSTUP_AUTO_INSTALL": "0",
+    "RUSTC": "/root/.rustup/toolchains/nightly-2026-08-01-x86_64-unknown-linux-gnu/bin/rustc",
+    "RUSTDOC": "/root/.rustup/toolchains/nightly-2026-08-01-x86_64-unknown-linux-gnu/bin/rustdoc",
+    "FERRULE_CUDA_TEST_ORACLE": "0",
+    "CARGO_TARGET_DIR": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/allocator-batch-v3/cargo-cuda124",
+    "FERRULE_NO_CUDA": "1"
+  },
+  "supervisor": {
+    "returncode": 0,
+    "timed_out": false,
+    "wall_seconds": 0.09366109222173691,
+    "stdout": "\nrunning 10 tests\ntest tests::v3_byte_pressure_defers_only_growth_not_standard_reuse ... ok\ntest tests::v3_capture_quarantine_is_not_wait_progress_growth_pressure ... ok\ntest tests::v3_count_pressure_reuses_safe_extents_including_admitted_22_gib ... ok\ntest tests::v3_failed_stream_teardown_ticket_is_terminal_not_empty_coverage ... ok\ntest tests::v3_multiple_blocks_still_record_per_registration_not_per_block ... ok\ntest tests::v3_registration_during_weak_gone_window_must_not_prune_ticket_or_reuse ... ok\ntest tests::v3_temporary_capture_preserves_complete_proof_until_publication ... ok\ntest tests::v3_temporary_capture_preserves_recorded_fences ... ok\ntest tests::v3_unknown_during_query_remains_terminal_unlike_capture ... ok\ntest tests::v3_weak_gone_before_stream_sync_completion_defers_empty_fences ... ok\n\ntest result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 22 filtered out; finished in 0.01s\n\n",
+    "stderr": "",
+    "cleanup_errors": [],
+    "cleanup_scope": "isolated_subreaper_direct_children",
+    "descendant_custody": "proven_drained",
+    "gpu_quiescence": "unverified",
+    "custody": {
+      "status": "proven_drained",
+      "method": "linux-subreaper-waitid",
+      "containment_verified": true,
+      "launch_id": "677c3e94b03747e7b56152cdf1682ef2",
+      "helper_identity": {
+        "pid": 145855,
+        "birth_ticks": 97087936,
+        "ppid": 145847,
+        "pgrp": 145855,
+        "session": 145855
+      },
+      "root_identity": {
+        "pid": 145856,
+        "birth_ticks": 97087939,
+        "ppid": 145855,
+        "pgrp": 145855,
+        "session": 145855
+      },
+      "boot_id": "4dd3497d-570c-4693-a876-5c26e06ab360",
+      "entries": [
+        {
+          "identity": {
+            "pid": 145856,
+            "birth_ticks": 97087939,
+            "ppid": 145855,
+            "pgrp": 145855,
+            "session": 145855
+          },
+          "role": "root",
+          "signals": [],
+          "reaped": true,
+          "exit_code": 0,
+          "first_observed_at": 8606999.742138358,
+          "reaped_at": 8606999.762472516
+        }
+      ],
+      "errors": [],
+      "reporting_errors": [],
+      "echild": true
+    },
+    "handshake": {
+      "kind": "ready",
+      "protocol": 1,
+      "launch_id": "677c3e94b03747e7b56152cdf1682ef2",
+      "helper_identity": {
+        "pid": 145855,
+        "birth_ticks": 97087936,
+        "ppid": 145847,
+        "pgrp": 145855,
+        "session": 145855
+      },
+      "containment_verified": true,
+      "method": "linux-subreaper-waitid"
+    },
+    "stdout_truncated": false,
+    "stderr_truncated": false
+  }
+}

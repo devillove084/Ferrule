@@ -1,0 +1,9 @@
+{
+  "gate": "backend-exact",
+  "reason": "exact_gate_or_resource_failure",
+  "supervisor": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-fresh-20261010-01/backend-exact/supervisor.json",
+    "sha256": "40339becb0cb7f2075d118ec33e36c0aea259d9f10e34c8bf4b567dfbf408d70"
+  },
+  "gpu_owner_released": true
+}

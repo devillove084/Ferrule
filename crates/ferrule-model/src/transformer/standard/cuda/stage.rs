@@ -103,6 +103,9 @@ impl StandardDecoderSegment {
             source,
         };
         validate_precision(precision).map_err(prepare)?;
+        if precision == ExecutionPrecisionPolicy::bf16_compatibility() {
+            crate::transformer::Bf16DenseCudaProfile::validate(resources).map_err(prepare)?;
+        }
         // Check only the assigned descriptors, before materializing weights.
         if let Some(layers) = resources.spec().layers().get(plan.layers()) {
             for layer in layers {
@@ -129,13 +132,21 @@ impl StandardDecoderSegment {
 
 impl CudaStandardDecoderSegment {
     pub fn precision(&self) -> ExecutionPrecisionPolicy {
-        ExecutionPrecisionPolicy::f32()
+        crate::transformer::StandardDecoderOperators::precision(&self.operators)
     }
     pub fn activation_dtype(&self) -> crate::transformer::RowsDType {
-        crate::transformer::RowsDType::F32
+        if self.operators.bf16.is_some() {
+            crate::transformer::RowsDType::Bf16
+        } else {
+            crate::transformer::RowsDType::F32
+        }
     }
     pub fn kv_element_type(&self) -> ferrule_common::execution::KvElementType {
-        ferrule_common::execution::KvElementType::F32
+        if self.operators.bf16.is_some() {
+            ferrule_common::execution::KvElementType::Bf16
+        } else {
+            ferrule_common::execution::KvElementType::F32
+        }
     }
 
     pub fn plan(&self) -> &LayerSegmentPlan {
@@ -160,7 +171,7 @@ impl CudaStandardDecoderSegment {
     }
 
     /// Same-owner device input/output. KV-local planes follow the segment range.
-    /// Every operator fences before returning; errors still require KV rollback.
+    /// Each layer proves completion before returning; errors still require KV rollback.
     pub fn execute_cuda_bound(
         &mut self,
         batch: &PackedDecoderBatch,
@@ -186,8 +197,12 @@ impl CudaStandardDecoderSegment {
                     source,
                 }
             })?;
-            self.segment
-                .execute_bound(batch, input, &mut binding, &mut self.operators)
+            self.segment.execute_with_layer_operators(
+                batch,
+                input,
+                &mut binding,
+                super::super::LayerOperators::Cuda(&mut self.operators),
+            )
         })();
         self.operators.end_tensor(result.is_ok());
         result
@@ -239,11 +254,11 @@ impl CudaStandardDecoderSegment {
                 stage: SegmentStage::Input,
                 source,
             })?;
-        self.segment.execute_bound_with_experts(
+        self.segment.execute_with_experts_and_layer_operators(
             batch,
             input,
             &mut binding,
-            &mut self.operators,
+            super::super::LayerOperators::Cuda(&mut self.operators),
             context,
             executor,
             check_active,

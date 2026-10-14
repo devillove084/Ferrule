@@ -1,0 +1,7 @@
+{
+  "status": "verified",
+  "all_eight_idle": true,
+  "all_eight_locks_available_and_released": true,
+  "receipt": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-collector-profile-20261009-001/final-owner-release.json",
+  "sha256": "fa5d898dc57d48aa49a275fa720c9ad25b537bd9e93145cf7db7ea5f8d3138f2"
+}

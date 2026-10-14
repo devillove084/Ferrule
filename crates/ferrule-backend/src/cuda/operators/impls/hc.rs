@@ -32,6 +32,24 @@ impl CudaOperators {
         split_comb: &mut CudaF32Buffer,
         packed_output: &'a mut CudaFp8ActivationPack,
     ) -> Result<CudaPreparedFp8Activation<'a>> {
+        Self::f32_no_alias(
+            &[
+                state,
+                function_row_major,
+                hc_scale,
+                hc_base,
+                layer_rms_weight,
+            ],
+            &[
+                mix_output,
+                workspace,
+                hidden_output,
+                normalized_output,
+                split_pre,
+                split_post,
+                split_comb,
+            ],
+        )?;
         self.submit_operator(1, |stream| {
             let packed_output = packed_output.operator_storage_mut();
             crate::cuda::providers::cutlass::submit_hc_producer(

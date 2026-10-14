@@ -1,0 +1,87 @@
+% Conceptual custody abstraction, not one implementation's Rust enum.
+% Matched non-success never authorizes a new publication. Unknown stays sticky.
+\definecolor{FerrulePlanning}{HTML}{315E85}
+\definecolor{FerruleStorage}{HTML}{9A6B25}
+\definecolor{FerruleExecution}{HTML}{2E786D}
+\definecolor{FerrulePublication}{HTML}{6C588A}
+\definecolor{FerruleException}{HTML}{A34F4A}
+\begin{tikzpicture}[x=1cm,y=1cm,
+  role/plan/.style={ferrule/state,draw=FerrulePlanning,fill=FerrulePlanning!9},
+  role/execution/.style={ferrule/state,draw=FerruleExecution,fill=FerruleExecution!9},
+  role/publication/.style={ferrule/state,draw=FerrulePublication,fill=FerrulePublication!9},
+  role/failure/.style={ferrule/state,draw=FerruleException,fill=FerruleException!8},
+  role/unknown/.style={role/failure,dashed},
+  evidence/.style={ferrule/control,draw=FerrulePlanning},
+  retirement/.style={ferrule/control,draw=FerrulePublication},
+  exception/.style={ferrule/control,draw=FerruleException}]
+  \node[ferrule/section] at (0.3,1.45) {OPERATION / CUSTODY STATE (CONCEPTUAL)};
+  \node[role/plan,minimum height=1.10cm] (reserved) at (3.5,0)
+    {\textbf{Reserved / unsubmitted}\\Covered claims; no submitted references};
+  \node[role/execution,minimum height=1.15cm] (submitted) at (3.5,-1.95)
+    {\textbf{Submitted / in flight}\\Read, transfer, install or compute pending};
+  \node[role/plan,minimum height=1.80cm] (success) at (3.5,-4.15)
+    {\textbf{Validated success / ready}\\
+     Match key, operation, stage and bytes\\
+     Generations + retained fence also match\\Publication preflight still required};
+  \node[role/publication,minimum height=1.15cm] (published) at (3.5,-6.45)
+    {\textbf{Published / live}\\Authorized output or state; leases remain};
+  \node[role/publication,minimum height=1.15cm] (retiring) at (3.5,-8.55)
+    {\textbf{Retire pending}\\Relevant physical references may still be live};
+  \node[role/publication,minimum height=1.15cm] (quiescent) at (3.5,-10.65)
+    {\textbf{Quiescent / reusable}\\Return custody, then explicitly release claims};
+
+  \node[role/plan,minimum height=1.10cm] (rollback) at (12.3,0)
+    {\textbf{Released / unsubmitted abort}\\Owner-local rollback; no provider references};
+  \node[role/unknown,minimum height=1.70cm] (unknown) at (12.3,-3.8)
+    {\textbf{Retained Unknown (sticky owner)}\\
+     Ambiguous submission / failed or lost fence\\Retain payload, pins, slots and claims\\
+     No automatic reset, retry or reuse};
+  \node[ferrule/note,text width=5.7cm,align=center] at (12.3,-5.28)
+    {Applies at any submitted / retiring stage.\\Caller outcome cannot reset this owner.};
+  \node[role/failure,minimum height=1.70cm] (drain) at (12.3,-7.1)
+    {\textbf{Known failure / cancel drain}\\Failure does not authorize new Publish\\
+     Cancel keeps irreversible ending intent\\Physical cleanup proof still required};
+
+  % Explicit anchors and separate orthogonal branch lanes; no diagonal crossings.
+  % No outgoing edge is drawn from the sticky physical-owner Unknown node.
+  \begin{pgfonlayer}{background}
+    \draw[ferrule/arrow] (reserved.south) -- (submitted.north);
+    \draw[evidence] (submitted.south) -- (success.north);
+    \draw[ferrule/arrow] (success.south) -- (published.north);
+    \draw[ferrule/arrow] (published.south) -- (retiring.north);
+    \draw[retirement] (retiring.south) -- (quiescent.north);
+    \draw[ferrule/arrow] (reserved.east) -- (rollback.west);
+    \draw[exception] (submitted.east) -- (12.3,-1.95) -- (unknown.north);
+    \draw[ferrule/arrow,draw=FerruleException] (submitted.east)
+      -- (7.5,-1.95) -- (7.5,-7.1) -- (drain.west);
+    \draw[retirement] (drain.south) -- (12.3,-10.65) -- (quiescent.east);
+  \end{pgfonlayer}
+  \node[ferrule/label,text width=4.6cm] at (3.5,-1.02) {submit};
+  \node[ferrule/label,text width=4.6cm] at (3.5,-2.95) {matched validated success};
+  \node[ferrule/label,text width=4.6cm] at (3.5,-5.42) {authorized publish};
+  \node[ferrule/label,text width=4.6cm] at (3.5,-7.50) {retire demand};
+  \node[ferrule/label,text width=4.6cm] at (3.5,-9.60) {fences + scoped quiescence};
+  \node[ferrule/label,text width=2.45cm] at (7.88,0.55) {abort before submission};
+  \node[ferrule/label,text width=3.5cm] at (11.2,-1.42) {ambiguous evidence};
+  \node[ferrule/label,text width=2.05cm] at (7.7,-5.48)
+    {matched\\non-success\\or cancel};
+  \node[ferrule/label,text width=4.8cm] at (12.3,-9.65)
+    {exact relevant fences\\+ proven quiescence};
+
+  \draw[draw=FerrulePlanning,fill=FerrulePlanning!9] (0.35,-11.95) rectangle (0.65,-12.2);
+  \node[ferrule/note,anchor=west] at (0.8,-12.08) {Control / plan};
+  \draw[draw=FerruleStorage,fill=FerruleStorage!10] (3.5,-11.95) rectangle (3.8,-12.2);
+  \node[ferrule/note,anchor=west] at (3.95,-12.08) {Storage};
+  \draw[draw=FerruleExecution,fill=FerruleExecution!9] (6.0,-11.95) rectangle (6.3,-12.2);
+  \node[ferrule/note,anchor=west] at (6.45,-12.08) {Execution};
+  \draw[draw=FerrulePublication,fill=FerrulePublication!9] (8.9,-11.95) rectangle (9.2,-12.2);
+  \node[ferrule/note,anchor=west] at (9.35,-12.08) {Publish / retire};
+  \draw[draw=FerruleException,fill=FerruleException!8,dashed] (12.4,-11.95) rectangle (12.7,-12.2);
+  \node[ferrule/note,anchor=west] at (12.85,-12.08) {Unknown / failure};
+  \node[ferrule/note,text width=15.45cm,anchor=north west] at (0.3,-12.65)
+    {\textbf{Separate axes:} logical outcome, operation phase and resource-credit kind are not interchangeable.\\
+     Solid: dependency / known outcome. Dashed: evidence; dashed Unknown border marks uncertainty.\\
+     Stale-generation or mismatched events are rejected: no state mutation or credit return.\\
+     Exact stage completion may close a registry obligation without healing a separately poisoned owner.\\
+     Producer readiness is not retirement; idle leases do not evict resident bytes; quiescence is not a refund.};
+\end{tikzpicture}

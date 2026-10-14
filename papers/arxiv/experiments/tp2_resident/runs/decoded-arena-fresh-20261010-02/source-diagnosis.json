@@ -1,0 +1,43 @@
+{
+  "status": "read_only_no_model_or_backend_changes",
+  "sources": {
+    "crates/ferrule-model/tests/unit/transformer/mixed_decoded_gpu.rs": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-model/tests/unit/transformer/mixed_decoded_gpu.rs",
+      "sha256": "32349d0688e63ca25184482af6c52b8e91b8e038536c5c74f619188dc904cab1"
+    },
+    "crates/ferrule-model/src/transformer/standard/cuda/hybrid_rank/mixed.rs": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-model/src/transformer/standard/cuda/hybrid_rank/mixed.rs",
+      "sha256": "4b337751b9bb487b1881f085840a36e5f3be8d4c2501f870777e361b1d414069"
+    },
+    "crates/ferrule-model/src/transformer/standard/cuda/bf16_hybrid.rs": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-model/src/transformer/standard/cuda/bf16_hybrid.rs",
+      "sha256": "459fb50e8f0eb494a0a1b5b25d374123b6c6746ccd7aa541193028b1ac04c815"
+    },
+    "crates/ferrule-backend/src/cuda/operators/numeric_fp8.rs": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-backend/src/cuda/operators/numeric_fp8.rs",
+      "sha256": "4a2ec5c9ea4e2c19c69abeef7bd57bebc984c29d6ac1cb6c95af2f729cc7f969"
+    },
+    "crates/ferrule-backend/src/bf16_gemmex_plan.rs": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-backend/src/bf16_gemmex_plan.rs",
+      "sha256": "e7b3ef09f11d6371034b0405850aaf0a6cc37ba09a59eec817336043bb869a83"
+    },
+    "crates/ferrule-backend/src/cuda/allocator.rs": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-backend/src/cuda/allocator.rs",
+      "sha256": "49ba582f3ad4f267ff8bbd0f6b3fe0351c1cf1a3e560e1c7d8e78c218cd6b98c"
+    }
+  },
+  "observed": {
+    "failed_assertion": "whole prepare_mixed_rank_block huge_allocations delta",
+    "actual": 2,
+    "expected": 1
+  },
+  "source_facts": [
+    "The test samples allocator metrics before prepare_mixed_rank_block, not immediately before arena allocation.",
+    "prepare_mixed_rank_block_pending first calls prepare_bf16_gemmex, then allocates the decoded arena.",
+    "prepare_bf16_gemmex_plans allocates one storage buffer including a 32 MiB workspace plus staging.",
+    "The allocator classifies requests >16 MiB as Huge and increments huge_allocations for every such request.",
+    "The small fixture then allocates a 128 MiB decoded root; both requests are inside the asserted delta."
+  ],
+  "interpretation": "Aggregate test scope includes the GemmEx provider storage as well as the root; delta=2 alone does not prove two cache roots.",
+  "required_followup": "Model owner must isolate root-allocation evidence from unrelated provider preparation, retaining exactly-one-root and full physical-budget assertions. Do not simply relax the expected count or rerun this frozen binary."
+}

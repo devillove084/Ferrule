@@ -1,0 +1,6 @@
+
+running 1 test
+test transformer::hybrid_parallel::mixed_decoded_arena::tests::three_gib_plan_has_disjoint_fixed_and_at_least_577_complete_experts ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 759 filtered out; finished in 0.00s
+

@@ -1,0 +1,76 @@
+{
+  "status": "runtime_contradiction",
+  "started_monotonic": 8410372.405419393,
+  "exact_speedup": null,
+  "contract_validation_seconds": 20.67177022434771,
+  "server_launch_monotonic": 8410393.07719136,
+  "executable_binding": "verified read-only staged Python path, matched to open hashed inode; spawn-compatible",
+  "startup_seconds": 228.185640623793,
+  "error": "Explicit backend/offload contract contradicted in logs",
+  "resources": {
+    "status": "blocked",
+    "sampled_device_high_water_bytes": 7634681856,
+    "sampled_tree_pss_high_water_bytes": 37738962944,
+    "sampled_tree_rss_high_water_bytes": 38155132928,
+    "samples": 43,
+    "errors": [
+      "Sampled GPU target exceeded"
+    ],
+    "sample_interval_seconds": 2,
+    "exact_peaks": false,
+    "hard_memory_partition": false,
+    "pinned_bytes": null,
+    "caveats": [
+      "CUDA pinning not measured by VmLck/VmPin alone",
+      "PSS excludes unmapped OS file cache; not a total physical-host-memory proof",
+      "Device samples include baseline; between-sample peaks may be missed"
+    ],
+    "identity_mode": "device_exclusive_local_custody",
+    "measurement_scope": "whole_selected_device",
+    "owned_process_gpu_peak_bytes": null,
+    "owned_gpu_attribution": "unknown",
+    "nvml_pid_set_changes": 1,
+    "absence_of_foreign_interference_proven": false
+  },
+  "shutdown": {
+    "status": "root_exited_descendants_unknown",
+    "seconds": 7.4239969197660685,
+    "timed_out": false,
+    "gpu_quiescence": "unverified; no GPU probe"
+  },
+  "runtime": {
+    "status": "blocked",
+    "evidence": {
+      "moe_marlin": [
+        "Using MARLIN Fp8 MoE backend"
+      ],
+      "linear_marlin": [
+        "MarlinFP8ScaledMMLinearKernel"
+      ],
+      "offloader_uva": [
+        "Offloader set to UVAOffloader"
+      ],
+      "offloaded_amount": [
+        "Total CPU offloaded parameters: 30.0"
+      ],
+      "model_bf16": [
+        "dtype=torch.bfloat16"
+      ]
+    },
+    "contradictions": [
+      "(EngineCore pid=168874) INFO 10-08 21:51:10 [qwen_gdn_linear_attn.py:500] Falling back to the Triton GDN decode path: torch.ops._C.fused_gdn_decode_post_conv_mtp is not built"
+    ],
+    "missing": [],
+    "reasons": [
+      "Effective KV/conv/SSM dtype and physical pinning need runtime evidence",
+      "UVA selection log alone does not prove UVA path rather than functional_call fallback"
+    ],
+    "exact_arithmetic_match": false,
+    "log_sha256": "ab6743624503e533102916cdd36fd489dd5c47470670787ace5dc664737a5837",
+    "scanned_prefix_bytes": 22664,
+    "truncated": false,
+    "performance_fields_observed": false,
+    "performance_parser": "profile/backend evidence only; no performance-field extraction implemented"
+  },
+  "wall_seconds": 256.4865161292255
+}

@@ -1,0 +1,106 @@
+{
+  "schema": "ferrule.paper.mixed-routed-down.cpu-validation.v1",
+  "status": "pass_cpu_preparation_only",
+  "model_fixture_ready": false,
+  "cuda_initialized": false,
+  "gpu_queries": false,
+  "source_bundle_sha256": "6fe6b0c5b8d886586fef422be52f61151fc72345b4077eae33987e8fa325c65f",
+  "checked_files": 222,
+  "fixtures": [
+    {
+      "directory": "hello-decode0-layer00-expert021",
+      "observed_boundaries_exact": true,
+      "raw_ranks": [
+        {
+          "rank": 0,
+          "weight_sha256": "1a15efce93b3eb42f60ae1b4e3c98222cbcda15172c70dceed7d123b458313c8",
+          "scale_sha256": "9531ed991bb4cf84c1d3940c645d952f7d7d52593e53dd5ed6309a6d121267a4",
+          "weight_bytes": 524288,
+          "scale_bytes": 64
+        },
+        {
+          "rank": 1,
+          "weight_sha256": "09580f8c7f601595a44ddb0cf8b9b5858b4e5f9ed05dbb751821b946d9f98a51",
+          "scale_sha256": "e1b38c9be187c66c94abded6ba4142c8cc84622937dafdee2a564382169dcbc5",
+          "weight_bytes": 524288,
+          "scale_bytes": 64
+        }
+      ],
+      "missing_expected_preserved": true
+    },
+    {
+      "directory": "hello-decode0-layer03-expert037",
+      "observed_boundaries_exact": true,
+      "raw_ranks": [
+        {
+          "rank": 0,
+          "weight_sha256": "4f194be3de408a6ecc4f3d019ad3e5bec6d58f659eefbd57793916b72117453f",
+          "scale_sha256": "134833a9738276fd133c7090f66a724afde884f64559515ad20a959dd855a8c0",
+          "weight_bytes": 524288,
+          "scale_bytes": 64
+        },
+        {
+          "rank": 1,
+          "weight_sha256": "3f508a7cdb985094308116744a23d4168b5b7907888b655dcacb883579325bc2",
+          "scale_sha256": "fda352beddbe3e03a68851a2dd6518907302e98f80afe69737ca9e81b3ba9b4c",
+          "weight_bytes": 524288,
+          "scale_bytes": 64
+        }
+      ],
+      "missing_expected_preserved": true
+    },
+    {
+      "directory": "capital-decode0-layer00-expert072",
+      "observed_boundaries_exact": true,
+      "raw_ranks": [
+        {
+          "rank": 0,
+          "weight_sha256": "6a93866d54d1e2f72093cb8200089b71bd266cfb2a3cb8db396737e803f94ede",
+          "scale_sha256": "797731f587ed9a289fd6316bb2982c21447aa6635ede793c4ef97454570b7ac8",
+          "weight_bytes": 524288,
+          "scale_bytes": 64
+        },
+        {
+          "rank": 1,
+          "weight_sha256": "49c653f3dfaec55ba77106f40e26d7bc661d3aca57b22f6beadf68631201ca8f",
+          "scale_sha256": "006061c60e70d5b56da1531aa8e84d23696ffa18e65441c0ee46867951932bda",
+          "weight_bytes": 524288,
+          "scale_bytes": 64
+        }
+      ],
+      "missing_expected_preserved": true
+    },
+    {
+      "directory": "capital-decode0-layer03-expert010",
+      "observed_boundaries_exact": true,
+      "raw_ranks": [
+        {
+          "rank": 0,
+          "weight_sha256": "686827ef9612db9690e6031f530e35ce52928f0dbdcd70b90e18b68a3a9afbee",
+          "scale_sha256": "bb5715271d634783bb86e6980c78349f89331620e3db3d1b8c175c78f39a1079",
+          "weight_bytes": 524288,
+          "scale_bytes": 64
+        },
+        {
+          "rank": 1,
+          "weight_sha256": "0abd63bcee816e15cc00bef649842836b02b56c07f6dfaca5d90fffd0629388e",
+          "scale_sha256": "d8278c347c45765ede345ddc518bd6da9a9184ffe4be24b968d359c857148f3f",
+          "weight_bytes": 524288,
+          "scale_bytes": 64
+        }
+      ],
+      "missing_expected_preserved": true
+    }
+  ],
+  "tests": {
+    "command": "GPU-hidden /opt/conda310/bin/python -B -m unittest discover -s papers/arxiv/experiments/tp2_mixed/oracle -p test_routed_down_extract.py",
+    "passed": 6
+  },
+  "not_run": [
+    "model frozen_tp2_down_fixture_preflight: missing real per-expert input/expected",
+    "native or W8 CUDA operator gates",
+    "independent GPU replay"
+  ],
+  "source_manifest_pin_unchanged": true,
+  "protocol_pin_unchanged": true
+}

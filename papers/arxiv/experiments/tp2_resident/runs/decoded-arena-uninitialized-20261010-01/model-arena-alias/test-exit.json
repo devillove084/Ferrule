@@ -1,0 +1,6 @@
+{
+  "returncode": 0,
+  "one_test_passed": true,
+  "selector": "transformer::standard::cuda::hybrid_rank::mixed::decoded_gpu_tests::decoded_arena_alias_retains_whole_root",
+  "binary_sha256": "705b9d16b81e16a016180ed6c479a5bd722c311f3df8547842ebbb05bfb5a050"
+}

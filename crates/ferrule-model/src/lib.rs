@@ -1,3 +1,4 @@
+#![cfg_attr(not(feature = "cpu-reference"), doc = include_str!("../tests/compile/cpu_reference_api.md"))]
 #![allow(
     clippy::field_reassign_with_default,
     clippy::large_enum_variant,
@@ -35,11 +36,12 @@ pub mod hyper_connection;
 pub mod materialization;
 pub mod nn;
 pub mod precision;
+pub mod resource_observability;
 pub mod runner;
-pub mod semantic;
 pub mod semantic_plan;
 pub mod spec;
 pub mod tensor_policy;
+pub mod tensor_semantics;
 pub mod tokenizer;
 
 // ── Sub-directory modules ─────────────────────────────────────────────────
@@ -89,7 +91,8 @@ pub use support::{
 };
 
 // ── Re-exports: semantic ──────────────────────────────────────────────────
-pub use semantic::{
+pub use tensor_semantics as semantic;
+pub use tensor_semantics::{
     AttentionTensorKind, AttentionTensorRef, DenseLayerTensorKind, DenseLayerTensorRef,
     HyperConnectionStage, HyperConnectionTensorKind, HyperConnectionTensorRef, RoutedExpertMatrix,
     RoutedExpertTensorPart, RoutedExpertTensorRef, RouterTensorKind, RouterTensorRef,
@@ -120,19 +123,20 @@ pub use checkpoint::{
 
 // ── Re-exports: moe ───────────────────────────────────────────────────────
 pub use moe::{
-    CpuExpertHandleStore, CpuReferenceExpertExecutor, ExpertArtifactPayload, ExpertComputeBundle,
-    ExpertComputeHandle, ExpertEvictRequest, ExpertExecutor, ExpertHandleStore, ExpertId,
-    ExpertIoTransport, ExpertIoTransportError, ExpertLinearFormat, ExpertLinearPayload,
-    ExpertLoadReason, ExpertLoadRequest, ExpertLoadSource, ExpertMatrixKind, ExpertMemoryPolicy,
-    ExpertRoute, ExpertRouterPolicy, ExpertStorageTier, ExpertStreamingPlanner,
-    ExpertStreamingPolicy, ExpertStreamingReader, ExpertStreamingStep, ExpertTelemetry,
-    ExpertTensorComponent, ExpertTensorKey, ExpertTensorPayload, ExpertTensorSlice,
-    HostStagedExpertCache, ResidentExpertHandle, ResourceResidentFormat, RoutedMoeStepOutput,
-    RouterScoreFunction, RouterSelectionPolicy, execute_routed_moe_reference,
-    execute_routed_moe_reference_with_handles, execute_routed_moe_with_artifact_router_reference,
+    CpuExpertHandleStore, ExpertArtifactPayload, ExpertComputeBundle, ExpertComputeHandle,
+    ExpertEvictRequest, ExpertExecutor, ExpertHandleStore, ExpertId, ExpertIoTransport,
+    ExpertIoTransportError, ExpertLinearFormat, ExpertLinearPayload, ExpertLoadReason,
+    ExpertLoadRequest, ExpertLoadSource, ExpertMatrixKind, ExpertMemoryPolicy, ExpertRoute,
+    ExpertRouterPolicy, ExpertStorageTier, ExpertStreamingPlanner, ExpertStreamingPolicy,
+    ExpertStreamingReader, ExpertStreamingStep, ExpertTelemetry, ExpertTensorComponent,
+    ExpertTensorKey, ExpertTensorPayload, ExpertTensorSlice, HostStagedExpertCache,
+    ResidentExpertHandle, ResourceResidentFormat, RoutedMoeStepOutput, RouterScoreFunction,
+    RouterSelectionPolicy, execute_routed_moe_reference, execute_routed_moe_reference_with_handles,
+    execute_routed_moe_with_artifact_router_reference,
     execute_routed_moe_with_artifact_router_reference_with_handles, read_experts_concurrent,
-    reference_linear,
 };
+#[cfg(any(test, feature = "cpu-reference"))]
+pub use moe::{CpuReferenceExpertExecutor, reference_linear};
 
 // ── Re-exports: materialization ───────────────────────────────────────────
 pub use materialization::{
@@ -151,6 +155,13 @@ pub use ferrule_common::{
     MaterializationResolveError, MaterializationResolveResult, MaterializedResourceId,
     MaterializedResourceKind, ParallelGroupId, ParallelRankId, ParallelTopologyId,
     PayloadEncodingId, ResidencyLeaseSet, ValidatedResidencyBinding,
+};
+
+// ── Re-exports: resource observability ────────────────────────────────────
+pub use resource_observability::{
+    PhysicalResourceObservation, ResourceClosure, ResourceEvidence, ResourceObservabilityLedger,
+    ResourceObservationScope, ResourceObservationScopeMismatch, ResourceObservationSnapshot,
+    ResourceQuiescence, ResourceRelease, ResourceResidency,
 };
 
 // ── Re-exports: runner ────────────────────────────────────────────────────

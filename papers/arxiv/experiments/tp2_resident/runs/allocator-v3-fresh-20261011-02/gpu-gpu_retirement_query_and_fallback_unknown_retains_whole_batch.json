@@ -1,0 +1,108 @@
+{
+  "argv": [
+    "/home/admin/luhuanbing.lhb/Ferrule/target/validation/allocator-batch-v3/cargo-cuda124/debug/build/ferrule-backend/bbdc9d166cdea35b/out/allocator_retirement_gpu-bbdc9d166cdea35b",
+    "tests::gpu_retirement_query_and_fallback_unknown_retains_whole_batch",
+    "--exact",
+    "--nocapture",
+    "--test-threads=1",
+    "--ignored"
+  ],
+  "environment": {
+    "PATH": "/home/admin/wxw403883/anaconda3/envs/tao/bin:/root/.cargo/bin:/usr/bin:/bin",
+    "CUDA_HOME": "/home/admin/wxw403883/anaconda3/envs/tao",
+    "NVCC": "/home/admin/wxw403883/anaconda3/envs/tao/bin/nvcc",
+    "LD_LIBRARY_PATH": "/home/admin/wxw403883/anaconda3/envs/tao/lib:/usr/lib64",
+    "FERRULE_CUDA_ARCH": "sm_86",
+    "FERRULE_CUTLASS_DIR": "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/cutlass",
+    "RUSTFLAGS": "-L native=/home/admin/luhuanbing.lhb/Ferrule/target/validation/qwen35-35b-current/toolchain/link -L native=/home/admin/luhuanbing.lhb/Ferrule/target/validation/bf16-mixed-qkv-20261005/link -L native=/home/admin/wxw403883/anaconda3/envs/tao/lib",
+    "HOME": "/root",
+    "CUDA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+    "NVIDIA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+    "CUBLAS_WORKSPACE_CONFIG": ":0:0",
+    "CARGO_BUILD_JOBS": "2",
+    "CARGO_PROFILE_RELEASE_OPT_LEVEL": "3",
+    "CARGO_PROFILE_RELEASE_LTO": "fat",
+    "CARGO_PROFILE_RELEASE_CODEGEN_UNITS": "1",
+    "CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS": "false",
+    "PYTHONDONTWRITEBYTECODE": "1",
+    "RUSTUP_TOOLCHAIN": "nightly-2026-08-01",
+    "CC": "/usr/bin/gcc",
+    "CXX": "/usr/bin/g++",
+    "CUDAHOSTCXX": "/usr/bin/g++",
+    "CARGO_HOME": "/root/.cargo",
+    "RUSTUP_HOME": "/root/.rustup",
+    "RUSTUP_AUTO_INSTALL": "0",
+    "RUSTC": "/root/.rustup/toolchains/nightly-2026-08-01-x86_64-unknown-linux-gnu/bin/rustc",
+    "RUSTDOC": "/root/.rustup/toolchains/nightly-2026-08-01-x86_64-unknown-linux-gnu/bin/rustdoc",
+    "FERRULE_CUDA_TEST_ORACLE": "0",
+    "CARGO_TARGET_DIR": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/allocator-batch-v3/cargo-cuda124"
+  },
+  "supervisor": {
+    "returncode": 0,
+    "timed_out": false,
+    "wall_seconds": 0.5436038095504045,
+    "stdout": "\nrunning 1 test\ntest tests::gpu_retirement_query_and_fallback_unknown_retains_whole_batch ... DEVICE NVIDIA GeForce RTX 3090\nMETRICS query_fallback_unknown CudaAllocatorMetrics { allocation_requests: 8, allocation_failures: 0, reuse_allocations: 7, small_allocations: 8, large_allocations: 0, huge_allocations: 0, requested_bytes: 2048, granted_bytes: 2048, live_requested_bytes: 0, live_granted_bytes: 0, peak_live_requested_bytes: 2048, peak_live_granted_bytes: 2048, reserved_bytes: 67108864, peak_reserved_bytes: 67108864, free_bytes: 67106816, largest_free_extent: 67106816, pending_retirement_blocks: 8, pending_retirement_bytes: 2048, capture_retirement_bytes: 0, retired_blocks: 8, retirement_batches: 1, retirement_created_fences: 1, pending_retirement_batches: 1, pending_unfenced_bytes: 2048, shutdown_quiescent: false, shutdown_retained: false, internal_fragmentation: 0.0, external_fragmentation: 0.0, segments: 1, driver_allocations: 1, driver_allocation_bytes: 67108864, driver_frees: 0, driver_free_bytes: 0 }\nDRIVER query_fallback_unknown creates=1 records=1 queries=1 event_syncs=1 context_syncs=0 stream_syncs=1 frees=0 primary_releases=0\nMETRICS sticky_unknown CudaAllocatorMetrics { allocation_requests: 8, allocation_failures: 0, reuse_allocations: 7, small_allocations: 8, large_allocations: 0, huge_allocations: 0, requested_bytes: 2048, granted_bytes: 2048, live_requested_bytes: 0, live_granted_bytes: 0, peak_live_requested_bytes: 2048, peak_live_granted_bytes: 2048, reserved_bytes: 67108864, peak_reserved_bytes: 67108864, free_bytes: 67106816, largest_free_extent: 67106816, pending_retirement_blocks: 8, pending_retirement_bytes: 2048, capture_retirement_bytes: 0, retired_blocks: 8, retirement_batches: 1, retirement_created_fences: 1, pending_retirement_batches: 1, pending_unfenced_bytes: 2048, shutdown_quiescent: false, shutdown_retained: false, internal_fragmentation: 0.0, external_fragmentation: 0.0, segments: 1, driver_allocations: 1, driver_allocation_bytes: 67108864, driver_frees: 0, driver_free_bytes: 0 }\nDRIVER sticky_unknown creates=1 records=1 queries=1 event_syncs=1 context_syncs=0 stream_syncs=1 frees=0 primary_releases=0\nDRIVER unknown_process_exit_required creates=1 records=1 queries=1 event_syncs=1 context_syncs=0 stream_syncs=1 frees=0 primary_releases=0\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 30 filtered out; finished in 0.32s\n\n",
+    "stderr": "",
+    "cleanup_errors": [],
+    "cleanup_scope": "isolated_subreaper_direct_children",
+    "descendant_custody": "proven_drained",
+    "gpu_quiescence": "unverified",
+    "custody": {
+      "status": "proven_drained",
+      "method": "linux-subreaper-waitid",
+      "containment_verified": true,
+      "launch_id": "af63f0342f27495ab3ea34871ef50f2d",
+      "helper_identity": {
+        "pid": 146022,
+        "birth_ticks": 97091175,
+        "ppid": 145937,
+        "pgrp": 146022,
+        "session": 146022
+      },
+      "root_identity": {
+        "pid": 146023,
+        "birth_ticks": 97091178,
+        "ppid": 146022,
+        "pgrp": 146022,
+        "session": 146022
+      },
+      "boot_id": "4dd3497d-570c-4693-a876-5c26e06ab360",
+      "entries": [
+        {
+          "identity": {
+            "pid": 146023,
+            "birth_ticks": 97091178,
+            "ppid": 146022,
+            "pgrp": 146022,
+            "session": 146022
+          },
+          "role": "root",
+          "signals": [],
+          "reaped": true,
+          "exit_code": 0,
+          "first_observed_at": 8607032.135333957,
+          "reaped_at": 8607032.588878283
+        }
+      ],
+      "errors": [],
+      "reporting_errors": [],
+      "echild": true
+    },
+    "handshake": {
+      "kind": "ready",
+      "protocol": 1,
+      "launch_id": "af63f0342f27495ab3ea34871ef50f2d",
+      "helper_identity": {
+        "pid": 146022,
+        "birth_ticks": 97091175,
+        "ppid": 145937,
+        "pgrp": 146022,
+        "session": 146022
+      },
+      "containment_verified": true,
+      "method": "linux-subreaper-waitid"
+    },
+    "stdout_truncated": false,
+    "stderr_truncated": false
+  }
+}

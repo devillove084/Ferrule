@@ -1,0 +1,462 @@
+{
+  "schema": "ferrule.paper.routebatch-descriptive-result.v1",
+  "status": "complete_verified",
+  "utc": "2026-10-11T21:45:13.700735+00:00",
+  "purpose": "fused_after",
+  "optimization": "routebatch",
+  "slots": [
+    "F1"
+  ],
+  "binary_sha256": "e674eda31c0b1379e19afbd1446662278d98047c27b77c0f1233670e601c87f7",
+  "handoff": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/route-batch-release-20261012-01/handoff.json",
+    "sha256": "955c4d0f9d4ac111bc2dcbf46ebc51612114d97c164606598903c90424065c4a"
+  },
+  "ready": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/route-batch-incremental-20261012-01/ready-release-builder.json",
+    "sha256": "4d870c9aadd427fc5a52eda03de474ed0b5bc9c01e5f1a2f9741810115430b0b"
+  },
+  "source_relation": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/route-batch-release-20261012-01/sourceCPUdelta.json",
+    "sha256": "9a6a1cbe09f10e5b64017fb6ca40111665591f9636e6dc8f6427d2058cfc52b4"
+  },
+  "prepared": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/route-batch-info-after-20261012-01/prepared.json",
+    "sha256": "1b9155eccc376df165614cbb96885f1f66e6047c9e52645bcb79f3b3cdf083ae"
+  },
+  "formal_stage_wall_seconds": 454.7220971081406,
+  "supervisor_wall_seconds": 400.6861294209957,
+  "lifecycle_wall_seconds": 365.92202584818006,
+  "startup_seconds": 351.1144807524979,
+  "measured_requests": 5,
+  "actual_input_tokens": 25,
+  "actual_output_tokens": 40,
+  "measured_window_seconds": 2.811537992209196,
+  "output_tokens_per_second": 14.227088558234126,
+  "denominator": "first measured HTTP send (dispatch fallback if none) to last client-observed terminal/deadline, including failures and client overhead",
+  "ttft_seconds": {
+    "mean": 0.1782141525298357,
+    "min": 0.17591635696589947,
+    "max": 0.1836157739162445
+  },
+  "request_e2e_seconds": {
+    "mean": 0.532166725024581,
+    "min": 0.526179775595665,
+    "max": 0.5393072254955769
+  },
+  "requests": [
+    {
+      "status": "success",
+      "actual_input_tokens": 5,
+      "actual_output_tokens": 8,
+      "ttft_seconds": 0.17646867595613003,
+      "request_e2e_seconds": 0.5393072254955769,
+      "finish_reason": "length"
+    },
+    {
+      "status": "success",
+      "actual_input_tokens": 5,
+      "actual_output_tokens": 8,
+      "ttft_seconds": 0.1768631413578987,
+      "request_e2e_seconds": 0.5285964291542768,
+      "finish_reason": "length"
+    },
+    {
+      "status": "success",
+      "actual_input_tokens": 5,
+      "actual_output_tokens": 8,
+      "ttft_seconds": 0.1836157739162445,
+      "request_e2e_seconds": 0.5368904452770948,
+      "finish_reason": "length"
+    },
+    {
+      "status": "success",
+      "actual_input_tokens": 5,
+      "actual_output_tokens": 8,
+      "ttft_seconds": 0.17591635696589947,
+      "request_e2e_seconds": 0.5298597496002913,
+      "finish_reason": "length"
+    },
+    {
+      "status": "success",
+      "actual_input_tokens": 5,
+      "actual_output_tokens": 8,
+      "ttft_seconds": 0.1782068144530058,
+      "request_e2e_seconds": 0.526179775595665,
+      "finish_reason": "length"
+    }
+  ],
+  "raw_summary": {
+    "scheduled": 5,
+    "offered": 5,
+    "not_issued": 0,
+    "statuses": {
+      "success": 5
+    },
+    "success": 5,
+    "failed": 0,
+    "success_fraction": 1.0,
+    "scheduled_success_fraction": 1.0,
+    "wall_seconds": 2.811537992209196,
+    "successful_output_tokens": 40,
+    "known_usage_output_tokens": 40,
+    "requests_without_usage": 0,
+    "committed_visible_token_rate": null,
+    "committed_visible_token_rate_reason": "SSE text is not token IDs; usage may include hidden/EOS tokens; partial counts unknown",
+    "actual_output_counts": {
+      "8": 5
+    },
+    "actual_input_counts": {
+      "5": 5
+    },
+    "length_matched_success": 5,
+    "slo_qualified_success": null,
+    "successful_requests_per_second": 1.7783860697792657,
+    "successful_output_tokens_per_second": 14.227088558234126,
+    "length_matched_requests_per_second": 1.7783860697792657,
+    "length_matched_output_tokens_per_second": 14.227088558234126,
+    "slo_goodput_requests_per_second": null,
+    "distributions": {
+      "success_ttft_seconds": {
+        "count": 5,
+        "mean": 0.1782141525298357,
+        "p50": 0.1768631413578987,
+        "p95": 0.18253398202359677
+      },
+      "success_request_e2e_seconds": {
+        "count": 5,
+        "mean": 0.532166725024581,
+        "p50": 0.5298597496002913,
+        "p95": 0.5388238694518804
+      },
+      "success_mean_tpot_usage_proxy_seconds": {
+        "count": 5,
+        "mean": 0.050533568593008185,
+        "p50": 0.050439558391060145,
+        "p95": 0.05155106852097171
+      },
+      "success_content_event_itl_seconds": {
+        "count": 35,
+        "mean": 0.05053356859300818,
+        "p50": 0.0501907654106617,
+        "p95": 0.053035194799304006
+      },
+      "failure_ttft_seconds": {
+        "count": 0,
+        "mean": null,
+        "p50": null,
+        "p95": null
+      },
+      "failure_request_e2e_seconds": {
+        "count": 0,
+        "mean": null,
+        "p50": null,
+        "p95": null
+      },
+      "failure_mean_tpot_usage_proxy_seconds": {
+        "count": 0,
+        "mean": null,
+        "p50": null,
+        "p95": null
+      },
+      "failure_content_event_itl_seconds": {
+        "count": 0,
+        "mean": null,
+        "p50": null,
+        "p95": null
+      }
+    },
+    "window_kind": "fixed-work",
+    "denominator": "first measured HTTP send (dispatch fallback if none) to last client-observed terminal/deadline, including failures and client overhead",
+    "denominator_seconds": 2.811537992209196,
+    "time_to_complete_seconds": 2.811537992209196
+  },
+  "policy": {
+    "log": "info",
+    "rankperf": false,
+    "profiler": false,
+    "extra_tensor_readback": false,
+    "unmeasured_QA_requests": 3,
+    "smoke_timing_included": false,
+    "tp": 2,
+    "rank_backend": "thread",
+    "context": 128,
+    "batch_tokens": 8,
+    "sequences": 2,
+    "arena_bytes": 3221225472,
+    "workspace_bytes": 4294967296,
+    "device_cap_bytes": 23622320128
+  },
+  "cache_ledger_snapshots": [
+    {
+      "owner": 0,
+      "stage": "ready",
+      "schema_version": 2,
+      "snapshot": {
+        "image_generation": 2,
+        "phase": "idle",
+        "published": true,
+        "quarantined": false,
+        "capacity_grants": 3221225472,
+        "arena_backing_grants": 3221225472,
+        "pin_target_grants": 1405091840,
+        "pinned_grants": 1405091840,
+        "unallocated_pin_grants": 0,
+        "active_routed_grants": 0,
+        "pooled_grants": 0,
+        "free_slot_grants": 1816133632,
+        "unused_tail_bytes": 0,
+        "slot_padding_bytes": 0,
+        "pending_reserved_grants": 0,
+        "pending_allocation_count": 0,
+        "pending_lease_count": 0,
+        "borrowed_key_count": 0,
+        "segment_slack_bytes": 0,
+        "pending_segment_slack_bytes": 0,
+        "physical_current_bytes": 3221225472,
+        "physical_peak_bytes": 3221225472,
+        "driver_allocation_growth_bytes": 3221225472,
+        "unknown_reserved_bytes": 0,
+        "backing_reuses": 0,
+        "native_fallbacks": 0,
+        "evictions": 0,
+        "rank_performance_enabled": false,
+        "rank_performance_active": false,
+        "profiled_activity": null
+      },
+      "profiled_hit_fraction": null,
+      "activity_scope": "Cumulative rankperf-enabled invocations only; not a measured-request or GPU-completion counter"
+    },
+    {
+      "owner": 0,
+      "stage": "shutdown",
+      "schema_version": 2,
+      "snapshot": {
+        "image_generation": 2,
+        "phase": "idle",
+        "published": true,
+        "quarantined": false,
+        "capacity_grants": 3221225472,
+        "arena_backing_grants": 3221225472,
+        "pin_target_grants": 1405091840,
+        "pinned_grants": 1405091840,
+        "unallocated_pin_grants": 0,
+        "active_routed_grants": 1816133632,
+        "pooled_grants": 0,
+        "free_slot_grants": 0,
+        "unused_tail_bytes": 0,
+        "slot_padding_bytes": 0,
+        "pending_reserved_grants": 0,
+        "pending_allocation_count": 0,
+        "pending_lease_count": 0,
+        "borrowed_key_count": 0,
+        "segment_slack_bytes": 0,
+        "pending_segment_slack_bytes": 0,
+        "physical_current_bytes": 3221225472,
+        "physical_peak_bytes": 3221225472,
+        "driver_allocation_growth_bytes": 3221225472,
+        "unknown_reserved_bytes": 0,
+        "backing_reuses": 54621,
+        "native_fallbacks": 0,
+        "evictions": 54621,
+        "rank_performance_enabled": false,
+        "rank_performance_active": false,
+        "profiled_activity": null
+      },
+      "profiled_hit_fraction": null,
+      "activity_scope": "Cumulative rankperf-enabled invocations only; not a measured-request or GPU-completion counter"
+    },
+    {
+      "owner": 1,
+      "stage": "ready",
+      "schema_version": 2,
+      "snapshot": {
+        "image_generation": 1,
+        "phase": "idle",
+        "published": true,
+        "quarantined": false,
+        "capacity_grants": 3221225472,
+        "arena_backing_grants": 3221225472,
+        "pin_target_grants": 1405091840,
+        "pinned_grants": 1405091840,
+        "unallocated_pin_grants": 0,
+        "active_routed_grants": 0,
+        "pooled_grants": 0,
+        "free_slot_grants": 1816133632,
+        "unused_tail_bytes": 0,
+        "slot_padding_bytes": 0,
+        "pending_reserved_grants": 0,
+        "pending_allocation_count": 0,
+        "pending_lease_count": 0,
+        "borrowed_key_count": 0,
+        "segment_slack_bytes": 0,
+        "pending_segment_slack_bytes": 0,
+        "physical_current_bytes": 3221225472,
+        "physical_peak_bytes": 3221225472,
+        "driver_allocation_growth_bytes": 3221225472,
+        "unknown_reserved_bytes": 0,
+        "backing_reuses": 0,
+        "native_fallbacks": 0,
+        "evictions": 0,
+        "rank_performance_enabled": false,
+        "rank_performance_active": false,
+        "profiled_activity": null
+      },
+      "profiled_hit_fraction": null,
+      "activity_scope": "Cumulative rankperf-enabled invocations only; not a measured-request or GPU-completion counter"
+    },
+    {
+      "owner": 1,
+      "stage": "shutdown",
+      "schema_version": 2,
+      "snapshot": {
+        "image_generation": 1,
+        "phase": "idle",
+        "published": true,
+        "quarantined": false,
+        "capacity_grants": 3221225472,
+        "arena_backing_grants": 3221225472,
+        "pin_target_grants": 1405091840,
+        "pinned_grants": 1405091840,
+        "unallocated_pin_grants": 0,
+        "active_routed_grants": 1816133632,
+        "pooled_grants": 0,
+        "free_slot_grants": 0,
+        "unused_tail_bytes": 0,
+        "slot_padding_bytes": 0,
+        "pending_reserved_grants": 0,
+        "pending_allocation_count": 0,
+        "pending_lease_count": 0,
+        "borrowed_key_count": 0,
+        "segment_slack_bytes": 0,
+        "pending_segment_slack_bytes": 0,
+        "physical_current_bytes": 3221225472,
+        "physical_peak_bytes": 3221225472,
+        "driver_allocation_growth_bytes": 3221225472,
+        "unknown_reserved_bytes": 0,
+        "backing_reuses": 54621,
+        "native_fallbacks": 0,
+        "evictions": 54621,
+        "rank_performance_enabled": false,
+        "rank_performance_active": false,
+        "profiled_activity": null
+      },
+      "profiled_hit_fraction": null,
+      "activity_scope": "Cumulative rankperf-enabled invocations only; not a measured-request or GPU-completion counter"
+    }
+  ],
+  "arena_physical_and_fallback_ledger_fields": [
+    {
+      "field": ".0.snapshot.arena_backing_grants",
+      "value": 3221225472
+    },
+    {
+      "field": ".0.snapshot.physical_current_bytes",
+      "value": 3221225472
+    },
+    {
+      "field": ".0.snapshot.physical_peak_bytes",
+      "value": 3221225472
+    },
+    {
+      "field": ".0.snapshot.native_fallbacks",
+      "value": 0
+    },
+    {
+      "field": ".1.snapshot.arena_backing_grants",
+      "value": 3221225472
+    },
+    {
+      "field": ".1.snapshot.physical_current_bytes",
+      "value": 3221225472
+    },
+    {
+      "field": ".1.snapshot.physical_peak_bytes",
+      "value": 3221225472
+    },
+    {
+      "field": ".1.snapshot.native_fallbacks",
+      "value": 0
+    },
+    {
+      "field": ".2.snapshot.arena_backing_grants",
+      "value": 3221225472
+    },
+    {
+      "field": ".2.snapshot.physical_current_bytes",
+      "value": 3221225472
+    },
+    {
+      "field": ".2.snapshot.physical_peak_bytes",
+      "value": 3221225472
+    },
+    {
+      "field": ".2.snapshot.native_fallbacks",
+      "value": 0
+    },
+    {
+      "field": ".3.snapshot.arena_backing_grants",
+      "value": 3221225472
+    },
+    {
+      "field": ".3.snapshot.physical_current_bytes",
+      "value": 3221225472
+    },
+    {
+      "field": ".3.snapshot.physical_peak_bytes",
+      "value": 3221225472
+    },
+    {
+      "field": ".3.snapshot.native_fallbacks",
+      "value": 0
+    }
+  ],
+  "ledger_observation_scope": "Source-bound host cache ledgers; not extra device readback or a kernel activity profiler",
+  "activity": null,
+  "auxiliary_kernel_count": null,
+  "official_profile_captured": false,
+  "nccl": {
+    "default_disabled": true,
+    "private_device_bound": "Unknown",
+    "private_host_bound": "Unknown",
+    "new_live_library_map_claim": "Not inferred from historical maps or CPU static loader"
+  },
+  "coverage": {
+    "backend_gates": 3,
+    "model_gates": 5,
+    "qualification_counter_rows": 32,
+    "e2e_calls": 37,
+    "exact_logits": 14154240,
+    "internal_2178_state_claim": false,
+    "real_model_R64_numeric_acceptance": false
+  },
+  "historical_descriptive": {
+    "before_f6a_tps": 6.514803399392355,
+    "old_7e1_tps": 5.7,
+    "v_tps": 10.5
+  },
+  "fairmatch": false,
+  "exact_speedup": null,
+  "causal_claim": false,
+  "statistical_significance_claim": false,
+  "raw_pins": {
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/route-batch-info-after-20261012-01/execution.json": "c2a52357a6b6bdaaab9cbda9e62e3282246cc43eb050742dadaac0b0bee98e39",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/route-batch-info-after-20261012-01/prepared.json": "1b9155eccc376df165614cbb96885f1f66e6047c9e52645bcb79f3b3cdf083ae",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/route-batch-info-after-20261012-01/runs/F1/execution.json": "3c60303288fce2a93589efe3f3fff86b5808f23970f88aba972a5efa11ec084e",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/route-batch-info-after-20261012-01/runs/F1/lock-release.json": "39ae688106ea715f00f8c7694b2a52e2819bb6f666208c5b1c0cb4e273e3df79",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/route-batch-info-after-20261012-01/runs/F1/session/after.json": "073ffab716d06bd4eb028c725094cd19497532d12946af6a17af77cfede45594",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/route-batch-info-after-20261012-01/runs/F1/session/before.json": "439544aba115351738786bc656b4d0c4cfab22dccb534f7c7a80731568b47a50",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/route-batch-info-after-20261012-01/runs/F1/session/case.json": "9f51d39af7dfaeede3cd8f5286c6052cfff55dfe511db48544359bf3019441b7",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/route-batch-info-after-20261012-01/runs/F1/session/qa8/gate.json": "02909fd3684df4f3a644d2ac009df6ea607824f74b768439be3dc434f466fa25",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/route-batch-info-after-20261012-01/runs/F1/session/qa8/http.json": "b7e36459536bd2ebd02a016110a9f3547588f3b242f1be11b0692763ae9e0337",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/route-batch-info-after-20261012-01/runs/F1/session/requests.json": "3b61b1e5f171455c80b83fa9edbb6c887e328d6f33a1a4ed7f7b42e35cbc22e7",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/route-batch-info-after-20261012-01/runs/F1/session/server.log": "558d2896455b22d01012d7874ddbdc86eacd3669f5343d72d219918b7de364da",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/route-batch-info-after-20261012-01/runs/F1/session/supervisor.json": "9eda92a9a5773577a085b727316131d42dc66947a15b9601aef571addc641acc"
+  },
+  "postflight": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/route-batch-info-after-20261012-01/postflight.json",
+    "all_eight_idle": true,
+    "uuid_locks_released": true,
+    "sha256": "11436594453f5366e1fbcda3bcafc01b4c036473237f0615391c978538c1be11"
+  }
+}

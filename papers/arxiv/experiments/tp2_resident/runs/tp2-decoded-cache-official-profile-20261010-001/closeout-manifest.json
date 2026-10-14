@@ -1,0 +1,19 @@
+{
+  "schema": "ferrule.paper.tp2-cacheon-closeout.v1",
+  "status": "CPU_report_completed_after_GPU_release",
+  "outputs_and_additional_inputs": {
+    "papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/execution-summary.json": "b4d63c96a9ea991140cb7e6d58b8d5340bb3ef5d55d6b1fb0dcf5b875fd528a0",
+    "papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/SUMMARY.md": "9f2c7affa80afcf3f78b08bb239d846994c4829dec2cb7b85f386e2f88ba6320",
+    "papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/profile-audit-v2.json": "cd4f5ae5b3fa582c3a608d783408e40b2c93c50e539385cd04490d91335ff06c",
+    "papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/final-owner-release.json": "8e9ffd030c6da2ddfb9db345a47264e0f6d7342313856be4dea3d35a6090eded",
+    "papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/cpu-closeout-tests.log": "3dfa0ad2b47e1070862b90cd1dbe3bd32fe0c66ae4c4bf5db65f4b1ecca23eee",
+    "papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/cpu-closeout-tests.json": "db4437c55793dcc06d6effaaa9bc64bcdd77851597e792b701743b091d6cd4c3",
+    "papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/case.json": "d289a275338e9c6abf789320c43fef035d618b331b1bbfc0122acff0c03fa539",
+    "papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/collector-after-model.json": "700ad58bf90714c59fcd580b0d6c8c99aef6f85eaa1c4faf804593e520b6548b",
+    "papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/probe-lock-release.json": "aff4f68d7b05f833122c36031f0e48aebe3c19cdf8e0cceb05f9b27350a7313e"
+  },
+  "gpu_workload_in_closeout": false,
+  "full_trace_accepted": false,
+  "fairmatch": false,
+  "exact_speedup": null
+}

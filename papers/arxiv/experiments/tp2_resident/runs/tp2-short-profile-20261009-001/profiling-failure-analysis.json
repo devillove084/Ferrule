@@ -1,0 +1,284 @@
+{
+  "artifact_pins": {
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-short-profile-20261009-001/P1-dispatch.json": "6f57bd705702757af30c2a1c3c9009f84de743d3e0ae83e3f79c99719cc5f81c",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-short-profile-20261009-001/execution.json": "cfcf2fb863d1d94cd22567c58b6307f9ea24dee886ef3dae9cef8c088f656f8e",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-short-profile-20261009-001/final-owner-recheck.json": "88b4e112c25576009e5b5415ca996b09efa3d7b52c392116f270010921727d6d",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-short-profile-20261009-001/final-owner-release.json": "6075b813f651ee510857864b0589159c1af8555e53dd0723bba50554900cc6b0",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-short-profile-20261009-001/launch.json": "5a2d60a1793c46dcca6fabf0b18e5dbff98364ef72d45cd4817d696cf1d02fe0",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-short-profile-20261009-001/prepared.json": "b535d585a872a5d3a153906aa0c63b67ba839542293839c4d0d6fc03c38e923f",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-short-profile-20261009-001/reconnect-preflight.json": "a7761f8598290a2fdbcde851f22ff4e820dc0570a2f7726beddb96d7912c0027",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-short-profile-20261009-001/runs/P1/canaries.json": "854238c428d68832a2806538f300bac32f53a0c8d47ff2e85bcfba5e5ace6fea",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-short-profile-20261009-001/runs/P1/execution.json": "71a8f096967b1b8fb11017b7893f8cbf6b8514e9e8e42a3b2c3608c748b076f5",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-short-profile-20261009-001/runs/P1/lock-release.json": "39ae688106ea715f00f8c7694b2a52e2819bb6f666208c5b1c0cb4e273e3df79",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-short-profile-20261009-001/runs/P1/prepared.json": "67a52c91e9b1fe32bdc63dafdbbeaac23e602aeeff51307e05f2a261cf1b999a",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-short-profile-20261009-001/runs/P1/session/after.json": "003131f967c862cea262d3ac34f1cfb465a3092358a3e970a511a1df45ae772c",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-short-profile-20261009-001/runs/P1/session/baseline.json": "3c2bd642756c89eefb40a77c82d66cda42ca4d6a3584092b8d2f1620932ab368",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-short-profile-20261009-001/runs/P1/session/before.json": "71b56342729957e75dcdedba3bd41725c13bc198cab73c9bbf5ea237608e8a1f",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-short-profile-20261009-001/runs/P1/session/case.json": "7ff028be936ac0e4cc916b6b9216bcd5d506557cf0d52376d3027b7bedc6b36f",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-short-profile-20261009-001/runs/P1/session/custody.json": "d1385bf3066322480f6192f4a2adeaff27c66185e927c863eb1c86478a63143c",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-short-profile-20261009-001/runs/P1/session/nsys-tmp/nvidia/nsight_systems/NSys-SessionManager.lock-4026532468-2026.1.3": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-short-profile-20261009-001/runs/P1/session/nsys-tmp/nvidia/nsight_systems/NSys-termination_status_197687-4026532468-2026.1.3": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-short-profile-20261009-001/runs/P1/session/prelaunch.json": "b75b4c1f5db1a86c621e7c57b7111873c72fb167c3476fc306913d75dc9e577e",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-short-profile-20261009-001/runs/P1/session/profile-stop": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-short-profile-20261009-001/runs/P1/session/samples.jsonl": "0dc633355fb0bc1c21a6116e91d9984eb52cf3be44e0bb349256559d17ad114f",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-short-profile-20261009-001/runs/P1/session/server.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-short-profile-20261009-001/runs/P1/session/supervisor.json": "c5d48f60925ecee1260f6dc9c02de03e8ffba947762193ff14045268868eb8ab",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-short-profile-20261009-001/runs/P1/session/worker-launch.json": "49152f676d0e694d7ab30c9e30580047d617cbff83d95fe936f783d8fc4d71e4",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-short-profile-20261009-001/runs/P1/topology.json": "ef2c30a474eb84b709762d9df80e6c853451640671cd142f0a4cc1f44009a50b",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-short-profile-20261009-001/tools/capabilities.json": "ba10ee321b413375e6d7186521915031b9e07e41c4ef0feb29cb3455d3c8538e",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-short-profile-20261009-001/tools/cpu-probe.log": "12f9aa6e2cd953545e757c7798e2e5af098d6e4b4690d1342727eea0d339c837",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-short-profile-20261009-001/tools/cpu-probe.nsys-rep": "a652ba68ddaf3b0ec887e645006e037562b48ad09596c43a4dc5d2c3a0e36ca2",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-short-profile-20261009-001/tools/nvidia/nsight_systems/NSys-SessionManager.lock-4026532468-2026.1.3": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-short-profile-20261009-001/tools/nvidia/nsight_systems/telemetry-0/telemetry.lock": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-short-profile-20261009-001/tools/profile-help.txt": "bb618694583301dbcc2ac8b87f8239ee7bf2e5c707b13affc01f90590723e958",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-short-profile-20261009-001/tools/reports.txt": "253894311013eb369fa98a45b17e8900534bf411ef869f1fbfe942b27cbfee51",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-short-profile-20261009-001/tools/sessions-before.txt": "3d61093b60dffdcb048f49c4e365d3d88c5c4a881f3385dcbcf536def003b745",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-short-profile-20261009-001/tools/start-help.txt": "9946c1f6e0f307ef2ae6d262d4c77f639858d8b201ca609cbc2e2d3a9ff588e2",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-short-profile-20261009-001/tools/stats-help.txt": "084d0a5f3438dfc56ffbbc3316274b09c27eaf281f572e1db5cc84b6e6281ec3",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-short-profile-20261009-001/tools/status.txt": "be26d80799f21e97722185502c1f05e23d3210db26de1440d6d25e7dadf018f0",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-short-profile-20261009-001/tools/stop-help.txt": "81dba69c56508cef65c5e4727b81443c6f522f82f3f8fb79a9ea16ba01923b05",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-short-profile-20261009-001/tools/version.txt": "a46fa502265be93cac6aed0834d2a9b32f7868381bf53cd56a3e1526894d85b2",
+    "failure_receipt": "e442d9fff07321652f67aa750e4146035d06b7c7afdb17319edb4e32446ca151"
+  },
+  "attempts": 1,
+  "correction": "Nonselected delta projection explicitly corrected; original failure receipt is preserved unchanged.",
+  "custody": {
+    "after_idle": "verified",
+    "final_idle": "verified",
+    "foreign_signals": false,
+    "released": true,
+    "supervisor": "proven_drained"
+  },
+  "failure": {
+    "compute_apps_before": [],
+    "delta_high_water_bytes": {
+      "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f": 1048576,
+      "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6": 4194304,
+      "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d": 1048576,
+      "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 4194304,
+      "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86": 2097152,
+      "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 4194304,
+      "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011": 4194304,
+      "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685": 1048576
+    },
+    "elapsed_seconds": 3.1789296939969063,
+    "errors": [
+      "ValueError: ['Nonselected positive memory delta exceeds 1 MiB: GPU-0bc01d70-2ade-0714-8959-b25ae75469b6', 'Nonselected positive memory delta exceeds 1 MiB: GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011', 'Nonselected positive memory delta exceeds 1 MiB: GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86']"
+    ],
+    "nonselected_observed": {
+      "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f": 1048576,
+      "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6": 4194304,
+      "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d": 1048576,
+      "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86": 2097152,
+      "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011": 4194304,
+      "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685": 1048576
+    },
+    "nonselected_tolerance_bytes": 1048576,
+    "observed_nonselected_over_tolerance": {
+      "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6": 4194304,
+      "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86": 2097152,
+      "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011": 4194304
+    },
+    "root_cause": "observer rejected unexplained positive nonselected GPU memory delta during Nsight startup",
+    "server_log_bytes": 0
+  },
+  "profiler": {
+    "cuda_all_apis": true,
+    "name": "Nsight Systems",
+    "report_available": false,
+    "start_later": true,
+    "started": false,
+    "trace_requested": [
+      "cuda",
+      "nvtx",
+      "osrt"
+    ],
+    "version": "2026.1.3.425-261338342291v0"
+  },
+  "release_binary_sha256": "e017a3a8c8ec4019a7f291a818643d9693e32b2dfee0a9cc503fcf84926c1b0b",
+  "retries": 0,
+  "run": "tp2-short-profile-20261009-001",
+  "schema": "ferrule.paper.tp2-profile-failure.v1",
+  "scope": {
+    "canaries_run": 0,
+    "full_capture": false,
+    "measured_run": 0,
+    "requests_run": 0,
+    "selected_uuids": [
+      "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9"
+    ],
+    "startup_excluded_by_design": true,
+    "warmup_run": 0
+  },
+  "source_evidence": {
+    "bf16_gemmex": "bf16_gemmex launch enqueues pack_bf16_activation, decode_weights and cuBLAS GemmEx on same stream; pair path enqueues second decode and split_pair",
+    "consumer_proof": "residency.rs consumer_proof records CUDA event synchronize plus upload stream sync; cuda.rs synchronous adds root barrier, event, boundary drain, compute sync and upload sync; no runtime counts captured",
+    "mixed_boundary": "mixed_layer.rs copies device rows to host via to_host_vec, exchanges CPU words, then upload_bf16_words; this is a concrete D2H/H2D candidate",
+    "mixed_linear": "mixed.rs preparation uploads/allocations are synchronous owner operations; routed path uploads row IDs/weights and allocates packed/output buffers",
+    "route_agreement": "mixed_route_collective.rs uses Condvar wake/wait for route agreement; wait time not measured"
+  },
+  "source_pins": {
+    "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-backend/native/cuda/cutlass/bf16_gemmex.cuh": "b36d03aebe3cc4f86620212bc416f7ef3e4fc3cb46154072fa52aa41334d7444",
+    "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-model/src/transformer/standard/cuda.rs": "654fac13af6cef6f2750ecd1843cc81be98749444784da765e00c9b72eb513bb",
+    "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-model/src/transformer/standard/cuda/hybrid_rank/mixed.rs": "4980282953f62b9d2e4f4ff8dc140458b637f60b473ce47d7fa565b6a7751634",
+    "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-model/src/transformer/standard/cuda/hybrid_rank/mixed_layer.rs": "e1d7b753b534a6d28e82f3674970e3bdd0104c5ef66f6985d02c5f36be40bab4",
+    "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-model/src/transformer/standard/cuda/residency.rs": "9d4a0761d4721ac218f718867b769514d6872a8080e1018b38f80a5251ef4ed7"
+  },
+  "status": "blocked_observer_delta",
+  "three_evidence_ranked": [
+    {
+      "bottleneck": "Repeated synchronous completion fences around Mixed owner operations",
+      "evidence": "consumer_proof + cuda.rs synchronous source calls",
+      "minimal_change": "add opt-in debug-only counters/timestamps around existing event/sync/upload calls; keep quarantine semantics and numerics unchanged",
+      "rank": 1
+    },
+    {
+      "bottleneck": "CPU BF16 boundary exchange with D2H -> host exchange -> H2D",
+      "evidence": "mixed_layer.rs mixed_words/to_host_vec and upload_bf16_words in mixed_reduce_rows/mixed_gather_head",
+      "minimal_change": "batch or fuse boundary transfers only after correctness/ownership proof; do not remove synchronization blindly",
+      "rank": 2
+    },
+    {
+      "bottleneck": "Per-linear FP8 decode/activation pack before cuBLAS GemmEx",
+      "evidence": "bf16_gemmex.cuh pack_bf16_activation + decode_weights + GemmEx per launch; pair variant repeats decode/split",
+      "minimal_change": "profile/reuse decoded/packed intermediates within proven lifetime or fuse kernels; preserve existing resident ownership/quarantine",
+      "rank": 3
+    }
+  ],
+  "tools": {
+    "commands": [
+      {
+        "argv": [
+          "/usr/local/bin/nsys",
+          "--version"
+        ],
+        "name": "version",
+        "returncode": 0
+      },
+      {
+        "argv": [
+          "/usr/local/bin/nsys",
+          "status",
+          "-e"
+        ],
+        "name": "status",
+        "returncode": 0
+      },
+      {
+        "argv": [
+          "/usr/local/bin/nsys",
+          "profile",
+          "--help"
+        ],
+        "name": "profile-help",
+        "returncode": 0
+      },
+      {
+        "argv": [
+          "/usr/local/bin/nsys",
+          "start",
+          "--help"
+        ],
+        "name": "start-help",
+        "returncode": 0
+      },
+      {
+        "argv": [
+          "/usr/local/bin/nsys",
+          "stop",
+          "--help"
+        ],
+        "name": "stop-help",
+        "returncode": 0
+      },
+      {
+        "argv": [
+          "/usr/local/bin/nsys",
+          "stats",
+          "--help"
+        ],
+        "name": "stats-help",
+        "returncode": 0
+      },
+      {
+        "argv": [
+          "/usr/local/bin/nsys",
+          "stats",
+          "--help-reports"
+        ],
+        "name": "reports",
+        "returncode": 1
+      },
+      {
+        "argv": [
+          "/usr/local/bin/nsys",
+          "sessions",
+          "list"
+        ],
+        "name": "sessions-before",
+        "returncode": 0
+      },
+      {
+        "argv": [
+          "/usr/local/bin/nsys",
+          "start",
+          "--session=tp2CpuProbe20261009"
+        ],
+        "name": "probe-start",
+        "parent_poll": null,
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "",
+        "unix": 1791539976.615715
+      },
+      {
+        "argv": [
+          "/usr/local/bin/nsys",
+          "stop",
+          "--session=tp2CpuProbe20261009"
+        ],
+        "name": "probe-stop",
+        "parent_poll": null,
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "Generating '/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-short-profile-20261009-001/tools/nsys-report-1b74.qdstrm'\n\n[1/1] [0%                          ] cpu-probe.nsys-rep\n[1/1] [0%                          ] cpu-probe.nsys-rep\n[1/1] [==========48%               ] cpu-probe.nsys-rep\n[1/1] [=======================96%  ] cpu-probe.nsys-rep\n[1/1] [========================98% ] cpu-probe.nsys-rep\n[1/1] [========================100%] cpu-probe.nsys-rep\n[1/1] [========================100%] cpu-probe.nsys-rep\nGenerated:\n\t/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-short-profile-20261009-001/tools/cpu-probe.nsys-rep\n",
+        "unix": 1791539979.0014663
+      },
+      {
+        "argv": [
+          "/usr/local/bin/nsys",
+          "profile",
+          "--session-new=tp2CpuProbe20261009",
+          "--start-later=true",
+          "--trace=osrt",
+          "--sample=none",
+          "--cpuctxsw=none",
+          "--kill=none",
+          "--wait=primary",
+          "--duration=10",
+          "--force-overwrite=false",
+          "--output=/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-short-profile-20261009-001/tools/cpu-probe",
+          "/bin/sleep",
+          "12"
+        ],
+        "name": "probe-launch",
+        "returncode": 0
+      }
+    ],
+    "nsys_resolved": "/opt/nvidia/nsight-systems/2026.1.3/target-linux-x64/nsys",
+    "tools": {
+      "ncu": null,
+      "nsys": "/usr/local/bin/nsys",
+      "nvprof": null,
+      "perf": null
+    }
+  },
+  "unavailable": [
+    "CUDA sync counts/durations",
+    "kernel times for decode/pack/GemmEx",
+    "D2H/H2D byte totals",
+    "host GPU-gap durations",
+    "startup Nsight segments"
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "case": "capital",
+  "error": null,
+  "export_completed": true,
+  "owners": [
+    0,
+    1
+  ],
+  "phase": "decode.0",
+  "schema": "ferrule.mixed-committed-kv-receipt.v1",
+  "session": 2,
+  "transaction": 4,
+  "writer_drain_required": true
+}

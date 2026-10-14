@@ -1,0 +1,11 @@
+test_actual_indexed_qualification_is_audited_not_serving_accepted (test_indexed_release.IndexedRelease.test_actual_indexed_qualification_is_audited_not_serving_accepted) ... ok
+test_actual_indexed_source_drift_still_rejected (test_indexed_release.IndexedRelease.test_actual_indexed_source_drift_still_rejected) ... ok
+test_cpu_benchmark_cannot_be_relabelled_gpu_or_e2e (test_indexed_release.IndexedRelease.test_cpu_benchmark_cannot_be_relabelled_gpu_or_e2e) ... ok
+test_final_qualification_hash_location_and_serving_schema_are_separate (test_indexed_release.IndexedRelease.test_final_qualification_hash_location_and_serving_schema_are_separate) ... ok
+test_plan_hash_cpu_inventory_and_named_selector_tampering_rejected (test_indexed_release.IndexedRelease.test_plan_hash_cpu_inventory_and_named_selector_tampering_rejected) ... ok
+test_unindexed_and_indexed_bind_their_real_pinned_plan_not_current_manifest (test_indexed_release.IndexedRelease.test_unindexed_and_indexed_bind_their_real_pinned_plan_not_current_manifest) ... ok
+
+----------------------------------------------------------------------
+Ran 6 tests in 8.164s
+
+OK

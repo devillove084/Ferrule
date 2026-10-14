@@ -1,0 +1,12 @@
+
+running 7 tests
+test cuda::allocator::dedicated_kv_tests::dedicated_kv_segment_never_lends_free_extent_to_weights_or_scratch ... ok
+test cuda::allocator::tests::alignment_applies_to_the_absolute_device_address ... ok
+test cuda::allocator::tests::deterministic_allocation_churn_preserves_capacity_and_alignment ... ok
+test cuda::allocator::tests::device_block_auto_traits_follow_its_owners ... ok
+test cuda::allocator::tests::fragmentation_formulas_are_bounded ... ok
+test cuda::allocator::tests::free_ranges_coalesce_in_both_directions ... ok
+test cuda::allocator::tests::size_classes_cover_small_large_and_huge ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 285 filtered out; finished in 0.14s
+

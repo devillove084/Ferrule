@@ -1,0 +1,12 @@
+{
+  "returncode": 0,
+  "gpu_hidden": true,
+  "stdout": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-uninitialized-20261010-01/cpu-paper-tests.stdout",
+    "sha256": "72cffcbbe3569bacb285e2c222e8637f108c6cd9e69acb35057ad8776fdb8ebe"
+  },
+  "stderr": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-uninitialized-20261010-01/cpu-paper-tests.stderr",
+    "sha256": "9f7ead5988c30458361c74e20ec4593f9f905353f6e0868a3ee4a642c60d820a"
+  }
+}

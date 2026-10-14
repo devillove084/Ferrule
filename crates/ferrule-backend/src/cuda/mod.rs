@@ -8,31 +8,19 @@ mod allocator;
 mod architecture;
 mod benchmark;
 #[doc(hidden)]
-pub mod context;
+pub mod operator_owner;
+#[doc(hidden)]
+pub use operator_owner as context;
 mod counters;
 pub mod diagnostics;
 mod ffi;
 mod graph;
 
-pub mod operators {
-    pub mod attention;
-    mod contracts;
-    mod impls;
-    pub mod kv;
-    pub mod legacy;
-    pub mod linear;
-    pub mod moe;
-    pub mod norm;
-    pub mod proposal;
-    pub mod rope;
-    pub use crate::cuda::context::recurrent;
-
-    pub use contracts::*;
-}
+pub mod operators;
 
 pub mod providers;
 mod runtime;
-pub use context::standard;
+pub use operator_owner::standard;
 mod transport;
 
 use ferrule_common::Result;
@@ -56,3 +44,9 @@ pub use transport::{
 pub fn compile_model_plan(requirements: &[LayerKernelRequirements]) -> Result<ModelKernelPlan> {
     providers::catalog::compile_model_plan(requirements)
 }
+
+pub use operator_owner::streaming_attention;
+pub use streaming_attention::{
+    CudaStreamingF32GqaRequest, CudaStreamingF32GqaWorkspace, StreamingF32GqaResult,
+    StreamingF32GqaStats,
+};

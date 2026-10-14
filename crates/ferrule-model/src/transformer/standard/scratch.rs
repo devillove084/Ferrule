@@ -7,7 +7,28 @@
 use ferrule_common::Result;
 
 use super::model_error;
-use crate::transformer::{ExpertMetadata, PreparedSwiGlu, SwiGlu};
+#[cfg(any(feature = "cuda", test))]
+use crate::transformer::ExpertMetadata;
+use crate::transformer::{PreparedSwiGlu, SwiGlu};
+
+impl SwiGlu {
+    /// Checked F32 activation scratch for `rows`, including bias broadcasts and
+    /// their gather IDs. Excludes weights, routing and numeric workspace; each
+    /// reservation remains the caller's separate charge. Zero rows retains the
+    /// weight-only preparation contract and still checks per-row geometry.
+    pub fn f32_scratch_bytes(&self, rows: usize) -> Result<usize> {
+        SwiGluScratchPlan::for_descriptor(self, rows)?.total_bytes()
+    }
+}
+
+impl PreparedSwiGlu {
+    /// Checked F32 activation scratch, independent of stored weight encoding or
+    /// numeric operand precision. Includes prepared biases but excludes weights,
+    /// routing and numeric workspace, just like `SwiGlu::f32_scratch_bytes`.
+    pub fn f32_scratch_bytes(&self, rows: usize) -> Result<usize> {
+        SwiGluScratchPlan::for_prepared(self, rows)?.total_bytes()
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct SwiGluScratchPlan {
@@ -71,6 +92,7 @@ impl SwiGluScratchPlan {
         )
     }
 
+    #[cfg(any(feature = "cuda", test))]
     pub(crate) fn for_metadata(expert: &ExpertMetadata, rows: usize) -> Result<Self> {
         Self::new(
             rows,
@@ -90,6 +112,33 @@ impl SwiGluScratchPlan {
             [expert.gate(), expert.up(), expert.down()]
                 .map(|p| p.has_bias().then_some(p.out_features())),
         )
+    }
+
+    /// Extra owner-message scratch beyond the expert's activation plan: the
+    /// packed output grant plus allocator rounding of input, gate/up/product and
+    /// output. Pinned host transport slots and allocator segment slack are not
+    /// device cache charges. Bounded experts are bias-free.
+    #[cfg(any(feature = "cuda", test))]
+    pub(crate) fn owner_bucket_extra_bytes(&self, tokens: usize, width: usize) -> Result<usize> {
+        if width == 0 {
+            return Err(model_error("owner bucket width must be nonzero"));
+        }
+        let grant = |bytes| {
+            ferrule_backend::cuda_allocation_grant_bytes(bytes)
+                .ok_or_else(|| model_error("owner bucket allocation grant overflow"))
+        };
+        let output_bytes = mul(mul(tokens, width)?, 4)?;
+        let mut extra = grant(output_bytes)?;
+        for bytes in [
+            self.input_bytes,
+            self.intermediate_bytes / 3,
+            self.intermediate_bytes / 3,
+            self.intermediate_bytes / 3,
+            self.output_bytes,
+        ] {
+            extra = add(extra, grant(bytes)? - bytes)?;
+        }
+        Ok(extra)
     }
 
     pub(crate) fn route(
@@ -121,12 +170,14 @@ impl SwiGluScratchPlan {
         Ok(plan)
     }
 
+    #[cfg(any(feature = "cuda", test))]
     pub(crate) fn with_route_bytes(mut self, route_bytes: usize) -> Result<Self> {
         self.route_bytes = add(self.route_bytes, route_bytes)?;
         self.total_bytes()?;
         Ok(self)
     }
 
+    #[cfg(any(feature = "cuda", test))]
     pub(crate) fn with_numeric_reservation(mut self, bytes: usize) -> Result<Self> {
         self.numeric_reservation_bytes = add(self.numeric_reservation_bytes, bytes)?;
         self.total_bytes()?;
@@ -165,6 +216,7 @@ impl SwiGluScratchPlan {
 
     /// Used at cache boundaries where route/table are already accounted for
     /// by a separate owner-local plan.
+    #[cfg(any(feature = "cuda", test))]
     pub(crate) fn total_with(&self, route: usize, numeric_reservation: usize) -> Result<usize> {
         self.with_route_bytes(route)?
             .with_numeric_reservation(numeric_reservation)?
@@ -478,3 +530,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../../../tests/unit/transformer/scratch.rs"]
+mod scratch_budget_tests;

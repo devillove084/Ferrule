@@ -2,7 +2,7 @@
 
 use ferrule_common::{Error, Result};
 
-use crate::cuda::context::{
+use crate::cuda::operator_owner::{
     CudaF32Buffer, CudaI32Buffer, CudaI32HostDownload, CudaI32HostMirror, CudaOperators,
 };
 use crate::cuda::operators::SelectedSoftmaxTopKLayout;

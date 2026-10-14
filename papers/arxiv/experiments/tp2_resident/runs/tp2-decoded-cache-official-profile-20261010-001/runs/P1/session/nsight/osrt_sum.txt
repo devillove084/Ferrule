@@ -1,0 +1,27 @@
+
+NOTICE: Existing SQLite export found: /home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/nsight/nsys.sqlite
+        It is assumed file was previously exported from: /home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/nsight/nsys.nsys-rep
+        Consider using --force-export=true if needed.
+
+Processing [/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/nsight/nsys.sqlite] with [/home/admin/luhuanbing.lhb/Ferrule/target/vendor/nsight-systems-cli-2025.3.1/opt/nvidia/nsight-systems-cli/2025.3.1/target-linux-x64/reports/osrt_sum.py]... 
+Time (%),Total Time (ns),Num Calls,Avg (ns),Med (ns),Min (ns),Max (ns),StdDev (ns),Name
+20.7,11245695044,23,488943262.8,500060110.0,244407204,500061875,53306988.5,pthread_cond_timedwait
+20.1,10962021075,6007,1824874.5,4847.0,1001,2295178975,38792741.4,futex
+17.6,9610968053,96,100114250.6,100118118.0,100037328,100124574,14814.5,poll
+17.5,9529051207,38336,248566.7,103023.0,52652,100076460,3817843.6,clock_nanosleep
+9.5,5177151033,35,147918600.9,2235.0,1333,2294005954,421137554.8,epoll_wait
+7.3,4000058689,1,4000058689.0,4000058689.0,4000058689,4000058689,0.0,sem_timedwait
+7.2,3918135977,25,156725439.1,136338405.0,55101,622810013,132143583.0,sem_wait
+0.0,8150582,1498,5441.0,5750.0,1356,22244,2316.9,write
+0.0,1732457,66,26249.3,13803.0,5574,390111,47599.6,pthread_rwlock_wrlock
+0.0,1307335,200,6536.7,1300.0,1001,265757,24821.3,pthread_mutex_lock
+0.0,371842,46,8083.5,7355.5,6266,17576,2138.2,pthread_rwlock_rdlock
+0.0,355221,18,19734.5,20046.5,14396,26133,4076.8,writev
+0.0,220624,57,3870.6,3986.0,1200,5820,818.1,waitpid
+0.0,191825,4,47956.3,47887.0,27257,68794,20932.3,ioctl
+0.0,19017,4,4754.3,4125.5,2676,8090,2469.0,accept4
+0.0,13769,2,6884.5,6884.5,6298,7471,829.4,shutdown
+0.0,10942,4,2735.5,2869.5,1462,3741,1076.5,epoll_ctl
+0.0,8110,4,2027.5,2175.0,1138,2622,646.8,recv
+0.0,5877,2,2938.5,2938.5,2460,3417,676.7,close
+

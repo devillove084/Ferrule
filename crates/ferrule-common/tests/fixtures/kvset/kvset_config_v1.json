@@ -1,0 +1,9 @@
+{
+  "capacities": [0, 1, 2, 3, 80],
+  "alphas": [{"numerator":2,"denominator":3},{"numerator":1,"denominator":1}],
+  "p_values": [{"numerator":1,"denominator":2},{"numerator":1,"denominator":1}],
+  "target_basis": "theoretical_reusable",
+  "coverage_denominator": "opportunity",
+  "measurement_window": {"start_seq":2,"end_seq":5},
+  "capacity_budget": null
+}

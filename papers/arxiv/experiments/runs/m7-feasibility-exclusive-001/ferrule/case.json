@@ -1,0 +1,62 @@
+{
+  "status": "complete",
+  "started_monotonic": 8410015.185137136,
+  "exact_speedup": null,
+  "contract_validation_seconds": 20.369267001748085,
+  "server_launch_monotonic": 8410035.55440632,
+  "executable_binding": "verified read-only staged inode executed through inherited fd",
+  "startup_seconds": 21.824655074626207,
+  "resources": {
+    "status": "observed_within_targets",
+    "sampled_device_high_water_bytes": 4191158272,
+    "sampled_tree_pss_high_water_bytes": 7206297600,
+    "sampled_tree_rss_high_water_bytes": 7209365504,
+    "samples": 15,
+    "errors": [],
+    "sample_interval_seconds": 2,
+    "exact_peaks": false,
+    "hard_memory_partition": false,
+    "pinned_bytes": null,
+    "caveats": [
+      "CUDA pinning not measured by VmLck/VmPin alone",
+      "PSS excludes unmapped OS file cache; not a total physical-host-memory proof",
+      "Device samples include baseline; between-sample peaks may be missed"
+    ],
+    "identity_mode": "device_exclusive_local_custody",
+    "measurement_scope": "whole_selected_device",
+    "owned_process_gpu_peak_bytes": null,
+    "owned_gpu_attribution": "unknown",
+    "nvml_pid_set_changes": 1,
+    "absence_of_foreign_interference_proven": false
+  },
+  "shutdown": {
+    "status": "root_exited_descendants_unknown",
+    "seconds": 0.9647888205945492,
+    "timed_out": false,
+    "gpu_quiescence": "unverified; no GPU probe"
+  },
+  "runtime": {
+    "status": "blocked",
+    "evidence": {
+      "mixed_profile": [
+        "cuda-hybrid-numeric-fp8-model-bf16-mixed-f32-ssm",
+        "cuda-hybrid-numeric-fp8-model-bf16-mixed-f32-ssm",
+        "cuda-hybrid-numeric-fp8-model-bf16-mixed-f32-ssm",
+        "cuda-hybrid-numeric-fp8-model-bf16-mixed-f32-ssm"
+      ]
+    },
+    "contradictions": [],
+    "missing": [],
+    "reasons": [
+      "Effective KV/conv/SSM dtype and physical pinning need runtime evidence",
+      "UVA selection log alone does not prove UVA path rather than functional_call fallback"
+    ],
+    "exact_arithmetic_match": false,
+    "log_sha256": "5fda7e51ab8713fd4ed46cb9f49d2ebb1001d440fc3d05f1ddf38d4dae311bb2",
+    "scanned_prefix_bytes": 8238,
+    "truncated": false,
+    "performance_fields_observed": false,
+    "performance_parser": "profile/backend evidence only; no performance-field extraction implemented"
+  },
+  "wall_seconds": 53.93927172757685
+}

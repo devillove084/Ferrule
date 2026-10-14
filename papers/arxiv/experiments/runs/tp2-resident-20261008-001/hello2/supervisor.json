@@ -1,0 +1,113 @@
+{
+  "returncode": 0,
+  "timed_out": false,
+  "wall_seconds": 145.06773500330746,
+  "stdout": "{\"repetition\": 0, \"summary\": {\"scheduled\": 1, \"offered\": 1, \"not_issued\": 0, \"statuses\": {\"success\": 1}, \"success\": 1, \"failed\": 0, \"success_fraction\": 1.0, \"scheduled_success_fraction\": 1.0, \"wall_seconds\": 1.3597420882433653, \"successful_output_tokens\": 2, \"known_usage_output_tokens\": 2, \"requests_without_usage\": 0, \"committed_visible_token_rate\": null, \"committed_visible_token_rate_reason\": \"SSE text is not token IDs; usage may include hidden/EOS tokens; partial counts unknown\", \"actual_output_counts\": {\"2\": 1}, \"actual_input_counts\": {\"1\": 1}, \"length_matched_success\": 1, \"slo_qualified_success\": null, \"successful_requests_per_second\": 0.7354335860059228, \"successful_output_tokens_per_second\": 1.4708671720118456, \"length_matched_requests_per_second\": 0.7354335860059228, \"length_matched_output_tokens_per_second\": 1.4708671720118456, \"slo_goodput_requests_per_second\": null, \"distributions\": {\"success_ttft_seconds\": {\"count\": 1, \"mean\": 1.2450084276497364, \"p50\": 1.2450084276497364, \"p95\": 1.2450084276497364}, \"success_request_e2e_seconds\": {\"count\": 1, \"mean\": 1.3593953344970942, \"p50\": 1.3593953344970942, \"p95\": 1.3593953344970942}, \"success_mean_tpot_usage_proxy_seconds\": {\"count\": 1, \"mean\": 0.11417312361299992, \"p50\": 0.11417312361299992, \"p95\": 0.11417312361299992}, \"success_content_event_itl_seconds\": {\"count\": 1, \"mean\": 0.11417312361299992, \"p50\": 0.11417312361299992, \"p95\": 0.11417312361299992}, \"failure_ttft_seconds\": {\"count\": 0, \"mean\": null, \"p50\": null, \"p95\": null}, \"failure_request_e2e_seconds\": {\"count\": 0, \"mean\": null, \"p50\": null, \"p95\": null}, \"failure_mean_tpot_usage_proxy_seconds\": {\"count\": 0, \"mean\": null, \"p50\": null, \"p95\": null}, \"failure_content_event_itl_seconds\": {\"count\": 0, \"mean\": null, \"p50\": null, \"p95\": null}}, \"window_kind\": \"fixed-work\", \"denominator\": \"first measured HTTP send (dispatch fallback if none) to last client-observed terminal/deadline, including failures and client overhead\", \"denominator_seconds\": 1.3597420882433653, \"time_to_complete_seconds\": 1.3597420882433653}}\n",
+  "stderr": "",
+  "cleanup_errors": [],
+  "cleanup_scope": "isolated_subreaper_direct_children",
+  "descendant_custody": "proven_drained",
+  "gpu_quiescence": "unverified",
+  "custody": {
+    "status": "proven_drained",
+    "method": "linux-subreaper-waitid",
+    "containment_verified": true,
+    "launch_id": "b60349304a4c4d17af34c7c028eb3dca",
+    "helper_identity": {
+      "pid": 68561,
+      "birth_ticks": 77979038,
+      "ppid": 68467,
+      "pgrp": 68561,
+      "session": 68561
+    },
+    "root_identity": {
+      "pid": 68562,
+      "birth_ticks": 77979041,
+      "ppid": 68561,
+      "pgrp": 68561,
+      "session": 68561
+    },
+    "boot_id": "4dd3497d-570c-4693-a876-5c26e06ab360",
+    "entries": [
+      {
+        "identity": {
+          "pid": 68562,
+          "birth_ticks": 77979041,
+          "ppid": 68561,
+          "pgrp": 68561,
+          "session": 68561
+        },
+        "role": "root",
+        "signals": [],
+        "reaped": true,
+        "exit_code": 0,
+        "first_observed_at": 8415910.764512895,
+        "reaped_at": 8416055.769397834
+      },
+      {
+        "identity": {
+          "pid": 72204,
+          "birth_ticks": 77982334,
+          "ppid": 68561,
+          "pgrp": 68562,
+          "session": 68562
+        },
+        "role": "adopted",
+        "signals": [],
+        "reaped": true,
+        "exit_code": -9,
+        "first_observed_at": 8416053.361103175,
+        "reaped_at": 8416053.721973702
+      },
+      {
+        "identity": {
+          "pid": 72205,
+          "birth_ticks": 77982334,
+          "ppid": 68561,
+          "pgrp": 68562,
+          "session": 68562
+        },
+        "role": "adopted",
+        "signals": [],
+        "reaped": true,
+        "exit_code": -9,
+        "first_observed_at": 8416053.362796132,
+        "reaped_at": 8416053.658951795
+      },
+      {
+        "identity": {
+          "pid": 71605,
+          "birth_ticks": 77981691,
+          "ppid": 68561,
+          "pgrp": 68562,
+          "session": 68562
+        },
+        "role": "adopted",
+        "signals": [],
+        "reaped": true,
+        "exit_code": 0,
+        "first_observed_at": 8416053.723660752,
+        "reaped_at": 8416053.836639391
+      }
+    ],
+    "errors": [],
+    "reporting_errors": [],
+    "echild": true
+  },
+  "handshake": {
+    "kind": "ready",
+    "protocol": 1,
+    "launch_id": "b60349304a4c4d17af34c7c028eb3dca",
+    "helper_identity": {
+      "pid": 68561,
+      "birth_ticks": 77979038,
+      "ppid": 68467,
+      "pgrp": 68561,
+      "session": 68561
+    },
+    "containment_verified": true,
+    "method": "linux-subreaper-waitid"
+  },
+  "stdout_truncated": false,
+  "stderr_truncated": false
+}

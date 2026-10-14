@@ -15,7 +15,11 @@ impl CudaPagedKvPool {
         }
         let context = inner.context.clone();
         for page in pages {
-            inner.storage_mut().release(&context, page)?;
+            if inner.storage().staging_page_limit().is_some() {
+                inner.storage_mut().release_chunked(page);
+            } else {
+                inner.storage_mut().release(&context, page)?;
+            }
         }
         Ok(())
     }
@@ -31,7 +35,19 @@ impl CudaPagedKvPool {
         }
         let context = inner.context.clone();
         // Preempt publishes no metadata until all synchronous downloads succeed.
-        if let Err(err) = inner.storage_mut().preempt(&context, &pages) {
+        let result = if inner.storage().staging_page_limit().is_some() {
+            inner.storage_mut().preempt_chunked(&context, &pages)
+        } else if inner.storage().planes()[0].element_type
+            == ferrule_common::execution::KvElementType::Bf16
+        {
+            inner
+                .storage_mut()
+                .preempt_typed(&context, &pages)
+                .map(|_| ())
+        } else {
+            inner.storage_mut().preempt(&context, &pages).map(|_| ())
+        };
+        if let Err(err) = result {
             inner.poisoned = true;
             return Err(err);
         }
@@ -51,7 +67,12 @@ impl CudaPagedKvPool {
         let context = inner.context.clone();
         // The legacy helper rolls back its reservation on I/O failure. Quarantine
         // the entire private storage before any clone can reuse those slots.
-        if let Err(err) = inner.storage_mut().restore(&context, &pages) {
+        let result = if inner.storage().staging_page_limit().is_some() {
+            inner.storage_mut().restore_chunked(&context, &pages)
+        } else {
+            inner.storage_mut().restore(&context, &pages)
+        };
+        if let Err(err) = result {
             inner.poisoned = true;
             return Err(err);
         }
@@ -63,6 +84,7 @@ impl CudaPagedKvPool {
             return Ok(());
         }
         inner.available()?;
+        inner.no_committed_reader()?;
         if !inner.entries.is_empty() {
             return Err(error("CUDA shutdown cannot bypass active/prepared pins"));
         }

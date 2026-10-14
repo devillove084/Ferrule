@@ -1,0 +1,19 @@
+{
+  "argv": [
+    "/home/admin/wxw403883/anaconda3/bin/python3.12",
+    "-S",
+    "-B",
+    "-m",
+    "unittest",
+    "discover",
+    "-s",
+    "papers/arxiv/experiments/tp2_resident",
+    "-p",
+    "test_*.py"
+  ],
+  "returncode": 0,
+  "timeout_seconds": 180,
+  "log_path": "papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/cpu-closeout-tests.log",
+  "log_sha256": "3dfa0ad2b47e1070862b90cd1dbe3bd32fe0c66ae4c4bf5db65f4b1ecca23eee",
+  "gpu_workload_started": false
+}

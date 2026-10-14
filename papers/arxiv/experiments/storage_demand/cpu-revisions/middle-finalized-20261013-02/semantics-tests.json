@@ -1,0 +1,28 @@
+{
+  "argv": [
+    "/home/admin/wxw403883/anaconda3/bin/python3.12",
+    "-S",
+    "-B",
+    "-m",
+    "unittest",
+    "discover",
+    "-s",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand",
+    "-p",
+    "test_run_middle*.py",
+    "-v"
+  ],
+  "returncode": 0,
+  "stdout": "",
+  "stderr": "test_each_missing_final_observation_remains_unknown_and_null (test_run_middle_semantics.ShutdownSemantics.test_each_missing_final_observation_remains_unknown_and_null) ... ok\ntest_exit_zero_with_null_ledgers_is_unknown (test_run_middle_semantics.ShutdownSemantics.test_exit_zero_with_null_ledgers_is_unknown) ... ok\ntest_failed_or_unobserved_exit_cannot_verify_complete_mock_evidence (test_run_middle_semantics.ShutdownSemantics.test_failed_or_unobserved_exit_cannot_verify_complete_mock_evidence) ... ok\ntest_only_explicit_complete_mock_owner_sample_verifies (test_run_middle_semantics.ShutdownSemantics.test_only_explicit_complete_mock_owner_sample_verifies) ... ok\ntest_pending_unknown_quarantine_and_invalid_credits_fail_closed (test_run_middle_semantics.ShutdownSemantics.test_pending_unknown_quarantine_and_invalid_credits_fail_closed) ... ok\ntest_worker_run_target_reaches_mocked_popen_with_devnull (test_run_middle_target.ProfileTargetIntegration.test_worker_run_target_reaches_mocked_popen_with_devnull) ... ok\n\n----------------------------------------------------------------------\nRan 6 tests in 0.022s\n\nOK\n",
+  "tests": 6,
+  "test_counts": {
+    "resource_semantics": 5,
+    "target_integration": 1
+  },
+  "source_pins": {
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/test_run_middle_semantics.py": "f654116f5d18e1d4a3f43bb51ecd0e60dbe4a75753939931928314cb7033ed8d",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/test_run_middle_target.py": "6ef3ed001d00504a500e0c7f4558f319b7e459e65842cf71d9003d50bb5173b3"
+  },
+  "fixture_scope": "mock owner samples and Popen target startup; no actual GPU evidence"
+}

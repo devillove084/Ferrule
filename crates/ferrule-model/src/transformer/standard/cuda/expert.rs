@@ -170,6 +170,10 @@ impl CudaStandardDecoderOperators {
                 experts: waiting,
             }));
         }
+        provider.preflight_expert_reads(
+            self.image_generation(),
+            &metadata.values().collect::<Vec<_>>(),
+        )?;
         self.cache_scratch(buckets.scratch_bytes)?;
         self.route_scratch_bytes = buckets.scratch_bytes;
         self.route_hold.push(
@@ -189,7 +193,9 @@ impl CudaStandardDecoderOperators {
         let route_rows = self.ops.upload_i32_buffer(&route_rows)?;
         self.route_ids
             .push(route_rows.as_device_buffer().slice(0, buckets.routes)?);
-        for (&id, slots) in &buckets.experts {
+        let mut selected = buckets.experts.iter().peekable();
+        while let Some((&id, slots)) = selected.next() {
+            let next = selected.peek().and_then(|(id, _)| metadata.get(id));
             let rows = slots.len();
             if let Some(&scratch) = scratch_plans.get(&id) {
                 self.cache_scratch(SwiGluScratchPlan::reserved_bytes(
@@ -214,8 +220,27 @@ impl CudaStandardDecoderOperators {
                 .gather_f32_rows(self.f32(input)?, &gather_ids, rows, width)?;
             self.hold_route_buffer(&gathered)?;
             let gathered = device_rows(RowsShape::new(rows, width)?, arena, gathered)?;
-            let values = if let Some(plan) = metadata.get(&id) {
-                self.metadata_swiglu_rows(plan, provider, &gathered, arena)?
+            // Scatter is the last bucket consumer. Keep it inside the expert
+            // lease so its one completion proof covers projections AND scatter.
+            let consume = |this: &mut Self, values: Rows| {
+                this.route_hold.push(
+                    this.f32(&values)?
+                        .as_device_buffer()
+                        .slice(0, rows * width)?,
+                );
+                // Unique destination per route slot; weighting happens below.
+                this.ops.scatter_add_f32_rows(
+                    this.f32(&values)?,
+                    &scatter_ids,
+                    &mut table,
+                    rows,
+                    width,
+                )
+            };
+            if let Some(plan) = metadata.get(&id) {
+                self.metadata_swiglu_consume_lookahead(
+                    plan, provider, &gathered, arena, next, consume,
+                )?;
             } else {
                 let expert = if self.bounded_experts.is_some() || self.numeric.is_some() {
                     match provider.expert(layer, id)? {
@@ -248,23 +273,12 @@ impl CudaStandardDecoderOperators {
                     self.experts
                         .insert((layer, id), std::sync::Arc::clone(&expert));
                 }
-                self.swiglu_rows(&expert, &gathered, arena)?
-            };
-            let result_view = self
-                .f32(&values)?
-                .as_device_buffer()
-                .slice(0, rows * width)?;
-            self.route_hold.push(result_view);
-            // Each zero-initialized destination has exactly one writer, across
-            // all buckets. The scatter primitive is not used to reduce routes.
-            self.ops.scatter_add_f32_rows(
-                self.f32(&values)?,
-                &scatter_ids,
-                &mut table,
-                rows,
-                width,
-            )?;
-            self.consumer_proof()?;
+                self.swiglu_consume(&expert, &gathered, arena, consume)?;
+            }
+            // KeepAll has no admission completion boundary.
+            if self.bounded_experts.is_none() {
+                self.consumer_proof()?;
+            }
             self.expert_hold.clear();
             self.route_hold.truncate(4);
             self.route_ids.truncate(1);
@@ -488,6 +502,9 @@ impl RoutedSwiGluExecutor for CudaHostRoutedExecutor<'_> {
     }
 }
 
+#[cfg(test)]
+type PackStepHook = fn(&mut CudaStandardDecoderOperators, usize, usize) -> Result<()>;
+
 /// Owner-local expert worker with a bounded prepared parameter directory.
 /// Results are unweighted: the dispatch protocol applies each route weight once.
 pub struct CudaExpertWorker<'a> {
@@ -495,6 +512,16 @@ pub struct CudaExpertWorker<'a> {
     placement: &'a ExpertPlacement,
     experts: &'a mut dyn ExpertProvider,
     operators: &'a mut CudaStandardDecoderOperators,
+    #[cfg(test)]
+    logical_downloads: usize,
+    #[cfg(test)]
+    packed_groups: usize,
+    #[cfg(test)]
+    pack_copies: usize,
+    #[cfg(test)]
+    lose_pack_proof: bool,
+    #[cfg(test)]
+    pack_step_hook: Option<PackStepHook>,
 }
 
 impl<'a> CudaExpertWorker<'a> {
@@ -509,6 +536,16 @@ impl<'a> CudaExpertWorker<'a> {
             placement,
             experts,
             operators,
+            #[cfg(test)]
+            logical_downloads: 0,
+            #[cfg(test)]
+            packed_groups: 0,
+            #[cfg(test)]
+            pack_copies: 0,
+            #[cfg(test)]
+            lose_pack_proof: false,
+            #[cfg(test)]
+            pack_step_hook: None,
         }
     }
 }
@@ -519,8 +556,18 @@ impl ExpertWorker for CudaExpertWorker<'_> {
     }
 
     fn compute(&mut self, tokens: &[ExpertToken]) -> Result<Vec<ExpertResult>> {
+        let Some(first) = tokens.first() else {
+            return Ok(Vec::new());
+        };
+        let width = first.payload.len();
+        let shape = RowsShape::new(tokens.len(), width)?;
+        // Check the complete reply before building indexes or touching CUDA.
+        shape
+            .elements()
+            .checked_mul(4)
+            .ok_or_else(|| cuda_error("owner bucket output bytes overflow"))?;
         let mut groups = BTreeMap::new();
-        for token in tokens {
+        for (slot, token) in tokens.iter().enumerate() {
             if self
                 .placement
                 .owner(token.expert.layer, token.expert.expert)
@@ -528,49 +575,223 @@ impl ExpertWorker for CudaExpertWorker<'_> {
             {
                 return Err(cuda_error("expert request is not assigned to this owner"));
             }
+            if token.payload.len() != width || token.payload.iter().any(|v| !v.is_finite()) {
+                return Err(cuda_error("invalid CUDA expert payload/shape"));
+            }
             groups
                 .entry(token.expert)
                 .or_insert_with(Vec::new)
-                .push(token);
+                .push(slot);
         }
-        let mut results = Vec::with_capacity(tokens.len());
-        for (expert, tokens) in groups {
-            let prepared = match self.experts.expert(expert.layer, expert.expert)? {
-                ExpertAvailability::Ready(prepared) => prepared,
-                ExpertAvailability::Waiting => return Err(cuda_error("CUDA expert is waiting")),
-                ExpertAvailability::Unsupported(reason) => return Err(cuda_error(reason)),
-            };
-            let width = prepared.input_width();
-            if prepared.output_width() != width
-                || tokens.iter().any(|token| {
-                    token.payload.len() != width || token.payload.iter().any(|v| !v.is_finite())
-                })
+        let mut metadata = BTreeMap::new();
+        let mut prepared = BTreeMap::new();
+        let mut plans = BTreeMap::new();
+        let mut peak = 0;
+        // Admit ALL groups before the first activation upload, eviction or CUDA
+        // allocation. Metadata providers also avoid payload IO on rejection.
+        for (&id, slots) in &groups {
+            let (bytes, activation) = if let Some(plan) =
+                self.experts.expert_metadata(id.layer, id.expert)?
             {
-                return Err(cuda_error("invalid CUDA expert payload/shape"));
-            }
-            let shape = RowsShape::new(tokens.len(), width)?;
-            let values = tokens
-                .iter()
-                .flat_map(|token| token.payload.iter().copied())
-                .collect();
-            let input = self.operators.bind_rows(Rows::Host(HostRows::new(
-                shape,
-                RowsDType::F32,
-                None,
-                values,
-            )?))?;
-            let output =
-                super::super::ready(self.operators.dense_swiglu(&prepared, &input, None)?)?;
-            let output = self.operators.download_rows(output)?;
-            if output.shape() != shape {
-                return Err(cuda_error("CUDA expert output shape mismatch"));
-            }
-            for (token, row) in tokens.into_iter().zip(output.values().chunks_exact(width)) {
-                results.push(ExpertResult::from_token(token, self.owner, row.to_vec()));
-            }
+                let (_, bytes, _) =
+                    self.operators
+                        .metadata_plan(&plan, id.layer, id.expert, slots.len(), width)?;
+                self.operators
+                    .preflight_bucket_numeric(plan.parameters(), slots.len())?;
+                let activation = SwiGluScratchPlan::for_metadata(&plan, slots.len())?;
+                metadata.insert(id, plan);
+                (bytes, activation)
+            } else {
+                let expert = match self.experts.expert(id.layer, id.expert)? {
+                    ExpertAvailability::Ready(expert) => expert,
+                    ExpertAvailability::Waiting => {
+                        return Err(cuda_error("CUDA expert is waiting"));
+                    }
+                    ExpertAvailability::Unsupported(reason) => return Err(cuda_error(reason)),
+                };
+                if expert.input_width() != width || expert.output_width() != width {
+                    return Err(cuda_error("invalid CUDA expert payload/shape"));
+                }
+                let bytes = if self.operators.bounded_experts.is_some()
+                    || self.operators.numeric.is_some()
+                {
+                    let (key, bytes, _) = self.operators.expert_plan(&expert, slots.len())?;
+                    if (key.layer, key.expert) != (id.layer, id.expert) {
+                        return Err(cuda_error("provider returned another owner expert"));
+                    }
+                    let parameters = [expert.gate(), expert.up(), expert.down()]
+                        .map(|p| p.parameter().binding().clone());
+                    self.operators
+                        .preflight_bucket_numeric(&parameters, slots.len())?;
+                    bytes
+                } else {
+                    for linear in [expert.gate(), expert.up(), expert.down()] {
+                        self.operators.bindings.validate(linear.parameter())?;
+                    }
+                    0
+                };
+                let activation = SwiGluScratchPlan::for_prepared(&expert, slots.len())?;
+                if self.operators.bounded_experts.is_none() && self.operators.numeric.is_none() {
+                    prepared.insert(id, expert);
+                }
+                (bytes, activation)
+            };
+            let scratch = activation.total_bytes()?;
+            let extra = activation.owner_bucket_extra_bytes(tokens.len(), width)?;
+            self.operators
+                .preflight_expert_admission(bytes, scratch, extra)?;
+            peak = peak.max(SwiGluScratchPlan::reserved_bytes(scratch, extra, 0)?);
+            plans.insert(id, (bytes, scratch, extra));
         }
-        Ok(results)
+        let values = self.operators.synchronous(|this| {
+            this.cache_scratch(peak)?;
+            let mut packed = this.ops.zero_f32_buffer(shape.elements())?;
+            this.route_hold
+                .push(packed.as_device_buffer().slice(0, shape.elements())?);
+            let packed_holds = this.route_hold.len();
+            let mut packed_offset = 0usize;
+            for (&id, slots) in &groups {
+                let (bytes, scratch, extra) = plans[&id];
+                let expert = if metadata.contains_key(&id) {
+                    None
+                } else if let Some(expert) = prepared.get(&id) {
+                    Some(std::sync::Arc::clone(expert))
+                } else {
+                    let expert = match self.experts.expert(id.layer, id.expert)? {
+                        ExpertAvailability::Ready(expert) => expert,
+                        ExpertAvailability::Waiting => {
+                            return Err(cuda_error("CUDA expert is waiting"));
+                        }
+                        ExpertAvailability::Unsupported(reason) => return Err(cuda_error(reason)),
+                    };
+                    let (key, actual_bytes, actual_scratch) =
+                        this.expert_plan(&expert, slots.len())?;
+                    if (key.layer, key.expert) != (id.layer, id.expert)
+                        || expert.input_width() != width
+                        || expert.output_width() != width
+                        || (actual_bytes, actual_scratch) != (bytes, scratch)
+                    {
+                        return Err(cuda_error("provider changed owner expert plan"));
+                    }
+                    Some(expert)
+                };
+                this.cache_scratch(SwiGluScratchPlan::reserved_bytes(scratch, extra, 0)?)?;
+                // Admission replaces (rather than adds to) cache scratch. Keep
+                // the packed output/grant slack in every expert reservation.
+                this.route_scratch_bytes = extra;
+                let group_shape = RowsShape::new(slots.len(), width)?;
+                let packed_end = packed_offset
+                    .checked_add(group_shape.elements())
+                    .filter(|&end| end <= shape.elements())
+                    .ok_or_else(|| cuda_error("owner bucket packed range overflow"))?;
+                let values = slots
+                    .iter()
+                    .flat_map(|&slot| tokens[slot].payload.iter().copied())
+                    .collect::<Vec<_>>();
+                // No bind_rows: nesting synchronous would release bucket custody.
+                let input = this.boundary.upload(&this.ops, &values)?;
+                this.route_hold
+                    .push(input.as_device_buffer().slice(0, group_shape.elements())?);
+                let input = device_rows(group_shape, None, input)?;
+                let consume = |this: &mut CudaStandardDecoderOperators, output: Rows| {
+                    if output.shape() != group_shape {
+                        return Err(cuda_error("CUDA expert output shape mismatch"));
+                    }
+                    // Input and destination already have bucket custody. Pin the
+                    // source BEFORE D2D, including error and unwind paths.
+                    this.expert_hold.push(
+                        this.f32(&output)?
+                            .as_device_buffer()
+                            .slice(0, group_shape.elements())?,
+                    );
+                    #[cfg(test)]
+                    if let Some(hook) = self.pack_step_hook {
+                        hook(this, self.packed_groups, 0)?;
+                    }
+                    // Pack in expert order, not token order: one driver copy per
+                    // group. Restore token slots on the host after the sole D2H.
+                    this.ops.copy_f32_range(
+                        this.f32(&output)?,
+                        0,
+                        &mut packed,
+                        packed_offset,
+                        group_shape.elements(),
+                    )?;
+                    #[cfg(test)]
+                    {
+                        self.pack_copies += 1;
+                        if let Some(hook) = self.pack_step_hook {
+                            hook(this, self.packed_groups, 1)?;
+                        }
+                    }
+                    #[cfg(test)]
+                    {
+                        self.packed_groups += 1;
+                        if std::mem::take(&mut self.lose_pack_proof) {
+                            this.lose_next_consumer_proof = true;
+                        }
+                    }
+                    Ok(())
+                };
+                if let Some(plan) = metadata.get(&id) {
+                    this.metadata_swiglu_consume(plan, self.experts, &input, None, consume)?;
+                } else {
+                    this.swiglu_consume(
+                        expert.as_ref().expect("preflight expert"),
+                        &input,
+                        None,
+                        consume,
+                    )?;
+                }
+                // Bounded mode proves D2D inside each exact lease before another
+                // expert may evict it. KeepAll has no lease, but still needs proof
+                // before releasing this group's activations.
+                if this.bounded_experts.is_none() {
+                    this.consumer_proof()?;
+                    this.expert_hold.clear();
+                    this.expert_artifacts.clear();
+                }
+                this.route_hold.truncate(packed_holds);
+                packed_offset = packed_end;
+            }
+            #[cfg(test)]
+            {
+                self.logical_downloads += 1;
+            }
+            // One logical export, still split into <=64 KiB transport chunks.
+            this.boundary.download(&this.ops, &packed)
+        })?;
+        restore_owner_bucket_results(tokens, &groups, &values, shape, self.owner)
     }
+}
+
+fn restore_owner_bucket_results(
+    tokens: &[ExpertToken],
+    groups: &BTreeMap<crate::moe::ExpertId, Vec<usize>>,
+    values: &[f32],
+    shape: RowsShape,
+    owner: ParallelRankId,
+) -> Result<Vec<ExpertResult>> {
+    if values.len() != shape.elements() {
+        return Err(cuda_error("CUDA expert packed output shape mismatch"));
+    }
+    if values.iter().any(|v| !v.is_finite()) {
+        return Err(cuda_error("CUDA expert output is non-finite"));
+    }
+    let mut results = tokens
+        .iter()
+        .map(|token| ExpertResult::from_token(token, owner, Vec::new()))
+        .collect::<Vec<_>>();
+    // The groups were built by enumerating tokens: every slot appears exactly
+    // once. Reuse that permutation; no extra GPU indices or host row table.
+    for (&slot, row) in groups
+        .values()
+        .flatten()
+        .zip(values.chunks_exact(shape.width()))
+    {
+        results[slot].output = row.to_vec();
+    }
+    Ok(results)
 }
 
 #[cfg(test)]
@@ -585,6 +806,20 @@ mod bucket_tests {
         StateDictMaterializer, StateDictSchema,
     };
     use std::sync::{Arc, Weak};
+
+    mod numeric_scope {
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/unit/transformer/numeric_scope.rs"
+        ));
+    }
+
+    mod owner_worker {
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/unit/transformer/owner_worker.rs"
+        ));
+    }
 
     struct Fixture {
         path: std::path::PathBuf,
@@ -674,6 +909,14 @@ mod bucket_tests {
             precision: NumericFp8Precision,
             bytes: usize,
         ) -> CudaStandardDecoderOperators {
+            self.owner_with_scratch(precision, bytes, 4096)
+        }
+        fn owner_with_scratch(
+            &self,
+            precision: NumericFp8Precision,
+            bytes: usize,
+            numeric_scratch: usize,
+        ) -> CudaStandardDecoderOperators {
             CudaStandardDecoderOperators::new_numeric_fp8_with_precision(
                 Rc::new(CudaOperators::new_on_device(0).unwrap()),
                 &self
@@ -686,7 +929,7 @@ mod bucket_tests {
                     max_experts: 1,
                     max_bytes: bytes,
                 }),
-                4096,
+                numeric_scratch,
                 precision,
             )
             .unwrap()
@@ -871,9 +1114,7 @@ mod bucket_tests {
             },
         )
         .unwrap();
-        let buckets = dispatch
-            .dispatch(&vec![0.25; 3 * 8], &mut |_| Ok(()))
-            .unwrap();
+        let buckets = dispatch.dispatch(&[0.25; 3 * 8], &mut |_| Ok(())).unwrap();
         let mut expected = BTreeMap::<usize, Vec<usize>>::new();
         for token in &buckets[0].tokens {
             expected

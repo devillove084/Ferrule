@@ -1,0 +1,175 @@
+{
+  "schema": "ferrule.paper.collector-handoff.v1",
+  "directory": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-collector-profile-20261009-001/runs/P1/session",
+  "authenticated": {
+    "worker": {
+      "pid": 152908,
+      "birth_ticks": 86234813,
+      "ppid": 152907,
+      "pgrp": 152908,
+      "session": 152908
+    },
+    "helper": {
+      "pid": 152907,
+      "birth_ticks": 86234810,
+      "ppid": 152893,
+      "pgrp": 152907,
+      "session": 152907
+    },
+    "coordinator": {
+      "pid": 152893,
+      "birth_ticks": 86231060,
+      "ppid": 172272,
+      "pgrp": 152893,
+      "session": 152893
+    },
+    "launch_id": "ec99752b7b6f4219b22b651a3e883af8"
+  },
+  "locks": {
+    "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f.lock",
+      "fd": 3,
+      "device": 64785,
+      "inode": 58516170,
+      "coordinator_pid": 152893,
+      "mode": "local_nonblocking_flock",
+      "global_reservation": false
+    },
+    "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/GPU-0bc01d70-2ade-0714-8959-b25ae75469b6.lock",
+      "fd": 4,
+      "device": 64785,
+      "inode": 58518656,
+      "coordinator_pid": 152893,
+      "mode": "local_nonblocking_flock",
+      "global_reservation": false
+    },
+    "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d.lock",
+      "fd": 5,
+      "device": 64785,
+      "inode": 58519156,
+      "coordinator_pid": 152893,
+      "mode": "local_nonblocking_flock",
+      "global_reservation": false
+    },
+    "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/GPU-63f1bd01-ddf9-a742-ee48-9389892493d9.lock",
+      "fd": 6,
+      "device": 64785,
+      "inode": 58519247,
+      "coordinator_pid": 152893,
+      "mode": "local_nonblocking_flock",
+      "global_reservation": false
+    },
+    "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86.lock",
+      "fd": 7,
+      "device": 64785,
+      "inode": 58519167,
+      "coordinator_pid": 152893,
+      "mode": "local_nonblocking_flock",
+      "global_reservation": false
+    },
+    "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/GPU-b980f22b-58a3-fc88-21c1-ae86053d8535.lock",
+      "fd": 8,
+      "device": 64785,
+      "inode": 58519119,
+      "coordinator_pid": 152893,
+      "mode": "local_nonblocking_flock",
+      "global_reservation": false
+    },
+    "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011.lock",
+      "fd": 9,
+      "device": 64785,
+      "inode": 58519444,
+      "coordinator_pid": 152893,
+      "mode": "local_nonblocking_flock",
+      "global_reservation": false
+    },
+    "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685.lock",
+      "fd": 10,
+      "device": 64785,
+      "inode": 58519446,
+      "coordinator_pid": 152893,
+      "mode": "local_nonblocking_flock",
+      "global_reservation": false
+    }
+  },
+  "grant": {
+    "scope": "all_eight_instrumentation_probe",
+    "granted": true,
+    "note": "User explicitly authorizes this one fresh all_eight_instrumentation_probe after successful optimized smoke and no-trace FV/VF; eight UUID custody is for Nsight observation, model visibility only physical GPU0/1; 16MiB fixed B1 probe ceiling, 1MiB nonselected model delta; no foreign signals",
+    "run_id": "tp2-optimized-collector-profile-20261009-001",
+    "prepared_sha256": "ebb24a2624a1000a47373079b8635689993cbf704330e9aa42c33af71a053b3c",
+    "gpu_uuids": [
+      "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f",
+      "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6",
+      "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d",
+      "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86",
+      "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011",
+      "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685"
+    ],
+    "model_gpu_uuids": [
+      "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9"
+    ]
+  },
+  "command": [
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/admission/optimized-20261009/staged/ferrule",
+    "serve",
+    "/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8",
+    "--backend",
+    "cuda",
+    "--engine",
+    "pipeline",
+    "--model-profile",
+    "qwen35-mixed-bf16",
+    "--tensor-parallel",
+    "2",
+    "--pipeline-parallel",
+    "1",
+    "--expert-parallel",
+    "1",
+    "--rank-backend",
+    "thread",
+    "--devices",
+    "0,1",
+    "--rank-restarts",
+    "0",
+    "--kv-execution-policy",
+    "resident",
+    "--ctx-size",
+    "128",
+    "--max-active-sequences",
+    "2",
+    "--max-batch-tokens",
+    "8",
+    "--prefill-chunk-size",
+    "8",
+    "--cuda-device-budget-mb",
+    "22528",
+    "--kv-cache-mb",
+    "16",
+    "--max-tensor-mb",
+    "2048",
+    "--cuda-workspace-mb",
+    "1024",
+    "--host",
+    "127.0.0.1",
+    "--port",
+    "18367",
+    "--served-model-name",
+    "qwen35-ferrule-tp2-resident-paper"
+  ],
+  "command_sha256": "00ea5bedd064717f815fc77449208a1829ee3262962e419c881f6b94887a2efa",
+  "binary_sha256": "4d40c34738d36a1c78f62c0e400dd732da40e34c316ce4bd3c356dc4d29b3173",
+  "worker_launch_sha256": "b7f2a85caffef4648005dfd77e68a24be263d1bc0542b0caef65ed940f891665",
+  "nonce": "118c7cad6ea099442a24efd9eae432ec4af071258f47eb2f24b041ae077571c0",
+  "created_monotonic": 8498493.639079962
+}

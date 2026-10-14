@@ -1,0 +1,107 @@
+{
+  "argv": [
+    "/home/admin/luhuanbing.lhb/Ferrule/target/validation/allocator-batch-v3/cargo-cuda124/debug/build/ferrule-backend/3922a9d3c3a530d7/out/ferrule_backend-3922a9d3c3a530d7",
+    "cuda::allocator::",
+    "--nocapture",
+    "--test-threads=1"
+  ],
+  "environment": {
+    "PATH": "/home/admin/wxw403883/anaconda3/envs/tao/bin:/root/.cargo/bin:/usr/bin:/bin",
+    "CUDA_HOME": "/home/admin/wxw403883/anaconda3/envs/tao",
+    "NVCC": "/home/admin/wxw403883/anaconda3/envs/tao/bin/nvcc",
+    "LD_LIBRARY_PATH": "/home/admin/wxw403883/anaconda3/envs/tao/lib:/usr/lib64",
+    "FERRULE_CUDA_ARCH": "sm_86",
+    "FERRULE_CUTLASS_DIR": "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/cutlass",
+    "RUSTFLAGS": "-L native=/home/admin/luhuanbing.lhb/Ferrule/target/validation/qwen35-35b-current/toolchain/link -L native=/home/admin/luhuanbing.lhb/Ferrule/target/validation/bf16-mixed-qkv-20261005/link -L native=/home/admin/wxw403883/anaconda3/envs/tao/lib",
+    "HOME": "/root",
+    "CUDA_VISIBLE_DEVICES": "",
+    "NVIDIA_VISIBLE_DEVICES": "void",
+    "CUBLAS_WORKSPACE_CONFIG": ":0:0",
+    "CARGO_BUILD_JOBS": "2",
+    "CARGO_PROFILE_RELEASE_OPT_LEVEL": "3",
+    "CARGO_PROFILE_RELEASE_LTO": "fat",
+    "CARGO_PROFILE_RELEASE_CODEGEN_UNITS": "1",
+    "CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS": "false",
+    "PYTHONDONTWRITEBYTECODE": "1",
+    "RUSTUP_TOOLCHAIN": "nightly-2026-08-01",
+    "CC": "/usr/bin/gcc",
+    "CXX": "/usr/bin/g++",
+    "CUDAHOSTCXX": "/usr/bin/g++",
+    "CARGO_HOME": "/root/.cargo",
+    "RUSTUP_HOME": "/root/.rustup",
+    "RUSTUP_AUTO_INSTALL": "0",
+    "RUSTC": "/root/.rustup/toolchains/nightly-2026-08-01-x86_64-unknown-linux-gnu/bin/rustc",
+    "RUSTDOC": "/root/.rustup/toolchains/nightly-2026-08-01-x86_64-unknown-linux-gnu/bin/rustdoc",
+    "FERRULE_CUDA_TEST_ORACLE": "0",
+    "CARGO_TARGET_DIR": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/allocator-batch-v3/cargo-cuda124",
+    "FERRULE_NO_CUDA": "1"
+  },
+  "supervisor": {
+    "returncode": 0,
+    "timed_out": false,
+    "wall_seconds": 0.24222175031900406,
+    "stdout": "\nrunning 7 tests\ntest cuda::allocator::dedicated_kv_tests::dedicated_kv_segment_never_lends_free_extent_to_weights_or_scratch ... ok\ntest cuda::allocator::tests::alignment_applies_to_the_absolute_device_address ... ok\ntest cuda::allocator::tests::deterministic_allocation_churn_preserves_capacity_and_alignment ... ok\ntest cuda::allocator::tests::device_block_auto_traits_follow_its_owners ... ok\ntest cuda::allocator::tests::fragmentation_formulas_are_bounded ... ok\ntest cuda::allocator::tests::free_ranges_coalesce_in_both_directions ... ok\ntest cuda::allocator::tests::size_classes_cover_small_large_and_huge ... ok\n\ntest result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 285 filtered out; finished in 0.14s\n\n",
+    "stderr": "",
+    "cleanup_errors": [],
+    "cleanup_scope": "isolated_subreaper_direct_children",
+    "descendant_custody": "proven_drained",
+    "gpu_quiescence": "unverified",
+    "custody": {
+      "status": "proven_drained",
+      "method": "linux-subreaper-waitid",
+      "containment_verified": true,
+      "launch_id": "c358f3fcd3e74fc281124c287ea18285",
+      "helper_identity": {
+        "pid": 145926,
+        "birth_ticks": 97087977,
+        "ppid": 145847,
+        "pgrp": 145926,
+        "session": 145926
+      },
+      "root_identity": {
+        "pid": 145927,
+        "birth_ticks": 97087980,
+        "ppid": 145926,
+        "pgrp": 145926,
+        "session": 145926
+      },
+      "boot_id": "4dd3497d-570c-4693-a876-5c26e06ab360",
+      "entries": [
+        {
+          "identity": {
+            "pid": 145927,
+            "birth_ticks": 97087980,
+            "ppid": 145926,
+            "pgrp": 145926,
+            "session": 145926
+          },
+          "role": "root",
+          "signals": [],
+          "reaped": true,
+          "exit_code": 0,
+          "first_observed_at": 8607000.150364172,
+          "reaped_at": 8607000.342487697
+        }
+      ],
+      "errors": [],
+      "reporting_errors": [],
+      "echild": true
+    },
+    "handshake": {
+      "kind": "ready",
+      "protocol": 1,
+      "launch_id": "c358f3fcd3e74fc281124c287ea18285",
+      "helper_identity": {
+        "pid": 145926,
+        "birth_ticks": 97087977,
+        "ppid": 145847,
+        "pgrp": 145926,
+        "session": 145926
+      },
+      "containment_verified": true,
+      "method": "linux-subreaper-waitid"
+    },
+    "stdout_truncated": false,
+    "stderr_truncated": false
+  }
+}

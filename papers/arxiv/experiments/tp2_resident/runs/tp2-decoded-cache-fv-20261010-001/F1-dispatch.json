@@ -1,0 +1,27 @@
+{
+  "protocol": "tp2-resident-fv-qa8-descriptive",
+  "purpose": "paired",
+  "status": "incomplete",
+  "sole_gpu_owner_granted": true,
+  "owner_note": "User sole GPU owner authorization: same final -03 dadf831 release passed S1/S2; execute fixed no-trace F1/V1/V2/F2 QA8 with rankperf off/activity null, workspace4096/cache3GiB/device22GiB, pinned vLLM TP2 Marlin, bounded authenticated custody, no foreign signals, stop on numerical/budget/Unknown",
+  "fairmatch": false,
+  "exact_speedup": null,
+  "slots": [
+    {
+      "id": "F1",
+      "status": "dispatched_unknown"
+    },
+    {
+      "id": "V1",
+      "status": "not_run"
+    },
+    {
+      "id": "V2",
+      "status": "not_run"
+    },
+    {
+      "id": "F2",
+      "status": "not_run"
+    }
+  ]
+}

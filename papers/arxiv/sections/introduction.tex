@@ -1,0 +1,91 @@
+\section{Introduction}
+\label{sec:introduction}
+
+A model can exceed an execution device's memory without exceeding the
+machine's usable physical residency, and a model can also exceed that
+aggregate residency. These are different problems. In the first case, a
+host-resident or compact representation may be sufficient; in the second,
+backing storage may be necessary for a complete request. A checkpoint's file
+size, an expanded tensor's size, and a running request's working set therefore
+cannot be used interchangeably. The working set includes active weights,
+expansion buffers, activations, model state, staging, in-flight transfers,
+allocator and driver reserves, metadata, and resident file-backed pages.
+
+\system{} studies the second problem: storage-backed inference under bounded
+physical memory and bounded runtime ledgers. Its central execution path is
+\emph{plan, admit, materialize, publish, execute, retire}. The design is
+intended to make a request feasible when only a bounded subset of the
+execution representation can be resident at once. It is not enough to submit
+an asynchronous read or to evict a cache entry: the producer must return
+custody, the consumer must receive the exact generation it requested, and
+retirement must wait for physical quiescence. These contracts make resource
+reuse safe; they do not by themselves demonstrate that storage is necessary,
+that devices overlap, or that a request has acceptable model quality.
+
+\paragraph{Research questions.}
+We organize the paper around four questions, each with a concrete observable:
+\begin{description}
+  \item[RQ1 -- capacity.] Can a complete, quality-accepted request finish
+  with bounded repeated materialization while the measured working set stays
+  within declared per-domain limits? A successful configured-budget run is
+  not, by itself, evidence that the model exceeds physical memory.
+  \item[RQ2 -- request I/O.] Which logical reads become physical network or
+  backing-block reads during a request, after separating startup, application
+  counters, OS page-cache hits, and storage-cache effects?
+  \item[RQ3 -- safe scheduling.] Under the same representation, quality
+  contract, and budgets, what differs between a correct blocking reference and
+  the proposed ready-dependent path in waiting, progress, and measured
+  storage/transfer/compute overlap?
+  \item[RQ4 -- custody and failure.] Do exact identities, credits, and
+  custody prevent stale publication and premature reuse, while retaining
+  capacity when completion is Unknown and releasing it only after evidence of
+  quiescence?
+\end{description}
+
+\paragraph{Contributions and boundaries.}
+This manuscript makes four scoped contributions:
+\begin{enumerate}
+  \item a resource model that separates disjoint physical domains, configured
+  accounting domains, representations, and the measured time-varying working
+  set;
+  \item a normal-path contract that connects source-bound planning and
+  stage-local admission to generation-qualified completion, publication, and
+  retirement;
+  \item standard structured pseudocode for the success and terminal-custody
+  paths, exposing the preconditions and observations needed to test them; and
+  \item an evidence-oriented evaluation layout that ties each RQ to tables,
+  traces, memory peaks, and plots rather than promoting design intent to a
+  result.
+\end{enumerate}
+
+The current evidence is deliberately narrower than the target. TP1 attempt
+\texttt{-02} is one DEBUG-instrumented exploratory run ($n=1$): four HTTP
+requests completed, the three limited visible-text/eight-output-token-usage
+canaries passed, and Hello2 passed HTTP and usage checks only. It records
+30 decoder invocations and 36,240,064,128 logical checkpoint-reader bytes;
+these are logical bytes, not physical NAS/network or block-device reads.
+Generated IDs, full numerical quality, process-owned GPU attribution, and a
+complete resource contract are absent or unknown. Attempt \texttt{-01} failed
+before server launch and supplied no request or read result. Consequently,
+TP1 does not establish RQ1 capacity, storage necessity, RQ3 scheduling, or
+RQ4 custody closure.
+
+Separate TP2 receipts include numerical/lifecycle observations for a test
+binary and descriptive resident comparisons. They are not interchangeable
+with TP1: the TP2 test binary is not a public serving binary, the arithmetic
+and topology contracts are profile-specific, and the two resident comparison
+blocks are not a fair speedup proof. In particular, the vLLM supplement is
+not evidence of storage necessity or a matched total working-set budget. The
+same-contract safe-blocking reference for RQ3 is not implemented. Multimodal,
+unified-memory, general-registry, ACID, and default NCCL/device-collective
+claims are outside the demonstrated evidence.
+
+The rest of the paper follows the execution argument. Section~\ref{sec:scope}
+defines representations, physical and accounting domains, quality, and
+failure contracts. Sections~\ref{sec:normal-profile}, \ref{sec:invariants},
+and~\ref{sec:algorithms} follow a normal profile, state its invariants, and
+give structured algorithms. Section~\ref{sec:implementation}
+identifies the code paths and their limits. Section~\ref{sec:evaluation}
+starts with the frozen setup and then reports RQ1--RQ4 in order. Sections~\ref{sec:related}, \ref{sec:limitations}, and~\ref{sec:conclusion}
+place the design in prior work, collect the remaining evidence gates, and
+conclude.

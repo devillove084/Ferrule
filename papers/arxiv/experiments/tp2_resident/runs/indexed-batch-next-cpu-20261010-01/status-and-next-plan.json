@@ -1,0 +1,246 @@
+{
+  "schema": "ferrule.paper.indexed-status-next-batch-plan.v1",
+  "scope": "CPU documentation/immutable receipt reads only",
+  "executable": false,
+  "planning_only": true,
+  "gpu_queries": 0,
+  "gpu_runs": 0,
+  "builds": 0,
+  "symbol_searches": 0,
+  "workflow_modified": false,
+  "current_index_result": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/arena-index-crossed-closeout-20261010-01/owner-closeout.json",
+    "sha256": "8e4e8c85ce642274deedebd7208874a5d28220b7d07b1c25f46a6fd3bcc8d753"
+  },
+  "cycles": [
+    {
+      "cycle": 1,
+      "order": [
+        "BEFORE",
+        "AFTER"
+      ],
+      "before_tok_s": 2.422125567819611,
+      "after_tok_s": 5.205590783659853,
+      "after_before_rate_ratio": 2.149182871780635,
+      "before_startup_s": 355.32967834733427,
+      "after_startup_s": 358.70887981913984,
+      "startup_after_minus_before_s": 3.3792014718055725,
+      "before_pss_GiB": 61.771711349487305,
+      "after_pss_GiB": 61.22148513793945,
+      "pss_after_minus_before_GiB": -0.5502262115478516
+    },
+    {
+      "cycle": 2,
+      "order": [
+        "AFTER",
+        "BEFORE"
+      ],
+      "before_tok_s": 2.485096415861086,
+      "after_tok_s": 5.247736517503887,
+      "after_before_rate_ratio": 2.1116832666975403,
+      "before_startup_s": 348.40551731549203,
+      "after_startup_s": 356.95539246685803,
+      "startup_after_minus_before_s": 8.549875151365995,
+      "before_pss_GiB": 61.08424472808838,
+      "after_pss_GiB": 61.09017753601074,
+      "pss_after_minus_before_GiB": 0.005932807922363281
+    }
+  ],
+  "preserved_assets": {
+    "ae3e": {
+      "binary": {
+        "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/admission/arena-public-20261010-01/staged/ferrule",
+        "sha256": "ae3e76d420cdff234be4262575b3bee29e89252c89bc2f21c744aefd47731bc7",
+        "kind": "public_serving"
+      },
+      "profile_admission": {
+        "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/admission/arena-public-20261010-01/profile-admission.json",
+        "sha256": "617eaeef8dd1c7e36cb26e0276f34f721dd7c449cf5dd86b7f2a52567c953256"
+      },
+      "build_receipt": {
+        "path": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/tp2-mixed-arena-public-release-20261010-01/handoff.json",
+        "sha256": "4b1734652ab05dd38e20fc7f9d85e7e201539b35707160021eec1f4d2dbf264e"
+      },
+      "smoke_receipt": {
+        "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/arena-public-smoke-20261010-01/serving-smoke.json",
+        "sha256": "4118655b2ba0338216d1beedc08f5a070f472c868c3b964912d87821d88c3913"
+      },
+      "profile_admission_is_not_a_new_profile_run": true
+    },
+    "9ef": {
+      "binary": {
+        "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/admission/indexed-lru-20261010-01/staged/ferrule",
+        "sha256": "9ef9841598b4694fb611250bf8876c4314d252400136ddb23f606a979cadb656",
+        "kind": "public_serving"
+      },
+      "profile_admission": {
+        "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/admission/indexed-lru-20261010-01/profile-admission.json",
+        "sha256": "36d741f0cff8ce13bad949464f0821d537271cf650d85dc0e9959463fe8bac1a"
+      },
+      "build_receipt": {
+        "path": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/tp2-mixed-arena-indexed-lru-release-20261010-01/handoff.json",
+        "sha256": "732764ffff6160dee729ec2c0cd8f6e0c47b29e0f703e6781205a1c567b2a31b"
+      },
+      "smoke_receipt": {
+        "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/indexed-lru-smoke-20261010-01/serving-smoke.json",
+        "sha256": "22e00978eae1eac5a56b7f223005a7741bf6da5f3e03371ecd0dc5623d5451cb"
+      },
+      "profile_admission_is_not_a_new_profile_run": true
+    },
+    "official_tools_document": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/OFFICIAL-NVIDIA-TOOLS.md",
+      "sha256": "7e5d9327cf06a92fbbdbec1152dc24f792a4606a626e947966aa2f5b2d5def34"
+    },
+    "official_profile_policy": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/profile_2025.py",
+      "sha256": "b7978eac6c04479625925ea06f8e660edbab93b367ef6a346538c47a5df77c43"
+    },
+    "official_tool_paths": {
+      "nsys": "target/vendor/nsight-systems-cli-2025.3.1/opt/nvidia/nsight-systems-cli/2025.3.1/target-linux-x64/nsys",
+      "importer": "target/vendor/nsight-systems-cli-2025.3.1/opt/nvidia/nsight-systems-cli/2025.3.1/host-linux-x64/QdstrmImporter",
+      "cupti": "target/vendor/nsight-systems-cli-2025.3.1/opt/nvidia/nsight-systems-cli/2025.3.1/target-linux-x64/libcupti.so.12.9"
+    },
+    "official_historical_profiles": [
+      {
+        "binary_label": "4d40",
+        "prepared": {
+          "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-official-full-profile-20261010-001/prepared.json",
+          "sha256": "9cd69715a89f78cdc4c51af14ec6ecbfc935f6e3a236a1319cef056e15b2414e"
+        },
+        "audit": {
+          "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-official-full-profile-20261010-001/profile-audit-v2.json",
+          "sha256": "55b2f32b676704e47ccdde9adf13af527b6fbb3a79b03d40ff1eb6a88d2bc2dd"
+        },
+        "execution": {
+          "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-official-full-profile-20261010-001/execution.json",
+          "sha256": "50b0fa6636b05bd3243eb1c26bf11db4d996d3d6abbf6820c50f45aa85e7ad19"
+        }
+      },
+      {
+        "binary_label": "dadf",
+        "prepared": {
+          "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/prepared.json",
+          "sha256": "ecbbac7ed6da73de4fec1d79658baf6490085136cc8c9639cbfb1f5ce585a69d"
+        },
+        "audit": {
+          "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/profile-audit-v2.json",
+          "sha256": "cd4f5ae5b3fa582c3a608d783408e40b2c93c50e539385cd04490d91335ff06c"
+        },
+        "execution": {
+          "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/execution.json",
+          "sha256": "32f40c4edff8e15fa7a7f7eac3555cd8861c47ec3dc00749a09d883be6cce9e9"
+        }
+      }
+    ],
+    "prior_symbol_preflight": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/arena-official-cpu-preflight-20261010-01/summary.json",
+      "sha256": "653ce915379eeecf40d170abd9d1069cb506dff552d77826ce77aea85d42b970"
+    },
+    "stripped_build_input_receipts": [
+      {
+        "path": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/tp2-mixed-arena-public-release-20261010-01/build-inputs.json",
+        "sha256": "7b5ac6a3f84096eda1751095d33c6abae939ff2a62a0db93f62b18b5231a361f"
+      },
+      {
+        "path": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/tp2-mixed-arena-indexed-lru-release-20261010-01/build-inputs.json",
+        "sha256": "8e36c4fe19ea07e8672cfc24fd21f87bc06275c24d779d355ddcaf20d9a464c2"
+      }
+    ]
+  },
+  "checklist": {
+    "index_qualification_and_same_binary_smoke": "historical PASS; no new qualification this turn",
+    "crossed_index_ab": "historical PASS, n=2 cycles, descriptive only",
+    "negative_arena_indexing_regression": "controlled recovery under matched indexed/unindexed arena comparison, not end-to-end parity",
+    "ferrule_vllm_parity": "NOT established; no V in these runs",
+    "fit_working_set_zero_eviction": "small bounded fixture evidence only",
+    "real_prefill_route_union_fits": "UNPROVEN; no route/union or measured-phase collection",
+    "startup_improvement": "NOT demonstrated; AFTER longer in both observed cycles",
+    "host_pss_improvement": "NOT demonstrated; mixed deltas across cycles",
+    "hot_zero_decode": "UNPROVEN; activity=null",
+    "foreign_interference_absence": "UNPROVEN; NVML host/local PID mapping unavailable",
+    "current_gpu_idle": "NOT queried this turn; historical final idle/release linked only"
+  },
+  "next_optimization": {
+    "status": "PLAN ONLY, not implemented or admitted",
+    "before": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/admission/indexed-lru-20261010-01/staged/ferrule",
+      "sha256": "9ef9841598b4694fb611250bf8876c4314d252400136ddb23f606a979cadb656",
+      "kind": "public_serving"
+    },
+    "after": null,
+    "proposed_quality_class": "operator_batch_retirement_v1 (draft name, not an accepted schema)",
+    "existing_launcher": "paired.py; reuse prepare/run/worker, request gates, observer and authenticated supervisor",
+    "existing_arena_index_ab": "UNCHANGED; ae3e/indexed exact-two-production-file contract must not accept backend retirement changes",
+    "manifest_authority": "A specific reviewed builder manifest SHA plus registered optimization class; never an arbitrary CLI skip/allowlist",
+    "manifest_requirements": [
+      "Before/after binary and release/qualification/smoke identities",
+      "Complete independently enumerated production/dependency/source inventories, including native .cc and build/config inputs",
+      "Exact reviewed changed/added/removed production paths with old/new hashes, change rationale and invariant mapping",
+      "Separate test-source delta and actually executed named-selector receipts; no count-only qualification",
+      "Stable build-before/after pins; same build/tool/library and serving environment/flags, or explicit rejection/review of any extra difference",
+      "Manifest itself pinned in AFTER builder evidence and compared to actual maps; unlisted delta fails closed"
+    ],
+    "required_quality": [
+      "Retain unchanged numerical oracle/boundary/recipe gates and budgets; fresh source-bound qualification for AFTER",
+      "Add published named operator retirement tests for bounded batch/queue/high-water and mandatory flush/drain",
+      "Exercise lease/root/borrowed ownership, completion ordering, delayed completion, cancellation, failures and Unknown quarantine",
+      "Prove no premature reuse/refund, use-after-free or double retirement; account physical memory without double counting",
+      "Verify exact precision/output and actual GPU completion semantics with real receipts, not CPU timing or aggregate gate counts"
+    ],
+    "same_flags": {
+      "arena_bytes_per_owner": 3221225472,
+      "workspace_mib": 4096,
+      "device_cap_mib": 22528,
+      "tp": 2,
+      "context": 128,
+      "batch_tokens": 8,
+      "sequences": 2,
+      "concurrency": 1,
+      "resident": true,
+      "offload": false,
+      "qa8_unmeasured": 3,
+      "qa8_measured": 5,
+      "rankperf": false,
+      "profiled_activity": null
+    },
+    "admission_sequence": [
+      "Freeze scoped operator implementation/manifest and paper interface before new pinned qualification",
+      "Review fresh AFTER qualification, actual release and builder-specific full delta",
+      "Require actual SAME-AFTER-binary S1/S2 before promote; no inherited 9ef smoke",
+      "Only later implement the minimal registered typed optimization branch in paired, not a new harness",
+      "Fresh independent crossed-order cycles if authorized; no new model or paper-wide experiment expansion"
+    ],
+    "no_gpu_authorization_implied": true
+  },
+  "next_official_profile": {
+    "status": "PLAN ONLY; no tool invocation/capture/build",
+    "tool_paths": {
+      "nsys": "target/vendor/nsight-systems-cli-2025.3.1/opt/nvidia/nsight-systems-cli/2025.3.1/target-linux-x64/nsys",
+      "importer": "target/vendor/nsight-systems-cli-2025.3.1/opt/nvidia/nsight-systems-cli/2025.3.1/host-linux-x64/QdstrmImporter",
+      "cupti": "target/vendor/nsight-systems-cli-2025.3.1/opt/nvidia/nsight-systems-cli/2025.3.1/target-linux-x64/libcupti.so.12.9"
+    },
+    "api_event_counts": "Collect CUDA runtime and driver event APIs in the same explicitly correlated request window as kernel/copy/sync/CPU-stack evidence",
+    "event_api_families": [
+      "cudaEvent*/cuEvent* create/record/query/synchronize/destroy",
+      "cudaStreamWaitEvent/cuStreamWaitEvent",
+      "stream/device synchronization"
+    ],
+    "counter_rules": [
+      "Report per-process/thread/owner/request/phase counts, durations and return status where present",
+      "Separate runtime/driver layers to avoid double counting; distinguish polls from completed retirements",
+      "Do not include startup/warmup/tail in the measured request window or infer zero from absent records",
+      "Keep raw rep/SQLite, tool/importer/CUPTI pins and bidirectional correlation/loss audits; partial traces remain partial",
+      "Document profiler request window versus unprofiled benchmark run window; profile timings are not performance rates"
+    ],
+    "cpu_stacks": "Need a separately pinned unstripped optimized profile build with usable symbols/unwind metadata and reviewed sampling capability/options",
+    "profile_build": "Preserve serving 9ef and ae3e; do not replace them. Pin profile binary/build-id/debug artifacts/source/tool/flags and its relation to the serving build, with its own admission/smoke before launch.",
+    "symbol_search_policy": "Do not repeat searches for missing symbols in stripped 9ef/ae3e or their identical stripped Cargo outputs",
+    "instrumentation_custody": "Reuse existing official collector-first flow and separately authorized instrumentation scope/UUID locks/B1/B0/drain; no bypass",
+    "cpu_affinity_thread_counts": "Currently uncollected; future read-only measurement only after minimal-overhead/interface review"
+  },
+  "limitations": [
+    "No parity, full-fit or statistical-significance claim",
+    "54,621 evictions/reuses per rank are whole-lifecycle counters, not proof about measured hot routes or prefill union",
+    "Startup/host memory and end-to-end gap remain open; indexing results do not qualify the next backend change"
+  ]
+}

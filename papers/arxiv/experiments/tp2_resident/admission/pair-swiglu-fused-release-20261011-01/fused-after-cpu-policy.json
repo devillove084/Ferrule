@@ -1,0 +1,31 @@
+{
+  "stage": "CPU reviewed policy and smoke preparation",
+  "completed_utc": "2026-10-11T12:01:18.851942+00:00",
+  "tests": [
+    "test_fused_after_info_only_and_actual_smoke_required",
+    "test_fused_after_rejects_artifact_or_handoff_override",
+    "test_fused_after_rejects_request_debug_and_rankperf",
+    "test_fused_after_single_slot_and_smoke_has_no_qa"
+  ],
+  "tests_run": 4,
+  "tests_passed": true,
+  "production_changed": false,
+  "sole_gpu_owner_authorized_by_user": true,
+  "python": "/home/admin/wxw403883/anaconda3/bin/python3.12",
+  "source_pins": {
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/paired.py": "1b9b2a3f170c5d738cf195607a5e98337bee568d3a69eb8a52cc316993122df0",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/test_paired.py": "0926fad8b6d3c1f983d30e813c0d3fcf3e18aaf87d1442e829f83290e6425e8d"
+  },
+  "prior_prepared_retained": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/pair-swiglu-fused-after-20261011-01/prepared.json",
+  "prepared": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/pair-swiglu-fused-smoke-20261011-02/prepared.json",
+    "sha256": "dde05fc56f6d5c69f0fe308b50dc3b9bda6e5da387edb1ee2e709cf2416376e0"
+  },
+  "smoke_performance": false,
+  "formal_slots": [
+    "F1"
+  ],
+  "formal_log": "info",
+  "formal_requires_actual_same_binary_smoke": true,
+  "prior_cpu_command_error": "Python syntax error before any write or GPU launch"
+}

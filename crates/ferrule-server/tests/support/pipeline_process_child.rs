@@ -43,7 +43,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     child_serve(reader, writer, |boot| {
         let record =
             json!({"pid":std::process::id(), "identity":boot.identity, "config":boot.config});
-        let inner = DecoderEndpoint::initialize(boot, launch)?;
+        let inner = ferrule_composition::initialize_builtin_process_endpoint(boot, launch)?;
         let evidence = std::env::var_os("FERRULE_PIPELINE_CHILD_EVIDENCE").map(|directory| {
             let path = PathBuf::from(directory).join(format!("{}.json", std::process::id()));
             std::fs::write(&path, record.to_string()).unwrap();

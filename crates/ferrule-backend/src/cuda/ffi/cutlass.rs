@@ -138,6 +138,57 @@ unsafe extern "C" {
     pub fn ferrule_cutlass_bf16_launch(args: *const Bf16Args) -> i32;
     pub fn ferrule_cutlass_numeric_fp8_can_implement(args: *const NumericArgs) -> i32;
     pub fn ferrule_cutlass_numeric_fp8_launch(args: *const NumericArgs) -> i32;
+    pub fn ferrule_cutlass_numeric_fp8_bf16_can_implement(args: *const NumericArgs) -> i32;
+    pub fn ferrule_cutlass_numeric_fp8_bf16_launch(args: *const NumericArgs) -> i32;
     pub fn ferrule_cutlass_numeric_fp8_f32_can_implement(args: *const NumericArgs) -> i32;
     pub fn ferrule_cutlass_numeric_fp8_f32_launch(args: *const NumericArgs) -> i32;
+    pub fn ferrule_cutlass_numeric_fp8_w8a16_can_implement(args: *const NumericArgs) -> i32;
+    pub fn ferrule_cutlass_numeric_fp8_w8a16_launch(args: *const NumericArgs) -> i32;
+    pub fn ferrule_cutlass_numeric_fp8_w8a16_bf16_can_implement(args: *const NumericArgs) -> i32;
+    pub fn ferrule_cutlass_numeric_fp8_w8a16_bf16_launch(args: *const NumericArgs) -> i32;
+    pub fn ferrule_cutlass_numeric_fp8_m1_can_implement(args: *const NumericArgs) -> i32;
+    pub fn ferrule_cutlass_numeric_fp8_m1_launch(args: *const NumericArgs) -> i32;
+}
+
+unsafe extern "C" {
+    pub fn ferrule_cutlass_numeric_fp8_sliced_k2_can_implement(args: *const NumericArgs) -> i32;
+    pub fn ferrule_cutlass_numeric_fp8_sliced_k2_launch(args: *const NumericArgs) -> i32;
+    pub fn ferrule_cutlass_numeric_fp8_sliced_k2_bf16_can_implement(
+        args: *const NumericArgs,
+    ) -> i32;
+    pub fn ferrule_cutlass_numeric_fp8_sliced_k2_bf16_launch(args: *const NumericArgs) -> i32;
+}
+
+unsafe extern "C" {
+    pub fn ferrule_numeric_bf16_gemv_create(
+        stream: u64,
+        scratch: u64,
+        bytes: u64,
+        reserve: u64,
+        handle: *mut u64,
+        growth: *mut u64,
+        version: *mut i32,
+    ) -> i32;
+    pub fn ferrule_numeric_bf16_gemv_destroy(handle: u64) -> i32;
+    pub fn ferrule_numeric_bf16_gemv_can_implement(args: *const NumericArgs) -> i32;
+    pub fn ferrule_numeric_bf16_gemv_launch(args: *const NumericArgs, handle: u64) -> i32;
+}
+
+unsafe extern "C" {
+    pub fn ferrule_bf16_gemmex_available() -> i32;
+    pub fn ferrule_bf16_gemmex_create(
+        m: u32,
+        n: u32,
+        k: u32,
+        stream: u64,
+        storage: u64,
+        bytes: u64,
+        reserve: u64,
+        handle: *mut u64,
+        growth: *mut u64,
+        version: *mut i32,
+    ) -> i32;
+    pub fn ferrule_bf16_gemmex_destroy(handle: u64) -> i32;
+    pub fn ferrule_bf16_gemmex_can_implement(args: *const NumericArgs) -> i32;
+    pub fn ferrule_bf16_gemmex_launch(args: *const NumericArgs, handle: u64) -> i32;
 }

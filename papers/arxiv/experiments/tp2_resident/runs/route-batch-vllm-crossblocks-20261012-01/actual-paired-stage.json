@@ -1,0 +1,51 @@
+{
+  "stage": "actual F1V1/V2F2 paired dispatch",
+  "argv": [
+    "/home/admin/wxw403883/anaconda3/bin/python3.12",
+    "-S",
+    "-B",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/paired.py",
+    "run",
+    "--id",
+    "route-batch-vllm-crossblocks-20261012-01",
+    "--purpose",
+    "paired",
+    "--sole-gpu-owner-granted",
+    "--owner-note",
+    "User explicitly authorized unique GPU owner for e674 routebatch versus frozen vllm028-py312/cu129; exactly F1V1/V2F2 fresh; prior actual same-binary smoke reused; unchanged flags/util0.8/Marlin; info/no rankperf/V upgrades/Nsight/matrix/readback; finite authenticated supervision; stop on ABI/numeric/resource/ECHILD/unknown custody and no foreign signals"
+  ],
+  "started_utc": "2026-10-11T22:14:00.779291+00:00",
+  "completed_utc": "2026-10-11T22:34:11.714983+00:00",
+  "wall_seconds": 1210.9357126597315,
+  "returncode": 0,
+  "error": null,
+  "status": "complete_descriptive_only",
+  "slots": [
+    {
+      "id": "F1",
+      "status": "complete",
+      "launch_id": "757eecf83d3941a4ad2bbe6ebda32c49"
+    },
+    {
+      "id": "V1",
+      "status": "complete",
+      "launch_id": "3dec24a54cf348f7a98ea630cefdb953"
+    },
+    {
+      "id": "V2",
+      "status": "complete",
+      "launch_id": "9b6529970c9548079586f4e9286c42af"
+    },
+    {
+      "id": "F2",
+      "status": "complete",
+      "launch_id": "8c1faee65e364fceab25a370c5000a05"
+    }
+  ],
+  "process_state": "Use authenticated raw custody receipts; unknown if absent",
+  "raw_pins": {
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/route-batch-vllm-crossblocks-20261012-01/execution.json": "a5111968644b568f834f61a4cd593d475c3d6be6bf24409a5d278edfd1343ced",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/route-batch-vllm-crossblocks-20261012-01/paired-run.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/route-batch-vllm-crossblocks-20261012-01/paired-run.stdout.log": "dea86b09e84d42fba54ab071530446305c2dc70d91d2e8eeea8ce62064591c34"
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "status": "not_run",
+  "server_starts": 0,
+  "reason": "CPU-only preparation superseded before launch: represent unobserved runtime evidence as null/unknown, not zero hash",
+  "prepared_sha256": "a2fb1a6eabc64468a39e40250b92f8054f87a34998e57e97015ee0315173b484"
+}

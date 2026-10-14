@@ -1,0 +1,218 @@
+{
+  "schema": "ferrule.paper.tp2-oracle.artifact-verification.v1",
+  "status": "pass",
+  "reference_manifest_sha256": "fb96ba4dd134761af30b4025b4cce86f96136cb01f05b5b4fca3e74587caa71d",
+  "full40_layers": 40,
+  "cases": {
+    "hello": {
+      "tensors": 2338,
+      "tensor_hashes_verified": 2338,
+      "bytes": 265524616,
+      "calls": [
+        {
+          "stage": "prefill",
+          "input_token_ids": [
+            9419
+          ],
+          "position_start": 0,
+          "sequence_length_after": 1,
+          "next_token_id": 11
+        },
+        {
+          "stage": "decode.0",
+          "input_token_ids": [
+            11
+          ],
+          "position_start": 1,
+          "sequence_length_after": 2,
+          "next_token_id": 353
+        }
+      ],
+      "local_reductions_exact": true,
+      "rank_router_agreement": true,
+      "raw_tie_policy_exact": true,
+      "cache_reconstruction_exact": true,
+      "unsharded": {
+        "prefill": {
+          "status": "same_input",
+          "argmax_match": true,
+          "logits": {
+            "max_abs": 0.25,
+            "mean_abs": 0.03508246207115308,
+            "rmse": 0.045597218186682394,
+            "exact": false,
+            "failures": 104083,
+            "elements": 248320,
+            "atol": 0.00025,
+            "rtol": 0.012
+          },
+          "failing_boundaries": 246
+        },
+        "decode.0": {
+          "status": "same_input",
+          "argmax_match": true,
+          "logits": {
+            "max_abs": 0.25,
+            "mean_abs": 0.04385324427257916,
+            "rmse": 0.05525790073838113,
+            "exact": false,
+            "failures": 154521,
+            "elements": 248320,
+            "atol": 0.00025,
+            "rtol": 0.012
+          },
+          "failing_boundaries": 298
+        }
+      }
+    },
+    "capital": {
+      "tensors": 2338,
+      "tensor_hashes_verified": 2338,
+      "bytes": 277610664,
+      "calls": [
+        {
+          "stage": "prefill",
+          "input_token_ids": [
+            760,
+            6511,
+            314,
+            9338,
+            369
+          ],
+          "position_start": 0,
+          "sequence_length_after": 5,
+          "next_token_id": 11751
+        },
+        {
+          "stage": "decode.0",
+          "input_token_ids": [
+            11751
+          ],
+          "position_start": 5,
+          "sequence_length_after": 6,
+          "next_token_id": 13
+        }
+      ],
+      "local_reductions_exact": true,
+      "rank_router_agreement": true,
+      "raw_tie_policy_exact": true,
+      "cache_reconstruction_exact": true,
+      "unsharded": {
+        "prefill": {
+          "status": "same_input",
+          "argmax_match": true,
+          "logits": {
+            "max_abs": 0.6875,
+            "mean_abs": 0.05265361809236545,
+            "rmse": 0.07097948638904905,
+            "exact": false,
+            "failures": 781127,
+            "elements": 1241600,
+            "atol": 0.00025,
+            "rtol": 0.012
+          },
+          "failing_boundaries": 389
+        },
+        "decode.0": {
+          "status": "same_input",
+          "argmax_match": true,
+          "logits": {
+            "max_abs": 0.4140625,
+            "mean_abs": 0.06700602893563967,
+            "rmse": 0.08374396579692234,
+            "exact": false,
+            "failures": 196126,
+            "elements": 248320,
+            "atol": 0.00025,
+            "rtol": 0.012
+          },
+          "failing_boundaries": 309
+        }
+      }
+    }
+  },
+  "checkpoint": {
+    "shards": 14,
+    "tensors": 64196,
+    "fp8_matrices_with_original_bf16_128_scales": 31745,
+    "bytes": 37463724680
+  },
+  "cuda_small_gate": {
+    "checks": 89,
+    "passed": true,
+    "exact_checks": 89,
+    "cpu_cuda_state_drift": {
+      "prefill.rank0": {
+        "max_abs": 4.656612873077393e-10,
+        "mean_abs": 8.185452315956354e-11,
+        "rmse": 1.9034893392081138e-10,
+        "exact": false,
+        "failures": 0,
+        "elements": 12,
+        "atol": 0.00025,
+        "rtol": 0.012
+      },
+      "prefill.rank1": {
+        "max_abs": 2.3283064365386963e-10,
+        "mean_abs": 4.18367562815547e-11,
+        "rmse": 8.277234614837177e-11,
+        "exact": false,
+        "failures": 0,
+        "elements": 12,
+        "atol": 0.00025,
+        "rtol": 0.012
+      },
+      "fresh_one.rank0": {
+        "max_abs": 0.0,
+        "mean_abs": 0.0,
+        "rmse": 0.0,
+        "exact": true,
+        "failures": 0,
+        "elements": 12,
+        "atol": 0.00025,
+        "rtol": 0.012
+      },
+      "fresh_one.rank1": {
+        "max_abs": 0.0,
+        "mean_abs": 0.0,
+        "rmse": 0.0,
+        "exact": true,
+        "failures": 0,
+        "elements": 12,
+        "atol": 0.00025,
+        "rtol": 0.012
+      },
+      "cached_one.rank0": {
+        "max_abs": 4.656612873077393e-10,
+        "mean_abs": 4.001776687800884e-11,
+        "rmse": 1.344904558986481e-10,
+        "exact": false,
+        "failures": 0,
+        "elements": 12,
+        "atol": 0.00025,
+        "rtol": 0.012
+      },
+      "cached_one.rank1": {
+        "max_abs": 0.0,
+        "mean_abs": 0.0,
+        "rmse": 0.0,
+        "exact": true,
+        "failures": 0,
+        "elements": 12,
+        "atol": 0.00025,
+        "rtol": 0.012
+      }
+    }
+  },
+  "elapsed_seconds": 218.57148424349725,
+  "peak_host_rss_bytes": 5011218432,
+  "device": {
+    "free_before": 24895225856,
+    "total": 25296044032,
+    "name": "NVIDIA GeForce RTX 3090",
+    "peak_allocated": 4069939712,
+    "peak_reserved": 4326424576,
+    "peak_operand_cache": 268435456
+  },
+  "execution_claim": "Independent reference integrity only; no runtime candidate comparison, physical TP2, or performance acceptance"
+}

@@ -1,0 +1,5 @@
+START hello2
+{"stage": "hello2", "launch_id": "57deffedb25a41ee8b2d543c4f99fa67", "drained": true, "all_gpu_idle": true, "eligible": true, "status": "complete", "startup_seconds": 123.66939330473542, "error": null, "request_gate": {"status": "pass", "quality_claim": false}}
+START canary8
+{"stage": "canary8", "launch_id": "2186502ffbd8448493e2a63d3924db44", "drained": true, "all_gpu_idle": true, "eligible": false, "status": "failed", "startup_seconds": null, "error": "ValueError: Resource monitor failed during startup", "request_gate": null}
+{"status": "incomplete", "error": "ValueError: canary8 failed; subsequent stages blocked, no retry", "performance_status": "not_run", "final_release": "verified"}

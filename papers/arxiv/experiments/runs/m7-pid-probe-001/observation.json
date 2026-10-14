@@ -1,0 +1,61 @@
+{
+  "status": "observed",
+  "mapping_proven": false,
+  "local_identity": {
+    "pid": 166933,
+    "birth_ticks": 77200718,
+    "ppid": 166932,
+    "pgrp": 166933,
+    "session": 166933
+  },
+  "pid_namespace": "pid:[4026532468]",
+  "nspid": [
+    166933
+  ],
+  "samples": [
+    {
+      "index": 0,
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "NVIDIA GeForce RTX 3090",
+      "driver": "575.57.08",
+      "pci_bus_id": "00000000:69:00.0",
+      "total_bytes": 25769803776,
+      "gpu_bytes": 277872640,
+      "utilization": 3,
+      "apps": [
+        {
+          "pid": 39486,
+          "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+          "used_bytes": 268435456
+        }
+      ],
+      "monotonic": 8408128.241642427
+    },
+    {
+      "index": 0,
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "NVIDIA GeForce RTX 3090",
+      "driver": "575.57.08",
+      "pci_bus_id": "00000000:69:00.0",
+      "total_bytes": 25769803776,
+      "gpu_bytes": 277872640,
+      "utilization": 0,
+      "apps": [
+        {
+          "pid": 39486,
+          "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+          "used_bytes": 268435456
+        }
+      ],
+      "monotonic": 8408128.688537026
+    }
+  ],
+  "driver_reported_pids": [
+    39486
+  ],
+  "proc_evidence": {
+    "39486": "not visible in mounted /proc"
+  },
+  "reason": "Driver PID/local probe PID observation is not a reusable namespace translation; need kernel NSpid mapping from host /proc or another independent mapping source",
+  "probe_pid_equals_driver_pid": false
+}

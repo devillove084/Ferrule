@@ -1,0 +1,208 @@
+{
+  "schema": "ferrule.paper.decoded-cache-plan.v1",
+  "public_enabled": false,
+  "cache_grants_per_owner": 3221225472,
+  "device_capacity": 23622320128,
+  "pinned_grants": 1405091840,
+  "routed_working_set_grants": 805306368,
+  "cpu_selectors": {
+    "decoded_cache::native_default_off_and_cache_report_claim_share_exact_grant": false,
+    "decoded_cache::cache_rejects_low_budget_capacity_and_configuration_drift": false,
+    "decoded_cache::cache_capacity_follows_device_placement_not_lane_number": false,
+    "decoded_cache::admitted_cache_programs_survive_runtime_binding_and_reject_owner_geometry_drift": false,
+    "decoded_cache::full40_cache_header_ledger": true,
+    "decoded_cache::lifecycle_cache_header_ledger": true
+  },
+  "host_small_selectors": [
+    [
+      "backend",
+      "cuda::providers::bf16_gemmex::mixed_decode_reuse_tests::mixed_decode_preflight_without_device_calls"
+    ],
+    [
+      "backend",
+      "cuda::providers::bf16_gemmex::mixed_decode_reuse_tests::mixed_pair_decode_preflight_without_device_calls"
+    ],
+    [
+      "backend",
+      "cuda::providers::bf16_gemmex::mixed_decode_reuse_tests::mixed_pair_preflight_without_device_calls"
+    ],
+    [
+      "model",
+      "transformer::standard::cuda::hybrid_rank::mixed::preparation_tests::decoded_claim_tests::decoded_claim_compares_full_admission_even_when_grants_match"
+    ],
+    [
+      "model",
+      "transformer::standard::cuda::hybrid_rank::mixed::decoded_gpu_tests::decoded_fixture_descriptors_preserve_pair_and_separate_fixed_roles"
+    ],
+    [
+      "model",
+      "transformer::standard::mixed_decoded::tests::pair_down_fit_set_is_stable_after_warmup_and_real_3366_mib_set_evicts"
+    ],
+    [
+      "model",
+      "transformer::standard::mixed_decoded::tests::every_class_at_capacity_has_no_warm_eviction_with_healthy_boundaries"
+    ],
+    [
+      "model",
+      "transformer::standard::mixed_decoded::tests::unknown_and_partial_install_failure_retain_root_and_all_slots"
+    ],
+    [
+      "model",
+      "transformer::standard::mixed_decoded::tests::failed_or_unsettled_root_allocation_never_refunds_or_retries"
+    ],
+    [
+      "model",
+      "transformer::standard::mixed_decoded::tests::existing_allocator_holes_do_not_change_full_root_charge"
+    ],
+    [
+      "model",
+      "transformer::standard::mixed_decoded::snapshot_tests::decoded_snapshot_prepare_execute_aftercomplete_are_disjoint_and_read_only"
+    ],
+    [
+      "model",
+      "transformer::standard::mixed_decoded::snapshot_tests::decoded_snapshot_pool_failed_reservations_and_unknown_remain_visible"
+    ],
+    [
+      "model",
+      "transformer::standard::mixed_decoded::snapshot_tests::decoded_snapshot_partial_view_failure_partitions_installed_root_once"
+    ],
+    [
+      "model",
+      "transformer::hybrid_parallel::mixed_decoded_arena::tests::three_gib_plan_has_disjoint_fixed_and_at_least_577_complete_experts"
+    ],
+    [
+      "model",
+      "transformer::standard::cuda::hybrid_rank::mixed::decoded_gpu_tests::decoded_fixture_real_class_inventory_and_same_config_plan"
+    ],
+    [
+      "backend",
+      "cuda::allocator::dedicated_kv_tests::dedicated_kv_segment_never_lends_free_extent_to_weights_or_scratch"
+    ],
+    [
+      "backend-slice",
+      "bf16_slice_element_bounds_and_empty_policy"
+    ],
+    [
+      "backend-slice",
+      "bf16_slice_rejects_u16_element_byte_and_address_overflow"
+    ],
+    [
+      "backend-slice",
+      "bf16_slice_custody_delegates_to_existing_shared_root"
+    ],
+    [
+      "runtime",
+      "absent_cache_snapshot_requires_no_cuda_owner"
+    ],
+    [
+      "runtime",
+      "observation::decoded_snapshot_tests::decoded_snapshot_runtime_json_preserves_physical_fields_and_unobserved_activity"
+    ],
+    [
+      "runtime",
+      "observation::decoded_snapshot_tests::decoded_snapshot_runtime_json_preserves_profile_coverage_and_quarantine"
+    ],
+    [
+      "runtime",
+      "observation::decoded_snapshot_tests::decoded_snapshot_runtime_json_preserves_preallocation_and_failed_root_reservation"
+    ]
+  ],
+  "gpu_selectors": {
+    "full40": "decoded_cache::full40_cache_candidate_boundaries_two_cases_two_phases",
+    "greedy4": "lifecycle::full40_decoded_cache_bounded_multistep_fork_recreate_cold_owner",
+    "fork2": "lifecycle::full40_decoded_cache_bounded_multistep_fork_recreate_cold_owner",
+    "canary2": "lifecycle::full40_decoded_cache_bounded_multistep_fork_recreate_cold_owner",
+    "recreate1": "lifecycle::full40_decoded_cache_bounded_multistep_fork_recreate_cold_owner",
+    "cold-owner1-01": "lifecycle::full40_decoded_cache_bounded_multistep_fork_recreate_cold_owner",
+    "cold-owner1-02": "lifecycle::full40_decoded_cache_bounded_multistep_fork_recreate_cold_owner"
+  },
+  "small_selectors": {
+    "backend-exact": [
+      "backend",
+      "cuda::providers::bf16_gemmex::mixed_decode_reuse_tests::mixed_decode_resident_single_pair_m1_m5",
+      1
+    ],
+    "backend-preflight": [
+      "backend",
+      "cuda::providers::bf16_gemmex::mixed_decode_reuse_tests::mixed_decode_pair_rejections",
+      1
+    ],
+    "backend-typed-view": [
+      "backend-slice",
+      "bf16_slice_gpu_shared_pointer_no_work_parent_drop",
+      1
+    ],
+    "model-cold-hot-fit": [
+      "model",
+      "transformer::standard::cuda::hybrid_rank::mixed::decoded_gpu_tests::decoded_pair_single_cold_hot_fit_exact_and_no_cache_dma",
+      2
+    ],
+    "model-fixed-pins": [
+      "model",
+      "transformer::standard::cuda::hybrid_rank::mixed::decoded_gpu_tests::decoded_fixed_pins_prepare_once_and_shared_stays_separate",
+      2
+    ],
+    "model-unknown-panic": [
+      "model",
+      "transformer::standard::cuda::hybrid_rank::mixed::decoded_gpu_tests::decoded_pair_unknown_and_panic_retain_physical_backing",
+      1
+    ],
+    "model-physical-full": [
+      "model",
+      "transformer::standard::cuda::hybrid_rank::mixed::decoded_gpu_tests::decoded_physical_full_native_fallback_before_submit_exact",
+      2
+    ],
+    "model-arena-fit": [
+      "model",
+      "transformer::standard::cuda::hybrid_rank::mixed::decoded_gpu_tests::decoded_arena_fit_working_set_hot_zero_eviction_decode_fallback",
+      1
+    ],
+    "model-arena-lru": [
+      "model",
+      "transformer::standard::cuda::hybrid_rank::mixed::decoded_gpu_tests::decoded_arena_true_class_full_lru_and_size_class_fairness",
+      2
+    ],
+    "model-arena-alias": [
+      "model",
+      "transformer::standard::cuda::hybrid_rank::mixed::decoded_gpu_tests::decoded_arena_alias_retains_whole_root",
+      1
+    ],
+    "model-fixed-unknown": [
+      "model",
+      "transformer::standard::cuda::hybrid_rank::mixed::decoded_gpu_tests::decoded_fixed_pin_unknown_and_panic_never_publish_arena",
+      1
+    ]
+  },
+  "small_required": [
+    "borrowed-retains",
+    "known-failure",
+    "pair-m1-after-retire",
+    "pair-m1-cold",
+    "pair-m1-eviction-reload",
+    "pair-m1-hot",
+    "pair-m5-after-retire",
+    "pair-m5-cold",
+    "pair-m5-eviction-reload",
+    "pair-m5-hot",
+    "single-m1-after-retire",
+    "single-m1-cold",
+    "single-m1-eviction-reload",
+    "single-m1-hot",
+    "single-m5-after-retire",
+    "single-m5-cold",
+    "single-m5-eviction-reload",
+    "single-m5-hot",
+    "unknown-retains"
+  ],
+  "numerical": "native BF16 bit-exact; M1/M5, ordered full-2N routed pair GEMM; no W8",
+  "custody": "healthy completion only; Unknown/borrowed roots never refunded or reused",
+  "arena_required": {
+    "physical_root_cap_bytes": 3221225472,
+    "hot_fit_evictions": 0,
+    "hot_fit_decodes": 0,
+    "accounting": "schema v2: full root once; logical slots/free/tail/pending partition"
+  },
+  "performance": "GPU-correlated prefill/decode launch counts, not host misses or historical shape motifs",
+  "progression": "small -> full40 hello/capital each 2178 exact -> six recipes -> fresh public admission/E2E",
+  "status": "plan_only_no_candidate_comparison"
+}

@@ -1,0 +1,26 @@
+{
+  "schema": "ferrule.paper.operator-retirement-build-review.v1",
+  "optimization_class": "operator_retirement_v3",
+  "before_binary_sha256": "9ef9841598b4694fb611250bf8876c4314d252400136ddb23f606a979cadb656",
+  "after_binary_sha256": "7e1c23a88143cb6455e3c6e10bfe43a567fc97b5fd45745800eae3a1e39a0e73",
+  "qualification_handoff": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-allocator-v3-20261011-03/handoff.json",
+    "sha256": "faa71361682e8b454b2e85feffd456c06598bcc4ff4572a34bfaa54367e83fd4"
+  },
+  "release_handoff": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/tp2-mixed-allocator-v3-release-20261011-01/handoff.json",
+    "sha256": "8362e938840955840114c59c8092be19eec0dc3b5c9237f10b39832bdda23b28"
+  },
+  "source_delta": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/plans/operator-retirement-v3-release-20261011-01/source-delta.json",
+    "sha256": "df8db2778be107d20c491ff7ddff97873bd8f5b693eac81e06ec4f01206c12b8"
+  },
+  "rationale": "Same 9ef model and serving geometry; allocator/runtime retirement V3 only, plus exact reverse-proven cfg(test) manifest entry. Full 584-source production/build inventory, native .cc and all test deltas disclosed. Builder unset-to-0 FERRULE_CUDA_TEST_ORACLE difference explicitly reviewed: oracle enables only for 1; actual compiled cfg is disabled in both. No serving flag/library change.",
+  "safety_invariants": [
+    "Fresh 23 named selectors and 37/40293 exact, plus separate exact 18 allocator selectors",
+    "Completion/weak-owner/capture/Unknown lifetime custody and bounded pressure, no premature reuse",
+    "Release logs/exit and fixed file pins, unchanged source inventories and actual dependency closure",
+    "Same-binary S1/S2 before promote; crossed cycles only after actual smoke",
+    "No GPU launch from build or CPU audit; current pending is not peak; event ledger is not all CUDA calls"
+  ]
+}

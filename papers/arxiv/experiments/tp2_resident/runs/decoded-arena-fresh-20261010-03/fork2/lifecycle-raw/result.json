@@ -1,0 +1,195 @@
+{
+  "canonical_candidate_complete": false,
+  "events": [
+    {
+      "case": "hello",
+      "epoch": 0,
+      "frontier": 0,
+      "op": "create",
+      "runtime_session": 1,
+      "session": "parent"
+    },
+    {
+      "call": {
+        "input_token_ids": [
+          9419
+        ],
+        "next_token_id": 11,
+        "position_start": 0,
+        "sequence_length_after": 1,
+        "stage": "call"
+      },
+      "epoch": 0,
+      "id": "call-00",
+      "input": {
+        "ids": [
+          9419
+        ],
+        "kind": "tokens"
+      },
+      "op": "call",
+      "runtime_session": 1,
+      "session": "parent",
+      "transaction": 1,
+      "untouched_sessions": []
+    },
+    {
+      "epoch": 0,
+      "frontier": 1,
+      "op": "fork",
+      "runtime_session": 2,
+      "runtime_source_session": 1,
+      "session": "left",
+      "source": "parent",
+      "state_binding": "source preceding publication; validate branch before-state on its next call"
+    },
+    {
+      "epoch": 0,
+      "frontier": 1,
+      "op": "fork",
+      "runtime_session": 3,
+      "runtime_source_session": 1,
+      "session": "right",
+      "source": "parent",
+      "state_binding": "source preceding publication; validate branch before-state on its next call"
+    },
+    {
+      "call": {
+        "input_token_ids": [
+          11
+        ],
+        "next_token_id": 353,
+        "position_start": 1,
+        "sequence_length_after": 2,
+        "stage": "call"
+      },
+      "epoch": 0,
+      "id": "call-01",
+      "input": {
+        "kind": "greedy"
+      },
+      "op": "call",
+      "runtime_session": 2,
+      "session": "left",
+      "transaction": 2,
+      "untouched_sessions": [
+        "parent",
+        "right"
+      ]
+    },
+    {
+      "call": {
+        "input_token_ids": [
+          353
+        ],
+        "next_token_id": 1044,
+        "position_start": 2,
+        "sequence_length_after": 3,
+        "stage": "call"
+      },
+      "epoch": 0,
+      "id": "call-02",
+      "input": {
+        "kind": "greedy"
+      },
+      "op": "call",
+      "runtime_session": 2,
+      "session": "left",
+      "transaction": 3,
+      "untouched_sessions": [
+        "parent",
+        "right"
+      ]
+    },
+    {
+      "epoch": 0,
+      "op": "drop",
+      "session": "left"
+    },
+    {
+      "call": {
+        "input_token_ids": [
+          11
+        ],
+        "next_token_id": 353,
+        "position_start": 1,
+        "sequence_length_after": 2,
+        "stage": "call"
+      },
+      "epoch": 0,
+      "id": "call-03",
+      "input": {
+        "kind": "greedy"
+      },
+      "op": "call",
+      "runtime_session": 3,
+      "session": "right",
+      "transaction": 4,
+      "untouched_sessions": [
+        "parent"
+      ]
+    },
+    {
+      "call": {
+        "input_token_ids": [
+          760
+        ],
+        "next_token_id": 2614,
+        "position_start": 2,
+        "sequence_length_after": 3,
+        "stage": "call"
+      },
+      "epoch": 0,
+      "id": "call-04",
+      "input": {
+        "ids": [
+          760
+        ],
+        "kind": "tokens"
+      },
+      "op": "call",
+      "runtime_session": 3,
+      "session": "right",
+      "transaction": 5,
+      "untouched_sessions": [
+        "parent"
+      ]
+    },
+    {
+      "epoch": 0,
+      "op": "drop",
+      "session": "right"
+    },
+    {
+      "call": {
+        "input_token_ids": [
+          11
+        ],
+        "next_token_id": 353,
+        "position_start": 1,
+        "sequence_length_after": 2,
+        "stage": "call"
+      },
+      "epoch": 0,
+      "id": "call-05",
+      "input": {
+        "kind": "greedy"
+      },
+      "op": "call",
+      "runtime_session": 1,
+      "session": "parent",
+      "transaction": 6,
+      "untouched_sessions": []
+    },
+    {
+      "epoch": 0,
+      "op": "drop",
+      "session": "parent"
+    }
+  ],
+  "independent_quality": "CPU lifecycle bridge and comparator required",
+  "schema": "ferrule.mixed-lifecycle-raw.v1",
+  "shutdown_ok": true,
+  "status": "captured",
+  "writer_complete": true
+}

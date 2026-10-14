@@ -4,8 +4,6 @@
 //! physical CUDA install authority. Runtime code owns logical demand, hard
 //! credits, operation IDs, completion validation, publication, and retirement.
 
-#![cfg(feature = "cuda")]
-
 use ferrule_common::{CompletionExpectation, ProviderFault, ProviderProgress, QuiescenceEvidence};
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
@@ -5710,7 +5708,6 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "cuda")]
     #[test]
     fn cuda_reservation_descriptor_and_upload_event_progression_compile() {
         use ferrule_common::{

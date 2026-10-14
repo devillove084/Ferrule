@@ -1,0 +1,16 @@
+{
+  "passed": true,
+  "gate": {
+    "name": "fused-cache-full40",
+    "binary": "composition",
+    "selector": "decoded_cache::full40_cache_unobserved_fused_logits_two_cases_two_phases",
+    "evidence": "unobserved_fused_logits_publication",
+    "devices": 2,
+    "reference": "full40",
+    "cache_bytes": 3221225472,
+    "observer": false
+  },
+  "proven_drained": true,
+  "all_eight_idle": true,
+  "performance_claim": false
+}

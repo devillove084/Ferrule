@@ -1,0 +1,49 @@
+
+NOTICE: Existing SQLite export found: /home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/session/nsight/nsys.sqlite
+        It is assumed file was previously exported from: /home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/session/nsight/nsys.nsys-rep
+        Consider using --force-export=true if needed.
+
+Processing [/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/session/nsight/nsys.sqlite] with [/home/admin/luhuanbing.lhb/Ferrule/target/vendor/nsight-systems-cli-2025.3.1/opt/nvidia/nsight-systems-cli/2025.3.1/target-linux-x64/reports/cuda_gpu_kern_sum.py]... 
+Time (%),Total Time (ns),Instances,Avg (ns),Med (ns),Min (ns),Max (ns),StdDev (ns),Name
+23.4,204667315,30167,6784.5,6784.0,6528,7264,70.2,"ferrule::cuda::cutlass::numeric_fp8::decode_weights(FerruleCutlassNumericFp8Args, unsigned int, unsigned int, unsigned long)"
+18.9,165428517,35014,4724.6,4096.0,3616,15136,2287.1,"std::enable_if<!T7, void>::type internal::gemvx::kernel<int, int, __nv_bfloat16, __nv_bfloat16, __nv_bfloat16, float, (bool)0, (bool)1, (bool)1, (bool)0, (int)7, (bool)0, cublasGemvParamsEx<int, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>, float>>(T13)"
+10.9,94916178,59199,1603.3,1632.0,1280,10848,206.3,ferrule::cuda::core::bf16_boundary_kernel(ferrule::cuda::core::Bf16BoundaryArgs)
+9.0,78468557,960,81738.1,81793.0,79040,84096,884.3,ferrule::cuda::core::hf_bf16::delta(FerruleCoreBf16DeltaArgs)
+7.5,65267936,1438,45388.0,45376.0,38560,52320,2387.6,"void ferrule::cuda::core::full_router_kernel<(int)8, (bool)0, (bool)0>(FerruleCoreRouterArgs, float *)"
+5.9,51235422,360,142320.6,140928.0,140065,153408,3865.8,"ferrule::cuda::core::eager_attention::validate_group(FerruleCoreTransformerArgs, FerruleBf16AttentionGroup)"
+4.2,36833353,1280,28776.1,28736.0,25792,30784,568.3,ampere_bf16_s16816gemm_bf16_64x64_sliced1x2_ldg8_f2f_stages_64x5_tn
+2.7,23885989,14695,1625.5,1632.0,1568,1696,18.9,"ferrule::cuda::cutlass::bf16_gemmex::split_pair(const unsigned short *, unsigned short *, unsigned short *, unsigned long, unsigned int)"
+2.6,23073116,118,195534.9,195520.0,195425,195968,87.2,"ferrule::cuda::core::bf16_chunk::prepare(FerruleCoreBf16ChunkArgs, ferrule::cuda::core::bf16_chunk::Workspace, unsigned int, float)"
+2.2,18902228,192,98449.1,2176.0,2112,581058,215853.6,"void gemv2T_kernel_val<int, int, __nv_bfloat16, __nv_bfloat16, __nv_bfloat16, float, (int)128, (int)16, (int)4, (int)4, (bool)0, (bool)0, cublasGemvParamsEx<int, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>, float>>(T13, T6, T6)"
+1.8,15750675,3632,4336.6,4064.0,3040,8672,1243.4,"ferrule::cuda::core::bf16_offset_norm_tree(ferrule::cuda::core::Bf16BoundaryArgs, float)"
+1.4,12269711,944,12997.6,12224.0,9088,18688,3470.2,"ferrule::cuda::core::bf16_chunk::matmul(const float *, const float *, float *, unsigned int, unsigned int, unsigned int, bool, bool, unsigned int)"
+0.8,7301802,3358,2174.4,2144.0,1920,2688,208.8,"void dot_kernel<float, (int)128, (int)0, cublasDotParams<cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<float>>>(T4)"
+0.8,6841902,162,42234.0,28096.0,27296,599714,88959.6,ampere_bf16_s16816gemm_bf16_64x64_ldg8_f2f_stages_64x5_tn
+0.8,6810730,630,10810.7,4768.0,4288,19680,7070.0,void cutlass::Kernel2<cutlass_80_wmma_tensorop_bf16_s161616gemm_bf16_32x32_128x2_tn_align8>(T1::Params)
+0.7,6505927,1188,5476.4,5376.0,5184,7264,355.2,void cutlass::Kernel2<cutlass_80_tensorop_s16816gemm_bf16_64x64_32x6_tn_align8>(T1::Params)
+0.7,6195310,1440,4302.3,4160.0,3904,5760,457.6,ferrule::cuda::core::moe_kernel(FerruleCoreMoeArgs)
+0.7,6166888,3598,1714.0,1600.0,1536,2720,203.0,ferrule::cuda::core::rows_f32_to_bf16_rne_kernel(FerruleCoreRowsArgs)
+0.6,5592355,3358,1665.4,1664.0,1600,1760,34.4,"void reduce_1Block_kernel<float, (int)128, (int)7, cublasGemvTensorStridedBatched<float>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>>(const T1 *, T1, T4, int, const T1 *, T1, T5, T6, cublasPointerMode_t, cublasLtEpilogue_t, cublasGemvTensorStridedBatched<const biasType<T6::value_type, T1>::type>)"
+0.5,4396323,992,4431.8,4352.0,4160,5728,307.8,void cutlass::Kernel2<cutlass_80_wmma_tensorop_bf16_s161616gemm_bf16_32x32_64x1_tn_align8>(T1::Params)
+0.5,4337957,1078,4024.1,4000.0,3808,4320,102.3,"ferrule::cuda::core::hf_bf16::gated_norm_tree(FerruleCoreBf16GatedNormArgs, float)"
+0.5,3952835,2158,1831.7,1856.0,1600,2016,113.2,ferrule::cuda::core::data_kernel(FerruleCoreDataArgs)
+0.4,3889257,236,16479.9,16480.0,15968,16992,202.9,void cutlass::Kernel2<cutlass_80_wmma_tensorop_bf16_s161616gemm_bf16_16x16_128x2_tn_align8>(T1::Params)
+0.4,3292323,1078,3054.1,2752.0,2592,6272,845.4,ferrule::cuda::core::hf_bf16::conv(FerruleCoreBf16ConvArgs)
+0.4,3105890,118,26321.1,26336.0,26272,26368,19.0,ferrule::cuda::core::bf16_chunk::triangular(ferrule::cuda::core::bf16_chunk::Workspace)
+0.3,2953347,1742,1695.4,1664.0,1568,1920,93.7,"void cublasLt::splitKreduce_kernel<(int)32, (int)16, int, float, __nv_bfloat16, float, __nv_bfloat16, (bool)1, (bool)0, (bool)0>(cublasLt::cublasSplitKParams<T6>, const T4 *, const T5 *, T5 *, const T6 *, const T6 *, const T7 *, const T4 *, T7 *, void *, long, T6 *, int *)"
+0.3,2387778,554,4310.1,4288.0,4032,4768,170.5,void cutlass::Kernel2<cutlass_80_wmma_tensorop_s161616gemm_bf16_16x16_64x1_tn_align8>(T1::Params)
+0.2,1942913,360,5397.0,5536.0,4224,6592,521.2,"ferrule::cuda::core::eager_attention::gather(FerruleCoreTransformerArgs, FerruleBf16AttentionGroup, unsigned short *, unsigned short *)"
+0.2,1887303,360,5242.5,5088.0,4384,5664,325.5,ferrule::cuda::core::eager_attention::append(FerruleCoreTransformerArgs)
+0.1,952738,360,2646.5,2656.0,2528,2816,57.4,"ferrule::cuda::core::eager_attention::softmax(FerruleCoreTransformerArgs, FerruleBf16AttentionGroup, const unsigned short *, unsigned short *)"
+0.1,743969,320,2324.9,2368.0,2080,2432,92.2,"std::enable_if<!T7, void>::type internal::gemvx::kernel<int, int, __nv_bfloat16, __nv_bfloat16, __nv_bfloat16, float, (bool)0, (bool)1, (bool)0, (bool)0, (int)6, (bool)0, cublasGemvParamsEx<int, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>, float>>(T13)"
+0.1,733440,360,2037.3,2048.0,2015,2080,16.5,"ferrule::cuda::core::eager_attention::pack(FerruleCoreTransformerArgs, FerruleBf16AttentionGroup, unsigned short *)"
+0.1,704065,360,1955.7,1952.0,1920,1984,16.3,"ferrule::cuda::core::eager_attention::scatter(FerruleCoreTransformerArgs, FerruleBf16AttentionGroup, const unsigned short *)"
+0.1,446464,118,3783.6,3776.0,3680,3936,59.6,"ferrule::cuda::core::bf16_chunk::output_and_state(FerruleCoreBf16ChunkArgs, ferrule::cuda::core::bf16_chunk::Workspace, unsigned int)"
+0.0,386529,160,2415.8,2432.0,2336,2432,17.6,"std::enable_if<!T7, void>::type internal::gemvx::kernel<int, int, __nv_bfloat16, __nv_bfloat16, __nv_bfloat16, float, (bool)0, (bool)1, (bool)1, (bool)0, (int)6, (bool)0, cublasGemvParamsEx<int, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>, float>>(T13)"
+0.0,380480,118,3224.4,3232.0,3167,3424,45.0,"ferrule::cuda::core::bf16_chunk::attention_delta_and_end_keys(ferrule::cuda::core::bf16_chunk::Workspace, unsigned int)"
+0.0,335712,118,2845.0,2848.0,2816,2912,20.1,"ferrule::cuda::core::bf16_chunk::decay_and_initial_exponents(ferrule::cuda::core::bf16_chunk::Workspace, unsigned int)"
+0.0,229568,118,1945.5,1952.0,1920,1984,17.0,"ferrule::cuda::core::bf16_chunk::prefix(ferrule::cuda::core::bf16_chunk::Workspace, unsigned int)"
+0.0,205727,118,1743.4,1728.0,1728,1792,16.6,"ferrule::cuda::core::bf16_chunk::mask_matrix(ferrule::cuda::core::bf16_chunk::Workspace, bool)"
+0.0,202818,40,5070.4,5056.0,5056,5089,16.1,void cutlass::Kernel2<cutlass_75_wmma_tensorop_bf16_s161616gemm_bf16_32x32_32x1_tn_align1>(T1::Params)
+0.0,105857,40,2646.4,2656.0,2624,2657,14.9,void cutlass::Kernel2<cutlass_75_wmma_tensorop_bf16_s161616gemm_bf16_32x32_32x1_nn_align1>(T1::Params)
+

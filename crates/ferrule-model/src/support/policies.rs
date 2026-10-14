@@ -93,46 +93,6 @@ pub struct PolicySet {
     pub semantics: TransformerSemantics,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{ParallelismPlan, ParallelismPlanError};
-
-    #[test]
-    fn public_parallelism_types_are_common_types() {
-        let plan: ferrule_common::ParallelismPlan = crate::ParallelismPlan::default();
-        let policy_plan: ParallelismPlan = plan;
-        let _: crate::ParallelismPlan = policy_plan;
-        let error: ferrule_common::ParallelismPlanError =
-            crate::ParallelismPlan::validated(1, 0, 1, 1, 1, 1).unwrap_err();
-        let _: crate::ParallelismPlanError = error;
-        let topology = ferrule_common::ValidatedParallelTopology::new(
-            ferrule_common::ParallelTopologyId::new(1),
-            1,
-            ferrule_common::ParallelRankId::new(0),
-            policy_plan,
-        )
-        .unwrap();
-        assert_eq!(topology.plan(), plan);
-    }
-
-    #[test]
-    fn default_parallelism_plan_is_valid() {
-        assert!(ParallelismPlan::default().validate().is_ok());
-    }
-
-    #[test]
-    fn validated_parallelism_plan_rejects_zero_dimension() {
-        let error = ParallelismPlan::validated(1, 0, 1, 1, 1, 1).unwrap_err();
-        assert_eq!(
-            error,
-            ParallelismPlanError::ZeroDimension {
-                dimension: "tensor_parallel"
-            }
-        );
-        assert!(error.to_string().contains("tensor_parallel"));
-    }
-}
-
 impl PolicySet {
     pub fn from_spec(spec: &TransformerSpec) -> Self {
         let attention_layout = AttentionLayout::from_spec(spec);
@@ -180,5 +140,45 @@ impl PolicySet {
             },
             semantics: spec.semantics.clone(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ParallelismPlan, ParallelismPlanError};
+
+    #[test]
+    fn public_parallelism_types_are_common_types() {
+        let plan: ferrule_common::ParallelismPlan = crate::ParallelismPlan::default();
+        let policy_plan: ParallelismPlan = plan;
+        let _: crate::ParallelismPlan = policy_plan;
+        let error: ferrule_common::ParallelismPlanError =
+            crate::ParallelismPlan::validated(1, 0, 1, 1, 1, 1).unwrap_err();
+        let _: crate::ParallelismPlanError = error;
+        let topology = ferrule_common::ValidatedParallelTopology::new(
+            ferrule_common::ParallelTopologyId::new(1),
+            1,
+            ferrule_common::ParallelRankId::new(0),
+            policy_plan,
+        )
+        .unwrap();
+        assert_eq!(topology.plan(), plan);
+    }
+
+    #[test]
+    fn default_parallelism_plan_is_valid() {
+        assert!(ParallelismPlan::default().validate().is_ok());
+    }
+
+    #[test]
+    fn validated_parallelism_plan_rejects_zero_dimension() {
+        let error = ParallelismPlan::validated(1, 0, 1, 1, 1, 1).unwrap_err();
+        assert_eq!(
+            error,
+            ParallelismPlanError::ZeroDimension {
+                dimension: "tensor_parallel"
+            }
+        );
+        assert!(error.to_string().contains("tensor_parallel"));
     }
 }

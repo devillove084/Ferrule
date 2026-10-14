@@ -1,0 +1,173 @@
+{
+  "directory": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/nsys-official-micro-20261009-001/runs/P1/session",
+  "owner_locks": {
+    "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f.lock",
+      "fd": 3,
+      "device": 64785,
+      "inode": 58516170,
+      "coordinator_pid": 165699,
+      "mode": "local_nonblocking_flock",
+      "global_reservation": false
+    },
+    "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/GPU-0bc01d70-2ade-0714-8959-b25ae75469b6.lock",
+      "fd": 4,
+      "device": 64785,
+      "inode": 58518656,
+      "coordinator_pid": 165699,
+      "mode": "local_nonblocking_flock",
+      "global_reservation": false
+    },
+    "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d.lock",
+      "fd": 5,
+      "device": 64785,
+      "inode": 58519156,
+      "coordinator_pid": 165699,
+      "mode": "local_nonblocking_flock",
+      "global_reservation": false
+    },
+    "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/GPU-63f1bd01-ddf9-a742-ee48-9389892493d9.lock",
+      "fd": 6,
+      "device": 64785,
+      "inode": 58519247,
+      "coordinator_pid": 165699,
+      "mode": "local_nonblocking_flock",
+      "global_reservation": false
+    },
+    "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86.lock",
+      "fd": 7,
+      "device": 64785,
+      "inode": 58519167,
+      "coordinator_pid": 165699,
+      "mode": "local_nonblocking_flock",
+      "global_reservation": false
+    },
+    "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/GPU-b980f22b-58a3-fc88-21c1-ae86053d8535.lock",
+      "fd": 8,
+      "device": 64785,
+      "inode": 58519119,
+      "coordinator_pid": 165699,
+      "mode": "local_nonblocking_flock",
+      "global_reservation": false
+    },
+    "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011.lock",
+      "fd": 9,
+      "device": 64785,
+      "inode": 58519444,
+      "coordinator_pid": 165699,
+      "mode": "local_nonblocking_flock",
+      "global_reservation": false
+    },
+    "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685.lock",
+      "fd": 10,
+      "device": 64785,
+      "inode": 58519446,
+      "coordinator_pid": 165699,
+      "mode": "local_nonblocking_flock",
+      "global_reservation": false
+    }
+  },
+  "baseline": {
+    "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": {
+      "index": 0,
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "total_bytes": 25769803776,
+      "gpu_bytes": 0,
+      "utilization": 0
+    },
+    "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": {
+      "index": 1,
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "total_bytes": 25769803776,
+      "gpu_bytes": 0,
+      "utilization": 0
+    },
+    "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6": {
+      "index": 2,
+      "uuid": "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6",
+      "total_bytes": 25769803776,
+      "gpu_bytes": 0,
+      "utilization": 0
+    },
+    "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011": {
+      "index": 3,
+      "uuid": "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011",
+      "total_bytes": 25769803776,
+      "gpu_bytes": 0,
+      "utilization": 0
+    },
+    "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86": {
+      "index": 4,
+      "uuid": "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86",
+      "total_bytes": 25769803776,
+      "gpu_bytes": 0,
+      "utilization": 0
+    },
+    "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685": {
+      "index": 5,
+      "uuid": "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685",
+      "total_bytes": 25769803776,
+      "gpu_bytes": 0,
+      "utilization": 0
+    },
+    "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d": {
+      "index": 6,
+      "uuid": "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d",
+      "total_bytes": 25769803776,
+      "gpu_bytes": 0,
+      "utilization": 0
+    },
+    "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f": {
+      "index": 7,
+      "uuid": "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f",
+      "total_bytes": 25769803776,
+      "gpu_bytes": 0,
+      "utilization": 0
+    }
+  },
+  "baseline_sha256": "3c2bd642756c89eefb40a77c82d66cda42ca4d6a3584092b8d2f1620932ab368",
+  "pins": {
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/contract.py": "05da87fb7f5d795a843b25674fc062c6d4e8d7b8be32f50613a3174e78d1fbe4",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/launch_guard.py": "b4ec4dc1b1e7e61fe322847e4a07ce2c3b2ed43d8d3e9bc3bd6602979ad00b9f",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/instrumentation_capture.py": "e2c74a6290b038550e50a8dcaca7329e7b24e8959c4b6a9587088edb95a490fb",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/instrumentation_live.py": "2c8beb51cedb53dcfc79b771a8f9e6116a0fb41a153f0e01bfbfe3a814ba9c0d",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/instrumentation_scope.py": "1c315e32add3cccbd56e9f1ac15ae8de0437ca6620562c9aceb4f37f90d30ff7",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/nsys_micro.py": "18a89ae910117b3f73c03aec47b760a2794e476ef1afacf9419a8a9470424079",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/observer.py": "9866b8bb3ce390a4929b6e6d59ac9c85fd5fe2f0a74974d2fd78ded13abc313d",
+    "/home/admin/luhuanbing.lhb/Ferrule/scripts/_owned_subreaper.py": "19ef9006089cde1abdca87177e01d26b925dcf996bfebaf6e3dc51ea71a77ff0",
+    "/home/admin/luhuanbing.lhb/Ferrule/scripts/test_vllm_qwen35.py": "1c330dac0727d54254a1c1648adcb9a4b747a2303fe183c2ba38f9ccd83ec2a1",
+    "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/nsight-systems-cli-2025.3.1/opt/nvidia/nsight-systems-cli/2025.3.1/host-linux-x64/QdstrmImporter": "23e4185b7b20d00c27dc2e521c1048a75abe04f04dbbd88e411b6dfba2cc8053",
+    "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/nsight-systems-cli-2025.3.1/opt/nvidia/nsight-systems-cli/2025.3.1/target-linux-x64/libcupti.so.10.2": "d01298144b9e8c8f0b89a8dc06c81fa8179a043292c293c8e5b00db2bffccde5",
+    "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/nsight-systems-cli-2025.3.1/opt/nvidia/nsight-systems-cli/2025.3.1/target-linux-x64/libcupti.so.11.0": "acfd1a0ab0e1c7c1abfa85e6b98a923e2ce88757e9a83086874f0444c04ddf3d",
+    "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/nsight-systems-cli-2025.3.1/opt/nvidia/nsight-systems-cli/2025.3.1/target-linux-x64/libcupti.so.11.1": "ed3e6588a0df9adb0158f13039ebfb0ce60f84924e23de80991d7dcb829f8fe0",
+    "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/nsight-systems-cli-2025.3.1/opt/nvidia/nsight-systems-cli/2025.3.1/target-linux-x64/libcupti.so.11.2": "e961d8214b9de1cd0db8e9235ac319188dadfe9cc1e4ea12b8a3f463b8973e88",
+    "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/nsight-systems-cli-2025.3.1/opt/nvidia/nsight-systems-cli/2025.3.1/target-linux-x64/libcupti.so.11.3": "f8bd623f3a1da4c37491019cbef5fb7e852dae66ba5db97b1bdfffb0f70611f1",
+    "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/nsight-systems-cli-2025.3.1/opt/nvidia/nsight-systems-cli/2025.3.1/target-linux-x64/libcupti.so.11.4": "e0b9ce7c149aa4e933a047d0ccec542ac1ee20261208add88cb1e0a8dfc83654",
+    "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/nsight-systems-cli-2025.3.1/opt/nvidia/nsight-systems-cli/2025.3.1/target-linux-x64/libcupti.so.11.5": "c1ae9cbccac742548e2cdffb364b31618733dd117ac38b5a17b590cbf146ccca",
+    "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/nsight-systems-cli-2025.3.1/opt/nvidia/nsight-systems-cli/2025.3.1/target-linux-x64/libcupti.so.11.6": "c1ae9cbccac742548e2cdffb364b31618733dd117ac38b5a17b590cbf146ccca",
+    "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/nsight-systems-cli-2025.3.1/opt/nvidia/nsight-systems-cli/2025.3.1/target-linux-x64/libcupti.so.11.7": "6e2fc5d89063863adbf1a6081fbe95b15d235aa8f520170f5eac320e27544e1d",
+    "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/nsight-systems-cli-2025.3.1/opt/nvidia/nsight-systems-cli/2025.3.1/target-linux-x64/libcupti.so.11.8": "f084994fbae5004fa43fe7eae3fa1861960ded46c7b38a3152df41d9a312e9fc",
+    "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/nsight-systems-cli-2025.3.1/opt/nvidia/nsight-systems-cli/2025.3.1/target-linux-x64/libcupti.so.12.9": "19f0f06e0c5579113840169d5f6d6d4222d4a4fc2d66403cbe3cad2d91db1ace",
+    "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/nsight-systems-cli-2025.3.1/opt/nvidia/nsight-systems-cli/2025.3.1/target-linux-x64/nsys": "525f35a10de49b396e91a3831ae40e98a8631d619b7c8bbb4c54469b8c08a72e",
+    "/home/admin/wxw403883/anaconda3/envs/tao/demo_suite/vectorAdd": "b3994c4eaccd8b7d616dea4bea6a7bdc3454a0e01bfcfe3ad483ac70a0f8d1ed"
+  },
+  "worker_token": "58f745871c6d9d4a012a2d9f8ba86e0b50912bebd1fb20220272fa9494e068b6",
+  "manifest": {
+    "protocol": "ferrule.paper.m7.worker.v2"
+  },
+  "coordinator": {
+    "pid": 165699,
+    "birth_ticks": 86883972,
+    "ppid": 172272,
+    "pgrp": 165699,
+    "session": 165699
+  },
+  "worker_source_sha256": "0aae631cf46bb99f567527d8dbe20b0a56e61c57ca7267858e1eb3e4cc67e16c"
+}

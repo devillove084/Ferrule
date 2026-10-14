@@ -356,9 +356,11 @@ impl CheckpointTensorReader {
         extents
             .try_reserve_exact(extent_count)
             .map_err(|e| matrix_error(format!("allocate matrix extents: {e}")))?;
+        // Share path storage before producing rows, not after the plan is built.
+        let path: Arc<Path> = Arc::from(slice.path.as_path());
         if columns.len() == *full_columns {
-            extents.push(CheckpointReadExtent::new(
-                slice.path.clone(),
+            extents.push(CheckpointReadExtent::new_shared_path(
+                Arc::clone(&path),
                 slice.offset + (rows.start * row_stride) as u64,
                 bytes as u64,
             )?);
@@ -366,8 +368,8 @@ impl CheckpointTensorReader {
             for row in rows.clone() {
                 // Full matrix and selected bounds were checked above, so every
                 // subextent is contained in the original physical tensor.
-                extents.push(CheckpointReadExtent::new(
-                    slice.path.clone(),
+                extents.push(CheckpointReadExtent::new_shared_path(
+                    Arc::clone(&path),
                     slice.offset + (row * row_stride + columns.start * element_bytes) as u64,
                     row_bytes as u64,
                 )?);
@@ -429,8 +431,8 @@ impl CheckpointTensorReader {
             Vec::new()
         } else {
             let plan = CheckpointReadPlan::new(
-                [CheckpointReadExtent::new(
-                    slice.path.clone(),
+                [CheckpointReadExtent::new_shared_path(
+                    Arc::from(slice.path.as_path()),
                     offset,
                     bytes,
                 )?],

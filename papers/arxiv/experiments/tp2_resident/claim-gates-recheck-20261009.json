@@ -1,0 +1,28 @@
+{
+  "checked_at_utc": "2026-10-09T01:38:18.325852+00:00",
+  "method": "CPU-only follow-up; initial audit retained unchanged",
+  "runs": [
+    {
+      "directory": "target/validation/tp2-mixed-claim-gates/shared-tiny-01",
+      "archived_artifacts_unchanged": true,
+      "binary_unchanged": true,
+      "current_pinned_path_drift": []
+    },
+    {
+      "directory": "target/validation/tp2-mixed-claim-gates/shared-full40-01",
+      "archived_artifacts_unchanged": true,
+      "binary_unchanged": true,
+      "current_pinned_path_drift": []
+    }
+  ],
+  "fairmatch": false,
+  "exact_speedup": null,
+  "interpretation": "Latest completed follow-up found no current pin drift; archived artifacts and binaries unchanged. An immediately preceding check failed the oracle/protocol.json hash comparison, without recording its observed digest. Cause unverified; do not infer stable concurrent-file identity. Fresh preparation must revalidate all pins. Oracle was neither modified nor numerically rerun by this paper task.",
+  "prior_check_failure": {
+    "path": "papers/arxiv/experiments/tp2_mixed/oracle/protocol.json",
+    "check": "current SHA256 equals archived prepared pin",
+    "observed_sha256": null,
+    "resolved_on_next_read": true,
+    "cause": "unknown"
+  }
+}

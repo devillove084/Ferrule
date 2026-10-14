@@ -1,0 +1,126 @@
+{
+  "status": "complete",
+  "phases": [
+    {
+      "stage": "hello2",
+      "gate": {
+        "status": "pass",
+        "engine": "vllm",
+        "checks": [
+          {
+            "index": 0,
+            "passed": true,
+            "actual_input_tokens": 1,
+            "actual_output_tokens": 2
+          }
+        ],
+        "first_qa_requests": 0,
+        "warmup_requests": 0,
+        "measured_requests": 1,
+        "http_receipt_sha256": "d96453f04c14e826209d44ec520cfb3e21c2cdc157ffbe0d1f8d5c909ab5a333",
+        "coverage": "visible text/usage only; separate pinned numerical acceptance, not arithmetic parity",
+        "fairmatch": false,
+        "exact_speedup": null
+      }
+    },
+    {
+      "stage": "canary8",
+      "gate": {
+        "status": "pass",
+        "engine": "vllm",
+        "checks": [
+          {
+            "index": 0,
+            "passed": true,
+            "actual_input_tokens": 5,
+            "actual_output_tokens": 8
+          },
+          {
+            "index": 1,
+            "passed": true,
+            "actual_input_tokens": 5,
+            "actual_output_tokens": 8
+          },
+          {
+            "index": 2,
+            "passed": true,
+            "actual_input_tokens": 3,
+            "actual_output_tokens": 8
+          }
+        ],
+        "first_qa_requests": 0,
+        "warmup_requests": 0,
+        "measured_requests": 3,
+        "http_receipt_sha256": "b6ec973f5cfcbe39282abd2036cc43a42bf697e7859d86ce83cfd7c177765e0d",
+        "coverage": "visible text/usage only; separate pinned numerical acceptance, not arithmetic parity",
+        "fairmatch": false,
+        "exact_speedup": null
+      }
+    },
+    {
+      "stage": "qa8-V1",
+      "gate": {
+        "status": "pass",
+        "engine": "vllm",
+        "checks": [
+          {
+            "index": 0,
+            "passed": true,
+            "actual_input_tokens": 5,
+            "actual_output_tokens": 8
+          },
+          {
+            "index": 1,
+            "passed": true,
+            "actual_input_tokens": 5,
+            "actual_output_tokens": 8
+          },
+          {
+            "index": 2,
+            "passed": true,
+            "actual_input_tokens": 5,
+            "actual_output_tokens": 8
+          },
+          {
+            "index": 3,
+            "passed": true,
+            "actual_input_tokens": 5,
+            "actual_output_tokens": 8
+          },
+          {
+            "index": 4,
+            "passed": true,
+            "actual_input_tokens": 5,
+            "actual_output_tokens": 8
+          },
+          {
+            "index": 5,
+            "passed": true,
+            "actual_input_tokens": 5,
+            "actual_output_tokens": 8
+          },
+          {
+            "index": 6,
+            "passed": true,
+            "actual_input_tokens": 5,
+            "actual_output_tokens": 8
+          },
+          {
+            "index": 7,
+            "passed": true,
+            "actual_input_tokens": 5,
+            "actual_output_tokens": 8
+          }
+        ],
+        "first_qa_requests": 1,
+        "warmup_requests": 2,
+        "measured_requests": 5,
+        "http_receipt_sha256": "dd6f52376b85c5b31c00433ba2fb881d0e8a97a4c0acbe89ad16d3e483472c29",
+        "coverage": "visible text/usage only; separate pinned numerical acceptance, not arithmetic parity",
+        "fairmatch": false,
+        "exact_speedup": null
+      }
+    }
+  ],
+  "same_server": true
+}

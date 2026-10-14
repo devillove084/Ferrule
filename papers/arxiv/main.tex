@@ -1,0 +1,74 @@
+% The paper embeds pre-rendered PDF figures; avoid unavailable EPS conversion.
+\def\DoNotLoadEpstopdf{}
+\documentclass[11pt,letterpaper]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs,tabularx}
+\usepackage{algorithm,algorithmic}
+\usepackage{xcolor}
+\usepackage{graphicx}
+\usepackage[hidelinks]{hyperref}
+
+\newcommand{\system}{Ferrule}
+\newcommand{\draftnote}[1]{\par\smallskip\noindent\textcolor{red!60!black}{\textbf{Draft note:} #1}\par\smallskip}
+\renewcommand{\algorithmicrequire}{\textbf{Inputs:}}
+\renewcommand{\algorithmicensure}{\textbf{Outputs:}}
+% These four experiment PDFs are generated paper assets and are included
+% directly; no missing-asset fallback is part of the final manuscript.
+\newcommand{\paperplot}[3]{%
+  \begin{figure*}[t]
+    \centering
+    \includegraphics[width=\textwidth]{#1}
+    \caption{#2}\label{#3}
+  \end{figure*}%
+}
+
+\title{Ferrule: Storage-Backed Inference Beyond Memory Capacity}
+\author{Lu Huanbing\\Independent Researcher\\\texttt{luhuanbing084@gmail.com}}
+\date{Working draft --- not a submission}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Storage-backed inference requires more than a small weight cache: the live
+working set must fit, nonresident data must become ready before consumption,
+and asynchronous physical references must end before capacity is reused.
+\system{} targets this problem with source-bound resource plans, staged
+admission, generation-qualified completion, and explicit custody through
+publication and retirement. We connect these contracts to a normal execution
+walkthrough, structured lifecycle algorithms, implementation boundaries, and
+four evaluation questions: capacity, request I/O, safe scheduling, and failure
+custody. The available TP1 observation is one DEBUG-instrumented exploratory
+run: four HTTP requests succeed, three limited visible-text/usage reference
+canaries pass, and 30 decoder invocations record 36,240,064,128 logical
+checkpoint-reader bytes. Hello2 has HTTP/usage checks only. Physical storage
+traffic, complete numerical quality, and the final resource contract remain
+unverified. Separate TP2 numerical receipts and two descriptive resident vLLM
+comparison blocks do not close those TP1 gates or establish a fair speedup.
+The same-contract safe blocking reference is not implemented. Thus the draft
+provides a design and a scoped logical-demand observation, not a demonstration
+of inference beyond physical memory capacity, measured overlap, universal
+quality, or completed multimodal support.
+\end{abstract}
+
+\input{sections/introduction}
+\input{sections/scope}
+% design.tex progresses from a normal walkthrough to invariants to algorithms.
+\input{sections/design}
+% Keep the lifecycle algorithms ahead of the implementation mapping.
+\clearpage
+\input{sections/implementation}
+\input{sections/evaluation}
+\input{sections/related-work}
+% conclusion.tex separates limitations from the conclusion.
+\input{sections/conclusion}
+
+\bibliographystyle{plain}
+\bibliography{references}
+\end{document}

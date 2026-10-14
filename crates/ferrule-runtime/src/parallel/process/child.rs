@@ -77,15 +77,16 @@ where
     deadline_after(options.io_timeout)?;
     ipc::nonblocking(reader.as_raw_fd())?;
     ipc::nonblocking(writer.as_raw_fd())?;
+    let frame = ipc::receive(
+        &mut reader,
+        options.frame_limits.max_frame_bytes,
+        deadline_after(options.io_timeout)?,
+    )?;
     let Message::Boot {
         identity,
         limits,
         config,
-    } = ipc::receive(
-        &mut reader,
-        options.frame_limits.max_frame_bytes,
-        deadline_after(options.io_timeout)?,
-    )?
+    } = frame.message()?
     else {
         return Err(protocol("first message must be Boot"));
     };
@@ -99,7 +100,16 @@ where
     {
         return Err(protocol("Boot limits exceed child-local ceilings"));
     }
-    ipc::serialize(&config, limits.max_config_bytes)?;
+    ipc::check_payload(config, limits.max_config_bytes)?;
+    frame.check_deadline()?;
+    let config = serde_json::from_str(config.get()).map_err(|source| ProcessError::Json {
+        operation: "decode process config",
+        source,
+    })?;
+    #[cfg(test)]
+    deadline_tests::after_config_decode();
+    frame.check_deadline()?;
+    drop(frame);
     let boot = ProcessBoot {
         identity,
         limits,
@@ -129,7 +139,7 @@ where
     let mut last_command = 0;
     loop {
         let message = ipc::receive_idle(&mut reader, limits.max_frame_bytes, options.io_timeout)?;
-        match message {
+        match message.message()? {
             Message::Execute {
                 identity: key,
                 session,
@@ -139,8 +149,11 @@ where
                     return Err(protocol("wrong owner or replayed command"));
                 }
                 last_command = key.command.get();
-                ipc::serialize(&payload, limits.max_command_bytes)?;
-                let result = match serde_json::from_value(payload) {
+                ipc::check_payload(payload, limits.max_command_bytes)?;
+                message.check_deadline()?;
+                let command = serde_json::from_str(payload.get());
+                message.check_deadline()?;
+                let result = match command {
                     Ok(command) => guarded(|| {
                         handler.execute(ProcessRequest {
                             identity: key,
@@ -149,7 +162,7 @@ where
                         })
                     })
                     .and_then(|output| {
-                        ipc::payload(&output, limits.max_output_bytes).map_err(|error| {
+                        ipc::serialize(&output, limits.max_output_bytes).map_err(|error| {
                             ProcessHandlerError::unknown(
                                 ProcessFailureKind::OutputEncode,
                                 error.to_string(),
@@ -161,8 +174,17 @@ where
                         error.to_string(),
                     )),
                 };
+                let encoded = result;
+                let result = encoded.as_ref().map_err(Clone::clone).and_then(|bytes| {
+                    ipc::raw_payload(bytes).map_err(|error| {
+                        ProcessHandlerError::unknown(
+                            ProcessFailureKind::OutputEncode,
+                            error.to_string(),
+                        )
+                    })
+                });
                 match result {
-                    Ok(payload) => send(
+                    Ok(payload) => send_raw(
                         &mut writer,
                         Message::Complete {
                             identity: key,
@@ -258,3 +280,18 @@ fn send<W: Write + AsRawFd>(
     let frame = ipc::encode(message, limits.max_frame_bytes)?;
     ipc::send(writer, &frame, deadline)
 }
+
+fn send_raw<W: Write + AsRawFd>(
+    writer: &mut W,
+    message: Message<&serde_json::value::RawValue>,
+    limits: ProcessFrameLimits,
+    timeout: Duration,
+) -> Result<(), ProcessError> {
+    let deadline = deadline_after(timeout)?;
+    let frame = ipc::encode_message(message, limits.max_frame_bytes)?;
+    ipc::send(writer, &frame, deadline)
+}
+
+#[cfg(test)]
+#[path = "../../../tests/unit/parallel/process_child_deadline.rs"]
+mod deadline_tests;

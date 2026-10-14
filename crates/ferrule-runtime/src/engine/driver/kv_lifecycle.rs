@@ -16,20 +16,11 @@ pub(super) enum PendingKvRetirement {
 /// Logical KV ownership bookkeeping. The page manager and resource registry
 /// remain the physical authorities; this component only keeps each acquired
 /// page's hard grant paired with its retirement work.
+#[derive(Default)]
 pub(super) struct KvLifecycleState {
     grants: HashMap<KvPageId, PhysicalResourceGrant>,
     pending_retirements: VecDeque<PendingKvRetirement>,
     pending_aborts: VecDeque<PendingResidentKv>,
-}
-
-impl Default for KvLifecycleState {
-    fn default() -> Self {
-        Self {
-            grants: HashMap::new(),
-            pending_retirements: VecDeque::new(),
-            pending_aborts: VecDeque::new(),
-        }
-    }
 }
 
 impl KvLifecycleState {
@@ -271,12 +262,19 @@ where
                         PendingKvRetirement::BackendRelease(retirement),
                     ));
                 }
+                self.trace.backend_release_ack(retirement.pages().len());
                 retirement
             }
             PendingKvRetirement::LogicalConfirmation(retirement) => retirement,
         };
-        self.kv
-            .confirm_retirement(&mut self.load_registry, &mut self.page_manager, retirement)
+        let pages = retirement.pages().len();
+        let result =
+            self.kv
+                .confirm_retirement(&mut self.load_registry, &mut self.page_manager, retirement);
+        if result.is_ok() {
+            self.trace.retirement_confirmed(pages);
+        }
+        result
     }
 
     pub(super) fn track_kv_page_grants(
@@ -397,6 +395,7 @@ where
                     return Err(Error::with_cleanup("KV reservation", error, cleanup));
                 }
             };
+            self.trace_reservation(&reservation);
             if let Err(error) = self
                 .page_manager
                 .as_mut()
@@ -548,6 +547,7 @@ where
                     ));
                 }
             };
+            self.trace_reservation(&reservation);
             let mut physical_pages = reservation.view().newly_allocated.clone();
             if let Some(cow) = reservation.view().cow_replacement {
                 physical_pages.push(cow.replacement);
@@ -691,6 +691,8 @@ where
     pub(super) fn progress_committed_resident_kv(
         &mut self,
         kv: PendingResidentKv,
+        action: &SchedulerAction,
+        transaction: ExecutionTransactionId,
     ) -> std::result::Result<(), (Error, PendingResidentKv)> {
         let kv = match kv {
             PendingResidentKv::Prepared(prepared) => {
@@ -703,9 +705,9 @@ where
                         PendingResidentKv::Prepared(prepared),
                     ));
                 };
-                PendingResidentKv::Retiring(PendingKvRetirement::BackendRelease(
-                    manager.publish_commit(prepared),
-                ))
+                let retirement = manager.publish_commit(prepared);
+                self.trace_action_end(action, transaction, true);
+                PendingResidentKv::Retiring(PendingKvRetirement::BackendRelease(retirement))
             }
             PendingResidentKv::Reserved(reservations) if reservations.is_empty() => return Ok(()),
             PendingResidentKv::Reserved(reservations) => {

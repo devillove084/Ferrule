@@ -2,7 +2,7 @@
 
 use ferrule_common::Result;
 
-pub use crate::cuda::context::{CudaF32Buffer, CudaI32Buffer, CudaOperators};
+pub use crate::cuda::operator_owner::{CudaF32Buffer, CudaI32Buffer, CudaOperators};
 pub use crate::cuda::operators::contracts::SplitHalfRopeLayout;
 
 impl CudaOperators {

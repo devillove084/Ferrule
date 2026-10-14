@@ -1,0 +1,580 @@
+ M .config/nextest.toml
+ M .github/workflows/ci.yml
+ M Cargo.lock
+ M Cargo.toml
+ M README.md
+ M crates/ferrule-backend/Cargo.toml
+ M crates/ferrule-backend/build.rs
+ M crates/ferrule-backend/native/cuda/core/abi.h
+ M crates/ferrule-backend/native/cuda/core/attention_ops.cuh
+ M crates/ferrule-backend/native/cuda/core/bindings.cuh
+ M crates/ferrule-backend/native/cuda/core/moe_ops.cuh
+ M crates/ferrule-backend/native/cuda/core/provider.cu
+ M crates/ferrule-backend/native/cuda/core/tensor_ops.cuh
+ M crates/ferrule-backend/native/cuda/cutlass/abi.h
+ M crates/ferrule-backend/native/cuda/cutlass/bf16_linear.cuh
+ M crates/ferrule-backend/native/cuda/cutlass/manifest.cuh
+ D crates/ferrule-backend/src/cpu/kv.rs
+ M crates/ferrule-backend/src/cpu/mod.rs
+ M crates/ferrule-backend/src/cuda/allocator.rs
+ M crates/ferrule-backend/src/cuda/benchmark.rs
+ D crates/ferrule-backend/src/cuda/context.rs
+ M crates/ferrule-backend/src/cuda/ffi/core.rs
+ M crates/ferrule-backend/src/cuda/ffi/cutlass.rs
+ M crates/ferrule-backend/src/cuda/graph.rs
+ M crates/ferrule-backend/src/cuda/mod.rs
+ M crates/ferrule-backend/src/cuda/operators/attention/hybrid.rs
+ M crates/ferrule-backend/src/cuda/operators/attention/mod.rs
+ M crates/ferrule-backend/src/cuda/operators/contracts.rs
+ D crates/ferrule-backend/src/cuda/operators/f32.rs
+ M crates/ferrule-backend/src/cuda/operators/impls/attention.rs
+ M crates/ferrule-backend/src/cuda/operators/impls/compressor.rs
+ M crates/ferrule-backend/src/cuda/operators/impls/hc.rs
+ M crates/ferrule-backend/src/cuda/operators/impls/moe.rs
+ M crates/ferrule-backend/src/cuda/operators/impls/projection.rs
+ M crates/ferrule-backend/src/cuda/operators/impls/proposal.rs
+ M crates/ferrule-backend/src/cuda/operators/kv/mod.rs
+ M crates/ferrule-backend/src/cuda/operators/kv/page_pool.rs
+ M crates/ferrule-backend/src/cuda/operators/kv/transaction.rs
+ M crates/ferrule-backend/src/cuda/operators/kv/transaction/lifecycle.rs
+ M crates/ferrule-backend/src/cuda/operators/kv/transaction/plan.rs
+ M crates/ferrule-backend/src/cuda/operators/kv/transaction/view.rs
+ M crates/ferrule-backend/src/cuda/operators/linear.rs
+ M crates/ferrule-backend/src/cuda/operators/moe/grouped_fp4.rs
+ M crates/ferrule-backend/src/cuda/operators/moe/mod.rs
+ M crates/ferrule-backend/src/cuda/operators/moe/routing.rs
+ M crates/ferrule-backend/src/cuda/operators/norm.rs
+ D crates/ferrule-backend/src/cuda/operators/numeric.rs
+ M crates/ferrule-backend/src/cuda/operators/numeric_fp8.rs
+ M crates/ferrule-backend/src/cuda/operators/proposal.rs
+ D crates/ferrule-backend/src/cuda/operators/resources.rs
+ M crates/ferrule-backend/src/cuda/operators/rope.rs
+ M crates/ferrule-backend/src/cuda/providers/core.rs
+ M crates/ferrule-backend/src/cuda/providers/cutlass.rs
+ M crates/ferrule-backend/src/cuda/providers/cutlass_bf16.rs
+ M crates/ferrule-backend/src/cuda/providers/cutlass_f32.rs
+ M crates/ferrule-backend/src/cuda/providers/cutlass_legacy.rs
+ M crates/ferrule-backend/src/cuda/providers/mod.rs
+ M crates/ferrule-backend/src/cuda/recurrent.rs
+ M crates/ferrule-backend/src/cuda/runtime.rs
+ M crates/ferrule-backend/src/cuda/standard.rs
+ M crates/ferrule-backend/src/cuda/transport.rs
+ M crates/ferrule-backend/src/lib.rs
+ M crates/ferrule-backend/src/plan.rs
+ M crates/ferrule-backend/tests/cuda_allocator.rs
+ M crates/ferrule-backend/tests/cuda_build_paths.rs
+ M crates/ferrule-backend/tests/cuda_family_contracts.rs
+ M crates/ferrule-backend/tests/cuda_graph_lifecycle.rs
+ M crates/ferrule-backend/tests/cuda_kv_metadata.rs
+ M crates/ferrule-backend/tests/cuda_kv_transactions.rs
+ M crates/ferrule-backend/tests/cuda_recurrent.rs
+ M crates/ferrule-backend/tests/cuda_recurrent_validation.rs
+ M crates/ferrule-backend/tests/cuda_refactoring_contracts.rs
+ M crates/ferrule-backend/tests/cuda_semantic_operators.rs
+ M crates/ferrule-backend/tests/cuda_standard.rs
+ M crates/ferrule-backend/tests/cuda_standard_linear.rs
+ M crates/ferrule-backend/tests/cutlass_f32.rs
+ M crates/ferrule-backend/tests/cutlass_numeric_fp8_f32.rs
+ M crates/ferrule-backend/tests/cutlass_provider.rs
+ M crates/ferrule-backend/tests/gqa_cooperative.rs
+ M crates/ferrule-backend/tests/native_layout.rs
+ M crates/ferrule-backend/tests/support/gqa_cooperative.cu
+ M crates/ferrule-backend/tests/support/gqa_cooperative.md
+ M crates/ferrule-cli/Cargo.toml
+ M crates/ferrule-cli/src/args.rs
+ M crates/ferrule-cli/src/commands/bench_interactive.rs
+ M crates/ferrule-cli/src/commands/bench_parallel.rs
+ M crates/ferrule-cli/src/commands/chat.rs
+ M crates/ferrule-cli/src/commands/mod.rs
+ M crates/ferrule-cli/src/commands/parallel_worker.rs
+ M crates/ferrule-cli/src/commands/rank_worker.rs
+ M crates/ferrule-cli/src/commands/serve.rs
+ M crates/ferrule-cli/src/main.rs
+ M crates/ferrule-cli/tests/rank_worker_process.rs
+ M crates/ferrule-cli/tests/serve.rs
+ M crates/ferrule-common/src/io_protocol.rs
+ M crates/ferrule-common/src/lib.rs
+ M crates/ferrule-common/src/topology.rs
+ M crates/ferrule-model/Cargo.toml
+ D crates/ferrule-model/src/decoder/custom_runtime_tests.rs
+ M crates/ferrule-model/src/decoder/hybrid.rs
+ M crates/ferrule-model/src/decoder/hybrid_cuda.rs
+ D crates/ferrule-model/src/decoder/hybrid_cuda_admission.rs
+ M crates/ferrule-model/src/decoder/kv.rs
+ M crates/ferrule-model/src/decoder/kv/cuda.rs
+ M crates/ferrule-model/src/decoder/mod.rs
+ M crates/ferrule-model/src/decoder/runner.rs
+ M crates/ferrule-model/src/decoder/runtime.rs
+ M crates/ferrule-model/src/decoder/state.rs
+ D crates/ferrule-model/src/decoder/tests.rs
+ M crates/ferrule-model/src/decoder/traits.rs
+ M crates/ferrule-model/src/decoder/transaction.rs
+ M crates/ferrule-model/src/lib.rs
+ M crates/ferrule-model/src/materialization.rs
+ M crates/ferrule-model/src/models/deepseek_v4/adapter.rs
+ M crates/ferrule-model/src/models/deepseek_v4/config.rs
+ M crates/ferrule-model/src/models/deepseek_v4/mod.rs
+ M crates/ferrule-model/src/models/deepseek_v4/recipe.rs
+ M crates/ferrule-model/src/moe/cuda_materialization.rs
+ M crates/ferrule-model/src/moe/cuda_reader_test_support.rs
+ M crates/ferrule-model/src/moe/executor.rs
+ M crates/ferrule-model/src/moe/io_uring_reader.rs
+ D crates/ferrule-model/src/moe/manager.rs
+ M crates/ferrule-model/src/moe/mod.rs
+ M crates/ferrule-model/src/moe/storage.rs
+ M crates/ferrule-model/src/moe/streaming.rs
+ M crates/ferrule-model/src/runner.rs
+ D crates/ferrule-model/src/semantic.rs
+ M crates/ferrule-model/src/support/policies.rs
+ M crates/ferrule-model/src/transformer/attention/mla.rs
+ M crates/ferrule-model/src/transformer/connection/hyper.rs
+ M crates/ferrule-model/src/transformer/cuda.rs
+ M crates/ferrule-model/src/transformer/forward.rs
+ M crates/ferrule-model/src/transformer/forward/cuda_tests.rs
+ M crates/ferrule-model/src/transformer/host_experts/budget.rs
+ M crates/ferrule-model/src/transformer/host_experts/memory.rs
+ M crates/ferrule-model/src/transformer/host_experts/mod.rs
+ M crates/ferrule-model/src/transformer/materialize.rs
+ M crates/ferrule-model/src/transformer/mod.rs
+ M crates/ferrule-model/src/transformer/operators.rs
+ M crates/ferrule-model/src/transformer/parallel.rs
+ M crates/ferrule-model/src/transformer/parallel_transfer.rs
+ M crates/ferrule-model/src/transformer/segment.rs
+ M crates/ferrule-model/src/transformer/standard/cuda.rs
+ M crates/ferrule-model/src/transformer/standard/cuda/binding.rs
+ M crates/ferrule-model/src/transformer/standard/cuda/boundary.rs
+ M crates/ferrule-model/src/transformer/standard/cuda/diagnostic.rs
+ M crates/ferrule-model/src/transformer/standard/cuda/expert.rs
+ D crates/ferrule-model/src/transformer/standard/cuda/expert_cache.rs
+ M crates/ferrule-model/src/transformer/standard/cuda/hybrid.rs
+ M crates/ferrule-model/src/transformer/standard/cuda/kv_binding.rs
+ M crates/ferrule-model/src/transformer/standard/cuda/numeric_binding.rs
+ M crates/ferrule-model/src/transformer/standard/cuda/recurrent.rs
+ M crates/ferrule-model/src/transformer/standard/cuda/residency.rs
+ M crates/ferrule-model/src/transformer/standard/cuda/stage.rs
+ M crates/ferrule-model/src/transformer/standard/hybrid.rs
+ M crates/ferrule-model/src/transformer/standard/mod.rs
+ M crates/ferrule-model/src/transformer/standard/numeric_precision.rs
+ M crates/ferrule-model/src/transformer/standard/scratch.rs
+ M crates/ferrule-model/src/transformer/standard/shared_gate_tests.rs
+ M crates/ferrule-model/tests/architecture_boundaries.rs
+ M crates/ferrule-model/tests/expert_parallel.rs
+ M crates/ferrule-model/tests/expert_parallel/bounded_cuda.rs
+ M crates/ferrule-model/tests/full_gpu_decoder.rs
+ M crates/ferrule-model/tests/hybrid_cpu.rs
+ M crates/ferrule-model/tests/hybrid_cuda.rs
+ M crates/ferrule-model/tests/hybrid_cuda/external.rs
+ M crates/ferrule-model/tests/hybrid_cuda/numeric.rs
+ M crates/ferrule-model/tests/hybrid_cuda/numeric_f32.rs
+ M crates/ferrule-model/tests/numeric_standard_cuda.rs
+ M crates/ferrule-model/tests/parallel_pipeline.rs
+ M crates/ferrule-model/tests/tensor_parallel.rs
+ M crates/ferrule-runtime/Cargo.toml
+ M crates/ferrule-runtime/src/cache/mod.rs
+ M crates/ferrule-runtime/src/cache/page_manager.rs
+ D crates/ferrule-runtime/src/engine/composition.rs
+ M crates/ferrule-runtime/src/engine/driver.rs
+ M crates/ferrule-runtime/src/engine/driver/admission.rs
+ M crates/ferrule-runtime/src/engine/driver/continuations.rs
+ M crates/ferrule-runtime/src/engine/driver/kv_lifecycle.rs
+ M crates/ferrule-runtime/src/engine/driver/output.rs
+ M crates/ferrule-runtime/src/engine/driver/prefix.rs
+ M crates/ferrule-runtime/src/engine/driver/resident.rs
+ M crates/ferrule-runtime/src/engine/driver/sessions.rs
+ M crates/ferrule-runtime/src/engine/driver/shutdown.rs
+ M crates/ferrule-runtime/src/engine/driver/speculative.rs
+ M crates/ferrule-runtime/src/engine/inference.rs
+ M crates/ferrule-runtime/src/engine/mod.rs
+ D crates/ferrule-runtime/src/engine/model_factory/mod.rs
+ D crates/ferrule-runtime/src/engine/model_factory/pipeline.rs
+ D crates/ferrule-runtime/src/engine/model_factory/qwen35.rs
+ D crates/ferrule-runtime/src/engine/model_factory/qwen35_ep.rs
+ D crates/ferrule-runtime/src/engine/model_factory/qwen35_ep_strict_tests.rs
+ D crates/ferrule-runtime/src/engine/model_factory/qwen35_ep_tests.rs
+ D crates/ferrule-runtime/src/engine/native_executor.rs
+ M crates/ferrule-runtime/src/engine/observability.rs
+ M crates/ferrule-runtime/src/engine/pipeline.rs
+ M crates/ferrule-runtime/src/error.rs
+ M crates/ferrule-runtime/src/io/mod.rs
+ M crates/ferrule-runtime/src/io/provider.rs
+ M crates/ferrule-runtime/src/io/registry.rs
+ D crates/ferrule-runtime/src/io/testing.rs
+ M crates/ferrule-runtime/src/lib.rs
+ M crates/ferrule-runtime/src/parallel/collective.rs
+ M crates/ferrule-runtime/src/parallel/data.rs
+ M crates/ferrule-runtime/src/parallel/expert.rs
+ M crates/ferrule-runtime/src/parallel/expert_tests.rs
+ M crates/ferrule-runtime/src/parallel/mod.rs
+ M crates/ferrule-runtime/src/parallel/pipeline.rs
+ M crates/ferrule-runtime/src/parallel/pipeline/cuda.rs
+ M crates/ferrule-runtime/src/parallel/pipeline/owner.rs
+ M crates/ferrule-runtime/src/parallel/pipeline/stage.rs
+ M crates/ferrule-runtime/src/parallel/pipeline/tensor_scope.rs
+ D crates/ferrule-runtime/src/parallel/pipeline/tensor_tests.rs
+ M crates/ferrule-runtime/src/parallel/pipeline/transport.rs
+ M crates/ferrule-runtime/src/parallel/process.rs
+ M crates/ferrule-runtime/src/parallel/process/child.rs
+ M crates/ferrule-runtime/src/parallel/process/decoder.rs
+ M crates/ferrule-runtime/src/parallel/process/decoder_endpoint.rs
+ M crates/ferrule-runtime/src/parallel/process/decoder_expert.rs
+ M crates/ferrule-runtime/src/parallel/process/decoder_stage.rs
+ M crates/ferrule-runtime/src/parallel/process/decoder_wire.rs
+ M crates/ferrule-runtime/src/parallel/process/ipc.rs
+ M crates/ferrule-runtime/src/parallel/process/owner.rs
+ M crates/ferrule-runtime/src/parallel/process/reaper.rs
+ M crates/ferrule-runtime/src/parallel/tensor_collective.rs
+ M crates/ferrule-runtime/src/scheduling/resources.rs
+ M crates/ferrule-runtime/src/speculation.rs
+ M crates/ferrule-runtime/tests/data_parallel.rs
+ M crates/ferrule-runtime/tests/distributed_cuda.rs
+ M crates/ferrule-runtime/tests/io_physical.rs
+ D crates/ferrule-runtime/tests/model_factory_registry.rs
+ M crates/ferrule-runtime/tests/parallel_cuda.rs
+ M crates/ferrule-runtime/tests/pipeline_program.rs
+ M crates/ferrule-runtime/tests/process_decoder.rs
+ M crates/ferrule-runtime/tests/process_decoder/cuda.rs
+ M crates/ferrule-runtime/tests/process_ipc_measurement.rs
+ M crates/ferrule-runtime/tests/process_ranks.rs
+ D crates/ferrule-runtime/tests/qwen3_dense_factory.rs
+ M crates/ferrule-runtime/tests/standard_tensor.rs
+ M crates/ferrule-runtime/tests/support/build_process_child.rs
+ D crates/ferrule-runtime/tests/support/pr26_ipc_contracts.rs
+ D crates/ferrule-runtime/tests/support/pr26_process_fixture.rs
+ M crates/ferrule-runtime/tests/support/process_rank_child.rs
+ M crates/ferrule-runtime/tests/swiglu_parallel.rs
+ M crates/ferrule-server/Cargo.toml
+ M crates/ferrule-server/src/config.rs
+ M crates/ferrule-server/src/http.rs
+ M crates/ferrule-server/src/worker.rs
+ M crates/ferrule-server/tests/http.rs
+ M crates/ferrule-server/tests/pipeline_http.rs
+ M crates/ferrule-server/tests/qwen35_http.rs
+ M crates/ferrule-server/tests/support/pipeline_process_child.rs
+ M crates/ferrule-server/tests/worker_lifecycle.rs
+ M deny.toml
+ M docs/ARCHITECTURE.md
+ M docs/PARALLELISM.md
+ M docs/QWEN35.md
+ M docs/ROADMAP.md
+ M justfile
+ A papers/arxiv/experiments/tp2_mixed/oracle/README.md
+ A papers/arxiv/experiments/tp2_mixed/oracle/compare.py
+ A papers/arxiv/experiments/tp2_mixed/oracle/launch.py
+ A papers/arxiv/experiments/tp2_mixed/oracle/protocol.json
+ A papers/arxiv/experiments/tp2_mixed/oracle/test_compare.py
+ A papers/arxiv/experiments/tp2_mixed/oracle/test_launch.py
+ A papers/arxiv/experiments/tp2_mixed/oracle/test_tp2_oracle.py
+ A papers/arxiv/experiments/tp2_mixed/oracle/tp2_oracle.py
+ M scripts/bench_process_ipc.py
+ M scripts/qwen35_fp8_reference.md
+ M scripts/qwen35_fp8_reference.py
+ D scripts/test_bench_process_ipc.py
+ D scripts/test_legacy_configs.py
+ D scripts/test_qwen35_fp8_reference.py
+?? crates/ferrule-backend/native/cuda/core/attention_bf16.cuh
+?? crates/ferrule-backend/native/cuda/core/attention_bf16_abi.h
+?? crates/ferrule-backend/native/cuda/core/bf16_boundary.cuh
+?? crates/ferrule-backend/native/cuda/core/bf16_rms_reduction.cuh
+?? crates/ferrule-backend/native/cuda/core/recurrent_bf16.cuh
+?? crates/ferrule-backend/native/cuda/core/recurrent_bf16_abi.h
+?? crates/ferrule-backend/native/cuda/core/recurrent_bf16_chunk.cuh
+?? crates/ferrule-backend/native/cuda/core/recurrent_bf16_chunk_abi.h
+?? crates/ferrule-backend/native/cuda/core/router_full_softmax.cuh
+?? crates/ferrule-backend/native/cuda/cutlass/bf16_gemmex.cuh
+?? crates/ferrule-backend/native/cuda/cutlass/bf16_gemmex_admission.h
+?? crates/ferrule-backend/native/cuda/cutlass/bf16_gemmex_policy.h
+?? crates/ferrule-backend/native/cuda/cutlass/numeric_bf16_gemv.cuh
+?? crates/ferrule-backend/native/cuda/cutlass/numeric_bf16_gemv_policy.h
+?? crates/ferrule-backend/native/cuda/cutlass/numeric_w8a16.cuh
+?? crates/ferrule-backend/src/bf16_attention_plan.rs
+?? crates/ferrule-backend/src/bf16_gemmex_plan.rs
+?? crates/ferrule-backend/src/cpu/paged_kv.rs
+?? crates/ferrule-backend/src/cpu/streaming_attention.rs
+?? crates/ferrule-backend/src/cuda/allocation_layout.rs
+?? crates/ferrule-backend/src/cuda/buffer_range.rs
+?? crates/ferrule-backend/src/cuda/ffi/recurrent_bf16.rs
+?? crates/ferrule-backend/src/cuda/ffi/recurrent_bf16_chunk.rs
+?? crates/ferrule-backend/src/cuda/graph_protocol.rs
+?? crates/ferrule-backend/src/cuda/operator_owner.rs
+?? crates/ferrule-backend/src/cuda/operators/attention/prepared_bf16.rs
+?? crates/ferrule-backend/src/cuda/operators/bf16_arena.rs
+?? crates/ferrule-backend/src/cuda/operators/kv/committed_gqa.rs
+?? crates/ferrule-backend/src/cuda/operators/kv/committed_read.rs
+?? crates/ferrule-backend/src/cuda/operators/kv/page_pool/
+?? crates/ferrule-backend/src/cuda/operators/kv/read_protocol.rs
+?? crates/ferrule-backend/src/cuda/operators/kv/single_page_placement.rs
+?? crates/ferrule-backend/src/cuda/operators/kv/transaction/append_bridge.rs
+?? crates/ferrule-backend/src/cuda/operators/kv/transaction/append_dma.rs
+?? crates/ferrule-backend/src/cuda/operators/kv/transaction/append_read.rs
+?? crates/ferrule-backend/src/cuda/operators/kv/transaction/append_stream.rs
+?? crates/ferrule-backend/src/cuda/operators/kv/transaction/bf16.rs
+?? crates/ferrule-backend/src/cuda/operators/kv/transaction/bf16_tests.rs
+?? crates/ferrule-backend/src/cuda/operators/kv/transaction/chunked.rs
+?? crates/ferrule-backend/src/cuda/operators/kv/transaction/chunked_protocol.rs
+?? crates/ferrule-backend/src/cuda/operators/kv/transaction/diagnostic.rs
+?? crates/ferrule-backend/src/cuda/operators/kv/transaction/prefix_read.rs
+?? crates/ferrule-backend/src/cuda/operators/linear/
+?? crates/ferrule-backend/src/cuda/operators/mod.rs
+?? crates/ferrule-backend/src/cuda/operators/recurrent_bf16.rs
+?? crates/ferrule-backend/src/cuda/operators/recurrent_bf16_chunk.rs
+?? crates/ferrule-backend/src/cuda/operators/resource_views.rs
+?? crates/ferrule-backend/src/cuda/operators/standard_bf16.rs
+?? crates/ferrule-backend/src/cuda/operators/typed_buffer_range.rs
+?? crates/ferrule-backend/src/cuda/providers/admission.rs
+?? crates/ferrule-backend/src/cuda/providers/bf16_gemmex.rs
+?? crates/ferrule-backend/src/cuda/streaming_attention.rs
+?? crates/ferrule-backend/src/cuda/transport_wait.rs
+?? crates/ferrule-backend/src/cuda_plan.rs
+?? crates/ferrule-backend/src/physical_placement.rs
+?? crates/ferrule-backend/src/recurrent_bf16_chunk_plan.rs
+?? crates/ferrule-backend/src/resources/
+?? crates/ferrule-backend/tests/allocator_batch_v3/
+?? crates/ferrule-backend/tests/allocator_context_drop/
+?? crates/ferrule-backend/tests/allocator_retirement/
+?? crates/ferrule-backend/tests/allocator_retirement_gpu/
+?? crates/ferrule-backend/tests/attention_bf16/
+?? crates/ferrule-backend/tests/bf16_attention_plan.rs
+?? crates/ferrule-backend/tests/bf16_gemmex.rs
+?? crates/ferrule-backend/tests/chunked_kv.rs
+?? crates/ferrule-backend/tests/chunked_kv/
+?? crates/ferrule-backend/tests/cuda_bf16_arena.rs
+?? crates/ferrule-backend/tests/cuda_bf16_kv_transactions.rs
+?? crates/ferrule-backend/tests/cuda_bf16_slice.rs
+?? crates/ferrule-backend/tests/cuda_committed_gqa.rs
+?? crates/ferrule-backend/tests/cuda_f32_alias.rs
+?? crates/ferrule-backend/tests/cuda_f32_prefix.rs
+?? crates/ferrule-backend/tests/cuda_hybrid_bf16.rs
+?? crates/ferrule-backend/tests/cuda_prepared_bf16_attention.rs
+?? crates/ferrule-backend/tests/cuda_recurrent_bf16.rs
+?? crates/ferrule-backend/tests/cuda_recurrent_bf16_chunk.rs
+?? crates/ferrule-backend/tests/cuda_recurrent_bf16_validation.rs
+?? crates/ferrule-backend/tests/cuda_scratch_metadata.rs
+?? crates/ferrule-backend/tests/host_kv/
+?? crates/ferrule-backend/tests/host_kv_protocol.rs
+?? crates/ferrule-backend/tests/numeric_bf16_gemv.rs
+?? crates/ferrule-backend/tests/numeric_bf16_gemv/
+?? crates/ferrule-backend/tests/numeric_bf16_tiled.rs
+?? crates/ferrule-backend/tests/numeric_bf16_tiled/
+?? crates/ferrule-backend/tests/numeric_w8a16.rs
+?? crates/ferrule-backend/tests/numeric_w8a16/
+?? crates/ferrule-backend/tests/ordinary_norm.rs
+?? crates/ferrule-backend/tests/ordinary_norm/
+?? crates/ferrule-backend/tests/recurrent_bf16/
+?? crates/ferrule-backend/tests/recurrent_bf16_chunk_plan.rs
+?? crates/ferrule-backend/tests/router_normalization.rs
+?? crates/ferrule-backend/tests/router_normalization/
+?? crates/ferrule-backend/tests/streaming_attention.rs
+?? crates/ferrule-backend/tests/streaming_attention/
+?? crates/ferrule-backend/tests/support/f32_alias_audit.md
+?? crates/ferrule-backend/tests/support/hybrid_bf16.md
+?? crates/ferrule-backend/tests/support/hybrid_bf16_hf.json
+?? crates/ferrule-backend/tests/support/hybrid_bf16_hf.py
+?? crates/ferrule-backend/tests/support/hybrid_bf16_hf.txt
+?? crates/ferrule-backend/tests/support/recurrent_bf16.md
+?? crates/ferrule-backend/tests/support/recurrent_bf16_hf.json
+?? crates/ferrule-backend/tests/support/recurrent_bf16_hf.py
+?? crates/ferrule-backend/tests/support/recurrent_bf16_hf.txt
+?? crates/ferrule-backend/tests/support/recurrent_bf16_reference.rs
+?? crates/ferrule-backend/tests/transport_completion_wait.rs
+?? crates/ferrule-backend/tests/unit/
+?? crates/ferrule-cli/src/commands/analyze_kvset.rs
+?? crates/ferrule-cli/src/commands/backend_policy.rs
+?? crates/ferrule-cli/src/commands/bench_kv_trace.rs
+?? crates/ferrule-cli/src/commands/network_rank.rs
+?? crates/ferrule-cli/src/commands/parallel_shape.rs
+?? crates/ferrule-cli/src/commands/trace_output.rs
+?? crates/ferrule-cli/tests/analyze_kvset.rs
+?? crates/ferrule-cli/tests/backend_policy.rs
+?? crates/ferrule-cli/tests/bench_kv_trace.rs
+?? crates/ferrule-cli/tests/bench_kv_trace/
+?? crates/ferrule-cli/tests/fixtures/
+?? crates/ferrule-cli/tests/network_rank.rs
+?? crates/ferrule-cli/tests/serve_cuda.rs
+?? crates/ferrule-cli/tests/support/
+?? crates/ferrule-cli/tests/unit/
+?? crates/ferrule-common/src/host_kv.rs
+?? crates/ferrule-common/src/host_kv_placement.rs
+?? crates/ferrule-common/src/kvset/
+?? crates/ferrule-common/tests/fixtures/
+?? crates/ferrule-common/tests/unit/
+?? crates/ferrule-composition/
+?? crates/ferrule-model/src/decoder/cuda_host_kv_invocation.rs
+?? crates/ferrule-model/src/decoder/external_work.rs
+?? crates/ferrule-model/src/decoder/hybrid_bf16_admission.rs
+?? crates/ferrule-model/src/decoder/hybrid_bf16_state.rs
+?? crates/ferrule-model/src/decoder/hybrid_memory_plan.rs
+?? crates/ferrule-model/src/decoder/invocation.rs
+?? crates/ferrule-model/src/decoder/kv_reclaim.rs
+?? crates/ferrule-model/src/decoder/mixed_attention.rs
+?? crates/ferrule-model/src/decoder/sequence.rs
+?? crates/ferrule-model/src/models/deepseek_v4/assembly.rs
+?? crates/ferrule-model/src/models/deepseek_v4/config/
+?? crates/ferrule-model/src/moe/catalog.rs
+?? crates/ferrule-model/src/moe/io_uring_reader/
+?? crates/ferrule-model/src/moe/resource_manager.rs
+?? crates/ferrule-model/src/moe/storage/
+?? crates/ferrule-model/src/tensor_semantics.rs
+?? crates/ferrule-model/src/transformer/hybrid_parallel.rs
+?? crates/ferrule-model/src/transformer/hybrid_parallel/
+?? crates/ferrule-model/src/transformer/materialize/
+?? crates/ferrule-model/src/transformer/numeric_shard.rs
+?? crates/ferrule-model/src/transformer/operators/
+?? crates/ferrule-model/src/transformer/rank_materialize.rs
+?? crates/ferrule-model/src/transformer/segment_inventory.rs
+?? crates/ferrule-model/src/transformer/standard/bf16_hybrid_profile.rs
+?? crates/ferrule-model/src/transformer/standard/bf16_precision.rs
+?? crates/ferrule-model/src/transformer/standard/cuda/append_gqa.rs
+?? crates/ferrule-model/src/transformer/standard/cuda/bf16.rs
+?? crates/ferrule-model/src/transformer/standard/cuda/bf16_attention.rs
+?? crates/ferrule-model/src/transformer/standard/cuda/bf16_chunk.rs
+?? crates/ferrule-model/src/transformer/standard/cuda/bf16_hybrid.rs
+?? crates/ferrule-model/src/transformer/standard/cuda/committed_gqa.rs
+?? crates/ferrule-model/src/transformer/standard/cuda/external_experts.rs
+?? crates/ferrule-model/src/transformer/standard/cuda/hybrid_rank.rs
+?? crates/ferrule-model/src/transformer/standard/cuda/hybrid_rank/
+?? crates/ferrule-model/src/transformer/standard/cuda/invocation_trace.rs
+?? crates/ferrule-model/src/transformer/standard/cuda/numeric_shard.rs
+?? crates/ferrule-model/src/transformer/standard/cuda/numeric_shard_binding.rs
+?? crates/ferrule-model/src/transformer/standard/cuda/rank_performance.rs
+?? crates/ferrule-model/src/transformer/standard/cuda/rank_timing.rs
+?? crates/ferrule-model/src/transformer/standard/cuda/root_execution.rs
+?? crates/ferrule-model/src/transformer/standard/cuda/root_submission.rs
+?? crates/ferrule-model/src/transformer/standard/cuda/segment.rs
+?? crates/ferrule-model/src/transformer/standard/cuda/upload_proof.rs
+?? crates/ferrule-model/src/transformer/standard/decoded_snapshot.rs
+?? crates/ferrule-model/src/transformer/standard/expert_cache.rs
+?? crates/ferrule-model/src/transformer/standard/layer_execution.rs
+?? crates/ferrule-model/src/transformer/standard/mixed_decoded.rs
+?? crates/ferrule-model/src/transformer/standard/mixed_retirement.rs
+?? crates/ferrule-model/src/transformer/standard/performance.rs
+?? crates/ferrule-model/tests/bf16_gqa_boundary/
+?? crates/ferrule-model/tests/compile/
+?? crates/ferrule-model/tests/cpu_reference_api.rs
+?? crates/ferrule-model/tests/fixtures/standard_bf16_hf.json
+?? crates/ferrule-model/tests/frozen_bf16_projections/
+?? crates/ferrule-model/tests/hybrid_bf16.rs
+?? crates/ferrule-model/tests/hybrid_bf16/
+?? crates/ferrule-model/tests/hybrid_cuda/diagnose_numeric_first.py
+?? crates/ferrule-model/tests/hybrid_cuda/diagnose_w8a16_causal.py
+?? crates/ferrule-model/tests/hybrid_cuda/numeric_w8a16.rs
+?? crates/ferrule-model/tests/hybrid_cuda/segment_external.rs
+?? crates/ferrule-model/tests/hybrid_cuda/test_diagnose_numeric_first.py
+?? crates/ferrule-model/tests/hybrid_cuda/test_diagnose_w8a16_causal.py
+?? crates/ferrule-model/tests/hybrid_cuda/w8a16_causal.md
+?? crates/ferrule-model/tests/hybrid_mixed_layer.rs
+?? crates/ferrule-model/tests/hybrid_mixed_qkv_geometry.rs
+?? crates/ferrule-model/tests/hybrid_parallel.rs
+?? crates/ferrule-model/tests/hybrid_parallel/
+?? crates/ferrule-model/tests/hybrid_pp_ep.rs
+?? crates/ferrule-model/tests/hybrid_rank_cuda.rs
+?? crates/ferrule-model/tests/hybrid_rank_cuda/
+?? crates/ferrule-model/tests/hybrid_rank_frozen.rs
+?? crates/ferrule-model/tests/hybrid_rank_precision.rs
+?? crates/ferrule-model/tests/hybrid_schema.rs
+?? crates/ferrule-model/tests/hybrid_segment.rs
+?? crates/ferrule-model/tests/hybrid_segment/
+?? crates/ferrule-model/tests/hybrid_tp_ep.rs
+?? crates/ferrule-model/tests/mixed_decoded_arena_handoff.rs
+?? crates/ferrule-model/tests/mixed_decoded_budget.rs
+?? crates/ferrule-model/tests/mixed_rank_timing.rs
+?? crates/ferrule-model/tests/mixed_routed_down/
+?? crates/ferrule-model/tests/mixed_routed_down_frozen.rs
+?? crates/ferrule-model/tests/mixed_upload_proof.rs
+?? crates/ferrule-model/tests/root_submission.rs
+?? crates/ferrule-model/tests/standard_bf16_cuda.rs
+?? crates/ferrule-model/tests/standard_bf16_precision.rs
+?? crates/ferrule-model/tests/support/
+?? crates/ferrule-model/tests/unit/
+?? crates/ferrule-runtime/src/cache/committed_read_pins.rs
+?? crates/ferrule-runtime/src/cache/kv_read_authority.rs
+?? crates/ferrule-runtime/src/engine/driver/kv_execution.rs
+?? crates/ferrule-runtime/src/engine/driver/trace.rs
+?? crates/ferrule-runtime/src/engine/kv_policy.rs
+?? crates/ferrule-runtime/src/engine/kv_trace.rs
+?? crates/ferrule-runtime/src/engine/kv_trace/
+?? crates/ferrule-runtime/src/engine/resident_composition.rs
+?? crates/ferrule-runtime/src/engine/runner_executor.rs
+?? crates/ferrule-runtime/src/engine/runner_executor/
+?? crates/ferrule-runtime/src/io/host_kv_adapters.rs
+?? crates/ferrule-runtime/src/parallel/codec.rs
+?? crates/ferrule-runtime/src/parallel/expert/
+?? crates/ferrule-runtime/src/parallel/expert_process.rs
+?? crates/ferrule-runtime/src/parallel/expert_process/
+?? crates/ferrule-runtime/src/parallel/frame_budget.rs
+?? crates/ferrule-runtime/src/parallel/hybrid_topology.rs
+?? crates/ferrule-runtime/src/parallel/mixed_rank_collective.rs
+?? crates/ferrule-runtime/src/parallel/mixed_route_collective.rs
+?? crates/ferrule-runtime/src/parallel/network.rs
+?? crates/ferrule-runtime/src/parallel/network/
+?? crates/ferrule-runtime/src/parallel/pipeline/completion_boundary.rs
+?? crates/ferrule-runtime/src/parallel/pipeline/dense_bf16_memory.rs
+?? crates/ferrule-runtime/src/parallel/pipeline/hybrid.rs
+?? crates/ferrule-runtime/src/parallel/pipeline/hybrid_cuda.rs
+?? crates/ferrule-runtime/src/parallel/pipeline/hybrid_cuda_tensor.rs
+?? crates/ferrule-runtime/src/parallel/pipeline/hybrid_tensor.rs
+?? crates/ferrule-runtime/src/parallel/pipeline/hybrid_tensor/
+?? crates/ferrule-runtime/src/parallel/pipeline/kv_capacity.rs
+?? crates/ferrule-runtime/src/parallel/pipeline/mixed_cache_observation.rs
+?? crates/ferrule-runtime/src/parallel/pipeline/mixed_cuda_tensor.rs
+?? crates/ferrule-runtime/src/parallel/pipeline/mixed_tensor_plan.rs
+?? crates/ferrule-runtime/src/parallel/pipeline/mixed_trace.rs
+?? crates/ferrule-runtime/src/parallel/process/decoder_hybrid.rs
+?? crates/ferrule-runtime/tests/bench/
+?? crates/ferrule-runtime/tests/compile/
+?? crates/ferrule-runtime/tests/host_kv/
+?? crates/ferrule-runtime/tests/host_kv_append.rs
+?? crates/ferrule-runtime/tests/host_kv_live.rs
+?? crates/ferrule-runtime/tests/hybrid_pipeline_state.rs
+?? crates/ferrule-runtime/tests/idle_kv_reclaim.rs
+?? crates/ferrule-runtime/tests/idle_kv_reclaim/
+?? crates/ferrule-runtime/tests/inference_boundary.rs
+?? crates/ferrule-runtime/tests/kv_execution_policy.rs
+?? crates/ferrule-runtime/tests/mixed_decoded_snapshot.rs
+?? crates/ferrule-runtime/tests/network_ranks.rs
+?? crates/ferrule-runtime/tests/parallel_architecture.rs
+?? crates/ferrule-runtime/tests/pipeline_capacity.rs
+?? crates/ferrule-runtime/tests/pipeline_capacity/
+?? crates/ferrule-runtime/tests/process_decoder/hybrid.rs
+?? crates/ferrule-runtime/tests/support/hybrid_cuda_tensor.md
+?? crates/ferrule-runtime/tests/support/ipc_frame_contracts.rs
+?? crates/ferrule-runtime/tests/support/materialization.rs
+?? crates/ferrule-runtime/tests/support/network/
+?? crates/ferrule-runtime/tests/support/numeric_expert_fixture.rs
+?? crates/ferrule-runtime/tests/support/process_binding.md
+?? crates/ferrule-runtime/tests/support/process_pipeline_fixture.rs
+?? crates/ferrule-runtime/tests/tp2_mixed_contract.rs
+?? crates/ferrule-runtime/tests/typed_collectives.rs
+?? crates/ferrule-runtime/tests/typed_collectives/
+?? crates/ferrule-runtime/tests/unit/
+?? crates/ferrule-server/tests/http/
+?? crates/ferrule-server/tests/qwen35_http/
+?? crates/ferrule-server/tests/support/ep8_capacity.rs
+?? crates/ferrule-server/tests/unit/
+?? crates/ferrule-server/tests/worker_kv_startup.rs
+?? docs/BF16_DENSE_CUDA.md
+?? docs/CPU_REFERENCE.md
+?? docs/CURRENT_ACCEPTANCE.md
+?? docs/PARALLEL_COMPOSITION.md
+?? docs/PERFORMANCE_EVALUATION.md
+?? docs/QWEN35_DENSE_PROCESS.md
+?? docs/QWEN35_MIXED_SERVING.md
+?? docs/QWEN35_PP_EP.md
+?? docs/temp_ferrule_impl.md
+?? docs/temp_ferrule_refactor.md
+?? docs/temp_kv_set.md
+?? scripts/_owned_subreaper.py
+?? scripts/_profile_capture.py
+?? scripts/automation_maintenance.md
+?? scripts/bench_ferrule_vllm.py
+?? scripts/check_feature_boundaries.py
+?? scripts/check_nextest_membership.py
+?? scripts/qwen35_fp8_bf16_reference.py
+?? scripts/qwen35_fp8_cuda_reference.md
+?? scripts/qwen35_fp8_cuda_reference.py
+?? scripts/run_pinned_jobs.py
+?? scripts/standard_bf16_reference.py
+?? scripts/test_vllm_qwen35.md
+?? scripts/test_vllm_qwen35.py
+?? scripts/tests/
+?? scripts/validate_network_localhost.md
+?? scripts/validate_network_localhost.py

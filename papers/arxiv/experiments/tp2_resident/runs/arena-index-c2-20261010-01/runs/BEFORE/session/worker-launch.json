@@ -1,0 +1,95 @@
+{
+  "directory": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/arena-index-c2-20261010-01/runs/BEFORE/session",
+  "owner_locks": {
+    "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/GPU-63f1bd01-ddf9-a742-ee48-9389892493d9.lock",
+      "fd": 3,
+      "device": 64785,
+      "inode": 58519247,
+      "coordinator_pid": 125284,
+      "mode": "local_nonblocking_flock",
+      "global_reservation": false
+    },
+    "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/GPU-b980f22b-58a3-fc88-21c1-ae86053d8535.lock",
+      "fd": 4,
+      "device": 64785,
+      "inode": 58519119,
+      "coordinator_pid": 125284,
+      "mode": "local_nonblocking_flock",
+      "global_reservation": false
+    }
+  },
+  "baseline": {
+    "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": {
+      "index": 0,
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "total_bytes": 25769803776,
+      "gpu_bytes": 0,
+      "utilization": 0
+    },
+    "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": {
+      "index": 1,
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "total_bytes": 25769803776,
+      "gpu_bytes": 0,
+      "utilization": 0
+    },
+    "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6": {
+      "index": 2,
+      "uuid": "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6",
+      "total_bytes": 25769803776,
+      "gpu_bytes": 0,
+      "utilization": 0
+    },
+    "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011": {
+      "index": 3,
+      "uuid": "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011",
+      "total_bytes": 25769803776,
+      "gpu_bytes": 0,
+      "utilization": 0
+    },
+    "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86": {
+      "index": 4,
+      "uuid": "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86",
+      "total_bytes": 25769803776,
+      "gpu_bytes": 0,
+      "utilization": 0
+    },
+    "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685": {
+      "index": 5,
+      "uuid": "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685",
+      "total_bytes": 25769803776,
+      "gpu_bytes": 0,
+      "utilization": 0
+    },
+    "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d": {
+      "index": 6,
+      "uuid": "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d",
+      "total_bytes": 25769803776,
+      "gpu_bytes": 0,
+      "utilization": 0
+    },
+    "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f": {
+      "index": 7,
+      "uuid": "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f",
+      "total_bytes": 25769803776,
+      "gpu_bytes": 0,
+      "utilization": 0
+    }
+  },
+  "baseline_sha256": "3c2bd642756c89eefb40a77c82d66cda42ca4d6a3584092b8d2f1620932ab368",
+  "prepared_sha256": "c5cf93da30c26526e0e1753d8c5027588aa7e609c1fdd6df81b924ab52fbefe7",
+  "worker_token": "a78104a5ef5552819cb02b9954263efe6c13851916eda616170c5d4ccf5af944",
+  "manifest": {
+    "protocol": "ferrule.paper.m7.worker.v2"
+  },
+  "coordinator": {
+    "pid": 125284,
+    "birth_ticks": 96251178,
+    "ppid": 125283,
+    "pgrp": 125284,
+    "session": 125283
+  },
+  "worker_source_sha256": "0aae631cf46bb99f567527d8dbe20b0a56e61c57ca7267858e1eb3e4cc67e16c"
+}

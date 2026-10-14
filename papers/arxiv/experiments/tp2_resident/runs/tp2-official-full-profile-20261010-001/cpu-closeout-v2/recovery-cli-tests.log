@@ -1,0 +1,9 @@
+test_default_and_explicit_fresh_output (__main__.OutputSafety.test_default_and_explicit_fresh_output) ... ok
+test_existing_default_and_explicit_output_unchanged (__main__.OutputSafety.test_existing_default_and_explicit_output_unchanged) ... ok
+test_historical_name_rejected_before_audit (__main__.OutputSafety.test_historical_name_rejected_before_audit) ... ok
+test_paths_and_non_json_rejected_before_audit (__main__.OutputSafety.test_paths_and_non_json_rejected_before_audit) ... ok
+
+----------------------------------------------------------------------
+Ran 4 tests in 0.005s
+
+OK

@@ -126,7 +126,14 @@ impl Fixture {
         ));
         std::fs::create_dir(&dir).unwrap();
         let oracle: Value = serde_json::from_str(match precision {
-            NumericFp8Precision::Bf16RneF32Accumulate => {
+            NumericFp8Precision::Bf16ModelF32Accumulate
+            | NumericFp8Precision::Bf16ModelTiledF32Accumulate
+            | NumericFp8Precision::Bf16ModelSlicedK2F32Accumulate
+            | NumericFp8Precision::Bf16ModelMixedF32Accumulate => {
+                panic!("model BF16 uses the independent hybrid BF16 fixture")
+            }
+            NumericFp8Precision::Bf16RneF32Accumulate
+            | NumericFp8Precision::W8A16Bf16F32Accumulate => {
                 include_str!("fixtures/numeric_standard_oracle.json")
             }
             NumericFp8Precision::F32Tf32x3 => {

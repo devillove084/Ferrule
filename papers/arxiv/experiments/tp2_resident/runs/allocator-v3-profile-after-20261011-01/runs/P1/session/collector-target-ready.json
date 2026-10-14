@@ -1,0 +1,10 @@
+{
+  "identity": {
+    "pid": 188403,
+    "birth_ticks": 100790545,
+    "ppid": 188402,
+    "state": "R"
+  },
+  "manifest_sha256": "065be171bee62259110591ad3fd104063cf8021a8249eaa004b0d80c7b48b3d5",
+  "nonce": "d6dce529addb6bdf48c49aaf5ecb21d75997424371b4012322f3cabe4f9815f5"
+}

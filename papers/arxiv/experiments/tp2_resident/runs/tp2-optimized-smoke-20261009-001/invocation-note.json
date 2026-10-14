@@ -1,0 +1,7 @@
+{
+  "status": "one_cpu_rejected_typo_before_actual_launch",
+  "rejected_id": "tp2-optimized-smoke-20260910-001",
+  "error": "Missing prepared.json",
+  "actual_id": "tp2-optimized-smoke-20261009-001",
+  "no_server_or_gpu_lock_on_rejected_invocation": true
+}

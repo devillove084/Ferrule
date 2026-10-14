@@ -1,0 +1,62 @@
+{
+  "status": "official_cli_isolated_installed_and_micro_pass",
+  "source_url": "https://developer.download.nvidia.com/devtools/repos/ubuntu2204/amd64/NsightSystems-linux-cli-public-2025.3.1.90-3582212.deb",
+  "package": "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/nsight-systems-cli-2025.3.1/NsightSystems-linux-cli-public-2025.3.1.90-3582212.deb",
+  "package_bytes": 175210028,
+  "package_sha256": "d2484ad0faf6831b11fa0bf73c54232d9ea8beafb50414019e6ba299c4ed5718",
+  "official_index_url": "https://developer.download.nvidia.com/devtools/repos/ubuntu2204/amd64/Packages.gz",
+  "official_package_record": "Package: nsight-systems-cli-2025.3.1\nArchitecture: amd64\nVersion: 2025.3.1.90-253135822126v0\nPriority: optional\nSection: devel\nMaintainer: Feedback <nsight-systems@nvidia.com>\nProvides: nsight-systems-cli\nDepends: libc6, libglib2.0-0\nFilename: NsightSystems-linux-cli-public-2025.3.1.90-3582212.deb\nSize: 175210028\nMD5sum: f37252fcc621c712c78544194c2f0a9e\nSHA1: 3c6410b107599f1a88f981a35d645d3511ba3cb4\nSHA256: d2484ad0faf6831b11fa0bf73c54232d9ea8beafb50414019e6ba299c4ed5718\nSHA512: 487451b00f2b7e15f8884052675dba00b87e82789ca10c3b3a37324de3bacb147c0db8f2601478eaa3645fff386244b63ed12e54715f0b7752961796e9de2177\nDescription: Nsight Systems is a statistical sampling profiler with tracing features.\n It is designed to work with devices and devkits based on\n NVIDIA Tegra SoCs (system-on-chip) or systems\n based on the x86_64 processor architecture that\n also include NVIDIA GPU(s).",
+  "index_sha256": "5a95fb559b3fb6d7e00adc21f022b5f255089dc1bbe7ff6c9294aa59acbcf656",
+  "install_root": "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/nsight-systems-cli-2025.3.1/opt/nvidia/nsight-systems-cli/2025.3.1",
+  "installation": "dedicated project vendor extraction; no system or conda transaction",
+  "versions": {
+    "cli": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/nsight-systems-cli-2025.3.1/opt/nvidia/nsight-systems-cli/2025.3.1/target-linux-x64/nsys",
+      "version": "NVIDIA Nsight Systems version 2025.3.1.90-253135822126v0",
+      "sha256": "525f35a10de49b396e91a3831ae40e98a8631d619b7c8bbb4c54469b8c08a72e"
+    },
+    "importer": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/nsight-systems-cli-2025.3.1/opt/nvidia/nsight-systems-cli/2025.3.1/host-linux-x64/QdstrmImporter",
+      "version": "NVIDIA Nsight Systems 2025.3.1.90-253135822126v0",
+      "sha256": "23e4185b7b20d00c27dc2e521c1048a75abe04f04dbbd88e411b6dfba2cc8053"
+    }
+  },
+  "bundled_cupti": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/nsight-systems-cli-2025.3.1/opt/nvidia/nsight-systems-cli/2025.3.1/target-linux-x64/libcupti.so.12.9",
+    "sha256": "19f0f06e0c5579113840169d5f6d6d4222d4a4fc2d66403cbe3cad2d91db1ace",
+    "loaded_in_both_sample_processes": true
+  },
+  "declared_dependencies": [
+    "libc6",
+    "libglib2.0-0"
+  ],
+  "resolved_dependency_sha256": "dependency-sha256.json",
+  "all_tool_file_sha256": "tool-inventory-sha256.json",
+  "conda": {
+    "path": "/opt/conda310/bin/conda",
+    "version": "conda 23.1.0",
+    "python": "Python 3.10.9",
+    "dry_run": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/nsys-official-micro-20261009-001/research/conda-dry-run.json",
+    "result": "nvidia channel has no nsight-systems=2025.3.1; no transaction"
+  },
+  "cuda_toolchain": "CUDA 12.4.99; no upgrade",
+  "driver": "575.57.08",
+  "cuda_driver_api": "12.9",
+  "hardware": "8x RTX3090 SM86",
+  "release_notes": "https://docs.nvidia.com/nsight-systems/2025.3/ReleaseNotes/index.html",
+  "workload": {
+    "path": "/home/admin/wxw403883/anaconda3/envs/tao/demo_suite/vectorAdd",
+    "sha256": "b3994c4eaccd8b7d616dea4bea6a7bdc3454a0e01bfcfe3ad483ac70a0f8d1ed",
+    "origin": "existing NVIDIA CUDA12.4 demo_suite vectorAdd",
+    "per_gpu": "H2D, vectorAdd kernel, D2H"
+  },
+  "unchanged_scope": [
+    "production code",
+    "torch",
+    "vllm",
+    "CUDA installation",
+    "old 2026.1.3 raw"
+  ],
+  "acceptance": "acceptance.json",
+  "provenance_note": "NVIDIA HTTPS repository and repository-index SHA256; package signature not independently verified"
+}

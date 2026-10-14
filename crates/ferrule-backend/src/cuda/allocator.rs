@@ -1,7 +1,8 @@
 //! Backend-private segmented CUDA device allocator.
 
 use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex, MutexGuard, Weak};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, TryLockError, Weak};
 
 #[cfg(test)]
 use std::sync::Barrier;
@@ -10,11 +11,16 @@ use super::runtime::{
     CudaContext, CudaError, CudaResult, CudaRetirementEvent, DevicePtr, driver_alloc, driver_free,
 };
 
-const MIN_ALIGNMENT: usize = 256;
-const SMALL_LIMIT: usize = 1 << 20;
+use crate::cuda_allocation_layout::{
+    ALLOCATOR_PAGE_BYTES, MIN_ALIGNMENT, SMALL_LIMIT, cuda_allocation_grant_bytes,
+};
 const LARGE_LIMIT: usize = 16 << 20;
-const ALLOCATOR_PAGE_BYTES: usize = 2 << 20;
 const SEGMENT_BYTES: usize = 64 << 20;
+const RETIREMENT_BATCH_BLOCKS: usize = 64;
+const RETIREMENT_BATCH_BYTES: usize = 64 << 20;
+// Driver-growth backpressure only: neither a reservation budget nor a limit on reuse.
+const PENDING_RETIREMENT_BATCHES: usize = 256;
+const PENDING_RETIREMENT_BYTES: usize = 256 << 20;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AllocationKind {
@@ -27,6 +33,7 @@ enum AllocationKind {
 enum SegmentKind {
     Standard,
     Huge,
+    Dedicated,
 }
 
 #[derive(Debug)]
@@ -100,11 +107,27 @@ impl Segment {
 }
 
 #[derive(Debug)]
-struct PendingRetirement {
+struct RetiredBlock {
     segment: u64,
     offset: usize,
     granted: usize,
-    events: Vec<CudaRetirementEvent>,
+}
+
+#[derive(Debug)]
+enum RetirementFences {
+    Unfenced,
+    Recorded(Vec<CudaRetirementEvent>),
+    Complete,
+    // Installed before driver calls: unwinding must never imply completion.
+    Retained,
+}
+
+#[derive(Debug)]
+struct PendingRetirement {
+    blocks: Vec<RetiredBlock>,
+    bytes: usize,
+    fences: Mutex<RetirementFences>,
+    has_fences: AtomicBool,
 }
 
 #[derive(Debug, Default)]
@@ -128,16 +151,30 @@ struct MetricState {
     driver_frees: u64,
     driver_free_bytes: u64,
     capture_retirement_bytes: usize,
+    retired_blocks: u64,
+    retirement_batches: u64,
+    retirement_created_fences: u64,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+enum AllocatorShutdownState {
+    #[default]
+    Running,
+    Quiescent,
+    Retained,
 }
 
 #[derive(Debug, Default)]
 struct AllocatorState {
     next_segment: u64,
     segments: Vec<Segment>,
-    pending: Vec<PendingRetirement>,
-    capture_retirements: Vec<PendingRetirement>,
+    unfenced: Vec<RetiredBlock>,
+    unfenced_bytes: usize,
+    pending: Vec<Arc<PendingRetirement>>,
+    capture_retirements: Vec<RetiredBlock>,
     metrics: MetricState,
     shutdown: bool,
+    shutdown_state: AllocatorShutdownState,
 }
 
 /// Canonical point-in-time diagnostics for ordinary CUDA device allocations.
@@ -162,6 +199,20 @@ pub struct CudaAllocatorMetrics {
     pub pending_retirement_blocks: usize,
     pub pending_retirement_bytes: usize,
     pub capture_retirement_bytes: usize,
+    /// Nonzero blocks retired after their final owner, including capture quarantine.
+    pub retired_blocks: u64,
+    /// Batches detached from the unfenced queue (including failed batches).
+    pub retirement_batches: u64,
+    /// Created fences returned by successful whole-batch recordings. Partial failed
+    /// recordings are destroyed inside the runtime and are not observable here.
+    pub retirement_created_fences: u64,
+    pub pending_retirement_batches: usize,
+    /// Includes recording/failed batches without a usable complete fence set.
+    pub pending_unfenced_bytes: usize,
+    /// Final shutdown proved completion and drained all nonzero block owners.
+    pub shutdown_quiescent: bool,
+    /// Shutdown/context teardown lacks a complete release proof (including unwind).
+    pub shutdown_retained: bool,
     pub internal_fragmentation: f64,
     pub external_fragmentation: f64,
     pub segments: usize,
@@ -259,6 +310,23 @@ impl CudaDeviceAllocator {
         requested: usize,
         alignment: usize,
     ) -> CudaResult<Arc<CudaDeviceBlock>> {
+        self.allocate_impl(requested, alignment, false)
+    }
+
+    pub(crate) fn allocate_dedicated(
+        self: &Arc<Self>,
+        requested: usize,
+        alignment: usize,
+    ) -> CudaResult<Arc<CudaDeviceBlock>> {
+        self.allocate_impl(requested, alignment, true)
+    }
+
+    fn allocate_impl(
+        self: &Arc<Self>,
+        requested: usize,
+        alignment: usize,
+        dedicated: bool,
+    ) -> CudaResult<Arc<CudaDeviceBlock>> {
         let context = self
             .context
             .upgrade()
@@ -280,9 +348,11 @@ impl CudaDeviceAllocator {
         }
         if capture_state.blocks_allocation() {
             state.metrics.allocation_failures = state.metrics.allocation_failures.saturating_add(1);
-            return Err(CudaError::internal(
-                "CUDA allocator cannot allocate during graph capture",
-            ));
+            return Err(CudaError::internal(if capture_state.completion_unknown() {
+                "CUDA allocator completion Unknown; resources quarantined, restart worker"
+            } else {
+                "CUDA allocator capture active; retry after capture ends"
+            }));
         }
         if requested == 0 {
             drop(state);
@@ -316,11 +386,26 @@ impl CudaDeviceAllocator {
             }
         }
 
-        let existing = find_allocation(&mut state.segments, kind, granted, alignment);
+        let existing = if dedicated {
+            None
+        } else {
+            find_allocation(&mut state.segments, kind, granted, alignment)
+        };
         let (segment, offset, reused) = match existing {
             Some(value) => (value.0, value.1, true),
             None => {
-                let segment_bytes = segment_size(kind, granted)?;
+                if pending_growth_pressure(&state) {
+                    state.metrics.allocation_failures =
+                        state.metrics.allocation_failures.saturating_add(1);
+                    return Err(CudaError::internal(
+                        "CUDA allocator driver growth deferred by ordinary retirement pressure; poll after registered-stream progress (not a device memory budget)",
+                    ));
+                }
+                let segment_bytes = if dedicated {
+                    granted
+                } else {
+                    segment_size(kind, granted)?
+                };
                 context.bind_to_thread()?;
                 let ptr = match driver_alloc(segment_bytes) {
                     Ok(ptr) => ptr,
@@ -332,7 +417,9 @@ impl CudaDeviceAllocator {
                 };
                 let id = state.next_segment;
                 state.next_segment = state.next_segment.saturating_add(1);
-                let segment_kind = if kind == AllocationKind::Huge {
+                let segment_kind = if dedicated {
+                    SegmentKind::Dedicated
+                } else if kind == AllocationKind::Huge {
                     SegmentKind::Huge
                 } else {
                     SegmentKind::Standard
@@ -409,77 +496,176 @@ impl CudaDeviceAllocator {
         state.metrics.live_requested_bytes =
             state.metrics.live_requested_bytes.saturating_sub(requested);
         state.metrics.live_granted_bytes = state.metrics.live_granted_bytes.saturating_sub(granted);
+        state.metrics.retired_blocks = state.metrics.retired_blocks.saturating_add(1);
+        let block = RetiredBlock {
+            segment,
+            offset,
+            granted,
+        };
         if capture_state.blocks_allocation() {
-            // A graph may retain the pointer after capture. Keep it isolated until
-            // the owning CUDA context (and therefore every graph) is destroyed.
+            // Graph pointers remain isolated until final context teardown.
             state.metrics.capture_retirement_bytes = state
                 .metrics
                 .capture_retirement_bytes
                 .saturating_add(granted);
-            state.capture_retirements.push(PendingRetirement {
-                segment,
-                offset,
-                granted,
-                events: Vec::new(),
-            });
+            state.capture_retirements.push(block);
             return;
+        }
+        // Nothing enters a batch after recording starts. Raw-pointer users must
+        // still finish submitting on registered streams before the last owner
+        // drops; late submission / unregistered streams remain unsupported.
+        let mut pressure = false;
+        if state.unfenced_bytes.saturating_add(granted) > RETIREMENT_BATCH_BYTES {
+            seal_locked(&mut state);
+            pressure = true;
+        }
+        state.unfenced.push(block);
+        state.unfenced_bytes += granted;
+        if state.unfenced.len() >= RETIREMENT_BATCH_BLOCKS
+            || state.unfenced_bytes >= RETIREMENT_BATCH_BYTES
+        {
+            seal_locked(&mut state);
+            pressure = true;
         }
         drop(state);
         drop(capture_state);
-
-        match context.record_retirement_events() {
-            Ok(events) => {
-                let mut state = self.lock();
-                state.pending.push(PendingRetirement {
-                    segment,
-                    offset,
-                    granted,
-                    events,
-                });
-            }
-            Err(()) if context.synchronize_registered_streams().is_ok() => {
-                self.release_block(segment, offset, granted);
-            }
-            Err(()) => {
-                // Correctness takes precedence over reclaiming memory after a driver failure.
-                let mut state = self.lock();
-                state.metrics.capture_retirement_bytes = state
-                    .metrics
-                    .capture_retirement_bytes
-                    .saturating_add(granted);
-            }
+        if pressure {
+            self.poll_retirements();
         }
     }
 
     pub(crate) fn poll_retirements(&self) -> usize {
-        let mut state = self.lock();
-        let mut ready = Vec::new();
-        let mut pending = Vec::with_capacity(state.pending.len());
-        for retirement in state.pending.drain(..) {
-            let complete = retirement.events.iter().all(|event| match event.query() {
-                Ok(value) => value,
-                Err(_) => event.synchronize().is_ok(),
-            });
-            if complete {
-                ready.push(retirement);
-            } else {
-                pending.push(retirement);
+        let Some(context) = self.context.upgrade() else {
+            return 0;
+        };
+        if context.is_capturing() {
+            return 0;
+        }
+        let pending = {
+            let mut state = self.lock();
+            seal_locked(&mut state);
+            state.pending.clone()
+        };
+        let mut released = 0;
+        for batch in pending {
+            // Concurrent/reentrant polling skips an in-flight batch. Retire can
+            // always append to the next queue; no allocator lock spans events,
+            // stream teardown, or the existing error-only completion fallback.
+            let mut fences = match batch.fences.try_lock() {
+                Ok(guard) => guard,
+                Err(TryLockError::WouldBlock) => continue,
+                Err(TryLockError::Poisoned(error)) => error.into_inner(),
+            };
+            let mut current = std::mem::replace(&mut *fences, RetirementFences::Retained);
+            batch.has_fences.store(false, Ordering::Relaxed);
+            if matches!(current, RetirementFences::Unfenced) {
+                current = match context.record_retirement_events() {
+                    Ok(None) => RetirementFences::Unfenced,
+                    Ok(Some(events)) => {
+                        let mut state = self.lock();
+                        state.metrics.retirement_created_fences = state
+                            .metrics
+                            .retirement_created_fences
+                            .saturating_add(events.len() as u64);
+                        RetirementFences::Recorded(events)
+                    }
+                    Err(()) => match context.synchronize_registered_streams() {
+                        Ok(()) => RetirementFences::Complete,
+                        Err(_error) => {
+                            #[cfg(feature = "cuda")]
+                            tracing::error!(
+                                target: "ferrule_backend::cuda::runtime",
+                                error = ?_error,
+                                completion_unknown = context.graph_completion_unknown(),
+                                retained_blocks = batch.blocks.len(),
+                                retained_bytes = batch.bytes,
+                                "CUDA allocator retirement record/fallback failed; batch retained; investigate driver completion, restart worker if Unknown"
+                            );
+                            RetirementFences::Retained
+                        }
+                    },
+                };
+            }
+            if let RetirementFences::Recorded(events) = current {
+                let mut complete = true;
+                let mut failed = false;
+                for event in &events {
+                    match event.query() {
+                        Ok(true) => {}
+                        Ok(false) => {
+                            complete = false;
+                            break;
+                        }
+                        Err(_query_error) => {
+                            if let Err(_completion_error) = event.synchronize() {
+                                // Failed completion is terminal, not a fence that a
+                                // later unrelated local success may wash away.
+                                context.mark_graph_unknown();
+                                #[cfg(feature = "cuda")]
+                                tracing::error!(
+                                    target: "ferrule_backend::cuda::runtime",
+                                    query_error = ?_query_error,
+                                    completion_error = ?_completion_error,
+                                    retained_blocks = batch.blocks.len(),
+                                    retained_bytes = batch.bytes,
+                                    "CUDA allocator retirement completion Unknown; batch retained; restart worker and investigate driver failure"
+                                );
+                                failed = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+                current = if failed {
+                    RetirementFences::Retained
+                } else if complete {
+                    RetirementFences::Complete
+                } else {
+                    RetirementFences::Recorded(events)
+                };
+            }
+            // Serialize publication of free extents with capture/Unknown state.
+            // Local event success cannot override a concurrent terminal failure.
+            let capture_state = context.capture_state();
+            if capture_state.completion_unknown() {
+                drop(capture_state);
+                drop(current);
+                continue;
+            }
+            let may_release = !capture_state.blocks_allocation();
+            // Capture is a temporary publication barrier, not loss of an
+            // existing Recorded/Complete proof. Keep it for the next poll.
+            batch.has_fences.store(
+                matches!(
+                    current,
+                    RetirementFences::Recorded(_) | RetirementFences::Complete
+                ),
+                Ordering::Relaxed,
+            );
+            let complete = matches!(current, RetirementFences::Complete);
+            *fences = current;
+            drop(fences);
+            if complete && may_release {
+                released += self.release_batch(&batch);
             }
         }
-        state.pending = pending;
-        for retirement in &ready {
-            release_block_locked(
-                &mut state,
-                retirement.segment,
-                retirement.offset,
-                retirement.granted,
-            );
-        }
-        ready.len()
+        released
     }
 
-    fn release_block(&self, segment: u64, offset: usize, granted: usize) {
-        release_block_locked(&mut self.lock(), segment, offset, granted);
+    fn release_batch(&self, batch: &Arc<PendingRetirement>) -> usize {
+        let mut state = self.lock();
+        let Some(index) = state
+            .pending
+            .iter()
+            .position(|candidate| Arc::ptr_eq(candidate, batch))
+        else {
+            return 0;
+        };
+        state.pending.swap_remove(index);
+        for block in &batch.blocks {
+            release_block_locked(&mut state, block.segment, block.offset, block.granted);
+        }
+        batch.blocks.len()
     }
 
     pub(crate) fn trim(&self) -> CudaResult<usize> {
@@ -545,29 +731,87 @@ impl CudaDeviceAllocator {
             self.lock().shutdown = true;
             return;
         };
-        self.shutdown_with_context(&context, false);
+        let _ = self.shutdown_with_context(&context, false);
     }
 
-    pub(crate) fn shutdown_with_context(&self, context: &CudaContext, release_captured: bool) {
-        self.lock().shutdown = true;
-        if context.synchronize_registered_streams().is_ok() {
+    pub(crate) fn shutdown_with_context(
+        &self,
+        context: &CudaContext,
+        release_captured: bool,
+    ) -> CudaResult<()> {
+        let (pending, captured) = {
             let mut state = self.lock();
-            let mut pending = std::mem::take(&mut state.pending);
-            if release_captured {
-                pending.append(&mut state.capture_retirements);
-                state.metrics.capture_retirement_bytes = 0;
-            }
-            for retirement in pending {
-                release_block_locked(
-                    &mut state,
-                    retirement.segment,
-                    retirement.offset,
-                    retirement.granted,
-                );
-            }
-            drop(state);
-            let _ = self.trim_with_context(context);
+            state.shutdown = true;
+            state.shutdown_state = AllocatorShutdownState::Retained;
+            seal_locked(&mut state);
+            (
+                state.pending.clone(),
+                if release_captured {
+                    state.capture_retirements.len()
+                } else {
+                    0
+                },
+            )
+        };
+        // Only this pre-sync snapshot is covered. Concurrent last-owner drops
+        // stay pending for a later poll / final context teardown.
+        context.synchronize_registered_streams()?;
+        let capture_state = context.capture_state();
+        if capture_state.blocks_allocation() {
+            return Err(CudaError::internal(
+                "CUDA allocator shutdown: capture or Unknown after completion",
+            ));
         }
+        for batch in &pending {
+            self.release_batch(batch);
+        }
+        let mut state = self.lock();
+        let captured = state
+            .capture_retirements
+            .drain(..captured)
+            .collect::<Vec<_>>();
+        for block in captured {
+            state.metrics.capture_retirement_bytes = state
+                .metrics
+                .capture_retirement_bytes
+                .saturating_sub(block.granted);
+            release_block_locked(&mut state, block.segment, block.offset, block.granted);
+        }
+        if !state.unfenced.is_empty()
+            || !state.pending.is_empty()
+            || !state.capture_retirements.is_empty()
+            || state
+                .segments
+                .iter()
+                .any(|segment| segment.live_blocks != 0)
+        {
+            return Err(CudaError::internal(
+                "CUDA allocator shutdown: live, captured, or concurrently retired blocks remain",
+            ));
+        }
+        drop(state);
+        drop(capture_state);
+        self.trim_with_context(context)?;
+        let capture_state = context.capture_state();
+        if capture_state.blocks_allocation() {
+            return Err(CudaError::internal(
+                "CUDA allocator shutdown: capture or Unknown during drain",
+            ));
+        }
+        self.lock().shutdown_state = AllocatorShutdownState::Quiescent;
+        Ok(())
+    }
+
+    // Preserve the ledger and raw event/segment custody, not only the primary
+    // context retain. No recovery/reuse is authorized after failed final teardown.
+    pub(crate) fn retain_after_context_failure(self: &Arc<Self>) -> CudaAllocatorMetrics {
+        let mut state = self.lock();
+        state.shutdown = true;
+        state.shutdown_state = AllocatorShutdownState::Retained;
+        drop(state);
+        let metrics = self.metrics();
+        std::mem::forget(Arc::clone(self));
+        metrics
     }
 
     pub(crate) fn metrics(&self) -> CudaAllocatorMetrics {
@@ -588,7 +832,7 @@ impl CudaDeviceAllocator {
         let pending_retirement_bytes = state
             .pending
             .iter()
-            .map(|retirement| retirement.granted)
+            .map(|retirement| retirement.bytes)
             .sum::<usize>();
         CudaAllocatorMetrics {
             allocation_requests: state.metrics.allocation_requests,
@@ -607,8 +851,28 @@ impl CudaDeviceAllocator {
             peak_reserved_bytes: state.metrics.peak_reserved_bytes,
             free_bytes,
             largest_free_extent,
-            pending_retirement_blocks: state.pending.len() + state.capture_retirements.len(),
-            pending_retirement_bytes: pending_retirement_bytes
+            shutdown_quiescent: state.shutdown_state == AllocatorShutdownState::Quiescent,
+            shutdown_retained: state.shutdown_state == AllocatorShutdownState::Retained,
+            retired_blocks: state.metrics.retired_blocks,
+            retirement_batches: state.metrics.retirement_batches,
+            retirement_created_fences: state.metrics.retirement_created_fences,
+            pending_retirement_batches: state.pending.len(),
+            pending_unfenced_bytes: state.unfenced_bytes
+                + state
+                    .pending
+                    .iter()
+                    .filter(|batch| !batch.has_fences.load(Ordering::Relaxed))
+                    .map(|batch| batch.bytes)
+                    .sum::<usize>(),
+            pending_retirement_blocks: state.unfenced.len()
+                + state
+                    .pending
+                    .iter()
+                    .map(|batch| batch.blocks.len())
+                    .sum::<usize>()
+                + state.capture_retirements.len(),
+            pending_retirement_bytes: state.unfenced_bytes
+                + pending_retirement_bytes
                 + state
                     .capture_retirements
                     .iter()
@@ -640,6 +904,31 @@ impl CudaDeviceAllocator {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
+}
+
+fn seal_locked(state: &mut AllocatorState) {
+    if state.unfenced.is_empty() {
+        return;
+    }
+    let batch = Arc::new(PendingRetirement {
+        blocks: std::mem::take(&mut state.unfenced),
+        bytes: std::mem::take(&mut state.unfenced_bytes),
+        fences: Mutex::new(RetirementFences::Unfenced),
+        has_fences: AtomicBool::new(false),
+    });
+    state.pending.push(batch);
+    state.metrics.retirement_batches = state.metrics.retirement_batches.saturating_add(1);
+}
+
+// Capture quarantine cannot progress through polling and belongs to context
+// teardown, not the ordinary retirement-growth throttle. Existing safe extents
+// are always tried first; externally admitted/reserved memory is not re-budgeted.
+fn pending_growth_pressure(state: &AllocatorState) -> bool {
+    state.pending.len() >= PENDING_RETIREMENT_BATCHES
+        || state
+            .unfenced_bytes
+            .saturating_add(state.pending.iter().map(|batch| batch.bytes).sum::<usize>())
+            >= PENDING_RETIREMENT_BYTES
 }
 
 fn find_allocation(
@@ -684,24 +973,16 @@ fn normalize_alignment(alignment: usize) -> CudaResult<usize> {
 }
 
 fn allocation_layout(requested: usize) -> CudaResult<(AllocationKind, usize)> {
-    if requested <= SMALL_LIMIT {
-        Ok((
-            AllocationKind::Small,
-            requested.max(MIN_ALIGNMENT).next_power_of_two(),
-        ))
+    let kind = if requested <= SMALL_LIMIT {
+        AllocationKind::Small
     } else if requested <= LARGE_LIMIT {
-        Ok((
-            AllocationKind::Large,
-            align_up(requested, ALLOCATOR_PAGE_BYTES)
-                .ok_or_else(|| CudaError::internal("CUDA large allocation size overflow"))?,
-        ))
+        AllocationKind::Large
     } else {
-        Ok((
-            AllocationKind::Huge,
-            align_up(requested, ALLOCATOR_PAGE_BYTES)
-                .ok_or_else(|| CudaError::internal("CUDA huge allocation size overflow"))?,
-        ))
-    }
+        AllocationKind::Huge
+    };
+    let granted = cuda_allocation_grant_bytes(requested)
+        .ok_or_else(|| CudaError::internal("CUDA allocation size overflow"))?;
+    Ok((kind, granted))
 }
 
 fn segment_size(kind: AllocationKind, granted: usize) -> CudaResult<usize> {
@@ -828,3 +1109,7 @@ mod tests {
         assert!((fragmentation(128, 256) - 0.5).abs() < f64::EPSILON);
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/cuda/allocator.rs"]
+mod dedicated_kv_tests;

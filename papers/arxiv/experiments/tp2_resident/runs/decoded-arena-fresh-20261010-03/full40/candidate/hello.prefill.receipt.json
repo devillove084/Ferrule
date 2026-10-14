@@ -1,0 +1,11 @@
+{
+  "case": "hello",
+  "error": null,
+  "input_token_ids": [
+    9419
+  ],
+  "phase": "prefill",
+  "published": true,
+  "session": 1,
+  "transaction": 1
+}

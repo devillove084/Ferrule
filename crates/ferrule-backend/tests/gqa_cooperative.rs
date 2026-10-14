@@ -3,13 +3,14 @@
 use std::path::PathBuf;
 use std::process::Command;
 
-fn run_harness(benchmark: bool) {
+fn run_harness(mode: &str) {
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let source = manifest.join("tests/support/gqa_cooperative.cu");
     let native_cuda = manifest.join("native/cuda");
-    let mode = if benchmark { "benchmark" } else { "oracle" };
+
     let binary = std::env::temp_dir().join(format!("ferrule-gqa-{mode}-{}", std::process::id()));
-    let compile = Command::new("nvcc")
+    let nvcc = std::env::var_os("NVCC").unwrap_or_else(|| "nvcc".into());
+    let compile = Command::new(nvcc)
         .args([
             "-std=c++17",
             "-O3",
@@ -32,8 +33,8 @@ fn run_harness(benchmark: bool) {
         "nvcc failed to compile direct GQA harness"
     );
     let mut command = Command::new(&binary);
-    if benchmark {
-        command.arg("--bench");
+    if mode != "oracle" {
+        command.arg(format!("--{mode}"));
     }
     let status = command.status().expect("failed to run direct GQA harness");
     let _ = std::fs::remove_file(binary);
@@ -41,13 +42,19 @@ fn run_harness(benchmark: bool) {
 }
 
 #[test]
+fn gqa_cooperative_compile_only() {
+    // Compile the actual CUDA fixture too, without initializing a CUDA device.
+    run_harness("compile-only");
+}
+
+#[test]
 #[ignore = "requires nvcc and native CUDA GPU; fixed-input bitwise old/new GPU oracle"]
 fn gqa_cooperative_fixed_input() {
-    run_harness(false);
+    run_harness("oracle");
 }
 
 #[test]
 #[ignore = "requires nvcc and exclusive native CUDA GPU; CUDA-event kernel timings"]
 fn gqa_cooperative_kernel_benchmark() {
-    run_harness(true);
+    run_harness("bench");
 }

@@ -1,0 +1,19 @@
+{
+  "action": "start",
+  "argv": [
+    "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/nsight-systems-cli-2025.3.1/opt/nvidia/nsight-systems-cli/2025.3.1/target-linux-x64/nsys",
+    "start",
+    "--session=FerruleProfile_tp2-official-full-profile-20261010-001"
+  ],
+  "returncode": 0,
+  "stdout": "",
+  "stderr": "",
+  "start": {
+    "monotonic_ns": 8517121396222959,
+    "unix_ns": 1791574178359704710
+  },
+  "end": {
+    "monotonic_ns": 8517125399432806,
+    "unix_ns": 1791574182362914426
+  }
+}

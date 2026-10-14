@@ -3,18 +3,23 @@
 use std::time::{Duration, Instant};
 
 use ferrule_common::io_protocol::LoadStage;
+use ferrule_composition::model_factory::ExpertCacheOptions;
+use ferrule_composition::{
+    ModelFactoryOptions, ResidentModelBuildObservability, ResidentModelBuildPlan,
+    ResidentModelPlanner,
+};
 use ferrule_model::{AutoConfig, ChatTemplate};
 use ferrule_runtime::engine::LocalSessionInferenceEngine;
-use ferrule_runtime::engine::model_factory::ExpertCacheOptions;
 use ferrule_runtime::{
-    BackendSelection, GenerateRequest, ModelFactoryOptions, RequestId, ResidentActionKind,
-    ResidentDriverStep, ResidentEngineObservability, ResidentExternalTokenObservability,
-    ResidentKvCacheObservability, ResidentMaterializationObservability,
-    ResidentModelBuildObservability, ResidentModelBuildPlan, ResidentModelPlanner,
-    ResidentTopKDriverStats, ResourceKind, SessionId, SpeculativeMetrics,
+    GenerateRequest, RequestId, ResidentActionKind, ResidentDriverStep,
+    ResidentEngineObservability, ResidentExternalTokenObservability, ResidentKvCacheObservability,
+    ResidentMaterializationObservability, ResidentTopKDriverStats, ResourceKind, SessionId,
+    SpeculativeMetrics,
 };
 
+use super::bench_kv_trace::Capture;
 use crate::GenerationConfig;
+use crate::args::BenchTraceArgs;
 use crate::bench::{GoldenTurn, InteractiveTrace, compare_interactive_trace};
 
 use super::resident::{
@@ -77,6 +82,7 @@ struct InteractiveBenchReport {
 )]
 pub fn cmd_bench_interactive(
     model_dir: &str,
+    backend_override: Option<&str>,
     prompts: &[String],
     max_new_tokens: usize,
     chat_template_override: Option<&str>,
@@ -86,6 +92,7 @@ pub fn cmd_bench_interactive(
     output_head_chunk_rows: usize,
     moe_hotset_experts: usize,
     golden_trace_path: Option<&str>,
+    trace_options: &BenchTraceArgs,
     json: bool,
 ) -> anyhow::Result<()> {
     if max_layers == 0 {
@@ -98,48 +105,90 @@ pub fn cmd_bench_interactive(
         anyhow::bail!("output-head-chunk-rows must be greater than zero");
     }
 
+    anyhow::ensure!(
+        !(trace_options.independent_prompts && golden_trace_path.is_some()),
+        "independent prompts cannot be compared with an interactive golden trace"
+    );
+    let backend = super::backend_policy::select(backend_override)?;
+    let mut capture = Capture::new(trace_options)?;
+    if trace_options.kv_trace.is_some() {
+        eprintln!(
+            "[kv-trace] WARNING: export contains sensitive prompt/generated token IDs; store it privately. Trace completeness is not physical shutdown proof."
+        );
+    }
+    let mut scheduler_config = single_sequence_scheduler_config(prefill_chunk_size);
+    if let Some(capacity) = trace_options.prefix_cache_capacity_pages {
+        scheduler_config.prefix_cache_capacity_pages = capacity;
+    }
     let generation = GenerationConfig {
         max_new_tokens,
         stop: Vec::new(),
         ctx_size: 4096,
         ..GenerationConfig::default()
     };
-    let config = AutoConfig::from_pretrained(model_dir)?;
-    let prepared = ResidentModelPlanner::new().prepare(
-        &config,
-        BackendSelection::Auto,
-        chat_template_override,
-        ModelFactoryOptions {
-            max_layers: Some(max_layers),
-            max_tensor_mebibytes: 128,
-            output_head_chunk_rows,
-            expert_reader_max_tensor_mebibytes: 64,
-            expert_cache: ExpertCacheOptions::default(),
-            qwen35_moe_capacity: None,
-            qwen35_host_cache: None,
-            moe_hotset_experts,
-            kv_cache_mebibytes: None,
-            scheduler_config: single_sequence_scheduler_config(prefill_chunk_size),
-            driver_config: resident_driver_config(generation.ctx_size, generation.stop_at_eos),
-        },
-    )?;
-    let build = prepared.observability();
-    let chat_template = prepared.chat_template();
+    let result = (|| {
+        let config = AutoConfig::from_pretrained(model_dir)?;
+        let prepared = ResidentModelPlanner::new().prepare(
+            &config,
+            backend,
+            chat_template_override,
+            ModelFactoryOptions {
+                max_layers: Some(max_layers),
+                max_tensor_mebibytes: 128,
+                output_head_chunk_rows,
+                expert_reader_max_tensor_mebibytes: 64,
+                expert_cache: ExpertCacheOptions::default(),
+                qwen35_moe_capacity: None,
+                numeric_fp8_profile: None,
+                qwen35_host_cache: None,
+                moe_hotset_experts,
+                kv_cache_mebibytes: None,
+                scheduler_config,
+                driver_config: resident_driver_config(generation.ctx_size, generation.stop_at_eos),
+            },
+        )?;
+        let build = prepared.observability();
+        let chat_template = prepared.chat_template();
 
-    let report = run_with_resident_engine(
-        prepared,
-        model_dir,
-        build,
-        output_head_chunk_rows,
-        chat_template,
-        &generation,
-        prompts,
-        warmup_tokens,
-        json,
-    )?;
+        run_with_resident_engine(
+            prepared,
+            model_dir,
+            build,
+            output_head_chunk_rows,
+            chat_template,
+            &generation,
+            prompts,
+            warmup_tokens,
+            trace_options.independent_prompts,
+            &mut capture,
+            json,
+        )
+    })();
+    // The local owner (including completion reactors) has returned before validation/I/O.
+    let exported = trace_options
+        .kv_trace
+        .as_deref()
+        .map(|path| capture.export(path, result.is_ok()))
+        .transpose();
+    let trace_metadata = match exported {
+        Ok(metadata) => metadata,
+        Err(export_error) => {
+            return Err(match result {
+                Err(owner_error) => owner_error.context(format!("{export_error:#}")),
+                Ok(_) => export_error,
+            });
+        }
+    };
+    let report = result?;
 
     if json {
         let mut output = interactive_bench_report_json(&report);
+        if trace_options.independent_prompts {
+            output["independent_prompts"] = true.into();
+        }
+        if let Some(metadata) = trace_metadata {
+            output["kv_trace"] = metadata;
+        }
         if let Some(golden_path) = golden_trace_path {
             let golden_json = std::fs::read_to_string(golden_path)?;
             let golden: InteractiveTrace = serde_json::from_str(&golden_json)?;
@@ -192,6 +241,8 @@ fn run_with_resident_engine(
     generation: &GenerationConfig,
     prompts: &[String],
     warmup_tokens: usize,
+    independent_prompts: bool,
+    capture: &mut Capture,
     json: bool,
 ) -> anyhow::Result<InteractiveBenchReport> {
     block_on_local_inference(run_with_resident_engine_async(
@@ -203,6 +254,8 @@ fn run_with_resident_engine(
         generation,
         prompts,
         warmup_tokens,
+        independent_prompts,
+        capture,
         json,
     ))
 }
@@ -220,205 +273,223 @@ async fn run_with_resident_engine_async(
     generation: &GenerationConfig,
     prompts: &[String],
     warmup_tokens: usize,
+    independent_prompts: bool,
+    capture: &mut Capture,
     json: bool,
 ) -> anyhow::Result<InteractiveBenchReport> {
     let build_started = Instant::now();
     let mut engine = LocalSessionInferenceEngine::new(prepared.build()?);
     let engine_build_us = duration_us(build_started.elapsed());
-    engine.initialize().await?;
-    engine.wait_for_model_warmup().await?;
+    capture.enable(&mut engine)?;
+    let result = async {
+        engine.initialize().await?;
+        engine.wait_for_model_warmup().await?;
 
-    let mut report = InteractiveBenchReport {
-        model_dir: model_dir.to_owned(),
-        build,
-        output_head_chunk_rows,
-        runtime_path: "resident_model_planner",
-        engine_build_us,
-        warmup_tokens,
-        warmup_us: 0,
-        warmup_generated_tokens: 0,
-        time_to_first_token_us: 0,
-        turns: Vec::new(),
-        aggregate_prefill_tok_per_s: 0.0,
-        aggregate_decode_tok_per_s: 0.0,
-        total_prompt_tokens: 0,
-        total_prefill_us: 0,
-        total_generated: 0,
-        final_position: 0,
-        observability: engine.observability_snapshot(),
-    };
-
-    if warmup_tokens > 0 {
-        let baseline = engine.observability_snapshot();
-        let warmup_prompt = chat_template.format_turn("warmup", true);
-        let warmup_prompt_tokens = engine.encode(&warmup_prompt)?;
-        let warmup_started = Instant::now();
-        engine.submit(driver_request(
-            0,
-            SessionId(u64::MAX),
-            warmup_prompt_tokens,
+        let mut report = InteractiveBenchReport {
+            model_dir: model_dir.to_owned(),
+            build,
+            output_head_chunk_rows,
+            runtime_path: "resident_model_planner",
+            engine_build_us,
             warmup_tokens,
-            &generation.stop,
-        ));
-        drive_request_to_completion(
-            &mut engine,
-            RequestId(0),
-            "interactive benchmark warmup",
-            &mut |_| Ok(()),
-        )
-        .await?;
-        report.warmup_us = duration_us(warmup_started.elapsed());
-        report.warmup_generated_tokens = engine
-            .observability_snapshot()
-            .delta_since(&baseline)
-            .driver
-            .emitted_tokens;
-    }
+            warmup_us: 0,
+            warmup_generated_tokens: 0,
+            time_to_first_token_us: 0,
+            turns: Vec::new(),
+            aggregate_prefill_tok_per_s: 0.0,
+            aggregate_decode_tok_per_s: 0.0,
+            total_prompt_tokens: 0,
+            total_prefill_us: 0,
+            total_generated: 0,
+            final_position: 0,
+            observability: engine.observability_snapshot(),
+        };
 
-    let measured_baseline = engine.observability_snapshot();
-    let mut first_token_measured = false;
-    let mut total_decode_us = 0u64;
-
-    for (turn_index, prompt_text) in prompts.iter().enumerate() {
-        let full_prompt = chat_template.format_turn(prompt_text, turn_index == 0);
-        let prompt_tokens = engine.encode(&full_prompt)?;
-        if prompt_tokens.is_empty() {
-            if !json {
-                eprintln!(
-                    "[bench] turn {} prompt encoded to zero tokens, skipping",
-                    turn_index + 1
-                );
-            }
-            continue;
+        if warmup_tokens > 0 {
+            let baseline = engine.observability_snapshot();
+            let warmup_prompt = chat_template.format_turn("warmup", true);
+            let warmup_prompt_tokens = engine.encode(&warmup_prompt)?;
+            let warmup_started = Instant::now();
+            engine.submit(driver_request(
+                0,
+                (!independent_prompts).then_some(SessionId(u64::MAX)),
+                warmup_prompt_tokens,
+                warmup_tokens,
+                &generation.stop,
+            ));
+            drive_request_to_completion(
+                &mut engine,
+                RequestId(0),
+                "interactive benchmark warmup",
+                &mut |_| Ok(()),
+            )
+            .await?;
+            report.warmup_us = duration_us(warmup_started.elapsed());
+            report.warmup_generated_tokens = engine
+                .observability_snapshot()
+                .delta_since(&baseline)
+                .driver
+                .emitted_tokens;
+            capture.drain(&mut engine)?;
         }
 
-        let request_id = RequestId(turn_index as u64 + 1);
-        let turn_baseline = engine.observability_snapshot();
-        engine.submit(driver_request(
-            request_id.0,
-            SessionId(0),
-            prompt_tokens.clone(),
-            generation.max_new_tokens,
-            &generation.stop,
-        ));
+        let measured_baseline = engine.observability_snapshot();
+        let mut first_token_measured = false;
+        let mut total_decode_us = 0u64;
 
-        let turn_started = Instant::now();
-        let mut first_token_us = None;
-        let mut prefill_us = 0u64;
-        let mut decode_us = 0u64;
-        let mut generated_tokens = Vec::new();
-        let mut runtime_steps = Vec::new();
-        let sequence = loop {
-            let step_started = Instant::now();
-            let step = engine
-                .step(&mut |event| {
-                    first_token_us.get_or_insert_with(|| duration_us(turn_started.elapsed()));
-                    generated_tokens.push(event.token);
-                    Ok(())
-                })
-                .await?;
-            let step_us = duration_us(step_started.elapsed());
-            let step_is_idle = matches!(step, ResidentDriverStep::Idle);
-            let session_position = engine
-                .retained_session_position(SessionId(0))
-                .unwrap_or_default();
+        for (turn_index, prompt_text) in prompts.iter().enumerate() {
+            let full_prompt =
+                chat_template.format_turn(prompt_text, independent_prompts || turn_index == 0);
+            let prompt_tokens = engine.encode(&full_prompt)?;
+            if prompt_tokens.is_empty() {
+                if !json {
+                    eprintln!(
+                        "[bench] turn {} prompt encoded to zero tokens, skipping",
+                        turn_index + 1
+                    );
+                }
+                continue;
+            }
 
-            match step {
-                ResidentDriverStep::Executed {
-                    action_kind,
-                    rows,
-                    staged,
-                    finished,
-                } => {
-                    match action_kind {
-                        ResidentActionKind::Prefill | ResidentActionKind::Mixed => {
-                            prefill_us = prefill_us.saturating_add(step_us);
-                        }
-                        ResidentActionKind::Decode => {
-                            decode_us = decode_us.saturating_add(step_us);
-                        }
-                        ResidentActionKind::Finish | ResidentActionKind::Cancel => {}
-                    }
-                    runtime_steps.push(RuntimeStepMeasurement {
-                        action_kind: resident_action_kind_name(action_kind).to_owned(),
+            let request_id = RequestId(turn_index as u64 + 1);
+            let turn_baseline = engine.observability_snapshot();
+            engine.submit(driver_request(
+                request_id.0,
+                (!independent_prompts).then_some(SessionId(0)),
+                prompt_tokens.clone(),
+                generation.max_new_tokens,
+                &generation.stop,
+            ));
+
+            let turn_started = Instant::now();
+            let mut first_token_us = None;
+            let mut prefill_us = 0u64;
+            let mut decode_us = 0u64;
+            let mut generated_tokens = Vec::new();
+            let mut runtime_steps = Vec::new();
+            let sequence = loop {
+                let step_started = Instant::now();
+                let step = engine
+                    .step(&mut |event| {
+                        first_token_us.get_or_insert_with(|| duration_us(turn_started.elapsed()));
+                        generated_tokens.push(event.token);
+                        Ok(())
+                    })
+                    .await?;
+                let step_us = duration_us(step_started.elapsed());
+                let step_is_idle = matches!(step, ResidentDriverStep::Idle);
+                let session_position = engine
+                    .retained_session_position(SessionId(0))
+                    .unwrap_or_default();
+
+                match step {
+                    ResidentDriverStep::Executed {
+                        action_kind,
                         rows,
                         staged,
                         finished,
-                        elapsed_us: step_us,
-                        session_position,
-                    });
+                    } => {
+                        match action_kind {
+                            ResidentActionKind::Prefill | ResidentActionKind::Mixed => {
+                                prefill_us = prefill_us.saturating_add(step_us);
+                            }
+                            ResidentActionKind::Decode => {
+                                decode_us = decode_us.saturating_add(step_us);
+                            }
+                            ResidentActionKind::Finish | ResidentActionKind::Cancel => {}
+                        }
+                        runtime_steps.push(RuntimeStepMeasurement {
+                            action_kind: resident_action_kind_name(action_kind).to_owned(),
+                            rows,
+                            staged,
+                            finished,
+                            elapsed_us: step_us,
+                            session_position,
+                        });
+                    }
+                    ResidentDriverStep::WaitingForModelProgress(_) => {
+                        decode_us = decode_us.saturating_add(step_us);
+                        runtime_steps.push(RuntimeStepMeasurement {
+                            action_kind: "model_wait".to_owned(),
+                            elapsed_us: step_us,
+                            session_position,
+                            ..Default::default()
+                        });
+                    }
+                    ResidentDriverStep::Idle => {}
+                    ResidentDriverStep::Blocked => {
+                        anyhow::bail!("resident runtime blocked while running measured turn")
+                    }
                 }
-                ResidentDriverStep::WaitingForModelProgress(_) => {
-                    decode_us = decode_us.saturating_add(step_us);
-                    runtime_steps.push(RuntimeStepMeasurement {
-                        action_kind: "model_wait".to_owned(),
-                        elapsed_us: step_us,
-                        session_position,
-                        ..Default::default()
-                    });
-                }
-                ResidentDriverStep::Idle => {}
-                ResidentDriverStep::Blocked => {
-                    anyhow::bail!("resident runtime blocked while running measured turn")
-                }
-            }
 
-            if let Some(terminal) = engine.take_request_terminal(request_id) {
-                break require_finished_request(terminal, "interactive benchmark turn")?;
-            }
-            if step_is_idle {
-                anyhow::bail!("interactive benchmark became idle before request terminalization");
-            }
-        };
+                if let Some(terminal) = engine.take_request_terminal(request_id) {
+                    break require_finished_request(terminal, "interactive benchmark turn")?;
+                }
+                if step_is_idle {
+                    anyhow::bail!(
+                        "interactive benchmark became idle before request terminalization"
+                    );
+                }
+            };
 
-        let first_token_us = first_token_us.unwrap_or_else(|| duration_us(turn_started.elapsed()));
-        if !first_token_measured {
-            report.time_to_first_token_us = first_token_us;
-            first_token_measured = true;
+            let first_token_us =
+                first_token_us.unwrap_or_else(|| duration_us(turn_started.elapsed()));
+            if !first_token_measured {
+                report.time_to_first_token_us = first_token_us;
+                first_token_measured = true;
+            }
+            let finish_reason = sequence.finish_reason;
+            let stopped_by_string = finish_reason
+                .is_some_and(|reason| reason == ferrule_runtime::SequenceFinishReason::StopString)
+                .then(|| matched_stop_string(&sequence.generated_text, &generation.stop))
+                .flatten();
+            let stopped_by_eos = finish_reason
+                .is_some_and(|reason| reason == ferrule_runtime::SequenceFinishReason::Eos);
+
+            report.total_prefill_us = report.total_prefill_us.saturating_add(prefill_us);
+            total_decode_us = total_decode_us.saturating_add(decode_us);
+            report.total_prompt_tokens = report
+                .total_prompt_tokens
+                .saturating_add(prompt_tokens.len());
+            report.total_generated = report
+                .total_generated
+                .saturating_add(generated_tokens.len());
+            report.final_position = sequence.position;
+            report.turns.push(InteractiveTurnMeasurement {
+                prompt_text: prompt_text.clone(),
+                prompt_tokens,
+                first_token_us,
+                prefill_us,
+                decode_us,
+                generated_tokens,
+                final_position: sequence.position,
+                finish_reason: finish_reason
+                    .map(|reason| reason.as_str().to_owned())
+                    .unwrap_or_else(|| "unknown".to_owned()),
+                stopped_by_eos,
+                stopped_by_string,
+                observability: engine.observability_snapshot().delta_since(&turn_baseline),
+                runtime_steps,
+            });
+            capture.drain(&mut engine)?;
         }
-        let finish_reason = sequence.finish_reason;
-        let stopped_by_string = finish_reason
-            .is_some_and(|reason| reason == ferrule_runtime::SequenceFinishReason::StopString)
-            .then(|| matched_stop_string(&sequence.generated_text, &generation.stop))
-            .flatten();
-        let stopped_by_eos = finish_reason
-            .is_some_and(|reason| reason == ferrule_runtime::SequenceFinishReason::Eos);
 
-        report.total_prefill_us = report.total_prefill_us.saturating_add(prefill_us);
-        total_decode_us = total_decode_us.saturating_add(decode_us);
-        report.total_prompt_tokens = report
-            .total_prompt_tokens
-            .saturating_add(prompt_tokens.len());
-        report.total_generated = report
-            .total_generated
-            .saturating_add(generated_tokens.len());
-        report.final_position = sequence.position;
-        report.turns.push(InteractiveTurnMeasurement {
-            prompt_text: prompt_text.clone(),
-            prompt_tokens,
-            first_token_us,
-            prefill_us,
-            decode_us,
-            generated_tokens,
-            final_position: sequence.position,
-            finish_reason: finish_reason
-                .map(|reason| reason.as_str().to_owned())
-                .unwrap_or_else(|| "unknown".to_owned()),
-            stopped_by_eos,
-            stopped_by_string,
-            observability: engine.observability_snapshot().delta_since(&turn_baseline),
-            runtime_steps,
-        });
+        report.observability = engine
+            .observability_snapshot()
+            .delta_since(&measured_baseline);
+        report.aggregate_prefill_tok_per_s = report.total_prompt_tokens as f64
+            / (report.total_prefill_us as f64 / 1_000_000.0).max(1e-6);
+        report.aggregate_decode_tok_per_s =
+            report.total_generated as f64 / (total_decode_us as f64 / 1_000_000.0).max(1e-6);
+        engine.shutdown().await?;
+        Ok(report)
     }
-
-    report.observability = engine
-        .observability_snapshot()
-        .delta_since(&measured_baseline);
-    report.aggregate_prefill_tok_per_s = report.total_prompt_tokens as f64
-        / (report.total_prefill_us as f64 / 1_000_000.0).max(1e-6);
-    report.aggregate_decode_tok_per_s =
-        report.total_generated as f64 / (total_decode_us as f64 / 1_000_000.0).max(1e-6);
-    engine.shutdown().await?;
+    .await;
+    // Success includes normal shutdown. Failure is finalized as diagnostic, never
+    // retried/cleaned up solely to manufacture a complete trace.
+    let finalized = capture.finalize(&mut engine, result.is_ok());
+    let report = result?;
+    finalized?;
     Ok(report)
 }
 
@@ -447,14 +518,14 @@ async fn drive_request_to_completion(
 
 fn driver_request(
     request_id: u64,
-    session_id: SessionId,
+    session_id: Option<SessionId>,
     prompt_tokens: Vec<u32>,
     max_new_tokens: usize,
     stop: &[String],
 ) -> GenerateRequest {
     GenerateRequest {
         id: RequestId(request_id),
-        session_id: Some(session_id),
+        session_id,
         prompt_tokens,
         max_new_tokens,
         stop: stop.to_vec(),
@@ -974,6 +1045,7 @@ mod tests {
         let report = InteractiveBenchReport {
             model_dir: "model".to_owned(),
             build: ResidentModelBuildObservability {
+                numeric_fp8_profile: None,
                 model_name: "qwen3-moe",
                 backend: ModelExecutionBackend::Cpu,
                 backend_profile: "cpu-standard-decoder",

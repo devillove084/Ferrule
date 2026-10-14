@@ -1,0 +1,15 @@
+{
+  "passed": true,
+  "phases": [
+    {
+      "selector": "public_allocator_diagnostics_track_reuse_and_trim",
+      "expected_failure": true,
+      "returncode": 101
+    },
+    {
+      "selector": "shutdown_rejects_new_ordinary_device_buffers",
+      "expected_failure": true,
+      "returncode": 101
+    }
+  ]
+}

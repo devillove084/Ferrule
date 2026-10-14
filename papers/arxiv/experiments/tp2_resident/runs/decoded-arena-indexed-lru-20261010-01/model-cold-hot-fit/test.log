@@ -1,0 +1,6 @@
+
+running 1 test
+test transformer::standard::cuda::hybrid_rank::mixed::decoded_gpu_tests::decoded_pair_single_cold_hot_fit_exact_and_no_cache_dma ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 759 filtered out; finished in 1.18s
+

@@ -1,0 +1,14 @@
+{
+  "case": "call-03",
+  "error": null,
+  "export_completed": true,
+  "owners": [
+    0,
+    1
+  ],
+  "phase": "decode",
+  "schema": "ferrule.mixed-committed-kv-receipt.v1",
+  "session": 1,
+  "transaction": 2,
+  "writer_drain_required": true
+}

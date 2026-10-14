@@ -416,11 +416,13 @@ def dump_tensors(output, name, tensors, precision='bf16_rne'):
         key: dict(shape=list(value.shape), dtype=str(value.dtype)) for key, value in tensors.items()})
 
 
-def run_case(model, ids, output, name, decode_text, cache_states=False, prompt=None, precision='bf16_rne'):
+def run_case(model, ids, output, name, decode_text, cache_states=False, prompt=None, precision='bf16_rne', trace_layers=0):
     tensors, calls, handles = {}, [], []
     stage = ''
 
     def put(key, value):
+        require(not value.is_floating_point() or value.dtype == torch.float32,
+                f'Native boundary/cache must remain F32: {key}: {value.dtype}')
         tensors[f'{stage}.{key}'] = value.detach().cpu().contiguous().clone()
 
     def observe(key):
@@ -442,6 +444,22 @@ def run_case(model, ids, output, name, decode_text, cache_states=False, prompt=N
             put(prefix + '.selected_expert_ids', result[2])
             put(prefix + '.routing_weights', result[1])
         handles.append(layer.mlp.gate.register_forward_hook(route))
+    if trace_layers:
+        def diagnostic(module_name):
+            def hook(_module, inputs, result):
+                if stage != 'prefill':
+                    return
+                for index, value in enumerate(inputs):
+                    if isinstance(value, torch.Tensor):
+                        put(f'trace.{module_name}.input.{index}', value)
+                for index, value in enumerate(result if isinstance(result, tuple) else (result,)):
+                    if isinstance(value, torch.Tensor):
+                        put(f'trace.{module_name}.output.{index}', value)
+            return hook
+        for module_name, module in model.named_modules():
+            parts = module_name.split('.')
+            if len(parts) >= 3 and parts[:2] == ['model', 'layers'] and int(parts[2]) < trace_layers:
+                handles.append(module.register_forward_hook(diagnostic(module_name)))
     cache, fed_ids = None, list(ids)
     try:
         for stage in ('prefill', 'decode.0'):
@@ -702,9 +720,15 @@ def worker(args, output, cap):
                             'activation': 'BF16-RNE represented as F32 for quantized Linear' if args.precision == 'bf16_rne' else 'F32 unchanged for quantized Linear',
                             'linear_product_accumulation_output': 'F32 strict CPU torch.matmul/linear; no TF32',
                             'native_tf_layers': 'F32 native attention/GDN/norm/router/shared-expert formulas',
+                            'model_boundary': 'F32', 'kv_cache': 'F32', 'gdn_state': 'F32',
+                            'w8a16_scope': 'bf16_rne is the operand contract, NOT an all-BF16 model or vLLM parity',
                             'cuda_kernel_reduction_order': 'not emulated; this is an independent CPU oracle contract',
                             'legacy_default_compatibility': 'default bf16_rne preserves the original profile',
                         })
+        import tokenizers
+        from transformers import dependency_versions_table
+        manifest['versions']['tokenizers'] = tokenizers.__version__
+        manifest['dependency_contract_sha256'] = sha256(dependency_versions_table.__file__)
         if args.precision == 'bf16_rne':
             manifest['precision_golden'] = precision_golden(output, adapter_types)
             manifest['tiny_golden'] = tiny_golden(output, adapter_types)
@@ -739,7 +763,7 @@ def worker(args, output, cap):
                 require(0 < len(ids) <= 16, 'Reference only supports short fixed prompts')
                 report, tensors = run_case(model, ids, output, name,
                     lambda ids: tokenizer.decode(ids, clean_up_tokenization_spaces=False),
-                    cache_states=args.cache_states, prompt=prompt, precision=args.precision)
+                    cache_states=args.cache_states, prompt=prompt, precision=args.precision, trace_layers=args.trace_first_layers)
                 manifest['cases'].append(dict(id=name, report=f'{name}.json', file=report['file'], sha256=report['sha256']))
                 manifest['weight_cache'] = loader.statistics()
                 write_json(output / 'manifest.json', manifest)
@@ -775,6 +799,8 @@ def main():
     parser.add_argument('--tiny-only', action='store_true')
     parser.add_argument('--capital', action='store_true', help='Also run the short capital prompt')
     parser.add_argument('--cache-states', action='store_true', help='Export all full-model conv/recurrent/KV states')
+    parser.add_argument('--trace-first-layers', type=int, choices=range(5), default=0,
+                        help='Opt-in native module input/output capture for at most four prefill layers')
     parser.add_argument('--worker', action='store_true', help=argparse.SUPPRESS)
     args = parser.parse_args()
     require(1 <= args.threads <= 8 and 1 <= args.timeout <= 900, 'At most 8 threads and 900s per worker')

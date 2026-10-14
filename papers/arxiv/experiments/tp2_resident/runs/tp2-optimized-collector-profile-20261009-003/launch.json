@@ -1,0 +1,15 @@
+{
+  "protocol": "tp2-serving-profile-c1",
+  "purpose": "profiling",
+  "status": "incomplete",
+  "sole_gpu_owner_granted": true,
+  "owner_note": "Fresh collector profile after actual cleanup sample reproduced and CPU-tested bounded B1 wait fix; same release/config; all_eight_instrumentation_probe; selected model GPU0/1; no foreign signals",
+  "fairmatch": false,
+  "exact_speedup": null,
+  "slots": [
+    {
+      "id": "P1",
+      "status": "not_run"
+    }
+  ]
+}

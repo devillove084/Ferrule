@@ -1,0 +1,22 @@
+
+NOTICE: Existing SQLite export found: /home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-collector-profile-20261009-002/runs/P1/session/nsight/nsys.sqlite
+        It is assumed file was previously exported from: /home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-collector-profile-20261009-002/runs/P1/session/nsight/nsys.nsys-rep
+        Consider using --force-export=true if needed.
+
+Processing [/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-collector-profile-20261009-002/runs/P1/session/nsight/nsys.sqlite] with [/opt/nvidia/nsight-systems/2026.1.3/target-linux-x64/reports/cuda_gpu_kern_sum.py]... 
+Time (%),Total Time (ns),Instances,Avg (ns),Med (ns),Min (ns),Max (ns),StdDev (ns),Name
+84.8,1068477757,228823,4669.5,1824.0,1280,599999,9638.9,[Unknown]
+6.3,78948819,960,82238.4,82368.0,80064,84768,940.3,ferrule::cuda::core::hf_bf16::delta(FerruleCoreBf16DeltaArgs)
+4.1,51413132,360,142814.3,141568.0,140577,153536,3714.1,"ferrule::cuda::core::eager_attention::validate_group(FerruleCoreTransformerArgs, FerruleBf16AttentionGroup)"
+2.7,34615461,1280,27043.3,27008.0,26528,28032,210.6,ampere_bf16_s16816gemm_bf16_64x64_sliced1x2_ldg8_f2f_stages_64x5_tn
+1.5,18881014,192,98338.6,2176.0,2112,579935,215597.8,"void gemv2T_kernel_val<int, int, __nv_bfloat16, __nv_bfloat16, __nv_bfloat16, float, (int)128, (int)16, (int)4, (int)4, (bool)0, (bool)0, cublasGemvParamsEx<int, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>, float>>(T13, T6, T6)"
+0.2,1936383,360,5378.8,5504.0,4160,6528,521.8,"ferrule::cuda::core::eager_attention::gather(FerruleCoreTransformerArgs, FerruleBf16AttentionGroup, unsigned short *, unsigned short *)"
+0.1,1886816,360,5241.2,5088.0,4384,5728,322.9,ferrule::cuda::core::eager_attention::append(FerruleCoreTransformerArgs)
+0.1,961602,360,2671.1,2688.0,2496,2784,63.5,"ferrule::cuda::core::eager_attention::softmax(FerruleCoreTransformerArgs, FerruleBf16AttentionGroup, const unsigned short *, unsigned short *)"
+0.1,741632,320,2317.6,2368.0,2080,2400,90.3,"std::enable_if<!T7, void>::type internal::gemvx::kernel<int, int, __nv_bfloat16, __nv_bfloat16, __nv_bfloat16, float, (bool)0, (bool)1, (bool)0, (bool)0, (int)6, (bool)0, cublasGemvParamsEx<int, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>, float>>(T13)"
+0.1,733060,360,2036.3,2048.0,2016,2049,15.4,"ferrule::cuda::core::eager_attention::pack(FerruleCoreTransformerArgs, FerruleBf16AttentionGroup, unsigned short *)"
+0.1,700575,360,1946.0,1952.0,1920,1984,15.9,"ferrule::cuda::core::eager_attention::scatter(FerruleCoreTransformerArgs, FerruleBf16AttentionGroup, const unsigned short *)"
+0.0,383617,160,2397.6,2400.0,2336,2432,19.8,"std::enable_if<!T7, void>::type internal::gemvx::kernel<int, int, __nv_bfloat16, __nv_bfloat16, __nv_bfloat16, float, (bool)0, (bool)1, (bool)1, (bool)0, (int)6, (bool)0, cublasGemvParamsEx<int, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>, float>>(T13)"
+0.0,202175,40,5054.4,5056.0,5024,5088,17.7,void cutlass::Kernel2<cutlass_75_wmma_tensorop_bf16_s161616gemm_bf16_32x32_32x1_tn_align1>(T1::Params)
+0.0,106144,40,2653.6,2656.0,2624,2688,18.3,void cutlass::Kernel2<cutlass_75_wmma_tensorop_bf16_s161616gemm_bf16_32x32_32x1_nn_align1>(T1::Params)
+

@@ -1,23 +1,51 @@
 # 并行执行集成状态
 
-本文区分当前源码的集成能力、本轮已完成的实跑证据与尚未覆盖的边界。下面的
-验收结果汇总本轮执行记录；文档收尾本身不重复 GPU 测试，也不把小 checkpoint
-fixture 的结果外推为更大的模型、更多节点或更强的故障恢复能力。
+维护中的运行证据统一见 [当前验收](CURRENT_ACCEPTANCE.md)；本页保留 profile-specific
+支持、协议/命令与历史数值记录。支持路径存在不等于某次 checkout 的 GPU PASS，
+也不把小 checkpoint fixture 外推为更大模型、更多节点或更强故障恢复。
 Ferrule production runtime 不依赖、链接或调用 NCCL；外部 Python/NCCL 对比工具
 不属于 Ferrule transport。
 
 **证据时序**：标准 linear 的 GEMM 已切换到 CUTLASS TF32x3。下文明确标记的
 旧 GPU 数值和 serving 记录属于更换 GEMM 前的历史验收，不能作为当前实现的
-回归通过证据。下方分别保留更换 GEMM 后的历史批次与当前 35B thread EP 实测，Qwen35 与
+回归通过证据。下方分别保留更换 GEMM 后的历史批次与当时 35B thread EP 实测，Qwen35 与
 Qwen3 分开列出；选定测试通过不等于无跳过的全 workspace / 全 GPU / strict Clippy
 全部通过。文档更新只核查已有报告与日志，不运行 Cargo。
 
-## Qwen3.5-0.8B：完整 text CPU / 单卡 CUDA 已接通
+历史 `target/validation` 链接保留原始 provenance；其中部分 artifact 在本 checkout
+缺失，不能据此宣称已重新核验旧测量。本文新增验收链接已核对本地文件存在，
+但本次不重跑其 GPU/服务命令，也不重建或修改历史收据。
+
+## 当前构建支持（每项仍需 checkpoint/profile/capacity admission）
+
+| Profile/path | Thread owners | Process owners / exclusions |
+|---|---|---|
+| Standard decoder, F32 PP with supported stage EP | CPU-reference or CUDA | Existing standard PP/EP transport; bounded frames/deadlines; not process TP |
+| Standard dense CUDA tensor pipeline, TP2/4 EP1 | Supported PP partition, explicit distinct root devices | Process TP unsupported |
+| Strict dense Qwen3.5-0.8B F32, PP2 TP1 EP1 | CPU-reference or CUDA | Dense hybrid process transport; full-vocabulary frame admission; no MoE/process TP |
+| Strict numeric Qwen3.5-35B resident, PP1 TP1 EP2/4/8 | Full shared expert prewarm, F32/default or explicit W8A16 | Resident root + owned-partition expert processes; not process PP×EP |
+| Strict numeric Qwen3.5 segment provider, PP2 TP1 EP2/4/8 | CUDA, shared assembly, full prewarm, explicit placement | Numeric hybrid process PP×EP unsupported |
+| Strict numeric Qwen3.5 tensor-rank provider, PP1/2 TP2/4 EP2 | CUDA, shared assembly, PP-major roots and stage experts | Process TP unsupported; TP4 construction is not strict full40 acceptance |
+| Native dense Qwen3 BF16, PP1 TP1 EP1 | Single-stage CUDA pipeline, resident typed KV | Not distributed BF16; separate from numeric FP8 Mixed |
+| Qwen3.5 numeric Mixed BF16, PP1 TP1 EP1 | Single resident CUDA owner, lazy experts | No distributed/process Mixed or BF16 expert wire |
+
+DP/SP/CP stay 1 for these production Qwen profiles. Automatic restart/replay,
+production multi-host Qwen serving and general sparse KV rosters are not implied.
+W8A16 remains quality-unaccepted; F32 and Mixed have distinct pinned acceptance.
+Commands and placement contracts: [Qwen3.5](QWEN35.md), [dense process](QWEN35_DENSE_PROCESS.md),
+[PP×EP](QWEN35_PP_EP.md), [Mixed](QWEN35_MIXED_SERVING.md),
+[native dense BF16](BF16_DENSE_CUDA.md). The
+[composition map](../crates/ferrule-composition/src/model_factory/parallel/README.md)
+separates geometry/provider/transport leaves from common assembly; CPU-reference
+[composition tests](PARALLEL_COMPOSITION.md) are not production GPU evidence.
+
+## 历史 Qwen3.5-0.8B：完整 text CPU / 单卡 CUDA 验收
 
 本节为严格 dense 0.8B profile，完整 **24 层（18 GDN + 6 full GQA）**；另有下节的
 精确 35B-A3B FP8 单卡/thread EP profile，不能混用默认 backend、精度或验收数字。
-真实 CPU/单卡 CUDA 数值验收已通过（本轮既有结果，文档收尾未重跑）；CLI 默认 CPU，
-显式 `--backend cuda` 已经由 model factory 接入 resident engine / model worker / HTTP/SSE。
+真实 CPU/单卡 CUDA 数值验收属于下述冻结批次，文档收尾未重跑。当前 CLI 默认/auto
+选择 CUDA；CPU 需 `cpu-reference` 与 `--backend cpu`，不是旧批次默认 CPU。
+显式 `--backend cuda` 经 composition 接入 resident engine / model worker / HTTP/SSE。
 最终日志确认 `hybrid_cuda` **13 tests 通过**，其中 **6 个实际 CUDA 测试、
 1 个比较器验证、6 个 CPU reference 测试**；另有独立 forward CUDA UT **1 passed**。
 Qwen35 `capital` + `hello` 的所有
@@ -36,8 +64,9 @@ SSE 输出 `Hello` 和 ` Paris`，SIGTERM exit 0，退出后无残留 GPU proces
   不是严格 IEEE F32 SGEMM，也不承诺 bitwise 相同；
   GDN 专用 CUDA kernels 经共享 operators 接入，不走 Python 或 CPU fallback。
 - 只执行 text；vision/MTP 附件严格校验后排除，不代表附件推理支持。
-  **0.8B 的 hybrid TP/PP/EP、process ranks、prefix cache、partial retain 和 speculation
-  均 unsupported**。35B/FP8 单卡与 dedicated EP2/4/8 另见下节，不能混用两者。
+  strict dense **PP2 TP1 EP1 已有 thread/process 路径**，见上表与 dense process 文档；
+  hybrid TP/EP、prefix cache、partial retain 和 speculation 不因此开放。
+  35B numeric FP8 与 Mixed 另有各自的 precision/transport policy，不能混用。
 - 每个 recurrent sequence state 为 **20,643,840 bytes**；预算计入 live、transaction
   working copies 和 default state，默认 4 sequences 共 **185,794,560 bytes**。
   KV compact 分配到 6 个 full-attention 层，默认 physical KV 为 192 MiB；
@@ -46,25 +75,13 @@ SSE 输出 `Hello` 和 ` Paris`，SIGTERM exit 0，退出后无残留 GPU proces
   离线 Transformers 5.2 oracle、HF 多 token cached continuation 陷阱及本次未重跑的
   验收 targets 也在专页说明；临时启动验证脚本不是 production engine。
 
-## Qwen3.5-35B-A3B FP8：单 owner 与 dedicated GPU-thread EP
+## 历史 Qwen3.5-35B-A3B FP8：resident thread EP8 证据
 
-精确 35B profile 是 **FP8 E4M3FN raw storage + numeric BF16 block scales，
-F32/TF32x3 compute**。默认是单 GPU resident root；另有独立的 resident GPU-thread
-expert-parallel path，当前只支持 **EP2、EP4、EP8**。这不是 generic pipeline 的
-TP/PP/process placement，也不是 RTX 3090 native FP8 MMA。显式 CUDA plan 为
-`Executable`；CPU、无 CUDA feature 和 generic pipeline TP/PP/process 仍为
-`Unsupported`，不会回退 CPU。F32/TF32x3 路径通过 strict oracle 不意味着 bitwise
-IEEE SGEMM；**BF16-RNE/F32-accumulate full40 仍是 diagnostic-only / known-unaccepted**，
-没有放宽容差，也不能用孤立 BF16 kernel 或 tiny fixture 的通过替代全模型验收。
-
-### 支持矩阵与 EP8 证据
-
-| 路径 | 状态 | 说明 |
-| --- | --- | --- |
-| 单 GPU resident | supported | root、KV 和 bounded device cache 在一个 CUDA owner 上 |
-| dedicated GPU-thread EP2/4/8 | supported | resident root + expert owners；显式 distinct `--devices`，`devices[0]` 是 root，owners 使用同一有序列表 |
-| generic pipeline TP/PP/process | unsupported | 不创建 hybrid TP/PP/process owners；`--engine auto` 只为专用 EP 请求选择该 resident path |
-| NCCL / multi-host | unsupported | production runtime 不依赖、链接或调用 NCCL |
+下文保留冻结 EP8 的数值、residency 和 release 观测，不再作为另一份当前支持矩阵。
+当前支持以本页开头的表为准，运行状态以 [验收索引](CURRENT_ACCEPTANCE.md) 为准。
+Numeric FP8 是 E4M3FN storage + numeric scales，不是 RTX 3090 native FP8 MMA。
+默认 F32/TF32x3、W8A16 与新 Mixed 的边界分别报告；旧 BF16-RNE diagnostic
+不接受和 W8 full40 失败不能泛化为所有 BF16 profile 失败。
 
 EP8 的 actual CLI/HTTP acceptance 使用 `--engine auto --expert-parallel 8`
 和 `--devices 0,1,2,3,4,5,6,7`。8 个 owner 都执行了 routed calls/tokens；每个 owner
@@ -173,29 +190,10 @@ standard linear graph replay 在原地址写入新输入，
 
 ### 先前串行验证：更换 GEMM 后的 0.8B / 标准 Qwen3 批次
 
-本节保留较早的独立批次，不覆盖后续 35B 变更；历史 postfix 计数见
-[QWEN35.md](QWEN35.md)，当前 EP8 strict proof 见上节。
-来源：[GPU 汇总](../target/validation/qwen35-final-gpu-summary.md)及其分项
-`target/validation/qwen35-final-gpu-*.log`、
-[CPU 汇总](../target/validation/qwen35-final-cpu-summary.md)。这些是 **Git ignored 的
-本地生成证据**，不是随仓库发布的文件；链接仅在保留该次 artifacts 的工作区有效。
-
-- 8 张 RTX 3090，`CARGO_INCREMENTAL=0`、`FERRULE_CUDA_ARCH=sm_86`、
-  `--locked`、测试串行且 `--test-threads=1`，命令 timeout 900 秒。
-  CUDA workspace all-targets check、CLI / process child 构建通过。
-- GPU 验证批次合计 **186 selected passed、0 failed**，**不是 186 项全 GPU 测试**。
-  包含 backend lib **113 passed / 18 ignored**；其中 KV 10 项随后另行定向通过，
-  不代表所有 ignored 都执行。hybrid 13 项构成见上；加独立 forward UT 后，
-  hybrid 组实际 CUDA 测试为 7 项。
-- CPU workspace 最终重跑 **1,274 passed、0 failed、6 ignored、2 精确 skip**；
-  首轮因缺少 `models/Qwen3-30B-A3B/config.json` 有 2 项失败。只跳过
-  `real_qwen3_30b_metadata_binds_to_the_generic_state_dict` 和
-  `qwen_adapter_uses_real_standard_kv_and_rejects_cuda`；doctest 另 **7 passed**。
-  被 ignored 的 Qwen35 全 24 层 CPU oracle target 随后单独执行 **1 passed**。
-- **strict Clippy 尚未全绿**：初次 strict run 报告的两个新增 lint
-  `manual_is_multiple_of` / `unnecessary_lazy_evaluations` 已在 `components.rs` 修复；
-  既有 `collapsible_if`、`chunks_exact_to_as_chunks`、`items_after_test_module`
-  仍是已知阻塞，不能把两个修复或 check/test 通过写成 strict Clippy 全通过。
+以下是更换 GEMM 后的冻结批次，来源为
+[GPU 汇总](../target/validation/qwen35-final-gpu-summary.md)与
+[CPU 汇总](../target/validation/qwen35-final-cpu-summary.md)。报告中的 selected、
+ignored、fixture filters 和失败保持原口径，不代表当前源码或全 workspace 验收。
 
 下列都是 **Qwen3 / 标准 decoder** 数据，不是 Qwen3.5 的 TP/PP 支持证明：
 
@@ -635,6 +633,23 @@ IPC 保留 bounded JSON、独立 payload/envelope limits、非零 length prefix�
 version validation 和不滑动 absolute deadlines。Timing 是观测，不生成 ACK、
 不延长 deadline，也不证明 completion/quiescence。
 
+### Exact-ticket synchronous boundary wait
+
+`CudaAsyncTransport::wait` queries the same borrowed ticket with `poll(ticket)`
+and calls `yield_now()` after each NotReady result. There is no timed sleep,
+backoff threshold, event/device synchronization or alternate wait policy. Only
+the exact recorded event query supplies completion evidence; a yield, cancel
+intent, callback return or process exit does not. Query errors retain quarantine
+and custody; missing producer proof cannot be repaired by cleanup.
+
+This applies only to already-synchronous upload/download boundaries. Nonblocking
+schedulers retain `poll`, their original absolute deadlines, Pending/Unknown
+semantics and cancellation observation. Waiting adds no sliding timeout or early
+resource release. The production helper has a driver-free regression entry in
+[transport_completion_wait.rs](../crates/ferrule-backend/tests/transport_completion_wait.rs).
+The rejected backoff experiment is recorded in the
+[performance protocol](PERFORMANCE_EVALUATION.md#16-historical-polling-backoff-result).
+
 ### CPU IPC measurement
 
 编译时 `FERRULE_PROCESS_IPC_INSTRUMENT=1` 才启用实验 instrumentation；运行时
@@ -642,6 +657,14 @@ version validation 和不滑动 absolute deadlines。Timing 是观测，不生�
 children。普通构建不读取该 timing 环境变量、不运行 clocks/counters/sinks；
 instrumented-off 仍有 cached runtime gate，不能与普通构建混为一谈。
 Counters 在线程正常退出时 best-effort 写入，不记录 payload；丢失记录不是零成本。
+当前 `ferrule.ipc-timing.v2` 的 `copy` write-call/byte counts 在 bounded writer 内
+累计，每次 encode（包括失败）仅汇总一次；默认不逐 chunk 读时钟，`copy.wall_ns`
+为 `null`。只有额外编译 `FERRULE_PROCESS_IPC_DETAILED=1` 才采集逐 chunk 时长；
+此模式会扰动测量，不能作为普通生产路径的性能结论。报告 parser 兼容旧 v1，
+混合 measured/unmeasured copy 时长仍保持缺失，不补零。
+这些计数覆盖线程/进程 lifetime（含启动、warmup 和 shutdown），不是 request delta。
+编译开关改变后必须重建匹配的 parent/child；仅设置 runtime sink 不能开启普通 binary。
+线程未正常退出可能没有 sink，非空文件也不证明所有 owners/ranks 都已 flush。
 `copy` 嵌套在 `encode`、`pipe_wait` 嵌套在 frame I/O，parent/child wall 也有
 重叠，不能将所有 phase 时间或不同层次 byte counts 相加。正常/off/on 分别报告，
 不把共享主机差异写成 speedup 或 correctness gate。
@@ -660,7 +683,7 @@ CARGO_TARGET_DIR=target/pr26-instrumented FERRULE_NO_CUDA=1 \
   FERRULE_PROCESS_IPC_INSTRUMENT=1 \
   cargo test --locked -p ferrule-runtime --test process_ipc_measurement --no-run
 python3 scripts/bench_process_ipc.py --help
-python3 scripts/test_bench_process_ipc.py
+python3 scripts/tests/test_bench_process_ipc.py
 ```
 
 向 [runner](../scripts/bench_process_ipc.py) 传入 instrumented 构建的

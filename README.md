@@ -64,8 +64,10 @@ proposal attachment:
   <img src="docs/assets/ferrule-arch.svg" alt="Ferrule architecture" width="100%" />
 </p>
 
-One Rust owner controls requests, scheduling, transactions, materialization,
-expert residency, paged KV state, CUDA resources, and retirement. Model code
+Rust-owned coordinators control requests, scheduling and transaction publication;
+owner-local executors retain physical CUDA, KV and expert-resource custody.
+Composition selects supported model/profile/topology combinations without adding
+a second coordinator or publication authority. Model code
 resolves exact semantic stages. Native providers receive same-checkout POD
 descriptors and temporarily borrow Rust-owned streams, pointers, and workspace.
 No layer may publish readiness without the exact identity, generation, and
@@ -78,7 +80,7 @@ provider, serving, and cleanup contracts.
 
 | Area | Current scope |
 |---|---|
-| Model profile | DeepSeek-V4 Flash 0731 with its proposal attachment |
+| Model profiles | DeepSeek-V4 Flash 0731 with its proposal attachment; strict text-only Qwen3.5-35B-A3B numeric FP8 via the bounded CUDA factories below |
 | Execution | Native Rust runtime with packed exact verification |
 | Expert I/O | Direct asynchronous reads into registered pinned staging, followed by event-gated CUDA placement |
 | KV cache | Runtime-owned paged reservations, COW forks, prefix commit, rollback, and retirement |
@@ -86,6 +88,19 @@ provider, serving, and cleanup contracts.
 | Kernels | Provider-neutral semantic plans with core CUDA and pinned CUTLASS implementations |
 | Serving | OpenAI-compatible HTTP and SSE with deterministic greedy decoding |
 | Other accelerators | Not yet validated |
+
+**Qwen3.5 CUDA TP×EP:** the thread factory supports PP1/2, TP2/4, EP2,
+DP/SP/CP1 with full shared expert prewarm. F32 full-model strict GPU evidence
+currently covers **TP2 EP2 only**, for PP1 and PP2; TP4 factory support is not
+full-model strict acceptance. W8A16 remains explicit experimental opt-in and
+**quality-unaccepted**. CUDA process TP, sparse KV-owner rosters and replay are
+rejected. See [TP×EP capability/API, commands and frozen acceptance evidence](crates/ferrule-runtime/tests/support/hybrid_cuda_tensor.md).
+[TP1 PP×EP support and evidence](docs/QWEN35_PP_EP.md) are separate and do not
+extend the TP×EP matrix. The single-owner [Mixed BF16 profile](docs/QWEN35_MIXED_SERVING.md)
+has bounded full40/fresh-quality evidence, distinct from the earlier public-serving
+lifecycle binary. See [current acceptance](docs/CURRENT_ACCEPTANCE.md) for the
+source-pinned results and four F32 strict topologies. None of these boundaries
+imply general release readiness or a completed fair vLLM performance comparison.
 
 ## Quick start
 
@@ -119,11 +134,17 @@ Run an interactive greedy session:
 just dsv4-chat
 ```
 
-Run the resident driver benchmark:
+Run the maintained interactive runtime-driver benchmark:
 
 ```bash
 just dsv4-runtime-driver-bench
 ```
+
+This invokes `bench-interactive`; its JSON and timing contract are **not** drop-in
+replacements for the retired generation/MoE-profile recipes. Migrate consumers
+explicitly using the [automation maintenance guide](scripts/automation_maintenance.md).
+Both `just dsv4-chat` and `just chat MODEL [OPTIONS...]` select `--backend cuda`;
+`just chat` no longer accepts a positional quantization argument or `-q`.
 
 Ferrule never downloads the model checkpoint implicitly.
 
@@ -174,10 +195,13 @@ limits.
 
 | Document | Purpose |
 |---|---|
+| [Current acceptance](docs/CURRENT_ACCEPTANCE.md) | Source-pinned Mixed quality, F32 parallel acceptance, earlier serving lifecycle, and explicit limits |
+| [Qwen3.5 support](docs/QWEN35.md) | Profile-specific serving and parallel support; no general BF16/distributed or performance claim |
 | [Architecture](docs/ARCHITECTURE.md) | Runtime ownership, transactions, materialization, scheduling, providers, serving, and cleanup |
 | [Computation](docs/COMPUTATION.md) | DeepSeek-V4 numerical precision, indexing, quantization, and parity contracts |
 | [Throughput](docs/THROUGHPUT.md) | Metric definitions, rooflines, I/O budgets, overlap, and reproducibility |
 | [Roadmap](docs/ROADMAP.md) | Unfinished work only |
+| [Automation maintenance](scripts/automation_maintenance.md) | Retired recipes, current chat arguments, GPU test membership and pinned-job workflows |
 
 ## Project status
 

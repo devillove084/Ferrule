@@ -23,6 +23,9 @@ extern "C" {
 #define FERRULE_CUTLASS_KERNEL_FP8_PROJECTION 10u
 #define FERRULE_CUTLASS_KERNEL_F32_GEMM 11u
 #define FERRULE_CUTLASS_KERNEL_BF16_GEMM 12u
+#define FERRULE_CUTLASS_KERNEL_NUMERIC_FP8_FUSED_M1 13u
+#define FERRULE_CUTLASS_KERNEL_NUMERIC_FP8_W8A16_FUSED 14u
+#define FERRULE_CUTLASS_KERNEL_NUMERIC_BF16_M1_GEMV 15u
 #define FERRULE_CUTLASS_KERNEL_BIT(id) (1ull << ((id) - 1u))
 
 typedef enum FerruleCutlassStatus {
@@ -39,6 +42,9 @@ typedef struct FerruleCutlassProviderManifest {
 // Generic F32 TensorOp implementation is compiled in the existing core TU.
 // The manifest queries its compiled capability, not an inferred FP8 capability.
 int32_t ferrule_cutlass_bf16_available(void);
+int32_t ferrule_numeric_bf16_gemv_available(void);
+int32_t ferrule_cutlass_numeric_fp8_m1_available(void);
+int32_t ferrule_cutlass_numeric_fp8_w8a16_available(void);
 struct FerruleCutlassF32Args;
 int32_t ferrule_cutlass_f32_available(void);
 int32_t ferrule_cutlass_f32_can_implement(const struct FerruleCutlassF32Args *args);

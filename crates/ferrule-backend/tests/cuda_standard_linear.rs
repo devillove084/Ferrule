@@ -1,6 +1,6 @@
 #![cfg(feature = "cuda")]
 
-use ferrule_backend::cuda::context::CudaOperators;
+use ferrule_backend::cuda::operator_owner::CudaOperators;
 use ferrule_backend::cuda::providers::cutlass::{self, CutlassKernelId};
 
 fn bytes(values: &[f32]) -> Vec<u8> {
@@ -176,7 +176,7 @@ fn standard_linear_f32_rejects_invalid_shapes_storage_and_owners() {
     let weights = bytes(&[1.0; 15]);
     let weight = op.upload_f32_linear(&weights, 3, 5).unwrap();
     let other_weight = foreign.upload_f32_linear(&weights, 3, 5).unwrap();
-    let bf16 = op.upload_bf16_linear(&vec![0; 30], 3, 5).unwrap();
+    let bf16 = op.upload_bf16_linear(&[0; 30], 3, 5).unwrap();
     let a = op.upload_f32_buffer(&[1.0; 10]).unwrap();
     let other_a = foreign.upload_f32_buffer(&[1.0; 10]).unwrap();
     let mut d = op.upload_f32_buffer(&[73.0; 6]).unwrap();

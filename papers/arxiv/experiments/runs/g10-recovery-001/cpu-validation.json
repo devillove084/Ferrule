@@ -1,0 +1,41 @@
+{
+  "status": "pass",
+  "suites": [
+    {
+      "suite": "contracts",
+      "argv": [
+        "/home/admin/wxw403883/anaconda3/bin/python3.12",
+        "-S",
+        "-B",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "papers/arxiv/experiments",
+        "-p",
+        "test_experiments.py"
+      ],
+      "returncode": 0,
+      "seconds": 1.4768982995301485,
+      "log": "papers/arxiv/experiments/runs/g10-recovery-001/contracts-tests.log"
+    },
+    {
+      "suite": "analysis",
+      "argv": [
+        "/home/admin/wxw403883/anaconda3/bin/python3.12",
+        "-S",
+        "-B",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "papers/arxiv/experiments/analysis",
+        "-p",
+        "test_*.py"
+      ],
+      "returncode": 0,
+      "seconds": 0.06661617197096348,
+      "log": "papers/arxiv/experiments/runs/g10-recovery-001/analysis-tests.log"
+    }
+  ]
+}

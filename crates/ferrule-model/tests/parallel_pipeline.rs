@@ -646,7 +646,70 @@ mod capability_preflight {
     }
 
     fn rebind(fixture: &Fixture, spec: DecoderModelSpec) -> BoundDecoderResources {
-        BoundDecoderResources::new(spec, Arc::new(fixture.resources.state_dict().clone())).unwrap()
+        use ferrule_model::nn::{ModulePath, ParameterDType, ParameterId, ParameterSpec};
+        use ferrule_model::transformer::{
+            ExactNameMapper, NameMapping, StateDictBinder, StateDictSchema,
+        };
+
+        let original = fixture.resources.state_dict();
+        if !matches!(spec.layers()[1].feed_forward(), FeedForward::Moe(moe) if moe.router_spec().selection_bias())
+        {
+            return BoundDecoderResources::new(spec, Arc::new(original.clone())).unwrap();
+        }
+        let mut schema = StateDictSchema::builder();
+        let mut mapper = ExactNameMapper::new();
+        let mut slices = Vec::new();
+        for parameter in original.parameters() {
+            schema
+                .register_with_role(parameter.spec().clone(), parameter.role().clone())
+                .unwrap();
+            let slice = parameter.weight().slice().clone();
+            mapper
+                .insert(&slice.name, NameMapping::weight(parameter.path().clone()))
+                .unwrap();
+            slices.push(slice);
+        }
+        // Selection-bias cases need complete binding metadata before capability
+        // preflight. Reuse a source removed below so any payload read still fails.
+        let path = ModulePath::new("layers.1.router_bias.weight").unwrap();
+        schema
+            .register_with_role(
+                ParameterSpec::new(
+                    ParameterId::new(
+                        original
+                            .parameters()
+                            .iter()
+                            .map(|p| p.id().get())
+                            .max()
+                            .unwrap()
+                            + 1,
+                    ),
+                    path.clone(),
+                    ParameterDType::F32,
+                    vec![2],
+                    ParameterResidency::layer(1),
+                )
+                .unwrap(),
+                TensorRole::RouterBias,
+            )
+            .unwrap();
+        mapper
+            .insert("router_bias", NameMapping::weight(path))
+            .unwrap();
+        slices.push(CheckpointTensorSlice {
+            name: "router_bias".into(),
+            role: TensorRole::RouterBias,
+            path: original.parameters()[0].weight().slice().path.clone(),
+            offset: original.parameters()[0].weight().slice().offset,
+            bytes: 8,
+            dtype: CheckpointDType::F32,
+            shape: vec![2],
+        });
+        let schema = schema.build().unwrap();
+        let state_dict = StateDictBinder::new(&schema, &mapper)
+            .bind_slices(slices)
+            .unwrap();
+        BoundDecoderResources::new(spec, Arc::new(state_dict)).unwrap()
     }
 
     fn assert_unsupported(error: Error, operator: &str, reason: &str) {
@@ -848,7 +911,7 @@ fn plans_reject_invalid_ranges_and_ownership() {
     for (total, range) in [
         (0, 0..0),
         (2, 1..1),
-        (2, 2..1),
+        (2, std::ops::Range { start: 2, end: 1 }),
         (2, 0..3),
         (2, usize::MAX..usize::MAX),
     ] {

@@ -1,0 +1,107 @@
+{
+  "argv": [
+    "/home/admin/luhuanbing.lhb/Ferrule/target/validation/allocator-batch-v3/cargo-cuda124/debug/build/ferrule-backend/8de12d49a8a27001/out/allocator_retirement-8de12d49a8a27001",
+    "",
+    "--nocapture",
+    "--test-threads=1"
+  ],
+  "environment": {
+    "PATH": "/home/admin/wxw403883/anaconda3/envs/tao/bin:/root/.cargo/bin:/usr/bin:/bin",
+    "CUDA_HOME": "/home/admin/wxw403883/anaconda3/envs/tao",
+    "NVCC": "/home/admin/wxw403883/anaconda3/envs/tao/bin/nvcc",
+    "LD_LIBRARY_PATH": "/home/admin/wxw403883/anaconda3/envs/tao/lib:/usr/lib64",
+    "FERRULE_CUDA_ARCH": "sm_86",
+    "FERRULE_CUTLASS_DIR": "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/cutlass",
+    "RUSTFLAGS": "-L native=/home/admin/luhuanbing.lhb/Ferrule/target/validation/qwen35-35b-current/toolchain/link -L native=/home/admin/luhuanbing.lhb/Ferrule/target/validation/bf16-mixed-qkv-20261005/link -L native=/home/admin/wxw403883/anaconda3/envs/tao/lib",
+    "HOME": "/root",
+    "CUDA_VISIBLE_DEVICES": "",
+    "NVIDIA_VISIBLE_DEVICES": "void",
+    "CUBLAS_WORKSPACE_CONFIG": ":0:0",
+    "CARGO_BUILD_JOBS": "2",
+    "CARGO_PROFILE_RELEASE_OPT_LEVEL": "3",
+    "CARGO_PROFILE_RELEASE_LTO": "fat",
+    "CARGO_PROFILE_RELEASE_CODEGEN_UNITS": "1",
+    "CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS": "false",
+    "PYTHONDONTWRITEBYTECODE": "1",
+    "RUSTUP_TOOLCHAIN": "nightly-2026-08-01",
+    "CC": "/usr/bin/gcc",
+    "CXX": "/usr/bin/g++",
+    "CUDAHOSTCXX": "/usr/bin/g++",
+    "CARGO_HOME": "/root/.cargo",
+    "RUSTUP_HOME": "/root/.rustup",
+    "RUSTUP_AUTO_INSTALL": "0",
+    "RUSTC": "/root/.rustup/toolchains/nightly-2026-08-01-x86_64-unknown-linux-gnu/bin/rustc",
+    "RUSTDOC": "/root/.rustup/toolchains/nightly-2026-08-01-x86_64-unknown-linux-gnu/bin/rustdoc",
+    "FERRULE_CUDA_TEST_ORACLE": "0",
+    "CARGO_TARGET_DIR": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/allocator-batch-v3/cargo-cuda124",
+    "FERRULE_NO_CUDA": "1"
+  },
+  "supervisor": {
+    "returncode": 0,
+    "timed_out": false,
+    "wall_seconds": 0.24098045751452446,
+    "stdout": "\nrunning 29 tests\ntest allocator::dedicated_kv_tests::dedicated_kv_segment_never_lends_free_extent_to_weights_or_scratch ... ok\ntest allocator::tests::alignment_applies_to_the_absolute_device_address ... ok\ntest allocator::tests::deterministic_allocation_churn_preserves_capacity_and_alignment ... ok\ntest allocator::tests::device_block_auto_traits_follow_its_owners ... ok\ntest allocator::tests::fragmentation_formulas_are_bounded ... ok\ntest allocator::tests::free_ranges_coalesce_in_both_directions ... ok\ntest allocator::tests::size_classes_cover_small_large_and_huge ... ok\ntest tests::byte_pressure_and_oversize_block_seal_bounded_batches ... ok\ntest tests::capture_retirements_stay_separate_until_final_teardown ... ok\ntest tests::concurrent_last_owner_drop_during_record_belongs_to_next_batch ... ok\ntest tests::context_drop_flushes_unfenced_without_per_batch_sync_or_early_free ... ok\ntest tests::count_pressure_seals_without_new_synchronization ... ok\ntest tests::dedicated_owner_aliases_retire_only_on_final_drop ... ok\ntest tests::failed_or_panicking_shutdown_keeps_all_blocks_and_reserved_bytes ... ok\ntest tests::many_blocks_share_two_fences_and_cannot_reuse_before_completion ... ok\ntest tests::old_record_and_query_completion_fallbacks_are_preserved ... ok\ntest tests::panic_in_record_query_or_sync_never_loses_the_batch ... ok\ntest tests::partial_record_failure_retains_entire_batch_and_accounting ... ok\ntest tests::pending_batch_pressure_only_defers_driver_growth_without_sync ... ok\ntest tests::pending_bytes_admission_stops_growth_but_never_discards_prior_live_owners ... ok\ntest tests::query_and_sync_failure_is_terminal_unknown ... ok\ntest tests::reentrant_poll_and_metrics_do_not_hold_allocator_lock_across_driver ... ok\ntest tests::shutdown_sync_only_releases_its_preexisting_snapshot ... ok\ntest tests::successful_stream_teardown_before_seal_keeps_old_empty_registry_contract ... ok\ntest tests::unknown_during_record_cannot_be_overridden_by_local_event_success ... ok\ntest tests::unknown_during_shutdown_sync_preserves_its_entire_snapshot ... ok\ntest tests::unknown_prevents_even_successful_recorded_fences_from_releasing_memory ... ok\ntest tests::unknown_stream_teardown_before_seal_retains_unfenced_batch ... ok\ntest tests::zero_sized_owner_never_creates_a_retirement_or_fence ... ok\n\ntest result: ok. 29 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s\n\n",
+    "stderr": "\nthread 'tests::failed_or_panicking_shutdown_keeps_all_blocks_and_reserved_bytes' (145907) panicked at crates/ferrule-backend/tests/allocator_retirement/runtime.rs:151:9:\nmock sync panic\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n\nthread 'tests::panic_in_record_query_or_sync_never_loses_the_batch' (145910) panicked at crates/ferrule-backend/tests/allocator_retirement/runtime.rs:132:17:\nmock record panic\n\nthread 'tests::panic_in_record_query_or_sync_never_loses_the_batch' (145910) panicked at crates/ferrule-backend/tests/allocator_retirement/runtime.rs:185:9:\nmock query panic\n\nthread 'tests::panic_in_record_query_or_sync_never_loses_the_batch' (145910) panicked at crates/ferrule-backend/tests/allocator_retirement/runtime.rs:151:9:\nmock sync panic\n",
+    "cleanup_errors": [],
+    "cleanup_scope": "isolated_subreaper_direct_children",
+    "descendant_custody": "proven_drained",
+    "gpu_quiescence": "unverified",
+    "custody": {
+      "status": "proven_drained",
+      "method": "linux-subreaper-waitid",
+      "containment_verified": true,
+      "launch_id": "eafce88ebc1e47129dd455a10ffcbe1f",
+      "helper_identity": {
+        "pid": 145891,
+        "birth_ticks": 97087952,
+        "ppid": 145847,
+        "pgrp": 145891,
+        "session": 145891
+      },
+      "root_identity": {
+        "pid": 145892,
+        "birth_ticks": 97087955,
+        "ppid": 145891,
+        "pgrp": 145891,
+        "session": 145891
+      },
+      "boot_id": "4dd3497d-570c-4693-a876-5c26e06ab360",
+      "entries": [
+        {
+          "identity": {
+            "pid": 145892,
+            "birth_ticks": 97087955,
+            "ppid": 145891,
+            "pgrp": 145891,
+            "session": 145891
+          },
+          "role": "root",
+          "signals": [],
+          "reaped": true,
+          "exit_code": 0,
+          "first_observed_at": 8606999.90102662,
+          "reaped_at": 8607000.052788852
+        }
+      ],
+      "errors": [],
+      "reporting_errors": [],
+      "echild": true
+    },
+    "handshake": {
+      "kind": "ready",
+      "protocol": 1,
+      "launch_id": "eafce88ebc1e47129dd455a10ffcbe1f",
+      "helper_identity": {
+        "pid": 145891,
+        "birth_ticks": 97087952,
+        "ppid": 145847,
+        "pgrp": 145891,
+        "session": 145891
+      },
+      "containment_verified": true,
+      "method": "linux-subreaper-waitid"
+    },
+    "stdout_truncated": false,
+    "stderr_truncated": false
+  }
+}

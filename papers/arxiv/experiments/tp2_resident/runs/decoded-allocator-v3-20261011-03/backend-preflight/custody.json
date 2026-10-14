@@ -1,0 +1,41 @@
+{
+  "status": "proven_drained",
+  "method": "linux-subreaper-waitid",
+  "containment_verified": true,
+  "launch_id": "b89df19a68ae4c3d931b1b9e3f77b2b4",
+  "helper_identity": {
+    "pid": 158438,
+    "birth_ticks": 97412041,
+    "ppid": 158396,
+    "pgrp": 158438,
+    "session": 158438
+  },
+  "root_identity": {
+    "pid": 158439,
+    "birth_ticks": 97412044,
+    "ppid": 158438,
+    "pgrp": 158438,
+    "session": 158438
+  },
+  "boot_id": "4dd3497d-570c-4693-a876-5c26e06ab360",
+  "entries": [
+    {
+      "identity": {
+        "pid": 158439,
+        "birth_ticks": 97412044,
+        "ppid": 158438,
+        "pgrp": 158438,
+        "session": 158438
+      },
+      "role": "root",
+      "signals": [],
+      "reaped": true,
+      "exit_code": 0,
+      "first_observed_at": 8610240.798162756,
+      "reaped_at": 8610242.452625686
+    }
+  ],
+  "errors": [],
+  "reporting_errors": [],
+  "echild": true
+}

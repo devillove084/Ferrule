@@ -1,0 +1,9 @@
+{
+  "gate": "greedy4",
+  "reason": "exact_gate_or_resource_failure",
+  "supervisor": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-allocator-v3-20261011-02/greedy4/supervisor.json",
+    "sha256": "b99d40f39bc7719fddc325facc47fed4b6253e05fac8f6388489329ac599384a"
+  },
+  "gpu_owner_released": true
+}

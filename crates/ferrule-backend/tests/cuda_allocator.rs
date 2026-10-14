@@ -4,9 +4,7 @@ use ferrule_backend::cuda::operators::linear::CudaOperators;
 
 #[test]
 fn public_allocator_diagnostics_track_reuse_and_trim() {
-    let Ok(operators) = CudaOperators::new() else {
-        return;
-    };
+    let operators = CudaOperators::new_on_device(0).expect("required CUDA device 0");
 
     let first = operators.zero_f32_buffer(1024).unwrap();
     let first_ptr = first.as_device_buffer().cu_deviceptr();
@@ -36,9 +34,7 @@ fn public_allocator_diagnostics_track_reuse_and_trim() {
 
 #[test]
 fn shutdown_rejects_new_ordinary_device_buffers() {
-    let Ok(operators) = CudaOperators::new() else {
-        return;
-    };
+    let operators = CudaOperators::new_on_device(0).expect("required CUDA device 0");
     operators.shutdown_device_allocator();
     let error = match operators.zero_i32_buffer(1) {
         Ok(_) => panic!("allocator growth after shutdown must fail"),
@@ -77,7 +73,7 @@ fn pr01_capture_guard_precedes_allocator_and_preserves_failpoint() {
 #[test]
 #[ignore = "requires actual CUDA GPU; PR01 managed, i32 D2H and pinned entries"]
 fn pr01_omitted_public_entries_reject_capture_assertion() {
-    use ferrule_backend::cuda::context::CudaArtifactLinearShape;
+    use ferrule_backend::cuda::operator_owner::CudaArtifactLinearShape;
     let op = CudaOperators::new_on_device(0).expect("required CUDA device");
     let buffer = op.zero_i32_buffer(1).unwrap();
     let shape = CudaArtifactLinearShape::F32 {

@@ -1,0 +1,132 @@
+{
+  "monotonic": 8836712.98194834,
+  "unix_ns": 1791893769945471004,
+  "server_identity": {
+    "pid": 71457,
+    "birth_ticks": 120057413,
+    "ppid": 71447,
+    "state": "R"
+  },
+  "observed": {
+    "index": 0,
+    "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+    "total_bytes": 25769803776,
+    "gpu_bytes": 3989831680,
+    "utilization": 0,
+    "devices": [
+      {
+        "index": 0,
+        "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+        "total_bytes": 25769803776,
+        "gpu_bytes": 3989831680,
+        "utilization": 0
+      },
+      {
+        "index": 1,
+        "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+        "total_bytes": 25769803776,
+        "gpu_bytes": 0,
+        "utilization": 0
+      },
+      {
+        "index": 2,
+        "uuid": "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6",
+        "total_bytes": 25769803776,
+        "gpu_bytes": 0,
+        "utilization": 0
+      },
+      {
+        "index": 3,
+        "uuid": "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011",
+        "total_bytes": 25769803776,
+        "gpu_bytes": 0,
+        "utilization": 0
+      },
+      {
+        "index": 4,
+        "uuid": "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86",
+        "total_bytes": 25769803776,
+        "gpu_bytes": 0,
+        "utilization": 0
+      },
+      {
+        "index": 5,
+        "uuid": "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685",
+        "total_bytes": 25769803776,
+        "gpu_bytes": 0,
+        "utilization": 0
+      },
+      {
+        "index": 6,
+        "uuid": "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d",
+        "total_bytes": 25769803776,
+        "gpu_bytes": 0,
+        "utilization": 0
+      },
+      {
+        "index": 7,
+        "uuid": "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f",
+        "total_bytes": 25769803776,
+        "gpu_bytes": 0,
+        "utilization": 0
+      }
+    ],
+    "apps": [
+      {
+        "pid": 218870,
+        "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+        "used_bytes": 3980394496
+      }
+    ],
+    "monotonic": 8836713.207598561,
+    "diagnostic_retry": false,
+    "missing_attempts": []
+  },
+  "declared_argv": [
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/staged/ferrule",
+    "serve",
+    "/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8",
+    "--backend",
+    "cuda",
+    "--engine",
+    "resident",
+    "--model-profile",
+    "qwen35-mixed-bf16",
+    "--expert-prewarm",
+    "lazy",
+    "--kv-execution-policy",
+    "resident",
+    "--ctx-size",
+    "128",
+    "--max-active-sequences",
+    "2",
+    "--max-batch-tokens",
+    "8",
+    "--prefill-chunk-size",
+    "8",
+    "--kv-cache-mb",
+    "16",
+    "--max-tensor-mb",
+    "1024",
+    "--cuda-device-budget-mb",
+    "7168",
+    "--cuda-workspace-mb",
+    "2048",
+    "--cuda-expert-scratch-mb",
+    "8",
+    "--cuda-expert-device-entries",
+    "64",
+    "--cuda-expert-device-bytes",
+    "335544320",
+    "--request-queue-capacity",
+    "2",
+    "--max-inflight-requests",
+    "2",
+    "--served-model-name",
+    "qwen35-storage-demand-paper",
+    "--host",
+    "127.0.0.1",
+    "--port",
+    "18369"
+  ]
+}

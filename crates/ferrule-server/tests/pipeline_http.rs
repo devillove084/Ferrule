@@ -17,15 +17,17 @@ use std::time::Duration;
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use ferrule_common::{CompletionHub, ParallelismPlan};
+use ferrule_composition::model_factory::{PipelineBuildOptions, PipelineRankBackend};
+use ferrule_composition::{
+    BackendSelection, ModelFactoryOptions, ResidentModelBuildPlan, ResidentModelPlanner,
+};
 use ferrule_model::{AutoConfig, ChatTemplate};
-use ferrule_runtime::engine::model_factory::{PipelineBuildOptions, PipelineRankBackend};
 use ferrule_runtime::engine::{BoxedSessionInferenceEngine, SessionInferenceEngine};
 #[cfg(unix)]
 use ferrule_runtime::parallel::process::ProcessLaunch;
 use ferrule_runtime::{
-    BackendSelection, CancelRequestResult, GenerateRequest, InferenceCancelProgress,
-    InferenceCompletionReactor, InferenceEngine, InferenceShutdownProgress, ModelFactoryOptions,
-    RequestId, ResidentDriverStep, ResidentModelBuildPlan, ResidentModelPlanner,
+    CancelRequestResult, GenerateRequest, InferenceCancelProgress, InferenceCompletionReactor,
+    InferenceEngine, InferenceShutdownProgress, RequestId, ResidentDriverStep,
     ResidentSchedulerConfig, ResidentTokenEvent, ResidentTopKDriverConfig, Result as RuntimeResult,
     SequenceState, SessionId,
 };
@@ -182,6 +184,7 @@ impl Fixture {
             expert_reader_max_tensor_mebibytes: 1,
             expert_cache: Default::default(),
             qwen35_moe_capacity: None,
+            numeric_fp8_profile: None,
             qwen35_host_cache: None,
             moe_hotset_experts: 0,
             kv_cache_mebibytes: None,
@@ -308,7 +311,7 @@ impl Fixture {
             .unwrap()
     }
 
-    #[cfg(unix)]
+    #[cfg(all(unix, any(feature = "cuda", feature = "cpu-reference")))]
     fn assert_process_owners_stopped(&self, pp: usize, ep: usize, cuda: bool) {
         let mut records = Vec::new();
         for entry in std::fs::read_dir(self.0.join("process-owners")).unwrap() {
@@ -1421,7 +1424,25 @@ async fn cpu_moe_ep_serves_with_and_without_pp() {
     }
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, not(feature = "cpu-reference")))]
+#[test]
+fn cpu_process_execution_requires_explicit_reference_opt_in() {
+    for experts in [false, true] {
+        let fixture = Fixture::with_experts(7, experts);
+        let plan =
+            fixture.process_plan(BackendSelection::Cpu, 2, if experts { 2 } else { 1 }, None);
+        let Err(error) = plan.build() else {
+            panic!("CPU process execution must not fall back without cpu-reference");
+        };
+        assert!(
+            format!("{error:?}")
+                .contains("CPU process execution requires cpu-reference; no fallback"),
+            "{error:?}"
+        );
+    }
+}
+
+#[cfg(all(unix, feature = "cpu-reference"))]
 #[tokio::test]
 async fn cpu_process_pp_and_ep_serve_http_sse_and_reuse_after_cancel() {
     let dense = Fixture::new(7);

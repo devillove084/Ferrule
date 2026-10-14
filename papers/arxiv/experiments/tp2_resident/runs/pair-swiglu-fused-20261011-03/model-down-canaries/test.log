@@ -1,0 +1,6 @@
+
+running 1 test
+test transformer::standard::cuda::hybrid_rank::mixed::decoded_gpu_tests::routed_down_staged_slices_match_standalone_and_preserve_neighbors ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 764 filtered out; finished in 1.27s
+

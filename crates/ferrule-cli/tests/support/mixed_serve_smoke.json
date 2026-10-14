@@ -1,0 +1,46 @@
+{
+  "serve_flags": {
+    "--backend": "cuda",
+    "--engine": "resident",
+    "--model-profile": "qwen35-mixed-bf16",
+    "--expert-prewarm": "lazy",
+    "--kv-execution-policy": "resident",
+    "--ctx-size": "128",
+    "--max-active-sequences": "2",
+    "--max-batch-tokens": "8",
+    "--prefill-chunk-size": "8",
+    "--kv-cache-mb": "16",
+    "--max-tensor-mb": "1024",
+    "--cuda-expert-device-entries": "8",
+    "--cuda-expert-device-bytes": "335544320",
+    "--cuda-expert-scratch-mb": "8",
+    "--cuda-workspace-mb": "2048",
+    "--cuda-device-budget-mb": "7168",
+    "--served-model-name": "qwen35-mixed-smoke",
+    "--host": "127.0.0.1",
+    "--port": "18359"
+  },
+  "policy": {
+    "activation": "bf16",
+    "kv": "bf16",
+    "convolution": "bf16",
+    "ssm": "f32",
+    "accumulation": "f32",
+    "storage": "e4m3fn-bf16-scales",
+    "arithmetic": "cuda-hybrid-numeric-fp8-model-bf16-mixed-f32-ssm",
+    "tp": 1,
+    "ep": 1,
+    "pp": 1,
+    "owners": 1,
+    "gpu_ordinal": 0,
+    "device_budget_bytes": 7516192768,
+    "os_page_cache": "uncontrolled; cold restart means process/model reload only"
+  },
+  "limits": {
+    "startup_seconds": 180,
+    "request_seconds": 120,
+    "cancellation_seconds": 30,
+    "teardown_seconds": 45,
+    "supervisor_seconds": 720
+  }
+}

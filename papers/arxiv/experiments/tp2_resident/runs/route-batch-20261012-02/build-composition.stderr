@@ -1,0 +1,5 @@
+    Blocking waiting for file lock on build directory
+   Compiling ferrule-model v0.2.0 (/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-model)
+   Compiling ferrule-runtime v0.2.0 (/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-runtime)
+   Compiling ferrule-composition v0.2.0 (/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-composition)
+    Finished `test` profile [optimized + debuginfo] target(s) in 3m 35s

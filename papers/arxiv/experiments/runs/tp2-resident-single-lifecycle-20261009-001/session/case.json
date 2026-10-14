@@ -1,0 +1,649 @@
+{
+  "status": "complete",
+  "started_monotonic": 8419870.729501836,
+  "fairmatch": false,
+  "exact_speedup": null,
+  "launch_monotonic": 8419871.439021168,
+  "server_pid": 14168,
+  "server_identity": {
+    "pid": 14168,
+    "birth_ticks": 78375109,
+    "ppid": 14155,
+    "state": "R"
+  },
+  "startup_seconds": 65.73253656737506,
+  "request_gate": {
+    "status": "complete",
+    "phases": [
+      {
+        "stage": "hello2",
+        "gate": {
+          "status": "pass",
+          "quality_claim": false
+        }
+      },
+      {
+        "stage": "canary8",
+        "gate": {
+          "status": "pass",
+          "checks": [
+            {
+              "id": "qa",
+              "expected_text": " Tokyo.\nThe capital of Japan is",
+              "observed_text": " Tokyo.\nThe capital of Japan is",
+              "reference_ids": [
+                25358,
+                13,
+                198,
+                760,
+                6511,
+                314,
+                6124,
+                369
+              ],
+              "observed_ids": null,
+              "actual_output_tokens": 8,
+              "actual_input_tokens": 5,
+              "passed": true
+            },
+            {
+              "id": "arithmetic",
+              "expected_text": " ?\n\n7 + 8 = ",
+              "observed_text": " ?\n\n7 + 8 = ",
+              "reference_ids": [
+                907,
+                271,
+                22,
+                478,
+                220,
+                23,
+                283,
+                220
+              ],
+              "observed_ids": null,
+              "actual_output_tokens": 8,
+              "actual_input_tokens": 5,
+              "passed": true
+            },
+            {
+              "id": "chinese",
+              "expected_text": "\u5317\u4eac\uff0c\u5317\u4eac\u662f\u4e2d\u56fd\u7684\u9996\u90fd\u3002\u90a3\u4e48",
+              "observed_text": "\u5317\u4eac\uff0c\u5317\u4eac\u662f\u4e2d\u56fd\u7684\u9996\u90fd\u3002\u90a3\u4e48",
+              "reference_ids": [
+                98116,
+                3709,
+                98116,
+                108820,
+                102357,
+                95983,
+                1710,
+                97486
+              ],
+              "observed_ids": null,
+              "actual_output_tokens": 8,
+              "actual_input_tokens": 3,
+              "passed": true
+            }
+          ],
+          "limitation": "Exact visible first8 text + usage only; not observed token IDs/logits/routes or full numerical oracle"
+        }
+      },
+      {
+        "stage": "qa8-V1",
+        "gate": {
+          "status": "pass",
+          "quality_claim": false
+        }
+      }
+    ],
+    "same_server": true
+  },
+  "resources": {
+    "status": "observed_within_targets",
+    "errors": [],
+    "gpu_peak_bytes": {
+      "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 20706230272,
+      "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 20706230272
+    },
+    "tree_pss_peak_bytes": 7385981952,
+    "tree_rss_peak_bytes": 9201651712,
+    "complete_host_samples": 31,
+    "incomplete_host_samples": 1,
+    "gpu_samples": 32,
+    "missing_gpu_attempts": 0,
+    "baseline": {
+      "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": {
+        "index": 0,
+        "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+        "total_bytes": 25769803776,
+        "gpu_bytes": 0,
+        "utilization": 0
+      },
+      "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": {
+        "index": 1,
+        "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+        "total_bytes": 25769803776,
+        "gpu_bytes": 0,
+        "utilization": 0
+      },
+      "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6": {
+        "index": 2,
+        "uuid": "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6",
+        "total_bytes": 25769803776,
+        "gpu_bytes": 0,
+        "utilization": 0
+      },
+      "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011": {
+        "index": 3,
+        "uuid": "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011",
+        "total_bytes": 25769803776,
+        "gpu_bytes": 0,
+        "utilization": 0
+      },
+      "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86": {
+        "index": 4,
+        "uuid": "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86",
+        "total_bytes": 25769803776,
+        "gpu_bytes": 0,
+        "utilization": 0
+      },
+      "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685": {
+        "index": 5,
+        "uuid": "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685",
+        "total_bytes": 25769803776,
+        "gpu_bytes": 0,
+        "utilization": 0
+      },
+      "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d": {
+        "index": 6,
+        "uuid": "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d",
+        "total_bytes": 25769803776,
+        "gpu_bytes": 0,
+        "utilization": 0
+      },
+      "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f": {
+        "index": 7,
+        "uuid": "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f",
+        "total_bytes": 25769803776,
+        "gpu_bytes": 0,
+        "utilization": 0
+      }
+    },
+    "delta_high_water_bytes": {
+      "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 20706230272,
+      "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 20706230272,
+      "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6": 0,
+      "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011": 0,
+      "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86": 0,
+      "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685": 0,
+      "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d": 0,
+      "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f": 0
+    },
+    "final_process_diagnostics": [
+      {
+        "identity": {
+          "pid": 14168,
+          "birth_ticks": 78375109,
+          "ppid": 14155,
+          "state": "S"
+        },
+        "command": "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/bin/python /home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-single-lifecycle-20261009-001/staged/ferrule serve /mnt/nas1/hf/Qwen3.5-35B-A3B-FP8 --host 127.0.0.1 --port 18367 --served-model-name qwen35-vllm-tp2-resident-paper --language-model-only --tensor-parallel-size 2 --pipeline-parallel-size 1 --data-parallel-size 1 --dtype bfloat16 --kv-cache-dtype auto --mamba-cache-dtype bfloat16 --mamba-ssm-cache-dtype float32 --linear-backend marlin --moe-backend marlin --cpu-offload-gb 0 --max-model-len 128 --max-num-seqs 2 --max-num-batched-tokens 8 --enable-chunked-prefill --gpu-memory-utilization 0.8 --no-enable-prefix-caching --generation-config vllm --seed 1 --enforce-eager ",
+        "environment": {
+          "HOME": "/home/admin",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "PYTHONNOUSERSITE": "1",
+          "CUDA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+          "NVIDIA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+          "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
+          "HF_HUB_OFFLINE": "1",
+          "TRANSFORMERS_OFFLINE": "1",
+          "CUDA_HOME": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86",
+          "CUDA_PATH": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86",
+          "CUDACXX": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86/bin/nvcc",
+          "NVCC": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86/bin/nvcc",
+          "FLASHINFER_NVCC": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86/bin/nvcc",
+          "PATH": "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/bin:/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86/bin:/root/.cargo/bin:/usr/share/Modules/bin:/sbin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/root/bin:/usr/X11R6/bin",
+          "FLASHINFER_WORKSPACE_BASE": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/flashinfer-cu129",
+          "MAX_JOBS": "4",
+          "NCCL_P2P_DISABLE": "1",
+          "NCCL_DEBUG": "INFO",
+          "NCCL_DEBUG_SUBSYS": "INIT,GRAPH,P2P,SHM,NET"
+        },
+        "libraries": [
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/nvidia/cuda_nvrtc/lib/libnvrtc-builtins.so.12.9",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/nvidia/cuda_nvrtc/lib/libnvrtc.so.12",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/nvidia/cuda_runtime/lib/libcudart.so.12",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/nvidia/nccl/lib/libnccl.so.2",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libc10_cuda.so",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch.so",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_cpu.so",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_cuda.so",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_global_deps.so",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_nvshmem.so",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_python.so",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torchaudio/lib/libtorchaudio.abi3.so",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torchcodec/libtorchcodec_image.so",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torchcodec/libtorchcodec_pybind_ops.so",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torchvision.libs/libcudart.6ead8f7a.so.12",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/vllm/_C_stable_libtorch.abi3.so",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/vllm/_moe_C_stable_libtorch.abi3.so",
+          "/usr/lib64/libcuda.so.575.57.08",
+          "/usr/lib64/libnvidia-ml.so.575.57.08",
+          "/usr/local/cuda-13.2/targets/x86_64-linux/lib/libcudart.so.13.2.86",
+          "/usr/local/cuda-13.2/targets/x86_64-linux/lib/libnvrtc.so.13.2.86"
+        ]
+      },
+      {
+        "identity": {
+          "pid": 14763,
+          "birth_ticks": 78376489,
+          "ppid": 14168,
+          "state": "S"
+        },
+        "command": "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/bin/python -B -s -c from multiprocessing.resource_tracker import main;main(75) ",
+        "environment": {
+          "HOME": "/home/admin",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "PYTHONNOUSERSITE": "1",
+          "CUDA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+          "NVIDIA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+          "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
+          "HF_HUB_OFFLINE": "1",
+          "TRANSFORMERS_OFFLINE": "1",
+          "CUDA_HOME": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86",
+          "CUDA_PATH": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86",
+          "CUDACXX": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86/bin/nvcc",
+          "NVCC": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86/bin/nvcc",
+          "FLASHINFER_NVCC": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86/bin/nvcc",
+          "PATH": "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/bin:/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86/bin:/root/.cargo/bin:/usr/share/Modules/bin:/sbin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/root/bin:/usr/X11R6/bin",
+          "FLASHINFER_WORKSPACE_BASE": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/flashinfer-cu129",
+          "MAX_JOBS": "4",
+          "NCCL_P2P_DISABLE": "1",
+          "NCCL_DEBUG": "INFO",
+          "NCCL_DEBUG_SUBSYS": "INIT,GRAPH,P2P,SHM,NET"
+        },
+        "libraries": []
+      },
+      {
+        "identity": {
+          "pid": 14764,
+          "birth_ticks": 78376489,
+          "ppid": 14168,
+          "state": "R"
+        },
+        "command": "VLLM::EngineCore                                                                                                                                                                                  ",
+        "environment": {},
+        "libraries": [
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/nvidia/cuda_nvrtc/lib/libnvrtc-builtins.so.12.9",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/nvidia/cuda_nvrtc/lib/libnvrtc.so.12",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/nvidia/cuda_runtime/lib/libcudart.so.12",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/nvidia/nccl/lib/libnccl.so.2",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libc10_cuda.so",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch.so",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_cpu.so",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_cuda.so",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_global_deps.so",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_nvshmem.so",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_python.so",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torchaudio/lib/libtorchaudio.abi3.so",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torchcodec/libtorchcodec_image.so",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torchcodec/libtorchcodec_pybind_ops.so",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torchvision.libs/libcudart.6ead8f7a.so.12",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/vllm/_C_stable_libtorch.abi3.so",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/vllm/_moe_C_stable_libtorch.abi3.so",
+          "/usr/lib64/libcuda.so.575.57.08",
+          "/usr/lib64/libnvidia-ml.so.575.57.08",
+          "/usr/local/cuda-13.2/targets/x86_64-linux/lib/libcudart.so.13.2.86",
+          "/usr/local/cuda-13.2/targets/x86_64-linux/lib/libnvrtc.so.13.2.86"
+        ]
+      },
+      {
+        "identity": {
+          "pid": 14989,
+          "birth_ticks": 78377094,
+          "ppid": 14764,
+          "state": "R"
+        },
+        "command": "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/bin/python -c import humming.utils.nvrtc; humming.utils.nvrtc.may_build_nvrtc_compile_binary() ",
+        "environment": {
+          "HOME": "/home/admin",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "PYTHONNOUSERSITE": "1",
+          "CUDA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+          "NVIDIA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+          "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
+          "HF_HUB_OFFLINE": "1",
+          "TRANSFORMERS_OFFLINE": "1",
+          "CUDA_HOME": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86",
+          "CUDA_PATH": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86",
+          "CUDACXX": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86/bin/nvcc",
+          "NVCC": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86/bin/nvcc",
+          "FLASHINFER_NVCC": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86/bin/nvcc",
+          "PATH": "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/bin:/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86/bin:/root/.cargo/bin:/usr/share/Modules/bin:/sbin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/root/bin:/usr/X11R6/bin",
+          "FLASHINFER_WORKSPACE_BASE": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/flashinfer-cu129",
+          "MAX_JOBS": "4",
+          "NCCL_P2P_DISABLE": "1",
+          "NCCL_DEBUG": "INFO",
+          "NCCL_DEBUG_SUBSYS": "INIT,GRAPH,P2P,SHM,NET"
+        },
+        "libraries": [
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/nvidia/cuda_nvrtc/lib/libnvrtc-builtins.so.12.9",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/nvidia/cuda_nvrtc/lib/libnvrtc.so.12",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/nvidia/cuda_runtime/lib/libcudart.so.12",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/nvidia/nccl/lib/libnccl.so.2",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libc10_cuda.so",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch.so",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_cpu.so",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_cuda.so",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_global_deps.so",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_nvshmem.so",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_python.so",
+          "/usr/lib64/libcuda.so.575.57.08"
+        ]
+      },
+      {
+        "identity": {
+          "pid": 14991,
+          "birth_ticks": 78377096,
+          "ppid": 14764,
+          "state": "R"
+        },
+        "command": "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/bin/python -c import humming.ops.utils; humming.ops.utils.init_humming_launcher() ",
+        "environment": {
+          "HOME": "/home/admin",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "PYTHONNOUSERSITE": "1",
+          "CUDA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+          "NVIDIA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+          "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
+          "HF_HUB_OFFLINE": "1",
+          "TRANSFORMERS_OFFLINE": "1",
+          "CUDA_HOME": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86",
+          "CUDA_PATH": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86",
+          "CUDACXX": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86/bin/nvcc",
+          "NVCC": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86/bin/nvcc",
+          "FLASHINFER_NVCC": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86/bin/nvcc",
+          "PATH": "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/bin:/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86/bin:/root/.cargo/bin:/usr/share/Modules/bin:/sbin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/root/bin:/usr/X11R6/bin",
+          "FLASHINFER_WORKSPACE_BASE": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/flashinfer-cu129",
+          "MAX_JOBS": "4",
+          "NCCL_P2P_DISABLE": "1",
+          "NCCL_DEBUG": "INFO",
+          "NCCL_DEBUG_SUBSYS": "INIT,GRAPH,P2P,SHM,NET"
+        },
+        "libraries": [
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/nvidia/cuda_nvrtc/lib/libnvrtc-builtins.so.12.9",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/nvidia/cuda_nvrtc/lib/libnvrtc.so.12",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/nvidia/cuda_runtime/lib/libcudart.so.12",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/nvidia/nccl/lib/libnccl.so.2",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libc10_cuda.so",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch.so",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_cpu.so",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_cuda.so",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_global_deps.so",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_nvshmem.so",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_python.so",
+          "/usr/lib64/libcuda.so.575.57.08"
+        ]
+      },
+      {
+        "identity": {
+          "pid": 15060,
+          "birth_ticks": 78377107,
+          "ppid": 14764,
+          "state": "R"
+        },
+        "command": "VLLM::Worker_TP0                                                                                                                                                                                  ",
+        "environment": {},
+        "libraries": [
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/nvidia/cuda_nvrtc/lib/libnvrtc-builtins.so.12.9",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/nvidia/cuda_nvrtc/lib/libnvrtc.so.12",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/nvidia/cuda_runtime/lib/libcudart.so.12",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/nvidia/nccl/lib/libnccl.so.2",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libc10_cuda.so",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch.so",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_cpu.so",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_cuda.so",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_global_deps.so",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_nvshmem.so",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_python.so",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torchaudio/lib/libtorchaudio.abi3.so",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torchcodec/libtorchcodec_image.so",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torchcodec/libtorchcodec_pybind_ops.so",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torchvision.libs/libcudart.6ead8f7a.so.12",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/vllm/_C_stable_libtorch.abi3.so",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/vllm/_moe_C_stable_libtorch.abi3.so",
+          "/usr/lib64/libcuda.so.575.57.08",
+          "/usr/lib64/libnvidia-ml.so.575.57.08",
+          "/usr/lib64/libnvidia-ptxjitcompiler.so.575.57.08",
+          "/usr/local/cuda-13.2/targets/x86_64-linux/lib/libcudart.so.13.2.86",
+          "/usr/local/cuda-13.2/targets/x86_64-linux/lib/libnvrtc.so.13.2.86"
+        ]
+      },
+      {
+        "identity": {
+          "pid": 15061,
+          "birth_ticks": 78377107,
+          "ppid": 14764,
+          "state": "R"
+        },
+        "command": "VLLM::Worker_TP1                                                                                                                                                                                  ",
+        "environment": {},
+        "libraries": [
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/nvidia/cuda_nvrtc/lib/libnvrtc-builtins.so.12.9",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/nvidia/cuda_nvrtc/lib/libnvrtc.so.12",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/nvidia/cuda_runtime/lib/libcudart.so.12",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/nvidia/nccl/lib/libnccl.so.2",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libc10_cuda.so",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch.so",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_cpu.so",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_cuda.so",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_global_deps.so",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_nvshmem.so",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_python.so",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torchaudio/lib/libtorchaudio.abi3.so",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torchcodec/libtorchcodec_image.so",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torchcodec/libtorchcodec_pybind_ops.so",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torchvision.libs/libcudart.6ead8f7a.so.12",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/vllm/_C_stable_libtorch.abi3.so",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/vllm/_moe_C_stable_libtorch.abi3.so",
+          "/usr/lib64/libcuda.so.575.57.08",
+          "/usr/lib64/libnvidia-ml.so.575.57.08",
+          "/usr/lib64/libnvidia-ptxjitcompiler.so.575.57.08",
+          "/usr/local/cuda-13.2/targets/x86_64-linux/lib/libcudart.so.13.2.86",
+          "/usr/local/cuda-13.2/targets/x86_64-linux/lib/libnvrtc.so.13.2.86"
+        ]
+      },
+      {
+        "identity": {
+          "pid": 15467,
+          "birth_ticks": 78377705,
+          "ppid": 15061,
+          "state": "R"
+        },
+        "command": "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/bin/python -c import humming.utils.nvrtc; humming.utils.nvrtc.may_build_nvrtc_compile_binary() ",
+        "environment": {
+          "HOME": "/home/admin",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "PYTHONNOUSERSITE": "1",
+          "CUDA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+          "NVIDIA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+          "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
+          "HF_HUB_OFFLINE": "1",
+          "TRANSFORMERS_OFFLINE": "1",
+          "CUDA_HOME": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86",
+          "CUDA_PATH": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86",
+          "CUDACXX": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86/bin/nvcc",
+          "NVCC": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86/bin/nvcc",
+          "FLASHINFER_NVCC": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86/bin/nvcc",
+          "PATH": "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/bin:/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86/bin:/root/.cargo/bin:/usr/share/Modules/bin:/sbin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/root/bin:/usr/X11R6/bin",
+          "FLASHINFER_WORKSPACE_BASE": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/flashinfer-cu129",
+          "MAX_JOBS": "4",
+          "NCCL_P2P_DISABLE": "1",
+          "NCCL_DEBUG": "INFO",
+          "NCCL_DEBUG_SUBSYS": "INIT,GRAPH,P2P,SHM,NET"
+        },
+        "libraries": [
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/nvidia/cuda_nvrtc/lib/libnvrtc-builtins.so.12.9",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/nvidia/cuda_nvrtc/lib/libnvrtc.so.12",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/nvidia/cuda_runtime/lib/libcudart.so.12",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/nvidia/nccl/lib/libnccl.so.2",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libc10_cuda.so",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch.so",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_cpu.so",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_cuda.so",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_global_deps.so",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_nvshmem.so",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_python.so",
+          "/usr/lib64/libcuda.so.575.57.08",
+          "/usr/lib64/libnvidia-ml.so.575.57.08"
+        ]
+      },
+      {
+        "identity": {
+          "pid": 15469,
+          "birth_ticks": 78377708,
+          "ppid": 15061,
+          "state": "R"
+        },
+        "command": "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/bin/python -c import humming.ops.utils; humming.ops.utils.init_humming_launcher() ",
+        "environment": {
+          "HOME": "/home/admin",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "PYTHONNOUSERSITE": "1",
+          "CUDA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+          "NVIDIA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+          "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
+          "HF_HUB_OFFLINE": "1",
+          "TRANSFORMERS_OFFLINE": "1",
+          "CUDA_HOME": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86",
+          "CUDA_PATH": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86",
+          "CUDACXX": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86/bin/nvcc",
+          "NVCC": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86/bin/nvcc",
+          "FLASHINFER_NVCC": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86/bin/nvcc",
+          "PATH": "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/bin:/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86/bin:/root/.cargo/bin:/usr/share/Modules/bin:/sbin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/root/bin:/usr/X11R6/bin",
+          "FLASHINFER_WORKSPACE_BASE": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/flashinfer-cu129",
+          "MAX_JOBS": "4",
+          "NCCL_P2P_DISABLE": "1",
+          "NCCL_DEBUG": "INFO",
+          "NCCL_DEBUG_SUBSYS": "INIT,GRAPH,P2P,SHM,NET"
+        },
+        "libraries": [
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/nvidia/cuda_nvrtc/lib/libnvrtc-builtins.so.12.9",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/nvidia/cuda_nvrtc/lib/libnvrtc.so.12",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/nvidia/cuda_runtime/lib/libcudart.so.12",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/nvidia/nccl/lib/libnccl.so.2",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libc10_cuda.so",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch.so",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_cpu.so",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_cuda.so",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_global_deps.so",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_nvshmem.so",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_python.so",
+          "/usr/lib64/libcuda.so.575.57.08",
+          "/usr/lib64/libnvidia-ml.so.575.57.08"
+        ]
+      },
+      {
+        "identity": {
+          "pid": 15471,
+          "birth_ticks": 78377715,
+          "ppid": 15060,
+          "state": "R"
+        },
+        "command": "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/bin/python -c import humming.utils.nvrtc; humming.utils.nvrtc.may_build_nvrtc_compile_binary() ",
+        "environment": {
+          "HOME": "/home/admin",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "PYTHONNOUSERSITE": "1",
+          "CUDA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+          "NVIDIA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+          "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
+          "HF_HUB_OFFLINE": "1",
+          "TRANSFORMERS_OFFLINE": "1",
+          "CUDA_HOME": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86",
+          "CUDA_PATH": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86",
+          "CUDACXX": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86/bin/nvcc",
+          "NVCC": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86/bin/nvcc",
+          "FLASHINFER_NVCC": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86/bin/nvcc",
+          "PATH": "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/bin:/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86/bin:/root/.cargo/bin:/usr/share/Modules/bin:/sbin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/root/bin:/usr/X11R6/bin",
+          "FLASHINFER_WORKSPACE_BASE": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/flashinfer-cu129",
+          "MAX_JOBS": "4",
+          "NCCL_P2P_DISABLE": "1",
+          "NCCL_DEBUG": "INFO",
+          "NCCL_DEBUG_SUBSYS": "INIT,GRAPH,P2P,SHM,NET"
+        },
+        "libraries": [
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/nvidia/cuda_nvrtc/lib/libnvrtc-builtins.so.12.9",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/nvidia/cuda_nvrtc/lib/libnvrtc.so.12",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/nvidia/cuda_runtime/lib/libcudart.so.12",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/nvidia/nccl/lib/libnccl.so.2",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libc10_cuda.so",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch.so",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_cpu.so",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_cuda.so",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_global_deps.so",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_nvshmem.so",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_python.so",
+          "/usr/lib64/libcuda.so.575.57.08",
+          "/usr/lib64/libnvidia-ml.so.575.57.08"
+        ]
+      },
+      {
+        "identity": {
+          "pid": 15473,
+          "birth_ticks": 78377717,
+          "ppid": 15060,
+          "state": "R"
+        },
+        "command": "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/bin/python -c import humming.ops.utils; humming.ops.utils.init_humming_launcher() ",
+        "environment": {
+          "HOME": "/home/admin",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "PYTHONNOUSERSITE": "1",
+          "CUDA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+          "NVIDIA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+          "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
+          "HF_HUB_OFFLINE": "1",
+          "TRANSFORMERS_OFFLINE": "1",
+          "CUDA_HOME": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86",
+          "CUDA_PATH": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86",
+          "CUDACXX": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86/bin/nvcc",
+          "NVCC": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86/bin/nvcc",
+          "FLASHINFER_NVCC": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86/bin/nvcc",
+          "PATH": "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/bin:/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86/bin:/root/.cargo/bin:/usr/share/Modules/bin:/sbin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/root/bin:/usr/X11R6/bin",
+          "FLASHINFER_WORKSPACE_BASE": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/flashinfer-cu129",
+          "MAX_JOBS": "4",
+          "NCCL_P2P_DISABLE": "1",
+          "NCCL_DEBUG": "INFO",
+          "NCCL_DEBUG_SUBSYS": "INIT,GRAPH,P2P,SHM,NET"
+        },
+        "libraries": [
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/nvidia/cuda_nvrtc/lib/libnvrtc-builtins.so.12.9",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/nvidia/cuda_nvrtc/lib/libnvrtc.so.12",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/nvidia/cuda_runtime/lib/libcudart.so.12",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/nvidia/nccl/lib/libnccl.so.2",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libc10_cuda.so",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch.so",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_cpu.so",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_cuda.so",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_global_deps.so",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_nvshmem.so",
+          "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_python.so",
+          "/usr/lib64/libcuda.so.575.57.08"
+        ]
+      }
+    ],
+    "owned_gpu_attribution": "unknown",
+    "owned_process_gpu_peak_bytes": null,
+    "exact_peaks": false,
+    "hard_memory_partition": false,
+    "continuous_coverage": false
+  },
+  "shutdown": {
+    "status": "root_exited_descendants_unknown",
+    "seconds": 0.615189790725708,
+    "timed_out": false,
+    "gpu_quiescence": "unverified; no GPU probe"
+  },
+  "wall_seconds": 75.51268525607884
+}

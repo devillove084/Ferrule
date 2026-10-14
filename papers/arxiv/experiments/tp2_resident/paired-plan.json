@@ -1,0 +1,133 @@
+{
+  "protocol": "tp2-resident-fv-qa8-descriptive",
+  "source_audit": {
+    "public_quality_accepted": false,
+    "flags": {
+      "--backend": "cuda",
+      "--engine": "pipeline",
+      "--model-profile": "qwen35-mixed-bf16",
+      "--tensor-parallel": "2",
+      "--pipeline-parallel": "1",
+      "--expert-parallel": "1",
+      "--rank-backend": "thread",
+      "--devices": "0,1",
+      "--rank-restarts": "0",
+      "--kv-execution-policy": "resident",
+      "--ctx-size": "128",
+      "--max-active-sequences": "2",
+      "--max-batch-tokens": "8",
+      "--prefill-chunk-size": "8",
+      "--cuda-device-budget-mb": "22528",
+      "--host": "127.0.0.1",
+      "--port": "18367",
+      "--served-model-name": "qwen35-ferrule-tp2-resident-paper"
+    },
+    "source_pins": {
+      "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-cli/src/args.rs": "1eab1003fe6d510133913637b0dee6cf80a8a9d4e91701bca7971b7b72511a18",
+      "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-cli/src/commands/serve.rs": "97c2513bfa635e8136a05612b5117b6f6e5b29ece438abddf8e5c437d8280c44",
+      "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-composition/src/model_factory/mixed_tensor_serving.rs": "db0059b8afb8726439dc6ead1141b7790f6cc4ec7c3b44de1c279b4a45479624"
+    },
+    "precision": "profile supplies BF16 activation/KV/conv, F32 SSM/accumulation",
+    "no_offload": "factory requires resident local shards; rejects host cache/hotset/offload",
+    "strict": "paper admission policy; NOT a CLI --strict flag"
+  },
+  "contract": {
+    "topology": {
+      "tp": 2,
+      "pp": 1,
+      "dp": 1,
+      "ep": 1,
+      "enable_expert_parallel": false,
+      "gpu_uuids": [
+        "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+        "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9"
+      ]
+    },
+    "boundaries": {
+      "activation": "bfloat16",
+      "kv": "bfloat16",
+      "conv": "bfloat16",
+      "ssm": "float32"
+    },
+    "workload": {
+      "context": 128,
+      "batch_tokens": 8,
+      "active_sequences": 2,
+      "concurrency": 1,
+      "seed": 1,
+      "eos": "natural",
+      "prefix_cache": false,
+      "endpoint": "raw-completions",
+      "eager": true,
+      "cpu_offload_gb": 0,
+      "reference_manifest_sha256": "102c798baeb5200bc8ed8386eabed6146870b3b6da2a90fc6010677041352c7e",
+      "qa": {
+        "max_tokens": 8,
+        "requests": 5,
+        "warmup": 2,
+        "first_after_ready": true
+      }
+    },
+    "resources": {
+      "gpu_target_bytes": 23622320128,
+      "host_target_bytes": 137438953472,
+      "hard_partition": false,
+      "policy": "sampled whole-device GPU and server-tree PSS; missing is null, not zero"
+    },
+    "limits": {
+      "startup_seconds": 900,
+      "request_seconds": 120,
+      "all_requests_seconds": 440,
+      "teardown_seconds": 120,
+      "supervisor_seconds": 1600,
+      "supervisor_ceiling_seconds": 1700
+    }
+  },
+  "slots": [
+    "F1",
+    "V1",
+    "V2",
+    "F2"
+  ],
+  "status": "cpu_only_not_executed",
+  "vllm_flags": {
+    "--host": "127.0.0.1",
+    "--port": "18367",
+    "--served-model-name": "qwen35-vllm-tp2-resident-paper",
+    "--language-model-only": true,
+    "--tensor-parallel-size": "2",
+    "--pipeline-parallel-size": "1",
+    "--data-parallel-size": "1",
+    "--dtype": "bfloat16",
+    "--kv-cache-dtype": "auto",
+    "--mamba-cache-dtype": "bfloat16",
+    "--mamba-ssm-cache-dtype": "float32",
+    "--linear-backend": "marlin",
+    "--moe-backend": "marlin",
+    "--cpu-offload-gb": "0",
+    "--max-model-len": "128",
+    "--max-num-seqs": "2",
+    "--max-num-batched-tokens": "8",
+    "--enable-chunked-prefill": true,
+    "--gpu-memory-utilization": "0.8",
+    "--no-enable-prefix-caching": true,
+    "--generation-config": "vllm",
+    "--seed": "1",
+    "--enforce-eager": true
+  },
+  "vllm_transport": {
+    "NCCL_P2P_DISABLE": "1",
+    "NCCL_DEBUG": "INFO",
+    "NCCL_DEBUG_SUBSYS": "INIT,GRAPH,P2P,SHM,NET",
+    "policy": "Fixed before first launch; historical and live CNS evidence; no retry/transport override"
+  },
+  "serving_binary": null,
+  "admission_receipts": "not supplied; do not use staged test binaries",
+  "stages": [
+    "hello2",
+    "canary8",
+    "qa8: excluded first +2 warmups +5 measured"
+  ],
+  "fairmatch": false,
+  "exact_speedup": null
+}

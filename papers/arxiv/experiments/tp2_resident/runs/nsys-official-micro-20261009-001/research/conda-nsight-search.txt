@@ -1,0 +1,1981 @@
+Loading channels: ...working... done
+cuda-nsight 11.4.43 0
+---------------------
+file name   : cuda-nsight-11.4.43-0.tar.bz2
+name        : cuda-nsight
+version     : 11.4.43
+build       : 0
+build number: 0
+size        : 113.6 MB
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/cuda-nsight-11.4.43-0.tar.bz2
+md5         : 523c9e3054290bf17c16537dc5d6a2c0
+timestamp   : 2022-06-16 15:19:35 UTC
+dependencies: []
+
+
+cuda-nsight 11.4.100 0
+----------------------
+file name   : cuda-nsight-11.4.100-0.tar.bz2
+name        : cuda-nsight
+version     : 11.4.100
+build       : 0
+build number: 0
+size        : 113.6 MB
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/cuda-nsight-11.4.100-0.tar.bz2
+md5         : d582afed1f60499ff0b5ae8690689b8c
+timestamp   : 2022-06-16 04:48:55 UTC
+dependencies: []
+
+
+cuda-nsight 11.4.120 0
+----------------------
+file name   : cuda-nsight-11.4.120-0.tar.bz2
+name        : cuda-nsight
+version     : 11.4.120
+build       : 0
+build number: 0
+size        : 113.6 MB
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/cuda-nsight-11.4.120-0.tar.bz2
+md5         : 6a90e0d28e25c0af2428c55512d2fd98
+timestamp   : 2022-06-16 03:26:37 UTC
+dependencies: []
+
+
+cuda-nsight 11.5.50 0
+---------------------
+file name   : cuda-nsight-11.5.50-0.tar.bz2
+name        : cuda-nsight
+version     : 11.5.50
+build       : 0
+build number: 0
+size        : 113.6 MB
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/cuda-nsight-11.5.50-0.tar.bz2
+md5         : 3a52eb9d9a515ecc8acd78a7f54297d5
+timestamp   : 2022-06-16 04:22:40 UTC
+dependencies: []
+
+
+cuda-nsight 11.5.114 0
+----------------------
+file name   : cuda-nsight-11.5.114-0.tar.bz2
+name        : cuda-nsight
+version     : 11.5.114
+build       : 0
+build number: 0
+size        : 113.6 MB
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/cuda-nsight-11.5.114-0.tar.bz2
+md5         : 5b8243054ed0ded785a1744928b5eb1f
+timestamp   : 2022-06-16 03:46:10 UTC
+dependencies: []
+
+
+cuda-nsight 11.6.55 0
+---------------------
+file name   : cuda-nsight-11.6.55-0.tar.bz2
+name        : cuda-nsight
+version     : 11.6.55
+build       : 0
+build number: 0
+size        : 113.6 MB
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/cuda-nsight-11.6.55-0.tar.bz2
+md5         : 0e2f14092646876af05b83eab280ff2d
+timestamp   : 2022-06-16 04:34:02 UTC
+dependencies: []
+
+
+cuda-nsight 11.6.112 0
+----------------------
+file name   : cuda-nsight-11.6.112-0.tar.bz2
+name        : cuda-nsight
+version     : 11.6.112
+build       : 0
+build number: 0
+size        : 113.6 MB
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/cuda-nsight-11.6.112-0.tar.bz2
+md5         : f36cfc6811740e631346c366b62a6de6
+timestamp   : 2022-06-16 02:27:06 UTC
+dependencies: []
+
+
+cuda-nsight 11.6.124 0
+----------------------
+file name   : cuda-nsight-11.6.124-0.tar.bz2
+name        : cuda-nsight
+version     : 11.6.124
+build       : 0
+build number: 0
+size        : 113.6 MB
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/cuda-nsight-11.6.124-0.tar.bz2
+md5         : fbe02107d2544cc9df3bf89fcd6c2304
+timestamp   : 2022-06-16 04:43:59 UTC
+dependencies: []
+
+
+cuda-nsight 11.7.50 0
+---------------------
+file name   : cuda-nsight-11.7.50-0.tar.bz2
+name        : cuda-nsight
+version     : 11.7.50
+build       : 0
+build number: 0
+size        : 113.6 MB
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/cuda-nsight-11.7.50-0.tar.bz2
+md5         : 20207c732b326a47481797775873ef5e
+timestamp   : 2022-06-14 13:26:29 UTC
+dependencies: []
+
+
+cuda-nsight 11.7.91 0
+---------------------
+file name   : cuda-nsight-11.7.91-0.tar.bz2
+name        : cuda-nsight
+version     : 11.7.91
+build       : 0
+build number: 0
+size        : 113.6 MB
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/cuda-nsight-11.7.91-0.tar.bz2
+md5         : 4a7dd1edb57d9cf18e9e45cdc08483ce
+timestamp   : 2022-05-20 03:55:14 UTC
+dependencies: []
+
+
+cuda-nsight 11.8.86 0
+---------------------
+file name   : cuda-nsight-11.8.86-0.tar.bz2
+name        : cuda-nsight
+version     : 11.8.86
+build       : 0
+build number: 0
+size        : 113.6 MB
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/cuda-nsight-11.8.86-0.tar.bz2
+md5         : f6395abb8428ada738738fd558eba798
+timestamp   : 2022-08-26 20:09:03 UTC
+dependencies: []
+
+
+cuda-nsight 12.0.78 0
+---------------------
+file name   : cuda-nsight-12.0.78-0.tar.bz2
+name        : cuda-nsight
+version     : 12.0.78
+build       : 0
+build number: 0
+size        : 113.6 MB
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/cuda-nsight-12.0.78-0.tar.bz2
+md5         : 37e91efc40236a8e7d61f40dc81f29bb
+timestamp   : 2022-10-27 02:42:22 UTC
+dependencies: []
+
+
+cuda-nsight 12.0.140 0
+----------------------
+file name   : cuda-nsight-12.0.140-0.tar.bz2
+name        : cuda-nsight
+version     : 12.0.140
+build       : 0
+build number: 0
+size        : 113.6 MB
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/cuda-nsight-12.0.140-0.tar.bz2
+md5         : 17076561616980b4040485e09425c036
+timestamp   : 2023-01-07 01:40:28 UTC
+dependencies: []
+
+
+cuda-nsight 12.1.55 0
+---------------------
+file name   : cuda-nsight-12.1.55-0.tar.bz2
+name        : cuda-nsight
+version     : 12.1.55
+build       : 0
+build number: 0
+size        : 113.6 MB
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/cuda-nsight-12.1.55-0.tar.bz2
+md5         : 779742b37c2aa7455f8aa4ba90d7c71b
+timestamp   : 2023-01-25 03:41:11 UTC
+dependencies: []
+
+
+cuda-nsight 12.1.105 0
+----------------------
+file name   : cuda-nsight-12.1.105-0.tar.bz2
+name        : cuda-nsight
+version     : 12.1.105
+build       : 0
+build number: 0
+size        : 113.6 MB
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/cuda-nsight-12.1.105-0.tar.bz2
+md5         : 48f584ea8c67ab9b16380c626792d4a5
+timestamp   : 2023-04-04 01:25:17 UTC
+dependencies: []
+
+
+cuda-nsight 12.2.53 0
+---------------------
+file name   : cuda-nsight-12.2.53-0.tar.bz2
+name        : cuda-nsight
+version     : 12.2.53
+build       : 0
+build number: 0
+size        : 113.6 MB
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/cuda-nsight-12.2.53-0.tar.bz2
+md5         : 2175faef47e3a920d84438a8fb0cbdb6
+timestamp   : 2023-05-01 02:38:27 UTC
+dependencies: []
+
+
+cuda-nsight 12.2.128 0
+----------------------
+file name   : cuda-nsight-12.2.128-0.tar.bz2
+name        : cuda-nsight
+version     : 12.2.128
+build       : 0
+build number: 0
+size        : 113.7 MB
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/cuda-nsight-12.2.128-0.tar.bz2
+md5         : bc0f9f6790e6803ab2717e5c62789fcb
+timestamp   : 2023-07-11 10:50:06 UTC
+dependencies: []
+
+
+cuda-nsight 12.2.144 0
+----------------------
+file name   : cuda-nsight-12.2.144-0.tar.bz2
+name        : cuda-nsight
+version     : 12.2.144
+build       : 0
+build number: 0
+size        : 113.7 MB
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/cuda-nsight-12.2.144-0.tar.bz2
+md5         : fd7e31eb0e20b841ee4facd6ae22e630
+timestamp   : 2023-08-22 21:49:56 UTC
+dependencies: []
+
+
+cuda-nsight 12.3.52 0
+---------------------
+file name   : cuda-nsight-12.3.52-0.tar.bz2
+name        : cuda-nsight
+version     : 12.3.52
+build       : 0
+build number: 0
+size        : 113.7 MB
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/cuda-nsight-12.3.52-0.tar.bz2
+md5         : 4fb8dfa9064b7bfb1df86a73af2d0d65
+timestamp   : 2023-09-26 22:28:43 UTC
+dependencies: []
+
+
+cuda-nsight 12.3.101 0
+----------------------
+file name   : cuda-nsight-12.3.101-0.tar.bz2
+name        : cuda-nsight
+version     : 12.3.101
+build       : 0
+build number: 0
+size        : 113.7 MB
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/cuda-nsight-12.3.101-0.tar.bz2
+md5         : 6a7400d30e4ab15c0961ae84b65a116a
+timestamp   : 2023-10-31 09:56:45 UTC
+dependencies: []
+
+
+cuda-nsight 12.4.99 0
+---------------------
+file name   : cuda-nsight-12.4.99-0.tar.bz2
+name        : cuda-nsight
+version     : 12.4.99
+build       : 0
+build number: 0
+size        : 113.7 MB
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/cuda-nsight-12.4.99-0.tar.bz2
+md5         : e1b3c0ea547183e07c50ed7c093bf53a
+timestamp   : 2024-02-28 01:07:14 UTC
+dependencies: []
+
+
+cuda-nsight 12.4.127 0
+----------------------
+file name   : cuda-nsight-12.4.127-0.tar.bz2
+name        : cuda-nsight
+version     : 12.4.127
+build       : 0
+build number: 0
+size        : 113.7 MB
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/cuda-nsight-12.4.127-0.tar.bz2
+md5         : 031e25cc0010cecfa62249acc3939ee6
+timestamp   : 2024-03-15 22:19:06 UTC
+dependencies: []
+
+
+cuda-nsight 12.5.39 0
+---------------------
+file name   : cuda-nsight-12.5.39-0.conda
+name        : cuda-nsight
+version     : 12.5.39
+build       : 0
+build number: 0
+size        : 113.2 MB
+license     : LicenseRef-NVIDIA-End-User-License-Agreement
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/cuda-nsight-12.5.39-0.conda
+md5         : c0d7f9a190853b6a81c43d32b7362547
+timestamp   : 2024-04-16 03:17:33 UTC
+dependencies: 
+  - cuda-version >=12.5,<12.6.0a0
+
+
+cuda-nsight 12.5.82 0
+---------------------
+file name   : cuda-nsight-12.5.82-0.tar.bz2
+name        : cuda-nsight
+version     : 12.5.82
+build       : 0
+build number: 0
+size        : 113.7 MB
+license     : LicenseRef-NVIDIA-End-User-License-Agreement
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/cuda-nsight-12.5.82-0.tar.bz2
+md5         : a3bfcc77af3834831c1d3c8af055122c
+timestamp   : 2024-06-06 10:16:47 UTC
+dependencies: 
+  - cuda-version >=12.5,<12.6.0a0
+
+
+cuda-nsight 12.6.20 0
+---------------------
+file name   : cuda-nsight-12.6.20-0.tar.bz2
+name        : cuda-nsight
+version     : 12.6.20
+build       : 0
+build number: 0
+size        : 113.7 MB
+license     : LicenseRef-NVIDIA-End-User-License-Agreement
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/cuda-nsight-12.6.20-0.tar.bz2
+md5         : 27c6d609b5ca00e79fd83be47b30c99e
+timestamp   : 2024-07-11 21:01:48 UTC
+dependencies: 
+  - cuda-version >=12.6,<12.7.0a0
+
+
+cuda-nsight 12.6.68 0
+---------------------
+file name   : cuda-nsight-12.6.68-0.tar.bz2
+name        : cuda-nsight
+version     : 12.6.68
+build       : 0
+build number: 0
+size        : 113.7 MB
+license     : LicenseRef-NVIDIA-End-User-License-Agreement
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/cuda-nsight-12.6.68-0.tar.bz2
+md5         : 83af0f82ad856028b7fe2f89ef977a7c
+timestamp   : 2024-08-14 18:02:20 UTC
+dependencies: 
+  - cuda-version >=12.6,<12.7.0a0
+
+
+cuda-nsight 12.6.77 0
+---------------------
+file name   : cuda-nsight-12.6.77-0.conda
+name        : cuda-nsight
+version     : 12.6.77
+build       : 0
+build number: 0
+size        : 113.2 MB
+license     : LicenseRef-NVIDIA-End-User-License-Agreement
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/cuda-nsight-12.6.77-0.conda
+md5         : 2494d00a49bc4aca9efa6f50ca27f21b
+timestamp   : 2024-09-12 10:10:40 UTC
+dependencies: 
+  - cuda-version >=12.6,<12.7.0a0
+
+
+cuda-nsight 12.8.55 0
+---------------------
+file name   : cuda-nsight-12.8.55-0.conda
+name        : cuda-nsight
+version     : 12.8.55
+build       : 0
+build number: 0
+size        : 113.2 MB
+license     : LicenseRef-NVIDIA-End-User-License-Agreement
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/cuda-nsight-12.8.55-0.conda
+md5         : 24c8d72d6e614260812a9b653a9c992e
+timestamp   : 2025-01-04 03:59:38 UTC
+dependencies: 
+  - cuda-version >=12.8,<12.9.0a0
+
+
+cuda-nsight 12.8.90 0
+---------------------
+file name   : cuda-nsight-12.8.90-0.conda
+name        : cuda-nsight
+version     : 12.8.90
+build       : 0
+build number: 0
+size        : 113.2 MB
+license     : LicenseRef-NVIDIA-End-User-License-Agreement
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/cuda-nsight-12.8.90-0.conda
+md5         : bcd131a2b582f93a4ad104bb66668de6
+timestamp   : 2025-02-13 12:16:56 UTC
+dependencies: 
+  - cuda-version >=12.8,<12.9.0a0
+
+
+cuda-nsight 12.9.19 0
+---------------------
+file name   : cuda-nsight-12.9.19-0.conda
+name        : cuda-nsight
+version     : 12.9.19
+build       : 0
+build number: 0
+size        : 113.2 MB
+license     : LicenseRef-NVIDIA-End-User-License-Agreement
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/cuda-nsight-12.9.19-0.conda
+md5         : cc655ace54cdd3fdf6c39661e19003af
+timestamp   : 2025-03-04 04:06:45 UTC
+dependencies: 
+  - cuda-version >=12.9,<12.10.0a0
+
+
+cuda-nsight 12.9.79 0
+---------------------
+file name   : cuda-nsight-12.9.79-0.conda
+name        : cuda-nsight
+version     : 12.9.79
+build       : 0
+build number: 0
+size        : 113.2 MB
+license     : LicenseRef-NVIDIA-End-User-License-Agreement
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/cuda-nsight-12.9.79-0.conda
+md5         : 6839c31eda7373a16f37ff9421dda3eb
+timestamp   : 2025-05-12 21:56:48 UTC
+dependencies: 
+  - cuda-version >=12.9,<12.10.0a0
+
+
+cuda-nsight 13.0.39 hd91e2ed_0
+------------------------------
+file name   : cuda-nsight-13.0.39-hd91e2ed_0.conda
+name        : cuda-nsight
+version     : 13.0.39
+build       : hd91e2ed_0
+build number: 0
+size        : 113.2 MB
+license     : LicenseRef-NVIDIA-End-User-License-Agreement
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/cuda-nsight-13.0.39-hd91e2ed_0.conda
+md5         : 0e5fb452567fa7611134b6a86f9ecade
+timestamp   : 2025-07-02 18:22:33 UTC
+dependencies: 
+  - cuda-version >=13.0,<13.1.0a0
+
+
+cuda-nsight 13.0.85 h6a26bb4_0
+------------------------------
+file name   : cuda-nsight-13.0.85-h6a26bb4_0.conda
+name        : cuda-nsight
+version     : 13.0.85
+build       : h6a26bb4_0
+build number: 0
+size        : 113.2 MB
+license     : LicenseRef-NVIDIA-End-User-License-Agreement
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/cuda-nsight-13.0.85-h6a26bb4_0.conda
+md5         : 2b0905746710c969748bdc9f55e605c5
+timestamp   : 2025-08-15 02:56:48 UTC
+dependencies: 
+  - cuda-version >=13.0,<13.1.0a0
+
+
+cuda-nsight 13.1.68 h39186ea_0
+------------------------------
+file name   : cuda-nsight-13.1.68-h39186ea_0.conda
+name        : cuda-nsight
+version     : 13.1.68
+build       : h39186ea_0
+build number: 0
+size        : 113.2 MB
+license     : LicenseRef-NVIDIA-End-User-License-Agreement
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/cuda-nsight-13.1.68-h39186ea_0.conda
+md5         : 4c049f8c4c0225a2da2ad2b65e8951fd
+timestamp   : 2025-10-18 02:58:21 UTC
+dependencies: 
+  - cuda-version >=13.1,<13.2.0a0
+
+
+cuda-nsight 13.1.115 hf678805_0
+-------------------------------
+file name   : cuda-nsight-13.1.115-hf678805_0.conda
+name        : cuda-nsight
+version     : 13.1.115
+build       : hf678805_0
+build number: 0
+size        : 113.2 MB
+license     : LicenseRef-NVIDIA-End-User-License-Agreement
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/cuda-nsight-13.1.115-hf678805_0.conda
+md5         : 81c70312fc722369a4126c45b9f9ff31
+timestamp   : 2025-12-17 03:58:06 UTC
+dependencies: 
+  - cuda-version >=13.1,<13.2.0a0
+
+
+cuda-nsight 13.2.20 h3da0c1a_0
+------------------------------
+file name   : cuda-nsight-13.2.20-h3da0c1a_0.conda
+name        : cuda-nsight
+version     : 13.2.20
+build       : h3da0c1a_0
+build number: 0
+size        : 113.2 MB
+license     : LicenseRef-NVIDIA-End-User-License-Agreement
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/cuda-nsight-13.2.20-h3da0c1a_0.conda
+md5         : 937ca0367de77335af0018ae40d70539
+timestamp   : 2026-01-10 04:05:37 UTC
+dependencies: 
+  - cuda-version >=13.2,<13.3.0a0
+
+
+cuda-nsight 13.2.75 h064bdef_0
+------------------------------
+file name   : cuda-nsight-13.2.75-h064bdef_0.conda
+name        : cuda-nsight
+version     : 13.2.75
+build       : h064bdef_0
+build number: 0
+size        : 113.2 MB
+license     : LicenseRef-NVIDIA-End-User-License-Agreement
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/cuda-nsight-13.2.75-h064bdef_0.conda
+md5         : 924b20960052ea338359b108e768d26d
+timestamp   : 2026-03-18 04:20:36 UTC
+dependencies: 
+  - cuda-version >=13.2,<13.3.0a0
+
+
+cuda-nsight 13.2.86 h54cca33_0
+------------------------------
+file name   : cuda-nsight-13.2.86-h54cca33_0.conda
+name        : cuda-nsight
+version     : 13.2.86
+build       : h54cca33_0
+build number: 0
+size        : 113.2 MB
+license     : LicenseRef-NVIDIA-End-User-License-Agreement
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/cuda-nsight-13.2.86-h54cca33_0.conda
+md5         : 3c83483edb929f6dc893b74f18ca9217
+timestamp   : 2026-05-08 18:38:44 UTC
+dependencies: 
+  - cuda-version >=13.2,<13.3.0a0
+
+
+cuda-nsight-compute 11.4.0 0
+----------------------------
+file name   : cuda-nsight-compute-11.4.0-0.tar.bz2
+name        : cuda-nsight-compute
+version     : 11.4.0
+build       : 0
+build number: 0
+size        : 1 KB
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/cuda-nsight-compute-11.4.0-0.tar.bz2
+md5         : ddc476d8382ad98eed0746c8f3cea912
+timestamp   : 2022-07-04 15:52:25 UTC
+dependencies: 
+  - nsight-compute >=2021.2.0.15
+
+
+cuda-nsight-compute 11.4.1 0
+----------------------------
+file name   : cuda-nsight-compute-11.4.1-0.tar.bz2
+name        : cuda-nsight-compute
+version     : 11.4.1
+build       : 0
+build number: 0
+size        : 1 KB
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/cuda-nsight-compute-11.4.1-0.tar.bz2
+md5         : 1c5992e369aa3616464cbe3dab04697c
+timestamp   : 2022-07-04 16:09:48 UTC
+dependencies: 
+  - nsight-compute >=2021.2.1.2
+
+
+cuda-nsight-compute 11.4.2 0
+----------------------------
+file name   : cuda-nsight-compute-11.4.2-0.tar.bz2
+name        : cuda-nsight-compute
+version     : 11.4.2
+build       : 0
+build number: 0
+size        : 1 KB
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/cuda-nsight-compute-11.4.2-0.tar.bz2
+md5         : 50d2aa4539374a2e5f5de1b76e28d879
+timestamp   : 2022-07-04 16:19:08 UTC
+dependencies: 
+  - nsight-compute >=2021.2.2.1
+
+
+cuda-nsight-compute 11.4.3 0
+----------------------------
+file name   : cuda-nsight-compute-11.4.3-0.tar.bz2
+name        : cuda-nsight-compute
+version     : 11.4.3
+build       : 0
+build number: 0
+size        : 1 KB
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/cuda-nsight-compute-11.4.3-0.tar.bz2
+md5         : 09fe41c7f3381ba980dc9516962e2f6f
+timestamp   : 2022-07-04 16:41:17 UTC
+dependencies: 
+  - nsight-compute >=2021.2.2.1
+
+
+cuda-nsight-compute 11.4.4 0
+----------------------------
+file name   : cuda-nsight-compute-11.4.4-0.tar.bz2
+name        : cuda-nsight-compute
+version     : 11.4.4
+build       : 0
+build number: 0
+size        : 1 KB
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/cuda-nsight-compute-11.4.4-0.tar.bz2
+md5         : b832efa8c3f9363a3191719a6eaf4e80
+timestamp   : 2022-07-04 16:53:57 UTC
+dependencies: 
+  - nsight-compute >=2021.2.2.1
+
+
+cuda-nsight-compute 11.5.0 0
+----------------------------
+file name   : cuda-nsight-compute-11.5.0-0.tar.bz2
+name        : cuda-nsight-compute
+version     : 11.5.0
+build       : 0
+build number: 0
+size        : 1 KB
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/cuda-nsight-compute-11.5.0-0.tar.bz2
+md5         : b4c20d591054be333eabfbb3228446a1
+timestamp   : 2022-06-29 19:29:40 UTC
+dependencies: 
+  - nsight-compute >=2021.3.0.13
+
+
+cuda-nsight-compute 11.5.1 0
+----------------------------
+file name   : cuda-nsight-compute-11.5.1-0.tar.bz2
+name        : cuda-nsight-compute
+version     : 11.5.1
+build       : 0
+build number: 0
+size        : 1 KB
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/cuda-nsight-compute-11.5.1-0.tar.bz2
+md5         : e43c70cf29f8112db2fa6364441aff50
+timestamp   : 2022-06-29 19:18:09 UTC
+dependencies: 
+  - nsight-compute >=2021.3.1.4
+
+
+cuda-nsight-compute 11.5.2 0
+----------------------------
+file name   : cuda-nsight-compute-11.5.2-0.tar.bz2
+name        : cuda-nsight-compute
+version     : 11.5.2
+build       : 0
+build number: 0
+size        : 1 KB
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/cuda-nsight-compute-11.5.2-0.tar.bz2
+md5         : 58a521735d0b6f345dc977bb8c0d2594
+timestamp   : 2022-06-29 19:11:19 UTC
+dependencies: 
+  - nsight-compute >=2021.3.1.4
+
+
+cuda-nsight-compute 11.6.0 0
+----------------------------
+file name   : cuda-nsight-compute-11.6.0-0.tar.bz2
+name        : cuda-nsight-compute
+version     : 11.6.0
+build       : 0
+build number: 0
+size        : 1 KB
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/cuda-nsight-compute-11.6.0-0.tar.bz2
+md5         : 3eadf810a32e6c4c9e544df0d37c3c9d
+timestamp   : 2022-06-29 19:23:30 UTC
+dependencies: 
+  - nsight-compute >=2022.1.0.12
+
+
+cuda-nsight-compute 11.6.1 0
+----------------------------
+file name   : cuda-nsight-compute-11.6.1-0.tar.bz2
+name        : cuda-nsight-compute
+version     : 11.6.1
+build       : 0
+build number: 0
+size        : 1 KB
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/cuda-nsight-compute-11.6.1-0.tar.bz2
+md5         : ec16103f95b602ed3d800cb1b0864c39
+timestamp   : 2022-06-29 19:12:45 UTC
+dependencies: 
+  - nsight-compute >=2022.1.1.2
+
+
+cuda-nsight-compute 11.6.2 0
+----------------------------
+file name   : cuda-nsight-compute-11.6.2-0.tar.bz2
+name        : cuda-nsight-compute
+version     : 11.6.2
+build       : 0
+build number: 0
+size        : 1 KB
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/cuda-nsight-compute-11.6.2-0.tar.bz2
+md5         : 8b0ab676275bb543531df27e7a38a1b0
+timestamp   : 2022-06-29 19:03:17 UTC
+dependencies: 
+  - nsight-compute >=2022.1.1.2
+
+
+cuda-nsight-compute 11.7.0 0
+----------------------------
+file name   : cuda-nsight-compute-11.7.0-0.tar.bz2
+name        : cuda-nsight-compute
+version     : 11.7.0
+build       : 0
+build number: 0
+size        : 1 KB
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/cuda-nsight-compute-11.7.0-0.tar.bz2
+md5         : 8ba20f5b48a2f8c7872543bc48cac488
+timestamp   : 2022-06-29 19:05:09 UTC
+dependencies: 
+  - nsight-compute >=2022.2.0.13
+
+
+cuda-nsight-compute 11.7.1 0
+----------------------------
+file name   : cuda-nsight-compute-11.7.1-0.tar.bz2
+name        : cuda-nsight-compute
+version     : 11.7.1
+build       : 0
+build number: 0
+size        : 1 KB
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/cuda-nsight-compute-11.7.1-0.tar.bz2
+md5         : 343e95ce0ad499392d070f73e9c072c2
+timestamp   : 2022-07-29 09:21:14 UTC
+dependencies: 
+  - nsight-compute >=2022.2.1.3
+
+
+cuda-nsight-compute 11.8.0 0
+----------------------------
+file name   : cuda-nsight-compute-11.8.0-0.tar.bz2
+name        : cuda-nsight-compute
+version     : 11.8.0
+build       : 0
+build number: 0
+size        : 1 KB
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/cuda-nsight-compute-11.8.0-0.tar.bz2
+md5         : 2321698a7ca3b20cc8a5fdcdcd9f8aae
+timestamp   : 2022-09-29 18:18:29 UTC
+dependencies: 
+  - nsight-compute >=2022.3.0.22
+
+
+cuda-nsight-compute 12.0.0 0
+----------------------------
+file name   : cuda-nsight-compute-12.0.0-0.tar.bz2
+name        : cuda-nsight-compute
+version     : 12.0.0
+build       : 0
+build number: 0
+size        : 1 KB
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/cuda-nsight-compute-12.0.0-0.tar.bz2
+md5         : 0364bf2a5f7b725bde3aa6d4081c42b5
+timestamp   : 2022-12-03 08:24:26 UTC
+dependencies: 
+  - nsight-compute >=2022.4.0.15
+
+
+cuda-nsight-compute 12.0.1 0
+----------------------------
+file name   : cuda-nsight-compute-12.0.1-0.tar.bz2
+name        : cuda-nsight-compute
+version     : 12.0.1
+build       : 0
+build number: 0
+size        : 1 KB
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/cuda-nsight-compute-12.0.1-0.tar.bz2
+md5         : 4a7bb663b2f88e4c6c6563fd5c97cacd
+timestamp   : 2023-01-28 14:30:56 UTC
+dependencies: 
+  - nsight-compute >=2022.4.1.6
+
+
+cuda-nsight-compute 12.1.0 0
+----------------------------
+file name   : cuda-nsight-compute-12.1.0-0.tar.bz2
+name        : cuda-nsight-compute
+version     : 12.1.0
+build       : 0
+build number: 0
+size        : 1 KB
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/cuda-nsight-compute-12.1.0-0.tar.bz2
+md5         : c0ff20490199cf54e4128897a3f6e8e4
+timestamp   : 2023-02-23 05:34:24 UTC
+dependencies: 
+  - nsight-compute >=2023.1.0.15
+
+
+cuda-nsight-compute 12.1.1 0
+----------------------------
+file name   : cuda-nsight-compute-12.1.1-0.tar.bz2
+name        : cuda-nsight-compute
+version     : 12.1.1
+build       : 0
+build number: 0
+size        : 1 KB
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/cuda-nsight-compute-12.1.1-0.tar.bz2
+md5         : 5f9bfd52fee54bee25c807876f478907
+timestamp   : 2023-04-17 14:59:50 UTC
+dependencies: 
+  - nsight-compute >=2023.1.1.4
+
+
+cuda-nsight-compute 12.2.0 0
+----------------------------
+file name   : cuda-nsight-compute-12.2.0-0.tar.bz2
+name        : cuda-nsight-compute
+version     : 12.2.0
+build       : 0
+build number: 0
+size        : 1 KB
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/cuda-nsight-compute-12.2.0-0.tar.bz2
+md5         : 6307caab84b13f050389f27bda6f8dc5
+timestamp   : 2023-06-26 07:02:39 UTC
+dependencies: 
+  - nsight-compute >=2023.2.0.16
+
+
+cuda-nsight-compute 12.2.1 0
+----------------------------
+file name   : cuda-nsight-compute-12.2.1-0.tar.bz2
+name        : cuda-nsight-compute
+version     : 12.2.1
+build       : 0
+build number: 0
+size        : 1 KB
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/cuda-nsight-compute-12.2.1-0.tar.bz2
+md5         : 3b0318f0a9322abdd056084933162392
+timestamp   : 2023-07-27 05:21:49 UTC
+dependencies: 
+  - nsight-compute >=2023.2.1.3
+
+
+cuda-nsight-compute 12.2.2 0
+----------------------------
+file name   : cuda-nsight-compute-12.2.2-0.tar.bz2
+name        : cuda-nsight-compute
+version     : 12.2.2
+build       : 0
+build number: 0
+size        : 1 KB
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/cuda-nsight-compute-12.2.2-0.tar.bz2
+md5         : 9d7efd760900c8f0b0ec4f2a17cf6aca
+timestamp   : 2023-08-23 04:47:23 UTC
+dependencies: 
+  - nsight-compute >=2023.2.2.3
+
+
+cuda-nsight-compute 12.3.0 0
+----------------------------
+file name   : cuda-nsight-compute-12.3.0-0.tar.bz2
+name        : cuda-nsight-compute
+version     : 12.3.0
+build       : 0
+build number: 0
+size        : 2 KB
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/cuda-nsight-compute-12.3.0-0.tar.bz2
+md5         : e1f22316f49ecf4dbe6d742d96fb071e
+timestamp   : 2023-10-16 06:45:23 UTC
+dependencies: 
+  - nsight-compute >=2023.3.0.12
+
+
+cuda-nsight-compute 12.3.1 0
+----------------------------
+file name   : cuda-nsight-compute-12.3.1-0.tar.bz2
+name        : cuda-nsight-compute
+version     : 12.3.1
+build       : 0
+build number: 0
+size        : 2 KB
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/cuda-nsight-compute-12.3.1-0.tar.bz2
+md5         : 643a1a8395ae61115ef7302fefbccef2
+timestamp   : 2023-11-09 06:16:10 UTC
+dependencies: 
+  - nsight-compute >=2023.3.1.1
+
+
+cuda-nsight-compute 12.3.2 0
+----------------------------
+file name   : cuda-nsight-compute-12.3.2-0.tar.bz2
+name        : cuda-nsight-compute
+version     : 12.3.2
+build       : 0
+build number: 0
+size        : 2 KB
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/cuda-nsight-compute-12.3.2-0.tar.bz2
+md5         : 20cb68f6df05105dcc4340125c4b417f
+timestamp   : 2023-11-29 18:32:41 UTC
+dependencies: 
+  - nsight-compute >=2023.3.1.1
+
+
+cuda-nsight-compute 12.4.0 0
+----------------------------
+file name   : cuda-nsight-compute-12.4.0-0.tar.bz2
+name        : cuda-nsight-compute
+version     : 12.4.0
+build       : 0
+build number: 0
+size        : 2 KB
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/cuda-nsight-compute-12.4.0-0.tar.bz2
+md5         : e505bc2ae1f22e27b38c919962490c23
+timestamp   : 2024-02-29 00:49:58 UTC
+dependencies: 
+  - nsight-compute >=2024.1.0.13
+
+
+cuda-nsight-compute 12.4.1 0
+----------------------------
+file name   : cuda-nsight-compute-12.4.1-0.tar.bz2
+name        : cuda-nsight-compute
+version     : 12.4.1
+build       : 0
+build number: 0
+size        : 2 KB
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/cuda-nsight-compute-12.4.1-0.tar.bz2
+md5         : 72b772f260afa08d99ef2fd15f035739
+timestamp   : 2024-03-28 19:35:32 UTC
+dependencies: 
+  - nsight-compute >=2024.1.1.4
+
+
+nsight-compute 2021.2.0.15 0
+----------------------------
+file name   : nsight-compute-2021.2.0.15-0.tar.bz2
+name        : nsight-compute
+version     : 2021.2.0.15
+build       : 0
+build number: 0
+size        : 327.7 MB
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/nsight-compute-2021.2.0.15-0.tar.bz2
+md5         : 48489df305b920e7f84d693ded43a33b
+timestamp   : 2022-06-16 05:46:01 UTC
+dependencies: []
+
+
+nsight-compute 2021.2.1.2 0
+---------------------------
+file name   : nsight-compute-2021.2.1.2-0.tar.bz2
+name        : nsight-compute
+version     : 2021.2.1.2
+build       : 0
+build number: 0
+size        : 327.6 MB
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/nsight-compute-2021.2.1.2-0.tar.bz2
+md5         : b0819d25b6eab167cc331838963d221c
+timestamp   : 2022-06-17 15:51:00 UTC
+dependencies: []
+
+
+nsight-compute 2021.2.2.1 0
+---------------------------
+file name   : nsight-compute-2021.2.2.1-0.tar.bz2
+name        : nsight-compute
+version     : 2021.2.2.1
+build       : 0
+build number: 0
+size        : 328.0 MB
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/nsight-compute-2021.2.2.1-0.tar.bz2
+md5         : 0c12f09bd9f7584a5e172d014b2fad50
+timestamp   : 2022-06-17 17:16:23 UTC
+dependencies: []
+
+
+nsight-compute 2021.3.0.13 0
+----------------------------
+file name   : nsight-compute-2021.3.0.13-0.tar.bz2
+name        : nsight-compute
+version     : 2021.3.0.13
+build       : 0
+build number: 0
+size        : 444.1 MB
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/nsight-compute-2021.3.0.13-0.tar.bz2
+md5         : 011b2f82974f47e2e08e144d9f72fe89
+timestamp   : 2022-06-15 22:25:35 UTC
+dependencies: []
+
+
+nsight-compute 2021.3.1.4 0
+---------------------------
+file name   : nsight-compute-2021.3.1.4-0.tar.bz2
+name        : nsight-compute
+version     : 2021.3.1.4
+build       : 0
+build number: 0
+size        : 446.1 MB
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/nsight-compute-2021.3.1.4-0.tar.bz2
+md5         : 65e670d11e4081f525578abdf58fcdf1
+timestamp   : 2022-06-15 22:55:44 UTC
+dependencies: []
+
+
+nsight-compute 2022.1.0.12 0
+----------------------------
+file name   : nsight-compute-2022.1.0.12-0.tar.bz2
+name        : nsight-compute
+version     : 2022.1.0.12
+build       : 0
+build number: 0
+size        : 450.6 MB
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/nsight-compute-2022.1.0.12-0.tar.bz2
+md5         : e181ec7f05d951c28f49d86fd3d43008
+timestamp   : 2022-06-15 22:17:20 UTC
+dependencies: []
+
+
+nsight-compute 2022.1.1.2 0
+---------------------------
+file name   : nsight-compute-2022.1.1.2-0.tar.bz2
+name        : nsight-compute
+version     : 2022.1.1.2
+build       : 0
+build number: 0
+size        : 450.6 MB
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/nsight-compute-2022.1.1.2-0.tar.bz2
+md5         : 38fd9fb0c02f0466af0e15c2cbf735c1
+timestamp   : 2022-06-15 22:32:09 UTC
+dependencies: []
+
+
+nsight-compute 2022.2.0.13 0
+----------------------------
+file name   : nsight-compute-2022.2.0.13-0.tar.bz2
+name        : nsight-compute
+version     : 2022.2.0.13
+build       : 0
+build number: 0
+size        : 462.9 MB
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/nsight-compute-2022.2.0.13-0.tar.bz2
+md5         : b82bd48611bbcdb30dba23710dad5d60
+timestamp   : 2022-06-14 13:52:37 UTC
+dependencies: []
+
+
+nsight-compute 2022.2.1.3 0
+---------------------------
+file name   : nsight-compute-2022.2.1.3-0.tar.bz2
+name        : nsight-compute
+version     : 2022.2.1.3
+build       : 0
+build number: 0
+size        : 461.4 MB
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/nsight-compute-2022.2.1.3-0.tar.bz2
+md5         : 255a2db7248b6329a52b870f3c9ac964
+timestamp   : 2022-05-15 17:58:54 UTC
+dependencies: []
+
+
+nsight-compute 2022.3.0.22 0
+----------------------------
+file name   : nsight-compute-2022.3.0.22-0.tar.bz2
+name        : nsight-compute
+version     : 2022.3.0.22
+build       : 0
+build number: 0
+size        : 610.0 MB
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/nsight-compute-2022.3.0.22-0.tar.bz2
+md5         : a438d9120c100bcac9eb166cebdd3023
+timestamp   : 2022-08-25 03:50:09 UTC
+dependencies: []
+
+
+nsight-compute 2022.4.0.15 0
+----------------------------
+file name   : nsight-compute-2022.4.0.15-0.tar.bz2
+name        : nsight-compute
+version     : 2022.4.0.15
+build       : 0
+build number: 0
+size        : 764.0 MB
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/nsight-compute-2022.4.0.15-0.tar.bz2
+md5         : d402626d6a8606b57e9a2eceee5db59f
+timestamp   : 2022-11-11 04:36:45 UTC
+dependencies: []
+
+
+nsight-compute 2022.4.1.6 0
+---------------------------
+file name   : nsight-compute-2022.4.1.6-0.tar.bz2
+name        : nsight-compute
+version     : 2022.4.1.6
+build       : 0
+build number: 0
+size        : 764.5 MB
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/nsight-compute-2022.4.1.6-0.tar.bz2
+md5         : 451162f8ee5d6d2d165854ed156e5b7a
+timestamp   : 2023-01-19 00:16:33 UTC
+dependencies: []
+
+
+nsight-compute 2023.1.0.15 0
+----------------------------
+file name   : nsight-compute-2023.1.0.15-0.tar.bz2
+name        : nsight-compute
+version     : 2023.1.0.15
+build       : 0
+build number: 0
+size        : 770.2 MB
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/nsight-compute-2023.1.0.15-0.tar.bz2
+md5         : 45105c239941b9ad3503269564f38714
+timestamp   : 2023-02-02 00:43:42 UTC
+dependencies: []
+
+
+nsight-compute 2023.1.1.4 0
+---------------------------
+file name   : nsight-compute-2023.1.1.4-0.tar.bz2
+name        : nsight-compute
+version     : 2023.1.1.4
+build       : 0
+build number: 0
+size        : 770.4 MB
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/nsight-compute-2023.1.1.4-0.tar.bz2
+md5         : d9d87cc85a21563b22afa08f9b7e5677
+timestamp   : 2023-03-31 21:01:38 UTC
+dependencies: []
+
+
+nsight-compute 2023.2.0.16 0
+----------------------------
+file name   : nsight-compute-2023.2.0.16-0.tar.bz2
+name        : nsight-compute
+version     : 2023.2.0.16
+build       : 0
+build number: 0
+size        : 792.3 MB
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/nsight-compute-2023.2.0.16-0.tar.bz2
+md5         : bd222bbc41d8d7576e03a1c2fa3f5264
+timestamp   : 2023-05-25 05:26:20 UTC
+dependencies: []
+
+
+nsight-compute 2023.2.1.3 0
+---------------------------
+file name   : nsight-compute-2023.2.1.3-0.tar.bz2
+name        : nsight-compute
+version     : 2023.2.1.3
+build       : 0
+build number: 0
+size        : 792.2 MB
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/nsight-compute-2023.2.1.3-0.tar.bz2
+md5         : d5d98b28e273575cf13924caf1c1befc
+timestamp   : 2023-07-11 02:57:09 UTC
+dependencies: []
+
+
+nsight-compute 2023.2.2.3 0
+---------------------------
+file name   : nsight-compute-2023.2.2.3-0.tar.bz2
+name        : nsight-compute
+version     : 2023.2.2.3
+build       : 0
+build number: 0
+size        : 792.1 MB
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/nsight-compute-2023.2.2.3-0.tar.bz2
+md5         : d0ff1af6de06ff12440b85b7786fba6f
+timestamp   : 2023-08-15 23:39:43 UTC
+dependencies: []
+
+
+nsight-compute 2023.3.0.12 0
+----------------------------
+file name   : nsight-compute-2023.3.0.12-0.tar.bz2
+name        : nsight-compute
+version     : 2023.3.0.12
+build       : 0
+build number: 0
+size        : 806.8 MB
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/nsight-compute-2023.3.0.12-0.tar.bz2
+md5         : a9109905f662935265cbb852a68daf69
+timestamp   : 2023-09-26 22:22:25 UTC
+dependencies: []
+
+
+nsight-compute 2023.3.1.1 0
+---------------------------
+file name   : nsight-compute-2023.3.1.1-0.tar.bz2
+name        : nsight-compute
+version     : 2023.3.1.1
+build       : 0
+build number: 0
+size        : 808.1 MB
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/nsight-compute-2023.3.1.1-0.tar.bz2
+md5         : 6488c61520f4215876d9a5fcebc6503e
+timestamp   : 2023-10-31 18:37:06 UTC
+dependencies: []
+
+
+nsight-compute 2024.1.0.13 0
+----------------------------
+file name   : nsight-compute-2024.1.0.13-0.tar.bz2
+name        : nsight-compute
+version     : 2024.1.0.13
+build       : 0
+build number: 0
+size        : 667.1 MB
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/nsight-compute-2024.1.0.13-0.tar.bz2
+md5         : a7c0cc361fe3e5e02693cfde67b59451
+timestamp   : 2023-12-20 21:54:04 UTC
+dependencies: []
+
+
+nsight-compute 2024.1.1.4 0
+---------------------------
+file name   : nsight-compute-2024.1.1.4-0.tar.bz2
+name        : nsight-compute
+version     : 2024.1.1.4
+build       : 0
+build number: 0
+size        : 667.1 MB
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/nsight-compute-2024.1.1.4-0.tar.bz2
+md5         : 217ed2ff255f52cbef787aba3f9b9637
+timestamp   : 2024-03-07 02:20:43 UTC
+dependencies: []
+
+
+nsight-compute 2024.2.0.16 2
+----------------------------
+file name   : nsight-compute-2024.2.0.16-2.conda
+name        : nsight-compute
+version     : 2024.2.0.16
+build       : 2
+build number: 2
+size        : 447.7 MB
+license     : LicenseRef-NVIDIA-End-User-License-Agreement
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/nsight-compute-2024.2.0.16-2.conda
+md5         : 8a7354e85db796c04b188e6e18968dd2
+timestamp   : 2024-04-19 10:20:01 UTC
+dependencies: 
+  - __glibc >=2.17,<3.0.a0
+  - cuda-version >=12.5,<12.6.0a0
+  - dbus >=1.13.18,<2.0a0
+  - expat >=2.5.0,<3.0a0
+  - fontconfig >=2.14.1,<3.0a0
+  - freetype >=2.12.1,<3.0a0
+  - libgcc-ng >=11.2.0
+  - libglib >=2.78.4,<3.0a0
+  - libstdcxx-ng >=11.2.0
+  - libxcb >=1.15,<2.0a0
+  - libxkbcommon >=1.0.1,<2.0a0
+  - nspr >=4.35,<5.0a0
+  - nss >=3.89.1,<4.0a0
+
+
+nsight-compute 2024.2.1.2 2
+---------------------------
+file name   : nsight-compute-2024.2.1.2-2.tar.bz2
+name        : nsight-compute
+version     : 2024.2.1.2
+build       : 2
+build number: 2
+size        : 509.8 MB
+license     : LicenseRef-NVIDIA-End-User-License-Agreement
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/nsight-compute-2024.2.1.2-2.tar.bz2
+md5         : b7158cb8e9cc4f191e0a255d54be860e
+timestamp   : 2024-06-04 21:39:36 UTC
+dependencies: 
+  - __glibc >=2.17,<3.0.a0
+  - cuda-version >=12.5,<12.6.0a0
+  - dbus >=1.13.18,<2.0a0
+  - expat >=2.6.2,<3.0a0
+  - fontconfig >=2.14.1,<3.0a0
+  - freetype >=2.12.1,<3.0a0
+  - libgcc-ng >=11.2.0
+  - libglib >=2.78.4,<3.0a0
+  - libstdcxx-ng >=11.2.0
+  - libxcb >=1.15,<2.0a0
+  - libxkbcommon >=1.0.1,<2.0a0
+  - nspr >=4.35,<5.0a0
+  - nss >=3.89.1,<4.0a0
+
+
+nsight-compute 2024.3.0.15 0
+----------------------------
+file name   : nsight-compute-2024.3.0.15-0.tar.bz2
+name        : nsight-compute
+version     : 2024.3.0.15
+build       : 0
+build number: 0
+size        : 504.8 MB
+license     : LicenseRef-NVIDIA-End-User-License-Agreement
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/nsight-compute-2024.3.0.15-0.tar.bz2
+md5         : 14efc08b11ad78e5934fe81e43bcbe6c
+timestamp   : 2024-07-16 02:37:49 UTC
+dependencies: 
+  - __glibc >=2.17,<3.0.a0
+  - cuda-version >=12.6,<12.7.0a0
+  - dbus >=1.13.18,<2.0a0
+  - expat >=2.6.2,<3.0a0
+  - fontconfig >=2.14.1,<3.0a0
+  - freetype >=2.12.1,<3.0a0
+  - libgcc-ng >=11.2.0
+  - libglib >=2.78.4,<3.0a0
+  - libstdcxx-ng >=11.2.0
+  - libxcb >=1.15,<2.0a0
+  - libxkbcommon >=1.0.1,<2.0a0
+  - nspr >=4.35,<5.0a0
+  - nss >=3.89.1,<4.0a0
+
+
+nsight-compute 2024.3.1.2 0
+---------------------------
+file name   : nsight-compute-2024.3.1.2-0.tar.bz2
+name        : nsight-compute
+version     : 2024.3.1.2
+build       : 0
+build number: 0
+size        : 504.7 MB
+license     : LicenseRef-NVIDIA-End-User-License-Agreement
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/nsight-compute-2024.3.1.2-0.tar.bz2
+md5         : 7a35ceee1158e55f6de2aa2408d0459c
+timestamp   : 2024-08-12 21:35:27 UTC
+dependencies: 
+  - __glibc >=2.17,<3.0.a0
+  - cuda-version >=12.6,<12.7.0a0
+  - dbus >=1.13.18,<2.0a0
+  - expat >=2.6.2,<3.0a0
+  - fontconfig >=2.14.1,<3.0a0
+  - freetype >=2.12.1,<3.0a0
+  - libgcc-ng >=11.2.0
+  - libglib >=2.78.4,<3.0a0
+  - libstdcxx-ng >=11.2.0
+  - libxcb >=1.15,<2.0a0
+  - libxkbcommon >=1.0.1,<2.0a0
+  - nspr >=4.35,<5.0a0
+  - nss >=3.89.1,<4.0a0
+
+
+nsight-compute 2024.3.2.3 0
+---------------------------
+file name   : nsight-compute-2024.3.2.3-0.conda
+name        : nsight-compute
+version     : 2024.3.2.3
+build       : 0
+build number: 0
+size        : 444.5 MB
+license     : LicenseRef-NVIDIA-End-User-License-Agreement
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/nsight-compute-2024.3.2.3-0.conda
+md5         : 46c441764c2332dec17bac92e1fde591
+timestamp   : 2024-09-18 23:54:57 UTC
+dependencies: 
+  - __glibc >=2.17,<3.0.a0
+  - cuda-version >=12.6,<12.7.0a0
+  - dbus >=1.13.18,<2.0a0
+  - expat >=2.6.3,<3.0a0
+  - fontconfig >=2.14.1,<3.0a0
+  - freetype >=2.12.1,<3.0a0
+  - libgcc-ng >=11.2.0
+  - libglib >=2.78.4,<3.0a0
+  - libstdcxx-ng >=11.2.0
+  - libxcb >=1.15,<2.0a0
+  - libxkbcommon >=1.0.1,<2.0a0
+  - nspr >=4.35,<5.0a0
+  - nss >=3.89.1,<4.0a0
+
+
+nsight-compute 2025.1.0.14 0
+----------------------------
+file name   : nsight-compute-2025.1.0.14-0.conda
+name        : nsight-compute
+version     : 2025.1.0.14
+build       : 0
+build number: 0
+size        : 320.1 MB
+license     : LicenseRef-NVIDIA-End-User-License-Agreement
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/nsight-compute-2025.1.0.14-0.conda
+md5         : b3f0ecb0da280c1ecc141e2741cbf9e9
+timestamp   : 2024-12-10 00:54:48 UTC
+dependencies: 
+  - __glibc >=2.17,<3.0.a0
+  - cuda-version >=12.8,<12.9.0a0
+  - dbus >=1.13.18,<2.0a0
+  - expat >=2.6.3,<3.0a0
+  - fontconfig >=2.14.1,<3.0a0
+  - freetype >=2.12.1,<3.0a0
+  - libgcc-ng >=11.2.0
+  - libglib >=2.78.4,<3.0a0
+  - libstdcxx-ng >=11.2.0
+  - libxkbcommon >=1.0.1,<2.0a0
+  - nspr >=4.35,<5.0a0
+  - nss >=3.89.1,<4.0a0
+
+
+nsight-compute 2025.1.1.2 0
+---------------------------
+file name   : nsight-compute-2025.1.1.2-0.conda
+name        : nsight-compute
+version     : 2025.1.1.2
+build       : 0
+build number: 0
+size        : 322.7 MB
+license     : LicenseRef-NVIDIA-End-User-License-Agreement
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/nsight-compute-2025.1.1.2-0.conda
+md5         : 9f66afce5a27f0996c2d226c686b22cf
+timestamp   : 2025-02-12 18:54:54 UTC
+dependencies: 
+  - __glibc >=2.17,<3.0.a0
+  - cuda-version >=12.8,<12.9.0a0
+  - dbus >=1.13.18,<2.0a0
+  - expat >=2.6.4,<3.0a0
+  - fontconfig >=2.14.1,<3.0a0
+  - freetype >=2.12.1,<3.0a0
+  - libgcc-ng >=11.2.0
+  - libglib >=2.78.4,<3.0a0
+  - libstdcxx-ng >=11.2.0
+  - libxkbcommon >=1.0.1,<2.0a0
+  - nspr >=4.35,<5.0a0
+  - nss >=3.89.1,<4.0a0
+
+
+nsight-compute 2025.2.0.11 0
+----------------------------
+file name   : nsight-compute-2025.2.0.11-0.conda
+name        : nsight-compute
+version     : 2025.2.0.11
+build       : 0
+build number: 0
+size        : 321.3 MB
+license     : LicenseRef-NVIDIA-End-User-License-Agreement
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/nsight-compute-2025.2.0.11-0.conda
+md5         : 38abf11e6184555d4255ba6431eb68b6
+timestamp   : 2025-02-28 15:35:13 UTC
+dependencies: 
+  - __glibc >=2.17,<3.0.a0
+  - cuda-version >=12.9,<12.10.0a0
+  - dbus >=1.13.18,<2.0a0
+  - expat >=2.6.4,<3.0a0
+  - fontconfig >=2.14.1,<3.0a0
+  - freetype >=2.12.1,<3.0a0
+  - libgcc-ng >=11.2.0
+  - libglib >=2.78.4,<3.0a0
+  - libstdcxx-ng >=11.2.0
+  - libxkbcommon >=1.0.1,<2.0a0
+  - nspr >=4.35,<5.0a0
+  - nss >=3.89.1,<4.0a0
+
+
+nsight-compute 2025.2.1.3 0
+---------------------------
+file name   : nsight-compute-2025.2.1.3-0.conda
+name        : nsight-compute
+version     : 2025.2.1.3
+build       : 0
+build number: 0
+size        : 319.3 MB
+license     : LicenseRef-NVIDIA-End-User-License-Agreement
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/nsight-compute-2025.2.1.3-0.conda
+md5         : 7989572b928d897a4ff2448c8b64d563
+timestamp   : 2025-05-15 22:34:05 UTC
+dependencies: 
+  - __glibc >=2.17,<3.0.a0
+  - cuda-version >=12.9,<12.10.0a0
+  - dbus >=1.13.18,<2.0a0
+  - expat >=2.7.1,<3.0a0
+  - fontconfig >=2.14.1,<3.0a0
+  - freetype >=2.13.3,<3.0a0
+  - libgcc-ng >=11.2.0
+  - libglib >=2.78.4,<3.0a0
+  - libstdcxx-ng >=11.2.0
+  - libxkbcommon >=1.9.1,<2.0a0
+  - nspr >=4.35,<5.0a0
+  - nss >=3.89.1,<4.0a0
+
+
+nsight-compute 2025.3.0.19 h445d347_0
+-------------------------------------
+file name   : nsight-compute-2025.3.0.19-h445d347_0.conda
+name        : nsight-compute
+version     : 2025.3.0.19
+build       : h445d347_0
+build number: 0
+size        : 340.7 MB
+license     : LicenseRef-NVIDIA-End-User-License-Agreement
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/nsight-compute-2025.3.0.19-h445d347_0.conda
+md5         : 537e5e7f33cb8f5863d86989a0dad800
+timestamp   : 2025-07-20 20:55:02 UTC
+dependencies: 
+  - __glibc >=2.17,<3.0.a0
+  - cuda-version >=13.0,<13.1.0a0
+  - dbus >=1.13.18,<2.0a0
+  - expat >=2.7.1,<3.0a0
+  - fontconfig >=2.14.1,<3.0a0
+  - freetype >=2.13.3,<3.0a0
+  - libgcc-ng >=11.2.0
+  - libglib >=2.84.2,<3.0a0
+  - libstdcxx-ng >=11.2.0
+  - libxkbcommon >=1.9.1,<2.0a0
+  - nspr >=4.35,<5.0a0
+  - nss >=3.89.1,<4.0a0
+
+
+nsight-compute 2025.3.1.4 hcd14d4a_0
+------------------------------------
+file name   : nsight-compute-2025.3.1.4-hcd14d4a_0.conda
+name        : nsight-compute
+version     : 2025.3.1.4
+build       : hcd14d4a_0
+build number: 0
+size        : 342.0 MB
+license     : LicenseRef-NVIDIA-End-User-License-Agreement
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/nsight-compute-2025.3.1.4-hcd14d4a_0.conda
+md5         : c492ae2089b2a05da08f58c4cbb52b97
+timestamp   : 2025-08-14 22:14:20 UTC
+dependencies: 
+  - __glibc >=2.17,<3.0.a0
+  - cuda-version >=13.0,<13.1.0a0
+  - dbus >=1.13.18,<2.0a0
+  - expat >=2.7.1,<3.0a0
+  - fontconfig >=2.14.1,<3.0a0
+  - freetype >=2.13.3,<3.0a0
+  - libgcc-ng >=11.2.0
+  - libglib >=2.84.2,<3.0a0
+  - libstdcxx-ng >=11.2.0
+  - libxkbcommon >=1.9.1,<2.0a0
+  - nspr >=4.35,<5.0a0
+  - nss >=3.89.1,<4.0a0
+
+
+nsight-compute 2025.4.0.12 hdc9f5c9_0
+-------------------------------------
+file name   : nsight-compute-2025.4.0.12-hdc9f5c9_0.conda
+name        : nsight-compute
+version     : 2025.4.0.12
+build       : hdc9f5c9_0
+build number: 0
+size        : 347.5 MB
+license     : LicenseRef-NVIDIA-End-User-License-Agreement
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/nsight-compute-2025.4.0.12-hdc9f5c9_0.conda
+md5         : f76b572ae801eb8f2aab76b47c2f11a7
+timestamp   : 2025-10-15 02:13:57 UTC
+dependencies: 
+  - __glibc >=2.17,<3.0.a0
+  - alsa-lib >=1.2.14,<1.3.0a0
+  - cuda-version >=13.1,<13.2.0a0
+  - dbus >=1.16.2,<2.0a0
+  - expat >=2.7.1,<3.0a0
+  - fontconfig >=2.15.0,<3.0a0
+  - freetype >=2.13.3,<3.0a0
+  - libgcc-ng >=11.2.0
+  - libglib >=2.84.2,<3.0a0
+  - libglvnd >=1.7.0,<2.0a0
+  - libopengl >=1.7.0,<2.0a0
+  - libstdcxx-ng >=11.2.0
+  - libxcb >=1.17.0,<2.0a0
+  - libxkbcommon >=1.9.1,<2.0a0
+  - libxkbfile >=1.1.0,<1.2.0a0
+  - libxkbfile >=1.1.0,<2.0a0
+  - nspr >=4.37,<5.0a0
+  - nss >=3.117,<4.0a0
+  - xcb-util-cursor >=0.1.5,<0.2.0a0
+  - xcb-util-image >=0.4.0,<0.5.0a0
+  - xcb-util-keysyms >=0.4.1,<0.5.0a0
+  - xcb-util-renderutil >=0.3.10,<0.4.0a0
+  - xcb-util-wm >=0.4.2,<0.5.0a0
+  - xorg-libice >=1.1.2,<2.0a0
+  - xorg-libsm >=1.2.6,<2.0a0
+  - xorg-libx11 >=1.8.12,<2.0a0
+  - xorg-libxcomposite >=0.4.6,<0.5.0a0
+  - xorg-libxcomposite >=0.4.6,<1.0a0
+  - xorg-libxdamage >=1.1.6,<1.2.0a0
+  - xorg-libxdamage >=1.1.6,<2.0a0
+  - xorg-libxext >=1.3.6,<2.0a0
+  - xorg-libxfixes >=6.0.1,<6.1.0a0
+  - xorg-libxfixes >=6.0.1,<7.0a0
+  - xorg-libxrandr >=1.5.4,<1.6.0a0
+  - xorg-libxrandr >=1.5.4,<2.0a0
+  - xorg-libxrender >=0.9.12,<0.10.0a0
+  - xorg-libxtst >=1.2.5,<1.3.0a0
+  - xorg-libxtst >=1.2.5,<2.0a0
+
+
+nsight-compute 2025.4.1.2 h6f129cd_0
+------------------------------------
+file name   : nsight-compute-2025.4.1.2-h6f129cd_0.conda
+name        : nsight-compute
+version     : 2025.4.1.2
+build       : h6f129cd_0
+build number: 0
+size        : 347.7 MB
+license     : LicenseRef-NVIDIA-End-User-License-Agreement
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/nsight-compute-2025.4.1.2-h6f129cd_0.conda
+md5         : ed6e7a310ab302e7659be62c69895588
+timestamp   : 2025-12-16 00:14:01 UTC
+dependencies: 
+  - __glibc >=2.17,<3.0.a0
+  - alsa-lib >=1.2.14,<1.3.0a0
+  - cuda-version >=13.1,<13.2.0a0
+  - dbus >=1.16.2,<2.0a0
+  - fontconfig >=2.15.0,<3.0a0
+  - freetype >=2.13.3,<3.0a0
+  - libexpat >=2.7.3,<3.0a0
+  - libgcc
+  - libgcc-ng >=11.2.0
+  - libglib >=2.84.4,<3.0a0
+  - libglvnd >=1.7.0,<2.0a0
+  - libopengl >=1.7.0,<2.0a0
+  - libstdcxx
+  - libstdcxx-ng >=11.2.0
+  - libxcb >=1.17.0,<2.0a0
+  - libxkbcommon >=1.9.1,<2.0a0
+  - libxkbfile >=1.1.0,<1.2.0a0
+  - libxkbfile >=1.1.0,<2.0a0
+  - nspr >=4.37,<5.0a0
+  - nss >=3.117,<4.0a0
+  - xcb-util-cursor >=0.1.5,<0.2.0a0
+  - xcb-util-image >=0.4.0,<0.5.0a0
+  - xcb-util-keysyms >=0.4.1,<0.5.0a0
+  - xcb-util-renderutil >=0.3.10,<0.4.0a0
+  - xcb-util-wm >=0.4.2,<0.5.0a0
+  - xorg-libice >=1.1.2,<2.0a0
+  - xorg-libsm >=1.2.6,<2.0a0
+  - xorg-libx11 >=1.8.12,<2.0a0
+  - xorg-libxcomposite >=0.4.6,<0.5.0a0
+  - xorg-libxcomposite >=0.4.6,<1.0a0
+  - xorg-libxdamage >=1.1.6,<1.2.0a0
+  - xorg-libxdamage >=1.1.6,<2.0a0
+  - xorg-libxext >=1.3.6,<2.0a0
+  - xorg-libxfixes >=6.0.1,<6.1.0a0
+  - xorg-libxfixes >=6.0.1,<7.0a0
+  - xorg-libxrandr >=1.5.4,<1.6.0a0
+  - xorg-libxrandr >=1.5.4,<2.0a0
+  - xorg-libxrender >=0.9.12,<0.10.0a0
+  - xorg-libxtst >=1.2.5,<1.3.0a0
+  - xorg-libxtst >=1.2.5,<2.0a0
+
+
+nsight-compute 2026.1.0.9 h3eabb2e_0
+------------------------------------
+file name   : nsight-compute-2026.1.0.9-h3eabb2e_0.conda
+name        : nsight-compute
+version     : 2026.1.0.9
+build       : h3eabb2e_0
+build number: 0
+size        : 355.7 MB
+license     : LicenseRef-NVIDIA-End-User-License-Agreement
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/nsight-compute-2026.1.0.9-h3eabb2e_0.conda
+md5         : b0fd56572a8eb70025dc8722e502de95
+timestamp   : 2026-01-13 21:14:15 UTC
+dependencies: 
+  - __glibc >=2.17,<3.0.a0
+  - alsa-lib >=1.2.14,<1.3.0a0
+  - cuda-version >=13.2,<13.3.0a0
+  - dbus >=1.16.2,<2.0a0
+  - fontconfig >=2.15.0,<3.0a0
+  - freetype >=2.13.3,<3.0a0
+  - libexpat >=2.7.3,<3.0a0
+  - libgcc >=14
+  - libglib >=2.84.4,<3.0a0
+  - libglvnd >=1.7.0,<2.0a0
+  - libopengl >=1.7.0,<2.0a0
+  - libstdcxx >=14
+  - libxcb >=1.17.0,<2.0a0
+  - libxkbcommon >=1.9.1,<2.0a0
+  - libxkbfile >=1.1.0,<1.2.0a0
+  - libxkbfile >=1.1.0,<2.0a0
+  - libzlib >=1.3.1,<2.0a0
+  - nspr >=4.37,<5.0a0
+  - nss >=3.117,<4.0a0
+  - wayland >=1.24.0,<2.0a0
+  - xcb-util-cursor >=0.1.5,<0.2.0a0
+  - xcb-util-image >=0.4.0,<0.5.0a0
+  - xcb-util-keysyms >=0.4.1,<0.5.0a0
+  - xcb-util-renderutil >=0.3.10,<0.4.0a0
+  - xcb-util-wm >=0.4.2,<0.5.0a0
+  - xorg-libice >=1.1.2,<2.0a0
+  - xorg-libsm >=1.2.6,<2.0a0
+  - xorg-libx11 >=1.8.12,<2.0a0
+  - xorg-libxcomposite >=0.4.6,<0.5.0a0
+  - xorg-libxcomposite >=0.4.6,<1.0a0
+  - xorg-libxdamage >=1.1.6,<1.2.0a0
+  - xorg-libxdamage >=1.1.6,<2.0a0
+  - xorg-libxext >=1.3.6,<2.0a0
+  - xorg-libxfixes >=6.0.1,<6.1.0a0
+  - xorg-libxfixes >=6.0.1,<7.0a0
+  - xorg-libxrandr >=1.5.4,<1.6.0a0
+  - xorg-libxrandr >=1.5.4,<2.0a0
+  - xorg-libxrender >=0.9.12,<0.10.0a0
+  - xorg-libxtst >=1.2.5,<1.3.0a0
+  - xorg-libxtst >=1.2.5,<2.0a0
+
+
+nsight-compute 2026.1.1.2 h934865d_0
+------------------------------------
+file name   : nsight-compute-2026.1.1.2-h934865d_0.conda
+name        : nsight-compute
+version     : 2026.1.1.2
+build       : h934865d_0
+build number: 0
+size        : 355.3 MB
+license     : LicenseRef-NVIDIA-End-User-License-Agreement
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/nsight-compute-2026.1.1.2-h934865d_0.conda
+md5         : 9807cd4aac8278d636eb133de26aa9f5
+timestamp   : 2026-03-13 22:34:43 UTC
+dependencies: 
+  - __glibc >=2.17,<3.0.a0
+  - alsa-lib >=1.2.15.3,<1.3.0a0
+  - cuda-version >=13.2,<13.3.0a0
+  - dbus >=1.16.2,<2.0a0
+  - fontconfig >=2.15.0,<3.0a0
+  - freetype >=2.14.1,<3.0a0
+  - libexpat >=2.7.4,<3.0a0
+  - libgcc >=14
+  - libglib >=2.86.3,<3.0a0
+  - libglvnd >=1.7.0,<2.0a0
+  - libopengl >=1.7.0,<2.0a0
+  - libstdcxx >=14
+  - libxcb >=1.17.0,<2.0a0
+  - libxkbcommon >=1.9.1,<2.0a0
+  - libxkbfile >=1.1.0,<1.2.0a0
+  - libxkbfile >=1.1.0,<2.0a0
+  - libzlib >=1.3.1,<2.0a0
+  - nspr >=4.37,<5.0a0
+  - nss >=3.117,<4.0a0
+  - wayland >=1.24.0,<2.0a0
+  - xcb-util-cursor >=0.1.5,<0.2.0a0
+  - xcb-util-image >=0.4.0,<0.5.0a0
+  - xcb-util-keysyms >=0.4.1,<0.5.0a0
+  - xcb-util-renderutil >=0.3.10,<0.4.0a0
+  - xcb-util-wm >=0.4.2,<0.5.0a0
+  - xorg-libice >=1.1.2,<2.0a0
+  - xorg-libsm >=1.2.6,<2.0a0
+  - xorg-libx11 >=1.8.12,<2.0a0
+  - xorg-libxcomposite >=0.4.6,<0.5.0a0
+  - xorg-libxcomposite >=0.4.6,<1.0a0
+  - xorg-libxdamage >=1.1.6,<1.2.0a0
+  - xorg-libxdamage >=1.1.6,<2.0a0
+  - xorg-libxext >=1.3.6,<2.0a0
+  - xorg-libxfixes >=6.0.1,<6.1.0a0
+  - xorg-libxfixes >=6.0.1,<7.0a0
+  - xorg-libxrandr >=1.5.4,<1.6.0a0
+  - xorg-libxrandr >=1.5.4,<2.0a0
+  - xorg-libxrender >=0.9.12,<0.10.0a0
+  - xorg-libxtst >=1.2.5,<1.3.0a0
+  - xorg-libxtst >=1.2.5,<2.0a0
+
+
+nsight-compute 2026.2.0.7 ha5db23c_0
+------------------------------------
+file name   : nsight-compute-2026.2.0.7-ha5db23c_0.conda
+name        : nsight-compute
+version     : 2026.2.0.7
+build       : ha5db23c_0
+build number: 0
+size        : 372.7 MB
+license     : LicenseRef-NVIDIA-End-User-License-Agreement
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/nsight-compute-2026.2.0.7-ha5db23c_0.conda
+md5         : bc56533f0e6f5d5cf142c2c5c7282205
+timestamp   : 2026-04-14 21:35:23 UTC
+dependencies: 
+  - __glibc >=2.28,<3.0.a0
+  - alsa-lib >=1.2.15.3,<1.3.0a0
+  - cuda-version >=13.3,<13.4.0a0
+  - dbus >=1.16.2,<2.0a0
+  - fontconfig >=2.15.0,<3.0a0
+  - freetype >=2.14.1,<3.0a0
+  - libexpat >=2.7.5,<3.0a0
+  - libgcc >=14
+  - libglib >=2.86.3,<3.0a0
+  - libglvnd >=1.7.0,<2.0a0
+  - libopengl >=1.7.0,<2.0a0
+  - libstdcxx >=14
+  - libxcb >=1.17.0,<2.0a0
+  - libxkbcommon >=1.9.1,<2.0a0
+  - libxkbfile >=1.1.0,<1.2.0a0
+  - libxkbfile >=1.1.0,<2.0a0
+  - libzlib >=1.3.1,<2.0a0
+  - nspr >=4.37,<5.0a0
+  - nss >=3.121,<4.0a0
+  - wayland >=1.24.0,<2.0a0
+  - xcb-util-cursor >=0.1.5,<0.2.0a0
+  - xcb-util-image >=0.4.0,<0.5.0a0
+  - xcb-util-keysyms >=0.4.1,<0.5.0a0
+  - xcb-util-renderutil >=0.3.10,<0.4.0a0
+  - xcb-util-wm >=0.4.2,<0.5.0a0
+  - xorg-libice >=1.1.2,<2.0a0
+  - xorg-libsm >=1.2.6,<2.0a0
+  - xorg-libx11 >=1.8.12,<2.0a0
+  - xorg-libxcomposite >=0.4.6,<0.5.0a0
+  - xorg-libxcomposite >=0.4.6,<1.0a0
+  - xorg-libxdamage >=1.1.6,<1.2.0a0
+  - xorg-libxdamage >=1.1.6,<2.0a0
+  - xorg-libxext >=1.3.6,<2.0a0
+  - xorg-libxfixes >=6.0.1,<6.1.0a0
+  - xorg-libxfixes >=6.0.1,<7.0a0
+  - xorg-libxrandr >=1.5.4,<1.6.0a0
+  - xorg-libxrandr >=1.5.4,<2.0a0
+  - xorg-libxrender >=0.9.12,<0.10.0a0
+  - xorg-libxtst >=1.2.5,<1.3.0a0
+  - xorg-libxtst >=1.2.5,<2.0a0
+
+
+nsight-compute 2026.2.1.5 h597d895_0
+------------------------------------
+file name   : nsight-compute-2026.2.1.5-h597d895_0.conda
+name        : nsight-compute
+version     : 2026.2.1.5
+build       : h597d895_0
+build number: 0
+size        : 371.7 MB
+license     : LicenseRef-NVIDIA-End-User-License-Agreement
+subdir      : linux-64
+url         : https://conda.anaconda.org/nvidia/linux-64/nsight-compute-2026.2.1.5-h597d895_0.conda
+md5         : 259e71d70429c57e4514841ec3d6a1cb
+timestamp   : 2026-06-12 20:33:58 UTC
+dependencies: 
+  - __glibc >=2.28,<3.0.a0
+  - alsa-lib >=1.2.15.3,<1.3.0a0
+  - cuda-version >=13.3,<13.4.0a0
+  - dbus >=1.16.2,<2.0a0
+  - fontconfig >=2.17.1,<3.0a0
+  - freetype >=2.14.1,<3.0a0
+  - libexpat >=2.8.1,<3.0a0
+  - libgcc >=14
+  - libglib >=2.86.3,<3.0a0
+  - libglvnd >=1.7.0,<2.0a0
+  - libopengl >=1.7.0,<2.0a0
+  - libstdcxx >=14
+  - libxcb >=1.17.0,<2.0a0
+  - libxkbcommon >=1.13.1,<2.0a0
+  - libxkbfile >=1.1.0,<1.2.0a0
+  - libxkbfile >=1.1.0,<2.0a0
+  - libzlib >=1.3.2,<2.0a0
+  - nspr >=4.37,<5.0a0
+  - nss >=3.121,<4.0a0
+  - wayland >=1.24.0,<2.0a0
+  - xcb-util-cursor >=0.1.5,<0.2.0a0
+  - xcb-util-image >=0.4.0,<0.5.0a0
+  - xcb-util-keysyms >=0.4.1,<0.5.0a0
+  - xcb-util-renderutil >=0.3.10,<0.4.0a0
+  - xcb-util-wm >=0.4.2,<0.5.0a0
+  - xorg-libice >=1.1.2,<2.0a0
+  - xorg-libsm >=1.2.6,<2.0a0
+  - xorg-libx11 >=1.8.12,<2.0a0
+  - xorg-libxcomposite >=0.4.6,<0.5.0a0
+  - xorg-libxcomposite >=0.4.6,<1.0a0
+  - xorg-libxdamage >=1.1.6,<1.2.0a0
+  - xorg-libxdamage >=1.1.6,<2.0a0
+  - xorg-libxext >=1.3.6,<2.0a0
+  - xorg-libxfixes >=6.0.1,<6.1.0a0
+  - xorg-libxfixes >=6.0.1,<7.0a0
+  - xorg-libxrandr >=1.5.4,<1.6.0a0
+  - xorg-libxrandr >=1.5.4,<2.0a0
+  - xorg-libxrender >=0.9.12,<0.10.0a0
+  - xorg-libxtst >=1.2.5,<1.3.0a0
+  - xorg-libxtst >=1.2.5,<2.0a0
+
+

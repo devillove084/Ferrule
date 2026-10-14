@@ -1,0 +1,24 @@
+{
+  "worker": {
+    "pid": 259571,
+    "birth_ticks": 105126070,
+    "ppid": 259570,
+    "pgrp": 259571,
+    "session": 259571
+  },
+  "helper": {
+    "pid": 259570,
+    "birth_ticks": 105126067,
+    "ppid": 259561,
+    "pgrp": 259570,
+    "session": 259570
+  },
+  "coordinator": {
+    "pid": 259561,
+    "birth_ticks": 105125669,
+    "ppid": 96249,
+    "pgrp": 259561,
+    "session": 259561
+  },
+  "launch_id": "261f3b3e555148c8b15c0ec3351f7c57"
+}

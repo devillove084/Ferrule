@@ -1,0 +1,38 @@
+{
+  "stage": "actual fixed fused-after F1 ordinary info measurement",
+  "argv": [
+    "/home/admin/wxw403883/anaconda3/bin/python3.12",
+    "-S",
+    "-B",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/paired.py",
+    "run",
+    "--id",
+    "pair-swiglu-fused-info-after-20261011-01",
+    "--purpose",
+    "fused_after",
+    "--sole-gpu-owner-granted",
+    "--owner-note",
+    "User explicitly authorized unique GPU owner on 2026-10-11; reviewed fixed f6a fused-after F1 ordinary info performance only; actual same-binary S1/S2 PASS; no rankperf/readback/V/cross-AB/Nsight; stop on error/ECHILD/unknown custody"
+  ],
+  "started_utc": "2026-10-11T12:19:17.038952+00:00",
+  "completed_utc": "2026-10-11T12:26:46.288626+00:00",
+  "wall_seconds": 449.2496688179672,
+  "returncode": 0,
+  "error": null,
+  "prepared": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/pair-swiglu-fused-info-after-20261011-01/prepared.json",
+    "sha256": "63432b9bdf1299112838df3decf8fff6d1a53fd1597f8479d2fb36ae3e1a0c21"
+  },
+  "execution": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/pair-swiglu-fused-info-after-20261011-01/execution.json",
+    "sha256": "f5b010e0c0902150e87e4564be7fa129e0f310f7fa4c3007854b6e410471ad8d"
+  },
+  "status": "complete_descriptive_only",
+  "gpu_process_state": "see authenticated existing custody receipts; unknown if absent",
+  "official_profile": false,
+  "auxiliary_kernel_count": null,
+  "logs": {
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/admission/pair-swiglu-fused-release-20261011-01/actual-formal.stdout.log": "2714d05d00c4c71e5fd8b343a02ba21cb65516162366e33af4a868ca87e1bab3",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/admission/pair-swiglu-fused-release-20261011-01/actual-formal.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+}

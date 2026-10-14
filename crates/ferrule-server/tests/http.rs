@@ -631,6 +631,8 @@ async fn pr13_body_io_error_and_missing_content_type_are_sanitized() {
 struct Pr13FaultEngine {
     inner: ImmediateEngine,
     tokenization_failure: bool,
+    execution_error: Option<ferrule_runtime::Error>,
+    cancellation_error: bool,
 }
 impl InferenceEngine for Pr13FaultEngine {
     fn completion_hub(&self) -> CompletionHub {
@@ -658,11 +660,19 @@ impl InferenceEngine for Pr13FaultEngine {
         &mut self,
         _: &mut dyn FnMut(&ResidentTokenEvent) -> RuntimeResult<()>,
     ) -> RuntimeResult<ResidentDriverStep> {
-        Err(ferrule_runtime::Error::Invariant {
-            message: "/private/provider-secret/execution".into(),
-        })
+        Err(self
+            .execution_error
+            .take()
+            .unwrap_or_else(|| ferrule_runtime::Error::Invariant {
+                message: "/private/provider-secret/execution".into(),
+            }))
     }
     fn cancel_request(&mut self, id: RequestId) -> RuntimeResult<InferenceCancelProgress> {
+        if std::mem::take(&mut self.cancellation_error) {
+            return Err(ferrule_runtime::Error::Invariant {
+                message: "injected fatal cancellation cleanup".into(),
+            });
+        }
         self.inner.cancel_request(id)
     }
     fn drain_finished(&mut self) -> Vec<SequenceState> {
@@ -725,9 +735,12 @@ async fn pr13_json_sse_execution_errors_share_contract_without_source_leakage() 
     }
 }
 
+#[path = "http/http_cleanup.rs"]
+mod cleanup_tests;
+
 #[tokio::test]
 async fn pr13_http_tokenization_failure_returns_permits_and_preserves_readiness() {
-    for endpoint in ["/tokenize", "/v1/completions"] {
+    for endpoint in ["/tokenize", "/v1/tokenize", "/v1/completions"] {
         let worker = spawn_model_worker_with(
             || {
                 Ok::<_, std::convert::Infallible>(Pr13FaultEngine {
@@ -735,7 +748,10 @@ async fn pr13_http_tokenization_failure_returns_permits_and_preserves_readiness(
                     ..Default::default()
                 })
             },
-            Default::default(),
+            WorkerConfig {
+                max_inflight_requests: 1,
+                ..Default::default()
+            },
         )
         .unwrap();
         let handle = worker.handle();
@@ -743,29 +759,32 @@ async fn pr13_http_tokenization_failure_returns_permits_and_preserves_readiness(
             ModelRegistration::new("test-model", ChatTemplate::Plain),
             handle.clone(),
         ));
-        let response = app
-            .clone()
-            .oneshot(pr13_request(
-                endpoint,
-                r#"{"model":"test-model","prompt":"hi"}"#,
-            ))
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
-        let body = response_text(response).await;
-        assert!(body.contains("tokenization_failed"));
-        assert!(!body.contains("provider-secret"));
-        pr13_counts(&handle, 0, 0);
-        let ready = app
-            .oneshot(
-                Request::builder()
-                    .uri("/readyz")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(ready.status(), StatusCode::OK);
+        for _ in 0..16 {
+            let response = app
+                .clone()
+                .oneshot(pr13_request(
+                    endpoint,
+                    r#"{"model":"test-model","prompt":"hi"}"#,
+                ))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+            let body = response_text(response).await;
+            assert!(body.contains("tokenization_failed"));
+            assert!(!body.contains("provider-secret"));
+            pr13_counts(&handle, 0, 0);
+            let ready = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri("/readyz")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(ready.status(), StatusCode::OK);
+        }
         worker.shutdown().await.unwrap();
     }
 }

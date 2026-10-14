@@ -126,11 +126,13 @@ fn failed_open_does_not_poison_restored_original_snapshot() {
     let failed = reader.read_counters();
     std::fs::remove_file(&f.weight.path).unwrap();
     std::fs::rename(&backup, &f.weight.path).unwrap();
-    assert!(original.source_files()[0].is_current());
+    // Rename restoration may change Unix ctime. Bind the restored catalog
+    // explicitly; never refresh the original immutable snapshot in the reader.
+    let restored = f.plan();
     for _ in 0..3 {
         assert_eq!(
             reader
-                .verified_read_session(&original)
+                .verified_read_session(&restored)
                 .unwrap()
                 .read()
                 .unwrap(),
@@ -189,9 +191,10 @@ fn failed_generation_does_not_remove_another_threads_valid_lease_or_cache_entry(
 
     std::fs::remove_file(&f.weight.path).unwrap();
     std::fs::rename(backup, &f.weight.path).unwrap();
+    let restored = f.plan();
     assert_eq!(
         reader
-            .verified_read_session(&original)
+            .verified_read_session(&restored)
             .unwrap()
             .read()
             .unwrap(),
@@ -213,19 +216,35 @@ fn failed_cached_boundary_preserves_lease_when_original_path_is_restored() {
     assert!(reader.verified_read_session(&original).is_err());
     std::fs::remove_file(&f.weight.path).unwrap();
     std::fs::rename(backup, &f.weight.path).unwrap();
-    assert_eq!(lease.read().unwrap(), expected);
+    let restored = f.plan();
+    let metadata_changed = original.source_files() != restored.source_files();
+    if metadata_changed {
+        // A stale lease still pins its FD and blocks admission of a new
+        // generation under the one-shard bound; a failed check must not evict it.
+        assert!(reader.verified_read_session(&restored).is_err());
+        assert_eq!(reader.read_counters().live_handles, 1);
+        assert!(lease.read().is_err());
+    } else {
+        assert_eq!(lease.read().unwrap(), expected);
+    }
     assert_eq!(
         reader
-            .verified_read_session(&original)
+            .verified_read_session(&restored)
             .unwrap()
             .read()
             .unwrap(),
         expected
     );
-    assert_eq!(reader.read_counters().open_calls, 1);
+    assert_eq!(
+        reader.read_counters().open_calls,
+        1 + u64::from(metadata_changed)
+    );
     assert_eq!(reader.read_counters().live_handles, 1);
     assert_eq!(reader.read_counters().peak_handles, 1);
-    assert_eq!(reader.read_counters().evictions, 0);
+    assert_eq!(
+        reader.read_counters().evictions,
+        u64::from(metadata_changed)
+    );
 }
 
 #[test]

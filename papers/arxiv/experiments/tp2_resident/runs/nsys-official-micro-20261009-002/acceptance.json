@@ -1,0 +1,208 @@
+{
+  "status": "pass",
+  "kernel_rows": 2,
+  "kernel_events": [
+    {
+      "globalPid": 284263484227584,
+      "deviceId": 0,
+      "start": 5663208852,
+      "end": 5663210740,
+      "correlationId": 123,
+      "demangledName": 1085,
+      "pid": 166208,
+      "physical_gpu_id": 0,
+      "physical_uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "kernel_name": "vectorAdd(const float *, const float *, float *, int)"
+    },
+    {
+      "globalPid": 284263685554176,
+      "deviceId": 0,
+      "start": 6367993820,
+      "end": 6367995740,
+      "correlationId": 123,
+      "demangledName": 1085,
+      "pid": 166220,
+      "physical_gpu_id": 1,
+      "physical_uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "kernel_name": "vectorAdd(const float *, const float *, float *, int)"
+    }
+  ],
+  "distinct_physical_kernel_uuids": [
+    "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+    "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535"
+  ],
+  "distinct_physical_kernel_gpu_ids": [
+    0,
+    1
+  ],
+  "logical_kernel_device_ids": [
+    0
+  ],
+  "memcpy_rows": 6,
+  "memcpy_events": [
+    {
+      "globalPid": 284263484227584,
+      "deviceId": 0,
+      "start": 5663046452,
+      "end": 5663056948,
+      "correlationId": 121,
+      "copyKind": 1,
+      "bytes": 200000,
+      "pid": 166208,
+      "physical_gpu_id": 0,
+      "physical_uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535"
+    },
+    {
+      "globalPid": 284263484227584,
+      "deviceId": 0,
+      "start": 5663083764,
+      "end": 5663093908,
+      "correlationId": 122,
+      "copyKind": 1,
+      "bytes": 200000,
+      "pid": 166208,
+      "physical_gpu_id": 0,
+      "physical_uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535"
+    },
+    {
+      "globalPid": 284263484227584,
+      "deviceId": 0,
+      "start": 5663221108,
+      "end": 5663231092,
+      "correlationId": 125,
+      "copyKind": 2,
+      "bytes": 200000,
+      "pid": 166208,
+      "physical_gpu_id": 0,
+      "physical_uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535"
+    },
+    {
+      "globalPid": 284263685554176,
+      "deviceId": 0,
+      "start": 6367835133,
+      "end": 6367845629,
+      "correlationId": 121,
+      "copyKind": 1,
+      "bytes": 200000,
+      "pid": 166220,
+      "physical_gpu_id": 1,
+      "physical_uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9"
+    },
+    {
+      "globalPid": 284263685554176,
+      "deviceId": 0,
+      "start": 6367872476,
+      "end": 6367883004,
+      "correlationId": 122,
+      "copyKind": 1,
+      "bytes": 200000,
+      "pid": 166220,
+      "physical_gpu_id": 1,
+      "physical_uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9"
+    },
+    {
+      "globalPid": 284263685554176,
+      "deviceId": 0,
+      "start": 6368004860,
+      "end": 6368014844,
+      "correlationId": 125,
+      "copyKind": 2,
+      "bytes": 200000,
+      "pid": 166220,
+      "physical_gpu_id": 1,
+      "physical_uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9"
+    }
+  ],
+  "runtime_rows": 26,
+  "fatal_diagnostics": [],
+  "warnings": [
+    {
+      "timestamp": 103162385,
+      "timestampType": 2,
+      "source": 3,
+      "severity": 2,
+      "text": "Scheduling information is absent. The thread activity is deduced based on OS runtime libraries traces. This is inaccurate and does not take into account asynchronous interrupts and exception faults.",
+      "globalPid": -144115188075855872
+    },
+    {
+      "timestamp": 103206920,
+      "timestampType": 2,
+      "source": 3,
+      "severity": 2,
+      "text": "No NVTX events collected. Does the process use NVTX?",
+      "globalPid": 284263685554176
+    },
+    {
+      "timestamp": 103208403,
+      "timestampType": 2,
+      "source": 3,
+      "severity": 2,
+      "text": "No NVTX events collected. Does the process use NVTX?",
+      "globalPid": 284263484227584
+    },
+    {
+      "timestamp": 103209190,
+      "timestampType": 2,
+      "source": 3,
+      "severity": 2,
+      "text": "No NVTX events collected. Does the process use NVTX?",
+      "globalPid": 284263014465536
+    },
+    {
+      "timestamp": 103213807,
+      "timestampType": 2,
+      "source": 3,
+      "severity": 2,
+      "text": "CUDA profiling might have not been started correctly.",
+      "globalPid": 284263014465536
+    },
+    {
+      "timestamp": 103214482,
+      "timestampType": 2,
+      "source": 3,
+      "severity": 2,
+      "text": "No CUDA events collected. Does the process use CUDA?",
+      "globalPid": 284263014465536
+    }
+  ],
+  "loaded_cupti": [
+    {
+      "timestamp": 5081078271,
+      "timestampType": 1,
+      "source": 1,
+      "severity": 1,
+      "text": "Loaded CUPTI library: /home/admin/luhuanbing.lhb/Ferrule/target/vendor/nsight-systems-cli-2025.3.1/opt/nvidia/nsight-systems-cli/2025.3.1/target-linux-x64/libcupti.so.12.9",
+      "globalPid": 284263484227584
+    },
+    {
+      "timestamp": 5851072121,
+      "timestampType": 1,
+      "source": 1,
+      "severity": 1,
+      "text": "Loaded CUPTI library: /home/admin/luhuanbing.lhb/Ferrule/target/vendor/nsight-systems-cli-2025.3.1/opt/nvidia/nsight-systems-cli/2025.3.1/target-linux-x64/libcupti.so.12.9",
+      "globalPid": 284263685554176
+    }
+  ],
+  "mapping": "CUPTI globalPid -> PROCESSES.pid; (pid, deviceId) -> TARGET_INFO_CUDA_DEVICE.(pid,cudaId) -> gpuId -> TARGET_INFO_GPU.id/uuid",
+  "schema_reference": "https://docs.nvidia.com/nsight-systems/2025.3/UserGuide/index.html#sqlite-schema-reference",
+  "release": {
+    "status": "capture_complete_requires_sqlite_acceptance",
+    "model_started": false,
+    "authenticated_drained": true,
+    "supervisor_success": true,
+    "original_b0_verified": true,
+    "b1_returned": true,
+    "local_contexts_closed": true,
+    "gpu_uuids": [
+      "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f",
+      "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6",
+      "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d",
+      "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86",
+      "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011",
+      "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685"
+    ]
+  },
+  "sqlite": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/nsys-official-micro-20261009-002/runs/P1/session/micro.sqlite"
+}

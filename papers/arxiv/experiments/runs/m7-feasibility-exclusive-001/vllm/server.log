@@ -1,0 +1,94 @@
+(APIServer pid=167520) INFO 10-08 21:45:56 [api_utils.py:333] 
+(APIServer pid=167520) INFO 10-08 21:45:56 [api_utils.py:333]        █     █     █▄   ▄█
+(APIServer pid=167520) INFO 10-08 21:45:56 [api_utils.py:333]  ▄▄ ▄█ █     █     █ ▀▄▀ █  version 0.28.0
+(APIServer pid=167520) INFO 10-08 21:45:56 [api_utils.py:333]   █▄█▀ █     █     █     █  model   /mnt/nas1/hf/Qwen3.5-35B-A3B-FP8
+(APIServer pid=167520) INFO 10-08 21:45:56 [api_utils.py:333]    ▀▀  ▀▀▀▀▀ ▀▀▀▀▀ ▀     ▀
+(APIServer pid=167520) INFO 10-08 21:45:56 [api_utils.py:333] 
+(APIServer pid=167520) INFO 10-08 21:45:56 [api_utils.py:272] non-default args: {'model_tag': '/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8', 'host': '127.0.0.1', 'port': 18357, 'model': '/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8', 'dtype': 'bfloat16', 'seed': 1, 'max_model_len': 128, 'enforce_eager': True, 'served_model_name': ['qwen35-vllm-paper'], 'generation_config': 'vllm', 'gpu_memory_utilization': 0.2916666666666667, 'enable_prefix_caching': False, 'mamba_cache_dtype': 'bfloat16', 'mamba_ssm_cache_dtype': 'float32', 'offload_backend': 'uva', 'cpu_offload_gb': 30.0, 'cpu_offload_params': ['w13_weight', 'w2_weight'], 'language_model_only': True, 'max_num_batched_tokens': 8, 'max_num_seqs': 2, 'enable_chunked_prefill': True, 'moe_backend': 'marlin', 'linear_backend': 'marlin'}
+(APIServer pid=167520) INFO 10-08 21:46:05 [model.py:672] Resolved architecture: Qwen3_5MoeForConditionalGeneration
+(APIServer pid=167520) INFO 10-08 21:46:05 [model.py:1965] Using max model len 128
+(APIServer pid=167520) INFO 10-08 21:46:06 [registry.py:141] All limits of multimodal modalities supported by the model are set to 0, running in text-only mode.
+(APIServer pid=167520) INFO 10-08 21:46:06 [model.py:875] Disabled mm_prefix attention mode because multimodal inputs are configuration-disabled. Attention backends without mm_prefix support may now be selected.
+(APIServer pid=167520) INFO 10-08 21:46:06 [scheduler.py:242] Chunked prefill is enabled with max_num_batched_tokens=8.
+(APIServer pid=167520) WARNING 10-08 21:46:06 [vllm.py:1285] Enforce eager set, disabling torch.compile and CUDAGraphs. This is equivalent to setting -cc.mode=none -cc.cudagraph_mode=none
+(APIServer pid=167520) WARNING 10-08 21:46:06 [vllm.py:1354] Inductor compilation was disabled by user settings, optimizations settings that are only active during inductor compilation will be ignored.
+(APIServer pid=167520) INFO 10-08 21:46:06 [kernel.py:308] Final IR op priority after setting platform defaults: IrOpPriorityConfig(rms_norm=['vllm_c', 'native'], fused_add_rms_norm=['vllm_c', 'native'])
+(APIServer pid=167520) INFO 10-08 21:46:06 [vllm.py:1533] Cudagraph is disabled under eager mode
+(APIServer pid=167520) INFO 10-08 21:46:06 [compilation.py:329] Enabled custom fusions: norm_quant, act_quant
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+  File "/home/admin/wxw403883/anaconda3/lib/python3.12/multiprocessing/spawn.py", line 122, in spawn_main
+    exitcode = _main(fd, parent_sentinel)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/admin/wxw403883/anaconda3/lib/python3.12/multiprocessing/spawn.py", line 131, in _main
+    prepare(preparation_data)
+  File "/home/admin/wxw403883/anaconda3/lib/python3.12/multiprocessing/spawn.py", line 246, in prepare
+    _fixup_main_from_path(data['init_main_from_path'])
+  File "/home/admin/wxw403883/anaconda3/lib/python3.12/multiprocessing/spawn.py", line 297, in _fixup_main_from_path
+    main_content = runpy.run_path(main_path,
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<frozen runpy>", line 285, in run_path
+  File "<frozen runpy>", line 254, in _get_code_from_file
+FileNotFoundError: [Errno 2] No such file or directory: '/proc/self/fd/4'
+(APIServer pid=167520) Traceback (most recent call last):
+(APIServer pid=167520)   File "/proc/self/fd/4", line 10, in <module>
+(APIServer pid=167520)     sys.exit(main())
+(APIServer pid=167520)              ^^^^^^
+(APIServer pid=167520)   File "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/vllm/entrypoints/cli/main.py", line 97, in main
+(APIServer pid=167520)     args.dispatch_function(args)
+(APIServer pid=167520)   File "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/vllm/entrypoints/cli/serve.py", line 152, in cmd
+(APIServer pid=167520)     uvloop.run(run_server(args))
+(APIServer pid=167520)   File "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/uvloop/__init__.py", line 96, in run
+(APIServer pid=167520)     return __asyncio.run(
+(APIServer pid=167520)            ^^^^^^^^^^^^^^
+(APIServer pid=167520)   File "/home/admin/wxw403883/anaconda3/lib/python3.12/asyncio/runners.py", line 194, in run
+(APIServer pid=167520)     return runner.run(main)
+(APIServer pid=167520)            ^^^^^^^^^^^^^^^^
+(APIServer pid=167520)   File "/home/admin/wxw403883/anaconda3/lib/python3.12/asyncio/runners.py", line 118, in run
+(APIServer pid=167520)     return self._loop.run_until_complete(task)
+(APIServer pid=167520)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=167520)   File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
+(APIServer pid=167520)   File "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/uvloop/__init__.py", line 48, in wrapper
+(APIServer pid=167520)     return await main
+(APIServer pid=167520)            ^^^^^^^^^^
+(APIServer pid=167520)   File "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/vllm/entrypoints/openai/api_server.py", line 739, in run_server
+(APIServer pid=167520)     await run_server_worker(listen_address, sock, args, **uvicorn_kwargs)
+(APIServer pid=167520)   File "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/vllm/entrypoints/openai/api_server.py", line 753, in run_server_worker
+(APIServer pid=167520)     async with build_async_engine_client(
+(APIServer pid=167520)   File "/home/admin/wxw403883/anaconda3/lib/python3.12/contextlib.py", line 210, in __aenter__
+(APIServer pid=167520)     return await anext(self.gen)
+(APIServer pid=167520)            ^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=167520)   File "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/vllm/entrypoints/openai/api_server.py", line 127, in build_async_engine_client
+(APIServer pid=167520)     async with build_async_engine_client_from_engine_args(
+(APIServer pid=167520)   File "/home/admin/wxw403883/anaconda3/lib/python3.12/contextlib.py", line 210, in __aenter__
+(APIServer pid=167520)     return await anext(self.gen)
+(APIServer pid=167520)            ^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=167520)   File "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/vllm/entrypoints/openai/api_server.py", line 163, in build_async_engine_client_from_engine_args
+(APIServer pid=167520)     async_llm = AsyncLLM.from_vllm_config(
+(APIServer pid=167520)                 ^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=167520)   File "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/vllm/v1/engine/async_llm.py", line 220, in from_vllm_config
+(APIServer pid=167520)     return cls(
+(APIServer pid=167520)            ^^^^
+(APIServer pid=167520)   File "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/vllm/v1/engine/async_llm.py", line 149, in __init__
+(APIServer pid=167520)     self.engine_core = EngineCoreClient.make_async_mp_client(
+(APIServer pid=167520)                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=167520)   File "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/vllm/tracing/otel.py", line 178, in sync_wrapper
+(APIServer pid=167520)     return func(*args, **kwargs)
+(APIServer pid=167520)            ^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=167520)   File "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/vllm/v1/engine/core_client.py", line 139, in make_async_mp_client
+(APIServer pid=167520)     return AsyncMPClient(*client_args)
+(APIServer pid=167520)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=167520)   File "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/vllm/tracing/otel.py", line 178, in sync_wrapper
+(APIServer pid=167520)     return func(*args, **kwargs)
+(APIServer pid=167520)            ^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=167520)   File "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/vllm/v1/engine/core_client.py", line 990, in __init__
+(APIServer pid=167520)     super().__init__(
+(APIServer pid=167520)   File "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/vllm/v1/engine/core_client.py", line 609, in __init__
+(APIServer pid=167520)     with launch_core_engines(
+(APIServer pid=167520)   File "/home/admin/wxw403883/anaconda3/lib/python3.12/contextlib.py", line 144, in __exit__
+(APIServer pid=167520)     next(self.gen)
+(APIServer pid=167520)   File "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/vllm/v1/engine/utils.py", line 1206, in launch_core_engines
+(APIServer pid=167520)     wait_for_engine_startup(
+(APIServer pid=167520)   File "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/vllm/v1/engine/utils.py", line 1286, in wait_for_engine_startup
+(APIServer pid=167520)     raise RuntimeError(
+(APIServer pid=167520) RuntimeError: Engine core initialization failed. See root cause above. Failed core proc(s): {'EngineCore': 1}

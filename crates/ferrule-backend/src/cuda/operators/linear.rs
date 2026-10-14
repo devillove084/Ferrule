@@ -42,8 +42,8 @@ use crate::cuda::operators::{OperatorOwner, OperatorWorkspaceRequirements};
 use crate::cuda::providers::cutlass;
 use crate::cuda::runtime::{CudaStream, DeviceBuffer};
 
-pub(crate) use crate::cuda::context::ARTIFACT_LINEAR_FP8_ACTIVATION_BLOCK_SIZE;
-pub use crate::cuda::context::{
+pub(crate) use crate::cuda::operator_owner::ARTIFACT_LINEAR_FP8_ACTIVATION_BLOCK_SIZE;
+pub use crate::cuda::operator_owner::{
     CudaArtifactLinearHandle, CudaArtifactLinearShape, CudaArtifactLinearWorkspace, CudaBf16Buffer,
     CudaF32Buffer, CudaFp8ActivationPack, CudaOperators, CudaPreparedFp8Activation, cuda_gemv,
     cuda_gemv_fp8_e4m3fn_e8m0_2d,
@@ -166,12 +166,11 @@ pub fn bf16_gemm(
     cutlass::bf16_gemm(stream, activation, weight, output, layout)
 }
 
-#[path = "numeric.rs"]
 mod numeric;
 
 pub use numeric::{
     CudaNumericFp8Artifact, CudaNumericFp8Workspace, NumericFp8Layout, NumericFp8LinearPlan,
-    NumericFp8Precision, NumericFp8ScaleType,
+    NumericFp8Precision, NumericFp8ScaleType, NumericFp8SelectedKernel,
 };
 
 /// Submit a numeric-FP8 plan through the semantic linear boundary.
@@ -223,7 +222,6 @@ impl CudaOperators {
     }
 }
 
-#[path = "f32.rs"]
 mod f32;
 pub(crate) use f32::f32_gemm_bytes;
 pub use f32::{F32GemmError, F32GemmLayout};
@@ -267,3 +265,41 @@ impl CudaOperators {
         Ok(())
     }
 }
+
+impl CudaOperators {
+    /// Numeric FP8 submission with already-rounded BF16 activation storage.
+    /// Explicit `W8A16Bf16F32Accumulate` retains its zero-scratch fused path.
+    /// Explicit `Bf16RneF32Accumulate` copies/pads BF16 words into the planned
+    /// activation scratch and decodes one bounded weight tile for native BF16
+    /// GEMM. This is not a promise of HF WMMA reduction-order compatibility.
+    /// Both produce F32; budget downstream BF16 writeback separately.
+    /// Owner, capture, alias, event and quarantine semantics match the numeric
+    /// F32-input method; strides are BF16 and F32 elements respectively.
+    #[allow(clippy::too_many_arguments)]
+    pub fn numeric_fp8_bf16_linear_into(
+        &self,
+        weight: &CudaNumericFp8Artifact,
+        input: &CudaBf16Buffer,
+        output: &mut CudaF32Buffer,
+        workspace: &mut CudaNumericFp8Workspace,
+        plan: NumericFp8LinearPlan,
+        activation_stride: usize,
+        output_stride: usize,
+    ) -> Result<()> {
+        self.submit_operator(plan.kernel_launches() as u64, |stream| {
+            cutlass::numeric_fp8_bf16_linear(
+                stream,
+                weight,
+                input.as_device_buffer(),
+                output.as_device_buffer_mut(),
+                workspace,
+                plan,
+                activation_stride,
+                output_stride,
+            )
+        })
+    }
+}
+
+mod bf16_gemmex;
+pub use bf16_gemmex::{Bf16GemmExPlan, CudaBf16GemmEx, CudaBf16GemmExGraph};

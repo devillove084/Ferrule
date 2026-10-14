@@ -78,6 +78,13 @@ __device__ inline float bf16_round(float value) {
   return bf16_value(bf16_rne(value));
 }
 
+// Keep the two tensor roundings and libdevice expf identical across providers.
+__device__ inline uint16_t bf16_swiglu(uint16_t gate, uint16_t up) {
+  const float v = bf16_value(gate);
+  const float activated = bf16_round(v / (1.0f + expf(-v)));
+  return bf16_rne(activated * bf16_value(up));
+}
+
 __device__ inline float clamp_value(float value, float low, float high) {
   return fminf(high, fmaxf(low, value));
 }

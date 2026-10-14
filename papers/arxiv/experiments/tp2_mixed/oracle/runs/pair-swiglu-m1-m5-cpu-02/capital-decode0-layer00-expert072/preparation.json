@@ -1,0 +1,371 @@
+{
+  "schema": "ferrule.paper.mixed-routed-down.pending-fixture.v1",
+  "status": "blocked_missing_cuda_expert_observations",
+  "model_fixture_ready": false,
+  "role": "RoutedExpertDown",
+  "tp": 2,
+  "rows": 1,
+  "n": 2048,
+  "local_k": 256,
+  "layer": 0,
+  "expert": 72,
+  "checkpoint_sha256": "fb96ba4dd134761af30b4025b4cce86f96136cb01f05b5b4fca3e74587caa71d",
+  "checkpoint_shard_set_sha256": "b51014a9d40c300ea77f12bf8cada444f79c8300277611f6e5f27a62fcb95090",
+  "case": "capital",
+  "stage": "decode.0",
+  "call": {
+    "stage": "decode.0",
+    "input_token_ids": [
+      11751
+    ],
+    "position_start": 5,
+    "sequence_length_after": 6,
+    "next_token_id": 13
+  },
+  "selected_expert_ids": [
+    254,
+    208,
+    191,
+    181,
+    81,
+    120,
+    72,
+    182
+  ],
+  "selection": "minimum actually selected expert ID, one per case/layer",
+  "route_slot": 6,
+  "reference_case": {
+    "id": "capital",
+    "file": "capital.safetensors",
+    "sha256": "4fe3d64cc559d5365100e34841db2934579e05a2a334d38a8766406814e90b6d",
+    "bytes": 277869920,
+    "report": {
+      "file": "capital.json",
+      "sha256": "144693807830d1d0211b2a0d06eb3f2e3ac820d484063154fa01693c6a21ee1f",
+      "bytes": 617117
+    },
+    "statistics": {
+      "file": "capital.stats.json",
+      "sha256": "d5c77e86e16ba8fb0a3e2640a432a99e7b0f300e3116511465d373f31f6c4997",
+      "bytes": 580811
+    }
+  },
+  "observed_tensor_keys": [
+    "decode.0.embedding",
+    "decode.0.layers.00.attention",
+    "decode.0.layers.00.moe",
+    "decode.0.rank.0.layers.00.routed_partial",
+    "decode.0.rank.0.layers.00.selected_expert_ids",
+    "decode.0.rank.0.layers.00.routing_weights",
+    "decode.0.rank.0.layers.00.raw_router_logits",
+    "decode.0.rank.0.layers.00.router_probabilities",
+    "decode.0.rank.1.layers.00.routed_partial",
+    "decode.0.rank.1.layers.00.selected_expert_ids",
+    "decode.0.rank.1.layers.00.routing_weights",
+    "decode.0.rank.1.layers.00.raw_router_logits",
+    "decode.0.rank.1.layers.00.router_probabilities"
+  ],
+  "raw_weight_source": "model.language_model.layers.0.mlp.experts.72.down_proj.weight",
+  "raw_scale_source": "model.language_model.layers.0.mlp.experts.72.down_proj.weight_scale_inv",
+  "partitions": [
+    {
+      "rank": 0,
+      "rows": [
+        0,
+        2048
+      ],
+      "columns": [
+        0,
+        256
+      ],
+      "scale_shape": [
+        16,
+        2
+      ],
+      "global_128_block_coordinates": [
+        [
+          0,
+          0
+        ],
+        [
+          0,
+          1
+        ],
+        [
+          1,
+          0
+        ],
+        [
+          1,
+          1
+        ],
+        [
+          2,
+          0
+        ],
+        [
+          2,
+          1
+        ],
+        [
+          3,
+          0
+        ],
+        [
+          3,
+          1
+        ],
+        [
+          4,
+          0
+        ],
+        [
+          4,
+          1
+        ],
+        [
+          5,
+          0
+        ],
+        [
+          5,
+          1
+        ],
+        [
+          6,
+          0
+        ],
+        [
+          6,
+          1
+        ],
+        [
+          7,
+          0
+        ],
+        [
+          7,
+          1
+        ],
+        [
+          8,
+          0
+        ],
+        [
+          8,
+          1
+        ],
+        [
+          9,
+          0
+        ],
+        [
+          9,
+          1
+        ],
+        [
+          10,
+          0
+        ],
+        [
+          10,
+          1
+        ],
+        [
+          11,
+          0
+        ],
+        [
+          11,
+          1
+        ],
+        [
+          12,
+          0
+        ],
+        [
+          12,
+          1
+        ],
+        [
+          13,
+          0
+        ],
+        [
+          13,
+          1
+        ],
+        [
+          14,
+          0
+        ],
+        [
+          14,
+          1
+        ],
+        [
+          15,
+          0
+        ],
+        [
+          15,
+          1
+        ]
+      ],
+      "block_coordinates_sha256": "1f945cd6a876a8c30db1dd6f3ae7ed245ada61c495a4a3bf038d39c8fee1f926"
+    },
+    {
+      "rank": 1,
+      "rows": [
+        0,
+        2048
+      ],
+      "columns": [
+        256,
+        512
+      ],
+      "scale_shape": [
+        16,
+        2
+      ],
+      "global_128_block_coordinates": [
+        [
+          0,
+          2
+        ],
+        [
+          0,
+          3
+        ],
+        [
+          1,
+          2
+        ],
+        [
+          1,
+          3
+        ],
+        [
+          2,
+          2
+        ],
+        [
+          2,
+          3
+        ],
+        [
+          3,
+          2
+        ],
+        [
+          3,
+          3
+        ],
+        [
+          4,
+          2
+        ],
+        [
+          4,
+          3
+        ],
+        [
+          5,
+          2
+        ],
+        [
+          5,
+          3
+        ],
+        [
+          6,
+          2
+        ],
+        [
+          6,
+          3
+        ],
+        [
+          7,
+          2
+        ],
+        [
+          7,
+          3
+        ],
+        [
+          8,
+          2
+        ],
+        [
+          8,
+          3
+        ],
+        [
+          9,
+          2
+        ],
+        [
+          9,
+          3
+        ],
+        [
+          10,
+          2
+        ],
+        [
+          10,
+          3
+        ],
+        [
+          11,
+          2
+        ],
+        [
+          11,
+          3
+        ],
+        [
+          12,
+          2
+        ],
+        [
+          12,
+          3
+        ],
+        [
+          13,
+          2
+        ],
+        [
+          13,
+          3
+        ],
+        [
+          14,
+          2
+        ],
+        [
+          14,
+          3
+        ],
+        [
+          15,
+          2
+        ],
+        [
+          15,
+          3
+        ]
+      ],
+      "block_coordinates_sha256": "56b0ca2cc77cc71cd0390c5f6235be57c9b6292c9da8161264ef8ccd0ed976b5"
+    }
+  ],
+  "missing": [
+    "rank0.input.bf16",
+    "rank0.hf.partial.bf16",
+    "rank1.input.bf16",
+    "rank1.hf.partial.bf16"
+  ],
+  "warning": "routed_partial is weighted expert accumulation, NOT an unweighted expert down partial"
+}

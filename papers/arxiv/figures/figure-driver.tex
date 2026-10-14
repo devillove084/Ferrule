@@ -1,0 +1,22 @@
+% CPU-only, tightly cropped PDF driver; no standalone/preview package required.
+% The caller defines \FerruleDiagram before loading this file.
+% This TeX installation has graphicx but not epstopdf-base.
+\def\DoNotLoadEpstopdf{}
+\documentclass[11pt]{article}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{xcolor}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,backgrounds,calc,fit,positioning}
+\input{figure-style.tex}
+\pagestyle{empty}
+\newsavebox{\FerruleFigureBox}
+\begin{document}
+\sbox{\FerruleFigureBox}{\input{\FerruleDiagram}}
+\pdfpagewidth=\dimexpr\wd\FerruleFigureBox+12pt\relax
+\pdfpageheight=\dimexpr\ht\FerruleFigureBox+\dp\FerruleFigureBox+12pt\relax
+\hoffset=-1in
+\voffset=-1in
+\shipout\vbox{\kern6pt\hbox{\kern6pt\usebox{\FerruleFigureBox}\kern6pt}\kern6pt}
+\end{document}

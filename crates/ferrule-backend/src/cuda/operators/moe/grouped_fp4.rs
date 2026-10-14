@@ -43,7 +43,7 @@ pub struct GroupedFp4MoeBuffers<'a> {
     pub workspace: &'a mut DeviceBuffer<u8>,
 }
 
-use crate::cuda::context::{CudaExpertRouteResolveWorkspace, CudaF32Buffer};
+use crate::cuda::operator_owner::{CudaExpertRouteResolveWorkspace, CudaF32Buffer};
 use crate::cuda::operators::OperatorWorkspaceRequirements;
 use crate::cuda::runtime::{CudaEvent, CudaStream, PinnedHostBuffer};
 use ferrule_common::Result;
@@ -138,7 +138,7 @@ pub struct CudaMoeBatchedWorkspace {
 /// prepared plan; no device allocation or stream-wide synchronization occurs there.
 /// Backend-private storage remains inaccessible through semantic and legacy paths.
 /// ```compile_fail,E0616
-/// use ferrule_backend::cuda::context::CudaExpertGroupRoutePlan;
+/// use ferrule_backend::cuda::operator_owner::CudaExpertGroupRoutePlan;
 /// fn access(workspace: &CudaExpertGroupRoutePlan) { let _ = &workspace.cutlass_workspace; }
 /// ```
 pub struct CudaExpertGroupRoutePlan {

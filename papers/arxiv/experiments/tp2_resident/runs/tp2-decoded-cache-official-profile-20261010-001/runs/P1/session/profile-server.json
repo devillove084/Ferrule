@@ -1,0 +1,19 @@
+{
+  "schema": "ferrule.profile-server.v1",
+  "started_monotonic": 8564742.316585364,
+  "started_unix_ns": 1791621799280067190,
+  "returncode": 0,
+  "stop_reason": "matrix_worker_stop_marker",
+  "environment": {
+    "FERRULE_PROCESS_IPC_TIMING": null,
+    "CUDA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+    "LD_LIBRARY_PATH": "/home/admin/wxw403883/anaconda3/envs/tao/lib:/usr/lib64",
+    "LD_PRELOAD": "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/nsight-systems-cli-2025.3.1/opt/nvidia/nsight-systems-cli/2025.3.1/target-linux-x64/libToolsInjectionProxy64.so:/home/admin/luhuanbing.lhb/Ferrule/target/vendor/nsight-systems-cli-2025.3.1/opt/nvidia/nsight-systems-cli/2025.3.1/target-linux-x64/libLinuxKeyboardInterceptorProxy.so"
+  },
+  "instrumentation": "compile_time_unverified_until_sink",
+  "descendant_custody": "outer_subreaper_required",
+  "pid": 18910,
+  "shutdown_started_monotonic": 8565158.166592035,
+  "ended_monotonic": 8565164.60262696,
+  "ended_unix_ns": 1791622221566111625
+}

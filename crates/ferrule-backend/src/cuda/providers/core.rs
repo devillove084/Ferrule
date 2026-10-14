@@ -82,6 +82,22 @@ pub fn load(context: &Arc<CudaContext>) -> KernelResult<CoreOperators> {
 
 impl CoreOperators {
     /// # Safety
+    /// Caller validates owner, extents, positions and disjoint device ranges.
+    /// All operands must survive completion on this stream.
+    pub(crate) unsafe fn streaming_gqa(
+        &self,
+        stream: &CudaStream,
+        mut args: StreamingGqaArgs,
+    ) -> KernelResult<()> {
+        invoke!(
+            stream,
+            args,
+            ferrule_core_streaming_gqa_launch,
+            "streaming F32 GQA"
+        )
+    }
+
+    /// # Safety
     /// Typed caller validates all extents, owners, and non-aliasing write ranges.
     pub(crate) unsafe fn causal_conv(
         &self,
@@ -1837,9 +1853,14 @@ impl CoreOperators {
         experts: u32,
         top_k: u32,
         output_scale: f32,
+        normalization: crate::cuda::operators::RouterNormalization,
+        probabilities: Option<&mut DeviceBuffer<f32>>,
     ) -> KernelResult<()> {
         let mut args = RouterArgs {
-            kind: ROUTER_SELECTED_SOFTMAX_TOPK,
+            kind: match normalization {
+                crate::cuda::operators::RouterNormalization::SelectedSoftmax => ROUTER_SELECTED_SOFTMAX_TOPK,
+                crate::cuda::operators::RouterNormalization::FullSoftmaxThenSelectedRenormalization => ROUTER_FULL_SOFTMAX_TOPK,
+            },
             rows,
             columns: experts,
             k: top_k,
@@ -1847,6 +1868,7 @@ impl CoreOperators {
             logits: device_ptr(logits),
             indices: device_ptr(indices),
             weights: device_ptr(weights),
+            probabilities: probabilities.map_or(0, |p| device_ptr(p)),
             ..Default::default()
         };
         invoke!(
@@ -3398,7 +3420,7 @@ mod tests {
         assert_pod_layout!(RopeArgs, 80, kind, values => 40, 72);
         assert_eq!(offset_of!(RopeArgs, inverse), 32);
         assert_eq!(offset_of!(RopeArgs, restore_bf16_boundary), 36);
-        assert_pod_layout!(RouterArgs, 96, kind, logits => 40, 88);
+        assert_pod_layout!(RouterArgs, 104, kind, logits => 40, 96);
         assert_pod_layout!(CompressorArgs, 96, kind, kv_input => 40, 88);
         assert_pod_layout!(IndexerArgs, 200, rows, query => 80, 192);
 

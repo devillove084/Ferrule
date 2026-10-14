@@ -1,0 +1,15 @@
+{
+  "protocol": "tp2-resident-fv-qa8-descriptive",
+  "purpose": "fused_after",
+  "status": "incomplete",
+  "sole_gpu_owner_granted": true,
+  "owner_note": "User explicitly authorized unique GPU owner on 2026-10-11; reviewed fixed f6a fused-after F1 ordinary info performance only; actual same-binary S1/S2 PASS; no rankperf/readback/V/cross-AB/Nsight; stop on error/ECHILD/unknown custody",
+  "fairmatch": false,
+  "exact_speedup": null,
+  "slots": [
+    {
+      "id": "F1",
+      "status": "not_run"
+    }
+  ]
+}

@@ -1,0 +1,68 @@
+{
+  "returncode": 0,
+  "timed_out": false,
+  "wall_seconds": 183.8554753307253,
+  "stdout": "Authenticated CUDA small-fixture gate before full checkpoint reads\nCUDA small-fixture gate passed; hashing full checkpoint\n",
+  "stderr": "The fast path is not available because one of the required library is not installed. Falling back to torch implementation. To install follow https://github.com/fla-org/flash-linear-attention#installation and https://github.com/Dao-AILab/causal-conv1d\n\rWriting model shards:   0%|          | 0/1 [00:00<?, ?it/s]\rWriting model shards: 100%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588| 1/1 [00:00<00:00, 641.82it/s]\n\rLoading weights:   0%|          | 0/36 [00:00<?, ?it/s]\rLoading weights: 100%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588| 36/36 [00:00<00:00, 9032.42it/s]\n",
+  "cleanup_errors": [],
+  "cleanup_scope": "isolated_subreaper_direct_children",
+  "descendant_custody": "proven_drained",
+  "gpu_quiescence": "unverified",
+  "custody": {
+    "status": "proven_drained",
+    "method": "linux-subreaper-waitid",
+    "containment_verified": true,
+    "launch_id": "59e0d38357f24f7086cf1d41b6416aab",
+    "helper_identity": {
+      "pid": 143370,
+      "birth_ticks": 83192052,
+      "ppid": 143365,
+      "pgrp": 143370,
+      "session": 143370
+    },
+    "root_identity": {
+      "pid": 143371,
+      "birth_ticks": 83192055,
+      "ppid": 143370,
+      "pgrp": 143370,
+      "session": 143370
+    },
+    "boot_id": "4dd3497d-570c-4693-a876-5c26e06ab360",
+    "entries": [
+      {
+        "identity": {
+          "pid": 143371,
+          "birth_ticks": 83192055,
+          "ppid": 143370,
+          "pgrp": 143370,
+          "session": 143370
+        },
+        "role": "root",
+        "signals": [],
+        "reaped": true,
+        "exit_code": 0,
+        "first_observed_at": 8468040.900612393,
+        "reaped_at": 8468224.689610155
+      }
+    ],
+    "errors": [],
+    "reporting_errors": [],
+    "echild": true
+  },
+  "handshake": {
+    "kind": "ready",
+    "protocol": 1,
+    "launch_id": "59e0d38357f24f7086cf1d41b6416aab",
+    "helper_identity": {
+      "pid": 143370,
+      "birth_ticks": 83192052,
+      "ppid": 143365,
+      "pgrp": 143370,
+      "session": 143370
+    },
+    "containment_verified": true,
+    "method": "linux-subreaper-waitid"
+  },
+  "stdout_truncated": false,
+  "stderr_truncated": false
+}

@@ -1,0 +1,15 @@
+{
+  "selector": "cuda::providers::bf16_gemmex::mixed_decode_reuse_tests::mixed_decode_pair_rejections",
+  "binary_sha256": "2802a9721e8c85bdcd11c0c1891b382405e5d3d571c7b2f4f4d9a9bab04d8655",
+  "source_digest": "1d422a2b3a57b076990181b68e194c5931e336c0214bd3295c558234b5017407",
+  "assertions_passed": true,
+  "cache_values": "not exported by model-owned tests; no fabricated numeric snapshot",
+  "gpu_memory": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-cache-frozen-pair-20261010-02/backend-preflight/resources.json",
+    "sha256": "b99f0b503f97c91f1ac5803842dabf1e0f3c6b3c36d0080e83f20437f8e2e1b4"
+  },
+  "log": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-cache-frozen-pair-20261010-02/backend-preflight/test.log",
+    "sha256": "5e93e5c1e8bdc6e33301dfa4227d7a12f1ea9c45ef5a689ccdea6b910ca108e5"
+  }
+}

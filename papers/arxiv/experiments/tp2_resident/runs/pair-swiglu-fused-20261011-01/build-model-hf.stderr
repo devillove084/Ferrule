@@ -1,0 +1,2 @@
+   Compiling ferrule-model v0.2.0 (/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-model)
+error: could not compile `ferrule-model` (test "pair_swiglu_hf_fixtures") due to 1 previous error

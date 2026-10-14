@@ -39,15 +39,17 @@ pub use crate::cuda::operators::proposal::{PROPOSAL_ROWS, ProposalHeadLayout};
 
 // Compatibility provider entry points: new callers use operators::linear.
 // Keep these exports until downstream raw-buffer callers have migrated.
+pub(crate) use bf16_linear::{NumericBf16Gemv, numeric_fp8_bf16_linear};
 pub use bf16_linear::{
-    bf16_gemm, bf16_gemm_can_implement, bf16_gemm_workspace_requirements, numeric_fp8_linear,
+    bf16_gemm, bf16_gemm_can_implement, bf16_gemm_workspace_requirements,
+    numeric_fp8_kernel_available, numeric_fp8_linear,
 };
 
 /// Compatibility paths for operator-owned numeric FP8 contracts.
 /// New callers should import these from `cuda::operators::linear`.
 pub use crate::cuda::operators::linear::{
     CudaNumericFp8Artifact, CudaNumericFp8Workspace, NumericFp8Layout, NumericFp8LinearPlan,
-    NumericFp8Precision, NumericFp8ScaleType,
+    NumericFp8Precision, NumericFp8ScaleType, NumericFp8SelectedKernel,
 };
 pub use ferrule_common::numeric_fp8::ImmutableValidatedNumericFp8Payload;
 
@@ -70,8 +72,6 @@ mod f32_linear;
 /// Legacy type paths; definitions and validation belong to the linear operator.
 pub use crate::cuda::operators::linear::{F32GemmError, F32GemmLayout};
 pub(crate) use f32_linear::f32_gemm_bytes as f32_gemm_bytes_native;
-// Internal compatibility import used by context::standard until that module is split.
-pub(crate) use crate::cuda::operators::linear::f32_gemm_bytes;
 pub use f32_linear::{f32_gemm, f32_gemm_can_implement, f32_gemm_workspace_requirements};
 
 #[cfg(ferrule_cuda_test_oracle)]
@@ -92,6 +92,9 @@ pub enum CutlassKernelId {
     Fp8Projection = 10,
     F32Gemm = 11,
     Bf16Gemm = 12,
+    NumericFp8FusedM1 = 13,
+    NumericFp8W8A16Fused = 14,
+    NumericBf16M1Gemv = 15,
 }
 
 impl CutlassKernelId {
@@ -113,6 +116,9 @@ impl CutlassKernelId {
             Self::Fp8Projection => "fp8-projection",
             Self::F32Gemm => "f32-gemm-tf32x3",
             Self::Bf16Gemm => "bf16-gemm-f32-accum",
+            Self::NumericFp8FusedM1 => "numeric-fused-fp32-m1",
+            Self::NumericFp8W8A16Fused => "numeric-w8a16-fused-bf16",
+            Self::NumericBf16M1Gemv => "numeric-bf16-m1-gemv",
         }
     }
 }
@@ -3249,7 +3255,23 @@ mod tests {
             crate::plan::ExecutionMode::Inference
         ));
         if crate::cuda::architecture::COMPILED_TARGET == "sm_86" {
-            assert_eq!(native.kernel_mask, 0xd86);
+            let expected_kernels = [
+                CutlassKernelId::Bf16Compressor,
+                CutlassKernelId::HyperConnectionProducer,
+                CutlassKernelId::HybridMlaAttention,
+                CutlassKernelId::ProposalHead,
+                CutlassKernelId::F32Gemm,
+                CutlassKernelId::Bf16Gemm,
+                CutlassKernelId::NumericBf16M1Gemv,
+                CutlassKernelId::NumericFp8FusedM1,
+                CutlassKernelId::NumericFp8W8A16Fused,
+            ];
+            let expected_mask = expected_kernels
+                .into_iter()
+                .fold(0, |mask, kernel| mask | kernel.mask());
+            assert_eq!(native.kernel_mask, expected_mask);
+            assert!(native.supports(CutlassKernelId::NumericFp8FusedM1));
+            assert!(native.supports(CutlassKernelId::NumericFp8W8A16Fused));
             assert_eq!(execution.operations.len(), 7);
         }
     }

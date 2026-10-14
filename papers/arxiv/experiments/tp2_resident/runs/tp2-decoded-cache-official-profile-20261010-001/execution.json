@@ -1,0 +1,1183 @@
+{
+  "protocol": "tp2-serving-profile-c1",
+  "purpose": "profiling",
+  "status": "complete_profile",
+  "sole_gpu_owner_granted": true,
+  "owner_note": "User explicit sole GPU owner: final -03 dadf831 S1/S2 and no-trace F1/V1/V2/F2 PASS; independent official Nsight 2025.3.1 eight-lock probe B0/stableB1/ordered GPU0,1 model/drainB0, profile-only FERRULE_LOG rankperf debug, cache3GiB/workspace4096/device22GiB, no foreign signals, stop on numerical/budget/Unknown",
+  "fairmatch": false,
+  "exact_speedup": null,
+  "slots": [
+    {
+      "id": "P1",
+      "status": "complete",
+      "launch_id": "f68eb6831cb84cc29b618df39085f44a",
+      "execution_sha256": "979a97d3cd6dd6ec124e442f83061cdac4d0f3a57ff456f345b63e79964588bd",
+      "supervisor_sha256": "cacd8a5f55124f12ce63485e21cf572fc3f8455e126543aef3febda7a4b5862d",
+      "observation": {
+        "status": "complete",
+        "started_monotonic": 8564733.272853993,
+        "fairmatch": false,
+        "exact_speedup": null,
+        "launch_monotonic": 8564734.060313947,
+        "server_pid": 18869,
+        "server_identity": {
+          "pid": 18869,
+          "birth_ticks": 92861379,
+          "ppid": 18860,
+          "state": "R"
+        },
+        "startup_seconds": 380.65941402874887,
+        "request_gate": {
+          "status": "complete",
+          "phases": [
+            {
+              "stage": "hello2",
+              "gate": {
+                "status": "pass",
+                "engine": "ferrule",
+                "checks": [
+                  {
+                    "index": 0,
+                    "passed": true,
+                    "actual_input_tokens": 1,
+                    "actual_output_tokens": 2
+                  }
+                ],
+                "first_qa_requests": 0,
+                "warmup_requests": 0,
+                "measured_requests": 1,
+                "http_receipt_sha256": "f412e8927665ad03fcdc80970c4a4d2549f9f90b0857545a847fcda978f44487",
+                "coverage": "visible text/usage only; separate pinned numerical acceptance, not arithmetic parity",
+                "fairmatch": false,
+                "exact_speedup": null
+              }
+            },
+            {
+              "stage": "canary8",
+              "gate": {
+                "status": "pass",
+                "engine": "ferrule",
+                "checks": [
+                  {
+                    "index": 0,
+                    "passed": true,
+                    "actual_input_tokens": 5,
+                    "actual_output_tokens": 8
+                  },
+                  {
+                    "index": 1,
+                    "passed": true,
+                    "actual_input_tokens": 5,
+                    "actual_output_tokens": 8
+                  },
+                  {
+                    "index": 2,
+                    "passed": true,
+                    "actual_input_tokens": 3,
+                    "actual_output_tokens": 8
+                  }
+                ],
+                "first_qa_requests": 0,
+                "warmup_requests": 0,
+                "measured_requests": 3,
+                "http_receipt_sha256": "45290ed17872f00b3f8f28021edf4f087eb760db07daa360e2aee6b9978308ea",
+                "coverage": "visible text/usage only; separate pinned numerical acceptance, not arithmetic parity",
+                "fairmatch": false,
+                "exact_speedup": null
+              }
+            },
+            {
+              "stage": "profile",
+              "gate": {
+                "schema": "ferrule.paper.tp2-profile-window.v1",
+                "status": "pass",
+                "requests": [
+                  {
+                    "text": " Tokyo.\nThe capital of Japan is",
+                    "raw_sse_events": [
+                      {
+                        "at": 8565127.795418222,
+                        "event": "",
+                        "data": "{\"id\":\"cmpl-ferrule-5\",\"object\":\"text_completion\",\"created\":1791622184,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\" Tokyo\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}"
+                      },
+                      {
+                        "at": 8565127.981756914,
+                        "event": "",
+                        "data": "{\"id\":\"cmpl-ferrule-5\",\"object\":\"text_completion\",\"created\":1791622184,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\".\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}"
+                      },
+                      {
+                        "at": 8565128.171002971,
+                        "event": "",
+                        "data": "{\"id\":\"cmpl-ferrule-5\",\"object\":\"text_completion\",\"created\":1791622184,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\"\\n\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}"
+                      },
+                      {
+                        "at": 8565128.357310127,
+                        "event": "",
+                        "data": "{\"id\":\"cmpl-ferrule-5\",\"object\":\"text_completion\",\"created\":1791622184,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\"The\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}"
+                      },
+                      {
+                        "at": 8565128.543481221,
+                        "event": "",
+                        "data": "{\"id\":\"cmpl-ferrule-5\",\"object\":\"text_completion\",\"created\":1791622184,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\" capital\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}"
+                      },
+                      {
+                        "at": 8565128.729817767,
+                        "event": "",
+                        "data": "{\"id\":\"cmpl-ferrule-5\",\"object\":\"text_completion\",\"created\":1791622184,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\" of\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}"
+                      },
+                      {
+                        "at": 8565128.916613178,
+                        "event": "",
+                        "data": "{\"id\":\"cmpl-ferrule-5\",\"object\":\"text_completion\",\"created\":1791622184,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\" Japan\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}"
+                      },
+                      {
+                        "at": 8565129.101782164,
+                        "event": "",
+                        "data": "{\"id\":\"cmpl-ferrule-5\",\"object\":\"text_completion\",\"created\":1791622184,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\" is\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}"
+                      },
+                      {
+                        "at": 8565129.10185699,
+                        "event": "",
+                        "data": "{\"id\":\"cmpl-ferrule-5\",\"object\":\"text_completion\",\"created\":1791622184,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\"\",\"index\":0,\"logprobs\":null,\"finish_reason\":\"length\"}]}"
+                      },
+                      {
+                        "at": 8565129.101886814,
+                        "event": "",
+                        "data": "{\"id\":\"cmpl-ferrule-5\",\"object\":\"text_completion\",\"created\":1791622184,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":8,\"total_tokens\":13}}"
+                      },
+                      {
+                        "at": 8565129.101922983,
+                        "event": "",
+                        "data": "[DONE]"
+                      }
+                    ],
+                    "content_event_times": [
+                      8565127.795418222,
+                      8565127.981756914,
+                      8565128.171002971,
+                      8565128.357310127,
+                      8565128.543481221,
+                      8565128.729817767,
+                      8565128.916613178,
+                      8565129.101782164
+                    ],
+                    "content_event_itl_seconds": [
+                      0.18633869290351868,
+                      0.18924605660140514,
+                      0.18630715645849705,
+                      0.18617109395563602,
+                      0.1863365452736616,
+                      0.18679541163146496,
+                      0.18516898527741432
+                    ],
+                    "content_events": 8,
+                    "usage": {
+                      "prompt_tokens": 5,
+                      "completion_tokens": 8,
+                      "total_tokens": 13
+                    },
+                    "actual_output_tokens": 8,
+                    "actual_input_tokens": 5,
+                    "finish_reason": "length",
+                    "finish_at": 8565129.10185699,
+                    "usage_at": 8565129.101886814,
+                    "done_at": 8565129.101922983,
+                    "ttft_seconds": 1.0144558139145374,
+                    "request_e2e_seconds": 2.321058101952076,
+                    "mean_tpot_usage_proxy_seconds": 0.18662342030022824,
+                    "token_itl_seconds": null,
+                    "exact_token_tpot_seconds": null,
+                    "reasoning_observed": false,
+                    "output_token_ids": null,
+                    "partial_token_count": 8,
+                    "label": "warmup",
+                    "status": "success",
+                    "error": null,
+                    "events": [
+                      {
+                        "kind": "start",
+                        "at": 8565126.780975832,
+                        "unix": 1791622183.7444572
+                      },
+                      {
+                        "kind": "headers",
+                        "at": 8565127.1005287,
+                        "status": 200,
+                        "content_type": "text/event-stream"
+                      },
+                      {
+                        "kind": "event",
+                        "data": "{\"id\":\"cmpl-ferrule-5\",\"object\":\"text_completion\",\"created\":1791622184,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\" Tokyo\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}",
+                        "event": "",
+                        "at": 8565127.795418222
+                      },
+                      {
+                        "kind": "event",
+                        "data": "{\"id\":\"cmpl-ferrule-5\",\"object\":\"text_completion\",\"created\":1791622184,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\".\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}",
+                        "event": "",
+                        "at": 8565127.981756914
+                      },
+                      {
+                        "kind": "event",
+                        "data": "{\"id\":\"cmpl-ferrule-5\",\"object\":\"text_completion\",\"created\":1791622184,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\"\\n\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}",
+                        "event": "",
+                        "at": 8565128.171002971
+                      },
+                      {
+                        "kind": "event",
+                        "data": "{\"id\":\"cmpl-ferrule-5\",\"object\":\"text_completion\",\"created\":1791622184,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\"The\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}",
+                        "event": "",
+                        "at": 8565128.357310127
+                      },
+                      {
+                        "kind": "event",
+                        "data": "{\"id\":\"cmpl-ferrule-5\",\"object\":\"text_completion\",\"created\":1791622184,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\" capital\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}",
+                        "event": "",
+                        "at": 8565128.543481221
+                      },
+                      {
+                        "kind": "event",
+                        "data": "{\"id\":\"cmpl-ferrule-5\",\"object\":\"text_completion\",\"created\":1791622184,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\" of\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}",
+                        "event": "",
+                        "at": 8565128.729817767
+                      },
+                      {
+                        "kind": "event",
+                        "data": "{\"id\":\"cmpl-ferrule-5\",\"object\":\"text_completion\",\"created\":1791622184,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\" Japan\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}",
+                        "event": "",
+                        "at": 8565128.916613178
+                      },
+                      {
+                        "kind": "event",
+                        "data": "{\"id\":\"cmpl-ferrule-5\",\"object\":\"text_completion\",\"created\":1791622184,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\" is\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}",
+                        "event": "",
+                        "at": 8565129.101782164
+                      },
+                      {
+                        "kind": "event",
+                        "data": "{\"id\":\"cmpl-ferrule-5\",\"object\":\"text_completion\",\"created\":1791622184,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\"\",\"index\":0,\"logprobs\":null,\"finish_reason\":\"length\"}]}",
+                        "event": "",
+                        "at": 8565129.10185699
+                      },
+                      {
+                        "kind": "event",
+                        "data": "{\"id\":\"cmpl-ferrule-5\",\"object\":\"text_completion\",\"created\":1791622184,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":8,\"total_tokens\":13}}",
+                        "event": "",
+                        "at": 8565129.101886814
+                      },
+                      {
+                        "kind": "event",
+                        "data": "[DONE]",
+                        "event": "",
+                        "at": 8565129.101922983
+                      },
+                      {
+                        "kind": "end",
+                        "at": 8565129.101989655,
+                        "status": "success",
+                        "error": null
+                      }
+                    ],
+                    "start_clock": {
+                      "monotonic_ns": 8565126780963395,
+                      "unix_ns": 1791622183744444954
+                    },
+                    "end_clock": {
+                      "monotonic_ns": 8565129102035811,
+                      "unix_ns": 1791622186065517638
+                    },
+                    "passed": true
+                  },
+                  {
+                    "text": " Tokyo.\nThe capital of Japan is",
+                    "raw_sse_events": [
+                      {
+                        "at": 8565130.611498564,
+                        "event": "",
+                        "data": "{\"id\":\"cmpl-ferrule-6\",\"object\":\"text_completion\",\"created\":1791622186,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\" Tokyo\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}"
+                      },
+                      {
+                        "at": 8565130.800820174,
+                        "event": "",
+                        "data": "{\"id\":\"cmpl-ferrule-6\",\"object\":\"text_completion\",\"created\":1791622186,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\".\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}"
+                      },
+                      {
+                        "at": 8565130.989823665,
+                        "event": "",
+                        "data": "{\"id\":\"cmpl-ferrule-6\",\"object\":\"text_completion\",\"created\":1791622186,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\"\\n\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}"
+                      },
+                      {
+                        "at": 8565131.176870612,
+                        "event": "",
+                        "data": "{\"id\":\"cmpl-ferrule-6\",\"object\":\"text_completion\",\"created\":1791622186,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\"The\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}"
+                      },
+                      {
+                        "at": 8565131.406392151,
+                        "event": "",
+                        "data": "{\"id\":\"cmpl-ferrule-6\",\"object\":\"text_completion\",\"created\":1791622186,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\" capital\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}"
+                      },
+                      {
+                        "at": 8565131.592893263,
+                        "event": "",
+                        "data": "{\"id\":\"cmpl-ferrule-6\",\"object\":\"text_completion\",\"created\":1791622186,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\" of\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}"
+                      },
+                      {
+                        "at": 8565131.79809641,
+                        "event": "",
+                        "data": "{\"id\":\"cmpl-ferrule-6\",\"object\":\"text_completion\",\"created\":1791622186,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\" Japan\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}"
+                      },
+                      {
+                        "at": 8565131.984095626,
+                        "event": "",
+                        "data": "{\"id\":\"cmpl-ferrule-6\",\"object\":\"text_completion\",\"created\":1791622186,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\" is\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}"
+                      },
+                      {
+                        "at": 8565131.984146815,
+                        "event": "",
+                        "data": "{\"id\":\"cmpl-ferrule-6\",\"object\":\"text_completion\",\"created\":1791622186,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\"\",\"index\":0,\"logprobs\":null,\"finish_reason\":\"length\"}]}"
+                      },
+                      {
+                        "at": 8565131.984172815,
+                        "event": "",
+                        "data": "{\"id\":\"cmpl-ferrule-6\",\"object\":\"text_completion\",\"created\":1791622186,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":8,\"total_tokens\":13}}"
+                      },
+                      {
+                        "at": 8565131.984205281,
+                        "event": "",
+                        "data": "[DONE]"
+                      }
+                    ],
+                    "content_event_times": [
+                      8565130.611498564,
+                      8565130.800820174,
+                      8565130.989823665,
+                      8565131.176870612,
+                      8565131.406392151,
+                      8565131.592893263,
+                      8565131.79809641,
+                      8565131.984095626
+                    ],
+                    "content_event_itl_seconds": [
+                      0.18932160921394825,
+                      0.1890034917742014,
+                      0.1870469469577074,
+                      0.22952153906226158,
+                      0.18650111183524132,
+                      0.20520314760506153,
+                      0.18599921464920044
+                    ],
+                    "content_events": 8,
+                    "usage": {
+                      "prompt_tokens": 5,
+                      "completion_tokens": 8,
+                      "total_tokens": 13
+                    },
+                    "actual_output_tokens": 8,
+                    "actual_input_tokens": 5,
+                    "finish_reason": "length",
+                    "finish_at": 8565131.984146815,
+                    "usage_at": 8565131.984172815,
+                    "done_at": 8565131.984205281,
+                    "ttft_seconds": 1.2406138237565756,
+                    "request_e2e_seconds": 2.6134092155843973,
+                    "mean_tpot_usage_proxy_seconds": 0.1960852944425174,
+                    "token_itl_seconds": null,
+                    "exact_token_tpot_seconds": null,
+                    "reasoning_observed": false,
+                    "output_token_ids": null,
+                    "partial_token_count": 8,
+                    "label": "measured",
+                    "status": "success",
+                    "error": null,
+                    "events": [
+                      {
+                        "kind": "start",
+                        "at": 8565129.370898005,
+                        "unix": 1791622186.3343794
+                      },
+                      {
+                        "kind": "headers",
+                        "at": 8565129.395288233,
+                        "status": 200,
+                        "content_type": "text/event-stream"
+                      },
+                      {
+                        "kind": "event",
+                        "data": "{\"id\":\"cmpl-ferrule-6\",\"object\":\"text_completion\",\"created\":1791622186,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\" Tokyo\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}",
+                        "event": "",
+                        "at": 8565130.611498564
+                      },
+                      {
+                        "kind": "event",
+                        "data": "{\"id\":\"cmpl-ferrule-6\",\"object\":\"text_completion\",\"created\":1791622186,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\".\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}",
+                        "event": "",
+                        "at": 8565130.800820174
+                      },
+                      {
+                        "kind": "event",
+                        "data": "{\"id\":\"cmpl-ferrule-6\",\"object\":\"text_completion\",\"created\":1791622186,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\"\\n\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}",
+                        "event": "",
+                        "at": 8565130.989823665
+                      },
+                      {
+                        "kind": "event",
+                        "data": "{\"id\":\"cmpl-ferrule-6\",\"object\":\"text_completion\",\"created\":1791622186,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\"The\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}",
+                        "event": "",
+                        "at": 8565131.176870612
+                      },
+                      {
+                        "kind": "event",
+                        "data": "{\"id\":\"cmpl-ferrule-6\",\"object\":\"text_completion\",\"created\":1791622186,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\" capital\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}",
+                        "event": "",
+                        "at": 8565131.406392151
+                      },
+                      {
+                        "kind": "event",
+                        "data": "{\"id\":\"cmpl-ferrule-6\",\"object\":\"text_completion\",\"created\":1791622186,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\" of\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}",
+                        "event": "",
+                        "at": 8565131.592893263
+                      },
+                      {
+                        "kind": "event",
+                        "data": "{\"id\":\"cmpl-ferrule-6\",\"object\":\"text_completion\",\"created\":1791622186,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\" Japan\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}",
+                        "event": "",
+                        "at": 8565131.79809641
+                      },
+                      {
+                        "kind": "event",
+                        "data": "{\"id\":\"cmpl-ferrule-6\",\"object\":\"text_completion\",\"created\":1791622186,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\" is\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}",
+                        "event": "",
+                        "at": 8565131.984095626
+                      },
+                      {
+                        "kind": "event",
+                        "data": "{\"id\":\"cmpl-ferrule-6\",\"object\":\"text_completion\",\"created\":1791622186,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\"\",\"index\":0,\"logprobs\":null,\"finish_reason\":\"length\"}]}",
+                        "event": "",
+                        "at": 8565131.984146815
+                      },
+                      {
+                        "kind": "event",
+                        "data": "{\"id\":\"cmpl-ferrule-6\",\"object\":\"text_completion\",\"created\":1791622186,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":8,\"total_tokens\":13}}",
+                        "event": "",
+                        "at": 8565131.984172815
+                      },
+                      {
+                        "kind": "event",
+                        "data": "[DONE]",
+                        "event": "",
+                        "at": 8565131.984205281
+                      },
+                      {
+                        "kind": "end",
+                        "at": 8565131.984263582,
+                        "status": "success",
+                        "error": null
+                      }
+                    ],
+                    "start_clock": {
+                      "monotonic_ns": 8565129370885866,
+                      "unix_ns": 1791622186334367213
+                    },
+                    "end_clock": {
+                      "monotonic_ns": 8565131984308429,
+                      "unix_ns": 1791622188947790072
+                    },
+                    "passed": true
+                  }
+                ],
+                "capture": "explicit start-later after readiness/Hello/canaries; warm1 + measured1 QA8",
+                "numerical_capture": false,
+                "benchmark": false,
+                "start": {
+                  "action": "start",
+                  "argv": [
+                    "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/nsight-systems-cli-2025.3.1/opt/nvidia/nsight-systems-cli/2025.3.1/target-linux-x64/nsys",
+                    "start",
+                    "--session=FerruleProfile_tp2-decoded-cache-official-profile-20261010-001"
+                  ],
+                  "returncode": 0,
+                  "stdout": "",
+                  "stderr": "",
+                  "start": {
+                    "monotonic_ns": 8565121612036952,
+                    "unix_ns": 1791622178575518572
+                  },
+                  "end": {
+                    "monotonic_ns": 8565126519751627,
+                    "unix_ns": 1791622183483233408
+                  }
+                },
+                "stop": {
+                  "action": "stop",
+                  "argv": [
+                    "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/nsight-systems-cli-2025.3.1/opt/nvidia/nsight-systems-cli/2025.3.1/target-linux-x64/nsys",
+                    "stop",
+                    "--session=FerruleProfile_tp2-decoded-cache-official-profile-20261010-001"
+                  ],
+                  "returncode": 0,
+                  "stdout": "Generating '/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/nsys-tmp/nsys-report-6869.qdstrm'\n\n[1/1] [0%                          ] nsys.nsys-rep\n[1/1] [0%                          ] nsys.nsys-rep\n[1/1] [=========44%                ] nsys.nsys-rep\n[1/1] [=====================88%    ] nsys.nsys-rep\n[1/1] [===================79%      ] nsys.nsys-rep\n[1/1] [==================77%       ] nsys.nsys-rep\n[1/1] [5%                          ] nsys.nsys-rep\n[1/1] [0%                          ] nsys.nsys-rep\n[1/1] [8%                          ] nsys.nsys-rep\n[1/1] [7%                          ] nsys.nsys-rep\n[1/1] [6%                          ] nsys.nsys-rep\n[1/1] [5%                          ] nsys.nsys-rep\n[1/1] [0%                          ] nsys.nsys-rep\n[1/1] [5%                          ] nsys.nsys-rep\n[1/1] [6%                          ] nsys.nsys-rep\n[1/1] [7%                          ] nsys.nsys-rep\n[1/1] [8%                          ] nsys.nsys-rep\n[1/1] [9%                          ] nsys.nsys-rep\n[1/1] [10%                         ] nsys.nsys-rep\n[1/1] [11%                         ] nsys.nsys-rep\n[1/1] [12%                         ] nsys.nsys-rep\n[1/1] [13%                         ] nsys.nsys-rep\n[1/1] [14%                         ] nsys.nsys-rep\n[1/1] [=15%                        ] nsys.nsys-rep\n[1/1] [=16%                        ] nsys.nsys-rep\n[1/1] [=17%                        ] nsys.nsys-rep\n[1/1] [==18%                       ] nsys.nsys-rep\n[1/1] [==19%                       ] nsys.nsys-rep\n[1/1] [==20%                       ] nsys.nsys-rep\n[1/1] [==21%                       ] nsys.nsys-rep\n[1/1] [===22%                      ] nsys.nsys-rep\n[1/1] [===23%                      ] nsys.nsys-rep\n[1/1] [===24%                      ] nsys.nsys-rep\n[1/1] [====25%                     ] nsys.nsys-rep\n[1/1] [====26%                     ] nsys.nsys-rep\n[1/1] [====27%                     ] nsys.nsys-rep\n[1/1] [====28%                     ] nsys.nsys-rep\n[1/1] [=====29%                    ] nsys.nsys-rep\n[1/1] [=====30%                    ] nsys.nsys-rep\n[1/1] [=====31%                    ] nsys.nsys-rep\n[1/1] [=====32%                    ] nsys.nsys-rep\n[1/1] [======33%                   ] nsys.nsys-rep\n[1/1] [======34%                   ] nsys.nsys-rep\n[1/1] [======35%                   ] nsys.nsys-rep\n[1/1] [=======36%                  ] nsys.nsys-rep\n[1/1] [=======37%                  ] nsys.nsys-rep\n[1/1] [=======38%                  ] nsys.nsys-rep\n[1/1] [=======39%                  ] nsys.nsys-rep\n[1/1] [========40%                 ] nsys.nsys-rep\n[1/1] [========41%                 ] nsys.nsys-rep\n[1/1] [========42%                 ] nsys.nsys-rep\n[1/1] [=========43%                ] nsys.nsys-rep\n[1/1] [=========44%                ] nsys.nsys-rep\n[1/1] [=========45%                ] nsys.nsys-rep\n[1/1] [=========46%                ] nsys.nsys-rep\n[1/1] [==========47%               ] nsys.nsys-rep\n[1/1] [==========48%               ] nsys.nsys-rep\n[1/1] [==========49%               ] nsys.nsys-rep\n[1/1] [===========50%              ] nsys.nsys-rep\n[1/1] [===========51%              ] nsys.nsys-rep\n[1/1] [===========52%              ] nsys.nsys-rep\n[1/1] [===========53%              ] nsys.nsys-rep\n[1/1] [============54%             ] nsys.nsys-rep\n[1/1] [============55%             ] nsys.nsys-rep\n[1/1] [============56%             ] nsys.nsys-rep\n[1/1] [============57%             ] nsys.nsys-rep\n[1/1] [=============58%            ] nsys.nsys-rep\n[1/1] [=============59%            ] nsys.nsys-rep\n[1/1] [=============60%            ] nsys.nsys-rep\n[1/1] [==============61%           ] nsys.nsys-rep\n[1/1] [==============62%           ] nsys.nsys-rep\n[1/1] [==============63%           ] nsys.nsys-rep\n[1/1] [==============64%           ] nsys.nsys-rep\n[1/1] [===============65%          ] nsys.nsys-rep\n[1/1] [===============66%          ] nsys.nsys-rep\n[1/1] [===============67%          ] nsys.nsys-rep\n[1/1] [================68%         ] nsys.nsys-rep\n[1/1] [================69%         ] nsys.nsys-rep\n[1/1] [================70%         ] nsys.nsys-rep\n[1/1] [================71%         ] nsys.nsys-rep\n[1/1] [=================72%        ] nsys.nsys-rep\n[1/1] [=================73%        ] nsys.nsys-rep\n[1/1] [=================74%        ] nsys.nsys-rep\n[1/1] [==================75%       ] nsys.nsys-rep\n[1/1] [==================76%       ] nsys.nsys-rep\n[1/1] [==================77%       ] nsys.nsys-rep\n[1/1] [==================78%       ] nsys.nsys-rep\n[1/1] [===================79%      ] nsys.nsys-rep\n[1/1] [===================80%      ] nsys.nsys-rep\n[1/1] [===================81%      ] nsys.nsys-rep\n[1/1] [===================82%      ] nsys.nsys-rep\n[1/1] [====================83%     ] nsys.nsys-rep\n[1/1] [====================84%     ] nsys.nsys-rep\n[1/1] [====================85%     ] nsys.nsys-rep\n[1/1] [=====================86%    ] nsys.nsys-rep\n[1/1] [=====================87%    ] nsys.nsys-rep\n[1/1] [=====================88%    ] nsys.nsys-rep\n[1/1] [========================100%] nsys.nsys-repGenerated:\n\t/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/nsight/nsys.nsys-rep\n",
+                  "stderr": "",
+                  "start": {
+                    "monotonic_ns": 8565132010005625,
+                    "unix_ns": 1791622188973487078
+                  },
+                  "end": {
+                    "monotonic_ns": 8565158060278807,
+                    "unix_ns": 1791622215023760479
+                  }
+                }
+              }
+            }
+          ],
+          "same_server": true
+        },
+        "resources": {
+          "status": "observed_within_targets",
+          "errors": [],
+          "memory_components": {
+            "sample_count": 172,
+            "complete_host_samples": 172,
+            "gpu_samples": 172,
+            "gpu_peak_bytes": {
+              "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 21147680768,
+              "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 21147680768
+            },
+            "tree_pss_peak_bytes": 64405316608,
+            "tree_rss_peak_bytes": 64454123520,
+            "tree_anonymous_peak_bytes": 64134717440,
+            "tree_pss_anon_peak_bytes": null,
+            "tree_pss_file_peak_bytes": null,
+            "tree_private_dirty_peak_bytes": 64178749440,
+            "component_sample_counts": {
+              "anonymous_bytes": 172,
+              "pss_anon_bytes": 0,
+              "pss_file_bytes": 0,
+              "private_dirty_bytes": 172
+            },
+            "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+            "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+          },
+          "phase_memory": {
+            "bounds": {
+              "ready_monotonic": 8565114.719727976,
+              "first_sent_monotonic": 8565115.090250826,
+              "first_terminal_monotonic": 8565115.65424694
+            },
+            "phases": {
+              "startup": {
+                "sample_count": 158,
+                "complete_host_samples": 158,
+                "gpu_samples": 158,
+                "gpu_peak_bytes": {
+                  "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 20745027584,
+                  "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 20745027584
+                },
+                "tree_pss_peak_bytes": 64049570816,
+                "tree_rss_peak_bytes": 64087134208,
+                "tree_anonymous_peak_bytes": 63771992064,
+                "tree_pss_anon_peak_bytes": null,
+                "tree_pss_file_peak_bytes": null,
+                "tree_private_dirty_peak_bytes": 63814582272,
+                "component_sample_counts": {
+                  "anonymous_bytes": 158,
+                  "pss_anon_bytes": 0,
+                  "pss_file_bytes": 0,
+                  "private_dirty_bytes": 158
+                },
+                "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+                "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+              },
+              "ready_before_first": {
+                "sample_count": 0,
+                "complete_host_samples": 0,
+                "gpu_samples": 0,
+                "gpu_peak_bytes": {
+                  "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": null,
+                  "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": null
+                },
+                "tree_pss_peak_bytes": null,
+                "tree_rss_peak_bytes": null,
+                "tree_anonymous_peak_bytes": null,
+                "tree_pss_anon_peak_bytes": null,
+                "tree_pss_file_peak_bytes": null,
+                "tree_private_dirty_peak_bytes": null,
+                "component_sample_counts": {
+                  "anonymous_bytes": 0,
+                  "pss_anon_bytes": 0,
+                  "pss_file_bytes": 0,
+                  "private_dirty_bytes": 0
+                },
+                "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+                "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+              },
+              "first_request": {
+                "sample_count": 0,
+                "complete_host_samples": 0,
+                "gpu_samples": 0,
+                "gpu_peak_bytes": {
+                  "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": null,
+                  "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": null
+                },
+                "tree_pss_peak_bytes": null,
+                "tree_rss_peak_bytes": null,
+                "tree_anonymous_peak_bytes": null,
+                "tree_pss_anon_peak_bytes": null,
+                "tree_pss_file_peak_bytes": null,
+                "tree_private_dirty_peak_bytes": null,
+                "component_sample_counts": {
+                  "anonymous_bytes": 0,
+                  "pss_anon_bytes": 0,
+                  "pss_file_bytes": 0,
+                  "private_dirty_bytes": 0
+                },
+                "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+                "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+              },
+              "after_first_request": {
+                "sample_count": 14,
+                "complete_host_samples": 14,
+                "gpu_samples": 14,
+                "gpu_peak_bytes": {
+                  "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 21147680768,
+                  "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 21147680768
+                },
+                "tree_pss_peak_bytes": 64405316608,
+                "tree_rss_peak_bytes": 64454123520,
+                "tree_anonymous_peak_bytes": 64134717440,
+                "tree_pss_anon_peak_bytes": null,
+                "tree_pss_file_peak_bytes": null,
+                "tree_private_dirty_peak_bytes": 64178749440,
+                "component_sample_counts": {
+                  "anonymous_bytes": 14,
+                  "pss_anon_bytes": 0,
+                  "pss_file_bytes": 0,
+                  "private_dirty_bytes": 14
+                },
+                "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+                "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+              }
+            },
+            "unassigned_or_boundary_samples": 0,
+            "steady_state_claim": false,
+            "policy": "after first request includes later canaries/warmup/requests; not a steady-state proof"
+          },
+          "phase_metadata_error": null,
+          "gpu_peak_bytes": {
+            "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 21147680768,
+            "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 21147680768
+          },
+          "tree_pss_peak_bytes": 64405316608,
+          "tree_rss_peak_bytes": 64454123520,
+          "complete_host_samples": 172,
+          "incomplete_host_samples": 0,
+          "gpu_samples": 172,
+          "missing_gpu_attempts": 0,
+          "baseline": {
+            "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": {
+              "index": 0,
+              "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+              "total_bytes": 25769803776,
+              "gpu_bytes": 4194304,
+              "utilization": 0
+            },
+            "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": {
+              "index": 1,
+              "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+              "total_bytes": 25769803776,
+              "gpu_bytes": 4194304,
+              "utilization": 0
+            },
+            "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6": {
+              "index": 2,
+              "uuid": "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6",
+              "total_bytes": 25769803776,
+              "gpu_bytes": 1048576,
+              "utilization": 0
+            },
+            "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011": {
+              "index": 3,
+              "uuid": "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011",
+              "total_bytes": 25769803776,
+              "gpu_bytes": 1048576,
+              "utilization": 0
+            },
+            "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86": {
+              "index": 4,
+              "uuid": "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86",
+              "total_bytes": 25769803776,
+              "gpu_bytes": 1048576,
+              "utilization": 0
+            },
+            "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685": {
+              "index": 5,
+              "uuid": "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685",
+              "total_bytes": 25769803776,
+              "gpu_bytes": 1048576,
+              "utilization": 0
+            },
+            "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d": {
+              "index": 6,
+              "uuid": "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d",
+              "total_bytes": 25769803776,
+              "gpu_bytes": 1048576,
+              "utilization": 0
+            },
+            "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f": {
+              "index": 7,
+              "uuid": "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f",
+              "total_bytes": 25769803776,
+              "gpu_bytes": 1048576,
+              "utilization": 0
+            }
+          },
+          "delta_high_water_bytes": {
+            "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 21143486464,
+            "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 21143486464,
+            "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6": 0,
+            "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011": 0,
+            "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86": 0,
+            "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685": 0,
+            "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d": 0,
+            "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f": 0
+          },
+          "final_process_diagnostics": [
+            {
+              "identity": {
+                "pid": 18869,
+                "birth_ticks": 92861379,
+                "ppid": 18860,
+                "state": "S"
+              },
+              "command": "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/nsight-systems-cli-2025.3.1/opt/nvidia/nsight-systems-cli/2025.3.1/target-linux-x64/nsys profile --session-new=FerruleProfile_tp2-decoded-cache-official-profile-20261010-001 --start-later=true --trace=cuda,nvtx,osrt,cublas --gpu-metrics-devices=none --gpuctxsw=false --sample=none --cpuctxsw=none --trace-fork-before-exec=false --kill=none --wait=primary --stop-on-exit=true --duration=240 --cuda-flush-interval=0 --force-overwrite=false --output=/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/nsight/nsys /home/admin/wxw403883/anaconda3/bin/python3.12 -S -B /home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/instrumentation_capture.py --directory /home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session --manifest-sha256 cbe1158c4c363e90add8aa0220dde6bc1c09cf09979561655f3746bec32130c9 -- /home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/admission/decoded-cache-20261010-03/staged/ferrule serve /mnt/nas1/hf/Qwen3.5-35B-A3B-FP8 --backend cuda --engine pipeline --model-profile qwen35-mixed-bf16 --tensor-parallel 2 --pipeline-parallel 1 --expert-parallel 1 --rank-backend thread --devices 0,1 --rank-restarts 0 --kv-execution-policy resident --ctx-size 128 --max-active-sequences 2 --max-batch-tokens 8 --prefill-chunk-size 8 --cuda-device-budget-mb 22528 --kv-cache-mb 16 --max-tensor-mb 2048 --cuda-workspace-mb 4096 --host 127.0.0.1 --port 18367 --served-model-name qwen35-ferrule-tp2-resident-paper ",
+              "environment": {
+                "HOME": "/root",
+                "PATH": "/home/admin/wxw403883/anaconda3/envs/tao/bin:/root/.cargo/bin:/usr/bin:/bin",
+                "PYTHONDONTWRITEBYTECODE": "1",
+                "CUDA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+                "NVIDIA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+                "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
+                "HF_HUB_OFFLINE": "1",
+                "TRANSFORMERS_OFFLINE": "1",
+                "CUDA_HOME": "/home/admin/wxw403883/anaconda3/envs/tao",
+                "NVCC": "/home/admin/wxw403883/anaconda3/envs/tao/bin/nvcc",
+                "LD_LIBRARY_PATH": "/home/admin/wxw403883/anaconda3/envs/tao/lib:/usr/lib64",
+                "CUBLAS_WORKSPACE_CONFIG": ":0:0",
+                "FERRULE_LOG": "info,ferrule_request=debug,ferrule_performance=debug",
+                "FERRULE_LOG_FORMAT": "json",
+                "TMPDIR": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/nsys-tmp"
+              },
+              "libraries": [
+                "/usr/lib64/libcuda.so.575.57.08",
+                "/usr/lib64/libnvidia-cfg.so.575.57.08",
+                "/usr/lib64/libnvidia-ml.so.575.57.08"
+              ]
+            },
+            {
+              "identity": {
+                "pid": 18888,
+                "birth_ticks": 92861688,
+                "ppid": 18869,
+                "state": "S"
+              },
+              "command": "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/nsight-systems-cli-2025.3.1/opt/nvidia/nsight-systems-cli/2025.3.1/target-linux-x64/nsys-launcher /home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/nsys-tmp/3605-3bb6-1f1e-4154 81 ",
+              "environment": {
+                "HOME": "/root",
+                "PATH": "/home/admin/wxw403883/anaconda3/envs/tao/bin:/root/.cargo/bin:/usr/bin:/bin",
+                "PYTHONDONTWRITEBYTECODE": "1",
+                "CUDA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+                "NVIDIA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+                "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
+                "HF_HUB_OFFLINE": "1",
+                "TRANSFORMERS_OFFLINE": "1",
+                "CUDA_HOME": "/home/admin/wxw403883/anaconda3/envs/tao",
+                "NVCC": "/home/admin/wxw403883/anaconda3/envs/tao/bin/nvcc",
+                "LD_LIBRARY_PATH": "/home/admin/wxw403883/anaconda3/envs/tao/lib:/usr/lib64",
+                "CUBLAS_WORKSPACE_CONFIG": ":0:0",
+                "FERRULE_LOG": "info,ferrule_request=debug,ferrule_performance=debug",
+                "FERRULE_LOG_FORMAT": "json",
+                "TMPDIR": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/nsys-tmp"
+              },
+              "libraries": []
+            },
+            {
+              "identity": {
+                "pid": 18889,
+                "birth_ticks": 92861688,
+                "ppid": 18888,
+                "state": "S"
+              },
+              "command": "/home/admin/wxw403883/anaconda3/bin/python3.12 -S -B /home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/instrumentation_capture.py --directory /home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session --manifest-sha256 cbe1158c4c363e90add8aa0220dde6bc1c09cf09979561655f3746bec32130c9 -- /home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/admission/decoded-cache-20261010-03/staged/ferrule serve /mnt/nas1/hf/Qwen3.5-35B-A3B-FP8 --backend cuda --engine pipeline --model-profile qwen35-mixed-bf16 --tensor-parallel 2 --pipeline-parallel 1 --expert-parallel 1 --rank-backend thread --devices 0,1 --rank-restarts 0 --kv-execution-policy resident --ctx-size 128 --max-active-sequences 2 --max-batch-tokens 8 --prefill-chunk-size 8 --cuda-device-budget-mb 22528 --kv-cache-mb 16 --max-tensor-mb 2048 --cuda-workspace-mb 4096 --host 127.0.0.1 --port 18367 --served-model-name qwen35-ferrule-tp2-resident-paper ",
+              "environment": {
+                "HOME": "/root",
+                "PATH": "/home/admin/wxw403883/anaconda3/envs/tao/bin:/root/.cargo/bin:/usr/bin:/bin",
+                "PYTHONDONTWRITEBYTECODE": "1",
+                "CUDA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+                "NVIDIA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+                "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
+                "HF_HUB_OFFLINE": "1",
+                "TRANSFORMERS_OFFLINE": "1",
+                "CUDA_HOME": "/home/admin/wxw403883/anaconda3/envs/tao",
+                "NVCC": "/home/admin/wxw403883/anaconda3/envs/tao/bin/nvcc",
+                "LD_LIBRARY_PATH": "/home/admin/wxw403883/anaconda3/envs/tao/lib:/usr/lib64",
+                "CUBLAS_WORKSPACE_CONFIG": ":0:0",
+                "FERRULE_LOG": "info,ferrule_request=debug,ferrule_performance=debug",
+                "FERRULE_LOG_FORMAT": "json",
+                "TMPDIR": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/nsys-tmp"
+              },
+              "libraries": []
+            },
+            {
+              "identity": {
+                "pid": 18890,
+                "birth_ticks": 92861688,
+                "ppid": 18888,
+                "state": "S"
+              },
+              "command": "nsys-tee 3 5 6 7 ",
+              "environment": {
+                "HOME": "/root",
+                "PATH": "/home/admin/wxw403883/anaconda3/envs/tao/bin:/root/.cargo/bin:/usr/bin:/bin",
+                "PYTHONDONTWRITEBYTECODE": "1",
+                "CUDA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+                "NVIDIA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+                "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
+                "HF_HUB_OFFLINE": "1",
+                "TRANSFORMERS_OFFLINE": "1",
+                "CUDA_HOME": "/home/admin/wxw403883/anaconda3/envs/tao",
+                "NVCC": "/home/admin/wxw403883/anaconda3/envs/tao/bin/nvcc",
+                "LD_LIBRARY_PATH": "/home/admin/wxw403883/anaconda3/envs/tao/lib:/usr/lib64",
+                "CUBLAS_WORKSPACE_CONFIG": ":0:0",
+                "FERRULE_LOG": "info,ferrule_request=debug,ferrule_performance=debug",
+                "FERRULE_LOG_FORMAT": "json",
+                "TMPDIR": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/nsys-tmp"
+              },
+              "libraries": []
+            },
+            {
+              "identity": {
+                "pid": 18910,
+                "birth_ticks": 92862196,
+                "ppid": 18889,
+                "state": "S"
+              },
+              "command": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/admission/decoded-cache-20261010-03/staged/ferrule serve /mnt/nas1/hf/Qwen3.5-35B-A3B-FP8 --backend cuda --engine pipeline --model-profile qwen35-mixed-bf16 --tensor-parallel 2 --pipeline-parallel 1 --expert-parallel 1 --rank-backend thread --devices 0,1 --rank-restarts 0 --kv-execution-policy resident --ctx-size 128 --max-active-sequences 2 --max-batch-tokens 8 --prefill-chunk-size 8 --cuda-device-budget-mb 22528 --kv-cache-mb 16 --max-tensor-mb 2048 --cuda-workspace-mb 4096 --host 127.0.0.1 --port 18367 --served-model-name qwen35-ferrule-tp2-resident-paper ",
+              "environment": {
+                "HOME": "/root",
+                "PATH": "/home/admin/wxw403883/anaconda3/envs/tao/bin:/root/.cargo/bin:/usr/bin:/bin",
+                "PYTHONDONTWRITEBYTECODE": "1",
+                "CUDA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+                "NVIDIA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+                "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
+                "HF_HUB_OFFLINE": "1",
+                "TRANSFORMERS_OFFLINE": "1",
+                "CUDA_HOME": "/home/admin/wxw403883/anaconda3/envs/tao",
+                "NVCC": "/home/admin/wxw403883/anaconda3/envs/tao/bin/nvcc",
+                "LD_LIBRARY_PATH": "/home/admin/wxw403883/anaconda3/envs/tao/lib:/usr/lib64",
+                "CUBLAS_WORKSPACE_CONFIG": ":0:0",
+                "FERRULE_LOG": "info,ferrule_request=debug,ferrule_performance=debug",
+                "FERRULE_LOG_FORMAT": "json",
+                "TMPDIR": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/nsys-tmp"
+              },
+              "libraries": [
+                "/home/admin/wxw403883/anaconda3/envs/tao/lib/libcudart.so.12.4.99",
+                "/usr/lib64/libcuda.so.575.57.08"
+              ]
+            }
+          ],
+          "owned_gpu_attribution": "unknown",
+          "owned_process_gpu_peak_bytes": null,
+          "exact_peaks": false,
+          "hard_memory_partition": false,
+          "continuous_coverage": false
+        },
+        "shutdown": {
+          "timed_out": false,
+          "returncode": 0,
+          "status": "collector_exited_descendants_require_custodian",
+          "seconds": 7.3499677535146475
+        },
+        "wall_seconds": 432.15484302304685
+      },
+      "runtime": {
+        "evidence": {
+          "profile": [
+            "[model plan] qwen3.5-35b-a3b-numeric-bf16 Pipeline: backend Cuda -> Cuda, profile=cuda-qwen35-mixed-bf16-tp2-local-shards-serial; numeric arithmetic=not applicable; ModelSupport { required_feature: Some(\"cuda\"), cuda_feature_enabled: true, static_constraints: \"Mixed PP1 TP2 EP1 CUDA threads; two distinct devices; resident local expert shards; BF16 activation/KV/conv, F32 SSM/accumulation; serial greedy; context<=128 batch<=8 sessions<=2; decoded BF16 cache=3 GiB per owner (fixed pins + bounded routed backing and segment slack); workspace includes cache; <=22 GiB/card; no offload/process/restart; public quality gate required\", static_supported: true, buildability: CatalogValidated, admission: OwnerLiveAdmissionRequired, storage: NumericFp8E4m3fnBf16Scales, arithmetic: Bf16Compatibility }; topology=ModelTopologyPlacement { rank_backend: Some(Thread), logical: LogicalTopology { pipeline_parallel: 1, tensor_parallel: 2, expert_parallel: 1, data_parallel: 1, sequence_parallel: 1, context_parallel: 1 }, physical: PhysicalPlacement { devices: Some([0, 1]), root_device: None, expert_devices: None, source_identity: None } }; scheduler requested=ResidentSchedulerConfig { prefill_chunk_size: 8, max_active_sequences: 2, max_decode_batch: 2, decode_cohort_target: 4, decode_cohort_max_deferrals: 3, max_batch_tokens: 8, prefill_reserve_tokens: 1, allow_mixed_batches: true, prefix_cache_capacity_pages: 0 }, effective=ResidentSchedulerConfig { prefill_chunk_size: 8, max_active_sequences: 2, max_decode_batch: 1, decode_cohort_target: 1, decode_cohort_max_deferrals: 0, max_batch_tokens: 8, prefill_reserve_tokens: 1, allow_mixed_batches: false, prefix_cache_capacity_pages: 0 }; context=128; adjustments=[max_layers: descriptor default -> 40 (use the descriptor layer count); scheduler_config.max_decode_batch: 2 -> 1 (generic pipeline is serial; batch <= context and prefill <= batch; no mixed batches/cohort deferral/native proposals); scheduler_config.allow_mixed_batches: true -> false (generic pipeline is serial; batch <= context and prefill <= batch; no mixed batches/cohort deferral/native proposals); scheduler_config.decode_cohort_target: 4 -> 1 (generic pipeline is serial; batch <= context and prefill <= batch; no mixed batches/cohort deferral/native proposals); scheduler_config.decode_cohort_max_deferrals: 3 -> 0 (generic pipeline is serial; batch <= context and prefill <= batch; no mixed batches/cohort deferral/native proposals)]; metadata only, owner live admission required (source identity, free memory, allocator/headroom and cleanup are not guaranteed); KV logical pages L and physical transaction slots P remain separately owner-planned",
+            "loading qwen35-ferrule-tp2-resident-paper with qwen3.5-35b-a3b-numeric-bf16 on cuda-qwen35-mixed-bf16-tp2-local-shards-serial (cuda backend) in the dedicated model worker...",
+            "{\"timestamp\":\"2026-10-10T08:45:25.308773Z\",\"level\":\"INFO\",\"fields\":{\"message\":\"resident model build entering owner-local admission\",\"report\":\"qwen3.5-35b-a3b-numeric-bf16 Pipeline: backend Cuda -> Cuda, profile=cuda-qwen35-mixed-bf16-tp2-local-shards-serial; numeric arithmetic=not applicable; ModelSupport { required_feature: Some(\\\"cuda\\\"), cuda_feature_enabled: true, static_constraints: \\\"Mixed PP1 TP2 EP1 CUDA threads; two distinct devices; resident local expert shards; BF16 activation/KV/conv, F32 SSM/accumulation; serial greedy; context<=128 batch<=8 sessions<=2; decoded BF16 cache=3 GiB per owner (fixed pins + bounded routed backing and segment slack); workspace includes cache; <=22 GiB/card; no offload/process/restart; public quality gate required\\\", static_supported: true, buildability: CatalogValidated, admission: OwnerLiveAdmissionRequired, storage: NumericFp8E4m3fnBf16Scales, arithmetic: Bf16Compatibility }; topology=ModelTopologyPlacement { rank_backend: Some(Thread), logical: LogicalTopology { pipeline_parallel: 1, tensor_parallel: 2, expert_parallel: 1, data_parallel: 1, sequence_parallel: 1, context_parallel: 1 }, physical: PhysicalPlacement { devices: Some([0, 1]), root_device: None, expert_devices: None, source_identity: None } }; scheduler requested=ResidentSchedulerConfig { prefill_chunk_size: 8, max_active_sequences: 2, max_decode_batch: 2, decode_cohort_target: 4, decode_cohort_max_deferrals: 3, max_batch_tokens: 8, prefill_reserve_tokens: 1, allow_mixed_batches: true, prefix_cache_capacity_pages: 0 }, effective=ResidentSchedulerConfig { prefill_chunk_size: 8, max_active_sequences: 2, max_decode_batch: 1, decode_cohort_target: 1, decode_cohort_max_deferrals: 0, max_batch_tokens: 8, prefill_reserve_tokens: 1, allow_mixed_batches: false, prefix_cache_capacity_pages: 0 }; context=128; adjustments=[max_layers: descriptor default -> 40 (use the descriptor layer count); scheduler_config.max_decode_batch: 2 -> 1 (generic pipeline is serial; batch <= context and prefill <= batch; no mixed batches/cohort deferral/native proposals); scheduler_config.allow_mixed_batches: true -> false (generic pipeline is serial; batch <= context and prefill <= batch; no mixed batches/cohort deferral/native proposals); scheduler_config.decode_cohort_target: 4 -> 1 (generic pipeline is serial; batch <= context and prefill <= batch; no mixed batches/cohort deferral/native proposals); scheduler_config.decode_cohort_max_deferrals: 3 -> 0 (generic pipeline is serial; batch <= context and prefill <= batch; no mixed batches/cohort deferral/native proposals)]; metadata only, owner live admission required (source identity, free memory, allocator/headroom and cleanup are not guaranteed); KV logical pages L and physical transaction slots P remain separately owner-planned\"},\"target\":\"ferrule_composition::model_factory\"}"
+          ],
+          "budget": [
+            "[Mixed TP2 device budget] cache_enabled=true decoded_cache_and_full_ledger=[MixedTp2CacheRequirements { device: 0, cache_enabled: true, cache_capacity_grants: 3221225472, pinned_grants: 1405091840, routed_working_set_grants: 805306368, required_workspace_bytes: 3875939840, workspace_ceiling_bytes: 4294967296, required_device_bytes: 23041273856, device_ceiling_bytes: 23622320128 }, MixedTp2CacheRequirements { device: 1, cache_enabled: true, cache_capacity_grants: 3221225472, pinned_grants: 1405091840, routed_working_set_grants: 805306368, required_workspace_bytes: 3875939840, workspace_ceiling_bytes: 4294967296, required_device_bytes: 23041273856, device_ceiling_bytes: 23622320128 }]; ceiling_bytes_per_card=23622320128; resident FP8 local expert shards plus bounded decoded BF16 cache, no host offload; BF16 activation/KV/conv, F32 SSM/accumulation; source-bound claims and live admission remain required; not a VRAM reservation"
+          ],
+          "resident": [
+            "[model plan] qwen3.5-35b-a3b-numeric-bf16 Pipeline: backend Cuda -> Cuda, profile=cuda-qwen35-mixed-bf16-tp2-local-shards-serial; numeric arithmetic=not applicable; ModelSupport { required_feature: Some(\"cuda\"), cuda_feature_enabled: true, static_constraints: \"Mixed PP1 TP2 EP1 CUDA threads; two distinct devices; resident local expert shards; BF16 activation/KV/conv, F32 SSM/accumulation; serial greedy; context<=128 batch<=8 sessions<=2; decoded BF16 cache=3 GiB per owner (fixed pins + bounded routed backing and segment slack); workspace includes cache; <=22 GiB/card; no offload/process/restart; public quality gate required\", static_supported: true, buildability: CatalogValidated, admission: OwnerLiveAdmissionRequired, storage: NumericFp8E4m3fnBf16Scales, arithmetic: Bf16Compatibility }; topology=ModelTopologyPlacement { rank_backend: Some(Thread), logical: LogicalTopology { pipeline_parallel: 1, tensor_parallel: 2, expert_parallel: 1, data_parallel: 1, sequence_parallel: 1, context_parallel: 1 }, physical: PhysicalPlacement { devices: Some([0, 1]), root_device: None, expert_devices: None, source_identity: None } }; scheduler requested=ResidentSchedulerConfig { prefill_chunk_size: 8, max_active_sequences: 2, max_decode_batch: 2, decode_cohort_target: 4, decode_cohort_max_deferrals: 3, max_batch_tokens: 8, prefill_reserve_tokens: 1, allow_mixed_batches: true, prefix_cache_capacity_pages: 0 }, effective=ResidentSchedulerConfig { prefill_chunk_size: 8, max_active_sequences: 2, max_decode_batch: 1, decode_cohort_target: 1, decode_cohort_max_deferrals: 0, max_batch_tokens: 8, prefill_reserve_tokens: 1, allow_mixed_batches: false, prefix_cache_capacity_pages: 0 }; context=128; adjustments=[max_layers: descriptor default -> 40 (use the descriptor layer count); scheduler_config.max_decode_batch: 2 -> 1 (generic pipeline is serial; batch <= context and prefill <= batch; no mixed batches/cohort deferral/native proposals); scheduler_config.allow_mixed_batches: true -> false (generic pipeline is serial; batch <= context and prefill <= batch; no mixed batches/cohort deferral/native proposals); scheduler_config.decode_cohort_target: 4 -> 1 (generic pipeline is serial; batch <= context and prefill <= batch; no mixed batches/cohort deferral/native proposals); scheduler_config.decode_cohort_max_deferrals: 3 -> 0 (generic pipeline is serial; batch <= context and prefill <= batch; no mixed batches/cohort deferral/native proposals)]; metadata only, owner live admission required (source identity, free memory, allocator/headroom and cleanup are not guaranteed); KV logical pages L and physical transaction slots P remain separately owner-planned",
+            "{\"timestamp\":\"2026-10-10T08:45:25.308773Z\",\"level\":\"INFO\",\"fields\":{\"message\":\"resident model build entering owner-local admission\",\"report\":\"qwen3.5-35b-a3b-numeric-bf16 Pipeline: backend Cuda -> Cuda, profile=cuda-qwen35-mixed-bf16-tp2-local-shards-serial; numeric arithmetic=not applicable; ModelSupport { required_feature: Some(\\\"cuda\\\"), cuda_feature_enabled: true, static_constraints: \\\"Mixed PP1 TP2 EP1 CUDA threads; two distinct devices; resident local expert shards; BF16 activation/KV/conv, F32 SSM/accumulation; serial greedy; context<=128 batch<=8 sessions<=2; decoded BF16 cache=3 GiB per owner (fixed pins + bounded routed backing and segment slack); workspace includes cache; <=22 GiB/card; no offload/process/restart; public quality gate required\\\", static_supported: true, buildability: CatalogValidated, admission: OwnerLiveAdmissionRequired, storage: NumericFp8E4m3fnBf16Scales, arithmetic: Bf16Compatibility }; topology=ModelTopologyPlacement { rank_backend: Some(Thread), logical: LogicalTopology { pipeline_parallel: 1, tensor_parallel: 2, expert_parallel: 1, data_parallel: 1, sequence_parallel: 1, context_parallel: 1 }, physical: PhysicalPlacement { devices: Some([0, 1]), root_device: None, expert_devices: None, source_identity: None } }; scheduler requested=ResidentSchedulerConfig { prefill_chunk_size: 8, max_active_sequences: 2, max_decode_batch: 2, decode_cohort_target: 4, decode_cohort_max_deferrals: 3, max_batch_tokens: 8, prefill_reserve_tokens: 1, allow_mixed_batches: true, prefix_cache_capacity_pages: 0 }, effective=ResidentSchedulerConfig { prefill_chunk_size: 8, max_active_sequences: 2, max_decode_batch: 1, decode_cohort_target: 1, decode_cohort_max_deferrals: 0, max_batch_tokens: 8, prefill_reserve_tokens: 1, allow_mixed_batches: false, prefix_cache_capacity_pages: 0 }; context=128; adjustments=[max_layers: descriptor default -> 40 (use the descriptor layer count); scheduler_config.max_decode_batch: 2 -> 1 (generic pipeline is serial; batch <= context and prefill <= batch; no mixed batches/cohort deferral/native proposals); scheduler_config.allow_mixed_batches: true -> false (generic pipeline is serial; batch <= context and prefill <= batch; no mixed batches/cohort deferral/native proposals); scheduler_config.decode_cohort_target: 4 -> 1 (generic pipeline is serial; batch <= context and prefill <= batch; no mixed batches/cohort deferral/native proposals); scheduler_config.decode_cohort_max_deferrals: 3 -> 0 (generic pipeline is serial; batch <= context and prefill <= batch; no mixed batches/cohort deferral/native proposals)]; metadata only, owner live admission required (source identity, free memory, allocator/headroom and cleanup are not guaranteed); KV logical pages L and physical transaction slots P remain separately owner-planned\"},\"target\":\"ferrule_composition::model_factory\"}"
+          ],
+          "precision": [
+            "[model plan] qwen3.5-35b-a3b-numeric-bf16 Pipeline: backend Cuda -> Cuda, profile=cuda-qwen35-mixed-bf16-tp2-local-shards-serial; numeric arithmetic=not applicable; ModelSupport { required_feature: Some(\"cuda\"), cuda_feature_enabled: true, static_constraints: \"Mixed PP1 TP2 EP1 CUDA threads; two distinct devices; resident local expert shards; BF16 activation/KV/conv, F32 SSM/accumulation; serial greedy; context<=128 batch<=8 sessions<=2; decoded BF16 cache=3 GiB per owner (fixed pins + bounded routed backing and segment slack); workspace includes cache; <=22 GiB/card; no offload/process/restart; public quality gate required\", static_supported: true, buildability: CatalogValidated, admission: OwnerLiveAdmissionRequired, storage: NumericFp8E4m3fnBf16Scales, arithmetic: Bf16Compatibility }; topology=ModelTopologyPlacement { rank_backend: Some(Thread), logical: LogicalTopology { pipeline_parallel: 1, tensor_parallel: 2, expert_parallel: 1, data_parallel: 1, sequence_parallel: 1, context_parallel: 1 }, physical: PhysicalPlacement { devices: Some([0, 1]), root_device: None, expert_devices: None, source_identity: None } }; scheduler requested=ResidentSchedulerConfig { prefill_chunk_size: 8, max_active_sequences: 2, max_decode_batch: 2, decode_cohort_target: 4, decode_cohort_max_deferrals: 3, max_batch_tokens: 8, prefill_reserve_tokens: 1, allow_mixed_batches: true, prefix_cache_capacity_pages: 0 }, effective=ResidentSchedulerConfig { prefill_chunk_size: 8, max_active_sequences: 2, max_decode_batch: 1, decode_cohort_target: 1, decode_cohort_max_deferrals: 0, max_batch_tokens: 8, prefill_reserve_tokens: 1, allow_mixed_batches: false, prefix_cache_capacity_pages: 0 }; context=128; adjustments=[max_layers: descriptor default -> 40 (use the descriptor layer count); scheduler_config.max_decode_batch: 2 -> 1 (generic pipeline is serial; batch <= context and prefill <= batch; no mixed batches/cohort deferral/native proposals); scheduler_config.allow_mixed_batches: true -> false (generic pipeline is serial; batch <= context and prefill <= batch; no mixed batches/cohort deferral/native proposals); scheduler_config.decode_cohort_target: 4 -> 1 (generic pipeline is serial; batch <= context and prefill <= batch; no mixed batches/cohort deferral/native proposals); scheduler_config.decode_cohort_max_deferrals: 3 -> 0 (generic pipeline is serial; batch <= context and prefill <= batch; no mixed batches/cohort deferral/native proposals)]; metadata only, owner live admission required (source identity, free memory, allocator/headroom and cleanup are not guaranteed); KV logical pages L and physical transaction slots P remain separately owner-planned",
+            "[Mixed TP2 device budget] cache_enabled=true decoded_cache_and_full_ledger=[MixedTp2CacheRequirements { device: 0, cache_enabled: true, cache_capacity_grants: 3221225472, pinned_grants: 1405091840, routed_working_set_grants: 805306368, required_workspace_bytes: 3875939840, workspace_ceiling_bytes: 4294967296, required_device_bytes: 23041273856, device_ceiling_bytes: 23622320128 }, MixedTp2CacheRequirements { device: 1, cache_enabled: true, cache_capacity_grants: 3221225472, pinned_grants: 1405091840, routed_working_set_grants: 805306368, required_workspace_bytes: 3875939840, workspace_ceiling_bytes: 4294967296, required_device_bytes: 23041273856, device_ceiling_bytes: 23622320128 }]; ceiling_bytes_per_card=23622320128; resident FP8 local expert shards plus bounded decoded BF16 cache, no host offload; BF16 activation/KV/conv, F32 SSM/accumulation; source-bound claims and live admission remain required; not a VRAM reservation",
+            "{\"timestamp\":\"2026-10-10T08:45:25.308773Z\",\"level\":\"INFO\",\"fields\":{\"message\":\"resident model build entering owner-local admission\",\"report\":\"qwen3.5-35b-a3b-numeric-bf16 Pipeline: backend Cuda -> Cuda, profile=cuda-qwen35-mixed-bf16-tp2-local-shards-serial; numeric arithmetic=not applicable; ModelSupport { required_feature: Some(\\\"cuda\\\"), cuda_feature_enabled: true, static_constraints: \\\"Mixed PP1 TP2 EP1 CUDA threads; two distinct devices; resident local expert shards; BF16 activation/KV/conv, F32 SSM/accumulation; serial greedy; context<=128 batch<=8 sessions<=2; decoded BF16 cache=3 GiB per owner (fixed pins + bounded routed backing and segment slack); workspace includes cache; <=22 GiB/card; no offload/process/restart; public quality gate required\\\", static_supported: true, buildability: CatalogValidated, admission: OwnerLiveAdmissionRequired, storage: NumericFp8E4m3fnBf16Scales, arithmetic: Bf16Compatibility }; topology=ModelTopologyPlacement { rank_backend: Some(Thread), logical: LogicalTopology { pipeline_parallel: 1, tensor_parallel: 2, expert_parallel: 1, data_parallel: 1, sequence_parallel: 1, context_parallel: 1 }, physical: PhysicalPlacement { devices: Some([0, 1]), root_device: None, expert_devices: None, source_identity: None } }; scheduler requested=ResidentSchedulerConfig { prefill_chunk_size: 8, max_active_sequences: 2, max_decode_batch: 2, decode_cohort_target: 4, decode_cohort_max_deferrals: 3, max_batch_tokens: 8, prefill_reserve_tokens: 1, allow_mixed_batches: true, prefix_cache_capacity_pages: 0 }, effective=ResidentSchedulerConfig { prefill_chunk_size: 8, max_active_sequences: 2, max_decode_batch: 1, decode_cohort_target: 1, decode_cohort_max_deferrals: 0, max_batch_tokens: 8, prefill_reserve_tokens: 1, allow_mixed_batches: false, prefix_cache_capacity_pages: 0 }; context=128; adjustments=[max_layers: descriptor default -> 40 (use the descriptor layer count); scheduler_config.max_decode_batch: 2 -> 1 (generic pipeline is serial; batch <= context and prefill <= batch; no mixed batches/cohort deferral/native proposals); scheduler_config.allow_mixed_batches: true -> false (generic pipeline is serial; batch <= context and prefill <= batch; no mixed batches/cohort deferral/native proposals); scheduler_config.decode_cohort_target: 4 -> 1 (generic pipeline is serial; batch <= context and prefill <= batch; no mixed batches/cohort deferral/native proposals); scheduler_config.decode_cohort_max_deferrals: 3 -> 0 (generic pipeline is serial; batch <= context and prefill <= batch; no mixed batches/cohort deferral/native proposals)]; metadata only, owner live admission required (source identity, free memory, allocator/headroom and cleanup are not guaranteed); KV logical pages L and physical transaction slots P remain separately owner-planned\"},\"target\":\"ferrule_composition::model_factory\"}"
+          ]
+        },
+        "missing": [],
+        "contradictions": [],
+        "transport": "raw log retained; Ferrule local thread collectives are not asserted to be NCCL",
+        "exact_arithmetic_match": false,
+        "decoded_cache_snapshots": [
+          {
+            "owner": 0,
+            "stage": "ready",
+            "snapshot": {
+              "image_generation": 1,
+              "phase": "idle",
+              "published": true,
+              "quarantined": false,
+              "capacity_grants": 3221225472,
+              "pin_target_grants": 1405091840,
+              "pinned_grants": 1405091840,
+              "unallocated_pin_grants": 0,
+              "active_routed_grants": 0,
+              "pooled_grants": 0,
+              "pending_reserved_grants": 0,
+              "pending_allocation_count": 0,
+              "pending_lease_count": 0,
+              "borrowed_key_count": 0,
+              "segment_slack_bytes": 1195376640,
+              "pending_segment_slack_bytes": 0,
+              "physical_current_bytes": 2600468480,
+              "physical_peak_bytes": 2666528768,
+              "driver_allocation_growth_bytes": 1409286144,
+              "unknown_reserved_bytes": 0,
+              "backing_reuses": 0,
+              "native_fallbacks": 0,
+              "evictions": 0,
+              "rank_performance_enabled": true,
+              "rank_performance_active": false,
+              "profiled_activity": null
+            },
+            "profiled_hit_fraction": null,
+            "activity_scope": "Cumulative rankperf-enabled invocations only; not a measured-request or GPU-completion counter"
+          },
+          {
+            "owner": 0,
+            "stage": "shutdown",
+            "snapshot": {
+              "image_generation": 1,
+              "phase": "idle",
+              "published": true,
+              "quarantined": false,
+              "capacity_grants": 3221225472,
+              "pin_target_grants": 1405091840,
+              "pinned_grants": 1405091840,
+              "unallocated_pin_grants": 0,
+              "active_routed_grants": 294649856,
+              "pooled_grants": 0,
+              "pending_reserved_grants": 0,
+              "pending_allocation_count": 0,
+              "pending_lease_count": 0,
+              "borrowed_key_count": 0,
+              "segment_slack_bytes": 1456472064,
+              "pending_segment_slack_bytes": 0,
+              "physical_current_bytes": 3156213760,
+              "physical_peak_bytes": 3221225472,
+              "driver_allocation_growth_bytes": 1677721600,
+              "unknown_reserved_bytes": 0,
+              "backing_reuses": 37379,
+              "native_fallbacks": 200,
+              "evictions": 37379,
+              "rank_performance_enabled": true,
+              "rank_performance_active": false,
+              "profiled_activity": {
+                "profiled_invocations": 48,
+                "hits": 12000,
+                "misses": 37766,
+                "decoded_bytes": 59191066624,
+                "evictions": 37379
+              }
+            },
+            "profiled_hit_fraction": 0.24112848129244865,
+            "activity_scope": "Cumulative rankperf-enabled invocations only; not a measured-request or GPU-completion counter"
+          },
+          {
+            "owner": 1,
+            "stage": "ready",
+            "snapshot": {
+              "image_generation": 2,
+              "phase": "idle",
+              "published": true,
+              "quarantined": false,
+              "capacity_grants": 3221225472,
+              "pin_target_grants": 1405091840,
+              "pinned_grants": 1405091840,
+              "unallocated_pin_grants": 0,
+              "active_routed_grants": 0,
+              "pooled_grants": 0,
+              "pending_reserved_grants": 0,
+              "pending_allocation_count": 0,
+              "pending_lease_count": 0,
+              "borrowed_key_count": 0,
+              "segment_slack_bytes": 1195376640,
+              "pending_segment_slack_bytes": 0,
+              "physical_current_bytes": 2600468480,
+              "physical_peak_bytes": 2666528768,
+              "driver_allocation_growth_bytes": 1409286144,
+              "unknown_reserved_bytes": 0,
+              "backing_reuses": 0,
+              "native_fallbacks": 0,
+              "evictions": 0,
+              "rank_performance_enabled": true,
+              "rank_performance_active": false,
+              "profiled_activity": null
+            },
+            "profiled_hit_fraction": null,
+            "activity_scope": "Cumulative rankperf-enabled invocations only; not a measured-request or GPU-completion counter"
+          },
+          {
+            "owner": 1,
+            "stage": "shutdown",
+            "snapshot": {
+              "image_generation": 2,
+              "phase": "idle",
+              "published": true,
+              "quarantined": false,
+              "capacity_grants": 3221225472,
+              "pin_target_grants": 1405091840,
+              "pinned_grants": 1405091840,
+              "unallocated_pin_grants": 0,
+              "active_routed_grants": 294649856,
+              "pooled_grants": 0,
+              "pending_reserved_grants": 0,
+              "pending_allocation_count": 0,
+              "pending_lease_count": 0,
+              "borrowed_key_count": 0,
+              "segment_slack_bytes": 1456472064,
+              "pending_segment_slack_bytes": 0,
+              "physical_current_bytes": 3156213760,
+              "physical_peak_bytes": 3221225472,
+              "driver_allocation_growth_bytes": 1677721600,
+              "unknown_reserved_bytes": 0,
+              "backing_reuses": 37379,
+              "native_fallbacks": 200,
+              "evictions": 37379,
+              "rank_performance_enabled": true,
+              "rank_performance_active": false,
+              "profiled_activity": {
+                "profiled_invocations": 48,
+                "hits": 12000,
+                "misses": 37766,
+                "decoded_bytes": 59191066624,
+                "evictions": 37379
+              }
+            },
+            "profiled_hit_fraction": 0.24112848129244865,
+            "activity_scope": "Cumulative rankperf-enabled invocations only; not a measured-request or GPU-completion counter"
+          }
+        ],
+        "observation_scope": "cache-only host ledger; profile activity excludes unprofiled/preparation work"
+      },
+      "fairmatch": false,
+      "exact_speedup": null
+    }
+  ],
+  "profiling": {
+    "schema": "ferrule.paper.tp2-profile.v1",
+    "status": "captured_requires_offline_coverage_audit",
+    "protocol": "tp2-serving-profile-c1",
+    "release_binary_sha256": "dadf831eb2af477108efd402171c40f7544a2600d14b8e5e7ab8a456d2625e5a",
+    "capture_scope": "two QA8 diagnostic requests; startup excluded; no full numerical capture",
+    "summary_commands": {
+      "cuda_api_sum": {
+        "returncode": 0,
+        "output": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/nsight/cuda_api_sum.txt"
+      },
+      "cuda_gpu_kern_sum": {
+        "returncode": 0,
+        "output": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/nsight/cuda_gpu_kern_sum.txt"
+      },
+      "cuda_gpu_mem_time_sum": {
+        "returncode": 0,
+        "output": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/nsight/cuda_gpu_mem_time_sum.txt"
+      },
+      "cuda_gpu_mem_size_sum": {
+        "returncode": 0,
+        "output": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/nsight/cuda_gpu_mem_size_sum.txt"
+      },
+      "osrt_sum": {
+        "returncode": 0,
+        "output": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/nsight/osrt_sum.txt"
+      },
+      "nvtx_sum": {
+        "returncode": 0,
+        "output": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/nsight/nvtx_sum.txt"
+      }
+    },
+    "artifact_pins": {
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/P1-assessment.json": "531fcd89df9e4bdb0f7027bede5cc1b51f63e55a95687bc2247011c374244af6",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/P1-dispatch.json": "3b658c7acfe7c6fce50de006e275bab236431160064bc98a28c3f87194bbce2e",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/authorized-probe-grant.json": "fd9c8867b6871a2cc1394d30187568fc23303e452e9ca3a5a43d981c9c67d1e7",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/launch.json": "c7ae9447d10e84ff8319491b2311cac2f3124d424fabcb75f7b60c675dccd714",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/prepared.json": "ecbbac7ed6da73de4fec1d79658baf6490085136cc8c9639cbfb1f5ce585a69d",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/probe-grant.json": "fd9c8867b6871a2cc1394d30187568fc23303e452e9ca3a5a43d981c9c67d1e7",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/probe-initial-idle.json": "0944f6bcee5da5a163ea33b68aa741037bd44038c18895fd5607d5346721d2fe",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/canaries.json": "854238c428d68832a2806538f300bac32f53a0c8d47ff2e85bcfba5e5ace6fea",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/execution.json": "979a97d3cd6dd6ec124e442f83061cdac4d0f3a57ff456f345b63e79964588bd",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/lock-release.json": "39ae688106ea715f00f8c7694b2a52e2819bb6f666208c5b1c0cb4e273e3df79",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/prepared.json": "2d46d7ce8efb906f31a9cec96b5aa6cb6c4dc0962a8745b2c5a206254754e8b6",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/probe-lock-release.json": "aff4f68d7b05f833122c36031f0e48aebe3c19cdf8e0cceb05f9b27350a7313e",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/after.json": "d67ec3e1f1bafbbcfcaf452d32d3d36a210b8ca7b82cd38a00f282ca11627dbd",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/baseline.json": "3c2bd642756c89eefb40a77c82d66cda42ca4d6a3584092b8d2f1620932ab368",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/before.json": "c7e8134f22966b069719b6e018f20d9a850c243a18e9a33fadf020b2bccba290",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/canaries.json": "854238c428d68832a2806538f300bac32f53a0c8d47ff2e85bcfba5e5ace6fea",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/canary8/gate.json": "6f5ad26e48900a1899ff82529fb221cca8c89040130b7aed6df5348d6306ea5a",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/canary8/http.json": "45290ed17872f00b3f8f28021edf4f087eb760db07daa360e2aee6b9978308ea",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/canary8/metadata.json": "5d172f3d8a46fbfd5acc13f4dd9798951642678dcce660ca5d7bade52c8229e7",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/canary8/pair-metadata.json": "172a398082b1b67ee093e4a5b2dcabe433cb3c54ea34ab2012471ad44649f37c",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/canary8/prompts.json": "42db4c2cc82a5130a3272a91e13738b309b8bfdaf3f796425e9a021d77f73af6",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/case.json": "d289a275338e9c6abf789320c43fef035d618b331b1bbfc0122acff0c03fa539",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/collector-after-model.json": "700ad58bf90714c59fcd580b0d6c8c99aef6f85eaa1c4faf804593e520b6548b",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/collector-baseline.json": "cfb8519e557461da5c05f46bfbc9503f5c072ab9129ae680b1d93a4b2f36d5f3",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/collector-manifest.json": "cbe1158c4c363e90add8aa0220dde6bc1c09cf09979561655f3746bec32130c9",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/collector-model-ended.json": "d4eb96c71c26f4d3bf230ca1df88d2b053a8775009ec7d6afe75931a8cc75797",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/collector-release.json": "20dc71d545b740ea8e7df76212368d9d1b86d4fd43d76a0f49eb49f11090df00",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/collector-samples.jsonl": "c1e29950f268547673cf89325bd2afd59b38232fa6013f4a838b576732b09a29",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/collector-target-ready.json": "9904e0de06758c2d50ddef2f57a1f1120b5e3fb7192c7f2c4aee48216eafed64",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/custody.json": "64a68b9ba6491371d8a7e52aa26f22560488b146ef75abfab673b2c48efecca4",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/hello2/gate.json": "4a75327825c4d24abea309144ee38c8087c6dbb2dda298c108293f8e69b91181",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/hello2/http.json": "f412e8927665ad03fcdc80970c4a4d2549f9f90b0857545a847fcda978f44487",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/hello2/metadata.json": "5d172f3d8a46fbfd5acc13f4dd9798951642678dcce660ca5d7bade52c8229e7",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/hello2/pair-metadata.json": "172a398082b1b67ee093e4a5b2dcabe433cb3c54ea34ab2012471ad44649f37c",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/model-release.json": "1148689ae8ea594551bce2307ee43134d1a607b8d263dd5a4e61df06a3af8403",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/nsight/cuda_api_sum.txt": "0a899fa5d915ebd39833318cbc9f529d4c1bff8c90a4a8d874b4509bead4c37c",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/nsight/cuda_gpu_kern_sum.txt": "6f3bc6ffa990d9ed68d5db2ff5a0a60b1e1c7098338f713cff80e37b27bf0fbb",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/nsight/cuda_gpu_mem_size_sum.txt": "e69b38d90ae90089363ef75550b84f3464a16847878cbd5494528937bc044c3b",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/nsight/cuda_gpu_mem_time_sum.txt": "d235ec237060273b11a678db61cb3b0fb4a24185158e4c139942289333f48a60",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/nsight/nsys.nsys-rep": "4365b51ae20906c66af7ee339d74bc9cc98df814ce0f7557d60429b312115dbc",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/nsight/nsys.sqlite": "f5b0ff1b721b0023ac0bb8598eba940d0513e12c27f7a2769fc407ca357c871f",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/nsight/nvtx_sum.txt": "62bc94ad88188af7e7efe59eb35e69d22f2f860b20c4833d91ba1d076e12e0d3",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/nsight/osrt_sum.txt": "fc81d85e649b433e7a2658319097cc3139aa6f6fdaf98075807c8be2e2bb6d71",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/nsys-tmp/nvidia/nsight_systems/NSys-SessionManager.lock-4026532468-2025.3.1": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/nsys-tmp/nvidia/nsight_systems/telemetry-0/telemetry.lock": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/prelaunch.json": "07e5a73e827b0263eeca41bb7541c2c5f27218c0b9b753be07e8c8c93a67184b",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/probe-locks.json": "8ca1a49822cc6a4c50f9fae300b7243130e73441eeb3b939ab2cc63de1d6a567",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/profile/gate.json": "ca1de2895eb7e1ba59894758594d2bf5d4ef1603bf64aad079881de161953ccb",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/profile/measured.json": "33c0d1ebd016cc998abe279cd9ad938d4a1778d46bf20e388f19df1ddb236838",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/profile/metadata.json": "5d172f3d8a46fbfd5acc13f4dd9798951642678dcce660ca5d7bade52c8229e7",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/profile/model-identity.json": "1c29b0b666dad77619da28dbdaa89a558630ba97b9c56c2aaa4fe9637b41b3a0",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/profile/profile-window.json": "ca1de2895eb7e1ba59894758594d2bf5d4ef1603bf64aad079881de161953ccb",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/profile/start.json": "7c3c231a1859fe70af518ad03b7e4406feb072fabff4116bb1a6282e210bd789",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/profile/stop.json": "fa09f20bb6cfbdfd447bdb8f04092adb744761a6e27835a11e630c381643f651",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/profile/warmup.json": "16cf2066a4122e92747b9bc98d8de7ad008b56a51862644c6dea5a0784af81e6",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/profile-server.json": "fb1653846471fcaad84d402bc2ce9854a6ad8368e1d0a5064b272d1e6d1b95b2",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/profile-stop": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/requests.json": "19513434effd4df359599e9c29695094200b48ad3157647b170b15136528e8b4",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/samples.jsonl": "fdd8f2eef7edca33f4ce0130be9ea70ca490f28a58d4c4a8c3f22eda0e35b614",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/server.log": "7acf2b698524bb4d848217ff7d10cc3741d6e7aa7ffdef588834797355ca4668",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/supervisor.json": "cacd8a5f55124f12ce63485e21cf572fc3f8455e126543aef3febda7a4b5862d",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/worker-launch.json": "bb837173279b0cd1ae4b68d0a5a563e803de57fdbcdbf8459965df53fb5c284b",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/topology.json": "ef2c30a474eb84b709762d9df80e6c853451640671cd142f0a4cc1f44009a50b"
+    },
+    "fairmatch": false,
+    "exact_speedup": null,
+    "benchmark": false,
+    "caveat": "Synchronization durations include GPU work; sums across threads/devices overlap"
+  }
+}

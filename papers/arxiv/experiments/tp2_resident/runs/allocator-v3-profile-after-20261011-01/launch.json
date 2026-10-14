@@ -1,0 +1,15 @@
+{
+  "protocol": "tp2-serving-profile-c1",
+  "purpose": "profiling",
+  "status": "incomplete",
+  "sole_gpu_owner_granted": true,
+  "owner_note": "Renewed user sole GPU owner authorization 2026-10-11: existing BEFORE9ef/AFTER7e1c prepared only, exactly one official short profile each, collector-first all8 locks B0/B1/model0,1/drainB0; fixed caps, no benchmark, no foreign kill, no automatic retry after cancel",
+  "fairmatch": false,
+  "exact_speedup": null,
+  "slots": [
+    {
+      "id": "P1",
+      "status": "not_run"
+    }
+  ]
+}

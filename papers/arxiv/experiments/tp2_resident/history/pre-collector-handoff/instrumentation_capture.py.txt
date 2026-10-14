@@ -1,0 +1,107 @@
+#!/usr/bin/env python3
+"""Collector-first direct child for the existing sealed supervisor.
+
+This is not a supervisor: the authenticated paper worker owns this process and
+its descendants. It freezes B1 before starting the pinned model child, then
+waits for the existing profile-stop marker and only terminates its own child.
+"""
+import argparse
+import json
+import os
+from pathlib import Path
+import signal
+import subprocess
+import time
+
+import instrumentation_scope as scope
+
+
+def identity(pid):
+    fields = Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()
+    return dict(pid=pid, birth_ticks=int(fields[19]), ppid=int(fields[1]))
+
+
+def query(inventory):
+    import csv
+    values=[]
+    for field in ('gpu=index,uuid,memory.total,memory.used,utilization.gpu',
+                  'compute-apps=pid,gpu_uuid,used_gpu_memory'):
+        result=subprocess.run(['/usr/bin/nvidia-smi','--query-'+field,
+            '--format=csv,noheader,nounits'],capture_output=True,text=True,
+            check=True,timeout=3)
+        values.append(list(csv.reader(result.stdout.splitlines())))
+    rows=[]
+    for row in values[0]:
+        if len(row)!=5:raise ValueError('Malformed collector GPU row')
+        index,uuid,total,used,util=[value.strip() for value in row]
+        rows.append(dict(index=int(index),uuid=uuid,total_bytes=int(total)*(1<<20),
+                        gpu_bytes=int(used)*(1<<20),utilization=int(util)))
+    apps=[]
+    for row in values[1]:
+        if len(row)!=3:raise ValueError('Malformed collector compute row')
+        pid,uuid,used=[value.strip() for value in row]
+        apps.append(dict(pid=int(pid),uuid=uuid,used_bytes=int(used)*(1<<20)))
+    return dict(monotonic=time.monotonic(),devices=rows,apps=apps)
+
+
+def atomic_json(path,value):
+    tmp=path.with_suffix(path.suffix+'.tmp')
+    tmp.write_text(json.dumps(value,indent=2,sort_keys=True)+'\n')
+    tmp.replace(path)
+
+
+def main(argv=None):
+    parser=argparse.ArgumentParser()
+    parser.add_argument('--directory',required=True,type=Path)
+    parser.add_argument('--inventory-json',required=True,type=Path)
+    parser.add_argument('--selected-json',required=True,type=Path)
+    parser.add_argument('--grant-json',required=True,type=Path)
+    parser.add_argument('--baseline-json',required=True,type=Path)
+    parser.add_argument('--stable-samples',type=int,default=3)
+    parser.add_argument('--stable-seconds',type=float,default=4)
+    parser.add_argument('--deadline-seconds',type=float,default=60)
+    parser.add_argument('command',nargs=argparse.REMAINDER)
+    args=parser.parse_args(argv)
+    if not args.command or args.command[0] != '--' or len(args.command)<2:
+        parser.error('requires -- followed by pinned model command')
+    directory=args.directory.resolve();directory.mkdir(parents=True,exist_ok=True)
+    inventory=json.loads(args.inventory_json.read_text())
+    selected=json.loads(args.selected_json.read_text())
+    grant=json.loads(args.grant_json.read_text())
+    state=scope.BaselineScope(inventory,selected,grant)
+    state.raw_idle(json.loads(args.baseline_json.read_text()))
+    root=identity(os.getpid());launch_id=grant.get('collector_launch_id','collector-'+str(root['pid']))
+    state.collector_started(dict(root,launch_id=launch_id),time.monotonic())
+    started=time.monotonic();samples=[]
+    while len(samples)<args.stable_samples:
+        if time.monotonic()-started > args.deadline_seconds:
+            raise RuntimeError('collector baseline deadline exceeded')
+        samples.append(query(inventory))
+        if len(samples)<args.stable_samples:time.sleep(max(0,args.stable_seconds/(args.stable_samples-1)))
+    frozen=state.freeze(samples,dict(root,launch_id=launch_id))
+    atomic_json(directory/'collector-baseline.json',dict(schema='ferrule.paper.collector-baseline.v1',
+        collector_identity=dict(root,launch_id=launch_id),samples=samples,**frozen))
+    atomic_json(directory/'collector-ready.json',dict(status='frozen',collector_identity=dict(root,launch_id=launch_id),
+        model_visible_uuids=selected,at=time.monotonic()))
+    child=None;stop=[]
+    for sig in (signal.SIGTERM,signal.SIGINT):
+        signal.signal(sig,lambda number,frame:stop.append(number))
+    try:
+        child=subprocess.Popen(args.command[1:],stdin=subprocess.DEVNULL)
+        atomic_json(directory/'model-child.json',dict(pid=child.pid,identity=identity(child.pid),started=time.monotonic()))
+        while child.poll() is None and not stop and not (directory/'profile-stop').exists():
+            time.sleep(.1)
+        if child.poll() is None:
+            child.terminate();child.wait(timeout=45)
+        atomic_json(directory/'model-child-exit.json',dict(returncode=child.returncode,stopped=bool(stop),
+            marker=(directory/'profile-stop').exists(),ended=time.monotonic()))
+        return 0 if child.returncode == 0 else child.returncode or 1
+    finally:
+        if child is not None and child.poll() is None:
+            child.terminate()
+            try:child.wait(timeout=45)
+            except subprocess.TimeoutExpired:pass
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

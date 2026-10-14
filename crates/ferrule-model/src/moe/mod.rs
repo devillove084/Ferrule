@@ -15,34 +15,39 @@
 //! - **Residency** (`residency`): device-budget planning for routed experts.
 //! - **Telemetry** (`telemetry`): expert activation counters.
 
+pub mod catalog;
 #[cfg(feature = "cuda")]
 pub(crate) mod cuda_materialization;
 pub mod executor;
 pub mod handle;
 #[cfg(target_os = "linux")]
 pub(crate) mod io_uring_reader;
-#[cfg(feature = "cuda")]
-mod manager;
 pub mod prediction;
 #[cfg(any(feature = "cuda", test))]
 pub(crate) mod residency;
+#[cfg(feature = "cuda")]
+mod resource_manager;
 pub mod routed;
 pub mod routing;
 pub mod streaming;
 pub mod telemetry;
 
-pub use executor::{CpuReferenceExpertExecutor, ExpertExecutor, reference_linear};
+pub use executor::ExpertExecutor;
+#[cfg(any(test, feature = "cpu-reference"))]
+pub use executor::{CpuReferenceExpertExecutor, reference_linear};
 pub use handle::{
     CpuExpertHandleStore, ExpertComputeHandle, ExpertHandleStore, ResidentExpertHandle,
     ResourceResidentFormat,
 };
-#[cfg(feature = "cuda")]
-pub use manager::{RoutedMoePrefetchLayer, RoutedMoeResidencyConfig, RoutedMoeResourceManager};
 pub use prediction::{
     ExpertAccessEvent, ExpertAccessPhase, ExpertBatchAccessEvent, ExpertBatchExpertEvent,
     ExpertCacheAction, ExpertHotsetPredictor, ExpertPredictContext, ExpertPrediction,
     ExpertPredictionReason, ExpertPredictionStats, ExpertResidency, ExpertResidencyOutcome,
     ScoreBasedExpertPredictor, ScoreBasedExpertPredictorConfig,
+};
+#[cfg(feature = "cuda")]
+pub use resource_manager::{
+    RoutedMoePrefetchLayer, RoutedMoeResidencyConfig, RoutedMoeResourceManager,
 };
 #[cfg(feature = "cuda")]
 pub use routed::{

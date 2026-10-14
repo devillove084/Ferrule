@@ -1,0 +1,108 @@
+{
+  "argv": [
+    "/home/admin/luhuanbing.lhb/Ferrule/target/validation/allocator-batch-v3/cargo-cuda124/debug/build/ferrule-backend/bbdc9d166cdea35b/out/allocator_retirement_gpu-bbdc9d166cdea35b",
+    "tests::gpu_n8_two_streams_batch_and_reuse",
+    "--exact",
+    "--nocapture",
+    "--test-threads=1",
+    "--ignored"
+  ],
+  "environment": {
+    "PATH": "/home/admin/wxw403883/anaconda3/envs/tao/bin:/root/.cargo/bin:/usr/bin:/bin",
+    "CUDA_HOME": "/home/admin/wxw403883/anaconda3/envs/tao",
+    "NVCC": "/home/admin/wxw403883/anaconda3/envs/tao/bin/nvcc",
+    "LD_LIBRARY_PATH": "/home/admin/wxw403883/anaconda3/envs/tao/lib:/usr/lib64",
+    "FERRULE_CUDA_ARCH": "sm_86",
+    "FERRULE_CUTLASS_DIR": "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/cutlass",
+    "RUSTFLAGS": "-L native=/home/admin/luhuanbing.lhb/Ferrule/target/validation/qwen35-35b-current/toolchain/link -L native=/home/admin/luhuanbing.lhb/Ferrule/target/validation/bf16-mixed-qkv-20261005/link -L native=/home/admin/wxw403883/anaconda3/envs/tao/lib",
+    "HOME": "/root",
+    "CUDA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+    "NVIDIA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+    "CUBLAS_WORKSPACE_CONFIG": ":0:0",
+    "CARGO_BUILD_JOBS": "2",
+    "CARGO_PROFILE_RELEASE_OPT_LEVEL": "3",
+    "CARGO_PROFILE_RELEASE_LTO": "fat",
+    "CARGO_PROFILE_RELEASE_CODEGEN_UNITS": "1",
+    "CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS": "false",
+    "PYTHONDONTWRITEBYTECODE": "1",
+    "RUSTUP_TOOLCHAIN": "nightly-2026-08-01",
+    "CC": "/usr/bin/gcc",
+    "CXX": "/usr/bin/g++",
+    "CUDAHOSTCXX": "/usr/bin/g++",
+    "CARGO_HOME": "/root/.cargo",
+    "RUSTUP_HOME": "/root/.rustup",
+    "RUSTUP_AUTO_INSTALL": "0",
+    "RUSTC": "/root/.rustup/toolchains/nightly-2026-08-01-x86_64-unknown-linux-gnu/bin/rustc",
+    "RUSTDOC": "/root/.rustup/toolchains/nightly-2026-08-01-x86_64-unknown-linux-gnu/bin/rustdoc",
+    "FERRULE_CUDA_TEST_ORACLE": "0",
+    "CARGO_TARGET_DIR": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/allocator-batch-v3/cargo-cuda124"
+  },
+  "supervisor": {
+    "returncode": 0,
+    "timed_out": false,
+    "wall_seconds": 0.6991174072027206,
+    "stdout": "\nrunning 1 test\ntest tests::gpu_n8_two_streams_batch_and_reuse ... DEVICE NVIDIA GeForce RTX 3090\nDRIVER n8_last_drop_before_seal creates=0 records=0 queries=0 event_syncs=0 context_syncs=0 stream_syncs=2 frees=0 primary_releases=0\nMETRICS n8_sealed_pending CudaAllocatorMetrics { allocation_requests: 8, allocation_failures: 0, reuse_allocations: 7, small_allocations: 8, large_allocations: 0, huge_allocations: 0, requested_bytes: 2048, granted_bytes: 2048, live_requested_bytes: 0, live_granted_bytes: 0, peak_live_requested_bytes: 2048, peak_live_granted_bytes: 2048, reserved_bytes: 67108864, peak_reserved_bytes: 67108864, free_bytes: 67106816, largest_free_extent: 67106816, pending_retirement_blocks: 8, pending_retirement_bytes: 2048, capture_retirement_bytes: 0, retired_blocks: 8, retirement_batches: 1, retirement_created_fences: 2, pending_retirement_batches: 1, pending_unfenced_bytes: 0, shutdown_quiescent: false, shutdown_retained: false, internal_fragmentation: 0.0, external_fragmentation: 0.0, segments: 1, driver_allocations: 1, driver_allocation_bytes: 67108864, driver_frees: 0, driver_free_bytes: 0 }\nDRIVER n8_sealed_pending creates=2 records=2 queries=1 event_syncs=0 context_syncs=0 stream_syncs=2 frees=0 primary_releases=0\nMETRICS n8_after_poll CudaAllocatorMetrics { allocation_requests: 9, allocation_failures: 0, reuse_allocations: 8, small_allocations: 9, large_allocations: 0, huge_allocations: 0, requested_bytes: 2304, granted_bytes: 2304, live_requested_bytes: 256, live_granted_bytes: 256, peak_live_requested_bytes: 2048, peak_live_granted_bytes: 2048, reserved_bytes: 67108864, peak_reserved_bytes: 67108864, free_bytes: 67108608, largest_free_extent: 67106560, pending_retirement_blocks: 0, pending_retirement_bytes: 0, capture_retirement_bytes: 0, retired_blocks: 8, retirement_batches: 1, retirement_created_fences: 2, pending_retirement_batches: 0, pending_unfenced_bytes: 0, shutdown_quiescent: false, shutdown_retained: false, internal_fragmentation: 0.0, external_fragmentation: 3.0517694540765916e-5, segments: 1, driver_allocations: 1, driver_allocation_bytes: 67108864, driver_frees: 0, driver_free_bytes: 0 }\nDRIVER n8_after_poll creates=2 records=2 queries=4 event_syncs=0 context_syncs=0 stream_syncs=3 frees=0 primary_releases=0\nMETRICS n8_reused CudaAllocatorMetrics { allocation_requests: 10, allocation_failures: 0, reuse_allocations: 9, small_allocations: 10, large_allocations: 0, huge_allocations: 0, requested_bytes: 2560, granted_bytes: 2560, live_requested_bytes: 512, live_granted_bytes: 512, peak_live_requested_bytes: 2048, peak_live_granted_bytes: 2048, reserved_bytes: 67108864, peak_reserved_bytes: 67108864, free_bytes: 67108352, largest_free_extent: 67106560, pending_retirement_blocks: 0, pending_retirement_bytes: 0, capture_retirement_bytes: 0, retired_blocks: 8, retirement_batches: 1, retirement_created_fences: 2, pending_retirement_batches: 0, pending_unfenced_bytes: 0, shutdown_quiescent: false, shutdown_retained: false, internal_fragmentation: 0.0, external_fragmentation: 2.670308458774251e-5, segments: 1, driver_allocations: 1, driver_allocation_bytes: 67108864, driver_frees: 0, driver_free_bytes: 0 }\nDRIVER n8_reused creates=2 records=2 queries=4 event_syncs=0 context_syncs=0 stream_syncs=3 frees=0 primary_releases=0\nMETRICS completed CudaAllocatorMetrics { allocation_requests: 10, allocation_failures: 0, reuse_allocations: 9, small_allocations: 10, large_allocations: 0, huge_allocations: 0, requested_bytes: 2560, granted_bytes: 2560, live_requested_bytes: 0, live_granted_bytes: 0, peak_live_requested_bytes: 2048, peak_live_granted_bytes: 2048, reserved_bytes: 67108864, peak_reserved_bytes: 67108864, free_bytes: 67108864, largest_free_extent: 67108864, pending_retirement_blocks: 0, pending_retirement_bytes: 0, capture_retirement_bytes: 0, retired_blocks: 10, retirement_batches: 2, retirement_created_fences: 4, pending_retirement_batches: 0, pending_unfenced_bytes: 0, shutdown_quiescent: false, shutdown_retained: false, internal_fragmentation: 0.0, external_fragmentation: 0.0, segments: 1, driver_allocations: 1, driver_allocation_bytes: 67108864, driver_frees: 0, driver_free_bytes: 0 }\nDRIVER completed creates=4 records=4 queries=6 event_syncs=0 context_syncs=0 stream_syncs=5 frees=0 primary_releases=0\nMETRICS final_drain CudaAllocatorMetrics { allocation_requests: 10, allocation_failures: 0, reuse_allocations: 9, small_allocations: 10, large_allocations: 0, huge_allocations: 0, requested_bytes: 2560, granted_bytes: 2560, live_requested_bytes: 0, live_granted_bytes: 0, peak_live_requested_bytes: 2048, peak_live_granted_bytes: 2048, reserved_bytes: 0, peak_reserved_bytes: 67108864, free_bytes: 0, largest_free_extent: 0, pending_retirement_blocks: 0, pending_retirement_bytes: 0, capture_retirement_bytes: 0, retired_blocks: 10, retirement_batches: 2, retirement_created_fences: 4, pending_retirement_batches: 0, pending_unfenced_bytes: 0, shutdown_quiescent: false, shutdown_retained: false, internal_fragmentation: 0.0, external_fragmentation: 0.0, segments: 0, driver_allocations: 1, driver_allocation_bytes: 67108864, driver_frees: 1, driver_free_bytes: 67108864 }\nDRIVER final_drain creates=4 records=4 queries=6 event_syncs=0 context_syncs=0 stream_syncs=5 frees=1 primary_releases=0\nDRIVER context_dropped creates=4 records=4 queries=6 event_syncs=0 context_syncs=1 stream_syncs=7 frees=1 primary_releases=1\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 30 filtered out; finished in 0.53s\n\n",
+    "stderr": "",
+    "cleanup_errors": [],
+    "cleanup_scope": "isolated_subreaper_direct_children",
+    "descendant_custody": "proven_drained",
+    "gpu_quiescence": "unverified",
+    "custody": {
+      "status": "proven_drained",
+      "method": "linux-subreaper-waitid",
+      "containment_verified": true,
+      "launch_id": "77a6c52ec1fb471b84007d688af12366",
+      "helper_identity": {
+        "pid": 145943,
+        "birth_ticks": 97090566,
+        "ppid": 145937,
+        "pgrp": 145943,
+        "session": 145943
+      },
+      "root_identity": {
+        "pid": 145944,
+        "birth_ticks": 97090568,
+        "ppid": 145943,
+        "pgrp": 145943,
+        "session": 145943
+      },
+      "boot_id": "4dd3497d-570c-4693-a876-5c26e06ab360",
+      "entries": [
+        {
+          "identity": {
+            "pid": 145944,
+            "birth_ticks": 97090568,
+            "ppid": 145943,
+            "pgrp": 145943,
+            "session": 145943
+          },
+          "role": "root",
+          "signals": [],
+          "reaped": true,
+          "exit_code": 0,
+          "first_observed_at": 8607026.03979478,
+          "reaped_at": 8607026.670888552
+        }
+      ],
+      "errors": [],
+      "reporting_errors": [],
+      "echild": true
+    },
+    "handshake": {
+      "kind": "ready",
+      "protocol": 1,
+      "launch_id": "77a6c52ec1fb471b84007d688af12366",
+      "helper_identity": {
+        "pid": 145943,
+        "birth_ticks": 97090566,
+        "ppid": 145937,
+        "pgrp": 145943,
+        "session": 145943
+      },
+      "containment_verified": true,
+      "method": "linux-subreaper-waitid"
+    },
+    "stdout_truncated": false,
+    "stderr_truncated": false
+  }
+}

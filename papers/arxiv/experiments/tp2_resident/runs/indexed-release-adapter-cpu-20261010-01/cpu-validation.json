@@ -1,0 +1,93 @@
+{
+  "status": "indexed_qualification_CPU_PASS_277_tests_PASS_serving_release_pending",
+  "cpu_only": true,
+  "gpu_queries_performed": false,
+  "gpu_started": false,
+  "serving_release_audited": false,
+  "serving_prepared_created": false,
+  "indexed_qualification": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-indexed-lru-20261010-01/handoff.json",
+    "sha256": "514b0d8a7f5e05abf958c5e278d13f026d5bda9c4f4191e51e3e9a7e2fc56cf3"
+  },
+  "qualification_audit": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/indexed-release-adapter-cpu-20261010-01/qualification-audit.json",
+    "sha256": "0f6cc63c19806d15b69ab716c8f40086d1473a365c70d79b380288acb211b881"
+  },
+  "tests_before": {
+    "total": 271,
+    "failures": 2,
+    "errors": 1,
+    "log": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/indexed-release-adapter-cpu-20261010-01/tests-before.log",
+      "sha256": "01ef53be11fb5ae8d1e6e7b8194ac724b1718ac7fac458e1a6557ae5b6d5bdda"
+    }
+  },
+  "tests_original_fixed": {
+    "total": 271,
+    "failures": 0,
+    "errors": 0,
+    "log": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/indexed-release-adapter-cpu-20261010-01/tests-after-01.log",
+      "sha256": "c76fd04e2bab1a90c571e5c4d03121e8cc390e6dc34338a7ae0f7ecf1ed5bd01"
+    }
+  },
+  "tests_final": {
+    "total": 277,
+    "failures": 0,
+    "errors": 0,
+    "log": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/indexed-release-adapter-cpu-20261010-01/tests-after-final.log",
+      "sha256": "a0dda8d0a1ceb4eb0fa7848fe6204d14bc7d437d1532c7bac89260cf04a7f22a"
+    }
+  },
+  "entry": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/indexed-release-adapter-cpu-20261010-01/ENTRY.md",
+    "sha256": "6e21bc2291fbf65aaa6911accc2ba0869d0256367764b0cd95a776b6e979c598"
+  },
+  "builder_pending_files": {
+    "handoff.json": true,
+    "handoff-file-pins.json": true,
+    "release.json": true
+  },
+  "modified_code": [
+    {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/decoded_cache_release.py",
+      "sha256": "f3b73309d6f39f39fefaa440f8f305addd1bbe81e230b8263f6690a84559807f"
+    },
+    {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/optimized_release.py",
+      "sha256": "017059a853871efc36f5e56adfafc16017bb58352d4230a3c557622a7b071ad5"
+    },
+    {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/test_decoded_cache_release.py",
+      "sha256": "08b6ba15396d4b08876a57c4b465555002c8fe26c815d2c68ed229b4006a361b"
+    },
+    {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/test_indexed_release.py",
+      "sha256": "913b52d9744ede4dac13dc8fefcb437729da6a975a1cd68ed6ff4ecb8adb2458"
+    }
+  ],
+  "preserved_indexed_workflow": [
+    {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/history/pre-indexed-release-adapter-20261010/decoded_cache_release.py.txt",
+      "sha256": "2d4e5fabec347682ae134ec4bff27cee600ed304ca074117a7a9a236a4be3a51"
+    },
+    {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/history/pre-indexed-release-adapter-20261010/optimized_release.py.txt",
+      "sha256": "631610b712bebfd2f99430053b141fe6386787ef02ac5f21f28ccc01885acd58"
+    },
+    {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/history/pre-indexed-release-adapter-20261010/test_decoded_cache_release.py.txt",
+      "sha256": "b8632dc6a45eeec31888d618d4b08c8781aa56ece1f79147061df58534fb7573"
+    }
+  ],
+  "preserved_old_release": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/tp2-mixed-arena-public-release-20261010-01/handoff.json",
+    "sha256": "4b1734652ab05dd38e20fc7f9d85e7e201539b35707160021eec1f4d2dbf264e"
+  },
+  "remaining": [
+    "Final owner-reviewed serving handoff/binary SHA and canonical two-file production delta",
+    "Review actual serving schema/fields; qualification-only receipt is not serving acceptance",
+    "Actual same-binary S1/S2 then promote, then two crossed-order cycles under renewed GPU authorization"
+  ]
+}

@@ -396,6 +396,14 @@ pub trait TransformerModule: Sized {
     type Event: Debug;
     type TerminalGuard: DecoderTerminalGuard;
 
+    /// Borrow immutable physical ledgers, not a synchronization or cleanup hook.
+    fn physical_resource_snapshot(
+        &self,
+        _default_state: &Self::State,
+    ) -> crate::resource_observability::PhysicalResourceObservation {
+        Default::default()
+    }
+
     /// Number of target layers driven per forward. Prepared composition
     /// details stay module-private; the executor only sequences layers.
     fn layer_count(&self) -> usize;
@@ -844,6 +852,9 @@ where
                     }
                 }
                 PhysicalPhase::Finishing(_) => {
+                    if let Some(append) = context.invocation() {
+                        append.finish()?;
+                    }
                     let terminal_guard = self.module.finish(
                         batch,
                         states,
@@ -965,6 +976,21 @@ where
 {
     type Continuation = TransformerContinuation<M>;
     type TerminalGuard = M::TerminalGuard;
+
+    fn physical_resource_snapshot(
+        &self,
+        default_state: &M::State,
+    ) -> crate::resource_observability::PhysicalResourceObservation {
+        use crate::resource_observability::{ArenaObservation, ResourceEvidence};
+        let mut snapshot = self.module.physical_resource_snapshot(default_state);
+        let stats = self.arena_stats();
+        snapshot.arenas = ResourceEvidence::Observed(ArenaObservation {
+            hits: stats.hits,
+            misses: stats.misses,
+            installs: stats.installs,
+        });
+        snapshot
+    }
 
     fn start_forward(
         &mut self,

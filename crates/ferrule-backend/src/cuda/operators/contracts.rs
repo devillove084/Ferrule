@@ -54,12 +54,7 @@ pub(crate) trait OperatorOwner {
     ) -> Result<T>;
 }
 
-/// Provider-neutral workspace size and alignment requirements.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct OperatorWorkspaceRequirements {
-    pub bytes: u64,
-    pub alignment: u32,
-}
+pub use crate::plan::OperatorWorkspaceRequirements;
 
 /// Native status indicating that row or page-table metadata is invalid.
 pub const PAGED_BF16_TRANSFORMER_METADATA_ERROR: i32 = 1;
@@ -603,6 +598,47 @@ impl SplitHalfRopeLayout {
             &[self.rows, self.heads, self.rope_dim / 2],
             "split-half RoPE pairs",
         )
+    }
+}
+
+/// F32 routing arithmetic, independent of raw-logit top-k selection.
+/// Both policies skip NaNs for selection and break exactly equal raw logits by
+/// lower ID, never probabilities that merely round to the same value.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum RouterNormalization {
+    /// Historical selected-only exponentials and serial denominator, including
+    /// its uniform-mass infinity handling.
+    #[default]
+    SelectedSoftmax,
+    /// Full F32 softmax, gather selected probabilities, tree sum, then divide.
+    /// At most 1024 experts and 32 selected experts. No global scratch. NaN,
+    /// positive infinity and all-negative-infinity rows propagate NaN weights
+    /// for valid IDs; missing IDs remain -1 with zero weight. No sanitization.
+    FullSoftmaxThenSelectedRenormalization,
+}
+
+impl RouterNormalization {
+    pub fn validate(self, layout: SelectedSoftmaxTopKLayout) -> Result<()> {
+        layout.validate()?;
+        layout.logit_elements()?;
+        layout.output_elements()?;
+        if layout.rows > u32::MAX as usize
+            || layout.experts > i32::MAX as usize
+            || (self == Self::FullSoftmaxThenSelectedRenormalization
+                && layout.rows > i32::MAX as usize)
+        {
+            return Err(Error::Internal {
+                message: "router dimensions exceed native index limits".into(),
+            });
+        }
+        if self == Self::FullSoftmaxThenSelectedRenormalization
+            && (layout.experts > 1024 || layout.top_k > 32)
+        {
+            return Err(Error::Internal {
+                message: "full-softmax router requires experts <= 1024 and top_k <= 32".into(),
+            });
+        }
+        Ok(())
     }
 }
 

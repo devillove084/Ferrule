@@ -1,0 +1,105 @@
+{
+  "complete_required_inventory": false,
+  "epoch": 0,
+  "max_bytes_per_owner": 2147483648,
+  "max_events_per_owner": 40000,
+  "max_invocations": 4,
+  "max_metadata_bytes_per_owner": 67108864,
+  "oracle_manifest_sha256": "fe7fb83bf8cae99164209aad077f5c1ff92adf902aaca43e8dbb99f8af8166ae",
+  "owners": [
+    0,
+    1
+  ],
+  "plan": {
+    "capture": "every call; complete old inventory at stage call; cache reflects committed post-call state",
+    "cold_owner": "one fresh authenticated numerical child per launch; repeat in a second launch to establish different owner identity",
+    "decode_steps": 1,
+    "fork": "deep independent HF global/rank cache snapshots, not a runtime COW implementation",
+    "limits": {
+      "max_calls": 20,
+      "max_live_sessions": 3,
+      "max_total_capture_bytes": 4294967296
+    },
+    "operations": [
+      {
+        "case": "hello",
+        "op": "create",
+        "session": "hello"
+      },
+      {
+        "id": "call-00",
+        "input": {
+          "ids": [
+            9419
+          ],
+          "kind": "tokens"
+        },
+        "op": "call",
+        "session": "hello"
+      },
+      {
+        "id": "call-01",
+        "input": {
+          "kind": "greedy"
+        },
+        "op": "call",
+        "session": "hello"
+      },
+      {
+        "op": "drop",
+        "session": "hello"
+      },
+      {
+        "case": "capital",
+        "op": "create",
+        "session": "capital"
+      },
+      {
+        "id": "call-02",
+        "input": {
+          "ids": [
+            760,
+            6511,
+            314,
+            9338,
+            369
+          ],
+          "kind": "tokens"
+        },
+        "op": "call",
+        "session": "capital"
+      },
+      {
+        "id": "call-03",
+        "input": {
+          "kind": "greedy"
+        },
+        "op": "call",
+        "session": "capital"
+      },
+      {
+        "op": "drop",
+        "session": "capital"
+      }
+    ],
+    "prompts": {
+      "capital": [
+        760,
+        6511,
+        314,
+        9338,
+        369
+      ],
+      "hello": [
+        9419
+      ]
+    },
+    "scenario": "cold-owner",
+    "schema": "ferrule.paper.tp2-mixed-lifecycle-plan.v1",
+    "stop": "fixed bounded decode count, including EOS; not natural-stop quality/performance evaluation"
+  },
+  "queue_record_limit": 40013,
+  "schema": "ferrule.mixed-lifecycle-owner-capture.v1",
+  "state_scope": "provisional GDN observations joined to parent publication; retained-source committed KV",
+  "storage": "f32le-native-host-view"
+}

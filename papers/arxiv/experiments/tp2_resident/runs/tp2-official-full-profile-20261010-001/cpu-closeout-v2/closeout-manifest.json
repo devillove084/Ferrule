@@ -1,0 +1,50 @@
+{
+  "schema": "ferrule.paper.nsight-cpu-closeout.v2",
+  "status": "complete_cpu_audit_full_trace_rejected",
+  "generated_unix_ns": 1791603181891958286,
+  "gpu_workload_started": false,
+  "new_gpu_capture": false,
+  "old_raw_and_receipt_policy": "old profile-audit.json, execution/release receipts, nsys-rep, SQLite and server.log preserved; v2 audit is separate",
+  "audit_v2": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-official-full-profile-20261010-001/profile-audit-v2.json",
+    "status": "rejected_incomplete_trace",
+    "request6_observed_correlation_closed": true,
+    "request6_full_trace_accepted": false,
+    "warmup_reverse_missing_correlations": [
+      687294,
+      687352
+    ],
+    "same_thread_runtime_overlap_request6": 0,
+    "cross_window_request6": false,
+    "explicit_cupti_drop_or_overflow_evidence": false,
+    "cause": "unknown; generic libAnalysis TraceSummaryVerifier incomplete-collection warning"
+  },
+  "tests": {
+    "command": "/home/admin/wxw403883/anaconda3/bin/python3.12 -S -B -m unittest discover -s papers/arxiv/experiments/tp2_resident -p test_profile_trace_audit*.py -v",
+    "passed": 17
+  },
+  "tools_doc": "papers/arxiv/experiments/tp2_resident/OFFICIAL-NVIDIA-TOOLS.md",
+  "w8_constraint": {
+    "path": "crates/ferrule-model/tests/mixed_routed_down/RESULT.md",
+    "candidate": "real-operand W8 routed-down",
+    "result": "16382/16384 words match native; two rank1 mismatches; default-off; model unchanged"
+  },
+  "sha256": {
+    "papers/arxiv/experiments/tp2_resident/runs/tp2-official-full-profile-20261010-001/profile-audit.json": "3303c2dafc62c6c90ddfc7f62dd01da55a0ab76587c718d7793a6ebf44c408a1",
+    "papers/arxiv/experiments/tp2_resident/runs/tp2-official-full-profile-20261010-001/profile-audit-v2.json": "55b2f32b676704e47ccdde9adf13af527b6fbb3a79b03d40ff1eb6a88d2bc2dd",
+    "papers/arxiv/experiments/tp2_resident/runs/tp2-official-full-profile-20261010-001/PROFILE-SUMMARY.md": "513dadc23b3bf96f7c2e24bac418dd3abe5d4152c80af2b0ccf183216cd7f4d5",
+    "papers/arxiv/experiments/tp2_resident/runs/tp2-official-full-profile-20261010-001/runs/P1/session/nsight/nsys.nsys-rep": "e4842f48ad372d3916e0ca89f61aae72d34de255bc78877f37905f18e79b03ba",
+    "papers/arxiv/experiments/tp2_resident/runs/tp2-official-full-profile-20261010-001/runs/P1/session/nsight/nsys.sqlite": "6715f8308a77a118151d86632e1ab0537f8c0396890fb1a3ac8add274bc137ae",
+    "papers/arxiv/experiments/tp2_resident/runs/tp2-official-full-profile-20261010-001/runs/P1/session/server.log": "dbd25f315f7a2d91ce0b9b49239f124dda96741feb8d92db0974cc5effe30032",
+    "papers/arxiv/experiments/tp2_resident/runs/tp2-official-full-profile-20261010-001/final-owner-release.json": "78691d40e3fac44537d8b050a657b296c3c6994d46232a9df693f3c387b6d38f",
+    "papers/arxiv/experiments/tp2_resident/runs/tp2-official-full-profile-20261010-001/final-artifact-sha256.json": "7a2129716fe1e3fcc652fe7529f05b6f953416c9c45ae98c620ec357ee0aa638",
+    "papers/arxiv/experiments/tp2_resident/profile_trace_audit.py": "561ec7cb1eb556fc26a4c35f5ec42fab04780ba950e9c9666e493e1411d97b1d",
+    "papers/arxiv/experiments/tp2_resident/profile_trace_audit_v2.py": "d776ca9354646815fdda611cc2e652c64f4725cbfa0b7b6ec15faba088ac0b59",
+    "papers/arxiv/experiments/tp2_resident/test_profile_trace_audit.py": "cc833b474d0fe6206595d6e718c8fe598f5db1c8e249245fed1b44076aeb7dba",
+    "papers/arxiv/experiments/tp2_resident/test_profile_trace_audit_v2.py": "7782ac88d50f55ce128aff1a0c783999d27e48d991e96d6f6a67835d1f5239a2",
+    "papers/arxiv/experiments/tp2_resident/OFFICIAL-NVIDIA-TOOLS.md": "c46bbfe1db564a87bc9f407881a64a8b9d9dc06745fdb079c8551fb62dec1262",
+    "papers/arxiv/experiments/tp2_resident/CURRENT.md": "5c31c454fe0ef6bf89a15aefc22304a41a2ff1372b544d7b51e7382a67d6eed8",
+    "papers/arxiv/PAPER_COMPLETION_CHECKLIST.md": "e2c0cd12c4eb2d0dfa1c61d9a582d903565c5eb0301f6e6738fc13b0c6ccff90",
+    "crates/ferrule-model/tests/mixed_routed_down/RESULT.md": "8140e7f9493f54e80c295ac42bb265a0b06e4fd5df9a74bc631e00efe6654163"
+  }
+}

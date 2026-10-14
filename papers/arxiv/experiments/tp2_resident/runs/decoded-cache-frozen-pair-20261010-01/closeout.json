@@ -1,0 +1,64 @@
+{
+  "status": "stopped_at_first_backend_gate",
+  "reason": "observer_selected_roster_did_not_cover_both_visible_authorized_devices",
+  "numerical_result": "not obtained; test SIGTERM before assertions completed",
+  "backend_returncode": -15,
+  "backend_pass": false,
+  "model_gpu_tests_run": 0,
+  "full40_run": false,
+  "lifecycle_recipes_run": 0,
+  "candidate_comparison_generated": false,
+  "physical_cache_values": null,
+  "physical_cache_values_reason": "test interrupted; no model GPU execution or exported physical snapshots",
+  "binaries": {
+    "backend": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-cache-frozen-pair-20261010-01/binary-backend/staged/ferrule",
+      "sha256": "2802a9721e8c85bdcd11c0c1891b382405e5d3d571c7b2f4f4d9a9bab04d8655"
+    },
+    "model": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-cache-frozen-pair-20261010-01/binary-model/staged/ferrule",
+      "sha256": "caf1f240f89200d184b07d0a1253bb12146de95942914aae205f0a69a5f70c78"
+    },
+    "composition": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-cache-frozen-pair-20261010-01/binary-composition/staged/ferrule",
+      "sha256": "04b910ab82b4a778a1e01a4fb7c6ea7e3894ef796a2b5d15de9cb6c67e2976aa"
+    }
+  },
+  "source_files": 2960,
+  "current_source_and_tool_pins_verified": true,
+  "cpu_exact_tests_passed": 10,
+  "receipts": {
+    "supervisor.json": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-cache-frozen-pair-20261010-01/backend-exact/supervisor.json",
+      "sha256": "36f174186d943f53087601fa530d3e79cdcf945542bd803a9b84cbcae0b81409"
+    },
+    "resources.json": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-cache-frozen-pair-20261010-01/backend-exact/resources.json",
+      "sha256": "cbc939082d82e86bf7cd340d36faad577f747827ae5864b354d590d65da5f49c"
+    },
+    "test-exit.json": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-cache-frozen-pair-20261010-01/backend-exact/test-exit.json",
+      "sha256": "4cae033ac983b937e3649640eef1d90fbf2456eb78b32a9498350898b6a4bfa1"
+    },
+    "test.log": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-cache-frozen-pair-20261010-01/backend-exact/test.log",
+      "sha256": "2464c19b404a80c2edfe8147181e63cb5dedf20d50952da40630394ec1d3c448"
+    },
+    "after.json": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-cache-frozen-pair-20261010-01/backend-exact/after.json",
+      "sha256": "1546b66e14355f18335fb2cafe792bb41907a68727be74299679b935eeb2ef76"
+    },
+    "release.json": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-cache-frozen-pair-20261010-01/backend-exact/release.json",
+      "sha256": "ca7cfa98076aad86385d8215ad64dec01235e0fc2e786052d205cb70cfc9ccbd"
+    }
+  },
+  "final_idle": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-cache-frozen-pair-20261010-01/final-idle.json",
+    "sha256": "2ba6bcf1affb7b96de7fef455b2795c13688067c4176cbcb0d830a060cb1053a"
+  },
+  "all_eight_idle": true,
+  "local_locks_reacquired_and_released": true,
+  "gpu_owner_released": true,
+  "next_step": "CPU runner scope fix and fresh workflow seal by coordinator; do not inherit this interrupted gate as pass"
+}

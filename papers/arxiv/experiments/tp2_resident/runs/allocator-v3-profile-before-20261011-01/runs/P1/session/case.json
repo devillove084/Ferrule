@@ -1,0 +1,885 @@
+{
+  "status": "complete",
+  "started_monotonic": 8642763.304539949,
+  "fairmatch": false,
+  "exact_speedup": null,
+  "launch_monotonic": 8642764.023527835,
+  "server_pid": 186702,
+  "server_identity": {
+    "pid": 186702,
+    "birth_ticks": 100664376,
+    "ppid": 186617,
+    "state": "R"
+  },
+  "startup_seconds": 366.6369802746922,
+  "request_gate": {
+    "status": "complete",
+    "phases": [
+      {
+        "stage": "hello2",
+        "gate": {
+          "status": "pass",
+          "engine": "ferrule",
+          "checks": [
+            {
+              "index": 0,
+              "passed": true,
+              "actual_input_tokens": 1,
+              "actual_output_tokens": 2
+            }
+          ],
+          "first_qa_requests": 0,
+          "warmup_requests": 0,
+          "measured_requests": 1,
+          "http_receipt_sha256": "d3b811476c3e5ed08ecceea6216d056046fe91528e0f52d1e85fdcf73c6d9c07",
+          "coverage": "visible text/usage only; separate pinned numerical acceptance, not arithmetic parity",
+          "fairmatch": false,
+          "exact_speedup": null
+        }
+      },
+      {
+        "stage": "canary8",
+        "gate": {
+          "status": "pass",
+          "engine": "ferrule",
+          "checks": [
+            {
+              "index": 0,
+              "passed": true,
+              "actual_input_tokens": 5,
+              "actual_output_tokens": 8
+            },
+            {
+              "index": 1,
+              "passed": true,
+              "actual_input_tokens": 5,
+              "actual_output_tokens": 8
+            },
+            {
+              "index": 2,
+              "passed": true,
+              "actual_input_tokens": 3,
+              "actual_output_tokens": 8
+            }
+          ],
+          "first_qa_requests": 0,
+          "warmup_requests": 0,
+          "measured_requests": 3,
+          "http_receipt_sha256": "c584e3e6cf5b8d1c7d4ced3fb7de3c7e989ea10be9589ba25f008ce820cd4509",
+          "coverage": "visible text/usage only; separate pinned numerical acceptance, not arithmetic parity",
+          "fairmatch": false,
+          "exact_speedup": null
+        }
+      },
+      {
+        "stage": "profile",
+        "gate": {
+          "schema": "ferrule.paper.tp2-profile-window.v1",
+          "status": "pass",
+          "requests": [
+            {
+              "text": " Tokyo.\nThe capital of Japan is",
+              "raw_sse_events": [
+                {
+                  "at": 8643142.753024727,
+                  "event": "",
+                  "data": "{\"id\":\"cmpl-ferrule-5\",\"object\":\"text_completion\",\"created\":1791700199,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\" Tokyo\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}"
+                },
+                {
+                  "at": 8643142.955349404,
+                  "event": "",
+                  "data": "{\"id\":\"cmpl-ferrule-5\",\"object\":\"text_completion\",\"created\":1791700199,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\".\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}"
+                },
+                {
+                  "at": 8643143.139309507,
+                  "event": "",
+                  "data": "{\"id\":\"cmpl-ferrule-5\",\"object\":\"text_completion\",\"created\":1791700199,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\"\\n\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}"
+                },
+                {
+                  "at": 8643143.3228835,
+                  "event": "",
+                  "data": "{\"id\":\"cmpl-ferrule-5\",\"object\":\"text_completion\",\"created\":1791700199,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\"The\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}"
+                },
+                {
+                  "at": 8643143.505761705,
+                  "event": "",
+                  "data": "{\"id\":\"cmpl-ferrule-5\",\"object\":\"text_completion\",\"created\":1791700199,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\" capital\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}"
+                },
+                {
+                  "at": 8643143.687908746,
+                  "event": "",
+                  "data": "{\"id\":\"cmpl-ferrule-5\",\"object\":\"text_completion\",\"created\":1791700199,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\" of\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}"
+                },
+                {
+                  "at": 8643143.881872673,
+                  "event": "",
+                  "data": "{\"id\":\"cmpl-ferrule-5\",\"object\":\"text_completion\",\"created\":1791700199,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\" Japan\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}"
+                },
+                {
+                  "at": 8643144.062968561,
+                  "event": "",
+                  "data": "{\"id\":\"cmpl-ferrule-5\",\"object\":\"text_completion\",\"created\":1791700199,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\" is\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}"
+                },
+                {
+                  "at": 8643144.063031644,
+                  "event": "",
+                  "data": "{\"id\":\"cmpl-ferrule-5\",\"object\":\"text_completion\",\"created\":1791700199,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\"\",\"index\":0,\"logprobs\":null,\"finish_reason\":\"length\"}]}"
+                },
+                {
+                  "at": 8643144.063060086,
+                  "event": "",
+                  "data": "{\"id\":\"cmpl-ferrule-5\",\"object\":\"text_completion\",\"created\":1791700199,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":8,\"total_tokens\":13}}"
+                },
+                {
+                  "at": 8643144.06308993,
+                  "event": "",
+                  "data": "[DONE]"
+                }
+              ],
+              "content_event_times": [
+                8643142.753024727,
+                8643142.955349404,
+                8643143.139309507,
+                8643143.3228835,
+                8643143.505761705,
+                8643143.687908746,
+                8643143.881872673,
+                8643144.062968561
+              ],
+              "content_event_itl_seconds": [
+                0.20232467725872993,
+                0.18396010249853134,
+                0.1835739929229021,
+                0.18287820555269718,
+                0.1821470409631729,
+                0.1939639262855053,
+                0.18109588883817196
+              ],
+              "content_events": 8,
+              "usage": {
+                "prompt_tokens": 5,
+                "completion_tokens": 8,
+                "total_tokens": 13
+              },
+              "actual_output_tokens": 8,
+              "actual_input_tokens": 5,
+              "finish_reason": "length",
+              "finish_at": 8643144.063031644,
+              "usage_at": 8643144.063060086,
+              "done_at": 8643144.06308993,
+              "ttft_seconds": 1.2671157456934452,
+              "request_e2e_seconds": 2.577270420268178,
+              "mean_tpot_usage_proxy_seconds": 0.1871348334742444,
+              "token_itl_seconds": null,
+              "exact_token_tpot_seconds": null,
+              "reasoning_observed": false,
+              "output_token_ids": null,
+              "partial_token_count": 8,
+              "label": "warmup",
+              "status": "success",
+              "error": null,
+              "events": [
+                {
+                  "kind": "start",
+                  "at": 8643141.485928187,
+                  "unix": 1791700198.4494092
+                },
+                {
+                  "kind": "headers",
+                  "at": 8643142.054275924,
+                  "status": 200,
+                  "content_type": "text/event-stream"
+                },
+                {
+                  "kind": "event",
+                  "data": "{\"id\":\"cmpl-ferrule-5\",\"object\":\"text_completion\",\"created\":1791700199,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\" Tokyo\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}",
+                  "event": "",
+                  "at": 8643142.753024727
+                },
+                {
+                  "kind": "event",
+                  "data": "{\"id\":\"cmpl-ferrule-5\",\"object\":\"text_completion\",\"created\":1791700199,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\".\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}",
+                  "event": "",
+                  "at": 8643142.955349404
+                },
+                {
+                  "kind": "event",
+                  "data": "{\"id\":\"cmpl-ferrule-5\",\"object\":\"text_completion\",\"created\":1791700199,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\"\\n\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}",
+                  "event": "",
+                  "at": 8643143.139309507
+                },
+                {
+                  "kind": "event",
+                  "data": "{\"id\":\"cmpl-ferrule-5\",\"object\":\"text_completion\",\"created\":1791700199,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\"The\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}",
+                  "event": "",
+                  "at": 8643143.3228835
+                },
+                {
+                  "kind": "event",
+                  "data": "{\"id\":\"cmpl-ferrule-5\",\"object\":\"text_completion\",\"created\":1791700199,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\" capital\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}",
+                  "event": "",
+                  "at": 8643143.505761705
+                },
+                {
+                  "kind": "event",
+                  "data": "{\"id\":\"cmpl-ferrule-5\",\"object\":\"text_completion\",\"created\":1791700199,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\" of\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}",
+                  "event": "",
+                  "at": 8643143.687908746
+                },
+                {
+                  "kind": "event",
+                  "data": "{\"id\":\"cmpl-ferrule-5\",\"object\":\"text_completion\",\"created\":1791700199,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\" Japan\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}",
+                  "event": "",
+                  "at": 8643143.881872673
+                },
+                {
+                  "kind": "event",
+                  "data": "{\"id\":\"cmpl-ferrule-5\",\"object\":\"text_completion\",\"created\":1791700199,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\" is\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}",
+                  "event": "",
+                  "at": 8643144.062968561
+                },
+                {
+                  "kind": "event",
+                  "data": "{\"id\":\"cmpl-ferrule-5\",\"object\":\"text_completion\",\"created\":1791700199,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\"\",\"index\":0,\"logprobs\":null,\"finish_reason\":\"length\"}]}",
+                  "event": "",
+                  "at": 8643144.063031644
+                },
+                {
+                  "kind": "event",
+                  "data": "{\"id\":\"cmpl-ferrule-5\",\"object\":\"text_completion\",\"created\":1791700199,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":8,\"total_tokens\":13}}",
+                  "event": "",
+                  "at": 8643144.063060086
+                },
+                {
+                  "kind": "event",
+                  "data": "[DONE]",
+                  "event": "",
+                  "at": 8643144.06308993
+                },
+                {
+                  "kind": "end",
+                  "at": 8643144.063152077,
+                  "status": "success",
+                  "error": null
+                }
+              ],
+              "start_clock": {
+                "monotonic_ns": 8643141485910392,
+                "unix_ns": 1791700198449391926
+              },
+              "end_clock": {
+                "monotonic_ns": 8643144063192935,
+                "unix_ns": 1791700201026674447
+              },
+              "passed": true
+            },
+            {
+              "text": " Tokyo.\nThe capital of Japan is",
+              "raw_sse_events": [
+                {
+                  "at": 8643145.879708063,
+                  "event": "",
+                  "data": "{\"id\":\"cmpl-ferrule-6\",\"object\":\"text_completion\",\"created\":1791700201,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\" Tokyo\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}"
+                },
+                {
+                  "at": 8643146.057451904,
+                  "event": "",
+                  "data": "{\"id\":\"cmpl-ferrule-6\",\"object\":\"text_completion\",\"created\":1791700201,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\".\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}"
+                },
+                {
+                  "at": 8643146.22871061,
+                  "event": "",
+                  "data": "{\"id\":\"cmpl-ferrule-6\",\"object\":\"text_completion\",\"created\":1791700201,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\"\\n\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}"
+                },
+                {
+                  "at": 8643146.399044136,
+                  "event": "",
+                  "data": "{\"id\":\"cmpl-ferrule-6\",\"object\":\"text_completion\",\"created\":1791700201,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\"The\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}"
+                },
+                {
+                  "at": 8643146.569054253,
+                  "event": "",
+                  "data": "{\"id\":\"cmpl-ferrule-6\",\"object\":\"text_completion\",\"created\":1791700201,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\" capital\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}"
+                },
+                {
+                  "at": 8643146.736911448,
+                  "event": "",
+                  "data": "{\"id\":\"cmpl-ferrule-6\",\"object\":\"text_completion\",\"created\":1791700201,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\" of\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}"
+                },
+                {
+                  "at": 8643146.906597368,
+                  "event": "",
+                  "data": "{\"id\":\"cmpl-ferrule-6\",\"object\":\"text_completion\",\"created\":1791700201,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\" Japan\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}"
+                },
+                {
+                  "at": 8643147.07609012,
+                  "event": "",
+                  "data": "{\"id\":\"cmpl-ferrule-6\",\"object\":\"text_completion\",\"created\":1791700201,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\" is\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}"
+                },
+                {
+                  "at": 8643147.076162115,
+                  "event": "",
+                  "data": "{\"id\":\"cmpl-ferrule-6\",\"object\":\"text_completion\",\"created\":1791700201,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\"\",\"index\":0,\"logprobs\":null,\"finish_reason\":\"length\"}]}"
+                },
+                {
+                  "at": 8643147.076186754,
+                  "event": "",
+                  "data": "{\"id\":\"cmpl-ferrule-6\",\"object\":\"text_completion\",\"created\":1791700201,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":8,\"total_tokens\":13}}"
+                },
+                {
+                  "at": 8643147.076216266,
+                  "event": "",
+                  "data": "[DONE]"
+                }
+              ],
+              "content_event_times": [
+                8643145.879708063,
+                8643146.057451904,
+                8643146.22871061,
+                8643146.399044136,
+                8643146.569054253,
+                8643146.736911448,
+                8643146.906597368,
+                8643147.07609012
+              ],
+              "content_event_itl_seconds": [
+                0.1777438409626484,
+                0.17125870659947395,
+                0.1703335251659155,
+                0.17001011781394482,
+                0.1678571943193674,
+                0.16968592070043087,
+                0.16949275135993958
+              ],
+              "content_events": 8,
+              "usage": {
+                "prompt_tokens": 5,
+                "completion_tokens": 8,
+                "total_tokens": 13
+              },
+              "actual_output_tokens": 8,
+              "actual_input_tokens": 5,
+              "finish_reason": "length",
+              "finish_at": 8643147.076162115,
+              "usage_at": 8643147.076186754,
+              "done_at": 8643147.076216266,
+              "ttft_seconds": 1.5331832077354193,
+              "request_e2e_seconds": 2.7297825571149588,
+              "mean_tpot_usage_proxy_seconds": 0.17091172241738864,
+              "token_itl_seconds": null,
+              "exact_token_tpot_seconds": null,
+              "reasoning_observed": false,
+              "output_token_ids": null,
+              "partial_token_count": 8,
+              "label": "measured",
+              "status": "success",
+              "error": null,
+              "events": [
+                {
+                  "kind": "start",
+                  "at": 8643144.346538182,
+                  "unix": 1791700201.3100195
+                },
+                {
+                  "kind": "headers",
+                  "at": 8643144.370012406,
+                  "status": 200,
+                  "content_type": "text/event-stream"
+                },
+                {
+                  "kind": "event",
+                  "data": "{\"id\":\"cmpl-ferrule-6\",\"object\":\"text_completion\",\"created\":1791700201,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\" Tokyo\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}",
+                  "event": "",
+                  "at": 8643145.879708063
+                },
+                {
+                  "kind": "event",
+                  "data": "{\"id\":\"cmpl-ferrule-6\",\"object\":\"text_completion\",\"created\":1791700201,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\".\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}",
+                  "event": "",
+                  "at": 8643146.057451904
+                },
+                {
+                  "kind": "event",
+                  "data": "{\"id\":\"cmpl-ferrule-6\",\"object\":\"text_completion\",\"created\":1791700201,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\"\\n\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}",
+                  "event": "",
+                  "at": 8643146.22871061
+                },
+                {
+                  "kind": "event",
+                  "data": "{\"id\":\"cmpl-ferrule-6\",\"object\":\"text_completion\",\"created\":1791700201,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\"The\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}",
+                  "event": "",
+                  "at": 8643146.399044136
+                },
+                {
+                  "kind": "event",
+                  "data": "{\"id\":\"cmpl-ferrule-6\",\"object\":\"text_completion\",\"created\":1791700201,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\" capital\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}",
+                  "event": "",
+                  "at": 8643146.569054253
+                },
+                {
+                  "kind": "event",
+                  "data": "{\"id\":\"cmpl-ferrule-6\",\"object\":\"text_completion\",\"created\":1791700201,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\" of\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}",
+                  "event": "",
+                  "at": 8643146.736911448
+                },
+                {
+                  "kind": "event",
+                  "data": "{\"id\":\"cmpl-ferrule-6\",\"object\":\"text_completion\",\"created\":1791700201,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\" Japan\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}",
+                  "event": "",
+                  "at": 8643146.906597368
+                },
+                {
+                  "kind": "event",
+                  "data": "{\"id\":\"cmpl-ferrule-6\",\"object\":\"text_completion\",\"created\":1791700201,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\" is\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}",
+                  "event": "",
+                  "at": 8643147.07609012
+                },
+                {
+                  "kind": "event",
+                  "data": "{\"id\":\"cmpl-ferrule-6\",\"object\":\"text_completion\",\"created\":1791700201,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\"\",\"index\":0,\"logprobs\":null,\"finish_reason\":\"length\"}]}",
+                  "event": "",
+                  "at": 8643147.076162115
+                },
+                {
+                  "kind": "event",
+                  "data": "{\"id\":\"cmpl-ferrule-6\",\"object\":\"text_completion\",\"created\":1791700201,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":8,\"total_tokens\":13}}",
+                  "event": "",
+                  "at": 8643147.076186754
+                },
+                {
+                  "kind": "event",
+                  "data": "[DONE]",
+                  "event": "",
+                  "at": 8643147.076216266
+                },
+                {
+                  "kind": "end",
+                  "at": 8643147.076277304,
+                  "status": "success",
+                  "error": null
+                }
+              ],
+              "start_clock": {
+                "monotonic_ns": 8643144346525574,
+                "unix_ns": 1791700201310007192
+              },
+              "end_clock": {
+                "monotonic_ns": 8643147076321710,
+                "unix_ns": 1791700204039803409
+              },
+              "passed": true
+            }
+          ],
+          "capture": "explicit start-later after readiness/Hello/canaries; warm1 + measured1 QA8",
+          "numerical_capture": false,
+          "benchmark": false,
+          "start": {
+            "action": "start",
+            "argv": [
+              "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/nsight-systems-cli-2025.3.1/opt/nvidia/nsight-systems-cli/2025.3.1/target-linux-x64/nsys",
+              "start",
+              "--session=FerruleProfile_allocator-v3-profile-before-20261011-01"
+            ],
+            "returncode": 0,
+            "stdout": "",
+            "stderr": "",
+            "start": {
+              "monotonic_ns": 8643137495716599,
+              "unix_ns": 1791700194459198334
+            },
+            "end": {
+              "monotonic_ns": 8643141219010196,
+              "unix_ns": 1791700198182491876
+            }
+          },
+          "stop": {
+            "action": "stop",
+            "argv": [
+              "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/nsight-systems-cli-2025.3.1/opt/nvidia/nsight-systems-cli/2025.3.1/target-linux-x64/nsys",
+              "stop",
+              "--session=FerruleProfile_allocator-v3-profile-before-20261011-01"
+            ],
+            "returncode": 0,
+            "stdout": "Generating '/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-before-20261011-01/runs/P1/session/nsys-tmp/nsys-report-75e5.qdstrm'\n\n[1/1] [0%                          ] nsys.nsys-rep\n[1/1] [0%                          ] nsys.nsys-rep\n[1/1] [==========49%               ] nsys.nsys-rep\n[1/1] [========================98% ] nsys.nsys-rep\n[1/1] [========================99% ] nsys.nsys-rep\n[1/1] [0%                          ] nsys.nsys-rep\n[1/1] [10%                         ] nsys.nsys-rep\n[1/1] [9%                          ] nsys.nsys-rep\n[1/1] [8%                          ] nsys.nsys-rep\n[1/1] [7%                          ] nsys.nsys-rep\n[1/1] [6%                          ] nsys.nsys-rep\n[1/1] [5%                          ] nsys.nsys-rep\n[1/1] [0%                          ] nsys.nsys-rep\n[1/1] [5%                          ] nsys.nsys-rep\n[1/1] [6%                          ] nsys.nsys-rep\n[1/1] [7%                          ] nsys.nsys-rep\n[1/1] [8%                          ] nsys.nsys-rep\n[1/1] [9%                          ] nsys.nsys-rep\n[1/1] [10%                         ] nsys.nsys-rep\n[1/1] [11%                         ] nsys.nsys-rep\n[1/1] [12%                         ] nsys.nsys-rep\n[1/1] [13%                         ] nsys.nsys-rep\n[1/1] [14%                         ] nsys.nsys-rep\n[1/1] [=15%                        ] nsys.nsys-rep\n[1/1] [=16%                        ] nsys.nsys-rep\n[1/1] [=17%                        ] nsys.nsys-rep\n[1/1] [==18%                       ] nsys.nsys-rep\n[1/1] [==19%                       ] nsys.nsys-rep\n[1/1] [==20%                       ] nsys.nsys-rep\n[1/1] [==21%                       ] nsys.nsys-rep\n[1/1] [===22%                      ] nsys.nsys-rep\n[1/1] [===23%                      ] nsys.nsys-rep\n[1/1] [===24%                      ] nsys.nsys-rep\n[1/1] [====25%                     ] nsys.nsys-rep\n[1/1] [====26%                     ] nsys.nsys-rep\n[1/1] [====27%                     ] nsys.nsys-rep\n[1/1] [====28%                     ] nsys.nsys-rep\n[1/1] [=====29%                    ] nsys.nsys-rep\n[1/1] [=====30%                    ] nsys.nsys-rep\n[1/1] [=====31%                    ] nsys.nsys-rep\n[1/1] [=====32%                    ] nsys.nsys-rep\n[1/1] [======33%                   ] nsys.nsys-rep\n[1/1] [======34%                   ] nsys.nsys-rep\n[1/1] [======35%                   ] nsys.nsys-rep\n[1/1] [=======36%                  ] nsys.nsys-rep\n[1/1] [=======37%                  ] nsys.nsys-rep\n[1/1] [=======38%                  ] nsys.nsys-rep\n[1/1] [=======39%                  ] nsys.nsys-rep\n[1/1] [========40%                 ] nsys.nsys-rep\n[1/1] [========41%                 ] nsys.nsys-rep\n[1/1] [========42%                 ] nsys.nsys-rep\n[1/1] [=========43%                ] nsys.nsys-rep\n[1/1] [=========44%                ] nsys.nsys-rep\n[1/1] [=========45%                ] nsys.nsys-rep\n[1/1] [=========46%                ] nsys.nsys-rep\n[1/1] [==========47%               ] nsys.nsys-rep\n[1/1] [==========48%               ] nsys.nsys-rep\n[1/1] [==========49%               ] nsys.nsys-rep\n[1/1] [===========50%              ] nsys.nsys-rep\n[1/1] [===========51%              ] nsys.nsys-rep\n[1/1] [===========52%              ] nsys.nsys-rep\n[1/1] [===========53%              ] nsys.nsys-rep\n[1/1] [============54%             ] nsys.nsys-rep\n[1/1] [============55%             ] nsys.nsys-rep\n[1/1] [============56%             ] nsys.nsys-rep\n[1/1] [============57%             ] nsys.nsys-rep\n[1/1] [=============58%            ] nsys.nsys-rep\n[1/1] [=============59%            ] nsys.nsys-rep\n[1/1] [=============60%            ] nsys.nsys-rep\n[1/1] [==============61%           ] nsys.nsys-rep\n[1/1] [==============62%           ] nsys.nsys-rep\n[1/1] [==============63%           ] nsys.nsys-rep\n[1/1] [==============64%           ] nsys.nsys-rep\n[1/1] [===============65%          ] nsys.nsys-rep\n[1/1] [===============66%          ] nsys.nsys-rep\n[1/1] [===============67%          ] nsys.nsys-rep\n[1/1] [================68%         ] nsys.nsys-rep\n[1/1] [================69%         ] nsys.nsys-rep\n[1/1] [================70%         ] nsys.nsys-rep\n[1/1] [================71%         ] nsys.nsys-rep\n[1/1] [=================72%        ] nsys.nsys-rep\n[1/1] [=================73%        ] nsys.nsys-rep\n[1/1] [=================74%        ] nsys.nsys-rep\n[1/1] [==================75%       ] nsys.nsys-rep\n[1/1] [==================76%       ] nsys.nsys-rep\n[1/1] [==================77%       ] nsys.nsys-rep\n[1/1] [==================78%       ] nsys.nsys-rep\n[1/1] [===================79%      ] nsys.nsys-rep\n[1/1] [===================80%      ] nsys.nsys-rep\n[1/1] [===================81%      ] nsys.nsys-rep\n[1/1] [===================82%      ] nsys.nsys-rep\n[1/1] [====================83%     ] nsys.nsys-rep\n[1/1] [====================84%     ] nsys.nsys-rep\n[1/1] [====================85%     ] nsys.nsys-rep\n[1/1] [=====================86%    ] nsys.nsys-rep\n[1/1] [=====================87%    ] nsys.nsys-rep\n[1/1] [=====================88%    ] nsys.nsys-rep\n[1/1] [========================100%] nsys.nsys-rep\n[1/1] [========================100%] nsys.nsys-rep\nGenerated:\n\t/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-before-20261011-01/runs/P1/session/nsight/nsys.nsys-rep\n",
+            "stderr": "",
+            "start": {
+              "monotonic_ns": 8643147086088429,
+              "unix_ns": 1791700204049569499
+            },
+            "end": {
+              "monotonic_ns": 8643173366853592,
+              "unix_ns": 1791700230330335328
+            }
+          }
+        }
+      }
+    ],
+    "same_server": true
+  },
+  "resources": {
+    "status": "observed_within_targets",
+    "errors": [],
+    "memory_components": {
+      "sample_count": 167,
+      "complete_host_samples": 167,
+      "gpu_samples": 167,
+      "gpu_peak_bytes": {
+        "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 22624075776,
+        "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 22624075776
+      },
+      "tree_pss_peak_bytes": 66658866176,
+      "tree_rss_peak_bytes": 66694688768,
+      "tree_anonymous_peak_bytes": 66379993088,
+      "tree_pss_anon_peak_bytes": null,
+      "tree_pss_file_peak_bytes": null,
+      "tree_private_dirty_peak_bytes": 66422583296,
+      "component_sample_counts": {
+        "anonymous_bytes": 167,
+        "pss_anon_bytes": 0,
+        "pss_file_bytes": 0,
+        "private_dirty_bytes": 167
+      },
+      "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+      "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+    },
+    "phase_memory": {
+      "bounds": {
+        "ready_monotonic": 8643130.66050811,
+        "first_sent_monotonic": 8643131.111785997,
+        "first_terminal_monotonic": 8643131.679763844
+      },
+      "phases": {
+        "startup": {
+          "sample_count": 152,
+          "complete_host_samples": 152,
+          "gpu_samples": 152,
+          "gpu_peak_bytes": {
+            "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 22556966912,
+            "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 22556966912
+          },
+          "tree_pss_peak_bytes": 66658866176,
+          "tree_rss_peak_bytes": 66694688768,
+          "tree_anonymous_peak_bytes": 66379993088,
+          "tree_pss_anon_peak_bytes": null,
+          "tree_pss_file_peak_bytes": null,
+          "tree_private_dirty_peak_bytes": 66422583296,
+          "component_sample_counts": {
+            "anonymous_bytes": 152,
+            "pss_anon_bytes": 0,
+            "pss_file_bytes": 0,
+            "private_dirty_bytes": 152
+          },
+          "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+          "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+        },
+        "ready_before_first": {
+          "sample_count": 0,
+          "complete_host_samples": 0,
+          "gpu_samples": 0,
+          "gpu_peak_bytes": {
+            "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": null,
+            "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": null
+          },
+          "tree_pss_peak_bytes": null,
+          "tree_rss_peak_bytes": null,
+          "tree_anonymous_peak_bytes": null,
+          "tree_pss_anon_peak_bytes": null,
+          "tree_pss_file_peak_bytes": null,
+          "tree_private_dirty_peak_bytes": null,
+          "component_sample_counts": {
+            "anonymous_bytes": 0,
+            "pss_anon_bytes": 0,
+            "pss_file_bytes": 0,
+            "private_dirty_bytes": 0
+          },
+          "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+          "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+        },
+        "first_request": {
+          "sample_count": 0,
+          "complete_host_samples": 0,
+          "gpu_samples": 0,
+          "gpu_peak_bytes": {
+            "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": null,
+            "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": null
+          },
+          "tree_pss_peak_bytes": null,
+          "tree_rss_peak_bytes": null,
+          "tree_anonymous_peak_bytes": null,
+          "tree_pss_anon_peak_bytes": null,
+          "tree_pss_file_peak_bytes": null,
+          "tree_private_dirty_peak_bytes": null,
+          "component_sample_counts": {
+            "anonymous_bytes": 0,
+            "pss_anon_bytes": 0,
+            "pss_file_bytes": 0,
+            "private_dirty_bytes": 0
+          },
+          "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+          "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+        },
+        "after_first_request": {
+          "sample_count": 15,
+          "complete_host_samples": 15,
+          "gpu_samples": 15,
+          "gpu_peak_bytes": {
+            "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 22624075776,
+            "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 22624075776
+          },
+          "tree_pss_peak_bytes": 65708607488,
+          "tree_rss_peak_bytes": 65756569600,
+          "tree_anonymous_peak_bytes": 65438466048,
+          "tree_pss_anon_peak_bytes": null,
+          "tree_pss_file_peak_bytes": null,
+          "tree_private_dirty_peak_bytes": 65481445376,
+          "component_sample_counts": {
+            "anonymous_bytes": 15,
+            "pss_anon_bytes": 0,
+            "pss_file_bytes": 0,
+            "private_dirty_bytes": 15
+          },
+          "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+          "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+        }
+      },
+      "unassigned_or_boundary_samples": 0,
+      "steady_state_claim": false,
+      "policy": "after first request includes later canaries/warmup/requests; not a steady-state proof"
+    },
+    "phase_metadata_error": null,
+    "gpu_peak_bytes": {
+      "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 22624075776,
+      "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 22624075776
+    },
+    "tree_pss_peak_bytes": 66658866176,
+    "tree_rss_peak_bytes": 66694688768,
+    "complete_host_samples": 167,
+    "incomplete_host_samples": 0,
+    "gpu_samples": 167,
+    "missing_gpu_attempts": 0,
+    "baseline": {
+      "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": {
+        "index": 0,
+        "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+        "total_bytes": 25769803776,
+        "gpu_bytes": 4194304,
+        "utilization": 0
+      },
+      "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": {
+        "index": 1,
+        "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+        "total_bytes": 25769803776,
+        "gpu_bytes": 4194304,
+        "utilization": 0
+      },
+      "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6": {
+        "index": 2,
+        "uuid": "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6",
+        "total_bytes": 25769803776,
+        "gpu_bytes": 1048576,
+        "utilization": 0
+      },
+      "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011": {
+        "index": 3,
+        "uuid": "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011",
+        "total_bytes": 25769803776,
+        "gpu_bytes": 1048576,
+        "utilization": 0
+      },
+      "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86": {
+        "index": 4,
+        "uuid": "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86",
+        "total_bytes": 25769803776,
+        "gpu_bytes": 1048576,
+        "utilization": 0
+      },
+      "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685": {
+        "index": 5,
+        "uuid": "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685",
+        "total_bytes": 25769803776,
+        "gpu_bytes": 1048576,
+        "utilization": 0
+      },
+      "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d": {
+        "index": 6,
+        "uuid": "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d",
+        "total_bytes": 25769803776,
+        "gpu_bytes": 1048576,
+        "utilization": 0
+      },
+      "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f": {
+        "index": 7,
+        "uuid": "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f",
+        "total_bytes": 25769803776,
+        "gpu_bytes": 1048576,
+        "utilization": 0
+      }
+    },
+    "delta_high_water_bytes": {
+      "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 22619881472,
+      "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 22619881472,
+      "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6": 0,
+      "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011": 0,
+      "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86": 0,
+      "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685": 0,
+      "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d": 0,
+      "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f": 0
+    },
+    "final_process_diagnostics": [
+      {
+        "identity": {
+          "pid": 186702,
+          "birth_ticks": 100664376,
+          "ppid": 186617,
+          "state": "S"
+        },
+        "command": "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/nsight-systems-cli-2025.3.1/opt/nvidia/nsight-systems-cli/2025.3.1/target-linux-x64/nsys profile --session-new=FerruleProfile_allocator-v3-profile-before-20261011-01 --start-later=true --trace=cuda,nvtx,osrt,cublas --gpu-metrics-devices=none --gpuctxsw=false --sample=none --cpuctxsw=none --trace-fork-before-exec=false --kill=none --wait=primary --stop-on-exit=true --duration=240 --cuda-flush-interval=0 --force-overwrite=false --output=/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-before-20261011-01/runs/P1/session/nsight/nsys /home/admin/wxw403883/anaconda3/bin/python3.12 -S -B /home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/instrumentation_capture.py --directory /home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-before-20261011-01/runs/P1/session --manifest-sha256 fc8736572648c10d47cb63172b9ae428602a81473406c6107d0118861a8dade4 -- /home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/admission/indexed-lru-20261010-01/staged/ferrule serve /mnt/nas1/hf/Qwen3.5-35B-A3B-FP8 --backend cuda --engine pipeline --model-profile qwen35-mixed-bf16 --tensor-parallel 2 --pipeline-parallel 1 --expert-parallel 1 --rank-backend thread --devices 0,1 --rank-restarts 0 --kv-execution-policy resident --ctx-size 128 --max-active-sequences 2 --max-batch-tokens 8 --prefill-chunk-size 8 --cuda-device-budget-mb 22528 --kv-cache-mb 16 --max-tensor-mb 2048 --cuda-workspace-mb 4096 --host 127.0.0.1 --port 18367 --served-model-name qwen35-ferrule-tp2-resident-paper ",
+        "environment": {
+          "HOME": "/root",
+          "PATH": "/home/admin/wxw403883/anaconda3/envs/tao/bin:/root/.cargo/bin:/usr/bin:/bin",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "CUDA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+          "NVIDIA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+          "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
+          "HF_HUB_OFFLINE": "1",
+          "TRANSFORMERS_OFFLINE": "1",
+          "CUDA_HOME": "/home/admin/wxw403883/anaconda3/envs/tao",
+          "NVCC": "/home/admin/wxw403883/anaconda3/envs/tao/bin/nvcc",
+          "LD_LIBRARY_PATH": "/home/admin/wxw403883/anaconda3/envs/tao/lib:/usr/lib64",
+          "CUBLAS_WORKSPACE_CONFIG": ":0:0",
+          "FERRULE_LOG": "info",
+          "FERRULE_LOG_FORMAT": "json",
+          "TMPDIR": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-before-20261011-01/runs/P1/session/nsys-tmp"
+        },
+        "libraries": [
+          "/usr/lib64/libcuda.so.575.57.08",
+          "/usr/lib64/libnvidia-cfg.so.575.57.08",
+          "/usr/lib64/libnvidia-ml.so.575.57.08"
+        ]
+      },
+      {
+        "identity": {
+          "pid": 186721,
+          "birth_ticks": 100664728,
+          "ppid": 186702,
+          "state": "S"
+        },
+        "command": "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/nsight-systems-cli-2025.3.1/opt/nvidia/nsight-systems-cli/2025.3.1/target-linux-x64/nsys-launcher /home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-before-20261011-01/runs/P1/session/nsys-tmp/fc15-c517-18fc-1cdf 81 ",
+        "environment": {
+          "HOME": "/root",
+          "PATH": "/home/admin/wxw403883/anaconda3/envs/tao/bin:/root/.cargo/bin:/usr/bin:/bin",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "CUDA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+          "NVIDIA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+          "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
+          "HF_HUB_OFFLINE": "1",
+          "TRANSFORMERS_OFFLINE": "1",
+          "CUDA_HOME": "/home/admin/wxw403883/anaconda3/envs/tao",
+          "NVCC": "/home/admin/wxw403883/anaconda3/envs/tao/bin/nvcc",
+          "LD_LIBRARY_PATH": "/home/admin/wxw403883/anaconda3/envs/tao/lib:/usr/lib64",
+          "CUBLAS_WORKSPACE_CONFIG": ":0:0",
+          "FERRULE_LOG": "info",
+          "FERRULE_LOG_FORMAT": "json",
+          "TMPDIR": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-before-20261011-01/runs/P1/session/nsys-tmp"
+        },
+        "libraries": []
+      },
+      {
+        "identity": {
+          "pid": 186722,
+          "birth_ticks": 100664728,
+          "ppid": 186721,
+          "state": "S"
+        },
+        "command": "/home/admin/wxw403883/anaconda3/bin/python3.12 -S -B /home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/instrumentation_capture.py --directory /home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-before-20261011-01/runs/P1/session --manifest-sha256 fc8736572648c10d47cb63172b9ae428602a81473406c6107d0118861a8dade4 -- /home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/admission/indexed-lru-20261010-01/staged/ferrule serve /mnt/nas1/hf/Qwen3.5-35B-A3B-FP8 --backend cuda --engine pipeline --model-profile qwen35-mixed-bf16 --tensor-parallel 2 --pipeline-parallel 1 --expert-parallel 1 --rank-backend thread --devices 0,1 --rank-restarts 0 --kv-execution-policy resident --ctx-size 128 --max-active-sequences 2 --max-batch-tokens 8 --prefill-chunk-size 8 --cuda-device-budget-mb 22528 --kv-cache-mb 16 --max-tensor-mb 2048 --cuda-workspace-mb 4096 --host 127.0.0.1 --port 18367 --served-model-name qwen35-ferrule-tp2-resident-paper ",
+        "environment": {
+          "HOME": "/root",
+          "PATH": "/home/admin/wxw403883/anaconda3/envs/tao/bin:/root/.cargo/bin:/usr/bin:/bin",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "CUDA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+          "NVIDIA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+          "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
+          "HF_HUB_OFFLINE": "1",
+          "TRANSFORMERS_OFFLINE": "1",
+          "CUDA_HOME": "/home/admin/wxw403883/anaconda3/envs/tao",
+          "NVCC": "/home/admin/wxw403883/anaconda3/envs/tao/bin/nvcc",
+          "LD_LIBRARY_PATH": "/home/admin/wxw403883/anaconda3/envs/tao/lib:/usr/lib64",
+          "CUBLAS_WORKSPACE_CONFIG": ":0:0",
+          "FERRULE_LOG": "info",
+          "FERRULE_LOG_FORMAT": "json",
+          "TMPDIR": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-before-20261011-01/runs/P1/session/nsys-tmp"
+        },
+        "libraries": []
+      },
+      {
+        "identity": {
+          "pid": 186723,
+          "birth_ticks": 100664728,
+          "ppid": 186721,
+          "state": "S"
+        },
+        "command": "nsys-tee 3 5 6 7 ",
+        "environment": {
+          "HOME": "/root",
+          "PATH": "/home/admin/wxw403883/anaconda3/envs/tao/bin:/root/.cargo/bin:/usr/bin:/bin",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "CUDA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+          "NVIDIA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+          "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
+          "HF_HUB_OFFLINE": "1",
+          "TRANSFORMERS_OFFLINE": "1",
+          "CUDA_HOME": "/home/admin/wxw403883/anaconda3/envs/tao",
+          "NVCC": "/home/admin/wxw403883/anaconda3/envs/tao/bin/nvcc",
+          "LD_LIBRARY_PATH": "/home/admin/wxw403883/anaconda3/envs/tao/lib:/usr/lib64",
+          "CUBLAS_WORKSPACE_CONFIG": ":0:0",
+          "FERRULE_LOG": "info",
+          "FERRULE_LOG_FORMAT": "json",
+          "TMPDIR": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-before-20261011-01/runs/P1/session/nsys-tmp"
+        },
+        "libraries": []
+      },
+      {
+        "identity": {
+          "pid": 186757,
+          "birth_ticks": 100665230,
+          "ppid": 186722,
+          "state": "S"
+        },
+        "command": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/admission/indexed-lru-20261010-01/staged/ferrule serve /mnt/nas1/hf/Qwen3.5-35B-A3B-FP8 --backend cuda --engine pipeline --model-profile qwen35-mixed-bf16 --tensor-parallel 2 --pipeline-parallel 1 --expert-parallel 1 --rank-backend thread --devices 0,1 --rank-restarts 0 --kv-execution-policy resident --ctx-size 128 --max-active-sequences 2 --max-batch-tokens 8 --prefill-chunk-size 8 --cuda-device-budget-mb 22528 --kv-cache-mb 16 --max-tensor-mb 2048 --cuda-workspace-mb 4096 --host 127.0.0.1 --port 18367 --served-model-name qwen35-ferrule-tp2-resident-paper ",
+        "environment": {
+          "HOME": "/root",
+          "PATH": "/home/admin/wxw403883/anaconda3/envs/tao/bin:/root/.cargo/bin:/usr/bin:/bin",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "CUDA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+          "NVIDIA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+          "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
+          "HF_HUB_OFFLINE": "1",
+          "TRANSFORMERS_OFFLINE": "1",
+          "CUDA_HOME": "/home/admin/wxw403883/anaconda3/envs/tao",
+          "NVCC": "/home/admin/wxw403883/anaconda3/envs/tao/bin/nvcc",
+          "LD_LIBRARY_PATH": "/home/admin/wxw403883/anaconda3/envs/tao/lib:/usr/lib64",
+          "CUBLAS_WORKSPACE_CONFIG": ":0:0",
+          "FERRULE_LOG": "info",
+          "FERRULE_LOG_FORMAT": "json",
+          "TMPDIR": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-before-20261011-01/runs/P1/session/nsys-tmp"
+        },
+        "libraries": [
+          "/home/admin/wxw403883/anaconda3/envs/tao/lib/libcudart.so.12.4.99",
+          "/usr/lib64/libcuda.so.575.57.08"
+        ]
+      }
+    ],
+    "owned_gpu_attribution": "unknown",
+    "owned_process_gpu_peak_bytes": null,
+    "exact_peaks": false,
+    "hard_memory_partition": false,
+    "continuous_coverage": false
+  },
+  "shutdown": {
+    "timed_out": false,
+    "returncode": 0,
+    "status": "collector_exited_descendants_require_custodian",
+    "seconds": 7.088168725371361
+  },
+  "wall_seconds": 417.51762431301177
+}

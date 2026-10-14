@@ -1,0 +1,45 @@
+{
+  "status": "kernel_coverage_failed_despite_lifecycle_complete",
+  "kernel_table_present": false,
+  "diagnostics": [
+    {
+      "message": "CUDA profiling might have not been started correctly.",
+      "count": 1
+    },
+    {
+      "message": "Error when processing events: /dvs/p4/build/sw/devtools/Agora/Rel/CUDA13.3/QuadD/Common/Services/FlatData/../FlatData/CudaEvent.h(454): Throw in function uint32",
+      "count": 1
+    },
+    {
+      "message": "Error when processing events: /dvs/p4/build/sw/devtools/Agora/Rel/CUDA13.3/QuadD/Common/SessionState/Modules/StringStorage.cpp(109): Throw in function QuadDComm",
+      "count": 429
+    },
+    {
+      "message": "NVTX profiling might have not been started correctly.",
+      "count": 1
+    },
+    {
+      "message": "No MMAP events were received for process with pid 154735 before attempting to resolve symbol. This might cause symbols to remain unresolved for the process.",
+      "count": 1
+    },
+    {
+      "message": "No NVTX events collected. Does the process use NVTX?",
+      "count": 1
+    },
+    {
+      "message": "OS runtime libraries profiling might have not been started correctly.",
+      "count": 1
+    },
+    {
+      "message": "Scheduling information is absent. The thread activity is deduced based on OS runtime libraries traces. This is inaccurate and does not take into account asynchr",
+      "count": 1
+    }
+  ],
+  "next_action": "One explicitly pinned cuda-sw software collection profile supported by installed Nsight CLI; Ampere lacks hardware tracing. No inference/transport/precision changes; no blind same-config rerun.",
+  "evidence_pins": {
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-collector-profile-20261009-003/runs/P1/session/nsight/cuda_gpu_kern_sum.txt": "c1f1b09359a9964f46e51ead5cead88e0cbcf8d45a9d5bcf9693bfa311fd6c09",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-collector-profile-20261009-003/runs/P1/session/nsight/nsys.nsys-rep": "74d88dbec93ceb4265c741579f457b06e65e02c9f507dac52d133e42b4db47aa",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-collector-profile-20261009-003/runs/P1/session/nsight/nsys.sqlite": "e95d51fbe7552347ef0e583778464220f7577192b612abfbf751138bfbe29940",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-collector-profile-20261009-003/runs/P1/session/profile/stop.json": "b19d08b1c34fbba66731cb4ad1859ea3149ab6b2d111f23966bca163c84dcc81"
+  }
+}

@@ -1,0 +1,56 @@
+{
+  "before": {
+    "model_pid": 186757,
+    "samples": 62,
+    "environment": {
+      "HOME": "/root",
+      "PATH": "/home/admin/wxw403883/anaconda3/envs/tao/bin:/root/.cargo/bin:/usr/bin:/bin",
+      "PYTHONDONTWRITEBYTECODE": "1",
+      "CUDA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "NVIDIA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
+      "HF_HUB_OFFLINE": "1",
+      "TRANSFORMERS_OFFLINE": "1",
+      "CUDA_HOME": "/home/admin/wxw403883/anaconda3/envs/tao",
+      "NVCC": "/home/admin/wxw403883/anaconda3/envs/tao/bin/nvcc",
+      "LD_LIBRARY_PATH": "/home/admin/wxw403883/anaconda3/envs/tao/lib:/usr/lib64",
+      "CUBLAS_WORKSPACE_CONFIG": ":0:0",
+      "FERRULE_LOG": "info",
+      "FERRULE_LOG_FORMAT": "json",
+      "TMPDIR": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-before-20261011-01/runs/P1/session/nsys-tmp"
+    },
+    "identity": {
+      "pid": 186757,
+      "birth_ticks": 100665230,
+      "ppid": 186722,
+      "state": "D"
+    }
+  },
+  "after": {
+    "model_pid": 188424,
+    "samples": 60,
+    "environment": {
+      "HOME": "/root",
+      "PATH": "/home/admin/wxw403883/anaconda3/envs/tao/bin:/root/.cargo/bin:/usr/bin:/bin",
+      "PYTHONDONTWRITEBYTECODE": "1",
+      "CUDA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "NVIDIA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
+      "HF_HUB_OFFLINE": "1",
+      "TRANSFORMERS_OFFLINE": "1",
+      "CUDA_HOME": "/home/admin/wxw403883/anaconda3/envs/tao",
+      "NVCC": "/home/admin/wxw403883/anaconda3/envs/tao/bin/nvcc",
+      "LD_LIBRARY_PATH": "/home/admin/wxw403883/anaconda3/envs/tao/lib:/usr/lib64",
+      "CUBLAS_WORKSPACE_CONFIG": ":0:0",
+      "FERRULE_LOG": "info",
+      "FERRULE_LOG_FORMAT": "json",
+      "TMPDIR": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/session/nsys-tmp"
+    },
+    "identity": {
+      "pid": 188424,
+      "birth_ticks": 100791052,
+      "ppid": 188403,
+      "state": "R"
+    }
+  }
+}

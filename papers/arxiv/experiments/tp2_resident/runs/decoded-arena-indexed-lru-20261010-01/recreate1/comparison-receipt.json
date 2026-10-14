@@ -1,0 +1,10 @@
+{
+  "all_exact": true,
+  "report": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-indexed-lru-20261010-01/recreate1-comparison.json",
+    "sha256": "849fa054a23e740391227d5c1042dc29194b5b493b90633b35d8a70e4cac804c"
+  },
+  "raw_sha256": "f71f41338573b938302851fac968c238581e9458a9c942df25a5c55c7fa9b939",
+  "reference_sha256": "5747d1ee3793d629aff5d87488d2dbd970fb02be11742b88ac16e3dca05e5a59",
+  "public_e2e_accepted": false
+}

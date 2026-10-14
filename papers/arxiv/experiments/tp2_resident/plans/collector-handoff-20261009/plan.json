@@ -1,0 +1,66 @@
+{
+  "schema": "ferrule.paper.collector-first-plan.v1",
+  "status": "cpu_tested_live_unverified",
+  "execute_allowed": false,
+  "entrypoint": "paired.py run --purpose profiling --probe-grant PATH plus renewed sole-owner grant",
+  "model_scope": {
+    "visible_gpu_count": 2,
+    "lock_scope": "all eight physical UUIDs for instrumentation only",
+    "model_profile": "TP2 PP1 EP1 resident; selected UUIDs remain ordered GPU0/GPU1"
+  },
+  "bounds": {
+    "startup_seconds": 900,
+    "request_seconds": 120,
+    "teardown_seconds": 120,
+    "supervisor_seconds": 1600,
+    "overall_seconds": 1700,
+    "collector_b1_seconds": 60,
+    "collector_samples": 3,
+    "collector_span_seconds": 4
+  },
+  "sequence": [
+    "fresh explicit grant and sorted atomic eight-lock acquisition",
+    "authenticated all-eight original B0 idle receipt",
+    "Nsight collector plus gated non-CUDA target; no model",
+    "authenticated stable B1 and atomic one-time model-release gate",
+    "selected-two model readiness, Hello2/canaries, warm1/measured1 diagnostic window",
+    "model drain, exact B1 return, collector drain, original all-eight B0, release"
+  ],
+  "safety": [
+    "PID plus proc start-time ancestry and sealed supervisor journal",
+    "foreign signals false; only existing owned direct-child wrapper cleanup",
+    "unknown or missing GPU/PSS samples remain missing, never zero",
+    "nonselected model tolerance remains positive delta <= 1 MiB relative to frozen B1",
+    "instrumentation-only ceiling 16 MiB/card is fixed and not a model tolerance",
+    "selected absolute sampled ceiling 22 GiB/card; host PSS 128 GiB observational budget"
+  ],
+  "implemented_paper_files": [
+    "instrumentation_scope.py",
+    "instrumentation_live.py",
+    "instrumentation_capture.py",
+    "paired.py",
+    "observer.py",
+    "optimized_release.py",
+    "compare_pilots.py"
+  ],
+  "cpu_validation": {
+    "tp2_tests": 124,
+    "original_tests": 42,
+    "gpu_operations": 0,
+    "server_operations": 0,
+    "locks_acquired": 0
+  },
+  "pending_live_validation": [
+    "verify actual eight UUID inventory and B0 under renewed authorization",
+    "measure collector stability/discovery overhead and selected-only model visibility",
+    "verify exact B1/B0 cleanup and Nsight CUDA/NVTX/OSRT coverage",
+    "run same-release smoke, then fresh no-trace descriptive F/V pair"
+  ],
+  "performance_policy": {
+    "fairmatch": false,
+    "exact_speedup": null,
+    "e2_complete": false,
+    "no_profiler_time_in_pair": true,
+    "no_quality_or_precision_changes": true
+  }
+}

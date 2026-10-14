@@ -1,0 +1,19 @@
+{
+  "protocol": "tp2-serving-smoke-c1",
+  "purpose": "serving_smoke",
+  "status": "incomplete",
+  "sole_gpu_owner_granted": true,
+  "owner_note": "20261013 sole GPU owner: exact current storage release TP2 S1/S2 startup smoke only; no profiler or foreign kill",
+  "fairmatch": false,
+  "exact_speedup": null,
+  "slots": [
+    {
+      "id": "S1",
+      "status": "dispatched_unknown"
+    },
+    {
+      "id": "S2",
+      "status": "not_run"
+    }
+  ]
+}

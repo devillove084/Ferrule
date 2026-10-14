@@ -1,0 +1,34 @@
+
+running 29 tests
+test allocator::dedicated_kv_tests::dedicated_kv_segment_never_lends_free_extent_to_weights_or_scratch ... ok
+test allocator::tests::alignment_applies_to_the_absolute_device_address ... ok
+test allocator::tests::deterministic_allocation_churn_preserves_capacity_and_alignment ... ok
+test allocator::tests::device_block_auto_traits_follow_its_owners ... ok
+test allocator::tests::fragmentation_formulas_are_bounded ... ok
+test allocator::tests::free_ranges_coalesce_in_both_directions ... ok
+test allocator::tests::size_classes_cover_small_large_and_huge ... ok
+test tests::byte_pressure_and_oversize_block_seal_bounded_batches ... ok
+test tests::capture_retirements_stay_separate_until_final_teardown ... ok
+test tests::concurrent_last_owner_drop_during_record_belongs_to_next_batch ... ok
+test tests::context_drop_flushes_unfenced_without_per_batch_sync_or_early_free ... ok
+test tests::count_pressure_seals_without_new_synchronization ... ok
+test tests::dedicated_owner_aliases_retire_only_on_final_drop ... ok
+test tests::failed_or_panicking_shutdown_keeps_all_blocks_and_reserved_bytes ... ok
+test tests::many_blocks_share_two_fences_and_cannot_reuse_before_completion ... ok
+test tests::old_record_and_query_completion_fallbacks_are_preserved ... ok
+test tests::panic_in_record_query_or_sync_never_loses_the_batch ... ok
+test tests::partial_record_failure_retains_entire_batch_and_accounting ... ok
+test tests::pending_batch_pressure_only_defers_driver_growth_without_sync ... ok
+test tests::pending_bytes_admission_stops_growth_but_never_discards_prior_live_owners ... ok
+test tests::query_and_sync_failure_is_terminal_unknown ... ok
+test tests::reentrant_poll_and_metrics_do_not_hold_allocator_lock_across_driver ... ok
+test tests::shutdown_sync_only_releases_its_preexisting_snapshot ... ok
+test tests::successful_stream_teardown_before_seal_keeps_old_empty_registry_contract ... ok
+test tests::unknown_during_record_cannot_be_overridden_by_local_event_success ... ok
+test tests::unknown_during_shutdown_sync_preserves_its_entire_snapshot ... ok
+test tests::unknown_prevents_even_successful_recorded_fences_from_releasing_memory ... ok
+test tests::unknown_stream_teardown_before_seal_retains_unfenced_batch ... ok
+test tests::zero_sized_owner_never_creates_a_retirement_or_fence ... ok
+
+test result: ok. 29 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
+

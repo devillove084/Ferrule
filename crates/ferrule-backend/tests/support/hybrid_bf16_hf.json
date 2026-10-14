@@ -1,0 +1,17 @@
+{
+  "device": "cpu",
+  "torch": "2.13.0+cu129",
+  "transformers": "5.5.3",
+  "hf_source_sha256": "0f8ca77e875c31d448137c9ac291bed505c6b9927a85b5b8460af29d1e1ee647",
+  "capture_helper_sha256": "96ade024983defa3bbff3f873d2eadbf8c8a7081e6456a81c1556aebb2b606a9",
+  "fixture_sha256": "4411bdd050f29c679a0e0a04a1e1e80881b01b1c5c8d9e015c0645c0e3140111",
+  "seed": 35016,
+  "loading": "from_pretrained(dtype=torch.bfloat16)",
+  "experts": "native eager, ascending expert order",
+  "attention": "native eager",
+  "projection_dtype": "bfloat16",
+  "router_logits_dtype": "bfloat16",
+  "route_weights_dtype": "float32",
+  "output_dtype": "bfloat16",
+  "scope": "operator boundary captures only, no full-model/GPU acceptance"
+}

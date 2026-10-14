@@ -1,0 +1,16 @@
+{
+  "passed": true,
+  "gate": {
+    "name": "backend-route-alias-h2d-fault",
+    "binary": "backend",
+    "selector": "cuda::operators::standard_bf16::tests::packed_routes_gpu_reject_invalid_owners_aliases_and_after_h2d_fault",
+    "evidence": "route_batch_backend_words_counts_custody",
+    "devices": 1,
+    "reference": null,
+    "cache_bytes": null,
+    "observer": null
+  },
+  "proven_drained": true,
+  "all_eight_idle": true,
+  "performance_claim": false
+}

@@ -1,0 +1,96 @@
+{
+  "status": "pass_cpu_fixture_validation_gpu_released",
+  "cuda_generation_manifest_sha256": "4f3081e16cc496121817bd49e4732cb5b49a030ca9853f616751c17d23ba1704",
+  "fixtures": [
+    {
+      "directory": "hello-decode0-layer00-expert021",
+      "sha256": "e2bbcee5f8cd281b21bc87eea81663e739e8ab095a744b59ba2ddaf19365291f",
+      "validated_files": 9,
+      "word_geometry_finite_and_raw_source_exact": true
+    },
+    {
+      "directory": "hello-decode0-layer03-expert037",
+      "sha256": "985454817c99304845b479b3697f45581d38b4b7910de277836cd98102128b21",
+      "validated_files": 9,
+      "word_geometry_finite_and_raw_source_exact": true
+    },
+    {
+      "directory": "capital-decode0-layer00-expert072",
+      "sha256": "23f2715bea81a25f253d386e02168ab130dc7d41131dcb3662c7fb86078ef575",
+      "validated_files": 9,
+      "word_geometry_finite_and_raw_source_exact": true
+    },
+    {
+      "directory": "capital-decode0-layer03-expert010",
+      "sha256": "f8446da2922dd38ce67e4941f3ac9a6dcb9d86cb39ec2699492e4c58c9c8c3f4",
+      "validated_files": 9,
+      "word_geometry_finite_and_raw_source_exact": true
+    }
+  ],
+  "exact_controls": 40,
+  "expert_forward_calls": 8,
+  "down_calls": 64,
+  "selected_rank_rows": 8,
+  "capture_bytes": 36864,
+  "numerical_seconds": 4.18081078492105,
+  "supervisor_seconds": 6.4065684620290995,
+  "peak_reserved_bytes": 125829120,
+  "release": {
+    "all_eight_idle": [
+      {
+        "index": 0,
+        "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+        "memory_mib": 0,
+        "utilization": 0
+      },
+      {
+        "index": 1,
+        "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+        "memory_mib": 0,
+        "utilization": 0
+      },
+      {
+        "index": 2,
+        "uuid": "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6",
+        "memory_mib": 0,
+        "utilization": 0
+      },
+      {
+        "index": 3,
+        "uuid": "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011",
+        "memory_mib": 0,
+        "utilization": 0
+      },
+      {
+        "index": 4,
+        "uuid": "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86",
+        "memory_mib": 0,
+        "utilization": 0
+      },
+      {
+        "index": 5,
+        "uuid": "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685",
+        "memory_mib": 0,
+        "utilization": 0
+      },
+      {
+        "index": 6,
+        "uuid": "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d",
+        "memory_mib": 0,
+        "utilization": 0
+      },
+      {
+        "index": 7,
+        "uuid": "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f",
+        "memory_mib": 0,
+        "utilization": 0
+      }
+    ],
+    "compute_apps": [],
+    "owner_lock_available": true,
+    "owned_process_birth_identities_absent": true
+  },
+  "rust_preflight": "not_yet_run",
+  "native_or_candidate_gpu_gate": "not_run",
+  "old_reference_protocol_and_bundle_pins_unchanged": true
+}

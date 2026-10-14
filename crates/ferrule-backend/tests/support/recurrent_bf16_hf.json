@@ -1,0 +1,32 @@
+{
+  "torch": "2.13.0+cu129",
+  "transformers": "5.5.3",
+  "seed": 35016,
+  "device": "cpu",
+  "aten_cpu_capability": "avx512",
+  "oracle_batch_replicas": 8,
+  "cpu_rsqrt_note": "8 identical independent batches avoid CPU scalar BF16 rsqrt double-rounding tails; vector BF16 rsqrt verified against F32-rsqrt then BF16",
+  "loading": "Qwen3_5ForCausalLM.save_pretrained -> from_pretrained(dtype=torch.bfloat16)",
+  "parameters": {
+    "dt_bias": "torch.bfloat16",
+    "A_log": "torch.bfloat16",
+    "conv1d.weight": "torch.bfloat16",
+    "norm.weight": "torch.bfloat16",
+    "out_proj.weight": "torch.bfloat16",
+    "in_proj_qkv.weight": "torch.bfloat16",
+    "in_proj_z.weight": "torch.bfloat16",
+    "in_proj_b.weight": "torch.bfloat16",
+    "in_proj_a.weight": "torch.bfloat16"
+  },
+  "hf_source_sha256": "aee59d55ee4e8ce0e50bf0e279796b85c2c66a28dfae55c3fcbb62fa9bcba048",
+  "fixture_sha256": "c3c7d72e892f8dac26e4456ef69b4e65748137d0bee831593d22205c3b5b0985",
+  "cases": [
+    1,
+    7,
+    65,
+    129
+  ],
+  "recurrent_state_dtype": "torch.float32",
+  "conv_history_dtype": "torch.bfloat16",
+  "oracle": "HF torch_causal_conv1d_update, torch_recurrent_gated_delta_rule, torch_chunk_gated_delta_rule, Qwen3_5RMSNormGated"
+}

@@ -1,0 +1,19 @@
+{
+  "protocol": "tp2-serving-smoke-c1",
+  "purpose": "serving_smoke",
+  "status": "incomplete",
+  "sole_gpu_owner_granted": true,
+  "owner_note": "User explicitly authorized this agent as sole GPU owner for actual same-ae3e-binary S1/S2 smoke then frozen-4d40 versus ae3e cache A/B; no vLLM or Nsight; enforce UUID locks, idle, budgets and authenticated drain; no foreign kill",
+  "fairmatch": false,
+  "exact_speedup": null,
+  "slots": [
+    {
+      "id": "S1",
+      "status": "dispatched_unknown"
+    },
+    {
+      "id": "S2",
+      "status": "not_run"
+    }
+  ]
+}

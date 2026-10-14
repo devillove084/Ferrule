@@ -1,0 +1,15 @@
+{
+  "capture_error": null,
+  "capture_failure": null,
+  "committed": false,
+  "complete_available_trace": true,
+  "events": 7890,
+  "excluded_events": [
+    "gdn.chunk.workspace"
+  ],
+  "invocations": 2,
+  "peak_pending_bytes": 1215118,
+  "required_inventory_complete": false,
+  "schema": "ferrule.mixed-owner-trace.v2",
+  "tensor_bytes": 179759936
+}

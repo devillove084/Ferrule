@@ -1,0 +1,1649 @@
+{
+  "schema": "ferrule.paper.m7.plan.v1",
+  "status": "cpu_only_not_executed",
+  "config": {
+    "schema": "ferrule.paper.m7.config.v1",
+    "model": "/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8",
+    "quality_history": "target/validation/bf16-attention-model-current-20261007/FINAL.json",
+    "ferrule_build_environment": "target/validation/mixed-public-serve-owner-20261007/admission-deadline-fix/build-environment.json",
+    "vllm_fix_environment": "target/validation/vllm028-py312/jit-cuda12/fix-env.json",
+    "vllm": "target/vendor/vllm028-py312/bin/vllm",
+    "cargo": "/root/.cargo/bin/cargo",
+    "build_target": "target/paper-m7-release",
+    "protocol": {
+      "seed": 1,
+      "prompt": "Hello",
+      "input_tokens": 1,
+      "context": 128,
+      "batch_tokens": 8,
+      "active_sequences": 2,
+      "concurrency": 1,
+      "tp": 1,
+      "pp": 1,
+      "ep": 1,
+      "activation": "bfloat16",
+      "kv": "bfloat16",
+      "conv": "bfloat16",
+      "ssm": "float32",
+      "prefix_cache": false,
+      "eos": "natural",
+      "endpoint": "raw-completions"
+    },
+    "resources": {
+      "gpu_target_bytes": 7516192768,
+      "host_target_bytes": 68719476736,
+      "gpu_expected_total_bytes": 25769803776,
+      "idle_max_device_mib": 512,
+      "sample_interval_seconds": 2,
+      "hard_memory_partition": false,
+      "host_policy": "process-tree PSS monitored; RSS also reported; uncharged file cache and CUDA pinning remain separately unknown",
+      "gpu_policy": "7 GiB soft target; Ferrule admission and vLLM utilization planning are not hard device partitions"
+    },
+    "limits": {
+      "startup_seconds": 900,
+      "request_seconds": 120,
+      "measurement_seconds": 360,
+      "cleanup_seconds": 120,
+      "case_seconds": 1600,
+      "idle_seconds": 20,
+      "build_seconds": 1500
+    },
+    "workloads": {
+      "feasibility": {
+        "max_tokens": 2,
+        "requests": 1,
+        "warmup": 0
+      },
+      "run": {
+        "max_tokens": 32,
+        "requests": 4,
+        "warmup": 1
+      }
+    },
+    "ferrule_flags": {
+      "--backend": "cuda",
+      "--engine": "resident",
+      "--model-profile": "qwen35-mixed-bf16",
+      "--pipeline-parallel": "1",
+      "--tensor-parallel": "1",
+      "--expert-parallel": "1",
+      "--expert-prewarm": "lazy",
+      "--kv-execution-policy": "resident",
+      "--ctx-size": "128",
+      "--max-active-sequences": "2",
+      "--max-batch-tokens": "8",
+      "--prefill-chunk-size": "8",
+      "--kv-cache-mb": "16",
+      "--max-tensor-mb": "1024",
+      "--cuda-expert-device-entries": "8",
+      "--cuda-expert-device-bytes": "335544320",
+      "--cuda-expert-scratch-mb": "8",
+      "--cuda-workspace-mb": "2048",
+      "--cuda-device-budget-mb": "7168",
+      "--served-model-name": "qwen35-mixed-paper",
+      "--host": "127.0.0.1",
+      "--port": "18359"
+    },
+    "vllm_flags": {
+      "--host": "127.0.0.1",
+      "--port": "18357",
+      "--served-model-name": "qwen35-vllm-paper",
+      "--language-model-only": true,
+      "--tensor-parallel-size": "1",
+      "--pipeline-parallel-size": "1",
+      "--data-parallel-size": "1",
+      "--dtype": "bfloat16",
+      "--kv-cache-dtype": "auto",
+      "--mamba-cache-dtype": "bfloat16",
+      "--mamba-ssm-cache-dtype": "float32",
+      "--linear-backend": "marlin",
+      "--moe-backend": "marlin",
+      "--offload-backend": "uva",
+      "--cpu-offload-gb": "30",
+      "--cpu-offload-params": [
+        "w13_weight",
+        "w2_weight"
+      ],
+      "--max-model-len": "128",
+      "--max-num-seqs": "2",
+      "--max-num-batched-tokens": "8",
+      "--enable-chunked-prefill": true,
+      "--gpu-memory-utilization": "0.2916666666666667",
+      "--no-enable-prefix-caching": true,
+      "--generation-config": "vllm",
+      "--seed": "1",
+      "--enforce-eager": true
+    }
+  },
+  "config_sha256": "896b452251d68be110648ec6b36007e2bf31d3f8803b56969c8655db719af576",
+  "protocol_sha256": "c6f1591242e702740c3edadd5c71f428538fe4648bed0379232c53242fb3d076",
+  "cli_audit": {
+    "status": "pass",
+    "method": "25-option typed/value audit; static, not runtime/device validation",
+    "option_evidence": {
+      "--host": {
+        "annotation": "str | None",
+        "value": "127.0.0.1"
+      },
+      "--port": {
+        "annotation": "int",
+        "value": "18357"
+      },
+      "--served-model-name": {
+        "annotation": "str | list[str] | None",
+        "value": "qwen35-vllm-paper"
+      },
+      "--language-model-only": {
+        "annotation": "bool",
+        "value": true
+      },
+      "--tensor-parallel-size": {
+        "annotation": "int",
+        "value": "1"
+      },
+      "--pipeline-parallel-size": {
+        "annotation": "int",
+        "value": "1"
+      },
+      "--data-parallel-size": {
+        "annotation": "int",
+        "value": "1"
+      },
+      "--dtype": {
+        "annotation": "ModelDType",
+        "value": "bfloat16"
+      },
+      "--kv-cache-dtype": {
+        "annotation": "CacheDType",
+        "value": "auto"
+      },
+      "--mamba-cache-dtype": {
+        "annotation": "MambaDType",
+        "value": "bfloat16"
+      },
+      "--mamba-ssm-cache-dtype": {
+        "annotation": "MambaDType",
+        "value": "float32"
+      },
+      "--linear-backend": {
+        "annotation": "LinearBackend",
+        "value": "marlin"
+      },
+      "--moe-backend": {
+        "annotation": "MoEBackend",
+        "value": "marlin"
+      },
+      "--offload-backend": {
+        "annotation": "str",
+        "value": "uva"
+      },
+      "--cpu-offload-gb": {
+        "annotation": "float",
+        "value": "30"
+      },
+      "--cpu-offload-params": {
+        "annotation": "set[str]",
+        "value": [
+          "w13_weight",
+          "w2_weight"
+        ]
+      },
+      "--max-model-len": {
+        "annotation": "int",
+        "value": "128"
+      },
+      "--max-num-seqs": {
+        "annotation": "int | None",
+        "value": "2"
+      },
+      "--max-num-batched-tokens": {
+        "annotation": "int | None",
+        "value": "8"
+      },
+      "--enable-chunked-prefill": {
+        "annotation": "bool | None",
+        "value": true
+      },
+      "--gpu-memory-utilization": {
+        "annotation": "float",
+        "value": "0.2916666666666667"
+      },
+      "--no-enable-prefix-caching": {
+        "annotation": "bool | None",
+        "value": true
+      },
+      "--generation-config": {
+        "annotation": "str",
+        "value": "vllm"
+      },
+      "--seed": {
+        "annotation": "int",
+        "value": "1"
+      },
+      "--enforce-eager": {
+        "annotation": "bool",
+        "value": true
+      }
+    },
+    "source_pins": {
+      "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/vllm/config/cache.py": "8790351601be188ed1cc7ad9de2af1978b238269da4724873af1185c91165ef6",
+      "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/vllm/config/kernel.py": "e10194776f2ee1f2255d897ad5c952b7fbb5a961a3ecec2780dfb06b9fe79bcb",
+      "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/vllm/config/model.py": "17c687232886184f0390f38fc1c2c8ae078eaf24ebd1960a6b0c6a0669a35a98",
+      "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/vllm/config/offload.py": "6f2db3d9a2730588473d5155811690c6241b167a21dcb62fbbd9ebb6386de42c",
+      "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/vllm/engine/arg_utils.py": "75636c2a7903738f0e8954394fcedfced318d30a41598a8aca533be2ea2c38c4",
+      "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/vllm/entrypoints/openai/cli_args.py": "5b6c1c61bc9d25c703086b92a3e0040d21cc054305d9a0fbe69767dfd26af646"
+    }
+  },
+  "quality_history": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/bf16-attention-model-current-20261007/FINAL.json",
+    "sha256": "423ea8919e30251384b49a6dc7dfda687039cf6fd2175b0253dcc69b7faabf99",
+    "status": "PASS_mixed_prepared_attention_original_full40_and_fresh_quality",
+    "full40": {
+      "report": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/bf16-attention-model-current-20261007/full40/full40-bf16-profile.json",
+      "sha256": "ab5a12266343726cd98c8ddacb126b2b13222caa488b2ab70be258155911563e",
+      "passed": true,
+      "metric_count": 804,
+      "groups": {
+        "logits": {
+          "metrics": 4,
+          "elements": 1986560,
+          "tolerance_or_id_failures": 0,
+          "nonzero_max_abs_metrics": 3,
+          "max_abs": 0.03125,
+          "nonfinite": 0
+        },
+        "route_ids": {
+          "metrics": 160,
+          "elements": 2560,
+          "tolerance_or_id_failures": 0,
+          "nonzero_max_abs_metrics": 0,
+          "max_abs": 0,
+          "nonfinite": 0
+        },
+        "route_weights": {
+          "metrics": 160,
+          "elements": 2560,
+          "tolerance_or_id_failures": 0,
+          "nonzero_max_abs_metrics": 0,
+          "max_abs": 0.0,
+          "nonfinite": 0
+        },
+        "raw_router_logits": {
+          "metrics": 160,
+          "elements": 81920,
+          "tolerance_or_id_failures": 0,
+          "nonzero_max_abs_metrics": 0,
+          "max_abs": 0.0,
+          "nonfinite": 0
+        },
+        "conv": {
+          "metrics": 120,
+          "elements": 3932160,
+          "tolerance_or_id_failures": 0,
+          "nonzero_max_abs_metrics": 0,
+          "max_abs": 0.0,
+          "nonfinite": 0
+        },
+        "ssm": {
+          "metrics": 120,
+          "elements": 62914560,
+          "tolerance_or_id_failures": 0,
+          "nonzero_max_abs_metrics": 0,
+          "max_abs": 0.0,
+          "nonfinite": 0
+        },
+        "kv": {
+          "metrics": 80,
+          "elements": 143360,
+          "tolerance_or_id_failures": 0,
+          "nonzero_max_abs_metrics": 0,
+          "max_abs": 0.0,
+          "nonfinite": 0
+        }
+      },
+      "phases": {
+        "hello/prefill": {
+          "metrics": 201,
+          "elements": 16981120,
+          "tolerance_or_id_failures": 0,
+          "nonzero_max_abs_metrics": 1,
+          "max_abs": 0.03125,
+          "nonfinite": 0
+        },
+        "hello/decode.0": {
+          "metrics": 201,
+          "elements": 16991360,
+          "tolerance_or_id_failures": 0,
+          "nonzero_max_abs_metrics": 1,
+          "max_abs": 0.03125,
+          "nonfinite": 0
+        },
+        "capital/prefill": {
+          "metrics": 201,
+          "elements": 18058880,
+          "tolerance_or_id_failures": 0,
+          "nonzero_max_abs_metrics": 0,
+          "max_abs": 0.0,
+          "nonfinite": 0
+        },
+        "capital/decode.0": {
+          "metrics": 201,
+          "elements": 17032320,
+          "tolerance_or_id_failures": 0,
+          "nonzero_max_abs_metrics": 1,
+          "max_abs": 0.03125,
+          "nonfinite": 0
+        }
+      },
+      "logit_phases": [
+        {
+          "atol": 0.00025,
+          "elements": 248320,
+          "failures": 0,
+          "first_failure": null,
+          "label": "hello/prefill/all_logits",
+          "max_abs": 0.03125,
+          "max_tolerance_ratio": 0.6188118811881188,
+          "nonfinite": 0,
+          "rms": 0.0004201548424826106,
+          "rtol": 0.012
+        },
+        {
+          "atol": 0.00025,
+          "elements": 248320,
+          "failures": 0,
+          "first_failure": null,
+          "label": "hello/decode.0/all_logits",
+          "max_abs": 0.03125,
+          "max_tolerance_ratio": 0.6297229219143576,
+          "nonfinite": 0,
+          "rms": 0.0003387497106663331,
+          "rtol": 0.012
+        },
+        {
+          "atol": 0.00025,
+          "elements": 1241600,
+          "failures": 0,
+          "first_failure": null,
+          "label": "capital/prefill/all_logits",
+          "max_abs": 0.0,
+          "max_tolerance_ratio": 0.0,
+          "nonfinite": 0,
+          "rms": 0.0,
+          "rtol": 0.012
+        },
+        {
+          "atol": 0.00025,
+          "elements": 248320,
+          "failures": 0,
+          "first_failure": null,
+          "label": "capital/decode.0/all_logits",
+          "max_abs": 0.03125,
+          "max_tolerance_ratio": 0.6377551020408163,
+          "nonfinite": 0,
+          "rms": 0.0003062416453009937,
+          "rtol": 0.012
+        }
+      ],
+      "minimum_failed_state_layer": null,
+      "atol": 0.00025,
+      "rtol": 0.012,
+      "peak_allocator_reserved_bytes": 3904897024,
+      "state_bytes_after_shutdown": 0,
+      "quarantine": false,
+      "cases": null
+    },
+    "fresh_quality": {
+      "report": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/bf16-attention-model-current-20261007/quality.json",
+      "sha256": "7ccda10a691f354e319b64d46ea480c2b58565d4d888c9757248aeb7e73481dd",
+      "passed": true,
+      "metric_count": 5427,
+      "groups": {
+        "logits": {
+          "metrics": 27,
+          "elements": 9187840,
+          "tolerance_or_id_failures": 0,
+          "nonzero_max_abs_metrics": 24,
+          "max_abs": 0.0625,
+          "nonfinite": 0
+        },
+        "route_ids": {
+          "metrics": 1080,
+          "elements": 11840,
+          "tolerance_or_id_failures": 0,
+          "nonzero_max_abs_metrics": 0,
+          "max_abs": 0,
+          "nonfinite": 0
+        },
+        "route_weights": {
+          "metrics": 1080,
+          "elements": 11840,
+          "tolerance_or_id_failures": 0,
+          "nonzero_max_abs_metrics": 0,
+          "max_abs": 0.0,
+          "nonfinite": 0
+        },
+        "raw_router_logits": {
+          "metrics": 1080,
+          "elements": 378880,
+          "tolerance_or_id_failures": 0,
+          "nonzero_max_abs_metrics": 0,
+          "max_abs": 0.0,
+          "nonfinite": 0
+        },
+        "conv": {
+          "metrics": 810,
+          "elements": 26542080,
+          "tolerance_or_id_failures": 0,
+          "nonzero_max_abs_metrics": 0,
+          "max_abs": 0.0,
+          "nonfinite": 0
+        },
+        "ssm": {
+          "metrics": 810,
+          "elements": 424673280,
+          "tolerance_or_id_failures": 0,
+          "nonzero_max_abs_metrics": 0,
+          "max_abs": 0.0,
+          "nonfinite": 0
+        },
+        "kv": {
+          "metrics": 540,
+          "elements": 2304000,
+          "tolerance_or_id_failures": 0,
+          "nonzero_max_abs_metrics": 0,
+          "max_abs": 0.0,
+          "nonfinite": 0
+        }
+      },
+      "phases": {
+        "qa/step.00": {
+          "metrics": 201,
+          "elements": 18058880,
+          "tolerance_or_id_failures": 0,
+          "nonzero_max_abs_metrics": 0,
+          "max_abs": 0.0,
+          "nonfinite": 0
+        },
+        "qa/step.01": {
+          "metrics": 201,
+          "elements": 17032320,
+          "tolerance_or_id_failures": 0,
+          "nonzero_max_abs_metrics": 1,
+          "max_abs": 0.03125,
+          "nonfinite": 0
+        },
+        "qa/step.02": {
+          "metrics": 201,
+          "elements": 17042560,
+          "tolerance_or_id_failures": 0,
+          "nonzero_max_abs_metrics": 1,
+          "max_abs": 0.03125,
+          "nonfinite": 0
+        },
+        "qa/step.03": {
+          "metrics": 201,
+          "elements": 17052800,
+          "tolerance_or_id_failures": 0,
+          "nonzero_max_abs_metrics": 1,
+          "max_abs": 0.0625,
+          "nonfinite": 0
+        },
+        "qa/step.04": {
+          "metrics": 201,
+          "elements": 17063040,
+          "tolerance_or_id_failures": 0,
+          "nonzero_max_abs_metrics": 1,
+          "max_abs": 0.03125,
+          "nonfinite": 0
+        },
+        "qa/step.05": {
+          "metrics": 201,
+          "elements": 17073280,
+          "tolerance_or_id_failures": 0,
+          "nonzero_max_abs_metrics": 1,
+          "max_abs": 0.03125,
+          "nonfinite": 0
+        },
+        "qa/step.06": {
+          "metrics": 201,
+          "elements": 17083520,
+          "tolerance_or_id_failures": 0,
+          "nonzero_max_abs_metrics": 1,
+          "max_abs": 0.03125,
+          "nonfinite": 0
+        },
+        "qa/step.07": {
+          "metrics": 201,
+          "elements": 17093760,
+          "tolerance_or_id_failures": 0,
+          "nonzero_max_abs_metrics": 1,
+          "max_abs": 0.03125,
+          "nonfinite": 0
+        },
+        "qa/step.08": {
+          "metrics": 201,
+          "elements": 17104000,
+          "tolerance_or_id_failures": 0,
+          "nonzero_max_abs_metrics": 1,
+          "max_abs": 0.03125,
+          "nonfinite": 0
+        },
+        "arithmetic/step.00": {
+          "metrics": 201,
+          "elements": 18058880,
+          "tolerance_or_id_failures": 0,
+          "nonzero_max_abs_metrics": 0,
+          "max_abs": 0.0,
+          "nonfinite": 0
+        },
+        "arithmetic/step.01": {
+          "metrics": 201,
+          "elements": 17032320,
+          "tolerance_or_id_failures": 0,
+          "nonzero_max_abs_metrics": 1,
+          "max_abs": 0.03125,
+          "nonfinite": 0
+        },
+        "arithmetic/step.02": {
+          "metrics": 201,
+          "elements": 17042560,
+          "tolerance_or_id_failures": 0,
+          "nonzero_max_abs_metrics": 1,
+          "max_abs": 0.03125,
+          "nonfinite": 0
+        },
+        "arithmetic/step.03": {
+          "metrics": 201,
+          "elements": 17052800,
+          "tolerance_or_id_failures": 0,
+          "nonzero_max_abs_metrics": 1,
+          "max_abs": 0.03125,
+          "nonfinite": 0
+        },
+        "arithmetic/step.04": {
+          "metrics": 201,
+          "elements": 17063040,
+          "tolerance_or_id_failures": 0,
+          "nonzero_max_abs_metrics": 1,
+          "max_abs": 0.03125,
+          "nonfinite": 0
+        },
+        "arithmetic/step.05": {
+          "metrics": 201,
+          "elements": 17073280,
+          "tolerance_or_id_failures": 0,
+          "nonzero_max_abs_metrics": 1,
+          "max_abs": 0.03125,
+          "nonfinite": 0
+        },
+        "arithmetic/step.06": {
+          "metrics": 201,
+          "elements": 17083520,
+          "tolerance_or_id_failures": 0,
+          "nonzero_max_abs_metrics": 1,
+          "max_abs": 0.03125,
+          "nonfinite": 0
+        },
+        "arithmetic/step.07": {
+          "metrics": 201,
+          "elements": 17093760,
+          "tolerance_or_id_failures": 0,
+          "nonzero_max_abs_metrics": 1,
+          "max_abs": 0.0625,
+          "nonfinite": 0
+        },
+        "arithmetic/step.08": {
+          "metrics": 201,
+          "elements": 17104000,
+          "tolerance_or_id_failures": 0,
+          "nonzero_max_abs_metrics": 1,
+          "max_abs": 0.03125,
+          "nonfinite": 0
+        },
+        "chinese/step.00": {
+          "metrics": 201,
+          "elements": 17520000,
+          "tolerance_or_id_failures": 0,
+          "nonzero_max_abs_metrics": 0,
+          "max_abs": 0.0,
+          "nonfinite": 0
+        },
+        "chinese/step.01": {
+          "metrics": 201,
+          "elements": 17011840,
+          "tolerance_or_id_failures": 0,
+          "nonzero_max_abs_metrics": 1,
+          "max_abs": 0.03125,
+          "nonfinite": 0
+        },
+        "chinese/step.02": {
+          "metrics": 201,
+          "elements": 17022080,
+          "tolerance_or_id_failures": 0,
+          "nonzero_max_abs_metrics": 1,
+          "max_abs": 0.03125,
+          "nonfinite": 0
+        },
+        "chinese/step.03": {
+          "metrics": 201,
+          "elements": 17032320,
+          "tolerance_or_id_failures": 0,
+          "nonzero_max_abs_metrics": 1,
+          "max_abs": 0.03125,
+          "nonfinite": 0
+        },
+        "chinese/step.04": {
+          "metrics": 201,
+          "elements": 17042560,
+          "tolerance_or_id_failures": 0,
+          "nonzero_max_abs_metrics": 1,
+          "max_abs": 0.03125,
+          "nonfinite": 0
+        },
+        "chinese/step.05": {
+          "metrics": 201,
+          "elements": 17052800,
+          "tolerance_or_id_failures": 0,
+          "nonzero_max_abs_metrics": 1,
+          "max_abs": 0.03125,
+          "nonfinite": 0
+        },
+        "chinese/step.06": {
+          "metrics": 201,
+          "elements": 17063040,
+          "tolerance_or_id_failures": 0,
+          "nonzero_max_abs_metrics": 1,
+          "max_abs": 0.03125,
+          "nonfinite": 0
+        },
+        "chinese/step.07": {
+          "metrics": 201,
+          "elements": 17073280,
+          "tolerance_or_id_failures": 0,
+          "nonzero_max_abs_metrics": 1,
+          "max_abs": 0.03125,
+          "nonfinite": 0
+        },
+        "chinese/step.08": {
+          "metrics": 201,
+          "elements": 17083520,
+          "tolerance_or_id_failures": 0,
+          "nonzero_max_abs_metrics": 1,
+          "max_abs": 0.03125,
+          "nonfinite": 0
+        }
+      },
+      "logit_phases": [
+        {
+          "atol": 0.00025,
+          "elements": 1241600,
+          "failures": 0,
+          "first_failure": null,
+          "label": "qa/step.00/all_logits",
+          "max_abs": 0.0,
+          "max_tolerance_ratio": 0.0,
+          "nonfinite": 0,
+          "rms": 0.0,
+          "rtol": 0.012
+        },
+        {
+          "atol": 0.00025,
+          "elements": 248320,
+          "failures": 0,
+          "first_failure": null,
+          "label": "qa/step.01/all_logits",
+          "max_abs": 0.03125,
+          "max_tolerance_ratio": 0.6345177664974619,
+          "nonfinite": 0,
+          "rms": 0.00029962154827481555,
+          "rtol": 0.012
+        },
+        {
+          "atol": 0.00025,
+          "elements": 248320,
+          "failures": 0,
+          "first_failure": null,
+          "label": "qa/step.02/all_logits",
+          "max_abs": 0.03125,
+          "max_tolerance_ratio": 0.6297229219143576,
+          "nonfinite": 0,
+          "rms": 0.0003492534773969794,
+          "rtol": 0.012
+        },
+        {
+          "atol": 0.00025,
+          "elements": 248320,
+          "failures": 0,
+          "first_failure": null,
+          "label": "qa/step.03/all_logits",
+          "max_abs": 0.0625,
+          "max_tolerance_ratio": 0.6426735218508998,
+          "nonfinite": 0,
+          "rms": 0.0003907157005912971,
+          "rtol": 0.012
+        },
+        {
+          "atol": 0.00025,
+          "elements": 248320,
+          "failures": 0,
+          "first_failure": null,
+          "label": "qa/step.04/all_logits",
+          "max_abs": 0.03125,
+          "max_tolerance_ratio": 0.6426735218508998,
+          "nonfinite": 0,
+          "rms": 0.0003053084544703391,
+          "rtol": 0.012
+        },
+        {
+          "atol": 0.00025,
+          "elements": 248320,
+          "failures": 0,
+          "first_failure": null,
+          "label": "qa/step.05/all_logits",
+          "max_abs": 0.03125,
+          "max_tolerance_ratio": 0.639386189258312,
+          "nonfinite": 0,
+          "rms": 0.00020995367409068103,
+          "rtol": 0.012
+        },
+        {
+          "atol": 0.00025,
+          "elements": 248320,
+          "failures": 0,
+          "first_failure": null,
+          "label": "qa/step.06/all_logits",
+          "max_abs": 0.03125,
+          "max_tolerance_ratio": 0.6426735218508998,
+          "nonfinite": 0,
+          "rms": 0.00031446250844930235,
+          "rtol": 0.012
+        },
+        {
+          "atol": 0.00025,
+          "elements": 248320,
+          "failures": 0,
+          "first_failure": null,
+          "label": "qa/step.07/all_logits",
+          "max_abs": 0.03125,
+          "max_tolerance_ratio": 0.6345177664974619,
+          "nonfinite": 0,
+          "rms": 0.00026584267644474513,
+          "rtol": 0.012
+        },
+        {
+          "atol": 0.00025,
+          "elements": 248320,
+          "failures": 0,
+          "first_failure": null,
+          "label": "qa/step.08/all_logits",
+          "max_abs": 0.03125,
+          "max_tolerance_ratio": 0.6203473945409429,
+          "nonfinite": 0,
+          "rms": 0.0004212259259690178,
+          "rtol": 0.012
+        },
+        {
+          "atol": 0.00025,
+          "elements": 1241600,
+          "failures": 0,
+          "first_failure": null,
+          "label": "arithmetic/step.00/all_logits",
+          "max_abs": 0.0,
+          "max_tolerance_ratio": 0.0,
+          "nonfinite": 0,
+          "rms": 0.0,
+          "rtol": 0.012
+        },
+        {
+          "atol": 0.00025,
+          "elements": 248320,
+          "failures": 0,
+          "first_failure": null,
+          "label": "arithmetic/step.01/all_logits",
+          "max_abs": 0.03125,
+          "max_tolerance_ratio": 0.6426735218508998,
+          "nonfinite": 0,
+          "rms": 0.00042917085247391165,
+          "rtol": 0.012
+        },
+        {
+          "atol": 0.00025,
+          "elements": 248320,
+          "failures": 0,
+          "first_failure": null,
+          "label": "arithmetic/step.02/all_logits",
+          "max_abs": 0.03125,
+          "max_tolerance_ratio": 0.6426735218508998,
+          "nonfinite": 0,
+          "rms": 0.0003085633948716584,
+          "rtol": 0.012
+        },
+        {
+          "atol": 0.00025,
+          "elements": 248320,
+          "failures": 0,
+          "first_failure": null,
+          "label": "arithmetic/step.03/all_logits",
+          "max_abs": 0.03125,
+          "max_tolerance_ratio": 0.6426735218508998,
+          "nonfinite": 0,
+          "rms": 0.0004081288886708063,
+          "rtol": 0.012
+        },
+        {
+          "atol": 0.00025,
+          "elements": 248320,
+          "failures": 0,
+          "first_failure": null,
+          "label": "arithmetic/step.04/all_logits",
+          "max_abs": 0.03125,
+          "max_tolerance_ratio": 0.6426735218508998,
+          "nonfinite": 0,
+          "rms": 0.0004299756739399588,
+          "rtol": 0.012
+        },
+        {
+          "atol": 0.00025,
+          "elements": 248320,
+          "failures": 0,
+          "first_failure": null,
+          "label": "arithmetic/step.05/all_logits",
+          "max_abs": 0.03125,
+          "max_tolerance_ratio": 0.6426735218508998,
+          "nonfinite": 0,
+          "rms": 0.0003231485280001297,
+          "rtol": 0.012
+        },
+        {
+          "atol": 0.00025,
+          "elements": 248320,
+          "failures": 0,
+          "first_failure": null,
+          "label": "arithmetic/step.06/all_logits",
+          "max_abs": 0.03125,
+          "max_tolerance_ratio": 0.6426735218508998,
+          "nonfinite": 0,
+          "rms": 0.0003551342964988418,
+          "rtol": 0.012
+        },
+        {
+          "atol": 0.00025,
+          "elements": 248320,
+          "failures": 0,
+          "first_failure": null,
+          "label": "arithmetic/step.07/all_logits",
+          "max_abs": 0.0625,
+          "max_tolerance_ratio": 0.6329113924050632,
+          "nonfinite": 0,
+          "rms": 0.00034073949862015445,
+          "rtol": 0.012
+        },
+        {
+          "atol": 0.00025,
+          "elements": 248320,
+          "failures": 0,
+          "first_failure": null,
+          "label": "arithmetic/step.08/all_logits",
+          "max_abs": 0.03125,
+          "max_tolerance_ratio": 0.6426735218508998,
+          "nonfinite": 0,
+          "rms": 0.00033908303883583267,
+          "rtol": 0.012
+        },
+        {
+          "atol": 0.00025,
+          "elements": 744960,
+          "failures": 0,
+          "first_failure": null,
+          "label": "chinese/step.00/all_logits",
+          "max_abs": 0.0,
+          "max_tolerance_ratio": 0.0,
+          "nonfinite": 0,
+          "rms": 0.0,
+          "rtol": 0.012
+        },
+        {
+          "atol": 0.00025,
+          "elements": 248320,
+          "failures": 0,
+          "first_failure": null,
+          "label": "chinese/step.01/all_logits",
+          "max_abs": 0.03125,
+          "max_tolerance_ratio": 0.6297229219143576,
+          "nonfinite": 0,
+          "rms": 0.0003227946208446763,
+          "rtol": 0.012
+        },
+        {
+          "atol": 0.00025,
+          "elements": 248320,
+          "failures": 0,
+          "first_failure": null,
+          "label": "chinese/step.02/all_logits",
+          "max_abs": 0.03125,
+          "max_tolerance_ratio": 0.6329113924050632,
+          "nonfinite": 0,
+          "rms": 0.0003839527289725968,
+          "rtol": 0.012
+        },
+        {
+          "atol": 0.00025,
+          "elements": 248320,
+          "failures": 0,
+          "first_failure": null,
+          "label": "chinese/step.03/all_logits",
+          "max_abs": 0.03125,
+          "max_tolerance_ratio": 0.6297229219143576,
+          "nonfinite": 0,
+          "rms": 0.0003430086393211284,
+          "rtol": 0.012
+        },
+        {
+          "atol": 0.00025,
+          "elements": 248320,
+          "failures": 0,
+          "first_failure": null,
+          "label": "chinese/step.04/all_logits",
+          "max_abs": 0.03125,
+          "max_tolerance_ratio": 0.6426735218508998,
+          "nonfinite": 0,
+          "rms": 0.0003511600532446638,
+          "rtol": 0.012
+        },
+        {
+          "atol": 0.00025,
+          "elements": 248320,
+          "failures": 0,
+          "first_failure": null,
+          "label": "chinese/step.05/all_logits",
+          "max_abs": 0.03125,
+          "max_tolerance_ratio": 0.6426735218508998,
+          "nonfinite": 0,
+          "rms": 0.00032987617765443885,
+          "rtol": 0.012
+        },
+        {
+          "atol": 0.00025,
+          "elements": 248320,
+          "failures": 0,
+          "first_failure": null,
+          "label": "chinese/step.06/all_logits",
+          "max_abs": 0.03125,
+          "max_tolerance_ratio": 0.6426735218508998,
+          "nonfinite": 0,
+          "rms": 0.0003643877352517124,
+          "rtol": 0.012
+        },
+        {
+          "atol": 0.00025,
+          "elements": 248320,
+          "failures": 0,
+          "first_failure": null,
+          "label": "chinese/step.07/all_logits",
+          "max_abs": 0.03125,
+          "max_tolerance_ratio": 0.6377551020408163,
+          "nonfinite": 0,
+          "rms": 0.00041721127129378313,
+          "rtol": 0.012
+        },
+        {
+          "atol": 0.00025,
+          "elements": 248320,
+          "failures": 0,
+          "first_failure": null,
+          "label": "chinese/step.08/all_logits",
+          "max_abs": 0.03125,
+          "max_tolerance_ratio": 0.639386189258312,
+          "nonfinite": 0,
+          "rms": 0.0004554969258157456,
+          "rtol": 0.012
+        }
+      ],
+      "minimum_failed_state_layer": null,
+      "atol": 0.00025,
+      "rtol": 0.012,
+      "peak_allocator_reserved_bytes": 3904897024,
+      "state_bytes_after_shutdown": 0,
+      "quarantine": false,
+      "cases": [
+        {
+          "case": "qa",
+          "common_history_generated_ids": [
+            25358,
+            13,
+            198,
+            760,
+            6511,
+            314,
+            6124,
+            369,
+            25358
+          ],
+          "fork_snapshot_equal": true,
+          "free_greedy_equal": true,
+          "free_greedy_ids": [
+            25358,
+            13,
+            198,
+            760,
+            6511,
+            314,
+            6124,
+            369,
+            25358
+          ],
+          "free_greedy_status": "completed_independent_feedback",
+          "oracle_generated_ids": [
+            25358,
+            13,
+            198,
+            760,
+            6511,
+            314,
+            6124,
+            369,
+            25358
+          ],
+          "prompt_ids": [
+            760,
+            6511,
+            314,
+            6124,
+            369
+          ],
+          "reset_equal": true,
+          "reset_generated_ids": [
+            25358,
+            13,
+            198,
+            760,
+            6511,
+            314,
+            6124,
+            369,
+            25358
+          ],
+          "reset_reused_state": true,
+          "top1_failures": []
+        },
+        {
+          "case": "arithmetic",
+          "common_history_generated_ids": [
+            907,
+            271,
+            22,
+            478,
+            220,
+            23,
+            283,
+            220,
+            16
+          ],
+          "fork_snapshot_equal": null,
+          "free_greedy_equal": true,
+          "free_greedy_ids": [
+            907,
+            271,
+            22,
+            478,
+            220,
+            23,
+            283,
+            220,
+            16
+          ],
+          "free_greedy_status": "completed_independent_feedback",
+          "oracle_generated_ids": [
+            907,
+            271,
+            22,
+            478,
+            220,
+            23,
+            283,
+            220,
+            16
+          ],
+          "prompt_ids": [
+            22,
+            478,
+            220,
+            23,
+            283
+          ],
+          "reset_reused_state": false,
+          "top1_failures": []
+        },
+        {
+          "case": "chinese",
+          "common_history_generated_ids": [
+            98116,
+            3709,
+            98116,
+            108820,
+            102357,
+            95983,
+            1710,
+            97486,
+            3709
+          ],
+          "fork_snapshot_equal": null,
+          "free_greedy_equal": true,
+          "free_greedy_ids": [
+            98116,
+            3709,
+            98116,
+            108820,
+            102357,
+            95983,
+            1710,
+            97486,
+            3709
+          ],
+          "free_greedy_status": "completed_independent_feedback",
+          "oracle_generated_ids": [
+            98116,
+            3709,
+            98116,
+            108820,
+            102357,
+            95983,
+            1710,
+            97486,
+            3709
+          ],
+          "prompt_ids": [
+            96328,
+            102357,
+            96878
+          ],
+          "reset_reused_state": false,
+          "top1_failures": []
+        }
+      ]
+    },
+    "cold_qa_restart": {
+      "report": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/bf16-attention-model-current-20261007/cold.json",
+      "sha256": "c9005c5e5f486dbc31e7112a2f20801dff8f477cc4ed77bf18d74e20c8234c44",
+      "passed": true,
+      "metric_count": 1809,
+      "groups": {
+        "logits": {
+          "metrics": 9,
+          "elements": 3228160,
+          "tolerance_or_id_failures": 0,
+          "nonzero_max_abs_metrics": 8,
+          "max_abs": 0.0625,
+          "nonfinite": 0
+        },
+        "route_ids": {
+          "metrics": 360,
+          "elements": 4160,
+          "tolerance_or_id_failures": 0,
+          "nonzero_max_abs_metrics": 0,
+          "max_abs": 0,
+          "nonfinite": 0
+        },
+        "route_weights": {
+          "metrics": 360,
+          "elements": 4160,
+          "tolerance_or_id_failures": 0,
+          "nonzero_max_abs_metrics": 0,
+          "max_abs": 0.0,
+          "nonfinite": 0
+        },
+        "raw_router_logits": {
+          "metrics": 360,
+          "elements": 133120,
+          "tolerance_or_id_failures": 0,
+          "nonzero_max_abs_metrics": 0,
+          "max_abs": 0.0,
+          "nonfinite": 0
+        },
+        "conv": {
+          "metrics": 270,
+          "elements": 8847360,
+          "tolerance_or_id_failures": 0,
+          "nonzero_max_abs_metrics": 0,
+          "max_abs": 0.0,
+          "nonfinite": 0
+        },
+        "ssm": {
+          "metrics": 270,
+          "elements": 141557760,
+          "tolerance_or_id_failures": 0,
+          "nonzero_max_abs_metrics": 0,
+          "max_abs": 0.0,
+          "nonfinite": 0
+        },
+        "kv": {
+          "metrics": 180,
+          "elements": 829440,
+          "tolerance_or_id_failures": 0,
+          "nonzero_max_abs_metrics": 0,
+          "max_abs": 0.0,
+          "nonfinite": 0
+        }
+      },
+      "phases": {
+        "qa/step.00": {
+          "metrics": 201,
+          "elements": 18058880,
+          "tolerance_or_id_failures": 0,
+          "nonzero_max_abs_metrics": 0,
+          "max_abs": 0.0,
+          "nonfinite": 0
+        },
+        "qa/step.01": {
+          "metrics": 201,
+          "elements": 17032320,
+          "tolerance_or_id_failures": 0,
+          "nonzero_max_abs_metrics": 1,
+          "max_abs": 0.03125,
+          "nonfinite": 0
+        },
+        "qa/step.02": {
+          "metrics": 201,
+          "elements": 17042560,
+          "tolerance_or_id_failures": 0,
+          "nonzero_max_abs_metrics": 1,
+          "max_abs": 0.03125,
+          "nonfinite": 0
+        },
+        "qa/step.03": {
+          "metrics": 201,
+          "elements": 17052800,
+          "tolerance_or_id_failures": 0,
+          "nonzero_max_abs_metrics": 1,
+          "max_abs": 0.0625,
+          "nonfinite": 0
+        },
+        "qa/step.04": {
+          "metrics": 201,
+          "elements": 17063040,
+          "tolerance_or_id_failures": 0,
+          "nonzero_max_abs_metrics": 1,
+          "max_abs": 0.03125,
+          "nonfinite": 0
+        },
+        "qa/step.05": {
+          "metrics": 201,
+          "elements": 17073280,
+          "tolerance_or_id_failures": 0,
+          "nonzero_max_abs_metrics": 1,
+          "max_abs": 0.03125,
+          "nonfinite": 0
+        },
+        "qa/step.06": {
+          "metrics": 201,
+          "elements": 17083520,
+          "tolerance_or_id_failures": 0,
+          "nonzero_max_abs_metrics": 1,
+          "max_abs": 0.03125,
+          "nonfinite": 0
+        },
+        "qa/step.07": {
+          "metrics": 201,
+          "elements": 17093760,
+          "tolerance_or_id_failures": 0,
+          "nonzero_max_abs_metrics": 1,
+          "max_abs": 0.03125,
+          "nonfinite": 0
+        },
+        "qa/step.08": {
+          "metrics": 201,
+          "elements": 17104000,
+          "tolerance_or_id_failures": 0,
+          "nonzero_max_abs_metrics": 1,
+          "max_abs": 0.03125,
+          "nonfinite": 0
+        }
+      },
+      "logit_phases": [
+        {
+          "atol": 0.00025,
+          "elements": 1241600,
+          "failures": 0,
+          "first_failure": null,
+          "label": "qa/step.00/all_logits",
+          "max_abs": 0.0,
+          "max_tolerance_ratio": 0.0,
+          "nonfinite": 0,
+          "rms": 0.0,
+          "rtol": 0.012
+        },
+        {
+          "atol": 0.00025,
+          "elements": 248320,
+          "failures": 0,
+          "first_failure": null,
+          "label": "qa/step.01/all_logits",
+          "max_abs": 0.03125,
+          "max_tolerance_ratio": 0.6345177664974619,
+          "nonfinite": 0,
+          "rms": 0.00029962154827481555,
+          "rtol": 0.012
+        },
+        {
+          "atol": 0.00025,
+          "elements": 248320,
+          "failures": 0,
+          "first_failure": null,
+          "label": "qa/step.02/all_logits",
+          "max_abs": 0.03125,
+          "max_tolerance_ratio": 0.6297229219143576,
+          "nonfinite": 0,
+          "rms": 0.0003492534773969794,
+          "rtol": 0.012
+        },
+        {
+          "atol": 0.00025,
+          "elements": 248320,
+          "failures": 0,
+          "first_failure": null,
+          "label": "qa/step.03/all_logits",
+          "max_abs": 0.0625,
+          "max_tolerance_ratio": 0.6426735218508998,
+          "nonfinite": 0,
+          "rms": 0.0003907157005912971,
+          "rtol": 0.012
+        },
+        {
+          "atol": 0.00025,
+          "elements": 248320,
+          "failures": 0,
+          "first_failure": null,
+          "label": "qa/step.04/all_logits",
+          "max_abs": 0.03125,
+          "max_tolerance_ratio": 0.6426735218508998,
+          "nonfinite": 0,
+          "rms": 0.0003053084544703391,
+          "rtol": 0.012
+        },
+        {
+          "atol": 0.00025,
+          "elements": 248320,
+          "failures": 0,
+          "first_failure": null,
+          "label": "qa/step.05/all_logits",
+          "max_abs": 0.03125,
+          "max_tolerance_ratio": 0.639386189258312,
+          "nonfinite": 0,
+          "rms": 0.00020995367409068103,
+          "rtol": 0.012
+        },
+        {
+          "atol": 0.00025,
+          "elements": 248320,
+          "failures": 0,
+          "first_failure": null,
+          "label": "qa/step.06/all_logits",
+          "max_abs": 0.03125,
+          "max_tolerance_ratio": 0.6426735218508998,
+          "nonfinite": 0,
+          "rms": 0.00031446250844930235,
+          "rtol": 0.012
+        },
+        {
+          "atol": 0.00025,
+          "elements": 248320,
+          "failures": 0,
+          "first_failure": null,
+          "label": "qa/step.07/all_logits",
+          "max_abs": 0.03125,
+          "max_tolerance_ratio": 0.6345177664974619,
+          "nonfinite": 0,
+          "rms": 0.00026584267644474513,
+          "rtol": 0.012
+        },
+        {
+          "atol": 0.00025,
+          "elements": 248320,
+          "failures": 0,
+          "first_failure": null,
+          "label": "qa/step.08/all_logits",
+          "max_abs": 0.03125,
+          "max_tolerance_ratio": 0.6203473945409429,
+          "nonfinite": 0,
+          "rms": 0.0004212259259690178,
+          "rtol": 0.012
+        }
+      ],
+      "minimum_failed_state_layer": null,
+      "atol": 0.00025,
+      "rtol": 0.012,
+      "peak_allocator_reserved_bytes": 3904897024,
+      "state_bytes_after_shutdown": 0,
+      "quarantine": false,
+      "cases": [
+        {
+          "case": "qa",
+          "common_history_generated_ids": [
+            25358,
+            13,
+            198,
+            760,
+            6511,
+            314,
+            6124,
+            369,
+            25358
+          ],
+          "fork_snapshot_equal": true,
+          "free_greedy_equal": true,
+          "free_greedy_ids": [
+            25358,
+            13,
+            198,
+            760,
+            6511,
+            314,
+            6124,
+            369,
+            25358
+          ],
+          "free_greedy_status": "completed_independent_feedback",
+          "oracle_generated_ids": [
+            25358,
+            13,
+            198,
+            760,
+            6511,
+            314,
+            6124,
+            369,
+            25358
+          ],
+          "prompt_ids": [
+            760,
+            6511,
+            314,
+            6124,
+            369
+          ],
+          "reset_equal": true,
+          "reset_generated_ids": [
+            25358,
+            13,
+            198,
+            760,
+            6511,
+            314,
+            6124,
+            369,
+            25358
+          ],
+          "reset_reused_state": true,
+          "top1_failures": []
+        }
+      ]
+    },
+    "applicability": "historical numerical PASS; subsequent composition-only refactor reported numerically unchanged; new release basic quality still required"
+  },
+  "model_identity": {
+    "path": "/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8",
+    "metadata_sha256": {
+      "config.json": "236c373b0682a4f40c2fa49ef8e5f722a87a8dbfe265286b6d5260b23d7cb229",
+      "model.safetensors.index.json": "b009f7a49c442fce959a2ff6fee41c69248879b90d7ff5636ec6d2068ac4876d",
+      "tokenizer.json": "5f9e4d4901a92b997e463c1f46055088b6cca5ca61a6522d1b9f64c4bb81cb42",
+      "tokenizer_config.json": "316230d6a809701f4db5ea8f8fc862bc3a6f3229c937c174e674ff3ca0a64ac8"
+    },
+    "shard_stats": {
+      "model.safetensors-00001-of-00014.safetensors": {
+        "bytes": 2685395560,
+        "mtime_ns": 1772424992657055256,
+        "inode": 38524559,
+        "device": 236
+      },
+      "model.safetensors-00002-of-00014.safetensors": {
+        "bytes": 2685393512,
+        "mtime_ns": 1772424806750938380,
+        "inode": 38524557,
+        "device": 236
+      },
+      "model.safetensors-00003-of-00014.safetensors": {
+        "bytes": 2685393512,
+        "mtime_ns": 1772425351626122160,
+        "inode": 38524563,
+        "device": 236
+      },
+      "model.safetensors-00004-of-00014.safetensors": {
+        "bytes": 2685394536,
+        "mtime_ns": 1772425557825932903,
+        "inode": 38524564,
+        "device": 236
+      },
+      "model.safetensors-00005-of-00014.safetensors": {
+        "bytes": 2685395560,
+        "mtime_ns": 1772425889647579315,
+        "inode": 38524566,
+        "device": 236
+      },
+      "model.safetensors-00006-of-00014.safetensors": {
+        "bytes": 2685394536,
+        "mtime_ns": 1772425164292942735,
+        "inode": 38524561,
+        "device": 236
+      },
+      "model.safetensors-00007-of-00014.safetensors": {
+        "bytes": 2685393512,
+        "mtime_ns": 1772426151999313636,
+        "inode": 38524567,
+        "device": 236
+      },
+      "model.safetensors-00008-of-00014.safetensors": {
+        "bytes": 2685393512,
+        "mtime_ns": 1772426339785901318,
+        "inode": 38524569,
+        "device": 236
+      },
+      "model.safetensors-00009-of-00014.safetensors": {
+        "bytes": 3645492144,
+        "mtime_ns": 1772426665613745394,
+        "inode": 38524570,
+        "device": 236
+      },
+      "model.safetensors-00010-of-00014.safetensors": {
+        "bytes": 2685398632,
+        "mtime_ns": 1772426854560705584,
+        "inode": 38524571,
+        "device": 236
+      },
+      "model.safetensors-00011-of-00014.safetensors": {
+        "bytes": 2685400680,
+        "mtime_ns": 1772427035405551264,
+        "inode": 38524573,
+        "device": 236
+      },
+      "model.safetensors-00012-of-00014.safetensors": {
+        "bytes": 2685399144,
+        "mtime_ns": 1772427235837349585,
+        "inode": 38524574,
+        "device": 236
+      },
+      "model.safetensors-00013-of-00014.safetensors": {
+        "bytes": 3011229472,
+        "mtime_ns": 1772427400537041055,
+        "inode": 38524576,
+        "device": 236
+      },
+      "model.safetensors-00014-of-00014.safetensors": {
+        "bytes": 1267650368,
+        "mtime_ns": 1772427480416081771,
+        "inode": 38524577,
+        "device": 236
+      }
+    },
+    "index_payload_bytes": 37454799072,
+    "identity_strength": "partial: metadata hashes + shard stat pins; payloads NOT hashed",
+    "full_checkpoint_sha256": null
+  },
+  "build": {
+    "argv": [
+      "/root/.cargo/bin/cargo",
+      "build",
+      "--offline",
+      "--locked",
+      "--release",
+      "-p",
+      "ferrule-cli",
+      "--bin",
+      "ferrule",
+      "--no-default-features",
+      "--features",
+      "cuda",
+      "--message-format=json",
+      "--target-dir",
+      "/home/admin/luhuanbing.lhb/Ferrule/target/paper-m7-release"
+    ],
+    "environment": {
+      "PATH": "/home/admin/wxw403883/anaconda3/envs/tao/bin:/root/.cargo/bin:/usr/bin:/bin",
+      "CUDA_HOME": "/home/admin/wxw403883/anaconda3/envs/tao",
+      "NVCC": "/home/admin/wxw403883/anaconda3/envs/tao/bin/nvcc",
+      "LD_LIBRARY_PATH": "/home/admin/wxw403883/anaconda3/envs/tao/lib:/usr/lib64",
+      "FERRULE_CUDA_ARCH": "sm_86",
+      "FERRULE_CUTLASS_DIR": "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/cutlass",
+      "RUSTFLAGS": "-L native=/home/admin/luhuanbing.lhb/Ferrule/target/validation/qwen35-35b-current/toolchain/link -L native=/home/admin/luhuanbing.lhb/Ferrule/target/validation/bf16-mixed-qkv-20261005/link -L native=/home/admin/wxw403883/anaconda3/envs/tao/lib",
+      "HOME": "/root",
+      "CUDA_VISIBLE_DEVICES": "",
+      "NVIDIA_VISIBLE_DEVICES": "none",
+      "CUBLAS_WORKSPACE_CONFIG": ":0:0",
+      "CARGO_BUILD_JOBS": "2",
+      "CARGO_PROFILE_RELEASE_OPT_LEVEL": "3",
+      "CARGO_PROFILE_RELEASE_LTO": "fat",
+      "CARGO_PROFILE_RELEASE_CODEGEN_UNITS": "1",
+      "CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS": "false",
+      "PYTHONDONTWRITEBYTECODE": "1",
+      "RUSTUP_TOOLCHAIN": "nightly-2026-08-01",
+      "CC": "/usr/bin/gcc",
+      "CXX": "/usr/bin/g++",
+      "CUDAHOSTCXX": "/usr/bin/g++"
+    },
+    "execute_requires": "build --execute-build; optional, no GPU queries"
+  },
+  "host": {
+    "monotonic_clock": {
+      "implementation": "clock_gettime(CLOCK_MONOTONIC)",
+      "resolution": 1e-09,
+      "adjustable": false
+    },
+    "memlock": [
+      65536,
+      65536
+    ]
+  },
+  "gates": [
+    "fresh release build pin",
+    "explicit sole-owner grant + physical UUID",
+    "independent idle before/after each engine",
+    "authenticated descendant drain",
+    "observed GPU/PSS within targets",
+    "release basic quality before Hello32"
+  ],
+  "deferred": [
+    "p128o32 needs a separately versioned ctx160 admission/quality profile"
+  ],
+  "exact_speedup": null,
+  "hard_memory_partition": false
+}

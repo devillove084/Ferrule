@@ -1,0 +1,50 @@
+{
+  "status": "verified",
+  "utc": "2026-10-11T21:44:39.327045+00:00",
+  "all_eight_idle": true,
+  "uuid_locks_released": true,
+  "errors": [],
+  "roster_queries": {
+    "devices": {
+      "argv": [
+        "/usr/bin/nvidia-smi",
+        "--query-gpu=uuid,memory.used",
+        "--format=csv,noheader,nounits"
+      ],
+      "stdout": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535, 0\nGPU-63f1bd01-ddf9-a742-ee48-9389892493d9, 0\nGPU-0bc01d70-2ade-0714-8959-b25ae75469b6, 0\nGPU-dc825838-7c6c-2683-71e7-9ee0ac61b011, 0\nGPU-6c86e874-0ba8-b45a-a604-bca3b934bb86, 0\nGPU-ff61a997-b3fc-fd3d-800d-63bad94fd685, 0\nGPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d, 0\nGPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f, 0\n",
+      "stderr": "",
+      "returncode": 0
+    },
+    "apps": {
+      "argv": [
+        "/usr/bin/nvidia-smi",
+        "--query-compute-apps=gpu_uuid,pid,process_name,used_gpu_memory",
+        "--format=csv,noheader,nounits"
+      ],
+      "stdout": "",
+      "stderr": "",
+      "returncode": 0
+    }
+  },
+  "selected_uuid_locks": [
+    "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+    "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9"
+  ],
+  "source_pins_unchanged": true,
+  "authenticated_drained": true,
+  "normal_shutdown": true,
+  "raw_pins": {
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/route-batch-info-after-20261012-01/execution.json": "c2a52357a6b6bdaaab9cbda9e62e3282246cc43eb050742dadaac0b0bee98e39",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/route-batch-info-after-20261012-01/prepared.json": "1b9155eccc376df165614cbb96885f1f66e6047c9e52645bcb79f3b3cdf083ae",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/route-batch-info-after-20261012-01/runs/F1/execution.json": "3c60303288fce2a93589efe3f3fff86b5808f23970f88aba972a5efa11ec084e",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/route-batch-info-after-20261012-01/runs/F1/lock-release.json": "39ae688106ea715f00f8c7694b2a52e2819bb6f666208c5b1c0cb4e273e3df79",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/route-batch-info-after-20261012-01/runs/F1/session/after.json": "073ffab716d06bd4eb028c725094cd19497532d12946af6a17af77cfede45594",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/route-batch-info-after-20261012-01/runs/F1/session/before.json": "439544aba115351738786bc656b4d0c4cfab22dccb534f7c7a80731568b47a50",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/route-batch-info-after-20261012-01/runs/F1/session/case.json": "9f51d39af7dfaeede3cd8f5286c6052cfff55dfe511db48544359bf3019441b7",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/route-batch-info-after-20261012-01/runs/F1/session/qa8/gate.json": "02909fd3684df4f3a644d2ac009df6ea607824f74b768439be3dc434f466fa25",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/route-batch-info-after-20261012-01/runs/F1/session/qa8/http.json": "b7e36459536bd2ebd02a016110a9f3547588f3b242f1be11b0692763ae9e0337",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/route-batch-info-after-20261012-01/runs/F1/session/requests.json": "3b61b1e5f171455c80b83fa9edbb6c887e328d6f33a1a4ed7f7b42e35cbc22e7",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/route-batch-info-after-20261012-01/runs/F1/session/server.log": "558d2896455b22d01012d7874ddbdc86eacd3669f5343d72d219918b7de364da",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/route-batch-info-after-20261012-01/runs/F1/session/supervisor.json": "9eda92a9a5773577a085b727316131d42dc66947a15b9601aef571addc641acc"
+  }
+}

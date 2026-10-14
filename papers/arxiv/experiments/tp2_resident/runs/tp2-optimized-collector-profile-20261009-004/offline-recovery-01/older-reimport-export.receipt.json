@@ -1,0 +1,18 @@
+{
+  "argv": [
+    "/opt/nvidia/nsight-compute/2026.1.1/host/target-linux-x64/nsys",
+    "export",
+    "--type=sqlite",
+    "--output=/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-collector-profile-20261009-004/offline-recovery-01/older-reimport.sqlite",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-collector-profile-20261009-004/offline-recovery-01/reimport-2026.1.1.nsys-rep"
+  ],
+  "environment": {
+    "PATH": "/usr/bin:/bin",
+    "HOME": "/root",
+    "CUDA_VISIBLE_DEVICES": "",
+    "NVIDIA_VISIBLE_DEVICES": "none",
+    "QT_QPA_PLATFORM": "offscreen"
+  },
+  "returncode": 0,
+  "seconds": 0.0637921579182148
+}

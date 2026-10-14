@@ -23,6 +23,23 @@ use crate::openai::Usage;
 
 type RuntimeWorkerRequestError = WorkerRequestError<ferrule_runtime::Error>;
 type RuntimeWorkerExecutionError = WorkerExecutionError<ferrule_runtime::Error>;
+
+pub(crate) fn trace_execution_failure(error: &RuntimeWorkerExecutionError, message: &'static str) {
+    let diagnostics = match error {
+        WorkerExecutionError::Runtime { source }
+        | WorkerExecutionError::Cancellation { source }
+        | WorkerExecutionError::ShutdownCancellation { source }
+        | WorkerExecutionError::AdmissionTokenization { source } => source
+            .diagnostic_chain()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>(),
+        _ => ferrule_common::ErrorChain::new(error)
+            .map(ToString::to_string)
+            .collect(),
+    };
+    tracing::error!(%error, error_chain = ?diagnostics, message);
+}
+
 fn server_source_error(source: impl StdError + Send + Sync + 'static) -> ferrule_runtime::Error {
     ferrule_common::Error::Backend {
         source: Box::new(source),
@@ -608,19 +625,120 @@ struct ActiveRequest<'metrics> {
     session_id: SessionId,
     submitted_at: Instant,
     emitted_tokens: usize,
+    emission_timing: Option<WorkerEmissionTiming>,
+}
+
+/// Successful worker-channel emissions, not HTTP delivery or visible SSE chunks.
+/// Durations stay unrounded until export; zero/one token has no interval sample.
+#[derive(Default)]
+struct WorkerEmissionTiming {
+    first: Option<std::time::Duration>,
+    last: Option<std::time::Duration>,
+    intervals: u64,
+    interval_sum: std::time::Duration,
+    interval_min: Option<std::time::Duration>,
+    interval_max: Option<std::time::Duration>,
+}
+
+impl WorkerEmissionTiming {
+    fn record(&mut self, elapsed: std::time::Duration) {
+        if let Some(last) = self.last {
+            let interval = elapsed - last;
+            self.intervals += 1;
+            self.interval_sum += interval;
+            self.interval_min = Some(self.interval_min.map_or(interval, |v| v.min(interval)));
+            self.interval_max = Some(self.interval_max.map_or(interval, |v| v.max(interval)));
+        } else {
+            self.first = Some(elapsed);
+        }
+        self.last = Some(elapsed);
+    }
+}
+
+fn emission_micros(duration: std::time::Duration) -> u64 {
+    u64::try_from(duration.as_micros()).unwrap_or(u64::MAX)
 }
 
 impl ActiveRequest<'_> {
+    fn emit_token(&mut self, event: &ResidentTokenEvent) -> bool {
+        // Reserve one channel slot for the unique terminal event. The ordinal
+        // is assigned only after this enqueue succeeds, so it excludes failed
+        // sends and callbacks skipped for cancellation or lack of an owner.
+        if self.cancellation.load(Ordering::Acquire)
+            || self.events.capacity() <= 1
+            || self
+                .events
+                .try_send(WorkerEvent::Token {
+                    text: event.text.clone(),
+                })
+                .is_err()
+        {
+            self.cancellation.store(true, Ordering::Release);
+            return false;
+        }
+        self.emitted_tokens = self.emitted_tokens.saturating_add(1);
+        if let Some(timing) = &mut self.emission_timing {
+            timing.record(self.submitted_at.elapsed());
+        }
+        // Token IDs can reconstruct model output, so this is separate from
+        // request summaries and remains opt-in at the trace level. Successful
+        // enqueue is not HTTP consumption or wire delivery.
+        tracing::trace!(
+            target: "ferrule_token",
+            event = "request_worker_token_enqueued",
+            request_id = event.request_id.map(|id| id.0),
+            session_id = event.session_id.0,
+            emission_ordinal = self.emitted_tokens,
+            resident_token_index = event.index,
+            actual_token_id = event.token,
+            delivery_boundary = "worker_channel_enqueue",
+            "production token queued for HTTP"
+        );
+        true
+    }
     fn needs_cancellation(&self) -> bool {
         !self.cancellation_submitted
             && !self.cancellation_failed
             && !self.requires_restore_or_shutdown
     }
 
-    fn send_terminal(&mut self, event: WorkerEvent) {
+    fn send_terminal(
+        &mut self,
+        request_id: RequestId,
+        finish_reason: &'static str,
+        event: WorkerEvent,
+    ) {
         if !self.terminal_sent {
             self.terminal_sent = true;
-            let _ = self.events.try_send(event);
+            let (status, usage) = match &event {
+                WorkerEvent::Finished { usage, .. } => (
+                    "finished",
+                    Some(Usage::new(usage.prompt_tokens, usage.completion_tokens)),
+                ),
+                WorkerEvent::Cancelled => ("cancelled", None),
+                WorkerEvent::Failed { .. } => ("failed", None),
+                WorkerEvent::Token { .. } => unreachable!("terminal event must not be a token"),
+            };
+            let enqueued = self.events.try_send(event).is_ok();
+            // A cancellation failure can notify HTTP before runtime arbitration
+            // completes. Keep this actual send result distinct from the owner's
+            // eventual terminal outcome, including closed-channel failures.
+            tracing::debug!(
+                target: "ferrule_request",
+                event = "request_worker_terminal_enqueue",
+                request_id = request_id.0,
+                session_id = self.session_id.0,
+                status,
+                finish_reason,
+                last_emission_ordinal = self.emitted_tokens,
+                terminal_event_enqueued = enqueued,
+                delivery_boundary = "worker_channel_enqueue",
+                usage_available = usage.is_some(),
+                prompt_tokens = usage.as_ref().map(|usage| usage.prompt_tokens),
+                completion_tokens = usage.as_ref().map(|usage| usage.completion_tokens),
+                total_tokens = usage.as_ref().map(|usage| usage.total_tokens),
+                "production terminal enqueue attempted for HTTP"
+            );
         }
     }
 }
@@ -906,15 +1024,15 @@ impl ModelWorker {
         }
         let mut outcome = None;
         loop {
-            if outcome.is_none() {
-                if let Ok(result) = self.outcome.try_recv() {
-                    outcome = Some(result);
-                }
+            if outcome.is_none()
+                && let Ok(result) = self.outcome.try_recv()
+            {
+                outcome = Some(result);
             }
-            if self.handle.snapshot().shutdown_report.quarantine {
-                if let Some(result) = outcome {
-                    return result;
-                }
+            if self.handle.snapshot().shutdown_report.quarantine
+                && let Some(result) = outcome
+            {
+                return result;
             }
             let finished = self
                 .handle
@@ -1038,13 +1156,22 @@ where
                         return Ok(());
                     }
                 };
+                // Omission preserves the legacy startup path. An explicit
+                // HostKV request must never reach Ready via resident fallback.
+                if thread_config.kv_execution_policy != ferrule_runtime::KvExecutionPolicy::Resident
+                    && let Err(source) =
+                        engine.configure_kv_execution(thread_config.kv_execution_policy)
+                {
+                    let _ = ready_sender.send(Err(WorkerStartError::Startup { source }));
+                    return Ok(());
+                }
                 // Configure the authoritative runtime before background work or Ready.
                 // Never silently discard explicit overrides on unsupported engines.
-                if let Some(options) = thread_config.runtime_admission_options {
-                    if let Err(source) = engine.set_admission_options(options) {
-                        let _ = ready_sender.send(Err(WorkerStartError::Startup { source }));
-                        return Ok(());
-                    }
+                if let Some(options) = thread_config.runtime_admission_options
+                    && let Err(source) = engine.set_admission_options(options)
+                {
+                    let _ = ready_sender.send(Err(WorkerStartError::Startup { source }));
+                    return Ok(());
                 }
                 let mut completion_owner = InferenceCompletionOwner::attach(&mut engine);
                 if let Err(error) = completion_owner.initialize(&mut engine).await {
@@ -1053,15 +1180,15 @@ where
                 }
                 thread_control.mark_ready();
                 let _ = ready_sender.send(Ok(()));
-                let result = run_worker(
+
+                run_worker(
                     engine,
                     completion_owner,
                     receiver,
                     thread_config,
                     thread_control.clone(),
                 )
-                .await;
-                result
+                .await
             });
             let quarantine = owner_control.snapshot().shutdown_report.quarantine;
             let _ = outcome_sender.send(result);
@@ -1221,20 +1348,8 @@ where
                 let Some(request) = active.get_mut(&request_id) else {
                     return Ok(());
                 };
-                // Reserve one channel slot for the unique terminal event.
-                if request.cancellation.load(Ordering::Acquire)
-                    || request.events.capacity() <= 1
-                    || request
-                        .events
-                        .try_send(WorkerEvent::Token {
-                            text: event.text.clone(),
-                        })
-                        .is_err()
-                {
-                    request.cancellation.store(true, Ordering::Release);
+                if !request.emit_token(event) {
                     control.signal();
-                } else {
-                    request.emitted_tokens = request.emitted_tokens.saturating_add(1);
                 }
                 Ok(())
             };
@@ -1289,7 +1404,7 @@ where
             Err(source) => Some(Arc::new(WorkerExecutionError::Runtime { source })),
         };
         if let Some(error) = error {
-            tracing::error!(%error, "model worker entered fatal state");
+            trace_execution_failure(&error, "model worker entered fatal state");
             control.mark_fatal(Arc::clone(&error));
             fatal_error = Some(Arc::clone(&error));
             fail_all(&mut engine, &mut active, error, &mut failures, &control);
@@ -1299,24 +1414,21 @@ where
     }
 
     control.begin_shutdown(ShutdownDeadline::now() + config.shutdown_timeout);
-    if engine.admission_snapshot().is_some() {
-        if let Err(error) = engine.close_admission() {
-            failures.push(error);
-        }
+    if engine.admission_snapshot().is_some()
+        && let Err(error) = engine.close_admission()
+    {
+        failures.push(error);
     }
     commands.close();
     // Dropping queued responses is a stable Unavailable result, without encode.
     while commands.try_recv().is_ok() {}
-    if let Some(error) = fatal_error {
-        failures.insert(0, execution_error(error));
-    }
+    let primary_error = fatal_error.map(execution_error);
     failures.extend(cancel_all(&mut engine, &mut completion_owner, &mut active, &control).await);
-    if !control.expired() {
-        if let Err(error) =
+    if !control.expired()
+        && let Err(error) =
             shutdown_engine(&mut engine, &mut completion_owner, &active, &control).await
-        {
-            failures.push(error);
-        }
+    {
+        failures.push(error);
     }
     if control.expired() {
         failures.push(control.incomplete());
@@ -1332,12 +1444,12 @@ where
             );
         }
         control.report.lock().unwrap().quarantine = true;
-        if control.snapshot().first_fatal.is_none() {
-            if let Some(error) = failures.pop() {
-                let error = Arc::new(WorkerExecutionError::Runtime { source: error });
-                control.mark_fatal(Arc::clone(&error));
-                failures.push(execution_error(error));
-            }
+        if control.snapshot().first_fatal.is_none()
+            && let Some(error) = failures.pop()
+        {
+            let error = Arc::new(WorkerExecutionError::Runtime { source: error });
+            control.mark_fatal(Arc::clone(&error));
+            failures.push(execution_error(error));
         }
         // No Drop/join of unknown native custody. The enclosing owner parks
         // with its LocalSet/runtime retained; a hard SLA needs a process.
@@ -1346,7 +1458,31 @@ where
     } else {
         control.report.lock().unwrap().stage = ShutdownStage::HostJoin;
     }
-    control.report.lock().unwrap().errors = failures.iter().map(ToString::to_string).collect();
+    control.report.lock().unwrap().errors = primary_error
+        .iter()
+        .chain(&failures)
+        .map(|error| format!("{error:?}"))
+        .collect();
+    if primary_error.is_some() || !failures.is_empty() {
+        tracing::error!(primary = ?primary_error, cleanup = ?failures, "model worker shutdown failed");
+    }
+    if let Some(source) = primary_error {
+        return Err(if failures.is_empty() {
+            source
+        } else {
+            ferrule_runtime::Error::CleanupBatch {
+                operation: "model worker shutdown",
+                source: Box::new(source),
+                cleanup: failures
+                    .into_iter()
+                    .map(|source| ferrule_runtime::CleanupStep {
+                        operation: "worker cleanup".into(),
+                        source,
+                    })
+                    .collect(),
+            }
+        });
+    }
     match failures.len() {
         0 => Ok(()),
         1 => Err(failures.pop().unwrap()),
@@ -1447,6 +1583,8 @@ where
                 .permit
                 .reconcile_prompt_bytes(0)
                 .expect("shrinking cannot fail");
+            // Reply wakeups may immediately attempt to reuse this capacity.
+            drop(command.permit);
             let _ = command.response.send(result);
             false
         }
@@ -1457,6 +1595,8 @@ where
             let worker_started_at = Instant::now();
             let worker_queue_us = command.enqueued_at.elapsed().as_micros() as u64;
             if active.contains_key(&command.request_id) {
+                drop(command.request);
+                drop(command.permit);
                 let _ = command
                     .accepted
                     .send(Err(Arc::new(WorkerExecutionError::Runtime {
@@ -1471,12 +1611,16 @@ where
             let prompt_tokens = match engine.encode(&command.request.prompt) {
                 Ok(tokens) if !tokens.is_empty() => tokens,
                 Ok(_) => {
+                    drop(command.request);
+                    drop(command.permit);
                     let _ = command.accepted.send(Err(Arc::new(
                         WorkerExecutionError::AdmissionEmptyPromptTokens,
                     )));
                     return false;
                 }
                 Err(error) => {
+                    drop(command.request);
+                    drop(command.permit);
                     let _ = command.accepted.send(Err(Arc::new(
                         WorkerExecutionError::AdmissionTokenization { source: error },
                     )));
@@ -1508,6 +1652,7 @@ where
                 return false;
             }
             if let Err(source) = engine.try_submit(request) {
+                drop(command.permit);
                 let _ = command
                     .accepted
                     .send(Err(Arc::new(WorkerExecutionError::Runtime { source })));
@@ -1538,6 +1683,9 @@ where
                     session_id,
                     submitted_at: command.enqueued_at,
                     emitted_tokens: 0,
+                    emission_timing:
+                        tracing::enabled!(target: "ferrule_request", tracing::Level::DEBUG)
+                            .then(WorkerEmissionTiming::default),
                 },
             );
             tracing::debug!(
@@ -1575,7 +1723,7 @@ enum RuntimeTerminal {
 
 enum RequestOutcome {
     Runtime {
-        sequence: SequenceState,
+        sequence: Box<SequenceState>,
         terminal: RuntimeTerminal,
     },
     Failed {
@@ -1643,9 +1791,9 @@ fn finish_request(
                 status,
                 reason,
                 &request,
-                Some(sequence.generated),
+                Some(Usage::new(sequence.prompt_len, sequence.generated)),
             );
-            request.send_terminal(event);
+            request.send_terminal(request_id, reason, event);
         }
         RequestOutcome::Failed { error, reason } => {
             trace_worker_request_terminal(
@@ -1656,9 +1804,16 @@ fn finish_request(
                 &request,
                 None,
             );
-            request.send_terminal(WorkerEvent::Failed { error });
+            request.send_terminal(request_id, reason, WorkerEvent::Failed { error });
         }
-        RequestOutcome::Quarantined => {}
+        RequestOutcome::Quarantined => trace_worker_request_terminal(
+            request_id,
+            request.session_id,
+            "quarantined",
+            "cleanup_unproven",
+            &request,
+            None,
+        ),
     }
     // Dropping the active owner's metrics guard ends observation exactly once.
     // Neither notification nor owner removal releases the cleanup-owned lease.
@@ -1692,14 +1847,18 @@ fn request_cancellation<E: InferenceEngine>(
             // Fatal retains its original error; suspended cancellation otherwise
             // notifies once without ending active observation or accepting cancel.
             if !matches!(cause, CancellationCause::Fatal) {
-                request.send_terminal(WorkerEvent::Failed {
-                    error: Arc::new(WorkerExecutionError::Cancellation {
-                        source: server_source_error(SuspendedCancellation {
-                            request_id,
-                            session_id,
+                request.send_terminal(
+                    request_id,
+                    "requires_restore_or_shutdown",
+                    WorkerEvent::Failed {
+                        error: Arc::new(WorkerExecutionError::Cancellation {
+                            source: server_source_error(SuspendedCancellation {
+                                request_id,
+                                session_id,
+                            }),
                         }),
-                    }),
-                });
+                    },
+                );
             }
             control.begin_shutdown(ShutdownDeadline::now() + control.shutdown_timeout);
         }
@@ -1728,7 +1887,7 @@ fn request_cancellation<E: InferenceEngine>(
                 // observation alive while shutdown steps the retained runtime
                 // owner, without submitting the failed cancellation again.
                 request.cancellation_failed = true;
-                request.send_terminal(WorkerEvent::Failed { error });
+                request.send_terminal(request_id, reason, WorkerEvent::Failed { error });
                 control.begin_shutdown(ShutdownDeadline::now() + control.shutdown_timeout);
             } else {
                 finish_request(
@@ -1786,7 +1945,7 @@ fn drain_terminal<E>(
             active,
             request_id,
             RequestOutcome::Runtime {
-                sequence,
+                sequence: Box::new(sequence),
                 terminal: RuntimeTerminal::Finished,
             },
             control,
@@ -1800,7 +1959,7 @@ fn drain_terminal<E>(
             active,
             request_id,
             RequestOutcome::Runtime {
-                sequence,
+                sequence: Box::new(sequence),
                 terminal: RuntimeTerminal::Cancelled,
             },
             control,
@@ -1814,7 +1973,7 @@ fn drain_terminal<E>(
             active,
             request_id,
             RequestOutcome::Runtime {
-                sequence,
+                sequence: Box::new(sequence),
                 terminal: RuntimeTerminal::Failed,
             },
             control,
@@ -1829,8 +1988,13 @@ fn trace_worker_request_terminal(
     status: &'static str,
     finish_reason: &'static str,
     request: &ActiveRequest<'_>,
-    generated_tokens: Option<usize>,
+    usage: Option<Usage>,
 ) {
+    if !tracing::enabled!(target: "ferrule_request", tracing::Level::DEBUG) {
+        return;
+    }
+    let timing = request.emission_timing.as_ref();
+    let generated_tokens = usage.as_ref().map(|usage| usage.completion_tokens);
     tracing::debug!(
         target: "ferrule_request",
         event = "request_worker_terminal",
@@ -1841,6 +2005,23 @@ fn trace_worker_request_terminal(
         worker_request_us = request.submitted_at.elapsed().as_micros() as u64,
         generated_tokens = ?generated_tokens,
         emitted_token_events = request.emitted_tokens,
+        last_emission_ordinal = request.emitted_tokens,
+        terminal_event_previously_attempted = request.terminal_sent,
+        usage_available = usage.is_some(),
+        prompt_tokens = usage.as_ref().map(|usage| usage.prompt_tokens),
+        completion_tokens = usage.as_ref().map(|usage| usage.completion_tokens),
+        total_tokens = usage.as_ref().map(|usage| usage.total_tokens),
+        emission_timing_enabled = timing.is_some(),
+        worker_first_emission_elapsed_us = timing.and_then(|t| t.first).map(emission_micros),
+        worker_last_emission_elapsed_us = timing.and_then(|t| t.last).map(emission_micros),
+        worker_emission_interval_count = timing.map(|t| t.intervals),
+        worker_emission_interval_sum_us = timing.map(|t| emission_micros(t.interval_sum)),
+        worker_emission_interval_min_us = timing.and_then(|t| t.interval_min).map(emission_micros),
+        worker_emission_interval_max_us = timing.and_then(|t| t.interval_max).map(emission_micros),
+        cancellation_requested = request.cancellation.load(Ordering::Acquire),
+        cancellation_submitted = request.cancellation_submitted,
+        cancellation_failed = request.cancellation_failed,
+        requires_restore_or_shutdown = request.requires_restore_or_shutdown,
         tokens_reconcile = ?generated_tokens.map(|generated| generated == request.emitted_tokens),
         "production request reached worker terminal state"
     );
@@ -1998,7 +2179,15 @@ where
 }
 
 #[cfg(test)]
+#[path = "../tests/unit"]
 mod tests {
+    #[path = "worker_emission_timing.rs"]
+    mod emission_timing_tests;
+    #[path = "worker_reply_wake.rs"]
+    mod reply_wake_tests;
+    #[path = "worker_token_tracing.rs"]
+    mod token_tracing_tests;
+
     use super::*;
     use ferrule_common::CompletionHub;
     use ferrule_runtime::{
@@ -2941,6 +3130,15 @@ mod tests {
 
     fn has_runtime_failure(error: &ferrule_runtime::Error, expected: &str) -> bool {
         match error {
+            ferrule_runtime::Error::Shared { source } => has_runtime_failure(source, expected),
+            ferrule_runtime::Error::CleanupBatch {
+                source, cleanup, ..
+            } => {
+                has_runtime_failure(source, expected)
+                    || cleanup
+                        .iter()
+                        .any(|step| has_runtime_failure(&step.source, expected))
+            }
             ferrule_runtime::Error::ShutdownIncomplete { message } => message == expected,
             ferrule_runtime::Error::EngineUnavailable => expected == "quarantine",
             ferrule_runtime::Error::FailureBatch { failures, .. } => failures
@@ -3163,6 +3361,7 @@ mod tests {
                 session_id: SessionId(1),
                 submitted_at: Instant::now(),
                 emitted_tokens: 0,
+                emission_timing: None,
             },
         );
         let mut scratch = Vec::with_capacity(1);
@@ -3198,6 +3397,7 @@ mod tests {
                 session_id: SessionId(2),
                 submitted_at: Instant::now(),
                 emitted_tokens: 0,
+                emission_timing: None,
             },
         );
         cancel_disconnected(
@@ -3246,6 +3446,7 @@ mod tests {
                 session_id: SessionId(3),
                 submitted_at: Instant::now(),
                 emitted_tokens: 0,
+                emission_timing: None,
             },
         );
         let mut scratch = Vec::new();
@@ -3381,6 +3582,7 @@ mod tests {
         terminal_quiescent: bool,
         held: usize,
         encode_error: bool,
+        encode_empty: bool,
         reject: bool,
         suspended: bool,
         submits: usize,
@@ -3400,6 +3602,7 @@ mod tests {
                 terminal_quiescent: false,
                 held: 0,
                 encode_error: false,
+                encode_empty: false,
                 reject: false,
                 suspended: false,
                 submits: 0,
@@ -3431,6 +3634,8 @@ mod tests {
                 Err(ferrule_runtime::Error::InvalidRequest {
                     message: "/private/tokenizer".into(),
                 })
+            } else if self.encode_empty {
+                Ok(vec![])
             } else {
                 Ok(vec![1])
             }

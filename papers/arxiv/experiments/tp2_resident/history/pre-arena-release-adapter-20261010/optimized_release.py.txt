@@ -1,0 +1,251 @@
+"""CPU-only typed adapter for the optimized builder's actual receipt schema.
+
+Not a build/quality/server runner. Exact artifacts are pinned, never paper globs.
+The old 33/35937 release policy remains separate and unchanged.
+"""
+from pathlib import Path
+import pre_serving as pre
+
+ct = pre.ct
+SCHEMA = 'ferrule.optimized-mixed-tp2-release-handoff.v1'
+QUALITY_SCHEMA = 'ferrule.paper.tp2-optimized-test-quality.v1'
+RELEASE = ct.ROOT/'target/validation/tp2-mixed-optimized-release-20261009'
+QUALITY = ct.ROOT/'target/validation/tp2-mixed-production-opts-01'
+
+
+def exact_comparison(report, full40=False):
+    ct.require(report.get('status') == 'pass' and report.get('passed') is True, 'Numerical comparator failed')
+    groups = report['cases'] if full40 else report['calls']
+    if full40:
+        ct.require(set(groups) == {'hello','capital'}, 'Full40 case coverage differs')
+    for group in groups.values():
+        ct.require(len(group['metrics']) == (2178 if full40 else 1089)
+            and all(m['exact'] is True and m['failures'] == 0 and m['max_abs'] == 0 and m['rmse'] == 0
+                    for m in group['metrics'].values()), 'Numerical metric is not exact/missing')
+    return (4 if full40 else len(groups)), sum(len(g['metrics']) for g in groups.values())
+
+
+def audit(link):
+    handoff = pre.checked_document(link)
+    import decoded_cache_release
+    if handoff.get('schema') in decoded_cache_release.SCHEMAS:
+        return decoded_cache_release.audit(link)
+    ct.require(handoff.get('schema') == SCHEMA and Path(link['path']).resolve() == RELEASE/'handoff.json',
+               'Unreviewed optimized handoff schema/location')
+    pins = {}
+    def pin(path, expected=None):
+        path = Path(path)
+        path = path if path.is_absolute() else ct.ROOT/path
+        digest = ct.sha(path)
+        ct.require(expected is None or digest == expected, 'Optimized evidence changed: '+str(path))
+        pins[str(path)] = digest
+        return path
+    def read(path, expected=None):
+        return ct.load(pin(path,expected))
+    pin(link['path'], link['sha256'])
+    state = read(RELEASE/'release-state.json')
+    inputs = read(RELEASE/'build-inputs.json')
+    expected_argv = ['cargo','build','--locked','--offline','--release','-p','ferrule-cli',
+        '--no-default-features','--features','cuda','--bin','ferrule','--target-dir',
+        'target/catalog-tp2-cuda','--message-format=json-render-diagnostics','-vv']
+    ct.require(state == handoff['release_state'] and state['status'] == 'complete'
+        and state['returncode'] == 0 and state['retries'] == 0 and state['source_pins_unchanged'] is True
+        and state['argv'] == expected_argv and state['terminal_timeout_ms'] == 480000,
+        'Optimized release build failed/changed')
+    ct.require(inputs['release_profile'] == dict(opt_level=3,lto='fat',codegen_units=1,panic='unwind',strip='symbols'),
+               'Optimized artifact is not the declared CUDA release profile')
+    ct.require(inputs == handoff['build_inputs'] and state['environment'] == inputs['environment']
+        and inputs['environment']['CUDA_VISIBLE_DEVICES'] == ''
+        and inputs['environment']['NVIDIA_VISIBLE_DEVICES'] == 'none'
+        and handoff['server_started'] is False and handoff['gpu_workload_started'] is False,
+        'Build environment/CPU-hidden provenance differs')
+    before = read(RELEASE/'production-source-pins-before.json',handoff['production_pins_before_sha256'])
+    after = read(RELEASE/'production-source-pins-after.json',handoff['production_pins_after_sha256'])
+    ct.require(before == after, 'Production source changed during build')
+    sources = {name:digest for name,digest in pre.release_sources(before).items()
+               if Path(name).suffix != '.md'}
+    ct.require(sources == pre.current_release_sources(), 'Release production/build inputs changed')
+    ct.check_pins(sources)
+    dependencies = read(RELEASE/'actual-release-dependencies.json')
+    # Includes actual compile-time doc inputs, not arbitrary adjacent paper files.
+    for name, digest in dependencies.items(): pin(name,digest)
+    relation = read(RELEASE/'quality-pin-relation.json')
+    read(RELEASE/'actual-dependency-quality-relation.json')
+    summary = read(QUALITY/'acceptance-summary.json',handoff['quality']['summary_sha256'])
+    frozen = read(QUALITY/'frozen.json',handoff['quality']['frozen_sha256'])
+    ct.require(relation == handoff['quality']['production_pin_relation']
+        and relation['production_mismatches'] == [] and relation['production_pins_compared'] == 2415
+        and relation['quality_summary_sha256'] == pins[str(QUALITY/'acceptance-summary.json')]
+        and relation['frozen_sha256'] == pins[str(QUALITY/'frozen.json')], 'Quality/build source relation differs')
+    for filename,key in [('build/sources-before.json','quality_build_sources_before_sha256'),
+                         ('build/sources-after.json','quality_build_sources_after_sha256')]:
+        read(QUALITY/filename,relation[key])
+    ct.require(pre.numerical_sources(sources) == pre.numerical_sources(frozen['sources']),
+               'Optimized numerical sources not the freshly tested ones')
+    for name,digest in handoff['quality']['verified_receipts'].items():pin(name,digest)
+    ct.require(summary['schema'] == 'ferrule.production-opt-quality-summary.v1'
+        and (summary['successful_gpu_gates'],summary['quality_calls'],summary['quality_metrics'],summary['failures']) == (19,37,40293,0)
+        and summary['all_exact'] is True and summary['max_abs'] == 0
+        and len(summary['rows']) == 19 and summary['source_set_unchanged'] is True,
+        'Optimized fresh quality closure differs')
+    rows=[]; calls=metrics=0
+    binaries={item['sha256'] for item in frozen['binaries'].values()}
+    for item in frozen['binaries'].values():pin(item['path'],item['sha256'])
+    for row in summary['rows']:
+        directory = QUALITY/row['run']
+        prepared = read(directory/'prepared.json')
+        result = read(directory/'result.json',row['result_sha256'])
+        supervisor = read(directory/'supervisor.json')
+        auth = read(directory/'authentication.json')
+        release = read(directory/'release.json')
+        exit_receipt = read(directory/'test-exit.json')
+        ct.require(ct.successful_process(supervisor) and result['passed'] is True
+            and result['echild'] is True and result['all_eight_idle'] is True
+            and release['gpu_owner_released'] is True and release['all_eight_idle'] is True
+            and auth == row['authentication'] and auth['launch_id'] == supervisor['handshake']['launch_id']
+            and exit_receipt['one_test_passed'] is True and exit_receipt['returncode'] == 0,
+            'Optimized gate lacks authenticated successful closure: '+row['run'])
+        ct.require(pre.numerical_sources(prepared['sources']) == pre.numerical_sources(sources)
+            and prepared['binary_sha256'] == row['binary_sha256'] and row['binary_sha256'] in binaries,
+            'Gate test binary/source differs')
+        pin(prepared['binary'],prepared['binary_sha256']);pin(directory/'test.log',exit_receipt['log_sha256'])
+        for name in ('before.json','after.json'):
+            ct.require(read(directory/name)['status'] == 'verified','Quality idle missing')
+        if 'comparison' in row:
+            comparison = row['comparison']
+            report = read(comparison['report'],comparison['report_sha256'])
+            n,m = exact_comparison(report,row['run']=='full40')
+            ct.require((n,m)==(row['calls'],row['metrics']), 'Comparator count differs')
+            canonical = Path(comparison['report'].replace('-comparison.json','-canonical'))/'manifest.json'
+            pin(canonical,comparison['actual_sha256'])
+            ct.require(report['actual_manifest_sha256'] == comparison['actual_sha256']
+                and report['reference_manifest_sha256'] == comparison['reference_sha256'], 'Comparator manifest binding differs')
+            calls+=n;metrics+=m
+        rows.append(dict(run=row['run'],test_binary_sha256=row['binary_sha256'],launch_id=auth['launch_id']))
+    ct.require((calls,metrics)==(37,40293), 'Audited optimized quality totals differ')
+    failed = read(QUALITY/summary['failed_attempt']['run']/'result.json')
+    ct.require(failed['passed'] is False, 'Historical failed attempt must remain failed')
+    artifact = handoff['artifact']
+    binary = pin(artifact['preserved_path'],artifact['sha256'])
+    ct.require(binary.stat().st_size == artifact['bytes'] and artifact['sha256'] not in binaries,
+               'Serving release is not a distinct build artifact')
+    runtime={}
+    for name,item in handoff['dynamic_library_pins'].items():
+        path=Path(name)
+        ct.require(str(path.resolve()) == item['resolved'] and path.stat().st_size == item['bytes'], 'Runtime library identity differs')
+        pin(path,item['sha256']);runtime[str(path)]=item['sha256']
+    pin(RELEASE/'release-help.txt',handoff['release_help']['sha256'])
+    pin(RELEASE/'ldd.txt',handoff['ldd']['sha256'])
+    ct.require(handoff['release_help']['returncode']==0 and handoff['ldd']['missing_libraries']==[], 'Release help/link evidence failed')
+    quality=dict(schema=QUALITY_SCHEMA,status='pass',kind='authenticated_test_binary_not_serving',
+        calls=calls,metrics=metrics,rows=rows,numerical_source_pins=pre.numerical_sources(sources),
+        artifact_pins=pins,old_failed_attempt_preserved=True,
+        observability=summary['observability'],fairmatch=False,exact_speedup=None)
+    return dict(binary_path=str(binary),binary_sha256=artifact['sha256'],source_pins=sources,
+        runtime_pins=runtime,evidence_pins=pins,quality=quality,
+        build_custody='builder completion/environment/source/binary hashes; raw Cargo terminal output not on disk; no authenticated build supervisor')
+
+
+def validate(m):
+    evidence=audit(m['build_receipt'])
+    quality=pre.checked_document(m['test_quality'])
+    ct.require(quality==evidence['quality'] and m['source_pins']==evidence['source_pins']
+        and m['runtime_pins']==evidence['runtime_pins'] and m['binary']['sha256']==evidence['binary_sha256']
+        and m['build_evidence_pins']==evidence['evidence_pins'], 'Optimized admission identity differs')
+    if quality.get('schema') != QUALITY_SCHEMA:
+        ct.require(m.get('serving_scope') == evidence['serving_scope']
+            and m.get('decoded_cache') == evidence['decoded_cache'], 'Cache-on serving metadata differs')
+    return dict(serving_binary_sha256=m['binary']['sha256'],test_quality_sha256=m['test_quality']['sha256'],
+        build_receipt_sha256=m['build_receipt']['sha256'],build_custody=evidence['build_custody'],serving_observation='pending')
+
+
+def bootstrap(output, handoff, handoff_sha256=None):
+    """Produce CPU admission only. HTTP qualification is deliberately downstream."""
+    import copy
+    import paired
+    paired.strict_gate()
+    output=output.resolve()
+    ct.require(output.is_relative_to(pre.HERE/'admission') and not output.exists(), 'Fresh paper admission directory required')
+    link=dict(path=str(handoff.resolve()),sha256=ct.sha(handoff))
+    if pre.ct.load(handoff).get('schema') != SCHEMA:
+        ct.require(handoff_sha256 == link['sha256'], 'New release requires explicit final --handoff-sha256; no mutable builder artifact')
+    evidence=audit(link)
+    output.mkdir(parents=True)
+    binary=ct.stage_binary(evidence['binary_path'],output)
+    quality_path=output/'model-runtime-quality.json'
+    ct.write(quality_path,evidence['quality'])
+    m=copy.deepcopy(ct.load(pre.HERE/'admission/tp2-serving-smoke-admission.json')['engines']['ferrule'])
+    m.update(binary=dict(path=binary,sha256=evidence['binary_sha256'],kind='public_serving'),
+        spec=paired.ferrule_spec(binary),source_pins=evidence['source_pins'],runtime_pins=evidence['runtime_pins'],
+        test_quality=dict(path=str(quality_path),sha256=ct.sha(quality_path)),build_receipt=link,
+        build_evidence_pins=evidence['evidence_pins'],gates={},model=paired.model_contract())
+    if 'serving_scope' in evidence:
+        m.update(serving_scope=evidence['serving_scope'],decoded_cache=evidence['decoded_cache'],
+                 spec=paired.ferrule_spec(binary,evidence['serving_scope']))
+    m.pop('serving_smoke',None)
+    admission=dict(protocol=pre.PROTOCOL,engines=dict(ferrule=m))
+    paired.validate_admission(admission,'serving_smoke')
+    path=output/'smoke-admission.json';ct.write(path,admission)
+    return path
+
+
+def promote(smoke_admission, smoke_receipt):
+    """After same-release smoke, reuse V pins and emit pair/profile admissions."""
+    import copy
+    import paired
+    paired.strict_gate()
+    admission=ct.load(smoke_admission)
+    paired.validate_admission(admission,'serving_smoke')
+    m=copy.deepcopy(admission['engines']['ferrule'])
+    m['serving_smoke']=dict(path=str(smoke_receipt.resolve()),sha256=ct.sha(smoke_receipt))
+    smoke=pre.validate_smoke(m)
+    # Only source-qualified distinctions, not numerical HTTP observation.
+    m['arithmetic'].update(effective_evidence='same-release S1/S2 profile/precision logs and visible canaries; kernel closure unobserved',
+        dequant_rounding='test-binary BF16 boundaries exact; not HTTP logits; not Marlin arithmetic')
+    first=Path(smoke['lifecycles'][0]['directory'])/'session/server.log'
+    m['transport'].update(observed_channels='local thread TP2 CPU collective, source-qualified; no per-collective trace or NCCL claim',
+                          evidence_sha256=ct.sha(first))
+    old=ct.load(pre.HERE/'admission/tp2-paired-admission.json')
+    m['backend_differences']=copy.deepcopy(old['engines']['ferrule']['backend_differences'])
+    pair=dict(protocol=paired.PROTOCOL,engines=dict(ferrule=m,vllm=old['engines']['vllm']))
+    profile=dict(protocol=pre.PROFILE_PROTOCOL,engines=dict(ferrule=m))
+    if m.get('decoded_cache'):
+        import profile_2025
+        profile['profiler']=dict(profile_2025.TOOL_CONFIG)
+    paired.validate_admission(pair,'paired');paired.validate_admission(profile,'profiling')
+    output=smoke_admission.parent
+    ct.require(not (output/'paired-admission.json').exists() and not (output/'profile-admission.json').exists(), 'No admission overwrite')
+    ct.write(output/'paired-admission.json',pair);ct.write(output/'profile-admission.json',profile)
+    return output
+
+
+def main(argv=None):
+    import argparse
+    ct.require_cpu_python()
+    cli=argparse.ArgumentParser(description=__doc__)
+    cli.add_argument('mode',choices=('audit','bootstrap','promote'))
+    cli.add_argument('--handoff',type=Path,default=RELEASE/'handoff.json')
+    cli.add_argument('--output',type=Path)
+    cli.add_argument('--handoff-sha256',help='Final owner-reviewed handoff hash required for cache-on bootstrap')
+    cli.add_argument('--smoke-admission',type=Path)
+    cli.add_argument('--smoke-receipt',type=Path)
+    args=cli.parse_args(argv)
+    if args.mode=='audit':
+        import json
+        link=dict(path=str(args.handoff.resolve()),sha256=ct.sha(args.handoff))
+        if args.handoff_sha256 is not None:
+            ct.require(link['sha256']==args.handoff_sha256,'Handoff hash differs')
+        evidence=audit(link)
+        print(json.dumps(dict(binary_sha256=evidence['binary_sha256'],
+            quality=evidence['quality'],status='cpu_audited_not_gpu_accepted'),indent=2))
+    elif args.mode=='bootstrap':
+        ct.require(args.output is not None,'--output required')
+        print(bootstrap(args.output,args.handoff,args.handoff_sha256))
+    else:
+        ct.require(args.smoke_admission is not None and args.smoke_receipt is not None,'Both smoke paths required')
+        print(promote(args.smoke_admission,args.smoke_receipt))
+    return 0
+
+
+if __name__=='__main__':
+    raise SystemExit(main())

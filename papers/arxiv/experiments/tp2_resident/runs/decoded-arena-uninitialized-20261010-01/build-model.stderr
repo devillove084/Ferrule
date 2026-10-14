@@ -1,0 +1,4 @@
+   Compiling ferrule-backend v0.2.0 (/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-backend)
+   Compiling ferrule-model v0.2.0 (/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-model)
+   Compiling ferrule-runtime v0.2.0 (/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-runtime)
+    Finished `test` profile [optimized + debuginfo] target(s) in 2m 16s

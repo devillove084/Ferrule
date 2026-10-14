@@ -724,7 +724,7 @@ fn qwen35_08b_full_24_layer_gpu_matches_local_tf_reference() {
             let actual: Vec<f32> = logits.iter().flatten().copied().collect();
             let expected = oracle.logits(stage, tokens.len());
             compare(&actual, &expected, &format!("{case}/{stage}"), 2e-4, 2e-4);
-            for (a, b) in logits.iter().zip(expected.chunks_exact(248320)) {
+            for (a, b) in logits.iter().zip(expected.as_chunks::<248320>().0) {
                 assert_eq!(argmax(a), argmax(b), "{case}/{stage} row argmax");
             }
             let prediction = argmax(logits.last().unwrap());

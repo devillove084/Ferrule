@@ -1,0 +1,194 @@
+{
+  "protocol": "tp2-operator-retirement-v3-matched4g-qa8-descriptive-v1",
+  "status": "CPU_adapter_ready_AFTER_fixed_review_release_audit_smoke_and_GPU_authorization_pending",
+  "execute_allowed": false,
+  "gpu_started": false,
+  "gpu_queried": false,
+  "locks_acquired": false,
+  "before": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/admission/indexed-lru-20261010-01/paired-admission.json",
+    "sha256": "bb804493bac2d1f17a3200dd015bf453610ac99ae2997631c2c2a82ee3cd0939",
+    "binary_sha256": "9ef9841598b4694fb611250bf8876c4314d252400136ddb23f606a979cadb656"
+  },
+  "qualification_handoff": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-allocator-v3-20261011-03/handoff.json",
+    "sha256": "faa71361682e8b454b2e85feffd456c06598bcc4ff4572a34bfaa54367e83fd4"
+  },
+  "qualification_schema": "ferrule.paper.allocator-v3-handoff.v1",
+  "qualification_counts": {
+    "fresh_named_gpu_gates": 23,
+    "calls": 37,
+    "exact_metrics": 40293,
+    "supplemental_gpu_small": 18,
+    "supplemental_replaces_named_gates": false
+  },
+  "after_binary_sha256": null,
+  "registered_build_review": null,
+  "cycles": [
+    {
+      "policy": "frozen_qualified_9ef_operator_retirement_v3",
+      "cycle": 1,
+      "order": [
+        "BEFORE",
+        "AFTER"
+      ],
+      "fresh_lifecycles": 2,
+      "arena_bytes_per_owner": 3221225472,
+      "workspace_mib": 4096,
+      "device_cap_mib": 22528,
+      "concurrency": 1,
+      "qa8_unmeasured": 3,
+      "qa8_unmeasured_layout": "excluded first + 2 warmups",
+      "qa8_measured": 5,
+      "actual_input_tokens": 5,
+      "actual_output_tokens": 8,
+      "rankperf": false,
+      "profiler": false,
+      "scope": "TP2 ctx128 batch8 seq2 resident/no-offload; identical argv/environment/runtime except executable",
+      "source_delta": "Exactly allocator.rs/runtime.rs plus the fixed cfg(test) manifest patch; complete inventories required",
+      "attribution": "Two crossed-order cycles remain descriptive; neither an all-differences attribution nor statistical significance",
+      "cpu_observation": {
+        "affinity": null,
+        "thread_count": null,
+        "reason": "Existing sampler captures memory/process identity, not affinity/thread counts; observer unchanged to preserve timing"
+      },
+      "unknown_pressure": null,
+      "pending_peak": null,
+      "retirement_ledger_scope": "Complete successfully created event sets only; not total CUDA events; partial-failure driver calls uncounted"
+    },
+    {
+      "policy": "frozen_qualified_9ef_operator_retirement_v3",
+      "cycle": 2,
+      "order": [
+        "AFTER",
+        "BEFORE"
+      ],
+      "fresh_lifecycles": 2,
+      "arena_bytes_per_owner": 3221225472,
+      "workspace_mib": 4096,
+      "device_cap_mib": 22528,
+      "concurrency": 1,
+      "qa8_unmeasured": 3,
+      "qa8_unmeasured_layout": "excluded first + 2 warmups",
+      "qa8_measured": 5,
+      "actual_input_tokens": 5,
+      "actual_output_tokens": 8,
+      "rankperf": false,
+      "profiler": false,
+      "scope": "TP2 ctx128 batch8 seq2 resident/no-offload; identical argv/environment/runtime except executable",
+      "source_delta": "Exactly allocator.rs/runtime.rs plus the fixed cfg(test) manifest patch; complete inventories required",
+      "attribution": "Two crossed-order cycles remain descriptive; neither an all-differences attribution nor statistical significance",
+      "cpu_observation": {
+        "affinity": null,
+        "thread_count": null,
+        "reason": "Existing sampler captures memory/process identity, not affinity/thread counts; observer unchanged to preserve timing"
+      },
+      "unknown_pressure": null,
+      "pending_peak": null,
+      "retirement_ledger_scope": "Complete successfully created event sets only; not total CUDA events; partial-failure driver calls uncounted"
+    }
+  ],
+  "launcher": "paired.py --purpose operator_retirement_ab; existing admission/prepare/run/worker/supervisor",
+  "review_manifest_schema": {
+    "schema": "ferrule.paper.operator-retirement-build-review.v1",
+    "optimization_class": "operator_retirement_v3",
+    "required_fields": [
+      "before_binary_sha256",
+      "after_binary_sha256",
+      "qualification_handoff",
+      "release_handoff",
+      "source_delta",
+      "rationale",
+      "safety_invariants"
+    ],
+    "registration": "One code-reviewed exact manifest path/SHA; no CLI override"
+  },
+  "source_delta_schema": {
+    "schema": "ferrule.paper.operator-retirement-source-delta.v1",
+    "production_paths": [
+      "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-backend/src/cuda/allocator.rs",
+      "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-backend/src/cuda/runtime.rs"
+    ],
+    "test_only_source_changes": [
+      {
+        "path": "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-backend/src/cuda/providers/cutlass.rs",
+        "before_sha256": "cf567b42135279ea1de45fb61a7ba935ab9be03497713067d4d0c7d2d393a3b5",
+        "after_sha256": "389ee1596b3af387fcb4782bceed8ce54d6870de56a93f4979f8df97209dbce4"
+      }
+    ],
+    "required_fields": [
+      "before_binary_sha256",
+      "after_binary_sha256",
+      "before_inventory_digest",
+      "after_inventory_digest",
+      "before_production_source_digest",
+      "after_production_source_digest",
+      "production_changes",
+      "test_only_source_changes",
+      "test_source_changes",
+      "qualification_handoff"
+    ],
+    "inventory": "Stable full builder before/after maps, including native .cc and build/config inputs; test changes separately",
+    "qualification_native_cc_coverage_gaps": 4,
+    "qualification_gap_is_not_permission_to_omit_build_inventory": true
+  },
+  "promotion_order": [
+    "Review final release handoff, binary SHA, full source/dependency inventories, exact fixed review manifest",
+    "Integrate actual typed release audit; reject unknown schema; fully audit named qualification receipts",
+    "Fresh explicit main-agent GPU authorization, then actual SAME-AFTER-binary S1/S2",
+    "Promote only after both smoke owners pass; then crossed cycles BEFORE/AFTER and AFTER/BEFORE",
+    "Separately authorized official short profile AFTER; BEFORE needs its own same-9ef-artifact short trace"
+  ],
+  "profile": {
+    "status": "plan_only_not_admitted",
+    "release": "2025.3.1.90-253135822126v0",
+    "tool_pins": {
+      "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/nsight-systems-cli-2025.3.1/opt/nvidia/nsight-systems-cli/2025.3.1/target-linux-x64/nsys": "525f35a10de49b396e91a3831ae40e98a8631d619b7c8bbb4c54469b8c08a72e",
+      "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/nsight-systems-cli-2025.3.1/opt/nvidia/nsight-systems-cli/2025.3.1/host-linux-x64/QdstrmImporter": "23e4185b7b20d00c27dc2e521c1048a75abe04f04dbbd88e411b6dfba2cc8053",
+      "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/nsight-systems-cli-2025.3.1/opt/nvidia/nsight-systems-cli/2025.3.1/target-linux-x64/libcupti.so.12.9": "19f0f06e0c5579113840169d5f6d6d4222d4a4fc2d66403cbe3cad2d91db1ace"
+    },
+    "launcher": "existing paired.py --purpose profiling collector-first lifecycle",
+    "supervision": "Reuse eight UUID locks, stable B0, selected 0/1 B1, authenticated ECHILD/drain back to B0; no new framework",
+    "actual_request": {
+      "input_tokens": 5,
+      "output_tokens": 8,
+      "warmup": 1,
+      "measured": 1
+    },
+    "rankperf": false,
+    "log": "info,ferrule_request=debug",
+    "cache_activity_required": false,
+    "pending_adapter": "Current cache profiling enables performance debug; add a separately reviewed rankperf-off policy before admission",
+    "correlation": "Existing profile_trace_audit_v2 full-export bidirectional (PID, correlationId), same actual-request window",
+    "cuda_api_counts": {
+      "runtime": [
+        "cudaEventCreate",
+        "cudaEventRecord",
+        "cudaEventQuery",
+        "cudaEventDestroy"
+      ],
+      "driver": [
+        "cuEventCreate",
+        "cuEventRecord",
+        "cuEventQuery",
+        "cuEventDestroy"
+      ],
+      "additional": [
+        "stream-wait-event",
+        "event/stream/context synchronization"
+      ],
+      "scope": "Separate API layers, owner/thread/request/phase, durations and return status; boundary-crossing calls disclosed",
+      "missing_coverage": null,
+      "unique_events": null,
+      "completed_retirements": null
+    },
+    "evidence": "Preserve raw nsys-rep/SQLite, clock anchors, diagnostics/loss/coverage; correlation closure is not trace completeness",
+    "before_official_profile": null,
+    "historical_4d40_is_retirement_baseline": false,
+    "cpu_stacks": "Not requested; stripped artifacts are not stack evidence; no replacement build or symbol scan"
+  },
+  "unknown_pressure": null,
+  "pending_peak": null,
+  "fairmatch": false,
+  "exact_speedup": null
+}

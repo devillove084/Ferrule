@@ -1,0 +1,149 @@
+{
+  "schema": "ferrule.paper.operator-retirement-source-delta.v1",
+  "before_binary_sha256": "9ef9841598b4694fb611250bf8876c4314d252400136ddb23f606a979cadb656",
+  "after_binary_sha256": "7e1c23a88143cb6455e3c6e10bfe43a567fc97b5fd45745800eae3a1e39a0e73",
+  "before_inventory_digest": "eb90c51d5128388ee3dc26b92e4ad277ef0a505fd071b73481649bb3fe852951",
+  "after_inventory_digest": "b407a1efa837c7daf4753123ade4b189820fc51a672f1af38a47bfcaa9ebd7f6",
+  "before_production_source_digest": "39e48a6f1df221ea523e9e726667987928779330dc6a5af7d1f3241d3b863de1",
+  "after_production_source_digest": "1af5e8b06d11b6b422ad2df754d0e012f5f0a3ae93789783c6fdb55d871ac6be",
+  "production_changes": [
+    {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-backend/src/cuda/allocator.rs",
+      "before_sha256": "49ba582f3ad4f267ff8bbd0f6b3fe0351c1cf1a3e560e1c7d8e78c218cd6b98c",
+      "after_sha256": "adb5db878dfd2700d5576ca4acb96f3be0b80e4cbd2a4d95b955cc39799fd052"
+    },
+    {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-backend/src/cuda/runtime.rs",
+      "before_sha256": "f7f36d50be4a5ddbd37d880da46c982d11cc7b83ed82f94e56655851d82bebfb",
+      "after_sha256": "bfe1a40b5666834d9b87a60c8011e355febb1007695d2806b5bac2ddfecf91e8"
+    }
+  ],
+  "test_only_source_changes": [
+    {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-backend/src/cuda/providers/cutlass.rs",
+      "before_sha256": "cf567b42135279ea1de45fb61a7ba935ab9be03497713067d4d0c7d2d393a3b5",
+      "after_sha256": "389ee1596b3af387fcb4782bceed8ce54d6870de56a93f4979f8df97209dbce4"
+    }
+  ],
+  "test_source_changes": [
+    {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-backend/tests/allocator_batch_v3/CPU_RECEIPT_V3.json",
+      "before_sha256": null,
+      "after_sha256": "da990c328fb333a77ec9b3a4f9039090f2ff28205e8736f9acf50251fabfb771"
+    },
+    {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-backend/tests/allocator_batch_v3/FREEZE_V3.sha256",
+      "before_sha256": null,
+      "after_sha256": "44a551c3772e5456a842d95133e9cbdd29dadafcc3d8fb29f15205cdb7574344"
+    },
+    {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-backend/tests/allocator_batch_v3/README.md",
+      "before_sha256": null,
+      "after_sha256": "d79b18ad1c49c2bc76846e553acd2d730a01a9c878eb34ec9e83549f8c5ed29b"
+    },
+    {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-backend/tests/allocator_batch_v3/main.rs",
+      "before_sha256": null,
+      "after_sha256": "3376bde731f7a91b3f79edb98ac59d672d5befab2a7a44fbd9cd1e1341a7cdd6"
+    },
+    {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-backend/tests/allocator_batch_v3/tests.rs",
+      "before_sha256": null,
+      "after_sha256": "fe910067299d5eac14453266a6aee07efe4cba9db899f5b681a03d0cb1657c7d"
+    },
+    {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-backend/tests/allocator_context_drop/CPU_RECEIPT_V2.json",
+      "before_sha256": null,
+      "after_sha256": "a7657e6edc943cf66f594a3a7f368dd559f28d2e58e1765295e0441edcc29163"
+    },
+    {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-backend/tests/allocator_context_drop/FREEZE_V2.sha256",
+      "before_sha256": null,
+      "after_sha256": "2a67ad45dd79f7c58bcefb23924e681c9e183dbb9122a045ef76931310dfdefe"
+    },
+    {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-backend/tests/allocator_context_drop/GPU_GATE.md",
+      "before_sha256": null,
+      "after_sha256": "4e3ede02f1a959785d0ff24044882a37a51820752eb51d15a8a8adb2d4fa2de5"
+    },
+    {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-backend/tests/allocator_context_drop/README.md",
+      "before_sha256": null,
+      "after_sha256": "14f180b0b0017bb04ae9e1b7fa6540da8a00024686e34f1bb9d498d90ab29ec2"
+    },
+    {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-backend/tests/allocator_context_drop/driver.rs",
+      "before_sha256": null,
+      "after_sha256": "767862f2c3b5f5248d86b952cfb388f9112218922996601dbc84425d980a1896"
+    },
+    {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-backend/tests/allocator_context_drop/gpu.rs",
+      "before_sha256": null,
+      "after_sha256": "f92f629beb36e8f4ec8254167f6493601e54985f040e3be89ef825f37e1078ac"
+    },
+    {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-backend/tests/allocator_context_drop/main.rs",
+      "before_sha256": null,
+      "after_sha256": "3d65cfb541e052f28193b9b4a1346e3bb2d063238100f5f7634819bccf5984cb"
+    },
+    {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-backend/tests/allocator_context_drop/tests.rs",
+      "before_sha256": null,
+      "after_sha256": "fc928bbebb2a7feaab0f44697616082974a693f522b1059402c2db63a6acb456"
+    },
+    {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-backend/tests/allocator_retirement/FREEZE.sha256",
+      "before_sha256": null,
+      "after_sha256": "5b6f07b33101c6adc13768505957eb84a8f523ef67eb001ddbd9b96b5d15c0c0"
+    },
+    {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-backend/tests/allocator_retirement/README.md",
+      "before_sha256": null,
+      "after_sha256": "07b344ef5838a81532aa147b0f875a8ab5af026cee5a15d5eb9d4330448e92a8"
+    },
+    {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-backend/tests/allocator_retirement/main.rs",
+      "before_sha256": null,
+      "after_sha256": "6b1bdc92c02d539e7a5cf8db965c66c193929f83e139e0bebdc14423844af6cf"
+    },
+    {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-backend/tests/allocator_retirement/runtime.rs",
+      "before_sha256": null,
+      "after_sha256": "200e50d7a7601ad7b9fb3eebad95babe72b0af18d1510bd36bc6ab908c7c4785"
+    },
+    {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-backend/tests/allocator_retirement/tests.rs",
+      "before_sha256": null,
+      "after_sha256": "a7e994bbedc0e8d4b355cd217aa1cc9090033a57e9e5381c6c2161d44a7682a3"
+    },
+    {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-backend/tests/allocator_retirement_gpu/README.md",
+      "before_sha256": null,
+      "after_sha256": "ee3303c288a2b24c8f67fcee735f43d3d7a1879994d5a0776423ec39a4264a6e"
+    },
+    {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-backend/tests/allocator_retirement_gpu/driver.rs",
+      "before_sha256": null,
+      "after_sha256": "d2105cf182c474fb99d19a2305d19af5cf06a397fe5c22c08c66cb479271bcdc"
+    },
+    {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-backend/tests/allocator_retirement_gpu/main.rs",
+      "before_sha256": null,
+      "after_sha256": "4d99ccea73eeb03ffcfddd84eb476ecf92e9a7122d015becf063ab1a905e9adc"
+    },
+    {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-backend/tests/allocator_retirement_gpu/tests.rs",
+      "before_sha256": null,
+      "after_sha256": "07ea6de4f480622506865b8a04794a280458f44dc6999bb5a014237a10a50ed5"
+    },
+    {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-backend/tests/cuda_allocator.rs",
+      "before_sha256": "23f2aed9bae6fac012bdb7ccf0c9ad2cc13714107b48a1dee03789b6ea69efe7",
+      "after_sha256": "2d09b8f03cf42ebc0adb04cf224a837e6f5edecaa0c4625e5e1c82d8d33a48b4"
+    }
+  ],
+  "qualification_handoff": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-allocator-v3-20261011-03/handoff.json",
+    "sha256": "faa71361682e8b454b2e85feffd456c06598bcc4ff4572a34bfaa54367e83fd4"
+  }
+}

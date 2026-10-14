@@ -1,0 +1,15 @@
+{
+  "selector": "transformer::standard::cuda::hybrid_rank::mixed::decoded_gpu_tests::decoded_physical_full_native_fallback_before_submit_exact",
+  "binary_sha256": "caf1f240f89200d184b07d0a1253bb12146de95942914aae205f0a69a5f70c78",
+  "source_digest": "1d422a2b3a57b076990181b68e194c5931e336c0214bd3295c558234b5017407",
+  "assertions_passed": true,
+  "cache_values": "not exported by model-owned tests; no fabricated numeric snapshot",
+  "gpu_memory": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-cache-frozen-pair-20261010-02/model-physical-full/resources.json",
+    "sha256": "aaade02406151eb7525ceaec26a79c096e1f958201cb9200dc17f7a0b34b3c80"
+  },
+  "log": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-cache-frozen-pair-20261010-02/model-physical-full/test.log",
+    "sha256": "9eee88cc5b35e8335f1ffbdad598155900eb8cabbe441703947d92448f405d5f"
+  }
+}

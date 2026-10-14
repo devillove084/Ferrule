@@ -1,0 +1,33 @@
+....{"stage": "hello2", "gate": {"status": "pass"}}
+{"stage": "canary8", "gate": {"status": "fail"}}
+...START single lifecycle; no retry
+{"status": "complete", "launch_id": "fixture", "server_starts": 1, "authenticated_drained": true, "after": "verified"}
+......EE..
+======================================================================
+ERROR: test_schedule_balanced_sequential_and_no_implicit_speedup (test_paired.Paired.test_schedule_balanced_sequential_and_no_implicit_speedup)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/test_paired.py", line 193, in test_schedule_balanced_sequential_and_no_implicit_speedup
+    self.assertEqual(p.run('fixture', True, 'fixture grant'), 0)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/paired.py", line 506, in run
+    slots=[dict(id=slot, status='not_run') for slot in experiment_slots(purpose, prepared['admission'])])
+                                                                                 ~~~~~~~~^^^^^^^^^^^^^
+KeyError: 'admission'
+
+======================================================================
+ERROR: test_schedule_fail_stop_retains_remaining_not_run (test_paired.Paired.test_schedule_fail_stop_retains_remaining_not_run)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/test_paired.py", line 174, in test_schedule_fail_stop_retains_remaining_not_run
+    self.assertEqual(p.run('fixture', True, 'fixture grant'), 1)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/paired.py", line 506, in run
+    slots=[dict(id=slot, status='not_run') for slot in experiment_slots(purpose, prepared['admission'])])
+                                                                                 ~~~~~~~~^^^^^^^^^^^^^
+KeyError: 'admission'
+
+----------------------------------------------------------------------
+Ran 17 tests in 4.071s
+
+FAILED (errors=2)

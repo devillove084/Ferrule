@@ -1,0 +1,250 @@
+{
+  "schema": "ferrule.paper.uninitialized-arena-handoff.v1",
+  "acceptance_summary": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-uninitialized-20261010-01/acceptance-summary.json",
+    "sha256": "2068f9f200ec99a8e94054dbfd2e585b2abb3fca1264e140cad5bb8641b1434c"
+  },
+  "prepared": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-uninitialized-20261010-01/prepared.json",
+    "sha256": "408672802ae4c0d02ca345acc7ab63c5510c58b3e605c280528236e8daf99c3a"
+  },
+  "source_digest": "30853e0e9ebae8b8e42b96b32e7e7b9e8067d5d9412f3dad6a53e87b51448f0f",
+  "binaries": {
+    "backend": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-uninitialized-20261010-01/binary-backend/staged/ferrule",
+      "sha256": "a6f5fb2bade4f085fcfc9c91c2745a5adaa4393fddd9fb76e8e64b219e503b0b"
+    },
+    "backend-slice": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-uninitialized-20261010-01/binary-backend-slice/staged/ferrule",
+      "sha256": "f84751452f20b9ee83493a2afffadf6fd9921ac1cd7fa9e3b6dff26840df5b3c"
+    },
+    "backend-arena": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-uninitialized-20261010-01/binary-backend-arena/staged/ferrule",
+      "sha256": "7f9223912fd20ead8bce37bd0f73b92ca13e9e52d3d61e9f68bd529974841da1"
+    },
+    "model": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-uninitialized-20261010-01/binary-model/staged/ferrule",
+      "sha256": "705b9d16b81e16a016180ed6c479a5bd722c311f3df8547842ebbb05bfb5a050"
+    },
+    "model-handoff": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-uninitialized-20261010-01/binary-model-handoff/staged/ferrule",
+      "sha256": "c4ba0b5c8b04e85bbd8d20d3ff3178fb72ed9faf5d9cd3b8c891f800461ed426"
+    },
+    "runtime": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-uninitialized-20261010-01/binary-runtime/staged/ferrule",
+      "sha256": "da1c0afc077a6269e10d1d7aa120bb593efb93100330ee5262042ab0842d0948"
+    },
+    "composition": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-uninitialized-20261010-01/binary-composition/staged/ferrule",
+      "sha256": "6d818ba4a6079283beafb180827477c585e19c09ace029345022073415ae54e7"
+    }
+  },
+  "source_changes_since_zero_initialized_arena03": {
+    "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-backend/src/cuda/operator_owner.rs": {
+      "before": "3293dd282c12ceae91d432d684028b13eead67505fb54ec470c8c3e3a242dc99",
+      "after": "8ae162a5fdf7c53665b482bfe0d1932e4cb00abd1d153aa3c8b0984bb9aae5ee"
+    },
+    "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-backend/src/cuda/operators/bf16_arena.rs": {
+      "before": null,
+      "after": "c9da2400670074b1f358250cef14603dab094854cac7d794a958b179de28b45b"
+    },
+    "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-backend/tests/cuda_bf16_arena.rs": {
+      "before": null,
+      "after": "8b60e6fc63fdd06b358c55e5a2c97090ae6fda19a5ec2762e1ff9a8550b20d53"
+    },
+    "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-model/src/transformer/standard/cuda/hybrid_rank/mixed.rs": {
+      "before": "279dc4bdf7cc06ba160efe20f451fd4fe8de01fd892f0b6807acb96a6f74f9ac",
+      "after": "54ea3983d776675f90179f9b2d85528f70063b49fd66c9a4af5594f96530d09a"
+    },
+    "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-model/tests/mixed_decoded_arena_handoff.rs": {
+      "before": null,
+      "after": "94a905c0f89daa244662ab362d1ad9aeaba58c3b67429862e8984b876c6c84b3"
+    },
+    "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-model/tests/unit/transformer/mixed_decoded_gpu.rs": {
+      "before": "a29750d097e2d9ffa093b2b6a240e55acd49eb451c2b1be9bb44d48620733a7a",
+      "after": "27ec068f2b582d177288435cd6d3719d01d24497ce5712631f658bb4c3f18553"
+    }
+  },
+  "unchanged_core_and_quota_pins": {
+    "crates/ferrule-model/src/transformer/standard/mixed_decoded.rs": "cb4e403845a0e0621c73912a0ed72de51686b421265b93d2b94f370edcddf8fb",
+    "crates/ferrule-model/src/transformer/hybrid_parallel/mixed_decoded_arena.rs": "9a082ee34b24525beb3206710e488400e36e3b1209dabfe022ba9480245f8d9a"
+  },
+  "model_api_handoff": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-model/tests/support/mixed_decoded_arena_handoff.md",
+    "sha256": "654cc9ea406bbc187f06c96de5268f097e14fdf9e044eab97f7fdc5db357c57f"
+  },
+  "backend_api_handoff": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-backend/tests/numeric_bf16_gemv/mixed_decode_handoff.md",
+    "sha256": "0b4f15f5078a32cb43e03c7e0a4aa9b1e9c90e349795d1adf760569cb5d3ab78"
+  },
+  "build_receipts": {
+    "backend": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-uninitialized-20261010-01/build-backend.json",
+      "sha256": "a629c95790c17df2b6916cae74b2b138da5226c149848bfec924240fb74a742f"
+    },
+    "backend-slice": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-uninitialized-20261010-01/build-backend-slice.json",
+      "sha256": "6c69f679283f8eaddcf5bc3dfcdefb1382c3b71338e9c94d9f135328eb283c89"
+    },
+    "backend-arena": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-uninitialized-20261010-01/build-backend-arena.json",
+      "sha256": "140c5f6f96e3da20c62038e1b601e27c7d5b14d413ab6d18b8b4b05c2d72024b"
+    },
+    "model": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-uninitialized-20261010-01/build-model.json",
+      "sha256": "46819eb9fc501d4d2348f262c5f76b50e32be755a859c0bd117ff329dad9c387"
+    },
+    "model-handoff": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-uninitialized-20261010-01/build-model-handoff.json",
+      "sha256": "6327ced5f3086e4963819d76e5579536d4deabc5cafad48139f9784bfbec795e"
+    },
+    "runtime": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-uninitialized-20261010-01/build-runtime.json",
+      "sha256": "a3b4598273171bfa6e34f692bc99dbad08f333ddf7a0d990e1d545805308bd2b"
+    },
+    "composition": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-uninitialized-20261010-01/build-composition.json",
+      "sha256": "6f03489eabcd5f4408232d7150124bdf333be30f3328eb734f150b1a1d1f8963"
+    }
+  },
+  "cpu_selectors_passed": 33,
+  "cpu_policy": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-uninitialized-20261010-01/cpu-paper-tests.json",
+    "sha256": "ba2345cf0171fb243b60b8ec057fb48fc34e5e55f3864c9971c8312e3dbf24e1"
+  },
+  "fresh_gpu_gates": 23,
+  "fresh_backend_gates": 5,
+  "fresh_model_gates": 11,
+  "prior_gpu_passes_inherited": false,
+  "exact_counts": {
+    "full40": {
+      "calls": 4,
+      "metrics": 4356
+    },
+    "greedy4": {
+      "calls": 10,
+      "metrics": 10890
+    },
+    "fork2": {
+      "calls": 6,
+      "metrics": 6534
+    },
+    "canary2": {
+      "calls": 5,
+      "metrics": 5445
+    },
+    "recreate1": {
+      "calls": 4,
+      "metrics": 4356
+    },
+    "cold-owner1-01": {
+      "calls": 4,
+      "metrics": 4356
+    },
+    "cold-owner1-02": {
+      "calls": 4,
+      "metrics": 4356
+    }
+  },
+  "cache_snapshot_rows": 32,
+  "actual_snapshots": {
+    "full40": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-uninitialized-20261010-01/full40/cache-snapshots.json",
+      "sha256": "396bfa37309e1f9b4987804bca69b300cff26de4610a0f8d20f34776e36e7650"
+    },
+    "greedy4": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-uninitialized-20261010-01/greedy4/cache-snapshots.json",
+      "sha256": "2cbaa7fec436f313e2d90544589c223ab8166dd6229b1c298b9df4dca88ab1dd"
+    },
+    "fork2": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-uninitialized-20261010-01/fork2/cache-snapshots.json",
+      "sha256": "871e457bcdcbb38d4e22080bec02f43efc3b21804bf3138eb9ab7a3ae38a6ce2"
+    },
+    "canary2": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-uninitialized-20261010-01/canary2/cache-snapshots.json",
+      "sha256": "c8eb82ccf76a9eda2c7c1b40c566904db323f037d5bc2dc8108ed3f15e4ec1a7"
+    },
+    "recreate1": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-uninitialized-20261010-01/recreate1/cache-snapshots.json",
+      "sha256": "473e7375f472e6baf436eceeaa905f807cb07101eea8116761d4801d5d677d2a"
+    },
+    "cold-owner1-01": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-uninitialized-20261010-01/cold-owner1-01/cache-snapshots.json",
+      "sha256": "396bfa37309e1f9b4987804bca69b300cff26de4610a0f8d20f34776e36e7650"
+    },
+    "cold-owner1-02": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-uninitialized-20261010-01/cold-owner1-02/cache-snapshots.json",
+      "sha256": "d7930369a08ead428a76c84e357b7740d49379ee625407a2b3539af22e3b6514"
+    }
+  },
+  "whole_device_sampled_peak_bytes": {
+    "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 22660775936,
+    "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 22660775936
+  },
+  "cache_full_grant_bytes_per_owner": 3221225472,
+  "root_current_peak_and_driver_growth_bytes_per_owner": 3221225472,
+  "source_bound_assertions": {
+    "allocation_requests": 1,
+    "huge_allocations": 1,
+    "driver_allocations": 1,
+    "granted_bytes": "exact plan arena grant",
+    "driver_growth_bytes": "exact plan arena grant",
+    "allocator_reuse_delta": 0,
+    "kernel_h2d_d2h_stream_sync_delta_before_custody": 0,
+    "scope": "Model test counters bracket only allocation plus all view installation, after GemmEx preparation; CPU guards exclude uncounted memset/init calls"
+  },
+  "new_small_receipts": {
+    "backend-arena-allocation": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-uninitialized-20261010-01/backend-arena-allocation/small-receipt.json",
+      "sha256": "da8da6c200dfc2b88a51876d377f1713f6b7c89e73f4da6aff58b7cd46311338"
+    },
+    "backend-arena-errors": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-uninitialized-20261010-01/backend-arena-errors/small-receipt.json",
+      "sha256": "bd495829eb7db9d14de77232a0d1598acc04040525816cf6b1943d647ed59c05"
+    },
+    "model-uninitialized-views": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-uninitialized-20261010-01/model-uninitialized-views/small-receipt.json",
+      "sha256": "b8d711cce7d905859b2e118653b29f221cc5498d072383f9b52c4b4174c352a5"
+    },
+    "model-first-fixed-failure": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-uninitialized-20261010-01/model-first-fixed-failure/small-receipt.json",
+      "sha256": "ab8afe5dbd2a20a3281500232ad71d9e68c5e99742ea16dd1629de91d72bfa66"
+    },
+    "model-uninitialized-slots": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-uninitialized-20261010-01/model-uninitialized-slots/small-receipt.json",
+      "sha256": "642527ac4585924242e1a686b0aa606df7f689b68e9ef98193948673a12b5e87"
+    }
+  },
+  "fit_hot_receipt": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-uninitialized-20261010-01/model-arena-fit/small-receipt.json",
+    "sha256": "126952dd4fc5a8bf3e87d715ddb0ec82a3a36f4e794443c8f49c557767be9c64"
+  },
+  "assertion_observation_limit": "Successful exact source-pinned assertions, not raw per-step telemetry or a full-model no-churn/speedup claim",
+  "runtime_libraries": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-uninitialized-20261010-01/runtime-library-pins.json",
+    "sha256": "fb2e34b01bd690c92bae30daa5fb4abc4144a7a312dd787deba83f48f7ad57fb"
+  },
+  "final_idle": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-uninitialized-20261010-01/final-idle.json",
+    "sha256": "e0076b2a92c252d76a42918f33aea8963d8f854d2db524ba541bb3b97a8c4cac"
+  },
+  "final_release": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-uninitialized-20261010-01/final-locks-released.json",
+    "sha256": "372feaeb0973306c87b1bdf7b97702cb58064e7674a78958634baf26f69626d6"
+  },
+  "historical_serving_binaries_preserved": {
+    "target/validation/tp2-mixed-optimized-release-20261009/ferrule-optimized": "4d40c34738d36a1c78f62c0e400dd732da40e34c316ce4bd3c356dc4d29b3173",
+    "target/validation/tp2-mixed-decoded-cache-public-release-20261010-03/ferrule-cacheon": "dadf831eb2af477108efd402171c40f7544a2600d14b8e5e7ab8a456d2625e5a"
+  },
+  "release_built": false,
+  "public_e2e_accepted": false,
+  "performance_accepted": false,
+  "release_cpu_builder_requirements": [
+    "Verify this handoff hash, acceptance summary, all source/build/tool/runtime/test-binary pins; no arena03/dadf numerical inheritance.",
+    "Build a fresh serving release from these exact production sources; any difference requires explicit reviewed source relation.",
+    "Retain original TP2 checkpoint/geometry/quotas/physical pages/native profiles; workspace4096 and total22528 MiB, full root3 GiB exactly once.",
+    "Require v2 actual ready/shutdown partitions and dedicated full-grant driver growth; activity null in unprofiled serving.",
+    "Extend the historical release adapter with an explicit current quality schema/source review; do not relabel its hard-coded old13-gate receipt.",
+    "No serving launch, public performance, A/B or Nsight acceptance is authorized by this CPU-builder input."
+  ]
+}

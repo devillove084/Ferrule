@@ -1,0 +1,47 @@
+
+The following built-in reports are available:
+
+  cuda_api_gpu_sum[:nvtx-name][:base|:mangled] -- CUDA Summary (API/Kernels/MemOps)
+  cuda_api_sum -- CUDA API Summary
+  cuda_api_trace -- CUDA API Trace
+  cuda_gpu_kern_gb_sum[:nvtx-name][:base|:mangled] -- CUDA GPU Kernel/Grid/Block Summary
+  cuda_gpu_kern_sum[:nvtx-name][:base|:mangled] -- CUDA GPU Kernel Summary
+  cuda_gpu_mem_size_sum -- CUDA GPU MemOps Summary (by Size)
+  cuda_gpu_mem_time_sum -- CUDA GPU MemOps Summary (by Time)
+  cuda_gpu_sum[:nvtx-name][:base|:mangled] -- CUDA GPU Summary (Kernels/MemOps)
+  cuda_gpu_trace[:nvtx-name][:base|:mangled] -- CUDA GPU Trace
+  cuda_green_context_sum -- CUDA Green Context Summary
+  cuda_kern_exec_sum[:nvtx-name][:base|:mangled] -- CUDA Kernel Launch & Exec Time Summary
+  cuda_kern_exec_trace[:nvtx-name][:base|:mangled] -- CUDA Kernel Launch & Exec Time Trace
+  dx11_pix_sum -- DX11 PIX Range Summary
+  dx12_gpu_marker_sum -- DX12 GPU Command List PIX Ranges Summary
+  dx12_pix_sum -- DX12 PIX Range Summary
+  mpi_event_sum -- MPI Event Summary
+  mpi_event_trace -- MPI Event Trace
+  mpi_msg_size_sum -- MPI Message Size Summary
+  network_congestion[:ticks_threshold=<ticks_per_ms>] -- Network Devices Congestion
+  nvtx_gpu_proj_sum -- NVTX GPU Projection Summary
+  nvtx_gpu_proj_trace -- NVTX GPU Projection Trace
+  nvtx_kern_sum[:base|:mangled] -- NVTX Range Kernel Summary
+  nvtx_pushpop_sum -- NVTX Push/Pop Range Summary
+  nvtx_pushpop_trace -- NVTX Push/Pop Range Trace
+  nvtx_startend_sum -- NVTX Start/End Range Summary
+  nvtx_sum -- NVTX Range Summary
+  nvvideo_api_sum -- NvVideo API Summary
+  openacc_sum -- OpenACC Summary
+  opengl_khr_gpu_range_sum -- OpenGL KHR_debug GPU Range Summary
+  opengl_khr_range_sum -- OpenGL KHR_debug Range Summary
+  openmp_sum -- OpenMP Summary
+  osrt_sum -- OS Runtime Summary
+  syscall_sum -- Syscall Summary
+  um_cpu_page_faults_sum -- Unified Memory CPU Page Faults Summary
+  um_sum[:rows=<limit>] -- Unified Memory Analysis Summary
+  um_total_sum -- Unified Memory Totals Summary
+  vulkan_api_sum -- Vulkan API Summary
+  vulkan_api_trace -- Vulkan API Trace
+  vulkan_gpu_marker_sum -- Vulkan GPU Range Summary
+  vulkan_marker_sum -- Vulkan Range Summary
+  wddm_queue_sum -- WDDM Queue Utilization Summary
+
+For more information, use '--help-reports <report_name>'
+

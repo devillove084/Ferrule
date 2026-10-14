@@ -1,0 +1,20 @@
+{
+  "schema": "ferrule.paper.m7.cpu-validation.v1",
+  "status": "pass",
+  "gpu_queries": false,
+  "torch_cuda_vllm_imports": false,
+  "servers_launched": false,
+  "packages_installed": false,
+  "release_build_executed": false,
+  "tests_command": "env CUDA_VISIBLE_DEVICES= NVIDIA_VISIBLE_DEVICES=none PYTHONDONTWRITEBYTECODE=1 /home/admin/wxw403883/anaconda3/bin/python3.12 -S -B -m unittest discover -s papers/arxiv/experiments -p test_*.py -v",
+  "tests_passed": 20,
+  "plan_artifact": "../m7-plan-001/plan.json",
+  "plan_artifact_created_cpu_only": true,
+  "exact_speedup": null,
+  "fairmatch": false,
+  "notes": [
+    "Plan captures historical authoritative numerical PASS plus a separate new-release basic-quality gate.",
+    "GPU execution remains blocked until a sole owner grants a physical UUID and supplies an owner note.",
+    "No runtime claims are made by this CPU validation receipt."
+  ]
+}

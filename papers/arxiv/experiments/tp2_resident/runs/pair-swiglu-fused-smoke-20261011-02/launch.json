@@ -1,0 +1,19 @@
+{
+  "protocol": "tp2-serving-smoke-c1",
+  "purpose": "serving_smoke",
+  "status": "incomplete",
+  "sole_gpu_owner_granted": true,
+  "owner_note": "User explicitly authorized unique GPU owner on 2026-10-11; existing sealed S1/S2 request-debug cancellation gate only; no performance, no V or profiler; stop on error/ECHILD/unknown custody",
+  "fairmatch": false,
+  "exact_speedup": null,
+  "slots": [
+    {
+      "id": "S1",
+      "status": "not_run"
+    },
+    {
+      "id": "S2",
+      "status": "not_run"
+    }
+  ]
+}

@@ -1,0 +1,44 @@
+{
+  "call": {
+    "input_token_ids": [
+      760,
+      6511,
+      314,
+      9338,
+      369
+    ],
+    "next_token_id": 11751,
+    "position_start": 0,
+    "sequence_length_after": 5,
+    "stage": "call"
+  },
+  "epoch": 0,
+  "id": "call-02",
+  "input": {
+    "ids": [
+      760,
+      6511,
+      314,
+      9338,
+      369
+    ],
+    "kind": "tokens"
+  },
+  "op": "call",
+  "publication": {
+    "committed_tokens": 5,
+    "outstanding": 0,
+    "position_start": 0,
+    "publications_after": 3,
+    "publications_before": 2,
+    "quarantined": false,
+    "schema": "ferrule.paper.unobserved-publication.v1",
+    "session": 2,
+    "submitted_rows": 5,
+    "tensor_readback": false
+  },
+  "runtime_session": 2,
+  "session": "capital",
+  "transaction": 3,
+  "untouched_sessions": []
+}

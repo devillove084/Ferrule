@@ -1,17 +1,23 @@
 //! Generic observability for resident model planning and execution.
 
 use ferrule_common::io_protocol::LoadStage;
+use ferrule_model::resource_observability::{
+    PhysicalResourceObservation, ResourceClosure, ResourceEvidence, ResourceObservabilityLedger,
+    ResourceObservationScope, ResourceObservationSnapshot,
+};
 use ferrule_model::{ModelInfo, ResidentModelRunner};
+use std::num::NonZeroU64;
 
 use crate::cache::KvPageManagerStats;
 use crate::io::{OutputTokenId, RegistryStats, RuntimeMaterializationResolverStats};
-use crate::scheduling::{ResourceKind, SequenceSlotPool};
+use crate::scheduling::{PhysicalResourceSnapshot, ResourceKind, SequenceSlotPool};
 use crate::speculation::SpeculativeMetrics;
 
 use super::{ResidentKvPagePlan, ResidentTopKDriver};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ResidentTopKDriverStats {
+    pub kv_execution: super::KvExecutionStats,
     pub actions: usize,
     pub prefill_chunks: usize,
     pub prefill_tokens: usize,
@@ -27,6 +33,16 @@ impl ResidentTopKDriverStats {
     /// Return monotonic counters since `before`, retaining current gauges.
     pub fn delta_since(&self, before: &Self) -> Self {
         Self {
+            kv_execution: super::KvExecutionStats {
+                resident_warming: self
+                    .kv_execution
+                    .resident_warming
+                    .saturating_sub(before.kv_execution.resident_warming),
+                host_kv_decode: self
+                    .kv_execution
+                    .host_kv_decode
+                    .saturating_sub(before.kv_execution.host_kv_decode),
+            },
             actions: self.actions.saturating_sub(before.actions),
             prefill_chunks: self.prefill_chunks.saturating_sub(before.prefill_chunks),
             prefill_tokens: self.prefill_tokens.saturating_sub(before.prefill_tokens),
@@ -63,6 +79,9 @@ impl ResidentPrefixCacheStats {
 /// Runtime-owned physical KV capacity and current utilization.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ResidentKvCacheObservability {
+    /// Independent gauges and context-wide actual driver frees; logical pages
+    /// remain charged while suspended and are not proof of device residency.
+    pub idle_physical: Option<super::IdleKvPhysicalStats>,
     pub page_size_tokens: usize,
     pub full_capacity_pages: usize,
     pub configured_pages: usize,
@@ -259,6 +278,7 @@ where
                 configured_bytes: None,
             });
             ResidentKvCacheObservability {
+                idle_physical: driver.idle_kv_physical_stats(),
                 page_size_tokens: manager.page_size(),
                 full_capacity_pages: plan.full_capacity_pages,
                 configured_pages: plan.configured_pages,
@@ -292,10 +312,87 @@ where
     }
 }
 
-#[derive(Debug, Default)]
+/// Read-only resource evidence alongside the existing engine work snapshot.
+/// These are owner-local ledgers, not device-wide allocator measurements.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResidentResourceObservability {
+    /// Actual model-owner forwarding; unsupported runners leave fields unobserved.
+    pub model: PhysicalResourceObservation,
+    /// Runtime registry residency, pending operations, credits, and retirements.
+    /// Residency, pending physical operations, credits, and retired operations
+    /// come from this driver's materialization registry. Scratch and complete
+    /// pending-retirement counts are unavailable, not assumed zero. Closure
+    /// describes the explicit close event, not allocator or final-owner release.
+    pub runtime: ResourceObservationSnapshot,
+
+    /// Exact broker domains, preserving units rather than summing bytes/slots.
+    pub credits: Vec<PhysicalResourceSnapshot>,
+}
+
+pub(crate) fn snapshot_resources<R, C>(
+    driver: &ResidentTopKDriver<R, C>,
+    resources: &ResourceObservabilityLedger,
+) -> ResidentResourceObservability
+where
+    R: ResidentModelRunner,
+    C: SequenceSlotPool,
+{
+    let registry = driver.load_registry();
+    let mut live = ResourceObservationSnapshot::unobserved(resources.snapshot().scope);
+    live.resident_bytes = ResourceEvidence::Observed(registry.resident_bytes());
+    live.pending_operations = ResourceEvidence::Observed(registry.pending_physical_operations());
+    live.active_credit_grants = ResourceEvidence::Observed(registry.resources().active_grants());
+    live.retired_operations = ResourceEvidence::Observed(registry.stats().retirements);
+    // Raw faults do not expose the registry's normalized custody evidence. Even
+    // a quiescent scoped fault leaves custody unknown if its owner mismatches.
+    // Conservatively retain uncertainty for scoped faults rather than treating
+    // their provider-reported status as authenticated registry-owner evidence.
+    let owner_uncertain = registry.provider_faults().iter().any(|fault| {
+        fault.scope.is_some()
+            || fault.quiescence != ferrule_common::io_protocol::QuiescenceEvidence::Quiescent
+    });
+    if owner_uncertain {
+        // Fault history does not observe retained quarantine bytes. The ledger
+        // normalizes custody loss to Unknown unless positive quarantine evidence
+        // was independently recorded by this owner.
+        live.fence = ResourceEvidence::Unknown;
+        live.closure = ResourceEvidence::Unknown;
+    }
+    let runtime = resources
+        .snapshot_with_live(&live)
+        .expect("driver resource observation scope is stable");
+    let model = driver.model_resource_observability_snapshot();
+    let mut credits = registry.resources().snapshots().collect::<Vec<_>>();
+    credits.sort_by_key(|snapshot| snapshot.kind);
+    ResidentResourceObservability {
+        runtime,
+        model,
+        credits,
+    }
+}
+
+#[derive(Debug)]
 pub(crate) struct ResidentDriverObservability {
     pub(crate) stats: ResidentTopKDriverStats,
     pub(crate) prefix_cache: ResidentPrefixCacheStats,
+    pub(crate) resources: ResourceObservabilityLedger,
+    pub(crate) physical_resources: PhysicalResourceObservation,
+}
+
+impl Default for ResidentDriverObservability {
+    fn default() -> Self {
+        let mut resources =
+            ResourceObservabilityLedger::new(ResourceObservationScope::fresh(NonZeroU64::MIN));
+        let mut initial = resources.snapshot();
+        initial.closure = ResourceEvidence::Observed(ResourceClosure::Open);
+        resources.observe(&initial).expect("same observation scope");
+        Self {
+            stats: ResidentTopKDriverStats::default(),
+            prefix_cache: ResidentPrefixCacheStats::default(),
+            resources,
+            physical_resources: PhysicalResourceObservation::default(),
+        }
+    }
 }
 
 impl ResidentDriverObservability {

@@ -1,5 +1,5 @@
 #![cfg(feature = "cuda")]
-use ferrule_backend::cuda::context::CudaOperators;
+use ferrule_backend::cuda::operator_owner::CudaOperators;
 use ferrule_common::Error;
 
 #[test]

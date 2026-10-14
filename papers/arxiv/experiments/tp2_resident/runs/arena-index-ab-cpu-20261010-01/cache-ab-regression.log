@@ -1,0 +1,35 @@
+.........E..E
+======================================================================
+ERROR: test_old_failure_stops_before_candidate (test_cache_ab.CacheAB.test_old_failure_stops_before_candidate)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/test_cache_ab.py", line 142, in test_old_failure_stops_before_candidate
+    code,starts,result=self.schedule(True)
+                       ^^^^^^^^^^^^^^^^^^^
+  File "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/test_cache_ab.py", line 130, in schedule
+    code=p.run('fixture',True,'CPU fixture grant','cache_ab')
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/paired.py", line 506, in run
+    slots=[dict(id=slot, status='not_run') for slot in experiment_slots(purpose, prepared['admission'])])
+                                                                                 ~~~~~~~~^^^^^^^^^^^^^
+KeyError: 'admission'
+
+======================================================================
+ERROR: test_schedule_runs_only_OFF_ON_and_no_vllm (test_cache_ab.CacheAB.test_schedule_runs_only_OFF_ON_and_no_vllm)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/test_cache_ab.py", line 136, in test_schedule_runs_only_OFF_ON_and_no_vllm
+    code,starts,result=self.schedule(False)
+                       ^^^^^^^^^^^^^^^^^^^^
+  File "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/test_cache_ab.py", line 130, in schedule
+    code=p.run('fixture',True,'CPU fixture grant','cache_ab')
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/paired.py", line 506, in run
+    slots=[dict(id=slot, status='not_run') for slot in experiment_slots(purpose, prepared['admission'])])
+                                                                                 ~~~~~~~~^^^^^^^^^^^^^
+KeyError: 'admission'
+
+----------------------------------------------------------------------
+Ran 13 tests in 17.559s
+
+FAILED (errors=2)

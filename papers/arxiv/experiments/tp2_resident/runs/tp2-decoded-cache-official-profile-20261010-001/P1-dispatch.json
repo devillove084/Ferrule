@@ -1,0 +1,15 @@
+{
+  "protocol": "tp2-serving-profile-c1",
+  "purpose": "profiling",
+  "status": "incomplete",
+  "sole_gpu_owner_granted": true,
+  "owner_note": "User explicit sole GPU owner: final -03 dadf831 S1/S2 and no-trace F1/V1/V2/F2 PASS; independent official Nsight 2025.3.1 eight-lock probe B0/stableB1/ordered GPU0,1 model/drainB0, profile-only FERRULE_LOG rankperf debug, cache3GiB/workspace4096/device22GiB, no foreign signals, stop on numerical/budget/Unknown",
+  "fairmatch": false,
+  "exact_speedup": null,
+  "slots": [
+    {
+      "id": "P1",
+      "status": "dispatched_unknown"
+    }
+  ]
+}

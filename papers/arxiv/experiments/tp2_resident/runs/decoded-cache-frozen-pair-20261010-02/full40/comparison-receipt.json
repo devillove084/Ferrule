@@ -1,0 +1,10 @@
+{
+  "all_exact": true,
+  "report": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-cache-frozen-pair-20261010-02/full40-comparison.json",
+    "sha256": "1434a14966b1174d24477580ec1b09ccef9a1bc79eb9ee30f1614fc9eebb5c1b"
+  },
+  "raw_sha256": "97389c02fd041fdd7bcd365b6a5546de7c92fdf0df2716064d888b89c9b046de",
+  "reference_sha256": "fb96ba4dd134761af30b4025b4cce86f96136cb01f05b5b4fca3e74587caa71d",
+  "public_e2e_accepted": false
+}

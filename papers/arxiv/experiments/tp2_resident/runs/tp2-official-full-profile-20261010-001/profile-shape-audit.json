@@ -1,0 +1,2306 @@
+{
+  "schema": "ferrule.paper.request6-shape-audit.v1",
+  "status": "observed_correlation_closed",
+  "request_id": 6,
+  "model_pid": 167217,
+  "request_window_ns": [
+    2622335777,
+    5112115777
+  ],
+  "full_trace_accepted": false,
+  "paired_api_activity_loss_excluded": false,
+  "benchmark": false,
+  "inputs": {
+    "sqlite": "papers/arxiv/experiments/tp2_resident/runs/tp2-official-full-profile-20261010-001/runs/P1/session/nsight/nsys.sqlite",
+    "sqlite_sha256": "6715f8308a77a118151d86632e1ab0537f8c0396890fb1a3ac8add274bc137ae",
+    "audit_sha256": "55b2f32b676704e47ccdde9adf13af527b6fbb3a79b03d40ff1eb6a88d2bc2dd",
+    "admission": "papers/arxiv/experiments/tp2_resident/admission/optimized-20261009/profile-admission.json",
+    "admission_sha256": "ccde84e24fcfe37630364d192dd2ed68748142be951f5729c69699460eecccf0",
+    "analyzer": "papers/arxiv/experiments/tp2_resident/profile_shape_audit.py",
+    "analyzer_sha256": "2a3c610b42a60de13f13ca16b9067e62c29b39ec42aa0c024c2dd73c0da4eb06"
+  },
+  "limitations": [
+    "Even unique bidirectional closure of all exported request rows cannot exclude paired API/activity loss; it does not establish complete collection.",
+    "All timings are sums of observed kernel or host API durations across two ranks, not wall-clock savings or critical-path attribution.",
+    "No kernel argument payload, activation/weight pointer, CUDA API callchain or GemmEx API ranges exported. No same-weight/activation cache hit rate can be established.",
+    "Current mixed.rs and mixed_layer.rs do not match admission source pins; role attribution is a qualified inference from observed native motifs, matching TP/native code and matching checkpoint metadata, NOT an exact per-call executed-model-source/parameter binding.",
+    "Header shapes were read CPU-only from current checkpoint files. Metadata hashes match admission; entire multi-GB shard payloads were not rehashed.",
+    "No pure prefill/decode split is claimed; all figures use the complete formal request-6 window.",
+    "Observed adjacency is not a proof of pointer dataflow or absence of simultaneously lost API/activity pairs."
+  ],
+  "source_pins": [
+    {
+      "path": "crates/ferrule-backend/native/cuda/cutlass/bf16_linear.cuh",
+      "current_sha256": "00cbcaf5595f580569c446e3c4eb6eb32f7d81834bc8375e3e40483f62902df6",
+      "admission_sha256": "00cbcaf5595f580569c446e3c4eb6eb32f7d81834bc8375e3e40483f62902df6",
+      "matches_admission": true
+    },
+    {
+      "path": "crates/ferrule-backend/native/cuda/cutlass/bf16_gemmex.cuh",
+      "current_sha256": "b36d03aebe3cc4f86620212bc416f7ef3e4fc3cb46154072fa52aa41334d7444",
+      "admission_sha256": "b36d03aebe3cc4f86620212bc416f7ef3e4fc3cb46154072fa52aa41334d7444",
+      "matches_admission": true
+    },
+    {
+      "path": "crates/ferrule-backend/native/cuda/cutlass/bf16_gemmex_policy.h",
+      "current_sha256": "b0c3e8605319728f82420afa90a0d3d0c6d5f1b0f4f6da3f4fa85490e9ae877e",
+      "admission_sha256": "b0c3e8605319728f82420afa90a0d3d0c6d5f1b0f4f6da3f4fa85490e9ae877e",
+      "matches_admission": true
+    },
+    {
+      "path": "crates/ferrule-backend/src/cuda/allocator.rs",
+      "current_sha256": "49ba582f3ad4f267ff8bbd0f6b3fe0351c1cf1a3e560e1c7d8e78c218cd6b98c",
+      "admission_sha256": "49ba582f3ad4f267ff8bbd0f6b3fe0351c1cf1a3e560e1c7d8e78c218cd6b98c",
+      "matches_admission": true
+    },
+    {
+      "path": "crates/ferrule-backend/src/cuda/runtime.rs",
+      "current_sha256": "f7f36d50be4a5ddbd37d880da46c982d11cc7b83ed82f94e56655851d82bebfb",
+      "admission_sha256": "f7f36d50be4a5ddbd37d880da46c982d11cc7b83ed82f94e56655851d82bebfb",
+      "matches_admission": true
+    },
+    {
+      "path": "crates/ferrule-backend/src/cuda/operator_owner.rs",
+      "current_sha256": "0c0a6182e840480afa602c6215044f30faaf350054eff6c0b636241e96900724",
+      "admission_sha256": "0c0a6182e840480afa602c6215044f30faaf350054eff6c0b636241e96900724",
+      "matches_admission": true
+    },
+    {
+      "path": "crates/ferrule-model/src/transformer/hybrid_parallel/layout.rs",
+      "current_sha256": "b9dd7b1517b2d4b9bff6216a86d2e72c4666333a5f749726e998bb846aab19e7",
+      "admission_sha256": "b9dd7b1517b2d4b9bff6216a86d2e72c4666333a5f749726e998bb846aab19e7",
+      "matches_admission": true
+    },
+    {
+      "path": "crates/ferrule-model/src/transformer/standard/cuda/hybrid_rank/mixed.rs",
+      "current_sha256": "e642ba6df25db4ae02b0817eeadcf1a0dfc58fdd32cdce516c740b785da57756",
+      "admission_sha256": "daffe630200da9affb92db05067582db8679f634e302e39134644e16e7b8645d",
+      "matches_admission": false
+    },
+    {
+      "path": "crates/ferrule-model/src/transformer/standard/cuda/hybrid_rank/mixed_layer.rs",
+      "current_sha256": "9c4b1ab10346644c12fce30ec557f1001a920516531ace03354125f656561bb2",
+      "admission_sha256": "dd1e0902c15c44b3104dfd619613e482b5e6a56057c2a1d0ff254fb5df666757",
+      "matches_admission": false
+    }
+  ],
+  "checkpoint": {
+    "path": "/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8",
+    "metadata": [
+      {
+        "file": "config.json",
+        "sha256": "236c373b0682a4f40c2fa49ef8e5f722a87a8dbfe265286b6d5260b23d7cb229",
+        "matches_admission": true
+      },
+      {
+        "file": "model.safetensors.index.json",
+        "sha256": "b009f7a49c442fce959a2ff6fee41c69248879b90d7ff5636ec6d2068ac4876d",
+        "matches_admission": true
+      }
+    ],
+    "header_sha256": {
+      "model.safetensors-00009-of-00014.safetensors": "5278385b6909d56dcc43e93199696c728aa0238873ac678fc1b56fe4905cc412",
+      "model.safetensors-00014-of-00014.safetensors": "a2b955471e8a6428570f43f3f2dcd343c8df2cd13d57f1fccf48780240cb2d73",
+      "model.safetensors-00013-of-00014.safetensors": "b48ddc6b4849507e714d2d3b61f26ee8e57b7e7517637f0c6f74a499fd7fbdc8",
+      "model.safetensors-00012-of-00014.safetensors": "99ef474761c47dad0d28ccc6901ffe3e081e91b4b8760a60b6c3eaa4178467e2",
+      "model.safetensors-00006-of-00014.safetensors": "44a77ceaffca6d39faab05a674c2410ac242109d89449d03d999e572773fe452",
+      "model.safetensors-00008-of-00014.safetensors": "615b13664321d3b1dd097e74395e0fc14e8fd777e63f592ccc1c59dceff14054",
+      "model.safetensors-00007-of-00014.safetensors": "c71ae2cc6d581ebd236956cc214a75fe5b7c5b7497b9625bd0f90d5eff83bcc1",
+      "model.safetensors-00011-of-00014.safetensors": "81403228029d4e7b21655addc4b8549fcdd360bace40ebd37b304bce37f1bcbf",
+      "model.safetensors-00005-of-00014.safetensors": "d910b107c23a80ff7007afa0ee38a9c95b0ed6eb1ecf51315e897858506b5b12",
+      "model.safetensors-00001-of-00014.safetensors": "71ea4d43f80e48cc7bc6d24b2ee9f0432a2e18b7ebe318a370dccf53f0cfafab",
+      "model.safetensors-00004-of-00014.safetensors": "86568fdd91132ddf1dccfae80f461422b208a803c32fb990280997b2a9a60aa7",
+      "model.safetensors-00010-of-00014.safetensors": "df32bb759f4f6de9abe49c98f53cba5f3d19039cabddff4495086e80025c8ccb",
+      "model.safetensors-00003-of-00014.safetensors": "901d9cc73c63095fa2fbd80945d5b8f7ee3c51745ad1d7c80bb89a888780e426",
+      "model.safetensors-00002-of-00014.safetensors": "931449b8ff4d2d9bd1a453e700627debd1bc542074ab4659c81880e5aa6c15e0"
+    },
+    "projection_inventory": [
+      {
+        "role": "input_layernorm.weight",
+        "dtype": "BF16",
+        "global_shape": [
+          2048
+        ],
+        "layer_count": 40,
+        "example": "model.language_model.layers.9.input_layernorm.weight"
+      },
+      {
+        "role": "linear_attn.conv1d.weight",
+        "dtype": "BF16",
+        "global_shape": [
+          8192,
+          1,
+          4
+        ],
+        "layer_count": 30,
+        "example": "model.language_model.layers.9.linear_attn.conv1d.weight"
+      },
+      {
+        "role": "linear_attn.in_proj_a.weight",
+        "dtype": "BF16",
+        "global_shape": [
+          32,
+          2048
+        ],
+        "layer_count": 30,
+        "example": "model.language_model.layers.9.linear_attn.in_proj_a.weight"
+      },
+      {
+        "role": "linear_attn.in_proj_b.weight",
+        "dtype": "BF16",
+        "global_shape": [
+          32,
+          2048
+        ],
+        "layer_count": 30,
+        "example": "model.language_model.layers.9.linear_attn.in_proj_b.weight"
+      },
+      {
+        "role": "linear_attn.in_proj_qkv.weight",
+        "dtype": "F8_E4M3",
+        "global_shape": [
+          8192,
+          2048
+        ],
+        "layer_count": 30,
+        "example": "model.language_model.layers.9.linear_attn.in_proj_qkv.weight"
+      },
+      {
+        "role": "linear_attn.in_proj_z.weight",
+        "dtype": "F8_E4M3",
+        "global_shape": [
+          4096,
+          2048
+        ],
+        "layer_count": 30,
+        "example": "model.language_model.layers.9.linear_attn.in_proj_z.weight"
+      },
+      {
+        "role": "linear_attn.norm.weight",
+        "dtype": "F32",
+        "global_shape": [
+          128
+        ],
+        "layer_count": 30,
+        "example": "model.language_model.layers.9.linear_attn.norm.weight"
+      },
+      {
+        "role": "linear_attn.out_proj.weight",
+        "dtype": "F8_E4M3",
+        "global_shape": [
+          2048,
+          4096
+        ],
+        "layer_count": 30,
+        "example": "model.language_model.layers.9.linear_attn.out_proj.weight"
+      },
+      {
+        "role": "lm_head.weight",
+        "dtype": "BF16",
+        "global_shape": [
+          248320,
+          2048
+        ],
+        "layer_count": 1,
+        "example": "lm_head.weight"
+      },
+      {
+        "role": "mlp.experts.0.down_proj.weight",
+        "dtype": "F8_E4M3",
+        "global_shape": [
+          2048,
+          512
+        ],
+        "layer_count": 40,
+        "example": "model.language_model.layers.9.mlp.experts.0.down_proj.weight"
+      },
+      {
+        "role": "mlp.experts.0.gate_proj.weight",
+        "dtype": "F8_E4M3",
+        "global_shape": [
+          512,
+          2048
+        ],
+        "layer_count": 40,
+        "example": "model.language_model.layers.9.mlp.experts.0.gate_proj.weight"
+      },
+      {
+        "role": "mlp.experts.0.up_proj.weight",
+        "dtype": "F8_E4M3",
+        "global_shape": [
+          512,
+          2048
+        ],
+        "layer_count": 40,
+        "example": "model.language_model.layers.9.mlp.experts.0.up_proj.weight"
+      },
+      {
+        "role": "mlp.gate.weight",
+        "dtype": "BF16",
+        "global_shape": [
+          256,
+          2048
+        ],
+        "layer_count": 40,
+        "example": "model.language_model.layers.9.mlp.gate.weight"
+      },
+      {
+        "role": "mlp.shared_expert.down_proj.weight",
+        "dtype": "F8_E4M3",
+        "global_shape": [
+          2048,
+          512
+        ],
+        "layer_count": 40,
+        "example": "model.language_model.layers.9.mlp.shared_expert.down_proj.weight"
+      },
+      {
+        "role": "mlp.shared_expert.gate_proj.weight",
+        "dtype": "F8_E4M3",
+        "global_shape": [
+          512,
+          2048
+        ],
+        "layer_count": 40,
+        "example": "model.language_model.layers.9.mlp.shared_expert.gate_proj.weight"
+      },
+      {
+        "role": "mlp.shared_expert.up_proj.weight",
+        "dtype": "F8_E4M3",
+        "global_shape": [
+          512,
+          2048
+        ],
+        "layer_count": 40,
+        "example": "model.language_model.layers.9.mlp.shared_expert.up_proj.weight"
+      },
+      {
+        "role": "mlp.shared_expert_gate.weight",
+        "dtype": "BF16",
+        "global_shape": [
+          1,
+          2048
+        ],
+        "layer_count": 40,
+        "example": "model.language_model.layers.9.mlp.shared_expert_gate.weight"
+      },
+      {
+        "role": "post_attention_layernorm.weight",
+        "dtype": "BF16",
+        "global_shape": [
+          2048
+        ],
+        "layer_count": 40,
+        "example": "model.language_model.layers.9.post_attention_layernorm.weight"
+      },
+      {
+        "role": "self_attn.k_norm.weight",
+        "dtype": "BF16",
+        "global_shape": [
+          256
+        ],
+        "layer_count": 10,
+        "example": "model.language_model.layers.7.self_attn.k_norm.weight"
+      },
+      {
+        "role": "self_attn.k_proj.weight",
+        "dtype": "F8_E4M3",
+        "global_shape": [
+          512,
+          2048
+        ],
+        "layer_count": 10,
+        "example": "model.language_model.layers.7.self_attn.k_proj.weight"
+      },
+      {
+        "role": "self_attn.o_proj.weight",
+        "dtype": "F8_E4M3",
+        "global_shape": [
+          2048,
+          4096
+        ],
+        "layer_count": 10,
+        "example": "model.language_model.layers.7.self_attn.o_proj.weight"
+      },
+      {
+        "role": "self_attn.q_norm.weight",
+        "dtype": "BF16",
+        "global_shape": [
+          256
+        ],
+        "layer_count": 10,
+        "example": "model.language_model.layers.7.self_attn.q_norm.weight"
+      },
+      {
+        "role": "self_attn.q_proj.weight",
+        "dtype": "F8_E4M3",
+        "global_shape": [
+          8192,
+          2048
+        ],
+        "layer_count": 10,
+        "example": "model.language_model.layers.7.self_attn.q_proj.weight"
+      },
+      {
+        "role": "self_attn.v_proj.weight",
+        "dtype": "F8_E4M3",
+        "global_shape": [
+          512,
+          2048
+        ],
+        "layer_count": 10,
+        "example": "model.language_model.layers.7.self_attn.v_proj.weight"
+      }
+    ],
+    "expert_inventory_scope": "One expert (expert 0) per layer; all 40 text layers; not all 256 experts"
+  },
+  "observed": {
+    "groups": [
+      {
+        "name": "ferrule::cuda::cutlass::numeric_fp8::decode_weights(FerruleCutlassNumericFp8Args, unsigned int, unsigned int)",
+        "launch_dims": [
+          2048,
+          1,
+          1,
+          256,
+          1,
+          1
+        ],
+        "count": 24612,
+        "sum_ns": 161883196,
+        "element_bounds": [
+          524033,
+          524288
+        ],
+        "owner_stream_counts": [
+          {
+            "device": 0,
+            "context": 1,
+            "stream": 22,
+            "owner_tid": 284280412606164,
+            "count": 12306
+          },
+          {
+            "device": 1,
+            "context": 2,
+            "stream": 25,
+            "owner_tid": 284280412606165,
+            "count": 12306
+          }
+        ],
+        "source_qualified_bytes": {
+          "elements": 524288,
+          "fp8_payload_per_call": 524288,
+          "bf16_output_per_call": 1048576,
+          "unique_bf16_scale_footprint_per_call": 64,
+          "fp8_payload_sum": 12903776256,
+          "bf16_output_sum": 25807552512,
+          "qualification": "Exact only under the matching checkpoint/TP/GemmEx geometry, not kernel-argument observation; excludes hardware cache effects and repeated scale loads."
+        }
+      },
+      {
+        "name": "ferrule::cuda::cutlass::numeric_fp8::decode_weights(FerruleCutlassNumericFp8Args, unsigned int, unsigned int)",
+        "launch_dims": [
+          32768,
+          1,
+          1,
+          256,
+          1,
+          1
+        ],
+        "count": 720,
+        "sum_ns": 56972550,
+        "element_bounds": [
+          8388353,
+          8388608
+        ],
+        "owner_stream_counts": [
+          {
+            "device": 0,
+            "context": 1,
+            "stream": 22,
+            "owner_tid": 284280412606164,
+            "count": 360
+          },
+          {
+            "device": 1,
+            "context": 2,
+            "stream": 25,
+            "owner_tid": 284280412606165,
+            "count": 360
+          }
+        ],
+        "source_qualified_bytes": {
+          "elements": 8388608,
+          "fp8_payload_per_call": 8388608,
+          "bf16_output_per_call": 16777216,
+          "unique_bf16_scale_footprint_per_call": 1024,
+          "fp8_payload_sum": 6039797760,
+          "bf16_output_sum": 12079595520,
+          "qualification": "Exact only under the matching checkpoint/TP/GemmEx geometry, not kernel-argument observation; excludes hardware cache effects and repeated scale loads."
+        }
+      },
+      {
+        "name": "ferrule::cuda::cutlass::numeric_fp8::decode_weights(FerruleCutlassNumericFp8Args, unsigned int, unsigned int)",
+        "launch_dims": [
+          16384,
+          1,
+          1,
+          256,
+          1,
+          1
+        ],
+        "count": 1260,
+        "sum_ns": 51651472,
+        "element_bounds": [
+          4194049,
+          4194304
+        ],
+        "owner_stream_counts": [
+          {
+            "device": 0,
+            "context": 1,
+            "stream": 22,
+            "owner_tid": 284280412606164,
+            "count": 630
+          },
+          {
+            "device": 1,
+            "context": 2,
+            "stream": 25,
+            "owner_tid": 284280412606165,
+            "count": 630
+          }
+        ],
+        "source_qualified_bytes": {
+          "elements": 4194304,
+          "fp8_payload_per_call": 4194304,
+          "bf16_output_per_call": 8388608,
+          "unique_bf16_scale_footprint_per_call": 512,
+          "fp8_payload_sum": 5284823040,
+          "bf16_output_sum": 10569646080,
+          "qualification": "Exact only under the matching checkpoint/TP/GemmEx geometry, not kernel-argument observation; excludes hardware cache effects and repeated scale loads."
+        }
+      },
+      {
+        "name": "ferrule::cuda::cutlass::numeric_fp8::pack_bf16_activation(FerruleCutlassNumericFp8Args)",
+        "launch_dims": [
+          8,
+          1,
+          1,
+          256,
+          1,
+          1
+        ],
+        "count": 10128,
+        "sum_ns": 15858728,
+        "element_bounds": [
+          1793,
+          2048
+        ],
+        "owner_stream_counts": [
+          {
+            "device": 0,
+            "context": 1,
+            "stream": 22,
+            "owner_tid": 284280412606164,
+            "count": 5064
+          },
+          {
+            "device": 1,
+            "context": 2,
+            "stream": 25,
+            "owner_tid": 284280412606165,
+            "count": 5064
+          }
+        ],
+        "source_qualified_shape": {
+          "m": 1,
+          "k": 2048,
+          "padded_k": 2048,
+          "bf16_read_per_call": 4096,
+          "bf16_write_per_call": 4096,
+          "bf16_read_sum": 41484288,
+          "bf16_write_sum": 41484288,
+          "qualification": "Model geometry plus adjacent decode/pair motif; grid alone gives only element_bounds."
+        }
+      },
+      {
+        "name": "ferrule::cuda::cutlass::numeric_fp8::pack_bf16_activation(FerruleCutlassNumericFp8Args)",
+        "launch_dims": [
+          1,
+          1,
+          1,
+          256,
+          1,
+          1
+        ],
+        "count": 7408,
+        "sum_ns": 11495691,
+        "element_bounds": [
+          1,
+          256
+        ],
+        "owner_stream_counts": [
+          {
+            "device": 0,
+            "context": 1,
+            "stream": 22,
+            "owner_tid": 284280412606164,
+            "count": 3704
+          },
+          {
+            "device": 1,
+            "context": 2,
+            "stream": 25,
+            "owner_tid": 284280412606165,
+            "count": 3704
+          }
+        ],
+        "source_qualified_shape": {
+          "m": 1,
+          "k": 256,
+          "padded_k": 256,
+          "bf16_read_per_call": 512,
+          "bf16_write_per_call": 512,
+          "bf16_read_sum": 3792896,
+          "bf16_write_sum": 3792896,
+          "qualification": "Model geometry plus adjacent decode/pair motif; grid alone gives only element_bounds."
+        }
+      },
+      {
+        "name": "ferrule::cuda::cutlass::numeric_fp8::pack_bf16_activation(FerruleCutlassNumericFp8Args)",
+        "launch_dims": [
+          40,
+          1,
+          1,
+          256,
+          1,
+          1
+        ],
+        "count": 428,
+        "sum_ns": 700480,
+        "element_bounds": [
+          9985,
+          10240
+        ],
+        "owner_stream_counts": [
+          {
+            "device": 0,
+            "context": 1,
+            "stream": 22,
+            "owner_tid": 284280412606164,
+            "count": 214
+          },
+          {
+            "device": 1,
+            "context": 2,
+            "stream": 25,
+            "owner_tid": 284280412606165,
+            "count": 214
+          }
+        ],
+        "source_qualified_shape": {
+          "m": 5,
+          "k": 2048,
+          "padded_k": 2048,
+          "bf16_read_per_call": 20480,
+          "bf16_write_per_call": 20480,
+          "bf16_read_sum": 8765440,
+          "bf16_write_sum": 8765440,
+          "qualification": "Model geometry plus adjacent decode/pair motif; grid alone gives only element_bounds."
+        }
+      },
+      {
+        "name": "ferrule::cuda::cutlass::numeric_fp8::pack_bf16_activation(FerruleCutlassNumericFp8Args)",
+        "launch_dims": [
+          2,
+          1,
+          1,
+          256,
+          1,
+          1
+        ],
+        "count": 342,
+        "sum_ns": 530494,
+        "element_bounds": [
+          257,
+          512
+        ],
+        "owner_stream_counts": [
+          {
+            "device": 0,
+            "context": 1,
+            "stream": 22,
+            "owner_tid": 284280412606164,
+            "count": 171
+          },
+          {
+            "device": 1,
+            "context": 2,
+            "stream": 25,
+            "owner_tid": 284280412606165,
+            "count": 171
+          }
+        ],
+        "source_qualified_shape": {
+          "m": 2,
+          "k": 256,
+          "padded_k": 256,
+          "bf16_read_per_call": 1024,
+          "bf16_write_per_call": 1024,
+          "bf16_read_sum": 350208,
+          "bf16_write_sum": 350208,
+          "qualification": "Model geometry plus adjacent decode/pair motif; grid alone gives only element_bounds."
+        }
+      },
+      {
+        "name": "ferrule::cuda::cutlass::numeric_fp8::pack_bf16_activation(FerruleCutlassNumericFp8Args)",
+        "launch_dims": [
+          16,
+          1,
+          1,
+          256,
+          1,
+          1
+        ],
+        "count": 342,
+        "sum_ns": 525760,
+        "element_bounds": [
+          3841,
+          4096
+        ],
+        "owner_stream_counts": [
+          {
+            "device": 0,
+            "context": 1,
+            "stream": 22,
+            "owner_tid": 284280412606164,
+            "count": 171
+          },
+          {
+            "device": 1,
+            "context": 2,
+            "stream": 25,
+            "owner_tid": 284280412606165,
+            "count": 171
+          }
+        ],
+        "source_qualified_shape": {
+          "m": 2,
+          "k": 2048,
+          "padded_k": 2048,
+          "bf16_read_per_call": 8192,
+          "bf16_write_per_call": 8192,
+          "bf16_read_sum": 2801664,
+          "bf16_write_sum": 2801664,
+          "qualification": "Model geometry plus adjacent decode/pair motif; grid alone gives only element_bounds."
+        }
+      },
+      {
+        "name": "ferrule::cuda::cutlass::numeric_fp8::pack_bf16_activation(FerruleCutlassNumericFp8Args)",
+        "launch_dims": [
+          3,
+          1,
+          1,
+          256,
+          1,
+          1
+        ],
+        "count": 156,
+        "sum_ns": 242719,
+        "element_bounds": [
+          513,
+          768
+        ],
+        "owner_stream_counts": [
+          {
+            "device": 0,
+            "context": 1,
+            "stream": 22,
+            "owner_tid": 284280412606164,
+            "count": 78
+          },
+          {
+            "device": 1,
+            "context": 2,
+            "stream": 25,
+            "owner_tid": 284280412606165,
+            "count": 78
+          }
+        ],
+        "source_qualified_shape": {
+          "m": 3,
+          "k": 256,
+          "padded_k": 256,
+          "bf16_read_per_call": 1536,
+          "bf16_write_per_call": 1536,
+          "bf16_read_sum": 239616,
+          "bf16_write_sum": 239616,
+          "qualification": "Model geometry plus adjacent decode/pair motif; grid alone gives only element_bounds."
+        }
+      },
+      {
+        "name": "ferrule::cuda::cutlass::numeric_fp8::pack_bf16_activation(FerruleCutlassNumericFp8Args)",
+        "launch_dims": [
+          24,
+          1,
+          1,
+          256,
+          1,
+          1
+        ],
+        "count": 156,
+        "sum_ns": 241568,
+        "element_bounds": [
+          5889,
+          6144
+        ],
+        "owner_stream_counts": [
+          {
+            "device": 0,
+            "context": 1,
+            "stream": 22,
+            "owner_tid": 284280412606164,
+            "count": 78
+          },
+          {
+            "device": 1,
+            "context": 2,
+            "stream": 25,
+            "owner_tid": 284280412606165,
+            "count": 78
+          }
+        ],
+        "source_qualified_shape": {
+          "m": 3,
+          "k": 2048,
+          "padded_k": 2048,
+          "bf16_read_per_call": 12288,
+          "bf16_write_per_call": 12288,
+          "bf16_read_sum": 1916928,
+          "bf16_write_sum": 1916928,
+          "qualification": "Model geometry plus adjacent decode/pair motif; grid alone gives only element_bounds."
+        }
+      },
+      {
+        "name": "ferrule::cuda::cutlass::numeric_fp8::pack_bf16_activation(FerruleCutlassNumericFp8Args)",
+        "launch_dims": [
+          32,
+          1,
+          1,
+          256,
+          1,
+          1
+        ],
+        "count": 90,
+        "sum_ns": 140129,
+        "element_bounds": [
+          7937,
+          8192
+        ],
+        "owner_stream_counts": [
+          {
+            "device": 0,
+            "context": 1,
+            "stream": 22,
+            "owner_tid": 284280412606164,
+            "count": 45
+          },
+          {
+            "device": 1,
+            "context": 2,
+            "stream": 25,
+            "owner_tid": 284280412606165,
+            "count": 45
+          }
+        ],
+        "source_qualified_shape": {
+          "m": 4,
+          "k": 2048,
+          "padded_k": 2048,
+          "bf16_read_per_call": 16384,
+          "bf16_write_per_call": 16384,
+          "bf16_read_sum": 1474560,
+          "bf16_write_sum": 1474560,
+          "qualification": "Model geometry plus adjacent decode/pair motif; grid alone gives only element_bounds."
+        }
+      },
+      {
+        "name": "ferrule::cuda::cutlass::numeric_fp8::pack_bf16_activation(FerruleCutlassNumericFp8Args)",
+        "launch_dims": [
+          4,
+          1,
+          1,
+          256,
+          1,
+          1
+        ],
+        "count": 90,
+        "sum_ns": 140033,
+        "element_bounds": [
+          769,
+          1024
+        ],
+        "owner_stream_counts": [
+          {
+            "device": 0,
+            "context": 1,
+            "stream": 22,
+            "owner_tid": 284280412606164,
+            "count": 45
+          },
+          {
+            "device": 1,
+            "context": 2,
+            "stream": 25,
+            "owner_tid": 284280412606165,
+            "count": 45
+          }
+        ],
+        "source_qualified_shape": {
+          "m": 4,
+          "k": 256,
+          "padded_k": 256,
+          "bf16_read_per_call": 2048,
+          "bf16_write_per_call": 2048,
+          "bf16_read_sum": 184320,
+          "bf16_write_sum": 184320,
+          "qualification": "Model geometry plus adjacent decode/pair motif; grid alone gives only element_bounds."
+        }
+      },
+      {
+        "name": "ferrule::cuda::cutlass::numeric_fp8::pack_bf16_activation(FerruleCutlassNumericFp8Args)",
+        "launch_dims": [
+          5,
+          1,
+          1,
+          256,
+          1,
+          1
+        ],
+        "count": 88,
+        "sum_ns": 137184,
+        "element_bounds": [
+          1025,
+          1280
+        ],
+        "owner_stream_counts": [
+          {
+            "device": 0,
+            "context": 1,
+            "stream": 22,
+            "owner_tid": 284280412606164,
+            "count": 44
+          },
+          {
+            "device": 1,
+            "context": 2,
+            "stream": 25,
+            "owner_tid": 284280412606165,
+            "count": 44
+          }
+        ],
+        "source_qualified_shape": {
+          "m": 5,
+          "k": 256,
+          "padded_k": 256,
+          "bf16_read_per_call": 2560,
+          "bf16_write_per_call": 2560,
+          "bf16_read_sum": 225280,
+          "bf16_write_sum": 225280,
+          "qualification": "Model geometry plus adjacent decode/pair motif; grid alone gives only element_bounds."
+        }
+      }
+    ],
+    "motifs": [
+      {
+        "pack_grid": 8,
+        "decode_grids": [
+          2048,
+          2048
+        ],
+        "matrix_launches": [
+          [
+            "std::enable_if<!T7, void>::type internal::gemvx::kernel<int, int, __nv_bfloat16, __nv_bfloat16, __nv_bfloat16, float, (bool)0, (bool)1, (bool)1, (bool)0, (int)7, (bool)0, cublasGemvParamsEx<int, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>, float>>(T13)",
+            128,
+            1,
+            1,
+            32,
+            4,
+            1
+          ]
+        ],
+        "count": 6768
+      },
+      {
+        "pack_grid": 1,
+        "decode_grids": [
+          2048
+        ],
+        "matrix_launches": [
+          [
+            "std::enable_if<!T7, void>::type internal::gemvx::kernel<int, int, __nv_bfloat16, __nv_bfloat16, __nv_bfloat16, float, (bool)0, (bool)1, (bool)1, (bool)0, (int)7, (bool)0, cublasGemvParamsEx<int, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>, float>>(T13)",
+            256,
+            1,
+            1,
+            16,
+            8,
+            1
+          ]
+        ],
+        "count": 6768
+      },
+      {
+        "pack_grid": 8,
+        "decode_grids": [
+          2048
+        ],
+        "matrix_launches": [
+          [
+            "std::enable_if<!T7, void>::type internal::gemvx::kernel<int, int, __nv_bfloat16, __nv_bfloat16, __nv_bfloat16, float, (bool)0, (bool)1, (bool)1, (bool)0, (int)7, (bool)0, cublasGemvParamsEx<int, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>, float>>(T13)",
+            64,
+            1,
+            1,
+            32,
+            4,
+            1
+          ]
+        ],
+        "count": 1600
+      },
+      {
+        "pack_grid": 8,
+        "decode_grids": [
+          32768
+        ],
+        "matrix_launches": [
+          [
+            "ampere_bf16_s16816gemm_bf16_64x64_sliced1x2_ldg8_f2f_stages_64x5_tn",
+            64,
+            1,
+            1,
+            128,
+            1,
+            1
+          ]
+        ],
+        "count": 640
+      },
+      {
+        "pack_grid": 8,
+        "decode_grids": [
+          16384
+        ],
+        "matrix_launches": [
+          [
+            "std::enable_if<!T7, void>::type internal::gemvx::kernel<int, int, __nv_bfloat16, __nv_bfloat16, __nv_bfloat16, float, (bool)0, (bool)1, (bool)1, (bool)0, (int)7, (bool)0, cublasGemvParamsEx<int, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>, float>>(T13)",
+            256,
+            1,
+            1,
+            16,
+            8,
+            1
+          ]
+        ],
+        "count": 640
+      },
+      {
+        "pack_grid": 1,
+        "decode_grids": [
+          2048
+        ],
+        "matrix_launches": [
+          [
+            "std::enable_if<!T7, void>::type internal::gemvx::kernel<int, int, __nv_bfloat16, __nv_bfloat16, __nv_bfloat16, float, (bool)0, (bool)1, (bool)1, (bool)0, (int)7, (bool)0, cublasGemvParamsEx<int, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>, float>>(T13)",
+            256,
+            1,
+            1,
+            16,
+            8,
+            1
+          ],
+          [
+            "void dot_kernel<float, (int)128, (int)0, cublasDotParams<cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<float>>>(T4)",
+            32,
+            1,
+            1,
+            128,
+            1,
+            1
+          ],
+          [
+            "void reduce_1Block_kernel<float, (int)128, (int)7, cublasGemvTensorStridedBatched<float>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>>(const T1 *, T1, T4, int, const T1 *, T1, T5, T6, cublasPointerMode_t, cublasLtEpilogue_t, cublasGemvTensorStridedBatched<const biasType<T6::value_type, T1>::type>)",
+            1,
+            1,
+            1,
+            128,
+            1,
+            1
+          ]
+        ],
+        "count": 640
+      },
+      {
+        "pack_grid": 8,
+        "decode_grids": [
+          16384
+        ],
+        "matrix_launches": [
+          [
+            "std::enable_if<!T7, void>::type internal::gemvx::kernel<int, int, __nv_bfloat16, __nv_bfloat16, __nv_bfloat16, float, (bool)0, (bool)1, (bool)1, (bool)0, (int)7, (bool)0, cublasGemvParamsEx<int, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>, float>>(T13)",
+            256,
+            1,
+            1,
+            16,
+            8,
+            1
+          ],
+          [
+            "void dot_kernel<float, (int)128, (int)0, cublasDotParams<cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<float>>>(T4)",
+            18,
+            1,
+            16,
+            128,
+            1,
+            1
+          ],
+          [
+            "void reduce_1Block_kernel<float, (int)128, (int)7, cublasGemvTensorStridedBatched<float>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>>(const T1 *, T1, T4, int, const T1 *, T1, T5, T6, cublasPointerMode_t, cublasLtEpilogue_t, cublasGemvTensorStridedBatched<const biasType<T6::value_type, T1>::type>)",
+            1,
+            1,
+            16,
+            128,
+            1,
+            1
+          ],
+          [
+            "void dot_kernel<float, (int)128, (int)0, cublasDotParams<cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<float>>>(T4)",
+            18,
+            1,
+            16,
+            128,
+            1,
+            1
+          ],
+          [
+            "void reduce_1Block_kernel<float, (int)128, (int)7, cublasGemvTensorStridedBatched<float>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>>(const T1 *, T1, T4, int, const T1 *, T1, T5, T6, cublasPointerMode_t, cublasLtEpilogue_t, cublasGemvTensorStridedBatched<const biasType<T6::value_type, T1>::type>)",
+            1,
+            1,
+            16,
+            128,
+            1,
+            1
+          ]
+        ],
+        "count": 480
+      },
+      {
+        "pack_grid": 16,
+        "decode_grids": [
+          2048,
+          2048
+        ],
+        "matrix_launches": [
+          [
+            "void cutlass::Kernel2<cutlass_80_tensorop_s16816gemm_bf16_64x64_32x6_tn_align8>(T1::Params)",
+            8,
+            1,
+            8,
+            128,
+            1,
+            1
+          ],
+          [
+            "void cublasLt::splitKreduce_kernel<(int)32, (int)16, int, float, __nv_bfloat16, float, __nv_bfloat16, (bool)1, (bool)0, (bool)0>(cublasLt::cublasSplitKParams<T6>, const T4 *, const T5 *, T5 *, const T6 *, const T6 *, const T7 *, const T4 *, T7 *, void *, long, T6 *, int *)",
+            16,
+            1,
+            1,
+            32,
+            16,
+            1
+          ]
+        ],
+        "count": 342
+      },
+      {
+        "pack_grid": 2,
+        "decode_grids": [
+          2048
+        ],
+        "matrix_launches": [
+          [
+            "void cutlass::Kernel2<cutlass_80_wmma_tensorop_bf16_s161616gemm_bf16_32x32_64x1_tn_align8>(T1::Params)",
+            8,
+            8,
+            1,
+            128,
+            1,
+            1
+          ]
+        ],
+        "count": 342
+      },
+      {
+        "pack_grid": 40,
+        "decode_grids": [
+          2048
+        ],
+        "matrix_launches": [
+          [
+            "void cutlass::Kernel2<cutlass_80_wmma_tensorop_s161616gemm_bf16_16x16_64x1_tn_align8>(T1::Params)",
+            8,
+            2,
+            16,
+            32,
+            1,
+            1
+          ],
+          [
+            "void cublasLt::splitKreduce_kernel<(int)32, (int)16, int, float, __nv_bfloat16, float, __nv_bfloat16, (bool)1, (bool)0, (bool)0>(cublasLt::cublasSplitKParams<T6>, const T4 *, const T5 *, T5 *, const T6 *, const T6 *, const T7 *, const T4 *, T7 *, void *, long, T6 *, int *)",
+            8,
+            1,
+            1,
+            32,
+            16,
+            1
+          ]
+        ],
+        "count": 200
+      },
+      {
+        "pack_grid": 24,
+        "decode_grids": [
+          2048,
+          2048
+        ],
+        "matrix_launches": [
+          [
+            "void cutlass::Kernel2<cutlass_80_tensorop_s16816gemm_bf16_64x64_32x6_tn_align8>(T1::Params)",
+            8,
+            1,
+            8,
+            128,
+            1,
+            1
+          ],
+          [
+            "void cublasLt::splitKreduce_kernel<(int)32, (int)16, int, float, __nv_bfloat16, float, __nv_bfloat16, (bool)1, (bool)0, (bool)0>(cublasLt::cublasSplitKParams<T6>, const T4 *, const T5 *, T5 *, const T6 *, const T6 *, const T7 *, const T4 *, T7 *, void *, long, T6 *, int *)",
+            16,
+            1,
+            1,
+            32,
+            16,
+            1
+          ]
+        ],
+        "count": 156
+      },
+      {
+        "pack_grid": 3,
+        "decode_grids": [
+          2048
+        ],
+        "matrix_launches": [
+          [
+            "void cutlass::Kernel2<cutlass_80_wmma_tensorop_bf16_s161616gemm_bf16_32x32_64x1_tn_align8>(T1::Params)",
+            8,
+            8,
+            1,
+            128,
+            1,
+            1
+          ]
+        ],
+        "count": 156
+      },
+      {
+        "pack_grid": 32,
+        "decode_grids": [
+          2048,
+          2048
+        ],
+        "matrix_launches": [
+          [
+            "void cutlass::Kernel2<cutlass_80_tensorop_s16816gemm_bf16_64x64_32x6_tn_align8>(T1::Params)",
+            8,
+            1,
+            8,
+            128,
+            1,
+            1
+          ],
+          [
+            "void cublasLt::splitKreduce_kernel<(int)32, (int)16, int, float, __nv_bfloat16, float, __nv_bfloat16, (bool)1, (bool)0, (bool)0>(cublasLt::cublasSplitKParams<T6>, const T4 *, const T5 *, T5 *, const T6 *, const T6 *, const T7 *, const T4 *, T7 *, void *, long, T6 *, int *)",
+            16,
+            1,
+            1,
+            32,
+            16,
+            1
+          ]
+        ],
+        "count": 90
+      },
+      {
+        "pack_grid": 4,
+        "decode_grids": [
+          2048
+        ],
+        "matrix_launches": [
+          [
+            "void cutlass::Kernel2<cutlass_80_wmma_tensorop_bf16_s161616gemm_bf16_32x32_128x2_tn_align8>(T1::Params)",
+            8,
+            8,
+            1,
+            128,
+            1,
+            1
+          ]
+        ],
+        "count": 90
+      },
+      {
+        "pack_grid": 40,
+        "decode_grids": [
+          32768
+        ],
+        "matrix_launches": [
+          [
+            "ampere_bf16_s16816gemm_bf16_64x64_ldg8_f2f_stages_64x5_tn",
+            64,
+            1,
+            1,
+            128,
+            1,
+            1
+          ]
+        ],
+        "count": 80
+      },
+      {
+        "pack_grid": 40,
+        "decode_grids": [
+          16384
+        ],
+        "matrix_launches": [
+          [
+            "void cutlass::Kernel2<cutlass_80_wmma_tensorop_bf16_s161616gemm_bf16_32x32_128x2_tn_align8>(T1::Params)",
+            8,
+            8,
+            1,
+            128,
+            1,
+            1
+          ]
+        ],
+        "count": 80
+      },
+      {
+        "pack_grid": 5,
+        "decode_grids": [
+          2048
+        ],
+        "matrix_launches": [
+          [
+            "void cutlass::Kernel2<cutlass_80_wmma_tensorop_bf16_s161616gemm_bf16_32x32_128x2_tn_align8>(T1::Params)",
+            8,
+            8,
+            1,
+            128,
+            1,
+            1
+          ],
+          [
+            "void dot_kernel<float, (int)128, (int)0, cublasDotParams<cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<float>>>(T4)",
+            10,
+            1,
+            5,
+            128,
+            1,
+            1
+          ],
+          [
+            "void reduce_1Block_kernel<float, (int)128, (int)7, cublasGemvTensorStridedBatched<float>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>>(const T1 *, T1, T4, int, const T1 *, T1, T5, T6, cublasPointerMode_t, cublasLtEpilogue_t, cublasGemvTensorStridedBatched<const biasType<T6::value_type, T1>::type>)",
+            1,
+            1,
+            5,
+            128,
+            1,
+            1
+          ]
+        ],
+        "count": 80
+      },
+      {
+        "pack_grid": 40,
+        "decode_grids": [
+          16384
+        ],
+        "matrix_launches": [
+          [
+            "void cutlass::Kernel2<cutlass_80_wmma_tensorop_bf16_s161616gemm_bf16_32x32_128x2_tn_align8>(T1::Params)",
+            8,
+            8,
+            1,
+            128,
+            1,
+            1
+          ],
+          [
+            "void cutlass::Kernel2<cutlass_80_wmma_tensorop_bf16_s161616gemm_bf16_16x16_128x2_tn_align8>(T1::Params)",
+            1,
+            1,
+            1,
+            32,
+            1,
+            1
+          ],
+          [
+            "void cutlass::Kernel2<cutlass_80_wmma_tensorop_bf16_s161616gemm_bf16_16x16_128x2_tn_align8>(T1::Params)",
+            1,
+            1,
+            1,
+            32,
+            1,
+            1
+          ]
+        ],
+        "count": 60
+      },
+      {
+        "pack_grid": 40,
+        "decode_grids": [
+          2048,
+          2048
+        ],
+        "matrix_launches": [
+          [
+            "void cutlass::Kernel2<cutlass_80_tensorop_s16816gemm_bf16_64x64_32x6_tn_align8>(T1::Params)",
+            8,
+            1,
+            8,
+            128,
+            1,
+            1
+          ],
+          [
+            "void cublasLt::splitKreduce_kernel<(int)32, (int)16, int, float, __nv_bfloat16, float, __nv_bfloat16, (bool)1, (bool)0, (bool)0>(cublasLt::cublasSplitKParams<T6>, const T4 *, const T5 *, T5 *, const T6 *, const T6 *, const T7 *, const T4 *, T7 *, void *, long, T6 *, int *)",
+            16,
+            1,
+            1,
+            32,
+            16,
+            1
+          ]
+        ],
+        "count": 8
+      },
+      {
+        "pack_grid": 5,
+        "decode_grids": [
+          2048
+        ],
+        "matrix_launches": [
+          [
+            "void cutlass::Kernel2<cutlass_80_wmma_tensorop_bf16_s161616gemm_bf16_32x32_128x2_tn_align8>(T1::Params)",
+            8,
+            8,
+            1,
+            128,
+            1,
+            1
+          ]
+        ],
+        "count": 8
+      }
+    ],
+    "motif_roles": {
+      "routed_down_motif": {
+        "count": 7364,
+        "sum_ns": 48407592
+      },
+      "routed_gate_up_motif": {
+        "count": 14728,
+        "sum_ns": 96811000
+      },
+      "routed_pack_motif": {
+        "count": 14728,
+        "sum_ns": 22777704
+      },
+      "shared_pack_motif": {
+        "count": 2160,
+        "sum_ns": 3342308
+      },
+      "shared_three_single_motif": {
+        "count": 2160,
+        "sum_ns": 14294775
+      },
+      "unassigned_decode_grid_16384": {
+        "count": 1260,
+        "sum_ns": 51651472
+      },
+      "unassigned_decode_grid_2048": {
+        "count": 360,
+        "sum_ns": 2369829
+      },
+      "unassigned_decode_grid_32768": {
+        "count": 720,
+        "sum_ns": 56972550
+      }
+    },
+    "routed_m_histogram": {
+      "1": 6768,
+      "2": 342,
+      "3": 156,
+      "4": 90,
+      "5": 8
+    },
+    "routed_examples": [
+      {
+        "stream": [
+          284280412438528,
+          0,
+          1,
+          22
+        ],
+        "correlation_ids": [
+          2864890,
+          2864894,
+          2864898,
+          2864933,
+          2864934,
+          2864941,
+          2864949,
+          2864960,
+          2864964
+        ],
+        "kernel_names": [
+          "ferrule::cuda::cutlass::numeric_fp8::pack_bf16_activation(FerruleCutlassNumericFp8Args)",
+          "ferrule::cuda::cutlass::numeric_fp8::decode_weights(FerruleCutlassNumericFp8Args, unsigned int, unsigned int)",
+          "ferrule::cuda::cutlass::numeric_fp8::decode_weights(FerruleCutlassNumericFp8Args, unsigned int, unsigned int)",
+          "void cutlass::Kernel2<cutlass_80_tensorop_s16816gemm_bf16_64x64_32x6_tn_align8>(T1::Params)",
+          "void cublasLt::splitKreduce_kernel<(int)32, (int)16, int, float, __nv_bfloat16, float, __nv_bfloat16, (bool)1, (bool)0, (bool)0>(cublasLt::cublasSplitKParams<T6>, const T4 *, const T5 *, T5 *, const T6 *, const T6 *, const T7 *, const T4 *, T7 *, void *, long, T6 *, int *)",
+          "ferrule::cuda::cutlass::bf16_gemmex::split_pair(const unsigned short *, unsigned short *, unsigned short *, unsigned long, unsigned int)",
+          "ferrule::cuda::core::bf16_boundary_kernel(ferrule::cuda::core::Bf16BoundaryArgs)",
+          "ferrule::cuda::cutlass::numeric_fp8::pack_bf16_activation(FerruleCutlassNumericFp8Args)",
+          "ferrule::cuda::cutlass::numeric_fp8::decode_weights(FerruleCutlassNumericFp8Args, unsigned int, unsigned int)"
+        ]
+      },
+      {
+        "stream": [
+          284280412438528,
+          0,
+          1,
+          22
+        ],
+        "correlation_ids": [
+          2865088,
+          2865092,
+          2865096,
+          2865122,
+          2865126,
+          2865136,
+          2865148,
+          2865159
+        ],
+        "kernel_names": [
+          "ferrule::cuda::cutlass::numeric_fp8::pack_bf16_activation(FerruleCutlassNumericFp8Args)",
+          "ferrule::cuda::cutlass::numeric_fp8::decode_weights(FerruleCutlassNumericFp8Args, unsigned int, unsigned int)",
+          "ferrule::cuda::cutlass::numeric_fp8::decode_weights(FerruleCutlassNumericFp8Args, unsigned int, unsigned int)",
+          "std::enable_if<!T7, void>::type internal::gemvx::kernel<int, int, __nv_bfloat16, __nv_bfloat16, __nv_bfloat16, float, (bool)0, (bool)1, (bool)1, (bool)0, (int)7, (bool)0, cublasGemvParamsEx<int, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>, float>>(T13)",
+          "ferrule::cuda::cutlass::bf16_gemmex::split_pair(const unsigned short *, unsigned short *, unsigned short *, unsigned long, unsigned int)",
+          "ferrule::cuda::core::bf16_boundary_kernel(ferrule::cuda::core::Bf16BoundaryArgs)",
+          "ferrule::cuda::cutlass::numeric_fp8::pack_bf16_activation(FerruleCutlassNumericFp8Args)",
+          "ferrule::cuda::cutlass::numeric_fp8::decode_weights(FerruleCutlassNumericFp8Args, unsigned int, unsigned int)"
+        ]
+      },
+      {
+        "stream": [
+          284280412438528,
+          0,
+          1,
+          22
+        ],
+        "correlation_ids": [
+          2865266,
+          2865276,
+          2865282,
+          2865299,
+          2865303,
+          2865313,
+          2865325,
+          2865334
+        ],
+        "kernel_names": [
+          "ferrule::cuda::cutlass::numeric_fp8::pack_bf16_activation(FerruleCutlassNumericFp8Args)",
+          "ferrule::cuda::cutlass::numeric_fp8::decode_weights(FerruleCutlassNumericFp8Args, unsigned int, unsigned int)",
+          "ferrule::cuda::cutlass::numeric_fp8::decode_weights(FerruleCutlassNumericFp8Args, unsigned int, unsigned int)",
+          "std::enable_if<!T7, void>::type internal::gemvx::kernel<int, int, __nv_bfloat16, __nv_bfloat16, __nv_bfloat16, float, (bool)0, (bool)1, (bool)1, (bool)0, (int)7, (bool)0, cublasGemvParamsEx<int, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>, float>>(T13)",
+          "ferrule::cuda::cutlass::bf16_gemmex::split_pair(const unsigned short *, unsigned short *, unsigned short *, unsigned long, unsigned int)",
+          "ferrule::cuda::core::bf16_boundary_kernel(ferrule::cuda::core::Bf16BoundaryArgs)",
+          "ferrule::cuda::cutlass::numeric_fp8::pack_bf16_activation(FerruleCutlassNumericFp8Args)",
+          "ferrule::cuda::cutlass::numeric_fp8::decode_weights(FerruleCutlassNumericFp8Args, unsigned int, unsigned int)"
+        ]
+      },
+      {
+        "stream": [
+          284280412438528,
+          0,
+          1,
+          22
+        ],
+        "correlation_ids": [
+          2865438,
+          2865442,
+          2865454,
+          2865469,
+          2865474,
+          2865485,
+          2865501,
+          2865506
+        ],
+        "kernel_names": [
+          "ferrule::cuda::cutlass::numeric_fp8::pack_bf16_activation(FerruleCutlassNumericFp8Args)",
+          "ferrule::cuda::cutlass::numeric_fp8::decode_weights(FerruleCutlassNumericFp8Args, unsigned int, unsigned int)",
+          "ferrule::cuda::cutlass::numeric_fp8::decode_weights(FerruleCutlassNumericFp8Args, unsigned int, unsigned int)",
+          "std::enable_if<!T7, void>::type internal::gemvx::kernel<int, int, __nv_bfloat16, __nv_bfloat16, __nv_bfloat16, float, (bool)0, (bool)1, (bool)1, (bool)0, (int)7, (bool)0, cublasGemvParamsEx<int, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>, float>>(T13)",
+          "ferrule::cuda::cutlass::bf16_gemmex::split_pair(const unsigned short *, unsigned short *, unsigned short *, unsigned long, unsigned int)",
+          "ferrule::cuda::core::bf16_boundary_kernel(ferrule::cuda::core::Bf16BoundaryArgs)",
+          "ferrule::cuda::cutlass::numeric_fp8::pack_bf16_activation(FerruleCutlassNumericFp8Args)",
+          "ferrule::cuda::cutlass::numeric_fp8::decode_weights(FerruleCutlassNumericFp8Args, unsigned int, unsigned int)"
+        ]
+      }
+    ],
+    "unmatched_pair_correlations": [],
+    "repetition": {
+      "ferrule::cuda::cutlass::numeric_fp8::pack_bf16_activation(FerruleCutlassNumericFp8Args)": {
+        "count": 19228,
+        "unique_launch_signatures": 10,
+        "pointer_repetition_rate": null,
+        "tensor_shape_repetition_rate": null,
+        "limitation": "Launch-signature recurrence only; no weight/activation addresses or kernel arguments exported.",
+        "repeat_after_first_launch_signature_fraction": 0.9994799251092157
+      },
+      "ferrule::cuda::cutlass::numeric_fp8::decode_weights(FerruleCutlassNumericFp8Args, unsigned int, unsigned int)": {
+        "count": 26592,
+        "unique_launch_signatures": 3,
+        "pointer_repetition_rate": null,
+        "tensor_shape_repetition_rate": null,
+        "limitation": "Launch-signature recurrence only; no weight/activation addresses or kernel arguments exported.",
+        "repeat_after_first_launch_signature_fraction": 0.9998871841155235
+      }
+    },
+    "kernel_rows": 117232,
+    "kernel_api_unique_success_same_window": 117232,
+    "api_stats": {
+      "cuCtxSetCurrent": {
+        "count": 509405,
+        "sum_ns": 35836030
+      },
+      "cuEventCreate": {
+        "count": 270580,
+        "sum_ns": 210766636
+      },
+      "cuEventRecord": {
+        "count": 270580,
+        "sum_ns": 77071449
+      },
+      "cuEventDestroy_v2": {
+        "count": 269848,
+        "sum_ns": 70162075
+      },
+      "cuEventQuery": {
+        "count": 260563,
+        "sum_ns": 101731819
+      },
+      "cudaLaunchKernel_v7000": {
+        "count": 115380,
+        "sum_ns": 492516429
+      },
+      "cuMemsetD8Async": {
+        "count": 69996,
+        "sum_ns": 221043652
+      },
+      "cuStreamSynchronize": {
+        "count": 67866,
+        "sum_ns": 82987683
+      },
+      "cuEventSynchronize": {
+        "count": 17050,
+        "sum_ns": 194059671
+      },
+      "cuMemcpyHtoDAsync_v2": {
+        "count": 14244,
+        "sum_ns": 74348898
+      },
+      "cuMemcpyDtoDAsync_v2": {
+        "count": 8716,
+        "sum_ns": 59328071
+      },
+      "cuMemcpyDtoHAsync_v2": {
+        "count": 3324,
+        "sum_ns": 1004508508
+      },
+      "cuKernelGetFunction": {
+        "count": 1852,
+        "sum_ns": 1237451
+      },
+      "cuLaunchKernel": {
+        "count": 1852,
+        "sum_ns": 7833334
+      },
+      "cuStreamWaitEvent": {
+        "count": 408,
+        "sum_ns": 224425
+      },
+      "cudaStreamIsCapturing_v10000": {
+        "count": 180,
+        "sum_ns": 192213
+      },
+      "cudaMemsetAsync_v3020": {
+        "count": 18,
+        "sum_ns": 63033
+      }
+    },
+    "event_api_previous_call": {
+      "cuEventCreate": {
+        "window_start": 2,
+        "cuEventDestroy_v2": 520,
+        "cuMemsetD8Async": 18,
+        "cudaLaunchKernel_v7000": 22396,
+        "cuEventRecord": 236144,
+        "cuMemcpyDtoDAsync_v2": 514,
+        "cuStreamSynchronize": 10610,
+        "cuLaunchKernel": 340,
+        "cuEventQuery": 36
+      },
+      "cuEventRecord": {
+        "cuEventCreate": 270172,
+        "cuMemcpyDtoHAsync_v2": 408
+      },
+      "cuEventSynchronize": {
+        "cuEventRecord": 17050
+      },
+      "cuEventDestroy_v2": {
+        "cuEventSynchronize": 17050,
+        "cuCtxSetCurrent": 252336,
+        "cuEventRecord": 18,
+        "cuEventQuery": 426,
+        "cuEventDestroy_v2": 18
+      },
+      "cuEventQuery": {
+        "cuCtxSetCurrent": 257069,
+        "cuEventRecord": 426,
+        "cuEventQuery": 3032,
+        "cuStreamSynchronize": 36
+      },
+      "cuStreamWaitEvent": {
+        "cuEventCreate": 408
+      }
+    },
+    "event_api_return_values": {
+      "cuEventCreate": {
+        "0": 270580
+      },
+      "cuEventRecord": {
+        "0": 270580
+      },
+      "cuEventSynchronize": {
+        "0": 17050
+      },
+      "cuEventDestroy_v2": {
+        "0": 269848
+      },
+      "cuEventQuery": {
+        "0": 252834,
+        "600": 7729
+      },
+      "cuStreamWaitEvent": {
+        "0": 408
+      }
+    },
+    "runtime_callchain_rows": 0,
+    "schema_columns": {
+      "CUPTI_ACTIVITY_KIND_KERNEL": [
+        "start",
+        "end",
+        "deviceId",
+        "contextId",
+        "greenContextId",
+        "streamId",
+        "correlationId",
+        "globalPid",
+        "demangledName",
+        "shortName",
+        "mangledName",
+        "launchType",
+        "cacheConfig",
+        "registersPerThread",
+        "gridX",
+        "gridY",
+        "gridZ",
+        "blockX",
+        "blockY",
+        "blockZ",
+        "staticSharedMemory",
+        "dynamicSharedMemory",
+        "localMemoryPerThread",
+        "localMemoryTotal",
+        "gridId",
+        "sharedMemoryExecuted",
+        "graphNodeId",
+        "sharedMemoryLimitConfig"
+      ],
+      "CUPTI_ACTIVITY_KIND_RUNTIME": [
+        "start",
+        "end",
+        "eventClass",
+        "globalTid",
+        "correlationId",
+        "nameId",
+        "returnValue",
+        "callchainId"
+      ],
+      "CUPTI_ACTIVITY_KIND_MEMCPY": [
+        "start",
+        "end",
+        "deviceId",
+        "contextId",
+        "greenContextId",
+        "streamId",
+        "correlationId",
+        "globalPid",
+        "bytes",
+        "copyKind",
+        "deprecatedSrcId",
+        "srcKind",
+        "dstKind",
+        "srcDeviceId",
+        "srcContextId",
+        "dstDeviceId",
+        "dstContextId",
+        "migrationCause",
+        "graphNodeId",
+        "virtualAddress",
+        "copyCount"
+      ]
+    },
+    "immediate_next_gpu_activity": [
+      {
+        "first": "ferrule::cuda::cutlass::numeric_fp8::pack_bf16_activation(FerruleCutlassNumericFp8Args)",
+        "next": "ferrule::cuda::cutlass::numeric_fp8::decode_weights(FerruleCutlassNumericFp8Args, unsigned int, unsigned int)",
+        "count": 19228
+      },
+      {
+        "first": "ferrule::cuda::cutlass::numeric_fp8::decode_weights(FerruleCutlassNumericFp8Args, unsigned int, unsigned int)",
+        "next": "std::enable_if<!T7, void>::type internal::gemvx::kernel<int, int, __nv_bfloat16, __nv_bfloat16, __nv_bfloat16, float, (bool)0, (bool)1, (bool)1, (bool)0, (int)7, (bool)0, cublasGemvParamsEx<int, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>, float>>(T13)",
+        "count": 16896
+      },
+      {
+        "first": "ferrule::cuda::cutlass::numeric_fp8::decode_weights(FerruleCutlassNumericFp8Args, unsigned int, unsigned int)",
+        "next": "ferrule::cuda::cutlass::numeric_fp8::decode_weights(FerruleCutlassNumericFp8Args, unsigned int, unsigned int)",
+        "count": 7364
+      },
+      {
+        "first": "ferrule::cuda::cutlass::numeric_fp8::decode_weights(FerruleCutlassNumericFp8Args, unsigned int, unsigned int)",
+        "next": "ampere_bf16_s16816gemm_bf16_64x64_sliced1x2_ldg8_f2f_stages_64x5_tn",
+        "count": 640
+      },
+      {
+        "first": "ferrule::cuda::cutlass::numeric_fp8::decode_weights(FerruleCutlassNumericFp8Args, unsigned int, unsigned int)",
+        "next": "void cutlass::Kernel2<cutlass_80_tensorop_s16816gemm_bf16_64x64_32x6_tn_align8>(T1::Params)",
+        "count": 596
+      },
+      {
+        "first": "ferrule::cuda::cutlass::numeric_fp8::decode_weights(FerruleCutlassNumericFp8Args, unsigned int, unsigned int)",
+        "next": "void cutlass::Kernel2<cutlass_80_wmma_tensorop_bf16_s161616gemm_bf16_32x32_64x1_tn_align8>(T1::Params)",
+        "count": 498
+      },
+      {
+        "first": "ferrule::cuda::cutlass::numeric_fp8::decode_weights(FerruleCutlassNumericFp8Args, unsigned int, unsigned int)",
+        "next": "void cutlass::Kernel2<cutlass_80_wmma_tensorop_bf16_s161616gemm_bf16_32x32_128x2_tn_align8>(T1::Params)",
+        "count": 318
+      },
+      {
+        "first": "ferrule::cuda::cutlass::numeric_fp8::decode_weights(FerruleCutlassNumericFp8Args, unsigned int, unsigned int)",
+        "next": "void cutlass::Kernel2<cutlass_80_wmma_tensorop_s161616gemm_bf16_16x16_64x1_tn_align8>(T1::Params)",
+        "count": 200
+      },
+      {
+        "first": "ferrule::cuda::cutlass::numeric_fp8::decode_weights(FerruleCutlassNumericFp8Args, unsigned int, unsigned int)",
+        "next": "ampere_bf16_s16816gemm_bf16_64x64_ldg8_f2f_stages_64x5_tn",
+        "count": 80
+      }
+    ],
+    "owner_names": {
+      "284280412606164": "dp-owner-0",
+      "284280412606165": "dp-owner-1"
+    },
+    "target_correlated_launch_apis": [
+      {
+        "kernel": "ferrule::cuda::cutlass::numeric_fp8::decode_weights(FerruleCutlassNumericFp8Args, unsigned int, unsigned int)",
+        "gridX": 2048,
+        "device": 0,
+        "context": 1,
+        "stream": 22,
+        "api": "cudaLaunchKernel_v7000",
+        "owner_tid": 284280412606164,
+        "count": 12306,
+        "sum_ns": 50039435
+      },
+      {
+        "kernel": "ferrule::cuda::cutlass::numeric_fp8::decode_weights(FerruleCutlassNumericFp8Args, unsigned int, unsigned int)",
+        "gridX": 2048,
+        "device": 1,
+        "context": 2,
+        "stream": 25,
+        "api": "cudaLaunchKernel_v7000",
+        "owner_tid": 284280412606165,
+        "count": 12306,
+        "sum_ns": 46334290
+      },
+      {
+        "kernel": "ferrule::cuda::cutlass::numeric_fp8::decode_weights(FerruleCutlassNumericFp8Args, unsigned int, unsigned int)",
+        "gridX": 16384,
+        "device": 0,
+        "context": 1,
+        "stream": 22,
+        "api": "cudaLaunchKernel_v7000",
+        "owner_tid": 284280412606164,
+        "count": 630,
+        "sum_ns": 2457632
+      },
+      {
+        "kernel": "ferrule::cuda::cutlass::numeric_fp8::decode_weights(FerruleCutlassNumericFp8Args, unsigned int, unsigned int)",
+        "gridX": 16384,
+        "device": 1,
+        "context": 2,
+        "stream": 25,
+        "api": "cudaLaunchKernel_v7000",
+        "owner_tid": 284280412606165,
+        "count": 630,
+        "sum_ns": 2332245
+      },
+      {
+        "kernel": "ferrule::cuda::cutlass::numeric_fp8::decode_weights(FerruleCutlassNumericFp8Args, unsigned int, unsigned int)",
+        "gridX": 32768,
+        "device": 0,
+        "context": 1,
+        "stream": 22,
+        "api": "cudaLaunchKernel_v7000",
+        "owner_tid": 284280412606164,
+        "count": 360,
+        "sum_ns": 1476330
+      },
+      {
+        "kernel": "ferrule::cuda::cutlass::numeric_fp8::decode_weights(FerruleCutlassNumericFp8Args, unsigned int, unsigned int)",
+        "gridX": 32768,
+        "device": 1,
+        "context": 2,
+        "stream": 25,
+        "api": "cudaLaunchKernel_v7000",
+        "owner_tid": 284280412606165,
+        "count": 360,
+        "sum_ns": 1354458
+      },
+      {
+        "kernel": "ferrule::cuda::cutlass::numeric_fp8::pack_bf16_activation(FerruleCutlassNumericFp8Args)",
+        "gridX": 1,
+        "device": 0,
+        "context": 1,
+        "stream": 22,
+        "api": "cudaLaunchKernel_v7000",
+        "owner_tid": 284280412606164,
+        "count": 3704,
+        "sum_ns": 14267811
+      },
+      {
+        "kernel": "ferrule::cuda::cutlass::numeric_fp8::pack_bf16_activation(FerruleCutlassNumericFp8Args)",
+        "gridX": 1,
+        "device": 1,
+        "context": 2,
+        "stream": 25,
+        "api": "cudaLaunchKernel_v7000",
+        "owner_tid": 284280412606165,
+        "count": 3704,
+        "sum_ns": 13737413
+      },
+      {
+        "kernel": "ferrule::cuda::cutlass::numeric_fp8::pack_bf16_activation(FerruleCutlassNumericFp8Args)",
+        "gridX": 2,
+        "device": 0,
+        "context": 1,
+        "stream": 22,
+        "api": "cudaLaunchKernel_v7000",
+        "owner_tid": 284280412606164,
+        "count": 171,
+        "sum_ns": 694771
+      },
+      {
+        "kernel": "ferrule::cuda::cutlass::numeric_fp8::pack_bf16_activation(FerruleCutlassNumericFp8Args)",
+        "gridX": 2,
+        "device": 1,
+        "context": 2,
+        "stream": 25,
+        "api": "cudaLaunchKernel_v7000",
+        "owner_tid": 284280412606165,
+        "count": 171,
+        "sum_ns": 616503
+      },
+      {
+        "kernel": "ferrule::cuda::cutlass::numeric_fp8::pack_bf16_activation(FerruleCutlassNumericFp8Args)",
+        "gridX": 3,
+        "device": 0,
+        "context": 1,
+        "stream": 22,
+        "api": "cudaLaunchKernel_v7000",
+        "owner_tid": 284280412606164,
+        "count": 78,
+        "sum_ns": 321691
+      },
+      {
+        "kernel": "ferrule::cuda::cutlass::numeric_fp8::pack_bf16_activation(FerruleCutlassNumericFp8Args)",
+        "gridX": 3,
+        "device": 1,
+        "context": 2,
+        "stream": 25,
+        "api": "cudaLaunchKernel_v7000",
+        "owner_tid": 284280412606165,
+        "count": 78,
+        "sum_ns": 283073
+      },
+      {
+        "kernel": "ferrule::cuda::cutlass::numeric_fp8::pack_bf16_activation(FerruleCutlassNumericFp8Args)",
+        "gridX": 4,
+        "device": 0,
+        "context": 1,
+        "stream": 22,
+        "api": "cudaLaunchKernel_v7000",
+        "owner_tid": 284280412606164,
+        "count": 45,
+        "sum_ns": 177550
+      },
+      {
+        "kernel": "ferrule::cuda::cutlass::numeric_fp8::pack_bf16_activation(FerruleCutlassNumericFp8Args)",
+        "gridX": 4,
+        "device": 1,
+        "context": 2,
+        "stream": 25,
+        "api": "cudaLaunchKernel_v7000",
+        "owner_tid": 284280412606165,
+        "count": 45,
+        "sum_ns": 168040
+      },
+      {
+        "kernel": "ferrule::cuda::cutlass::numeric_fp8::pack_bf16_activation(FerruleCutlassNumericFp8Args)",
+        "gridX": 5,
+        "device": 0,
+        "context": 1,
+        "stream": 22,
+        "api": "cudaLaunchKernel_v7000",
+        "owner_tid": 284280412606164,
+        "count": 44,
+        "sum_ns": 184647
+      },
+      {
+        "kernel": "ferrule::cuda::cutlass::numeric_fp8::pack_bf16_activation(FerruleCutlassNumericFp8Args)",
+        "gridX": 5,
+        "device": 1,
+        "context": 2,
+        "stream": 25,
+        "api": "cudaLaunchKernel_v7000",
+        "owner_tid": 284280412606165,
+        "count": 44,
+        "sum_ns": 159593
+      },
+      {
+        "kernel": "ferrule::cuda::cutlass::numeric_fp8::pack_bf16_activation(FerruleCutlassNumericFp8Args)",
+        "gridX": 8,
+        "device": 0,
+        "context": 1,
+        "stream": 22,
+        "api": "cudaLaunchKernel_v7000",
+        "owner_tid": 284280412606164,
+        "count": 5064,
+        "sum_ns": 22611094
+      },
+      {
+        "kernel": "ferrule::cuda::cutlass::numeric_fp8::pack_bf16_activation(FerruleCutlassNumericFp8Args)",
+        "gridX": 8,
+        "device": 1,
+        "context": 2,
+        "stream": 25,
+        "api": "cudaLaunchKernel_v7000",
+        "owner_tid": 284280412606165,
+        "count": 5064,
+        "sum_ns": 21234977
+      },
+      {
+        "kernel": "ferrule::cuda::cutlass::numeric_fp8::pack_bf16_activation(FerruleCutlassNumericFp8Args)",
+        "gridX": 16,
+        "device": 0,
+        "context": 1,
+        "stream": 22,
+        "api": "cudaLaunchKernel_v7000",
+        "owner_tid": 284280412606164,
+        "count": 171,
+        "sum_ns": 749929
+      },
+      {
+        "kernel": "ferrule::cuda::cutlass::numeric_fp8::pack_bf16_activation(FerruleCutlassNumericFp8Args)",
+        "gridX": 16,
+        "device": 1,
+        "context": 2,
+        "stream": 25,
+        "api": "cudaLaunchKernel_v7000",
+        "owner_tid": 284280412606165,
+        "count": 171,
+        "sum_ns": 688941
+      },
+      {
+        "kernel": "ferrule::cuda::cutlass::numeric_fp8::pack_bf16_activation(FerruleCutlassNumericFp8Args)",
+        "gridX": 24,
+        "device": 0,
+        "context": 1,
+        "stream": 22,
+        "api": "cudaLaunchKernel_v7000",
+        "owner_tid": 284280412606164,
+        "count": 78,
+        "sum_ns": 339698
+      },
+      {
+        "kernel": "ferrule::cuda::cutlass::numeric_fp8::pack_bf16_activation(FerruleCutlassNumericFp8Args)",
+        "gridX": 24,
+        "device": 1,
+        "context": 2,
+        "stream": 25,
+        "api": "cudaLaunchKernel_v7000",
+        "owner_tid": 284280412606165,
+        "count": 78,
+        "sum_ns": 321019
+      },
+      {
+        "kernel": "ferrule::cuda::cutlass::numeric_fp8::pack_bf16_activation(FerruleCutlassNumericFp8Args)",
+        "gridX": 32,
+        "device": 0,
+        "context": 1,
+        "stream": 22,
+        "api": "cudaLaunchKernel_v7000",
+        "owner_tid": 284280412606164,
+        "count": 45,
+        "sum_ns": 190001
+      },
+      {
+        "kernel": "ferrule::cuda::cutlass::numeric_fp8::pack_bf16_activation(FerruleCutlassNumericFp8Args)",
+        "gridX": 32,
+        "device": 1,
+        "context": 2,
+        "stream": 25,
+        "api": "cudaLaunchKernel_v7000",
+        "owner_tid": 284280412606165,
+        "count": 45,
+        "sum_ns": 188957
+      },
+      {
+        "kernel": "ferrule::cuda::cutlass::numeric_fp8::pack_bf16_activation(FerruleCutlassNumericFp8Args)",
+        "gridX": 40,
+        "device": 0,
+        "context": 1,
+        "stream": 22,
+        "api": "cudaLaunchKernel_v7000",
+        "owner_tid": 284280412606164,
+        "count": 214,
+        "sum_ns": 966287
+      },
+      {
+        "kernel": "ferrule::cuda::cutlass::numeric_fp8::pack_bf16_activation(FerruleCutlassNumericFp8Args)",
+        "gridX": 40,
+        "device": 1,
+        "context": 2,
+        "stream": 25,
+        "api": "cudaLaunchKernel_v7000",
+        "owner_tid": 284280412606165,
+        "count": 214,
+        "sum_ns": 885992
+      }
+    ]
+  },
+  "attribution": {
+    "status": "source_and_geometry_qualified_not_argument_observed",
+    "routed": {
+      "decode_calls": 22092,
+      "decode_sum_ns": 145218592,
+      "decode_time_fraction": 0.5368381408587773,
+      "gate_up_shape_each": [
+        256,
+        2048
+      ],
+      "paired_gemm_n": 512,
+      "down_shape": [
+        2048,
+        256
+      ],
+      "m_histogram": {
+        "1": 6768,
+        "2": 342,
+        "3": 156,
+        "4": 90,
+        "5": 8
+      },
+      "evidence": [
+        "7364 pack->decode->decode->matrix kernel(s)->split_pair->BF16 boundary->pack->decode motifs; all same PID/device/context/stream",
+        "Current mixed_swiglu_inner pairs only RoutedExpertGate; native launch_pair matches admission hash",
+        "40-layer TP2 model: global expert intermediate 512, local intermediate 256, hidden 2048"
+      ],
+      "not_proven": [
+        "expert IDs",
+        "layer IDs per call",
+        "weight addresses",
+        "same-weight reuse count"
+      ]
+    },
+    "shared": {
+      "decode_calls": 2160,
+      "decode_sum_ns": 14294775,
+      "shapes": [
+        [
+          256,
+          2048
+        ],
+        [
+          256,
+          2048
+        ],
+        [
+          2048,
+          256
+        ]
+      ],
+      "evidence": "720 router->three single small decode->first routed pair regions; matches one shared MLP per layer/rank/invocation"
+    },
+    "remaining_small": {
+      "count": 360,
+      "sum_ns": 2369829,
+      "candidate": "GQA K/V projections, local [256,2048]",
+      "evidence": "Residual 360 calls = 10 GQA layers * 2 K/V * 2 ranks * 9 inferred forward invocations; same grid also used by experts, so count/shape reconciliation is not per-call parameter identification"
+    },
+    "dense_large": {
+      "count": 720,
+      "sum_ns": 56972550,
+      "local_shape": [
+        4096,
+        2048
+      ],
+      "candidates": [
+        "GDN combined QKV (540 expected)",
+        "GQA query+gate projection (180 expected)"
+      ],
+      "evidence": "40 layers * 2 ranks * 9 inferred forward invocations; current checkpoint and matching TP partition imply 8388608 FP8 elements"
+    },
+    "dense_medium": {
+      "count": 1260,
+      "sum_ns": 51651472,
+      "local_shape": [
+        2048,
+        2048
+      ],
+      "candidates": [
+        "GDN Z (540 expected)",
+        "GDN output (540 expected)",
+        "GQA output (180 expected)"
+      ],
+      "evidence": "1260 = (30*2+10) * 2 ranks * 9 inferred forward invocations; individual candidate time shares not measured"
+    },
+    "head": {
+      "decode_calls_attributed": 0,
+      "pack_calls_attributed": 0,
+      "global_shape": [
+        248320,
+        2048
+      ],
+      "local_shape": [
+        124160,
+        2048
+      ],
+      "dtype": "BF16",
+      "evidence": "Checkpoint header BF16; matching native resident GemmEx path performs no pack/decode; current model Storage::Bf16 selects resident path. This excludes head as a justified decode attribution, not head GPU cost."
+    }
+  },
+  "event_bookkeeping": {
+    "api_count": 1071571,
+    "host_api_sum_ns": 459731979,
+    "included": [
+      "cuEventCreate",
+      "cuEventRecord",
+      "cuEventQuery",
+      "cuEventDestroy_v2"
+    ],
+    "excluded_event_synchronize": {
+      "count": 17050,
+      "sum_ns": 194059671
+    },
+    "ctx_set_current": {
+      "count": 509405,
+      "sum_ns": 35836030
+    },
+    "mechanism": "CudaDeviceBlock::drop -> allocator.retire -> record_retirement_events loops all live registered streams; compute/upload/control each create+record an event. poll_retirements queries events; retirement event Drop destroys them. Three-stream lifecycle gives roughly 3*(create+record+query+destroy)=12 event APIs per retired block if queried once, before context binds/retries.",
+    "source_refs": [
+      "crates/ferrule-backend/src/cuda/allocator.rs:219-227,424-508",
+      "crates/ferrule-backend/src/cuda/runtime.rs:460-487,798-829",
+      "crates/ferrule-backend/src/cuda/operator_owner.rs:2460-2485"
+    ],
+    "observed_support": "Create/Record equal 270580 each; Query has 7729 NOT_READY responses; most Query/Destroy are immediately preceded by cuCtxSetCurrent, matching retirement methods. Source files match admission.",
+    "qualification": "Mechanism and multiplying factor are source-grounded; API arguments/event handles/callchains are absent, so exact allocator share, retired-buffer count and per-stream event counts cannot be proven. CUDA stream metadata table is incomplete for context1; do not use synchronization deviceId=0 as a physical-device ownership proof."
+  },
+  "optimization_candidates": [
+    {
+      "priority": 1,
+      "target": "Routed expert decode",
+      "observed_decode_ns": 145218592,
+      "direction": "Investigate direct FP8-weight/BF16-activation math or bounded hot-expert decoded cache; preserve native BF16 rounding and concatenated routed gate/up semantics.",
+      "constraint": "No measured weight reuse rate. Full decoded routed residency costs 30 GiB/rank vs 15 GiB/rank FP8 payload for this geometry, before other allocations; do not propose it under the 22 GiB owner budget."
+    },
+    {
+      "priority": 2,
+      "target": "Repeated dense attention/Z/shared decoding",
+      "observed_decode_ns": 125288626,
+      "direction": "Consider prepared BF16 resident representations for fixed dense projections; source geometry gives 1340 MiB/rank BF16 payload for attention+Z+shared (excluding routed/head), if retained alongside FP8. Budget, lifetime and numerical validation required.",
+      "constraint": "The 9-invocation shape reconciliation is not a measured pointer reuse count. Individual QKV vs query or Z vs output time is not separately identified."
+    },
+    {
+      "priority": 3,
+      "target": "Activation pack",
+      "observed_pack_ns": 30012786,
+      "direction": "Eliminate packed-input copies where contiguous BF16 input can be consumed safely, or share immutable input staging for the two shared gate/up calls without merging their GEMMs.",
+      "constraint": "No activation pointers exported; cannot claim redundant input reuse from repeated grid alone. Routed gate/up already share one pack."
+    },
+    {
+      "priority": 4,
+      "target": "Allocator retirement event multiplication",
+      "direction": "Explore owner-epoch retirement batching, safe event pooling, or per-buffer actual-use stream tracking rather than three fresh fences per drop.",
+      "constraint": "Preserve cross-stream completion, capture/unknown-completion quarantine and lifetime proof; source mechanism does not justify simply removing events."
+    }
+  ],
+  "validation": {
+    "cpu_only": true,
+    "gpu_visibility": "",
+    "tests": [
+      {
+        "pattern": "test_profile_shape_audit.py",
+        "passed": 9
+      },
+      {
+        "pattern": "test_profile_trace_audit*.py",
+        "passed": 17
+      }
+    ],
+    "reconciled": {
+      "decode_count": 26592,
+      "decode_sum_ns": 270507218,
+      "pack_count": 19228,
+      "pack_sum_ns": 30012786
+    },
+    "test_file_sha256": "8dae58ee1360c615ee9b695b6f509d6543cf3941ea469d15793e8962d4ae06b1"
+  }
+}

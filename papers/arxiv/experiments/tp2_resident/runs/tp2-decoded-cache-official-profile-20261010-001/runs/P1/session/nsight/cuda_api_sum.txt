@@ -1,0 +1,21 @@
+Generating SQLite file /home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/nsight/nsys.sqlite from /home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/nsight/nsys.nsys-rep
+Processing [/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/nsight/nsys.sqlite] with [/home/admin/luhuanbing.lhb/Ferrule/target/vendor/nsight-systems-cli-2025.3.1/opt/nvidia/nsight-systems-cli/2025.3.1/target-linux-x64/reports/cuda_api_sum.py]... 
+Time (%),Total Time (ns),Num Calls,Avg (ns),Med (ns),Min (ns),Max (ns),StdDev (ns),Name
+24.7,794216343,183460,4329.1,4090.0,2676,62840,1071.9,cudaLaunchKernel
+14.6,471296611,541168,870.9,727.0,147,56227,579.9,cuEventCreate
+13.5,435224734,140232,3103.6,2911.0,1338,277257,1562.2,cuMemsetD8Async
+7.7,249429982,522485,477.4,466.0,269,13350,212.1,cuEventQuery
+6.6,211100610,34108,6189.2,2173.0,314,598690,24909.2,cuEventSynchronize
+6.5,209150942,541168,386.5,364.0,113,397378,610.1,cuEventDestroy_v2
+5.3,170487757,541168,315.0,271.0,204,13695,155.3,cuEventRecord
+5.2,166024984,135732,1223.2,375.0,293,81502,1764.4,cuStreamSynchronize
+4.5,144902239,28488,5086.4,4902.0,2032,187608,2816.6,cuMemcpyHtoDAsync_v2
+4.4,141110312,6648,21226.0,12745.0,2139,517111,21848.9,cuMemcpyDtoHAsync_v2
+3.7,120693276,17432,6923.7,6929.0,3491,19967,1292.0,cuMemcpyDtoDAsync_v2
+2.7,87020054,1021578,85.2,72.0,65,33568,76.2,cuCtxSetCurrent
+0.5,15395585,3704,4156.5,4017.5,2788,23871,950.6,cuLaunchKernel
+0.1,2475312,3704,668.3,628.0,220,14006,425.3,cuKernelGetFunction
+0.0,436496,816,534.9,489.0,312,2012,241.7,cuStreamWaitEvent
+0.0,411757,360,1143.8,1027.5,743,9045,497.7,cudaStreamIsCapturing_v10000
+0.0,121896,36,3386.0,3218.0,2364,4752,605.4,cudaMemsetAsync
+

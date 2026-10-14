@@ -1,0 +1,70 @@
+{
+  "schema": "ferrule.paper.storage-demand.tp1-case.v1",
+  "case_id": "storage-demand-tp1-mixed-middle-20261013-01",
+  "status": "prepared_cpu_only_not_authorized",
+  "binary": "target/validation/storage-paper-current-release-20261013-01/ferrule-storage-paper-current",
+  "binary_sha256": "36e6aaa54d1aff7c8cc35d63dcee0df1cad91fcc8f6d3e746369504f2c70a58c",
+  "handoff": "target/validation/storage-paper-current-release-20261013-01/handoff.json",
+  "handoff_sha256": "b782207cc06f7317e1a28498afd4d76134c439e544370cbba50b260730245444",
+  "source_pin_manifest": "target/validation/storage-paper-current-release-20261013-01/production-source-pins-sealed.json",
+  "runtime_pin_manifest": "target/validation/storage-paper-current-release-20261013-01/runtime-library-verification.json",
+  "model": "/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8",
+  "topology": {"pp": 1, "tp": 1, "ep": 1, "rank_backend": "thread", "owners": 1, "visible_ordinals": [0]},
+  "argv": [
+    "target/validation/storage-paper-current-release-20261013-01/ferrule-storage-paper-current", "serve",
+    "/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8",
+    "--backend", "cuda", "--engine", "resident", "--model-profile", "qwen35-mixed-bf16",
+    "--expert-prewarm", "lazy", "--kv-execution-policy", "resident",
+    "--ctx-size", "128", "--max-active-sequences", "2", "--max-batch-tokens", "8", "--prefill-chunk-size", "8",
+    "--kv-cache-mb", "16", "--max-tensor-mb", "1024",
+    "--cuda-device-budget-mb", "7168", "--cuda-workspace-mb", "2048", "--cuda-expert-scratch-mb", "8",
+    "--cuda-expert-device-entries", "64", "--cuda-expert-device-bytes", "335544320",
+    "--request-queue-capacity", "2", "--max-inflight-requests", "2",
+    "--served-model-name", "qwen35-storage-demand-paper", "--host", "127.0.0.1", "--port", "18369"
+  ],
+  "environment": {
+    "CUBLAS_WORKSPACE_CONFIG": ":0:0", "CUDA_VISIBLE_DEVICES": "0", "NVIDIA_VISIBLE_DEVICES": "0",
+    "FERRULE_LOG": "info,ferrule_performance=debug", "FERRULE_LOG_FORMAT": "json",
+    "LD_LIBRARY_PATH": "/home/admin/wxw403883/anaconda3/envs/tao/lib:/usr/lib64"
+  },
+  "cache_candidates": {"middle": [64, 335544320], "small": [8, 67108864], "big": [128, 671088640]},
+  "cache_bytes_include_scratch": true,
+  "host_expert_retention": 0,
+  "physical_host_cap_bytes": null,
+  "pagecache_policy": "uncontrolled; host retention zero is not pagecache zero",
+  "limits": {"startup_seconds": 700, "request_seconds": 120, "all_requests_seconds": 300, "target_lifetime_seconds": 1100, "shutdown_seconds": 45, "outer_seconds": 1200, "requested_request_ceiling": 10},
+  "workload": {
+    "controls": {"temperature": 0, "seed": 1, "concurrency": 1, "stream": true, "include_usage": true},
+    "first_stage": ["Hello max_tokens=2", "three original HF canaries max_tokens=8"],
+    "first_stage_requests": 4,
+    "qa_extension": {"max_tokens": 8, "excluded_first": 1, "warmups": 2, "measured": 5},
+    "full_schedule_requests": 12,
+    "reference_reader": "papers/arxiv/experiments/runs/g10-exclusive-001/g10.py:references",
+    "reference_manifest": "target/validation/bf16-fresh-quality-20261007/oracle/manifest.json",
+    "reference_manifest_sha256": "102c798baeb5200bc8ed8386eabed6146870b3b6da2a90fc6010677041352c7e",
+    "actual_token_history": null,
+    "exact_token_pass_requires": "actual generated IDs equal frozen eight-ID prefix; text/usage alone is not exact-token proof"
+  },
+  "reuse": {
+    "target": "scripts/_profile_capture.py:run_target(directory, command, lifetime_seconds, shutdown_seconds)",
+    "supervisor": "scripts/test_vllm_qwen35.py:run_process",
+    "launch_guard": "papers/arxiv/experiments/launch_guard.py:seal/authenticate",
+    "observer": "papers/arxiv/experiments/tp2_resident/observer.py",
+    "dispatch": "TP1-specific registration still required in coordinator; do not pass this manifest to the fixed TP2 dispatcher",
+    "custody": "coordinator-only renewed authorization, selected UUID lock, authenticated subreaper, independent pre/post all-eight idle, nonselected delta tolerance 1 MiB, stop on unknown drain"
+  },
+  "observation": {
+    "event": "mixed_decoder_invocation",
+    "fields": ["transaction", "rows", "sequences", "prefill_rows", "decode_rows", "checkpoint_read_calls", "checkpoint_read_bytes", "checkpoint_source_checks", "checkpoint_path_metadata_calls", "checkpoint_handle_metadata_calls", "expert_hits", "expert_uploads", "expert_evictions", "expert_resident_bytes", "artifact_uploads", "artifact_upload_bytes", "h2d_bytes"],
+    "scope": "raw per-invocation logical reader deltas, not physical NAS IO; preserve raw JSON and serial request ID/name/time anchors; transaction is not request ID",
+    "proc_io": "optional PID/starttime-bound process counters; read_bytes is not NFS network traffic",
+    "mountstats": "optional shared-mount counter; foreign traffic and server physical disk IO unknown",
+    "PssAnon": null,
+    "timing_claim": "instrumented n=1 exploration, overhead unmeasured; no fast benchmark or CI claim"
+  },
+  "blocked": ["No GPU authorization in CPU preparation", "Four initial requests are bounded; full QA schedule needs 12, exceeding ceiling10", "Actual generated-token history needs an audited existing output/trace source", "Current TP1 capacity/source-bound CUDA admission and canaries are not executed", "Historical full40/fresh-quality pins are not current-binary math PASS", "Coordinator must seal a TP1-specific worker binding without bypassing custody"],
+  "paper_claim": "regulated application GPU cache with storage-backed logical demand; not host-overflow or physically necessary NAS reads",
+  "gpu_queries": 0,
+  "gpu_locks": 0,
+  "gpu_runs": 0
+}

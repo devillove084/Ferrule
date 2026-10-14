@@ -7,6 +7,7 @@ use crate::transformer::{Attention, DecoderModelSpec, UnsupportedOperator};
 use ferrule_backend::cpu::gated_delta::GatedDeltaShape;
 use ferrule_common::execution::KvElementType;
 use ferrule_common::{Error, Result};
+use std::ops::Range;
 
 pub type HybridDecoderSequenceState = DecoderSequenceState<(), HybridLayerStates>;
 
@@ -19,27 +20,85 @@ pub enum HybridLayerSchema {
     },
     GatedDeltaNet(GatedDeltaShape),
 }
+/// State slots retain one entry per decoder layer; only KV planes are compact.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HybridLayerEntry {
+    pub global_layer: usize,
+    pub local_layer: usize,
+    pub state_slot: usize,
+    pub global_kv_layer: Option<usize>,
+    pub local_kv_layer: Option<usize>,
+}
+#[derive(Debug, thiserror::Error)]
+pub enum HybridSchemaError {
+    #[error("invalid hybrid layer range {range:?} for {total_layers} layers")]
+    InvalidRange {
+        range: Range<usize>,
+        total_layers: usize,
+    },
+    #[error("recurrent-only hybrid segment {range:?} requires a zero-KV backend")]
+    RecurrentOnly { range: Range<usize> },
+    #[error("hybrid schemas do not form an exact ordered partition at segment {segment}")]
+    InvalidPartition { segment: usize },
+}
+impl From<HybridSchemaError> for Error {
+    fn from(source: HybridSchemaError) -> Self {
+        Self::ModelSource {
+            source: Box::new(source),
+        }
+    }
+}
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HybridStateSchema {
     layers: Vec<HybridLayerSchema>,
+    entries: Vec<HybridLayerEntry>,
+    range: Range<usize>,
+    total_layers: usize,
 }
 impl HybridStateSchema {
     pub fn from_spec(spec: &DecoderModelSpec, active_layers: usize) -> Result<Self> {
-        if active_layers == 0 || active_layers > spec.layers().len() {
-            return Err(error("invalid hybrid active layer count"));
+        Self::build(spec, 0..active_layers, false)
+    }
+    /// A physical PP segment must contain full attention. The compatible prefix
+    /// constructor still permits recurrent-only prefixes, but kv_planes rejects them.
+    pub fn for_segment(spec: &DecoderModelSpec, range: Range<usize>) -> Result<Self> {
+        Self::build(spec, range, true)
+    }
+    fn build(spec: &DecoderModelSpec, range: Range<usize>, require_kv: bool) -> Result<Self> {
+        if range.start >= range.end || range.end > spec.layers().len() {
+            return Err(HybridSchemaError::InvalidRange {
+                range,
+                total_layers: spec.layers().len(),
+            }
+            .into());
         }
-        let mut full = 0;
+        let mut global_kv = spec.layers()[..range.start]
+            .iter()
+            .filter(|l| matches!(l.attention(), Attention::Gqa(_)))
+            .count();
+        let mut local_kv = 0;
+        let mut geometry = None;
         let mut layers = Vec::new();
-        for layer in &spec.layers()[..active_layers] {
-            layers.push(match layer.attention() {
+        let mut entries = Vec::new();
+        for (local, layer) in spec.layers()[range.clone()].iter().enumerate() {
+            let (description, kv) = match layer.attention() {
                 Attention::Gqa(gqa) => {
-                    let entry = HybridLayerSchema::FullAttention {
-                        kv_layer: full,
-                        kv_heads: gqa.num_kv_heads(),
-                        head_dim: gqa.head_dim(),
+                    let shape = (gqa.num_kv_heads(), gqa.head_dim());
+                    if geometry.is_some_and(|previous| previous != shape) {
+                        return Err(unsupported(
+                            "hybrid requires uniform full-attention KV geometry",
+                        ));
+                    }
+                    geometry = Some(shape);
+                    let description = HybridLayerSchema::FullAttention {
+                        kv_layer: local_kv,
+                        kv_heads: shape.0,
+                        head_dim: shape.1,
                     };
-                    full += 1;
-                    entry
+                    let kv = (Some(global_kv), Some(local_kv));
+                    global_kv += 1;
+                    local_kv += 1;
+                    (description, kv)
                 }
                 Attention::GatedDeltaNet(d) => {
                     let shape = GatedDeltaShape {
@@ -50,21 +109,117 @@ impl HybridStateSchema {
                         kernel: d.conv_kernel_dim(),
                     };
                     shape.sizes()?;
-                    HybridLayerSchema::GatedDeltaNet(shape)
+                    (HybridLayerSchema::GatedDeltaNet(shape), (None, None))
                 }
                 _ => {
                     return Err(unsupported(
                         "hybrid state supports GQA and GatedDeltaNet only",
                     ));
                 }
+            };
+            entries.push(HybridLayerEntry {
+                global_layer: range.start + local,
+                local_layer: local,
+                state_slot: local,
+                global_kv_layer: kv.0,
+                local_kv_layer: kv.1,
             });
+            layers.push(description);
         }
-        Ok(Self { layers })
+        if require_kv && local_kv == 0 {
+            return Err(HybridSchemaError::RecurrentOnly { range }.into());
+        }
+        let schema = Self {
+            layers,
+            entries,
+            range,
+            total_layers: spec.layers().len(),
+        };
+        schema.per_sequence_state_bytes()?;
+        Ok(schema)
+    }
+    pub fn entries(&self) -> &[HybridLayerEntry] {
+        &self.entries
+    }
+    pub fn entry(&self, global_layer: usize) -> Option<&HybridLayerEntry> {
+        global_layer
+            .checked_sub(self.range.start)
+            .and_then(|i| self.entries.get(i))
+    }
+    pub fn layer_range(&self) -> Range<usize> {
+        self.range.clone()
+    }
+    pub fn total_layers(&self) -> usize {
+        self.total_layers
+    }
+    pub fn per_sequence_state_bytes(&self) -> Result<usize> {
+        self.layers.iter().try_fold(0usize, |sum, layer| {
+            let HybridLayerSchema::GatedDeltaNet(shape) = layer else {
+                return Ok(sum);
+            };
+            let (_, conv, recurrent) = shape.sizes()?;
+            for count in [conv, recurrent] {
+                if count
+                    .checked_mul(std::mem::size_of::<f32>())
+                    .is_none_or(|bytes| bytes > isize::MAX as usize)
+                {
+                    return Err(error("hybrid state buffer exceeds address space"));
+                }
+            }
+            conv.checked_add(recurrent)
+                .and_then(|n| n.checked_mul(4))
+                .and_then(|n| sum.checked_add(n))
+                .ok_or_else(|| error("hybrid state byte overflow"))
+        })
+    }
+    /// Reconstruct each range from the model to check geometry and all mappings.
+    pub fn validate_partition(spec: &DecoderModelSpec, schemas: &[Self]) -> Result<()> {
+        let mut next = 0;
+        for (segment, schema) in schemas.iter().enumerate() {
+            if schema.range.start != next
+                || schema != &Self::for_segment(spec, schema.range.clone())?
+            {
+                return Err(HybridSchemaError::InvalidPartition { segment }.into());
+            }
+            next = schema.range.end;
+        }
+        if next != spec.layers().len() || schemas.is_empty() {
+            return Err(HybridSchemaError::InvalidPartition {
+                segment: schemas.len(),
+            }
+            .into());
+        }
+        Self::from_spec(spec, spec.layers().len())?;
+        Ok(())
+    }
+    /// Preserve global coordinates and compact slots while specializing physical shapes.
+    pub(crate) fn with_local_layers(&self, layers: Vec<HybridLayerSchema>) -> Result<Self> {
+        if layers.len() != self.layers.len()
+            || layers
+                .iter()
+                .zip(&self.layers)
+                .any(|(a, b)| std::mem::discriminant(a) != std::mem::discriminant(b))
+        {
+            return Err(error("local hybrid schema changes layer kinds"));
+        }
+        let mut local = self.clone();
+        local.layers = layers;
+        local.per_sequence_state_bytes()?;
+        Ok(local)
     }
     pub fn layers(&self) -> &[HybridLayerSchema] {
         &self.layers
     }
     pub fn kv_planes(&self, page_size: usize, max_positions: usize) -> Result<StandardGqaPlanes> {
+        self.kv_planes_with_dtype(page_size, max_positions, KvElementType::F32)
+    }
+    /// Explicit typed opt-in; the existing default and rank paths remain F32.
+    pub fn kv_planes_with_dtype(
+        &self,
+        page_size: usize,
+        max_positions: usize,
+        dtype: KvElementType,
+    ) -> Result<StandardGqaPlanes> {
         let mut geometry = None;
         let mut count = 0;
         for layer in &self.layers {
@@ -84,16 +239,10 @@ impl HybridStateSchema {
         let (heads, dim) = geometry.ok_or_else(|| {
             unsupported("paged hybrid decoder needs at least one full-attention layer")
         })?;
-        StandardGqaPlanes::new(
-            count,
-            heads,
-            dim,
-            page_size,
-            max_positions,
-            KvElementType::F32,
-        )
+        StandardGqaPlanes::new(count, heads, dim, page_size, max_positions, dtype)
     }
     pub fn create(&self) -> Result<HybridLayerStates> {
+        self.per_sequence_state_bytes()?;
         Ok(HybridLayerStates {
             schema: self.clone(),
             layers: self
@@ -155,7 +304,12 @@ impl HybridLayerStates {
         &self.layers
     }
     pub fn linear_mut(&mut self, layer: usize) -> Result<&mut GatedDeltaNetState> {
-        match self.layers.get_mut(layer) {
+        let slot = self
+            .schema
+            .entry(layer)
+            .ok_or_else(|| error("global layer outside hybrid schema"))?
+            .state_slot;
+        match self.layers.get_mut(slot) {
             Some(HybridLayerState::GatedDeltaNet(state)) => Ok(state),
             _ => Err(error("layer does not have gated delta state")),
         }
@@ -189,20 +343,16 @@ pub enum GatedDeltaStateRef<'a> {
     Cpu(&'a mut GatedDeltaNetState),
     #[cfg(feature = "cuda")]
     Cuda(&'a mut super::CudaGatedDeltaState),
+    #[cfg(feature = "cuda")]
+    CudaBf16(&'a mut super::hybrid_cuda::CudaBf16GatedDeltaState),
 }
-impl GatedDeltaStateRef<'_> {
-    pub(crate) fn cpu(&mut self) -> Result<&mut GatedDeltaNetState> {
-        match self {
-            Self::Cpu(state) => Ok(state),
-            #[cfg(feature = "cuda")]
-            Self::Cuda(_) => Err(unsupported(
-                "CPU operator cannot access CUDA recurrent state",
-            )),
-        }
-    }
-}
-
-/// State access used by the single standard CPU module for both stateless GQA and hybrid layers.
+/// Backend-neutral schema, frontier and borrowed recurrent-state contract for
+/// the shared standard decoder layer loop.
+///
+/// The concrete state retains its physical owner and representation. This trait
+/// does not require Clone or Send and grants no checkout, release or completion
+/// authority; those remain with the sequence lifecycle and owner.
+#[doc = include_str!("../../tests/compile/standard_sequence_state.md")]
 pub trait StandardSequenceState: super::DecoderSequence {
     fn validate_standard_schema(schema: &HybridStateSchema) -> Result<()>
     where
@@ -212,10 +362,13 @@ pub trait StandardSequenceState: super::DecoderSequence {
     fn validate_standard_state(&self, schema: &HybridStateSchema) -> Result<()> {
         self.validate_standard_state_at(schema, self.core().position())
     }
-    fn linear_state_mut(&mut self, layer: usize) -> Result<&mut GatedDeltaNetState>;
-    fn linear_state(&mut self, layer: usize) -> Result<GatedDeltaStateRef<'_>> {
-        self.linear_state_mut(layer).map(GatedDeltaStateRef::Cpu)
-    }
+    /// Exclusively borrow the physical state for a global decoder layer.
+    ///
+    /// Return only the owner's actual storage kind, never a host fallback or a
+    /// copied payload. Missing/non-recurrent layers and unavailable owners fail
+    /// without transferring custody. The operator validates its expected kind
+    /// and owner before use; the borrow cannot outlive this sequence state.
+    fn linear_state(&mut self, layer: usize) -> Result<GatedDeltaStateRef<'_>>;
 }
 impl StandardSequenceState for super::GenericDecoderSequenceState {
     fn validate_standard_schema(schema: &HybridStateSchema) -> Result<()> {
@@ -234,7 +387,7 @@ impl StandardSequenceState for super::GenericDecoderSequenceState {
     fn validate_standard_state_at(&self, schema: &HybridStateSchema, _: usize) -> Result<()> {
         Self::validate_standard_schema(schema)
     }
-    fn linear_state_mut(&mut self, _: usize) -> Result<&mut GatedDeltaNetState> {
+    fn linear_state(&mut self, _: usize) -> Result<GatedDeltaStateRef<'_>> {
         Err(unsupported("sequence has no recurrent state"))
     }
 }
@@ -249,8 +402,10 @@ impl StandardSequenceState for HybridDecoderSequenceState {
     ) -> Result<()> {
         self.kv_state().validate(schema, position)
     }
-    fn linear_state_mut(&mut self, layer: usize) -> Result<&mut GatedDeltaNetState> {
-        self.kv_state_mut().linear_mut(layer)
+    fn linear_state(&mut self, layer: usize) -> Result<GatedDeltaStateRef<'_>> {
+        self.kv_state_mut()
+            .linear_mut(layer)
+            .map(GatedDeltaStateRef::Cpu)
     }
 }
 #[derive(Debug, Clone)]
@@ -330,6 +485,24 @@ mod tests {
 
     fn schema() -> HybridStateSchema {
         HybridStateSchema {
+            range: 0..2,
+            total_layers: 2,
+            entries: vec![
+                HybridLayerEntry {
+                    global_layer: 0,
+                    local_layer: 0,
+                    state_slot: 0,
+                    global_kv_layer: None,
+                    local_kv_layer: None,
+                },
+                HybridLayerEntry {
+                    global_layer: 1,
+                    local_layer: 1,
+                    state_slot: 1,
+                    global_kv_layer: Some(0),
+                    local_kv_layer: Some(0),
+                },
+            ],
             layers: vec![
                 HybridLayerSchema::GatedDeltaNet(GatedDeltaShape {
                     key_heads: 1,
@@ -351,7 +524,12 @@ mod tests {
     fn failed_release_retains_exact_state_and_partial_work_is_releasable() {
         let mut lifecycle = HybridSequenceLifecycle::new(schema());
         let state = lifecycle.create().unwrap();
-        let mut wrong = HybridSequenceLifecycle::new(HybridStateSchema { layers: Vec::new() });
+        let mut wrong = HybridSequenceLifecycle::new(HybridStateSchema {
+            layers: Vec::new(),
+            entries: Vec::new(),
+            range: 0..0,
+            total_layers: 0,
+        });
         let original = state.clone();
         let failed = wrong.try_release(state).unwrap_err();
         let (_, state) = failed.into_parts();
@@ -387,3 +565,11 @@ mod tests {
         lifecycle.try_release(state).unwrap();
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/hybrid_parallel/state_bounds.rs"]
+mod allocation_bounds;
+
+#[cfg(test)]
+#[path = "../../tests/unit/standard_sequence_state.rs"]
+mod state_contract_tests;

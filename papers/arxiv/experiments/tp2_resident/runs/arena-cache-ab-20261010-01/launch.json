@@ -1,0 +1,19 @@
+{
+  "protocol": "tp2-cacheoff-cacheon-matched4g-qa8-descriptive",
+  "purpose": "cache_ab",
+  "status": "incomplete",
+  "sole_gpu_owner_granted": true,
+  "owner_note": "User explicitly authorized this agent as sole GPU owner for OFF frozen 4d40 versus ON ae3e cache A/B after actual same-binary S1/S2 PASS; two fresh lifecycles, workspace4096 total22528 TP2 ctx128 batch8 seq2 resident no-offload; 3 unmeasured plus 5 measured QA8; no rankperf, vLLM or Nsight; fail-stop on numerical/rootUnknown/budget/identity failure; no foreign kill",
+  "fairmatch": false,
+  "exact_speedup": null,
+  "slots": [
+    {
+      "id": "OFF",
+      "status": "not_run"
+    },
+    {
+      "id": "ON",
+      "status": "not_run"
+    }
+  ]
+}

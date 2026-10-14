@@ -1,0 +1,8 @@
+
+running 1 test
+test tests::gpu_shutdown_fault_retains_primary_and_segments ... DEVICE NVIDIA GeForce RTX 3090
+DRIVER shutdown_unknown_process_exit_required creates=0 records=0 queries=0 event_syncs=0 context_syncs=1 stream_syncs=2 frees=0 primary_releases=0
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 30 filtered out; finished in 0.31s
+

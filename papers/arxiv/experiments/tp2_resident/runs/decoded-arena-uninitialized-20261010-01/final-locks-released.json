@@ -1,0 +1,12 @@
+{
+  "gpu_owner_released": true,
+  "lock_uuids": [
+    "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+    "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535"
+  ],
+  "all_eight_idle": true,
+  "final_idle": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-uninitialized-20261010-01/final-idle.json",
+    "sha256": "e0076b2a92c252d76a42918f33aea8963d8f854d2db524ba541bb3b97a8c4cac"
+  }
+}

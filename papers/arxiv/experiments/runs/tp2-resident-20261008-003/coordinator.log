@@ -1,0 +1,3 @@
+START hello2
+{"stage": "hello2", "launch_id": "c569bfa823284cb9aadf8da78c0c38d2", "drained": true, "all_gpu_idle": true, "eligible": false, "final_drained_server_log_sha256": "bc83244759458833bb7692e473631adfdb372cc09ae9f649eedf0f3dd3e6cdcf", "status": "failed", "startup_seconds": null, "error": "ValueError: Resource monitor failed during startup", "request_gate": null}
+{"status": "incomplete", "error": "ValueError: hello2 failed; subsequent stages blocked, no retry", "performance_status": "not_run", "final_release": "verified"}

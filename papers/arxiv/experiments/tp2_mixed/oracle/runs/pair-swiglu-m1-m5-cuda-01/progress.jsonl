@@ -1,0 +1,10 @@
+{"fixture": "hello-decode0-layer00-expert021", "rank": 0, "exact_controls": 5, "down_calls": [21, 97, 102, 113, 142, 166, 205, 210]}
+{"fixture": "hello-decode0-layer00-expert021", "rank": 1, "exact_controls": 5, "down_calls": [21, 97, 102, 113, 142, 166, 205, 210]}
+{"fixture": "hello-decode0-layer03-expert037", "rank": 0, "exact_controls": 5, "down_calls": [37, 58, 75, 84, 113, 199, 211, 214]}
+{"fixture": "hello-decode0-layer03-expert037", "rank": 1, "exact_controls": 5, "down_calls": [37, 58, 75, 84, 113, 199, 211, 214]}
+{"fixture": "capital-decode0-layer00-expert072", "rank": 0, "exact_controls": 5, "down_calls": [72, 81, 120, 181, 182, 191, 208, 254]}
+{"fixture": "capital-decode0-layer00-expert072", "rank": 1, "exact_controls": 5, "down_calls": [72, 81, 120, 181, 182, 191, 208, 254]}
+{"fixture": "capital-decode0-layer03-expert010", "rank": 0, "exact_controls": 5, "down_calls": [10, 56, 115, 163, 209, 224, 243, 255]}
+{"fixture": "capital-decode0-layer03-expert010", "rank": 1, "exact_controls": 5, "down_calls": [10, 56, 115, 163, 209, 224, 243, 255]}
+{"fixture": "capital-prefill-layer09-expert095", "rank": 0, "exact_controls": 5, "down_calls": [0, 12, 44, 48, 65, 70, 71, 72, 84, 86, 95, 100, 122, 138, 139, 154, 157, 159, 184, 187, 196, 206, 210, 246]}
+{"fixture": "capital-prefill-layer09-expert095", "rank": 1, "exact_controls": 5, "down_calls": [0, 12, 44, 48, 65, 70, 71, 72, 84, 86, 95, 100, 122, 138, 139, 154, 157, 159, 184, 187, 196, 206, 210, 246]}

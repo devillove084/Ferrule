@@ -1,0 +1,72 @@
+{
+  "schema": "ferrule.paper.tp2-oracle.handoff.v1",
+  "status": "reference_verified_runtime_comparison_pending",
+  "reference_directory": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_mixed/oracle/runs/full40-20261009-03",
+  "manifest": {
+    "file": "manifest.json",
+    "sha256": "fb96ba4dd134761af30b4025b4cce86f96136cb01f05b5b4fca3e74587caa71d",
+    "bytes": 33135
+  },
+  "verification": [
+    {
+      "file": "artifact-verification.json",
+      "sha256": "5e738ce4a3387576183bcd21033766a441449fae63ea12e714af5f5c4c49809a",
+      "bytes": 5716
+    },
+    {
+      "file": "checkpoint-reverification.json",
+      "sha256": "a52809ef51274ae48c53f8eff3d2d4c5175398027810eb19ea5a96a672296d44",
+      "bytes": 311
+    },
+    {
+      "file": "all-eight-release.json",
+      "sha256": "1e2038e4fd64c4e3553f4caf7a9551e85792a1647fecd63485b70df766cf0603",
+      "bytes": 3046
+    },
+    {
+      "file": "expected-comparison.json",
+      "sha256": "8b03d27ff3a0aefac179bdfa159812a61c5022e56f568faeeccbc1ccfa3d55ce",
+      "bytes": 765127
+    }
+  ],
+  "cuda_small_checks": 89,
+  "cpu_tests": 28,
+  "reference_tensors": 4676,
+  "candidate_tensors_per_case": 2178,
+  "failed_attempts_preserved": [
+    {
+      "directory": "full40-20261009-01",
+      "manifest": {
+        "file": "manifest.json",
+        "sha256": "ba06d8542817f778371884533c687df772e143afb4755ccff3b981ad270e69b6",
+        "bytes": 260
+      },
+      "status": "incomplete",
+      "error": "ValueError: Worker failed/timed out/custody unknown",
+      "custody": "proven_drained",
+      "note": "Preserved unchanged; never promoted or reused as a completed reference"
+    },
+    {
+      "directory": "full40-20261009-02",
+      "manifest": {
+        "file": "manifest.json",
+        "sha256": "781c1cbfdb9501bf5fa6ca347e4327054b32fea50e8c639ae06c02a3c7daaa61",
+        "bytes": 30997
+      },
+      "status": "incomplete",
+      "error": "ValueError: Worker failed/timed out/custody unknown",
+      "custody": "proven_drained",
+      "note": "Preserved unchanged; never promoted or reused as a completed reference"
+    }
+  ],
+  "gpu_grant_state": "finished; all eight idle and owner lock released",
+  "actual_topology": "logical TP2 simulated on one RTX 3090 CUDA context",
+  "claims_excluded": [
+    "physical TP2 transport",
+    "performance acceptance",
+    "vLLM bit-exactness",
+    "Ferrule full40 pass",
+    "factory enablement"
+  ],
+  "observed_marshal_issue": "Raw marshal code hashes depend on constants reference counts; reproduced on CPU. Canonical bytecode/constants and source hashes remain enforced."
+}

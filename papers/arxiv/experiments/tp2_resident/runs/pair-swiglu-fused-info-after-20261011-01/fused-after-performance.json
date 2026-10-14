@@ -1,0 +1,221 @@
+{
+  "schema": "ferrule.paper.fused-after-descriptive-result.v1",
+  "status": "complete_verified",
+  "completed_utc": "2026-10-11T12:30:10.442598+00:00",
+  "binary_sha256": "f6a65e1b6f09c0a8385fcfb0ee0b1cab5f02d2b09a341a6cd4d9e7aa81ed06f4",
+  "handoff": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/pair-swiglu-fused-release-20261011-01/handoff.json",
+    "sha256": "e482fab64d721d928c26bf3a0fde5634ec5d3d6234e9530fbb8a87cffdac50b8"
+  },
+  "qualification": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/pair-swiglu-fused-validation-20261011-01/ready-release-builder.json",
+    "sha256": "fe77dcb66142f370d4de7445265c4cb8db50d52e863eb88eedb8d80bf6014c43"
+  },
+  "prepared": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/pair-swiglu-fused-info-after-20261011-01/prepared.json",
+    "sha256": "63432b9bdf1299112838df3decf8fff6d1a53fd1597f8479d2fb36ae3e1a0c21"
+  },
+  "smoke": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/pair-swiglu-fused-smoke-20261011-02/serving-smoke.json",
+    "sha256": "b53be5e8c5cd05062968f1cd7464b1d930baf2cfd54ef5239cac0bb41191cf24",
+    "performance_included": false
+  },
+  "purpose": "fused_after",
+  "slots": [
+    "F1"
+  ],
+  "log": "info",
+  "rankperf": false,
+  "profiler": false,
+  "extra_tensor_observer_readback": false,
+  "scope": {
+    "tp": 2,
+    "rank_backend": "thread",
+    "arena_bytes": 3221225472,
+    "workspace_mb": 4096,
+    "device_cap_mb": 22528,
+    "context": 128,
+    "batch_tokens": 8,
+    "sequences": 2,
+    "activation": "BF16",
+    "ssm": "F32"
+  },
+  "formal_stage_wall_seconds": 449.2496688179672,
+  "supervisor_wall_seconds": 401.65007594786584,
+  "lifecycle_wall_seconds": 371.3244386129081,
+  "startup_seconds": 348.6552958842367,
+  "qa_unmeasured": {
+    "excluded_first": 1,
+    "warmup": 2,
+    "actual_input_tokens_each": 5,
+    "actual_output_tokens_each": 8
+  },
+  "measured_requests": 5,
+  "actual_input_tokens": 25,
+  "actual_output_tokens": 40,
+  "actual_input_tokens_each": 5,
+  "actual_output_tokens_each": 8,
+  "measured_window_seconds": 6.139862947165966,
+  "output_tokens_per_second": 6.514803399392355,
+  "denominator": "first measured HTTP send (dispatch fallback if none) to last client-observed terminal/deadline, including failures and client overhead",
+  "ttft_seconds": {
+    "mean": 0.44101524315774443,
+    "min": 0.43573474511504173,
+    "max": 0.44833195209503174
+  },
+  "request_e2e_seconds": {
+    "mean": 1.201991780847311,
+    "min": 1.1941825579851866,
+    "max": 1.2149749845266342
+  },
+  "requests": [
+    {
+      "status": "success",
+      "actual_input_tokens": 5,
+      "actual_output_tokens": 8,
+      "ttft_seconds": 0.44227627106010914,
+      "request_e2e_seconds": 1.2007716540247202,
+      "finish_reason": "length"
+    },
+    {
+      "status": "success",
+      "actual_input_tokens": 5,
+      "actual_output_tokens": 8,
+      "ttft_seconds": 0.44833195209503174,
+      "request_e2e_seconds": 1.2149749845266342,
+      "finish_reason": "length"
+    },
+    {
+      "status": "success",
+      "actual_input_tokens": 5,
+      "actual_output_tokens": 8,
+      "ttft_seconds": 0.4398012962192297,
+      "request_e2e_seconds": 1.2008602153509855,
+      "finish_reason": "length"
+    },
+    {
+      "status": "success",
+      "actual_input_tokens": 5,
+      "actual_output_tokens": 8,
+      "ttft_seconds": 0.43573474511504173,
+      "request_e2e_seconds": 1.1941825579851866,
+      "finish_reason": "length"
+    },
+    {
+      "status": "success",
+      "actual_input_tokens": 5,
+      "actual_output_tokens": 8,
+      "ttft_seconds": 0.43893195129930973,
+      "request_e2e_seconds": 1.1991694923490286,
+      "finish_reason": "length"
+    }
+  ],
+  "raw_http_summary": {
+    "scheduled": 5,
+    "offered": 5,
+    "not_issued": 0,
+    "statuses": {
+      "success": 5
+    },
+    "success": 5,
+    "failed": 0,
+    "success_fraction": 1.0,
+    "scheduled_success_fraction": 1.0,
+    "wall_seconds": 6.139862947165966,
+    "successful_output_tokens": 40,
+    "known_usage_output_tokens": 40,
+    "requests_without_usage": 0,
+    "committed_visible_token_rate": null,
+    "committed_visible_token_rate_reason": "SSE text is not token IDs; usage may include hidden/EOS tokens; partial counts unknown",
+    "actual_output_counts": {
+      "8": 5
+    },
+    "actual_input_counts": {
+      "5": 5
+    },
+    "length_matched_success": 5,
+    "slo_qualified_success": null,
+    "successful_requests_per_second": 0.8143504249240444,
+    "successful_output_tokens_per_second": 6.514803399392355,
+    "length_matched_requests_per_second": 0.8143504249240444,
+    "length_matched_output_tokens_per_second": 6.514803399392355,
+    "slo_goodput_requests_per_second": null,
+    "distributions": {
+      "success_ttft_seconds": {
+        "count": 5,
+        "mean": 0.44101524315774443,
+        "p50": 0.4398012962192297,
+        "p95": 0.4471208158880472
+      },
+      "success_request_e2e_seconds": {
+        "count": 5,
+        "mean": 1.201991780847311,
+        "p50": 1.2007716540247202,
+        "p95": 1.2121520306915046
+      },
+      "success_mean_tpot_usage_proxy_seconds": {
+        "count": 5,
+        "mean": 0.10868091833378588,
+        "p50": 0.10857904622597354,
+        "p95": 0.10932898234043802
+      },
+      "success_content_event_itl_seconds": {
+        "count": 35,
+        "mean": 0.10868091833378588,
+        "p50": 0.10873018205165863,
+        "p95": 0.11097698919475078
+      },
+      "failure_ttft_seconds": {
+        "count": 0,
+        "mean": null,
+        "p50": null,
+        "p95": null
+      },
+      "failure_request_e2e_seconds": {
+        "count": 0,
+        "mean": null,
+        "p50": null,
+        "p95": null
+      },
+      "failure_mean_tpot_usage_proxy_seconds": {
+        "count": 0,
+        "mean": null,
+        "p50": null,
+        "p95": null
+      },
+      "failure_content_event_itl_seconds": {
+        "count": 0,
+        "mean": null,
+        "p50": null,
+        "p95": null
+      }
+    },
+    "window_kind": "fixed-work",
+    "denominator": "first measured HTTP send (dispatch fallback if none) to last client-observed terminal/deadline, including failures and client overhead",
+    "denominator_seconds": 6.139862947165966,
+    "time_to_complete_seconds": 6.139862947165966
+  },
+  "auxiliary_kernel_count": null,
+  "auxiliary_kernel_count_reason": "No official profiler capture this run; kernel counts and causal kernel-to-speedup inference unavailable",
+  "historical_descriptive": {
+    "before_7e1_output_tokens_per_second_range": [
+      5.66,
+      5.82
+    ],
+    "v_output_tokens_per_second": 10.5,
+    "provenance": "User-provided historical comparison; not rerun here"
+  },
+  "fairmatch": false,
+  "exact_speedup": null,
+  "causal_claim": false,
+  "statistical_significance_claim": false,
+  "token_id_observation": "unavailable; actual HTTP usage counts and frozen visible canary checks",
+  "final_verification": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/pair-swiglu-fused-info-after-20261011-01/postflight.json",
+    "all_eight_idle": true,
+    "uuid_locks_released": true,
+    "authenticated_drained": true,
+    "source_pins_unchanged": true,
+    "sha256": "8461aaf951d6cef8510e73c8cc7c138e12a443d05e54dd4c37e64db249b5bce4"
+  }
+}

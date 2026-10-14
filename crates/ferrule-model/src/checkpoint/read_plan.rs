@@ -17,13 +17,17 @@ use super::CheckpointSourceFileIdentity;
 /// One physical checkpoint byte range in payload order.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct CheckpointReadExtent {
-    path: PathBuf,
+    path: Arc<Path>,
     offset: u64,
     bytes: u64,
 }
 
 impl CheckpointReadExtent {
     pub fn new(path: PathBuf, offset: u64, bytes: u64) -> Result<Self> {
+        Self::new_shared_path(Arc::from(path), offset, bytes)
+    }
+
+    pub(crate) fn new_shared_path(path: Arc<Path>, offset: u64, bytes: u64) -> Result<Self> {
         if bytes == 0 {
             return Err(Error::Model {
                 message: "checkpoint read extent must contain at least one byte".into(),
@@ -40,6 +44,11 @@ impl CheckpointReadExtent {
     }
 
     pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    #[cfg(test)]
+    pub(crate) fn shared_path(&self) -> &Arc<Path> {
         &self.path
     }
 

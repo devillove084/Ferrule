@@ -1,0 +1,124 @@
+{
+  "schema": "ferrule.paper.allocator-v3-crossed-closeout.v1",
+  "status": "completed_descriptive_only",
+  "timestamp_unix": 1791698755.9366937,
+  "authorization": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-crossed-closeout-20261011-01/authorization.json",
+    "sha256": "8f1d5d078be7f51e85ff675cfdb390092ebcfd231a7440bc168d809ecb954040"
+  },
+  "smoke": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-serving-smoke-20261011-01/serving-smoke.json",
+    "sha256": "4995627ebdcc7a894cd717124c8d2a4d434498c359193f9af4aa5058059287b9"
+  },
+  "promoted_admission": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/admission/allocator-v3-release-20261011-01/paired-admission.json",
+    "sha256": "5b410aacbe8f986fe8cf592f46e239e2fd5e61fa85f62c6aaf6dc0fc55231c4b"
+  },
+  "cycles": [
+    {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-crossed-c1-20261011-01/operator-retirement-summary.json",
+      "sha256": "c9475852ad01302524992b51d4ef12eaf6a14ff8fe43f4ae562bbfab0245c93b"
+    },
+    {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-crossed-c2-20261011-01/operator-retirement-summary.json",
+      "sha256": "45edbb53eebe74f94edc451aeb423ad91f14e50284e16c5945ae0be8270cd74f"
+    }
+  ],
+  "measurements": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-crossed-closeout-20261011-01/measurements.json",
+    "sha256": "cd4f0a0ee486130e6cd259cb9d23af2708a3ddd37378407dba7ce94e0127e37e"
+  },
+  "lifecycle_audit": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-crossed-closeout-20261011-01/lifecycle-audit.json",
+    "sha256": "d346596a7c911a0c4bbeb6b3a12e74f996863511ef1fe778b7f1d92a0b275ffb"
+  },
+  "build_scope": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-crossed-closeout-20261011-01/build-source-scope.json",
+    "sha256": "1eb712cb5da3337a65d248906044ea0654c2c4e023343316f7b529de9d907c7a"
+  },
+  "raw_pins": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-crossed-closeout-20261011-01/raw-file-pins.json",
+    "sha256": "bf71af1d470f72af6dffd838f194b6308301554a2115469abe49b359e52e40b9"
+  },
+  "pre_eight_idle": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-crossed-closeout-20261011-01/preflight-eight-idle.json",
+    "sha256": "a8639f5246fd49fe0d1f61d1f42986c5ea161eafaec358257db1050a06051f11"
+  },
+  "post_eight_idle": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-crossed-closeout-20261011-01/final-eight-idle.json",
+    "sha256": "f66f2b222dc02d998d6b11772bf8c91dd3de42a75ba98c73aa4fed2a32982cf7"
+  },
+  "final_lock_release": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-crossed-closeout-20261011-01/final-lock-release.json",
+    "sha256": "36780804b167a9c9169e70e50c788f8c0bb0b09f1143599510e120fb5f846ee3"
+  },
+  "six_authenticated_lifecycles_drained_echild": true,
+  "all_locks_released": true,
+  "foreign_kill": false,
+  "production_or_paper_source_changes": false,
+  "profile_executed": false,
+  "new_cpu_fix_required": false,
+  "geometry": {
+    "policy": "frozen_qualified_9ef_operator_retirement_v3",
+    "cycle": 1,
+    "order": [
+      "BEFORE",
+      "AFTER"
+    ],
+    "fresh_lifecycles": 2,
+    "arena_bytes_per_owner": 3221225472,
+    "workspace_mib": 4096,
+    "device_cap_mib": 22528,
+    "concurrency": 1,
+    "qa8_unmeasured": 3,
+    "qa8_unmeasured_layout": "excluded first + 2 warmups",
+    "qa8_measured": 5,
+    "actual_input_tokens": 5,
+    "actual_output_tokens": 8,
+    "rankperf": false,
+    "profiler": false,
+    "scope": "TP2 ctx128 batch8 seq2 resident/no-offload; identical argv/environment/runtime except executable",
+    "source_delta": "Exactly allocator.rs/runtime.rs plus the fixed cfg(test) manifest patch; complete inventories required",
+    "attribution": "Two crossed-order cycles remain descriptive; neither an all-differences attribution nor statistical significance",
+    "cpu_observation": {
+      "affinity": null,
+      "thread_count": null,
+      "reason": "Existing sampler captures memory/process identity, not affinity/thread counts; observer unchanged to preserve timing"
+    },
+    "unknown_pressure": null,
+    "pending_peak": null,
+    "retirement_ledger_scope": "Complete successfully created event sets only; not total CUDA events; partial-failure driver calls uncounted"
+  },
+  "actual_qa8_totals": {
+    "unmeasured": 12,
+    "measured": 20,
+    "measured_output_tokens": 160
+  },
+  "comparisons": [
+    {
+      "cycle": 1,
+      "observed_rate_change_percent": 7.766458044210256,
+      "ttft_mean_change_percent": -7.332085057979909,
+      "e2e_mean_change_percent": -7.051146736376146
+    },
+    {
+      "cycle": 2,
+      "observed_rate_change_percent": 8.911309558308545,
+      "ttft_mean_change_percent": -8.044105472907015,
+      "e2e_mean_change_percent": -7.448621630690977
+    }
+  ],
+  "exact_speedup": null,
+  "fairmatch": false,
+  "isolated_retirement_effect": false,
+  "limitations": [
+    "Two crossed cycles are descriptive, not statistical significance or exclusive retirement causality.",
+    "Sampled GPU peaks are not exact or continuous; NVML host PID to local process mapping remains unknown.",
+    "Local ECHILD custody plus separately observed eight-GPU idle does not prove absence of foreign interference during execution.",
+    "Ready/shutdown pending is zero; pending/Unknown high-watermarks remain null, never zero.",
+    "BEFORE has no new retirement counters; AFTER fences count complete successful event sets, not all CUDA calls.",
+    "Rates use actual HTTP fixed-work denominator and usage tokens, not exact visible token IDs or pure decode time.",
+    "Smoke alone uses request DEBUG for cancellation proof; all A/B logs info, rankperf off. No official profile this round.",
+    "Generic profile-admission.json emitted by existing promote is not an authorized info-only profile launch; use separately reviewed retirement_profile policy next phase."
+  ]
+}

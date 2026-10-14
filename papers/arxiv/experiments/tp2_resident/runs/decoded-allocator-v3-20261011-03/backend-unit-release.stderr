@@ -1,0 +1,4 @@
+    Finished `release` profile [optimized] target(s) in 0.12s
+     Running unittests src/lib.rs (target/validation/qwen35-35b-current/toolchain/cargo-cuda124/release/build/ferrule-backend/eba7d12785feef79/out/ferrule_backend-eba7d12785feef79)
+CUDA capture unwind cleanup failed: graph: cleanup
+CUDA capture unwind cleanup panicked

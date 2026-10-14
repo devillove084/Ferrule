@@ -1,0 +1,15 @@
+{
+  "argv": [
+    "/usr/bin/ldd",
+    "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/QdstrmImporter"
+  ],
+  "environment": {
+    "PATH": "/usr/bin:/bin",
+    "HOME": "/root",
+    "CUDA_VISIBLE_DEVICES": "",
+    "NVIDIA_VISIBLE_DEVICES": "none",
+    "QT_QPA_PLATFORM": "offscreen",
+    "LD_LIBRARY_PATH": "/home/admin/wxw403883/anaconda3/envs/tao/lib:/usr/lib64"
+  },
+  "returncode": 0
+}

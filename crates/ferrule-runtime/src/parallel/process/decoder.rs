@@ -3,6 +3,8 @@
 //! Loss is terminal for the transport: neither rollback nor poll is replayed to
 //! a replacement owner, and OS reaping is never a physical retirement receipt.
 
+use crate::parallel::pipeline::PhysicalKvLayout;
+use ferrule_model::ModelExecutionBackend;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
@@ -11,11 +13,7 @@ use ferrule_common::execution::ExecutionTransactionId;
 use ferrule_common::topology::ExpertSourceScope;
 use ferrule_common::{Error, ParallelRankId};
 use ferrule_model::execution::ExecutionPrecisionPolicy;
-use ferrule_model::models::qwen3::{Qwen3DenseRecipe, Qwen3MoeRecipe};
-use ferrule_model::transformer::{
-    BoundDecoderResources, DecoderLoadOptions, DecoderRecipe, LayerSegmentPlan,
-    SyntheticDecoderRecipe,
-};
+use ferrule_model::transformer::{BoundDecoderResources, LayerSegmentPlan};
 use serde::{Deserialize, Serialize};
 
 use super::decoder_expert::ProcessExperts;
@@ -23,6 +21,9 @@ use super::decoder_stage::prepare as prepare_stage;
 use super::*;
 use crate::parallel::data::ReplicaWorker;
 use crate::parallel::expert::ExpertGroup;
+use crate::parallel::pipeline::completion_boundary::{
+    self, Boundary, CompletionClass, CompletionContext,
+};
 use crate::parallel::pipeline::{
     BoxedPipelineStageWorker, PipelineCommand, PipelineConfig, PipelineRank, PipelineReply,
     PipelineStage, PipelineStageBoot, PipelineStageDescription, PipelineStageWorker,
@@ -30,10 +31,11 @@ use crate::parallel::pipeline::{
 };
 use ferrule_model::transformer::expert_parallel::{ExpertDispatchLimits, ExpertPlacement};
 
-pub use super::decoder_endpoint::DecoderEndpoint;
+pub use super::decoder_endpoint::{DecoderBindings, DecoderEndpoint};
 pub use super::decoder_expert::{
     ExpertBoot, ExpertCommand, ExpertProcessStats, ExpertReply, ExpertTokenFrame,
 };
+pub use super::decoder_hybrid::{HybridBootFrame, HybridCudaBudgetFrame, HybridLayerFrame};
 pub use super::decoder_wire::{DecoderCommand, DecoderProcessStats, DecoderReply};
 pub(super) type Result<T> = ferrule_common::Result<T>;
 pub(super) fn error(message: impl std::fmt::Display) -> Error {
@@ -42,15 +44,24 @@ pub(super) fn error(message: impl std::fmt::Display) -> Error {
     }
 }
 
-// Capacity and source-scope semantics require coordinated parent/child restart.
-// Neither v1 nor v2 Boot can establish the v3 caller identity contract.
-pub const DECODER_WIRE_VERSION: u16 = 3;
+// Hybrid schemas and physical capacity require coordinated parent/child restart.
+// Older Boots cannot establish the hybrid state/geometry contract.
+pub const DECODER_WIRE_VERSION: u16 = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DecoderDevice {
     Cpu,
     Cuda { ordinal: usize },
+}
+impl DecoderDevice {
+    /// Metadata conversion; does not require or initialize the selected backend.
+    pub const fn backend(self) -> ferrule_model::ModelExecutionBackend {
+        match self {
+            Self::Cpu => ModelExecutionBackend::Cpu,
+            Self::Cuda { .. } => ModelExecutionBackend::Cuda,
+        }
+    }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -63,6 +74,7 @@ pub enum DecoderPrecision {
 pub enum DecoderRecipeKind {
     Qwen3Dense,
     Qwen3Moe,
+    Qwen35DenseHybrid,
     Synthetic,
 }
 
@@ -108,8 +120,8 @@ pub struct KvConfigFrame {
     pub max_ack_polls: usize,
 }
 impl KvConfigFrame {
-    /// CPU compatibility encoder: physical slots equal logical pages.
-    /// CUDA callers must use `encode_for_device`.
+    /// Standard CPU encoder: physical slots equal logical pages.
+    /// Hybrid callers use `encode_for_hybrid`; standard CUDA uses `encode_for_device`.
     pub fn encode(c: PipelineConfig) -> Self {
         Self {
             page_size: c.page_size,
@@ -125,11 +137,22 @@ impl KvConfigFrame {
     /// Encode the explicit backend capacity without initializing that backend.
     pub fn encode_for_device(c: PipelineConfig, device: DecoderDevice) -> Result<Self> {
         let mut frame = Self::encode(c);
-        frame.physical_pages = c.physical_pages(matches!(device, DecoderDevice::Cuda { .. }))?;
+        frame.physical_pages = c.physical_pages(PhysicalKvLayout::standard(device.backend()))?;
         Ok(frame)
     }
 
-    fn decode(&self, precision: DecoderPrecision, device: DecoderDevice) -> Result<PipelineConfig> {
+    /// Hybrid CPU and CUDA both retain shadow/COW slots in the working journal.
+    pub fn encode_for_hybrid(c: PipelineConfig, device: DecoderDevice) -> Result<Self> {
+        let mut frame = Self::encode(c);
+        frame.physical_pages = c.physical_pages(PhysicalKvLayout::hybrid(device.backend()))?;
+        Ok(frame)
+    }
+
+    fn decode(
+        &self,
+        precision: DecoderPrecision,
+        layout: PhysicalKvLayout,
+    ) -> Result<PipelineConfig> {
         let c = PipelineConfig {
             page_size: self.page_size,
             max_pages: self.max_pages,
@@ -146,7 +169,7 @@ impl KvConfigFrame {
             },
         };
         c.validate()?;
-        if self.physical_pages != c.physical_pages(matches!(device, DecoderDevice::Cuda { .. }))? {
+        if self.physical_pages != c.physical_pages(layout)? {
             return Err(error(
                 "decoder physical capacity differs from backend L/2L policy",
             ));
@@ -183,6 +206,7 @@ impl ExpertPlacementFrame {
             || match self.source_scope {
                 ExpertSourceScope::Member => !self.members.contains(&self.source),
                 ExpertSourceScope::ExternalStage => self.members.contains(&self.source),
+                ExpertSourceScope::ExternalTensorSource => true,
             }
             || self
                 .members
@@ -235,6 +259,7 @@ pub struct DecoderBoot {
     pub device: DecoderDevice,
     pub kv: KvConfigFrame,
     pub experts: Option<ExpertPlacementFrame>,
+    pub hybrid: Option<HybridBootFrame>,
 }
 impl DecoderBoot {
     pub fn stage_boot(&self) -> Result<PipelineStageBoot> {
@@ -246,6 +271,13 @@ impl DecoderBoot {
         {
             return Err(error("unsupported decoder boot version/device/precision"));
         }
+        // Wire tag/schema association is protocol validation, not family binding.
+        if (self.recipe == DecoderRecipeKind::Qwen35DenseHybrid) != self.hybrid.is_some() {
+            return Err(error("hybrid recipe/schema mismatch"));
+        }
+        if let Some(hybrid) = &self.hybrid {
+            hybrid.validate(self)?;
+        }
         let rank = ParallelRankId::new(self.rank);
         let boot = PipelineStageBoot {
             rank: PipelineRank {
@@ -253,7 +285,13 @@ impl DecoderBoot {
                 global: rank,
             },
             plan: self.segment.decode()?,
-            config: self.kv.decode(self.precision, self.device)?,
+            config: self.kv.decode(
+                self.precision,
+                match &self.hybrid {
+                    Some(_) => PhysicalKvLayout::hybrid(self.device.backend()),
+                    None => PhysicalKvLayout::standard(self.device.backend()),
+                },
+            )?,
             physical_pages: self.kv.physical_pages,
             program_spec: Vec::new(),
         };
@@ -297,6 +335,11 @@ impl DecoderBoot {
         head_dim: usize,
     ) -> Result<PipelineStageDescription> {
         let boot = self.stage_boot()?;
+        if let Some(hybrid) = &self.hybrid
+            && (hidden, vocabulary, kv_heads, head_dim) != hybrid.geometry()?
+        {
+            return Err(error("hybrid description geometry differs from Boot"));
+        }
         let description = PipelineStageDescription {
             plan: boot.plan,
             config: boot.config,
@@ -318,29 +361,22 @@ impl DecoderBoot {
         }
         Ok(description)
     }
-    /// HF metadata and selected tensor payloads are read only inside the child.
-    pub fn load_resources(&self) -> Result<BoundDecoderResources> {
+    /// Validate an application-bound image without selecting a model family or
+    /// opening a checkpoint. Numeric expert source identity has its own boot contract.
+    pub fn validate_resources(&self, resources: &BoundDecoderResources) -> Result<()> {
         self.stage_boot()?;
-        let file = std::fs::File::open(self.checkpoint.join("config.json"))?;
-        if file.metadata()?.len() > 1024 * 1024 {
-            return Err(error("checkpoint config exceeds 1 MiB"));
+        if resources.spec().layers().len() != self.segment.total_layers {
+            return Err(error("checkpoint/segment layer count mismatch"));
         }
-        let config: serde_json::Value = serde_json::from_reader(file).map_err(error)?;
-        let (recipe, family): (Box<dyn DecoderRecipe>, _) = match self.recipe {
-            DecoderRecipeKind::Qwen3Dense => (
-                Box::new(Qwen3DenseRecipe::new()),
-                ferrule_model::ModelFamily::Qwen3,
-            ),
-            DecoderRecipeKind::Qwen3Moe => (
-                Box::new(Qwen3MoeRecipe::new()),
-                ferrule_model::ModelFamily::QwenMoe,
-            ),
-            DecoderRecipeKind::Synthetic => (
-                Box::new(SyntheticDecoderRecipe::new()),
-                ferrule_model::ModelFamily::Unknown("synthetic".into()),
-            ),
-        };
-        DecoderLoadOptions::new(recipe.as_ref(), &config).open_hf(&self.checkpoint, family)
+        if let Some(hybrid) = &self.hybrid {
+            hybrid.validate_resources(self, resources)?;
+        }
+        if let Some(experts) = &self.experts {
+            experts
+                .decode(self.segment.layers.clone())?
+                .validate_resources(resources)?;
+        }
+        Ok(())
     }
 }
 
@@ -386,17 +422,20 @@ impl DecoderChild {
     pub fn initialize_builtin(
         boot: ProcessBoot,
         launch: ProcessLaunch,
+        bind: impl FnOnce(&DecoderBoot) -> Result<BoundDecoderResources>,
     ) -> std::result::Result<Self, ProcessHandlerError> {
         let identity = boot.identity;
         let limits = boot.limits;
         let mut experts = None;
         let mut child = Self::initialize(boot, |config| {
+            let resources = bind(config)?;
+            config.validate_resources(&resources)?;
             if config.experts.is_some() {
                 experts = Some(std::rc::Rc::new(std::cell::RefCell::new(
                     ProcessExperts::spawn(config, identity, launch, limits)?,
                 )));
             }
-            prepare_stage(config, experts.clone())
+            prepare_stage(config, &resources, experts.clone())
         })?;
         child.experts = experts;
         Ok(child)
@@ -411,6 +450,9 @@ impl DecoderChild {
         config
             .stage_boot()
             .map_err(|e| fenced(ProcessFailureKind::Startup, e))?;
+        config
+            .validate_frame_limits(boot.limits)
+            .map_err(|e| fenced(ProcessFailureKind::Startup, e))?;
         if boot.identity.rank.get() != config.rank {
             return Err(fenced(
                 ProcessFailureKind::Startup,
@@ -420,10 +462,10 @@ impl DecoderChild {
         let mut worker =
             factory(&config).map_err(|e| handler_failure(ProcessFailureKind::Startup, e))?;
         let d = worker.boot_description();
-        let expected = config
-            .description(d.hidden, d.vocabulary, d.kv_heads, d.head_dim)
-            .map_err(|e| fenced(ProcessFailureKind::Startup, e))?;
-        if *d != expected {
+        let expected = config.description(d.hidden, d.vocabulary, d.kv_heads, d.head_dim);
+        if !expected.is_ok_and(|expected| *d == expected)
+            || worker.has_hybrid_state() != config.hybrid.is_some()
+        {
             let cleanup = worker.shutdown();
             if let Err(e) = cleanup {
                 std::mem::forget(worker);
@@ -437,6 +479,12 @@ impl DecoderChild {
                 "factory description differs from Boot",
             ));
         }
+        tracing::debug!(
+            rank = config.rank,
+            hybrid = config.hybrid.is_some(),
+            physical_pages = config.kv.physical_pages,
+            "validated process decoder owner"
+        );
         Ok(Self {
             identity: boot.identity,
             boot: config,
@@ -444,35 +492,49 @@ impl DecoderChild {
             experts: None,
         })
     }
-    pub fn cpu_factory(boot: &DecoderBoot) -> Result<BoxedPipelineStageWorker> {
+    /// Bind an already validated checkpoint on the child owner. This seam also
+    /// lets CPU-reference fixtures use tiny resources without weakening Qwen profiles.
+    pub fn hybrid_factory(
+        boot: &DecoderBoot,
+        resources: &BoundDecoderResources,
+    ) -> Result<BoxedPipelineStageWorker> {
+        super::decoder_stage::prepare_hybrid(boot, resources)
+    }
+    pub fn cpu_factory(
+        boot: &DecoderBoot,
+        resources: &BoundDecoderResources,
+    ) -> Result<BoxedPipelineStageWorker> {
         if boot.device != DecoderDevice::Cpu {
             return Err(error(
                 "CUDA Boot requires a CUDA child factory; no CPU fallback",
             ));
         }
+        if boot.hybrid.is_some() {
+            return prepare_stage(boot, resources, None);
+        }
         let stage_boot = boot.stage_boot()?;
-        let resources = boot.load_resources()?;
+        boot.validate_resources(resources)?;
         let stage = if let Some(placement) = &boot.experts {
             let group = placement.decode(stage_boot.plan.layers())?;
-            let path_boot = boot.clone();
+            let expert_resources = std::sync::Arc::new(resources.clone());
             let max = stage_boot.config.max_parameter_bytes;
             let experts =
                 crate::parallel::expert::ExpertParallelExecutor::new(group, move |rank, group| {
                     crate::parallel::expert::ExpertRankWorker::prepare_cpu(
-                        &path_boot.load_resources()?,
+                        &expert_resources,
                         rank,
                         group,
                         max,
                     )
                 })?;
             PipelineStage::prepare_cpu_with_experts(
-                &resources,
+                resources,
                 stage_boot.plan.clone(),
                 stage_boot.config,
                 experts,
             )?
         } else {
-            PipelineStage::prepare_cpu(&resources, stage_boot.plan.clone(), stage_boot.config)?
+            PipelineStage::prepare_cpu(resources, stage_boot.plan.clone(), stage_boot.config)?
         };
         Ok(PipelineStageWorker::new(&stage_boot, stage)?.boxed())
     }
@@ -481,12 +543,9 @@ fn fenced(kind: ProcessFailureKind, e: impl std::fmt::Display) -> ProcessHandler
     ProcessHandlerError::fenced(kind, e.to_string())
 }
 fn handler_failure(kind: ProcessFailureKind, e: Error) -> ProcessHandlerError {
-    #[cfg(feature = "cuda")]
-    if ferrule_model::transformer::parallel::CudaShardError::from_error(&e)
-        .is_some_and(|e| e.needs_quarantine())
-    {
+    if completion_boundary::is_unknown(&e) {
         std::mem::forget(e);
-        return ProcessHandlerError::unknown(kind, "CUDA decoder quiescence unknown");
+        return ProcessHandlerError::unknown(kind, "decoder quiescence unknown");
     }
     fenced(kind, e)
 }
@@ -536,12 +595,12 @@ impl ProcessChildHandler for DecoderChild {
         let mut reply = DecoderReply::encode(reply, &self.boot).map_err(|e| {
             ProcessHandlerError::unknown(ProcessFailureKind::OutputEncode, e.to_string())
         })?;
-        if let DecoderReply::Stats(stats) = &mut reply {
-            if let Some(experts) = &self.experts {
-                stats.experts = experts.borrow_mut().process_stats().map_err(|e| {
-                    ProcessHandlerError::unknown(ProcessFailureKind::Handler, e.to_string())
-                })?;
-            }
+        if let DecoderReply::Stats(stats) = &mut reply
+            && let Some(experts) = &self.experts
+        {
+            stats.experts = experts.borrow_mut().process_stats().map_err(|e| {
+                ProcessHandlerError::unknown(ProcessFailureKind::Handler, e.to_string())
+            })?;
         }
         Ok(reply)
     }
@@ -573,12 +632,28 @@ impl ProcessPipelineTransport {
         boots: Vec<(ProcessIdentity, DecoderBoot)>,
         options: ProcessOwnerConfig,
     ) -> Result<Self> {
+        if boots.iter().any(|(_, boot)| boot.hybrid.is_some()) {
+            return Err(error(
+                "hybrid process requires explicit compact layout factory",
+            ));
+        }
+        Self::spawn_hybrid_admitted(launch, boots, options)
+    }
+
+    /// Only the compact-layout executor factory admits hybrid Boots. The public
+    /// generic transport path must not silently build a standard logical KV map.
+    pub(crate) fn spawn_hybrid_admitted(
+        launch: ProcessLaunch,
+        boots: Vec<(ProcessIdentity, DecoderBoot)>,
+        options: ProcessOwnerConfig,
+    ) -> Result<Self> {
         if boots.is_empty() || boots.len() > PROCESS_REAPER_CAPACITY {
             return Err(error("invalid decoder process count"));
         }
         let mut ids = std::collections::BTreeSet::new();
         for (identity, boot) in &boots {
             boot.stage_boot()?;
+            boot.validate_frame_limits(options.frame_limits)?;
             if identity.rank.get() != boot.rank || !ids.insert(boot.rank) {
                 return Err(error("duplicate/mismatched decoder owner"));
             }
@@ -601,15 +676,33 @@ impl ProcessPipelineTransport {
         };
         let startup = (|| {
             for (identity, boot) in boots {
+                let context = CompletionContext {
+                    rank: PipelineRank {
+                        local: identity.rank,
+                        global: identity.rank,
+                    },
+                    stage: "startup",
+                    transaction: None,
+                };
                 let mut owner =
-                    Owner::spawn(launch.clone(), identity, &boot, options).map_err(error)?;
+                    Owner::spawn(launch.clone(), identity, &boot, options).map_err(|failure| {
+                        // Preserve the typed process evidence; owner Drop still
+                        // transfers unreaped children to the existing reaper.
+                        context.failure(
+                            CompletionClass::Failed,
+                            true,
+                            Some(Box::new(failure.source)),
+                        )
+                    })?;
                 let reply = owner
                     .execute(
                         ExecutionTransactionId::new(1)?,
                         0,
                         &DecoderCommand::Describe,
                     )
-                    .map_err(error)?;
+                    .map_err(|source| {
+                        context.failure(CompletionClass::Failed, true, Some(Box::new(source)))
+                    })?;
                 let DecoderReply::Description {
                     boot: actual,
                     hidden,
@@ -654,12 +747,20 @@ impl ProcessPipelineTransport {
 
     pub fn process_stats(&mut self, rank: u32) -> Result<DecoderProcessStats> {
         if self.unavailable {
-            return Err(error("decoder transport quarantined"));
+            return Err(completion_boundary::quarantined());
         }
         let entry = self
             .ranks
             .get_mut(&rank)
             .ok_or_else(|| error("unknown rank"))?;
+        let context = CompletionContext {
+            rank: PipelineRank {
+                local: ParallelRankId::new(rank),
+                global: ParallelRankId::new(rank),
+            },
+            stage: "stats",
+            transaction: Some(ExecutionTransactionId::new(1)?),
+        };
         match entry
             .owner
             .execute(ExecutionTransactionId::new(1)?, 0, &DecoderCommand::Stats)
@@ -669,18 +770,20 @@ impl ProcessPipelineTransport {
             {
                 Ok(stats)
             }
-            Err(e) if e.is_command_rejection() => Err(error(e)),
-            other => {
-                let message = format!("invalid/lost process statistics: {other:?}");
-                self.quarantine();
-                Err(error(message))
+            Err(e) if e.is_command_rejection() => {
+                Err(context.failure(CompletionClass::Failed, false, Some(Box::new(e))))
             }
+            Err(e) => Err(self.lost(context, e)),
+            Ok(_) => Err(self.lost(context, error("invalid process statistics"))),
         }
     }
-    fn lost(&mut self, e: impl std::fmt::Display) -> Error {
-        let message = format!("quiescence unknown; no replay or retirement: {e}");
+    fn lost(
+        &mut self,
+        context: CompletionContext,
+        source: impl std::error::Error + Send + Sync + 'static,
+    ) -> Error {
         self.quarantine();
-        error(message)
+        context.failure(CompletionClass::Unknown, true, Some(Box::new(source)))
     }
 }
 impl PipelineTransport for ProcessPipelineTransport {
@@ -691,7 +794,7 @@ impl PipelineTransport for ProcessPipelineTransport {
         poll: &mut dyn FnMut(),
     ) -> Result<PipelineReply> {
         if self.unavailable {
-            return Err(error("decoder transport quarantined"));
+            return Err(completion_boundary::quarantined());
         }
         if rank.local != rank.global {
             return Err(error("rank mapping mismatch"));
@@ -710,69 +813,101 @@ impl PipelineTransport for ProcessPipelineTransport {
             return Err(error("command rank mismatch"));
         }
         let tx = ExecutionTransactionId::new(wire.key().map_or(1, |k| k.transaction))?;
-        let entry = self
-            .ranks
-            .get_mut(&rank.global.get())
-            .ok_or_else(|| error("unknown pipeline process rank"))?;
-        if let DecoderCommand::Execute { key, .. } = &wire {
-            if entry
-                .prepared
-                .as_ref()
-                .is_none_or(|(expected, _)| expected != key)
+        let mut context = command.completion_context(rank);
+        context.transaction = Some(tx);
+        let boundary = Boundary::new("pipeline.process", context);
+        let result = (|| {
+            let entry = self
+                .ranks
+                .get_mut(&rank.global.get())
+                .ok_or_else(|| error("unknown pipeline process rank"))?;
+            if let DecoderCommand::Execute { key, .. } = &wire
+                && entry
+                    .prepared
+                    .as_ref()
+                    .is_none_or(|(expected, _)| expected != key)
             {
                 return Err(error("Execute has no matching preparation projection"));
             }
-        }
-        let reply = entry
-            .owner
-            .execute_observed(tx, wire.session(), &wire, poll);
-        poll();
-        let reply = match reply {
-            Ok(reply) => reply,
-            Err(e) if e.is_command_rejection() => return Err(error(e)),
-            Err(e) => return Err(self.lost(e)),
-        };
-        let decoded = reply.decode(&wire, &entry.description, &entry.boot);
-        let reply = match decoded {
-            Ok(r) => r,
-            Err(e) => return Err(self.lost(e)),
-        };
-        if let PipelineReply::Executed { output } = &reply {
-            let rows = entry.prepared.as_ref().expect("checked preparation").1;
-            if let Err(e) = entry.description.validate_output(output, rows) {
-                return Err(self.lost(e));
+            let reply = entry
+                .owner
+                .execute_observed(tx, wire.session(), &wire, poll);
+            // Exact byte/phase timing remains in IPC, without re-encoding payloads.
+            let reply = reply.map_err(|source| {
+                let rejected = source.is_command_rejection();
+                context.failure(
+                    if rejected {
+                        CompletionClass::Failed
+                    } else {
+                        CompletionClass::Unknown
+                    },
+                    !rejected,
+                    Some(Box::new(source)),
+                )
+            });
+            poll();
+            let reply = match reply {
+                Ok(reply) => reply,
+                Err(e) if !completion_boundary::needs_quarantine(&e) => return Err(e),
+                Err(e) => return Err(self.lost(context, e)),
+            };
+            let decoded = reply.decode(&wire, &entry.description, &entry.boot);
+            let reply = match decoded {
+                Ok(r) => r,
+                Err(e) => return Err(self.lost(context, e)),
+            };
+            if let PipelineReply::Executed { output } = &reply {
+                let rows = entry.prepared.as_ref().expect("checked preparation").1;
+                if let Err(e) = entry.description.validate_output(output, rows) {
+                    return Err(self.lost(context, e));
+                }
             }
-        }
-        if let DecoderCommand::Prepare { key, batch, .. } = &wire {
-            entry.prepared = Some((key.clone(), batch.tokens.len()));
-        }
-        if matches!(
-            wire,
-            DecoderCommand::Finish { .. } | DecoderCommand::Rollback { .. }
-        ) && matches!(
-            reply,
-            PipelineReply::Ack(ferrule_model::decoder::KvEndProgress::Complete)
-        ) {
-            entry.prepared = None;
-        }
-        if let PipelineCommand::Execute { cancellation, .. } = command {
-            if cancellation.load(Ordering::Acquire) {
+            if let DecoderCommand::Prepare { key, batch, .. } = &wire {
+                entry.prepared = Some((key.clone(), batch.tokens.len()));
+            }
+            if matches!(
+                wire,
+                DecoderCommand::Finish { .. } | DecoderCommand::Rollback { .. }
+            ) && matches!(
+                reply,
+                PipelineReply::Ack(ferrule_model::decoder::KvEndProgress::Complete)
+            ) {
+                entry.prepared = None;
+            }
+            if let PipelineCommand::Execute { cancellation, .. } = command
+                && cancellation.load(Ordering::Acquire)
+            {
                 return Err(error("decoder cancelled after draining child execution"));
             }
-        }
-        Ok(reply)
+            Ok(reply)
+        })();
+        // Transport receipt is not semantic success: decode, output validation,
+        // ACK bookkeeping and cancellation must settle before the single event.
+        boundary.finish(&result);
+        result
     }
     fn outstanding(&self) -> usize {
         0
     }
     fn shutdown(&mut self) -> Result<()> {
         if self.unavailable {
-            return Err(error("quarantined process shutdown is not a device fence"));
+            return Err(completion_boundary::quarantined());
         }
         let mut failures = Vec::new();
         for entry in self.ranks.values_mut() {
             if let Err(e) = entry.owner.shutdown() {
-                failures.push(error(e));
+                let rank = ParallelRankId::new(entry.boot.rank);
+                failures.push(
+                    CompletionContext {
+                        rank: PipelineRank {
+                            local: rank,
+                            global: rank,
+                        },
+                        stage: "shutdown",
+                        transaction: None,
+                    }
+                    .failure(CompletionClass::Unknown, true, Some(Box::new(e))),
+                );
             }
         }
         if !failures.is_empty() {
@@ -787,6 +922,10 @@ impl PipelineTransport for ProcessPipelineTransport {
         self.ranks.clear();
     }
 }
+
+#[cfg(test)]
+#[path = "../../../tests/unit/parallel/process_completion.rs"]
+mod completion_tests;
 
 #[derive(Clone)]
 pub struct SharedProcessPipelineTransport(

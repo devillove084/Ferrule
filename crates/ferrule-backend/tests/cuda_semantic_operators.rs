@@ -342,7 +342,7 @@ fn stable_selected_softmax_topk_uses_expert_id_ties() {
     ];
     let mut expected_ids = Vec::with_capacity(ROWS * TOP_K);
     let mut expected_weights = Vec::with_capacity(ROWS * TOP_K);
-    for row in logits.chunks_exact(EXPERTS) {
+    for row in logits.as_chunks::<EXPERTS>().0 {
         let mut selected = row.iter().copied().enumerate().collect::<Vec<_>>();
         selected.sort_by(|(first_id, first), (second_id, second)| {
             second
@@ -393,7 +393,7 @@ fn stable_selected_softmax_topk_uses_expert_id_ties() {
         2e-6,
         "selected-softmax weights",
     );
-    for row in actual_weights.chunks_exact(TOP_K) {
+    for row in actual_weights.as_chunks::<TOP_K>().0 {
         assert!((row.iter().sum::<f32>() - layout.output_scale).abs() <= 2e-6);
     }
 }
@@ -409,17 +409,30 @@ fn customize_value_plane(layout: &mut PagedBf16CausalGqaLayout, physical_slots: 
     layout.validate().expect("custom independent value plane");
 }
 
-fn append_reference(
+struct AppendReferenceCase<'a> {
     layout: PagedBf16CausalGqaLayout,
-    key_cache: &mut [u16],
-    value_cache: &mut [u16],
-    append_key: &[u16],
-    append_value: &[u16],
-    block_slots: &[i32],
-    block_offsets: &[i32],
-    row_sequence_ids: &[i32],
-    row_positions: &[i32],
-) {
+    key_cache: &'a mut [u16],
+    value_cache: &'a mut [u16],
+    append_key: &'a [u16],
+    append_value: &'a [u16],
+    block_slots: &'a [i32],
+    block_offsets: &'a [i32],
+    row_sequence_ids: &'a [i32],
+    row_positions: &'a [i32],
+}
+
+fn append_reference(case: AppendReferenceCase<'_>) {
+    let AppendReferenceCase {
+        layout,
+        key_cache,
+        value_cache,
+        append_key,
+        append_value,
+        block_slots,
+        block_offsets,
+        row_sequence_ids,
+        row_positions,
+    } = case;
     for row in 0..layout.rows {
         let sequence = row_sequence_ids[row] as usize;
         let position = row_positions[row] as usize;
@@ -457,17 +470,30 @@ fn append_reference(
     }
 }
 
-fn combined_gqa_reference(
+struct CombinedGqaReferenceCase<'a> {
     layout: PagedBf16CausalGqaLayout,
-    query: &[f32],
-    key_cache: &[u16],
-    value_cache: &[u16],
-    block_slots: &[i32],
-    block_offsets: &[i32],
-    row_sequence_ids: &[i32],
-    row_positions: &[i32],
-    row_kv_lens: &[i32],
-) -> Vec<f32> {
+    query: &'a [f32],
+    key_cache: &'a [u16],
+    value_cache: &'a [u16],
+    block_slots: &'a [i32],
+    block_offsets: &'a [i32],
+    row_sequence_ids: &'a [i32],
+    row_positions: &'a [i32],
+    row_kv_lens: &'a [i32],
+}
+
+fn combined_gqa_reference(case: CombinedGqaReferenceCase<'_>) -> Vec<f32> {
+    let CombinedGqaReferenceCase {
+        layout,
+        query,
+        key_cache,
+        value_cache,
+        block_slots,
+        block_offsets,
+        row_sequence_ids,
+        row_positions,
+        row_kv_lens,
+    } = case;
     let mut output = vec![0.0; layout.rows * layout.q_heads * layout.head_dim];
     let queries_per_kv_head = layout.q_heads / layout.kv_heads;
     for row in 0..layout.rows {
@@ -612,28 +638,28 @@ fn paged_bf16_gqa_matches_ragged_prefill_and_decode_reference() {
     let (prefill_key, prefill_value) = packed_kv(prefill_layout.rows, KV_HEADS, HEAD_DIM, 2);
     let mut key_reference = vec![0u16; prefill_layout.key_cache.capacity_bytes / 2];
     let mut value_reference = vec![0u16; prefill_layout.value_cache.capacity_bytes / 2];
-    append_reference(
-        prefill_layout,
-        &mut key_reference,
-        &mut value_reference,
-        &prefill_key,
-        &prefill_value,
-        &block_slots,
-        &block_offsets,
-        &prefill_sequence_ids,
-        &prefill_positions,
-    );
-    let expected_prefill = combined_gqa_reference(
-        prefill_layout,
-        &prefill_query,
-        &key_reference,
-        &value_reference,
-        &block_slots,
-        &block_offsets,
-        &prefill_sequence_ids,
-        &prefill_positions,
-        &prefill_kv_lens,
-    );
+    append_reference(AppendReferenceCase {
+        layout: prefill_layout,
+        key_cache: &mut key_reference,
+        value_cache: &mut value_reference,
+        append_key: &prefill_key,
+        append_value: &prefill_value,
+        block_slots: &block_slots,
+        block_offsets: &block_offsets,
+        row_sequence_ids: &prefill_sequence_ids,
+        row_positions: &prefill_positions,
+    });
+    let expected_prefill = combined_gqa_reference(CombinedGqaReferenceCase {
+        layout: prefill_layout,
+        query: &prefill_query,
+        key_cache: &key_reference,
+        value_cache: &value_reference,
+        block_slots: &block_slots,
+        block_offsets: &block_offsets,
+        row_sequence_ids: &prefill_sequence_ids,
+        row_positions: &prefill_positions,
+        row_kv_lens: &prefill_kv_lens,
+    });
 
     let context = CudaOperators::new().expect("CUDA artifact context");
     let block_slots_device = context
@@ -727,28 +753,28 @@ fn paged_bf16_gqa_matches_ragged_prefill_and_decode_reference() {
     let decode_kv_lens = [2, 3];
     let decode_query = packed_query(decode_layout.rows, Q_HEADS, HEAD_DIM, 7);
     let (decode_key, decode_value) = packed_kv(decode_layout.rows, KV_HEADS, HEAD_DIM, 9);
-    append_reference(
-        decode_layout,
-        &mut key_reference,
-        &mut value_reference,
-        &decode_key,
-        &decode_value,
-        &block_slots,
-        &block_offsets,
-        &decode_sequence_ids,
-        &decode_positions,
-    );
-    let expected_decode = combined_gqa_reference(
-        decode_layout,
-        &decode_query,
-        &key_reference,
-        &value_reference,
-        &block_slots,
-        &block_offsets,
-        &decode_sequence_ids,
-        &decode_positions,
-        &decode_kv_lens,
-    );
+    append_reference(AppendReferenceCase {
+        layout: decode_layout,
+        key_cache: &mut key_reference,
+        value_cache: &mut value_reference,
+        append_key: &decode_key,
+        append_value: &decode_value,
+        block_slots: &block_slots,
+        block_offsets: &block_offsets,
+        row_sequence_ids: &decode_sequence_ids,
+        row_positions: &decode_positions,
+    });
+    let expected_decode = combined_gqa_reference(CombinedGqaReferenceCase {
+        layout: decode_layout,
+        query: &decode_query,
+        key_cache: &key_reference,
+        value_cache: &value_reference,
+        block_slots: &block_slots,
+        block_offsets: &block_offsets,
+        row_sequence_ids: &decode_sequence_ids,
+        row_positions: &decode_positions,
+        row_kv_lens: &decode_kv_lens,
+    });
     let query = context
         .upload_f32_buffer(&decode_query)
         .expect("upload decode query");

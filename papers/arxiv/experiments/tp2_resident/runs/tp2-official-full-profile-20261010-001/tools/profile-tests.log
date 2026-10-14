@@ -1,0 +1,17 @@
+test_gated_target_keeps_fixed_software_trace_despite_parent_environment (test_profile.ProfileHooks.test_gated_target_keeps_fixed_software_trace_despite_parent_environment) ... ok
+test_missing_owner_cannot_launch_profiler (test_profile.ProfileHooks.test_missing_owner_cannot_launch_profiler) ... ok
+test_profiler_targets_exact_binary_uses_existing_graceful_wrapper (test_profile.ProfileHooks.test_profiler_targets_exact_binary_uses_existing_graceful_wrapper) ... ok
+test_raw_frozen_qa8_and_outer_alarm_restored (test_profile.ProfileHooks.test_raw_frozen_qa8_and_outer_alarm_restored) ... ok
+test_readiness_marker_uses_existing_wait_and_notifies_observer (test_profile.ProfileHooks.test_readiness_marker_uses_existing_wait_and_notifies_observer) ... ok
+test_same_sealed_process_loop_one_slot_quality_before_capture (test_profile.ProfileHooks.test_same_sealed_process_loop_one_slot_quality_before_capture) ... ok
+test_warm_failure_stops_measured_and_always_stops_collection (test_profile.ProfileHooks.test_warm_failure_stops_measured_and_always_stops_collection) ... ok
+test_default_2026_is_restored (test_profile_2025.Profile2025.test_default_2026_is_restored) ... ok
+test_flags_keep_gated_existing_wrapper_and_match_official_help (test_profile_2025.Profile2025.test_flags_keep_gated_existing_wrapper_and_match_official_help) ... ok
+test_frozen_policy_cannot_change_environment_binary_or_be_benchmark (test_profile_2025.Profile2025.test_frozen_policy_cannot_change_environment_binary_or_be_benchmark) ... ok
+test_same_existing_server_lifecycle (test_profile_2025.Profile2025.test_same_existing_server_lifecycle) ... ok
+test_unknown_tool_or_binary_policy_rejected (test_profile_2025.Profile2025.test_unknown_tool_or_binary_policy_rejected) ... ok
+
+----------------------------------------------------------------------
+Ran 12 tests in 0.588s
+
+OK

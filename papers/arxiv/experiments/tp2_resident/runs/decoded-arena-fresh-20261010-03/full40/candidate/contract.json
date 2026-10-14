@@ -1,0 +1,40 @@
+{
+  "cases": [
+    "hello",
+    "capital"
+  ],
+  "committed_KV": "post-publication native BF16 full prefix chunks; require matching kv receipt and complete owner status",
+  "complete_required_inventory": false,
+  "identity": "owner plus invocation begin transaction/sessions/generations/tokens/positions",
+  "max_bytes_per_owner": 1073741824,
+  "max_events_per_owner": 40000,
+  "max_invocations": 4,
+  "max_metadata_bytes_per_owner": 67108864,
+  "max_queue_records": 40013,
+  "max_tensor_bytes": 8388608,
+  "native_metadata": [
+    "native_dtype",
+    "shape",
+    "strides",
+    "sequence",
+    "parameter_partition",
+    "attention_partition"
+  ],
+  "oracle_manifest_sha256": "fb96ba4dd134761af30b4025b4cce86f96136cb01f05b5b4fca3e74587caa71d",
+  "owners": [
+    0,
+    1
+  ],
+  "phases": [
+    "prefill",
+    "decode.0"
+  ],
+  "publication": "only parent receipt with published=true authenticates a committed candidate",
+  "quality": "independent comparator required; raw capture success is not full-boundary acceptance",
+  "queue_policy": "entire admitted capture; no writer-throughput assumption",
+  "route_weight_bits": "u32 raw F32 bits in JSON",
+  "router_probabilities": "native F32 source sink, no runtime softmax recomputation",
+  "schema": "ferrule.mixed-candidate.v2",
+  "state_scope": "GDN operator observations provisional; committed.kv is separate retained-source export",
+  "storage": "f32le-native-host-view"
+}

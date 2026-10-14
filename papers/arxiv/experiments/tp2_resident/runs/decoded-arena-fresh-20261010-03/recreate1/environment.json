@@ -1,0 +1,20 @@
+{
+  "PATH": "/usr/bin:/bin",
+  "HOME": "/root",
+  "CUDA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+  "NVIDIA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+  "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
+  "LD_LIBRARY_PATH": "/home/admin/wxw403883/anaconda3/envs/tao/lib:/usr/lib64",
+  "CUBLAS_WORKSPACE_CONFIG": ":0:0",
+  "FERRULE_MIXED_GPU_RUN": "1",
+  "FERRULE_RUN_MIXED_RANK_GPU": "1",
+  "FERRULE_MIXED_MODEL": "/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8",
+  "FERRULE_MIXED_ORACLE_DIR": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_mixed/oracle/runs/full40-20261009-03",
+  "FERRULE_MIXED_ORACLE_SHA256": "fb96ba4dd134761af30b4025b4cce86f96136cb01f05b5b4fca3e74587caa71d",
+  "FERRULE_MIXED_EVIDENCE_DIR": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-fresh-20261010-03/recreate1",
+  "FERRULE_PAPER_WORKER_TOKEN": "4bfc3d24f1f6f0607d972e2fb1178c8e703e6396236de477c24638ed3de5db6e",
+  "FERRULE_LOG": "info",
+  "FERRULE_LOG_FORMAT": "json",
+  "FERRULE_MIXED_LIFECYCLE_ORACLE_DIR": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_mixed/oracle/runs/lifecycle-recreate1-01",
+  "FERRULE_MIXED_LIFECYCLE_ORACLE_SHA256": "5747d1ee3793d629aff5d87488d2dbd970fb02be11742b88ac16e3dca05e5a59"
+}

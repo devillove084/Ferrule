@@ -1,0 +1,72 @@
+{
+  "status": "failed",
+  "fairmatch": false,
+  "exact_speedup": null,
+  "started_monotonic": 8413837.841464406,
+  "server_launch_monotonic": 8413837.843668563,
+  "error": "ValueError: Resource monitor failed during startup",
+  "startup_failure_seconds": 89.35886846296489,
+  "resources": {
+    "status": "blocked",
+    "sampled_device_high_water_bytes": 11801722880,
+    "sampled_tree_pss_high_water_bytes": 37366041600,
+    "sampled_tree_rss_high_water_bytes": 37784666112,
+    "samples": 37,
+    "errors": [
+      "Sampled GPU target exceeded"
+    ],
+    "sample_interval_seconds": 2,
+    "exact_peaks": false,
+    "hard_memory_partition": false,
+    "pinned_bytes": null,
+    "caveats": [
+      "CUDA pinning not measured by VmLck/VmPin alone",
+      "PSS excludes unmapped OS file cache; not a total physical-host-memory proof",
+      "Device samples include baseline; between-sample peaks may be missed"
+    ],
+    "identity_mode": "device_exclusive_local_custody",
+    "measurement_scope": "whole_selected_device",
+    "owned_process_gpu_peak_bytes": null,
+    "owned_gpu_attribution": "unknown",
+    "nvml_pid_set_changes": 1,
+    "absence_of_foreign_interference_proven": false
+  },
+  "shutdown": {
+    "status": "root_exited_descendants_unknown",
+    "seconds": 7.624922821298242,
+    "timed_out": false,
+    "gpu_quiescence": "unverified; no GPU probe"
+  },
+  "runtime": {
+    "status": "blocked",
+    "evidence": {
+      "moe_marlin": [
+        "Using MARLIN Fp8 MoE backend"
+      ],
+      "linear_marlin": [
+        "MarlinFP8ScaledMMLinearKernel"
+      ],
+      "offloader_uva": [
+        "Offloader set to UVAOffloader"
+      ],
+      "offloaded_amount": [
+        "Total CPU offloaded parameters: 30.0"
+      ],
+      "model_bf16": [
+        "dtype=torch.bfloat16"
+      ]
+    },
+    "contradictions": [],
+    "fallback_observations": [
+      "(EngineCore pid=171536) INFO 10-08 22:48:35 [qwen_gdn_linear_attn.py:500] Falling back to the Triton GDN decode path: torch.ops._C.fused_gdn_decode_post_conv_mtp is not built"
+    ],
+    "missing": [],
+    "reasons": [
+      "Effective KV/conv/SSM dtype and physical pinning need runtime evidence",
+      "UVA selection log alone does not prove UVA path rather than functional_call fallback"
+    ],
+    "exact_arithmetic_match": false,
+    "log_sha256": "75f22a9b54e0d01acb7b59c5aec08b83a6cb068972628f946ee472bcfb259f9d"
+  },
+  "wall_seconds": 97.2738318387419
+}

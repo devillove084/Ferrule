@@ -1,0 +1,4 @@
+   Compiling ferrule-backend v0.2.0 (/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-backend)
+   Compiling ferrule-model v0.2.0 (/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-model)
+   Compiling ferrule-runtime v0.2.0 (/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-runtime)
+error: could not compile `ferrule-model` (lib test) due to 1 previous error

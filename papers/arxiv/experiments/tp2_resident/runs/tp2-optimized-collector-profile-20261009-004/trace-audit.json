@@ -1,0 +1,770 @@
+{
+  "schema": "ferrule.paper.offline-trace-audit.v1",
+  "run_id": "tp2-optimized-collector-profile-20261009-004",
+  "status": "rejected_incomplete_cuda_trace",
+  "lifecycle_status": "pass",
+  "benchmark": false,
+  "fairmatch": false,
+  "exact_speedup": null,
+  "release_binary_sha256": "4d40c34738d36a1c78f62c0e400dd732da40e34c316ce4bd3c356dc4d29b3173",
+  "trace": "cuda-sw,nvtx,osrt",
+  "kernel_table_present": false,
+  "nvtx_table_present": false,
+  "kernel_duration_ns": null,
+  "host_gpu_gap_ns": null,
+  "kernel_bottleneck_ranking": null,
+  "all_api_metrics_complete": false,
+  "reason": "Missing kernel table; NumTpcs and StringStorage importer exceptions persist with explicit software trace. Root cause inside installed collector/importer unresolved; not a production CUDA failure or proof hardware selection caused earlier failures.",
+  "diagnostics": [
+    {
+      "severity": 2,
+      "text": "Error when processing events: /dvs/p4/build/sw/devtools/Agora/Rel/CUDA13.3/QuadD/Common/SessionState/Modules/StringStorage.cpp(109): Throw in function QuadDCommon::StringId QuadDSessionState::StringStorage::GetKeyForExteriorId(QuadDSessionState::GlobalProcess, ExteriorId) const\nDynamic exception type: boost::wrapexcept<QuadDCommon::LogicException>\nstd::exception::what: LogicException\n[QuadDCommon::tag_message*] = Cannot find bucket for a bucket index\n",
+      "count": 428
+    },
+    {
+      "severity": 1,
+      "text": "Common injection library initialized successfully.",
+      "count": 2
+    },
+    {
+      "severity": 1,
+      "text": "OS runtime libraries injection initialized successfully.",
+      "count": 2
+    },
+    {
+      "severity": 2,
+      "text": "CUDA profiling might have not been started correctly.",
+      "count": 2
+    },
+    {
+      "severity": 2,
+      "text": "No NVTX events collected. Does the process use NVTX?",
+      "count": 2
+    },
+    {
+      "severity": 1,
+      "text": "Buffers holding CUDA trace data will be flushed on CudaProfilerStop() call. See --flush-on-cudaprofilerstop to control this behavior.",
+      "count": 1
+    },
+    {
+      "severity": 1,
+      "text": "CUDA injection initialized successfully.",
+      "count": 1
+    },
+    {
+      "severity": 1,
+      "text": "CUDA legacy/software instrumented trace was collected.",
+      "count": 1
+    },
+    {
+      "severity": 1,
+      "text": "Enabling trace for device graph launch",
+      "count": 1
+    },
+    {
+      "severity": 1,
+      "text": "Loaded CUPTI library: /opt/nvidia/nsight-systems/2026.1.3/target-linux-x64/libcupti.so.12.9",
+      "count": 1
+    },
+    {
+      "severity": 1,
+      "text": "Number of CUDA events collected: \t180006.",
+      "count": 1
+    },
+    {
+      "severity": 1,
+      "text": "Number of CUPTI events produced: \t7197127, CUPTI buffers: 50.",
+      "count": 1
+    },
+    {
+      "severity": 1,
+      "text": "Number of OS runtime libraries events collected: \t126.",
+      "count": 1
+    },
+    {
+      "severity": 1,
+      "text": "Number of OS runtime libraries events collected: \t7527.",
+      "count": 1
+    },
+    {
+      "severity": 1,
+      "text": "Process was launched by the profiler, see /home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-collector-profile-20261009-004/runs/P1/session/nsys-tmp/nvidia/nsight_systems/quadd_session_10156009/streams/pid_156018_stdout.log and stderr.log for program output",
+      "count": 1
+    },
+    {
+      "severity": 1,
+      "text": "Profiling has started.",
+      "count": 1
+    },
+    {
+      "severity": 1,
+      "text": "Profiling has stopped.",
+      "count": 1
+    },
+    {
+      "severity": 1,
+      "text": "S3EventHandler: S3 trace events were not found, not creating counters",
+      "count": 1
+    },
+    {
+      "severity": 2,
+      "text": "Error when processing events: /dvs/p4/build/sw/devtools/Agora/Rel/CUDA13.3/QuadD/Common/Services/FlatData/../FlatData/CudaEvent.h(454): Throw in function uint32_t QuadDCommon::FlatComm::Cuda::EventNS::CudaActivityDevice::GetNumTpcs() const\nDynamic exception type: boost::wrapexcept<QuadDCommon::NotInitializedException>\nstd::exception::what: NotInitializedException\n[QuadDCommon::tag_message*] = Data member NumTpcs was not initialized\n",
+      "count": 1
+    },
+    {
+      "severity": 2,
+      "text": "NVTX profiling might have not been started correctly.",
+      "count": 1
+    },
+    {
+      "severity": 2,
+      "text": "No CUDA events collected. Does the process use CUDA?",
+      "count": 1
+    },
+    {
+      "severity": 2,
+      "text": "No MMAP events were received for process with pid 156039 before attempting to resolve symbol. This might cause symbols to remain unresolved for the process.",
+      "count": 1
+    },
+    {
+      "severity": 2,
+      "text": "Not all NVTX events might have been collected.",
+      "count": 1
+    },
+    {
+      "severity": 2,
+      "text": "Not all OS runtime libraries events might have been collected.",
+      "count": 1
+    },
+    {
+      "severity": 2,
+      "text": "OS runtime libraries profiling might have not been started correctly.",
+      "count": 1
+    },
+    {
+      "severity": 2,
+      "text": "Scheduling information is absent. The thread activity is deduced based on OS runtime libraries traces. This is inaccurate and does not take into account asynchronous interrupts and exception faults.",
+      "count": 1
+    }
+  ],
+  "analysis": {
+    "globalVid": 281474976710656,
+    "duration": 6429226301,
+    "startTime": 8501187446172070,
+    "stopTime": 8501193875398371
+  },
+  "clock_anchor": {
+    "utcEpochNs": 1791558244409652590,
+    "utcTime": "2026-10-09T15:04:04",
+    "localTime": "2026-10-09T23:04:04",
+    "systemClockNs": 8501187446172070
+  },
+  "requests": [
+    {
+      "label": "warmup",
+      "status": "success",
+      "passed": true,
+      "actual_output_tokens": 8,
+      "ttft_seconds": 1.2446917593479156,
+      "e2e_seconds": 2.7241676580160856,
+      "start_ns": 276330188,
+      "end_ns": 3000511342,
+      "inside_capture": true,
+      "clock_crosscheck_ns": [
+        1294,
+        1293
+      ],
+      "partial_api_by_thread": [
+        {
+          "globalTid": 284092876874538,
+          "calls": 46541,
+          "duration_ns": 474081928
+        },
+        {
+          "globalTid": 284092876874539,
+          "calls": 41288,
+          "duration_ns": 19273881
+        }
+      ],
+      "partial_copies": [
+        {
+          "deviceId": 0,
+          "copyKind": 1,
+          "calls": 11,
+          "bytes": 12320,
+          "duration_ns": 5728
+        },
+        {
+          "deviceId": 0,
+          "copyKind": 2,
+          "calls": 1,
+          "bytes": 4096,
+          "duration_ns": 1664
+        },
+        {
+          "deviceId": 1,
+          "copyKind": 1,
+          "calls": 8,
+          "bytes": 16404,
+          "duration_ns": 4672
+        },
+        {
+          "deviceId": 1,
+          "copyKind": 2,
+          "calls": 1,
+          "bytes": 4096,
+          "duration_ns": 1600
+        }
+      ]
+    },
+    {
+      "label": "measured",
+      "status": "success",
+      "passed": true,
+      "actual_output_tokens": 8,
+      "ttft_seconds": 1.5690213795751333,
+      "e2e_seconds": 3.0210989862680435,
+      "start_ns": 3263626196,
+      "end_ns": 6284737208,
+      "inside_capture": true,
+      "clock_crosscheck_ns": [
+        785,
+        1124
+      ],
+      "partial_api_by_thread": [
+        {
+          "globalTid": 284092876874538,
+          "calls": 43860,
+          "duration_ns": 17522033
+        },
+        {
+          "globalTid": 284092876874539,
+          "calls": 47415,
+          "duration_ns": 21868269
+        }
+      ],
+      "partial_copies": [
+        {
+          "deviceId": 0,
+          "copyKind": 1,
+          "calls": 6,
+          "bytes": 8520,
+          "duration_ns": 3232
+        },
+        {
+          "deviceId": 0,
+          "copyKind": 2,
+          "calls": 2,
+          "bytes": 8192,
+          "duration_ns": 3264
+        },
+        {
+          "deviceId": 0,
+          "copyKind": 8,
+          "calls": 1,
+          "bytes": 1048576,
+          "duration_ns": 3840
+        },
+        {
+          "deviceId": 1,
+          "copyKind": 1,
+          "calls": 16,
+          "bytes": 49200,
+          "duration_ns": 14240
+        },
+        {
+          "deviceId": 1,
+          "copyKind": 2,
+          "calls": 36,
+          "bytes": 2177024,
+          "duration_ns": 132735
+        },
+        {
+          "deviceId": 1,
+          "copyKind": 8,
+          "calls": 1,
+          "bytes": 8192,
+          "duration_ns": 1280
+        }
+      ]
+    }
+  ],
+  "gpu_metadata": [
+    {
+      "id": 0,
+      "uuid": "b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "NVIDIA GeForce RTX 3090"
+    },
+    {
+      "id": 1,
+      "uuid": "63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "NVIDIA GeForce RTX 3090"
+    },
+    {
+      "id": 2,
+      "uuid": "0bc01d70-2ade-0714-8959-b25ae75469b6",
+      "name": "NVIDIA GeForce RTX 3090"
+    },
+    {
+      "id": 3,
+      "uuid": "dc825838-7c6c-2683-71e7-9ee0ac61b011",
+      "name": "NVIDIA GeForce RTX 3090"
+    },
+    {
+      "id": 4,
+      "uuid": "6c86e874-0ba8-b45a-a604-bca3b934bb86",
+      "name": "NVIDIA GeForce RTX 3090"
+    },
+    {
+      "id": 5,
+      "uuid": "ff61a997-b3fc-fd3d-800d-63bad94fd685",
+      "name": "NVIDIA GeForce RTX 3090"
+    },
+    {
+      "id": 6,
+      "uuid": "2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d",
+      "name": "NVIDIA GeForce RTX 3090"
+    },
+    {
+      "id": 7,
+      "uuid": "0ac006a6-932d-f77d-9abd-ea242dd3ba4f",
+      "name": "NVIDIA GeForce RTX 3090"
+    }
+  ],
+  "cuda_device_metadata": [
+    {
+      "gpuId": 0,
+      "cudaId": 0,
+      "pid": 156039,
+      "uuid": "c04e0db8-5e50-416a-aee3-54edcf219a4f",
+      "numMultiprocessors": 82
+    }
+  ],
+  "partial_api_threads": [
+    {
+      "globalTid": 284092876874538,
+      "name": "dp-owner-0",
+      "calls": 90401,
+      "start_ns": 297920559,
+      "end_ns": 6260784766
+    },
+    {
+      "globalTid": 284092876874539,
+      "name": "dp-owner-1",
+      "calls": 88703,
+      "start_ns": 314132860,
+      "end_ns": 6266017377
+    }
+  ],
+  "partial_api_summary": [
+    {
+      "name": "cuEventRecord",
+      "calls": 11772,
+      "duration_ns": 470789399,
+      "max_ns": 452435521
+    },
+    {
+      "name": "cuEventQuery",
+      "calls": 28893,
+      "duration_ns": 29116644,
+      "max_ns": 24008
+    },
+    {
+      "name": "cuEventDestroy_v2",
+      "calls": 41103,
+      "duration_ns": 11603727,
+      "max_ns": 40504
+    },
+    {
+      "name": "cuEventCreate",
+      "calls": 11713,
+      "duration_ns": 9053025,
+      "max_ns": 55410
+    },
+    {
+      "name": "cuCtxSetCurrent",
+      "calls": 69419,
+      "duration_ns": 5086544,
+      "max_ns": 7871
+    },
+    {
+      "name": "cuMemsetD8Async",
+      "calls": 825,
+      "duration_ns": 4595025,
+      "max_ns": 68093
+    },
+    {
+      "name": "cuCtxGetCurrent",
+      "calls": 14576,
+      "duration_ns": 892741,
+      "max_ns": 3399
+    },
+    {
+      "name": "cuEventSynchronize",
+      "calls": 153,
+      "duration_ns": 641769,
+      "max_ns": 89538
+    },
+    {
+      "name": "cuStreamSynchronize",
+      "calls": 475,
+      "duration_ns": 410326,
+      "max_ns": 7277
+    },
+    {
+      "name": "cuMemcpyHtoDAsync_v2",
+      "calls": 42,
+      "duration_ns": 240092,
+      "max_ns": 17080
+    },
+    {
+      "name": "cuMemcpyDtoHAsync_v2",
+      "calls": 41,
+      "duration_ns": 233776,
+      "max_ns": 20840
+    },
+    {
+      "name": "cudaLaunchKernel_v7000",
+      "calls": 11,
+      "duration_ns": 49825,
+      "max_ns": 7032
+    },
+    {
+      "name": "cuStreamWaitEvent",
+      "calls": 33,
+      "duration_ns": 13100,
+      "max_ns": 542
+    },
+    {
+      "name": "cuMemcpyDtoDAsync_v2",
+      "calls": 2,
+      "duration_ns": 10139,
+      "max_ns": 6025
+    },
+    {
+      "name": "cudaGetLastError_v3020",
+      "calls": 28,
+      "duration_ns": 2695,
+      "max_ns": 142
+    },
+    {
+      "name": "cuKernelGetFunction",
+      "calls": 3,
+      "duration_ns": 2054,
+      "max_ns": 727
+    },
+    {
+      "name": "cudaOccupancyMaxActiveBlocksPerMultiprocessor_v6050",
+      "calls": 2,
+      "duration_ns": 2005,
+      "max_ns": 1016
+    },
+    {
+      "name": "cuOccupancyMaxActiveBlocksPerMultiprocessorWithFlags",
+      "calls": 4,
+      "duration_ns": 1037,
+      "max_ns": 322
+    },
+    {
+      "name": "cudaGetDevice_v3020",
+      "calls": 3,
+      "duration_ns": 977,
+      "max_ns": 387
+    },
+    {
+      "name": "cudaDeviceGetAttribute_v5000",
+      "calls": 3,
+      "duration_ns": 887,
+      "max_ns": 360
+    },
+    {
+      "name": "cudaPeekAtLastError_v3020",
+      "calls": 3,
+      "duration_ns": 324,
+      "max_ns": 143
+    }
+  ],
+  "partial_copy_summary": [
+    {
+      "deviceId": 0,
+      "copyKind": 1,
+      "calls": 17,
+      "bytes": 20840,
+      "duration_ns": 8960
+    },
+    {
+      "deviceId": 0,
+      "copyKind": 2,
+      "calls": 3,
+      "bytes": 12288,
+      "duration_ns": 4928
+    },
+    {
+      "deviceId": 0,
+      "copyKind": 8,
+      "calls": 1,
+      "bytes": 1048576,
+      "duration_ns": 3840
+    },
+    {
+      "deviceId": 1,
+      "copyKind": 1,
+      "calls": 24,
+      "bytes": 65604,
+      "duration_ns": 18912
+    },
+    {
+      "deviceId": 1,
+      "copyKind": 2,
+      "calls": 37,
+      "bytes": 2181120,
+      "duration_ns": 134335
+    },
+    {
+      "deviceId": 1,
+      "copyKind": 8,
+      "calls": 1,
+      "bytes": 8192,
+      "duration_ns": 1280
+    }
+  ],
+  "partial_osrt_summary": [
+    {
+      "name": "clock_nanosleep",
+      "calls": 3599,
+      "duration_ns": 6658208908
+    },
+    {
+      "name": "pthread_cond_timedwait",
+      "calls": 3,
+      "duration_ns": 1500149118
+    },
+    {
+      "name": "futex",
+      "calls": 436,
+      "duration_ns": 869484179
+    },
+    {
+      "name": "poll",
+      "calls": 8,
+      "duration_ns": 800931074
+    },
+    {
+      "name": "sem_wait",
+      "calls": 5,
+      "duration_ns": 566921939
+    },
+    {
+      "name": "pthread_mutex_lock",
+      "calls": 3521,
+      "duration_ns": 484785262
+    },
+    {
+      "name": "waitpid",
+      "calls": 63,
+      "duration_ns": 161393
+    },
+    {
+      "name": "ioctl",
+      "calls": 2,
+      "duration_ns": 113495
+    },
+    {
+      "name": "pthread_rwlock_wrlock",
+      "calls": 3,
+      "duration_ns": 82608
+    },
+    {
+      "name": "writev",
+      "calls": 3,
+      "duration_ns": 56845
+    },
+    {
+      "name": "pthread_rwlock_rdlock",
+      "calls": 4,
+      "duration_ns": 50639
+    },
+    {
+      "name": "shutdown",
+      "calls": 1,
+      "duration_ns": 8260
+    },
+    {
+      "name": "epoll_wait",
+      "calls": 3,
+      "duration_ns": 6967
+    },
+    {
+      "name": "close",
+      "calls": 1,
+      "duration_ns": 3568
+    },
+    {
+      "name": "epoll_ctl",
+      "calls": 1,
+      "duration_ns": 2189
+    },
+    {
+      "name": "[Unknown]",
+      "calls": 1,
+      "duration_ns": 0
+    }
+  ],
+  "startup_seconds": 256.3843475896865,
+  "startup_milestones": [
+    {
+      "timestamp": "2026-10-09T15:00:52.236034Z",
+      "fields": {
+        "message": "resident model build entering owner-local admission",
+        "report": "qwen3.5-35b-a3b-numeric-bf16 Pipeline: backend Cuda -> Cuda, profile=cuda-qwen35-mixed-bf16-tp2-local-shards-serial; numeric arithmetic=not applicable; ModelSupport { required_feature: Some(\"cuda\"), cuda_feature_enabled: true, static_constraints: \"Mixed PP1 TP2 EP1 CUDA threads; two distinct devices; resident local expert shards; BF16 activation/KV/conv, F32 SSM/accumulation; serial greedy; context<=128 batch<=8 sessions<=2; <=22 GiB/card; no offload/process/restart; public quality gate required\", static_supported: true, buildability: CatalogValidated, admission: OwnerLiveAdmissionRequired, storage: NumericFp8E4m3fnBf16Scales, arithmetic: Bf16Compatibility }; topology=ModelTopologyPlacement { rank_backend: Some(Thread), logical: LogicalTopology { pipeline_parallel: 1, tensor_parallel: 2, expert_parallel: 1, data_parallel: 1, sequence_parallel: 1, context_parallel: 1 }, physical: PhysicalPlacement { devices: Some([0, 1]), root_device: None, expert_devices: None, source_identity: None } }; scheduler requested=ResidentSchedulerConfig { prefill_chunk_size: 8, max_active_sequences: 2, max_decode_batch: 2, decode_cohort_target: 4, decode_cohort_max_deferrals: 3, max_batch_tokens: 8, prefill_reserve_tokens: 1, allow_mixed_batches: true, prefix_cache_capacity_pages: 0 }, effective=ResidentSchedulerConfig { prefill_chunk_size: 8, max_active_sequences: 2, max_decode_batch: 1, decode_cohort_target: 1, decode_cohort_max_deferrals: 0, max_batch_tokens: 8, prefill_reserve_tokens: 1, allow_mixed_batches: false, prefix_cache_capacity_pages: 0 }; context=128; adjustments=[max_layers: descriptor default -> 40 (use the descriptor layer count); scheduler_config.max_decode_batch: 2 -> 1 (generic pipeline is serial; batch <= context and prefill <= batch; no mixed batches/cohort deferral/native proposals); scheduler_config.allow_mixed_batches: true -> false (generic pipeline is serial; batch <= context and prefill <= batch; no mixed batches/cohort deferral/native proposals); scheduler_config.decode_cohort_target: 4 -> 1 (generic pipeline is serial; batch <= context and prefill <= batch; no mixed batches/cohort deferral/native proposals); scheduler_config.decode_cohort_max_deferrals: 3 -> 0 (generic pipeline is serial; batch <= context and prefill <= batch; no mixed batches/cohort deferral/native proposals)]; metadata only, owner live admission required (source identity, free memory, allocator/headroom and cleanup are not guaranteed); KV logical pages L and physical transaction slots P remain separately owner-planned"
+      }
+    },
+    {
+      "timestamp": "2026-10-09T15:01:56.985546Z",
+      "fields": {
+        "message": "Mixed experimental source-bound admission",
+        "capacity": "ParallelRankCapacity { page_size: 16, max_positions: 128, max_rows: 8, sessions: 2, logical_pages: 16 }",
+        "budgets": "[HybridStageBudget { device: 0, weights: 18390764032, state: 162201600, kv: 8388608, workspace: 654714368, margin: 603979776 }, HybridStageBudget { device: 1, weights: 18390764032, state: 162201600, kv: 8388608, workspace: 654714368, margin: 603979776 }]",
+        "known_host_bytes": 89187512,
+        "attention_views": 996
+      }
+    },
+    {
+      "timestamp": "2026-10-09T15:03:54.522912Z",
+      "fields": {
+        "message": "Mixed owner image/KV ready; claim final fence pending",
+        "owner": 1,
+        "device": 1,
+        "live_grants": 18990566144,
+        "estimate": "HybridCudaMemoryEstimate { per_sequence_state_bytes: 32440320, kv_bytes: 8388608, weight_bytes_upper_bound: 18390764032, workspace_bytes_upper_bound: 654714368 }"
+      }
+    },
+    {
+      "timestamp": "2026-10-09T15:03:54.524829Z",
+      "fields": {
+        "message": "Mixed owner image/KV ready; claim final fence pending",
+        "owner": 0,
+        "device": 0,
+        "live_grants": 18990566144,
+        "estimate": "HybridCudaMemoryEstimate { per_sequence_state_bytes: 32440320, kv_bytes: 8388608, weight_bytes_upper_bound: 18390764032, workspace_bytes_upper_bound: 654714368 }"
+      }
+    },
+    {
+      "timestamp": "2026-10-09T15:03:54.530395Z",
+      "fields": {
+        "message": "Mixed owner preparation claim completion",
+        "owner": 1,
+        "device": 1,
+        "claim_finished": true,
+        "device_quarantine": false,
+        "allocator": "CudaAllocatorMetrics { allocation_requests: 62371, allocation_failures: 0, reuse_allocations: 62114, small_allocations: 62254, large_allocations: 113, huge_allocations: 4, requested_bytes: 19009236100, granted_bytes: 19023006464, live_requested_bytes: 18976795780, live_granted_bytes: 18990566144, peak_live_requested_bytes: 19009236100, peak_live_granted_bytes: 19023006464, reserved_bytes: 19086180352, peak_reserved_bytes: 19086180352, free_bytes: 95614208, largest_free_extent: 67108864, pending_retirement_blocks: 0, pending_retirement_bytes: 0, capture_retirement_bytes: 0, internal_fragmentation: 0.0007251160336971152, external_fragmentation: 0.29812874672349954, segments: 257, driver_allocations: 257, driver_allocation_bytes: 19086180352, driver_frees: 0, driver_free_bytes: 0 }"
+      }
+    },
+    {
+      "timestamp": "2026-10-09T15:03:54.531768Z",
+      "fields": {
+        "message": "Mixed owner preparation claim completion",
+        "owner": 0,
+        "device": 0,
+        "claim_finished": true,
+        "device_quarantine": false,
+        "allocator": "CudaAllocatorMetrics { allocation_requests: 62371, allocation_failures: 0, reuse_allocations: 62114, small_allocations: 62254, large_allocations: 113, huge_allocations: 4, requested_bytes: 19009236100, granted_bytes: 19023006464, live_requested_bytes: 18976795780, live_granted_bytes: 18990566144, peak_live_requested_bytes: 19009236100, peak_live_granted_bytes: 19023006464, reserved_bytes: 19086180352, peak_reserved_bytes: 19086180352, free_bytes: 95614208, largest_free_extent: 67108864, pending_retirement_blocks: 0, pending_retirement_bytes: 0, capture_retirement_bytes: 0, internal_fragmentation: 0.0007251160336971152, external_fragmentation: 0.29812874672349954, segments: 257, driver_allocations: 257, driver_allocation_bytes: 19086180352, driver_frees: 0, driver_free_bytes: 0 }"
+      }
+    },
+    {
+      "timestamp": "2026-10-09T15:03:54.705051Z",
+      "fields": {
+        "message": "Ferrule OpenAI server listening",
+        "address": "127.0.0.1:18367"
+      }
+    },
+    {
+      "timestamp": "2026-10-09T15:04:42.549445Z",
+      "fields": {
+        "message": "Mixed owner shutdown fence; image retained until worker retirement",
+        "owner": 1,
+        "device": 1,
+        "quiescent": true,
+        "device_quarantine": false,
+        "operator_quarantine": false,
+        "allocator": "CudaAllocatorMetrics { allocation_requests: 282080, allocation_failures: 0, reuse_allocations: 281823, small_allocations: 281949, large_allocations: 127, huge_allocations: 4, requested_bytes: 21866322556, granted_bytes: 22031309312, live_requested_bytes: 18976795780, live_granted_bytes: 18990566144, peak_live_requested_bytes: 19049126020, peak_live_granted_bytes: 19065932544, reserved_bytes: 19086180352, peak_reserved_bytes: 19086180352, free_bytes: 95614208, largest_free_extent: 67108864, pending_retirement_blocks: 0, pending_retirement_bytes: 0, capture_retirement_bytes: 0, internal_fragmentation: 0.0007251160336971152, external_fragmentation: 0.29812874672349954, segments: 257, driver_allocations: 257, driver_allocation_bytes: 19086180352, driver_frees: 0, driver_free_bytes: 0 }"
+      }
+    },
+    {
+      "timestamp": "2026-10-09T15:04:42.553060Z",
+      "fields": {
+        "message": "Mixed owner shutdown fence; image retained until worker retirement",
+        "owner": 0,
+        "device": 0,
+        "quiescent": true,
+        "device_quarantine": false,
+        "operator_quarantine": false,
+        "allocator": "CudaAllocatorMetrics { allocation_requests: 282080, allocation_failures: 0, reuse_allocations: 281823, small_allocations: 281949, large_allocations: 127, huge_allocations: 4, requested_bytes: 21866322556, granted_bytes: 22031309312, live_requested_bytes: 18976795780, live_granted_bytes: 18990566144, peak_live_requested_bytes: 19049126020, peak_live_granted_bytes: 19065932544, reserved_bytes: 19086180352, peak_reserved_bytes: 19086180352, free_bytes: 95614208, largest_free_extent: 67108864, pending_retirement_blocks: 0, pending_retirement_bytes: 0, capture_retirement_bytes: 0, internal_fragmentation: 0.0007251160336971152, external_fragmentation: 0.29812874672349954, segments: 257, driver_allocations: 257, driver_allocation_bytes: 19086180352, driver_frees: 0, driver_free_bytes: 0 }"
+      }
+    }
+  ],
+  "startup_observed_intervals": {
+    "build_entry_to_source_admission_seconds": 64.749512,
+    "source_admission_to_owner_image_ready_seconds": {
+      "1": 117.537366,
+      "0": 117.539283
+    }
+  },
+  "baseline_mib": {
+    "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f": 1.0,
+    "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6": 1.0,
+    "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d": 1.0,
+    "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 4.0,
+    "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86": 1.0,
+    "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 4.0,
+    "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011": 1.0,
+    "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685": 1.0
+  },
+  "nonselected_delta_max_bytes": {
+    "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6": 0,
+    "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011": 0,
+    "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86": 0,
+    "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685": 0,
+    "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d": 0,
+    "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f": 0
+  },
+  "valid_gpu_samples": 124,
+  "b1_return_samples": 2,
+  "cleanup": "model B1, collector original B0, authenticated drain, final independent all-eight lock availability/release verified",
+  "caveats": [
+    "Partial imported records are not full request counts or workload totals.",
+    "Synchronization API waits include GPU work; cross-thread durations overlap.",
+    "No kernel or scheduling trace means no measured idle gaps or decode/GEMM/pack attribution.",
+    "Startup intervals are log milestones, not isolated optimization costs.",
+    "Installed CUDA device metadata contains an inconsistent UUID; do not infer owner mapping from that row. Physical TARGET_INFO_GPU and authenticated visibility retained."
+  ],
+  "artifact_pins": {
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-collector-profile-20261009-004/audit_trace.py": "7b6c804824e02e9169c3f91a4314be1fc9e9405c2a28d342eea0c13e89e996bc",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-collector-profile-20261009-004/prepared.json": "9bea3a1adfca1e3d99e4e58abf74168b341ef3a0b07a73cd721b5181c382e543",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-collector-profile-20261009-004/profiling.json": "2cf8af3e556cbeab7edcc6e370b52e3e7a747a9ec2e65523318c0c19fff38685",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-collector-profile-20261009-004/final-owner-release.json": "d6a61844d9b1f89df74d519b58cb6d6bc36eeca09d28a9665da780a61fc88733",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-collector-profile-20261009-004/runs/P1/session/server.log": "68802eb0524462647158136d0d0f9b6f956c61536c13d5dcae1b57ae51ae64bb",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-collector-profile-20261009-004/runs/P1/session/case.json": "78a3dbee34164394208496aa8202aee72042c0d631bbcc85f91b7d9f74a8cca3",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-collector-profile-20261009-004/runs/P1/session/collector-baseline.json": "e3df6385f319fe027c9cbca4617d063b3911137577b77fcce4d586dfb632c5c9",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-collector-profile-20261009-004/runs/P1/session/collector-after-model.json": "d19ec79a708d4275119a37365fddbc38d1111700ed8f934361766621f4d09a2e",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-collector-profile-20261009-004/runs/P1/session/samples.jsonl": "af8d819554b801c8aa9684b1aa0f75949213ecdfc33d929d92d4d4f651b45571",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-collector-profile-20261009-004/runs/P1/session/profile/measured.json": "fcd3946c3b99b6524bb5f262116a714453e7d04ba10310770810f8f01bf83637",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-collector-profile-20261009-004/runs/P1/session/profile/stop.json": "4b61ac59889ce5cafd57e37f03892afba75947404a579a09152434b5245ff3f6",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-collector-profile-20261009-004/runs/P1/session/profile/gate.json": "f9c532eabee2e53a62e9735909a1804168eb91b2b6b860901e00830289eea07e",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-collector-profile-20261009-004/runs/P1/session/profile/start.json": "f98fc7b6922c3977f03b24d448ccd15532b23904ef236bd0ee4137b30bfe54c0",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-collector-profile-20261009-004/runs/P1/session/profile/profile-window.json": "f9c532eabee2e53a62e9735909a1804168eb91b2b6b860901e00830289eea07e",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-collector-profile-20261009-004/runs/P1/session/profile/model-identity.json": "9079d19e23d4fc9bb10140329d82fa347bf44f22525e9c841c30f879bf210e03",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-collector-profile-20261009-004/runs/P1/session/profile/warmup.json": "c8e57b3d4cf34d888df3576c6b07b775454a763a22fdb6ec7b34b6e34b393470",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-collector-profile-20261009-004/runs/P1/session/profile/metadata.json": "fa0fbe5ec0be3144aa80073c93620b7ab8531e6da2def086169c5b33dc38b626",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-collector-profile-20261009-004/runs/P1/session/nsight/osrt_sum.txt": "c0ff35d01958105e80a7a307804687e979363b255def1bc87a8f1123e3975a0a",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-collector-profile-20261009-004/runs/P1/session/nsight/nvtx_sum.txt": "b5272409bc3eac7fe377a6274e020e905b0d58c7504f39f2ec99921c22b3f43b",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-collector-profile-20261009-004/runs/P1/session/nsight/cuda_gpu_mem_time_sum.txt": "37a604f31fe68c579bb17dbbc3fb54054fb328519bbc1885d648a4d547c693d2",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-collector-profile-20261009-004/runs/P1/session/nsight/nsys.sqlite": "c4c66e36bf113b2601ce9fa10a2b2133702e51d07a65c795a948455df9da4d06",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-collector-profile-20261009-004/runs/P1/session/nsight/cuda_gpu_kern_sum.txt": "2ecfc1605b38f9ff32c3d0f2ca217c90c4262b1ad44d6aae43612730c526b966",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-collector-profile-20261009-004/runs/P1/session/nsight/cuda_gpu_mem_size_sum.txt": "a1225ae132f344b3853a0e9768d38a6f46b6e46ae118e17e48d1c043eb94cff4",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-collector-profile-20261009-004/runs/P1/session/nsight/cuda_api_sum.txt": "35db0b66d142fa81dc8bbdf11712789bda93ef24fd6818cf72bc81b89bde9fd8",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-collector-profile-20261009-004/runs/P1/session/nsight/nsys.nsys-rep": "ee8de58e861817fcf73337fcbeec4cc2094a07437fd4d75c357bf93c7e8acd6d",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-collector-profile-20261009-004/runs/P1/session/nsight/nsys.qdstrm": "291a23c1e79c1a8bf4bb7a1593d6b15142c3327cbbd0318a6fc3a88d566b9731",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-collector-profile-20261009-004/trace-queries.json": "c766527d41756d49b11d605eaf2e7520e6c2115078e5732bc11f4da193bbf1d5"
+  }
+}

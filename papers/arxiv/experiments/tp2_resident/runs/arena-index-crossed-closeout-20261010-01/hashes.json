@@ -1,0 +1,18 @@
+{
+  "owner-closeout.json": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/arena-index-crossed-closeout-20261010-01/owner-closeout.json",
+    "sha256": "8e4e8c85ce642274deedebd7208874a5d28220b7d07b1c25f46a6fd3bcc8d753"
+  },
+  "RESULTS.md": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/arena-index-crossed-closeout-20261010-01/RESULTS.md",
+    "sha256": "936b5bc28ad9ac9d05d45ab241157ad08e399fe795e70853f3e7c9365b1c259c"
+  },
+  "final-idle.json": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/arena-index-crossed-closeout-20261010-01/final-idle.json",
+    "sha256": "f343e6e067c4574cab78b072234b62aebd9bd1b3ec44127e637418ea43eb6755"
+  },
+  "final-lock-release.json": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/arena-index-crossed-closeout-20261010-01/final-lock-release.json",
+    "sha256": "e0978918ed6541925f3f5f6e25568e20ece27bc36587a23511aedb0d6f787d0c"
+  }
+}

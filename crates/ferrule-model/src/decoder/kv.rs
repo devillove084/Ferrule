@@ -937,6 +937,16 @@ fn unique_page_set(pages: &[KvPageId], label: &str) -> Result<BTreeSet<KvPageId>
 
 /// Physical page-pool protocol used by model-neutral paged decoder backends.
 pub trait PhysicalKvPool {
+    fn idle_kv_reclaim_config(&self) -> Option<super::IdleKvReclaimConfig> {
+        None
+    }
+    fn idle_kv_physical_stats(&self) -> Option<super::IdleKvPhysicalStats> {
+        None
+    }
+    fn trim_idle_kv(&mut self) -> Result<()> {
+        Ok(())
+    }
+
     type SequenceState: super::DecoderSequence;
     type Transaction;
     type KvView;
@@ -1190,6 +1200,15 @@ impl<P> DecoderKvBackend for PagedKvBackend<P>
 where
     P: PhysicalKvPool,
 {
+    fn idle_kv_reclaim_config(&self) -> Option<super::IdleKvReclaimConfig> {
+        self.pool.idle_kv_reclaim_config()
+    }
+    fn idle_kv_physical_stats(&self) -> Option<super::IdleKvPhysicalStats> {
+        self.pool.idle_kv_physical_stats()
+    }
+    fn trim_idle_kv(&mut self) -> Result<()> {
+        self.pool.trim_idle_kv()
+    }
     type SequenceState = P::SequenceState;
     type Transaction = PagedKvTransactionHandle;
     type KvView = P::KvView;
@@ -1894,13 +1913,12 @@ impl<S: super::DecoderSequence> PhysicalKvPool for TypedCpuPagedKvPool<S> {
                 "CPU staging lacks a quiescent shape/mapping witness",
             ));
         }
-        if let Some(checked) = &p.checked_slots {
-            if checked.keys().ne(p.slots.keys())
+        if let Some(checked) = &p.checked_slots
+            && (checked.keys().ne(p.slots.keys())
                 || checked.values().any(|slot| *slot >= p.capacity)
-                || checked.values().copied().collect::<BTreeSet<_>>().len() != checked.len()
-            {
-                return Err(kv_error("CPU staged mapping witness changed"));
-            }
+                || checked.values().copied().collect::<BTreeSet<_>>().len() != checked.len())
+        {
+            return Err(kv_error("CPU staged mapping witness changed"));
         }
         for (page, slot) in &p.slots {
             if self.inner.physical_slot(*page) != *slot

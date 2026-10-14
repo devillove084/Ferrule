@@ -1,0 +1,86 @@
+{
+  "schema": "ferrule.paper.tp2-mixed-independent-oracle.protocol.v1",
+  "profile": "SystemMixedTP2EP1",
+  "versions": {
+    "torch": "2.13.0+cu129",
+    "transformers": "5.5.3"
+  },
+  "topology": {
+    "logical_tp": 2,
+    "pp": 1,
+    "ep": 1,
+    "simulation_devices": 1,
+    "production_transport_validated": false
+  },
+  "storage": "Original E4M3FN x numeric BF16 128x128 scale in F32, then BF16 RNE; no reciprocal/E8M0 conversion",
+  "precision": {
+    "activation": "BF16",
+    "parameters": "BF16 including once-rounded native F32 GDN A_log/norm",
+    "rope_frequency": "native F32",
+    "ssm": "explicit F32 preallocation",
+    "conv": "BF16",
+    "kv": "BF16",
+    "tf32": false,
+    "bf16_reduced_precision_reduction": false
+  },
+  "partitions": {
+    "attention": "contiguous whole query+gate heads; whole KV heads; local native HF normalization/RoPE/attention; O input-column shards",
+    "gdn": "local Q segment + local K segment + local V segment; matching depthwise conv; contiguous whole Z/B/A/value heads; local head-group repeat and norm; F32 per-rank state; output input-column shards",
+    "mlp": "each rank has a slice of every expert, gate/up independently row-sharded then concatenated gate-before-up; down input-column shard",
+    "embedding_and_final_norm": "replicated semantics; one computation on identical post-reduction hidden states",
+    "output": "contiguous BF16 vocab row shards; concatenate rank0 then rank1 without reduction; actual vocab 248320 divisible by TP2, no padded vocab values exported; ragged/padded gather checked on independent 11-token fixture"
+  },
+  "reduction": "Each local partial writes BF16; rank0.float + rank1.float; one BF16 RNE cast",
+  "moe": {
+    "expert_execution": "all experts logically resident/available on both ranks; lazy checkpoint operands allowed; not a measured residency/performance result",
+    "routing": "replicated original BF16 weights; native F32 full softmax/topk/renormalization; lower expert ID substitutions ONLY at equal raw logits; unequal raw softmax collisions stay native",
+    "accumulation": "pinned HF eager ascending expert ID, per-expert F32 routing product cast BF16 and BF16 index_add; NOT slot-major or fused F32 accumulation",
+    "combine": "native shared sigmoid BF16 gating; local routed+shared BF16 add; exactly ONE TP sum afterwards",
+    "vllm_bitexact": false
+  },
+  "cases": {
+    "hello": [
+      9419
+    ],
+    "capital": [
+      760,
+      6511,
+      314,
+      9338,
+      369
+    ]
+  },
+  "stages": [
+    "prefill",
+    "decode.0"
+  ],
+  "continuation": "own greedy full-vocab argmax after prefill; consumer MUST use recorded decode input; baseline drift skips same-input claims when continuations differ",
+  "comparison": {
+    "atol": 0.00025,
+    "rtol": 0.012,
+    "formula": "abs(actual-expected) <= atol + rtol*abs(expected)",
+    "ids_and_inputs": "exact",
+    "state": "report exactness AND unchanged tolerance, no a-priori CPU/CUDA state or exp equivalence claim",
+    "all_boundaries_required": "all except oracle-only pre-canonicalization native_expert_ids; canonical selected IDs remain exact",
+    "oracle_only_diagnostics": [
+      "native_expert_ids"
+    ]
+  },
+  "limits": {
+    "max_timeout_seconds": 1700,
+    "default_capture_mib_per_case": 512,
+    "default_decoded_weight_cache_mib": 256,
+    "max_capture_mib": 2048,
+    "max_decoded_weight_cache_mib": 1024,
+    "outer_terminal_timeout_ms": 1800000
+  },
+  "custody": "existing paper launch_guard seal/authenticate + test_vllm_qwen35.run_process subreaper; fresh explicit sole-owner grant and shared owner lock; never signal foreign PIDs",
+  "admission": "CPU tests and a completed reference are NOT factory enablement or a Ferrule full40 PASS; caller must provide reference directory and manifest SHA256 to the runtime gate",
+  "unvalidated_math_sites": [
+    "CUDA GEMM/softmax/norm/SiLU/sigmoid/reduction implementation drift versus production",
+    "HF GDN chunk prefill versus production recurrence/chunk policy, exp/softplus/L2 normalization and exact F32 state updates",
+    "HF eager per-expert accumulation versus vLLM fused MoE (different contract; no bit-exact claim)"
+  ],
+  "blocker_policy": "Any uncovered math-site difference or failed unchanged tolerance blocks runtime admission; no silent policy or threshold change",
+  "pre_weight_gate": "Mandatory authenticated one-GPU synthetic TP1/native equality, TP2 GQA/GDN inventory, independent frozen row/local-MoE/route/head and CUDA-F32-state fixtures; abort before full checkpoint reads on failure"
+}

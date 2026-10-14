@@ -424,10 +424,8 @@ fn run_transaction(inject_failure: bool) -> TestResult {
                 drained += transaction.drain();
             }
         }
-        if synchronized {
-            if let Err(error) = transaction.prepare_vote(id, rank, outcome) {
-                errors.push(format!("rank={rank:?} ready vote: {error:?}"));
-            }
+        if synchronized && let Err(error) = transaction.prepare_vote(id, rank, outcome) {
+            errors.push(format!("rank={rank:?} ready vote: {error:?}"));
         }
     }
     if !transaction.pending_completions().is_empty() || transaction.in_use_credits() != 0 {

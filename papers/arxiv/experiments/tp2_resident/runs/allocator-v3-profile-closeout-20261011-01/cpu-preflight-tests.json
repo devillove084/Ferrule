@@ -1,0 +1,19 @@
+{
+  "argv": [
+    "/home/admin/wxw403883/anaconda3/bin/python3.12",
+    "-S",
+    "-B",
+    "-m",
+    "unittest",
+    "test_profile",
+    "test_profile_2025",
+    "test_instrumentation_scope",
+    "test_instrumentation_live",
+    "test_profile_trace_audit_v2",
+    "test_allocator_v3_release"
+  ],
+  "cwd": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident",
+  "exit_code": 0,
+  "elapsed_seconds": 21.39292025566101,
+  "log_sha256": "ea893dd7d9579da8a116a6cdb56471d4243959f01f2ec0bd15e6960a66d083dd"
+}

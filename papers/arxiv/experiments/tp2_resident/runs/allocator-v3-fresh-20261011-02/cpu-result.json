@@ -1,0 +1,26 @@
+{
+  "passed": true,
+  "phases": [
+    [
+      "allocator_batch_v3",
+      "tests::v3_",
+      10
+    ],
+    [
+      "allocator_context_drop",
+      "tests::context_drop_",
+      14
+    ],
+    [
+      "allocator_retirement",
+      "",
+      29
+    ],
+    [
+      "lib",
+      "cuda::allocator::",
+      7
+    ]
+  ],
+  "total": 60
+}

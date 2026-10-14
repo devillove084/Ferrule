@@ -1,0 +1,101 @@
+{
+  "schema": "ferrule.paper.allocator-v3-source-relation.v1",
+  "prior_indexed_prepared": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-indexed-lru-20261010-01/prepared.json",
+    "sha256": "06ccf0e77d492ff8fe4951b86dc58d81ff87d2d1e064c542242a2faf50cdd506"
+  },
+  "source_changes": {
+    "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-backend/tests/allocator_retirement/main.rs": {
+      "before": null,
+      "after": "6b1bdc92c02d539e7a5cf8db965c66c193929f83e139e0bebdc14423844af6cf"
+    },
+    "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-backend/tests/cuda_allocator.rs": {
+      "before": "23f2aed9bae6fac012bdb7ccf0c9ad2cc13714107b48a1dee03789b6ea69efe7",
+      "after": "2d09b8f03cf42ebc0adb04cf224a837e6f5edecaa0c4625e5e1c82d8d33a48b4"
+    },
+    "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-backend/tests/allocator_context_drop/driver.rs": {
+      "before": null,
+      "after": "767862f2c3b5f5248d86b952cfb388f9112218922996601dbc84425d980a1896"
+    },
+    "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-backend/tests/allocator_context_drop/tests.rs": {
+      "before": null,
+      "after": "fc928bbebb2a7feaab0f44697616082974a693f522b1059402c2db63a6acb456"
+    },
+    "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-backend/tests/allocator_context_drop/CPU_RECEIPT_V2.json": {
+      "before": null,
+      "after": "a7657e6edc943cf66f594a3a7f368dd559f28d2e58e1765295e0441edcc29163"
+    },
+    "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-backend/tests/allocator_retirement_gpu/driver.rs": {
+      "before": null,
+      "after": "d2105cf182c474fb99d19a2305d19af5cf06a397fe5c22c08c66cb479271bcdc"
+    },
+    "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-backend/tests/allocator_retirement_gpu/tests.rs": {
+      "before": null,
+      "after": "07ea6de4f480622506865b8a04794a280458f44dc6999bb5a014237a10a50ed5"
+    },
+    "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-backend/src/cuda/runtime.rs": {
+      "before": "f7f36d50be4a5ddbd37d880da46c982d11cc7b83ed82f94e56655851d82bebfb",
+      "after": "bfe1a40b5666834d9b87a60c8011e355febb1007695d2806b5bac2ddfecf91e8"
+    },
+    "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-backend/src/cuda/providers/cutlass.rs": {
+      "before": "cf567b42135279ea1de45fb61a7ba935ab9be03497713067d4d0c7d2d393a3b5",
+      "after": "389ee1596b3af387fcb4782bceed8ce54d6870de56a93f4979f8df97209dbce4"
+    },
+    "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-backend/tests/allocator_context_drop/main.rs": {
+      "before": null,
+      "after": "3d65cfb541e052f28193b9b4a1346e3bb2d063238100f5f7634819bccf5984cb"
+    },
+    "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-backend/src/cuda/allocator.rs": {
+      "before": "49ba582f3ad4f267ff8bbd0f6b3fe0351c1cf1a3e560e1c7d8e78c218cd6b98c",
+      "after": "adb5db878dfd2700d5576ca4acb96f3be0b80e4cbd2a4d95b955cc39799fd052"
+    },
+    "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-backend/tests/allocator_retirement/runtime.rs": {
+      "before": null,
+      "after": "200e50d7a7601ad7b9fb3eebad95babe72b0af18d1510bd36bc6ab908c7c4785"
+    },
+    "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-backend/tests/allocator_batch_v3/tests.rs": {
+      "before": null,
+      "after": "fe910067299d5eac14453266a6aee07efe4cba9db899f5b681a03d0cb1657c7d"
+    },
+    "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-backend/tests/allocator_batch_v3/CPU_RECEIPT_V3.json": {
+      "before": null,
+      "after": "da990c328fb333a77ec9b3a4f9039090f2ff28205e8736f9acf50251fabfb771"
+    },
+    "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-backend/tests/allocator_retirement_gpu/main.rs": {
+      "before": null,
+      "after": "4d99ccea73eeb03ffcfddd84eb476ecf92e9a7122d015becf063ab1a905e9adc"
+    },
+    "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-backend/tests/allocator_context_drop/gpu.rs": {
+      "before": null,
+      "after": "f92f629beb36e8f4ec8254167f6493601e54985f040e3be89ef825f37e1078ac"
+    },
+    "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-backend/tests/allocator_batch_v3/main.rs": {
+      "before": null,
+      "after": "3376bde731f7a91b3f79edb98ac59d672d5befab2a7a44fbd9cd1e1341a7cdd6"
+    },
+    "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-backend/tests/allocator_retirement/tests.rs": {
+      "before": null,
+      "after": "a7e994bbedc0e8d4b355cd217aa1cc9090033a57e9e5381c6c2161d44a7682a3"
+    }
+  },
+  "production_changes": {
+    "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-backend/src/cuda/allocator.rs": {
+      "before": "49ba582f3ad4f267ff8bbd0f6b3fe0351c1cf1a3e560e1c7d8e78c218cd6b98c",
+      "after": "adb5db878dfd2700d5576ca4acb96f3be0b80e4cbd2a4d95b955cc39799fd052"
+    },
+    "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-backend/src/cuda/runtime.rs": {
+      "before": "f7f36d50be4a5ddbd37d880da46c982d11cc7b83ed82f94e56655851d82bebfb",
+      "after": "bfe1a40b5666834d9b87a60c8011e355febb1007695d2806b5bac2ddfecf91e8"
+    }
+  },
+  "test_only_source_patch": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-backend/src/cuda/providers/cutlass.rs",
+    "before": "cf567b42135279ea1de45fb61a7ba935ab9be03497713067d4d0c7d2d393a3b5",
+    "after": "389ee1596b3af387fcb4782bceed8ce54d6870de56a93f4979f8df97209dbce4",
+    "scope": "One expected NumericBf16M1Gemv entry in cfg(test) manifest-contract array; reverse edit restores exact prior SHA; non-test prefix unchanged"
+  },
+  "all_model_production_unchanged": true,
+  "model_production_files": 229,
+  "all_native_sources_unchanged": true,
+  "native_files": 41
+}

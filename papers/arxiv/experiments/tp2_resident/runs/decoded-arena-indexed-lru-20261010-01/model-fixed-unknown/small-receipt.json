@@ -1,0 +1,16 @@
+{
+  "selector": "transformer::standard::cuda::hybrid_rank::mixed::decoded_gpu_tests::decoded_fixed_pin_unknown_and_panic_never_publish_arena",
+  "binary_sha256": "b0a1f243076045b1503ec21f6f004383e6c58686e6a24c9ca85ec76df854a366",
+  "source_digest": "561a7b47a538b7c96d72ca3c4790b05f472643e876219847fdf7a962bd84faa9",
+  "assertions_passed": true,
+  "cache_values": "source-pinned model assertions; no raw per-step counters exported",
+  "assertion_contract": null,
+  "gpu_memory": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-indexed-lru-20261010-01/model-fixed-unknown/resources.json",
+    "sha256": "0f474ed0cc4c8d38337165dc85fcb0b539ea498085258aa2858006bfe7c8209d"
+  },
+  "log": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-indexed-lru-20261010-01/model-fixed-unknown/test.log",
+    "sha256": "86f74c160203a385edbae53d5d599b2797eacd7b5f13b4fdbc72e383bd8a956c"
+  }
+}

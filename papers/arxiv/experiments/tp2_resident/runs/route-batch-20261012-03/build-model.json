@@ -1,0 +1,85 @@
+{
+  "argv": [
+    "/root/.rustup/toolchains/nightly-2026-08-01-x86_64-unknown-linux-gnu/bin/cargo",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "ferrule-model",
+    "--features",
+    "cuda",
+    "--lib",
+    "--no-run",
+    "--message-format=json",
+    "--target-dir",
+    "/home/admin/luhuanbing.lhb/Ferrule/target/pair-swiglu-cuda124"
+  ],
+  "supervisor": {
+    "returncode": 0,
+    "timed_out": false,
+    "wall_seconds": 87.01015559211373,
+    "stdout": "",
+    "stderr": "",
+    "cleanup_errors": [],
+    "cleanup_scope": "isolated_subreaper_direct_children",
+    "descendant_custody": "proven_drained",
+    "gpu_quiescence": "unverified",
+    "custody": {
+      "status": "proven_drained",
+      "method": "linux-subreaper-waitid",
+      "containment_verified": true,
+      "launch_id": "254d2941e6b94f7284bb685af1ce2993",
+      "helper_identity": {
+        "pid": 933,
+        "birth_ticks": 105213751,
+        "ppid": 615,
+        "pgrp": 933,
+        "session": 933
+      },
+      "root_identity": {
+        "pid": 934,
+        "birth_ticks": 105213754,
+        "ppid": 933,
+        "pgrp": 933,
+        "session": 933
+      },
+      "boot_id": "4dd3497d-570c-4693-a876-5c26e06ab360",
+      "entries": [
+        {
+          "identity": {
+            "pid": 934,
+            "birth_ticks": 105213754,
+            "ppid": 933,
+            "pgrp": 933,
+            "session": 933
+          },
+          "role": "root",
+          "signals": [],
+          "reaped": true,
+          "exit_code": 0,
+          "first_observed_at": 8688257.897203946,
+          "reaped_at": 8688344.80734243
+        }
+      ],
+      "errors": [],
+      "reporting_errors": [],
+      "echild": true
+    },
+    "handshake": {
+      "kind": "ready",
+      "protocol": 1,
+      "launch_id": "254d2941e6b94f7284bb685af1ce2993",
+      "helper_identity": {
+        "pid": 933,
+        "birth_ticks": 105213751,
+        "ppid": 615,
+        "pgrp": 933,
+        "session": 933
+      },
+      "containment_verified": true,
+      "method": "linux-subreaper-waitid"
+    },
+    "stdout_truncated": false,
+    "stderr_truncated": false
+  }
+}

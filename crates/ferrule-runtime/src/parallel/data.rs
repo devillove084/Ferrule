@@ -25,15 +25,19 @@
 //! not return/cooperate.
 
 use std::collections::{BTreeMap, HashMap};
+use std::future::Future;
 use std::mem::{self, ManuallyDrop};
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::sync::Arc;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError};
+use std::sync::{Arc, Condvar, Mutex};
+use std::task::{Context, Wake, Waker};
 use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
 
-use ferrule_common::ParallelRankId;
 use ferrule_common::execution::ExecutionTransactionId;
+use ferrule_common::{CompletionHub, CompletionListener, ParallelRankId};
 
 use crate::SessionId;
 
@@ -258,6 +262,71 @@ struct Replica<I, O, E> {
     outstanding: usize,
 }
 
+// This is only a synchronous adapter for the existing single-consumer hub,
+// never an executor/block_on for arbitrary futures. No business state is held
+// under this lock, and listener polling (which may invoke Wake) is outside it.
+#[derive(Default)]
+struct CompletionSignal {
+    notified: Mutex<bool>,
+    ready: Condvar,
+}
+
+impl Wake for CompletionSignal {
+    fn wake(self: Arc<Self>) {
+        self.wake_by_ref();
+    }
+
+    fn wake_by_ref(self: &Arc<Self>) {
+        *self.notified.lock().unwrap_or_else(|e| e.into_inner()) = true;
+        self.ready.notify_one();
+    }
+}
+
+struct CompletionWait {
+    signal: Arc<CompletionSignal>,
+    waker: Waker,
+}
+
+impl CompletionWait {
+    fn new() -> Self {
+        let signal = Arc::new(CompletionSignal::default());
+        let waker = Waker::from(Arc::clone(&signal));
+        Self { signal, waker }
+    }
+
+    fn wait(&self, listener: &mut CompletionListener, deadline: Instant) {
+        // Cancellation is a callback/atomic flag, not a hub producer. Bound
+        // rechecks even when no further completion or owner-exit notification
+        // can arrive. The listener registration has a second epoch check.
+        let until = deadline.min(Instant::now() + Duration::from_millis(1));
+        *self
+            .signal
+            .notified
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = false;
+        let mut context = Context::from_waker(&self.waker);
+        if Pin::new(listener).poll(&mut context).is_ready() {
+            return;
+        }
+        #[cfg(test)]
+        completion_wait_tests::registered();
+        let notified = self
+            .signal
+            .notified
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _guard = self
+            .signal
+            .ready
+            .wait_timeout_while(
+                notified,
+                until.saturating_duration_since(Instant::now()),
+                |notified| !*notified,
+            )
+            .unwrap_or_else(|e| e.into_inner());
+    }
+}
+
 /// Single host coordinator; mutable admission serializes routing and ID checks.
 /// Memory is bounded by session_capacity + replicas * outstanding capacity
 /// (payload sizes themselves remain the caller's responsibility).
@@ -270,12 +339,16 @@ pub struct DataParallelExecutor<I: Send + 'static, O: Send + 'static, E: Send + 
     next_route: usize,
     next_poll: usize,
     closed: bool,
+    completion_hub: CompletionHub,
+    completion_wait: CompletionWait,
 }
 
 impl<I: Send + 'static, O: Send + 'static, E: Send + 'static> DataParallelExecutor<I, O, E> {
     /// The Send factory is cloned on the host, but invoked INSIDE each thread.
     /// Neither W nor its device-local state needs to implement Send or Sync.
-    /// Returns only after every created owner acknowledges initialization.
+    /// Factories start concurrently; they must not rely on rank-ordered startup.
+    /// Returns only after every created owner acknowledges initialization. Any
+    /// startup failure closes all inputs and joins every created owner.
     pub fn new<F, W>(config: DataParallelConfig, factory: F) -> Result<Self, BuildError<E>>
     where
         F: FnOnce(ParallelRankId) -> Result<W, E> + Clone + Send + 'static,
@@ -291,21 +364,30 @@ impl<I: Send + 'static, O: Send + 'static, E: Send + 'static> DataParallelExecut
             next_route: 0,
             next_poll: 0,
             closed: false,
+            completion_hub: CompletionHub::new(),
+            completion_wait: CompletionWait::new(),
         };
+        // Readiness is one barrier for the whole pool, rather than one barrier
+        // nested inside the spawn loop.  This lets every owner enter its
+        // owner-local factory before the coordinator observes any result.
+        let (ready_tx, ready_rx) =
+            mpsc::sync_channel::<(usize, Result<(), OwnerFailure<E>>)>(config.replicas);
+        let mut spawn_failure = None;
         for index in 0..config.replicas {
             let rank = rank_id(index);
             let (sender, requests) = mpsc::sync_channel(config.max_outstanding_per_replica);
             let (results, receiver) = mpsc::sync_channel(config.max_outstanding_per_replica);
-            let (ready_tx, ready_rx) = mpsc::sync_channel(1);
             let alive = Arc::new(AtomicBool::new(true));
             let owner_alive = Arc::clone(&alive);
             let in_flight = Arc::new(AtomicU64::new(0));
             let owner_in_flight = Arc::clone(&in_flight);
             let make_worker = factory.clone();
+            let ready_tx = ready_tx.clone();
+            let completion_hub = pool.completion_hub.clone();
             let owner = thread::Builder::new()
                 .name(format!("dp-owner-{index}"))
                 .spawn(move || {
-                    let _exit = OwnerExit(Arc::clone(&owner_alive));
+                    let _exit = OwnerExit(Arc::clone(&owner_alive), completion_hub.clone());
                     let initialized = catch_unwind(AssertUnwindSafe(|| make_worker(rank)));
                     let worker = match initialized {
                         Ok(Ok(worker)) => worker,
@@ -325,17 +407,21 @@ impl<I: Send + 'static, O: Send + 'static, E: Send + 'static> DataParallelExecut
                                 },
                                 Ok(Ok(_)) => unreachable!(),
                             };
-                            let _ = ready_tx.send(Err(OwnerFailure {
-                                rank,
-                                transaction: None,
-                                kind,
-                            }));
+                            let _ = ready_tx.send((
+                                index,
+                                Err(OwnerFailure {
+                                    rank,
+                                    transaction: None,
+                                    kind,
+                                }),
+                            ));
                             return Ok(());
                         }
                     };
-                    if ready_tx.send(Ok(())).is_err() {
-                        return Ok(());
-                    }
+                    // A lost readiness receiver still requires normal owner
+                    // shutdown/quarantine, not an unfenced worker Drop.
+                    let _ = ready_tx.send((index, Ok(())));
+                    drop(ready_tx);
                     run_owner(
                         rank,
                         worker,
@@ -343,43 +429,79 @@ impl<I: Send + 'static, O: Send + 'static, E: Send + 'static> DataParallelExecut
                         results,
                         &owner_alive,
                         &owner_in_flight,
+                        &completion_hub,
                     )
                 });
-            let failure = match owner {
-                Ok(owner) => {
-                    pool.replicas.push(Replica {
-                        sender: Some(sender),
-                        receiver,
-                        owner: Some(owner),
-                        alive,
-                        in_flight,
-                        outstanding: 0,
-                    });
-                    match ready_rx.recv() {
-                        Ok(Ok(())) => None,
-                        Ok(Err(failure)) => Some(failure),
-                        Err(_) => Some(OwnerFailure {
-                            rank,
-                            transaction: None,
-                            kind: OwnerFailureKind::Panicked,
-                        }),
-                    }
-                }
-                Err(error) => Some(OwnerFailure {
-                    rank,
-                    transaction: None,
-                    kind: OwnerFailureKind::Spawn(error),
+            match owner {
+                Ok(owner) => pool.replicas.push(Replica {
+                    sender: Some(sender),
+                    receiver,
+                    owner: Some(owner),
+                    alive,
+                    in_flight,
+                    outstanding: 0,
                 }),
-            };
-            if let Some(failure) = failure {
-                let mut failures = vec![failure];
-                if let Err(error) = pool.shutdown() {
-                    failures.extend(error.failures);
+                Err(error) => {
+                    spawn_failure = Some(OwnerFailure {
+                        rank,
+                        transaction: None,
+                        kind: OwnerFailureKind::Spawn(error),
+                    });
+                    break;
                 }
-                return Err(BuildError::Owners(failures));
             }
         }
-        Ok(pool)
+        drop(ready_tx);
+
+        if spawn_failure.is_some() {
+            pool.begin_shutdown();
+        }
+
+        // Receive all owner-local initialization results before publishing the
+        // pool.  Indexing by owner rank makes the failure receipt deterministic,
+        // while the channel itself allows factories to finish concurrently.
+        let spawned = pool.replicas.len();
+        let mut readiness: Vec<Option<Result<(), OwnerFailure<E>>>> =
+            (0..spawned).map(|_| None).collect();
+        for _ in 0..spawned {
+            match ready_rx.recv() {
+                Ok((index, result)) => {
+                    if result.is_err() {
+                        // Stop accepting new work as soon as any owner reports
+                        // startup failure; the remaining readiness messages are
+                        // still collected so every owner can be joined below.
+                        pool.begin_shutdown();
+                    }
+                    readiness[index] = Some(result);
+                }
+                Err(_) => break,
+            }
+        }
+        let mut failures = Vec::new();
+        for (index, result) in readiness.into_iter().enumerate() {
+            match result {
+                Some(Ok(())) => {}
+                Some(Err(failure)) => failures.push(failure),
+                None => failures.push(OwnerFailure {
+                    rank: rank_id(index),
+                    transaction: None,
+                    kind: OwnerFailureKind::Panicked,
+                }),
+            }
+        }
+        failures.extend(spawn_failure);
+        if failures.is_empty() {
+            Ok(pool)
+        } else {
+            // Every owner was spawned before this barrier was evaluated.  The
+            // normal shutdown path therefore joins initialized, failed, and
+            // already-exited owners together, preserving their existing
+            // cancellation, quiescence, and cleanup guarantees.
+            if let Err(error) = pool.shutdown() {
+                failures.extend(error.failures);
+            }
+            Err(BuildError::Owners(failures))
+        }
     }
 
     pub fn session_rank(&self, session: SessionId) -> Option<ParallelRankId> {
@@ -523,14 +645,14 @@ impl<I: Send + 'static, O: Send + 'static, E: Send + 'static> DataParallelExecut
                 input,
             ));
         }
-        if let Some(high_watermark) = self.high_watermark {
-            if transaction <= high_watermark {
-                return Err(reject(
-                    SubmitErrorKind::RetiredOrOutOfOrder { high_watermark },
-                    sticky,
-                    input,
-                ));
-            }
+        if let Some(high_watermark) = self.high_watermark
+            && transaction <= high_watermark
+        {
+            return Err(reject(
+                SubmitErrorKind::RetiredOrOutOfOrder { high_watermark },
+                sticky,
+                input,
+            ));
         }
         if sticky.is_none() && self.sessions.len() >= self.config.session_capacity {
             return Err(reject(SubmitErrorKind::SessionCapacity, None, input));
@@ -696,6 +818,19 @@ impl<I: Send + 'static, O: Send + 'static, E: Send + 'static> DataParallelExecut
         None
     }
 
+    /// Snapshot BEFORE checking/draining the completion channel or join state.
+    /// The hub epoch covers progress between that check and waker registration.
+    pub(super) fn completion_listener(&self) -> CompletionListener {
+        self.completion_hub.listen()
+    }
+
+    /// Synchronous owner-thread wait only; do not block an async runtime task.
+    /// A wake/timeout is NOT completion evidence and never releases a credit.
+    /// Callers must recheck their deadline, cancellation and original predicate.
+    pub(super) fn wait_for_completion(&self, listener: &mut CompletionListener, deadline: Instant) {
+        self.completion_wait.wait(listener, deadline);
+    }
+
     pub fn poll(&mut self) -> Option<HostCompletion<O, E>> {
         self.try_recv()
     }
@@ -773,11 +908,14 @@ fn rank_id(index: usize) -> ParallelRankId {
     ParallelRankId::new(u32::try_from(index).expect("validated replica count"))
 }
 
-struct OwnerExit(Arc<AtomicBool>);
+struct OwnerExit(Arc<AtomicBool>, CompletionHub);
 
 impl Drop for OwnerExit {
     fn drop(&mut self) {
         self.0.store(false, Ordering::Release);
+        // This precedes the thread's final exit; bounded consumers must still
+        // check JoinHandle::is_finished, never treat the wake as join evidence.
+        self.1.notify();
     }
 }
 
@@ -817,6 +955,7 @@ fn run_owner<I, W: ReplicaWorker<I>>(
     results: SyncSender<Delivery<W::Output, W::Error>>,
     alive: &AtomicBool,
     in_flight: &AtomicU64,
+    completion_hub: &CompletionHub,
 ) -> Result<(), OwnerFailure<W::Error>> {
     // Keep the allocation as well as its fields alive on quarantine. Suppressing
     // Drop for a stack W alone would let thread exit reclaim its inline storage.
@@ -852,6 +991,7 @@ fn run_owner<I, W: ReplicaWorker<I>>(
                         ),
                     };
                     let _ = results.send((transaction, outcome));
+                    completion_hub.notify();
                     if quiescence == PanicQuiescence::Quiescent {
                         drop(ManuallyDrop::into_inner(worker));
                     }
@@ -866,6 +1006,7 @@ fn run_owner<I, W: ReplicaWorker<I>>(
         if results.send((transaction, outcome)).is_err() {
             break;
         }
+        completion_hub.notify();
     }
     let result = match catch_unwind(AssertUnwindSafe(|| worker.shutdown())) {
         Ok(result) => result.map_err(|error| OwnerFailure {
@@ -892,3 +1033,7 @@ fn run_owner<I, W: ReplicaWorker<I>>(
     drop(ManuallyDrop::into_inner(worker));
     result
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/parallel/data_completion_wait.rs"]
+mod completion_wait_tests;

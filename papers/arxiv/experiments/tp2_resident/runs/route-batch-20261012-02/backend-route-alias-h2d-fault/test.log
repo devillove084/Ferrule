@@ -1,0 +1,6 @@
+
+running 1 test
+test cuda::operators::standard_bf16::tests::packed_routes_gpu_reject_invalid_owners_aliases_and_after_h2d_fault ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 310 filtered out; finished in 0.68s
+

@@ -1,0 +1,16 @@
+{
+  "passed": true,
+  "gate": {
+    "name": "backend-route-finite-bits",
+    "binary": "backend",
+    "selector": "cuda::operators::standard_bf16::tests::packed_routes_gpu_finite_bits_and_preflight_no_work",
+    "evidence": "route_batch_backend_words_counts_custody",
+    "devices": 1,
+    "reference": null,
+    "cache_bytes": null,
+    "observer": null
+  },
+  "proven_drained": true,
+  "all_eight_idle": true,
+  "performance_claim": false
+}

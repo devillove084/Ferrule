@@ -1,0 +1,140 @@
+{
+  "status": "verified",
+  "observations": [
+    {
+      "index": 0,
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "total_bytes": 25769803776,
+      "gpu_bytes": 0,
+      "utilization": 0,
+      "devices": [
+        {
+          "index": 0,
+          "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+          "total_bytes": 25769803776,
+          "gpu_bytes": 0,
+          "utilization": 0
+        },
+        {
+          "index": 1,
+          "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+          "total_bytes": 25769803776,
+          "gpu_bytes": 0,
+          "utilization": 0
+        },
+        {
+          "index": 2,
+          "uuid": "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6",
+          "total_bytes": 25769803776,
+          "gpu_bytes": 0,
+          "utilization": 0
+        },
+        {
+          "index": 3,
+          "uuid": "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011",
+          "total_bytes": 25769803776,
+          "gpu_bytes": 0,
+          "utilization": 0
+        },
+        {
+          "index": 4,
+          "uuid": "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86",
+          "total_bytes": 25769803776,
+          "gpu_bytes": 0,
+          "utilization": 0
+        },
+        {
+          "index": 5,
+          "uuid": "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685",
+          "total_bytes": 25769803776,
+          "gpu_bytes": 0,
+          "utilization": 0
+        },
+        {
+          "index": 6,
+          "uuid": "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d",
+          "total_bytes": 25769803776,
+          "gpu_bytes": 0,
+          "utilization": 0
+        },
+        {
+          "index": 7,
+          "uuid": "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f",
+          "total_bytes": 25769803776,
+          "gpu_bytes": 0,
+          "utilization": 0
+        }
+      ],
+      "apps": [],
+      "monotonic": 8410329.620850457
+    },
+    {
+      "index": 0,
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "total_bytes": 25769803776,
+      "gpu_bytes": 0,
+      "utilization": 0,
+      "devices": [
+        {
+          "index": 0,
+          "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+          "total_bytes": 25769803776,
+          "gpu_bytes": 0,
+          "utilization": 0
+        },
+        {
+          "index": 1,
+          "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+          "total_bytes": 25769803776,
+          "gpu_bytes": 0,
+          "utilization": 0
+        },
+        {
+          "index": 2,
+          "uuid": "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6",
+          "total_bytes": 25769803776,
+          "gpu_bytes": 0,
+          "utilization": 0
+        },
+        {
+          "index": 3,
+          "uuid": "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011",
+          "total_bytes": 25769803776,
+          "gpu_bytes": 0,
+          "utilization": 0
+        },
+        {
+          "index": 4,
+          "uuid": "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86",
+          "total_bytes": 25769803776,
+          "gpu_bytes": 0,
+          "utilization": 0
+        },
+        {
+          "index": 5,
+          "uuid": "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685",
+          "total_bytes": 25769803776,
+          "gpu_bytes": 0,
+          "utilization": 0
+        },
+        {
+          "index": 6,
+          "uuid": "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d",
+          "total_bytes": 25769803776,
+          "gpu_bytes": 0,
+          "utilization": 0
+        },
+        {
+          "index": 7,
+          "uuid": "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f",
+          "total_bytes": 25769803776,
+          "gpu_bytes": 0,
+          "utilization": 0
+        }
+      ],
+      "apps": [],
+      "monotonic": 8410330.092016151
+    }
+  ],
+  "scope": "all eight physical GPUs"
+}

@@ -1,0 +1,10 @@
+{
+  "added": {
+    "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/nsight-systems-cli-2025.3.1/opt/nvidia/nsight-systems-cli/2025.3.1/target-linux-x64/python/lib/__pycache__/kernel_helper.cpython-312.pyc": "53a694d31e34d89eaaebfb4d3c1061605241dc23f2a85811e27de0107fa39630",
+    "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/nsight-systems-cli-2025.3.1/opt/nvidia/nsight-systems-cli/2025.3.1/target-linux-x64/python/lib/__pycache__/nsysstats.cpython-312.pyc": "810c32cdba47e2f17f5c0ce8a8d4b39423d5cbb65382a2000d486a5bada18992"
+  },
+  "changed": {},
+  "removed": {},
+  "origin": "Official nsys stats Python cache, produced only after successful capture/drain; not execution source changes",
+  "action": "preserved as recorded tool outputs; original workflow file hashes all still match"
+}

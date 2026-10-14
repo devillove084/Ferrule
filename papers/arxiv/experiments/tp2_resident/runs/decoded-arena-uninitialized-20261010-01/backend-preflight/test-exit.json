@@ -1,0 +1,6 @@
+{
+  "returncode": 0,
+  "one_test_passed": true,
+  "selector": "cuda::providers::bf16_gemmex::mixed_decode_reuse_tests::mixed_decode_pair_rejections",
+  "binary_sha256": "a6f5fb2bade4f085fcfc9c91c2745a5adaa4393fddd9fb76e8e64b219e503b0b"
+}

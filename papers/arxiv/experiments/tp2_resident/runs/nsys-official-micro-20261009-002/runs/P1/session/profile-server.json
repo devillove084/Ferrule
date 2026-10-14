@@ -1,0 +1,18 @@
+{
+  "returncode": 0,
+  "samples": [
+    {
+      "index": 0,
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "returncode": 0,
+      "passed": true
+    },
+    {
+      "index": 1,
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "returncode": 0,
+      "passed": true
+    }
+  ],
+  "workload": "NVIDIA CUDA12.4 demo_suite/vectorAdd"
+}

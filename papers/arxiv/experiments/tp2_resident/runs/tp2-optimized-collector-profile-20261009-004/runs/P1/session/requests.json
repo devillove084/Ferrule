@@ -1,0 +1,504 @@
+{
+  "status": "complete",
+  "phases": [
+    {
+      "stage": "hello2",
+      "gate": {
+        "status": "pass",
+        "engine": "ferrule",
+        "checks": [
+          {
+            "index": 0,
+            "passed": true,
+            "actual_input_tokens": 1,
+            "actual_output_tokens": 2
+          }
+        ],
+        "first_qa_requests": 0,
+        "warmup_requests": 0,
+        "measured_requests": 1,
+        "http_receipt_sha256": "deb71f441ae6b766c6230e03e47bda3fc942132f30f46b4239454fd6874fd953",
+        "coverage": "visible text/usage only; separate pinned numerical acceptance, not arithmetic parity",
+        "fairmatch": false,
+        "exact_speedup": null
+      }
+    },
+    {
+      "stage": "canary8",
+      "gate": {
+        "status": "pass",
+        "engine": "ferrule",
+        "checks": [
+          {
+            "index": 0,
+            "passed": true,
+            "actual_input_tokens": 5,
+            "actual_output_tokens": 8
+          },
+          {
+            "index": 1,
+            "passed": true,
+            "actual_input_tokens": 5,
+            "actual_output_tokens": 8
+          },
+          {
+            "index": 2,
+            "passed": true,
+            "actual_input_tokens": 3,
+            "actual_output_tokens": 8
+          }
+        ],
+        "first_qa_requests": 0,
+        "warmup_requests": 0,
+        "measured_requests": 3,
+        "http_receipt_sha256": "d040a4aac8976a6056189211eba25b187d397079a021985ed786bf54aab7057c",
+        "coverage": "visible text/usage only; separate pinned numerical acceptance, not arithmetic parity",
+        "fairmatch": false,
+        "exact_speedup": null
+      }
+    },
+    {
+      "stage": "profile",
+      "gate": {
+        "schema": "ferrule.paper.tp2-profile-window.v1",
+        "status": "pass",
+        "requests": [
+          {
+            "text": " Tokyo.\nThe capital of Japan is",
+            "raw_sse_events": [
+              {
+                "at": 8501188.967193244,
+                "event": "",
+                "data": "{\"id\":\"cmpl-ferrule-5\",\"object\":\"text_completion\",\"created\":1791558244,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\" Tokyo\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}"
+              },
+              {
+                "at": 8501189.175431332,
+                "event": "",
+                "data": "{\"id\":\"cmpl-ferrule-5\",\"object\":\"text_completion\",\"created\":1791558244,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\".\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}"
+              },
+              {
+                "at": 8501189.383513872,
+                "event": "",
+                "data": "{\"id\":\"cmpl-ferrule-5\",\"object\":\"text_completion\",\"created\":1791558244,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\"\\n\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}"
+              },
+              {
+                "at": 8501189.593903068,
+                "event": "",
+                "data": "{\"id\":\"cmpl-ferrule-5\",\"object\":\"text_completion\",\"created\":1791558244,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\"The\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}"
+              },
+              {
+                "at": 8501189.819347654,
+                "event": "",
+                "data": "{\"id\":\"cmpl-ferrule-5\",\"object\":\"text_completion\",\"created\":1791558244,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\" capital\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}"
+              },
+              {
+                "at": 8501190.027524875,
+                "event": "",
+                "data": "{\"id\":\"cmpl-ferrule-5\",\"object\":\"text_completion\",\"created\":1791558244,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\" of\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}"
+              },
+              {
+                "at": 8501190.235992603,
+                "event": "",
+                "data": "{\"id\":\"cmpl-ferrule-5\",\"object\":\"text_completion\",\"created\":1791558244,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\" Japan\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}"
+              },
+              {
+                "at": 8501190.446447257,
+                "event": "",
+                "data": "{\"id\":\"cmpl-ferrule-5\",\"object\":\"text_completion\",\"created\":1791558244,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\" is\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}"
+              },
+              {
+                "at": 8501190.446510946,
+                "event": "",
+                "data": "{\"id\":\"cmpl-ferrule-5\",\"object\":\"text_completion\",\"created\":1791558244,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\"\",\"index\":0,\"logprobs\":null,\"finish_reason\":\"length\"}]}"
+              },
+              {
+                "at": 8501190.446541123,
+                "event": "",
+                "data": "{\"id\":\"cmpl-ferrule-5\",\"object\":\"text_completion\",\"created\":1791558244,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":8,\"total_tokens\":13}}"
+              },
+              {
+                "at": 8501190.446571741,
+                "event": "",
+                "data": "[DONE]"
+              }
+            ],
+            "content_event_times": [
+              8501188.967193244,
+              8501189.175431332,
+              8501189.383513872,
+              8501189.593903068,
+              8501189.819347654,
+              8501190.027524875,
+              8501190.235992603,
+              8501190.446447257
+            ],
+            "content_event_itl_seconds": [
+              0.20823808759450912,
+              0.208082539960742,
+              0.21038919687271118,
+              0.22544458508491516,
+              0.2081772219389677,
+              0.20846772752702236,
+              0.21045465394854546
+            ],
+            "content_events": 8,
+            "usage": {
+              "prompt_tokens": 5,
+              "completion_tokens": 8,
+              "total_tokens": 13
+            },
+            "actual_output_tokens": 8,
+            "actual_input_tokens": 5,
+            "finish_reason": "length",
+            "finish_at": 8501190.446510946,
+            "usage_at": 8501190.446541123,
+            "done_at": 8501190.446571741,
+            "ttft_seconds": 1.2446917593479156,
+            "request_e2e_seconds": 2.7241676580160856,
+            "mean_tpot_usage_proxy_seconds": 0.21132200184677327,
+            "token_itl_seconds": null,
+            "exact_token_tpot_seconds": null,
+            "reasoning_observed": false,
+            "output_token_ids": null,
+            "partial_token_count": 8,
+            "label": "warmup",
+            "status": "success",
+            "error": null,
+            "events": [
+              {
+                "kind": "start",
+                "at": 8501187.722513566,
+                "unix": 1791558244.6859949
+              },
+              {
+                "kind": "headers",
+                "at": 8501187.746602308,
+                "status": 200,
+                "content_type": "text/event-stream"
+              },
+              {
+                "kind": "event",
+                "data": "{\"id\":\"cmpl-ferrule-5\",\"object\":\"text_completion\",\"created\":1791558244,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\" Tokyo\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}",
+                "event": "",
+                "at": 8501188.967193244
+              },
+              {
+                "kind": "event",
+                "data": "{\"id\":\"cmpl-ferrule-5\",\"object\":\"text_completion\",\"created\":1791558244,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\".\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}",
+                "event": "",
+                "at": 8501189.175431332
+              },
+              {
+                "kind": "event",
+                "data": "{\"id\":\"cmpl-ferrule-5\",\"object\":\"text_completion\",\"created\":1791558244,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\"\\n\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}",
+                "event": "",
+                "at": 8501189.383513872
+              },
+              {
+                "kind": "event",
+                "data": "{\"id\":\"cmpl-ferrule-5\",\"object\":\"text_completion\",\"created\":1791558244,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\"The\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}",
+                "event": "",
+                "at": 8501189.593903068
+              },
+              {
+                "kind": "event",
+                "data": "{\"id\":\"cmpl-ferrule-5\",\"object\":\"text_completion\",\"created\":1791558244,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\" capital\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}",
+                "event": "",
+                "at": 8501189.819347654
+              },
+              {
+                "kind": "event",
+                "data": "{\"id\":\"cmpl-ferrule-5\",\"object\":\"text_completion\",\"created\":1791558244,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\" of\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}",
+                "event": "",
+                "at": 8501190.027524875
+              },
+              {
+                "kind": "event",
+                "data": "{\"id\":\"cmpl-ferrule-5\",\"object\":\"text_completion\",\"created\":1791558244,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\" Japan\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}",
+                "event": "",
+                "at": 8501190.235992603
+              },
+              {
+                "kind": "event",
+                "data": "{\"id\":\"cmpl-ferrule-5\",\"object\":\"text_completion\",\"created\":1791558244,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\" is\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}",
+                "event": "",
+                "at": 8501190.446447257
+              },
+              {
+                "kind": "event",
+                "data": "{\"id\":\"cmpl-ferrule-5\",\"object\":\"text_completion\",\"created\":1791558244,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\"\",\"index\":0,\"logprobs\":null,\"finish_reason\":\"length\"}]}",
+                "event": "",
+                "at": 8501190.446510946
+              },
+              {
+                "kind": "event",
+                "data": "{\"id\":\"cmpl-ferrule-5\",\"object\":\"text_completion\",\"created\":1791558244,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":8,\"total_tokens\":13}}",
+                "event": "",
+                "at": 8501190.446541123
+              },
+              {
+                "kind": "event",
+                "data": "[DONE]",
+                "event": "",
+                "at": 8501190.446571741
+              },
+              {
+                "kind": "end",
+                "at": 8501190.44663822,
+                "status": "success",
+                "error": null
+              }
+            ],
+            "start_clock": {
+              "monotonic_ns": 8501187722502258,
+              "unix_ns": 1791558244685984072
+            },
+            "end_clock": {
+              "monotonic_ns": 8501190446683412,
+              "unix_ns": 1791558247410165225
+            },
+            "passed": true
+          },
+          {
+            "text": " Tokyo.\nThe capital of Japan is",
+            "raw_sse_events": [
+              {
+                "at": 8501192.278818624,
+                "event": "",
+                "data": "{\"id\":\"cmpl-ferrule-6\",\"object\":\"text_completion\",\"created\":1791558247,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\" Tokyo\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}"
+              },
+              {
+                "at": 8501192.483019954,
+                "event": "",
+                "data": "{\"id\":\"cmpl-ferrule-6\",\"object\":\"text_completion\",\"created\":1791558247,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\".\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}"
+              },
+              {
+                "at": 8501192.696120212,
+                "event": "",
+                "data": "{\"id\":\"cmpl-ferrule-6\",\"object\":\"text_completion\",\"created\":1791558247,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\"\\n\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}"
+              },
+              {
+                "at": 8501192.898506429,
+                "event": "",
+                "data": "{\"id\":\"cmpl-ferrule-6\",\"object\":\"text_completion\",\"created\":1791558247,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\"The\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}"
+              },
+              {
+                "at": 8501193.100358805,
+                "event": "",
+                "data": "{\"id\":\"cmpl-ferrule-6\",\"object\":\"text_completion\",\"created\":1791558247,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\" capital\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}"
+              },
+              {
+                "at": 8501193.30266714,
+                "event": "",
+                "data": "{\"id\":\"cmpl-ferrule-6\",\"object\":\"text_completion\",\"created\":1791558247,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\" of\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}"
+              },
+              {
+                "at": 8501193.50898823,
+                "event": "",
+                "data": "{\"id\":\"cmpl-ferrule-6\",\"object\":\"text_completion\",\"created\":1791558247,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\" Japan\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}"
+              },
+              {
+                "at": 8501193.730679115,
+                "event": "",
+                "data": "{\"id\":\"cmpl-ferrule-6\",\"object\":\"text_completion\",\"created\":1791558247,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\" is\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}"
+              },
+              {
+                "at": 8501193.730752373,
+                "event": "",
+                "data": "{\"id\":\"cmpl-ferrule-6\",\"object\":\"text_completion\",\"created\":1791558247,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\"\",\"index\":0,\"logprobs\":null,\"finish_reason\":\"length\"}]}"
+              },
+              {
+                "at": 8501193.730781153,
+                "event": "",
+                "data": "{\"id\":\"cmpl-ferrule-6\",\"object\":\"text_completion\",\"created\":1791558247,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":8,\"total_tokens\":13}}"
+              },
+              {
+                "at": 8501193.730812756,
+                "event": "",
+                "data": "[DONE]"
+              }
+            ],
+            "content_event_times": [
+              8501192.278818624,
+              8501192.483019954,
+              8501192.696120212,
+              8501192.898506429,
+              8501193.100358805,
+              8501193.30266714,
+              8501193.50898823,
+              8501193.730679115
+            ],
+            "content_event_itl_seconds": [
+              0.2042013294994831,
+              0.21310025826096535,
+              0.20238621719181538,
+              0.2018523756414652,
+              0.20230833441019058,
+              0.2063210904598236,
+              0.22169088572263718
+            ],
+            "content_events": 8,
+            "usage": {
+              "prompt_tokens": 5,
+              "completion_tokens": 8,
+              "total_tokens": 13
+            },
+            "actual_output_tokens": 8,
+            "actual_input_tokens": 5,
+            "finish_reason": "length",
+            "finish_at": 8501193.730752373,
+            "usage_at": 8501193.730781153,
+            "done_at": 8501193.730812756,
+            "ttft_seconds": 1.5690213795751333,
+            "request_e2e_seconds": 3.0210989862680435,
+            "mean_tpot_usage_proxy_seconds": 0.20740864159805433,
+            "token_itl_seconds": null,
+            "exact_token_tpot_seconds": null,
+            "reasoning_observed": false,
+            "output_token_ids": null,
+            "partial_token_count": 8,
+            "label": "measured",
+            "status": "success",
+            "error": null,
+            "events": [
+              {
+                "kind": "start",
+                "at": 8501190.709811345,
+                "unix": 1791558247.6732926
+              },
+              {
+                "kind": "headers",
+                "at": 8501190.750417134,
+                "status": 200,
+                "content_type": "text/event-stream"
+              },
+              {
+                "kind": "event",
+                "data": "{\"id\":\"cmpl-ferrule-6\",\"object\":\"text_completion\",\"created\":1791558247,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\" Tokyo\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}",
+                "event": "",
+                "at": 8501192.278818624
+              },
+              {
+                "kind": "event",
+                "data": "{\"id\":\"cmpl-ferrule-6\",\"object\":\"text_completion\",\"created\":1791558247,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\".\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}",
+                "event": "",
+                "at": 8501192.483019954
+              },
+              {
+                "kind": "event",
+                "data": "{\"id\":\"cmpl-ferrule-6\",\"object\":\"text_completion\",\"created\":1791558247,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\"\\n\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}",
+                "event": "",
+                "at": 8501192.696120212
+              },
+              {
+                "kind": "event",
+                "data": "{\"id\":\"cmpl-ferrule-6\",\"object\":\"text_completion\",\"created\":1791558247,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\"The\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}",
+                "event": "",
+                "at": 8501192.898506429
+              },
+              {
+                "kind": "event",
+                "data": "{\"id\":\"cmpl-ferrule-6\",\"object\":\"text_completion\",\"created\":1791558247,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\" capital\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}",
+                "event": "",
+                "at": 8501193.100358805
+              },
+              {
+                "kind": "event",
+                "data": "{\"id\":\"cmpl-ferrule-6\",\"object\":\"text_completion\",\"created\":1791558247,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\" of\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}",
+                "event": "",
+                "at": 8501193.30266714
+              },
+              {
+                "kind": "event",
+                "data": "{\"id\":\"cmpl-ferrule-6\",\"object\":\"text_completion\",\"created\":1791558247,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\" Japan\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}",
+                "event": "",
+                "at": 8501193.50898823
+              },
+              {
+                "kind": "event",
+                "data": "{\"id\":\"cmpl-ferrule-6\",\"object\":\"text_completion\",\"created\":1791558247,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\" is\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}",
+                "event": "",
+                "at": 8501193.730679115
+              },
+              {
+                "kind": "event",
+                "data": "{\"id\":\"cmpl-ferrule-6\",\"object\":\"text_completion\",\"created\":1791558247,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[{\"text\":\"\",\"index\":0,\"logprobs\":null,\"finish_reason\":\"length\"}]}",
+                "event": "",
+                "at": 8501193.730752373
+              },
+              {
+                "kind": "event",
+                "data": "{\"id\":\"cmpl-ferrule-6\",\"object\":\"text_completion\",\"created\":1791558247,\"model\":\"qwen35-ferrule-tp2-resident-paper\",\"choices\":[],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":8,\"total_tokens\":13}}",
+                "event": "",
+                "at": 8501193.730781153
+              },
+              {
+                "kind": "event",
+                "data": "[DONE]",
+                "event": "",
+                "at": 8501193.730812756
+              },
+              {
+                "kind": "end",
+                "at": 8501193.730869986,
+                "status": "success",
+                "error": null
+              }
+            ],
+            "start_clock": {
+              "monotonic_ns": 8501190709798266,
+              "unix_ns": 1791558247673279571
+            },
+            "end_clock": {
+              "monotonic_ns": 8501193730909278,
+              "unix_ns": 1791558250694390922
+            },
+            "passed": true
+          }
+        ],
+        "capture": "explicit start-later after readiness/Hello/canaries; warm1 + measured1 QA8",
+        "numerical_capture": false,
+        "benchmark": false,
+        "start": {
+          "action": "start",
+          "argv": [
+            "/opt/nvidia/nsight-systems/2026.1.3/target-linux-x64/nsys",
+            "start",
+            "--session=FerruleProfile_tp2-optimized-collector-profile-20261009-004"
+          ],
+          "returncode": 0,
+          "stdout": "",
+          "stderr": "",
+          "start": {
+            "monotonic_ns": 8501183900871488,
+            "unix_ns": 1791558240864353429
+          },
+          "end": {
+            "monotonic_ns": 8501187483316945,
+            "unix_ns": 1791558244446798545
+          }
+        },
+        "stop": {
+          "action": "stop",
+          "argv": [
+            "/opt/nvidia/nsight-systems/2026.1.3/target-linux-x64/nsys",
+            "stop",
+            "--session=FerruleProfile_tp2-optimized-collector-profile-20261009-004"
+          ],
+          "returncode": 0,
+          "stdout": "Generating '/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-collector-profile-20261009-004/runs/P1/session/nsys-tmp/nsys-report-d075.qdstrm'\n\n[1/1] [0%                          ] nsys.nsys-rep\n[1/1] [0%                          ] nsys.nsys-rep\n[1/1] [==========49%               ] nsys.nsys-rep\n[1/1] [========================99% ] nsys.nsys-rep\n[1/1] [5%                          ] nsys.nsys-rep\n[1/1] [0%                          ] nsys.nsys-rep\n[1/1] [========================100%] nsys.nsys-repGenerated:\n\t/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-collector-profile-20261009-004/runs/P1/session/nsight/nsys.qdstrm\n\t/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-collector-profile-20261009-004/runs/P1/session/nsight/nsys.nsys-rep\n",
+          "stderr": "",
+          "start": {
+            "monotonic_ns": 8501193765725667,
+            "unix_ns": 1791558250729207013
+          },
+          "end": {
+            "monotonic_ns": 8501225554476602,
+            "unix_ns": 1791558282517958352
+          }
+        }
+      }
+    }
+  ],
+  "same_server": true
+}

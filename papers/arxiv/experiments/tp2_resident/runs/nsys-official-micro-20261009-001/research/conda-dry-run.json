@@ -1,0 +1,17 @@
+{
+  "caused_by": "None",
+  "channel_urls": [
+    "https://conda.anaconda.org/nvidia/linux-64",
+    "https://conda.anaconda.org/nvidia/noarch"
+  ],
+  "channels_formatted": "  - https://conda.anaconda.org/nvidia/linux-64\n  - https://conda.anaconda.org/nvidia/noarch",
+  "error": "PackagesNotFoundError: The following packages are not available from current channels:\n\n  - nsight-systems=2025.3.1\n\nCurrent channels:\n\n  - https://conda.anaconda.org/nvidia/linux-64\n  - https://conda.anaconda.org/nvidia/noarch\n\nTo search for alternate channels that may provide the conda package you're\nlooking for, navigate to\n\n    https://anaconda.org\n\nand use the search bar at the top of the page.\n",
+  "exception_name": "PackagesNotFoundError",
+  "exception_type": "<class 'conda.exceptions.PackagesNotFoundError'>",
+  "message": "The following packages are not available from current channels:\n\n  - nsight-systems=2025.3.1\n\nCurrent channels:\n\n  - https://conda.anaconda.org/nvidia/linux-64\n  - https://conda.anaconda.org/nvidia/noarch\n\nTo search for alternate channels that may provide the conda package you're\nlooking for, navigate to\n\n    https://anaconda.org\n\nand use the search bar at the top of the page.\n",
+  "packages": [
+    "nsight-systems=2025.3.1"
+  ],
+  "packages_formatted": "  - nsight-systems=2025.3.1"
+}
+

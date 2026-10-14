@@ -1,0 +1,8 @@
+{
+  "status": "pass",
+  "shards": 14,
+  "bytes": 37463724680,
+  "manifest_sha256": "fb96ba4dd134761af30b4025b4cce86f96136cb01f05b5b4fca3e74587caa71d",
+  "elapsed_seconds": 36.64124101027846,
+  "policy": "All original indexed whole-file hashes/sizes and index/config/tokenizer identities re-read after export"
+}

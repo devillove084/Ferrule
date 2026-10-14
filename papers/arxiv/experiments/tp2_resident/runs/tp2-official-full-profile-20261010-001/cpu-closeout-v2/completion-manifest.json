@@ -1,0 +1,429 @@
+{
+  "schema": "ferrule.paper.nsight-cpu-recovery-closeout.v1",
+  "status": "complete_cpu_closeout_full_trace_rejected",
+  "generated_unix_ns": 1791603513715874726,
+  "scope": {
+    "cpu_only": true,
+    "gpu_visibility": {
+      "CUDA_VISIBLE_DEVICES": "",
+      "NVIDIA_VISIBLE_DEVICES": "none"
+    },
+    "gpu_queries": 0,
+    "gpu_locks": 0,
+    "gpu_workloads": 0,
+    "new_capture": false,
+    "audit_regenerated": false,
+    "production_model_oracle_changed": false,
+    "new_harness_or_audit_version": false
+  },
+  "previous_closeout": "papers/arxiv/experiments/tp2_resident/runs/tp2-official-full-profile-20261010-001/cpu-closeout-v2/closeout-manifest.json",
+  "preservation": {
+    "prior_closeout_pins_verified_before_document_edits": 16,
+    "historical_artifact_pins_verified": 29,
+    "archived_path_aliases": {
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/profile_trace_audit.py": "papers/arxiv/experiments/tp2_resident/runs/tp2-official-full-profile-20261010-001/cpu-closeout-v2/profile_trace_audit_v1.py",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-official-full-profile-20261010-001/PROFILE-SUMMARY.md": "papers/arxiv/experiments/tp2_resident/runs/tp2-official-full-profile-20261010-001/cpu-closeout-v2/PROFILE-SUMMARY-v1.md"
+    },
+    "prior_manifest_preserved": true,
+    "raw_and_v1_v2_audits_preserved": true,
+    "historical_receipts_preserved": true,
+    "prior_document_hashes_superseded_only": {
+      "papers/arxiv/PAPER_COMPLETION_CHECKLIST.md": {
+        "previous_sha256": "e2c0cd12c4eb2d0dfa1c61d9a582d903565c5eb0301f6e6738fc13b0c6ccff90",
+        "current_sha256": "cd3f56fd862ec19a0fdd9fe4740ce00e32eddfdade037d358b0a9d53d7442b95"
+      },
+      "papers/arxiv/experiments/tp2_resident/CURRENT.md": {
+        "previous_sha256": "5c31c454fe0ef6bf89a15aefc22304a41a2ff1372b544d7b51e7382a67d6eed8",
+        "current_sha256": "960346da2958c3a0a10b5089fe9a214fa262f8a7d629d79bfde93bc45725a873"
+      },
+      "papers/arxiv/experiments/tp2_resident/OFFICIAL-NVIDIA-TOOLS.md": {
+        "previous_sha256": "c46bbfe1db564a87bc9f407881a64a8b9d9dc06745fdb079c8551fb62dec1262",
+        "current_sha256": "7e5d9327cf06a92fbbdbec1152dc24f792a4606a626e947966aa2f5b2d5def34"
+      }
+    }
+  },
+  "documents": [
+    "papers/arxiv/experiments/tp2_resident/OFFICIAL-NVIDIA-TOOLS.md",
+    "papers/arxiv/experiments/tp2_resident/CURRENT.md",
+    "papers/arxiv/PAPER_COMPLETION_CHECKLIST.md"
+  ],
+  "validation": {
+    "tests": [
+      {
+        "log": "papers/arxiv/experiments/tp2_resident/runs/tp2-official-full-profile-20261010-001/cpu-closeout-v2/audit-tests-final.log",
+        "passed": 17,
+        "scope": "previous_completed_not_rerun"
+      },
+      {
+        "log": "papers/arxiv/experiments/tp2_resident/runs/tp2-official-full-profile-20261010-001/tools/final-profile-tests.log",
+        "passed": 16,
+        "scope": "historical_overlapping_suite_not_rerun"
+      },
+      {
+        "log": "papers/arxiv/experiments/tp2_resident/runs/nsys-official-micro-20261009-002/accept-cpu-tests.log",
+        "passed": 12,
+        "scope": "historical_micro_cpu_suite_not_rerun"
+      },
+      {
+        "log": "papers/arxiv/experiments/tp2_resident/runs/tp2-official-full-profile-20261010-001/cpu-closeout-v2/recovery-cli-tests.log",
+        "passed": 4,
+        "scope": "executed_in_this_recovery"
+      }
+    ],
+    "test_count_note": "Historical suites overlap; do not sum them as new tests. Four additional CPU CLI fixture tests ran in this recovery, with audit computation mocked and temporary outputs removed.",
+    "local_links_and_markdown_anchors": {
+      "status": "pass",
+      "checked": 57,
+      "documents": [
+        "papers/arxiv/experiments/tp2_resident/OFFICIAL-NVIDIA-TOOLS.md",
+        "papers/arxiv/experiments/tp2_resident/CURRENT.md",
+        "papers/arxiv/PAPER_COMPLETION_CHECKLIST.md",
+        "papers/arxiv/experiments/tp2_resident/runs/tp2-official-full-profile-20261010-001/PROFILE-SUMMARY.md"
+      ],
+      "links": [
+        {
+          "document": "papers/arxiv/experiments/tp2_resident/OFFICIAL-NVIDIA-TOOLS.md",
+          "target": "runs/nsys-official-micro-20261009-002/installation.json"
+        },
+        {
+          "document": "papers/arxiv/experiments/tp2_resident/OFFICIAL-NVIDIA-TOOLS.md",
+          "target": "runs/nsys-official-micro-20261009-002/dependency-sha256.json"
+        },
+        {
+          "document": "papers/arxiv/experiments/tp2_resident/OFFICIAL-NVIDIA-TOOLS.md",
+          "target": "runs/nsys-official-micro-20261009-002/tool-inventory-sha256.json"
+        },
+        {
+          "document": "papers/arxiv/experiments/tp2_resident/OFFICIAL-NVIDIA-TOOLS.md",
+          "target": "runs/nsys-official-micro-20261009-001/research/conda-dry-run.json"
+        },
+        {
+          "document": "papers/arxiv/experiments/tp2_resident/OFFICIAL-NVIDIA-TOOLS.md",
+          "target": "runs/nsys-official-micro-20261009-002/acceptance.json"
+        },
+        {
+          "document": "papers/arxiv/experiments/tp2_resident/OFFICIAL-NVIDIA-TOOLS.md",
+          "target": "runs/tp2-official-full-profile-20261010-001/execution.json"
+        },
+        {
+          "document": "papers/arxiv/experiments/tp2_resident/OFFICIAL-NVIDIA-TOOLS.md",
+          "target": "runs/tp2-official-full-profile-20261010-001/launch.json"
+        },
+        {
+          "document": "papers/arxiv/experiments/tp2_resident/OFFICIAL-NVIDIA-TOOLS.md",
+          "target": "runs/nsys-official-micro-20261009-001/research/profile-help.txt"
+        },
+        {
+          "document": "papers/arxiv/experiments/tp2_resident/OFFICIAL-NVIDIA-TOOLS.md",
+          "target": "runs/tp2-official-full-profile-20261010-001/profile-audit-v2.json"
+        },
+        {
+          "document": "papers/arxiv/experiments/tp2_resident/OFFICIAL-NVIDIA-TOOLS.md",
+          "target": "runs/tp2-official-full-profile-20261010-001/cpu-closeout-v2/closeout-manifest.json"
+        },
+        {
+          "document": "papers/arxiv/experiments/tp2_resident/OFFICIAL-NVIDIA-TOOLS.md",
+          "target": "runs/tp2-official-full-profile-20261010-001/cpu-closeout-v2/completion-manifest.json"
+        },
+        {
+          "document": "papers/arxiv/experiments/tp2_resident/OFFICIAL-NVIDIA-TOOLS.md",
+          "target": "../../../../crates/ferrule-model/tests/mixed_routed_down/RESULT.md"
+        },
+        {
+          "document": "papers/arxiv/experiments/tp2_resident/CURRENT.md",
+          "target": "OFFICIAL-NVIDIA-TOOLS.md"
+        },
+        {
+          "document": "papers/arxiv/experiments/tp2_resident/CURRENT.md",
+          "target": "runs/nsys-official-micro-20261009-002/acceptance.json"
+        },
+        {
+          "document": "papers/arxiv/experiments/tp2_resident/CURRENT.md",
+          "target": "runs/tp2-official-full-profile-20261010-001/profile-audit-v2.json"
+        },
+        {
+          "document": "papers/arxiv/experiments/tp2_resident/CURRENT.md",
+          "target": "runs/tp2-official-full-profile-20261010-001/PROFILE-SUMMARY.md"
+        },
+        {
+          "document": "papers/arxiv/experiments/tp2_resident/CURRENT.md",
+          "target": "../../../../crates/ferrule-model/tests/mixed_routed_down/RESULT.md"
+        },
+        {
+          "document": "papers/arxiv/experiments/tp2_resident/CURRENT.md",
+          "target": "runs/tp2-official-full-profile-20261010-001/cpu-closeout-v2/closeout-manifest.json"
+        },
+        {
+          "document": "papers/arxiv/experiments/tp2_resident/CURRENT.md",
+          "target": "runs/tp2-official-full-profile-20261010-001/cpu-closeout-v2/completion-manifest.json"
+        },
+        {
+          "document": "papers/arxiv/experiments/tp2_resident/CURRENT.md",
+          "target": "RESULTS-optimized-pilot.md"
+        },
+        {
+          "document": "papers/arxiv/experiments/tp2_resident/CURRENT.md",
+          "target": "runs/tp2-optimized-collector-profile-20261009-004/trace-audit.json"
+        },
+        {
+          "document": "papers/arxiv/experiments/tp2_resident/CURRENT.md",
+          "target": "runs/tp2-optimized-collector-profile-20261009-004/final-owner-release.json"
+        },
+        {
+          "document": "papers/arxiv/experiments/tp2_resident/CURRENT.md",
+          "target": "INSTRUMENTATION-BASELINE.md"
+        },
+        {
+          "document": "papers/arxiv/experiments/tp2_resident/CURRENT.md",
+          "target": "admission/optimized-20261009/smoke-admission.json"
+        },
+        {
+          "document": "papers/arxiv/experiments/tp2_resident/CURRENT.md",
+          "target": "INSTRUMENTATION-BASELINE.md#executable-entry-points"
+        },
+        {
+          "document": "papers/arxiv/experiments/tp2_resident/CURRENT.md",
+          "target": "plans/collector-handoff-20261009/plan.json"
+        },
+        {
+          "document": "papers/arxiv/experiments/tp2_resident/CURRENT.md",
+          "target": "plans/collector-handoff-20261009/cpu-preparation.json"
+        },
+        {
+          "document": "papers/arxiv/experiments/tp2_resident/CURRENT.md",
+          "target": "RESULTS-short-profile.md"
+        },
+        {
+          "document": "papers/arxiv/experiments/tp2_resident/CURRENT.md",
+          "target": "RESULTS-serving-pilot.md"
+        },
+        {
+          "document": "papers/arxiv/experiments/tp2_resident/CURRENT.md",
+          "target": "RESULTS-single-lifecycle.md"
+        },
+        {
+          "document": "papers/arxiv/experiments/tp2_resident/CURRENT.md",
+          "target": "claim-gates-audit-20261009.json"
+        },
+        {
+          "document": "papers/arxiv/experiments/tp2_resident/CURRENT.md",
+          "target": "RESULTS-single-lifecycle.md#later-ferrule-progress--cpu-receipt-audit-2026-10-09"
+        },
+        {
+          "document": "papers/arxiv/experiments/tp2_resident/CURRENT.md",
+          "target": "claim-gates-recheck-20261009.json"
+        },
+        {
+          "document": "papers/arxiv/experiments/tp2_resident/CURRENT.md",
+          "target": "full-boundary-audit.json"
+        },
+        {
+          "document": "papers/arxiv/experiments/tp2_resident/CURRENT.md",
+          "target": "model-runtime-quality.json"
+        },
+        {
+          "document": "papers/arxiv/PAPER_COMPLETION_CHECKLIST.md",
+          "target": "experiments/README.md"
+        },
+        {
+          "document": "papers/arxiv/PAPER_COMPLETION_CHECKLIST.md",
+          "target": "experiments/tp2_resident/RESULTS-single-lifecycle.md"
+        },
+        {
+          "document": "papers/arxiv/PAPER_COMPLETION_CHECKLIST.md",
+          "target": "EVIDENCE_LEDGER.md"
+        },
+        {
+          "document": "papers/arxiv/PAPER_COMPLETION_CHECKLIST.md",
+          "target": "experiments/tp2_resident/full-boundary-audit.json"
+        },
+        {
+          "document": "papers/arxiv/PAPER_COMPLETION_CHECKLIST.md",
+          "target": "experiments/tp2_resident/RESULTS-serving-pilot.md"
+        },
+        {
+          "document": "papers/arxiv/PAPER_COMPLETION_CHECKLIST.md",
+          "target": "../../docs/CURRENT_ACCEPTANCE.md"
+        },
+        {
+          "document": "papers/arxiv/PAPER_COMPLETION_CHECKLIST.md",
+          "target": "EVIDENCE_LEDGER.md"
+        },
+        {
+          "document": "papers/arxiv/PAPER_COMPLETION_CHECKLIST.md",
+          "target": "experiments/tp2_resident/runs/tp2-official-full-profile-20261010-001/profile-audit-v2.json"
+        },
+        {
+          "document": "papers/arxiv/PAPER_COMPLETION_CHECKLIST.md",
+          "target": "experiments/tp2_resident/OFFICIAL-NVIDIA-TOOLS.md"
+        },
+        {
+          "document": "papers/arxiv/PAPER_COMPLETION_CHECKLIST.md",
+          "target": "experiments/tp2_resident/runs/tp2-official-full-profile-20261010-001/cpu-closeout-v2/completion-manifest.json"
+        },
+        {
+          "document": "papers/arxiv/PAPER_COMPLETION_CHECKLIST.md",
+          "target": "experiments/tp2_resident/full-boundary-audit.json"
+        },
+        {
+          "document": "papers/arxiv/PAPER_COMPLETION_CHECKLIST.md",
+          "target": "experiments/tp2_resident/CURRENT.md"
+        },
+        {
+          "document": "papers/arxiv/PAPER_COMPLETION_CHECKLIST.md",
+          "target": "experiments/tp2_resident/RESULTS-serving-pilot.md"
+        },
+        {
+          "document": "papers/arxiv/PAPER_COMPLETION_CHECKLIST.md",
+          "target": "../../crates/ferrule-model/tests/mixed_routed_down/RESULT.md"
+        },
+        {
+          "document": "papers/arxiv/PAPER_COMPLETION_CHECKLIST.md",
+          "target": "experiments/tp2_resident/RESULTS-single-lifecycle.md"
+        },
+        {
+          "document": "papers/arxiv/PAPER_COMPLETION_CHECKLIST.md",
+          "target": "experiments/runs/tp2-resident-single-lifecycle-20261009-001/RESULTS.json"
+        },
+        {
+          "document": "papers/arxiv/PAPER_COMPLETION_CHECKLIST.md",
+          "target": "experiments/tp2_resident/RESULTS.md"
+        },
+        {
+          "document": "papers/arxiv/PAPER_COMPLETION_CHECKLIST.md",
+          "target": "experiments/tp2_resident/RESULTS-baseline-delta.md"
+        },
+        {
+          "document": "papers/arxiv/PAPER_COMPLETION_CHECKLIST.md",
+          "target": "../../docs/THROUGHPUT.md"
+        },
+        {
+          "document": "papers/arxiv/PAPER_COMPLETION_CHECKLIST.md",
+          "target": "EVIDENCE_LEDGER.md"
+        },
+        {
+          "document": "papers/arxiv/PAPER_COMPLETION_CHECKLIST.md",
+          "target": "README.md"
+        },
+        {
+          "document": "papers/arxiv/experiments/tp2_resident/runs/tp2-official-full-profile-20261010-001/PROFILE-SUMMARY.md",
+          "target": "../../../../../../crates/ferrule-model/tests/mixed_routed_down/RESULT.md"
+        }
+      ]
+    },
+    "metadata_checks": [
+      "historical and archive hashes",
+      "official package, CLI, importer and CUPTI hashes",
+      "complete saved tool inventory and dependency hashes",
+      "installation and NVIDIA conda dry-run provenance",
+      "micro two-physical-UUID acceptance receipt",
+      "request6 counts, two-way correlation, window, UUIDs and overlap",
+      "warmup forward and reverse missing correlations",
+      "local kernel quantities and unavailable pure phase boundaries",
+      "historical lifecycle drain and fairmatch restrictions",
+      "all five E2 boxes remain unchecked",
+      "W8 negative result reference unchanged"
+    ],
+    "tool_inventory_files_verified": 767,
+    "dependency_files_verified": 66
+  },
+  "official_tool": {
+    "source_url": "https://developer.download.nvidia.com/devtools/repos/ubuntu2204/amd64/NsightSystems-linux-cli-public-2025.3.1.90-3582212.deb",
+    "version": "NVIDIA Nsight Systems version 2025.3.1.90-253135822126v0",
+    "installation_receipt": "papers/arxiv/experiments/tp2_resident/runs/nsys-official-micro-20261009-002/installation.json",
+    "conda310": "Recorded unchanged, conda 23.1.0 / Python 3.10.9; no transaction in installation receipt and no conda operation in this recovery; environment not re-probed",
+    "signature": "not independently verified"
+  },
+  "claims": {
+    "request6_status": "observed_correlation_closed",
+    "request6_counts": {
+      "kernel_observed": 117232,
+      "memcpy_observed": 26284,
+      "memset_observed": 70014,
+      "runtime_api_rows": 1881862,
+      "memset_successful_api": 70014,
+      "memcpy_successful_api": 26284,
+      "kernel_successful_api": 117232,
+      "launch_runtime": 115380,
+      "launch_driver": 1852,
+      "kernel_activity_to_api_unique": 117232,
+      "memcpy_activity_to_api_unique": 26284,
+      "memset_activity_to_api_unique": 70014,
+      "memset_api_to_activity_unique": 70014,
+      "memcpy_api_to_activity_unique": 26284,
+      "kernel_api_to_activity_unique": 117232
+    },
+    "full_trace_accepted": false,
+    "warning_cause": "unknown; capture-boundary and overflow causation unproven",
+    "warmup_missing_api": {
+      "memcpy": 4,
+      "memset": 12
+    },
+    "warmup_missing_activity_correlations": [
+      687294,
+      687352
+    ],
+    "paired_api_activity_loss_excluded": false,
+    "E2_complete": false,
+    "fairmatch": false,
+    "exact_speedup": null,
+    "w8": {
+      "result_path": "crates/ferrule-model/tests/mixed_routed_down/RESULT.md",
+      "matched_words": 16382,
+      "total_words": 16384,
+      "failed_words": 2,
+      "default_on": false
+    }
+  },
+  "sha256": {
+    "crates/ferrule-model/tests/mixed_routed_down/RESULT.md": "8140e7f9493f54e80c295ac42bb265a0b06e4fd5df9a74bc631e00efe6654163",
+    "papers/arxiv/PAPER_COMPLETION_CHECKLIST.md": "cd3f56fd862ec19a0fdd9fe4740ce00e32eddfdade037d358b0a9d53d7442b95",
+    "papers/arxiv/experiments/tp2_resident/CURRENT.md": "960346da2958c3a0a10b5089fe9a214fa262f8a7d629d79bfde93bc45725a873",
+    "papers/arxiv/experiments/tp2_resident/OFFICIAL-NVIDIA-TOOLS.md": "7e5d9327cf06a92fbbdbec1152dc24f792a4606a626e947966aa2f5b2d5def34",
+    "papers/arxiv/experiments/tp2_resident/profile_trace_audit.py": "561ec7cb1eb556fc26a4c35f5ec42fab04780ba950e9c9666e493e1411d97b1d",
+    "papers/arxiv/experiments/tp2_resident/profile_trace_audit_v2.py": "d776ca9354646815fdda611cc2e652c64f4725cbfa0b7b6ec15faba088ac0b59",
+    "papers/arxiv/experiments/tp2_resident/runs/nsys-official-micro-20261009-001/research/conda-dry-run.json": "e0c54e4a837d8dfe20403a03f08c5e377ebba179c5e8a0c63139102825af31f2",
+    "papers/arxiv/experiments/tp2_resident/runs/nsys-official-micro-20261009-002/accept-cpu-tests.log": "b2af7437111438ef8f2df8340e3209dddec856a6d7db6088dfcc659f13dc0c7a",
+    "papers/arxiv/experiments/tp2_resident/runs/nsys-official-micro-20261009-002/acceptance.json": "e2e7f5a13fcd1aa1dc7b93ff07cb0cd9789b7517fbaf1e9f93acf4a7c3bc3199",
+    "papers/arxiv/experiments/tp2_resident/runs/nsys-official-micro-20261009-002/dependency-sha256.json": "f80eec1091be69eb835634ce5d8b4a7b3c516ea6d821b119ea67148d0086745d",
+    "papers/arxiv/experiments/tp2_resident/runs/nsys-official-micro-20261009-002/installation.json": "2c097bf2a4faf9e767928d6cd7f841360ac3677943183fe9635c37db5e4fe488",
+    "papers/arxiv/experiments/tp2_resident/runs/nsys-official-micro-20261009-002/tool-inventory-sha256.json": "26f313f560e8658451f24cb041929d4d94fd190ff3872b7961ff4ce38478985a",
+    "papers/arxiv/experiments/tp2_resident/runs/tp2-official-full-profile-20261010-001/PROFILE-SUMMARY.md": "513dadc23b3bf96f7c2e24bac418dd3abe5d4152c80af2b0ccf183216cd7f4d5",
+    "papers/arxiv/experiments/tp2_resident/runs/tp2-official-full-profile-20261010-001/cpu-closeout-v2/PROFILE-SUMMARY-v1.md": "db1bbde89c1f7b6e3f16b91421842226bbc5716ac0c9d0b2898d074284a34406",
+    "papers/arxiv/experiments/tp2_resident/runs/tp2-official-full-profile-20261010-001/cpu-closeout-v2/audit-tests-final.log": "b39c4861721951b4bde0a5ce5f2e626c4a6aac8e344fbf60843612e5723dedfe",
+    "papers/arxiv/experiments/tp2_resident/runs/tp2-official-full-profile-20261010-001/cpu-closeout-v2/closeout-manifest.json": "b3dc91635d1acf4e20e21e1e742ea0e84430f8915055783f1ce2330bbd049122",
+    "papers/arxiv/experiments/tp2_resident/runs/tp2-official-full-profile-20261010-001/cpu-closeout-v2/profile_trace_audit_v1.py": "cbd5926eb2095edfb2eaad32b8c85a5c4f5a49ae9364022e2dd3db8accdd0ff4",
+    "papers/arxiv/experiments/tp2_resident/runs/tp2-official-full-profile-20261010-001/cpu-closeout-v2/recovery-cli-tests.log": "b7602bdea823bfb4a9ef72e3563a1991feac7fad1fd8ec98b735b5fbb888295d",
+    "papers/arxiv/experiments/tp2_resident/runs/tp2-official-full-profile-20261010-001/execution.json": "50b0fa6636b05bd3243eb1c26bf11db4d996d3d6abbf6820c50f45aa85e7ad19",
+    "papers/arxiv/experiments/tp2_resident/runs/tp2-official-full-profile-20261010-001/final-artifact-sha256.json": "7a2129716fe1e3fcc652fe7529f05b6f953416c9c45ae98c620ec357ee0aa638",
+    "papers/arxiv/experiments/tp2_resident/runs/tp2-official-full-profile-20261010-001/final-owner-release.json": "78691d40e3fac44537d8b050a657b296c3c6994d46232a9df693f3c387b6d38f",
+    "papers/arxiv/experiments/tp2_resident/runs/tp2-official-full-profile-20261010-001/post-stats-cache-drift.json": "77bcc8f5994bc25fa3cf448b9ea26a8dc501ad7e99ac3848b06abd8ac79fc88d",
+    "papers/arxiv/experiments/tp2_resident/runs/tp2-official-full-profile-20261010-001/prepared.json": "9cd69715a89f78cdc4c51af14ec6ecbfc935f6e3a236a1319cef056e15b2414e",
+    "papers/arxiv/experiments/tp2_resident/runs/tp2-official-full-profile-20261010-001/profile-audit-v2.json": "55b2f32b676704e47ccdde9adf13af527b6fbb3a79b03d40ff1eb6a88d2bc2dd",
+    "papers/arxiv/experiments/tp2_resident/runs/tp2-official-full-profile-20261010-001/profile-audit.json": "3303c2dafc62c6c90ddfc7f62dd01da55a0ab76587c718d7793a6ebf44c408a1",
+    "papers/arxiv/experiments/tp2_resident/runs/tp2-official-full-profile-20261010-001/runs/P1/lock-release.json": "39ae688106ea715f00f8c7694b2a52e2819bb6f666208c5b1c0cb4e273e3df79",
+    "papers/arxiv/experiments/tp2_resident/runs/tp2-official-full-profile-20261010-001/runs/P1/probe-lock-release.json": "aff4f68d7b05f833122c36031f0e48aebe3c19cdf8e0cceb05f9b27350a7313e",
+    "papers/arxiv/experiments/tp2_resident/runs/tp2-official-full-profile-20261010-001/runs/P1/session/after.json": "97ae24cc25a750de4347a87f86e0f987c2edd9b94508b348823e86566c288ff8",
+    "papers/arxiv/experiments/tp2_resident/runs/tp2-official-full-profile-20261010-001/runs/P1/session/nsight/cuda_api_sum.txt": "2a97d16c2d7a2572190de3ea2fa5e1b58f9d54f568a0830fc2b495b9b991938d",
+    "papers/arxiv/experiments/tp2_resident/runs/tp2-official-full-profile-20261010-001/runs/P1/session/nsight/cuda_gpu_kern_sum.txt": "33a5e1478fcb64f7b2b6b5b475ae54f0cf192222010e66a5d0043bbd363c599b",
+    "papers/arxiv/experiments/tp2_resident/runs/tp2-official-full-profile-20261010-001/runs/P1/session/nsight/cuda_gpu_mem_size_sum.txt": "19bec88de411a4992849953a428e1291cebfb4682b44b0e134399ea92eb63792",
+    "papers/arxiv/experiments/tp2_resident/runs/tp2-official-full-profile-20261010-001/runs/P1/session/nsight/cuda_gpu_mem_time_sum.txt": "3f3566c320899dd870344bea2321971c35a3419c383f59f07e671b68b3521d89",
+    "papers/arxiv/experiments/tp2_resident/runs/tp2-official-full-profile-20261010-001/runs/P1/session/nsight/nsys.nsys-rep": "e4842f48ad372d3916e0ca89f61aae72d34de255bc78877f37905f18e79b03ba",
+    "papers/arxiv/experiments/tp2_resident/runs/tp2-official-full-profile-20261010-001/runs/P1/session/nsight/nsys.sqlite": "6715f8308a77a118151d86632e1ab0537f8c0396890fb1a3ac8add274bc137ae",
+    "papers/arxiv/experiments/tp2_resident/runs/tp2-official-full-profile-20261010-001/runs/P1/session/nsight/nvtx_sum.txt": "f3fc47a0c940093583dd6194aabe20f7a62f11dfe5c1d655332c4bb75f60186a",
+    "papers/arxiv/experiments/tp2_resident/runs/tp2-official-full-profile-20261010-001/runs/P1/session/nsight/osrt_sum.txt": "d30c380025b2aba09f020747e83041092dacb0716cc8e3025e0552d71e7b4e14",
+    "papers/arxiv/experiments/tp2_resident/runs/tp2-official-full-profile-20261010-001/runs/P1/session/profile/gate.json": "4a6d6ddc4f4980dfd42a2ec0d1d8cdac4cd33cda50a1d030f30c2b324ad8ffe8",
+    "papers/arxiv/experiments/tp2_resident/runs/tp2-official-full-profile-20261010-001/runs/P1/session/profile/measured.json": "85d7f540cd883b42704846b8c7ebfd2ab912e9085a17eaf6d4360be6631a0a81",
+    "papers/arxiv/experiments/tp2_resident/runs/tp2-official-full-profile-20261010-001/runs/P1/session/profile/metadata.json": "f2c4dd69a7d3def14cd06f6c4f32b3994204c1113e42b1204d5b16b5f2fdbd21",
+    "papers/arxiv/experiments/tp2_resident/runs/tp2-official-full-profile-20261010-001/runs/P1/session/profile/model-identity.json": "e711124c5ecc8664b81af2f7092a4b37b25c9137d6dbd6dd44f1b361687434df",
+    "papers/arxiv/experiments/tp2_resident/runs/tp2-official-full-profile-20261010-001/runs/P1/session/profile/profile-window.json": "4a6d6ddc4f4980dfd42a2ec0d1d8cdac4cd33cda50a1d030f30c2b324ad8ffe8",
+    "papers/arxiv/experiments/tp2_resident/runs/tp2-official-full-profile-20261010-001/runs/P1/session/profile/start.json": "8480700bd0e328833b21a13fad92eae7d5f930404530a56a04039aea937ee3ca",
+    "papers/arxiv/experiments/tp2_resident/runs/tp2-official-full-profile-20261010-001/runs/P1/session/profile/stop.json": "d72338803b16479aa0813d6fb77f4692c2e5cf52f210decb50b9266979e78f31",
+    "papers/arxiv/experiments/tp2_resident/runs/tp2-official-full-profile-20261010-001/runs/P1/session/profile/warmup.json": "9d49913f90a09b54e893c057176a15f312f627ad60299737b6e51797ce7732c1",
+    "papers/arxiv/experiments/tp2_resident/runs/tp2-official-full-profile-20261010-001/runs/P1/session/server.log": "dbd25f315f7a2d91ce0b9b49239f124dda96741feb8d92db0974cc5effe30032",
+    "papers/arxiv/experiments/tp2_resident/runs/tp2-official-full-profile-20261010-001/runs/P1/session/supervisor.json": "fc2d8d22649c28019403c61a5f137fc063e61a3aa70d3fd31e581f8165d25b83",
+    "papers/arxiv/experiments/tp2_resident/runs/tp2-official-full-profile-20261010-001/tools/final-profile-tests.log": "b1970e712c93382d929246287cbf70009811c2e3ffa800ac0ddf5679a7636c61",
+    "papers/arxiv/experiments/tp2_resident/test_profile_trace_audit.py": "cc833b474d0fe6206595d6e718c8fe598f5db1c8e249245fed1b44076aeb7dba",
+    "papers/arxiv/experiments/tp2_resident/test_profile_trace_audit_v2.py": "7782ac88d50f55ce128aff1a0c783999d27e48d991e96d6f6a67835d1f5239a2"
+  }
+}

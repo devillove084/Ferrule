@@ -1,0 +1,60 @@
+{
+  "schema": "ferrule.paper.tp2-paired.handoff.v1",
+  "checked_at_utc": "2026-10-09T06:45:02.662027+00:00",
+  "status": "cpu_validated_pilot_blocked",
+  "public_quality_accepted": false,
+  "fairmatch": false,
+  "exact_speedup": null,
+  "tests": {
+    "original": 42,
+    "tp2_total": 63,
+    "new_paired": 14
+  },
+  "artifact_pins": {
+    "papers/arxiv/experiments/tp2_resident/paired.py": "ec7d590081a2127c176281c819918b60eaca58c0f412dae3f92f43cff44482cc",
+    "papers/arxiv/experiments/tp2_resident/test_paired.py": "aec69b97d8648b5991e88d7f8a56acf0321d1c22a9f56d20c4293636c1613b57",
+    "papers/arxiv/experiments/tp2_resident/paired-plan.json": "f3970d763cae6d243fc7b06d92a9f88c1ec3a4d7e7d1df6e0ef183fc596331be",
+    "papers/arxiv/experiments/tp2_resident/full-boundary-audit.json": "1e3ff507124278b7eac59ba70ae81ec3e358767de75284cf172e7682c0518903",
+    "papers/arxiv/experiments/tp2_resident/CURRENT.md": "e132b66a91e3697551cb30635a3c7e20692c112ce57fe203b0ad89ae82026782",
+    "papers/arxiv/experiments/tp2_resident/RESULTS-single-lifecycle.md": "4a026a7ab0cf022b80f916dc65122680f38682ae7762c28eafc5a997ed246b03",
+    "papers/arxiv/PAPER_COMPLETION_CHECKLIST.md": "affcecc8e17dcd046d63599a707d480308b2a0f6ff82aab2c2707d717421bd61"
+  },
+  "historical_pins_preserved": {
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/launch_guard.py": "b4ec4dc1b1e7e61fe322847e4a07ce2c3b2ed43d8d3e9bc3bd6602979ad00b9f",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/contract.py": "96f9664cb16e4b861b4902f6c07b234ca08d89106d4d99a9ff8db74511de25bf",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runner.py": "f1e87f00822445a708c5ffe50124ea0d34e928fd56fe6943ccaf7a052bb9d95a",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/telemetry.py": "766a2e62730e3b56efd553d013554b18520c4883f6e5a3ee7ddeef4211091900",
+    "/home/admin/luhuanbing.lhb/Ferrule/scripts/test_vllm_qwen35.py": "1c330dac0727d54254a1c1648adcb9a4b747a2303fe183c2ba38f9ccd83ec2a1",
+    "/home/admin/luhuanbing.lhb/Ferrule/scripts/_owned_subreaper.py": "19ef9006089cde1abdca87177e01d26b925dcf996bfebaf6e3dc51ea71a77ff0",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/test_pair_contract.py": "f2b3650be15819948bbfdfe023ebce9d38cb60ed9891beba82a08ccc383b8ce7",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/experiment.py": "ba59769f59a6be5a732acc3bd7c8237063031198fb069d9e15e71761b580f67f",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/experiment_v2.py": "ff57bbba5c7e81e454b6793b413ef354af8b3085da2a5f4892c5593264b0be92",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/test_sampling_v4.py": "eb9a6191b8491f5e0f06cd3374b1c31740d8be39749344b4381bd13f5a7b6a0b",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/test_tp2.py": "de1082be324604cb108f159fe9246b7227696e0bfa69284ead9dd94aef78ad1c",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/sampling_v2.py": "5cf4245642db39420f1e9592433129b11e215f2073edb1271b44858b6461dfc6",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/test_observer.py": "06b3239fc4f6650e855dbaed7dcd0f78b3296489236b1e4d87155331dc98b977",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/experiment_v4.py": "ee5d85c338a7851d61a322e0b00fedfb26a2edb669609d0ecb9e92c549bee1a4",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/test_sampling_v2.py": "7290077427090c0dc1ed6a0775b98ed38fc2dfd60ee82b732a658afb77a7590f",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/experiment_current.py": "42901aa3d81a7dbe9b275cb68a1365d7f0fef4443ed459ae58a3865c638debb7",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/sampling_v3.py": "d03caeaaff13578c036ea106f0073fde042634032fdc7bc2ee671ec7b7f7f387",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/sampling_v4.py": "dcef3594941c3f9fdf214782434af934d7ab082dd2b7f8bd05472d3e9bbb5249",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/observer.py": "dadab1c5c6fa5c4ffab2bc986b2cdd1ae76cdda8f8adba8dc86945e1e4f78f67",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/pair_contract.py": "77b0ca45b1b3e1b123aa21624bee30a44da524d290cfefce641db8285a005168",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/test_sampling_v3.py": "d049332e666abe2fa9dbd88105e69159e3455ffc403e80cb5b4cb5da50f63052",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/experiment_v3.py": "03fb60c61c42aef735c49c0c12e8bdca14c2884c338df0f44ae83fdc7844f85b"
+  },
+  "full_boundary_artifact_pins_rechecked": 44,
+  "live_gpu_state": "not queried; no GPU authorization or launch in this task",
+  "remaining": [
+    "Independent real TP2 multistep/lifecycle acceptance",
+    "Production public quality gate opened by its owner; no paper bypass",
+    "Reviewed same-serving-binary source/runtime/quality/lifecycle admission wrappers; immutable real serving executable absent here",
+    "Primary-agent renewed sole GPU owner authorization before pilot"
+  ],
+  "caveats": [
+    "CPU mocks validate wiring, not real serving readiness",
+    "Frozen visible canaries and QA first/warmups/measured text+usage are not Marlin numerical parity",
+    "Model identity remains metadata hashes and shard stats, not full payload hashes",
+    "Full-boundary comparison covers prefill and one decode for two cases, not multistep or every workload"
+  ]
+}

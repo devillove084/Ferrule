@@ -1,0 +1,18 @@
+{
+  "tp2_tests": 130,
+  "original_tests": 42,
+  "all_pass": true,
+  "fix": "CPU visibility isolation moved from import to explicit CPU entry; CPU subprocess allowlist unchanged; target exact visibility no override",
+  "source_pins": {
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/contract.py": "05da87fb7f5d795a843b25674fc062c6d4e8d7b8be32f50613a3174e78d1fbe4",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runner.py": "0aae631cf46bb99f567527d8dbe20b0a56e61c57ca7267858e1eb3e4cc67e16c",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/instrumentation_capture.py": "e2c74a6290b038550e50a8dcaca7329e7b24e8959c4b6a9587088edb95a490fb",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/test_import_isolation.py": "ace35bfc750c601e75c8b37ea605eaac97ecbf8ef8bc50987c8a002bf456b955"
+  },
+  "old_sources": {
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/history/pre-import-isolation-fix/contract.py.txt": "96f9664cb16e4b861b4902f6c07b234ca08d89106d4d99a9ff8db74511de25bf",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/history/pre-import-isolation-fix/instrumentation_capture.py.txt": "cd51a39234b75641118d716b61be28649fce438fb4d9168b5e0515b1576e710b",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/history/pre-import-isolation-fix/instrumentation_live.py.txt": "f70474f42aa9f936964430812d369a5313e9a1b824497faf00a2bc12c34f7b14",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/history/pre-import-isolation-fix/runner.py.txt": "f1e87f00822445a708c5ffe50124ea0d34e928fd56fe6943ccaf7a052bb9d95a"
+  }
+}

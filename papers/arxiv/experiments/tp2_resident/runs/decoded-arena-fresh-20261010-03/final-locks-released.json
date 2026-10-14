@@ -1,0 +1,12 @@
+{
+  "gpu_owner_released": true,
+  "lock_uuids": [
+    "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+    "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535"
+  ],
+  "all_eight_idle": true,
+  "final_idle": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-fresh-20261010-03/final-idle.json",
+    "sha256": "e1e6663af5b95cfca56a915e846fe8100b255f1434c95814c7ecfadb517e2b40"
+  }
+}

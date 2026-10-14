@@ -7,6 +7,10 @@
 #[path = "support/build_process_child.rs"]
 mod build_process_child;
 
+#[cfg(feature = "cpu-reference")]
+#[path = "process_decoder/hybrid.rs"]
+mod hybrid;
+
 #[cfg(all(feature = "cuda", target_os = "linux"))]
 #[path = "process_decoder/cuda.rs"]
 mod cuda;
@@ -184,6 +188,7 @@ impl Fixture {
                     identity(rank),
                     DecoderBoot {
                         version: DECODER_WIRE_VERSION,
+                        hybrid: None,
                         rank,
                         checkpoint: self.0.clone(),
                         recipe: DecoderRecipeKind::Synthetic,
@@ -1164,7 +1169,7 @@ fn capacity_wire_roundtrip_and_old_boot_rejection_precede_factory() {
         );
         assert!(!called.get());
     }
-    assert_eq!(DECODER_WIRE_VERSION, 3);
+    assert_eq!(DECODER_WIRE_VERSION, 4);
     assert_eq!(PROCESS_PROTOCOL_VERSION, 1);
 }
 
@@ -1191,7 +1196,9 @@ fn process_single_logical_page(device: DecoderDevice) {
     };
     let mut boots = fixture.boots(2, false);
     let physical = cfg
-        .physical_pages(matches!(device, DecoderDevice::Cuda { .. }))
+        .physical_pages(
+            ferrule_runtime::parallel::pipeline::PhysicalKvLayout::standard(device.backend()),
+        )
         .unwrap();
     for (_, boot) in &mut boots {
         boot.device = device;

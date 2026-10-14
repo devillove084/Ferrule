@@ -1,0 +1,16 @@
+{
+  "passed": true,
+  "gate": {
+    "name": "model-route-late-consumer-unknown",
+    "binary": "model",
+    "selector": "transformer::standard::cuda::hybrid_rank::mixed::decoded_gpu_tests::route_batch::late_consumer_unknown_retains_metadata_gather_and_image",
+    "evidence": "actual_route_batch_model_synthetic_partials_not_hf_R64",
+    "devices": 1,
+    "reference": null,
+    "cache_bytes": null,
+    "observer": null
+  },
+  "proven_drained": true,
+  "all_eight_idle": true,
+  "performance_claim": false
+}

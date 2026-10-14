@@ -1,0 +1,29 @@
+{
+  "stage": "actual ordinary-info routebatch F1",
+  "status": "complete_descriptive_only",
+  "returncode": 0,
+  "error": null,
+  "wall_seconds": 454.7220971081406,
+  "utc": "2026-10-11T21:41:17.402707+00:00",
+  "argv": [
+    "/home/admin/wxw403883/anaconda3/bin/python3.12",
+    "-S",
+    "-B",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/paired.py",
+    "run",
+    "--id",
+    "route-batch-info-after-20261012-01",
+    "--purpose",
+    "fused_after",
+    "--sole-gpu-owner-granted",
+    "--owner-note",
+    "User authorized unique GPU owner: reviewed routebatch e674 ordinary info F1; actual same-binary S1/S2 PASS; unchanged TP2thread/Rows8/3GiBarena/4GiBworkspace/22528MiB; no rankperf/V/Nsight/readback/matrix; stop on ECHILD/error/unknown custody"
+  ],
+  "optimization": "routebatch",
+  "auxiliary_kernel_count": null,
+  "raw_pins": {
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/admission/route-batch-release-20261012-01/actual-formal.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/admission/route-batch-release-20261012-01/actual-formal.stdout.log": "d80a1d8ca4196d022a20095f3dfc578ee056e5956b038aa1bcd5282445b1b088",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/route-batch-info-after-20261012-01/execution.json": "c2a52357a6b6bdaaab9cbda9e62e3282246cc43eb050742dadaac0b0bee98e39"
+  }
+}

@@ -8,6 +8,7 @@ use ferrule_model::transformer::{
     LayerSegmentPlan, SegmentError, SegmentInput, SegmentOutput, StandardDecoderSegment,
 };
 
+use super::super::expert::ExpertGroup;
 use super::super::expert::{ExpertOwnerStats, ExpertParallelExecutor};
 
 /// Optional routed expert injection, using the existing pipeline transaction.
@@ -216,5 +217,136 @@ impl PipelineStageProgram for CpuPipelineStageProgram {
             .map(ExpertParallelExecutor::shutdown)
             .transpose()
             .map(|_| ())
+    }
+}
+
+/// Owner-local state contract. State, lifecycle and view need not be Clone/Send.
+/// Hybrid adapters implement this directly; standard programs use the blanket
+/// adapter. Only the owner journal may advance core or publish sequence state.
+/// Lifecycle checkout must return an independent working attachment while
+/// retaining the source core/topology. Partial/failed copies remain lifecycle
+/// custody until safely cleaned; a returned state is always journal custody.
+/// Execute has the same host-storage/fence obligations as `PipelineStageProgram`.
+///
+#[doc = include_str!("../../../tests/compile/pipeline_state_program.md")]
+pub trait PipelineStateProgram: 'static {
+    #[cfg(feature = "cuda")]
+    fn trace_committed(
+        &mut self,
+        _backend: &mut dyn std::any::Any,
+        _transaction: ExecutionTransactionId,
+        _source: &ferrule_common::host_kv::CommittedKvSource,
+    ) -> Result<()> {
+        Err(super::error(
+            "program has no committed native trace capability",
+        ))
+    }
+
+    type SequenceState: ferrule_model::decoder::DecoderSequence + 'static;
+    type Lifecycle: ferrule_model::decoder::DecoderSequenceLifecycle<Self::SequenceState>;
+    type KvView: 'static;
+    fn plan(&self) -> &LayerSegmentPlan;
+    fn new_lifecycle(&mut self) -> Result<Self::Lifecycle>;
+    /// Authenticated CPU-reference attachment metadata, not a KV participant.
+    #[cfg(feature = "cpu-reference")]
+    fn hybrid_reference_expert_group(&self) -> Option<&ExpertGroup> {
+        None
+    }
+    /// Owner-bound external attachment authenticated against the stage description.
+    fn hybrid_expert_group(&self) -> Option<&ExpertGroup> {
+        #[cfg(feature = "cpu-reference")]
+        {
+            self.hybrid_reference_expert_group()
+        }
+        #[cfg(not(feature = "cpu-reference"))]
+        {
+            None
+        }
+    }
+    /// Root and child completion proof before physical rollback/abort.
+    fn poll_quiescence(&mut self) -> Result<bool> {
+        Ok(true)
+    }
+    /// Numeric storage contract for an explicitly bound hybrid program. Legacy
+    /// owners default to F32; a BF16 configuration alone never changes the program.
+    fn hybrid_precision(&self) -> ferrule_model::execution::ExecutionPrecisionPolicy {
+        ferrule_model::execution::ExecutionPrecisionPolicy::f32()
+    }
+    /// Explicit compact layout; legacy/process constructors cannot admit this.
+    fn hybrid_schema(&self) -> Option<&ferrule_model::decoder::HybridStateSchema> {
+        None
+    }
+    fn validate_execution(
+        &self,
+        _: &KvCommitBinding,
+        _: &PackedDecoderBatch,
+        _: &[u64],
+    ) -> Result<()> {
+        Ok(())
+    }
+    fn execute_state(
+        &mut self,
+        batch: &PackedDecoderBatch,
+        input: SegmentInput,
+        states: &mut [Self::SequenceState],
+        view: &mut Self::KvView,
+        context: PipelineExecutionContext<'_>,
+    ) -> Result<SegmentOutput>;
+    /// Check every local model frontier against the packed sequence end, while
+    /// the working core still describes the committed source.
+    fn validate_frontier(
+        &self,
+        batch: &PackedDecoderBatch,
+        states: &[Self::SequenceState],
+    ) -> Result<()>;
+    fn expert_outstanding(&self) -> usize {
+        0
+    }
+    fn owner_stats(&mut self) -> Result<Vec<ExpertOwnerStats>> {
+        Ok(Vec::new())
+    }
+    fn shutdown(&mut self) -> Result<()> {
+        Ok(())
+    }
+}
+impl<P: PipelineStageProgram> PipelineStateProgram for P {
+    type SequenceState = ferrule_model::decoder::GenericDecoderSequenceState;
+    type Lifecycle = ferrule_model::decoder::StandardSequenceLifecycle<(), ()>;
+    type KvView = P::KvView;
+    fn plan(&self) -> &LayerSegmentPlan {
+        PipelineStageProgram::plan(self)
+    }
+    fn new_lifecycle(&mut self) -> Result<Self::Lifecycle> {
+        Ok(Self::Lifecycle::new())
+    }
+    fn validate_execution(
+        &self,
+        binding: &KvCommitBinding,
+        batch: &PackedDecoderBatch,
+        ids: &[u64],
+    ) -> Result<()> {
+        PipelineStageProgram::validate_execution(self, binding, batch, ids)
+    }
+    fn execute_state(
+        &mut self,
+        batch: &PackedDecoderBatch,
+        input: SegmentInput,
+        _: &mut [Self::SequenceState],
+        view: &mut Self::KvView,
+        context: PipelineExecutionContext<'_>,
+    ) -> Result<SegmentOutput> {
+        PipelineStageProgram::execute(self, batch, input, view, context)
+    }
+    fn validate_frontier(&self, _: &PackedDecoderBatch, _: &[Self::SequenceState]) -> Result<()> {
+        Ok(())
+    }
+    fn expert_outstanding(&self) -> usize {
+        PipelineStageProgram::expert_outstanding(self)
+    }
+    fn owner_stats(&mut self) -> Result<Vec<ExpertOwnerStats>> {
+        PipelineStageProgram::owner_stats(self)
+    }
+    fn shutdown(&mut self) -> Result<()> {
+        PipelineStageProgram::shutdown(self)
     }
 }

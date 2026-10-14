@@ -5,123 +5,34 @@ use super::super::RoutedLayerExecution;
 use super::*;
 use crate::decoder::{
     CudaHybridSequenceState, CudaKvView, DecoderLogits, DecoderTransactionContext,
-    HybridCudaDevice, HybridCudaExpertProgress, HybridCudaRoutedExperts, HybridLayerSchema,
-    HybridStateSchema, NoTerminalGuard, PackedDecoderBatch, StandardSequenceState,
+    HybridCudaDevice, HybridCudaRoutedExperts, HybridLayerSchema, HybridStateSchema,
+    NoTerminalGuard, PackedDecoderBatch, StandardSequenceState,
 };
-use crate::transformer::expert_parallel::{RoutedSwiGluExecutor, RoutedSwiGluRequest};
 use crate::transformer::{
     Attention, BoundDecoderResources, LayerRequest, MemoryLayerWeightCache, NoPostLayerTap, Poll,
     PreparedTransformer, StateDictMaterializer, Step, TransformerModule,
 };
 use std::convert::Infallible;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ExpertForwardPhase {
-    Active,
-    Failed,
-    Draining,
-}
+#[path = "invocation_trace.rs"]
+mod invocation_trace;
+use invocation_trace::InvocationTrace;
 
-#[derive(Debug)]
-struct ExpertForward {
-    transaction: ExecutionTransactionId,
-    batch: PackedDecoderBatch,
-    phase: ExpertForwardPhase,
-}
-impl ExpertForward {
-    fn check(&self, transaction: ExecutionTransactionId, batch: &PackedDecoderBatch) -> Result<()> {
-        if self.transaction != transaction
-            || self.phase != ExpertForwardPhase::Active
-            || &self.batch != batch
-        {
-            return Err(cuda_error(
-                "external expert transaction/batch/generation/phase is not active",
-            ));
-        }
-        Ok(())
-    }
-}
-
-/// Freeze stable sequence identities in packed ROW order, not state-slot order.
-fn routed_sequences(batch: &PackedDecoderBatch) -> Result<Vec<u64>> {
-    if batch.row_to_sequence().len() != batch.len() {
-        return Err(cuda_error("external expert packed row count mismatch"));
-    }
-    batch
-        .row_to_sequence()
-        .iter()
-        .enumerate()
-        .map(|(row, &index)| {
-            let sequence = batch
-                .sequences()
-                .get(index)
-                .filter(|sequence| sequence.query().contains(&row))
-                .ok_or_else(|| cuda_error("external expert packed sequence mapping mismatch"))?;
-            Ok(sequence.topology_id().get())
-        })
-        .collect()
-}
-
-struct RoutedCall<'a> {
-    executor: &'a mut dyn crate::decoder::HybridCudaRoutedExecutor,
-    device: &'a HybridCudaDevice,
-    holds: &'a mut Vec<DeviceBuffer<f32>>,
-}
-impl RoutedCall<'_> {
-    fn hold(&mut self, rows: &Rows) -> Result<()> {
-        let rows = rows.cuda()?;
-        rows.validate_owner(self.device.operators())?;
-        let buffer = rows
-            .f32_buffer()
-            .ok_or_else(|| cuda_error("external expert requires F32 CUDA rows"))?;
-        self.holds.push(
-            buffer
-                .as_device_buffer()
-                .slice(0, rows.shape().elements())?,
-        );
-        Ok(())
-    }
-}
-impl RoutedSwiGluExecutor for RoutedCall<'_> {
-    fn routed_swiglu(
-        &mut self,
-        request: RoutedSwiGluRequest<'_>,
-        check_active: &mut dyn FnMut(ExecutionTransactionId) -> Result<()>,
-    ) -> Result<OperatorProgress<Rows>> {
-        check_active(request.context.transaction)?;
-        if request.sequences.len() != request.input.shape().rows()
-            || request.routes.rows() != request.sequences.len()
-        {
-            return Err(cuda_error("external routed rows/identities mismatch"));
-        }
-        let transaction = request.context.transaction;
-        let shape = request.input.shape();
-        let arena = request.arena;
-        // Retain aliases BEFORE submission, including failure/panic paths. A root
-        // stream fence alone says nothing about a remote consumer of these rows.
-        self.hold(request.input)?;
-        let result = self.executor.routed_swiglu(request, check_active)?;
-        if let OperatorProgress::Ready(rows) = &result {
-            self.hold(rows)?;
-            if rows.shape() != shape || rows.arena() != arena {
-                return Err(cuda_error("external expert result geometry mismatch"));
-            }
-        }
-        check_active(transaction)?;
-        Ok(result)
-    }
-}
+#[path = "external_experts.rs"]
+pub(super) mod external_experts;
+#[cfg(test)]
+use external_experts::{ExpertForward, ExpertForwardPhase};
+use external_experts::{ExternalExpertCustody, RoutedCall, routed_sequences};
 
 pub struct CudaHybridModule {
     resources: Arc<BoundDecoderResources>,
     materializer: Arc<StateDictMaterializer>,
     device: HybridCudaDevice,
     schema: HybridStateSchema,
-    experts: Option<HybridCudaRoutedExperts>,
-    expert_forward: Option<ExpertForward>,
-    expert_holds: Vec<DeviceBuffer<f32>>,
-    expert_kv: Option<CudaKvView>,
+    attention_capacity: Option<crate::decoder::mixed_attention::MixedAttentionCapacity>,
+    external: ExternalExpertCustody,
     closed: bool,
+    performance: Option<InvocationTrace>,
     #[cfg(test)]
     reject_next_finish_completion: std::cell::Cell<bool>,
     operators: CudaStandardDecoderOperators,
@@ -137,9 +48,7 @@ impl std::fmt::Debug for CudaHybridModule {
         f.debug_struct("CudaHybridModule")
             .field("device", &self.device)
             .field("operators", &self.operators)
-            .field("experts", &self.experts)
-            .field("expert_forward", &self.expert_forward)
-            .field("expert_holds", &self.expert_holds.len())
+            .field("external", &self.external)
             .field("closed", &self.closed)
             .finish_non_exhaustive()
     }
@@ -162,7 +71,40 @@ impl CudaHybridModule {
         if let Some(experts) = &mut experts {
             experts.owner = Some(device.clone());
         }
+        let estimate = if experts.is_some() {
+            crate::decoder::HybridCudaMemoryEstimate::for_resources_with_routed_experts
+        } else {
+            crate::decoder::HybridCudaMemoryEstimate::for_resources
+        }(&resources, options, device.budget().kv_pages)?;
+        let claim = device.admit(estimate, options.capabilities().max_sequences)?;
+        let result = Self::prepare_with_claim(resources, device, options, experts, &claim);
+        claim.finish(result)
+    }
+
+    /// Prepare under an outer factory claim; pool/default-state construction
+    /// remains inside that factory's rollback scope. Does not finish the claim.
+    pub fn prepare_with_claim(
+        resources: Arc<BoundDecoderResources>,
+        device: HybridCudaDevice,
+        options: &crate::decoder::GenericDecoderOptions,
+        mut experts: Option<HybridCudaRoutedExperts>,
+        claim: &crate::decoder::HybridCudaPreparationClaim,
+    ) -> Result<Self> {
+        if let Some(experts) = &mut experts {
+            experts.owner = Some(device.clone());
+        }
+        let estimate = if experts.is_some() {
+            crate::decoder::HybridCudaMemoryEstimate::for_resources_with_routed_experts
+        } else {
+            crate::decoder::HybridCudaMemoryEstimate::for_resources
+        }(&resources, options, device.budget().kv_pages)?;
+        claim.validate_estimate(estimate, options.capabilities().max_sequences)?;
+        claim.begin_image(&device)?;
         options.validate_hybrid_cuda(&resources)?;
+        let attention_capacity =
+            crate::decoder::mixed_attention::MixedAttentionCapacity::for_resources(
+                &resources, options,
+            )?;
         let spec = resources.spec();
         let active_layers = options.active_layers().unwrap_or(spec.layers().len());
 
@@ -174,6 +116,10 @@ impl CudaHybridModule {
             }
         }
 
+        crate::moe::catalog::ValidatedExpertCatalog::for_decoder_range(
+            &resources,
+            0..active_layers,
+        )?;
         device.ensure_ready()?;
         let materializer = Arc::new(StateDictMaterializer::new(options.max_parameter_bytes())?);
         let embedding = super::super::prepare_embedding(&resources, &materializer)?;
@@ -204,7 +150,21 @@ impl CudaHybridModule {
                 resources.state_dict().parameters(),
             )?,
         };
-        let result = operators.prepare_hybrid_image(&embedding, &layers, &output);
+        let chunk_bytes =
+            crate::decoder::HybridMemoryPlan::bf16_chunk_workspace_bytes(&resources, options)?;
+        let gemmex_plans =
+            crate::decoder::HybridMemoryPlan::bf16_gemmex_plans(&resources, options)?;
+        let result = operators
+            .prepare_bf16_gemmex(&gemmex_plans)
+            .and_then(|()| {
+                operators.prepare_bf16_attention(
+                    crate::decoder::HybridMemoryPlan::bf16_attention_plan(&resources, options)?,
+                )
+            })
+            .and_then(|()| operators.prepare_bf16_chunk_workspace(chunk_bytes))
+            .and_then(|()| {
+                operators.prepare_hybrid_image(&embedding, &layers, &output, &materializer)
+            });
         if operators.needs_quarantine() {
             device.quarantine();
         }
@@ -212,21 +172,22 @@ impl CudaHybridModule {
         if operators.resident_parameter_bytes() > device.budget().weight_bytes {
             return Err(unsupported("resident CUDA weights exceed budget"));
         }
-        Ok(Self {
+        let image = Self {
             resources,
             materializer,
+            external: ExternalExpertCustody::new(experts, &device),
             device,
             schema,
-            experts,
-            expert_forward: None,
-            expert_holds: Vec::new(),
-            expert_kv: None,
+            attention_capacity,
             closed: false,
+            performance: None,
             #[cfg(test)]
             reject_next_finish_completion: std::cell::Cell::new(false),
             operators,
             prepared: PreparedTransformer::new(embedding, layers, output, NoPostLayerTap),
-        })
+        };
+        claim.image_prepared()?;
+        Ok(image)
     }
     #[cfg(test)]
     pub(crate) fn reject_next_finish_completion(&self) {
@@ -243,6 +204,23 @@ impl CudaHybridModule {
         self.operators.clear_diagnostic_trace();
     }
 
+    /// Immutable physical/native profile, independent of numeric FP8 arithmetic.
+    pub fn bf16_profile(&self) -> Option<crate::transformer::Bf16HybridCudaProfile> {
+        self.operators
+            .bf16
+            .as_ref()
+            .filter(|_| self.operators.numeric.is_none())
+            .map(|_| crate::transformer::Bf16HybridCudaProfile)
+    }
+    /// Shared dtype/storage contract. Use `numeric_fp8_precision()` for the
+    /// distinct fused versus tiled execution identity.
+    pub fn numeric_bf16_profile(
+        &self,
+    ) -> Option<crate::transformer::NumericFp8Bf16HybridCudaProfile> {
+        self.numeric_fp8_precision()
+            .is_some_and(crate::transformer::NumericFp8Precision::has_bf16_model_boundaries)
+            .then_some(crate::transformer::NumericFp8Bf16HybridCudaProfile)
+    }
     pub fn resident_parameter_bytes(&self) -> usize {
         self.operators.resident_parameter_bytes()
     }
@@ -255,6 +233,11 @@ impl CudaHybridModule {
     pub fn numeric_fp8_precision(&self) -> Option<crate::transformer::NumericFp8Precision> {
         self.operators.numeric_fp8_precision()
     }
+    /// Logical image-owned GDN chunk scratch; shared by layers, never sequence state.
+    pub fn bf16_chunk_workspace_bytes(&self) -> usize {
+        self.operators.bf16_chunk_workspace_bytes()
+    }
+
     /// Reservation, actual workspace payload, allocation count, reuse count, submissions.
     pub fn numeric_workspace_usage(&self) -> Option<(usize, usize, u64, u64, u64)> {
         self.operators.numeric_workspace_stats().map(|s| {
@@ -275,88 +258,50 @@ impl CudaHybridModule {
         transaction: ExecutionTransactionId,
         batch: &PackedDecoderBatch,
     ) -> Result<()> {
-        self.device.ensure_ready()?;
-        if let Some(experts) = &mut self.experts {
-            self.expert_forward
-                .as_ref()
-                .ok_or_else(|| cuda_error("unknown external expert forward"))?
-                .check(transaction, batch)?;
-            if let Some(check) = &mut experts.check_active {
-                check(transaction)?;
-            }
-        }
-        Ok(())
+        self.external.check(&self.device, transaction, batch)
     }
 
-    fn expert_failed(&mut self) {
-        if let Some(forward) = &mut self.expert_forward {
-            if forward.phase == ExpertForwardPhase::Active {
-                forward.phase = ExpertForwardPhase::Failed;
-                if let Some(experts) = &mut self.experts {
-                    experts
-                        .executor
-                        .as_mut()
-                        .expect("attached executor")
-                        .on_error(forward.transaction);
-                }
-            }
-        }
+    fn expert_failed(&mut self) -> Result<()> {
+        self.external.fail()
     }
 
     fn drain_experts(&mut self, shutdown: bool) -> Result<bool> {
-        self.device.ensure_ready()?;
-        let Some(experts) = &mut self.experts else {
-            return Ok(true);
-        };
-        let executor = experts.executor.as_mut().expect("attached executor");
-        let progress = executor.drain()?;
-        let progress = if progress == HybridCudaExpertProgress::Complete && shutdown {
-            executor.shutdown()?
-        } else {
-            progress
-        };
-        match progress {
-            HybridCudaExpertProgress::Complete => {
-                self.device.fence()?;
-                self.expert_holds.clear();
-                Ok(true)
-            }
-            HybridCudaExpertProgress::Pending => Ok(false),
-            HybridCudaExpertProgress::Unknown => {
-                self.device.quarantine();
-                self.operators.poisoned = true;
-                self.device.ensure_ready()?;
-                unreachable!()
-            }
-        }
+        self.external.drain(&self.device, shutdown)
     }
 
     fn require_expert_drain(&mut self, shutdown: bool) -> Result<()> {
-        if !self.drain_experts(shutdown)? {
-            return Err(cuda_error(
-                "external expert completion pending; retain module/KV custody",
-            ));
-        }
-        Ok(())
+        self.external.require_drain(&self.device, shutdown)
     }
 
     fn checked<T>(&mut self, run: impl FnOnce(&mut Self) -> Result<T>) -> Result<T> {
-        self.device.ensure_ready()?;
+        if let Err(error) = self.device.ensure_ready() {
+            self.end_performance("failed");
+            return Err(error);
+        }
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let result = run(self);
-            if result.is_err() {
-                self.expert_failed();
-            }
-            result
+            result.map_err(|primary| {
+                Error::with_cleanup(
+                    "CUDA hybrid expert cancellation",
+                    primary,
+                    self.expert_failed(),
+                )
+            })
         }));
         if self.operators.needs_quarantine() {
             self.device.quarantine();
         }
         match result {
-            Ok(result) => result,
+            Ok(result) => {
+                if result.is_err() {
+                    self.end_performance("failed");
+                }
+                result
+            }
             Err(panic) => {
                 self.device.quarantine();
                 self.operators.poisoned = true;
+                self.end_performance("panicked");
                 std::panic::resume_unwind(panic)
             }
         }
@@ -386,16 +331,17 @@ impl CudaHybridModule {
             }
             batch.validate_states(states)?;
             let row_sequences = routed_sequences(batch)?;
-            let forward = this.expert_forward.as_ref();
+            let forward = this.external.forward.as_ref();
             let device = &this.device;
-            let (source_rank, executor, mut external_check) = match this.experts.as_mut() {
-                Some(experts) => (
-                    experts.source_rank,
-                    Some(experts.executor.as_mut().expect("attached executor")),
-                    experts.check_active.as_mut(),
-                ),
-                None => (ParallelRankId::new(0), None, None),
-            };
+            let (source_rank, executor, mut external_check) =
+                match this.external.attachment.as_mut() {
+                    Some(experts) => (
+                        experts.source_rank,
+                        Some(experts.executor.as_mut().expect("attached executor")),
+                        experts.check_active.as_mut(),
+                    ),
+                    None => (ParallelRankId::new(0), None, None),
+                };
             let mut check_active = |transaction| {
                 device.ensure_ready()?;
                 forward
@@ -409,7 +355,7 @@ impl CudaHybridModule {
             let mut call = executor.map(|executor| RoutedCall {
                 executor: executor.as_mut(),
                 device,
-                holds: &mut this.expert_holds,
+                holds: &mut this.external.holds,
             });
             let mut execution = call.as_mut().map(|executor| RoutedLayerExecution {
                 transaction: context.transaction(),
@@ -421,22 +367,30 @@ impl CudaHybridModule {
             if let Some(execution) = &mut execution {
                 execution.check_active()?;
             }
-            let mut binding = CudaStandardKvBinding::new(kv, batch)?;
             let mut states = states
                 .iter_mut()
                 .map(|s| s as &mut dyn StandardSequenceState)
                 .collect::<Vec<_>>();
-            let result = super::super::execute_standard_layer_inner(
-                &mut this.operators,
-                &this.materializer,
-                layer.index(),
-                layer.attention().block().as_ref(),
-                layer.feed_forward().block(),
+            let attention = this.operators.bf16_attention.clone();
+            let result = CudaStandardKvBinding::with_context(
+                kv,
+                batch,
+                context,
                 kv_layer,
-                hidden,
-                &mut binding,
-                &mut states,
-                execution.as_mut(),
+                attention,
+                |binding| {
+                    this.operators.execute_root_layer(
+                        &this.materializer,
+                        layer.index(),
+                        layer.attention().block().as_ref(),
+                        layer.feed_forward().block(),
+                        kv_layer,
+                        hidden,
+                        binding,
+                        &mut states,
+                        execution.as_mut(),
+                    )
+                },
             );
             this.operators.set_diagnostic_layer(None);
             result?;
@@ -463,6 +417,101 @@ impl TransformerModule for CudaHybridModule {
     type Event = Infallible;
     type TerminalGuard = NoTerminalGuard;
 
+    fn physical_resource_snapshot(
+        &self,
+        default_state: &Self::State,
+    ) -> crate::resource_observability::PhysicalResourceObservation {
+        use crate::resource_observability::{
+            DefaultStateObservation, ExpertCacheObservation, PhysicalResourceObservation,
+            ResourceClosure, ResourceEvidence, ResourceQuiescence, ResourceResidency,
+            TransferObservation, WorkspaceObservation,
+        };
+        let image_generation = self.operators.image_generation();
+        let transfer = self.operators.boundary.observation_stats();
+        let quarantined = self.device.needs_quarantine()
+            || self.operators.needs_quarantine()
+            || default_state.kv_state().needs_quarantine();
+        let mut snapshot = PhysicalResourceObservation {
+            image_generation: ResourceEvidence::Observed(image_generation),
+            device_ordinal: ResourceEvidence::Observed(self.device.device_ordinal()),
+            default_state: ResourceEvidence::Observed(DefaultStateObservation {
+                topology_id: default_state.topology_id().get(),
+                generation: default_state.core().generation(),
+                position: default_state.core().position(),
+                poisoned: default_state.core().is_poisoned(),
+                resident_bytes: ResourceEvidence::Observed(
+                    default_state.kv_state().resident_bytes(),
+                ),
+            }),
+            resident_parameter_bytes: ResourceEvidence::Observed(self.resident_parameter_bytes()),
+            live_model_state_bytes: ResourceEvidence::Observed(self.device.live_state_bytes()),
+            expert_cache: self
+                .expert_cache_stats()
+                .map(|stats| ResourceEvidence::Observed(ExpertCacheObservation::from(stats)))
+                .unwrap_or_default(),
+            numeric_workspace: self
+                .operators
+                .numeric_workspace_stats()
+                .map(|stats| {
+                    ResourceEvidence::Observed(WorkspaceObservation {
+                        image_generation,
+                        kind: "numeric",
+                        reserved_bytes: stats.reserved_bytes,
+                        allocated_bytes: stats.allocated_bytes,
+                        creations: stats.allocations,
+                        reuses: stats.reuses,
+                        submissions: stats.submissions,
+                    })
+                })
+                .unwrap_or_default(),
+            recurrent_chunk_workspace_bytes: ResourceEvidence::Observed(
+                self.bf16_chunk_workspace_bytes(),
+            ),
+            boundary_transfer: ResourceEvidence::Observed(TransferObservation {
+                tx_slots: transfer.tx_slots,
+                rx_slots: transfer.rx_slots,
+                tx_in_use: transfer.tx_in_use,
+                rx_in_use: transfer.rx_in_use,
+                tx_high_water: transfer.tx_high_water,
+                rx_high_water: transfer.rx_high_water,
+                pinned_allocations: transfer.pinned_allocations,
+                pinned_bytes: transfer.pinned_bytes,
+                device_holds_in_use: transfer.device_holds_in_use,
+                device_holds_high_water: transfer.device_holds_high_water,
+                submissions: transfer.submissions,
+                failed_submissions: transfer.failed_submissions,
+                completions: transfer.completions,
+                cancel_intents: transfer.cancel_intents,
+                canceled_completions: transfer.canceled_completions,
+                quarantined: transfer.quarantined,
+            }),
+            // allocator_metrics polls retirement fences and can release blocks.
+            // No immutable allocator getter is exposed; leave it Unobserved.
+            allocator: ResourceEvidence::Unobserved,
+            owner_fence_completions: ResourceEvidence::Observed(
+                self.device.completed_state_operations(),
+            ),
+            quarantine: ResourceEvidence::Observed(quarantined),
+            residency: ResourceEvidence::Observed(ResourceResidency::Retained),
+            close: ResourceEvidence::Observed(if self.closed {
+                ResourceClosure::Closed
+            } else {
+                ResourceClosure::Open
+            }),
+            ..Default::default()
+        };
+        if quarantined {
+            snapshot.mark_unknown();
+        } else if self.closed {
+            // closed is published only after external drain, operator quiescence
+            // and both device fences succeed in the existing shutdown protocol.
+            snapshot.quiescence = ResourceEvidence::Verified(ResourceQuiescence::Quiescent);
+        }
+        // The live image, default state and workspaces still own their storage.
+        // Neither a successful close nor allocator zeros proves post-Drop release.
+        snapshot
+    }
+
     fn layer_count(&self) -> usize {
         self.prepared.layers().len()
     }
@@ -474,22 +523,64 @@ impl TransformerModule for CudaHybridModule {
         states: &mut [Self::State],
         kv: &mut Self::KvView,
     ) -> Result<()> {
-        self.device.ensure_ready()?;
-        if self.closed || self.expert_forward.is_some() {
-            return Err(cuda_error(
-                "hybrid module closed or previous expert forward retains custody",
-            ));
+        self.begin_performance(context.transaction(), batch);
+        let result = (|| {
+            self.device.ensure_ready()?;
+            if let Some(append) = context.invocation() {
+                append.cuda_host_kv()?;
+                append.validate_batch(context.transaction(), batch)?;
+                if append.layer_count() != self.prepared.layers().len()
+                    || self
+                        .schema
+                        .layers()
+                        .iter()
+                        .any(|l| !matches!(l, HybridLayerSchema::FullAttention { .. }))
+                    || self.external.attachment.is_some()
+                    || self.operators.numeric.is_some()
+                    || self.operators.bf16.is_some()
+                    || self.operators.tensor_collective.is_some()
+                {
+                    return Err(cuda_error(
+                        "HostKV decode requires dense F32 all-GQA layers; no numeric/EP/TP fallback",
+                    ));
+                }
+            }
+            if self.closed || self.external.forward.is_some() {
+                return Err(cuda_error(
+                    "hybrid module closed or previous expert forward retains custody",
+                ));
+            }
+            if context.transaction() != kv.transaction() {
+                return Err(cuda_error("hybrid context/root KV transaction mismatch"));
+            }
+            batch.validate_states(states)?;
+            if let Some(capacity) = self.attention_capacity {
+                capacity.validate_batch(batch)?;
+            }
+            routed_sequences(batch)?;
+            self.operators.preflight_expert_metadata()?;
+            for state in states {
+                state.validate_standard_state(&self.schema)?;
+            }
+            kv.validate_batch(batch)?;
+            if let Some(owner) = &self.operators.bf16_attention {
+                let owner = owner.borrow();
+                for layer in self.schema.layers() {
+                    if let HybridLayerSchema::FullAttention { kv_layer, .. } = layer {
+                        kv.with_bf16_gqa_planes(&self.operators.ops, *kv_layer, batch, |planes| {
+                            planes
+                                .prepared_attention_view(owner.provider.plan())
+                                .map(|_| ())
+                        })?;
+                    }
+                }
+            }
+            Ok(())
+        })();
+        if result.is_err() {
+            self.end_performance("failed");
         }
-        if context.transaction() != kv.transaction() {
-            return Err(cuda_error("hybrid context/root KV transaction mismatch"));
-        }
-        batch.validate_states(states)?;
-        routed_sequences(batch)?;
-        self.operators.preflight_expert_metadata()?;
-        for state in states {
-            state.validate_standard_state(&self.schema)?;
-        }
-        kv.validate_batch(batch)
+        result
     }
 
     fn arena_key(&self, batch: &PackedDecoderBatch) -> Result<Self::ArenaKey> {
@@ -509,14 +600,8 @@ impl TransformerModule for CudaHybridModule {
         _arena: &mut Self::Arena,
     ) -> Result<Step<Self::Hidden, Self::EmbeddingPending>> {
         self.checked(|this| {
-            if this.experts.is_some() {
-                this.expert_forward = Some(ExpertForward {
-                    transaction: context.transaction(),
-                    batch: batch.clone(),
-                    phase: ExpertForwardPhase::Active,
-                });
-                this.expert_kv = Some(kv.clone());
-            }
+            this.external.begin(context.transaction(), batch, kv)?;
+            this.operators.begin_bf16_attention(context.transaction())?;
             let metadata = super::super::packed_gqa_metadata(batch)?;
             let rows = super::super::ready(this.operators.embedding(
                 this.prepared.embedding(),
@@ -590,6 +675,8 @@ impl TransformerModule for CudaHybridModule {
     ) -> Result<Step<DecoderLogits, Self::OutputPending>> {
         self.checked(|this| {
             this.check_expert_active(context.transaction(), batch)?;
+            this.operators
+                .finish_bf16_attention(context.transaction(), false)?;
             let logits = super::super::execute_standard_output(
                 &mut this.operators,
                 this.prepared.output(),
@@ -643,10 +730,7 @@ impl TransformerModule for CudaHybridModule {
 
     fn begin_quiescence(&mut self) -> Result<Self::Quiescence> {
         self.checked(|this| {
-            this.expert_failed();
-            if let Some(forward) = &mut this.expert_forward {
-                forward.phase = ExpertForwardPhase::Draining;
-            }
+            this.external.begin_drain()?;
             Ok(())
         })
     }
@@ -670,64 +754,78 @@ impl TransformerModule for CudaHybridModule {
         _arena: &mut Self::Arena,
         events: Vec<Self::Event>,
     ) -> Result<Self::TerminalGuard> {
-        self.checked(|this| {
-            this.check_expert_active(kv.transaction(), batch)?;
-            this.require_expert_drain(false)?;
-            this.check_expert_active(kv.transaction(), batch)
-        })?;
-        // Simulate lost completion evidence, not an illegal GPU operation. The
-        // real fence then returns the owner's permanent typed Unknown result.
-        #[cfg(test)]
-        if self.reject_next_finish_completion.replace(false) {
-            self.device.quarantine();
-        }
-        self.device.fence()?;
-        for sequence in batch.sequences() {
-            let state = states
-                .get(sequence.state_index())
-                .ok_or_else(|| cuda_error("missing hybrid sequence at completion"))?;
-            state.validate_standard_state_at(&self.schema, sequence.sequence_len())?;
-        }
-        self.expert_forward = None;
-        self.expert_kv = None;
-        match events.into_iter().next() {
-            Some(event) => match event {},
-            None => Ok(NoTerminalGuard),
-        }
+        let result = (|| {
+            self.checked(|this| {
+                this.check_expert_active(kv.transaction(), batch)?;
+                this.require_expert_drain(false)?;
+                this.check_expert_active(kv.transaction(), batch)
+            })?;
+            // Simulate lost completion evidence, not an illegal GPU operation. The
+            // real fence then returns the owner's permanent typed Unknown result.
+            #[cfg(test)]
+            if self.reject_next_finish_completion.replace(false) {
+                self.device.quarantine();
+            }
+            self.device.fence()?;
+            for sequence in batch.sequences() {
+                let state = states
+                    .get(sequence.state_index())
+                    .ok_or_else(|| cuda_error("missing hybrid sequence at completion"))?;
+                state.validate_standard_state_at(&self.schema, sequence.sequence_len())?;
+            }
+            self.external.finish();
+            match events.into_iter().next() {
+                Some(event) => match event {},
+                None => Ok(NoTerminalGuard),
+            }
+        })();
+        self.end_performance(if result.is_ok() {
+            "completed"
+        } else {
+            "failed"
+        });
+        result
     }
 
     fn abort(
         &mut self,
         _batch: &PackedDecoderBatch,
         _states: &mut [Self::State],
-        _kv: &mut Self::KvView,
+        kv: &mut Self::KvView,
         _arena: &mut Self::Arena,
     ) -> Result<()> {
-        self.checked(|this| {
+        let result = self.checked(|this| {
+            this.operators
+                .finish_bf16_attention(kv.transaction(), true)?;
             this.require_expert_drain(false)?;
             this.device.fence()?;
-            this.expert_forward = None;
-            this.expert_kv = None;
+            this.external.finish();
             Ok(())
-        })
+        });
+        self.end_performance(if result.is_ok() { "aborted" } else { "failed" });
+        result
     }
 
     fn shutdown(&mut self) -> Result<()> {
         if self.closed {
             return self.device.ensure_ready();
         }
-        self.checked(|this| {
+        let result = self.checked(|this| {
             this.require_expert_drain(true)?;
             this.operators.quiesce()?;
             this.device.fence()?;
-            if let Some(experts) = &mut this.experts {
-                experts.closed = true;
-            }
-            this.expert_kv = None;
-            this.expert_forward = None;
+            this.external.close();
             this.closed = true;
             Ok(())
-        })
+        });
+        self.end_performance(if std::thread::panicking() {
+            "panicked"
+        } else if result.is_ok() {
+            "shutdown"
+        } else {
+            "failed"
+        });
+        result
     }
 }
 
@@ -737,9 +835,7 @@ impl Drop for CudaHybridModule {
         if !matches!(result, Ok(Ok(()))) || self.device.needs_quarantine() {
             self.device.quarantine();
             self.operators.poisoned = true;
-            std::mem::forget(self.experts.take());
-            std::mem::forget(self.expert_kv.take());
-            std::mem::forget(std::mem::take(&mut self.expert_holds));
+            self.external.retain_unknown();
             std::mem::forget(self.device.clone());
         }
     }
@@ -843,5 +939,81 @@ mod external_identity_tests {
             active.phase = phase;
             assert!(active.check(transaction, &batch).is_err());
         }
+    }
+
+    struct CancellationProbe {
+        calls: Rc<std::cell::Cell<usize>>,
+        panic: bool,
+    }
+    impl crate::transformer::expert_parallel::RoutedSwiGluExecutor for CancellationProbe {
+        fn routed_swiglu(
+            &mut self,
+            _: crate::transformer::expert_parallel::RoutedSwiGluRequest<'_>,
+            _: &mut dyn FnMut(ExecutionTransactionId) -> Result<()>,
+        ) -> Result<OperatorProgress<Rows>> {
+            panic!("CPU custody contract must not run a forward")
+        }
+    }
+    impl crate::decoder::HybridCudaRoutedExecutor for CancellationProbe {
+        fn drain(&mut self) -> Result<crate::decoder::WorkProgress> {
+            Ok(crate::decoder::WorkProgress::Complete)
+        }
+        fn shutdown(&mut self) -> Result<crate::decoder::WorkProgress> {
+            Ok(crate::decoder::WorkProgress::Complete)
+        }
+        fn on_error(&mut self, _: ExecutionTransactionId) {
+            self.calls.set(self.calls.get() + 1);
+            assert!(!self.panic, "injected cancellation callback panic");
+        }
+    }
+    fn custody(calls: Rc<std::cell::Cell<usize>>, panic: bool) -> ExternalExpertCustody {
+        let state = GenericDecoderSequenceState::new((), ());
+        ExternalExpertCustody {
+            attachment: Some(HybridCudaRoutedExperts::new(
+                ParallelRankId::new(7),
+                Box::new(CancellationProbe { calls, panic }),
+            )),
+            forward: Some(ExpertForward {
+                transaction: ExecutionTransactionId::new(10).unwrap(),
+                batch: packed(&state, ForwardPhase::Prefill, 1),
+                phase: ExpertForwardPhase::Active,
+            }),
+            ..Default::default()
+        }
+    }
+    #[test]
+    fn external_custody_notifies_failure_once_and_retains_forward_until_proof() {
+        let calls = Rc::new(std::cell::Cell::new(0));
+        let mut custody = custody(calls.clone(), false);
+        custody.fail().unwrap();
+        custody.fail().unwrap();
+        custody.begin_drain().unwrap();
+        custody.begin_drain().unwrap();
+        assert_eq!(calls.get(), 1);
+        assert_eq!(
+            custody.forward.as_ref().unwrap().phase,
+            ExpertForwardPhase::Draining
+        );
+        custody.finish();
+        assert!(custody.forward.is_none());
+    }
+    #[test]
+    fn external_custody_callback_panic_does_not_replace_primary_failure() {
+        let calls = Rc::new(std::cell::Cell::new(0));
+        let mut custody = custody(calls.clone(), true);
+        let error = Error::with_cleanup(
+            "forward",
+            cuda_error("primary forward error"),
+            custody.fail(),
+        );
+        let text = error.to_string();
+        assert!(text.contains("primary forward error"), "{text}");
+        assert!(text.contains("completion unknown"), "{text}");
+        assert_eq!(
+            custody.forward.as_ref().unwrap().phase,
+            ExpertForwardPhase::Failed
+        );
+        custody.fail().unwrap();
+        assert_eq!(calls.get(), 1);
     }
 }

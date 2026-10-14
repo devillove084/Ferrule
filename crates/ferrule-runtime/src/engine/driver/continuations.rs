@@ -650,10 +650,10 @@ where
     pub(super) fn retry_pending_continuation_cleanups(&mut self) -> Result<()> {
         let mut first_error = None;
         for (continuation, reason) in self.continuations.pending_detaches() {
-            if let Err(error) = self.detach_registered_continuation(continuation, reason) {
-                if first_error.is_none() {
-                    first_error = Some(error);
-                }
+            if let Err(error) = self.detach_registered_continuation(continuation, reason)
+                && first_error.is_none()
+            {
+                first_error = Some(error);
             }
         }
         first_error.map_or(Ok(()), Err)

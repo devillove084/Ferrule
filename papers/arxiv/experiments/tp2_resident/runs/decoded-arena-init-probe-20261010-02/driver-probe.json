@@ -1,0 +1,52 @@
+{
+  "cuInit": 0,
+  "name": "CUDA_SUCCESS",
+  "message": "no error",
+  "maps": [
+    "7faf2ddf8000-7faf2dfbd000 r--p 00000000 fd:02 1980855                    /usr/lib64/libcuda.so.575.57.08",
+    "7faf2dfbd000-7faf2ee54000 r-xp 001c5000 fd:02 1980855                    /usr/lib64/libcuda.so.575.57.08",
+    "7faf2ee54000-7faf33431000 r--p 0105c000 fd:02 1980855                    /usr/lib64/libcuda.so.575.57.08",
+    "7faf33431000-7faf33432000 ---p 05639000 fd:02 1980855                    /usr/lib64/libcuda.so.575.57.08",
+    "7faf33432000-7faf3355f000 r--p 05639000 fd:02 1980855                    /usr/lib64/libcuda.so.575.57.08",
+    "7faf3355f000-7faf33603000 rw-p 05766000 fd:02 1980855                    /usr/lib64/libcuda.so.575.57.08"
+  ],
+  "nodes": [
+    {
+      "path": "/dev/nvidiactl",
+      "mode": "0o20666",
+      "major": 195,
+      "minor": 255,
+      "open_rdwr_errno": 0
+    },
+    {
+      "path": "/dev/nvidia0",
+      "mode": "0o20666",
+      "major": 195,
+      "minor": 0,
+      "open_rdwr_errno": 0
+    },
+    {
+      "path": "/dev/nvidia-uvm",
+      "mode": "0o20666",
+      "major": 234,
+      "minor": 0,
+      "open_rdwr_errno": 0
+    },
+    {
+      "path": "/dev/nvidia-uvm-tools",
+      "mode": "0o20666",
+      "major": 234,
+      "minor": 1,
+      "open_rdwr_errno": 0
+    }
+  ],
+  "driver": {
+    "path": "/usr/lib64/libcuda.so.575.57.08",
+    "sha256": "f2470aa637fa72422534edeaeb9de19afe3d0646388baf7ffb5337b2edafc59e"
+  },
+  "kernel": "NVRM version: NVIDIA UNIX x86_64 Kernel Module  575.57.08  Sat May 24 07:21:16 UTC 2025\nGCC version:  gcc version 6.5.1 20181026 (Alibaba 6.5.1-1) (GCC) \n",
+  "process_status": "Name:\tpython3.12\nUmask:\t0022\nState:\tR (running)\nTgid:\t50477\nNgid:\t0\nPid:\t50477\nPPid:\t50476\nTracerPid:\t0\nUid:\t0\t0\t0\t0\nGid:\t0\t0\t0\t0\nFDSize:\t64\nGroups:\t0 \nNStgid:\t50477\nNSpid:\t50477\nNSpgid:\t50477\nNSsid:\t50477\nVmPeak:\t 4528960 kB\nVmSize:\t 4528960 kB\nVmLck:\t       0 kB\nVmPin:\t       0 kB\nVmHWM:\t   36496 kB\nVmRSS:\t   36496 kB\nRssAnon:\t   20388 kB\nRssFile:\t   16108 kB\nRssShmem:\t       0 kB\nVmData:\t   32404 kB\nVmStk:\t     132 kB\nVmExe:\t    2548 kB\nVmLib:\t   20676 kB\nVmPTE:\t     156 kB\nVmSwap:\t       0 kB\nHugetlbPages:\t       0 kB\nCoreDumping:\t0\nThreads:\t2\nSigQ:\t2/3092032\nSigPnd:\t0000000000000000\nShdPnd:\t0000000000000000\nSigBlk:\t0000000000000000\nSigIgn:\t0000000001381000\nSigCgt:\t0000000180000002\nCapInh:\t0000000000000000\nCapPrm:\t00000000a82425fb\nCapEff:\t00000000a82425fb\nCapBnd:\t00000000a82425fb\nCapAmb:\t0000000000000000\nNoNewPrivs:\t0\nSeccomp:\t2\nSpeculation_Store_Bypass:\tvulnerable\nCpus_allowed:\tffffffff,ffffffff,ffffffff,ffffffff\nCpus_allowed_list:\t0-127\nMems_allowed:\t00000000,00000001\nMems_allowed_list:\t0\nvoluntary_ctxt_switches:\t135\nnonvoluntary_ctxt_switches:\t92\n",
+  "root_cause": "not established; success/failure does not prove a transient driver cause",
+  "cuDeviceGetCount": 0,
+  "device_count": 1
+}

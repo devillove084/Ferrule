@@ -1,0 +1,11 @@
+{
+  "case": "capital",
+  "error": null,
+  "input_token_ids": [
+    11751
+  ],
+  "phase": "decode.0",
+  "published": true,
+  "session": 2,
+  "transaction": 4
+}

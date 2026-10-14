@@ -1,6 +1,7 @@
-//! F32 CUDA programs over the existing PP owner journal and KV cohort.
+//! F32 and explicitly admitted dense BF16 CUDA programs over the existing PP owner journal and KV cohort.
 //! Host staging is confined to PP/logits and explicit expert-result boundaries.
 
+use crate::parallel::pipeline::PhysicalKvLayout;
 use std::rc::Rc;
 
 use ferrule_backend::cuda::operators::linear::CudaOperators;
@@ -12,18 +13,17 @@ use ferrule_model::decoder::{
 };
 use ferrule_model::execution::ExecutionPrecisionPolicy;
 use ferrule_model::transformer::expert_parallel::{RoutedSwiGluExecutor, RoutedSwiGluRequest};
-use ferrule_model::transformer::parallel::CudaShardError;
 use ferrule_model::transformer::{
     Attention, BoundDecoderResources, CudaStandardDecoderOperators, CudaStandardDecoderSegment,
     LayerSegmentPlan, OperatorProgress, Rows, SegmentInput, SegmentOutput, StandardDecoderSegment,
 };
 
+use super::completion_boundary::checked_cuda_completion;
 use super::stage::segment_error;
 use super::{
     PipelineConfig, PipelineExecutionContext, PipelineStage, PipelineStageDescription,
     PipelineStageProgram, error,
 };
-use crate::parallel::data::PanicQuiescence;
 use crate::parallel::expert::{ExpertOwnerStats, ExpertParallelExecutor};
 
 /// Construct on the stage owner. Neither the segment, operators nor KV view is
@@ -42,33 +42,21 @@ impl CudaPipelineStageProgram {
     }
 
     fn check_completion<T>(&self, result: Result<T>) -> Result<T> {
-        if self.segment.needs_quarantine()
-            || self
-                .experts
-                .as_ref()
-                .is_some_and(|(_, ops)| ops.needs_quarantine())
-        {
-            std::mem::forget(result);
-            std::panic::panic_any(PanicQuiescence::Unknown);
-        }
-        checked_completion(result)
+        checked_cuda_completion(
+            self.segment.needs_quarantine()
+                || self
+                    .experts
+                    .as_ref()
+                    .is_some_and(|(_, ops)| ops.needs_quarantine()),
+            result,
+        )
     }
 }
 
 // Startup errors may be nested inside SegmentError, before there is a program
 // for the owner to retain. Preserve the model's typed completion evidence.
 fn checked_completion<T>(result: Result<T>) -> Result<T> {
-    fn unknown(source: &(dyn std::error::Error + 'static)) -> bool {
-        source
-            .downcast_ref::<CudaShardError>()
-            .is_some_and(CudaShardError::needs_quarantine)
-            || source.source().is_some_and(unknown)
-    }
-    if result.as_ref().err().is_some_and(|e| unknown(e)) {
-        std::mem::forget(result);
-        std::panic::panic_any(PanicQuiescence::Unknown);
-    }
-    result
+    checked_cuda_completion(false, result)
 }
 
 struct CudaRouted<'a> {
@@ -163,7 +151,7 @@ impl PipelineStageProgram for CudaPipelineStageProgram {
 
 impl PipelineStage<CudaPagedKvBackend, CudaPipelineStageProgram> {
     /// The caller creates operators INSIDE the existing stage owner factory.
-    /// The exact same owner backs layer computation and physical F32 KV planes.
+    /// The exact same owner backs computation and precision-typed KV planes.
     pub fn prepare_cuda(
         resources: &BoundDecoderResources,
         plan: LayerSegmentPlan,
@@ -171,10 +159,16 @@ impl PipelineStage<CudaPagedKvBackend, CudaPipelineStageProgram> {
         ops: Rc<CudaOperators>,
     ) -> Result<Self> {
         config.validate()?;
-        if config.precision != ExecutionPrecisionPolicy::f32() {
-            return Err(error(
-                "CUDA pipeline requires F32 activations/KV; BF16 compatibility and CPU fallback are disabled",
-            ));
+        if config.precision == ExecutionPrecisionPolicy::bf16_compatibility() {
+            let budget = super::DenseBf16MemoryPlan::new(resources, &plan, config)?;
+            super::DenseBf16MemoryPlan::validate_provider(resources, config.max_batch_tokens)?;
+            let (free, _) = ops.memory_info()?;
+            budget.check_available(free)?;
+            tracing::info!(
+                ?budget,
+                free_device_bytes = free,
+                "dense BF16 owner admission"
+            );
         }
         if plan.total_layers() != resources.spec().layers().len() {
             return Err(error("CUDA pipeline layer count mismatch"));
@@ -194,7 +188,9 @@ impl PipelineStage<CudaPagedKvBackend, CudaPipelineStageProgram> {
         let description = PipelineStageDescription {
             plan: plan.clone(),
             config,
-            physical_pages: config.physical_pages(true)?,
+            physical_pages: config.physical_pages(PhysicalKvLayout::standard(
+                ferrule_model::ModelExecutionBackend::Cuda,
+            ))?,
             hidden: resources.spec().hidden_size(),
             vocabulary: resources.spec().vocab_size(),
             kv_heads,
@@ -260,7 +256,9 @@ impl PipelineStage<CudaPagedKvBackend, CudaPipelineStageProgram> {
         let description = PipelineStageDescription {
             plan: plan.clone(),
             config,
-            physical_pages: config.physical_pages(true)?,
+            physical_pages: config.physical_pages(PhysicalKvLayout::standard(
+                ferrule_model::ModelExecutionBackend::Cuda,
+            ))?,
             hidden: resources.spec().hidden_size(),
             vocabulary: resources.spec().vocab_size(),
             kv_heads: tensor.local_kv_heads(),

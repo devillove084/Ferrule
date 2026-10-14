@@ -2,8 +2,6 @@
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
-#[cfg(feature = "cuda")]
-use std::fmt;
 use std::sync::Arc;
 
 use ferrule_backend::cpu::{
@@ -12,8 +10,9 @@ use ferrule_backend::cpu::{
     PagedKvHistory as BackendPagedKvHistory, RopeRef as CpuRopeRef,
     RotaryPairing as CpuRotaryPairing, RotaryRegion as CpuRotaryRegion, SwiGluRef as CpuSwiGluRef,
 };
+
 #[cfg(feature = "cuda")]
-use ferrule_backend::cuda::operators::linear::{CudaBf16Buffer, CudaF32Buffer, CudaOperators};
+use ferrule_backend::cuda::operators::linear::CudaOperators;
 use ferrule_common::execution::ExecutionTransactionId;
 use ferrule_common::{Error, ParallelRankId, Result};
 
@@ -26,6 +25,11 @@ use super::{
     RotaryPairing, RotaryRegion, RotaryScaling, RouterScoreFunction, RouterSelection,
 };
 
+#[cfg(feature = "cuda")]
+mod cuda;
+#[cfg(feature = "cuda")]
+pub use cuda::CudaRows;
+
 pub use ferrule_backend::cpu::{HostRows, RouterRoutes, RowsArenaId, RowsDType, RowsShape};
 
 /// Device that owns row storage.
@@ -36,137 +40,6 @@ pub enum RowsDevice {
     Cuda {
         ordinal: u32,
     },
-}
-
-/// CUDA-owned dense rows.
-#[cfg(feature = "cuda")]
-pub struct CudaRows {
-    shape: RowsShape,
-    dtype: RowsDType,
-    arena: Option<RowsArenaId>,
-    storage: CudaRowsStorage,
-}
-
-#[cfg(feature = "cuda")]
-enum CudaRowsStorage {
-    F32(CudaF32Buffer),
-    Bf16(CudaBf16Buffer),
-}
-
-#[cfg(feature = "cuda")]
-impl fmt::Debug for CudaRows {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("CudaRows")
-            .field("shape", &self.shape)
-            .field("dtype", &self.dtype)
-            .field("arena", &self.arena)
-            .finish_non_exhaustive()
-    }
-}
-
-#[cfg(feature = "cuda")]
-impl CudaRows {
-    pub fn f32(
-        shape: RowsShape,
-        arena: Option<RowsArenaId>,
-        buffer: CudaF32Buffer,
-    ) -> Result<Self> {
-        if buffer.len() != shape.elements() {
-            return Err(model_error(format!(
-                "CUDA F32 rows contain {} values for shape [{}, {}]",
-                buffer.len(),
-                shape.rows(),
-                shape.width()
-            )));
-        }
-        Ok(Self {
-            shape,
-            dtype: RowsDType::F32,
-            arena,
-            storage: CudaRowsStorage::F32(buffer),
-        })
-    }
-
-    pub fn bf16(
-        shape: RowsShape,
-        arena: Option<RowsArenaId>,
-        buffer: CudaBf16Buffer,
-    ) -> Result<Self> {
-        if buffer.len() != shape.elements() {
-            return Err(model_error(format!(
-                "CUDA BF16 rows contain {} values for shape [{}, {}]",
-                buffer.len(),
-                shape.rows(),
-                shape.width()
-            )));
-        }
-        Ok(Self {
-            shape,
-            dtype: RowsDType::Bf16,
-            arena,
-            storage: CudaRowsStorage::Bf16(buffer),
-        })
-    }
-
-    pub const fn shape(&self) -> RowsShape {
-        self.shape
-    }
-
-    pub const fn dtype(&self) -> RowsDType {
-        self.dtype
-    }
-
-    pub const fn arena(&self) -> Option<RowsArenaId> {
-        self.arena
-    }
-
-    pub fn device_ordinal(&self) -> u32 {
-        match &self.storage {
-            CudaRowsStorage::F32(buffer) => buffer.as_device_buffer().context().ordinal() as u32,
-            CudaRowsStorage::Bf16(buffer) => buffer.as_device_buffer().context().ordinal() as u32,
-        }
-    }
-
-    /// Ordinals alone do not identify an allocator/stream owner.
-    pub fn validate_owner(&self, operators: &CudaOperators) -> Result<()> {
-        let stream = operators.stream_clone();
-        let matches = match &self.storage {
-            CudaRowsStorage::F32(buffer) => {
-                Arc::ptr_eq(buffer.as_device_buffer().context(), stream.context())
-            }
-            CudaRowsStorage::Bf16(buffer) => {
-                Arc::ptr_eq(buffer.as_device_buffer().context(), stream.context())
-            }
-        };
-        if !matches {
-            return Err(model_error(
-                "CUDA rows belong to a different operator owner",
-            ));
-        }
-        Ok(())
-    }
-
-    pub fn f32_buffer(&self) -> Option<&CudaF32Buffer> {
-        match &self.storage {
-            CudaRowsStorage::F32(buffer) => Some(buffer),
-            CudaRowsStorage::Bf16(_) => None,
-        }
-    }
-
-    pub fn f32_buffer_mut(&mut self) -> Option<&mut CudaF32Buffer> {
-        match &mut self.storage {
-            CudaRowsStorage::F32(buffer) => Some(buffer),
-            CudaRowsStorage::Bf16(_) => None,
-        }
-    }
-
-    pub fn bf16_buffer(&self) -> Option<&CudaBf16Buffer> {
-        match &self.storage {
-            CudaRowsStorage::F32(_) => None,
-            CudaRowsStorage::Bf16(buffer) => Some(buffer),
-        }
-    }
 }
 
 /// Backend-neutral row ownership retained by model operator composition.
@@ -225,22 +98,6 @@ impl Rows {
             Self::Host(rows) => Ok(rows),
             #[cfg(feature = "cuda")]
             Self::Cuda(_) => Err(model_error("CPU operator received CUDA rows")),
-        }
-    }
-
-    #[cfg(feature = "cuda")]
-    pub fn cuda(&self) -> Result<&CudaRows> {
-        match self {
-            Self::Cuda(rows) => Ok(rows),
-            Self::Host(_) => Err(model_error("CUDA operator received host rows")),
-        }
-    }
-
-    #[cfg(feature = "cuda")]
-    pub fn into_cuda(self) -> Result<CudaRows> {
-        match self {
-            Self::Cuda(rows) => Ok(rows),
-            Self::Host(_) => Err(model_error("CUDA operator received host rows")),
         }
     }
 }
@@ -601,6 +458,33 @@ pub struct KvHistory {
 }
 
 pub trait KvView {
+    /// Retire scoped attention custody after the standard gate/output projection.
+    /// Resident bindings have no additional custody.
+    ///
+    /// # Safety
+    /// The caller must have retired every alias of this binding's current GQA
+    /// output after its last consumer on the same operator owner. `operators`
+    /// must be that owner, not an arbitrary implementation reporting success.
+    /// It must drain retained submission operands before any budget refund.
+    /// Calling this on acceptance, cancellation or a different output is invalid.
+    ///
+    /// ```compile_fail,E0133
+    /// use ferrule_model::transformer::{KvView, StandardDecoderOperators};
+    /// fn forge(kv: &mut dyn KvView, ops: &mut dyn StandardDecoderOperators) {
+    ///     kv.finish_gqa_consumers(ops).unwrap();
+    /// }
+    /// ```
+    #[expect(
+        unsafe_code,
+        reason = "Audited standard layer consumer-return boundary; see Safety contract"
+    )]
+    unsafe fn finish_gqa_consumers(
+        &mut self,
+        _operators: &mut dyn StandardDecoderOperators,
+    ) -> Result<()> {
+        Ok(())
+    }
+
     fn append(&mut self, request: KvAppendRequest<'_>) -> Result<()>;
 
     fn history(
@@ -986,6 +870,27 @@ pub trait ExpertProvider {
     fn expert_metadata(&mut self, _layer: usize, _expert: usize) -> Result<Option<ExpertMetadata>> {
         Ok(None)
     }
+    /// Select all canonical read descriptors before bucket credit or GPU work.
+    /// The default preserves the legacy provider protocol and performs no I/O.
+    fn preflight_expert_reads(
+        &mut self,
+        _image_generation: u64,
+        _selected: &[&ExpertMetadata],
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    /// Called after current uploads and host payload release, before math. The
+    /// resident hint is a non-mutating observation after current admission, not
+    /// a future lease. Implementations must defer speculative errors to demand.
+    fn lookahead_expert_read(
+        &mut self,
+        _current: &ExpertMetadata,
+        _next: Option<&ExpertMetadata>,
+        _next_is_resident: bool,
+    ) {
+    }
+
     fn expert(&mut self, layer: usize, expert: usize) -> Result<ExpertAvailability>;
 }
 
@@ -1013,6 +918,19 @@ pub trait StandardDecoderOperators {
     fn attention_heads(&self, query: usize, kv: usize) -> Result<(usize, usize)> {
         Ok((query, kv))
     }
+    /// Complete local producer work before invoking an external routed executor,
+    /// including its liveness callbacks. Failure must prevent external dispatch.
+    /// Synchronous backends need no additional boundary.
+    fn before_external_routed_execution(&mut self) -> Result<()> {
+        Ok(())
+    }
+
+    /// Complete the routed FFN after local shared gating/addition and before
+    /// the outer residual. TP owners may reduce once here; other profiles are identity.
+    fn finish_routed_feed_forward(&mut self, _layer: usize, output: Rows) -> Result<Rows> {
+        Ok(output)
+    }
+
     /// Explicit stage/EP boundary, never called between ordinary layer operators.
     fn bind_rows(&mut self, rows: Rows) -> Result<Rows> {
         rows.into_host().map(Rows::Host)
@@ -1234,6 +1152,22 @@ impl CpuStandardDecoderOperators {
 impl Default for CpuStandardDecoderOperators {
     fn default() -> Self {
         Self::new(ExecutionPrecisionPolicy::f32())
+    }
+}
+
+// CPU-only extraction stays with the CPU consumer, not the sequence contract.
+impl crate::decoder::GatedDeltaStateRef<'_> {
+    fn cpu(&mut self) -> Result<&mut crate::decoder::GatedDeltaNetState> {
+        match self {
+            Self::Cpu(state) => Ok(state),
+            #[cfg(feature = "cuda")]
+            Self::Cuda(_) | Self::CudaBf16(_) => Err(Error::ModelSource {
+                source: Box::new(UnsupportedOperator::new(
+                    "hybrid_decoder",
+                    "CPU operator cannot access CUDA recurrent state",
+                )),
+            }),
+        }
     }
 }
 
@@ -1697,6 +1631,15 @@ struct CpuLinearAdapter<'a> {
 
 impl<'a> CpuLinearAdapter<'a> {
     fn new(linear: &'a PreparedLinear) -> Result<Self> {
+        #[cfg(feature = "cpu-reference")]
+        if let super::PreparedLinearStorage::CpuLocal(matrix) = linear.storage() {
+            return Ok(Self {
+                storage: CpuWeightStorage::F32(Cow::Borrowed(&matrix.values)),
+                out_features: matrix.local_shape[0],
+                in_features: matrix.local_shape[1],
+                bias: None,
+            });
+        }
         let weight = linear.weight()?;
         let (storage, out_features, in_features) = match weight.format {
             LinearWeightFormat::Bf16 {

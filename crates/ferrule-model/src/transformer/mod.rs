@@ -7,8 +7,13 @@ pub mod connection;
 #[cfg(feature = "cuda")]
 pub(crate) mod cuda;
 pub mod expert_parallel;
+pub(crate) mod expert_reads;
+pub use expert_reads::{
+    ExpertReadPipelineError, ExpertReadPipelineOptions, ExpertReadPipelineStats, ExpertReadSchedule,
+};
 mod forward;
 pub mod host_experts;
+pub mod hybrid_parallel;
 mod materialize;
 mod operators;
 pub mod parallel;
@@ -17,6 +22,7 @@ mod parallel_transfer;
 pub mod proposal;
 mod recipe;
 mod segment;
+mod segment_inventory;
 mod standard;
 mod state_dict;
 
@@ -49,11 +55,13 @@ pub use forward::{
     TransformerContinuation, TransformerForwardExecutor, TransformerLayer, TransformerModule,
 };
 #[cfg(feature = "cuda")]
-pub use materialize::PreparedCudaLinear;
+pub use materialize::{CudaNumericFp8RankBinding, PreparedCudaLinear};
 pub use materialize::{
-    LayerWeightCache, MemoryLayerWeightCache, PreparedDecoder, PreparedDecoderAttachment,
-    PreparedDecoderGeneration, PreparedEmbedding, PreparedInteger, PreparedLinear,
-    PreparedLinearStorage, PreparedNorm, PreparedParameter, PreparedParameterStorage, PreparedRope,
+    HybridRankStorage, LayerWeightCache, MemoryLayerWeightCache, NumericFp8RankExecutionBudget,
+    NumericFp8RankPlan, NumericFp8RankWeightBudget, PreparedDecoder, PreparedDecoderAttachment,
+    PreparedDecoderGeneration, PreparedEmbedding, PreparedHybridRankParameter, PreparedInteger,
+    PreparedLinear, PreparedLinearStorage, PreparedNorm, PreparedNumericFp8RankLinear,
+    PreparedNumericFp8RankSegment, PreparedParameter, PreparedParameterStorage, PreparedRope,
     StateDictMaterializer,
 };
 #[cfg(feature = "cuda")]
@@ -67,14 +75,15 @@ pub use operators::{
 };
 pub use recipe::{DecoderRecipe, DecoderRecipeError, DecoderRecipeOutput, SyntheticDecoderRecipe};
 pub use segment::{
-    DeviceSegmentInput, DeviceSegmentOutput, LayerSegmentPlan, SegmentError, SegmentInput,
-    SegmentOutput, SegmentResult, SegmentStage, StandardDecoderSegment,
+    DeviceSegmentInput, DeviceSegmentOutput, HybridDecoderSegment, LayerSegmentPlan, SegmentError,
+    SegmentInput, SegmentOutput, SegmentResult, SegmentStage, StandardDecoderSegment,
 };
+pub use segment_inventory::{HybridSegmentMemoryEstimate, HybridSegmentResidentMemory};
 pub use standard::expert_cache::{ExpertCacheLimits, ExpertCachePolicy, ExpertCacheStats};
-#[cfg(feature = "cuda")]
 pub(crate) use standard::scratch::SwiGluScratchPlan;
 pub use standard::{
-    CpuGqaMoeModule, CpuHybridModule, CpuStandardModule, CpuTransformerHidden, NumericFp8Precision,
+    Bf16DenseCudaProfile, Bf16HybridCudaProfile, CpuGqaMoeModule, CpuHybridModule,
+    CpuStandardModule, CpuTransformerHidden, NumericFp8Bf16HybridCudaProfile, NumericFp8Precision,
     PreparedAttentionBlock, PreparedCpuOutput, PreparedFeedForwardBlock,
     PreparedGatedDeltaNetBlock, PreparedGqaBlock, PreparedGqaMoeLayer, PreparedStandardLayer,
     PreparedStandardOutput, StandardTensorCollective, StandardTensorPlacement, StandardTensorPlan,
@@ -88,7 +97,12 @@ pub use state_dict::{
 
 #[cfg(feature = "cuda")]
 pub use standard::cuda::{
-    CudaExpertParallelRoutedExecutor, CudaExpertWorker, CudaHostRoutedExecutor, CudaHybridModule,
-    CudaStandardDecoderOperators, CudaStandardDecoderSegment, CudaStandardKvBinding,
-    ExpertMetadataPreflightStats,
+    CommittedGqa, CommittedGqaOutput, CommittedGqaRequest, CudaDiagnosticBuffer,
+    CudaDiagnosticDescriptor, CudaDiagnosticDtype, CudaDiagnosticEvent, CudaDiagnosticLayout,
+    CudaDiagnosticLimits, CudaDiagnosticSequence, CudaExpertParallelRoutedExecutor,
+    CudaExpertWorker, CudaHostRoutedExecutor, CudaHybridDecoderSegment, CudaHybridModule,
+    CudaHybridRankLifecycle, CudaHybridRankMemory, CudaHybridRankSegment, CudaHybridRankState,
+    CudaMixedRankLinear, CudaNativeDiagnosticEvent, CudaStandardDecoderOperators,
+    CudaStandardDecoderSegment, CudaStandardKvBinding, ExpertMetadataPreflightStats,
+    MixedDecodedCacheActivity, MixedDecodedCachePhase, MixedDecodedCacheSnapshot,
 };

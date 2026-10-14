@@ -1,0 +1,16 @@
+{
+  "selector": "gpu::arena_errors_never_submit_initialization",
+  "binary_sha256": "7f9223912fd20ead8bce37bd0f73b92ca13e9e52d3d61e9f68bd529974841da1",
+  "source_digest": "30853e0e9ebae8b8e42b96b32e7e7b9e8067d5d9412f3dad6a53e87b51448f0f",
+  "assertions_passed": true,
+  "cache_values": "source-pinned model assertions; no raw per-step counters exported",
+  "assertion_contract": null,
+  "gpu_memory": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-uninitialized-20261010-01/backend-arena-errors/resources.json",
+    "sha256": "a7e88960b8e0c0666e5a079295e457d5419a78211a3db2b6cec4d3d0127805e8"
+  },
+  "log": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-uninitialized-20261010-01/backend-arena-errors/test.log",
+    "sha256": "8913f8cd94b36dc59ec376c73fb72e067023aaf97ffea893d0a5a914000cc397"
+  }
+}

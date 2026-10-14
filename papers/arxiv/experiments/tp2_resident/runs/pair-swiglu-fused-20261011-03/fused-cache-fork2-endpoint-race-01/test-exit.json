@@ -1,0 +1,7 @@
+{
+  "returncode": 0,
+  "one_test_passed": true,
+  "selector": "lifecycle::full40_decoded_cache_unobserved_fused_lifecycle",
+  "binary_sha256": "5ee4f22f67251babc99618b0d3e2500325716e79b2617c6c33586e2af9dcbbcf",
+  "log_sha256": "a0098b964efcf35311201a2b56970aec7feaa26701ec2421ec9967fb4683d8f5"
+}

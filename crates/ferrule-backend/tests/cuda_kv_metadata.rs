@@ -47,9 +47,9 @@ fn planes(dtype: KvElementType) -> [KvPlaneDescriptor; 2] {
     ]
 }
 #[test]
-fn schema_truthfully_rejects_bf16_and_overflow() {
+fn schema_accepts_matching_typed_planes_and_rejects_overflow() {
     validate_schema(&planes(KvElementType::F32), 4, 8).unwrap();
-    assert!(validate_schema(&planes(KvElementType::Bf16), 4, 8).is_err());
+    validate_schema(&planes(KvElementType::Bf16), 4, 8).unwrap();
     for (page_size, slots) in [(0, 8), (4, 0), (usize::MAX, 4), (4, usize::MAX)] {
         assert!(validate_schema(&planes(KvElementType::F32), page_size, slots).is_err());
     }
@@ -153,4 +153,65 @@ fn packed_sequences_keep_owner_local_slots_and_offsets() {
         b.packed_slots(&batch, 4).unwrap(),
         (vec![5, 7], vec![0, 1, 2])
     );
+}
+
+#[test]
+fn typed_schema_modes_and_physical_bytes_are_exact() {
+    let bf16 = planes(KvElementType::Bf16);
+    let f32 = planes(KvElementType::F32);
+    assert_eq!(bf16[0].checked_page_bytes(4), Some(192));
+    assert_eq!(f32[0].checked_page_bytes(4), Some(384));
+    plan::validate_plane_type(&bf16, KvElementType::Bf16).unwrap();
+    assert!(plan::validate_plane_type(&f32, KvElementType::Bf16).is_err());
+    assert!(plan::validate_plane_type(&bf16, KvElementType::F32).is_err());
+    let mut mixed = bf16;
+    mixed[1].element_type = KvElementType::F32;
+    assert!(validate_schema(&mixed, 4, 8).is_err());
+    plan::validate_storage_mode(&bf16, false).unwrap();
+    plan::validate_storage_mode(&f32, true).unwrap();
+    assert!(plan::validate_storage_mode(&bf16, true).is_err());
+    let large = [
+        KvPlaneDescriptor::new(
+            "standard_gqa.key",
+            u32::MAX as usize,
+            1,
+            KvElementType::Bf16,
+        ),
+        KvPlaneDescriptor::new(
+            "standard_gqa.value",
+            u32::MAX as usize,
+            1,
+            KvElementType::Bf16,
+        ),
+    ];
+    assert!(validate_schema(&large, u32::MAX as usize, 1).is_err());
+    // Each plane fits usize on 64-bit, but their physical sum does not.
+    assert!(validate_schema(&large, 2, i32::MAX as usize).is_err());
+}
+
+#[test]
+fn bf16_rows_reject_aliases_and_i32_overflow_without_device_work() {
+    let mut b = batch(&[KvPageId(30)], 0);
+    assert_eq!(
+        plan::bf16_row_metadata(&b, 4, &[2], &[0, 1]).unwrap(),
+        (vec![0], vec![0], vec![1])
+    );
+    b.row_sequence_ids = vec![0, 0].into();
+    b.row_positions = vec![0, 0].into();
+    assert!(plan::bf16_row_metadata(&b, 4, &[2], &[0, 1]).is_err());
+    b.row_sequence_ids = vec![0, 1].into();
+    b.sequences = vec![b.sequences[0].clone(), b.sequences[0].clone()].into();
+    assert!(plan::bf16_row_metadata(&b, 4, &[2, 2], &[0, 1, 2]).is_err());
+    let mut b = batch(&[KvPageId(30)], 0);
+    b.sequences[0].sequence_len = i32::MAX as usize + 1;
+    assert!(plan::bf16_row_metadata(&b, 4, &[2], &[0, 1]).is_err());
+    b.sequences[0].sequence_len = 1;
+    for (slots, offsets) in [
+        (vec![-1], vec![0, 1]),
+        (vec![2], vec![0, 2]),
+        (vec![2], vec![-1, 1]),
+        (vec![2], vec![0]),
+    ] {
+        assert!(plan::bf16_row_metadata(&b, 4, &slots, &offsets).is_err());
+    }
 }

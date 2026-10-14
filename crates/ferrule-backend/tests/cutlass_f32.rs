@@ -18,9 +18,23 @@ fn f32_sm86_exact_capability_and_plan_policy() {
     assert!(provider.supports(CutlassKernelId::F32Gemm));
     assert!(execution.supports(KernelOperation::LinearF32, ExecutionMode::Inference));
     if COMPILED_TARGET == "sm_86" {
-        // Exact native capability set includes the independent BF16 GEMM bit.
-        assert_eq!(provider.manifest().kernel_mask, 0xd86);
-        assert!(provider.supports(CutlassKernelId::Bf16Gemm));
+        // Weight-only FP8 kernels require no native FP8 MMA: M1 uses F32
+        // arithmetic, while fused W8A16 uses the independent BF16 capability.
+        let expected_kernels = [
+            CutlassKernelId::Bf16Compressor,
+            CutlassKernelId::HyperConnectionProducer,
+            CutlassKernelId::HybridMlaAttention,
+            CutlassKernelId::ProposalHead,
+            CutlassKernelId::F32Gemm,
+            CutlassKernelId::Bf16Gemm,
+            CutlassKernelId::NumericFp8FusedM1,
+            CutlassKernelId::NumericFp8W8A16Fused,
+        ];
+        let expected_mask = expected_kernels.iter().fold(0, |mask, id| mask | id.mask());
+        assert_eq!(provider.manifest().kernel_mask, expected_mask);
+        for kernel in expected_kernels {
+            assert!(provider.supports(kernel), "{}", kernel.name());
+        }
         let caps = CudaTarget::parse(COMPILED_TARGET).unwrap().capabilities();
         assert!(caps.tf32_mma_sync);
         assert!(caps.bf16_mma_sync);
@@ -44,7 +58,7 @@ fn f32_sm86_exact_capability_and_plan_policy() {
             assert!(execution.supports(operation, ExecutionMode::Inference));
         }
         eprintln!(
-            "sm_86 native/Rust mask=0xD86: F32 TF32x3=true, BF16 GEMM=true, FP8 QueryAKv/Projection=false, inference operations=7"
+            "sm_86 native/Rust mask={expected_mask:#x}: F32 TF32x3=true, BF16 GEMM=true, numeric FP32 M1=true, numeric W8A16=true, FP8 QueryAKv/Projection=false, inference operations=7"
         );
     }
     let mut bundle = LayerKernelRequirements::default();

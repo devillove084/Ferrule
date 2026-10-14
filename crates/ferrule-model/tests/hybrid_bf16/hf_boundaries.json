@@ -1,0 +1,253 @@
+{
+  "scope": "boundary evidence only; no Ferrule forward or GPU numerical acceptance",
+  "torch": "2.13.0+cu129",
+  "transformers": "5.5.3",
+  "hf_source_sha256": "0f8ca77e875c31d448137c9ac291bed505c6b9927a85b5b8460af29d1e1ee647",
+  "seed": 35016,
+  "device": "cpu",
+  "aten_cpu_capability": "avx512",
+  "loading": "save_pretrained -> from_pretrained(dtype=torch.bfloat16)",
+  "attention_implementation": "eager",
+  "experts_implementation": "eager",
+  "parameters": {
+    "model.embed_tokens.weight": "torch.bfloat16",
+    "model.layers.0.linear_attn.dt_bias": "torch.bfloat16",
+    "model.layers.0.linear_attn.A_log": "torch.bfloat16",
+    "model.layers.0.linear_attn.conv1d.weight": "torch.bfloat16",
+    "model.layers.0.linear_attn.norm.weight": "torch.bfloat16",
+    "model.layers.0.linear_attn.out_proj.weight": "torch.bfloat16",
+    "model.layers.0.linear_attn.in_proj_qkv.weight": "torch.bfloat16",
+    "model.layers.0.linear_attn.in_proj_z.weight": "torch.bfloat16",
+    "model.layers.0.linear_attn.in_proj_b.weight": "torch.bfloat16",
+    "model.layers.0.linear_attn.in_proj_a.weight": "torch.bfloat16",
+    "model.layers.0.mlp.gate.weight": "torch.bfloat16",
+    "model.layers.0.mlp.experts.gate_up_proj": "torch.bfloat16",
+    "model.layers.0.mlp.experts.down_proj": "torch.bfloat16",
+    "model.layers.0.mlp.shared_expert.gate_proj.weight": "torch.bfloat16",
+    "model.layers.0.mlp.shared_expert.up_proj.weight": "torch.bfloat16",
+    "model.layers.0.mlp.shared_expert.down_proj.weight": "torch.bfloat16",
+    "model.layers.0.mlp.shared_expert_gate.weight": "torch.bfloat16",
+    "model.layers.0.input_layernorm.weight": "torch.bfloat16",
+    "model.layers.0.post_attention_layernorm.weight": "torch.bfloat16",
+    "model.layers.1.self_attn.q_proj.weight": "torch.bfloat16",
+    "model.layers.1.self_attn.k_proj.weight": "torch.bfloat16",
+    "model.layers.1.self_attn.v_proj.weight": "torch.bfloat16",
+    "model.layers.1.self_attn.o_proj.weight": "torch.bfloat16",
+    "model.layers.1.self_attn.q_norm.weight": "torch.bfloat16",
+    "model.layers.1.self_attn.k_norm.weight": "torch.bfloat16",
+    "model.layers.1.mlp.gate.weight": "torch.bfloat16",
+    "model.layers.1.mlp.experts.gate_up_proj": "torch.bfloat16",
+    "model.layers.1.mlp.experts.down_proj": "torch.bfloat16",
+    "model.layers.1.mlp.shared_expert.gate_proj.weight": "torch.bfloat16",
+    "model.layers.1.mlp.shared_expert.up_proj.weight": "torch.bfloat16",
+    "model.layers.1.mlp.shared_expert.down_proj.weight": "torch.bfloat16",
+    "model.layers.1.mlp.shared_expert_gate.weight": "torch.bfloat16",
+    "model.layers.1.input_layernorm.weight": "torch.bfloat16",
+    "model.layers.1.post_attention_layernorm.weight": "torch.bfloat16",
+    "model.norm.weight": "torch.bfloat16",
+    "lm_head.weight": "torch.bfloat16"
+  },
+  "buffers": {
+    "model.rotary_emb.inv_freq": "torch.float32",
+    "model.rotary_emb.original_inv_freq": "torch.float32"
+  },
+  "router": {
+    "linear_output": "torch.bfloat16",
+    "probabilities": "torch.float32",
+    "weights": "torch.float32",
+    "logits": [
+      0.546875,
+      -0.189453125,
+      0.51171875,
+      -0.63671875,
+      0.36328125,
+      -0.130859375,
+      0.384765625,
+      -0.44921875,
+      0.181640625,
+      -0.07080078125,
+      0.2578125,
+      -0.263671875,
+      7.581710815429688e-05,
+      -0.0123291015625,
+      0.1318359375,
+      -0.0751953125,
+      -0.181640625,
+      0.046630859375,
+      0.00531005859375,
+      0.11181640625,
+      -0.36328125,
+      0.10595703125,
+      -0.12255859375,
+      0.298828125,
+      -0.54296875,
+      0.1640625,
+      -0.2490234375,
+      0.486328125,
+      -0.7265625,
+      0.2236328125,
+      -0.376953125,
+      0.67578125
+    ],
+    "full_probabilities": [
+      0.36357027292251587,
+      0.1741025447845459,
+      0.35101059079170227,
+      0.11131664365530014,
+      0.3251441419124603,
+      0.19836880266666412,
+      0.33220523595809937,
+      0.14428183436393738,
+      0.285986065864563,
+      0.22218307852745056,
+      0.3086213171482086,
+      0.18320956826210022,
+      0.24654841423034668,
+      0.24350889027118683,
+      0.28127098083496094,
+      0.22867168486118317,
+      0.20820105075836182,
+      0.26158928871154785,
+      0.2510004937648773,
+      0.279209166765213,
+      0.1721223145723343,
+      0.2751849889755249,
+      0.21896854043006897,
+      0.33372414112091064,
+      0.13949395716190338,
+      0.28288841247558594,
+      0.18716050684452057,
+      0.3904571235179901,
+      0.11026033759117126,
+      0.2851569354534149,
+      0.15640577673912048,
+      0.44817692041397095
+    ],
+    "selected_weights": [
+      0.4091111123561859,
+      0.39497819542884827,
+      0.19591064751148224,
+      0.38821807503700256,
+      0.3799664080142975,
+      0.23181559145450592,
+      0.3778463900089264,
+      0.3501339554786682,
+      0.2720196843147278,
+      0.3646579384803772,
+      0.3196413516998291,
+      0.3157007098197937,
+      0.35262635350227356,
+      0.3303733766078949,
+      0.31700029969215393,
+      0.40310806035995483,
+      0.3323981463909149,
+      0.264493852853775,
+      0.45375290513038635,
+      0.3287465572357178,
+      0.2175005078315735,
+      0.5037169456481934,
+      0.32049480080604553,
+      0.1757882535457611
+    ],
+    "indices": [
+      [
+        0,
+        2,
+        1
+      ],
+      [
+        2,
+        0,
+        1
+      ],
+      [
+        2,
+        0,
+        1
+      ],
+      [
+        2,
+        0,
+        1
+      ],
+      [
+        3,
+        1,
+        2
+      ],
+      [
+        3,
+        1,
+        2
+      ],
+      [
+        3,
+        1,
+        2
+      ],
+      [
+        3,
+        1,
+        2
+      ]
+    ],
+    "selected_softmax_max_error": 2.9802322387695312e-08
+  },
+  "attention_gate": {
+    "elements": 128,
+    "mismatches": 38,
+    "max_error": 0.0078125,
+    "x": -0.59375,
+    "gate": 0.92578125,
+    "sigmoid": 0.71484375,
+    "hf": -0.423828125,
+    "f32_gate_then_cast": -0.42578125
+  },
+  "shared_gate": {
+    "elements": 128,
+    "mismatches": 43,
+    "max_error": 0.00390625,
+    "x": 0.06982421875,
+    "gate": 1.234375,
+    "sigmoid": 0.7734375,
+    "hf": 0.053955078125,
+    "f32_gate_then_cast": 0.05419921875
+  },
+  "scalar_gate": {
+    "x": 0.515625,
+    "gate": -0.9375,
+    "sigmoid": 0.28125,
+    "hf": 0.14453125,
+    "f32_gate_then_cast": 0.1455078125
+  },
+  "combine": {
+    "elements": 128,
+    "mismatches": 67,
+    "max_error": 0.00390625,
+    "token": 0,
+    "column": 2,
+    "terms_expert_order": [
+      {
+        "expert": 0,
+        "value": 0.31640625,
+        "weight": 0.4091111123561859
+      },
+      {
+        "expert": 1,
+        "value": 0.57421875,
+        "weight": 0.19591064751148224
+      },
+      {
+        "expert": 2,
+        "value": 0.482421875,
+        "weight": 0.39497819542884827
+      }
+    ],
+    "hf": 0.43359375,
+    "f32_sum_then_cast": 0.431640625
+  },
+  "offset_norm": {
+    "elements": 128,
+    "early_cast_mismatches": 28
+  }
+}

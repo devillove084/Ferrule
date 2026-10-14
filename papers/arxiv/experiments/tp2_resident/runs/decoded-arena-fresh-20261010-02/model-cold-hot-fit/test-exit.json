@@ -1,0 +1,6 @@
+{
+  "returncode": 101,
+  "one_test_passed": false,
+  "selector": "transformer::standard::cuda::hybrid_rank::mixed::decoded_gpu_tests::decoded_pair_single_cold_hot_fit_exact_and_no_cache_dma",
+  "binary_sha256": "278c8a7c47ed3f40ddffec4b0f9113cfbe1316edf65a119ef93187bf85e3807f"
+}

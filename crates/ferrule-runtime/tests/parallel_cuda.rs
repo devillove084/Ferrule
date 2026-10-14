@@ -143,7 +143,9 @@ fn oracle(input: &[f32]) -> (Vec<f32>, Vec<f32>) {
     }
     let norm_weight = norm_weight();
     let rms = linear
-        .chunks_exact(OUTPUT)
+        .as_chunks::<OUTPUT>()
+        .0
+        .iter()
         .flat_map(|row| {
             let mean_square = row.iter().map(|value| value * value).sum::<f32>() / OUTPUT as f32;
             let inverse = (mean_square + EPSILON).sqrt().recip();

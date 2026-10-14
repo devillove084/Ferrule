@@ -1,0 +1,16 @@
+{
+  "passed": true,
+  "gate": {
+    "name": "backend-pair_swiglu_bf16_edges_m1_m2_m5_exact",
+    "binary": "backend",
+    "selector": "cuda::providers::bf16_gemmex::pair_swiglu_tests::pair_swiglu_bf16_edges_m1_m2_m5_exact",
+    "evidence": "shared_helper_small_not_independent_hf",
+    "devices": 1,
+    "reference": null,
+    "cache_bytes": null,
+    "observer": null
+  },
+  "proven_drained": true,
+  "all_eight_idle": true,
+  "performance_claim": false
+}

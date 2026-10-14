@@ -1,0 +1,108 @@
+{
+  "argv": [
+    "/home/admin/luhuanbing.lhb/Ferrule/target/validation/allocator-batch-v3/cargo-cuda124/debug/build/ferrule-backend/bbdc9d166cdea35b/out/allocator_retirement_gpu-bbdc9d166cdea35b",
+    "tests::gpu_pending_batch_pressure_allows_safe_extent_not_growth",
+    "--exact",
+    "--nocapture",
+    "--test-threads=1",
+    "--ignored"
+  ],
+  "environment": {
+    "PATH": "/home/admin/wxw403883/anaconda3/envs/tao/bin:/root/.cargo/bin:/usr/bin:/bin",
+    "CUDA_HOME": "/home/admin/wxw403883/anaconda3/envs/tao",
+    "NVCC": "/home/admin/wxw403883/anaconda3/envs/tao/bin/nvcc",
+    "LD_LIBRARY_PATH": "/home/admin/wxw403883/anaconda3/envs/tao/lib:/usr/lib64",
+    "FERRULE_CUDA_ARCH": "sm_86",
+    "FERRULE_CUTLASS_DIR": "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/cutlass",
+    "RUSTFLAGS": "-L native=/home/admin/luhuanbing.lhb/Ferrule/target/validation/qwen35-35b-current/toolchain/link -L native=/home/admin/luhuanbing.lhb/Ferrule/target/validation/bf16-mixed-qkv-20261005/link -L native=/home/admin/wxw403883/anaconda3/envs/tao/lib",
+    "HOME": "/root",
+    "CUDA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+    "NVIDIA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+    "CUBLAS_WORKSPACE_CONFIG": ":0:0",
+    "CARGO_BUILD_JOBS": "2",
+    "CARGO_PROFILE_RELEASE_OPT_LEVEL": "3",
+    "CARGO_PROFILE_RELEASE_LTO": "fat",
+    "CARGO_PROFILE_RELEASE_CODEGEN_UNITS": "1",
+    "CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS": "false",
+    "PYTHONDONTWRITEBYTECODE": "1",
+    "RUSTUP_TOOLCHAIN": "nightly-2026-08-01",
+    "CC": "/usr/bin/gcc",
+    "CXX": "/usr/bin/g++",
+    "CUDAHOSTCXX": "/usr/bin/g++",
+    "CARGO_HOME": "/root/.cargo",
+    "RUSTUP_HOME": "/root/.rustup",
+    "RUSTUP_AUTO_INSTALL": "0",
+    "RUSTC": "/root/.rustup/toolchains/nightly-2026-08-01-x86_64-unknown-linux-gnu/bin/rustc",
+    "RUSTDOC": "/root/.rustup/toolchains/nightly-2026-08-01-x86_64-unknown-linux-gnu/bin/rustdoc",
+    "FERRULE_CUDA_TEST_ORACLE": "0",
+    "CARGO_TARGET_DIR": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/allocator-batch-v3/cargo-cuda124"
+  },
+  "supervisor": {
+    "returncode": 0,
+    "timed_out": false,
+    "wall_seconds": 0.5500275604426861,
+    "stdout": "\nrunning 1 test\ntest tests::gpu_pending_batch_pressure_allows_safe_extent_not_growth ... DEVICE NVIDIA GeForce RTX 3090\nMETRICS batch_pressure CudaAllocatorMetrics { allocation_requests: 16384, allocation_failures: 0, reuse_allocations: 16383, small_allocations: 16384, large_allocations: 0, huge_allocations: 0, requested_bytes: 4194304, granted_bytes: 4194304, live_requested_bytes: 0, live_granted_bytes: 0, peak_live_requested_bytes: 4194304, peak_live_granted_bytes: 4194304, reserved_bytes: 67108864, peak_reserved_bytes: 67108864, free_bytes: 62914560, largest_free_extent: 62914560, pending_retirement_blocks: 16384, pending_retirement_bytes: 4194304, capture_retirement_bytes: 0, retired_blocks: 16384, retirement_batches: 256, retirement_created_fences: 256, pending_retirement_batches: 256, pending_unfenced_bytes: 0, shutdown_quiescent: false, shutdown_retained: false, internal_fragmentation: 0.0, external_fragmentation: 0.0, segments: 1, driver_allocations: 1, driver_allocation_bytes: 67108864, driver_frees: 0, driver_free_bytes: 0 }\nDRIVER batch_pressure creates=256 records=256 queries=33152 event_syncs=0 context_syncs=0 stream_syncs=0 frees=0 primary_releases=0\nMETRICS safe_extent_at_batch_pressure CudaAllocatorMetrics { allocation_requests: 16385, allocation_failures: 0, reuse_allocations: 16384, small_allocations: 16385, large_allocations: 0, huge_allocations: 0, requested_bytes: 4194560, granted_bytes: 4194560, live_requested_bytes: 256, live_granted_bytes: 256, peak_live_requested_bytes: 4194304, peak_live_granted_bytes: 4194304, reserved_bytes: 67108864, peak_reserved_bytes: 67108864, free_bytes: 62914304, largest_free_extent: 62914304, pending_retirement_blocks: 16384, pending_retirement_bytes: 4194304, capture_retirement_bytes: 0, retired_blocks: 16384, retirement_batches: 256, retirement_created_fences: 256, pending_retirement_batches: 256, pending_unfenced_bytes: 0, shutdown_quiescent: false, shutdown_retained: false, internal_fragmentation: 0.0, external_fragmentation: 0.0, segments: 1, driver_allocations: 1, driver_allocation_bytes: 67108864, driver_frees: 0, driver_free_bytes: 0 }\nDRIVER safe_extent_at_batch_pressure creates=256 records=256 queries=33664 event_syncs=0 context_syncs=0 stream_syncs=0 frees=0 primary_releases=0\nMETRICS completed CudaAllocatorMetrics { allocation_requests: 16386, allocation_failures: 1, reuse_allocations: 16384, small_allocations: 16385, large_allocations: 0, huge_allocations: 1, requested_bytes: 88080640, granted_bytes: 88080640, live_requested_bytes: 0, live_granted_bytes: 0, peak_live_requested_bytes: 4194304, peak_live_granted_bytes: 4194304, reserved_bytes: 67108864, peak_reserved_bytes: 67108864, free_bytes: 67108864, largest_free_extent: 67108864, pending_retirement_blocks: 0, pending_retirement_bytes: 0, capture_retirement_bytes: 0, retired_blocks: 16385, retirement_batches: 257, retirement_created_fences: 257, pending_retirement_batches: 0, pending_unfenced_bytes: 0, shutdown_quiescent: false, shutdown_retained: false, internal_fragmentation: 0.0, external_fragmentation: 0.0, segments: 1, driver_allocations: 1, driver_allocation_bytes: 67108864, driver_frees: 0, driver_free_bytes: 0 }\nDRIVER completed creates=257 records=257 queries=34177 event_syncs=0 context_syncs=0 stream_syncs=2 frees=0 primary_releases=0\nMETRICS final_drain CudaAllocatorMetrics { allocation_requests: 16386, allocation_failures: 1, reuse_allocations: 16384, small_allocations: 16385, large_allocations: 0, huge_allocations: 1, requested_bytes: 88080640, granted_bytes: 88080640, live_requested_bytes: 0, live_granted_bytes: 0, peak_live_requested_bytes: 4194304, peak_live_granted_bytes: 4194304, reserved_bytes: 0, peak_reserved_bytes: 67108864, free_bytes: 0, largest_free_extent: 0, pending_retirement_blocks: 0, pending_retirement_bytes: 0, capture_retirement_bytes: 0, retired_blocks: 16385, retirement_batches: 257, retirement_created_fences: 257, pending_retirement_batches: 0, pending_unfenced_bytes: 0, shutdown_quiescent: false, shutdown_retained: false, internal_fragmentation: 0.0, external_fragmentation: 0.0, segments: 0, driver_allocations: 1, driver_allocation_bytes: 67108864, driver_frees: 1, driver_free_bytes: 67108864 }\nDRIVER final_drain creates=257 records=257 queries=34177 event_syncs=0 context_syncs=0 stream_syncs=2 frees=1 primary_releases=0\nDRIVER context_dropped creates=257 records=257 queries=34177 event_syncs=0 context_syncs=1 stream_syncs=3 frees=1 primary_releases=1\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 30 filtered out; finished in 0.39s\n\n",
+    "stderr": "",
+    "cleanup_errors": [],
+    "cleanup_scope": "isolated_subreaper_direct_children",
+    "descendant_custody": "proven_drained",
+    "gpu_quiescence": "unverified",
+    "custody": {
+      "status": "proven_drained",
+      "method": "linux-subreaper-waitid",
+      "containment_verified": true,
+      "launch_id": "c4802dad20094283bb24877bd4a768c8",
+      "helper_identity": {
+        "pid": 145967,
+        "birth_ticks": 97090737,
+        "ppid": 145937,
+        "pgrp": 145967,
+        "session": 145967
+      },
+      "root_identity": {
+        "pid": 145968,
+        "birth_ticks": 97090740,
+        "ppid": 145967,
+        "pgrp": 145967,
+        "session": 145967
+      },
+      "boot_id": "4dd3497d-570c-4693-a876-5c26e06ab360",
+      "entries": [
+        {
+          "identity": {
+            "pid": 145968,
+            "birth_ticks": 97090740,
+            "ppid": 145967,
+            "pgrp": 145967,
+            "session": 145967
+          },
+          "role": "root",
+          "signals": [],
+          "reaped": true,
+          "exit_code": 0,
+          "first_observed_at": 8607027.752177825,
+          "reaped_at": 8607028.216257207
+        }
+      ],
+      "errors": [],
+      "reporting_errors": [],
+      "echild": true
+    },
+    "handshake": {
+      "kind": "ready",
+      "protocol": 1,
+      "launch_id": "c4802dad20094283bb24877bd4a768c8",
+      "helper_identity": {
+        "pid": 145967,
+        "birth_ticks": 97090737,
+        "ppid": 145937,
+        "pgrp": 145967,
+        "session": 145967
+      },
+      "containment_verified": true,
+      "method": "linux-subreaper-waitid"
+    },
+    "stdout_truncated": false,
+    "stderr_truncated": false
+  }
+}

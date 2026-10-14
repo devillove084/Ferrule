@@ -1,0 +1,131 @@
+{
+  "schema": "ferrule.paper.collector-handoff.v1",
+  "directory": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/nsys-official-micro-20261009-001/runs/P1/session",
+  "authenticated": {
+    "worker": {
+      "pid": 165715,
+      "birth_ticks": 86884073,
+      "ppid": 165714,
+      "pgrp": 165715,
+      "session": 165715
+    },
+    "helper": {
+      "pid": 165714,
+      "birth_ticks": 86884070,
+      "ppid": 165699,
+      "pgrp": 165714,
+      "session": 165714
+    },
+    "coordinator": {
+      "pid": 165699,
+      "birth_ticks": 86883972,
+      "ppid": 172272,
+      "pgrp": 165699,
+      "session": 165699
+    },
+    "launch_id": "8598820a201a4ebd9b31d2cee9c2559e"
+  },
+  "locks": {
+    "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f.lock",
+      "fd": 3,
+      "device": 64785,
+      "inode": 58516170,
+      "coordinator_pid": 165699,
+      "mode": "local_nonblocking_flock",
+      "global_reservation": false
+    },
+    "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/GPU-0bc01d70-2ade-0714-8959-b25ae75469b6.lock",
+      "fd": 4,
+      "device": 64785,
+      "inode": 58518656,
+      "coordinator_pid": 165699,
+      "mode": "local_nonblocking_flock",
+      "global_reservation": false
+    },
+    "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d.lock",
+      "fd": 5,
+      "device": 64785,
+      "inode": 58519156,
+      "coordinator_pid": 165699,
+      "mode": "local_nonblocking_flock",
+      "global_reservation": false
+    },
+    "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/GPU-63f1bd01-ddf9-a742-ee48-9389892493d9.lock",
+      "fd": 6,
+      "device": 64785,
+      "inode": 58519247,
+      "coordinator_pid": 165699,
+      "mode": "local_nonblocking_flock",
+      "global_reservation": false
+    },
+    "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86.lock",
+      "fd": 7,
+      "device": 64785,
+      "inode": 58519167,
+      "coordinator_pid": 165699,
+      "mode": "local_nonblocking_flock",
+      "global_reservation": false
+    },
+    "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/GPU-b980f22b-58a3-fc88-21c1-ae86053d8535.lock",
+      "fd": 8,
+      "device": 64785,
+      "inode": 58519119,
+      "coordinator_pid": 165699,
+      "mode": "local_nonblocking_flock",
+      "global_reservation": false
+    },
+    "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011.lock",
+      "fd": 9,
+      "device": 64785,
+      "inode": 58519444,
+      "coordinator_pid": 165699,
+      "mode": "local_nonblocking_flock",
+      "global_reservation": false
+    },
+    "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685.lock",
+      "fd": 10,
+      "device": 64785,
+      "inode": 58519446,
+      "coordinator_pid": 165699,
+      "mode": "local_nonblocking_flock",
+      "global_reservation": false
+    }
+  },
+  "grant": {
+    "scope": "all_eight_instrumentation_probe",
+    "granted": true,
+    "note": "User sole GPU owner; official Nsight micro only; eight instrumentation locks; workload GPU0/1; no foreign signals",
+    "gpu_uuids": [
+      "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f",
+      "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6",
+      "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d",
+      "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86",
+      "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011",
+      "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685"
+    ],
+    "model_gpu_uuids": [
+      "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9"
+    ],
+    "run_id": "nsys-official-micro-20261009-001",
+    "prepared_sha256": "b3301a7a5e31e177c73f4eac039ebefa1fd876a8d7e29e37737bcecdb0953db5"
+  },
+  "command": [
+    "/home/admin/wxw403883/anaconda3/envs/tao/demo_suite/vectorAdd"
+  ],
+  "command_sha256": "59b9ae2f8be2149c8e2f46a75a2ba90a84e2c3f468a10f214364d8a709d3b384",
+  "binary_sha256": "b3994c4eaccd8b7d616dea4bea6a7bdc3454a0e01bfcfe3ad483ac70a0f8d1ed",
+  "worker_launch_sha256": "072b8afae350d3c24810f7cdc45b5f5cc426c8dd37a96847e666b56cdaacf50c",
+  "nonce": "78068612b51598f72e96c1a78621aa8ad731094e66f0ffa37c4cdf2f60e27f11",
+  "created_monotonic": 8504962.054620516
+}

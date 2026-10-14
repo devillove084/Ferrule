@@ -189,6 +189,7 @@ fn boots(
                 identity(rank),
                 DecoderBoot {
                     version: DECODER_WIRE_VERSION,
+                    hybrid: None,
                     rank,
                     checkpoint: path.to_owned(),
                     recipe,

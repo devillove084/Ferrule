@@ -1,0 +1,32 @@
+{
+  "child": {
+    "pid": 85277,
+    "birth_ticks": 80561845,
+    "ppid": 85271,
+    "pgrp": 85271,
+    "session": 85271
+  },
+  "worker": {
+    "pid": 85271,
+    "birth_ticks": 80561836,
+    "ppid": 85270,
+    "pgrp": 85271,
+    "session": 85271
+  },
+  "helper": {
+    "pid": 85270,
+    "birth_ticks": 80561833,
+    "ppid": 85265,
+    "pgrp": 85270,
+    "session": 85270
+  },
+  "coordinator": {
+    "pid": 85265,
+    "birth_ticks": 80561802,
+    "ppid": 172272,
+    "pgrp": 85265,
+    "session": 85265
+  },
+  "launch_sha256": "000cd5adf39c81e6565601a8202ef4f6646bf5ce6b4134f19a2f2f5600d400b2",
+  "launch_id": "3daaa81aba84440580bc62aaa636588f"
+}

@@ -1,0 +1,52 @@
+{
+  "stage": "actual final source/custody/roster/UUID-lock verification",
+  "started_utc": "2026-10-11T12:29:40.397757+00:00",
+  "status": "verified",
+  "all_eight_idle": true,
+  "uuid_locks_reacquired_and_released": true,
+  "errors": [],
+  "gpu_uuid_locks": [
+    "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+    "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9"
+  ],
+  "device_count": 8,
+  "compute_app_count": 0,
+  "roster_queries": {
+    "devices": {
+      "argv": [
+        "/usr/bin/nvidia-smi",
+        "--query-gpu=uuid,memory.used",
+        "--format=csv,noheader,nounits"
+      ],
+      "returncode": 0,
+      "stdout": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535, 0\nGPU-63f1bd01-ddf9-a742-ee48-9389892493d9, 0\nGPU-0bc01d70-2ade-0714-8959-b25ae75469b6, 0\nGPU-dc825838-7c6c-2683-71e7-9ee0ac61b011, 0\nGPU-6c86e874-0ba8-b45a-a604-bca3b934bb86, 0\nGPU-ff61a997-b3fc-fd3d-800d-63bad94fd685, 0\nGPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d, 0\nGPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f, 0\n",
+      "stderr": ""
+    },
+    "compute_apps": {
+      "argv": [
+        "/usr/bin/nvidia-smi",
+        "--query-compute-apps=gpu_uuid,pid,process_name,used_gpu_memory",
+        "--format=csv,noheader,nounits"
+      ],
+      "returncode": 0,
+      "stdout": "",
+      "stderr": ""
+    }
+  },
+  "source_pins_after_verified": true,
+  "authenticated_drained": true,
+  "descendant_custody": "proven_drained",
+  "normal_shutdown": true,
+  "artifact_pins": {
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/pair-swiglu-fused-info-after-20261011-01/execution.json": "f5b010e0c0902150e87e4564be7fa129e0f310f7fa4c3007854b6e410471ad8d",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/pair-swiglu-fused-info-after-20261011-01/prepared.json": "63432b9bdf1299112838df3decf8fff6d1a53fd1597f8479d2fb36ae3e1a0c21",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/pair-swiglu-fused-info-after-20261011-01/runs/F1/execution.json": "0fcf9b4c986ae3bc34e364e880ef4800ef1f42acc552e6b857d70826ec37dc33",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/pair-swiglu-fused-info-after-20261011-01/runs/F1/lock-release.json": "39ae688106ea715f00f8c7694b2a52e2819bb6f666208c5b1c0cb4e273e3df79",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/pair-swiglu-fused-info-after-20261011-01/runs/F1/session/case.json": "a12fef3755ef0ff2f9008bfba07755dc269647d264bd4879a0a2b81e0d6a7656",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/pair-swiglu-fused-info-after-20261011-01/runs/F1/session/qa8/gate.json": "292095fd1319005808ad7308c2241436d5e625ad3872326b2eaac1835bf45eeb",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/pair-swiglu-fused-info-after-20261011-01/runs/F1/session/qa8/http.json": "cc510dc0e0958b46bf438cbc54c896f7e122f30a74cae8b59ad42b92a4580826",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/pair-swiglu-fused-info-after-20261011-01/runs/F1/session/server.log": "461c1e4dcffe6e4efe668768650b5118d1b1273efa4735c736dc0a318547ecfa",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/pair-swiglu-fused-info-after-20261011-01/runs/F1/session/supervisor.json": "fb6cdac3151831136b4321b7c826db0ba7f0e72fc893f0450511483eee8bf182"
+  },
+  "completed_utc": "2026-10-11T12:30:10.450201+00:00"
+}

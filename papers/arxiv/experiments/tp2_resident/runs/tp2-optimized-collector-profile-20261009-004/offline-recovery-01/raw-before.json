@@ -1,0 +1,17 @@
+{
+  "nsys.qdstrm": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-collector-profile-20261009-004/runs/P1/session/nsight/nsys.qdstrm",
+    "bytes": 122892106,
+    "sha256": "291a23c1e79c1a8bf4bb7a1593d6b15142c3327cbbd0318a6fc3a88d566b9731"
+  },
+  "nsys.nsys-rep": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-collector-profile-20261009-004/runs/P1/session/nsight/nsys.nsys-rep",
+    "bytes": 4675997,
+    "sha256": "ee8de58e861817fcf73337fcbeec4cc2094a07437fd4d75c357bf93c7e8acd6d"
+  },
+  "nsys.sqlite": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-collector-profile-20261009-004/runs/P1/session/nsight/nsys.sqlite",
+    "bytes": 10551296,
+    "sha256": "c4c66e36bf113b2601ce9fa10a2b2133702e51d07a65c795a948455df9da4d06"
+  }
+}

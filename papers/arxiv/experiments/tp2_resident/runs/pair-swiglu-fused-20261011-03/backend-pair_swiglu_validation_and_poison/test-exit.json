@@ -1,0 +1,7 @@
+{
+  "returncode": 0,
+  "one_test_passed": true,
+  "selector": "cuda::providers::bf16_gemmex::pair_swiglu_tests::pair_swiglu_validation_and_poison",
+  "binary_sha256": "71aefda9fc154928712f7cebfbb1f374a2e6b9b57730c1f3b5cc178bae9cade4",
+  "log_sha256": "2cd3cb27e7f9c0323939d2fb78cd6e4134391b7c62e699ad7b015d5fea4b9669"
+}

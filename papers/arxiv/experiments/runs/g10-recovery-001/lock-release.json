@@ -1,0 +1,16 @@
+{
+  "status": "released",
+  "prior_lock_available": true,
+  "local_lock_released": true,
+  "lock_observation": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/GPU-b980f22b-58a3-fc88-21c1-ae86053d8535.lock",
+    "fd": 3,
+    "device": 64785,
+    "inode": 58519119,
+    "coordinator_pid": 174887,
+    "mode": "local_nonblocking_flock",
+    "global_reservation": false
+  },
+  "no_engine_launched": true,
+  "all_gpu_idle": true
+}

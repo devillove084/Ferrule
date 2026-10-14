@@ -1,0 +1,147 @@
+"""CPU-testable instrumentation custody contract; not a collector/server launcher.
+
+Eight UUID locks cover a separately authorized instrumentation probe. They never
+expand the model's two-UUID visibility. Baselines are one-shot, not adaptive.
+"""
+from contextlib import ExitStack, contextmanager
+import math
+import re
+
+SCOPE_FLAGS = ('--gpu-metrics-devices=none','--gpu-video-devices=none',
+               '--gpuctxsw=false','--cuda-trace-scope=process-tree')
+TOLERANCE_BYTES = 1 << 20
+PROBE_CEILING_BYTES = 16 << 20
+PROBE_SECONDS = 60
+
+
+def require(condition, message):
+    if not condition:
+        raise ValueError(message)
+
+
+def grant_scope(inventory, selected, grant):
+    require(len(inventory) == 8 and len(set(inventory)) == 8 and all(
+        re.fullmatch(r'GPU-[0-9a-fA-F-]{36}', uuid) for uuid in inventory), 'Need eight verified distinct physical UUIDs')
+    require(len(selected) == 2 and len(set(selected)) == 2 and set(selected) <= set(inventory), 'Model must remain on two UUIDs')
+    require(grant.get('scope') == 'all_eight_instrumentation_probe' and grant.get('granted') is True
+        and grant.get('note','').strip() and grant.get('gpu_uuids') == sorted(inventory),
+        'Explicit new eight-GPU probe grant required; two-GPU/model grant is insufficient')
+    return sorted(inventory)
+
+
+@contextmanager
+def probe_locks(inventory, selected, grant, acquire):
+    """Caller supplies existing ct.exclusive_owner_lock; tests supply fixtures."""
+    uuids = grant_scope(inventory,selected,grant)
+    with ExitStack() as stack:
+        yield {uuid:stack.enter_context(acquire(uuid)) for uuid in uuids}
+
+
+def devices(sample, inventory):
+    require(sample.get('apps') == [], 'Collector-only baseline forbids every compute PID, including unmapped PIDs')
+    rows = sample.get('devices',[])
+    require(len(rows) == 8 and {row['uuid'] for row in rows} == set(inventory), 'Incomplete GPU baseline sample')
+    require(len({row['index'] for row in rows}) == 8, 'Duplicate device index')
+    require(all(row['utilization'] == 0 and type(row['gpu_bytes']) is int and row['gpu_bytes'] >= 0 for row in rows),
+            'Baseline requires idle utilization and known memory; missing is not zero')
+    require(isinstance(sample.get('monotonic'),(int,float)) and math.isfinite(sample['monotonic']), 'Missing sample clock')
+    return {row['uuid']:dict(row) for row in rows}
+
+
+class BaselineScope:
+    """State policy only: live lock/root authentication must be performed by sealed worker.
+
+    The identity supplied here binds receipts; metadata alone cannot prove live
+    custody or authorize launch. No method signals any PID or probes any device.
+    """
+    def __init__(self, inventory, selected, grant):
+        self.inventory = grant_scope(inventory,selected,grant)
+        self.selected = tuple(selected)
+        self.state = 'needs_raw_idle'
+        self.raw = self.anchor = self.collector = None
+
+    def raw_idle(self, sample):
+        require(self.state == 'needs_raw_idle','Raw baseline cannot be replaced')
+        self.raw = devices(sample,self.inventory)
+        require(all(row['gpu_bytes'] == 0 for row in self.raw.values()), 'Probe requires true original all-eight idle')
+        self.raw_time = sample['monotonic']; self.state = 'needs_collector'
+
+    def collector_started(self, identity, now, model_started=False):
+        require(self.state == 'needs_collector' and not model_started, 'Collector must start before model')
+        require(identity.get('pid',0) > 0 and identity.get('birth_ticks',0) > 0 and identity.get('launch_id'), 'Collector custody receipt missing')
+        require(math.isfinite(now) and now >= self.raw_time,'Bad collector clock')
+        self.collector = dict(identity);self.started = now;self.state = 'needs_stable_baseline'
+
+    def freeze(self, samples, identity, model_started=False):
+        require(self.state == 'needs_stable_baseline' and not model_started, 'No baseline reset after model start or prior freeze')
+        require(identity == self.collector, 'Collector PID/start-time/launch identity changed')
+        require(len(samples) >= 3, 'Need at least three collector-only samples')
+        times = [sample.get('monotonic',float('nan')) for sample in samples]
+        require(all(math.isfinite(t) for t in times) and all(a < b for a,b in zip(times,times[1:]))
+            and times[0] >= self.started and times[-1]-times[0] >= 4
+            and times[-1]-self.started <= PROBE_SECONDS, 'Unstable, late or unordered baseline sampling')
+        rows = [devices(sample,self.inventory) for sample in samples]
+        for uuid in self.inventory:
+            require(all(row[uuid]['index'] == self.raw[uuid]['index'] for row in rows), 'UUID/index mapping changed')
+            values = [row[uuid]['gpu_bytes'] for row in rows]
+            require(len(set(values)) == 1, 'Collector memory not stable; no maximum/median rebaseline')
+            require(values[0] <= PROBE_CEILING_BYTES, 'Instrumentation-only per-card ceiling exceeded')
+        self.anchor = rows[-1]; self.state = 'model_admissible'
+        return dict(raw=self.raw,instrumentation=self.anchor,
+            instrumentation_delta_bytes={u:self.anchor[u]['gpu_bytes']-self.raw[u]['gpu_bytes'] for u in self.inventory},
+            nonselected_model_delta_tolerance_bytes=TOLERANCE_BYTES,
+            instrumentation_ceiling_bytes=PROBE_CEILING_BYTES,collector_identity=self.collector,
+            model_gpu_uuids=list(self.selected),probe_lock_uuids=self.inventory,
+            attribution='exclusive probe assumption, not NVML PID attribution',execute_allowed=False)
+
+    def admit_model(self, visible_uuids, identity):
+        require(self.state == 'model_admissible' and identity == self.collector, 'No frozen live-collector baseline')
+        require(tuple(visible_uuids) == self.selected,'Eight-card lock scope must not expand/reorder model visibility')
+        self.state = 'model_active'
+
+    def check_model_sample(self, sample, identity):
+        require(self.state == 'model_active' and identity == self.collector, 'Collector identity lost during model phase')
+        rows = sample.get('devices',[])
+        require(len(rows) == 8 and {row['uuid'] for row in rows} == set(self.inventory), 'Incomplete model GPU sample')
+        require(all(type(row['gpu_bytes']) is int and row['gpu_bytes'] >= 0 and
+            row['index'] == self.raw[row['uuid']]['index'] for row in rows), 'Unknown memory or UUID/index drift')
+        require(isinstance(sample.get('apps'),list), 'Missing compute PID observation')
+        require(all(app['uuid'] in self.selected for app in sample['apps']), 'Nonselected compute PID; no foreign signals')
+        require(all(row['utilization'] == 0 for row in rows if row['uuid'] not in self.selected), 'Nonselected GPU activity')
+        from sampling_v4 import device_deltas
+        delta = device_deltas(sample,self.anchor,self.selected)
+        require(not delta['violations'], str(delta['violations']))
+        require(all(row['gpu_bytes'] <= 22 << 30 for row in rows if row['uuid'] in self.selected),
+                'Selected absolute ceiling exceeded; do not subtract instrumentation memory')
+        return delta
+
+    def after_model(self, drained, baseline_returned):
+        require(self.state == 'model_active' and drained and baseline_returned, 'Model drain and instrumentation-anchor return required')
+        self.state = 'needs_collector_drain'
+
+    def finish(self, collector_drained, original_idle_sample):
+        require(self.state == 'needs_collector_drain' and collector_drained, 'Keep all locks until collector authenticated drain')
+        rows = devices(original_idle_sample,self.inventory)
+        require(all(rows[u]['gpu_bytes'] == self.raw[u]['gpu_bytes'] and rows[u]['index'] == self.raw[u]['index'] for u in self.inventory),
+                'Final idle must match original baseline, not instrumentation baseline')
+        self.state = 'release_admissible'
+        return dict(status=self.state,model_gpu_uuids=list(self.selected),probe_lock_uuids=self.inventory)
+
+
+def plan():
+    return dict(status='cpu_policy_tested_not_live_wired',execute_allowed=False,
+        metrics_flags=list(SCOPE_FLAGS),enumeration_suppression='No documented no-enumeration switch found; disabled metrics is not proof',
+        probe=dict(explicit_grant='all_eight_instrumentation_probe',atomic_sorted_locks=8,
+                   model_visible_gpus=2,stable_samples=3,min_stable_seconds=4,deadline_seconds=PROBE_SECONDS,
+                   instrumentation_ceiling_bytes=PROBE_CEILING_BYTES,model_nonselected_tolerance_bytes=TOLERANCE_BYTES),
+        sequence=['grant + lock all eight, then authenticated raw idle',
+            'same authenticated supervisor launches collector with gated non-CUDA target, NO model yet',
+            'freeze collector-only stable baseline and bind PID/starttime/launch ID',
+            'release model gate only after live custody recheck, selected UUID0/1 visibility',
+            'Ready + Hello/canaries; start trace; warm1 + measured1; stop trace',
+            'drain model and return to frozen instrumentation anchor',
+            'drain collector; original all-eight zero baseline; release all locks'],
+        unimplemented=['gated pre-model target and authenticated baseline handoff into existing worker',
+            'live collector stability / no further nonselected allocation on model launch or trace start',
+            'two-device CUDA coverage and request-window timestamps in exported report'],
+        release_policy='fresh optimized release requires source/build/numerical + same-release smoke, then no-trace paired pilot; profile timings never substituted')

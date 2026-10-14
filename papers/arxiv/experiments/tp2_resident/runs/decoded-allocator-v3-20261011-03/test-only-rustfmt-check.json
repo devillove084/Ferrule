@@ -1,0 +1,79 @@
+{
+  "argv": [
+    "/root/.rustup/toolchains/nightly-2026-08-01-x86_64-unknown-linux-gnu/bin/rustfmt",
+    "--check",
+    "--edition",
+    "2024",
+    "--config",
+    "skip_children=true",
+    "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-backend/src/cuda/providers/cutlass.rs"
+  ],
+  "supervisor": {
+    "returncode": 0,
+    "timed_out": false,
+    "wall_seconds": 0.14368212223052979,
+    "stdout": "",
+    "stderr": "",
+    "cleanup_errors": [],
+    "cleanup_scope": "isolated_subreaper_direct_children",
+    "descendant_custody": "proven_drained",
+    "gpu_quiescence": "unverified",
+    "custody": {
+      "status": "proven_drained",
+      "method": "linux-subreaper-waitid",
+      "containment_verified": true,
+      "launch_id": "b19b2bc020de4fc7b27e464cbdab2424",
+      "helper_identity": {
+        "pid": 170769,
+        "birth_ticks": 97747231,
+        "ppid": 170768,
+        "pgrp": 170769,
+        "session": 170769
+      },
+      "root_identity": {
+        "pid": 170770,
+        "birth_ticks": 97747234,
+        "ppid": 170769,
+        "pgrp": 170769,
+        "session": 170769
+      },
+      "boot_id": "4dd3497d-570c-4693-a876-5c26e06ab360",
+      "entries": [
+        {
+          "identity": {
+            "pid": 170770,
+            "birth_ticks": 97747234,
+            "ppid": 170769,
+            "pgrp": 170769,
+            "session": 170769
+          },
+          "role": "root",
+          "signals": [],
+          "reaped": true,
+          "exit_code": 0,
+          "first_observed_at": 8613592.698374348,
+          "reaped_at": 8613592.759207508
+        }
+      ],
+      "errors": [],
+      "reporting_errors": [],
+      "echild": true
+    },
+    "handshake": {
+      "kind": "ready",
+      "protocol": 1,
+      "launch_id": "b19b2bc020de4fc7b27e464cbdab2424",
+      "helper_identity": {
+        "pid": 170769,
+        "birth_ticks": 97747231,
+        "ppid": 170768,
+        "pgrp": 170769,
+        "session": 170769
+      },
+      "containment_verified": true,
+      "method": "linux-subreaper-waitid"
+    },
+    "stdout_truncated": false,
+    "stderr_truncated": false
+  }
+}

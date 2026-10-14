@@ -20,6 +20,7 @@ mod child;
 pub mod decoder;
 mod decoder_endpoint;
 mod decoder_expert;
+mod decoder_hybrid;
 mod decoder_stage;
 pub mod decoder_wire;
 mod ipc;
@@ -141,6 +142,9 @@ impl Default for ProcessFrameLimits {
     }
 }
 impl ProcessFrameLimits {
+    /// Trusted child ceiling; each Boot negotiates its own smaller payload limits.
+    pub const MAX_FRAME_BYTES: usize = ipc::HARD_MAX_FRAME_BYTES;
+
     pub fn validate(self) -> Result<(), ProcessError> {
         if !(1024..=ipc::HARD_MAX_FRAME_BYTES).contains(&self.max_frame_bytes) {
             return Err(invalid("max_frame_bytes must be between 1024 and 128 MiB"));

@@ -1,0 +1,226 @@
+{
+  "qualification": "allocator-context-drop-v2",
+  "generated_utc": "2026-10-10T19:31:39.110590+00:00",
+  "status": "CPU_AND_BUILD_PASS_GPU_PENDING",
+  "gpu_execution": false,
+  "gpu_gate_owner": "agent322",
+  "gpu_definitions": 4,
+  "gpu_fault_kind": "real CUDA operations with synthetic result injection; not hardware-damaging faults",
+  "freeze": "crates/ferrule-backend/tests/allocator_context_drop/FREEZE_V2.sha256",
+  "freeze_sha256": "2a67ad45dd79f7c58bcefb23924e681c9e183dbb9122a045ef76931310dfdefe",
+  "prior_freeze": "crates/ferrule-backend/tests/allocator_retirement/FREEZE.sha256",
+  "prior_freeze_sha256": "5b6f07b33101c6adc13768505957eb84a8f523ef67eb001ddbd9b96b5d15c0c0",
+  "prior_receipt_overwritten": false,
+  "compiler": "CUDA 12.4.99",
+  "target": "sm_86",
+  "cuda_test_oracle": "0",
+  "environment": {
+    "CUDA_VISIBLE_DEVICES": "",
+    "NVIDIA_VISIBLE_DEVICES": "void",
+    "FERRULE_NO_CUDA": "1"
+  },
+  "cargo_target_dir": "target/validation/allocator-context-drop-v2/cargo-cuda124",
+  "tests": {
+    "real_runtime_cpu_ffi_faults": 14,
+    "retirement_cpu_cuda_feature": 29,
+    "allocator_library_cpu": 7,
+    "retirement_no_default_features": 29
+  },
+  "new_public_metrics": [
+    "shutdown_quiescent",
+    "shutdown_retained"
+  ],
+  "production_changes": [
+    "crates/ferrule-backend/src/cuda/allocator.rs",
+    "crates/ferrule-backend/src/cuda/runtime.rs"
+  ],
+  "unchanged_non_target_source_hashes": 379,
+  "commands": [
+    {
+      "label": "compile-only",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "ferrule-backend",
+        "--features",
+        "cuda",
+        "--lib",
+        "--test",
+        "allocator_context_drop",
+        "--test",
+        "allocator_retirement",
+        "--test",
+        "cuda_allocator",
+        "--no-run"
+      ],
+      "exit_code": 0,
+      "log": "target/validation/allocator-context-drop-v2/compile-only-final.log"
+    },
+    {
+      "label": "drop-cpu",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "ferrule-backend",
+        "--features",
+        "cuda",
+        "--test",
+        "allocator_context_drop",
+        "tests::context_drop_"
+      ],
+      "exit_code": 0,
+      "log": "target/validation/allocator-context-drop-v2/drop-cpu-final.log"
+    },
+    {
+      "label": "retirement-cpu",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "ferrule-backend",
+        "--features",
+        "cuda",
+        "--test",
+        "allocator_retirement"
+      ],
+      "exit_code": 0,
+      "log": "target/validation/allocator-context-drop-v2/retirement-cpu-final.log"
+    },
+    {
+      "label": "allocator-lib-cpu",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "ferrule-backend",
+        "--features",
+        "cuda",
+        "--lib",
+        "cuda::allocator::"
+      ],
+      "exit_code": 0,
+      "log": "target/validation/allocator-context-drop-v2/allocator-lib-cpu-final.log"
+    },
+    {
+      "label": "gpu-definitions-list-only",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "ferrule-backend",
+        "--features",
+        "cuda",
+        "--lib",
+        "cuda::runtime::context_drop_gpu_tests::",
+        "--",
+        "--list"
+      ],
+      "exit_code": 0,
+      "log": "target/validation/allocator-context-drop-v2/gpu-definitions-list-only-final.log"
+    },
+    {
+      "label": "clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "--offline",
+        "-p",
+        "ferrule-backend",
+        "--features",
+        "cuda",
+        "--lib",
+        "--test",
+        "allocator_context_drop",
+        "--test",
+        "allocator_retirement",
+        "--test",
+        "cuda_allocator",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit_code": 0,
+      "log": "target/validation/allocator-context-drop-v2/clippy-final.log"
+    },
+    {
+      "label": "no-default-cpu",
+      "command": [
+        "/root/.cargo/bin/cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "ferrule-backend",
+        "--no-default-features",
+        "--test",
+        "allocator_retirement"
+      ],
+      "exit_code": 0,
+      "log": "target/validation/allocator-context-drop-v2/no-default-cpu-final.log"
+    },
+    {
+      "label": "rustfmt",
+      "command": [
+        "/root/.cargo/bin/rustfmt",
+        "--edition",
+        "2024",
+        "--config",
+        "skip_children=true",
+        "--check",
+        "crates/ferrule-backend/src/cuda/allocator.rs",
+        "crates/ferrule-backend/src/cuda/runtime.rs",
+        "crates/ferrule-backend/src/cuda/allocation_layout.rs",
+        "crates/ferrule-backend/tests/unit/cuda/allocator.rs",
+        "crates/ferrule-backend/tests/allocator_retirement/main.rs",
+        "crates/ferrule-backend/tests/allocator_retirement/runtime.rs",
+        "crates/ferrule-backend/tests/allocator_retirement/tests.rs",
+        "crates/ferrule-backend/tests/allocator_context_drop/driver.rs",
+        "crates/ferrule-backend/tests/allocator_context_drop/gpu.rs",
+        "crates/ferrule-backend/tests/allocator_context_drop/main.rs",
+        "crates/ferrule-backend/tests/allocator_context_drop/tests.rs"
+      ],
+      "exit_code": 0,
+      "log": "target/validation/allocator-context-drop-v2/rustfmt-final.log"
+    }
+  ],
+  "compiled_artifacts": [
+    {
+      "path": "target/validation/allocator-context-drop-v2/cargo-cuda124/debug/build/ferrule-backend/85bde858edec236e/out/ferrule_backend-85bde858edec236e",
+      "sha256": "e79ed82d1fc1e800b8a9996eef577701386d28589f907bdd70020cba15f7f2bf",
+      "executed_on_gpu": false
+    },
+    {
+      "path": "target/validation/allocator-context-drop-v2/cargo-cuda124/debug/build/ferrule-backend/cd00ba94b85f1899/out/allocator_context_drop-cd00ba94b85f1899",
+      "sha256": "a70932ba6bd0f1cc5d58061899128c57b3abb6d940392c88b9e7921a17fef9a5",
+      "executed_on_gpu": false
+    },
+    {
+      "path": "target/validation/allocator-context-drop-v2/cargo-cuda124/debug/build/ferrule-backend/7163d04fbfe46ed0/out/allocator_retirement-7163d04fbfe46ed0",
+      "sha256": "dc669604bdf46b5ec8f6030602914099a69055f862154a69b26f2f7808ef47b0",
+      "executed_on_gpu": false
+    },
+    {
+      "path": "target/validation/allocator-context-drop-v2/cargo-cuda124/debug/build/ferrule-backend/901c43a0a130a286/out/cuda_allocator-901c43a0a130a286",
+      "sha256": "e002d666c0aa5b8bb35ba48046feed87e3220f01d732ade3c0d95f9f9aec1b76",
+      "executed_on_gpu": false
+    }
+  ],
+  "notes": [
+    "CUDA allocator integration and four ignored GPU cases were compiled only",
+    "No inherited throughput, event-count, numeric, or GPU qualification claim",
+    "Earlier V1 freeze remains a historical receipt; only V2 describes the current source"
+  ]
+}

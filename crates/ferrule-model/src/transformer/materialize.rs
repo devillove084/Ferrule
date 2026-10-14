@@ -1,5 +1,23 @@
 //! Lazy state-dict materialization for standard decoder execution.
 
+#[cfg(feature = "cuda")]
+mod cuda;
+#[path = "numeric_shard.rs"]
+mod numeric_shard;
+#[path = "rank_materialize.rs"]
+mod rank_materialize;
+#[cfg(feature = "cuda")]
+pub use cuda::PreparedCudaLinear;
+#[cfg(feature = "cuda")]
+pub use numeric_shard::CudaNumericFp8RankBinding;
+#[cfg(all(test, feature = "cuda"))]
+pub(crate) use numeric_shard::tests as numeric_rank_tests;
+pub use numeric_shard::{
+    NumericFp8RankExecutionBudget, NumericFp8RankPlan, NumericFp8RankWeightBudget,
+    PreparedNumericFp8RankLinear, PreparedNumericFp8RankSegment,
+};
+pub use rank_materialize::{HybridRankStorage, PreparedHybridRankParameter};
+
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -193,9 +211,24 @@ pub struct PreparedParameter {
 /// never a dense float payload or a native exponent-only E8M0 linear.
 #[derive(Debug, Clone)]
 pub enum PreparedParameterStorage {
+    #[cfg(feature = "cuda")]
+    HybridRank(Arc<PreparedHybridRankParameter>),
+    #[cfg(feature = "cpu-reference")]
+    CpuLocal(Arc<PreparedCpuLocalMatrix>),
     Full(CheckpointTensorPayload),
     Tensor(Arc<TensorParallelWeightShard>),
     NumericFp8(Arc<NumericFp8Artifact>),
+}
+
+/// A prepared CPU matrix owns only decoded local values. Global source metadata
+/// remains on BoundParameter; it is never a second resident full-weight image.
+#[cfg(feature = "cpu-reference")]
+#[derive(Debug)]
+pub struct PreparedCpuLocalMatrix {
+    pub(crate) global_shape: [usize; 2],
+    pub(crate) local_shape: [usize; 2],
+    pub(crate) values: Arc<[f32]>,
+    pub(crate) collective: Option<super::parallel::TensorParallelLinearPlan>,
 }
 
 impl PreparedParameter {
@@ -237,6 +270,14 @@ impl PreparedParameter {
     /// Packed TP rectangles have no contiguous on-disk tensor slice.
     pub fn weight(&self) -> Result<&CheckpointTensorPayload> {
         match &self.weight {
+            #[cfg(feature = "cpu-reference")]
+            PreparedParameterStorage::CpuLocal(_) => {
+                Err(model_error("local CPU matrix has no full payload"))
+            }
+            #[cfg(feature = "cuda")]
+            PreparedParameterStorage::HybridRank(_) => {
+                Err(model_error("hybrid rank storage has no full payload"))
+            }
             PreparedParameterStorage::Full(weight) => Ok(weight),
             PreparedParameterStorage::NumericFp8(_) => Err(numeric_unsupported("parameter.weight")),
             PreparedParameterStorage::Tensor(_) => Err(model_error(
@@ -248,7 +289,7 @@ impl PreparedParameter {
     pub fn tensor_shard(&self) -> Option<&TensorParallelWeightShard> {
         match &self.weight {
             PreparedParameterStorage::Tensor(shard) => Some(shard),
-            PreparedParameterStorage::Full(_) | PreparedParameterStorage::NumericFp8(_) => None,
+            _ => None,
         }
     }
 
@@ -260,10 +301,24 @@ impl PreparedParameter {
 
     pub fn values_f32(&self) -> Result<Vec<f32>> {
         match &self.weight {
+            #[cfg(feature = "cpu-reference")]
+            PreparedParameterStorage::CpuLocal(matrix) => Ok(matrix.values.to_vec()),
+            #[cfg(feature = "cuda")]
+            PreparedParameterStorage::HybridRank(matrix) => {
+                matrix.dense_values().map(|v| v.to_vec())
+            }
             PreparedParameterStorage::Full(weight) => decode_float_payload(weight),
             PreparedParameterStorage::Tensor(shard) => shard.values_f32(),
             PreparedParameterStorage::NumericFp8(_) => Err(numeric_unsupported("values_f32")),
         }
+    }
+
+    pub(crate) fn prepared_f32_values(&self) -> Result<Arc<[f32]>> {
+        #[cfg(feature = "cpu-reference")]
+        if let PreparedParameterStorage::CpuLocal(matrix) = &self.weight {
+            return Ok(Arc::clone(&matrix.values));
+        }
+        Ok(self.values_f32()?.into())
     }
 
     pub fn values_usize(&self) -> Result<Vec<usize>> {
@@ -339,6 +394,13 @@ impl PreparedParameter {
     }
 
     pub fn values_bf16_words(&self) -> Result<Vec<u16>> {
+        #[cfg(feature = "cuda")]
+        if let PreparedParameterStorage::HybridRank(rank) = &self.weight {
+            return match rank.storage() {
+                HybridRankStorage::Bf16(words) => Ok(words.to_vec()),
+                _ => Err(model_error("rank parameter is not native BF16 storage")),
+            };
+        }
         let weight = self.weight()?;
         if weight.slice.dtype != CheckpointDType::Bf16 {
             return Err(model_error(format!(
@@ -356,6 +418,52 @@ impl PreparedParameter {
             .collect())
     }
 
+    /// Preflight physical BF16 vector size without decoding or rounding source values.
+    #[cfg(feature = "cuda")]
+    pub(crate) fn mixed_vector_bf16_word_count(&self) -> Result<usize> {
+        use rank_materialize::TypedSourceVectorPolicy;
+        let policy = TypedSourceVectorPolicy::for_parameter(
+            super::hybrid_parallel::HybridRankPrecision::MixedBf16F32,
+            self.role(),
+            &self.binding.weight().slice().dtype,
+        )?;
+        if self.scale().is_some()
+            || self.binding.weight().transform() != &TensorTransform::Identity
+            || (policy == TypedSourceVectorPolicy::Bf16ResidentFromF32
+                && self.binding.weight().logical_shape().len() != 1)
+        {
+            return Err(model_error(
+                "Mixed conversion requires unscaled identity BF16 or GDN F32 vector",
+            ));
+        }
+        if let Some(rank) = self.hybrid_rank() {
+            return match rank.storage() {
+                HybridRankStorage::Bf16(words) => Ok(words.len()),
+                _ => Err(model_error(
+                    "Mixed vector rank storage must already be BF16",
+                )),
+            };
+        }
+        self.binding.weight().slice().element_count()
+    }
+
+    /// Preparation-only conversion; source binding/dtype remain intact. Rank-local
+    /// A_log was already converted at its bounded read; replicated norm converts here.
+    #[cfg(feature = "cuda")]
+    pub(crate) fn mixed_vector_bf16_words(&self) -> Result<Vec<u16>> {
+        self.mixed_vector_bf16_word_count()?;
+        if self.hybrid_rank().is_some()
+            || self.binding.weight().slice().dtype == CheckpointDType::Bf16
+        {
+            return self.values_bf16_words();
+        }
+        Ok(self
+            .values_f32()?
+            .into_iter()
+            .map(crate::execution::bf16_rne_word)
+            .collect())
+    }
+
     pub fn into_linear(&self, role: TensorRole) -> Result<PreparedLinear> {
         PreparedLinear::from_parameter(Arc::new(self.clone()), role)
     }
@@ -365,6 +473,10 @@ impl PreparedParameter {
 /// BF16/F32/E8M0/FP4 contracts. Numeric FP8 has no implicit native/CPU conversion.
 #[derive(Debug, Clone)]
 pub enum PreparedLinearStorage {
+    #[cfg(feature = "cuda")]
+    HybridRank(Arc<PreparedHybridRankParameter>),
+    #[cfg(feature = "cpu-reference")]
+    CpuLocal(Arc<PreparedCpuLocalMatrix>),
     Native(LinearWeight),
     Tensor(Arc<TensorParallelWeightShard>),
     NumericFp8(Arc<NumericFp8Artifact>),
@@ -384,12 +496,32 @@ pub struct PreparedLinear {
 
 impl PreparedLinear {
     pub fn from_parameter(parameter: Arc<PreparedParameter>, role: TensorRole) -> Result<Self> {
+        #[cfg(feature = "cpu-reference")]
+        if matches!(parameter.storage(), PreparedParameterStorage::CpuLocal(_))
+            && parameter.role() != &role
+        {
+            return Err(model_error("local CPU matrix role mismatch"));
+        }
         if parameter.tensor_shard().is_some() && parameter.role() != &role {
             return Err(model_error(
                 "TP linear cannot reinterpret a shard as another role",
             ));
         }
+        #[cfg(feature = "cuda")]
+        if matches!(parameter.storage(), PreparedParameterStorage::HybridRank(_))
+            && parameter.role() != &role
+        {
+            return Err(model_error("hybrid rank linear role mismatch"));
+        }
         let storage = match &parameter.weight {
+            #[cfg(feature = "cuda")]
+            PreparedParameterStorage::HybridRank(matrix) => {
+                PreparedLinearStorage::HybridRank(Arc::clone(matrix))
+            }
+            #[cfg(feature = "cpu-reference")]
+            PreparedParameterStorage::CpuLocal(matrix) => {
+                PreparedLinearStorage::CpuLocal(Arc::clone(matrix))
+            }
             PreparedParameterStorage::Full(weight) => {
                 PreparedLinearStorage::Native(LinearWeight::from_weight_and_scale(
                     role.clone(),
@@ -414,6 +546,14 @@ impl PreparedLinear {
     }
 
     pub fn with_bias(mut self, bias: Arc<PreparedParameter>) -> Result<Self> {
+        #[cfg(feature = "cpu-reference")]
+        if matches!(self.storage, PreparedLinearStorage::CpuLocal(_)) {
+            return Err(model_error("local CPU linear bias is unsupported"));
+        }
+        #[cfg(feature = "cuda")]
+        if matches!(self.storage, PreparedLinearStorage::HybridRank(_)) {
+            return Err(model_error("hybrid rank bias is unsupported"));
+        }
         if self.tensor_shard().is_some() {
             return Err(model_error("TP linear bias is unsupported"));
         }
@@ -434,8 +574,25 @@ impl PreparedLinear {
         &self.parameter
     }
 
+    pub(crate) fn weak_numeric_artifact(&self) -> Result<std::sync::Weak<NumericFp8Artifact>> {
+        match &self.storage {
+            PreparedLinearStorage::NumericFp8(artifact) => Ok(Arc::downgrade(artifact)),
+            _ => Err(model_error(
+                "expert read pipeline requires numeric FP8 artifacts",
+            )),
+        }
+    }
+
     pub fn weight(&self) -> Result<&LinearWeight> {
         match &self.storage {
+            #[cfg(feature = "cpu-reference")]
+            PreparedLinearStorage::CpuLocal(_) => {
+                Err(model_error("CPU local matrix requires local operators"))
+            }
+            #[cfg(feature = "cuda")]
+            PreparedLinearStorage::HybridRank(_) => Err(model_error(
+                "hybrid rank storage requires CUDA rank operators",
+            )),
             PreparedLinearStorage::Native(weight) => Ok(weight),
             PreparedLinearStorage::Tensor(_) => Err(model_error(
                 "TP linear requires rank-local operators and collectives",
@@ -472,6 +629,10 @@ impl PreparedLinear {
 
     pub fn in_features(&self) -> usize {
         match &self.storage {
+            #[cfg(feature = "cpu-reference")]
+            PreparedLinearStorage::CpuLocal(matrix) => matrix.global_shape[1],
+            #[cfg(feature = "cuda")]
+            PreparedLinearStorage::HybridRank(matrix) => matrix.global_shape[1],
             PreparedLinearStorage::Native(weight) => weight.format.in_features(),
             PreparedLinearStorage::Tensor(shard) => shard.full_shape()[1],
             PreparedLinearStorage::NumericFp8(artifact) => {
@@ -482,44 +643,16 @@ impl PreparedLinear {
 
     pub fn out_features(&self) -> usize {
         match &self.storage {
+            #[cfg(feature = "cpu-reference")]
+            PreparedLinearStorage::CpuLocal(matrix) => matrix.global_shape[0],
+            #[cfg(feature = "cuda")]
+            PreparedLinearStorage::HybridRank(matrix) => matrix.global_shape[0],
             PreparedLinearStorage::Native(weight) => weight.format.out_features(),
             PreparedLinearStorage::Tensor(shard) => shard.full_shape()[0],
             PreparedLinearStorage::NumericFp8(artifact) => {
                 artifact.provenance().source().matrix_shape()[0]
             }
         }
-    }
-}
-
-#[cfg(feature = "cuda")]
-/// Backend-compiled linear handle with its activation contract.
-pub struct PreparedCudaLinear {
-    pub(crate) handle: ferrule_backend::cuda::operators::linear::CudaArtifactLinearHandle,
-    pub(crate) activation_quantization: Option<crate::checkpoint::weight::ActivationQuantization>,
-}
-
-#[cfg(feature = "cuda")]
-impl PreparedCudaLinear {
-    pub fn new(
-        handle: ferrule_backend::cuda::operators::linear::CudaArtifactLinearHandle,
-        activation_quantization: Option<crate::checkpoint::weight::ActivationQuantization>,
-    ) -> Self {
-        Self {
-            handle,
-            activation_quantization,
-        }
-    }
-
-    pub const fn handle(
-        &self,
-    ) -> &ferrule_backend::cuda::operators::linear::CudaArtifactLinearHandle {
-        &self.handle
-    }
-
-    pub const fn activation_quantization(
-        &self,
-    ) -> Option<crate::checkpoint::weight::ActivationQuantization> {
-        self.activation_quantization
     }
 }
 
@@ -721,8 +854,15 @@ pub struct StateDictMaterializer {
     reader: CheckpointTensorReader,
     static_parameters: Mutex<BTreeMap<ParameterId, Arc<PreparedParameter>>>,
     tensor: Option<(StandardTensorPlan, ParallelRankId)>,
+    #[cfg(feature = "cuda")]
+    cuda_rank: Option<(Arc<super::hybrid_parallel::HybridRankLayout>, usize)>,
+    #[cfg(feature = "cpu-reference")]
+    hybrid: Option<Arc<super::hybrid_parallel::HybridRankLayout>>,
     tensor_reads: Mutex<Vec<TensorParallelPreparationRead>>,
     host_experts: OnceLock<Arc<super::host_experts::HostExpertCache>>,
+    expert_read_options: Option<super::ExpertReadPipelineOptions>,
+    expert_read_active: Arc<std::sync::atomic::AtomicBool>,
+    expert_read_stats: Arc<Mutex<super::ExpertReadPipelineStats>>,
 }
 
 impl StateDictMaterializer {
@@ -735,9 +875,109 @@ impl StateDictMaterializer {
             reader: CheckpointTensorReader::new(max_parameter_bytes),
             static_parameters: Mutex::new(BTreeMap::new()),
             tensor: None,
+            #[cfg(feature = "cuda")]
+            cuda_rank: None,
+            #[cfg(feature = "cpu-reference")]
+            hybrid: None,
             tensor_reads: Mutex::new(Vec::new()),
             host_experts: OnceLock::new(),
+            expert_read_options: None,
+            expert_read_active: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            expert_read_stats: Arc::new(Mutex::new(super::ExpertReadPipelineStats::default())),
         })
+    }
+
+    /// Configure only the host read schedule, not a cache or execution profile.
+    /// Unconfigured materializers retain their existing demand path. Both opt-in
+    /// modes use the same checkpoint worker and the same admitted host budget.
+    pub fn configure_expert_read_pipeline(
+        &mut self,
+        options: super::ExpertReadPipelineOptions,
+    ) -> Result<()> {
+        options.validate()?;
+        if self.tensor.is_some() || self.host_experts.get().is_some() {
+            return Err(model_error(
+                "expert read pipeline requires lazy unsharded bindings",
+            ));
+        }
+        #[cfg(feature = "cuda")]
+        if self.cuda_rank.is_some() {
+            return Err(model_error(
+                "expert read pipeline does not support rank-local bindings",
+            ));
+        }
+        #[cfg(feature = "cpu-reference")]
+        if self.hybrid.is_some() {
+            return Err(model_error(
+                "expert read pipeline does not support CPU local shards",
+            ));
+        }
+        if self.expert_read_options.is_some() {
+            return Err(model_error("expert read pipeline is already configured"));
+        }
+        self.expert_read_options = Some(options);
+        Ok(())
+    }
+
+    pub fn expert_read_pipeline_options(&self) -> Option<super::ExpertReadPipelineOptions> {
+        self.expert_read_options
+    }
+
+    /// Totals from closed read scopes. This does not poll workers or imply GPU
+    /// execution/completion; active scopes report when their host cleanup ends.
+    pub fn expert_read_pipeline_stats(&self) -> super::ExpertReadPipelineStats {
+        *self
+            .expert_read_stats
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    pub(crate) fn expert_read_sequence(
+        &self,
+        image: u64,
+        selected: &[&super::ExpertMetadata],
+    ) -> Result<Option<super::expert_reads::ExpertReadSequence>> {
+        self.expert_read_options
+            .map(|options| {
+                let admission =
+                    super::expert_reads::ExpertReadAdmission::take(&self.expert_read_active)?;
+                let mut sequence = super::expert_reads::ExpertReadSequence::new(
+                    options,
+                    image,
+                    selected,
+                    self.reader.clone(),
+                )?;
+                sequence.admission = Some(admission);
+                sequence.stats_sink = Some(Arc::clone(&self.expert_read_stats));
+                Ok(sequence)
+            })
+            .transpose()
+    }
+
+    pub(crate) fn expert_parameter_from_read(
+        &self,
+        read: &super::expert_reads::CurrentExpertRead,
+        index: usize,
+        binding: &BoundParameter,
+    ) -> Result<Arc<PreparedParameter>> {
+        read.plan.validate_binding(index, binding)?;
+        let projection = &read.plan.projections[index];
+        if projection.read_plan().storage_bytes() > self.max_parameter_bytes {
+            return Err(model_error(
+                "prefetched parameter exceeds materializer read budget",
+            ));
+        }
+        let (weight, scale) = &read.plan.ranges[index];
+        let artifact = NumericFp8Artifact::from_verified_read_range(
+            projection,
+            &read.completion,
+            &read.ticket,
+            weight.start..scale.end,
+        )?;
+        Ok(Arc::new(PreparedParameter::from_host_numeric(
+            binding.clone(),
+            artifact,
+        )))
     }
 
     /// Bind the exact resource image's single host residency authority. Repeated
@@ -746,6 +986,11 @@ impl StateDictMaterializer {
         &self,
         cache: &Arc<super::host_experts::HostExpertCache>,
     ) -> Result<()> {
+        if self.expert_read_options.is_some() {
+            return Err(model_error(
+                "full host residency cannot coexist with lazy expert reads",
+            ));
+        }
         let installed = self.host_experts.get_or_init(|| Arc::clone(cache));
         if self.tensor.is_some() || !Arc::ptr_eq(installed, cache) {
             return Err(model_error(
@@ -767,6 +1012,82 @@ impl StateDictMaterializer {
         let mut materializer = Self::new(max_parameter_bytes)?;
         materializer.tensor = Some((plan, rank));
         Ok(materializer)
+    }
+
+    #[cfg(feature = "cpu-reference")]
+    pub(crate) fn for_hybrid(
+        max_parameter_bytes: u64,
+        layout: Arc<super::hybrid_parallel::HybridRankLayout>,
+    ) -> Result<Self> {
+        let mut result = Self::new(max_parameter_bytes)?;
+        result.hybrid = Some(layout);
+        Ok(result)
+    }
+
+    /// Read catalog-bound rectangles directly, including discontiguous GDN Q/K/V.
+    /// The aggregate local matrix is bounded before the first read/allocation.
+    #[cfg(feature = "cpu-reference")]
+    fn hybrid_matrix(&self, binding: &BoundParameter) -> Result<PreparedCpuLocalMatrix> {
+        let layout = self
+            .hybrid
+            .as_ref()
+            .ok_or_else(|| model_error("missing local layout"))?;
+        if binding.scale().is_some()
+            || binding.weight().slice().dtype != CheckpointDType::F32
+            || binding.weight().transform() != &TensorTransform::Identity
+        {
+            return Err(model_error(
+                "hybrid local preparation requires identity unscaled F32",
+            ));
+        }
+        let p = layout.parameter_partition(binding)?;
+        if p.bytes_f32()? as u64 > self.max_parameter_bytes {
+            return Err(model_error("local matrix exceeds bounded parameter read"));
+        }
+        let mut slice = binding.weight().slice().clone();
+        if slice.shape.len() != 2 {
+            let columns = if slice.shape.len() == 3 {
+                slice.shape[2]
+            } else {
+                1
+            };
+            slice.shape = vec![slice.element_count()? / columns, columns];
+        }
+        let global_shape = [slice.shape[0], slice.shape[1]];
+        let mut values = Vec::with_capacity(p.bytes_f32()? / 4);
+        for rows in &p.rows {
+            let read = self.reader.plan_2d_range(
+                &slice,
+                rows.clone(),
+                p.columns.clone(),
+                binding.weight().source_identity(),
+            )?;
+            let payload = self.reader.read_matrix(&read)?;
+            values.extend(
+                payload
+                    .bytes()
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .map(|b| f32::from_le_bytes(*b)),
+            );
+            self.tensor_reads
+                .lock()
+                .map_err(|_| model_error("TP read accounting poisoned"))?
+                .push(TensorParallelPreparationRead {
+                    parameter: binding.id(),
+                    canonical: binding.canonical_id(),
+                    role: binding.role().clone(),
+                    bytes: payload.bytes().len() as u64,
+                    rectangle: Some(read),
+                });
+        }
+        Ok(PreparedCpuLocalMatrix {
+            global_shape,
+            local_shape: p.local_shape()?,
+            values: values.into(),
+            collective: p.collective,
+        })
     }
 
     /// Materialize raw numeric FP8 storage for a bounded row/tile/expert view.
@@ -801,6 +1122,25 @@ impl StateDictMaterializer {
         binding: &BoundParameter,
         role: TensorRole,
     ) -> Result<PreparedLinear> {
+        #[cfg(feature = "cuda")]
+        if self.cuda_rank.is_some() {
+            return self.prepare_cuda_rank_linear(binding, role);
+        }
+        #[cfg(feature = "cpu-reference")]
+        if self.hybrid.is_some() {
+            if binding.role() != &role {
+                return Err(model_error("local matrix role mismatch"));
+            }
+            let matrix = self.hybrid_matrix(binding)?;
+            return PreparedLinear::from_parameter(
+                Arc::new(PreparedParameter {
+                    binding: binding.clone(),
+                    weight: PreparedParameterStorage::CpuLocal(Arc::new(matrix)),
+                    scale: None,
+                }),
+                role,
+            );
+        }
         let Some((tensor, rank)) = &self.tensor else {
             return PreparedLinear::from_parameter(self.parameter(binding)?, role);
         };
@@ -831,6 +1171,17 @@ impl StateDictMaterializer {
         )
     }
 
+    pub(crate) fn prepared_embedding_linear(
+        &self,
+        binding: &BoundParameter,
+    ) -> Result<PreparedLinear> {
+        #[cfg(feature = "cpu-reference")]
+        if self.hybrid.is_some() {
+            return self.prepared_linear(binding, TensorRole::TokenEmbedding);
+        }
+        PreparedLinear::from_parameter(self.static_parameter(binding)?, TensorRole::TokenEmbedding)
+    }
+
     pub(crate) fn prepared_layer_linear(
         &self,
         layer: usize,
@@ -840,6 +1191,14 @@ impl StateDictMaterializer {
     ) -> Result<PreparedLinear> {
         if binding.residency() != &(ParameterResidency::Layer { layer }) {
             return Err(model_error("linear binding belongs to another layer"));
+        }
+        #[cfg(feature = "cpu-reference")]
+        if self.hybrid.is_some() {
+            return self.prepared_linear(binding, role);
+        }
+        #[cfg(feature = "cuda")]
+        if self.cuda_rank.is_some() {
+            return self.prepare_cuda_rank_linear(binding, role);
         }
         if self.tensor.is_some() {
             self.prepared_linear(binding, role)
@@ -938,6 +1297,25 @@ impl StateDictMaterializer {
                 binding.residency()
             )));
         }
+        #[cfg(feature = "cuda")]
+        if let Some(parameter) = self.cuda_rank_layer_parameter(binding) {
+            return parameter;
+        }
+        #[cfg(feature = "cpu-reference")]
+        if self.hybrid.is_some()
+            && matches!(
+                binding.role(),
+                TensorRole::LinearAttentionConv
+                    | TensorRole::LinearAttentionALog
+                    | TensorRole::LinearAttentionDtBias
+            )
+        {
+            return Ok(Arc::new(PreparedParameter {
+                binding: binding.clone(),
+                weight: PreparedParameterStorage::CpuLocal(Arc::new(self.hybrid_matrix(binding)?)),
+                scale: None,
+            }));
+        }
         self.validate_full_read(binding)?;
         if let Some(parameter) = cache.get(binding.canonical_id()) {
             return numeric_cached_view(binding, parameter);
@@ -982,6 +1360,10 @@ impl StateDictMaterializer {
                 binding.residency()
             )));
         }
+        #[cfg(feature = "cuda")]
+        if self.cuda_rank.is_some() {
+            return self.cuda_rank_parameter(binding);
+        }
         if let Some(cache) = self.host_experts.get() {
             // Content proof is immutable, but direct materializer callers still
             // need a freshness boundary. GPU metadata hits never enter here.
@@ -1001,6 +1383,8 @@ impl StateDictMaterializer {
     }
 
     fn validate_full_read(&self, binding: &BoundParameter) -> Result<()> {
+        #[cfg(feature = "cuda")]
+        self.validate_cuda_rank_full_read(binding)?;
         if self.tensor.is_some()
             && !matches!(
                 binding.role(),

@@ -1,0 +1,85 @@
+{
+  "schema": "ferrule.paper.storage-demand.pilot-protocol.v2",
+  "id": "storage-middle64-repeated-qa-nfs-20261014-v2",
+  "status": "preregistered_cpu_only_not_authorized",
+  "candidate_binary": null,
+  "candidate_quality": "pending_same_candidate_StorageMiddle64_GPU_owner",
+  "trial_order": ["L1", "L2", "L3", "L4", "L5"],
+  "trial_count": 5,
+  "retry_count": 0,
+  "trial_rationale": "Five independent server lifecycles are a finite pilot budget, not a power calculation or statistical-significance claim. Same binary/config/UUID; no small/big, ablation, comparator or randomized treatment.",
+  "request_phases": {"initial": 4, "qa_excluded_first": 1, "qa_warmup": 2, "qa_measured": 5},
+  "request_ceiling_per_lifecycle": 12,
+  "scheduled_requests": 60,
+  "scheduled_measured_qa": 25,
+  "ceiling_resolution": "New v2 case raises ceiling10 to12 explicitly: 4+1+2+5=12. Historical case-middle.json and run_middle.py remain frozen. No truncation or hidden requests.",
+  "limits": {
+    "startup_seconds": 700,
+    "request_seconds": 120,
+    "all_requests_seconds": 480,
+    "worker_bookkeeping_seconds": 60,
+    "target_lifetime_seconds": 1240,
+    "shutdown_seconds": 45,
+    "worker_preidle_seconds": 20,
+    "worker_finalization_seconds": 35,
+    "supervisor_seconds": 1340,
+    "supervisor_call_overhead_seconds": 28,
+    "coordinator_preidle_seconds": 20,
+    "coordinator_postidle_seconds": 20,
+    "coordinator_finalization_seconds": 32,
+    "outer_lifecycle_seconds": 1440,
+    "pilot_seconds": 7200
+  },
+  "deadlines": "Absolute, non-sliding monotonic deadlines. Each request gets min(120, remaining480, remaining target/outer/pilot budget), never a fresh480. 480 is an aggregate cutoff, not a promise of12*120; unfinished issued requests are censored and the remainder unissued. Target lifetime includes startup/request/bookkeeping; shutdown is additional. Supervisor helper overhead reserves5s handshake+5s command+8s wait grace+8s cancel wait+2s helper reap. Outer deadline closes admission; existing authenticated custodian retains cleanup authority.",
+  "planning_estimate": {
+    "source": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/canary-qa/http.json",
+    "source_n": 1,
+    "qa_e2e_seconds": 18.309471419081092,
+    "all_12_requests_may_cost_like_qa": true,
+    "request_cost_seconds_60": 1098.5682851448655,
+    "planning_allowance_seconds_per_lifecycle": 500,
+    "planning_total_seconds": 3598.5682851448655,
+    "interpretation": "About1h scheduling allowance: ~18min extrapolated HTTP cost plus~42min conservative startup/idle/observation/shutdown allowance. Not measured current-binary cost; observed historical startup18.497s. Literal worst-case envelope2h. Abort at fixed deadlines; do not add trials to compensate failures."
+  },
+  "primary_outcomes": [
+    "Client-observed measured-QA TTFT (first nonempty SSE content, not token boundary) and request_e2e_seconds, with all25 scheduled slots and failure/censoring counts",
+    "Per-request serialized log-byte-window mixed_decoder_invocation logical checkpoint_read_calls and checkpoint_read_bytes; startup excluded and separately retained",
+    "Per-request expert_hits, expert_uploads and expert_evictions; hit share only hits/(hits+uploads) when nonzero, explicitly not a universal cache-hit probability or miss counter",
+    "Facade h2d_copies/h2d_bytes and artifact_uploads/artifact_upload_bytes, not physical PCIe traffic",
+    "Sampled owner-bound GPU/tree PSS high water and raw resource_shutdown_summary evidence/coverage; no exact peak, hard-host-cap or universal final-release claim"
+  ],
+  "physical_io_outcome": "Timestamp-bracketed raw Linux NFS client mountstats before/after startup, each request, request phase and shutdown, selected by longest checkpoint-path mount. Report shared-mount serverreadbytes and READ RPC deltas only with stable boot/mount namespace/device/mount/statvers/age and monotone counters. Missing/reset samples stay null. Shared-client traffic cannot be attributed to this server; physical NAS backend disk/network bytes remain unknown.",
+  "denominators": "All5 lifecycles,60 requests,25 measured QA stay scheduled. For each phase retain success,failed,censored,unissued; issued=success+failed+censored,terminal=success+failed. Lost/incomplete issued outcomes are censored with explicit reason, never unissued or success. Startup/quality/custody STOP leaves subsequent slots unissued, no replacement. Quality and metric eligibility separate from HTTP success. Descriptive per-lifecycle rows and eligible distributions only, with scheduled denominators alongside; no CI/p-value/power/steady-state/speedup claim.",
+  "stop_policy": {
+    "unknown_custody": "STOP admission and all subsequent lifecycles immediately on PID/birth/parent/UUID identity loss, unauthenticated or unknown descendant drain, known foreign GPU owner, explicit unknown physical scope/quarantine/fence/closure, pending final close or quarantine. Never repair by exit, idle, Drop, retries, fabricated zeros or foreign signals.",
+    "other_failures": "STOP on startup/request timeout, failed HTTP/text/usage/actual-ID gate, unavailable required trace/counter window, mount sampling failure/reset or missing required owner-close identity/quiescence, changed pins/argv/quality, or failed pre/post idle. Preserve distinct reasons and all planned slots.",
+    "resource_unverified": "Unsupported resource partitions and final release may remain unobserved, not unknown custody. A complete owner-local close with actual closed/quiescent, retained residency, zero observed pending uploads/unknown bytes, original scoped identity, process normal exit, authenticated drain and independent post-idle can permit progression. Do NOT require universal post-Drop/final release or zero retained source mappings/allocator residency. Preserve resource_contract_complete=unverified and raw evidence qualifiers."
+  },
+  "logging": {
+    "FERRULE_LOG": "info,ferrule_performance=debug,ferrule_request=debug,ferrule_token=trace,ferrule_resource_observability=info",
+    "FERRULE_LOG_FORMAT": "json",
+    "privacy": "Explicit opt-in token IDs/raw SSE can reconstruct output; raw mountstats can expose export paths. Restrict artifacts to approved local custody, no remote upload; do not dump prompts beyond frozen public canaries, arbitrary env or secrets.",
+    "cost": "DEBUG/TRACE, sampler and raw capture overhead is unmeasured and all results instrumented. Flush/drain/parse log after shutdown; no claimed uninstrumented baseline. A new matching baseline build/quality seal is required, never reuse historical n1 numerics."
+  },
+  "custody": {
+    "gpu_policy": "No GPU query, lock, HTTP, process/server launch in CPU preparation. Future coordinator requires renewed sole-owner grant, one physical UUID bound to ordinal0, local nonblocking UUID lock, authenticated launch_guard/subreaper, birth-bound observation, pre/post all-eight idle. Locks are local, NOT global GPU/NFS reservations.",
+    "nonselected_delta_tolerance_bytes": 1048576,
+    "sample_interval_seconds": 2,
+    "no_drop_cache": true,
+    "no_foreign_kills": true,
+    "page_cache": "uncontrolled; separate lifecycles are not storage-cold or independent NFS/page-cache samples",
+    "physical_nas_backend_bytes": null,
+    "physical_host_cap_bytes": null
+  },
+  "maintained_api_reuse": {
+    "contract": "papers/arxiv/experiments/contract.py:load,digest,sha,check_pins,write,release_artifact,validate_staged_binary,pinned_executable,isolated_argv,exclusive_owner_lock,validate_owner_lock,drained",
+    "middle_wrapper_reference_only": "papers/arxiv/experiments/storage_demand/run_middle.py:schedule,one_request,invocations,worker; frozen four-request entry is never executed or patched",
+    "current_case_reference_only": "papers/arxiv/experiments/tp2_resident/experiment_current.py:requests,worker; fixed TP2 dispatcher is NOT the TP1 launch entry",
+    "request": "scripts/bench_ferrule_vllm.py:make_payload,main,Stream.metrics raw_sse_events",
+    "target": "scripts/_profile_capture.py:run_target(directory,command,1240,45)",
+    "supervisor": "scripts/test_vllm_qwen35.py:run_process(argv,1340,payload)",
+    "seal": "papers/arxiv/experiments/launch_guard.py:seal,authenticate",
+    "observer": "papers/arxiv/experiments/tp2_resident/observer.py:Monitor,verify_root,idle",
+    "adapter": "storage_demand/runnerhelpers/evidence_v2.py; narrow preparation/evidence library, not a second process/HTTP/supervisor harness"
+  }
+}

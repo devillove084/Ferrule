@@ -15,6 +15,7 @@
 //! No logical page is reused before every owner retirement ACK and the parent's
 //! `KvPageManager::confirm_page_retirement`.
 
+use ferrule_model::ModelExecutionBackend;
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
@@ -41,17 +42,52 @@ use ferrule_model::transformer::{
     StandardDecoderSegment,
 };
 
+mod kv_capacity;
+pub use kv_capacity::{CustodyStrategy, PhysicalKvLayout, PhysicalSlotLimit};
+
+pub mod dense_bf16_memory;
+pub use dense_bf16_memory as bf16;
+pub use dense_bf16_memory::DenseBf16MemoryPlan;
 #[cfg(feature = "cuda")]
 pub mod cuda;
 #[cfg(feature = "cuda")]
 pub use cuda::CudaPipelineStageProgram;
 
+pub mod hybrid;
+#[cfg(feature = "cpu-reference")]
+pub mod hybrid_tensor;
+pub use hybrid::{
+    HybridCpuPipelineStageProgram, HybridDeviceBudget, HybridPipelineLayout, HybridStageBudget,
+};
+#[cfg(feature = "cpu-reference")]
+pub use hybrid_tensor::{
+    HybridCpuTensorConfig, HybridCpuTensorPipelineStageProgram, HybridCpuTensorStage,
+};
+#[cfg(feature = "cuda")]
+mod hybrid_cuda;
+#[cfg(feature = "cuda")]
+pub use hybrid_cuda::HybridCudaPipelineStageProgram;
+#[path = "pipeline/completion_boundary.rs"]
+pub(super) mod completion_boundary;
+
+#[cfg(feature = "cuda")]
+mod mixed_tensor_plan;
+#[cfg(feature = "cuda")]
+mod mixed_trace;
+#[cfg(feature = "cuda")]
+pub use mixed_trace::MixedTraceConfig;
 pub mod owner;
 pub mod stage;
 #[cfg(feature = "cuda")]
 pub mod tensor;
 pub mod tensor_scope;
+#[cfg(feature = "cuda")]
+pub use mixed_tensor_plan::MixedTensorExecutionPlan;
+pub use tensor_scope::translate_hybrid_schedule;
+#[cfg(feature = "cuda")]
+pub mod hybrid_cuda_tensor;
 #[cfg(test)]
+#[path = "../../tests/unit/parallel/tensor_scope/pipeline.rs"]
 mod tensor_tests;
 pub mod transport;
 #[cfg(feature = "cuda")]
@@ -61,6 +97,7 @@ use ferrule_model::{ModelFamily, WeightSource};
 pub use owner::{PipelineOwnerStats, PipelineStageWorker};
 pub use stage::{
     CpuPipelineStageProgram, PipelineExecutionContext, PipelineExpertContext, PipelineStageProgram,
+    PipelineStateProgram,
 };
 pub use transport::{
     DataPoolPipelineTransport, PipelineCommand, PipelineCommandKey, PipelinePreparedProjection,
@@ -139,28 +176,24 @@ impl PipelineConfig {
         Ok(())
     }
 
-    /// Pure planning: standard CUDA reserves one shadow per logical page. Any
-    /// quarantined slot remains charged inside this bound, never extra headroom.
-    pub fn physical_pages(self, cuda: bool) -> Result<usize> {
+    /// Checked owner-local capacity, independently selecting custody and indices.
+    pub fn physical_pages(self, layout: PhysicalKvLayout) -> Result<usize> {
         self.validate()?;
-        let pages = self
-            .max_pages
-            .checked_mul(if cuda { 2 } else { 1 })
-            .filter(|&pages| {
-                pages
-                    <= if cuda {
-                        i32::MAX as usize + 1
-                    } else {
-                        u32::MAX as usize
-                    }
-            })
-            .ok_or_else(|| error("pipeline physical slot capacity overflow"))?;
-        Ok(pages)
+        layout.physical_pages(self.max_pages)
     }
 
     fn validate_physical_pages(self, pages: usize) -> Result<()> {
         self.validate()?;
-        if pages != self.max_pages && self.physical_pages(true).ok() != Some(pages) {
+        // Device-neutral descriptions accept either custody strategy. Concrete
+        // adapters validate their native slot limit before constructing a pool.
+        if ![CustodyStrategy::InPlace, CustodyStrategy::Shadowed]
+            .into_iter()
+            .any(|custody| {
+                PhysicalKvLayout::new(custody, PhysicalSlotLimit::U32)
+                    .validate_pages(self.max_pages, pages)
+                    .is_ok()
+            })
+        {
             return Err(error("pipeline physical capacity must be L or checked 2L"));
         }
         Ok(())
@@ -282,7 +315,8 @@ impl PipelineStage<CpuPagedKvBackend, CpuPipelineStageProgram> {
         .capabilities();
         let description = Description {
             plan: plan.clone(),
-            physical_pages: config.physical_pages(false)?,
+            physical_pages: config
+                .physical_pages(PhysicalKvLayout::standard(ModelExecutionBackend::Cpu))?,
             config,
             hidden: resources.spec().hidden_size(),
             vocabulary: resources.spec().vocab_size(),
@@ -339,11 +373,16 @@ impl<B, P> PipelineStage<B, P> {
 }
 
 impl PipelineStageDescription {
-    /// Physical bytes for this owner's segment-local planes and TP-local heads.
+    /// Standard GQA bytes for this owner's layers and TP-local heads. Hybrid
+    /// serving must use `PipelineParallelExecutor::physical_kv_bytes`, whose
+    /// explicit thread layout accounts for compact full-attention planes.
     pub fn physical_bytes(&self) -> Result<u64> {
+        self.physical_bytes_for_layers(self.plan.layer_count())
+    }
+    pub(super) fn physical_bytes_for_layers(&self, kv_layers: usize) -> Result<u64> {
         use ferrule_common::execution::KvLayoutSchema;
         let planes = StandardGqaPlanes::new(
-            self.plan.layer_count(),
+            kv_layers,
             self.kv_heads,
             self.head_dim,
             self.config.page_size,
@@ -455,15 +494,14 @@ impl PipelineStageDescription {
             self.config.max_positions,
             self.config.dtype(),
         )?;
-        if let Some(group) = &self.expert_group {
-            if group.layers != self.plan.layers()
+        if let Some(group) = &self.expert_group
+            && (group.layers != self.plan.layers()
                 || group.members.is_empty()
                 || group.members.iter().collect::<BTreeSet<_>>().len() != group.members.len()
                 || group.limits.max_tokens == 0
-                || group.limits.max_bytes == 0
-            {
-                return Err(error("invalid pipeline expert group"));
-            }
+                || group.limits.max_bytes == 0)
+        {
+            return Err(error("invalid pipeline expert group"));
         }
         Ok(())
     }
@@ -481,7 +519,9 @@ impl PipelineStageDescription {
             let member = group.members.contains(&group.source_rank);
             if match scope {
                 ExpertSourceScope::Member => !member,
-                ExpertSourceScope::ExternalStage => member || group.source_rank != caller,
+                ExpertSourceScope::ExternalStage | ExpertSourceScope::ExternalTensorSource => {
+                    member || group.source_rank != caller
+                }
             } {
                 return Err(error("pipeline expert source scope/caller mismatch"));
             }
@@ -498,7 +538,7 @@ pub struct PipelineStageBoot {
     pub rank: PipelineRank,
     pub plan: LayerSegmentPlan,
     /// Logical parent capacity remains `config.max_pages`; this is the owner-local
-    /// physical pool, including CUDA transaction shadow slots.
+    /// physical pool, including any transaction shadow slots.
     pub physical_pages: usize,
     pub config: PipelineConfig,
     pub program_spec: Vec<u8>,
@@ -518,12 +558,12 @@ impl PipelineStageBoot {
 
 impl<B, P> PipelineStage<B, P>
 where
-    B: DecoderKvBackend<SequenceState = GenericDecoderSequenceState>
+    B: DecoderKvBackend<SequenceState = P::SequenceState>
         + KvCommitParticipant<
-            SequenceState = GenericDecoderSequenceState,
+            SequenceState = P::SequenceState,
             Transaction = <B as DecoderKvBackend>::Transaction,
         >,
-    P: PipelineStageProgram<KvView = B::KvView>,
+    P: PipelineStateProgram<KvView = <B as DecoderKvBackend>::KvView>,
 {
     /// Assemble an owner-local device program and its associated KV backend.
     /// On rejection BOTH program and backend shutdown are attempted.
@@ -549,6 +589,13 @@ where
         Ok(stage)
     }
 
+    fn hybrid_expert_description_valid(&self) -> bool {
+        if let Some(group) = self.program.hybrid_expert_group() {
+            return self.description.expert_group.as_ref() == Some(group);
+        }
+        self.description.expert_group.is_none()
+    }
+
     fn validate(&self) -> Result<()> {
         self.description.validate()?;
         let config = self.description.config;
@@ -568,6 +615,30 @@ where
             || capabilities.logits_row_policy != ferrule_common::execution::LogitsRowPolicy::Any
         {
             return Err(error("pipeline stage plan/capabilities mismatch"));
+        }
+        if let Some(schema) = self.program.hybrid_schema() {
+            if schema.layer_range() != self.description.plan.layers()
+                || schema.total_layers() != self.description.plan.total_layers()
+                || config.precision != self.program.hybrid_precision()
+                || !self.hybrid_expert_description_valid()
+                || self.description.physical_pages
+                    != config.physical_pages(PhysicalKvLayout::new(
+                        CustodyStrategy::Shadowed,
+                        PhysicalSlotLimit::U32,
+                    ))?
+            {
+                return Err(error(
+                    "hybrid stage requires exact schema/precision, 2L slots and authenticated owner-bound EP",
+                ));
+            }
+            schema.kv_planes_with_dtype(config.page_size, config.max_positions, config.dtype())?;
+            if schema.layers().iter().any(|layer| {
+                matches!(layer,
+                ferrule_model::decoder::HybridLayerSchema::FullAttention { kv_heads, head_dim, .. }
+                if (*kv_heads, *head_dim) != (self.description.kv_heads, self.description.head_dim))
+            }) {
+                return Err(error("hybrid description differs from compact KV geometry"));
+            }
         }
         let capacity = self.backend.capacity();
         if capacity.physical_pages != self.description.physical_pages
@@ -604,6 +675,7 @@ trait StageWorkerDispatch:
     fn dispatch(&mut self, command: Command) -> Result<Reply>;
     fn boot_description(&self) -> &PipelineStageDescription;
     fn has_active_custody(&self) -> bool;
+    fn has_hybrid_state(&self) -> bool;
 }
 
 impl BoxedPipelineStageWorker {
@@ -615,6 +687,9 @@ impl BoxedPipelineStageWorker {
     }
     pub fn has_active_custody(&self) -> bool {
         self.0.has_active_custody()
+    }
+    pub fn has_hybrid_state(&self) -> bool {
+        self.0.has_hybrid_state()
     }
 }
 
@@ -646,6 +721,28 @@ fn validate_pipeline_layout(
     config: PipelineConfig,
     thread_tensor: bool,
 ) -> Result<()> {
+    validate_pipeline_mesh(topology, plans, config, thread_tensor)?;
+    if topology.plan().expert_parallel != 1 && topology.plan().tensor_parallel != 1 {
+        return Err(error(
+            "EP×TP unsupported; expert dispatch has no TP owner mapping",
+        ));
+    }
+    if topology.plan().expert_parallel != 1 {
+        return Err(error(
+            "common EP topology is metadata-only; configure explicit stage ExpertGroups instead",
+        ));
+    }
+    Ok(())
+}
+
+// Structural validation shared with the explicit CPU-reference factory. The
+// ordinary thread/process/CUDA entry points retain their EP gates above.
+fn validate_pipeline_mesh(
+    topology: &ValidatedParallelTopology,
+    plans: &[LayerSegmentPlan],
+    config: PipelineConfig,
+    thread_tensor: bool,
+) -> Result<()> {
     config.validate()?;
     if topology.plan().data_parallel != 1 {
         return Err(error("pipeline requires DP=1"));
@@ -664,16 +761,6 @@ fn validate_pipeline_layout(
     {
         return Err(error("thread tensor pipeline requires TP1/2/4 and F32"));
     }
-    if topology.plan().expert_parallel != 1 && topology.plan().tensor_parallel != 1 {
-        return Err(error(
-            "EP×TP unsupported; expert dispatch has no TP owner mapping",
-        ));
-    }
-    if topology.plan().expert_parallel != 1 {
-        return Err(error(
-            "common EP topology is metadata-only; configure explicit stage ExpertGroups instead",
-        ));
-    }
     if topology.plan().pipeline_parallel != plans.len() {
         return Err(error("segment count differs from topology PP degree"));
     }
@@ -682,13 +769,32 @@ fn validate_pipeline_layout(
 
 fn owner_failure(
     failure: super::data::OwnerFailure<ferrule_common::Error>,
+    stage: &'static str,
 ) -> ferrule_common::Error {
     use super::data::OwnerFailureKind;
-    let source = match failure.kind {
-        OwnerFailureKind::Initialization(source) | OwnerFailureKind::Shutdown(source) => source,
-        other => error(format!("pipeline owner failure: {other:?}")),
+    use completion_boundary::{CompletionClass, CompletionContext, classify};
+    let (stage, class, source) = match failure.kind {
+        OwnerFailureKind::Initialization(source) => ("startup", classify(&source), Some(source)),
+        OwnerFailureKind::Shutdown(source) => ("shutdown", classify(&source), Some(source)),
+        OwnerFailureKind::Spawn(source) => {
+            ("startup", CompletionClass::Failed, Some(source.into()))
+        }
+        OwnerFailureKind::Panicked => (stage, CompletionClass::Panicked, None),
+        OwnerFailureKind::QuiescenceUnknown => (stage, CompletionClass::Unknown, None),
     };
-    ferrule_common::Error::context(format!("pipeline owner {:?}", failure.rank), source)
+    CompletionContext {
+        rank: PipelineRank {
+            local: failure.rank,
+            global: failure.rank,
+        },
+        stage: if failure.transaction.is_some() {
+            "execute"
+        } else {
+            stage
+        },
+        transaction: failure.transaction,
+    }
+    .failure(class, true, source.map(|e| Box::new(e) as _))
 }
 
 fn pool_build_error(
@@ -700,7 +806,10 @@ fn pool_build_error(
         }
         super::data::BuildError::Owners(failures) => errors(
             "pipeline construction",
-            failures.into_iter().map(owner_failure).collect(),
+            failures
+                .into_iter()
+                .map(|failure| owner_failure(failure, "startup"))
+                .collect(),
         ),
     }
 }
@@ -710,7 +819,11 @@ fn pool_shutdown_error(
 ) -> ferrule_common::Error {
     errors(
         "pipeline shutdown",
-        failure.failures.into_iter().map(owner_failure).collect(),
+        failure
+            .failures
+            .into_iter()
+            .map(|failure| owner_failure(failure, "shutdown"))
+            .collect(),
     )
 }
 
@@ -909,7 +1022,8 @@ pub struct PipelineProgress {
 /// One serial pipeline, independently selecting owner transport and device program.
 /// Generic constructors retain DP=TP=1. `new_standard_cuda_tensor` opts into
 /// sealed concurrent thread PP×TP, with one KV manager and one coordinator.
-/// Process TP and EP×TP are not supported.
+/// Production process TP and generic EP×TP remain unsupported. The opt-in
+/// CPU-reference hybrid constructor admits explicit external expert attachments.
 pub struct PipelineParallelExecutor {
     transport: Rc<RefCell<Box<dyn PipelineTransport>>>,
     coordinator: DistributedTransaction,
@@ -917,6 +1031,7 @@ pub struct PipelineParallelExecutor {
     page_manager: KvPageManager,
     config: PipelineConfig,
     descriptions: Vec<Description>,
+    owner_kv_layers: Vec<usize>,
     tensor_controls: Vec<super::tensor::decoder_collective::DecoderTensorCollectiveControl>,
     sessions: BTreeMap<SessionId, StateSlot>,
     next_transaction: u64,
@@ -924,6 +1039,8 @@ pub struct PipelineParallelExecutor {
     quarantined: bool,
     closed: bool,
     unresolved_retirement: Option<crate::cache::KvRetirement>,
+    #[cfg(feature = "cuda")]
+    last_trace_publication: Option<(SessionId, ExecutionTransactionId)>,
 }
 
 impl PipelineParallelExecutor {
@@ -964,12 +1081,12 @@ impl PipelineParallelExecutor {
             + Clone
             + Send
             + 'static,
-        B: DecoderKvBackend<SequenceState = GenericDecoderSequenceState>
+        B: DecoderKvBackend<SequenceState = P::SequenceState>
             + KvCommitParticipant<
-                SequenceState = GenericDecoderSequenceState,
+                SequenceState = P::SequenceState,
                 Transaction = <B as DecoderKvBackend>::Transaction,
             > + 'static,
-        P: PipelineStageProgram<KvView = B::KvView>,
+        P: PipelineStateProgram<KvView = <B as DecoderKvBackend>::KvView>,
     {
         validate_pipeline(&topology, &plans, config)?;
         let owner_plans = Arc::new(plans.clone());
@@ -983,7 +1100,14 @@ impl PipelineParallelExecutor {
             move |local| {
                 let rank = Self::rank(local.get() as usize);
                 let plan = owner_plans[local.get() as usize].clone();
-                let stage = factory(rank, plan.clone())?;
+                let mut stage = factory(rank, plan.clone())?;
+                if stage.program.hybrid_schema().is_some() {
+                    return Err(ferrule_common::Error::with_cleanup(
+                        "legacy pipeline startup",
+                        error("hybrid requires explicit thread PP2 layout"),
+                        stage.shutdown(),
+                    ));
+                }
                 let boot = PipelineStageBoot {
                     rank,
                     plan,
@@ -1039,10 +1163,10 @@ impl PipelineParallelExecutor {
             move |local| {
                 let boot = &boots[local.get() as usize];
                 let mut worker = factory(boot.clone())?;
-                if worker.boot_description().physical_pages != boot.physical_pages {
+                if worker.boot_description().physical_pages != boot.physical_pages || worker.0.has_hybrid_state() {
                     return Err(ferrule_common::Error::with_cleanup(
                         "pipeline physical boot mismatch",
-                        error("owner physical capacity differs from boot"),
+                        error("owner physical capacity differs from boot or hybrid lacks explicit layout"),
                         worker.shutdown(),
                     ));
                 }
@@ -1069,12 +1193,12 @@ impl PipelineParallelExecutor {
             + Clone
             + Send
             + 'static,
-        B: DecoderKvBackend<SequenceState = GenericDecoderSequenceState>
+        B: DecoderKvBackend<SequenceState = P::SequenceState>
             + KvCommitParticipant<
-                SequenceState = GenericDecoderSequenceState,
+                SequenceState = P::SequenceState,
                 Transaction = <B as DecoderKvBackend>::Transaction,
             > + 'static,
-        P: PipelineStageProgram<KvView = B::KvView>,
+        P: PipelineStateProgram<KvView = <B as DecoderKvBackend>::KvView>,
     {
         validate_pipeline_layout(&topology, &plans, config, true)?;
         if topology.plan().tensor_parallel > 1 {
@@ -1098,12 +1222,12 @@ impl PipelineParallelExecutor {
             + Clone
             + Send
             + 'static,
-        B: DecoderKvBackend<SequenceState = GenericDecoderSequenceState>
+        B: DecoderKvBackend<SequenceState = P::SequenceState>
             + KvCommitParticipant<
-                SequenceState = GenericDecoderSequenceState,
+                SequenceState = P::SequenceState,
                 Transaction = <B as DecoderKvBackend>::Transaction,
             > + 'static,
-        P: PipelineStageProgram<KvView = B::KvView>,
+        P: PipelineStateProgram<KvView = <B as DecoderKvBackend>::KvView>,
     {
         validate_pipeline_layout(&topology, &plans, config, true)?;
         let owner_topology = topology.clone();
@@ -1121,7 +1245,14 @@ impl PipelineParallelExecutor {
                     .map_err(|e| error(format!("tensor owner coordinate: {e:?}")))?;
                 let rank = Self::rank(local.get() as usize);
                 let plan = owner_plans[coordinate.stage() as usize].clone();
-                let stage = factory(rank, coordinate, plan.clone())?;
+                let mut stage = factory(rank, coordinate, plan.clone())?;
+                if stage.program.hybrid_schema().is_some() {
+                    return Err(ferrule_common::Error::with_cleanup(
+                        "tensor pipeline startup",
+                        error("hybrid tensor pipeline unsupported"),
+                        stage.shutdown(),
+                    ));
+                }
                 let boot = PipelineStageBoot {
                     rank,
                     plan,
@@ -1140,6 +1271,7 @@ impl PipelineParallelExecutor {
             ThreadTransport::new(pool),
             true,
             ExpertSourceScope::Member,
+            None,
         )
     }
 
@@ -1161,6 +1293,7 @@ impl PipelineParallelExecutor {
             transport,
             false,
             ExpertSourceScope::Member,
+            None,
         )
     }
 
@@ -1179,6 +1312,7 @@ impl PipelineParallelExecutor {
             transport,
             false,
             ExpertSourceScope::ExternalStage,
+            None,
         )
     }
 
@@ -1189,9 +1323,14 @@ impl PipelineParallelExecutor {
         mut transport: T,
         thread_tensor: bool,
         source_scope: ExpertSourceScope,
+        hybrid_layout: Option<HybridPipelineLayout>,
     ) -> Result<Self> {
         let startup = (|| {
-            validate_pipeline_layout(&topology, &plans, config, thread_tensor)?;
+            if let Some(layout) = &hybrid_layout {
+                layout.validate(&topology, &plans, config)?;
+            } else {
+                validate_pipeline_layout(&topology, &plans, config, thread_tensor)?;
+            }
             let degree = topology.world_size() as usize;
             let tp = topology.plan().tensor_parallel;
             let mut descriptions: Vec<Description> = Vec::with_capacity(degree);
@@ -1249,7 +1388,9 @@ impl PipelineParallelExecutor {
             }
             let first = &descriptions[0];
             let schema = StandardGqaPlanes::new(
-                plans[0].total_layers(),
+                hybrid_layout
+                    .as_ref()
+                    .map_or(plans[0].total_layers(), HybridPipelineLayout::kv_layers),
                 first
                     .kv_heads
                     .checked_mul(tp)
@@ -1271,8 +1412,37 @@ impl PipelineParallelExecutor {
                 ));
             }
         };
+        let owner_kv_layers = descriptions
+            .iter()
+            .enumerate()
+            .map(|(i, d)| {
+                hybrid_layout
+                    .as_ref()
+                    .map_or(d.plan.layer_count(), |layout| layout.stage_kv_layers(i))
+            })
+            .collect();
+        Ok(Self::from_validated_transport(
+            topology,
+            config,
+            transport,
+            descriptions,
+            scopes,
+            Box::new(schema),
+            owner_kv_layers,
+        ))
+    }
+
+    fn from_validated_transport<T: PipelineTransport + 'static>(
+        topology: ValidatedParallelTopology,
+        config: PipelineConfig,
+        transport: T,
+        descriptions: Vec<Description>,
+        scopes: ParallelExecutionScopes,
+        schema: Box<dyn ferrule_common::execution::KvLayoutSchema>,
+        owner_kv_layers: Vec<usize>,
+    ) -> Self {
         let degree = topology.world_size() as usize;
-        Ok(Self {
+        Self {
             transport: Rc::new(RefCell::new(Box::new(transport))),
             coordinator: DistributedTransaction::new_with_limits(
                 topology,
@@ -1283,8 +1453,9 @@ impl PipelineParallelExecutor {
                 },
             ),
             scopes,
-            page_manager: KvPageManager::new(Box::new(schema), config.max_pages),
+            page_manager: KvPageManager::new(schema, config.max_pages),
             config,
+            owner_kv_layers,
             descriptions,
             tensor_controls: Vec::new(),
             sessions: BTreeMap::new(),
@@ -1292,7 +1463,9 @@ impl PipelineParallelExecutor {
             quarantined: false,
             closed: false,
             unresolved_retirement: None,
-        })
+            #[cfg(feature = "cuda")]
+            last_trace_publication: None,
+        }
     }
 
     fn rank(index: usize) -> PipelineRank {
@@ -1317,10 +1490,25 @@ impl PipelineParallelExecutor {
     // A poisoned collective forbids new work, but is not evidence of unknown
     // device custody. Proven rollback still permits session cleanup and shutdown.
     fn custody_available(&self) -> Result<()> {
-        if self.closed || self.quarantined {
-            return Err(error("pipeline closed or quarantined; custody retained"));
+        if self.quarantined {
+            return Err(completion_boundary::quarantined());
+        }
+        if self.closed {
+            return Err(error("pipeline closed; custody retained"));
         }
         Ok(())
+    }
+    /// Actual compact owner-local KV bytes, including physical shadow slots.
+    pub fn physical_kv_bytes(&self) -> Result<u64> {
+        self.descriptions
+            .iter()
+            .enumerate()
+            .try_fold(0u64, |sum, (index, stage)| {
+                let layers = self.owner_kv_layers[index];
+                let bytes = stage.physical_bytes_for_layers(layers)?;
+                sum.checked_add(bytes)
+                    .ok_or_else(|| error("pipeline physical byte total overflow"))
+            })
     }
     pub fn config(&self) -> PipelineConfig {
         self.config
@@ -1341,9 +1529,9 @@ impl PipelineParallelExecutor {
     pub fn page_manager(&self) -> &KvPageManager {
         &self.page_manager
     }
-    /// Unknown custody or a permanently failed TP lifetime blocks new work.
-    /// Successful rollback/shutdown does not reset collective failure; there is
-    /// no implicit epoch replacement or replay.
+    /// Unknown custody, unresolved singleton step or failed TP lifetime blocks
+    /// new work. Only complete journal rollback closes singleton admission;
+    /// multi-TP communication failure never gets an implicit epoch replacement.
     pub fn is_quarantined(&self) -> bool {
         self.quarantined
             || self
@@ -1498,8 +1686,17 @@ impl PipelineParallelExecutor {
         for session in sessions {
             self.release_session(session)?;
         }
-        self.closed = true;
-        self.transport.borrow_mut().shutdown()
+        let result = self.transport.borrow_mut().shutdown();
+        if result
+            .as_ref()
+            .err()
+            .is_some_and(|source| completion_boundary::is_unknown(source))
+        {
+            self.quarantined = true;
+        } else {
+            self.closed = true;
+        }
+        result
     }
 }
 
@@ -1536,7 +1733,7 @@ impl PipelineParallelExecutor {
         // Even an unexpected cleanup error must not drop/consume logical custody.
         let mut logical = logical.map(std::mem::ManuallyDrop::new);
         coordinator(self.coordinator.abort_decision(id))?;
-        let mut failure = None;
+        let mut failures = Vec::new();
         for key in keys {
             let result = poll_end(self.config.max_ack_polls, || {
                 ack(self.command(key.rank, Command::Rollback(key.clone()))?)
@@ -1548,13 +1745,13 @@ impl PipelineParallelExecutor {
                     FinalizeOutcome::Success,
                 ))?,
                 Err(source) => {
-                    failure.get_or_insert(source);
+                    failures.push(source);
                 }
             }
         }
 
-        if let Some(source) = failure {
-            return Err(source);
+        if !failures.is_empty() {
+            return Err(errors("pipeline rollback", failures));
         }
 
         if let Some(logical) = logical.take().map(std::mem::ManuallyDrop::into_inner) {
@@ -1579,6 +1776,12 @@ impl PipelineParallelExecutor {
         }
         coordinator(self.coordinator.cancel(id))?;
         coordinator(self.coordinator.retire(id))?;
+        // Only the complete journal rollback + logical retirement proof may
+        // release a failed singleton step. This never resets multi-TP lifetime
+        // failure, and is unreachable for Unknown or pending rollback ACKs.
+        for control in &self.tensor_controls {
+            control.complete_singleton_rollback(id)?;
+        }
         self.quarantined = false;
         Ok(())
     }
@@ -1590,6 +1793,18 @@ impl PipelineParallelExecutor {
         logical: Option<LogicalRollback>,
         source: ferrule_common::Error,
     ) -> ferrule_common::Error {
+        if completion_boundary::is_unknown(&source) {
+            // No rollback ACK may downgrade Unknown or release its reservation.
+            std::mem::forget(logical);
+            self.quarantined = true;
+            // The logical Abort decision is not an owner ACK. Keep the existing
+            // coordinator state while retaining all physical/logical custody.
+            return ferrule_common::Error::with_cleanup(
+                "pipeline abort decision",
+                source,
+                coordinator(self.coordinator.abort_decision(id)).map(|_| ()),
+            );
+        }
         match self.abort_before_ready(id, keys, logical) {
             Ok(()) => source,
             Err(cleanup) => ferrule_common::Error::with_cleanup(
@@ -1821,6 +2036,7 @@ impl PipelineParallelExecutor {
                         tensor_scope::TensorBatchIdentity::from_logical(
                             &binding,
                             stage_identity.expect("prepared stage identity"),
+                            batch.sequences().len(),
                         ),
                         Arc::clone(&cancelled),
                     )?;
@@ -2028,10 +2244,98 @@ impl PipelineParallelExecutor {
         self.confirm_retirement(retirement)?;
         coordinator(self.coordinator.retire(id))?;
         self.quarantined = false;
+        #[cfg(feature = "cuda")]
+        {
+            self.last_trace_publication = Some((session, id));
+        }
         Ok(PipelineOutput {
             transaction: id,
             logits,
         })
+    }
+
+    /// Post-publication diagnostic only. Retains the logical source pin until every
+    /// owner proves native readback completion; Unknown pins remain registered.
+    #[cfg(feature = "cuda")]
+    #[doc(hidden)]
+    pub fn export_committed_trace(
+        &mut self,
+        session: SessionId,
+        transaction: ExecutionTransactionId,
+    ) -> Result<()> {
+        self.available()?;
+        if self.last_trace_publication != Some((session, transaction)) || self.outstanding() != 0 {
+            return Err(error(
+                "trace requires latest actual publication and drained transport",
+            ));
+        }
+        let slot = self
+            .session_slot(session)
+            .ok_or_else(|| error("trace session absent"))?;
+        let generation = self.page_manager.sequence_generation(slot).map_err(error)?;
+        let tokens = self
+            .page_manager
+            .block_table(slot)
+            .ok_or_else(|| error("trace block table absent"))?
+            .committed_tokens();
+        let source = self
+            .page_manager
+            .committed_kv_source(slot, generation, 0..tokens)
+            .map_err(error)?;
+        let binding = KvCommitBinding::new(
+            transaction,
+            self.coordinator.topology().topology_id(),
+            self.scopes.kv_participants().as_participants().clone(),
+            transaction.get(),
+        )?;
+        let lease = self
+            .page_manager
+            .acquire_committed_read(&source)
+            .map_err(error)?;
+        let result: Result<()> = (|| {
+            for index in 0..self.descriptions.len() {
+                self.page_manager
+                    .validate_committed_read(&lease)
+                    .map_err(error)?;
+                let rank = Self::rank(index);
+                complete(self.command(
+                    rank,
+                    Command::TraceCommitted(transport::CommittedTraceRequest {
+                        key: WireKey {
+                            binding: binding.clone(),
+                            rank,
+                            session,
+                        },
+                        source: source.clone(),
+                    }),
+                )?)?;
+                self.page_manager
+                    .validate_committed_read(&lease)
+                    .map_err(error)?;
+            }
+            Ok(())
+        })();
+        if result
+            .as_ref()
+            .err()
+            .is_some_and(|e| completion_boundary::is_unknown(e))
+        {
+            self.quarantined = true;
+            // Lease Drop deliberately does not unpin; custody is still unresolved.
+            return result;
+        }
+        let release = self
+            .page_manager
+            .release_committed_read(&lease)
+            .map_err(error);
+        match result {
+            Ok(()) => release,
+            Err(primary) => Err(ferrule_common::Error::with_cleanup(
+                "committed trace read",
+                primary,
+                release,
+            )),
+        }
     }
 
     fn finish_receipts(&self, keys: &[WireKey], receipts: &[Rc<Receipts>]) -> Result<()> {
@@ -2053,6 +2357,9 @@ fn poll_end(limit: usize, mut poll: impl FnMut() -> Result<KvEndProgress>) -> Re
             }
             Ok(KvEndProgress::Pending) => {}
             Err(source) => {
+                if completion_boundary::is_unknown(&source) {
+                    return Err(source);
+                }
                 last_error = Some(source);
             }
         }
@@ -2072,6 +2379,10 @@ impl Drop for PipelineParallelExecutor {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/parallel/completion.rs"]
+mod completion_tests;
 
 fn identical_output(left: &SegmentOutput, right: &SegmentOutput) -> bool {
     let equal = |left: &[f32], right: &[f32]| {

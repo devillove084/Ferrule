@@ -1,5 +1,10 @@
 //! Private POD contracts and symbols for the core CUDA provider.
 
+#[path = "recurrent_bf16.rs"]
+pub(crate) mod recurrent_bf16;
+#[path = "recurrent_bf16_chunk.rs"]
+pub(crate) mod recurrent_bf16_chunk;
+
 pub(crate) const DSV4_DECODE_INDEX_QUERY_SHARED_ELEMENTS: usize = 8192;
 
 pub(crate) const LINEAR_F32: u32 = 1;
@@ -46,6 +51,7 @@ pub(crate) const NORM_OFFSET_AFFINE_F32: u32 = 6;
 pub(crate) const DATA_QUERY_GATE_SPLIT: u32 = 13;
 pub(crate) const DATA_SIGMOID_GATE: u32 = 14;
 pub(crate) const DATA_SILU_GATE: u32 = 15;
+pub(crate) const DATA_SIGMOID_GATE_BF16: u32 = 16;
 /// DataArgs.flags for sigmoid/SiLU gates; gate index = output index / width.
 pub(crate) const DATA_GATE_ROW_BROADCAST: u32 = 1;
 
@@ -59,6 +65,7 @@ pub(crate) const ROUTER_HASH: u32 = 2;
 pub(crate) const VOCAB_TOPK_F32: u32 = 3;
 pub(crate) const VOCAB_TOPK_I32: u32 = 4;
 pub(crate) const ROUTER_SELECTED_SOFTMAX_TOPK: u32 = 5;
+pub(crate) const ROUTER_FULL_SOFTMAX_TOPK: u32 = 6;
 
 pub(crate) const COMPRESSOR_PREFILL: u32 = 1;
 pub(crate) const COMPRESSOR_RESET: u32 = 2;
@@ -92,6 +99,7 @@ pub(crate) const MOE_WEIGHTED_SCATTER_ADD_BF16_ROWS: u32 = 10;
 pub(crate) const MOE_SWIGLU_STANDARD_F32: u32 = 11;
 pub(crate) const MOE_WEIGHTED_COMBINE_F32: u32 = 12;
 pub(crate) const MOE_SWIGLU_CLAMPED_F32: u32 = 13;
+pub(crate) const MOE_WEIGHTED_COMBINE_BF16: u32 = 14;
 
 pub(crate) const HC_PRE: u32 = 1;
 pub(crate) const HC_POST: u32 = 2;
@@ -301,6 +309,7 @@ pub(crate) struct RouterArgs {
     pub(crate) hash_table: u64,
     pub(crate) indices: u64,
     pub(crate) weights: u64,
+    pub(crate) probabilities: u64,
     pub(crate) stream: u64,
 }
 
@@ -622,7 +631,27 @@ pub(crate) struct DeltaArgs {
     pub(crate) stream: u64,
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub(crate) struct StreamingGqaArgs {
+    pub(crate) rows: u32,
+    pub(crate) q_heads: u32,
+    pub(crate) kv_heads: u32,
+    pub(crate) head_dim: u32,
+    pub(crate) tokens: u32,
+    pub(crate) softmax_scale: f32,
+    pub(crate) query: u64,
+    pub(crate) key: u64,
+    pub(crate) value: u64,
+    pub(crate) partial: u64,
+    pub(crate) query_start: u64,
+    pub(crate) kv_start: u64,
+    pub(crate) window: u64,
+    pub(crate) stream: u64,
+}
+
 unsafe extern "C" {
+    pub(crate) fn ferrule_core_streaming_gqa_launch(args: *const StreamingGqaArgs) -> i32;
     pub(crate) fn ferrule_core_conv_launch(args: *const ConvArgs) -> i32;
     pub(crate) fn ferrule_core_delta_launch(args: *const DeltaArgs) -> i32;
     pub(crate) fn ferrule_core_linear_launch(args: *const LinearArgs) -> i32;
@@ -665,4 +694,33 @@ mod recurrent_abi_tests {
         assert_eq!(std::mem::offset_of!(DeltaArgs, qkv), 24);
         assert_eq!(std::mem::offset_of!(DeltaArgs, stream), 80);
     }
+}
+
+#[cfg(test)]
+#[path = "../../../tests/unit/cuda/streaming_gqa_abi.rs"]
+mod streaming_gqa_abi_tests;
+
+/// Explicit standard eager BF16 tensor boundary ABI; reductions remain F32.
+#[repr(C)]
+#[derive(Default)]
+pub(crate) struct Bf16BoundaryArgs {
+    pub(crate) kind: u32,
+    pub(crate) rows: u32,
+    pub(crate) width: u32,
+    pub(crate) heads: u32,
+    pub(crate) rope_dim: u32,
+    pub(crate) table_positions: u32,
+    pub(crate) epsilon: f32,
+    pub(crate) reserved: u32,
+    pub(crate) input: u64,
+    pub(crate) other: u64,
+    pub(crate) cosine: u64,
+    pub(crate) sine: u64,
+    pub(crate) positions: u64,
+    pub(crate) output: u64,
+    pub(crate) stream: u64,
+}
+const _: () = assert!(std::mem::size_of::<Bf16BoundaryArgs>() == 88);
+unsafe extern "C" {
+    pub(crate) fn ferrule_core_bf16_boundary(args: *const Bf16BoundaryArgs) -> i32;
 }

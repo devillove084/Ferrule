@@ -1,0 +1,102 @@
+{
+  "stage": "actual-smoke promotion and fixed formal CPU admission",
+  "completed_utc": "2026-10-11T12:18:09.126889+00:00",
+  "smoke": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/pair-swiglu-fused-smoke-20261011-02/serving-smoke.json",
+    "sha256": "b53be5e8c5cd05062968f1cd7464b1d930baf2cfd54ef5239cac0bb41191cf24",
+    "status": "pass"
+  },
+  "admission": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/admission/pair-swiglu-fused-release-20261011-01/paired-admission.json",
+    "sha256": "cb07d718af800671b6bfec5bfa7e697993b3e591e5467afc2d57a01444f4872d"
+  },
+  "prepared": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/pair-swiglu-fused-info-after-20261011-01/prepared.json",
+    "sha256": "63432b9bdf1299112838df3decf8fff6d1a53fd1597f8479d2fb36ae3e1a0c21"
+  },
+  "slots": [
+    "F1"
+  ],
+  "phases": [
+    "hello2",
+    "canary8",
+    "qa8"
+  ],
+  "formal_environment": {
+    "HOME": "/root",
+    "PATH": "/home/admin/wxw403883/anaconda3/envs/tao/bin:/root/.cargo/bin:/usr/bin:/bin",
+    "PYTHONDONTWRITEBYTECODE": "1",
+    "CUDA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+    "NVIDIA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+    "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
+    "HF_HUB_OFFLINE": "1",
+    "TRANSFORMERS_OFFLINE": "1",
+    "CUDA_HOME": "/home/admin/wxw403883/anaconda3/envs/tao",
+    "NVCC": "/home/admin/wxw403883/anaconda3/envs/tao/bin/nvcc",
+    "LD_LIBRARY_PATH": "/home/admin/wxw403883/anaconda3/envs/tao/lib:/usr/lib64",
+    "CUBLAS_WORKSPACE_CONFIG": ":0:0",
+    "FERRULE_LOG": "info",
+    "FERRULE_LOG_FORMAT": "json"
+  },
+  "formal_argv": [
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/admission/pair-swiglu-fused-release-20261011-01/staged/ferrule",
+    "serve",
+    "/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8",
+    "--backend",
+    "cuda",
+    "--engine",
+    "pipeline",
+    "--model-profile",
+    "qwen35-mixed-bf16",
+    "--tensor-parallel",
+    "2",
+    "--pipeline-parallel",
+    "1",
+    "--expert-parallel",
+    "1",
+    "--rank-backend",
+    "thread",
+    "--devices",
+    "0,1",
+    "--rank-restarts",
+    "0",
+    "--kv-execution-policy",
+    "resident",
+    "--ctx-size",
+    "128",
+    "--max-active-sequences",
+    "2",
+    "--max-batch-tokens",
+    "8",
+    "--prefill-chunk-size",
+    "8",
+    "--cuda-device-budget-mb",
+    "22528",
+    "--kv-cache-mb",
+    "16",
+    "--max-tensor-mb",
+    "2048",
+    "--cuda-workspace-mb",
+    "4096",
+    "--host",
+    "127.0.0.1",
+    "--port",
+    "18367",
+    "--served-model-name",
+    "qwen35-ferrule-tp2-resident-paper"
+  ],
+  "fixed_binary_sha256": "f6a65e1b6f09c0a8385fcfb0ee0b1cab5f02d2b09a341a6cd4d9e7aa81ed06f4",
+  "handoff": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/pair-swiglu-fused-release-20261011-01/handoff.json",
+    "sha256": "e482fab64d721d928c26bf3a0fde5634ec5d3d6234e9530fbb8a87cffdac50b8"
+  },
+  "ready": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/pair-swiglu-fused-validation-20261011-01/ready-release-builder.json",
+    "sha256": "fe77dcb66142f370d4de7445265c4cb8db50d52e863eb88eedb8d80bf6014c43"
+  },
+  "rankperf": false,
+  "official_profile": false,
+  "auxiliary_kernel_count": null,
+  "performance_excludes_smoke": true,
+  "comparison": "BEFORE 7e1 5.66\u20135.82 and V 10.5 are historical descriptive only; no pure causal or statistics claim"
+}

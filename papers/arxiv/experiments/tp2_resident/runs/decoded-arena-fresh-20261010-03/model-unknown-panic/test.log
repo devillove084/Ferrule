@@ -1,0 +1,10 @@
+
+running 1 test
+test transformer::standard::cuda::hybrid_rank::mixed::decoded_gpu_tests::decoded_pair_unknown_and_panic_retain_physical_backing ... 
+thread 'transformer::standard::cuda::hybrid_rank::mixed::decoded_gpu_tests::decoded_pair_unknown_and_panic_retain_physical_backing' (54784) panicked at crates/ferrule-model/src/transformer/standard/cuda/hybrid_rank/../../../../../tests/unit/transformer/mixed_decoded_gpu.rs:13:14:
+injected decoded submission unwind
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 750 filtered out; finished in 0.87s
+

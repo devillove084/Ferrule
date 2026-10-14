@@ -1,0 +1,246 @@
+{
+  "artifacts": {
+    "papers/arxiv/experiments/storage_demand/analysis/output/PLOTS.md": "f310e64b0667ba778adf06714d1b1cfea37c2964aeced924d759fffa462a5879",
+    "papers/arxiv/experiments/storage_demand/analysis/output/plot-data.json": "046214edc8d9e4af3d566a211e6d4499b9a6fcbe5234bd6b837ac6d9aaf5043e",
+    "papers/arxiv/figures/storage-demand-cache-reconciliation.pdf": "64b64eb08373a7737eb4b48b1eb1f56ff6b59efc35af450c575e501d3ae4a9c4",
+    "papers/arxiv/figures/storage-demand-cache-reconciliation.png": "241f51b165c1e99e680be1c440b4b6b2871f7a47c7f382d69d28d03ff1e5137b",
+    "papers/arxiv/figures/storage-demand-invocation-timeline.pdf": "c5911f681e57b6f9d9924d6241b39cc8c7e3385bb15306b7d74c477c2bae8de1",
+    "papers/arxiv/figures/storage-demand-invocation-timeline.png": "d1d670e759f1424c6900c6891750ea96e6b85b826f694667d49458d7a5a91e03",
+    "papers/arxiv/figures/storage-demand-logical-transfer.pdf": "0228d86bba4d6220478799ddf159fd1f1d7f2782a7149caae6f6d0c0c4acc343",
+    "papers/arxiv/figures/storage-demand-logical-transfer.png": "037acad8612d37ee62c49d31b296e4e130854231ae38d778dd823f018f03fd07",
+    "papers/arxiv/figures/storage-demand-preview.png": "e0e52792163bf757693be80c2f8688bbfab7ace94797f7a072bbd7b6ed8981f1",
+    "papers/arxiv/figures/storage-demand-timing.pdf": "919d0175b40afb69d0cd99887386e11f68e630506fc3fe4dae686f43a9c9279c",
+    "papers/arxiv/figures/storage-demand-timing.png": "9647415f222ea72c3744ad649156775e8496eeda83d81762842de652f90a9a80"
+  },
+  "policy": "No current timestamp; --check recomputes bytes with the recorded rendering toolchain",
+  "provenance": {
+    "generator_path": "papers/arxiv/experiments/storage_demand/analysis/plot_storage_demand.py",
+    "generator_sha256": "5fa7dd7298234b82990a37242e471e2e5ad8361109f95fd79087e1c77e47a38f",
+    "inputs": [
+      {
+        "bound_sha256": "3c2bd642756c89eefb40a77c82d66cda42ca4d6a3584092b8d2f1620932ab368",
+        "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-01/baseline.json",
+        "sha256": "3c2bd642756c89eefb40a77c82d66cda42ca4d6a3584092b8d2f1620932ab368"
+      },
+      {
+        "bound_sha256": "8b41a2470fbdb6fb78d605913335e169afeb2e41a2de7d3524b904db800be070",
+        "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-01/case.json",
+        "sha256": "8b41a2470fbdb6fb78d605913335e169afeb2e41a2de7d3524b904db800be070"
+      },
+      {
+        "bound_sha256": "202ac899d510a49166be65da3fe728e181b9e52b277dd9577b04a49dc9d56fa7",
+        "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-01/custody.json",
+        "sha256": "202ac899d510a49166be65da3fe728e181b9e52b277dd9577b04a49dc9d56fa7"
+      },
+      {
+        "bound_sha256": "d108cb5ae0a42634371b39a5b9304d6d3d44ebe1de112ad2672950749977dda3",
+        "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-01/post-idle.json",
+        "sha256": "d108cb5ae0a42634371b39a5b9304d6d3d44ebe1de112ad2672950749977dda3"
+      },
+      {
+        "bound_sha256": "be3c8bf2d7d04ef44723b7c52b2c8a9a6131dffe8e58abceb3e3b382b4fc25b5",
+        "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-01/prelaunch.json",
+        "sha256": "be3c8bf2d7d04ef44723b7c52b2c8a9a6131dffe8e58abceb3e3b382b4fc25b5"
+      },
+      {
+        "bound_sha256": "762adbe3baab7883c3f488adca86e57a53919f7c8bdfc109f92fb82baf02c288",
+        "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-01/registration.json",
+        "sha256": "762adbe3baab7883c3f488adca86e57a53919f7c8bdfc109f92fb82baf02c288"
+      },
+      {
+        "bound_sha256": "581f2d5eaa83a209aec950ad7bb308100721e279d550acdd845a0b1bacbf10f1",
+        "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-01/report.json",
+        "sha256": "581f2d5eaa83a209aec950ad7bb308100721e279d550acdd845a0b1bacbf10f1"
+      },
+      {
+        "bound_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-01/server.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "bound_sha256": "1c896f22e38fa324325d681396693584f3a62f8adb2ef168d8d69f78848e0527",
+        "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-01/supervisor.json",
+        "sha256": "1c896f22e38fa324325d681396693584f3a62f8adb2ef168d8d69f78848e0527"
+      },
+      {
+        "bound_sha256": "3c2bd642756c89eefb40a77c82d66cda42ca4d6a3584092b8d2f1620932ab368",
+        "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/baseline.json",
+        "sha256": "3c2bd642756c89eefb40a77c82d66cda42ca4d6a3584092b8d2f1620932ab368"
+      },
+      {
+        "bound_sha256": "891d6effb322b99c08d94ef741c2befe236446c4719f8eb2b108d2bdb2ff0d5f",
+        "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/canary-arithmetic/generated-controls.json",
+        "sha256": "891d6effb322b99c08d94ef741c2befe236446c4719f8eb2b108d2bdb2ff0d5f"
+      },
+      {
+        "bound_sha256": "e699a0dec9ed5ea79dc1088a8e1dc775b978b01cdc174b0e5fa489057f9dd715",
+        "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/canary-arithmetic/http.json",
+        "sha256": "e699a0dec9ed5ea79dc1088a8e1dc775b978b01cdc174b0e5fa489057f9dd715"
+      },
+      {
+        "bound_sha256": "2ac02f64ed1352d365c65abacc27337a390f26f42225998b1d6e773d758261c7",
+        "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/canary-arithmetic/invocations.json",
+        "sha256": "2ac02f64ed1352d365c65abacc27337a390f26f42225998b1d6e773d758261c7"
+      },
+      {
+        "bound_sha256": "c04340df3ca24db4f5a914c712a8cd645314b2815c5c6847c6e8d5cf25886c7a",
+        "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/canary-arithmetic/observed.json",
+        "sha256": "c04340df3ca24db4f5a914c712a8cd645314b2815c5c6847c6e8d5cf25886c7a"
+      },
+      {
+        "bound_sha256": "0e775b44fa912e1b69760570d81d8c8b9e8b11e817ce43adef00a292b7258f46",
+        "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/canary-arithmetic/prompts.json",
+        "sha256": "0e775b44fa912e1b69760570d81d8c8b9e8b11e817ce43adef00a292b7258f46"
+      },
+      {
+        "bound_sha256": "a617afe01b34d6dd5271e75e2685c7e6b135b58eebcda92dd947c225a7b234d6",
+        "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/canary-chinese/generated-controls.json",
+        "sha256": "a617afe01b34d6dd5271e75e2685c7e6b135b58eebcda92dd947c225a7b234d6"
+      },
+      {
+        "bound_sha256": "125093da155f71d1bc79dcbfd0d810cf2d65f778c6ab1fbc93d822c15d2406ba",
+        "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/canary-chinese/http.json",
+        "sha256": "125093da155f71d1bc79dcbfd0d810cf2d65f778c6ab1fbc93d822c15d2406ba"
+      },
+      {
+        "bound_sha256": "8403e162fe56f79cd4a1150c71daffa1ffcd8f9f679d92924dc7f593bf014a80",
+        "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/canary-chinese/invocations.json",
+        "sha256": "8403e162fe56f79cd4a1150c71daffa1ffcd8f9f679d92924dc7f593bf014a80"
+      },
+      {
+        "bound_sha256": "608774e1779777b3c32cb2b551da1bf910939a0682737d6c694f281f6930059f",
+        "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/canary-chinese/observed.json",
+        "sha256": "608774e1779777b3c32cb2b551da1bf910939a0682737d6c694f281f6930059f"
+      },
+      {
+        "bound_sha256": "c1f3d605dbe86516c9c6148be86fcc0bf3f4d9e1086c6593797a7925836e84d3",
+        "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/canary-chinese/prompts.json",
+        "sha256": "c1f3d605dbe86516c9c6148be86fcc0bf3f4d9e1086c6593797a7925836e84d3"
+      },
+      {
+        "bound_sha256": "f86cd633caf68a58b0a27c249e2f3927b069f6036e9436c11631410b1af933a2",
+        "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/canary-qa/generated-controls.json",
+        "sha256": "f86cd633caf68a58b0a27c249e2f3927b069f6036e9436c11631410b1af933a2"
+      },
+      {
+        "bound_sha256": "aa931fa589629d85c852a9e111c993573994fd75199de66418571c864f72589f",
+        "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/canary-qa/http.json",
+        "sha256": "aa931fa589629d85c852a9e111c993573994fd75199de66418571c864f72589f"
+      },
+      {
+        "bound_sha256": "49afde43e4709d9ebafac95d84acf01361c95abb49608a5dbb5cfb0e289668f3",
+        "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/canary-qa/invocations.json",
+        "sha256": "49afde43e4709d9ebafac95d84acf01361c95abb49608a5dbb5cfb0e289668f3"
+      },
+      {
+        "bound_sha256": "688e055fac0f5a10167d6768abf199b902f5f4d8288a77a9ddcda343e4bda1a7",
+        "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/canary-qa/observed.json",
+        "sha256": "688e055fac0f5a10167d6768abf199b902f5f4d8288a77a9ddcda343e4bda1a7"
+      },
+      {
+        "bound_sha256": "b53ff4cfeede55331bae244c61f823c2162018cdb6dc534904788528d3b1645f",
+        "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/canary-qa/prompts.json",
+        "sha256": "b53ff4cfeede55331bae244c61f823c2162018cdb6dc534904788528d3b1645f"
+      },
+      {
+        "bound_sha256": "cec50b599498dede2998aad4f73c1c2f1bb300ab812574f66c10bf1071a7fcb2",
+        "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/case.json",
+        "sha256": "cec50b599498dede2998aad4f73c1c2f1bb300ab812574f66c10bf1071a7fcb2"
+      },
+      {
+        "bound_sha256": "92be2863ac83410287b7ae6c3f2ce42ee4674370c16c237cfe0836346dbc210f",
+        "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/custody.json",
+        "sha256": "92be2863ac83410287b7ae6c3f2ce42ee4674370c16c237cfe0836346dbc210f"
+      },
+      {
+        "bound_sha256": "2cd95112669d9e91f8f2f6535ce4ae2a52438df3125d8e464f8785d87f422399",
+        "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/hello2/generated-controls.json",
+        "sha256": "2cd95112669d9e91f8f2f6535ce4ae2a52438df3125d8e464f8785d87f422399"
+      },
+      {
+        "bound_sha256": "1a11f397db51772a432593b0e26d39d96eb203a4fa09e67a36e0879b9c1c088e",
+        "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/hello2/http.json",
+        "sha256": "1a11f397db51772a432593b0e26d39d96eb203a4fa09e67a36e0879b9c1c088e"
+      },
+      {
+        "bound_sha256": "274023d5df3dc3c64de630fd78551216b24952b534462a7bacf6f0c94ce24cd8",
+        "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/hello2/invocations.json",
+        "sha256": "274023d5df3dc3c64de630fd78551216b24952b534462a7bacf6f0c94ce24cd8"
+      },
+      {
+        "bound_sha256": "f397dceea6e079480bc62bad92b269564ae88701a6b2c61928af2889f4c5d02c",
+        "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/hello2/observed.json",
+        "sha256": "f397dceea6e079480bc62bad92b269564ae88701a6b2c61928af2889f4c5d02c"
+      },
+      {
+        "bound_sha256": "2c85f070c770acdde693be8a4529a3734f5bce2f2ff470acec5a1748b47e7bac",
+        "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/hello2/prompts.json",
+        "sha256": "2c85f070c770acdde693be8a4529a3734f5bce2f2ff470acec5a1748b47e7bac"
+      },
+      {
+        "bound_sha256": "7b99b56382d7ca6582bb9a085109e2f0d6f9bdf6a6307fec38d28b6707749748",
+        "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/post-idle.json",
+        "sha256": "7b99b56382d7ca6582bb9a085109e2f0d6f9bdf6a6307fec38d28b6707749748"
+      },
+      {
+        "bound_sha256": "7c3c46d1a93cb0376297edfdf23911c4525d8500453d28789a604195de475178",
+        "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/prelaunch.json",
+        "sha256": "7c3c46d1a93cb0376297edfdf23911c4525d8500453d28789a604195de475178"
+      },
+      {
+        "bound_sha256": "433205d954ec415e46a2f552384ac9a340bc6225fe78c88d97480cec36003503",
+        "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/profile-server.json",
+        "sha256": "433205d954ec415e46a2f552384ac9a340bc6225fe78c88d97480cec36003503"
+      },
+      {
+        "bound_sha256": "677402df817b284c5924a3ed308a7a1505f7eacef5880dc3bd59df3cd419de08",
+        "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/ready.json",
+        "sha256": "677402df817b284c5924a3ed308a7a1505f7eacef5880dc3bd59df3cd419de08"
+      },
+      {
+        "bound_sha256": "22a574f13d24e7148e365c4c96bdc2913eb63a6e7bd9206f9120b25070e1d8b0",
+        "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/registration.json",
+        "sha256": "22a574f13d24e7148e365c4c96bdc2913eb63a6e7bd9206f9120b25070e1d8b0"
+      },
+      {
+        "bound_sha256": "509448c31afa76ed7c955aeee7a34b618e797c7639fbba2043f193b42ca57297",
+        "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/report.json",
+        "sha256": "509448c31afa76ed7c955aeee7a34b618e797c7639fbba2043f193b42ca57297"
+      },
+      {
+        "bound_sha256": "5a9d6e8335e0661a7194f5cfc02405d5d2244094b263ca403fa21f468a8e1cc8",
+        "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/samples.jsonl",
+        "sha256": "5a9d6e8335e0661a7194f5cfc02405d5d2244094b263ca403fa21f468a8e1cc8"
+      },
+      {
+        "bound_sha256": "2ff930f024ae14b847a4982a3790fedda70a2e49b4550bb32ecabd0d74a7fe9f",
+        "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/server.log",
+        "sha256": "2ff930f024ae14b847a4982a3790fedda70a2e49b4550bb32ecabd0d74a7fe9f"
+      },
+      {
+        "bound_sha256": "b73b1553b05aac91d3c5ec9c37bdcc0e69d39be6dc72dcd3bbfe1df4dbc813c5",
+        "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/supervisor.json",
+        "sha256": "b73b1553b05aac91d3c5ec9c37bdcc0e69d39be6dc72dcd3bbfe1df4dbc813c5"
+      }
+    ],
+    "summarizer": {
+      "generator_path": "papers/arxiv/experiments/storage_demand/analysis/summarize.py",
+      "generator_sha256": "a1eb8dfb4e71175ead15e90e9b048d4b9879dd6fe62a2b0565e45acae4235c15",
+      "input_manifest_path": "papers/arxiv/experiments/storage_demand/analysis/inputs.json",
+      "input_manifest_sha256": "82d1dc579d0cb894134bc45ef7c18d677bfa1711b9e5baf1cda5216b962d185b",
+      "time_policy": "no analysis timestamp; timings come only from bound receipts"
+    },
+    "summary_sha256": "c56aa40625c9a871df8ea77fcc7ea43fb9722390eea945764842aabf7a0c4d3a"
+  },
+  "renderer": {
+    "backend": "Agg",
+    "font": "DejaVu Sans",
+    "font_sha256": "3fdf69cabf06049ea70a00b5919340e2ce1e6d02b0cc3c4b44fb6801bd1e0d22",
+    "freetype": "2.12.1",
+    "matplotlib": "3.8.4",
+    "numpy": "1.26.4",
+    "pillow": "10.3.0",
+    "preview_dpi": 150
+  },
+  "schema": "storage_demand_plot_artifacts.v1"
+}

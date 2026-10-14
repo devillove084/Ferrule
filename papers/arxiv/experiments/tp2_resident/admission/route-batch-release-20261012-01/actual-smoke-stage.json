@@ -1,0 +1,27 @@
+{
+  "stage": "actual same-binary S1/S2 debug smoke, not performance",
+  "status": "complete_smoke",
+  "returncode": 0,
+  "error": null,
+  "wall_seconds": 767.1652676388621,
+  "utc": "2026-10-11T21:29:45.737987+00:00",
+  "argv": [
+    "/home/admin/wxw403883/anaconda3/bin/python3.12",
+    "-S",
+    "-B",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/paired.py",
+    "run",
+    "--id",
+    "route-batch-smoke-20261012-01",
+    "--purpose",
+    "serving_smoke",
+    "--sole-gpu-owner-granted",
+    "--owner-note",
+    "User explicitly authorized unique GPU owner for actual routebatch e674; exact CPU review passed; S1/S2 request-debug cancellation/reuse gate only, no performance; finite sealed supervisor; stop on error/ECHILD/unknown custody; no V/profiler"
+  ],
+  "raw_pins": {
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/admission/route-batch-release-20261012-01/actual-smoke.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/admission/route-batch-release-20261012-01/actual-smoke.stdout.log": "14cb6272dcc6005b9037e5ae22b97caf72659b526de7cc26060c7cb303ba64b1",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/route-batch-smoke-20261012-01/execution.json": "115ebea34de7bfa81738da5564f1a25a07bb7ffb11d6e51c5050eebc5634768f"
+  }
+}

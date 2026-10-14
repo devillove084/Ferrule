@@ -14,8 +14,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use ferrule_common::Error;
 
-use super::context::{CudaComputeEvent, CudaF32Buffer, cu};
+use super::operator_owner::{CudaComputeEvent, CudaF32Buffer, cu};
 use super::runtime::{self, CudaContext, CudaEvent, CudaStream, DeviceBuffer, PinnedHostBuffer};
+
+#[path = "transport_wait.rs"]
+mod completion_wait;
 
 static NEXT_TRANSPORT_ID: AtomicU64 = AtomicU64::new(1);
 type Result<T> = std::result::Result<T, CudaTransferError>;
@@ -141,7 +144,7 @@ pub enum CudaTransferError {
     /// retained in a quarantined transport; retry drain or retain the owner.
     Submission {
         source: Error,
-        cleanup: Option<Error>,
+        cleanup: Option<Box<Error>>,
     },
 }
 
@@ -473,6 +476,15 @@ impl CudaAsyncTransport {
         ))
     }
 
+    /// Waits for this exact ticket using the original query/yield loop, without
+    /// sleep/backoff. A yield is never completion evidence; no callback or
+    /// device-wide synchronization is introduced.
+    /// This is for already-synchronous owner boundaries. Deadline/cancellation
+    /// aware schedulers must keep using `poll` with their original budgets.
+    pub fn wait(&mut self, ticket: &CudaTransferTicket) -> Result<CudaTransferCompletion> {
+        completion_wait::wait(|| self.poll(ticket), std::thread::yield_now)
+    }
+
     /// Intent only. Even a physically ready transfer occupies its slot until
     /// poll/drain consumes completion. Cancellation cannot undo DMA or kernels
     /// already enqueued by the caller, but never publishes a successful payload.
@@ -616,7 +628,10 @@ impl TransportInner {
                 self.quarantine();
             }
             self.update_in_use();
-            return Err(CudaTransferError::Submission { source, cleanup });
+            return Err(CudaTransferError::Submission {
+                source,
+                cleanup: cleanup.map(Box::new),
+            });
         }
         Ok(())
     }
@@ -919,3 +934,7 @@ mod tests {
         assert_eq!(drops.get(), 2);
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/cuda/transport_errors.rs"]
+mod error_tests;

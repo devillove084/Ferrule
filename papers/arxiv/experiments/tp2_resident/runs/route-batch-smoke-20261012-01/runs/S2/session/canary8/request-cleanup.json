@@ -1,0 +1,29 @@
+{
+  "status": "pass",
+  "attempts": [
+    {
+      "snapshot": {
+        "closed": false,
+        "kv": null,
+        "max_body_bytes": 16777216,
+        "prompt_bytes": {
+          "available": 67108864,
+          "held": 0,
+          "limit": 67108864
+        },
+        "requests": {
+          "available": 1024,
+          "held": 0,
+          "limit": 1024
+        },
+        "runtime": {
+          "status": "unsupported"
+        },
+        "scheduler": null
+      },
+      "clean": true
+    }
+  ],
+  "device_quiescence": "not inferred",
+  "runtime_cleanup": "unavailable"
+}

@@ -1,0 +1,8 @@
+{
+  "tp2_tests": 134,
+  "original_tests": 42,
+  "status": "pass",
+  "trace": "cuda-sw,nvtx,osrt",
+  "production_changed": false,
+  "prior_pre_serving_archive_sha256": "c355d3f29c5bf67de26974c5c691ce02a5d5044bb9feeb30845460473781a423"
+}

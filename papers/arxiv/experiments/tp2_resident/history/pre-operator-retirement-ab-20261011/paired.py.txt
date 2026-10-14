@@ -1,0 +1,618 @@
+#!/usr/bin/env python3
+"""Strict TP2 paired adapter for the pinned single-lifecycle runner.
+
+A private module instance binds prepared validation, HTTP phases and engine log
+interpretation. The archived runner, supervisor and observer remain unchanged.
+Plan is CPU-only; prepare/run require numerical admission; run also needs a
+fresh explicit sole-owner grant. No bypass of the production quality constant.
+"""
+import argparse
+import importlib.util
+import io
+import json
+from pathlib import Path
+import re
+import sys
+from types import SimpleNamespace
+
+sys.dont_write_bytecode = True
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+import pair_contract as contract
+import pre_serving
+import cache_ab
+import arena_index_ab
+class _OptionalObserved:
+    def __getattr__(self, name):
+        return getattr(importlib.import_module('observed'), name)
+
+
+observed = _OptionalObserved()
+
+baseline, shared = contract.baseline, contract.shared
+ct, base, guard = baseline.ct, baseline.base, baseline.guard
+FACTORY = ct.ROOT/'crates/ferrule-composition/src/model_factory/mixed_tensor_serving.rs'
+CLI = ct.ROOT/'crates/ferrule-cli/src/args.rs'
+SERVE = ct.ROOT/'crates/ferrule-cli/src/commands/serve.rs'
+PROFILE = 'cuda-qwen35-mixed-bf16-tp2-local-shards-serial'
+SLOTS = ('F1', 'V1', 'V2', 'F2')
+PROTOCOL = 'tp2-resident-fv-qa8-descriptive'
+CACHE_WORKSPACE_SCOPE = dict(policy='decoded-cache-workspace-v1',
+    cuda_workspace_mb=4096, cuda_device_budget_mb=22528)
+
+
+def ferrule_flags(serving_scope=None):
+    ct.require(serving_scope is None or serving_scope == CACHE_WORKSPACE_SCOPE,
+               'Unreviewed Ferrule serving scope')
+    # Profile lowering supplies BF16 and rejects a model-precision override.
+    return {'--backend': 'cuda', '--engine': 'pipeline',
+        '--model-profile': 'qwen35-mixed-bf16', '--tensor-parallel': '2',
+        '--pipeline-parallel': '1', '--expert-parallel': '1', '--rank-backend': 'thread',
+        '--devices': '0,1', '--rank-restarts': '0', '--kv-execution-policy': 'resident',
+        '--ctx-size': '128', '--max-active-sequences': '2', '--max-batch-tokens': '8',
+        '--prefill-chunk-size': '8', '--cuda-device-budget-mb': '22528',
+        '--kv-cache-mb': '16', '--max-tensor-mb': '2048', '--cuda-workspace-mb': '4096' if serving_scope is not None else '1024',
+        '--host': '127.0.0.1', '--port': '18367',
+        '--served-model-name': 'qwen35-ferrule-tp2-resident-paper'}
+
+
+def source_audit(serving_scope=None):
+    """Read actual source; never execute CLI help or import CUDA libraries."""
+    factory, cli = FACTORY.read_text(), CLI.read_text()
+    matches = re.findall(r'^const PUBLIC_QUALITY_ACCEPTED: bool = (true|false);$', factory, re.M)
+    ct.require(len(matches) == 1, 'Unrecognized public quality gate declaration')
+    serve_args = cli.split('pub(crate) struct ServeArgs {', 1)[1].split('\n}', 1)[0]
+    for flag in ferrule_flags(serving_scope):
+        field = flag[2:].replace('-', '_')
+        ct.require(re.search(r'pub\(crate\) '+field+r':', serve_args), 'CLI field missing: '+flag)
+    for literal in ('RankCapability::ThreadOnly', 'degrees: &[2]',
+            'Mixed BF16 TP2 requires PP1 TP2 EP1 DP/SP/CP1',
+            'BF16 activation/KV/conv, F32 SSM/accumulation',
+            'scheduler.prefix_cache_capacity_pages != 0', 'resident KV', 'no offload/process/restart'):
+        ct.require(literal in factory, 'Factory envelope changed: '+literal)
+    return dict(public_quality_accepted=matches[0] == 'true', flags=ferrule_flags(serving_scope),
+        source_pins=ct.inventory([FACTORY, CLI, SERVE]),
+        precision='profile supplies BF16 activation/KV/conv, F32 SSM/accumulation',
+        no_offload='factory requires resident local shards; rejects host cache/hotset/offload',
+        strict='paper admission policy; NOT a CLI --strict flag')
+
+
+def strict_gate():
+    ct.require(source_audit()['public_quality_accepted'],
+               'PUBLIC_QUALITY_ACCEPTED=false; no locks, GPU queries or server launch')
+
+
+def ferrule_spec(binary, serving_scope=None):
+    c = shared.config()
+    spec = ct.server_spec(ct.config(ct.EXCLUSIVE_PATH), 'ferrule', str(binary), shared.UUIDS[0])
+    flags = ferrule_flags(serving_scope)
+    spec.update(argv=[str(binary), 'serve', c['model'], *ct.flags_argv(flags)],
+                model=flags['--served-model-name'], url='http://127.0.0.1:18367/v1/completions')
+    spec['environment'].update(CUDA_VISIBLE_DEVICES=','.join(shared.UUIDS),
+                              NVIDIA_VISIBLE_DEVICES=','.join(shared.UUIDS))
+    return spec
+
+
+def required_gates(engine):
+    # New Ferrule release bootstraps without HTTP evidence. The unchanged vLLM
+    # baseline already has serving evidence; it is not part of Ferrule bootstrap.
+    return () if engine == 'ferrule' else ('public_serving_cli', 'service_lifecycle', 'serving_quality')
+
+
+def execution_paths(purpose='paired'):
+    """Explicit actually used Python/config closure, not a paper-directory glob."""
+    paths = [HERE/name for name in ('paired.py','cache_ab.py','arena_index_ab.py','pre_serving.py','optimized_release.py','decoded_cache_release.py','decoded_cache_gate.py',
+        'decoded-cache-source-review.json','profile_2025.py','pair_contract.py','instrumentation_scope.py',
+        'experiment_current.py','experiment_v4.py','observer.py','sampling_v4.py','sampling_v2.py')]
+    paths += [HERE.parent/name for name in ('runner.py','contract.py','telemetry.py',
+        'launch_guard.py','cli_audit.py','m7.json','m7-device-exclusive.json','runs/g10-exclusive-001/g10.py')]
+    paths += [ct.ROOT/'scripts'/name for name in ('bench_ferrule_vllm.py','test_vllm_qwen35.py','_owned_subreaper.py')]
+    paths += [Path(sys.executable),Path('/usr/bin/env'),Path('/usr/bin/nvidia-smi')]
+    if purpose == 'observed':
+        paths += [HERE/'observed.py']
+    if purpose == 'profiling':
+        paths += [HERE/'instrumentation_live.py', HERE/'instrumentation_capture.py']
+        paths += pre_serving.profile_tool_paths()
+    return paths
+
+
+def experiment_slots(purpose, admission=None):
+    ct.require(purpose in ('paired','serving_smoke','profiling','observed','cache_ab','arena_index_ab'), 'Unknown run purpose')
+    if purpose == 'arena_index_ab':
+        ct.require(admission is not None, 'Arena index cycle admission required')
+        return arena_index_ab.slots(admission['cycle'])
+    if purpose == 'cache_ab':
+        return cache_ab.SLOTS
+    if purpose == 'observed':
+        return (observed.SLOT,)
+    if purpose == 'serving_smoke':
+        return pre_serving.SLOTS
+    if purpose == 'profiling':
+        return (pre_serving.PROFILE_SLOT,)
+    return SLOTS
+
+
+def slot_engine(slot):
+    return 'vllm' if slot.startswith('V') else 'ferrule'
+
+
+def slot_metadata(admission, slot):
+    if admission.get('protocol') == arena_index_ab.PROTOCOL:
+        ct.require(slot in arena_index_ab.SLOTS, 'Unknown arena index variant')
+        return admission['before'] if slot == 'BEFORE' else admission['engines']['ferrule']
+    if admission.get('protocol') == cache_ab.PROTOCOL:
+        ct.require(slot in cache_ab.SLOTS, 'Unknown cache A/B variant')
+        return admission['cacheoff'] if slot == 'OFF' else admission['engines']['ferrule']
+    return admission['engines'][slot_engine(slot)]
+
+
+def validate_gate(engine, name, m):
+    gate = m['gates'][name]
+    receipt_path = gate['receipt_path']
+    ct.require(ct.sha(receipt_path) == gate['receipt_sha256'], 'Gate receipt changed: '+name)
+    receipt = ct.load(receipt_path)
+    ct.require(receipt.get('schema') == 'ferrule.paper.tp2-serving-admission.v1'
+        and receipt.get('engine') == engine and receipt.get('gate') == name
+        and receipt.get('status') == 'pass'
+        and receipt.get('binary_sha256') == m['binary']['sha256']
+        and receipt.get('source_pins') == m['source_pins']
+        and receipt.get('spec_digest') == ct.digest(m['spec']),
+        'Gate must bind serving binary/source/spec, not staged test binary: '+name)
+    ct.require(contract._pins(receipt.get('evidence_pins')), 'Gate evidence missing')
+    ct.check_pins(receipt['evidence_pins'])
+
+
+def model_contract():
+    identity = ct.model_identity(shared.config())
+    return dict(checkpoint_identity={key:identity[key] for key in ('path','metadata_sha256','shard_stats')},
+        identity_strength=identity['identity_strength'],
+        tokenizer_identity={key:identity['metadata_sha256'][key] for key in ('tokenizer.json','tokenizer_config.json')})
+
+
+def validate_admission(admission, purpose='paired'):
+    strict_gate()
+    if purpose == 'arena_index_ab':
+        return arena_index_ab.validate(admission)
+    if purpose == 'cache_ab':
+        return cache_ab.validate(admission)
+    import profile_2025
+    profile_2025.configure(admission.get('profiler'), pre_serving)
+    if admission.get('profiler') is not None:
+        ct.require(purpose == 'profiling', 'Profiler policy is profiling-only, never a no-trace benchmark')
+        if profile_2025.is_frozen(admission):
+            return profile_2025.validate_fixed_admission(admission, purpose)
+        # Tool selection is not build/quality qualification. Keep all current-source gates below.
+        ct.check_pins(profile_2025.TOOL_PINS)
+    if purpose == 'observed':
+        observed.require_enablement()
+    expected_protocol = (observed.PROTOCOL if purpose == 'observed' else pre_serving.PROFILE_PROTOCOL if purpose == 'profiling' else
+                         pre_serving.PROTOCOL if purpose == 'serving_smoke' else PROTOCOL)
+    ct.require(admission.get('protocol') == expected_protocol, 'Protocol missing/different')
+    engines = ('ferrule',) if purpose in ('serving_smoke','profiling','observed') else ('ferrule','vllm')
+    ct.require(set(admission['engines']) == set(engines), 'Unexpected engine set')
+    for engine in engines:
+        m = admission['engines'][engine]
+        if engine == 'ferrule' and m.get('serving_scope') is not None:
+            import decoded_cache_release
+            ct.require(m.get('decoded_cache') == decoded_cache_release.CACHE,
+                       'Explicit workspace scope requires actual cache-on admission metadata')
+        reasons = contract._engine_blockers(engine, m, contract.common_contract())
+        replaced_gates = contract.REQUIRED_GATES if engine == 'ferrule' else ('all_boundary','multistep')
+        reasons = [r for r in reasons if not any(r.startswith(engine+': '+g+' ') for g in replaced_gates)]
+        if purpose in ('serving_smoke','profiling','observed'):
+            # Effective operations/transport are observations OUTPUT by execution.
+            reasons = [r for r in reasons if r not in (engine+': arithmetic unknown/incomplete', engine+': transport unknown/incomplete')]
+            ct.require(m.get('arithmetic',{}).get('profile') == PROFILE, 'Declared arithmetic profile missing')
+        ct.require(not reasons, '; '.join(reasons))
+        ct.require(m['model'] == model_contract(), 'Model/tokenizer identity differs or overclaims full payload hashing')
+        ct.check_pins(m['source_pins'])
+        ct.check_pins(m['runtime_pins'])
+        if engine == 'vllm':
+            ct.require(set(m['runtime_pins']) == {str(path.resolve()) for path in shared.runtime_paths(shared.config())},
+                       'Incomplete vLLM installed runtime inventory')
+        ct.validate_staged_binary(m['binary']['path'], m['binary']['sha256'])
+        expected = ferrule_spec(m['binary']['path'], m.get('serving_scope')) if engine == 'ferrule' else shared.spec_for(
+            shared.config(), m['binary']['path'])
+        ct.require(m['spec'] == expected, 'Unaudited argv/environment override: '+engine)
+        for name in required_gates(engine):
+            validate_gate(engine, name, m)
+        if engine == 'ferrule':
+            pre_serving.validate_release(m)
+            if purpose in ('paired','profiling'):
+                pre_serving.validate_smoke(m)  # downstream of bootstrap, never its prerequisite
+            ct.require(m['source_pins'] == pre_serving.current_release_sources(), 'Serving build source coverage differs')
+            ct.require(all(m['source_pins'].get(p) == h for p,h in source_audit()['source_pins'].items()),
+                       'Quality constant and CLI source not bound to serving build')
+    if purpose == 'paired':
+        for group in ('model','cache'):
+            ct.require(admission['engines']['ferrule'][group] == admission['engines']['vllm'][group], 'Paired scope differs: '+group)
+    return admission
+
+
+def pair_path(identity):
+    ct.require(re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,79}', identity), 'Unsafe pair ID')
+    return HERE/'runs'/identity
+
+
+def prepare(identity, admission_path, purpose='paired'):
+    strict_gate()
+    if purpose == 'observed':
+        observed.require_enablement()
+    admission = validate_admission(ct.load(admission_path), purpose)
+    directory = pair_path(identity)
+    capability_only = (purpose == 'profiling' and directory.is_dir()
+                       and {p.name for p in directory.iterdir()} == {'tools'})
+    ct.require(not directory.exists() or capability_only, 'No overwrite/resume')
+    directory.mkdir(parents=True,exist_ok=capability_only)
+    refs, ref_pins = shared.references()
+    # Immutable receipt identity only. Never re-pin unrelated mutable paper work.
+    history = {str(Path(admission_path).resolve()):ct.sha(admission_path)}
+    m = dict(protocol=admission['protocol'], purpose=purpose, admission=admission, admission_path=str(Path(admission_path).resolve()),
+        admission_sha256=ct.sha(admission_path), source_pins=ct.inventory(execution_paths(purpose)),
+        reference_pins=ref_pins, historical_pins=history, config=shared.config(),
+        model_identity=ct.model_identity(shared.config()), fairmatch=False, exact_speedup=None,
+        scope=contract.SCOPE, order=list(experiment_slots(purpose, admission)), per_case_limits=contract.common_contract()['limits'])
+    if purpose == 'arena_index_ab':
+        m['arena_index_contract'] = arena_index_ab.contract(admission['cycle'])
+        m['frozen_arena_audit'] = arena_index_ab.frozen_audit()
+    elif purpose == 'cache_ab':
+        m['cache_ab_contract'] = cache_ab.contract()
+        m['frozen_cacheoff_audit'] = cache_ab.frozen_audit()
+    elif admission['engines']['ferrule'].get('serving_scope') is not None:
+        m['serving_scope_difference'] = dict(
+            declared=admission['engines']['ferrule']['serving_scope'],
+            baseline_workspace_mb=1024, candidate_workspace_mb=4096,
+            device_budget_mb=22528, cache_enablement='requires release/runtime evidence; not implied by workspace',
+            comparison='changed workspace ceiling; not an identical-flags cache-only comparison')
+    import profile_2025
+    if profile_2025.is_frozen(admission):
+        m['fixed_binary_audit'] = profile_2025.fixed_binary_audit(admission)
+    ct.write(directory/'prepared.json', m)
+    for slot in experiment_slots(purpose, admission):
+        case = directory/'runs'/slot
+        case.mkdir(parents=True)
+        ct.write(case/'canaries.json', refs)
+        ct.write(case/'prepared.json', dict(pair_directory=str(directory), slot=slot,
+                                          pair_sha256=ct.sha(directory/'prepared.json')))
+    return directory
+
+
+def validate_pair(directory):
+    p = ct.load(directory/'prepared.json')
+    purpose = p.get('purpose','paired')
+    expected = (observed.PROTOCOL if purpose == 'observed' else pre_serving.PROFILE_PROTOCOL if purpose == 'profiling' else
+                pre_serving.PROTOCOL if purpose == 'serving_smoke' else PROTOCOL)
+    if purpose == 'arena_index_ab':
+        expected = arena_index_ab.PROTOCOL
+        ct.require(p['arena_index_contract'] == arena_index_ab.contract(p['admission']['cycle'])
+            and p['frozen_arena_audit'] == arena_index_ab.frozen_audit(), 'Frozen arena evidence changed')
+    if purpose == 'cache_ab':
+        expected = cache_ab.PROTOCOL
+        ct.require(p['cache_ab_contract'] == cache_ab.contract()
+            and p['frozen_cacheoff_audit'] == cache_ab.frozen_audit(), 'Frozen A/B contract/evidence changed')
+    ct.require(p['protocol'] == expected and p['order'] == list(experiment_slots(purpose, p['admission'])), 'Run protocol changed')
+    ct.require(ct.sha(p['admission_path']) == p['admission_sha256']
+        and ct.load(p['admission_path']) == p['admission'], 'Admission changed')
+    validate_admission(p['admission'], purpose)
+    import profile_2025
+    if profile_2025.is_frozen(p['admission']):
+        ct.require(p['fixed_binary_audit'] == profile_2025.fixed_binary_audit(p['admission']),
+                   'Fixed binary evidence/current source drift changed since preparation')
+    for key in ('source_pins', 'reference_pins', 'historical_pins'):
+        ct.check_pins(p[key])
+    ct.require(ct.inventory(execution_paths(purpose)) == p['source_pins'], 'Workflow inventory changed')
+    ct.require(p['config'] == shared.config() and p['model_identity'] == ct.model_identity(p['config']),
+               'Pinned config/model identity changed')
+    return p
+
+
+def validate_slot(directory):
+    binding = ct.load(directory/'prepared.json')
+    pair = Path(binding['pair_directory'])
+    slot = binding['slot']
+    manifest = ct.load(pair/'prepared.json')
+    purpose = manifest.get('purpose', 'paired')
+    ct.require(slot in experiment_slots(purpose, manifest['admission']) and directory.resolve() == (pair/'runs'/slot).resolve(), 'Slot binding differs')
+    ct.require(ct.sha(pair/'prepared.json') == binding['pair_sha256'], 'Pair manifest changed')
+    p = validate_pair(pair)
+    engine = slot_engine(slot)
+    m = slot_metadata(p['admission'], slot)
+    ct.require(ct.load(directory/'canaries.json') == shared.references()[0], 'Frozen canaries changed')
+    spec = pre_serving.smoke_spec(m['spec']) if p.get('purpose') == 'serving_smoke' else m['spec']
+    if p.get('purpose') == 'observed':
+        spec = observed.observed_spec(spec)
+    if p.get('purpose') == 'profiling':
+        spec = json.loads(json.dumps(spec))
+        spec['environment']['TMPDIR'] = str(directory/'session/nsys-tmp')
+        if p['admission'].get('profiler') is not None:
+            spec['environment']['FERRULE_LOG'] = 'info,ferrule_request=debug'
+            if m.get('decoded_cache'):
+                import decoded_cache_release
+                spec['environment']['FERRULE_LOG'] = decoded_cache_release.PROFILE_LOG
+    return dict(p, engine_metadata=m, spec=spec, executable_sha256=m['binary']['sha256'])
+
+
+def request_block(directory, prepared, stage):
+    stage = 'qa8' if stage == 'qa8-V1' else stage
+    engine = prepared['spec']['engine']
+    plan = contract.http_plan(engine, prepared['spec'], stage, directory)
+    if plan['corpus'] is not None:
+        ct.write(directory/'prompts.json', plan['corpus'])
+    ct.write(directory/'pair-metadata.json', dict(engine=engine, serving=prepared['engine_metadata'],
+        protocol=PROTOCOL, fairmatch=False, exact_speedup=None,
+        numerical_receipts=prepared['engine_metadata'].get('test_quality', prepared['engine_metadata'].get('gates',{})),
+        first_label=plan['first_label'], token_id_observation='unavailable'))
+    plan['argv'][plan['argv'].index('--metadata')+1] = str(directory/'pair-metadata.json')
+    code = baseline.http.main(plan['argv'])
+    report = ct.load(directory/'http.json')
+    rows = [row for run in report.get('runs', []) for row in run.get('requests', [])]
+    warm = report.get('warmups', [])
+    first = [report['first_after_ready']] if 'first_after_ready' in report else []
+    workload = shared.config()['workloads'][stage]
+    complete = (code == 0 and report.get('status') == 'complete'
+                and len(rows) == workload['requests'] and len(warm) == workload['warmup']
+                and len(first) == int(stage == 'qa8'))
+    checks = []
+    refs = shared.references()[0]
+    for i, row in enumerate(first + warm + rows):
+        valid = (row.get('status') == 'success' and row.get('input_length_matches') is True
+            and type(row.get('actual_output_tokens')) is int
+            and 0 < row['actual_output_tokens'] <= workload['max_tokens']
+            and row.get('finish_reason') in ('length', 'stop'))
+        if stage != 'hello2':
+            ref = refs[i] if stage == 'canary8' and i < len(refs) else refs[0]
+            valid = valid and row.get('text') == ref['reference_text'] and row.get(
+                'actual_output_tokens') == len(ref['reference_ids']) and row.get('actual_input_tokens') == ref['input_tokens']
+        checks.append(dict(index=i, passed=valid, actual_input_tokens=row.get('actual_input_tokens'),
+                           actual_output_tokens=row.get('actual_output_tokens')))
+    return dict(status='pass' if complete and checks and all(r['passed'] for r in checks) else 'fail',
+        engine=engine, checks=checks, first_qa_requests=len(first), warmup_requests=len(warm),
+        measured_requests=len(rows), http_receipt_sha256=ct.sha(directory/'http.json'),
+        coverage='visible text/usage only; separate pinned numerical acceptance, not arithmetic parity',
+        fairmatch=False, exact_speedup=None)
+
+
+def runtime_evidence(engine, log):
+    if engine == 'vllm':
+        return shared.runtime_evidence(log)
+    patterns = {'profile': PROFILE, 'budget': '[Mixed TP2 device budget]',
+                'resident': 'resident local expert shards', 'precision': 'BF16 activation/KV/conv, F32 SSM/accumulation'}
+    found = {k: [line for line in log.splitlines() if literal in line][:20] for k,literal in patterns.items()}
+    return dict(evidence=found, missing=[k for k,v in found.items() if not v],
+        contradictions=[line for line in log.splitlines() if 'public admission is closed' in line],
+        transport='raw log retained; Ferrule local thread collectives are not asserted to be NCCL',
+        exact_arithmetic_match=False)
+
+
+def shutdown_receipt(server, timeout):
+    # The original helper owns graceful termination; record its reaped child's
+    # code without substituting root exit for authenticated descendant drain.
+    receipt = baseline.http.shutdown_owned_group(server, timeout)
+    return dict(receipt, returncode=server.returncode)
+
+
+def readiness_marker(spec, startup_guard, timeout):
+    ready = baseline.http.wait_ready(spec,startup_guard,timeout)
+    startup_guard.monitor.mark_ready(ready)
+    return ready
+
+
+def lifecycle(directory, engine, owner_note, purpose='paired'):
+    """Bind hooks in a PRIVATE module; no global baseline/shared monkeypatch.
+
+    run/worker/requests remain the pinned implementation. Its supervised child
+    command returns to this adapter and authenticates with the same custodian.
+    """
+    spec = importlib.util.spec_from_file_location('_tp2_pair_lifecycle', baseline.__file__)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    module.__file__ = str(Path(__file__).resolve())
+    module.HERE = directory/'_binding'
+    module.NOTE = owner_note
+    module.PROTOCOL = dict(baseline.PROTOCOL, id=PROTOCOL,
+        ferrule='gated physical TP2 serving; descriptive system comparison, no arithmetic parity')
+    if purpose == 'arena_index_ab':
+        module.PROTOCOL.update(id=arena_index_ab.PROTOCOL,
+            qa='BEFORE/AFTER arena index: serial QA8, excluded first +2 warmups +5 measured; no trace/rankperf')
+    if purpose == 'cache_ab':
+        module.PROTOCOL.update(id=cache_ab.PROTOCOL,
+            qa='same-server QA8: existing excluded first +2 warmups =3 unmeasured, then 5 measured; no trace/rankperf')
+    if purpose == 'observed':
+        module.PROTOCOL.update(id=observed.PROTOCOL, phases=['hello2','canary8','observed'],
+            qa='single warm QA8 + one measured diagnostic; no profiler; startup excluded')
+    if purpose == 'serving_smoke':
+        module.PROTOCOL.update(id=pre_serving.PROTOCOL, phases=list(pre_serving.PHASES), qa='no performance measurements; serving admission only')
+    elif purpose == 'profiling':
+        module.PROTOCOL.update(id=pre_serving.PROFILE_PROTOCOL, phases=['hello2','canary8','profile'],
+            qa='one Nsight-controlled warm and measured QA8 request; startup excluded; diagnostic only')
+    module.http = SimpleNamespace(**{**vars(baseline.http), 'shutdown_owned_group': shutdown_receipt, 'wait_ready': readiness_marker})
+    module.validate = validate_slot
+    module.shared = SimpleNamespace(**{**vars(shared),
+        'request_block': (observed.request_block if purpose == 'observed' else pre_serving.request_block if purpose == 'serving_smoke' else
+                          pre_serving.profile_request_block if purpose == 'profiling' else request_block),
+        'runtime_evidence': lambda log: runtime_evidence(engine, log)})
+    if purpose == 'profiling':
+        case = directory/'runs'/pre_serving.PROFILE_SLOT/'session'
+        def bound_profile(specification, fd):
+            # Like Python spawn, Nsight/wrapper execs do not preserve our fd.
+            # Reuse the exact staged-inode check, then pass its immutable path.
+            target = base.bound_server_argv(dict(specification,engine='vllm'),fd)
+            import instrumentation_live
+            digest = instrumentation_live.target_manifest(case, target)
+            return pre_serving.profile_server_argv(target,case, digest)
+        module.base = SimpleNamespace(**{**vars(module.base), 'bound_server_argv': bound_profile})
+        module.http = SimpleNamespace(**{**vars(baseline.http),
+            'shutdown_owned_group': lambda server, timeout: baseline.http.shutdown_profile_capture(server,case,timeout),
+            'wait_ready': readiness_marker})
+        import instrumentation_live
+        instrumentation_live.bind(module, directory, owner_note)
+    return module
+
+
+def assess_slot(directory, engine):
+    r = ct.load(directory/'execution.json')
+    supervisor = ct.load(directory/'session/supervisor.json')
+    release = ct.load(directory/'lock-release.json')
+    ct.require(r['status'] == 'complete' and ct.successful_process(supervisor)
+        and r.get('authenticated_drained') is True and r.get('supervisor_success') is True
+        and r.get('after', {}).get('status') == 'verified'
+        and release.get('released') is True and release.get('all_gpu_idle') is True,
+        'Failed case/unknown custody or release; no next slot')
+    if directory.name == pre_serving.PROFILE_SLOT:
+        probe = ct.load(directory/'probe-lock-release.json')
+        ct.require(probe.get('local_contexts_closed') is True and probe.get('authenticated_drained') is True
+            and probe.get('original_b0_verified') is True and len(probe['probe_gpu_uuids']) == 8
+            and ct.load(directory/'session/collector-after-model.json')['status'] == 'b1_returned',
+            'Collector-first B1/B0 release chain incomplete')
+    evidence = r.get('runtime', {})
+    ct.require(not evidence.get('contradictions') and not evidence.get('missing'), 'Runtime evidence missing/contradictory')
+    if engine == 'vllm':
+        ct.require(all(evidence.get('evidence', {}).get(k) for k in ('linear_marlin', 'moe_marlin', 'gdn', 'transport')),
+                   'vLLM operation/transport evidence missing')
+    if engine == 'ferrule':
+        # Same assessor for smoke, pair and profile; never an alternate lifecycle.
+        binding = ct.load(directory/'prepared.json')
+        pair = ct.load(Path(binding['pair_directory'])/'prepared.json')
+        m = slot_metadata(pair['admission'], directory.name)
+        if m.get('decoded_cache'):
+            import decoded_cache_release
+            snapshots = decoded_cache_release.snapshot_rows(
+                (directory/'session/server.log').read_text(), profiling=pair['purpose'] == 'profiling')
+            evidence = dict(evidence, decoded_cache_snapshots=snapshots,
+                observation_scope='cache-only host ledger; profile activity excludes unprofiled/preparation work')
+    return dict(status='complete', launch_id=r['launch_id'], execution_sha256=ct.sha(directory/'execution.json'),
+        supervisor_sha256=ct.sha(directory/'session/supervisor.json'),
+        observation=r['observation'], runtime=evidence, fairmatch=False, exact_speedup=None)
+
+
+def run(identity, granted=False, owner_note='', purpose='paired', probe_grant_path=None):
+    strict_gate()
+    ct.require(granted is True and owner_note.strip(), 'Explicit renewed sole-owner grant and note required')
+    if purpose == 'observed':
+        observed.require_enablement()
+    directory = pair_path(identity)
+    prepared = validate_pair(directory)
+    ct.require(prepared.get('purpose','paired') == purpose, 'Prepared/run purpose mismatch')
+    ct.require(not (directory/'launch.json').exists() and not (directory/'execution.json').exists(), 'No retry/resume')
+    if purpose == 'profiling':
+        import instrumentation_live
+        ct.require(probe_grant_path is not None, 'Explicit eight-GPU instrumentation --probe-grant required')
+        grant = instrumentation_live.probe_grant(ct.load(probe_grant_path), directory)
+        instrumentation_live.readonly(directory/'probe-grant.json', grant)
+    else:
+        ct.require(probe_grant_path is None, 'Eight-GPU probe grant is profiling-only')
+    result = dict(protocol=prepared.get('protocol', PROTOCOL), purpose=purpose, status='incomplete', sole_gpu_owner_granted=True,
+        owner_note=owner_note, fairmatch=False, exact_speedup=None,
+        slots=[dict(id=slot, status='not_run') for slot in experiment_slots(purpose, prepared.get('admission'))])
+    ct.write(directory/'launch.json', result)
+    try:
+        for row in result['slots']:
+            slot = row['id']
+            engine = slot_engine(slot)
+            validate_pair(directory)
+            row['status'] = 'dispatched_unknown'
+            ct.write(directory/(slot+'-dispatch.json'), result)
+            adapter = lifecycle(directory, engine, owner_note, purpose) if purpose in ('serving_smoke','profiling','observed','cache_ab','arena_index_ab') else lifecycle(directory, engine, owner_note)
+            code = adapter.run(slot)
+            if code != 0:
+                row['status'] = 'failed'
+            ct.require(code == 0, 'Case failed; preserve failure and all remaining not_run slots')
+            row.update(pre_serving.assess_lifecycle(directory/'runs'/slot) if purpose == 'serving_smoke'
+                       else assess_slot(directory/'runs'/slot, engine))
+            ct.write(directory/(slot+'-assessment.json'), result)
+        if purpose == 'arena_index_ab':
+            result['arena_index_ab'] = arena_index_ab.finish(directory, prepared)
+        if purpose == 'cache_ab':
+            result['cache_ab'] = cache_ab.finish(directory, prepared)
+        if purpose == 'observed':
+            result['observed'] = observed.finish(directory, prepared)
+        if purpose == 'serving_smoke':
+            result['serving_smoke'] = pre_serving.finish(directory, prepared)
+        elif purpose == 'profiling':
+            result['profiling'] = pre_serving.finish_profile(directory, prepared)
+        result['status'] = ('complete_observed' if purpose == 'observed' else 'complete_smoke' if purpose == 'serving_smoke' else
+                            'complete_profile' if purpose == 'profiling' else 'complete_descriptive_only')
+    except BaseException as error:
+        result.update(status='stopped', error=type(error).__name__+': '+str(error))
+    finally:
+        ct.write(directory/'execution.json', result)
+    return 0 if result['status'] in ('complete_descriptive_only','complete_smoke','complete_profile','complete_observed') else 1
+
+
+def worker(seal):
+    payload = json.load(sys.stdin)
+    guard.authenticate(payload, seal)
+    directory = Path(payload['directory']).parent
+    p = validate_slot(directory)
+    pair_directory = directory.parent.parent
+    authorization = ct.load(pair_directory/(directory.name+'-dispatch.json'))
+    ct.require(authorization.get('sole_gpu_owner_granted') is True
+        and authorization.get('owner_note') and any(row['id'] == directory.name
+        and row['status'] == 'dispatched_unknown' for row in authorization['slots']),
+        'No active authorized pair slot')
+    module = lifecycle(pair_directory, p['spec']['engine'], authorization['owner_note'], p.get('purpose','paired'))
+    previous = sys.stdin
+    try:
+        sys.stdin = io.StringIO(json.dumps(payload))
+        return module.worker(seal)
+    finally:
+        sys.stdin = previous
+
+
+def main(argv=None):
+    ct.require_cpu_python()
+    argv = sys.argv[1:] if argv is None else argv
+    if len(argv) == 2 and argv[0] == '--worker':
+        return worker(argv[1])
+    cli = argparse.ArgumentParser(description=__doc__)
+    cli.add_argument('mode', choices=('plan', 'prepare', 'run'))
+    cli.add_argument('--id')
+    cli.add_argument('--admission', type=Path)
+    cli.add_argument('--serving-scope', choices=('legacy','decoded-cache-4g'), default='legacy',
+                     help='plan only; prepare/run take the exact scope from the pinned admission')
+    cli.add_argument('--purpose', choices=('paired','serving_smoke','profiling','observed','cache_ab','arena_index_ab'), default='paired')
+    cli.add_argument('--sole-gpu-owner-granted', action='store_true')
+    cli.add_argument('--owner-note', default='')
+    cli.add_argument('--probe-grant', type=Path, help='profiling only: explicit run-bound eight-UUID instrumentation grant')
+    args = cli.parse_args(argv)
+    ct.require(args.mode == 'plan' or args.serving_scope == 'legacy',
+               'Serving scope cannot override a pinned admission; --serving-scope is plan-only')
+    serving_scope = CACHE_WORKSPACE_SCOPE if args.serving_scope == 'decoded-cache-4g' else None
+    if args.mode == 'plan' and args.purpose == 'arena_index_ab':
+        print(json.dumps(arena_index_ab.plan(), indent=2))
+        return 0
+    if args.mode == 'plan' and args.purpose == 'cache_ab':
+        print(json.dumps(cache_ab.plan(), indent=2))
+        return 0
+    if args.mode == 'plan' and args.purpose == 'observed':
+        print(json.dumps(observed.plan(), indent=2))
+        return 0
+    if args.mode == 'plan':
+        print(json.dumps(dict(protocol=(pre_serving.PROFILE_PROTOCOL if args.purpose == 'profiling' else pre_serving.PROTOCOL if args.purpose == 'serving_smoke' else PROTOCOL),
+            purpose=args.purpose, source_audit=source_audit(serving_scope),
+            serving_scope=serving_scope, ferrule_flags=ferrule_flags(serving_scope),
+            contract=contract.common_contract(), slots=experiment_slots(args.purpose), status='cpu_only_not_executed',
+            vllm_flags=shared.config()['vllm_flags'],
+            vllm_transport=shared.config()['transport'],
+            serving_binary=None, admission_receipts='explicit pinned release handoff required; test numerical quality is NOT serving HTTP evidence',
+            stages=(['hello2','canary8','profile: nsys warmup+measured'] if args.purpose == 'profiling' else list(pre_serving.PHASES) if args.purpose == 'serving_smoke' else ['hello2','canary8','qa8: excluded first +2 warmups +5 measured']),
+            requires_existing_http_receipt=args.purpose in ('paired','profiling'),
+            smoke_changes='request debug logging only; cancel max64 request fits context128; no numerical/logit serving oracle',
+            quality_receipt_path=str(HERE/'model-runtime-quality.json'),
+            execution_pin_policy='explicit imported module/config/tool closure; no tests/docs/sibling experiments glob',
+            fairmatch=False, exact_speedup=None), indent=2))
+        return 0
+    ct.require(args.id, '--id required')
+    if args.mode == 'prepare':
+        ct.require(args.admission, '--admission required; no synthesized acceptance')
+        print(prepare(args.id, args.admission, args.purpose))
+        return 0
+    return run(args.id, args.sole_gpu_owner_granted, args.owner_note, args.purpose, args.probe_grant)
+
+
+if __name__ == '__main__':
+    try:
+        raise SystemExit(main())
+    except (ValueError, KeyError, OSError) as error:
+        print('BLOCKED: '+str(error), file=sys.stderr)
+        raise SystemExit(2)

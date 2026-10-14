@@ -1,0 +1,1476 @@
+{
+  "schema": "ferrule.paper.operator-retirement-official-profile.v1",
+  "status": "observed_not_closed",
+  "binary_sha256": "7e1c23a88143cb6455e3c6e10bfe43a567fc97b5fd45745800eae3a1e39a0e73",
+  "policy": {
+    "release": "2025.3.1.90-253135822126v0",
+    "policy": "operator_retirement_9ef_7e1c_info_only_v1",
+    "before_binary_sha256": "9ef9841598b4694fb611250bf8876c4314d252400136ddb23f606a979cadb656",
+    "after_binary_sha256": "7e1c23a88143cb6455e3c6e10bfe43a567fc97b5fd45745800eae3a1e39a0e73",
+    "rankperf": false,
+    "log": "info",
+    "window": "actual_HTTP_start_end_unix_clock_anchors"
+  },
+  "model_pid": 188424,
+  "session_epoch_ns": 1791701462037184458,
+  "actual_request_windows": {
+    "warmup": {
+      "start_ns": 459582151,
+      "end_ns": 2328059658,
+      "actual_input_tokens": 5,
+      "actual_output_tokens": 8,
+      "clock_delta_disagreement_ns": 188,
+      "scope": "Client HTTP start/end anchors; includes transport/terminal response, not pure prefill/decode"
+    },
+    "measured": {
+      "start_ns": 2555379178,
+      "end_ns": 5045421016,
+      "actual_input_tokens": 5,
+      "actual_output_tokens": 8,
+      "clock_delta_disagreement_ns": 342,
+      "scope": "Client HTTP start/end anchors; includes transport/terminal response, not pure prefill/decode"
+    }
+  },
+  "bidirectional_correlation": {
+    "warmup": {
+      "status": "observed_correlation_not_closed",
+      "observed_correlation_closed": false,
+      "full_trace_accepted": false,
+      "paired_api_activity_loss_excluded": false,
+      "request_window_ns": [
+        459582151,
+        2328059658
+      ],
+      "counts": {
+        "kernel_observed": 86247,
+        "memcpy_observed": 26092,
+        "memset_observed": 69646,
+        "runtime_api_rows": 672454,
+        "memset_successful_api": 69593,
+        "kernel_successful_api": 86251,
+        "launch_driver": 1832,
+        "memcpy_successful_api": 26072,
+        "launch_runtime": 84419,
+        "kernel_activity_to_api_unique": 86247,
+        "memcpy_activity_to_api_unique": 26072,
+        "memset_activity_to_api_unique": 69593,
+        "memset_api_to_activity_unique": 69593,
+        "memcpy_api_to_activity_unique": 26072,
+        "kernel_api_to_activity_unique": 86247
+      },
+      "issues": [
+        {
+          "direction": "activity_to_api",
+          "reason": "missing_api_in_full_export",
+          "kind": "memcpy",
+          "pid": 188424,
+          "correlation_id": 549180,
+          "start_ns": 673663245,
+          "end_ns": 673664685,
+          "api_matches": 0,
+          "activity_matches": 1
+        },
+        {
+          "direction": "activity_to_api",
+          "reason": "missing_api_in_full_export",
+          "kind": "memcpy",
+          "pid": 188424,
+          "correlation_id": 549182,
+          "start_ns": 673672690,
+          "end_ns": 673674130,
+          "api_matches": 0,
+          "activity_matches": 1
+        },
+        {
+          "direction": "activity_to_api",
+          "reason": "missing_api_in_full_export",
+          "kind": "memcpy",
+          "pid": 188424,
+          "correlation_id": 549183,
+          "start_ns": 673682157,
+          "end_ns": 673682637,
+          "api_matches": 0,
+          "activity_matches": 1
+        },
+        {
+          "direction": "activity_to_api",
+          "reason": "missing_api_in_full_export",
+          "kind": "memcpy",
+          "pid": 188424,
+          "correlation_id": 549184,
+          "start_ns": 673685010,
+          "end_ns": 673685458,
+          "api_matches": 0,
+          "activity_matches": 1
+        },
+        {
+          "direction": "activity_to_api",
+          "reason": "missing_api_in_full_export",
+          "kind": "memcpy",
+          "pid": 188424,
+          "correlation_id": 549248,
+          "start_ns": 673789715,
+          "end_ns": 673790995,
+          "api_matches": 0,
+          "activity_matches": 1
+        },
+        {
+          "direction": "activity_to_api",
+          "reason": "missing_api_in_full_export",
+          "kind": "memcpy",
+          "pid": 188424,
+          "correlation_id": 549252,
+          "start_ns": 673797997,
+          "end_ns": 673799277,
+          "api_matches": 0,
+          "activity_matches": 1
+        },
+        {
+          "direction": "activity_to_api",
+          "reason": "missing_api_in_full_export",
+          "kind": "memcpy",
+          "pid": 188424,
+          "correlation_id": 549254,
+          "start_ns": 673799251,
+          "end_ns": 673799731,
+          "api_matches": 0,
+          "activity_matches": 1
+        },
+        {
+          "direction": "activity_to_api",
+          "reason": "missing_api_in_full_export",
+          "kind": "memcpy",
+          "pid": 188424,
+          "correlation_id": 549258,
+          "start_ns": 673807341,
+          "end_ns": 673807821,
+          "api_matches": 0,
+          "activity_matches": 1
+        },
+        {
+          "direction": "activity_to_api",
+          "reason": "missing_api_in_full_export",
+          "kind": "memcpy",
+          "pid": 188424,
+          "correlation_id": 549389,
+          "start_ns": 673901171,
+          "end_ns": 673902419,
+          "api_matches": 0,
+          "activity_matches": 1
+        },
+        {
+          "direction": "activity_to_api",
+          "reason": "missing_api_in_full_export",
+          "kind": "memcpy",
+          "pid": 188424,
+          "correlation_id": 549406,
+          "start_ns": 673910163,
+          "end_ns": 673910643,
+          "api_matches": 0,
+          "activity_matches": 1
+        },
+        {
+          "direction": "activity_to_api",
+          "reason": "missing_api_in_full_export",
+          "kind": "memcpy",
+          "pid": 188424,
+          "correlation_id": 549420,
+          "start_ns": 673926189,
+          "end_ns": 673927469,
+          "api_matches": 0,
+          "activity_matches": 1
+        },
+        {
+          "direction": "activity_to_api",
+          "reason": "missing_api_in_full_export",
+          "kind": "memcpy",
+          "pid": 188424,
+          "correlation_id": 549444,
+          "start_ns": 673935405,
+          "end_ns": 673935885,
+          "api_matches": 0,
+          "activity_matches": 1
+        },
+        {
+          "direction": "activity_to_api",
+          "reason": "missing_api_in_full_export",
+          "kind": "memcpy",
+          "pid": 188424,
+          "correlation_id": 549567,
+          "start_ns": 674024308,
+          "end_ns": 674025588,
+          "api_matches": 0,
+          "activity_matches": 1
+        },
+        {
+          "direction": "activity_to_api",
+          "reason": "missing_api_in_full_export",
+          "kind": "memcpy",
+          "pid": 188424,
+          "correlation_id": 549572,
+          "start_ns": 674031501,
+          "end_ns": 674032781,
+          "api_matches": 0,
+          "activity_matches": 1
+        },
+        {
+          "direction": "activity_to_api",
+          "reason": "missing_api_in_full_export",
+          "kind": "memcpy",
+          "pid": 188424,
+          "correlation_id": 549574,
+          "start_ns": 674033076,
+          "end_ns": 674033588,
+          "api_matches": 0,
+          "activity_matches": 1
+        },
+        {
+          "direction": "activity_to_api",
+          "reason": "missing_api_in_full_export",
+          "kind": "memcpy",
+          "pid": 188424,
+          "correlation_id": 549578,
+          "start_ns": 674040077,
+          "end_ns": 674040557,
+          "api_matches": 0,
+          "activity_matches": 1
+        },
+        {
+          "direction": "activity_to_api",
+          "reason": "missing_api_in_full_export",
+          "kind": "memcpy",
+          "pid": 188424,
+          "correlation_id": 549709,
+          "start_ns": 674123284,
+          "end_ns": 674124564,
+          "api_matches": 0,
+          "activity_matches": 1
+        },
+        {
+          "direction": "activity_to_api",
+          "reason": "missing_api_in_full_export",
+          "kind": "memcpy",
+          "pid": 188424,
+          "correlation_id": 549713,
+          "start_ns": 674131348,
+          "end_ns": 674131828,
+          "api_matches": 0,
+          "activity_matches": 1
+        },
+        {
+          "direction": "activity_to_api",
+          "reason": "missing_api_in_full_export",
+          "kind": "memcpy",
+          "pid": 188424,
+          "correlation_id": 549743,
+          "start_ns": 674155597,
+          "end_ns": 674156877,
+          "api_matches": 0,
+          "activity_matches": 1
+        },
+        {
+          "direction": "activity_to_api",
+          "reason": "missing_api_in_full_export",
+          "kind": "memcpy",
+          "pid": 188424,
+          "correlation_id": 549768,
+          "start_ns": 674166317,
+          "end_ns": 674166829,
+          "api_matches": 0,
+          "activity_matches": 1
+        },
+        {
+          "direction": "activity_to_api",
+          "reason": "missing_api_in_full_export",
+          "kind": "memset",
+          "pid": 188424,
+          "correlation_id": 549185,
+          "start_ns": 673693005,
+          "end_ns": 673693677,
+          "api_matches": 0,
+          "activity_matches": 1
+        },
+        {
+          "direction": "activity_to_api",
+          "reason": "missing_api_in_full_export",
+          "kind": "memset",
+          "pid": 188424,
+          "correlation_id": 549186,
+          "start_ns": 673697586,
+          "end_ns": 673698226,
+          "api_matches": 0,
+          "activity_matches": 1
+        },
+        {
+          "direction": "activity_to_api",
+          "reason": "missing_api_in_full_export",
+          "kind": "memset",
+          "pid": 188424,
+          "correlation_id": 549189,
+          "start_ns": 673705645,
+          "end_ns": 673706125,
+          "api_matches": 0,
+          "activity_matches": 1
+        },
+        {
+          "direction": "activity_to_api",
+          "reason": "missing_api_in_full_export",
+          "kind": "memset",
+          "pid": 188424,
+          "correlation_id": 549190,
+          "start_ns": 673709970,
+          "end_ns": 673710450,
+          "api_matches": 0,
+          "activity_matches": 1
+        },
+        {
+          "direction": "activity_to_api",
+          "reason": "missing_api_in_full_export",
+          "kind": "memset",
+          "pid": 188424,
+          "correlation_id": 549191,
+          "start_ns": 673713677,
+          "end_ns": 673714189,
+          "api_matches": 0,
+          "activity_matches": 1
+        },
+        {
+          "direction": "activity_to_api",
+          "reason": "missing_api_in_full_export",
+          "kind": "memset",
+          "pid": 188424,
+          "correlation_id": 549192,
+          "start_ns": 673715410,
+          "end_ns": 673715890,
+          "api_matches": 0,
+          "activity_matches": 1
+        },
+        {
+          "direction": "activity_to_api",
+          "reason": "missing_api_in_full_export",
+          "kind": "memset",
+          "pid": 188424,
+          "correlation_id": 549202,
+          "start_ns": 673748557,
+          "end_ns": 673749069,
+          "api_matches": 0,
+          "activity_matches": 1
+        },
+        {
+          "direction": "activity_to_api",
+          "reason": "missing_api_in_full_export",
+          "kind": "memset",
+          "pid": 188424,
+          "correlation_id": 549204,
+          "start_ns": 673752563,
+          "end_ns": 673753075,
+          "api_matches": 0,
+          "activity_matches": 1
+        },
+        {
+          "direction": "activity_to_api",
+          "reason": "missing_api_in_full_export",
+          "kind": "memset",
+          "pid": 188424,
+          "correlation_id": 549210,
+          "start_ns": 673758445,
+          "end_ns": 673759117,
+          "api_matches": 0,
+          "activity_matches": 1
+        },
+        {
+          "direction": "activity_to_api",
+          "reason": "missing_api_in_full_export",
+          "kind": "memset",
+          "pid": 188424,
+          "correlation_id": 549212,
+          "start_ns": 673759923,
+          "end_ns": 673760595,
+          "api_matches": 0,
+          "activity_matches": 1
+        },
+        {
+          "direction": "activity_to_api",
+          "reason": "missing_api_in_full_export",
+          "kind": "memset",
+          "pid": 188424,
+          "correlation_id": 549242,
+          "start_ns": 673780147,
+          "end_ns": 673781651,
+          "api_matches": 0,
+          "activity_matches": 1
+        },
+        {
+          "direction": "activity_to_api",
+          "reason": "missing_api_in_full_export",
+          "kind": "memset",
+          "pid": 188424,
+          "correlation_id": 549245,
+          "start_ns": 673785837,
+          "end_ns": 673787405,
+          "api_matches": 0,
+          "activity_matches": 1
+        },
+        {
+          "direction": "activity_to_api",
+          "reason": "missing_api_in_full_export",
+          "kind": "memset",
+          "pid": 188424,
+          "correlation_id": 549260,
+          "start_ns": 673807507,
+          "end_ns": 673808179,
+          "api_matches": 0,
+          "activity_matches": 1
+        },
+        {
+          "direction": "activity_to_api",
+          "reason": "missing_api_in_full_export",
+          "kind": "memset",
+          "pid": 188424,
+          "correlation_id": 549270,
+          "start_ns": 673817517,
+          "end_ns": 673818189,
+          "api_matches": 0,
+          "activity_matches": 1
+        },
+        {
+          "direction": "activity_to_api",
+          "reason": "missing_api_in_full_export",
+          "kind": "memset",
+          "pid": 188424,
+          "correlation_id": 549312,
+          "start_ns": 673835443,
+          "end_ns": 673835923,
+          "api_matches": 0,
+          "activity_matches": 1
+        },
+        {
+          "direction": "activity_to_api",
+          "reason": "missing_api_in_full_export",
+          "kind": "memset",
+          "pid": 188424,
+          "correlation_id": 549316,
+          "start_ns": 673837805,
+          "end_ns": 673838317,
+          "api_matches": 0,
+          "activity_matches": 1
+        },
+        {
+          "direction": "activity_to_api",
+          "reason": "missing_api_in_full_export",
+          "kind": "memset",
+          "pid": 188424,
+          "correlation_id": 549318,
+          "start_ns": 673840179,
+          "end_ns": 673840659,
+          "api_matches": 0,
+          "activity_matches": 1
+        },
+        {
+          "direction": "activity_to_api",
+          "reason": "missing_api_in_full_export",
+          "kind": "memset",
+          "pid": 188424,
+          "correlation_id": 549320,
+          "start_ns": 673841549,
+          "end_ns": 673842061,
+          "api_matches": 0,
+          "activity_matches": 1
+        },
+        {
+          "direction": "activity_to_api",
+          "reason": "missing_api_in_full_export",
+          "kind": "memset",
+          "pid": 188424,
+          "correlation_id": 549342,
+          "start_ns": 673863027,
+          "end_ns": 673863507,
+          "api_matches": 0,
+          "activity_matches": 1
+        },
+        {
+          "direction": "activity_to_api",
+          "reason": "missing_api_in_full_export",
+          "kind": "memset",
+          "pid": 188424,
+          "correlation_id": 549359,
+          "start_ns": 673872435,
+          "end_ns": 673873107,
+          "api_matches": 0,
+          "activity_matches": 1
+        },
+        {
+          "direction": "activity_to_api",
+          "reason": "missing_api_in_full_export",
+          "kind": "memset",
+          "pid": 188424,
+          "correlation_id": 549375,
+          "start_ns": 673883277,
+          "end_ns": 673883789,
+          "api_matches": 0,
+          "activity_matches": 1
+        },
+        {
+          "direction": "activity_to_api",
+          "reason": "missing_api_in_full_export",
+          "kind": "memset",
+          "pid": 188424,
+          "correlation_id": 549381,
+          "start_ns": 673889363,
+          "end_ns": 673890707,
+          "api_matches": 0,
+          "activity_matches": 1
+        },
+        {
+          "direction": "activity_to_api",
+          "reason": "missing_api_in_full_export",
+          "kind": "memset",
+          "pid": 188424,
+          "correlation_id": 549384,
+          "start_ns": 673891533,
+          "end_ns": 673892173,
+          "api_matches": 0,
+          "activity_matches": 1
+        },
+        {
+          "direction": "activity_to_api",
+          "reason": "missing_api_in_full_export",
+          "kind": "memset",
+          "pid": 188424,
+          "correlation_id": 549411,
+          "start_ns": 673916301,
+          "end_ns": 673917837,
+          "api_matches": 0,
+          "activity_matches": 1
+        },
+        {
+          "direction": "activity_to_api",
+          "reason": "missing_api_in_full_export",
+          "kind": "memset",
+          "pid": 188424,
+          "correlation_id": 549413,
+          "start_ns": 673919251,
+          "end_ns": 673919923,
+          "api_matches": 0,
+          "activity_matches": 1
+        },
+        {
+          "direction": "activity_to_api",
+          "reason": "missing_api_in_full_export",
+          "kind": "memset",
+          "pid": 188424,
+          "correlation_id": 549446,
+          "start_ns": 673935635,
+          "end_ns": 673936115,
+          "api_matches": 0,
+          "activity_matches": 1
+        },
+        {
+          "direction": "activity_to_api",
+          "reason": "missing_api_in_full_export",
+          "kind": "memset",
+          "pid": 188424,
+          "correlation_id": 549450,
+          "start_ns": 673941555,
+          "end_ns": 673942035,
+          "api_matches": 0,
+          "activity_matches": 1
+        },
+        {
+          "direction": "activity_to_api",
+          "reason": "missing_api_in_full_export",
+          "kind": "memset",
+          "pid": 188424,
+          "correlation_id": 549452,
+          "start_ns": 673946093,
+          "end_ns": 673946765,
+          "api_matches": 0,
+          "activity_matches": 1
+        },
+        {
+          "direction": "activity_to_api",
+          "reason": "missing_api_in_full_export",
+          "kind": "memset",
+          "pid": 188424,
+          "correlation_id": 549484,
+          "start_ns": 673962605,
+          "end_ns": 673963085,
+          "api_matches": 0,
+          "activity_matches": 1
+        },
+        {
+          "direction": "activity_to_api",
+          "reason": "missing_api_in_full_export",
+          "kind": "memset",
+          "pid": 188424,
+          "correlation_id": 549496,
+          "start_ns": 673966413,
+          "end_ns": 673966925,
+          "api_matches": 0,
+          "activity_matches": 1
+        },
+        {
+          "direction": "activity_to_api",
+          "reason": "missing_api_in_full_export",
+          "kind": "memset",
+          "pid": 188424,
+          "correlation_id": 549512,
+          "start_ns": 673978195,
+          "end_ns": 673978675,
+          "api_matches": 0,
+          "activity_matches": 1
+        },
+        {
+          "direction": "activity_to_api",
+          "reason": "missing_api_in_full_export",
+          "kind": "memset",
+          "pid": 188424,
+          "correlation_id": 549521,
+          "start_ns": 673987123,
+          "end_ns": 673987827,
+          "api_matches": 0,
+          "activity_matches": 1
+        },
+        {
+          "direction": "activity_to_api",
+          "reason": "missing_api_in_full_export",
+          "kind": "memset",
+          "pid": 188424,
+          "correlation_id": 549524,
+          "start_ns": 673990285,
+          "end_ns": 673990797,
+          "api_matches": 0,
+          "activity_matches": 1
+        },
+        {
+          "direction": "activity_to_api",
+          "reason": "missing_api_in_full_export",
+          "kind": "memset",
+          "pid": 188424,
+          "correlation_id": 549532,
+          "start_ns": 674000845,
+          "end_ns": 674001549,
+          "api_matches": 0,
+          "activity_matches": 1
+        },
+        {
+          "direction": "activity_to_api",
+          "reason": "missing_api_in_full_export",
+          "kind": "memset",
+          "pid": 188424,
+          "correlation_id": 549557,
+          "start_ns": 674012755,
+          "end_ns": 674014067,
+          "api_matches": 0,
+          "activity_matches": 1
+        },
+        {
+          "direction": "activity_to_api",
+          "reason": "missing_api_in_full_export",
+          "kind": "memset",
+          "pid": 188424,
+          "correlation_id": 549565,
+          "start_ns": 674021485,
+          "end_ns": 674022829,
+          "api_matches": 0,
+          "activity_matches": 1
+        },
+        {
+          "direction": "activity_to_api",
+          "reason": "missing_api_in_full_export",
+          "kind": "memset",
+          "pid": 188424,
+          "correlation_id": 549580,
+          "start_ns": 674042388,
+          "end_ns": 674043060,
+          "api_matches": 0,
+          "activity_matches": 1
+        },
+        {
+          "direction": "activity_to_api",
+          "reason": "missing_api_in_full_export",
+          "kind": "memset",
+          "pid": 188424,
+          "correlation_id": 549587,
+          "start_ns": 674051501,
+          "end_ns": 674052173,
+          "api_matches": 0,
+          "activity_matches": 1
+        },
+        {
+          "direction": "activity_to_api",
+          "reason": "missing_api_in_full_export",
+          "kind": "memset",
+          "pid": 188424,
+          "correlation_id": 549615,
+          "start_ns": 674060692,
+          "end_ns": 674061204,
+          "api_matches": 0,
+          "activity_matches": 1
+        },
+        {
+          "direction": "activity_to_api",
+          "reason": "missing_api_in_full_export",
+          "kind": "memset",
+          "pid": 188424,
+          "correlation_id": 549630,
+          "start_ns": 674065652,
+          "end_ns": 674066164,
+          "api_matches": 0,
+          "activity_matches": 1
+        },
+        {
+          "direction": "activity_to_api",
+          "reason": "missing_api_in_full_export",
+          "kind": "memset",
+          "pid": 188424,
+          "correlation_id": 549638,
+          "start_ns": 674069965,
+          "end_ns": 674070477,
+          "api_matches": 0,
+          "activity_matches": 1
+        },
+        {
+          "direction": "activity_to_api",
+          "reason": "missing_api_in_full_export",
+          "kind": "memset",
+          "pid": 188424,
+          "correlation_id": 549645,
+          "start_ns": 674073325,
+          "end_ns": 674073837,
+          "api_matches": 0,
+          "activity_matches": 1
+        },
+        {
+          "direction": "activity_to_api",
+          "reason": "missing_api_in_full_export",
+          "kind": "memset",
+          "pid": 188424,
+          "correlation_id": 549660,
+          "start_ns": 674088884,
+          "end_ns": 674089396,
+          "api_matches": 0,
+          "activity_matches": 1
+        },
+        {
+          "direction": "activity_to_api",
+          "reason": "missing_api_in_full_export",
+          "kind": "memset",
+          "pid": 188424,
+          "correlation_id": 549675,
+          "start_ns": 674097012,
+          "end_ns": 674097652,
+          "api_matches": 0,
+          "activity_matches": 1
+        },
+        {
+          "direction": "activity_to_api",
+          "reason": "missing_api_in_full_export",
+          "kind": "memset",
+          "pid": 188424,
+          "correlation_id": 549696,
+          "start_ns": 674109197,
+          "end_ns": 674109709,
+          "api_matches": 0,
+          "activity_matches": 1
+        },
+        {
+          "direction": "activity_to_api",
+          "reason": "missing_api_in_full_export",
+          "kind": "memset",
+          "pid": 188424,
+          "correlation_id": 549700,
+          "start_ns": 674113620,
+          "end_ns": 674114932,
+          "api_matches": 0,
+          "activity_matches": 1
+        },
+        {
+          "direction": "activity_to_api",
+          "reason": "missing_api_in_full_export",
+          "kind": "memset",
+          "pid": 188424,
+          "correlation_id": 549704,
+          "start_ns": 674117869,
+          "end_ns": 674118541,
+          "api_matches": 0,
+          "activity_matches": 1
+        },
+        {
+          "direction": "activity_to_api",
+          "reason": "missing_api_in_full_export",
+          "kind": "memset",
+          "pid": 188424,
+          "correlation_id": 549730,
+          "start_ns": 674143220,
+          "end_ns": 674144564,
+          "api_matches": 0,
+          "activity_matches": 1
+        },
+        {
+          "direction": "activity_to_api",
+          "reason": "missing_api_in_full_export",
+          "kind": "memset",
+          "pid": 188424,
+          "correlation_id": 549733,
+          "start_ns": 674144941,
+          "end_ns": 674146317,
+          "api_matches": 0,
+          "activity_matches": 1
+        },
+        {
+          "direction": "activity_to_api",
+          "reason": "missing_api_in_full_export",
+          "kind": "memset",
+          "pid": 188424,
+          "correlation_id": 549764,
+          "start_ns": 674159764,
+          "end_ns": 674160276,
+          "api_matches": 0,
+          "activity_matches": 1
+        },
+        {
+          "direction": "activity_to_api",
+          "reason": "missing_api_in_full_export",
+          "kind": "memset",
+          "pid": 188424,
+          "correlation_id": 549766,
+          "start_ns": 674163188,
+          "end_ns": 674163700,
+          "api_matches": 0,
+          "activity_matches": 1
+        },
+        {
+          "direction": "activity_to_api",
+          "reason": "missing_api_in_full_export",
+          "kind": "memset",
+          "pid": 188424,
+          "correlation_id": 549774,
+          "start_ns": 674175629,
+          "end_ns": 674176301,
+          "api_matches": 0,
+          "activity_matches": 1
+        },
+        {
+          "direction": "activity_to_api",
+          "reason": "missing_api_in_full_export",
+          "kind": "memset",
+          "pid": 188424,
+          "correlation_id": 549816,
+          "start_ns": 674192909,
+          "end_ns": 674193421,
+          "api_matches": 0,
+          "activity_matches": 1
+        },
+        {
+          "direction": "api_to_activity",
+          "reason": "missing_activity_in_full_export",
+          "kind": "kernel",
+          "api": "cuLaunchKernel",
+          "pid": 188424,
+          "correlation_id": 549823,
+          "start_ns": 674193601,
+          "end_ns": 674197157,
+          "activity_matches": 0
+        },
+        {
+          "direction": "api_to_activity",
+          "reason": "missing_activity_in_full_export",
+          "kind": "kernel",
+          "api": "cuLaunchKernel",
+          "pid": 188424,
+          "correlation_id": 549893,
+          "start_ns": 674258304,
+          "end_ns": 674261919,
+          "activity_matches": 0
+        },
+        {
+          "direction": "api_to_activity",
+          "reason": "missing_activity_in_full_export",
+          "kind": "kernel",
+          "api": "cuLaunchKernel",
+          "pid": 188424,
+          "correlation_id": 550000,
+          "start_ns": 674339594,
+          "end_ns": 674343218,
+          "activity_matches": 0
+        },
+        {
+          "direction": "api_to_activity",
+          "reason": "missing_activity_in_full_export",
+          "kind": "kernel",
+          "api": "cuLaunchKernel",
+          "pid": 188424,
+          "correlation_id": 550070,
+          "start_ns": 674394381,
+          "end_ns": 674398402,
+          "activity_matches": 0
+        }
+      ],
+      "same_thread_runtime_overlaps": 0,
+      "overlap_examples": [],
+      "matching_policy": "Full-export (PID, correlation ID), unique successful API, correct activity kind, same request window",
+      "limitation": "Exported-row closure only; simultaneous API/activity loss remains possible. Not a complete-report claim."
+    },
+    "measured": {
+      "status": "observed_correlation_closed",
+      "observed_correlation_closed": true,
+      "full_trace_accepted": false,
+      "paired_api_activity_loss_excluded": false,
+      "request_window_ns": [
+        2555379178,
+        5045421016
+      ],
+      "counts": {
+        "kernel_observed": 86392,
+        "memcpy_observed": 26284,
+        "memset_observed": 70134,
+        "runtime_api_rows": 674634,
+        "memset_successful_api": 70134,
+        "memcpy_successful_api": 26284,
+        "kernel_successful_api": 86392,
+        "launch_runtime": 84540,
+        "launch_driver": 1852,
+        "kernel_activity_to_api_unique": 86392,
+        "memcpy_activity_to_api_unique": 26284,
+        "memset_activity_to_api_unique": 70134,
+        "memset_api_to_activity_unique": 70134,
+        "memcpy_api_to_activity_unique": 26284,
+        "kernel_api_to_activity_unique": 86392
+      },
+      "issues": [],
+      "same_thread_runtime_overlaps": 0,
+      "overlap_examples": [],
+      "matching_policy": "Full-export (PID, correlation ID), unique successful API, correct activity kind, same request window",
+      "limitation": "Exported-row closure only; simultaneous API/activity loss remains possible. Not a complete-report claim."
+    }
+  },
+  "per_uuid_activity": {
+    "warmup": {
+      "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": {
+        "kernels": 43119,
+        "kernel_duration_ns": 217747322,
+        "memcpy": {
+          "D2D": {
+            "count": 4313,
+            "bytes": 290111488,
+            "duration_ns": 6118005
+          },
+          "H2D": {
+            "count": 7073,
+            "bytes": 10756384,
+            "duration_ns": 4069551
+          },
+          "D2H": {
+            "count": 1659,
+            "bytes": 20413156,
+            "duration_ns": 3232559
+          }
+        },
+        "memsets": 34820
+      },
+      "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": {
+        "kernels": 43128,
+        "kernel_duration_ns": 218899101,
+        "memcpy": {
+          "D2D": {
+            "count": 4314,
+            "bytes": 290119680,
+            "duration_ns": 6165884
+          },
+          "H2D": {
+            "count": 7074,
+            "bytes": 10756388,
+            "duration_ns": 4137755
+          },
+          "D2H": {
+            "count": 1659,
+            "bytes": 20413156,
+            "duration_ns": 3218430
+          }
+        },
+        "memsets": 34826
+      }
+    },
+    "measured": {
+      "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": {
+        "kernels": 43196,
+        "kernel_duration_ns": 218042390,
+        "memcpy": {
+          "H2D": {
+            "count": 7122,
+            "bytes": 10940972,
+            "duration_ns": 4081132
+          },
+          "D2D": {
+            "count": 4358,
+            "bytes": 321699840,
+            "duration_ns": 6250931
+          },
+          "D2H": {
+            "count": 1662,
+            "bytes": 20433956,
+            "duration_ns": 3224582
+          }
+        },
+        "memsets": 35067
+      },
+      "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": {
+        "kernels": 43196,
+        "kernel_duration_ns": 218998391,
+        "memcpy": {
+          "H2D": {
+            "count": 7122,
+            "bytes": 10940972,
+            "duration_ns": 4106943
+          },
+          "D2D": {
+            "count": 4358,
+            "bytes": 321699840,
+            "duration_ns": 6304697
+          },
+          "D2H": {
+            "count": 1662,
+            "bytes": 20433956,
+            "duration_ns": 3204571
+          }
+        },
+        "memsets": 35067
+      }
+    }
+  },
+  "api_counts": {
+    "warmup": {
+      "events": {
+        "runtime": {
+          "create": {
+            "count": 0,
+            "duration_ns": 0,
+            "returns": {},
+            "names": {}
+          },
+          "record": {
+            "count": 0,
+            "duration_ns": 0,
+            "returns": {},
+            "names": {}
+          },
+          "query": {
+            "count": 0,
+            "duration_ns": 0,
+            "returns": {},
+            "names": {}
+          },
+          "destroy": {
+            "count": 0,
+            "duration_ns": 0,
+            "returns": {},
+            "names": {}
+          }
+        },
+        "driver": {
+          "create": {
+            "count": 74821,
+            "duration_ns": 56629542,
+            "returns": {
+              "0": 74821
+            },
+            "names": {
+              "cuEventCreate": 74821
+            }
+          },
+          "record": {
+            "count": 74821,
+            "duration_ns": 26105149,
+            "returns": {
+              "0": 74821
+            },
+            "names": {
+              "cuEventRecord": 74821
+            }
+          },
+          "query": {
+            "count": 61894,
+            "duration_ns": 28847025,
+            "returns": {
+              "0": 57855,
+              "600": 4039
+            },
+            "names": {
+              "cuEventQuery": 61894
+            }
+          },
+          "destroy": {
+            "count": 74821,
+            "duration_ns": 22057041,
+            "returns": {
+              "0": 74821
+            },
+            "names": {
+              "cuEventDestroy_v2": 74821
+            }
+          }
+        }
+      },
+      "synchronization": {
+        "cuStreamSynchronize": {
+          "count": 67651,
+          "duration_ns": 81392699
+        },
+        "cuEventSynchronize": {
+          "count": 17004,
+          "duration_ns": 137762999
+        },
+        "cuStreamWaitEvent": {
+          "count": 408,
+          "duration_ns": 215265
+        }
+      },
+      "launches": {
+        "cuLaunchKernel": {
+          "count": 1832,
+          "duration_ns": 8080085
+        },
+        "cudaLaunchKernel_v7000": {
+          "count": 84419,
+          "duration_ns": 392791888
+        }
+      },
+      "boundary_crossing_calls": []
+    },
+    "measured": {
+      "events": {
+        "runtime": {
+          "create": {
+            "count": 0,
+            "duration_ns": 0,
+            "returns": {},
+            "names": {}
+          },
+          "record": {
+            "count": 0,
+            "duration_ns": 0,
+            "returns": {},
+            "names": {}
+          },
+          "query": {
+            "count": 0,
+            "duration_ns": 0,
+            "returns": {},
+            "names": {}
+          },
+          "destroy": {
+            "count": 0,
+            "duration_ns": 0,
+            "returns": {},
+            "names": {}
+          }
+        },
+        "driver": {
+          "create": {
+            "count": 75218,
+            "duration_ns": 56967622,
+            "returns": {
+              "0": 75218
+            },
+            "names": {
+              "cuEventCreate": 75218
+            }
+          },
+          "record": {
+            "count": 75218,
+            "duration_ns": 26743367,
+            "returns": {
+              "0": 75218
+            },
+            "names": {
+              "cuEventRecord": 75218
+            }
+          },
+          "query": {
+            "count": 62270,
+            "duration_ns": 29618923,
+            "returns": {
+              "0": 58200,
+              "600": 4070
+            },
+            "names": {
+              "cuEventQuery": 62270
+            }
+          },
+          "destroy": {
+            "count": 75218,
+            "duration_ns": 21207263,
+            "returns": {
+              "0": 75218
+            },
+            "names": {
+              "cuEventDestroy_v2": 75218
+            }
+          }
+        }
+      },
+      "synchronization": {
+        "cuEventSynchronize": {
+          "count": 17054,
+          "duration_ns": 136971928
+        },
+        "cuStreamSynchronize": {
+          "count": 67866,
+          "duration_ns": 82363410
+        },
+        "cuStreamWaitEvent": {
+          "count": 408,
+          "duration_ns": 224783
+        }
+      },
+      "launches": {
+        "cudaLaunchKernel_v7000": {
+          "count": 84540,
+          "duration_ns": 399498489
+        },
+        "cuLaunchKernel": {
+          "count": 1852,
+          "duration_ns": 8065258
+        }
+      },
+      "boundary_crossing_calls": []
+    }
+  },
+  "api_table_coverage": {
+    "CUPTI_ACTIVITY_KIND_RUNTIME": true,
+    "CUPTI_ACTIVITY_KIND_DRIVER": false
+  },
+  "diagnostics": [
+    {
+      "timestamp": -379221382587,
+      "timestampType": 1,
+      "source": 2,
+      "severity": 1,
+      "text": "Process was launched by the profiler, see /home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/session/nsys-tmp/nvidia/nsight_systems/quadd_session_10188392/streams/pid_188403_stdout.log and stderr.log for program output",
+      "globalPid": 284635854536704
+    },
+    {
+      "timestamp": -379207061572,
+      "timestampType": 1,
+      "source": 1,
+      "severity": 1,
+      "text": "Common injection library initialized successfully.",
+      "globalPid": 284635854536704
+    },
+    {
+      "timestamp": -379203523351,
+      "timestampType": 1,
+      "source": 1,
+      "severity": 1,
+      "text": "OS runtime libraries injection initialized successfully.",
+      "globalPid": 284635854536704
+    },
+    {
+      "timestamp": -374153277005,
+      "timestampType": 1,
+      "source": 1,
+      "severity": 1,
+      "text": "Common injection library initialized successfully.",
+      "globalPid": 284636206858240
+    },
+    {
+      "timestamp": -374143269518,
+      "timestampType": 1,
+      "source": 1,
+      "severity": 1,
+      "text": "OS runtime libraries injection initialized successfully.",
+      "globalPid": 284636206858240
+    },
+    {
+      "timestamp": -119141014545,
+      "timestampType": 1,
+      "source": 1,
+      "severity": 1,
+      "text": "Buffers holding CUDA trace data will be flushed on CudaProfilerStop() call. See --flush-on-cudaprofilerstop to control this behavior.",
+      "globalPid": 284636206858240
+    },
+    {
+      "timestamp": -119130604292,
+      "timestampType": 1,
+      "source": 1,
+      "severity": 1,
+      "text": "Loaded CUPTI library: /home/admin/luhuanbing.lhb/Ferrule/target/vendor/nsight-systems-cli-2025.3.1/opt/nvidia/nsight-systems-cli/2025.3.1/target-linux-x64/libcupti.so.12.9",
+      "globalPid": 284636206858240
+    },
+    {
+      "timestamp": -118852873273,
+      "timestampType": 1,
+      "source": 1,
+      "severity": 1,
+      "text": "Enabling trace for device graph launch",
+      "globalPid": 284636206858240
+    },
+    {
+      "timestamp": -118852858981,
+      "timestampType": 1,
+      "source": 1,
+      "severity": 1,
+      "text": "CUDA injection initialized successfully.",
+      "globalPid": 284636206858240
+    },
+    {
+      "timestamp": -19531055277,
+      "timestampType": 1,
+      "source": 1,
+      "severity": 1,
+      "text": "NVTX injection initialized successfully.",
+      "globalPid": 284636206858240
+    },
+    {
+      "timestamp": 0,
+      "timestampType": 1,
+      "source": 3,
+      "severity": 1,
+      "text": "Profiling has started.",
+      "globalPid": -144115188075855872
+    },
+    {
+      "timestamp": 2119976609,
+      "timestampType": 2,
+      "source": 3,
+      "severity": 2,
+      "text": "Scheduling information is absent. The thread activity is deduced based on OS runtime libraries traces. This is inaccurate and does not take into account asynchronous interrupts and exception faults.",
+      "globalPid": -144115188075855872
+    },
+    {
+      "timestamp": 2120031257,
+      "timestampType": 2,
+      "source": 3,
+      "severity": 2,
+      "text": "Not all NVTX events might have been collected.",
+      "globalPid": 284636206858240
+    },
+    {
+      "timestamp": 2120034455,
+      "timestampType": 2,
+      "source": 3,
+      "severity": 1,
+      "text": "Number of NVTX events collected: \t1.",
+      "globalPid": 284636206858240
+    },
+    {
+      "timestamp": 2120036760,
+      "timestampType": 2,
+      "source": 3,
+      "severity": 2,
+      "text": "Not all NVTX events might have been collected.",
+      "globalPid": 284635854536704
+    },
+    {
+      "timestamp": 2120037230,
+      "timestampType": 2,
+      "source": 3,
+      "severity": 2,
+      "text": "No NVTX events collected. Does the process use NVTX?",
+      "globalPid": 284635854536704
+    },
+    {
+      "timestamp": 2120039282,
+      "timestampType": 2,
+      "source": 3,
+      "severity": 2,
+      "text": "Not all CUDA events might have been collected.",
+      "globalPid": 284636206858240
+    },
+    {
+      "timestamp": 2120040045,
+      "timestampType": 2,
+      "source": 3,
+      "severity": 1,
+      "text": "Number of CUDA events collected: \t1711883.",
+      "globalPid": 284636206858240
+    },
+    {
+      "timestamp": 2120040664,
+      "timestampType": 2,
+      "source": 3,
+      "severity": 2,
+      "text": "CUDA profiling might have not been started correctly.",
+      "globalPid": 284635854536704
+    },
+    {
+      "timestamp": 2120041283,
+      "timestampType": 2,
+      "source": 3,
+      "severity": 2,
+      "text": "No CUDA events collected. Does the process use CUDA?",
+      "globalPid": 284635854536704
+    },
+    {
+      "timestamp": 2120042779,
+      "timestampType": 2,
+      "source": 3,
+      "severity": 2,
+      "text": "Not all OS runtime libraries events might have been collected.",
+      "globalPid": 284636206858240
+    },
+    {
+      "timestamp": 2120043388,
+      "timestampType": 2,
+      "source": 3,
+      "severity": 1,
+      "text": "Number of OS runtime libraries events collected: \t37243.",
+      "globalPid": 284636206858240
+    },
+    {
+      "timestamp": 2120043938,
+      "timestampType": 2,
+      "source": 3,
+      "severity": 2,
+      "text": "Not all OS runtime libraries events might have been collected.",
+      "globalPid": 284635854536704
+    },
+    {
+      "timestamp": 2120044328,
+      "timestampType": 2,
+      "source": 3,
+      "severity": 1,
+      "text": "Number of OS runtime libraries events collected: \t93.",
+      "globalPid": 284635854536704
+    },
+    {
+      "timestamp": 5171081050,
+      "timestampType": 1,
+      "source": 3,
+      "severity": 1,
+      "text": "Profiling has stopped.",
+      "globalPid": -144115188075855872
+    },
+    {
+      "timestamp": 5249492115,
+      "timestampType": 1,
+      "source": 1,
+      "severity": 1,
+      "text": "Number of CUPTI events produced: \t2006410, CUPTI buffers: 50.",
+      "globalPid": 284636206858240
+    }
+  ],
+  "full_trace_accepted": false,
+  "full_trace_warning": "Retain all Nsight/DIAGNOSTIC_EVENT completeness warnings; exported bidirectional closure does not exclude paired API/activity loss",
+  "unique_cuda_events": null,
+  "completed_retirements": null,
+  "unknown_pressure": null,
+  "pending_peak": null,
+  "scope": "Same actual HTTP request bounds for APIs and activities, exact model PID and physical UUID mapping; info-only, rankperf off",
+  "limitations": [
+    "Not pure prefill/decode windows; no server request DEBUG markers.",
+    "Runtime/driver call layers must not be added as unique events; query not-ready is polling, not retirement completion.",
+    "Host API durations include waits, overlap across threads/devices and cannot be added into throughput benefits.",
+    "Stripped release, no CPU stack attribution; full-trace completeness unproven."
+  ],
+  "artifact_pins": {
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/prepared.json": "b27764bc3ab9b1e98ab974cbd731a9637c68fee2f5d89049698da1f2f358e349",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/probe-lock-release.json": "aff4f68d7b05f833122c36031f0e48aebe3c19cdf8e0cceb05f9b27350a7313e",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/session/nsight/nsys.nsys-rep": "21ad1b8e7fe5958bfb92fa5cf3834016e428398df4a86463fc5b873a7a886c4f",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/session/nsight/nsys.sqlite": "efe99aee5f384ca6b0210bcb943223daf88e8b820f7ffbf5dd5231b2d4ecc245",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/session/profile/measured.json": "47dde74f1fb16a6315702f2d45e4003b5de48a2b2bc425e2118dbc3650f157c4",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/session/profile/warmup.json": "2612ed2e0b912225caf46d2fcc03b8bfcee6d08767d4928a5dd9d0853cf8c73c",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/session/server.log": "097533a091388b446c3e92a7f759093ea8070a2aadd68b6ecb35394665b683cb"
+  }
+}

@@ -2312,7 +2312,7 @@ fn provider_global_fault_has_no_fabricated_operation_and_cannot_be_idle() {
     handle.push_fault(fault.clone());
     assert_eq!(
         registry.provider_mut().next_completion(),
-        Err(fault.clone())
+        Err(Box::new(fault.clone()))
     );
     handle.push_fault(fault.clone());
     registry.collect_provider_completions(8);

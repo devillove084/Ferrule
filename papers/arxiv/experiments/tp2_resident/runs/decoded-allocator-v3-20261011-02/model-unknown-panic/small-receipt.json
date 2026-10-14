@@ -1,0 +1,16 @@
+{
+  "selector": "transformer::standard::cuda::hybrid_rank::mixed::decoded_gpu_tests::decoded_pair_unknown_and_panic_retain_physical_backing",
+  "binary_sha256": "e0e956282450b7fadf349c7921e4c4caab9e1e427a9c77f1bab438b918cf6fad",
+  "source_digest": "e3592ec70f5073d1a2a6a3a43141ce56cdc081ef2693f29b1226dccfd7e3b436",
+  "assertions_passed": true,
+  "cache_values": "source-pinned model assertions; no raw per-step counters exported",
+  "assertion_contract": null,
+  "gpu_memory": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-allocator-v3-20261011-02/model-unknown-panic/resources.json",
+    "sha256": "b464d0149571f97a88c236f62fdaf191025a58bb37e47a4ac5fc71a36cb8cc82"
+  },
+  "log": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-allocator-v3-20261011-02/model-unknown-panic/test.log",
+    "sha256": "c65603ed54e95c5c154ef998a5bfa7dae4aa45b602b4c4ef7fa1cde92aad0b60"
+  }
+}

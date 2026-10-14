@@ -1,0 +1,7 @@
+{
+  "returncode": 0,
+  "one_test_passed": true,
+  "selector": "cuda::operators::standard_bf16::tests::packed_routes_gpu_finite_bits_and_preflight_no_work",
+  "binary_sha256": "2636ee8fb65102fb69421e5926655d68e98ec34ada23462ac19448a9a2b36308",
+  "log_sha256": "90ca5a76e1571849a0699f83879d4d4c67092f26b03595241deedc6c59192ed9"
+}

@@ -11,6 +11,7 @@ categories = ["science", "machine-learning"]
 
 [features]
 default = []
+cpu-reference = ["ferrule-model/cpu-reference"]
 cuda = ["ferrule-model/cuda", "dep:ferrule-backend", "ferrule-backend/cuda"]
 
 [dependencies]
@@ -25,9 +26,12 @@ snafu.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
-serde_json = "1"
+serde_json = { version = "1", features = ["raw_value"] }
+rustls = { version = "0.23.45", default-features = false, features = ["std", "ring"] }
 
 [dev-dependencies]
+rcgen = { version = "0.14.10", default-features = false, features = ["pem", "ring"] }
+tempfile = "3"
 ferrule-backend = { version = "0.2.0", path = "../ferrule-backend" }
 
 # A test-only executable without libtest's stdout preamble. The production
@@ -37,5 +41,20 @@ name = "process_rank_child"
 path = "tests/support/process_rank_child.rs"
 test = false
 
+# CPU-only network regression child; never a production worker fallback.
+[[example]]
+name = "network_rank_child"
+path = "tests/support/network/test_child.rs"
+test = false
+
 [lints]
 workspace = true
+
+# Public fake providers require the explicit reference lane.
+[[test]]
+name = "io_registry"
+required-features = ["cpu-reference"]
+
+[[test]]
+name = "io_physical"
+required-features = ["cpu-reference"]

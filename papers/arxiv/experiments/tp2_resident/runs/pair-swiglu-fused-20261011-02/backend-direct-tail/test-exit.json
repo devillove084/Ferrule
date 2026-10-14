@@ -1,0 +1,7 @@
+{
+  "returncode": 0,
+  "one_test_passed": true,
+  "selector": "pair_swiglu_direct_tail::gpu::direct_tail_words_old_literal_vs_fused_m1_m2_m5",
+  "binary_sha256": "5ff0e195fd865a8816d37cc4e498392da800b31df587041d75baa76e2b86de38",
+  "log_sha256": "012e422f2ce7ad6aa819491027cd3103e342721513f01bb6490247adafcfeb67"
+}

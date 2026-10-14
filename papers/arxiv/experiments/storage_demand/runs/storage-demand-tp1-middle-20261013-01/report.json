@@ -1,0 +1,122 @@
+{
+  "status": "failed",
+  "purpose": "storage_demand_tp1_middle_four_requests_v1",
+  "owner_note": "Storage-demand TP1 middle only: Hello2 + 3 canaries; no QA or retry",
+  "request_count": 4,
+  "prepared_sha256": "5c7a01147084aa95f6a6604cf727f69754c7e7b51539afd7423539723e4bc696",
+  "n": 1,
+  "full_current_math_pass": false,
+  "exact_token_pass": null,
+  "physical_host_cap_bytes": null,
+  "physical_nas_bytes": null,
+  "PssAnon": null,
+  "small_big_authorized": false,
+  "authenticated_drained": true,
+  "supervision_complete": true,
+  "supervisor_success": false,
+  "case": {
+    "status": "target_failed",
+    "requests": [],
+    "started_monotonic": 8833650.487862617,
+    "token_ids_exposed": false,
+    "target_error": "AttributeError: 'types.SimpleNamespace' object has no attribute 'DEVNULL'",
+    "shutdown_contract": {
+      "normal_exit_observed": null,
+      "process_exit_success": null,
+      "resource_contract_complete": "unknown",
+      "pending_requests_observed": null,
+      "pending_operations_observed": null,
+      "custody_unknown_observed": null,
+      "quarantine_observed": null,
+      "ledger_credits_outstanding_observed": null,
+      "fence_quiescent_observed": null,
+      "source_completion_observed": null,
+      "resource_evidence_coverage": {
+        "required_fields": [
+          "pending_requests_observed",
+          "pending_operations_observed",
+          "custody_unknown_observed",
+          "quarantine_observed",
+          "ledger_credits_outstanding_observed",
+          "fence_quiescent_observed",
+          "source_completion_observed"
+        ],
+        "missing_fields": [
+          "pending_requests_observed",
+          "pending_operations_observed",
+          "custody_unknown_observed",
+          "quarantine_observed",
+          "ledger_credits_outstanding_observed",
+          "fence_quiescent_observed",
+          "source_completion_observed"
+        ],
+        "invalid_fields": [],
+        "failed_fields": []
+      },
+      "basis": "Process exit is supervision evidence only; resource verification requires explicit final owner ledger credits, fence quiescence, pending, Unknown/quarantine and current source-completion observations"
+    },
+    "all_invocation_counters": {
+      "invocations": 0,
+      "valid": false,
+      "deltas": {
+        "checkpoint_read_calls": null,
+        "checkpoint_read_bytes": null,
+        "checkpoint_source_checks": null,
+        "checkpoint_path_metadata_calls": null,
+        "checkpoint_handle_metadata_calls": null,
+        "h2d_copies": null,
+        "h2d_bytes": null,
+        "artifact_uploads": null,
+        "artifact_upload_bytes": null,
+        "expert_hits": null,
+        "expert_uploads": null,
+        "expert_evictions": null
+      },
+      "last_gauges": {
+        "expert_resident_entries": null,
+        "expert_resident_bytes": null,
+        "expert_pending_upload_bytes": null,
+        "expert_scratch_bytes": null,
+        "expert_owner_peak_bytes": null,
+        "expert_unknown_quarantine_bytes": null
+      },
+      "expert_cache_miss_counter": null,
+      "io_credits": null,
+      "physical_nas_bytes": null,
+      "proc_read_bytes": null,
+      "nfs_shared_mount_bytes": null,
+      "scope": "logical checkpoint reader and facade deltas; not physical NAS/device-kernel counts"
+    },
+    "runtime_log_evidence": [],
+    "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "pins_after": {
+      "status": "verified_scoped",
+      "legacy_manifest_entries": 702,
+      "production_source_scope": "597 pins via sealed compiled-source archive; current worktree not rehashed",
+      "active_workflow_scope": "explicit TP1 import/assets; unrelated paper workflow excluded",
+      "tensor_payload_bytes_hashed": 0,
+      "shard_headers_reread": false
+    },
+    "wall_seconds": 0.05517653748393059
+  },
+  "resource_contract_complete": "unknown",
+  "pins_post_supervisor": "sealed_702_history_and_597_build_archive_plus_explicit_TP1_import_assets_and_runtime_pins_verified",
+  "all_eight_post_idle": true,
+  "selected_local_lock_released": true,
+  "artifact_pins": {
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-01/baseline.json": "3c2bd642756c89eefb40a77c82d66cda42ca4d6a3584092b8d2f1620932ab368",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-01/case.json": "8b41a2470fbdb6fb78d605913335e169afeb2e41a2de7d3524b904db800be070",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-01/cpu-contracts.json": "ef6acc6b939e2b4804d4c46e6c7b34c4fef5c1c7f719aae4c3432bcb10366408",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-01/current-runtime-pins.json": "c1772544522cd7fc881475c9b5b9e41572ac995c26f8388cc5d516287aaf1e44",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-01/custody.json": "202ac899d510a49166be65da3fe728e181b9e52b277dd9577b04a49dc9d56fa7",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-01/lock-preflight.json": "8badc60b16687a47675d49626eef159658d7fbd5b6a43c2bb7545f508d7dbf30",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-01/post-idle.json": "d108cb5ae0a42634371b39a5b9304d6d3d44ebe1de112ad2672950749977dda3",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-01/preflight.json": "7bd7725b3de2260d7fd6c0cae24f7041e3eb638131e0f0fa329d9be1d224a3bd",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-01/prelaunch.json": "be3c8bf2d7d04ef44723b7c52b2c8a9a6131dffe8e58abceb3e3b382b4fc25b5",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-01/registration.json": "762adbe3baab7883c3f488adca86e57a53919f7c8bdfc109f92fb82baf02c288",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-01/server.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-01/staged/ferrule": "36e6aaa54d1aff7c8cc35d63dcee0df1cad91fcc8f6d3e746369504f2c70a58c",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-01/supervisor.json": "1c896f22e38fa324325d681396693584f3a62f8adb2ef168d8d69f78848e0527",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-01/worker-launch.json": "4349e40644539b91902ee7d6cc47e4cfd26275ecd054d59f222363abb5b84790"
+  }
+}

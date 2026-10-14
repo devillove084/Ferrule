@@ -1,0 +1,15 @@
+{
+  "protocol": "tp2-serving-profile-c1",
+  "purpose": "profiling",
+  "status": "incomplete",
+  "sole_gpu_owner_granted": true,
+  "owner_note": "User sole GPU owner authorization: one official Nsight2025.3 fixed4d40 full-model short profile, GPU0/1 only, eight instrumentation locks, no foreign signals, no benchmark",
+  "fairmatch": false,
+  "exact_speedup": null,
+  "slots": [
+    {
+      "id": "P1",
+      "status": "dispatched_unknown"
+    }
+  ]
+}

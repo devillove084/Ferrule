@@ -1,0 +1,648 @@
+{
+  "schema": "ferrule.paper.tp2-mixed-lifecycle-contract.v1",
+  "reference_schema": "ferrule.paper.tp2-mixed-lifecycle-reference.v1",
+  "candidate_schema": "ferrule.paper.tp2-mixed-lifecycle-candidate.v1",
+  "profile": "SystemMixedTP2EP1",
+  "reference_manifest": "full40-03 only as numerical identity/protocol; lifecycle captures use fresh output directories",
+  "protocol_sha256": "c6e7836f3797c16502dc21b8c756c87495525c2cf2faac26ba11077f62cfbb57",
+  "scenarios": [
+    {
+      "name": "greedy",
+      "decode_steps": 4,
+      "exports": 1,
+      "calls_per_export": 10,
+      "plan": {
+        "schema": "ferrule.paper.tp2-mixed-lifecycle-plan.v1",
+        "scenario": "greedy",
+        "decode_steps": 4,
+        "prompts": {
+          "hello": [
+            9419
+          ],
+          "capital": [
+            760,
+            6511,
+            314,
+            9338,
+            369
+          ]
+        },
+        "operations": [
+          {
+            "op": "create",
+            "session": "hello",
+            "case": "hello"
+          },
+          {
+            "op": "call",
+            "session": "hello",
+            "id": "call-00",
+            "input": {
+              "kind": "tokens",
+              "ids": [
+                9419
+              ]
+            }
+          },
+          {
+            "op": "call",
+            "session": "hello",
+            "id": "call-01",
+            "input": {
+              "kind": "greedy"
+            }
+          },
+          {
+            "op": "call",
+            "session": "hello",
+            "id": "call-02",
+            "input": {
+              "kind": "greedy"
+            }
+          },
+          {
+            "op": "call",
+            "session": "hello",
+            "id": "call-03",
+            "input": {
+              "kind": "greedy"
+            }
+          },
+          {
+            "op": "call",
+            "session": "hello",
+            "id": "call-04",
+            "input": {
+              "kind": "greedy"
+            }
+          },
+          {
+            "op": "drop",
+            "session": "hello"
+          },
+          {
+            "op": "create",
+            "session": "capital",
+            "case": "capital"
+          },
+          {
+            "op": "call",
+            "session": "capital",
+            "id": "call-05",
+            "input": {
+              "kind": "tokens",
+              "ids": [
+                760,
+                6511,
+                314,
+                9338,
+                369
+              ]
+            }
+          },
+          {
+            "op": "call",
+            "session": "capital",
+            "id": "call-06",
+            "input": {
+              "kind": "greedy"
+            }
+          },
+          {
+            "op": "call",
+            "session": "capital",
+            "id": "call-07",
+            "input": {
+              "kind": "greedy"
+            }
+          },
+          {
+            "op": "call",
+            "session": "capital",
+            "id": "call-08",
+            "input": {
+              "kind": "greedy"
+            }
+          },
+          {
+            "op": "call",
+            "session": "capital",
+            "id": "call-09",
+            "input": {
+              "kind": "greedy"
+            }
+          },
+          {
+            "op": "drop",
+            "session": "capital"
+          }
+        ],
+        "limits": {
+          "max_calls": 20,
+          "max_live_sessions": 3,
+          "max_total_capture_bytes": 4294967296
+        },
+        "capture": "every call; complete old inventory at stage call; cache reflects committed post-call state",
+        "fork": "deep independent HF global/rank cache snapshots, not a runtime COW implementation",
+        "cold_owner": "one fresh authenticated numerical child per launch; repeat in a second launch to establish different owner identity",
+        "stop": "fixed bounded decode count, including EOS; not natural-stop quality/performance evaluation"
+      },
+      "plan_sha256": "672bab8cd0550c4a5fecf28bb90450cf053f5f8d82469d7d11f25da28753077e",
+      "output_names": [
+        "lifecycle-greedy4-01"
+      ]
+    },
+    {
+      "name": "fork",
+      "decode_steps": 2,
+      "exports": 1,
+      "calls_per_export": 6,
+      "plan": {
+        "schema": "ferrule.paper.tp2-mixed-lifecycle-plan.v1",
+        "scenario": "fork",
+        "decode_steps": 2,
+        "prompts": {
+          "hello": [
+            9419
+          ],
+          "capital": [
+            760,
+            6511,
+            314,
+            9338,
+            369
+          ]
+        },
+        "operations": [
+          {
+            "op": "create",
+            "session": "parent",
+            "case": "hello"
+          },
+          {
+            "op": "call",
+            "session": "parent",
+            "id": "call-00",
+            "input": {
+              "kind": "tokens",
+              "ids": [
+                9419
+              ]
+            }
+          },
+          {
+            "op": "fork",
+            "source": "parent",
+            "session": "left"
+          },
+          {
+            "op": "fork",
+            "source": "parent",
+            "session": "right"
+          },
+          {
+            "op": "call",
+            "session": "left",
+            "id": "call-01",
+            "input": {
+              "kind": "greedy"
+            }
+          },
+          {
+            "op": "call",
+            "session": "left",
+            "id": "call-02",
+            "input": {
+              "kind": "greedy"
+            }
+          },
+          {
+            "op": "drop",
+            "session": "left"
+          },
+          {
+            "op": "call",
+            "session": "right",
+            "id": "call-03",
+            "input": {
+              "kind": "greedy"
+            }
+          },
+          {
+            "op": "call",
+            "session": "right",
+            "id": "call-04",
+            "input": {
+              "kind": "tokens",
+              "ids": [
+                760
+              ]
+            }
+          },
+          {
+            "op": "drop",
+            "session": "right"
+          },
+          {
+            "op": "call",
+            "session": "parent",
+            "id": "call-05",
+            "input": {
+              "kind": "greedy"
+            }
+          },
+          {
+            "op": "drop",
+            "session": "parent"
+          }
+        ],
+        "limits": {
+          "max_calls": 20,
+          "max_live_sessions": 3,
+          "max_total_capture_bytes": 4294967296
+        },
+        "capture": "every call; complete old inventory at stage call; cache reflects committed post-call state",
+        "fork": "deep independent HF global/rank cache snapshots, not a runtime COW implementation",
+        "cold_owner": "one fresh authenticated numerical child per launch; repeat in a second launch to establish different owner identity",
+        "stop": "fixed bounded decode count, including EOS; not natural-stop quality/performance evaluation"
+      },
+      "plan_sha256": "61c1436102bd6f60a42d72aa78ab2cc329f13f4f5f650fbf9d38c72677bca20b",
+      "output_names": [
+        "lifecycle-fork2-01"
+      ]
+    },
+    {
+      "name": "canary",
+      "decode_steps": 2,
+      "exports": 1,
+      "calls_per_export": 5,
+      "plan": {
+        "schema": "ferrule.paper.tp2-mixed-lifecycle-plan.v1",
+        "scenario": "canary",
+        "decode_steps": 2,
+        "prompts": {
+          "hello": [
+            9419
+          ],
+          "capital": [
+            760,
+            6511,
+            314,
+            9338,
+            369
+          ]
+        },
+        "operations": [
+          {
+            "op": "create",
+            "session": "main",
+            "case": "hello"
+          },
+          {
+            "op": "call",
+            "session": "main",
+            "id": "call-00",
+            "input": {
+              "kind": "tokens",
+              "ids": [
+                9419
+              ]
+            }
+          },
+          {
+            "op": "create",
+            "session": "canary",
+            "case": "capital"
+          },
+          {
+            "op": "call",
+            "session": "canary",
+            "id": "call-01",
+            "input": {
+              "kind": "tokens",
+              "ids": [
+                760,
+                6511,
+                314,
+                9338,
+                369
+              ]
+            }
+          },
+          {
+            "op": "call",
+            "session": "canary",
+            "id": "call-02",
+            "input": {
+              "kind": "greedy"
+            }
+          },
+          {
+            "op": "drop",
+            "session": "canary"
+          },
+          {
+            "op": "call",
+            "session": "main",
+            "id": "call-03",
+            "input": {
+              "kind": "greedy"
+            }
+          },
+          {
+            "op": "call",
+            "session": "main",
+            "id": "call-04",
+            "input": {
+              "kind": "greedy"
+            }
+          },
+          {
+            "op": "drop",
+            "session": "main"
+          }
+        ],
+        "limits": {
+          "max_calls": 20,
+          "max_live_sessions": 3,
+          "max_total_capture_bytes": 4294967296
+        },
+        "capture": "every call; complete old inventory at stage call; cache reflects committed post-call state",
+        "fork": "deep independent HF global/rank cache snapshots, not a runtime COW implementation",
+        "cold_owner": "one fresh authenticated numerical child per launch; repeat in a second launch to establish different owner identity",
+        "stop": "fixed bounded decode count, including EOS; not natural-stop quality/performance evaluation"
+      },
+      "plan_sha256": "fb2acf3880159a661e98362b610a09714effd6e612b2b9877b3cc7dca501d1ba",
+      "output_names": [
+        "lifecycle-canary2-01"
+      ]
+    },
+    {
+      "name": "recreate",
+      "decode_steps": 1,
+      "exports": 1,
+      "calls_per_export": 4,
+      "plan": {
+        "schema": "ferrule.paper.tp2-mixed-lifecycle-plan.v1",
+        "scenario": "recreate",
+        "decode_steps": 1,
+        "prompts": {
+          "hello": [
+            9419
+          ],
+          "capital": [
+            760,
+            6511,
+            314,
+            9338,
+            369
+          ]
+        },
+        "operations": [
+          {
+            "op": "create",
+            "session": "main",
+            "case": "hello"
+          },
+          {
+            "op": "call",
+            "session": "main",
+            "id": "call-00",
+            "input": {
+              "kind": "tokens",
+              "ids": [
+                9419
+              ]
+            }
+          },
+          {
+            "op": "call",
+            "session": "main",
+            "id": "call-01",
+            "input": {
+              "kind": "greedy"
+            }
+          },
+          {
+            "op": "drop",
+            "session": "main"
+          },
+          {
+            "op": "recreate_model"
+          },
+          {
+            "op": "create",
+            "session": "main",
+            "case": "hello"
+          },
+          {
+            "op": "call",
+            "session": "main",
+            "id": "call-02",
+            "input": {
+              "kind": "tokens",
+              "ids": [
+                9419
+              ]
+            }
+          },
+          {
+            "op": "call",
+            "session": "main",
+            "id": "call-03",
+            "input": {
+              "kind": "greedy"
+            }
+          },
+          {
+            "op": "drop",
+            "session": "main"
+          }
+        ],
+        "limits": {
+          "max_calls": 20,
+          "max_live_sessions": 3,
+          "max_total_capture_bytes": 4294967296
+        },
+        "capture": "every call; complete old inventory at stage call; cache reflects committed post-call state",
+        "fork": "deep independent HF global/rank cache snapshots, not a runtime COW implementation",
+        "cold_owner": "one fresh authenticated numerical child per launch; repeat in a second launch to establish different owner identity",
+        "stop": "fixed bounded decode count, including EOS; not natural-stop quality/performance evaluation"
+      },
+      "plan_sha256": "3ab677110b6e2f12f8d6bf20743bb718fb97270b88a15bf51a239880b445f939",
+      "output_names": [
+        "lifecycle-recreate1-01"
+      ]
+    },
+    {
+      "name": "cold-owner",
+      "decode_steps": 1,
+      "exports": 2,
+      "calls_per_export": 4,
+      "plan": {
+        "schema": "ferrule.paper.tp2-mixed-lifecycle-plan.v1",
+        "scenario": "cold-owner",
+        "decode_steps": 1,
+        "prompts": {
+          "hello": [
+            9419
+          ],
+          "capital": [
+            760,
+            6511,
+            314,
+            9338,
+            369
+          ]
+        },
+        "operations": [
+          {
+            "op": "create",
+            "session": "hello",
+            "case": "hello"
+          },
+          {
+            "op": "call",
+            "session": "hello",
+            "id": "call-00",
+            "input": {
+              "kind": "tokens",
+              "ids": [
+                9419
+              ]
+            }
+          },
+          {
+            "op": "call",
+            "session": "hello",
+            "id": "call-01",
+            "input": {
+              "kind": "greedy"
+            }
+          },
+          {
+            "op": "drop",
+            "session": "hello"
+          },
+          {
+            "op": "create",
+            "session": "capital",
+            "case": "capital"
+          },
+          {
+            "op": "call",
+            "session": "capital",
+            "id": "call-02",
+            "input": {
+              "kind": "tokens",
+              "ids": [
+                760,
+                6511,
+                314,
+                9338,
+                369
+              ]
+            }
+          },
+          {
+            "op": "call",
+            "session": "capital",
+            "id": "call-03",
+            "input": {
+              "kind": "greedy"
+            }
+          },
+          {
+            "op": "drop",
+            "session": "capital"
+          }
+        ],
+        "limits": {
+          "max_calls": 20,
+          "max_live_sessions": 3,
+          "max_total_capture_bytes": 4294967296
+        },
+        "capture": "every call; complete old inventory at stage call; cache reflects committed post-call state",
+        "fork": "deep independent HF global/rank cache snapshots, not a runtime COW implementation",
+        "cold_owner": "one fresh authenticated numerical child per launch; repeat in a second launch to establish different owner identity",
+        "stop": "fixed bounded decode count, including EOS; not natural-stop quality/performance evaluation"
+      },
+      "plan_sha256": "22fade69743473880328feb350449baad853402d8ac2a9ebe83bccfc317f71bf",
+      "output_names": [
+        "lifecycle-cold-owner1-01",
+        "lifecycle-cold-owner1-02"
+      ]
+    }
+  ],
+  "required_per_call": [
+    "call inputs/positions/mask",
+    "embedding/final_norm",
+    "all layer hidden/attention/moe",
+    "rank partial/shared/routed",
+    "router raw/full probabilities/IDs/weights",
+    "rank/global KV/GDN state",
+    "rank/full logits"
+  ],
+  "exact": [
+    "IDs",
+    "inputs",
+    "greedy IDs",
+    "selected expert IDs",
+    "cache frontier",
+    "publication transaction/session join"
+  ],
+  "tolerance": {
+    "atol": 0.00025,
+    "rtol": 0.012
+  },
+  "lifecycle_claims": [
+    "fork KV authority/COW remains runtime-owned; comparator checks observed committed state only",
+    "execution_end is not commit",
+    "cold-owner requires distinct authenticated process identities",
+    "no physical TP/performance claim"
+  ],
+  "total_exports": 6,
+  "total_model_calls": 33,
+  "bounds": {
+    "child_seconds": 1700,
+    "outer_terminal_ms": 1800000,
+    "decoded_cache_mib": 256,
+    "capture_mib_per_call": 512,
+    "max_cumulative_capture_bytes_per_export": 4294967296,
+    "max_live_sessions": 3,
+    "execution": "sequential one-device logical TP2, fresh authenticated launch per export",
+    "failure_policy": "preserve failed directory; prioritize greedy4 and fork2; no unbounded retries"
+  },
+  "call_artifact_contract": {
+    "case_id": "call-NN in exact operation order",
+    "tensor_stage": "call",
+    "reference_tensors_per_call": 1169,
+    "candidate_tensors_per_call": 1089,
+    "files": [
+      "call-NN.safetensors",
+      "call-NN.json",
+      "call-NN.stats.json"
+    ],
+    "calls_fields": [
+      "stage",
+      "input_token_ids",
+      "position_start",
+      "sequence_length_after",
+      "next_token_id"
+    ],
+    "event_fields": [
+      "op",
+      "id",
+      "session",
+      "input",
+      "epoch",
+      "call",
+      "state_before",
+      "state_after",
+      "untouched_sessions"
+    ],
+    "resolved_input_rule": "tokens as fixed in plan, or reference own full-vocab argmax; runtime must replay recorded inputs after generation",
+    "output_rule": "each call: logits for all fed positions, committed-frontier states, complete layer/rank boundary inventory",
+    "fork_state": "oracle uses deep HF copies; candidate may use actual runtime COW. No invented authoritative KV snapshot if runtime does not grant a read lease"
+  }
+}

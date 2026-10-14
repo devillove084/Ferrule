@@ -1,0 +1,11 @@
+{
+  "fixture": "crates/ferrule-cli/tests/fixtures/network/linear.json",
+  "tls": {"ca": "tls/ca.pem", "certificate_chain": "tls/worker.pem", "private_key": "tls/worker.key", "peer_leaf": "tls/controller.pem"},
+  "binding": {
+    "run_id": "example-unique-run", "controller_id": "controller-a", "node_id": "worker-a",
+    "identity": {"epoch": 1, "rank": 0, "owner_instance": 1},
+    "target": {"mode": "tp_column", "world": 2, "device": 0, "in_features": 3, "out_features": 5, "max_rows": 2}
+  },
+  "startup_timeout_ms": 30000, "command_timeout_ms": 30000,
+  "limits": {"max_frame_bytes": 8388608, "max_config_bytes": 4194304, "max_command_bytes": 4194304, "max_output_bytes": 4194304, "max_error_bytes": 4096}
+}

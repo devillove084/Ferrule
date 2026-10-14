@@ -1,0 +1,14 @@
+{
+  "argv": [
+    "/home/admin/wxw403883/anaconda3/bin/python3.12",
+    "-S",
+    "-B",
+    "papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-closeout-20261011-01/analyze_formal.py"
+  ],
+  "cwd": "/home/admin/luhuanbing.lhb/Ferrule",
+  "exit_code": 0,
+  "elapsed_seconds": 17.346863508224487,
+  "source_sha256": "a55bacfd876b704743f67a9040cdbcd4ea06e1c23c807f0ef3b334de10eb4db8",
+  "log_sha256": "42fe1b5d0020f577788656477b24df6c3e3d4ec15a6209afb1e2bf3a3f08d176",
+  "gpu_launch": false
+}

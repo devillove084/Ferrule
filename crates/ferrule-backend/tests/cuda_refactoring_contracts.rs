@@ -1,6 +1,7 @@
 //! CPU-required source contracts supplement (not replace) runtime fault tests.
-const CONTEXT: &str = include_str!("../src/cuda/context.rs");
+const CONTEXT: &str = include_str!("../src/cuda/operator_owner.rs");
 const GRAPH: &str = include_str!("../src/cuda/graph.rs");
+const GRAPH_PROTOCOL: &str = include_str!("../src/cuda/graph_protocol.rs");
 
 fn function<'a>(source: &'a str, name: &str) -> &'a str {
     let start = source.find(&format!("fn {name}")).expect(name);
@@ -43,17 +44,23 @@ fn pr01_omitted_entries_and_submitted_cleanup_are_guarded() {
 #[test]
 fn pr24_capture_is_scoped_and_key_keeps_boundaries() {
     assert!(
-        GRAPH.contains("CaptureGuard"),
+        GRAPH_PROTOCOL.contains("CaptureGuard"),
         "capture must own exactly one end on Err/unwind"
     );
     assert!(
-        !GRAPH.contains(".chain(shapes.iter().copied())"),
+        !GRAPH_PROTOCOL.contains(".chain(shapes.iter().copied())"),
         "pointer/shape boundary collision"
     );
     assert!(
-        GRAPH.contains("Unknown"),
+        GRAPH.contains("Unknown") && GRAPH_PROTOCOL.contains("Unknown"),
         "unknown completion must not remain replayable"
     );
+    assert!(GRAPH.contains("mod protocol;"));
+    assert!(GRAPH.contains("CacheEntry<CudaGraphHandle>"));
+    assert!(!GRAPH.contains("#[cfg(feature = \"cuda\")]"));
+
+    assert!(!GRAPH_PROTOCOL.contains("crate::cuda::"));
+    assert!(!GRAPH_PROTOCOL.contains("struct CudaGraphHandle"));
 }
 
 // Compile the real CPU-only counter implementation even without the CUDA feature.
@@ -66,12 +73,12 @@ mod counters;
 #[cfg(not(feature = "cuda"))]
 #[allow(dead_code)]
 #[allow(unsafe_code)]
-#[path = "../src/cuda/graph.rs"]
+#[path = "../src/cuda/graph_protocol.rs"]
 mod graph;
 
 const LINEAR: &str = include_str!("../src/cuda/operators/linear.rs");
 const NUMERIC_BRIDGE: &str = include_str!("../src/cuda/operators/numeric_fp8.rs");
-const NUMERIC_CONTRACT: &str = include_str!("../src/cuda/operators/numeric.rs");
+const NUMERIC_CONTRACT: &str = include_str!("../src/cuda/operators/linear/numeric.rs");
 const NUMERIC_PROVIDER: &str = include_str!("../src/cuda/providers/cutlass_bf16.rs");
 const CUTLASS: &str = include_str!("../src/cuda/providers/cutlass.rs");
 
@@ -130,12 +137,12 @@ fn pr21_linear_facade_delegates_without_changing_execution() {
 
 #[test]
 fn pr21_numeric_preflight_and_native_failure_keep_poison_boundary() {
-    let launch = body(NUMERIC_PROVIDER, "numeric_fp8_linear");
+    let launch = body(NUMERIC_PROVIDER, "numeric_fp8_submit");
     let checkpoints = [
         "ifworkspace.is_poisoned()",
         "ifartifact.layout()!=plan.layout()",
         "ifworkspace.precision()!=plan.precision()",
-        "available(plan.precision())?;",
+        "if!numeric_fp8_kernel_available(plan.selected_kernel())?",
         "no_overlap(&[a,w,s],&[d,scratch])?;",
         "status(unsafe{preflight(&args)})?;",
         "cu(stream.context().bind_to_thread())?;",
@@ -246,9 +253,21 @@ fn pr21_bf16_facade_workspace_preflight_and_launch() {
 
 #[test]
 fn pr21_numeric_contracts_are_operator_owned_not_provider_forwarders() {
+    let plan = include_str!("../src/cuda_plan.rs");
     for declaration in [
         "pub enum NumericFp8Precision",
         "pub struct NumericFp8LinearPlan",
+    ] {
+        assert!(plan.contains(declaration), "{declaration}");
+        assert!(!NUMERIC_CONTRACT.contains(declaration), "{declaration}");
+        assert!(!NUMERIC_PROVIDER.contains(declaration), "{declaration}");
+    }
+    assert!(NUMERIC_CONTRACT.contains(
+        "pub use crate::cuda_plan::{NumericFp8LinearPlan, NumericFp8Precision, NumericFp8SelectedKernel};"
+    ));
+    assert!(!plan.contains("providers::"));
+    assert!(!plan.contains("CutlassKernelId"));
+    for declaration in [
         "pub struct CudaNumericFp8Artifact",
         "pub struct CudaNumericFp8Workspace",
     ] {
@@ -290,15 +309,18 @@ fn pr21_numeric_facade_and_legacy_exports_share_semantic_identity() {
     use std::any::{TypeId, type_name};
 
     macro_rules! same_type {
-        ($ty:ident) => {
+        ($ty:ident, $owner:literal) => {
             assert_eq!(TypeId::of::<semantic::$ty>(), TypeId::of::<legacy::$ty>());
-            assert!(type_name::<semantic::$ty>().contains("::operators::linear::numeric::"));
+            assert_eq!(
+                type_name::<semantic::$ty>(),
+                concat!("ferrule_backend::", $owner, "::", stringify!($ty))
+            );
         };
     }
-    same_type!(NumericFp8Precision);
-    same_type!(NumericFp8LinearPlan);
-    same_type!(CudaNumericFp8Artifact);
-    same_type!(CudaNumericFp8Workspace);
+    same_type!(NumericFp8Precision, "cuda_plan");
+    same_type!(NumericFp8LinearPlan, "cuda_plan");
+    same_type!(CudaNumericFp8Artifact, "cuda::operators::linear::numeric");
+    same_type!(CudaNumericFp8Workspace, "cuda::operators::linear::numeric");
     assert_eq!(
         TypeId::of::<semantic::NumericFp8Layout>(),
         TypeId::of::<legacy::NumericFp8Layout>()

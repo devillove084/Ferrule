@@ -903,11 +903,11 @@ pub enum ProviderProgress {
 
 impl ProviderProgress {
     /// Lossless compatibility boundary: a fault can never become `None`/Idle.
-    pub fn into_completion(self) -> Result<Option<CompletionEvent>, ProviderFault> {
+    pub fn into_completion(self) -> Result<Option<CompletionEvent>, Box<ProviderFault>> {
         match self {
             Self::Idle => Ok(None),
             Self::Completion(event) => Ok(Some(event)),
-            Self::Fault(fault) => Err(fault),
+            Self::Fault(fault) => Err(Box::new(fault)),
         }
     }
 }

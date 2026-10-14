@@ -1,0 +1,26 @@
+
+running 1 test
+test real_hf_pair_swiglu_cold_and_resident_every_word ... HF_PAIR_SWIGLU fixture=hello-decode0-layer00-expert021-rank0 rank=0 M=1 path=cold words=256 mismatches=0 first=None
+HF_PAIR_SWIGLU fixture=hello-decode0-layer00-expert021-rank0 rank=0 M=1 path=resident words=256 mismatches=0 first=None
+HF_PAIR_SWIGLU fixture=hello-decode0-layer00-expert021-rank1 rank=1 M=1 path=cold words=256 mismatches=0 first=None
+HF_PAIR_SWIGLU fixture=hello-decode0-layer00-expert021-rank1 rank=1 M=1 path=resident words=256 mismatches=0 first=None
+HF_PAIR_SWIGLU fixture=hello-decode0-layer03-expert037-rank0 rank=0 M=1 path=cold words=256 mismatches=0 first=None
+HF_PAIR_SWIGLU fixture=hello-decode0-layer03-expert037-rank0 rank=0 M=1 path=resident words=256 mismatches=0 first=None
+HF_PAIR_SWIGLU fixture=hello-decode0-layer03-expert037-rank1 rank=1 M=1 path=cold words=256 mismatches=0 first=None
+HF_PAIR_SWIGLU fixture=hello-decode0-layer03-expert037-rank1 rank=1 M=1 path=resident words=256 mismatches=0 first=None
+HF_PAIR_SWIGLU fixture=capital-decode0-layer00-expert072-rank0 rank=0 M=1 path=cold words=256 mismatches=0 first=None
+HF_PAIR_SWIGLU fixture=capital-decode0-layer00-expert072-rank0 rank=0 M=1 path=resident words=256 mismatches=0 first=None
+HF_PAIR_SWIGLU fixture=capital-decode0-layer00-expert072-rank1 rank=1 M=1 path=cold words=256 mismatches=0 first=None
+HF_PAIR_SWIGLU fixture=capital-decode0-layer00-expert072-rank1 rank=1 M=1 path=resident words=256 mismatches=0 first=None
+HF_PAIR_SWIGLU fixture=capital-decode0-layer03-expert010-rank0 rank=0 M=1 path=cold words=256 mismatches=0 first=None
+HF_PAIR_SWIGLU fixture=capital-decode0-layer03-expert010-rank0 rank=0 M=1 path=resident words=256 mismatches=0 first=None
+HF_PAIR_SWIGLU fixture=capital-decode0-layer03-expert010-rank1 rank=1 M=1 path=cold words=256 mismatches=0 first=None
+HF_PAIR_SWIGLU fixture=capital-decode0-layer03-expert010-rank1 rank=1 M=1 path=resident words=256 mismatches=0 first=None
+HF_PAIR_SWIGLU fixture=capital-prefill-layer09-expert095-rank0 rank=0 M=5 path=cold words=1280 mismatches=0 first=None
+HF_PAIR_SWIGLU fixture=capital-prefill-layer09-expert095-rank0 rank=0 M=5 path=resident words=1280 mismatches=0 first=None
+HF_PAIR_SWIGLU fixture=capital-prefill-layer09-expert095-rank1 rank=1 M=5 path=cold words=1280 mismatches=0 first=None
+HF_PAIR_SWIGLU fixture=capital-prefill-layer09-expert095-rank1 rank=1 M=5 path=resident words=1280 mismatches=0 first=None
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.89s
+

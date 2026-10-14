@@ -1,0 +1,86 @@
+% Selected prepared-KV ordering, not a universal path or overlap timeline.
+% Journal custody precedes potentially submitting backend preparation.
+\definecolor{FerrulePlanning}{HTML}{315E85}
+\definecolor{FerruleStorage}{HTML}{9A6B25}
+\definecolor{FerruleExecution}{HTML}{2E786D}
+\definecolor{FerrulePublication}{HTML}{6C588A}
+\definecolor{FerruleException}{HTML}{A34F4A}
+\begin{tikzpicture}[x=1cm,y=1cm,
+  phase/.style={ferrule/box,text width=1.8cm,inner sep=3pt,minimum height=1.45cm},
+  role/plan/.style={phase,draw=FerrulePlanning,fill=FerrulePlanning!9},
+  role/storage/.style={phase,draw=FerruleStorage,fill=FerruleStorage!10},
+  role/execution/.style={phase,draw=FerruleExecution,fill=FerruleExecution!9},
+  role/publication/.style={phase,draw=FerrulePublication,fill=FerrulePublication!9},
+  evidence/.style={ferrule/control,draw=FerrulePlanning},
+  retirement/.style={ferrule/control,draw=FerrulePublication}]
+  \node[ferrule/section] at (0.3,1.40) {CONTROL / JOURNAL OWNER};
+  \node[ferrule/note,anchor=east] at (16.5,1.40) {Selected prepared-KV ordering, not a timeline};
+  \node[ferrule/section] at (0.3,-1.70) {PROVIDER};
+  \node[ferrule/section] at (0.3,-4.55) {EXECUTION};
+  \node[ferrule/section] at (0.3,-6.60) {CUSTODY};
+
+  \node[role/plan] (request) at (1.4,0) {\textbf{Request}\\Source plan};
+  \node[role/plan] (reserve) at (3.75,0) {\textbf{Reserve}\\Claims + pins};
+  \node[role/plan] (journal) at (6.1,0) {\textbf{Journal}\\Provisional\\state};
+  \node[role/plan] (candidate) at (10.8,0) {\textbf{Candidate}\\Preflight\\Journal held};
+  \node[role/publication] (publish) at (13.15,0) {\textbf{Publish}\\Output / state};
+  \node[role/publication] (retire) at (15.5,0) {\textbf{Retire}\\Exact handles};
+
+  \node[role/storage] (submit) at (6.1,-3.10)
+    {\textbf{Prepare}\\\textbf{/ submit}\\Read / KV\\or upload};
+  \node[role/storage] (ready) at (8.45,-3.10)
+    {\textbf{Ready}\\Producer\\fence};
+  \node[role/storage] (install) at (13.15,-3.10)
+    {\textbf{Install}\\Exact ACK\\Generation};
+  \node[role/execution] (compute) at (10.8,-5.65)
+    {\textbf{Compute}\\Consumer\\fence retained};
+
+  \node[ferrule/note,text width=10.5cm,align=center] at (8.25,-7.70)
+    {Each claim stays charged until its own explicit release or ownership transfer.\\
+     Producer completion establishes readiness, not downstream retirement.};
+  \node[role/publication] (idle) at (15.5,-7.70)
+    {\textbf{Quiescent}\\Release /\\lease idle};
+
+  % Orthogonal lanes avoid every phase box and heading; draw behind the labels.
+  \begin{pgfonlayer}{background}
+    \draw[ferrule/rule] (0.3,-1.05) -- (16.5,-1.05);
+    \draw[ferrule/rule] (0.3,-4.05) -- (16.5,-4.05);
+    \draw[ferrule/group,draw=FerrulePublication,fill=FerrulePublication!5]
+      (2.5,-7.05) rectangle (14.05,-8.35);
+    \draw[ferrule/arrow] (request.east) -- (reserve.west);
+    \draw[ferrule/arrow] (reserve.east) -- (journal.west);
+    \draw[ferrule/arrow] (journal.south) -- (submit.north);
+    \draw[evidence] (submit.east) -- (ready.west);
+    \draw[ferrule/arrow] (ready.south) -- (8.45,-5.65) -- (compute.west);
+    \draw[evidence] (compute.north) -- (candidate.south);
+    \draw[ferrule/arrow] (candidate.east) -- (11.97,0)
+      -- (11.97,-3.10) -- (install.west);
+    \draw[evidence] (install.north) -- (publish.south);
+    \draw[ferrule/arrow] (publish.east) -- (retire.west);
+    \draw[retirement] (reserve.south) -- (3.75,-7.05);
+    \draw[retirement] (retire.south) -- (idle.north);
+    \draw[ferrule/arrow] (14.05,-7.70) -- (idle.west);
+  \end{pgfonlayer}
+  \node[ferrule/label,text width=2.7cm] at (6.1,-1.60) {journal before submit};
+  \node[ferrule/label,text width=1.8cm] at (8.45,-1.60) {exact CQE / event};
+  \node[ferrule/label,text width=3.0cm] at (10.8,-4.50) {validated success};
+  \node[ferrule/label,text width=2.2cm] at (13.15,-1.60) {matched install ACK};
+  \node[ferrule/label,text width=2.2cm] at (13.55,-4.50) {prepared-KV path only};
+  \node[ferrule/label,text width=2.75cm] at (15.5,-5.60) {final consumer fences\\+ scoped quiescence};
+
+  \draw[draw=FerrulePlanning,fill=FerrulePlanning!9] (0.35,-8.95) rectangle (0.65,-9.2);
+  \node[ferrule/note,anchor=west] at (0.8,-9.08) {Control / plan};
+  \draw[draw=FerruleStorage,fill=FerruleStorage!10] (3.5,-8.95) rectangle (3.8,-9.2);
+  \node[ferrule/note,anchor=west] at (3.95,-9.08) {Storage};
+  \draw[draw=FerruleExecution,fill=FerruleExecution!9] (6.0,-8.95) rectangle (6.3,-9.2);
+  \node[ferrule/note,anchor=west] at (6.45,-9.08) {Execution};
+  \draw[draw=FerrulePublication,fill=FerrulePublication!9] (8.9,-8.95) rectangle (9.2,-9.2);
+  \node[ferrule/note,anchor=west] at (9.35,-9.08) {Publish / retire};
+  \draw[draw=FerruleException,fill=FerruleException!8,dashed] (12.4,-8.95) rectangle (12.7,-9.2);
+  \node[ferrule/note,anchor=west] at (12.85,-9.08) {Unknown / failure};
+  \node[ferrule/unknown,draw=FerruleException,fill=FerruleException!8,
+    text width=15.8cm,minimum height=1.25cm] at (8.45,-10.20)
+    {\textbf{Logical terminal $\ne$ physical closure.} Cancel, error, timeout and shutdown are not fences.\\
+     Pending retains its pollable payload; sticky physical-owner Unknown has no automatic reset or reuse.\\
+     Solid arrows show dependencies; dashed arrows require named evidence. Journals are not durable ACID.};
+\end{tikzpicture}

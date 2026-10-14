@@ -1,12 +1,9 @@
 //! DeepSeek-V4 artifact adapter and generic decoder composition.
 
 use std::path::Path;
-#[cfg(feature = "cuda")]
 use std::sync::Arc;
 
-#[cfg(feature = "cuda")]
 use ferrule_common::CompletionHub;
-#[cfg(feature = "cuda")]
 use ferrule_common::execution::{
     ExecutionCapabilities, ExecutionTransactionId, KvBindingMode, LogitsRowPolicy,
 };
@@ -15,18 +12,13 @@ use ferrule_common::{Error, ResidencyLeaseSet, Result};
 use crate::ModelExecutionBackend;
 use crate::decoder::GenericDecoderObservabilitySnapshot;
 use crate::moe::prediction::{ExpertHotsetPredictor, ScoreBasedExpertPredictor};
-#[cfg(feature = "cuda")]
 use crate::moe::streaming::ExpertSourceCatalog;
-#[cfg(feature = "cuda")]
 use crate::moe::{RoutedMoePendingExpert, RoutedMoeQuiescence, RoutedMoeSequenceEvent};
-#[cfg(feature = "cuda")]
 use crate::runner::NativeProposal;
-#[cfg(feature = "cuda")]
 use crate::transformer::proposal::{
     MtpAttachment, MtpPhysicalOps, MtpProposalContinuation, MtpProposalExecutor, MtpProtocol,
     MtpStageResume, MtpStageStart,
 };
-#[cfg(feature = "cuda")]
 use ferrule_backend::cuda::operators::{attention as cuda_attention, linear as cuda_linear};
 
 use crate::decoder::{
@@ -34,14 +26,12 @@ use crate::decoder::{
     DecoderProvisionalRetainContext, DecoderResourceSnapshot, DecoderSequenceAttachment,
     DecoderTransactionContext, DecoderWait, GenericDecoderRunner, PagedKvBackend,
 };
-#[cfg(feature = "cuda")]
 use crate::decoder::{DecoderLogits, DecoderTopKRow, NoTerminalGuard, PackedDecoderBatch};
 
-#[cfg(feature = "cuda")]
-use super::checkpoint::DeepSeekV4Checkpoint;
-use super::recipe::{
+use super::assembly::{
     DeepSeekV4OutputProfileStats, DeepSeekV4PrepareOptions, DeepSeekV4PrepareProfile,
 };
+use super::checkpoint::DeepSeekV4Checkpoint;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct DeepSeekV4LayerProfileStats {
@@ -173,29 +163,23 @@ pub struct DeepSeekV4ObservabilitySnapshot {
     pub layer_runtime: Vec<DeepSeekV4LayerRuntimeStats>,
 }
 
-#[cfg(feature = "cuda")]
 use std::convert::Infallible;
 
-#[cfg(feature = "cuda")]
-use super::recipe::{
+use super::assembly::{
     DeepSeekV4ExecutionPolicy, DeepSeekV4ModelPlan, DeepSeekV4Resources, prepare_with_policy,
 };
-#[cfg(feature = "cuda")]
 use crate::moe::{ExpertLayerSources, RoutedMoePrefetchLayer, RoutedMoeResourceManager};
-#[cfg(feature = "cuda")]
 use crate::transformer::attention::mla::{
     MlaKvView, MlaLayerState, MlaPagedKvBinding, MlaPhysicalPool, MlaProposalAttentionBuffers,
     MlaProposalMainBuffers, MlaSequenceLifecycle,
 };
 use crate::transformer::attention::mla::{MlaSequenceAttachment, MlaSequenceState};
-#[cfg(feature = "cuda")]
 use crate::transformer::cuda::{
     CudaMlaHyperMoeArena, CudaMlaHyperMoeArenaVariants, CudaMlaHyperMoeContinuation,
     CudaMlaHyperMoeProgress, CudaMlaLayerRequest, CudaMtpHeadBuffers, CudaOutputHeadTopKDownload,
     CudaTransformerArenaKey, CudaTransformerBuffers, CudaTransformerRowLayout,
     CudaTransformerRuntimeHandle, MlaHyperMoeLayer,
 };
-#[cfg(feature = "cuda")]
 use crate::transformer::{
     LayerRequest, Pending, Poll, Step, TransformerContinuation, TransformerForwardExecutor,
     TransformerModule,
@@ -232,10 +216,8 @@ impl MlaSequenceAttachment for DeepSeekSequenceAttachment {
 
 pub(super) type DeepSeekSequenceState =
     crate::decoder::DecoderSequenceState<DeepSeekSequenceAttachment, MlaSequenceState>;
-#[cfg(feature = "cuda")]
 type DeepSeekSequenceLifecycle = MlaSequenceLifecycle<DeepSeekSequenceAttachment>;
 
-#[cfg(feature = "cuda")]
 pub struct DeepSeekMtpArena {
     layers: Vec<CudaMlaHyperMoeArena>,
     hc_state: cuda_linear::CudaF32Buffer,
@@ -243,7 +225,6 @@ pub struct DeepSeekMtpArena {
     head: CudaMtpHeadBuffers,
 }
 
-#[cfg(feature = "cuda")]
 impl std::fmt::Debug for DeepSeekMtpArena {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -254,12 +235,10 @@ impl std::fmt::Debug for DeepSeekMtpArena {
     }
 }
 
-#[cfg(feature = "cuda")]
 pub struct DeepSeekMtpStageContinuation {
     inner: Option<CudaMlaHyperMoeContinuation>,
 }
 
-#[cfg(feature = "cuda")]
 impl std::fmt::Debug for DeepSeekMtpStageContinuation {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -269,13 +248,11 @@ impl std::fmt::Debug for DeepSeekMtpStageContinuation {
     }
 }
 
-#[cfg(feature = "cuda")]
 pub struct DeepSeekMtpHeadDownload {
     inner: cuda_attention::CudaI32HostDownload,
     callback_armed: bool,
 }
 
-#[cfg(feature = "cuda")]
 impl std::fmt::Debug for DeepSeekMtpHeadDownload {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -285,12 +262,10 @@ impl std::fmt::Debug for DeepSeekMtpHeadDownload {
     }
 }
 
-#[cfg(feature = "cuda")]
 pub struct DeepSeekMoeQuiescence {
     inner: RoutedMoeQuiescence,
 }
 
-#[cfg(feature = "cuda")]
 impl std::fmt::Debug for DeepSeekMoeQuiescence {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -299,13 +274,11 @@ impl std::fmt::Debug for DeepSeekMoeQuiescence {
     }
 }
 
-#[cfg(feature = "cuda")]
 pub struct DeepSeekMtpPhysicalOps {
     resources: Arc<DeepSeekV4Resources>,
     runtime: CudaTransformerRuntimeHandle,
 }
 
-#[cfg(feature = "cuda")]
 impl std::fmt::Debug for DeepSeekMtpPhysicalOps {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -315,7 +288,6 @@ impl std::fmt::Debug for DeepSeekMtpPhysicalOps {
     }
 }
 
-#[cfg(feature = "cuda")]
 impl DeepSeekMtpPhysicalOps {
     fn from_attachment(
         resources: Arc<DeepSeekV4Resources>,
@@ -342,7 +314,6 @@ impl DeepSeekMtpPhysicalOps {
     }
 }
 
-#[cfg(feature = "cuda")]
 impl MtpPhysicalOps for DeepSeekMtpPhysicalOps {
     type State = DeepSeekSequenceState;
     type KvView = MlaKvView;
@@ -692,11 +663,9 @@ impl MtpPhysicalOps for DeepSeekMtpPhysicalOps {
     }
 }
 
-#[cfg(feature = "cuda")]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct DeepSeekObserver;
 
-#[cfg(feature = "cuda")]
 impl DecoderObserver<crate::decoder::PagedKvBackend<MlaPhysicalPool<DeepSeekSequenceAttachment>>>
     for DeepSeekObserver
 {
@@ -725,7 +694,6 @@ impl DecoderObserver<crate::decoder::PagedKvBackend<MlaPhysicalPool<DeepSeekSequ
 /// Resolves the materialization wait edge for one layer's pending routed experts.
 /// An empty pending set degrades to the generic completion edge armed by the
 /// in-flight route download.
-#[cfg(feature = "cuda")]
 fn expert_stage_wait(
     context: &DecoderTransactionContext,
     experts: &ExpertLayerSources,
@@ -774,7 +742,6 @@ fn expert_stage_wait(
 
 /// Per-forward target-side custody. The rolling HC rows live in the arena;
 /// per-sequence paged bindings are cloned once at embedding for layer requests.
-#[cfg(feature = "cuda")]
 #[derive(Debug)]
 pub struct DeepSeekHidden {
     paged_bindings: Vec<MlaPagedKvBinding>,
@@ -782,14 +749,12 @@ pub struct DeepSeekHidden {
 
 /// Shape-keyed forward arena: packed HC/output buffers, per-shape layer scratch,
 /// and optional MTP main-projection buffers for target-tap capture.
-#[cfg(feature = "cuda")]
 pub struct DeepSeekForwardArena {
     buffers: CudaTransformerBuffers,
     layers: CudaMlaHyperMoeArenaVariants,
     proposal_main: Option<MlaProposalMainBuffers>,
 }
 
-#[cfg(feature = "cuda")]
 impl std::fmt::Debug for DeepSeekForwardArena {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -800,12 +765,10 @@ impl std::fmt::Debug for DeepSeekForwardArena {
     }
 }
 
-#[cfg(feature = "cuda")]
 pub struct DeepSeekLayerPending {
     continuation: Option<CudaMlaHyperMoeContinuation>,
 }
 
-#[cfg(feature = "cuda")]
 impl std::fmt::Debug for DeepSeekLayerPending {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -815,12 +778,10 @@ impl std::fmt::Debug for DeepSeekLayerPending {
     }
 }
 
-#[cfg(feature = "cuda")]
 pub struct DeepSeekOutputPending {
     download: Option<CudaOutputHeadTopKDownload>,
 }
 
-#[cfg(feature = "cuda")]
 impl std::fmt::Debug for DeepSeekOutputPending {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -830,13 +791,11 @@ impl std::fmt::Debug for DeepSeekOutputPending {
     }
 }
 
-#[cfg(feature = "cuda")]
 pub struct DeepSeekModule {
     plan: DeepSeekV4ModelPlan,
     runtime: CudaTransformerRuntimeHandle,
 }
 
-#[cfg(feature = "cuda")]
 impl DeepSeekModule {
     fn new(plan: DeepSeekV4ModelPlan, runtime: CudaTransformerRuntimeHandle) -> Self {
         Self { plan, runtime }
@@ -856,7 +815,6 @@ impl DeepSeekModule {
     }
 }
 
-#[cfg(feature = "cuda")]
 impl TransformerModule for DeepSeekModule {
     type State = DeepSeekSequenceState;
     type KvView = MlaKvView;
@@ -1404,10 +1362,8 @@ impl TransformerModule for DeepSeekModule {
     }
 }
 
-#[cfg(feature = "cuda")]
 pub struct DeepSeekDecoderComposition;
 
-#[cfg(feature = "cuda")]
 impl DecoderComposition for DeepSeekDecoderComposition {
     type Resources = Arc<DeepSeekV4Resources>;
     type SequenceState = DeepSeekSequenceState;
@@ -1423,7 +1379,6 @@ impl DecoderComposition for DeepSeekDecoderComposition {
     type TerminalGuard = <DeepSeekModule as TransformerModule>::TerminalGuard;
 }
 
-#[cfg(feature = "cuda")]
 fn deepseek_capabilities() -> ExecutionCapabilities {
     let max_packed_rows = usize::try_from(u32::MAX).unwrap_or(usize::MAX);
     ExecutionCapabilities {
@@ -1445,7 +1400,6 @@ fn deepseek_capabilities() -> ExecutionCapabilities {
 pub struct DeepSeekV4Adapter;
 
 impl DeepSeekV4Adapter {
-    #[cfg(feature = "cuda")]
     pub fn new_with_operator_backend(
         model: DeepSeekV4Checkpoint,
         options: DeepSeekV4PrepareOptions,
@@ -1459,7 +1413,6 @@ impl DeepSeekV4Adapter {
         Self::build_cuda(model, options)
     }
 
-    #[cfg(feature = "cuda")]
     pub fn load_hf_with_options(
         model_dir: &Path,
         max_tensor_bytes: u64,
@@ -1473,7 +1426,6 @@ impl DeepSeekV4Adapter {
         )
     }
 
-    #[cfg(feature = "cuda")]
     pub fn load_hf_with_options_and_backend(
         model_dir: &Path,
         max_tensor_bytes: u64,
@@ -1487,7 +1439,6 @@ impl DeepSeekV4Adapter {
         )
     }
 
-    #[cfg(feature = "cuda")]
     fn build_cuda(
         model: DeepSeekV4Checkpoint,
         options: DeepSeekV4PrepareOptions,
@@ -1564,13 +1515,11 @@ impl DeepSeekV4Adapter {
     }
 }
 
-#[cfg(feature = "cuda")]
 static NEXT_DEEPSEEK_MODEL_INSTANCE: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(1);
 
 /// Constructs the CUDA transformer runtime and the routed-MoE resource
 /// manager for one assembled DeepSeek plan.
-#[cfg(feature = "cuda")]
 fn initialize_cuda_runtime(
     resources: &DeepSeekV4Resources,
     generation: u64,

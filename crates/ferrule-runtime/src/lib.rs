@@ -1,3 +1,4 @@
+#![cfg_attr(not(feature = "cpu-reference"), doc = include_str!("../tests/compile/cpu_reference_api.md"))]
 #![allow(
     clippy::unnecessary_sort_by,
     clippy::needless_range_loop,
@@ -7,7 +8,18 @@
 //! Ferrule runtime for resident workloads, shared scheduling and I/O, resource
 //! residency, transactional state, and exact speculative execution.
 
+#[cfg(test)]
+extern crate self as ferrule_runtime;
+
 mod error;
+
+#[cfg(all(test, unix))]
+#[path = "../tests/support/build_process_child.rs"]
+mod build_process_child;
+
+#[cfg(test)]
+#[path = "../tests/support/hybrid_fixture.rs"]
+mod hybrid_fixture;
 
 // ── Sub-directory modules ─────────────────────────────────────────────────
 pub mod cache;
@@ -34,19 +46,21 @@ pub use cache::{
     KvPageManager, KvPageManagerStats, KvReservation, KvReservationBindings, KvReservationCommit,
     KvReservationId, PageBlockTable, PreemptedKvState, PreparedKvSequenceFork,
 };
+pub use engine::NativeMultiSessionExecutor;
 pub use engine::{
-    BackendSelection, BuiltinModelResolver, InferenceCancelProgress, InferenceCompletionOwner,
-    InferenceCompletionReactor, InferenceEngine, InferenceRequestCleanup,
-    InferenceShutdownProgress, LocalResidentInferenceEngine, ModelFactoryOptions,
-    NativeMultiSessionExecutor, PipelineInferenceEngine, RequestCleanupOwner,
+    HostKvDecodeConfig, IdleKvMemoryPlan, IdleKvPhysicalStats, IdleKvReclaimConfig,
+    InferenceCancelProgress, InferenceCompletionOwner, InferenceCompletionReactor, InferenceEngine,
+    InferenceRequestCleanup, InferenceShutdownProgress, KvExecutionMode, KvExecutionPolicy,
+    KvExecutionStats, LocalResidentInferenceEngine, PipelineInferenceEngine, RequestCleanupOwner,
     RequestCleanupReceipt, ResidentActionKind, ResidentCancelProgress,
     ResidentDriverShutdownReport, ResidentDriverStep, ResidentEngineObservability,
     ResidentExternalTokenObservability, ResidentInferenceEngine, ResidentKvCacheObservability,
     ResidentMaterializationObservability, ResidentMaterializationStageObservability,
-    ResidentModelBuildObservability, ResidentModelBuildPlan, ResidentModelPlanner,
     ResidentPrefixCacheStats, ResidentShutdownProgress, ResidentTokenEvent, ResidentTopKDriver,
-    ResidentTopKDriverConfig, ResidentTopKDriverStats, ResolvedModelBackend, RuntimeAdmissionError,
-    RuntimeAdmissionOptions, RuntimeAdmissionResource, RuntimeAdmissionSnapshot,
+    ResidentTopKDriverConfig, ResidentTopKDriverStats, RunnerMultiSessionExecutor,
+    RuntimeAdmissionError, RuntimeAdmissionOptions, RuntimeAdmissionResource,
+    RuntimeAdmissionSnapshot, RuntimeKvTraceConfig, RuntimeKvTraceKind, RuntimeKvTraceSnapshot,
+    RuntimePrefixReplay,
 };
 pub use expert_residency::{
     ExpertInstallIntent, ExpertInstallPrepareOutcome, ExpertInstallReason, ExpertKey, ExpertLease,

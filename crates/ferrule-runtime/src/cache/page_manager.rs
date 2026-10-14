@@ -21,11 +21,18 @@ use std::num::NonZeroU64;
 use std::sync::atomic::AtomicU64;
 
 use super::take_permanent_identity;
+use std::sync::Arc;
+#[path = "committed_read_pins.rs"]
+mod committed_read_pins;
+#[path = "kv_read_authority.rs"]
+pub mod kv_read_authority;
 use crate::{Error, Result};
+use committed_read_pins::CommittedReadPins;
 use ferrule_common::execution::{
     KvBlockId, KvCowReplacement, KvLayoutSchema, KvPageId, KvReservationView, KvWriteSlot,
     StateSlot,
 };
+pub use kv_read_authority as host_kv;
 
 /// Per-sequence block table mapping logical page indices to physical page IDs.
 #[derive(Debug, Clone, Default)]
@@ -56,36 +63,38 @@ impl BlockTable {
 /// Per-sequence KV state tracked by the page manager.
 #[derive(Debug)]
 struct SequencePageState {
+    incarnation: u64,
     /// Generation of the sequence state when this KV state was last committed.
     generation: u64,
     /// Block table mapping logical pages to physical page IDs.
     block_table: BlockTable,
 }
 
-/// Runtime page manager for logical KV allocation.
-///
-/// Owns page allocation, free-list, refcounting, block tables, and reservation
-/// semantics. The backend owns physical buffers; this manager owns metadata.
+/// Opaque handle to one manager-owned suspension registration. Clones are
+/// aliases, not extra page authority. Successful restore/release invalidates all
+/// aliases. Drop retains custody; failed restore leaves the registration intact,
+/// so callers may keep a clone for retry. Release errors return the input handle.
 #[derive(Debug, Clone)]
 pub struct PreemptedKvState {
+    manager_id: u64,
+    suspension_id: u64,
+    record: Arc<SuspendedKvRecord>,
+}
+#[derive(Debug)]
+struct SuspendedKvRecord {
     generation: u64,
     block_table: BlockTable,
     evicted_pages: Vec<KvPageId>,
 }
-
 impl PreemptedKvState {
     pub fn pages(&self) -> &[KvPageId] {
-        self.block_table.pages()
+        self.record.block_table.pages()
     }
-
-    /// Pages exclusively referenced by this sequence and therefore safe to
-    /// remove from backend residency while the logical state is suspended.
     pub fn evicted_pages(&self) -> &[KvPageId] {
-        &self.evicted_pages
+        &self.record.evicted_pages
     }
-
     pub fn committed_tokens(&self) -> usize {
-        self.block_table.committed_tokens()
+        self.record.block_table.committed_tokens()
     }
 }
 
@@ -109,6 +118,7 @@ impl KvReservationId {
 /// Non-cloneable ownership token for one provisional logical KV reservation.
 #[derive(Debug)]
 pub struct KvReservation {
+    manager_id: u64,
     id: KvReservationId,
     view: KvReservationView,
 }
@@ -311,6 +321,8 @@ impl KvPrefixSnapshot {
 /// Validated but unpublished exact-prefix page-table fork.
 #[derive(Debug)]
 pub struct PreparedKvSequenceFork {
+    manager_id: u64,
+    source_incarnation: u64,
     source: StateSlot,
     target: StateSlot,
     target_generation: u64,
@@ -346,6 +358,9 @@ fn take_page_manager_identity(counter: &AtomicU64) -> u64 {
 }
 
 pub struct KvPageManager {
+    next_incarnation: u64,
+    suspended: HashMap<u64, Arc<SuspendedKvRecord>>,
+    committed_read_pins: CommittedReadPins,
     manager_id: u64,
     /// The KV layout schema describing page size and planes.
     schema: Box<dyn KvLayoutSchema>,
@@ -392,6 +407,9 @@ impl KvPageManager {
     pub fn new(schema: Box<dyn KvLayoutSchema>, max_pages: usize) -> Self {
         let manager_id = take_page_manager_identity(&NEXT_PAGE_MANAGER_ID);
         Self {
+            next_incarnation: 1,
+            suspended: HashMap::new(),
+            committed_read_pins: CommittedReadPins::new(),
             manager_id,
             schema,
             free_pages: Vec::new(),
@@ -416,6 +434,14 @@ impl KvPageManager {
     /// Returns the page size in tokens.
     pub fn page_size(&self) -> usize {
         self.schema.page_size()
+    }
+
+    fn take_incarnation(&mut self) -> Result<u64> {
+        let id = self.next_incarnation;
+        self.next_incarnation = id.checked_add(1).ok_or_else(|| Error::InvalidRequest {
+            message: "page manager: source incarnation exhausted".into(),
+        })?;
+        Ok(id)
     }
 
     fn take_reservation_id(&mut self) -> Result<KvReservationId> {
@@ -474,6 +500,7 @@ impl KvPageManager {
     }
 
     fn validate_refcount_increments(&self, pages: &[KvPageId], operation: &str) -> Result<()> {
+        self.ensure_no_page_readers(pages)?;
         let mut increments = HashMap::<KvPageId, u32>::new();
         for page in pages {
             let increment = increments.entry(*page).or_default();
@@ -518,6 +545,11 @@ impl KvPageManager {
         let mut ids = HashSet::with_capacity(reservations.len());
         let mut slots = HashSet::with_capacity(reservations.len());
         for reservation in reservations {
+            if reservation.manager_id != self.manager_id {
+                return Err(Error::InvalidRequest {
+                    message: "page manager: foreign reservation owner".into(),
+                });
+            }
             if !ids.insert(reservation.id) {
                 return Err(Error::InvalidRequest {
                     message: format!(
@@ -677,15 +709,18 @@ impl KvPageManager {
 
     /// Register a new sequence in the page manager.
     pub fn alloc_sequence(&mut self, state_slot: StateSlot, generation: u64) -> Result<()> {
+        self.ensure_no_slot_readers(state_slot)?;
         let slot = state_slot.get();
         if self.sequences.contains_key(&slot) {
             return Err(Error::Invariant {
                 message: format!("page manager: state slot {slot} is already allocated"),
             });
         }
+        let incarnation = self.take_incarnation()?;
         self.sequences.insert(
             slot,
             SequencePageState {
+                incarnation,
                 generation,
                 block_table: BlockTable::default(),
             },
@@ -713,6 +748,7 @@ impl KvPageManager {
         generation: u64,
         token_count: usize,
     ) -> Result<usize> {
+        self.ensure_no_slot_readers(state_slot)?;
         let slot = state_slot.get();
         if self.reservation_owners.contains_key(&slot) {
             return Err(Error::InvalidRequest {
@@ -774,6 +810,7 @@ impl KvPageManager {
         generation: u64,
         token_count: usize,
     ) -> Result<KvReservation> {
+        self.ensure_no_slot_readers(state_slot)?;
         let slot = state_slot.get();
         if let Some(owner) = self.reservation_owners.get(&slot) {
             return Err(Error::InvalidRequest {
@@ -857,7 +894,11 @@ impl KvPageManager {
         let id = self.take_reservation_id()?;
         self.pending_reservations.insert(id, view.clone());
         self.reservation_owners.insert(slot, id);
-        Ok(KvReservation { id, view })
+        Ok(KvReservation {
+            manager_id: self.manager_id,
+            id,
+            view,
+        })
     }
 
     /// Validate and seal an entire packed logical commit without publishing it.
@@ -1101,6 +1142,7 @@ impl KvPageManager {
 
     /// Free a sequence and quarantine pages whose global refcount reaches zero.
     pub fn free_sequence_pages(&mut self, state_slot: StateSlot) -> Result<KvRetirement> {
+        self.ensure_no_slot_readers(state_slot)?;
         let slot = state_slot.get();
         if let Some(owner) = self.reservation_owners.get(&slot) {
             return Err(Error::InvalidRequest {
@@ -1146,6 +1188,7 @@ impl KvPageManager {
         source: StateSlot,
         expected_prefix_tokens: usize,
     ) -> Result<KvPrefixSnapshot> {
+        self.ensure_no_slot_readers(source)?;
         if let Some(owner) = self.reservation_owners.get(&source.get()) {
             return Err(Error::InvalidRequest {
                 message: format!(
@@ -1281,6 +1324,7 @@ impl KvPageManager {
             });
         }
         self.validate_refcount_increments(&prepared.block_table.pages, "prefix snapshot fork")?;
+        let incarnation = self.take_incarnation()?;
         for page in &prepared.block_table.pages {
             *self
                 .page_refcounts
@@ -1290,6 +1334,7 @@ impl KvPageManager {
         self.sequences.insert(
             prepared.target.get(),
             SequencePageState {
+                incarnation,
                 generation: prepared.target_generation,
                 block_table: prepared.block_table,
             },
@@ -1305,6 +1350,12 @@ impl KvPageManager {
         target_generation: u64,
         expected_prefix_tokens: usize,
     ) -> Result<PreparedKvSequenceFork> {
+        self.ensure_no_slot_readers(source)?;
+        if self.reservation_owners.contains_key(&source.get()) {
+            return Err(Error::InvalidRequest {
+                message: "page manager: fork source has active transaction".into(),
+            });
+        }
         if self.sequences.contains_key(&target.get()) {
             return Err(Error::Invariant {
                 message: format!(
@@ -1358,6 +1409,8 @@ impl KvPageManager {
                 })?;
         }
         Ok(PreparedKvSequenceFork {
+            manager_id: self.manager_id,
+            source_incarnation: self.sequences[&source.get()].incarnation,
             source,
             target,
             target_generation,
@@ -1367,6 +1420,22 @@ impl KvPageManager {
 
     /// Publish a previously validated page-table fork.
     pub fn publish_fork_sequence_exact(&mut self, prepared: PreparedKvSequenceFork) -> Result<()> {
+        if prepared.manager_id != self.manager_id
+            || self
+                .sequences
+                .get(&prepared.source.get())
+                .is_none_or(|s| s.incarnation != prepared.source_incarnation)
+        {
+            return Err(Error::InvalidRequest {
+                message: "page manager: stale or foreign prepared fork".into(),
+            });
+        }
+        self.ensure_no_slot_readers(prepared.source)?;
+        if self.reservation_owners.contains_key(&prepared.source.get()) {
+            return Err(Error::InvalidRequest {
+                message: "page manager: fork source has active transaction".into(),
+            });
+        }
         if self.sequences.contains_key(&prepared.target.get()) {
             return Err(Error::Invariant {
                 message: format!(
@@ -1402,6 +1471,7 @@ impl KvPageManager {
                     message: "page manager: prepared fork refcount overflow".into(),
                 })?;
         }
+        let incarnation = self.take_incarnation()?;
         for page in &prepared.block_table.pages {
             *self
                 .page_refcounts
@@ -1411,6 +1481,7 @@ impl KvPageManager {
         self.sequences.insert(
             prepared.target.get(),
             SequencePageState {
+                incarnation,
                 generation: prepared.target_generation,
                 block_table: prepared.block_table,
             },
@@ -1418,71 +1489,125 @@ impl KvPageManager {
         Ok(())
     }
 
-    /// Detach a sequence from scheduling while retaining its page references.
-    pub fn preempt_sequence(&mut self, state_slot: StateSlot) -> Result<PreemptedKvState> {
-        if let Some(owner) = self.reservation_owners.get(&state_slot.get()) {
+    fn suspended_state(&self, state: &PreemptedKvState) -> Result<&SuspendedKvRecord> {
+        if state.manager_id != self.manager_id {
             return Err(Error::InvalidRequest {
-                message: format!(
-                    "page manager: cannot preempt state slot {} owned by reservation {}",
-                    state_slot.get(),
-                    owner.get()
-                ),
+                message: "page manager: suspension belongs to another manager".into(),
             });
         }
+        let registered =
+            self.suspended
+                .get(&state.suspension_id)
+                .ok_or_else(|| Error::InvalidRequest {
+                    message: "page manager: suspension already consumed or unknown".into(),
+                })?;
+        if !Arc::ptr_eq(registered, &state.record) {
+            return Err(Error::InvalidRequest {
+                message: "page manager: suspension record identity mismatch".into(),
+            });
+        }
+        Ok(registered)
+    }
+
+    /// Detach a sequence without duplicating its logical references.
+    pub fn preempt_sequence(&mut self, state_slot: StateSlot) -> Result<PreemptedKvState> {
+        self.ensure_no_slot_readers(state_slot)?;
+        if self.reservation_owners.contains_key(&state_slot.get()) {
+            return Err(Error::InvalidRequest {
+                message: "page manager: cannot preempt an active transaction".into(),
+            });
+        }
+        if !self.sequences.contains_key(&state_slot.get()) {
+            return Err(Error::InvalidRequest {
+                message: "page manager: cannot preempt an unallocated sequence".into(),
+            });
+        }
+        let suspension_id = self.take_incarnation()?;
         let state = self
             .sequences
             .remove(&state_slot.get())
-            .ok_or_else(|| Error::Invariant {
-                message: "page manager: cannot preempt an unallocated sequence".into(),
-            })?;
+            .expect("validated sequence");
         let evicted_pages = state
             .block_table
             .pages
             .iter()
             .copied()
-            .filter(|page| self.page_refcount(*page) == 1)
+            .filter(|p| self.page_refcount(*p) == 1)
             .collect();
-        Ok(PreemptedKvState {
+        let record = Arc::new(SuspendedKvRecord {
             generation: state.generation,
             block_table: state.block_table,
             evicted_pages,
+        });
+        self.suspended.insert(suspension_id, record.clone());
+        Ok(PreemptedKvState {
+            manager_id: self.manager_id,
+            suspension_id,
+            record,
         })
     }
 
-    /// Restore a previously preempted sequence without changing page identity.
+    /// Failed preflight never consumes registration; callers can retain a clone
+    /// for retry. Success consumes the registration once and invalidates aliases.
     pub fn restore_sequence(
         &mut self,
         state_slot: StateSlot,
         state: PreemptedKvState,
     ) -> Result<()> {
-        if self.sequences.contains_key(&state_slot.get()) {
-            return Err(Error::Invariant {
+        self.suspended_state(&state)?;
+        self.ensure_no_slot_readers(state_slot)?;
+        self.ensure_no_page_readers(state.pages())?;
+        if self.sequences.contains_key(&state_slot.get())
+            || self.reservation_owners.contains_key(&state_slot.get())
+        {
+            return Err(Error::InvalidRequest {
                 message: "page manager: restore target is allocated".into(),
             });
         }
+        self.validate_refcount_decrements(state.pages())?;
+        if state
+            .pages()
+            .iter()
+            .any(|p| self.retiring_pages.contains(p))
+        {
+            return Err(Error::InvalidRequest {
+                message: "page manager: suspended page is retiring".into(),
+            });
+        }
+        let incarnation = self.take_incarnation()?;
+        self.suspended
+            .remove(&state.suspension_id)
+            .expect("validated registration");
         self.sequences.insert(
             state_slot.get(),
             SequencePageState {
-                generation: state.generation,
-                block_table: state.block_table,
+                incarnation,
+                generation: state.record.generation,
+                block_table: state.record.block_table.clone(),
             },
         );
         Ok(())
     }
 
-    /// Release a preempted state and quarantine pages whose refcount reaches zero.
+    /// Validate the entire release before consuming registration or any refcount.
     pub fn release_preempted_pages(
         &mut self,
         state: PreemptedKvState,
     ) -> std::result::Result<KvRetirement, ReleasePreemptedKvStateError> {
-        if let Err(error) = self.validate_refcount_decrements(&state.block_table.pages) {
+        let check = self
+            .suspended_state(&state)
+            .and_then(|record| self.validate_refcount_decrements(&record.block_table.pages));
+        if let Err(error) = check {
             return Err(ReleasePreemptedKvStateError { error, state });
         }
+        self.suspended
+            .remove(&state.suspension_id)
+            .expect("validated registration");
         let retiring = state
-            .block_table
-            .pages
-            .into_iter()
-            .filter(|page| decrement_refcount_infallible(&mut self.page_refcounts, *page))
+            .pages()
+            .iter()
+            .copied()
+            .filter(|p| decrement_refcount_infallible(&mut self.page_refcounts, *p))
             .collect();
         Ok(self.begin_retirement(retiring))
     }
@@ -1497,6 +1622,8 @@ impl KvPageManager {
         execution_state_slot: StateSlot,
         execution_generation: u64,
     ) -> Result<()> {
+        self.validate_live_reservations(&[reservation])?;
+        self.ensure_no_slot_readers(execution_state_slot)?;
         let stored = self
             .pending_reservations
             .get_mut(&reservation.id)
@@ -1522,6 +1649,7 @@ impl KvPageManager {
     }
 
     pub fn reservation_view(&self, reservation: &KvReservation) -> Result<KvReservationView> {
+        self.validate_live_reservations(&[reservation])?;
         let stored = self
             .pending_reservations
             .get(&reservation.id)
@@ -1656,6 +1784,7 @@ impl KvPageManager {
     }
 
     fn validate_refcount_decrements(&self, pages: &[KvPageId]) -> Result<()> {
+        self.ensure_no_page_readers(pages)?;
         let mut decrements = HashMap::<KvPageId, u32>::new();
         for page in pages {
             let count = decrements.entry(*page).or_default();
@@ -2070,7 +2199,11 @@ mod tests {
         mgr.confirm_page_retirement(retirement).unwrap();
         let free_before = mgr.free_pages();
 
-        let consumed = KvReservation { id, view };
+        let consumed = KvReservation {
+            manager_id: mgr.manager_id,
+            id,
+            view,
+        };
         let error = mgr.abort_reservations(vec![consumed]).unwrap_err();
         let (_, returned) = error.into_parts();
         assert_eq!(returned.len(), 1);

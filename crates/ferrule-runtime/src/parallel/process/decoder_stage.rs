@@ -26,14 +26,21 @@ pub(super) type Experts = Rc<RefCell<ProcessExperts>>;
 
 pub(super) fn prepare(
     boot: &DecoderBoot,
+    resources: &ferrule_model::transformer::BoundDecoderResources,
     experts: Option<Experts>,
 ) -> Result<BoxedPipelineStageWorker> {
     let stage_boot = boot.stage_boot()?;
-    let resources = boot.load_resources()?;
+    boot.validate_resources(resources)?;
+    if boot.hybrid.is_some() {
+        if experts.is_some() {
+            return Err(error("hybrid process EP is unsupported"));
+        }
+        return prepare_hybrid(boot, resources);
+    }
     if boot.device == DecoderDevice::Cpu && experts.is_none() {
         return Ok(PipelineStageWorker::new(
             &stage_boot,
-            PipelineStage::prepare_cpu(&resources, stage_boot.plan.clone(), stage_boot.config)?,
+            PipelineStage::prepare_cpu(resources, stage_boot.plan.clone(), stage_boot.config)?,
         )?
         .boxed());
     }
@@ -44,7 +51,7 @@ pub(super) fn prepare(
         ));
         if experts.is_none() {
             let stage = PipelineStage::prepare_cuda(
-                &resources,
+                resources,
                 stage_boot.plan.clone(),
                 stage_boot.config,
                 Rc::clone(&ops),
@@ -53,10 +60,10 @@ pub(super) fn prepare(
             drop(ops.release());
             return Ok(worker);
         }
-        let (description, planes) = description(boot, &resources)?;
+        let (description, planes) = description(boot, resources)?;
         let capabilities = description.execution_capabilities()?;
         let segment = StandardDecoderSegment::prepare_cuda(
-            &resources,
+            resources,
             stage_boot.plan.clone(),
             stage_boot.config.precision,
             stage_boot.config.max_positions,
@@ -94,10 +101,10 @@ pub(super) fn prepare(
             "CUDA decoder requires --features cuda; no CPU fallback",
         ));
     }
-    let (description, planes) = description(boot, &resources)?;
+    let (description, planes) = description(boot, resources)?;
     let capabilities = description.execution_capabilities()?;
     let segment = StandardDecoderSegment::prepare(
-        &resources,
+        resources,
         stage_boot.plan.clone(),
         stage_boot.config.precision,
         stage_boot.config.max_positions,
@@ -272,5 +279,101 @@ impl PipelineStageProgram for CudaProgram {
                 .chain(segment.err())
                 .collect(),
         ))
+    }
+}
+
+pub(super) fn prepare_hybrid(
+    boot: &DecoderBoot,
+    resources: &ferrule_model::transformer::BoundDecoderResources,
+) -> Result<BoxedPipelineStageWorker> {
+    let stage_boot = boot.stage_boot()?;
+    let hybrid = boot
+        .hybrid
+        .as_ref()
+        .ok_or_else(|| error("missing hybrid schema"))?;
+    hybrid.validate_resources(boot, resources)?;
+    match boot.device {
+        DecoderDevice::Cpu => {
+            let stage = PipelineStage::prepare_hybrid_cpu(
+                resources,
+                stage_boot.plan.clone(),
+                stage_boot.config,
+            )?;
+            Ok(PipelineStageWorker::new(&stage_boot, stage)?.boxed())
+        }
+        #[cfg(feature = "cuda")]
+        DecoderDevice::Cuda { ordinal } => {
+            use crate::parallel::pipeline::HybridStageBudget;
+            use ferrule_model::decoder::{
+                GenericDecoderOptions, HybridCudaDevice, HybridCudaMemoryBudget,
+            };
+            use ferrule_model::transformer::HybridSegmentMemoryEstimate;
+            let config = stage_boot.config;
+            let options = GenericDecoderOptions::standard_cpu(
+                resources.spec(),
+                ferrule_model::ModelFamily::Unknown("process-hybrid".into()),
+                ferrule_model::WeightSource::Safetensors,
+                config.page_size,
+                config.max_positions,
+                config.max_batch_tokens,
+                config.session_capacity,
+                config.max_parameter_bytes,
+                config.precision,
+            )?;
+            let estimate = HybridSegmentMemoryEstimate::for_cuda_segment(
+                resources,
+                &options,
+                &stage_boot.plan,
+            )?;
+            let budget = hybrid.cuda_budget.as_ref().expect("validated CUDA budget");
+            let required = HybridStageBudget::from_segment_estimate(
+                config,
+                ordinal,
+                &estimate,
+                ferrule_model::ModelExecutionBackend::Cuda,
+                budget.margin_bytes as u64,
+            )?;
+            if (budget.state_bytes as u64) < required.state
+                || (budget.weight_bytes as u64) < required.weights
+                || (budget.workspace_bytes as u64) < required.workspace
+            {
+                return Err(error(
+                    "hybrid child budget is smaller than rebound segment estimate",
+                ));
+            }
+            let cap = (budget.state_bytes as u64)
+                .checked_add(budget.weight_bytes as u64)
+                .and_then(|n| n.checked_add(budget.workspace_bytes as u64))
+                .and_then(|n| n.checked_add(required.kv))
+                .and_then(|n| n.checked_add(budget.margin_bytes as u64))
+                .ok_or_else(|| error("hybrid CUDA capacity overflow"))?;
+            let device = Retained::new(HybridCudaDevice::new_on_device(
+                ordinal,
+                HybridCudaMemoryBudget {
+                    kv_pages: stage_boot.physical_pages,
+                    state_bytes: budget.state_bytes,
+                    weight_bytes: budget.weight_bytes,
+                    workspace_bytes: budget.workspace_bytes,
+                },
+            )?);
+            let (free, total) = device.operators().memory_info()?;
+            if cap > free.min(total) as u64 {
+                drop(device.release());
+                return Err(error("hybrid child exceeds current device capacity"));
+            }
+            let stage = PipelineStage::prepare_hybrid_cuda(
+                resources,
+                stage_boot.plan.clone(),
+                config,
+                (*device).clone(),
+            )?;
+            let worker = PipelineStageWorker::new(&stage_boot, stage)?.boxed();
+            drop(device.release());
+            Ok(worker)
+        }
+        #[cfg(not(feature = "cuda"))]
+        DecoderDevice::Cuda { .. } => {
+            Err(error("hybrid CUDA requires cuda feature; no CPU fallback"))
+        }
     }
 }

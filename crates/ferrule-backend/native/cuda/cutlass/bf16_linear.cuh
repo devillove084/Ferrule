@@ -115,9 +115,23 @@ __global__ void pack_activation(FerruleCutlassNumericFp8Args a) {
         : 0;
   }
 }
+// Typed BF16 input: preserve words and zero-pad K, never reinterpret as F32.
+// Retains the same explicitly budgeted activation tile and launch count.
+__global__ void pack_bf16_activation(FerruleCutlassNumericFp8Args a) {
+  const uint64_t count = uint64_t(a.m) * a.padded_k;
+  for (uint64_t i = uint64_t(blockIdx.x) * blockDim.x + threadIdx.x;
+       i < count; i += uint64_t(gridDim.x) * blockDim.x) {
+    const uint32_t col = i % a.padded_k;
+    pointer<uint16_t>(a.workspace)[i] = col < a.k
+        ? const_pointer<uint16_t>(a.activation)[(i / a.padded_k) * a.lda + col]
+        : 0;
+  }
+}
 __global__ void decode_weights(FerruleCutlassNumericFp8Args a, uint32_t first,
-                               uint32_t rows) {
-  auto *dst = pointer<uint16_t>(a.workspace + uint64_t(a.m) * a.padded_k * 2);
+                               uint32_t rows, uint64_t target = 0) {
+  // Explicit resident destination shares the exact existing decode arithmetic.
+  auto *dst = pointer<uint16_t>(target ? target :
+      a.workspace + uint64_t(a.m) * a.padded_k * 2);
   const uint64_t count = uint64_t(rows) * a.padded_k;
   for (uint64_t i = uint64_t(blockIdx.x) * blockDim.x + threadIdx.x;
        i < count; i += uint64_t(gridDim.x) * blockDim.x) {
@@ -139,7 +153,13 @@ inline unsigned blocks(uint64_t count) {
 }
 } // namespace ferrule::cuda::cutlass::numeric_fp8
 
-extern "C" int32_t ferrule_cutlass_numeric_fp8_can_implement(const FerruleCutlassNumericFp8Args *a) {
+namespace ferrule::cuda::cutlass::numeric_fp8 {
+inline bool tiled_span(uint64_t address, uint64_t elements, uint32_t element_bytes) {
+  uint64_t bytes, end;
+  return address && checked_mul_u64(elements, element_bytes, &bytes) &&
+      bytes <= INT64_MAX && checked_add_u64(address, bytes, &end);
+}
+inline int tiled_can_implement(const FerruleCutlassNumericFp8Args *a, uint32_t activation_alignment) {
   using namespace ferrule::cuda::cutlass::numeric_fp8;
   if (!a || !a->m || a->m > INT_MAX - 64u || !a->n || !a->k || a->k > INT_MAX - 32u ||
       a->n > INT_MAX - 128u || a->padded_k != (a->k + 7u) / 8u * 8u ||
@@ -149,14 +169,47 @@ extern "C" int32_t ferrule_cutlass_numeric_fp8_can_implement(const FerruleCutlas
       (a->scale_bytes != 2 && a->scale_bytes != 4) || a->reserved ||
       a->lda < a->k || a->lda > INT_MAX || a->ldd < a->n || a->ldd > INT_MAX ||
       !a->activation || !a->weight || !a->scales || !a->output || !a->workspace ||
-      a->activation % 4 || a->scales % a->scale_bytes ||
+      a->activation % activation_alignment || a->scales % a->scale_bytes ||
       a->workspace_bytes < (uint64_t(a->m) + a->tile_rows) * a->padded_k * 2) return 1;
+  // The validated dimensions bound these element counts within uint64_t.
+  // Check the actual accessed spans before forming any derived GEMM pointers;
+  // unused caller-supplied workspace capacity is not part of the access range.
+  if (!tiled_span(a->activation, uint64_t(a->m - 1u) * a->lda + a->k,
+                  activation_alignment) ||
+      !tiled_span(a->weight, uint64_t(a->n) * a->k, 1) ||
+      !tiled_span(a->scales, uint64_t((a->row_origin + a->n + 127u) / 128u) *
+                  a->scale_cols, a->scale_bytes) ||
+      !tiled_span(a->output, uint64_t(a->m - 1u) * a->ldd + a->n, 4) ||
+      !tiled_span(a->workspace, (uint64_t(a->m) + a->tile_rows) * a->padded_k, 2)) return 1;
   // Preflight both distinct tile shapes before even packing the activation.
   auto first = gemm_args(*a, 0, a->tile_rows);
   if (int status = ferrule_cutlass_bf16_can_implement(&first)) return status;
   uint32_t offset = (a->n - 1u) / a->tile_rows * a->tile_rows;
   auto last = gemm_args(*a, offset, a->n - offset);
   return ferrule_cutlass_bf16_can_implement(&last);
+}
+} // namespace ferrule::cuda::cutlass::numeric_fp8
+extern "C" int32_t ferrule_cutlass_numeric_fp8_can_implement(const FerruleCutlassNumericFp8Args *a) {
+  return ferrule::cuda::cutlass::numeric_fp8::tiled_can_implement(a, 4);
+}
+extern "C" int32_t ferrule_cutlass_numeric_fp8_bf16_can_implement(const FerruleCutlassNumericFp8Args *a) {
+  return ferrule::cuda::cutlass::numeric_fp8::tiled_can_implement(a, 2);
+}
+extern "C" int32_t ferrule_cutlass_numeric_fp8_bf16_launch(const FerruleCutlassNumericFp8Args *a) {
+  if (int status = ferrule_cutlass_numeric_fp8_bf16_can_implement(a)) return status;
+  using namespace ferrule::cuda::cutlass::numeric_fp8;
+  auto stream = reinterpret_cast<cudaStream_t>(a->stream);
+  pack_bf16_activation<<<blocks(uint64_t(a->m) * a->padded_k), 256, 0, stream>>>(*a);
+  if (cudaGetLastError() != cudaSuccess) return 4;
+  for (uint32_t first = 0; first < a->n;) {
+    const uint32_t count = a->n - first < a->tile_rows ? a->n - first : a->tile_rows;
+    decode_weights<<<blocks(uint64_t(count) * a->padded_k), 256, 0, stream>>>(*a, first, count);
+    if (cudaGetLastError() != cudaSuccess) return 4;
+    auto g = gemm_args(*a, first, count);
+    if (int status = ferrule_cutlass_bf16_launch(&g)) return status;
+    first += count;
+  }
+  return 0;
 }
 extern "C" int32_t ferrule_cutlass_numeric_fp8_launch(const FerruleCutlassNumericFp8Args *a) {
   if (int status = ferrule_cutlass_numeric_fp8_can_implement(a)) return status;
@@ -231,4 +284,174 @@ extern "C" int32_t ferrule_cutlass_numeric_fp8_f32_launch(const FerruleCutlassNu
     first += count;
   }
   return 0;
+}
+
+namespace ferrule::cuda::cutlass::numeric_fp8 {
+// Four independent warps per CTA, one output per warp. Packed loads cover
+// 128 K elements per iteration; odd K uses coalesced byte loads instead.
+// No shared/global partial sums, atomics, conversion tile, or second launch.
+template <bool F32Scale, bool Packed>
+__global__ void fused_fp32_m1(FerruleCutlassNumericFp8Args a) {
+  const uint32_t lane = threadIdx.x & 31u;
+  const uint32_t warp = threadIdx.x / 32u;
+  for (uint32_t row = blockIdx.x * 4u + warp; row < a.n;
+       row += gridDim.x * 4u) {
+    const uint64_t weight_base = uint64_t(row) * a.k;
+    const uint64_t scale_base = uint64_t((a.row_origin + row) / 128u) * a.scale_cols;
+    float sums[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    constexpr uint32_t width = Packed ? 4u : 1u;
+    for (uint32_t col = lane * width; col < a.k; col += 32u * width) {
+      uint32_t codes;
+      if constexpr (Packed) {
+        codes = *const_pointer<uint32_t>(a.weight + weight_base + col);
+      } else {
+        codes = const_pointer<uint8_t>(a.weight)[weight_base + col];
+      }
+#pragma unroll
+      for (uint32_t j = 0; j < width; ++j) {
+        const uint64_t si = scale_base + (a.column_origin + col + j) / 128u;
+        const float scale = F32Scale ? const_pointer<float>(a.scales)[si]
+            : bf16_value(const_pointer<uint16_t>(a.scales)[si]);
+        // Keep decode*scale rounded as a separate F32 multiplication, matching
+        // tiled decode exactly (including subnormals). Never fold scale into A.
+        const float w = __fmul_rn(fp8_value(uint8_t(codes >> (8u * j))), scale);
+        sums[j] = __fmaf_rn(const_pointer<float>(a.activation)[col + j], w, sums[j]);
+      }
+    }
+    float sum = __fadd_rn(__fadd_rn(sums[0], sums[1]), __fadd_rn(sums[2], sums[3]));
+#pragma unroll
+    for (int offset = 16; offset > 0; offset /= 2) {
+      sum = __fadd_rn(sum, __shfl_down_sync(0xffffffffu, sum, offset));
+    }
+    if (lane == 0) pointer<float>(a.output)[row] = sum;
+  }
+}
+
+inline bool m1_span(uint64_t address, uint64_t bytes) {
+  uint64_t end;
+  return address && bytes <= INT64_MAX && checked_add_u64(address, bytes, &end);
+}
+} // namespace ferrule::cuda::cutlass::numeric_fp8
+
+extern "C" int32_t ferrule_cutlass_numeric_fp8_m1_available() {
+  return FERRULE_CUDA_TARGET_SM >= 80;
+}
+extern "C" int32_t ferrule_cutlass_numeric_fp8_m1_can_implement(const FerruleCutlassNumericFp8Args *a) {
+  using namespace ferrule::cuda::cutlass::numeric_fp8;
+  if (!a || a->m != 1 || !a->n || a->n > INT_MAX - 128u ||
+      !a->k || a->k > INT_MAX - 32u || a->padded_k != a->k ||
+      a->tile_rows || a->workspace_bytes || a->reserved ||
+      a->row_origin >= 128 || a->column_origin >= 128 ||
+      a->scale_cols != (a->column_origin + a->k + 127u) / 128u ||
+      (a->scale_bytes != 2 && a->scale_bytes != 4) ||
+      a->lda < a->k || a->lda > INT_MAX || a->ldd < a->n || a->ldd > INT_MAX ||
+      a->activation % 4 || a->output % 4 || a->scales % a->scale_bytes ||
+      !m1_span(a->activation, uint64_t(a->k) * 4) ||
+      !m1_span(a->output, uint64_t(a->n) * 4) ||
+      !m1_span(a->weight, uint64_t(a->n) * a->k) ||
+      !m1_span(a->scales, uint64_t((a->row_origin + a->n + 127u) / 128u) *
+          a->scale_cols * a->scale_bytes)) return 1;
+  return ferrule_cutlass_numeric_fp8_m1_available() ? 0 : 2;
+}
+extern "C" int32_t ferrule_cutlass_numeric_fp8_m1_launch(const FerruleCutlassNumericFp8Args *a) {
+  if (int status = ferrule_cutlass_numeric_fp8_m1_can_implement(a)) return status;
+#if FERRULE_CUDA_TARGET_SM >= 80
+  using namespace ferrule::cuda::cutlass::numeric_fp8;
+  const unsigned count = (a->n + 3u) / 4u;
+  const unsigned grid = count < 65535u ? count : 65535u;
+  auto stream = reinterpret_cast<cudaStream_t>(a->stream);
+  const bool packed = a->k % 4u == 0 && a->weight % 4u == 0;
+  if (a->scale_bytes == 4) {
+    if (packed) fused_fp32_m1<true, true><<<grid, 128, 0, stream>>>(*a);
+    else fused_fp32_m1<true, false><<<grid, 128, 0, stream>>>(*a);
+  } else {
+    if (packed) fused_fp32_m1<false, true><<<grid, 128, 0, stream>>>(*a);
+    else fused_fp32_m1<false, false><<<grid, 128, 0, stream>>>(*a);
+  }
+  return cudaGetLastError() == cudaSuccess ? 0 : 4;
+#else
+  return 2;
+#endif
+}
+
+#include "cutlass/numeric_w8a16.cuh"
+
+// Explicit compatibility profile, not a replacement for the established tiled
+// kernel. Transpose the GEMM view so the weight rows are M, as in native HF's
+// gate kernel. Two K32 warp partitions traverse each K64 tile independently;
+// the epilogue merges their F32 accumulators without global split-K scratch.
+namespace ferrule::cuda::cutlass::numeric_fp8::sliced_k2 {
+#if FERRULE_CUTLASS_BF16_TENSOROP
+using Element = ::cutlass::bfloat16_t;
+using Gemm = ::cutlass::gemm::device::Gemm<
+    Element, ::cutlass::layout::RowMajor,
+    Element, ::cutlass::layout::ColumnMajor,
+    float, ::cutlass::layout::ColumnMajor, float,
+    ::cutlass::arch::OpClassTensorOp, ::cutlass::arch::Sm80,
+    ::cutlass::gemm::GemmShape<64, 64, 64>,
+    ::cutlass::gemm::GemmShape<64, 32, 32>,
+    ::cutlass::gemm::GemmShape<16, 8, 16>,
+    ::cutlass::epilogue::thread::LinearCombination<float, 1, float, float>,
+    ::cutlass::gemm::threadblock::GemmIdentityThreadblockSwizzle<>,
+    5, 8, 8, false, ::cutlass::arch::OpMultiplyAdd>;
+inline Gemm::Arguments arguments(const FerruleCutlassBf16Args &a) {
+  auto *output = reinterpret_cast<float *>(a.output);
+  return {{int(a.n), int(a.m), int(a.k)},
+          {reinterpret_cast<const Element *>(a.weight), int(a.ldb)},
+          {reinterpret_cast<const Element *>(a.activation), int(a.lda)},
+          {output, int(a.ldd)}, {output, int(a.ldd)}, {1.0f, 0.0f}, 1};
+}
+#endif
+inline int can_implement(const FerruleCutlassNumericFp8Args *a, uint32_t alignment) {
+  if (!a || !a->m || a->k % 64) return 1;
+  if (int status = tiled_can_implement(a, alignment)) return status;
+#if FERRULE_CUTLASS_BF16_TENSOROP
+  for (uint32_t first : {0u, (a->n - 1u) / a->tile_rows * a->tile_rows}) {
+    uint32_t count = a->n - first < a->tile_rows ? a->n - first : a->tile_rows;
+    auto args = arguments(gemm_args(*a, first, count));
+    if (Gemm::get_workspace_size(args) != 0) return 2;
+    if (Gemm::can_implement(args) != ::cutlass::Status::kSuccess) return 3;
+  }
+  return 0;
+#else
+  return 2;
+#endif
+}
+template <bool Bf16Input>
+inline int launch(const FerruleCutlassNumericFp8Args *a) {
+  if (int status = can_implement(a, Bf16Input ? 2 : 4)) return status;
+#if FERRULE_CUTLASS_BF16_TENSOROP
+  auto stream = reinterpret_cast<cudaStream_t>(a->stream);
+  if constexpr (Bf16Input)
+    pack_bf16_activation<<<blocks(uint64_t(a->m) * a->padded_k), 256, 0, stream>>>(*a);
+  else
+    pack_activation<<<blocks(uint64_t(a->m) * a->padded_k), 256, 0, stream>>>(*a);
+  if (cudaGetLastError() != cudaSuccess) return 4;
+  for (uint32_t first = 0; first < a->n;) {
+    uint32_t count = a->n - first < a->tile_rows ? a->n - first : a->tile_rows;
+    decode_weights<<<blocks(uint64_t(count) * a->padded_k), 256, 0, stream>>>(*a, first, count);
+    if (cudaGetLastError() != cudaSuccess) return 4;
+    Gemm gemm;
+    auto status = gemm.initialize(arguments(gemm_args(*a, first, count)), nullptr, stream);
+    if (status == ::cutlass::Status::kSuccess) status = gemm.run(stream);
+    if (status != ::cutlass::Status::kSuccess) return 1000 + int(status);
+    first += count;
+  }
+  return 0;
+#else
+  return 2;
+#endif
+}
+} // namespace ferrule::cuda::cutlass::numeric_fp8::sliced_k2
+extern "C" int32_t ferrule_cutlass_numeric_fp8_sliced_k2_can_implement(const FerruleCutlassNumericFp8Args *a) {
+  return ferrule::cuda::cutlass::numeric_fp8::sliced_k2::can_implement(a, 4);
+}
+extern "C" int32_t ferrule_cutlass_numeric_fp8_sliced_k2_bf16_can_implement(const FerruleCutlassNumericFp8Args *a) {
+  return ferrule::cuda::cutlass::numeric_fp8::sliced_k2::can_implement(a, 2);
+}
+extern "C" int32_t ferrule_cutlass_numeric_fp8_sliced_k2_launch(const FerruleCutlassNumericFp8Args *a) {
+  return ferrule::cuda::cutlass::numeric_fp8::sliced_k2::launch<false>(a);
+}
+extern "C" int32_t ferrule_cutlass_numeric_fp8_sliced_k2_bf16_launch(const FerruleCutlassNumericFp8Args *a) {
+  return ferrule::cuda::cutlass::numeric_fp8::sliced_k2::launch<true>(a);
 }

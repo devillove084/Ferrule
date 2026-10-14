@@ -1,0 +1,68 @@
+{
+  "returncode": 1,
+  "timed_out": false,
+  "wall_seconds": 1.5952528808265924,
+  "stdout": "",
+  "stderr": "Traceback (most recent call last):\n  File \"<string>\", line 1, in <module>\n  File \"/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_mixed/oracle/tp2_oracle.py\", line 661, in export\n    authentication = authenticate_export(payload, launch_hash)\n  File \"/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_mixed/oracle/tp2_oracle.py\", line 570, in authenticate_export\n    require(journal.get('containment_verified') is True and journal.get('method') == 'linux-subreaper-waitid' and\n  File \"/home/admin/luhuanbing.lhb/Ferrule/scripts/qwen35_fp8_cuda_reference.py\", line 38, in require\n    raise ValueError(message)\nValueError: Authenticated custody journal differs\n",
+  "cleanup_errors": [],
+  "cleanup_scope": "isolated_subreaper_direct_children",
+  "descendant_custody": "proven_drained",
+  "gpu_quiescence": "unverified",
+  "custody": {
+    "status": "proven_drained",
+    "method": "linux-subreaper-waitid",
+    "containment_verified": true,
+    "launch_id": "0d2d9ac54400421eb679ddda76c17cfe",
+    "helper_identity": {
+      "pid": 82941,
+      "birth_ticks": 80516083,
+      "ppid": 82936,
+      "pgrp": 82941,
+      "session": 82941
+    },
+    "root_identity": {
+      "pid": 82942,
+      "birth_ticks": 80516086,
+      "ppid": 82941,
+      "pgrp": 82941,
+      "session": 82941
+    },
+    "boot_id": "4dd3497d-570c-4693-a876-5c26e06ab360",
+    "entries": [
+      {
+        "identity": {
+          "pid": 82942,
+          "birth_ticks": 80516086,
+          "ppid": 82941,
+          "pgrp": 82941,
+          "session": 82941
+        },
+        "role": "root",
+        "signals": [],
+        "reaped": true,
+        "exit_code": 1,
+        "first_observed_at": 8441281.21967545,
+        "reaped_at": 8441282.737695802
+      }
+    ],
+    "errors": [],
+    "reporting_errors": [],
+    "echild": true
+  },
+  "handshake": {
+    "kind": "ready",
+    "protocol": 1,
+    "launch_id": "0d2d9ac54400421eb679ddda76c17cfe",
+    "helper_identity": {
+      "pid": 82941,
+      "birth_ticks": 80516083,
+      "ppid": 82936,
+      "pgrp": 82941,
+      "session": 82941
+    },
+    "containment_verified": true,
+    "method": "linux-subreaper-waitid"
+  },
+  "stdout_truncated": false,
+  "stderr_truncated": false
+}

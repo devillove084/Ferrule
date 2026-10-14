@@ -10,6 +10,13 @@
 //! or hot-path dynamic policy.  The hot path reads pre-resolved POD
 //! descriptors and dispatches directly.
 
+/// Provider-neutral workspace size and alignment requirements.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OperatorWorkspaceRequirements {
+    pub bytes: u64,
+    pub alignment: u32,
+}
+
 // ── Provider and kernel identity ──────────────────────────────────────
 
 /// Stable provider identity assigned during backend construction.

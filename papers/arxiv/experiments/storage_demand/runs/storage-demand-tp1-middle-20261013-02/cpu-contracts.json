@@ -1,0 +1,27 @@
+{
+  "status": "passed_cpu_only",
+  "checks": {
+    "historical_cpu_contracts_15_bound": true,
+    "legacy_702_manifest_and_parent_entries_bound": true,
+    "exact_four_schedule": true,
+    "greedy_payloads": true,
+    "physical_unknowns_null": true,
+    "binding_accepts_frozen_case": true,
+    "reject_request_count_10": true,
+    "reject_request_count_12": true,
+    "reject_gpu_mask_0,1": true,
+    "reject_uuid_GPU-bad": true,
+    "reject_purpose_tp2": true,
+    "reject_wrapper_sha256_0000000000000000000000000000000000000000000000000000000000000000": true,
+    "reject_prepared_sha256_0000000000000000000000000000000000000000000000000000000000000000": true,
+    "reject_worker_token_None": true,
+    "reject_worker_token_wrong-nonce": true,
+    "reject_actual_total_bytes_nan": true,
+    "reject_granted_False": true
+  },
+  "existing_contracts": 15,
+  "wrapper_source_sha256": "9faa3b0b9acbcf9a96a2bafd8b071e5ded90cbc709fdbc9c336c198ec190ce17",
+  "gpu_queries": 0,
+  "gpu_locks": 0,
+  "gpu_runs": 0
+}

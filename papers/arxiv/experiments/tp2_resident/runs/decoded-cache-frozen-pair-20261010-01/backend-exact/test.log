@@ -1,0 +1,3 @@
+
+running 1 test
+test cuda::providers::bf16_gemmex::mixed_decode_reuse_tests::mixed_decode_resident_single_pair_m1_m5 ... 

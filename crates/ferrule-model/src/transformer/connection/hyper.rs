@@ -100,16 +100,6 @@ pub enum HyperConnectionStage {
     FeedForward,
 }
 
-#[cfg(feature = "cuda")]
-impl HyperConnectionStage {
-    pub const fn kernel_operation(self) -> ferrule_backend::plan::KernelOperation {
-        match self {
-            Self::Attention => ferrule_backend::plan::KernelOperation::AttentionHcPre,
-            Self::FeedForward => ferrule_backend::plan::KernelOperation::FeedForwardHcPre,
-        }
-    }
-}
-
 /// Host-side parameters for one HyperConnection phase.
 #[derive(Debug, Clone, PartialEq)]
 pub struct HyperConnectionWeights {
@@ -413,6 +403,15 @@ mod cuda {
         HyperConnection, HyperConnectionPhase, HyperConnectionStage, HyperConnectionWeights,
         PreparedHyperConnection, PreparedHyperConnectionHead, PreparedHyperConnectionWeights,
     };
+
+    impl HyperConnectionStage {
+        pub const fn kernel_operation(self) -> ferrule_backend::plan::KernelOperation {
+            match self {
+                Self::Attention => ferrule_backend::plan::KernelOperation::AttentionHcPre,
+                Self::FeedForward => ferrule_backend::plan::KernelOperation::FeedForwardHcPre,
+            }
+        }
+    }
 
     impl PreparedHyperConnection<CudaF32Buffer, CudaF32Buffer> {
         pub fn prepare(operators: &CudaOperators, source: &HyperConnection) -> Result<Self> {

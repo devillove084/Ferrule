@@ -1,0 +1,8 @@
+{
+  "schema": "ferrule.paper.tp2-mixed-independent-oracle.v1",
+  "profile": "SystemMixedTP2EP1",
+  "status": "incomplete",
+  "full_reference_complete": false,
+  "strict_ferrule_full40": false,
+  "error": "ValueError: Worker failed/timed out/custody unknown"
+}

@@ -1,0 +1,21 @@
+% Compile from papers/arxiv, using -outdir=figures/build.
+% This is a figure-only integration target, not manuscript evidence.
+\def\DoNotLoadEpstopdf{}
+\documentclass[11pt,letterpaper]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage{amsmath,amssymb}
+\usepackage{xcolor}
+\usepackage{graphicx}
+\usepackage[hidelinks]{hyperref}
+\begin{document}
+\section*{Ferrule protocol figures: integration preview}
+Figures~\ref{fig:architecture}, \ref{fig:transaction-lifecycle} and
+\ref{fig:operation-state} share a monochrome style and separate source planning,
+logical publication and physical custody. This target checks the paper leaves
+and labels independently of concurrent manuscript edits.
+\input{figures/overview}
+\end{document}

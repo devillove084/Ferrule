@@ -1,0 +1,102 @@
+{
+  "schema": "ferrule.paper.tp2-profile.v1",
+  "status": "captured_requires_offline_coverage_audit",
+  "protocol": "tp2-serving-profile-c1",
+  "release_binary_sha256": "dadf831eb2af477108efd402171c40f7544a2600d14b8e5e7ab8a456d2625e5a",
+  "capture_scope": "two QA8 diagnostic requests; startup excluded; no full numerical capture",
+  "summary_commands": {
+    "cuda_api_sum": {
+      "returncode": 0,
+      "output": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/nsight/cuda_api_sum.txt"
+    },
+    "cuda_gpu_kern_sum": {
+      "returncode": 0,
+      "output": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/nsight/cuda_gpu_kern_sum.txt"
+    },
+    "cuda_gpu_mem_time_sum": {
+      "returncode": 0,
+      "output": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/nsight/cuda_gpu_mem_time_sum.txt"
+    },
+    "cuda_gpu_mem_size_sum": {
+      "returncode": 0,
+      "output": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/nsight/cuda_gpu_mem_size_sum.txt"
+    },
+    "osrt_sum": {
+      "returncode": 0,
+      "output": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/nsight/osrt_sum.txt"
+    },
+    "nvtx_sum": {
+      "returncode": 0,
+      "output": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/nsight/nvtx_sum.txt"
+    }
+  },
+  "artifact_pins": {
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/P1-assessment.json": "531fcd89df9e4bdb0f7027bede5cc1b51f63e55a95687bc2247011c374244af6",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/P1-dispatch.json": "3b658c7acfe7c6fce50de006e275bab236431160064bc98a28c3f87194bbce2e",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/authorized-probe-grant.json": "fd9c8867b6871a2cc1394d30187568fc23303e452e9ca3a5a43d981c9c67d1e7",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/launch.json": "c7ae9447d10e84ff8319491b2311cac2f3124d424fabcb75f7b60c675dccd714",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/prepared.json": "ecbbac7ed6da73de4fec1d79658baf6490085136cc8c9639cbfb1f5ce585a69d",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/probe-grant.json": "fd9c8867b6871a2cc1394d30187568fc23303e452e9ca3a5a43d981c9c67d1e7",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/probe-initial-idle.json": "0944f6bcee5da5a163ea33b68aa741037bd44038c18895fd5607d5346721d2fe",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/canaries.json": "854238c428d68832a2806538f300bac32f53a0c8d47ff2e85bcfba5e5ace6fea",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/execution.json": "979a97d3cd6dd6ec124e442f83061cdac4d0f3a57ff456f345b63e79964588bd",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/lock-release.json": "39ae688106ea715f00f8c7694b2a52e2819bb6f666208c5b1c0cb4e273e3df79",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/prepared.json": "2d46d7ce8efb906f31a9cec96b5aa6cb6c4dc0962a8745b2c5a206254754e8b6",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/probe-lock-release.json": "aff4f68d7b05f833122c36031f0e48aebe3c19cdf8e0cceb05f9b27350a7313e",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/after.json": "d67ec3e1f1bafbbcfcaf452d32d3d36a210b8ca7b82cd38a00f282ca11627dbd",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/baseline.json": "3c2bd642756c89eefb40a77c82d66cda42ca4d6a3584092b8d2f1620932ab368",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/before.json": "c7e8134f22966b069719b6e018f20d9a850c243a18e9a33fadf020b2bccba290",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/canaries.json": "854238c428d68832a2806538f300bac32f53a0c8d47ff2e85bcfba5e5ace6fea",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/canary8/gate.json": "6f5ad26e48900a1899ff82529fb221cca8c89040130b7aed6df5348d6306ea5a",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/canary8/http.json": "45290ed17872f00b3f8f28021edf4f087eb760db07daa360e2aee6b9978308ea",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/canary8/metadata.json": "5d172f3d8a46fbfd5acc13f4dd9798951642678dcce660ca5d7bade52c8229e7",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/canary8/pair-metadata.json": "172a398082b1b67ee093e4a5b2dcabe433cb3c54ea34ab2012471ad44649f37c",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/canary8/prompts.json": "42db4c2cc82a5130a3272a91e13738b309b8bfdaf3f796425e9a021d77f73af6",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/case.json": "d289a275338e9c6abf789320c43fef035d618b331b1bbfc0122acff0c03fa539",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/collector-after-model.json": "700ad58bf90714c59fcd580b0d6c8c99aef6f85eaa1c4faf804593e520b6548b",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/collector-baseline.json": "cfb8519e557461da5c05f46bfbc9503f5c072ab9129ae680b1d93a4b2f36d5f3",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/collector-manifest.json": "cbe1158c4c363e90add8aa0220dde6bc1c09cf09979561655f3746bec32130c9",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/collector-model-ended.json": "d4eb96c71c26f4d3bf230ca1df88d2b053a8775009ec7d6afe75931a8cc75797",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/collector-release.json": "20dc71d545b740ea8e7df76212368d9d1b86d4fd43d76a0f49eb49f11090df00",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/collector-samples.jsonl": "c1e29950f268547673cf89325bd2afd59b38232fa6013f4a838b576732b09a29",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/collector-target-ready.json": "9904e0de06758c2d50ddef2f57a1f1120b5e3fb7192c7f2c4aee48216eafed64",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/custody.json": "64a68b9ba6491371d8a7e52aa26f22560488b146ef75abfab673b2c48efecca4",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/hello2/gate.json": "4a75327825c4d24abea309144ee38c8087c6dbb2dda298c108293f8e69b91181",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/hello2/http.json": "f412e8927665ad03fcdc80970c4a4d2549f9f90b0857545a847fcda978f44487",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/hello2/metadata.json": "5d172f3d8a46fbfd5acc13f4dd9798951642678dcce660ca5d7bade52c8229e7",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/hello2/pair-metadata.json": "172a398082b1b67ee093e4a5b2dcabe433cb3c54ea34ab2012471ad44649f37c",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/model-release.json": "1148689ae8ea594551bce2307ee43134d1a607b8d263dd5a4e61df06a3af8403",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/nsight/cuda_api_sum.txt": "0a899fa5d915ebd39833318cbc9f529d4c1bff8c90a4a8d874b4509bead4c37c",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/nsight/cuda_gpu_kern_sum.txt": "6f3bc6ffa990d9ed68d5db2ff5a0a60b1e1c7098338f713cff80e37b27bf0fbb",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/nsight/cuda_gpu_mem_size_sum.txt": "e69b38d90ae90089363ef75550b84f3464a16847878cbd5494528937bc044c3b",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/nsight/cuda_gpu_mem_time_sum.txt": "d235ec237060273b11a678db61cb3b0fb4a24185158e4c139942289333f48a60",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/nsight/nsys.nsys-rep": "4365b51ae20906c66af7ee339d74bc9cc98df814ce0f7557d60429b312115dbc",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/nsight/nsys.sqlite": "f5b0ff1b721b0023ac0bb8598eba940d0513e12c27f7a2769fc407ca357c871f",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/nsight/nvtx_sum.txt": "62bc94ad88188af7e7efe59eb35e69d22f2f860b20c4833d91ba1d076e12e0d3",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/nsight/osrt_sum.txt": "fc81d85e649b433e7a2658319097cc3139aa6f6fdaf98075807c8be2e2bb6d71",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/nsys-tmp/nvidia/nsight_systems/NSys-SessionManager.lock-4026532468-2025.3.1": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/nsys-tmp/nvidia/nsight_systems/telemetry-0/telemetry.lock": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/prelaunch.json": "07e5a73e827b0263eeca41bb7541c2c5f27218c0b9b753be07e8c8c93a67184b",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/probe-locks.json": "8ca1a49822cc6a4c50f9fae300b7243130e73441eeb3b939ab2cc63de1d6a567",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/profile/gate.json": "ca1de2895eb7e1ba59894758594d2bf5d4ef1603bf64aad079881de161953ccb",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/profile/measured.json": "33c0d1ebd016cc998abe279cd9ad938d4a1778d46bf20e388f19df1ddb236838",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/profile/metadata.json": "5d172f3d8a46fbfd5acc13f4dd9798951642678dcce660ca5d7bade52c8229e7",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/profile/model-identity.json": "1c29b0b666dad77619da28dbdaa89a558630ba97b9c56c2aaa4fe9637b41b3a0",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/profile/profile-window.json": "ca1de2895eb7e1ba59894758594d2bf5d4ef1603bf64aad079881de161953ccb",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/profile/start.json": "7c3c231a1859fe70af518ad03b7e4406feb072fabff4116bb1a6282e210bd789",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/profile/stop.json": "fa09f20bb6cfbdfd447bdb8f04092adb744761a6e27835a11e630c381643f651",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/profile/warmup.json": "16cf2066a4122e92747b9bc98d8de7ad008b56a51862644c6dea5a0784af81e6",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/profile-server.json": "fb1653846471fcaad84d402bc2ce9854a6ad8368e1d0a5064b272d1e6d1b95b2",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/profile-stop": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/requests.json": "19513434effd4df359599e9c29695094200b48ad3157647b170b15136528e8b4",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/samples.jsonl": "fdd8f2eef7edca33f4ce0130be9ea70ca490f28a58d4c4a8c3f22eda0e35b614",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/server.log": "7acf2b698524bb4d848217ff7d10cc3741d6e7aa7ffdef588834797355ca4668",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/supervisor.json": "cacd8a5f55124f12ce63485e21cf572fc3f8455e126543aef3febda7a4b5862d",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/worker-launch.json": "bb837173279b0cd1ae4b68d0a5a563e803de57fdbcdbf8459965df53fb5c284b",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/topology.json": "ef2c30a474eb84b709762d9df80e6c853451640671cd142f0a4cc1f44009a50b"
+  },
+  "fairmatch": false,
+  "exact_speedup": null,
+  "benchmark": false,
+  "caveat": "Synchronization durations include GPU work; sums across threads/devices overlap"
+}

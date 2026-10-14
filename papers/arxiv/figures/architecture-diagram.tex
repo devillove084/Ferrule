@@ -1,0 +1,101 @@
+% Selected-profile concept, not a universal runner/registry integration claim.
+% Local palette keeps this owned figure independent of the shared driver/style.
+\definecolor{FerrulePlanning}{HTML}{315E85}
+\definecolor{FerruleStorage}{HTML}{9A6B25}
+\definecolor{FerruleExecution}{HTML}{2E786D}
+\definecolor{FerrulePublication}{HTML}{6C588A}
+\definecolor{FerruleException}{HTML}{A34F4A}
+\begin{tikzpicture}[x=1cm,y=1cm,
+  role/plan/.style={ferrule/box,draw=FerrulePlanning,fill=FerrulePlanning!9},
+  role/storage/.style={ferrule/box,draw=FerruleStorage,fill=FerruleStorage!10},
+  role/execution/.style={ferrule/box,draw=FerruleExecution,fill=FerruleExecution!9},
+  role/publication/.style={ferrule/box,draw=FerrulePublication,fill=FerrulePublication!9},
+  role/exception/.style={ferrule/unknown,draw=FerruleException,fill=FerruleException!8},
+  evidence/.style={ferrule/control,draw=FerrulePlanning},
+  retirement/.style={ferrule/control,draw=FerrulePublication}]
+  \node[ferrule/section] at (0.25,0.35) {SELECTED PROFILE: PLAN AND PHYSICAL PATH};
+  \node[ferrule/section] at (10.65,0.35) {SCOPED OWNER CONTROL};
+
+  \node[role/plan,text width=8.65cm,minimum height=1.20cm] (plan) at (4.8,-0.85)
+    {\textbf{Neutral plan / immutable source catalog}\\
+     Semantics, encoding, placement and source identity\\
+     Metadata descriptors, not payload or residency ownership};
+  \node[role/plan,text width=8.65cm,minimum height=1.30cm] (admit) at (4.8,-2.80)
+    {\textbf{Admission / source-bound read-only plan}\\
+     Exact key + stage requirements + persistent resident bytes\\
+     Covered-domain claims before each stage's submission};
+
+  \node[ferrule/section,fill=white,inner sep=2pt] at (0.5,-4.05) {Materialization};
+  \node[role/storage,text width=2.15cm,minimum height=1.15cm] (read) at (1.8,-4.95)
+    {\textbf{Source read}\\Checkpoint ranges};
+  \node[role/storage,text width=2.15cm,minimum height=1.15cm] (stage) at (4.85,-4.95)
+    {\textbf{Host staging}\\Pinned / bounded};
+  \node[role/storage,text width=2.15cm,minimum height=1.15cm] (transfer) at (7.9,-4.95)
+    {\textbf{Transfer / install}\\Exact destination};
+
+  \node[ferrule/section,fill=white,inner sep=2pt] at (0.5,-6.45)
+    {Execution provider: CUDA instance};
+  \node[role/execution,text width=2.15cm,minimum height=1.15cm] at (1.8,-7.4)
+    {\textbf{Resident weights}\\Generation binding};
+  \node[role/execution,text width=2.15cm,minimum height=1.15cm] at (4.85,-7.4)
+    {\textbf{Workspace / arena}\\Temporaries};
+  \node[role/execution,text width=2.15cm,minimum height=1.15cm] at (7.9,-7.4)
+    {\textbf{KV / model state}\\Pages and pins};
+  \node[role/execution,text width=8.65cm,minimum height=1.20cm] (consumer) at (4.8,-9.5)
+    {\textbf{Consumer owner / model work}\\
+     Lease-protected bindings and state\\
+     Output consumers end at their final relevant fence};
+
+  \node[role/plan,text width=5.0cm,minimum height=1.20cm] (journal) at (13.5,-0.85)
+    {\textbf{Scope-local owner / journal}\\
+     Journal before backend submission\\
+     Physical resources stay owner-held};
+  \node[role/publication,text width=5.0cm,minimum height=1.30cm] (publish) at (13.5,-2.80)
+    {\textbf{Logical publication}\\Authorized output / state\\Owner-local in-memory protocol};
+  \node[role/plan,text width=5.0cm,minimum height=1.95cm] (complete) at (13.5,-5.15)
+    {\textbf{Completion validation}\\Match operation / key / stage / bytes\\
+     Generations + retained fence\\Success $\ne$ known failure};
+  \node[role/publication,text width=5.0cm,minimum height=1.30cm] (custody) at (13.5,-7.4)
+    {\textbf{Custody / retirement}\\Owner-held pins, leases and claims\\Reuse only after final relevant fences};
+  \node[role/plan,text width=5.0cm,minimum height=1.20cm] (observe) at (13.5,-9.5)
+    {\textbf{Causal traces / observability}\\Scoped identity and stage metrics\\Logical terminal $\ne$ cleanup proof};
+
+  % Group fills and all connectors sit behind opaque nodes and edge labels.
+  \begin{pgfonlayer}{background}
+    \draw[ferrule/group,draw=FerruleStorage,fill=FerruleStorage!3]
+      (0.25,-4.05) rectangle (9.4,-5.85);
+    \draw[ferrule/group,draw=FerruleExecution,fill=FerruleExecution!3]
+      (0.25,-6.45) rectangle (9.4,-8.25);
+    \draw[ferrule/arrow] (plan.south) -- (admit.north);
+    \draw[ferrule/arrow] (admit.south) -- (4.8,-4.05);
+    \draw[ferrule/arrow] (read.east) -- (stage.west);
+    \draw[ferrule/arrow] (stage.east) -- (transfer.west);
+    \draw[ferrule/arrow] (transfer.south) -- (7.9,-6.45);
+    \draw[ferrule/arrow] (4.8,-8.25) -- (consumer.north);
+    \draw[evidence] (journal.west) -- (10.05,-0.85) -- (10.05,-2.8) -- (admit.east);
+    \draw[evidence] (transfer.east) -- (10.1,-4.95) -- (10.1,-5.15) -- (complete.west);
+    \draw[evidence] (complete.north) -- (publish.south);
+    \draw[retirement] (complete.south) -- (custody.north);
+    \draw[retirement] (9.4,-7.4) -- (custody.west);
+    \draw[evidence] (consumer.east) -- (observe.west);
+    \draw[evidence] (custody.south) -- (observe.north);
+  \end{pgfonlayer}
+  \node[ferrule/label,text width=4.3cm] at (13.5,-3.80) {validated success + preflight};
+  \node[ferrule/label,text width=4.3cm] at (13.5,-6.43) {named custody proof only};
+
+  % Labeled swatches remain intelligible without color; dashed paths are evidence.
+  \draw[draw=FerrulePlanning,fill=FerrulePlanning!9] (0.35,-10.65) rectangle (0.65,-10.9);
+  \node[ferrule/note,anchor=west] at (0.8,-10.78) {Control / plan};
+  \draw[draw=FerruleStorage,fill=FerruleStorage!10] (3.5,-10.65) rectangle (3.8,-10.9);
+  \node[ferrule/note,anchor=west] at (3.95,-10.78) {Storage};
+  \draw[draw=FerruleExecution,fill=FerruleExecution!9] (6.0,-10.65) rectangle (6.3,-10.9);
+  \node[ferrule/note,anchor=west] at (6.45,-10.78) {Execution};
+  \draw[draw=FerrulePublication,fill=FerrulePublication!9] (8.9,-10.65) rectangle (9.2,-10.9);
+  \node[ferrule/note,anchor=west] at (9.35,-10.78) {Publish / retire};
+  \draw[draw=FerruleException,fill=FerruleException!8,dashed] (12.4,-10.65) rectangle (12.7,-10.9);
+  \node[ferrule/note,anchor=west] at (12.85,-10.78) {Unknown / failure};
+  \node[role/exception,text width=15.2cm,minimum height=1.1cm] at (8.35,-11.75)
+    {\textbf{Scoped boundaries.} Solid: plan/resource dependency. Dashed: evidence/owner control.\\
+     Covered-domain budgets do not hard-cap OS page caches or storage-server caches.\\
+     No durable ACID, global commit, universal registry, or default NCCL/collective route is implied.};
+\end{tikzpicture}

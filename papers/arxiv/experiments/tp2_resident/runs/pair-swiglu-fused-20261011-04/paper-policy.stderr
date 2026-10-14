@@ -1,0 +1,9 @@
+test_diagnostic_cannot_claim_cached_fusion (test_routed_fusion_gate.SelectedContract.test_diagnostic_cannot_claim_cached_fusion) ... ok
+test_logits_reject_nonfinite_shape_failure_and_wrong_greedy (test_routed_fusion_gate.SelectedContract.test_logits_reject_nonfinite_shape_failure_and_wrong_greedy) ... ok
+test_math_is_narrow_and_direct_tail_has_real_target (test_routed_fusion_gate.SelectedContract.test_math_is_narrow_and_direct_tail_has_real_target) ... ok
+test_six_unobserved_recipes_reuse_one_executor_with_cache (test_routed_fusion_gate.SelectedContract.test_six_unobserved_recipes_reuse_one_executor_with_cache) ... ok
+
+----------------------------------------------------------------------
+Ran 4 tests in 0.001s
+
+OK

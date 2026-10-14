@@ -1,0 +1,166 @@
+{
+  "runs": [
+    {
+      "run": "tp2-resident-20261008-001",
+      "environment_equal": true,
+      "argv_except_unique_stage_equal": true,
+      "executable_hash_equal": true,
+      "runtime_inventory_equal": true,
+      "gpu_uuids": [
+        "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+        "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9"
+      ],
+      "log_sha256": "906906ff601a9a43d489134a64ab9224e19ed83136dac4eb4bd9f48fe50ee19d",
+      "initialization_evidence": [
+        {
+          "line": 21,
+          "text": "(Worker pid=72204) INFO 10-08 23:23:29 [parallel_state.py:1638] world_size=2 rank=0 local_rank=0 distributed_init_method=file:///tmp/vllm_dist_214ed6adff7443aaa91f3e764fc51faa backend=nccl"
+        },
+        {
+          "line": 23,
+          "text": "(Worker pid=72205) INFO 10-08 23:23:29 [parallel_state.py:1638] world_size=2 rank=1 local_rank=1 distributed_init_method=file:///tmp/vllm_dist_214ed6adff7443aaa91f3e764fc51faa backend=nccl"
+        },
+        {
+          "line": 31,
+          "text": "gpu-public011166042141:72204:72204 [0] NCCL INFO NCCL version 2.29.7+cuda12.9"
+        },
+        {
+          "line": 68,
+          "text": "gpu-public011166042141:72205:72205 [1] NCCL INFO NCCL version 2.29.7+cuda12.9"
+        },
+        {
+          "line": 328,
+          "text": "(Worker_TP0 pid=72204) INFO 10-08 23:23:31 [__init__.py:689] Selected MarlinFP8ScaledMMLinearKernel for Fp8LinearMethod"
+        },
+        {
+          "line": 332,
+          "text": "(Worker_TP0 pid=72204) INFO 10-08 23:23:31 [fp8.py:325] Using MARLIN Fp8 MoE backend out of potential backends: ['AITER', 'FLASHINFER_TRTLLM', 'FLASHINFER_CUTLASS', 'DEEPGEMM', 'VLLM_CUTLASS', 'TRITON', 'MARLIN', 'HUMMING', 'BATCHED_DEEPGEMM', 'BATCHED_VLLM_CUTLASS', 'BATCHED_TRITON', 'XPU', 'CPU', 'HPC']."
+        }
+      ]
+    },
+    {
+      "run": "tp2-resident-20261008-002",
+      "environment_equal": true,
+      "argv_except_unique_stage_equal": true,
+      "executable_hash_equal": true,
+      "runtime_inventory_equal": true,
+      "gpu_uuids": [
+        "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+        "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9"
+      ],
+      "log_sha256": "51ff37e708c428add3ba652b6e488fb60a94c74222f0874eda05c044dd3822cb",
+      "initialization_evidence": [
+        {
+          "line": 21,
+          "text": "(Worker pid=139007) INFO 10-08 23:31:09 [parallel_state.py:1638] world_size=2 rank=0 local_rank=0 distributed_init_method=file:///tmp/vllm_dist_1e358521e4bf4e358fb31cb94206d3ff backend=nccl"
+        },
+        {
+          "line": 23,
+          "text": "(Worker pid=139008) INFO 10-08 23:31:09 [parallel_state.py:1638] world_size=2 rank=1 local_rank=1 distributed_init_method=file:///tmp/vllm_dist_1e358521e4bf4e358fb31cb94206d3ff backend=nccl"
+        },
+        {
+          "line": 31,
+          "text": "gpu-public011166042141:139008:139008 [1] NCCL INFO NCCL version 2.29.7+cuda12.9"
+        },
+        {
+          "line": 67,
+          "text": "gpu-public011166042141:139007:139007 [0] NCCL INFO NCCL version 2.29.7+cuda12.9"
+        },
+        {
+          "line": 323,
+          "text": "(Worker_TP0 pid=139007) INFO 10-08 23:31:11 [__init__.py:689] Selected MarlinFP8ScaledMMLinearKernel for Fp8LinearMethod"
+        },
+        {
+          "line": 327,
+          "text": "(Worker_TP0 pid=139007) INFO 10-08 23:31:11 [fp8.py:325] Using MARLIN Fp8 MoE backend out of potential backends: ['AITER', 'FLASHINFER_TRTLLM', 'FLASHINFER_CUTLASS', 'DEEPGEMM', 'VLLM_CUTLASS', 'TRITON', 'MARLIN', 'HUMMING', 'BATCHED_DEEPGEMM', 'BATCHED_VLLM_CUTLASS', 'BATCHED_TRITON', 'XPU', 'CPU', 'HPC']."
+        }
+      ]
+    },
+    {
+      "run": "tp2-resident-20261008-003",
+      "environment_equal": true,
+      "argv_except_unique_stage_equal": true,
+      "executable_hash_equal": true,
+      "runtime_inventory_equal": true,
+      "gpu_uuids": [
+        "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+        "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9"
+      ],
+      "log_sha256": "bc83244759458833bb7692e473631adfdb372cc09ae9f649eedf0f3dd3e6cdcf",
+      "initialization_evidence": [
+        {
+          "line": 132,
+          "text": "(APIServer pid=149458)     torch._C._cuda_init()"
+        },
+        {
+          "line": 135,
+          "text": "(APIServer pid=149458) KeyboardInterrupt: terminated"
+        }
+      ]
+    },
+    {
+      "run": "tp2-resident-20261008-004",
+      "environment_equal": true,
+      "argv_except_unique_stage_equal": true,
+      "executable_hash_equal": true,
+      "runtime_inventory_equal": true,
+      "gpu_uuids": [
+        "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+        "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9"
+      ],
+      "log_sha256": "21fbfc56121b7514e8598054510526c5a77f86c8dd7855d96b8882180de845d7",
+      "initialization_evidence": [
+        {
+          "line": 38,
+          "text": "(Worker pid=150547) ERROR 10-09 00:06:57 [multiproc_executor.py:941]     torch.accelerator.set_device_index(self.device)"
+        },
+        {
+          "line": 39,
+          "text": "(Worker pid=150547) ERROR 10-09 00:06:57 [multiproc_executor.py:941]   File \"/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/accelerator/__init__.py\", line 198, in set_device_index"
+        },
+        {
+          "line": 42,
+          "text": "(Worker pid=150547) ERROR 10-09 00:06:57 [multiproc_executor.py:941]     torch._C._cuda_init()"
+        },
+        {
+          "line": 43,
+          "text": "(Worker pid=150547) ERROR 10-09 00:06:57 [multiproc_executor.py:941] RuntimeError: CUDA driver initialization failed, you might not have a CUDA gpu."
+        },
+        {
+          "line": 46,
+          "text": "(Worker pid=150546) INFO 10-09 00:06:57 [parallel_state.py:1638] world_size=2 rank=0 local_rank=0 distributed_init_method=file:///tmp/vllm_dist_35cfecbbcd754e81aa829ff734f68b55 backend=nccl"
+        },
+        {
+          "line": 120,
+          "text": "(APIServer pid=149903) KeyboardInterrupt: terminated"
+        }
+      ]
+    }
+  ],
+  "exact_environment": {
+    "HOME": "/home/admin",
+    "PYTHONDONTWRITEBYTECODE": "1",
+    "PYTHONNOUSERSITE": "1",
+    "CUDA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+    "NVIDIA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+    "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
+    "HF_HUB_OFFLINE": "1",
+    "TRANSFORMERS_OFFLINE": "1",
+    "CUDA_HOME": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86",
+    "CUDA_PATH": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86",
+    "CUDACXX": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86/bin/nvcc",
+    "NVCC": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86/bin/nvcc",
+    "FLASHINFER_NVCC": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86/bin/nvcc",
+    "PATH": "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/bin:/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86/bin:/root/.cargo/bin:/usr/share/Modules/bin:/sbin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/root/bin:/usr/X11R6/bin",
+    "FLASHINFER_WORKSPACE_BASE": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/flashinfer-cu129",
+    "MAX_JOBS": "4",
+    "NCCL_P2P_DISABLE": "1",
+    "NCCL_DEBUG": "INFO",
+    "NCCL_DEBUG_SUBSYS": "INIT,GRAPH,P2P,SHM,NET"
+  },
+  "actual_historical_loaded_library_mappings": "unavailable; identical installed inventory is not proof of identical dynamic resolution",
+  "run003": "Observer 3s nvidia-smi timeout caused SIGTERM during API-server FLA/Triton CUDA lazy init; terminal exception KeyboardInterrupt: terminated",
+  "run004": "Worker PID150547 failed at gpu_worker.py:379 set_device_index -> torch._C._cuda_init before NCCL. PID150546 reached rank0 distributed init. PSS observer subsequently exhausted ESRCH retries.",
+  "cuda_numeric_error": "Not emitted in historical logs; underlying CUresult/runtime error code unavailable",
+  "root_cause": "Observer-induced abort proven for 003. Underlying driver failure 004 not proven; no env/config/library-input drift detected. One authorized same-config retry, no fallback."
+}

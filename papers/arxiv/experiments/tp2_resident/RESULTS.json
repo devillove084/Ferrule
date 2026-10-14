@@ -1,0 +1,311 @@
+{
+  "schema": "ferrule.paper.tp2-resident.summary.v1",
+  "status": "resident_hello_pass_canaries_blocked_before_requests",
+  "runs": [
+    {
+      "id": "tp2-resident-20261008-001",
+      "profile": "vllm-tp2-resident-noep-v1",
+      "status": "incomplete",
+      "cases": [
+        {
+          "stage": "hello2",
+          "status": "complete",
+          "startup_seconds": 128.3966568298638,
+          "startup_failure_seconds": null,
+          "case_wall_seconds": 132.22503234818578,
+          "supervisor_wall_seconds": 145.06773500330746,
+          "launch_id": "b60349304a4c4d17af34c7c028eb3dca",
+          "authenticated_drained": true,
+          "server_pid": 69856,
+          "gpu_peaks_bytes": {
+            "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 20456669184,
+            "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 20456669184
+          },
+          "tree_pss_peak_bytes": 8053426176,
+          "tree_rss_peak_bytes": 10830700544,
+          "observer_errors": {
+            "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": [],
+            "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": []
+          },
+          "server_log": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-20261008-001/hello2/server.log",
+          "server_log_sha256": "906906ff601a9a43d489134a64ab9224e19ed83136dac4eb4bd9f48fe50ee19d",
+          "after_idle": "verified",
+          "requests": [
+            {
+              "prompt_id": "prompt-0",
+              "text": ", I",
+              "actual_input_tokens": 1,
+              "actual_output_tokens": 2,
+              "ttft_seconds": 1.2450084276497364,
+              "request_e2e_seconds": 1.3593953344970942,
+              "finish_reason": "length",
+              "status": "success"
+            }
+          ],
+          "http_wall_seconds": [
+            1.3597420882433653
+          ]
+        },
+        {
+          "stage": "canary8",
+          "status": "failed",
+          "startup_seconds": null,
+          "startup_failure_seconds": 25.890072660520673,
+          "case_wall_seconds": 29.084411883726716,
+          "supervisor_wall_seconds": 42.19923830218613,
+          "launch_id": "fea4f714c4fa48939df7f98981fb7b29",
+          "authenticated_drained": true,
+          "server_pid": 76127,
+          "gpu_peaks_bytes": {
+            "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 3145728,
+            "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 3145728
+          },
+          "tree_pss_peak_bytes": 3305118720,
+          "tree_rss_peak_bytes": 4651667456,
+          "observer_errors": {
+            "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": [
+              "[Errno 3] No such process"
+            ],
+            "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": [
+              "[Errno 3] No such process"
+            ]
+          },
+          "server_log": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-20261008-001/canary8/server.log",
+          "server_log_sha256": "4973e13aafdcef7af3efa4d9d6d28b388c2f16604d5c330d72ab7e0b69e9febd",
+          "after_idle": "verified",
+          "requests": []
+        }
+      ],
+      "execution_receipt": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-20261008-001/execution.json",
+      "prepared_sha256": "36a2938ee0432dde854f6344d2b0a7c51f340274e39cb78141cf2999a31b360b",
+      "all_pins_rechecked": true,
+      "prior_runs_preserved": true,
+      "final_release": "verified",
+      "locks": {
+        "status": "released",
+        "gpu_uuids": [
+          "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+          "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9"
+        ],
+        "local_locks_released": true,
+        "all_gpu_idle": true
+      }
+    },
+    {
+      "id": "tp2-resident-20261008-002",
+      "profile": "vllm-tp2-resident-noep-observer-v2",
+      "status": "incomplete",
+      "cases": [
+        {
+          "stage": "hello2",
+          "status": "complete",
+          "startup_seconds": 123.66939330473542,
+          "startup_failure_seconds": null,
+          "case_wall_seconds": 127.3719942457974,
+          "supervisor_wall_seconds": 140.09550108015537,
+          "launch_id": "57deffedb25a41ee8b2d543c4f99fa67",
+          "authenticated_drained": true,
+          "server_pid": 137751,
+          "gpu_peaks_bytes": {
+            "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 20456669184,
+            "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 20456669184
+          },
+          "tree_pss_peak_bytes": 7799822336,
+          "tree_rss_peak_bytes": 10460729344,
+          "observer_errors": {
+            "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": [],
+            "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": []
+          },
+          "server_log": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-20261008-002/hello2/server.log",
+          "server_log_sha256": "51ff37e708c428add3ba652b6e488fb60a94c74222f0874eda05c044dd3822cb",
+          "after_idle": "verified",
+          "requests": [
+            {
+              "prompt_id": "prompt-0",
+              "text": ", I",
+              "actual_input_tokens": 1,
+              "actual_output_tokens": 2,
+              "ttft_seconds": 1.0491699427366257,
+              "request_e2e_seconds": 1.1292133759707212,
+              "finish_reason": "length",
+              "status": "success"
+            }
+          ],
+          "http_wall_seconds": [
+            1.129500150680542
+          ]
+        },
+        {
+          "stage": "canary8",
+          "status": "failed",
+          "startup_seconds": null,
+          "startup_failure_seconds": 25.492122983559966,
+          "case_wall_seconds": 28.95321145094931,
+          "supervisor_wall_seconds": 42.250818049535155,
+          "launch_id": "2186502ffbd8448493e2a63d3924db44",
+          "authenticated_drained": true,
+          "server_pid": 140656,
+          "gpu_peaks_bytes": {
+            "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 3145728,
+            "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 3145728
+          },
+          "tree_pss_peak_bytes": 4636173312,
+          "tree_rss_peak_bytes": 6784172032,
+          "observer_errors": [
+            "Traceback (most recent call last):\n  File \"/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/sampling_v2.py\", line 79, in collect\n    ct.require(all(d['gpu_bytes'] == 0 and d['utilization'] == 0 for d in row['devices']\n  File \"/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/contract.py\", line 46, in require\n    raise ValueError(reason)\nValueError: Nonselected GPU activity under sole-owner allocation; never signal foreign process\n"
+          ],
+          "server_log": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-20261008-002/canary8/server.log",
+          "server_log_sha256": "7255d06bcf03591781685ed147a61cbf163684ad715752233acdb9c5f11d0e15",
+          "after_idle": "verified",
+          "requests": []
+        }
+      ],
+      "execution_receipt": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-20261008-002/execution.json",
+      "prepared_sha256": "93301c2c6d9d1de0ed3ce6d671fb114e0c34009e1aed661be297fd1bba1754cd",
+      "all_pins_rechecked": true,
+      "prior_runs_preserved": true,
+      "final_release": "verified",
+      "locks": {
+        "status": "released",
+        "gpu_uuids": [
+          "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+          "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9"
+        ],
+        "local_locks_released": true,
+        "all_gpu_idle": true
+      }
+    }
+  ],
+  "gpu_uuids": [
+    "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+    "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9"
+  ],
+  "identity_mode": "device_exclusive_local_custody",
+  "owned_gpu_attribution": "unknown",
+  "owned_process_gpu_peak_bytes": null,
+  "absence_of_foreign_interference_proven": false,
+  "fairmatch": false,
+  "exact_speedup": null,
+  "canary_status": "not_evaluated_no_canary_http_requests",
+  "performance_status": "not_run_gate_blocked",
+  "reference_manifest_sha256": "102c798baeb5200bc8ed8386eabed6146870b3b6da2a90fc6010677041352c7e",
+  "transport": {
+    "declared_NCCL_P2P_DISABLE": "1",
+    "observed": "NCCL 2.29.7, local channel SHM/direct/direct; custom allreduce disabled by runtime P2P check",
+    "network_initialization": "No IB device; NCCL Socket network plugin initialized; local channels logged SHM, not evidence of inter-GPU Socket payload"
+  },
+  "kernels": {
+    "linear": "MarlinFP8ScaledMMLinearKernel",
+    "moe": "MARLIN Fp8 MoE",
+    "gdn_prefill": "Triton/FLA",
+    "gdn_decode": "Triton fallback; fused_gdn_decode_post_conv_mtp not built",
+    "arithmetic_match": false
+  },
+  "offload": {
+    "cpu_offload_gb": 0,
+    "expert_parallel": false,
+    "source_selection": "NoopOffloader from zero CPU offload and prefetch group0",
+    "direct_noop_runtime_log": false,
+    "observed_model_load_gib": 17.04,
+    "full_residency_audit": "no allocator-level tensor residency inventory"
+  },
+  "nonselected_observation": {
+    "run": "002",
+    "stage": "canary8",
+    "gpu_indices": [
+      2,
+      3,
+      4,
+      5
+    ],
+    "bytes_each": 1048576,
+    "utilization_each": 0,
+    "nvml_apps": [],
+    "provenance": "unknown; neither attributed to foreign work nor silently classified as own driver initialization"
+  },
+  "validation": {
+    "original_tests": 42,
+    "tp2_tests": 15,
+    "status": "pass",
+    "cpu_esrch_reproduction": "135 ESRCH/FileNotFound samples in 8-second process-churn probe; first traceback at telemetry.py:93 /proc/stat read"
+  },
+  "limits": {
+    "startup_seconds": 900,
+    "request_seconds": 120,
+    "teardown_seconds": 120,
+    "worker_supervisor_seconds": 1600,
+    "gpu_ceiling_bytes_each": 23622320128,
+    "vllm_planning_gib_each": 19.2,
+    "host_pss_ceiling_bytes": 137438953472,
+    "hard_caps": false
+  },
+  "next_step": "Investigate nonselected 1 MiB startup memory under authenticated process observation before another GPU experiment; do not relax guard or regenerate reference",
+  "artifact_pins": {
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-20261008-001/topology.json": "c9732798a89841e9e3b1cd42830a3218974cc4209cfb944e3c0030fa74803c4f",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-20261008-001/config.json": "52169d03bb9a9e7dbff739ebd71e8ef203892580c386728c2c3aaeca3e315b64",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-20261008-001/lock-release.json": "4489d2c90f8891f60e6ad7025d2705f19ec485c2ab1357e4cbd7ff3644e03177",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-20261008-001/canaries.json": "854238c428d68832a2806538f300bac32f53a0c8d47ff2e85bcfba5e5ace6fea",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-20261008-001/prepared.json": "36a2938ee0432dde854f6344d2b0a7c51f340274e39cb78141cf2999a31b360b",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-20261008-001/final-release.json": "12c270ff27b4080622009968464f3a4f03aca44375a844c5b2162455e4132777",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-20261008-001/coordinator.log": "7c04122567375ba5232c0bf1f09bc150552c38a7cc023cac30626ff6a38c40d4",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-20261008-001/execution.json": "695d8cca72c4d771044854cfe298bfc4d3fec65ba7741eb837e65f12b6f292a5",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-20261008-001/hello2/assessment.json": "bb917a77702035228b70a64070053015992d58696453460107d8ddaaff771872",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-20261008-001/hello2/case.json": "2c5255ebee509f834f2b12b6be713c5c7f84ccc041b8b402cc8f10797138a22a",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-20261008-001/hello2/custody.json": "5ed14aa31613b8d048939808c6c0232a158374e6f63e10a3e30848b3b4e9e698",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-20261008-001/hello2/before.json": "f6e7715918650ae89f8eb9d33397b51822b5c6e81bca375e2e3d3f7a0769234a",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-20261008-001/hello2/worker-launch.json": "77b52351664454bdf8dd31d588cc32bc7a77a8881b9ad72942162a6c2dae9b43",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-20261008-001/hello2/http.json": "06c05f640cd4865f7afc16301993ff9aa4e46d097eb460942fe2e4bc39a41b69",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-20261008-001/hello2/server.log": "906906ff601a9a43d489134a64ab9224e19ed83136dac4eb4bd9f48fe50ee19d",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-20261008-001/hello2/after.json": "091ded2e99c058b7d0521d40257c6f9b8fddd7f0d3f0d79a0bd9720fc2523666",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-20261008-001/hello2/supervisor.json": "e925640c2de040f6d7eb4ea99294192bac82dbb668c20d5e9061e3cfe371612c",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-20261008-001/hello2/metadata.json": "6123f0877b31f8cc224c16b41ef748535d46ca530268bb0493d817ee2fb72f27",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-20261008-001/staged/ferrule": "fa5be271423d704d89b038d89ee8b75e0e62d6de8a7072fc5c22c7c8ab00d18a",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-20261008-001/canary8/assessment.json": "2930205c172273e0d2bd32425dc20fadab60759c2ce7634ebf88668f7269566c",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-20261008-001/canary8/case.json": "c66b916fca19ad80215d0ae2df7f4cf1e1cf76917b3ba7a9befd4d90eb1ac7e7",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-20261008-001/canary8/custody.json": "1c5596ecde319778fc0722e4712f799ca90e41d039a21e6c73dc6bc8fbb442ed",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-20261008-001/canary8/before.json": "577ba4be7601247d9d9dc632831002d76df678b11280af45e938010a00f7de26",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-20261008-001/canary8/worker-launch.json": "3af28fd7c2faaab4e507a5c21fd56dba00203278312c0342288ba96f48d23cb5",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-20261008-001/canary8/server.log": "4973e13aafdcef7af3efa4d9d6d28b388c2f16604d5c330d72ab7e0b69e9febd",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-20261008-001/canary8/after.json": "c94cbecce44da91c649721641072bab56290fc643714fed33d24f0ae6a967b4c",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-20261008-001/canary8/supervisor.json": "d44e97900eb9efc038aeea532b1e6c6d83132675c0254918fa0f6645828fee0d",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-20261008-001/canary8/metadata.json": "6123f0877b31f8cc224c16b41ef748535d46ca530268bb0493d817ee2fb72f27",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-20261008-001/hello2/gpu0/server.log": "906906ff601a9a43d489134a64ab9224e19ed83136dac4eb4bd9f48fe50ee19d",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-20261008-001/hello2/gpu0/samples.jsonl": "122d0142b1c3e80ab314ed582deb05e750b9cbec2d33126f261f4aaf7fe76883",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-20261008-001/hello2/gpu1/server.log": "906906ff601a9a43d489134a64ab9224e19ed83136dac4eb4bd9f48fe50ee19d",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-20261008-001/hello2/gpu1/samples.jsonl": "85aca824c226dada7289f83ae4952d01b3916eaa123ef69843f0053273fe3721",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-20261008-001/canary8/gpu0/server.log": "4973e13aafdcef7af3efa4d9d6d28b388c2f16604d5c330d72ab7e0b69e9febd",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-20261008-001/canary8/gpu0/samples.jsonl": "5f3341fb3743f7434a6e2f263143e446629896dc500574e0edd50b00116abb0c",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-20261008-001/canary8/gpu1/server.log": "4973e13aafdcef7af3efa4d9d6d28b388c2f16604d5c330d72ab7e0b69e9febd",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-20261008-001/canary8/gpu1/samples.jsonl": "ffec15650e3adea48a9a962d4ca3f65dc1df6ae2949e29de357d75639b0899b9",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-20261008-002/topology.json": "c9732798a89841e9e3b1cd42830a3218974cc4209cfb944e3c0030fa74803c4f",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-20261008-002/config.json": "5919548c64740a68a5e34cfd69e1f8ae173e82d48d31bbc6642d69f20ead59df",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-20261008-002/lock-release.json": "4489d2c90f8891f60e6ad7025d2705f19ec485c2ab1357e4cbd7ff3644e03177",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-20261008-002/canaries.json": "854238c428d68832a2806538f300bac32f53a0c8d47ff2e85bcfba5e5ace6fea",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-20261008-002/prepared.json": "93301c2c6d9d1de0ed3ce6d671fb114e0c34009e1aed661be297fd1bba1754cd",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-20261008-002/final-release.json": "cb8034daec786a780a27b07dc177e3c6edf811025d8988a84857b94cdad38e2f",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-20261008-002/coordinator.log": "87457ced3930cae9391a4f198c9bdb7f156f6ca5691bdf5707b8086f674ffc91",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-20261008-002/execution.json": "7d7f5d684cf20c9be951af45cea231ec7d3228c4e91a6b49aca5fec3ad090ecf",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-20261008-002/hello2/assessment.json": "cd8fee3de78fc35804b9abafbd1f3c545dfc92d3390cbc4cc5ec83badd093fb7",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-20261008-002/hello2/case.json": "c0c38af81e05db7d3b7fd96c4903ab666579bcaf36810a54b972be114c35e17c",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-20261008-002/hello2/custody.json": "382a1164aeae8675195ba7b1a62e3cc9c0c8bf103f161b7d5af6d3ec42cdb51b",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-20261008-002/hello2/before.json": "3870dfbe87453b1865882f17ac05c4e99d221a7ba363d95b4a3aa61b08bd7f6d",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-20261008-002/hello2/worker-launch.json": "510d314eae398895a12d734ca6f73780b9c13ebf267441ebd0a20be77fb7b52b",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-20261008-002/hello2/http.json": "5dfb519d4c9c255835d556f3c440eceabb74d1e31df26cc84a8fe067ea2a87c4",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-20261008-002/hello2/server.log": "51ff37e708c428add3ba652b6e488fb60a94c74222f0874eda05c044dd3822cb",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-20261008-002/hello2/after.json": "93215f24a4592000a787c56a0e8ab7b62a906b9e47e76dcd8de2affb93978b0b",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-20261008-002/hello2/samples.jsonl": "1de1f20732fd4e7717b577e6e64d78ad5c837fbd60bad70ae268d87fbab286ca",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-20261008-002/hello2/supervisor.json": "6c25fee1f3c63e342437c8753b5777ba6737014534000de66d238f89fda9e497",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-20261008-002/hello2/metadata.json": "701af2cddf8100e7832f0aed6c82e3ce51732491d0743dd55e6c0e9775da9bff",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-20261008-002/staged/ferrule": "fa5be271423d704d89b038d89ee8b75e0e62d6de8a7072fc5c22c7c8ab00d18a",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-20261008-002/canary8/assessment.json": "bdedd5092c79882c8b7d30cce9162c7b3e53d869b1069a85e8fd414987e5133a",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-20261008-002/canary8/case.json": "738be46924925f198d7065c3f71d75c9413cc5268fe3588af66a811d19ae1d48",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-20261008-002/canary8/custody.json": "78b3969e6e7f443a62bde250deba2849ba862997278b72ca05818b0d69f1c5f8",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-20261008-002/canary8/before.json": "6545f8f36e75c10a3ed521b41c80e106938d9097fc71c43dc06e984e7bc87807",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-20261008-002/canary8/worker-launch.json": "369a61e8e8364f9850edf3bca9fe6a88257243264cf1a1c49d4d29d1ac0c9f54",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-20261008-002/canary8/server.log": "7255d06bcf03591781685ed147a61cbf163684ad715752233acdb9c5f11d0e15",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-20261008-002/canary8/after.json": "5ef68ac3e5d41b27a250c16d288ddfe0086f198f78bd48baf4c22d4203543700",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-20261008-002/canary8/samples.jsonl": "b69f6298f5dfbe57b075090312c4487ea212b0ee970e115112010f112493125d",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-20261008-002/canary8/supervisor.json": "0c80a2249d355c53746ae5c1b032af704914873ca2421b40770e82245e1c154f",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-20261008-002/canary8/metadata.json": "701af2cddf8100e7832f0aed6c82e3ce51732491d0743dd55e6c0e9775da9bff"
+  }
+}

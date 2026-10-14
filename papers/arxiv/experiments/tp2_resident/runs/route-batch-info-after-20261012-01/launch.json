@@ -1,0 +1,15 @@
+{
+  "protocol": "tp2-resident-fv-qa8-descriptive",
+  "purpose": "fused_after",
+  "status": "incomplete",
+  "sole_gpu_owner_granted": true,
+  "owner_note": "User authorized unique GPU owner: reviewed routebatch e674 ordinary info F1; actual same-binary S1/S2 PASS; unchanged TP2thread/Rows8/3GiBarena/4GiBworkspace/22528MiB; no rankperf/V/Nsight/readback/matrix; stop on ECHILD/error/unknown custody",
+  "fairmatch": false,
+  "exact_speedup": null,
+  "slots": [
+    {
+      "id": "F1",
+      "status": "not_run"
+    }
+  ]
+}

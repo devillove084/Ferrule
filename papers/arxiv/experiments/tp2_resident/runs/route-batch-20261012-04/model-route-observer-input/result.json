@@ -1,0 +1,16 @@
+{
+  "passed": true,
+  "gate": {
+    "name": "model-route-observer-input",
+    "binary": "model",
+    "selector": "transformer::standard::cuda::hybrid_rank::mixed::decoded_gpu_tests::route_batch::observer_input_views_use_the_single_gather_root",
+    "evidence": "actual_route_batch_model_synthetic_partials_not_hf_R64",
+    "devices": 1,
+    "reference": null,
+    "cache_bytes": null,
+    "observer": null
+  },
+  "proven_drained": true,
+  "all_eight_idle": true,
+  "performance_claim": false
+}

@@ -1,0 +1,107 @@
+{
+  "schema": "ferrule.paper.tp2-oracle.release.v1",
+  "status": "all_eight_idle_and_released",
+  "gpus": [
+    {
+      "index": 0,
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "NVIDIA GeForce RTX 3090",
+      "driver": "575.57.08",
+      "pci_bus_id": "00000000:69:00.0",
+      "total_bytes": 25769803776,
+      "gpu_bytes": 0,
+      "utilization": 0,
+      "apps": [],
+      "monotonic": 8442093.04322535
+    },
+    {
+      "index": 1,
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "NVIDIA GeForce RTX 3090",
+      "driver": "575.57.08",
+      "pci_bus_id": "00000000:6A:00.0",
+      "total_bytes": 25769803776,
+      "gpu_bytes": 0,
+      "utilization": 0,
+      "apps": [],
+      "monotonic": 8442093.30627622
+    },
+    {
+      "index": 2,
+      "uuid": "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6",
+      "name": "NVIDIA GeForce RTX 3090",
+      "driver": "575.57.08",
+      "pci_bus_id": "00000000:6D:00.0",
+      "total_bytes": 25769803776,
+      "gpu_bytes": 0,
+      "utilization": 0,
+      "apps": [],
+      "monotonic": 8442093.510973837
+    },
+    {
+      "index": 3,
+      "uuid": "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011",
+      "name": "NVIDIA GeForce RTX 3090",
+      "driver": "575.57.08",
+      "pci_bus_id": "00000000:6E:00.0",
+      "total_bytes": 25769803776,
+      "gpu_bytes": 0,
+      "utilization": 0,
+      "apps": [],
+      "monotonic": 8442093.715805547
+    },
+    {
+      "index": 4,
+      "uuid": "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86",
+      "name": "NVIDIA GeForce RTX 3090",
+      "driver": "575.57.08",
+      "pci_bus_id": "00000000:CE:00.0",
+      "total_bytes": 25769803776,
+      "gpu_bytes": 0,
+      "utilization": 0,
+      "apps": [],
+      "monotonic": 8442093.912112227
+    },
+    {
+      "index": 5,
+      "uuid": "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685",
+      "name": "NVIDIA GeForce RTX 3090",
+      "driver": "575.57.08",
+      "pci_bus_id": "00000000:CF:00.0",
+      "total_bytes": 25769803776,
+      "gpu_bytes": 0,
+      "utilization": 0,
+      "apps": [],
+      "monotonic": 8442094.11647584
+    },
+    {
+      "index": 6,
+      "uuid": "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d",
+      "name": "NVIDIA GeForce RTX 3090",
+      "driver": "575.57.08",
+      "pci_bus_id": "00000000:D2:00.0",
+      "total_bytes": 25769803776,
+      "gpu_bytes": 0,
+      "utilization": 0,
+      "apps": [],
+      "monotonic": 8442094.317010026
+    },
+    {
+      "index": 7,
+      "uuid": "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f",
+      "name": "NVIDIA GeForce RTX 3090",
+      "driver": "575.57.08",
+      "pci_bus_id": "00000000:D3:00.0",
+      "total_bytes": 25769803776,
+      "gpu_bytes": 0,
+      "utilization": 0,
+      "apps": [],
+      "monotonic": 8442094.52226472
+    }
+  ],
+  "export_local_lock_reacquired_and_released": true,
+  "descendant_custody": "proven_drained",
+  "foreign_pids_signaled": false,
+  "sole_owner_grant_finished": true,
+  "reference_manifest_sha256": "fb96ba4dd134761af30b4025b4cce86f96136cb01f05b5b4fca3e74587caa71d"
+}

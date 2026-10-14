@@ -1,6 +1,6 @@
 #![cfg(feature = "cuda")]
 use ferrule_backend::cpu::{KvEndProgress, PagedKvBatch, PagedKvPrepare, PagedKvSequence};
-use ferrule_backend::cuda::context::CudaOperators;
+use ferrule_backend::cuda::operator_owner::CudaOperators;
 use ferrule_backend::cuda::operators::kv::{CudaKvView, CudaPagedKvPool, CudaPagedKvTransaction};
 use ferrule_common::execution::{
     ExecutionTransactionId, KvCowReplacement, KvElementType, KvPageId, KvPlaneDescriptor,

@@ -2,7 +2,9 @@
 
 This document contains unfinished work only. Each item is intentionally phrased
 so it can become a GitHub issue or project card without carrying implementation
-history.
+history. Implemented support and pinned runs are indexed in
+[CURRENT_ACCEPTANCE.md](CURRENT_ACCEPTANCE.md); an untested profile must not
+inherit a neighboring profile's acceptance.
 
 ## B300 correctness
 
@@ -16,6 +18,16 @@ history.
   required.
 
 ## Performance and concurrency
+
+- Complete a source-pinned, same-resource Ferrule/vLLM serving comparison with
+  explicit arithmetic/topology compatibility, independent paired process runs,
+  request/failure records and confidence intervals. Historical mismatched rows
+  and operator timings do not complete this gate.
+- Rebuild and validate public Mixed serving on sources matching the latest
+  attention quality result; the earlier Hello lifecycle used a different binary.
+- Extend Mixed quality beyond the bounded three-prompt/token-budget gate without
+  changing references or silently widening tolerances; retain W8A16's separate
+  failed full40/task-quality gates.
 
 - Pass reproducible B300 multi-request serving acceptance.
 - Meet the documented throughput and latency gates with confidence intervals.
@@ -33,11 +45,17 @@ history.
 
 ## Distributed execution
 
-- Define topology and placement for data, tensor, pipeline, expert, sequence,
-  and context parallelism.
-- Integrate communication stages, buffers, fences, credits, and cancellation
-  into execution transactions.
-- Validate deterministic distributed publication and failure cleanup.
+- Extend beyond the existing local standard and strict Qwen3.5 thread/process
+  profiles: multi-node transport and production DP/SP/CP need separate support,
+  placement, admission, communication and failure-custody validation.
+- Implement and validate distributed BF16/Mixed arithmetic and wire/state
+  contracts before admitting those profiles; single-owner Mixed PASS is not a
+  distributed precision permit.
+- Add CUDA process TP or numeric hybrid process PP×EP only with their own
+  bounded transport, publication and failure-cleanup proof. Existing resident
+  process EP and dense 0.8B process PP2 do not provide that proof.
+- Extend strict full-model acceptance to currently construction-only degrees
+  such as Qwen3.5 TP4; the four accepted F32 topologies remain separately pinned.
 
 ## Training and RL
 
@@ -48,6 +66,8 @@ history.
 
 ## Portability
 
-- Restore Qwen end-to-end validation and complete the `sm_86` portability gate.
+- Extend Qwen/`sm_86` validation beyond the pinned accepted profiles, workloads
+  and binaries; complete the remaining portability and failure-path coverage
+  without relabeling existing bounded end-to-end passes as unimplemented.
 - Validate `sm_121a` independently from other CUDA profiles.
 - Add Metal, ROCm, and Ascend providers behind the same semantic plans.

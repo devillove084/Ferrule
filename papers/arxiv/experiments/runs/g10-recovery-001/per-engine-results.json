@@ -1,0 +1,163 @@
+[
+  {
+    "engine": "ferrule",
+    "status": "complete",
+    "error": null,
+    "launches": 1,
+    "startup_seconds": 16.511282877996564,
+    "startup_failure_seconds": null,
+    "requests": [
+      {
+        "status": "success",
+        "text": ", I",
+        "actual_input_tokens": 1,
+        "actual_output_tokens": 2,
+        "finish_reason": "length",
+        "ttft_seconds": 0.6268567871302366,
+        "request_e2e_seconds": 1.7686595972627401,
+        "output_token_ids": null
+      }
+    ],
+    "windows": [
+      {
+        "window_kind": "fixed-work",
+        "denominator": "first measured HTTP send (dispatch fallback if none) to last client-observed terminal/deadline, including failures and client overhead",
+        "denominator_seconds": 1.768964046612382,
+        "dispatch_start_at": 8413812.624210648,
+        "terminal_observed_at": 8413814.393174695,
+        "elapsed_to_last_terminal_seconds": 1.768964046612382,
+        "time_to_complete_seconds": 1.768964046612382,
+        "all_scheduled_requests_terminal": true,
+        "work_completed": true,
+        "all_requests_successful": true,
+        "intentional_idle_seconds": 0.0,
+        "deadline_limit_seconds": 360.0
+      }
+    ],
+    "output_tokens_per_second": [
+      1.1306052284273718
+    ],
+    "resources": {
+      "status": "observed_within_targets",
+      "sampled_device_high_water_bytes": 4191158272,
+      "sampled_tree_pss_high_water_bytes": 7077563392,
+      "sampled_tree_rss_high_water_bytes": 7080718336,
+      "samples": 9,
+      "errors": [],
+      "sample_interval_seconds": 2,
+      "exact_peaks": false,
+      "hard_memory_partition": false,
+      "pinned_bytes": null,
+      "caveats": [
+        "CUDA pinning not measured by VmLck/VmPin alone",
+        "PSS excludes unmapped OS file cache; not a total physical-host-memory proof",
+        "Device samples include baseline; between-sample peaks may be missed"
+      ],
+      "identity_mode": "device_exclusive_local_custody",
+      "measurement_scope": "whole_selected_device",
+      "owned_process_gpu_peak_bytes": null,
+      "owned_gpu_attribution": "unknown",
+      "nvml_pid_set_changes": 1,
+      "absence_of_foreign_interference_proven": false
+    },
+    "gpu_gib": 3.9033203125,
+    "host_pss_gib": 6.591494560241699,
+    "authenticated_descendants_drained": true,
+    "before_after_all_gpu_idle": true,
+    "supervisor_seconds": 40.39898048527539,
+    "supervisor_timed_out": false,
+    "runtime": {
+      "status": "blocked",
+      "evidence": {
+        "mixed_profile": [
+          "cuda-hybrid-numeric-fp8-model-bf16-mixed-f32-ssm",
+          "cuda-hybrid-numeric-fp8-model-bf16-mixed-f32-ssm",
+          "cuda-hybrid-numeric-fp8-model-bf16-mixed-f32-ssm",
+          "cuda-hybrid-numeric-fp8-model-bf16-mixed-f32-ssm"
+        ]
+      },
+      "contradictions": [],
+      "fallback_observations": [],
+      "missing": [],
+      "reasons": [
+        "Effective KV/conv/SSM dtype and physical pinning need runtime evidence",
+        "UVA selection log alone does not prove UVA path rather than functional_call fallback"
+      ],
+      "exact_arithmetic_match": false,
+      "log_sha256": "e5aacd6aa7e81fcd52f5635c27dadf59561f04595b0c05be7dec92200d6fcaf4"
+    }
+  },
+  {
+    "engine": "vllm",
+    "status": "failed",
+    "error": "ValueError: Resource monitor failed during startup",
+    "launches": 1,
+    "startup_seconds": null,
+    "startup_failure_seconds": 89.35886846296489,
+    "requests": [],
+    "windows": [],
+    "output_tokens_per_second": [],
+    "resources": {
+      "status": "blocked",
+      "sampled_device_high_water_bytes": 11801722880,
+      "sampled_tree_pss_high_water_bytes": 37366041600,
+      "sampled_tree_rss_high_water_bytes": 37784666112,
+      "samples": 37,
+      "errors": [
+        "Sampled GPU target exceeded"
+      ],
+      "sample_interval_seconds": 2,
+      "exact_peaks": false,
+      "hard_memory_partition": false,
+      "pinned_bytes": null,
+      "caveats": [
+        "CUDA pinning not measured by VmLck/VmPin alone",
+        "PSS excludes unmapped OS file cache; not a total physical-host-memory proof",
+        "Device samples include baseline; between-sample peaks may be missed"
+      ],
+      "identity_mode": "device_exclusive_local_custody",
+      "measurement_scope": "whole_selected_device",
+      "owned_process_gpu_peak_bytes": null,
+      "owned_gpu_attribution": "unknown",
+      "nvml_pid_set_changes": 1,
+      "absence_of_foreign_interference_proven": false
+    },
+    "gpu_gib": 10.9912109375,
+    "host_pss_gib": 34.799838066101074,
+    "authenticated_descendants_drained": true,
+    "before_after_all_gpu_idle": true,
+    "supervisor_seconds": 117.85067205317318,
+    "supervisor_timed_out": false,
+    "runtime": {
+      "status": "blocked",
+      "evidence": {
+        "moe_marlin": [
+          "Using MARLIN Fp8 MoE backend"
+        ],
+        "linear_marlin": [
+          "MarlinFP8ScaledMMLinearKernel"
+        ],
+        "offloader_uva": [
+          "Offloader set to UVAOffloader"
+        ],
+        "offloaded_amount": [
+          "Total CPU offloaded parameters: 30.0"
+        ],
+        "model_bf16": [
+          "dtype=torch.bfloat16"
+        ]
+      },
+      "contradictions": [],
+      "fallback_observations": [
+        "(EngineCore pid=171536) INFO 10-08 22:48:35 [qwen_gdn_linear_attn.py:500] Falling back to the Triton GDN decode path: torch.ops._C.fused_gdn_decode_post_conv_mtp is not built"
+      ],
+      "missing": [],
+      "reasons": [
+        "Effective KV/conv/SSM dtype and physical pinning need runtime evidence",
+        "UVA selection log alone does not prove UVA path rather than functional_call fallback"
+      ],
+      "exact_arithmetic_match": false,
+      "log_sha256": "75f22a9b54e0d01acb7b59c5aec08b83a6cb068972628f946ee472bcfb259f9d"
+    }
+  }
+]

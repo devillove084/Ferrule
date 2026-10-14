@@ -1,0 +1,21 @@
+{
+  "call": {
+    "input_token_ids": [
+      198
+    ],
+    "next_token_id": 760,
+    "position_start": 7,
+    "sequence_length_after": 8,
+    "stage": "call"
+  },
+  "epoch": 0,
+  "id": "call-08",
+  "input": {
+    "kind": "greedy"
+  },
+  "op": "call",
+  "runtime_session": 2,
+  "session": "capital",
+  "transaction": 9,
+  "untouched_sessions": []
+}

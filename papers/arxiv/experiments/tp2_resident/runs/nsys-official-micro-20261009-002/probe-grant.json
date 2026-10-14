@@ -1,0 +1,21 @@
+{
+  "scope": "all_eight_instrumentation_probe",
+  "granted": true,
+  "note": "User sole GPU owner; official Nsight micro only; eight instrumentation locks; workload GPU0/1; no foreign signals",
+  "gpu_uuids": [
+    "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f",
+    "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6",
+    "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d",
+    "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+    "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86",
+    "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+    "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011",
+    "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685"
+  ],
+  "model_gpu_uuids": [
+    "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+    "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9"
+  ],
+  "run_id": "nsys-official-micro-20261009-002",
+  "prepared_sha256": "d40c30a42ddd81f47c4810d9118ec658dbd64b0fd55ccd360a82436eb9e648b7"
+}

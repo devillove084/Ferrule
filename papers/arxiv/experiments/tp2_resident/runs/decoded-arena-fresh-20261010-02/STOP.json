@@ -1,0 +1,9 @@
+{
+  "gate": "model-cold-hot-fit",
+  "reason": "exact_gate_or_resource_failure",
+  "supervisor": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-fresh-20261010-02/model-cold-hot-fit/supervisor.json",
+    "sha256": "83043274cf0a5f5f757df9627a4f38c253fca75cae621fc398051f365b1f9331"
+  },
+  "gpu_owner_released": true
+}

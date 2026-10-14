@@ -1,0 +1,128 @@
+{
+  "status": "cpu_audit_pass_smoke_prepared_not_executed",
+  "gpu_workload_started": false,
+  "release_gpu_smoke_passed": false,
+  "performance_accepted": false,
+  "promoted": false,
+  "final_handoff": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/tp2-mixed-arena-public-release-20261010-01/handoff.json",
+    "sha256": "4b1734652ab05dd38e20fc7f9d85e7e201539b35707160021eec1f4d2dbf264e"
+  },
+  "binary_sha256": "ae3e76d420cdff234be4262575b3bee29e89252c89bc2f21c744aefd47731bc7",
+  "audit": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/arena-release-cpu-audit-20261010-01/audit.json",
+    "sha256": "51d2ba6c732428b70cf02ace76423557018a0d432ed7cb37c271da750eafca87"
+  },
+  "smoke_admission": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/admission/arena-public-20261010-01/smoke-admission.json",
+    "sha256": "c96c096a6b5b74e0668d04a261b930b5cd93ff298a8df80c03f7310e5a4ca18b"
+  },
+  "prepared": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/arena-public-smoke-20261010-01/prepared.json",
+    "sha256": "2404126b7f4e27abedac95940b5b11a583e408c09eb8f57040a172c1e43745dc"
+  },
+  "prepared_and_slots_cpu_validation": "PASS: existing paired.validate_pair and validate_slot for S1/S2",
+  "qualification": {
+    "named_gpu_gates": 23,
+    "full_model_calls": 37,
+    "exact_metrics": 40293,
+    "handoff": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-uninitialized-20261010-01/handoff.json",
+      "sha256": "d6b15ddc6590f5f3b445ac5f02564bad45345365401044247e53ec01ecd5783e"
+    },
+    "scope": "Existing authenticated test-binary GPU receipts audited on CPU; not a new GPU run or serving PASS"
+  },
+  "native_cpu_source_pin_coverage_gaps": [
+    {
+      "dadf_source_sha256": "40a1fa8c630bb186699e6dee570204964aa6abf549ef51bd0bb13b3c2921587d",
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-backend/native/cpu/attention.cc",
+      "quality_sha256": null,
+      "sha256": "40a1fa8c630bb186699e6dee570204964aa6abf549ef51bd0bb13b3c2921587d",
+      "stable_build_before_after": true,
+      "unchanged_since_dadf": true
+    },
+    {
+      "dadf_source_sha256": "b03b973d58cb901c782347513b83441f019362eaebff15deb81a0eacb55ba20c",
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-backend/native/cpu/dense.cc",
+      "quality_sha256": null,
+      "sha256": "b03b973d58cb901c782347513b83441f019362eaebff15deb81a0eacb55ba20c",
+      "stable_build_before_after": true,
+      "unchanged_since_dadf": true
+    },
+    {
+      "dadf_source_sha256": "861361469def908b4c538b3d8456fdc3c6740257f14f632f743cc4a24edaf9e5",
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-backend/native/cpu/moe.cc",
+      "quality_sha256": null,
+      "sha256": "861361469def908b4c538b3d8456fdc3c6740257f14f632f743cc4a24edaf9e5",
+      "stable_build_before_after": true,
+      "unchanged_since_dadf": true
+    },
+    {
+      "dadf_source_sha256": "abfa3194d1a062df8df13648876bfbd10b7b0fb8cbb25c814675edb5e7641ba1",
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-backend/native/cpu/provider.cc",
+      "quality_sha256": null,
+      "sha256": "abfa3194d1a062df8df13648876bfbd10b7b0fb8cbb25c814675edb5e7641ba1",
+      "stable_build_before_after": true,
+      "unchanged_since_dadf": true
+    }
+  ],
+  "tests": {
+    "total": 55,
+    "results": [
+      {
+        "module": "test_decoded_cache_release",
+        "passed": 34,
+        "log": {
+          "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/arena-release-cpu-audit-20261010-01/decoded-tests.log",
+          "sha256": "317572d9ca62a1c6cf58c5442ec071ce0452c23398048e99dafe7add1d584a8e"
+        }
+      },
+      {
+        "module": "test_optimized_release",
+        "passed": 8,
+        "log": {
+          "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/arena-release-cpu-audit-20261010-01/optimized-tests.log",
+          "sha256": "1d02d9f4d06123d9d989034a4e16fd73feb197c1ee2700810d474e9cc0c792b6"
+        }
+      },
+      {
+        "module": "test_cache_ab",
+        "passed": 13,
+        "log": {
+          "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/arena-release-cpu-audit-20261010-01/cache-ab-tests.log",
+          "sha256": "3ec1abf73e05a647783f750fcba1a7d282fe5d7a35b508c1d2bd39151b439410"
+        }
+      }
+    ]
+  },
+  "changed_code": [
+    {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/decoded_cache_release.py",
+      "sha256": "2d4e5fabec347682ae134ec4bff27cee600ed304ca074117a7a9a236a4be3a51"
+    },
+    {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/optimized_release.py",
+      "sha256": "631610b712bebfd2f99430053b141fe6386787ef02ac5f21f28ccc01885acd58"
+    },
+    {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/test_decoded_cache_release.py",
+      "sha256": "b8632dc6a45eeec31888d618d4b08c8781aa56ece1f79147061df58534fb7573"
+    }
+  ],
+  "owner_authorization_required": true,
+  "pending_entry": [
+    "/home/admin/wxw403883/anaconda3/bin/python3.12",
+    "-S",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/paired.py",
+    "run",
+    "--id",
+    "arena-public-smoke-20261010-01",
+    "--purpose",
+    "serving_smoke"
+  ],
+  "required_owner_arguments": [
+    "--sole-gpu-owner-granted",
+    "--owner-note (actual owner authorization, not fabricated)"
+  ],
+  "promotion_policy": "Only after actual SAME-binary S1/S2 PASS; existing cache_ab OFF 4d40 / ON candidate contract remains unchanged: workspace 4096 MiB and total 22 GiB on both sides"
+}

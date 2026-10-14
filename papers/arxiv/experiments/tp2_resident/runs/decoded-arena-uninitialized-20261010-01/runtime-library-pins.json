@@ -1,0 +1,24 @@
+{
+  "environment": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-uninitialized-20261010-01/full40/environment.json",
+    "sha256": "4ff9eebb37dcb23286b7ff690ccbe3ec056c4c46be1aa930f9ebfdfb3cb513c3"
+  },
+  "ldd": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-uninitialized-20261010-01/composition-ldd.txt",
+    "sha256": "b0cfba8802ba69d61b6c9b7ccb6f719266c8bc369092720c20f94ad20b439205"
+  },
+  "resolved_libraries": {
+    "/home/admin/wxw403883/anaconda3/envs/tao/lib/libcublas.so.12.4.5.8": "88397a191cfc25f94c272b638ffa942be58d5594ba5d41ac4b766c2cd3fe54ac",
+    "/home/admin/wxw403883/anaconda3/envs/tao/lib/libcublasLt.so.12.4.5.8": "a18a341a9b6de15918e410a2337a74f2a644fd80c0600e61d69ddad69be15687",
+    "/home/admin/wxw403883/anaconda3/envs/tao/lib/libcudart.so.12.4.99": "e8023d1aa80d86175f22986faf55e23c0a9286ff625cede0b560220c6cd8a560",
+    "/home/admin/wxw403883/anaconda3/envs/tao/lib/libgcc_s.so.1": "f43f5563b8e01388eacf8f0b4898a53b88fe8aea535a2424ffb576d85845677e",
+    "/usr/lib64/ld-2.32.so": "385218198df39d3931fbb0666db2838bce66a7658c82c61454d4903a4e1d2ed3",
+    "/usr/lib64/libc-2.32.so": "d589c6aea9b813d2392b1c8bdeda73afe694d399687ab867bd26735175faadf1",
+    "/usr/lib64/libcuda.so.575.57.08": "f2470aa637fa72422534edeaeb9de19afe3d0646388baf7ffb5337b2edafc59e",
+    "/usr/lib64/libdl-2.32.so": "4eec77f1e5131f2b84aaa83c21772dc233ff9a44d2715a195249fee9d1dd3cae",
+    "/usr/lib64/libm-2.32.so": "3ad871eb16ece2c91050642503aa18757d3b018b1491afb662aec555fff683dd",
+    "/usr/lib64/libpthread-2.32.so": "6fd5dbf2a630b845af36c36e4d4509fef9da415b48fa25c6661184000bc3f3ce",
+    "/usr/lib64/librt-2.32.so": "68bf882c5011e80b654ace48ac7e4164d62fb6991d475514f299c6da57892196",
+    "/usr/lib64/libstdc++.so.6.0.28": "729ce0312dcd9dd2301f66a1c157fade62d60809dcb0647a5906b3f7e28c88d7"
+  }
+}

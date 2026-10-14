@@ -1,0 +1,19 @@
+{
+  "protocol": "tp2-arena-index-matched4g-qa8-descriptive-v1",
+  "purpose": "arena_index_ab",
+  "status": "incomplete",
+  "sole_gpu_owner_granted": true,
+  "owner_note": "User sole-GPU-owner authorization: crossed arena index cycle1 BEFORE frozen ae3e then AFTER indexed 9ef after actual same-9ef S1/S2 PASS and promote; serial3unmeasured+5measuredQA8, TP2ctx128batch8seq2resident, arena3GiB workspace4GiB device22GiB, rankperf off; finite authenticated supervisor, selected UUID locks/roster, preidle/ECHILD/drain/post8idle; fail-stop on numeric/budget/rootUnknown/quarantine; no Nsight/vLLM/foreign kill",
+  "fairmatch": false,
+  "exact_speedup": null,
+  "slots": [
+    {
+      "id": "BEFORE",
+      "status": "dispatched_unknown"
+    },
+    {
+      "id": "AFTER",
+      "status": "not_run"
+    }
+  ]
+}

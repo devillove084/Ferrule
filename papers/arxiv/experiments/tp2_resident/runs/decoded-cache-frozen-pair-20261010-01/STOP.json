@@ -1,0 +1,9 @@
+{
+  "gate": "backend-exact",
+  "reason": "exact_gate_or_resource_failure",
+  "supervisor": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-cache-frozen-pair-20261010-01/backend-exact/supervisor.json",
+    "sha256": "36f174186d943f53087601fa530d3e79cdcf945542bd803a9b84cbcae0b81409"
+  },
+  "gpu_owner_released": true
+}

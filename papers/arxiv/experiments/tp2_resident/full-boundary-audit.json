@@ -1,0 +1,192 @@
+{
+  "schema": "ferrule.paper.tp2-full-boundary.cpu-audit.v1",
+  "checked_at_utc": "2026-10-09T06:27:40.300958+00:00",
+  "run": "target/validation/tp2-mixed-claim-gates/native-whole-capture-full40-02",
+  "comparison": "papers/arxiv/experiments/tp2_mixed/oracle/runs/native-whole-capture-comparison-01.json",
+  "binary_sha256": "81a00dbf34a1d94d2240bdc5ff8d2a898f6806460c2d940d7e91d25dde5d81da",
+  "cases": {
+    "hello": {
+      "fields": 2178,
+      "all_exact": true,
+      "total_elements": 69796521,
+      "reference_calls": [
+        {
+          "stage": "prefill",
+          "input_token_ids": [
+            9419
+          ],
+          "position_start": 0,
+          "sequence_length_after": 1,
+          "next_token_id": 11
+        },
+        {
+          "stage": "decode.0",
+          "input_token_ids": [
+            11
+          ],
+          "position_start": 1,
+          "sequence_length_after": 2,
+          "next_token_id": 353
+        }
+      ],
+      "actual_calls": [
+        {
+          "stage": "prefill",
+          "input_token_ids": [
+            9419
+          ],
+          "position_start": 0,
+          "sequence_length_after": 1,
+          "next_token_id": 11
+        },
+        {
+          "stage": "decode.0",
+          "input_token_ids": [
+            11
+          ],
+          "position_start": 1,
+          "sequence_length_after": 2,
+          "next_token_id": 353
+        }
+      ],
+      "greedy_ids_match": [
+        true,
+        true
+      ]
+    },
+    "capital": {
+      "fields": 2178,
+      "all_exact": true,
+      "total_elements": 75737085,
+      "reference_calls": [
+        {
+          "stage": "prefill",
+          "input_token_ids": [
+            760,
+            6511,
+            314,
+            9338,
+            369
+          ],
+          "position_start": 0,
+          "sequence_length_after": 5,
+          "next_token_id": 11751
+        },
+        {
+          "stage": "decode.0",
+          "input_token_ids": [
+            11751
+          ],
+          "position_start": 5,
+          "sequence_length_after": 6,
+          "next_token_id": 13
+        }
+      ],
+      "actual_calls": [
+        {
+          "stage": "prefill",
+          "input_token_ids": [
+            760,
+            6511,
+            314,
+            9338,
+            369
+          ],
+          "position_start": 0,
+          "sequence_length_after": 5,
+          "next_token_id": 11751
+        },
+        {
+          "stage": "decode.0",
+          "input_token_ids": [
+            11751
+          ],
+          "position_start": 5,
+          "sequence_length_after": 6,
+          "next_token_id": 13
+        }
+      ],
+      "greedy_ids_match": [
+        true,
+        true
+      ]
+    }
+  },
+  "artifact_pins": {
+    "target/validation/tp2-mixed-claim-gates/native-whole-capture-full40-02/candidate/contract.json": "68a1ca0aecf049746133868180c2c60831cc84cf350bea224666a61a964cab26",
+    "target/validation/tp2-mixed-claim-gates/native-whole-capture-full40-02/candidate/rank-0/events.jsonl": "32414708235d35427d6de5d0a69b1ca6b0884290245823b1597bb11883ad8981",
+    "target/validation/tp2-mixed-claim-gates/native-whole-capture-full40-02/candidate/rank-0/tensors.f32le": "7479d960ae75cfb7296cfeac876bce594fd9ee26afe5de869ff3933c60bb42cb",
+    "target/validation/tp2-mixed-claim-gates/native-whole-capture-full40-02/candidate/rank-0/capture-status.json": "48e516b55804850dcb4a5e34461a7ca2c6a7fb2e89e31f93e39712c07a527fba",
+    "target/validation/tp2-mixed-claim-gates/native-whole-capture-full40-02/candidate/rank-1/events.jsonl": "5c1157026837f6895d9151a7a885646b80125aaa58090209d4910dc905ae6b97",
+    "target/validation/tp2-mixed-claim-gates/native-whole-capture-full40-02/candidate/rank-1/tensors.f32le": "ee33839e25534325770d7ba39b88ba3bff9b634fe9610db5e7d0ee8dc73d4135",
+    "target/validation/tp2-mixed-claim-gates/native-whole-capture-full40-02/candidate/rank-1/capture-status.json": "a2fc9bb952e7647133c403c708c9bdcb1bf6722701998e4db4d911de6d783861",
+    "target/validation/tp2-mixed-claim-gates/native-whole-capture-full40-02/candidate/hello.prefill.receipt.json": "110caafaf59029883e3404f8ea3121e23790d03402904c88825c0c1f5542aba5",
+    "target/validation/tp2-mixed-claim-gates/native-whole-capture-full40-02/candidate/hello.prefill.kv-receipt.json": "26b8ce7c4d54f4aadf99df590310cdd334a06caa541150efb6472d8b08d86145",
+    "target/validation/tp2-mixed-claim-gates/native-whole-capture-full40-02/hello.prefill.actual.f32le": "9bf6dff82a46e7b6aca7dc72d4112248f13d4c89c39260e42d37e27921765786",
+    "target/validation/tp2-mixed-claim-gates/native-whole-capture-full40-02/candidate/hello.decode.0.receipt.json": "9c925bb68eeb1a91d18e63ef0f05b3a851c2c9b16a5f6998900f5e9760775088",
+    "target/validation/tp2-mixed-claim-gates/native-whole-capture-full40-02/candidate/hello.decode.0.kv-receipt.json": "cffd837e1ade6702fdea4a8c6fd68521e30698770f927b777439ae239372f827",
+    "target/validation/tp2-mixed-claim-gates/native-whole-capture-full40-02/hello.decode.0.actual.f32le": "a247ba2a4f8c24e51a5d7bef9f37cd12e897155e4fed96d0a2ca91b041cb92f3",
+    "target/validation/tp2-mixed-claim-gates/native-whole-capture-full40-02/candidate/capital.prefill.receipt.json": "9c54b69234e8dbf86521a47e0a7f831cee2e42c6998cf086a2fd0e5db2372738",
+    "target/validation/tp2-mixed-claim-gates/native-whole-capture-full40-02/candidate/capital.prefill.kv-receipt.json": "633d0cdae63475e24eb188c20481e2786e1140f04aad0b1fabbe366fffbbbee7",
+    "target/validation/tp2-mixed-claim-gates/native-whole-capture-full40-02/capital.prefill.actual.f32le": "46438456e938ee9011ee954034f7e55734488213637827f763dccc1279d4459a",
+    "target/validation/tp2-mixed-claim-gates/native-whole-capture-full40-02/candidate/capital.decode.0.receipt.json": "030ef5a65681da8e169bd5f83a5ff2166047a84b71f56c9facc3f90b67b3dac5",
+    "target/validation/tp2-mixed-claim-gates/native-whole-capture-full40-02/candidate/capital.decode.0.kv-receipt.json": "3e93cf7656b9ab5af84f077b1455c74c3d8cd15c69cd4e37ce3d02ec37fd96cb",
+    "target/validation/tp2-mixed-claim-gates/native-whole-capture-full40-02/capital.decode.0.actual.f32le": "d911572d21929d9519f302b6634fd505f190f49ab1880a3edfa074ab9bf2d6a9",
+    "papers/arxiv/experiments/tp2_mixed/oracle/runs/native-whole-capture-canonical-01/hello.safetensors": "ae9368c0e63c1749976fb5040b886dc977e7d3ce23cb9637a701e11fd84025a3",
+    "papers/arxiv/experiments/tp2_mixed/oracle/runs/native-whole-capture-canonical-01/hello.json": "0f213d4a6c6f2228d831da8d1bea84f04aa3a9ccb751ec663ab5c15ab4d9e56e",
+    "papers/arxiv/experiments/tp2_mixed/oracle/runs/native-whole-capture-canonical-01/capital.safetensors": "b7efc6467899adef1bef33b090c5dfa89a846ccd7180306b851c5df66daabe70",
+    "papers/arxiv/experiments/tp2_mixed/oracle/runs/native-whole-capture-canonical-01/capital.json": "a977037a9c5070bb9cea6b94226503943551705f1d1c30eb6c1fcc183ba6570f",
+    "papers/arxiv/experiments/tp2_mixed/oracle/runs/native-whole-capture-comparison-01.json": "66fed066ce64765656bd086e81b9b1393495648cc8b113d1fd3d6e615d28d78c",
+    "papers/arxiv/experiments/tp2_mixed/oracle/runs/native-whole-capture-canonical-01/manifest.json": "ce9ef4beefa930a3ff9453ff39854504b1a674a34e6d36e2f78c812f4429d4e0",
+    "papers/arxiv/experiments/tp2_mixed/oracle/runs/native-whole-capture-canonical-01/raw-source.json": "f103b0851bc2ab117d709956192bdd18e200a370f770aea4acd7cdff1ce24fab",
+    "papers/arxiv/experiments/tp2_mixed/oracle/runs/full40-20261009-03/manifest.json": "fb96ba4dd134761af30b4025b4cce86f96136cb01f05b5b4fca3e74587caa71d",
+    "target/validation/tp2-mixed-claim-gates/native-whole-capture-full40-02/after.json": "7e504760edca1b7b6db18e86a5953262c56c09b4da192f0b84dbd91482fedf1a",
+    "target/validation/tp2-mixed-claim-gates/native-whole-capture-full40-02/authentication.json": "9cdd1472d8e069ea9cf39bace9fe0d41560065ed91ebe6d109bcfa28a05d312e",
+    "target/validation/tp2-mixed-claim-gates/native-whole-capture-full40-02/before.json": "88a815999443600be12957f895014c99b220e4f436e543e3c87b117dde238b9e",
+    "target/validation/tp2-mixed-claim-gates/native-whole-capture-full40-02/capital.decode.0.metrics.json": "530785a36e95367c98dc8d1525954b9ff410bc17167732d3d2ee1a5261081af8",
+    "target/validation/tp2-mixed-claim-gates/native-whole-capture-full40-02/capital.prefill.metrics.json": "4b5fd7ba70c9ff2007472519e51acc0ea1438652461f2aff040299d6dc74159f",
+    "target/validation/tp2-mixed-claim-gates/native-whole-capture-full40-02/custody.json": "7487db52214c9f34ca970ce7f7804cadaaf78573f4f8739575bc9c567ac765ce",
+    "target/validation/tp2-mixed-claim-gates/native-whole-capture-full40-02/environment.json": "5cb44005b1f6e41b6fc6d45de3267bbebf6861b724d73073b6a7aedd54e1b9ed",
+    "target/validation/tp2-mixed-claim-gates/native-whole-capture-full40-02/hello.decode.0.metrics.json": "ac181c461eed4c4071e021a5bd9f231bb4bf2f61984a2ebf43c0d6cd894d8ec9",
+    "target/validation/tp2-mixed-claim-gates/native-whole-capture-full40-02/hello.prefill.metrics.json": "f6fe96b1aab44f5da840a64e020cd9d67d2628b9fd105466dfb6d43fede1338a",
+    "target/validation/tp2-mixed-claim-gates/native-whole-capture-full40-02/prepared.json": "fc818a5eef3fa08b5002674e070aa409a3e91c64db62182f1f3add7f74c40d64",
+    "target/validation/tp2-mixed-claim-gates/native-whole-capture-full40-02/release.json": "779e42d8ddaff0681899abba11ce2f4158422699c9ee39b87239d99a0af749fa",
+    "target/validation/tp2-mixed-claim-gates/native-whole-capture-full40-02/resources.json": "054b04bbc95c800c038ab50d8f82ad4ad785d4bf611befcc7b16810e9059004f",
+    "target/validation/tp2-mixed-claim-gates/native-whole-capture-full40-02/result.json": "dddb846ad3a58f9e73c4495e4ca00698f69135800be486ec14d2e57b9633da45",
+    "target/validation/tp2-mixed-claim-gates/native-whole-capture-full40-02/supervisor.json": "3e576183e74849f26c76da468d13935063e798d34b190ddbf2bed0d78da2dfcf",
+    "target/validation/tp2-mixed-claim-gates/native-whole-capture-full40-02/test-exit.json": "741d66e156deb4bf8c95d2eac8e507100f8c7c275698a49b6ce3b02ed1db11ce",
+    "target/validation/tp2-mixed-claim-gates/native-whole-capture-full40-02/worker-launch.json": "6912dff4874464db63e5767775a8a32989b2966d2d160156ee7a87dfc294649a",
+    "target/validation/tp2-mixed-claim-gates/native-whole-capture-full40-02/test.log": "070a2100ec6512daafcf1996d1d5bf90c681833b3ac9a5fb93c48193437b1eac"
+  },
+  "result": {
+    "passed": true,
+    "drained": true,
+    "echild": true,
+    "all_eight_idle": true,
+    "returncode": 0
+  },
+  "release": {
+    "local_locks_released": true,
+    "all_eight_idle": true,
+    "gpu_owner_released": true
+  },
+  "launch_id": "e4e56352ecc24629986be91d811165c8",
+  "supervisor_wall_seconds": 335.7746376786381,
+  "method": "CPU hashes and comparator metric validation; raw/canonical payload hash coverage; no GPU or numerical rerun",
+  "limitations": [
+    "Each case prefill plus one decode, not multistep acceptance",
+    "Canonical metadata arrays are not all physically observed device arrays; retain comparator oracle_only_diagnostics and source archive scope",
+    "Test binary is not a public serving binary; numerical comparator does not establish factory admission",
+    "HF-eager TP2 is not Marlin arithmetic; fairmatch remains false"
+  ],
+  "oracle_only_diagnostics": {
+    "hello": [
+      "native_expert_ids"
+    ],
+    "capital": [
+      "native_expert_ids"
+    ]
+  },
+  "fairmatch": false,
+  "exact_speedup": null
+}

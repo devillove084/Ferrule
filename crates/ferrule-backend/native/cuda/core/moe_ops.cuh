@@ -442,6 +442,23 @@ __global__ void moe_kernel(FerruleCoreMoeArgs args) {
     const float e = expf(-fabsf(gate));
     const float sigmoid = gate >= 0.0f ? 1.0f / (1.0f + e) : e / (1.0f + e);
     pointer<float>(args.output)[index] = gate * sigmoid * up;
+  } else if (args.kind == FERRULE_CORE_MOE_WEIGHTED_COMBINE_BF16) {
+    if (index >= static_cast<uint64_t>(args.tokens) * args.hidden) return;
+    const uint32_t token = static_cast<uint32_t>(index / args.hidden);
+    const uint32_t column = static_cast<uint32_t>(index % args.hidden);
+    float result = 0.0f;
+    // HF eager order is ascending expert, not top-k rank. Caller packs that order.
+    // One writer per output element; no nondeterministic atomics or fused FMA.
+    for (uint32_t route = 0; route < args.batch_columns; ++route) {
+      if (const_pointer<int32_t>(args.route_slots)[route] == static_cast<int32_t>(token)) {
+        const float projection = bf16_value(const_pointer<uint16_t>(args.input)[
+            static_cast<uint64_t>(route) * args.hidden + column]);
+        const float contribution = bf16_round(__fmul_rn(
+            projection, const_pointer<float>(args.route_weights)[route]));
+        result = bf16_round(__fadd_rn(result, contribution));
+      }
+    }
+    pointer<uint16_t>(args.output)[index] = bf16_rne(result);
   } else if (args.kind == FERRULE_CORE_MOE_WEIGHTED_COMBINE_F32) {
     if (index >= static_cast<uint64_t>(args.tokens) * args.hidden) return;
     const uint32_t token = static_cast<uint32_t>(index / args.hidden);

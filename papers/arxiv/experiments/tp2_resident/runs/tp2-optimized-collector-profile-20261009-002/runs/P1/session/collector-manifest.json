@@ -1,0 +1,175 @@
+{
+  "schema": "ferrule.paper.collector-handoff.v1",
+  "directory": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-collector-profile-20261009-002/runs/P1/session",
+  "authenticated": {
+    "worker": {
+      "pid": 153612,
+      "birth_ticks": 86311049,
+      "ppid": 153611,
+      "pgrp": 153612,
+      "session": 153612
+    },
+    "helper": {
+      "pid": 153611,
+      "birth_ticks": 86311046,
+      "ppid": 153597,
+      "pgrp": 153611,
+      "session": 153611
+    },
+    "coordinator": {
+      "pid": 153597,
+      "birth_ticks": 86307355,
+      "ppid": 172272,
+      "pgrp": 153597,
+      "session": 153597
+    },
+    "launch_id": "3c39d1a958ec4f829d9821dc5c3ff7ba"
+  },
+  "locks": {
+    "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f.lock",
+      "fd": 3,
+      "device": 64785,
+      "inode": 58516170,
+      "coordinator_pid": 153597,
+      "mode": "local_nonblocking_flock",
+      "global_reservation": false
+    },
+    "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/GPU-0bc01d70-2ade-0714-8959-b25ae75469b6.lock",
+      "fd": 4,
+      "device": 64785,
+      "inode": 58518656,
+      "coordinator_pid": 153597,
+      "mode": "local_nonblocking_flock",
+      "global_reservation": false
+    },
+    "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d.lock",
+      "fd": 5,
+      "device": 64785,
+      "inode": 58519156,
+      "coordinator_pid": 153597,
+      "mode": "local_nonblocking_flock",
+      "global_reservation": false
+    },
+    "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/GPU-63f1bd01-ddf9-a742-ee48-9389892493d9.lock",
+      "fd": 6,
+      "device": 64785,
+      "inode": 58519247,
+      "coordinator_pid": 153597,
+      "mode": "local_nonblocking_flock",
+      "global_reservation": false
+    },
+    "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86.lock",
+      "fd": 7,
+      "device": 64785,
+      "inode": 58519167,
+      "coordinator_pid": 153597,
+      "mode": "local_nonblocking_flock",
+      "global_reservation": false
+    },
+    "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/GPU-b980f22b-58a3-fc88-21c1-ae86053d8535.lock",
+      "fd": 8,
+      "device": 64785,
+      "inode": 58519119,
+      "coordinator_pid": 153597,
+      "mode": "local_nonblocking_flock",
+      "global_reservation": false
+    },
+    "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011.lock",
+      "fd": 9,
+      "device": 64785,
+      "inode": 58519444,
+      "coordinator_pid": 153597,
+      "mode": "local_nonblocking_flock",
+      "global_reservation": false
+    },
+    "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685.lock",
+      "fd": 10,
+      "device": 64785,
+      "inode": 58519446,
+      "coordinator_pid": 153597,
+      "mode": "local_nonblocking_flock",
+      "global_reservation": false
+    }
+  },
+  "grant": {
+    "scope": "all_eight_instrumentation_probe",
+    "granted": true,
+    "note": "User authorizes fresh collector-first profile after explicit CPU import-isolation fix and 130+42 CPU tests; sole GPU owner; all_eight_instrumentation_probe solely for instrumentation; model exact selected GPU0/1; fixed16MiB B1 and1MiB nonselected delta; no smoke/pair rerun; no foreign signals",
+    "run_id": "tp2-optimized-collector-profile-20261009-002",
+    "prepared_sha256": "6c03ce9644645b6dc78d3d28a1bdee8258d2a75261394b7b8ad0535573e90d21",
+    "gpu_uuids": [
+      "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f",
+      "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6",
+      "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d",
+      "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86",
+      "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011",
+      "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685"
+    ],
+    "model_gpu_uuids": [
+      "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9"
+    ]
+  },
+  "command": [
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/admission/optimized-20261009/staged/ferrule",
+    "serve",
+    "/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8",
+    "--backend",
+    "cuda",
+    "--engine",
+    "pipeline",
+    "--model-profile",
+    "qwen35-mixed-bf16",
+    "--tensor-parallel",
+    "2",
+    "--pipeline-parallel",
+    "1",
+    "--expert-parallel",
+    "1",
+    "--rank-backend",
+    "thread",
+    "--devices",
+    "0,1",
+    "--rank-restarts",
+    "0",
+    "--kv-execution-policy",
+    "resident",
+    "--ctx-size",
+    "128",
+    "--max-active-sequences",
+    "2",
+    "--max-batch-tokens",
+    "8",
+    "--prefill-chunk-size",
+    "8",
+    "--cuda-device-budget-mb",
+    "22528",
+    "--kv-cache-mb",
+    "16",
+    "--max-tensor-mb",
+    "2048",
+    "--cuda-workspace-mb",
+    "1024",
+    "--host",
+    "127.0.0.1",
+    "--port",
+    "18367",
+    "--served-model-name",
+    "qwen35-ferrule-tp2-resident-paper"
+  ],
+  "command_sha256": "00ea5bedd064717f815fc77449208a1829ee3262962e419c881f6b94887a2efa",
+  "binary_sha256": "4d40c34738d36a1c78f62c0e400dd732da40e34c316ce4bd3c356dc4d29b3173",
+  "worker_launch_sha256": "60c6f08683335e8b5abd4d2a96edbb9bf386a4d49cd5926685b077f0639abdaa",
+  "nonce": "b30a222d28ecf8efc756ab1a9b73bf525395c27c035cee8fe406f3597ee304d2",
+  "created_monotonic": 8499256.27877147
+}

@@ -1,0 +1,6 @@
+{
+  "returncode": 0,
+  "one_test_passed": true,
+  "selector": "transformer::standard::cuda::hybrid_rank::mixed::decoded_gpu_tests::decoded_pair_unknown_and_panic_retain_physical_backing",
+  "binary_sha256": "ca7957146344c694aa41c2f3d697f7b789ff8b15bc19657507f5467c00066897"
+}

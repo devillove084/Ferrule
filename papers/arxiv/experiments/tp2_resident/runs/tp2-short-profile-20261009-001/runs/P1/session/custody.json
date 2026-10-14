@@ -1,0 +1,121 @@
+{
+  "status": "proven_drained",
+  "method": "linux-subreaper-waitid",
+  "containment_verified": true,
+  "launch_id": "f3b126f0642a47658e84b17fc2b5baa9",
+  "helper_identity": {
+    "pid": 197648,
+    "birth_ticks": 84812940,
+    "ppid": 197608,
+    "pgrp": 197648,
+    "session": 197648
+  },
+  "root_identity": {
+    "pid": 197649,
+    "birth_ticks": 84812943,
+    "ppid": 197648,
+    "pgrp": 197648,
+    "session": 197648
+  },
+  "boot_id": "4dd3497d-570c-4693-a876-5c26e06ab360",
+  "entries": [
+    {
+      "identity": {
+        "pid": 197649,
+        "birth_ticks": 84812943,
+        "ppid": 197648,
+        "pgrp": 197648,
+        "session": 197648
+      },
+      "role": "root",
+      "signals": [],
+      "reaped": true,
+      "exit_code": 1,
+      "first_observed_at": 8484249.782496125,
+      "reaped_at": 8484283.969472026
+    },
+    {
+      "identity": {
+        "pid": 197672,
+        "birth_ticks": 84816109,
+        "ppid": 197648,
+        "pgrp": 197672,
+        "session": 197672
+      },
+      "role": "adopted",
+      "signals": [
+        19,
+        19,
+        15,
+        18
+      ],
+      "reaped": true,
+      "exit_code": 0,
+      "first_observed_at": 8484281.453848114,
+      "reaped_at": 8484283.981604865
+    },
+    {
+      "identity": {
+        "pid": 197686,
+        "birth_ticks": 84816290,
+        "ppid": 197648,
+        "pgrp": 197649,
+        "session": 197649
+      },
+      "role": "adopted",
+      "signals": [
+        19,
+        19,
+        15,
+        18,
+        19,
+        9
+      ],
+      "reaped": true,
+      "exit_code": -9,
+      "first_observed_at": 8484283.946365263,
+      "reaped_at": 8484284.13497544
+    },
+    {
+      "identity": {
+        "pid": 197687,
+        "birth_ticks": 84816290,
+        "ppid": 197648,
+        "pgrp": 197687,
+        "session": 197687
+      },
+      "role": "adopted",
+      "signals": [
+        19,
+        15,
+        18
+      ],
+      "reaped": true,
+      "exit_code": -15,
+      "first_observed_at": 8484284.136806786,
+      "reaped_at": 8484284.149777124
+    },
+    {
+      "identity": {
+        "pid": 197688,
+        "birth_ticks": 84816290,
+        "ppid": 197648,
+        "pgrp": 197649,
+        "session": 197649
+      },
+      "role": "adopted",
+      "signals": [
+        19,
+        15,
+        18
+      ],
+      "reaped": true,
+      "exit_code": 0,
+      "first_observed_at": 8484284.138195163,
+      "reaped_at": 8484284.15122329
+    }
+  ],
+  "errors": [],
+  "reporting_errors": [],
+  "echild": true
+}

@@ -1,0 +1,86 @@
+{
+  "argv": [
+    "/opt/conda310/bin/python",
+    "-B",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/decoded_cache_compare.py",
+    "--input",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-cache-frozen-pair-20261010-02/canary2",
+    "--reference",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_mixed/oracle/runs/lifecycle-canary2-01",
+    "--reference-sha256",
+    "4069b0e3f4dbead859654855a576c402867fa6ea2908d3dc67cf78c3ea2f672f",
+    "--canonical",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-cache-frozen-pair-20261010-02/canary2-canonical",
+    "--output",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-cache-frozen-pair-20261010-02/canary2-comparison.json",
+    "--lifecycle"
+  ],
+  "supervisor": {
+    "returncode": 0,
+    "timed_out": false,
+    "wall_seconds": 35.443378346040845,
+    "stdout": "",
+    "stderr": "",
+    "cleanup_errors": [],
+    "cleanup_scope": "isolated_subreaper_direct_children",
+    "descendant_custody": "proven_drained",
+    "gpu_quiescence": "unverified",
+    "custody": {
+      "status": "proven_drained",
+      "method": "linux-subreaper-waitid",
+      "containment_verified": true,
+      "launch_id": "f0d2ca7f49224dbaa18bbe96e158f7f4",
+      "helper_identity": {
+        "pid": 253171,
+        "birth_ticks": 92005626,
+        "ppid": 253170,
+        "pgrp": 253171,
+        "session": 253171
+      },
+      "root_identity": {
+        "pid": 253172,
+        "birth_ticks": 92005629,
+        "ppid": 253171,
+        "pgrp": 253171,
+        "session": 253171
+      },
+      "boot_id": "4dd3497d-570c-4693-a876-5c26e06ab360",
+      "entries": [
+        {
+          "identity": {
+            "pid": 253172,
+            "birth_ticks": 92005629,
+            "ppid": 253171,
+            "pgrp": 253171,
+            "session": 253171
+          },
+          "role": "root",
+          "signals": [],
+          "reaped": true,
+          "exit_code": 0,
+          "first_observed_at": 8556176.645089729,
+          "reaped_at": 8556211.999557203
+        }
+      ],
+      "errors": [],
+      "reporting_errors": [],
+      "echild": true
+    },
+    "handshake": {
+      "kind": "ready",
+      "protocol": 1,
+      "launch_id": "f0d2ca7f49224dbaa18bbe96e158f7f4",
+      "helper_identity": {
+        "pid": 253171,
+        "birth_ticks": 92005626,
+        "ppid": 253170,
+        "pgrp": 253171,
+        "session": 253171
+      },
+      "containment_verified": true,
+      "method": "linux-subreaper-waitid"
+    },
+    "stdout_truncated": false,
+    "stderr_truncated": false
+  }
+}

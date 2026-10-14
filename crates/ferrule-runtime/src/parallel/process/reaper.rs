@@ -38,7 +38,7 @@ impl Slot {
                             while index < registry.pending.len() {
                                 // Only try_wait: one D-state child cannot stop others.
                                 if matches!(registry.pending[index].try_wait(), Ok(Some(_))) {
-                                    registry.pending.swap_remove(index);
+                                    drop(registry.pending.swap_remove(index));
                                     registry.reserved -= 1;
                                 } else {
                                     index += 1;

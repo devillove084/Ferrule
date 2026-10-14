@@ -1,7 +1,7 @@
 use crate::cuda::runtime::{CudaContext, DeviceBuffer, LaunchConfig};
 use ferrule_common::Result;
 
-use crate::cuda::context::cu;
+use crate::cuda::operator_owner::cu;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CudaSmokeBenchmark {

@@ -1,0 +1,68 @@
+{
+  "returncode": 1,
+  "timed_out": false,
+  "wall_seconds": 345.5640075057745,
+  "stdout": "",
+  "stderr": "Traceback (most recent call last):\n  File \"/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/decoded_cache_gate.py\", line 1124, in <module>\n    sys.exit(main())\n             ^^^^^^\n  File \"/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/decoded_cache_gate.py\", line 1103, in main\n    return worker(a.worker_pin)\n           ^^^^^^^^^^^^^^^^^^^^\n  File \"/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/decoded_cache_gate.py\", line 662, in worker\n    ct.require(resources['status'] == 'observed_within_targets', 'Resource observation incomplete/exceeded target')\n  File \"/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/contract.py\", line 46, in require\n    raise ValueError(reason)\nValueError: Resource observation incomplete/exceeded target\n",
+  "cleanup_errors": [],
+  "cleanup_scope": "isolated_subreaper_direct_children",
+  "descendant_custody": "proven_drained",
+  "gpu_quiescence": "unverified",
+  "custody": {
+    "status": "proven_drained",
+    "method": "linux-subreaper-waitid",
+    "containment_verified": true,
+    "launch_id": "b6fc4014717f40c0b71ca27ca75a44fa",
+    "helper_identity": {
+      "pid": 156134,
+      "birth_ticks": 97335941,
+      "ppid": 156124,
+      "pgrp": 156134,
+      "session": 156134
+    },
+    "root_identity": {
+      "pid": 156135,
+      "birth_ticks": 97335945,
+      "ppid": 156134,
+      "pgrp": 156134,
+      "session": 156134
+    },
+    "boot_id": "4dd3497d-570c-4693-a876-5c26e06ab360",
+    "entries": [
+      {
+        "identity": {
+          "pid": 156135,
+          "birth_ticks": 97335945,
+          "ppid": 156134,
+          "pgrp": 156134,
+          "session": 156134
+        },
+        "role": "root",
+        "signals": [],
+        "reaped": true,
+        "exit_code": 1,
+        "first_observed_at": 8609479.80170973,
+        "reaped_at": 8609825.295726787
+      }
+    ],
+    "errors": [],
+    "reporting_errors": [],
+    "echild": true
+  },
+  "handshake": {
+    "kind": "ready",
+    "protocol": 1,
+    "launch_id": "b6fc4014717f40c0b71ca27ca75a44fa",
+    "helper_identity": {
+      "pid": 156134,
+      "birth_ticks": 97335941,
+      "ppid": 156124,
+      "pgrp": 156134,
+      "session": 156134
+    },
+    "containment_verified": true,
+    "method": "linux-subreaper-waitid"
+  },
+  "stdout_truncated": false,
+  "stderr_truncated": false
+}

@@ -2,11 +2,63 @@
 const PROVIDER: &str = include_str!("../src/cuda/providers/cutlass.rs");
 const LEGACY_PROVIDER: &str = include_str!("../src/cuda/providers/cutlass_legacy.rs");
 const F32_PROVIDER: &str = include_str!("../src/cuda/providers/cutlass_f32.rs");
-const CONTEXT: &str = include_str!("../src/cuda/context.rs");
-const F32: &str = include_str!("../src/cuda/operators/f32.rs");
+const CONTEXT: &str = include_str!("../src/cuda/operator_owner.rs");
+const F32: &str = include_str!("../src/cuda/operators/linear/f32.rs");
 const PROPOSAL: &str = include_str!("../src/cuda/operators/proposal.rs");
 const HYBRID: &str = include_str!("../src/cuda/operators/attention/hybrid.rs");
 const GROUPED: &str = include_str!("../src/cuda/operators/moe/grouped_fp4.rs");
+
+#[test]
+fn linear_implementations_live_in_the_family_directory() {
+    let cuda = include_str!("../src/cuda/mod.rs");
+    let operators = include_str!("../src/cuda/operators/mod.rs");
+    let linear = include_str!("../src/cuda/operators/linear.rs");
+    let numeric = include_str!("../src/cuda/operators/linear/numeric.rs");
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/cuda/operators");
+
+    assert!(cuda.contains("pub mod operators;"));
+    assert!(!cuda.contains("pub mod operators {"));
+    assert!(operators.contains("pub mod linear;"));
+    for name in ["f32", "numeric"] {
+        assert!(linear.contains(&format!("mod {name};")));
+        assert!(!root.join(format!("{name}.rs")).exists());
+    }
+    // Normal module resolution must reach the real implementations, not a
+    // path override or an include/re-export shim back to the old location.
+    for source in [operators, linear, F32] {
+        assert!(!source.contains("#[path"));
+        assert!(!source.contains("include!("));
+    }
+    assert!(!numeric.contains("include!("));
+    assert_eq!(numeric.matches("#[path").count(), 1);
+    assert!(numeric.contains(
+        "#[cfg(test)]\n#[path = \"../../../../tests/numeric_w8a16/poison.rs\"]\nmod w8a16_poison_tests;"
+    ));
+    for implementation in [
+        "pub struct F32GemmLayout {",
+        "pub enum F32GemmError {",
+        "impl F32GemmLayout {",
+        "pub(crate) fn required_bytes(self)",
+        "pub(crate) fn f32_gemm_bytes(",
+        "crate::cuda::providers::cutlass::f32_gemm_bytes_native(",
+    ] {
+        assert!(F32.contains(implementation), "missing {implementation}");
+    }
+    for implementation in [
+        "pub struct CudaNumericFp8Artifact {",
+        "impl CudaNumericFp8Artifact {",
+        "fn upload_validated_bytes(",
+        "weight: cu(DeviceBuffer::from_host(stream, weight))?",
+        "pub struct CudaNumericFp8Workspace {",
+        "impl CudaNumericFp8Workspace {",
+        "self.poisoned = true;",
+    ] {
+        assert!(numeric.contains(implementation), "missing {implementation}");
+    }
+    assert!(linear.contains("pub(crate) use f32::f32_gemm_bytes;"));
+    assert!(linear.contains("pub use f32::{F32GemmError, F32GemmLayout};"));
+    assert!(linear.contains("pub use numeric::{"));
+}
 
 #[test]
 fn family_contracts_are_definitions_not_provider_type_aliases() {
@@ -349,7 +401,15 @@ fn family_impls_are_outside_aggregate_context() {
         ),
         (
             include_str!("../src/cuda/operators/impls/compressor.rs"),
-            &["artifact_bf16_compressor_into"][..],
+            &[
+                "artifact_bf16_compressor_into",
+                "reset_compressor_recurrent_state",
+                "compressor_recurrent_seed_prefill",
+                "compressor_recurrent_append_projected",
+                "compressor_recurrent_boundary_into",
+                "compressor_prefill_softmax_from_device",
+                "compressor_prefill_softmax_from_device_into",
+            ][..],
         ),
         (
             include_str!("../src/cuda/operators/impls/proposal.rs"),
@@ -392,6 +452,12 @@ fn family_impls_are_outside_aggregate_context() {
         "record_compute_event",
         "proposal_head_workspace",
         "begin_proposal_head_result_download",
+        "create_compressor_recurrent_state",
+        "clone_compressor_recurrent_state",
+        "create_compressor_recurrent_checkpoint_slab",
+        "capture_compressor_recurrent_checkpoint",
+        "restore_compressor_recurrent_checkpoint",
+        "copy_f32_within",
     ] {
         assert!(
             CONTEXT.contains(&format!("fn {owner_method}")),
@@ -640,6 +706,18 @@ fn production_boundary(source: &str) -> Result<(), String> {
         .filter(|ch| !ch.is_whitespace())
         .collect();
     for forbidden in [
+        "self.stream",
+        "self.counters",
+        "self._ctx",
+        "self.module",
+        "new_stream(",
+        "Arc<CudaStream>",
+        "CudaOpCounterCells",
+        "workspace.poison(",
+        ".buffer",
+        "usesuper::",
+        "pack_fp8_rows_from_f32_preallocated",
+        "zero_i32_buffer_in_place",
         "operators::legacy",
         "cutlass::legacy",
         "CutlassKernelId",
@@ -683,6 +761,65 @@ fn production_boundary(source: &str) -> Result<(), String> {
 }
 
 #[test]
+fn compressor_state_submission_preserves_zero_groups_and_overlap_copy_order() {
+    let source = include_str!("../src/cuda/operators/impls/compressor.rs");
+    assert_eq!(
+        source
+            .matches("let state = state.operator_state_mut();")
+            .count(),
+        4
+    );
+    assert_eq!(source.matches("self.submit_operator(1,").count(), 6);
+    assert_eq!(source.matches("cu(unsafe {").count(), 5);
+
+    let boundary = source
+        .split_once("pub fn compressor_recurrent_boundary_into(")
+        .unwrap()
+        .1
+        .split_once("pub fn compressor_prefill_softmax_from_device(")
+        .unwrap()
+        .0;
+    let launch = boundary.find("compressor_recurrent_softmax_f32(").unwrap();
+    let kv_copy = boundary
+        .find("self.copy_f32_within(state.kv_state, half, 0, half)?;")
+        .unwrap();
+    let score_copy = boundary
+        .find("self.copy_f32_within(state.score_state, half, 0, half)?;")
+        .unwrap();
+    assert!(launch < kv_copy && kv_copy < score_copy);
+    let boundary: String = boundary.chars().filter(|ch| !ch.is_whitespace()).collect();
+    assert!(boundary.contains("})?;ifstate.shape.overlap{"));
+
+    let prefill: String = source
+        .split_once("pub fn compressor_prefill_softmax_from_device_into(")
+        .unwrap()
+        .1
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .collect();
+    let mut remaining = prefill.as_str();
+    for checkpoint in [
+        "Self::f32_no_alias(",
+        "ifratio==0||head_dim==0||out_dim==0",
+        "letconsumed_tokens=",
+        "letmin_projected=",
+        "letexpected_ape=",
+        "ifape.len()!=expected_ape",
+        "letexpected_output=",
+        "ifoutput.len()!=expected_output",
+        "ifgroups==0{returnOk(());}",
+        "self.submit_operator(1,|stream|",
+        "cu(unsafe{",
+        "self.core_native().dsv4_compressor_prefill_softmax(",
+        "LaunchConfig::for_num_elems(expected_outputasu32)",
+        "groupsasu32,ratioasu32,head_dimasu32,out_dimasu32",
+    ] {
+        let index = remaining.find(checkpoint).expect(checkpoint);
+        remaining = &remaining[index + checkpoint.len()..];
+    }
+}
+
+#[test]
 fn owner_resource_boundary_has_positive_and_negative_fixtures() {
     for legal in [
         "crate::cuda::providers::cutlass::submit_bf16_compressor(stream, input)",
@@ -698,6 +835,14 @@ fn owner_resource_boundary_has_positive_and_negative_fixtures() {
         "use cutlass::{submit_mla_output}; use cutlass::{mla_output as launch};",
         "precision . kernel ( )",
         "use crate::cuda::providers::cutlass::*;",
+        "use super::*;",
+        "use super::{CudaOperators};",
+        "self . module . recurrent_data(stream, args)",
+        "self . stream . synchronize()",
+        "self . _ctx . alloc_zeros(16)",
+        "self . counters . launches.set(1)",
+        "input . buffer . cu_deviceptr()",
+        "struct Family { stream: Arc<CudaStream> }",
     ] {
         assert!(production_boundary(illegal).is_err(), "accepted {illegal}");
     }
@@ -725,6 +870,14 @@ fn owner_families_do_not_call_compatibility_launches_or_own_resources() {
             include_str!("../src/cuda/operators/impls/proposal.rs"),
         ),
         ("linear", include_str!("../src/cuda/operators/linear.rs")),
+        (
+            "standard_bf16",
+            include_str!("../src/cuda/operators/standard_bf16.rs"),
+        ),
+        (
+            "recurrent_bf16",
+            include_str!("../src/cuda/operators/recurrent_bf16.rs"),
+        ),
     ];
     let actual: std::collections::BTreeSet<_> = std::fs::read_dir(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/cuda/operators/impls"),
@@ -734,7 +887,7 @@ fn owner_families_do_not_call_compatibility_launches_or_own_resources() {
     .collect();
     let expected: std::collections::BTreeSet<_> = families
         .iter()
-        .filter(|(name, _)| *name != "linear")
+        .filter(|(name, _)| !matches!(*name, "linear" | "standard_bf16" | "recurrent_bf16"))
         .map(|(name, _)| format!("{name}.rs"))
         .chain(std::iter::once("mod.rs".to_owned()))
         .collect();
@@ -767,9 +920,9 @@ fn owner_families_do_not_call_compatibility_launches_or_own_resources() {
         .split("pub(crate) trait OperatorOwner {")
         .nth(1)
         .unwrap()
-        .split("/// Provider-neutral workspace size")
-        .next()
-        .unwrap();
+        .split_once("\n}")
+        .unwrap()
+        .0;
     assert_eq!(owner.matches("fn ").count(), 1);
     assert!(owner.contains("FnOnce(&CudaStream) -> Result<T>"));
     assert!(!owner.contains("DeviceBuffer"));
@@ -925,9 +1078,9 @@ fn owner_numeric_rejects_foreign_resources_and_recovers_capture() {
 
 #[test]
 fn family_module_privacy_is_separate_from_context_resources() {
-    let modules = include_str!("../src/cuda/mod.rs");
+    let modules = include_str!("../src/cuda/operators/mod.rs");
     let impls = include_str!("../src/cuda/operators/impls/mod.rs");
-    let resources = include_str!("../src/cuda/operators/resources.rs");
+    let resources = include_str!("../src/cuda/operators/resource_views.rs");
     assert!(modules.contains("mod impls;"));
     assert!(!CONTEXT.contains("operators/impls/"));
     for family in [
@@ -941,9 +1094,9 @@ fn family_module_privacy_is_separate_from_context_resources() {
         assert!(impls.contains(&format!("mod {family};")));
         assert!(!CONTEXT.contains(&format!("mod {family}_impl;")));
     }
-    assert!(CONTEXT.contains("operators/resources.rs"));
-    assert!(CONTEXT.contains("mod operator_resources;"));
-    assert!(!CONTEXT.contains("pub(crate) mod operator_resources"));
+    assert!(CONTEXT.contains("operators/resource_views.rs"));
+    assert!(CONTEXT.contains("\nmod resource_views;"));
+    assert!(!CONTEXT.contains("pub(crate) mod resource_views"));
     for field in [
         "weight: DeviceBuffer<u8>",
         "x_packed: DeviceBuffer<u8>",
@@ -961,6 +1114,7 @@ fn family_module_privacy_is_separate_from_context_resources() {
         "struct ArtifactLinearRef<'a>",
         "struct Fp8StorageMut<'a>",
         "struct PreparedFp8ActivationRef<'a>",
+        "struct CompressorStateMut<'a>",
     ] {
         assert!(resources.contains(declaration));
     }
@@ -981,9 +1135,266 @@ fn family_module_privacy_is_separate_from_context_resources() {
             "resource adapter must not own/submit {forbidden}"
         );
     }
+    assert!(resources.contains("kv_state: &'a mut CudaF32Buffer"));
+    assert!(resources.contains("score_state: &'a mut CudaF32Buffer"));
+    assert!(resources.contains("fn operator_state_mut(&mut self) -> CompressorStateMut<'_>"));
+    for field in ["kv_state: CudaF32Buffer", "score_state: CudaF32Buffer"] {
+        assert!(CONTEXT.contains(field), "missing state owner field {field}");
+        assert!(!CONTEXT.contains(&format!("pub(crate) {field}")));
+    }
     assert!(resources.contains("weight: &'a DeviceBuffer<u8>"));
     assert!(resources.contains("x_packed: &'a mut DeviceBuffer<u8>"));
     assert!(resources.contains("scale: Option<&'a DeviceBuffer<u8>>"));
     assert!(resources.contains("self.pack_fp8_rows_from_f32_preallocated("));
     assert!(resources.contains("self.zero_i32_buffer_in_place(status)"));
+}
+
+fn bf16_source_owner(modules: &str, context: &str, name: &str, source: &str) -> Result<(), String> {
+    let compact = |s: &str| {
+        s.lines()
+            .map(|line| line.split("//").next().unwrap())
+            .flat_map(str::chars)
+            .filter(|ch| !ch.is_whitespace())
+            .collect::<String>()
+    };
+    let modules = compact(modules);
+    let context = compact(context);
+    if !modules.contains(&format!("pubmod{name};"))
+        || modules.contains("#[path")
+        || modules.contains("operator_owner::{recurrent_bf16")
+        || modules.contains(&format!("operator_owner::{name}"))
+        || context.contains(&format!("mod{name};"))
+        || context.contains(&format!("{name}.rs"))
+    {
+        return Err(format!(
+            "{name} must be a real operator module, not a context child"
+        ));
+    }
+    let production = source.split("#[cfg(test)]").next().unwrap();
+    production_boundary(production)?;
+    if !production.contains("impl CudaOperators {")
+        || !production.contains("self.submit_operator(")
+        || production.contains("include!(")
+        || production.contains("#[path")
+        || production.contains("#[cfg")
+        || production.contains("#[test]")
+    {
+        return Err(format!(
+            "{name} must own execution without duplicated/gated implementations"
+        ));
+    }
+    Ok(())
+}
+
+#[test]
+fn bf16_canonical_modules_have_real_source_ownership() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let modules = include_str!("../src/cuda/operators/mod.rs");
+    let plans = include_str!("../src/cuda_plan.rs");
+    let sources = [
+        (
+            "standard_bf16",
+            include_str!("../src/cuda/operators/standard_bf16.rs"),
+        ),
+        (
+            "recurrent_bf16",
+            include_str!("../src/cuda/operators/recurrent_bf16.rs"),
+        ),
+    ];
+    assert!(CONTEXT.contains("pub use crate::cuda::operators::{recurrent_bf16, standard_bf16};"));
+    for (name, source) in sources {
+        bf16_source_owner(modules, CONTEXT, name, source).unwrap();
+        assert!(!root.join(format!("src/cuda/{name}.rs")).exists());
+        let mount =
+            format!("#[cfg(test)]\n#[path = \"../../../tests/unit/cuda/{name}.rs\"]\nmod tests;");
+        assert!(
+            source.ends_with(&format!("{mount}\n")),
+            "{name}: private test mount"
+        );
+        assert_eq!(source.matches("#[cfg").count(), 1);
+        let unit =
+            std::fs::read_to_string(root.join(format!("tests/unit/cuda/{name}.rs"))).unwrap();
+        assert!(unit.contains("#[test]"));
+        assert!(unit.contains("use super::*;"));
+        for line in source
+            .lines()
+            .filter(|line| line.trim_start().starts_with("pub fn "))
+        {
+            assert!(
+                !CONTEXT.contains(line.trim()),
+                "duplicated BF16 implementation: {line}"
+            );
+        }
+    }
+    for (declaration, reexport) in [
+        (
+            "pub enum Bf16GateLayout {",
+            "pub use crate::cuda_plan::Bf16GateLayout;",
+        ),
+        (
+            "pub struct Bf16RecurrentStorage {",
+            "pub use crate::cuda_plan::Bf16RecurrentStorage;",
+        ),
+    ] {
+        assert_eq!(plans.matches(declaration).count(), 1);
+        assert!(sources.iter().any(|(_, s)| s.contains(reexport)));
+        assert!(sources.iter().all(|(_, s)| !s.contains(declaration)));
+    }
+    assert!(!plans.contains("#[cfg"));
+    assert!(!plans.contains("crate::cuda::"));
+    assert!(
+        !root
+            .join("tests/support/hybrid_bf16_validation.rs")
+            .exists()
+    );
+    for field in [
+        "module: CoreOperators",
+        "_ctx: Arc<CudaContext>",
+        "stream: Arc<CudaStream>",
+        "counters: CudaOpCounterCells",
+        "buffer: DeviceBuffer<T>",
+    ] {
+        assert!(CONTEXT.contains(field));
+        assert!(!CONTEXT.contains(&format!("pub(crate) {field}")));
+        assert!(!CONTEXT.contains(&format!("pub {field}")));
+    }
+    assert!(CONTEXT.contains("pub(crate) fn core_native(&self) -> &CoreOperators"));
+    assert!(CONTEXT.contains("pub(crate) fn check_buffer_owner<T: DeviceCopy>"));
+}
+
+#[test]
+fn bf16_source_ownership_rejects_back_mounts_forwarders_and_authority_leaks() {
+    let modules = include_str!("../src/cuda/operators/mod.rs");
+    for (name, source) in [
+        (
+            "standard_bf16",
+            include_str!("../src/cuda/operators/standard_bf16.rs"),
+        ),
+        (
+            "recurrent_bf16",
+            include_str!("../src/cuda/operators/recurrent_bf16.rs"),
+        ),
+    ] {
+        let declaration = format!("pub mod {name};");
+        for wrong_modules in [
+            modules.replace(
+                &declaration,
+                &format!("pub use crate::cuda::operator_owner::{name};"),
+            ),
+            modules.replace(
+                &declaration,
+                &format!("#[path = \"../{name}.rs\"]\n{declaration}"),
+            ),
+        ] {
+            assert!(bf16_source_owner(&wrong_modules, CONTEXT, name, source).is_err());
+        }
+        let back_mount = format!("{CONTEXT}\n#[path = \"{name}.rs\"]\n{declaration}");
+        assert!(bf16_source_owner(modules, &back_mount, name, source).is_err());
+        for invalid in [
+            format!("pub use crate::cuda::operator_owner::{name}::*;"),
+            format!("include!(\"../{name}.rs\");"),
+            format!("use super::*;\n{source}"),
+            format!("#[cfg(feature = \"cuda\")]\n{source}"),
+            source.replace("impl CudaOperators {", "#[test]\nimpl CudaOperators {"),
+            source.replace("self.submit_operator(", "self.stream.submit("),
+        ] {
+            assert!(bf16_source_owner(modules, CONTEXT, name, &invalid).is_err());
+        }
+    }
+}
+
+#[test]
+fn bf16_geometry_and_byte_plans_work_without_cuda() {
+    use ferrule_backend::cuda_plan::{
+        Bf16GateLayout, Bf16RecurrentStorage, CausalConv1dLayout, F32RowsLayout,
+        GatedDeltaNetLayout,
+    };
+    for gate in [
+        Bf16GateLayout::Elementwise { rows: 3, width: 5 },
+        Bf16GateLayout::RowBroadcast { rows: 3, width: 5 },
+    ] {
+        assert_eq!(gate.input_elements().unwrap(), 15);
+    }
+    assert_eq!(
+        Bf16GateLayout::Elementwise { rows: 3, width: 5 }
+            .gate_elements()
+            .unwrap(),
+        15
+    );
+    assert_eq!(
+        Bf16GateLayout::RowBroadcast { rows: 3, width: 5 }
+            .gate_elements()
+            .unwrap(),
+        3
+    );
+    for (rows, width) in [(0, 1), (1, 0), (usize::MAX, 2), (1, i32::MAX as usize + 1)] {
+        assert!(
+            Bf16GateLayout::Elementwise { rows, width }
+                .input_elements()
+                .is_err()
+        );
+        assert!(
+            Bf16GateLayout::RowBroadcast { rows, width }
+                .gate_elements()
+                .is_err()
+        );
+        assert!(F32RowsLayout { rows, width }.validate().is_err());
+    }
+    let delta = GatedDeltaNetLayout {
+        rows: 3,
+        key_heads: 2,
+        value_heads: 4,
+        key_dim: 3,
+        value_dim: 5,
+    };
+    let conv = CausalConv1dLayout {
+        rows: 3,
+        channels: delta.qkv_width().unwrap(),
+        kernel_size: 4,
+    };
+    let storage = Bf16RecurrentStorage::for_layouts(conv, delta).unwrap();
+    assert_eq!(storage.conv_history_bytes, 32 * 4 * 2);
+    assert_eq!(storage.recurrent_state_bytes, 4 * 3 * 5 * 4);
+    assert_eq!(storage.total_bytes().unwrap(), 496);
+    assert!(
+        Bf16RecurrentStorage::for_layouts(CausalConv1dLayout { rows: 1, ..conv }, delta).is_err()
+    );
+    assert!(
+        Bf16RecurrentStorage::for_layouts(
+            CausalConv1dLayout {
+                channels: 31,
+                ..conv
+            },
+            delta
+        )
+        .is_err()
+    );
+    assert!(
+        Bf16RecurrentStorage::for_layouts(
+            CausalConv1dLayout {
+                kernel_size: 0,
+                ..conv
+            },
+            delta
+        )
+        .is_err()
+    );
+    assert!(
+        Bf16RecurrentStorage::for_layouts(
+            conv,
+            GatedDeltaNetLayout {
+                value_heads: 3,
+                ..delta
+            }
+        )
+        .is_err()
+    );
+    assert!(
+        Bf16RecurrentStorage {
+            conv_history_bytes: usize::MAX,
+            recurrent_state_bytes: 1
+        }
+        .total_bytes()
+        .is_err()
+    );
 }

@@ -2,7 +2,7 @@
 //! See scripts/bench_process_ipc.py for pinned inputs, environment and 100s bound.
 #![cfg(unix)]
 
-#[path = "support/pr26_process_fixture.rs"]
+#[path = "support/process_pipeline_fixture.rs"]
 mod fixture;
 
 use std::cell::RefCell;
@@ -197,7 +197,7 @@ fn cpu_echo_baseline() {
     let mut reports = Vec::new();
     for elements in [0, 32, 4096, 32768] {
         let blob: Vec<f32> = (0..elements)
-            .map(|i| (i as i32 % 257 - 128) as f32 / 32.0)
+            .map(|i| (i % 257 - 128) as f32 / 32.0)
             .collect();
         let input = json!({"value":32, "blob":blob});
         let mut wall = Vec::new();

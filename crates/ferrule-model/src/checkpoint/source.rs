@@ -34,7 +34,11 @@ pub struct CheckpointSourceCounters {
     pub path_metadata_calls: u64,
 }
 
-/// Canonical path and filesystem identity captured during checkpoint discovery.
+/// Canonical path and bounded filesystem metadata captured during discovery.
+/// Unix snapshots include dev/inode, length, mtime and ctime (seconds/nanos).
+/// Non-Unix uses the available length/mtime and path fallback; metadata identity
+/// is neither a payload-content hash nor proof of NFS/network coherence. Source
+/// images must remain immutable with coherent metadata through consumption.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct CheckpointSourceFileIdentity {
     catalog_path: PathBuf,
@@ -215,11 +219,19 @@ impl CheckpointBundleSource {
     }
 
     pub fn read_plan(&self, tensors: &[CheckpointTensorSlice]) -> Result<CheckpointReadPlan> {
+        let mut paths = BTreeMap::<&Path, Arc<Path>>::new();
         CheckpointReadPlan::new(
             tensors
                 .iter()
                 .map(|tensor| {
-                    CheckpointReadExtent::new(tensor.path.clone(), tensor.offset, tensor.bytes)
+                    let path = paths
+                        .entry(tensor.path.as_path())
+                        .or_insert_with(|| Arc::from(tensor.path.as_path()));
+                    CheckpointReadExtent::new_shared_path(
+                        Arc::clone(path),
+                        tensor.offset,
+                        tensor.bytes,
+                    )
                 })
                 .collect::<Result<Vec<_>>>()?,
             Arc::clone(&self.source_files),
@@ -382,7 +394,7 @@ pub(crate) fn checkpoint_resource_source(
     let content_hash_bytes = content.finalize();
 
     let mut source = Sha256::new();
-    source.update(b"ferrule-checkpoint-physical-source-v1");
+    source.update(b"ferrule-checkpoint-physical-source-v2");
     update_hash_bytes(&mut source, domain);
     source.update(&content_hash_bytes);
     update_hash_u64(&mut source, tensors.len() as u64);
@@ -515,3 +527,7 @@ mod tests {
         std::env::temp_dir().join(format!("{prefix}-{}-{nonce}", std::process::id()))
     }
 }
+
+#[cfg(all(test, unix))]
+#[path = "../../tests/checkpoint_read_pipeline/source.rs"]
+mod metadata_tests;

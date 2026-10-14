@@ -23,8 +23,12 @@ use std::sync::{
 use std::time::{Duration, Instant};
 use tower::ServiceExt;
 
+#[path = "support/ep8_capacity.rs"]
+mod ep8_capacity;
 #[path = "../../ferrule-runtime/tests/support/hybrid_fixture.rs"]
 mod fixture;
+#[path = "qwen35_http/sse_contract.rs"]
+mod sse_contract;
 const DEADLINE: Duration = Duration::from_secs(90);
 
 #[derive(Default)]
@@ -230,10 +234,8 @@ async fn http_lifecycle(
             "text/event-stream"
         );
         let body = text(response).await;
-        assert!(body.contains(expected), "{body}");
-        assert!(body.contains("\"finish_reason\":\"length\""), "{body}");
-        assert!(body.contains("\"completion_tokens\":1"), "{body}");
-        assert_eq!(body.matches("data: [DONE]").count(), 1);
+        require_ep8_usage("real-cpu-lifecycle", &body, 1).unwrap();
+        assert_eq!(sse_contract::Sample::parse(&body).unwrap().text, expected);
     }
     let stopped = text(app.clone().oneshot(post("/v1/completions", json!({"model":"hybrid","prompt":prompt,"max_tokens":8,"stop":expected,"stream":true}))).await.unwrap()).await;
     assert!(stopped.contains("\"finish_reason\":\"stop\""), "{stopped}");
@@ -369,7 +371,7 @@ async fn hybrid_cpu_http_nested_eos_and_ignore_eos() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires Qwen3.5-0.8B NAS artifact and one CUDA GPU; full-depth F32, about 4 minutes"]
 async fn qwen35_cuda_http_token_stop_abort_reset_shutdown() {
-    use ferrule_runtime::{BackendSelection, ModelFactoryOptions, ResidentModelPlanner};
+    use ferrule_composition::{BackendSelection, ModelFactoryOptions, ResidentModelPlanner};
     let path = std::env::var_os("FERRULE_QWEN35_08B_DIR")
         .unwrap_or_else(|| "/mnt/nas1/hf/Qwen3.5-0.8B".into());
     let config = ferrule_model::AutoConfig::from_pretrained(path).unwrap();
@@ -385,6 +387,7 @@ async fn qwen35_cuda_http_token_stop_abort_reset_shutdown() {
                 expert_reader_max_tensor_mebibytes: 64,
                 expert_cache: Default::default(),
                 qwen35_moe_capacity: None,
+                numeric_fp8_profile: None,
                 qwen35_host_cache: None,
                 moe_hotset_experts: 0,
                 kv_cache_mebibytes: Some(32),
@@ -430,7 +433,7 @@ async fn qwen35_35b_fp8_f32_ep8_http_hello_and_shutdown() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires eight free GPUs and NAS 35B FP8; concurrent SSE/cancel, 1k context; run with external 1200s deadline"]
 async fn qwen35_35b_fp8_ep8_http_concurrent_cancel_and_shutdown() {
-    use ferrule_runtime::{BackendSelection, ModelFactoryOptions, ResidentModelPlanner};
+    use ferrule_composition::{BackendSelection, ModelFactoryOptions, ResidentModelPlanner};
 
     ferrule_common::observability::init_tracing();
     let started = Instant::now();
@@ -444,6 +447,7 @@ async fn qwen35_35b_fp8_ep8_http_concurrent_cancel_and_shutdown() {
         expert_reader_max_tensor_mebibytes: 64,
         expert_cache: Default::default(),
         qwen35_moe_capacity: None,
+        numeric_fp8_profile: None,
         qwen35_host_cache: Some(
             ferrule_model::transformer::host_experts::HostExpertCacheOptions {
                 max_bytes: 32u64 << 30,
@@ -471,7 +475,7 @@ async fn qwen35_35b_fp8_ep8_http_concurrent_cancel_and_shutdown() {
             BackendSelection::Auto,
             None,
             options,
-            ferrule_runtime::engine::model_factory::PipelineBuildOptions {
+            ferrule_composition::model_factory::PipelineBuildOptions {
                 parallelism: ferrule_common::ParallelismPlan {
                     expert_parallel: 8,
                     ..Default::default()
@@ -541,36 +545,19 @@ async fn qwen35_35b_fp8_ep8_http_concurrent_cancel_and_shutdown() {
             return Err(format!("cancel request status: {}", response.status()));
         }
         let mut body = response.into_body();
-        // SSE keep-alive comments are not generated tokens. Wait for an actual
-        // nonterminal completion chunk before dropping the real subscription.
-        let first = loop {
+        let mut sample = sse_contract::Sample::default();
+        while sample.tokens == 0 {
             let frame = body.frame().await
                 .ok_or_else(|| "cancel stream ended before a token".to_string())?
                 .map_err(|error| format!("cancel SSE frame failed: {error:?}"))?;
-            let Some(data) = frame.data_ref() else { continue };
-            let frame_text = std::str::from_utf8(data).map_err(|error| error.to_string())?;
-            for line in frame_text.lines().filter_map(|line| line.strip_prefix("data: ")) {
-                if line == "[DONE]" {
-                    return Err("cancel stream completed before disconnect".to_string());
-                }
-                let event: Value = serde_json::from_str(line).map_err(|error| error.to_string())?;
-                if event.get("error").is_some() {
-                    return Err(format!("cancel SSE error: {event}"));
-                }
-                if event["choices"][0]["text"].as_str().is_some_and(|text| !text.is_empty())
-                    && event["choices"][0]["finish_reason"].is_null()
-                {
-                    break;
-                }
-                return Err(format!("unexpected cancel SSE event: {event}"));
-            }
-            if frame_text.lines().any(|line| line.starts_with("data: ")) {
-                break frame;
-            }
-        };
+            if let Some(data) = frame.data_ref() { sample.push(data)?; }
+        }
+        if sample.finish_reason.is_some() {
+            return Err("cancel stream reached terminal before disconnect".into());
+        }
         eprintln!(
-            "EP8 cancel first SSE frame received elapsed={:.3}s frame={first:?}",
-            started.elapsed().as_secs_f64()
+            "EP8 cancel actual token-event received elapsed={:.3}s request_id={}",
+            started.elapsed().as_secs_f64(), sample.request_id()?
         );
         drop(body);
         eprintln!(
@@ -618,7 +605,7 @@ async fn qwen35_35b_fp8_ep8_http_concurrent_cancel_and_shutdown() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires eight exclusive GPUs and NAS 35B FP8; real 1k-token prefill, ctx=2048; run with external 1200s deadline"]
 async fn qwen35_35b_fp8_ep8_http_context_1k_and_shutdown() {
-    use ferrule_runtime::{BackendSelection, ModelFactoryOptions, ResidentModelPlanner};
+    use ferrule_composition::{BackendSelection, ModelFactoryOptions, ResidentModelPlanner};
 
     ferrule_common::observability::init_tracing();
     let started = Instant::now();
@@ -683,6 +670,7 @@ async fn qwen35_35b_fp8_ep8_http_context_1k_and_shutdown() {
         expert_reader_max_tensor_mebibytes: 64,
         expert_cache: Default::default(),
         qwen35_moe_capacity: None,
+        numeric_fp8_profile: None,
         qwen35_host_cache: Some(
             ferrule_model::transformer::host_experts::HostExpertCacheOptions {
                 max_bytes: 32u64 << 30,
@@ -710,7 +698,7 @@ async fn qwen35_35b_fp8_ep8_http_context_1k_and_shutdown() {
             BackendSelection::Auto,
             None,
             options,
-            ferrule_runtime::engine::model_factory::PipelineBuildOptions {
+            ferrule_composition::model_factory::PipelineBuildOptions {
                 parallelism: ferrule_common::ParallelismPlan {
                     expert_parallel: 8,
                     ..Default::default()
@@ -757,27 +745,10 @@ async fn qwen35_35b_fp8_ep8_http_context_1k_and_shutdown() {
             }),
         );
         let verify = |label: &str, body: &str, prompt_tokens: usize| -> Result<(), String> {
-            require_ep8_usage(label, body, 2)?;
-            let mut usage_seen = false;
-            let mut completion = String::new();
-            for line in body.lines().filter_map(|line| line.strip_prefix("data: ")) {
-                if line == "[DONE]" { continue; }
-                let event: Value = serde_json::from_str(line).map_err(|error| error.to_string())?;
-                if let Some(text) = event["choices"][0]["text"].as_str() {
-                    completion.push_str(text);
-                }
-                if let Some(usage) = event.get("usage").filter(|usage| !usage.is_null()) {
-                    if usage["prompt_tokens"] != json!(prompt_tokens)
-                        || usage["completion_tokens"] != json!(2)
-                        || usage["total_tokens"] != json!(prompt_tokens + 2)
-                    {
-                        return Err(format!("{label} incorrect exact token usage: {usage}"));
-                    }
-                    usage_seen = true;
-                }
-            }
-            if !usage_seen || completion.is_empty() {
-                return Err(format!("{label} missing exact usage or actual completion: {body}"));
+            let sample = sse_contract::Sample::parse(body)?;
+            sample.require_length(2, Some(prompt_tokens))?;
+            if sample.text.is_empty() {
+                return Err(format!("{label} missing visible completion: {body}"));
             }
             Ok(())
         };
@@ -844,26 +815,31 @@ async fn collect_ep8_sse(response: axum::response::Response) -> Result<String, S
         .map_err(|error| format!("SSE was not UTF-8: {error}"))
 }
 
-#[cfg(feature = "cuda")]
 fn require_ep8_usage(label: &str, body: &str, expected_tokens: usize) -> Result<(), String> {
-    let needle = format!("\"completion_tokens\":{expected_tokens}");
-    if !body.contains(&needle)
-        || !body.contains("\"finish_reason\":\"length\"")
-        || body.contains("\"error\":")
-        || body.matches("data: [DONE]").count() != 1
-    {
-        return Err(format!("{label} missing usage/DONE: {body}"));
-    }
-    eprintln!(
-        "EP8 request={label} completion_tokens={expected_tokens} done=true sse_bytes={} SSE:\n{body}",
-        body.len()
+    sse_contract::Sample::parse(body)
+        .and_then(|sample| sample.require_length(expected_tokens, None))
+        .map_err(|error| format!("{label}: {error}"))
+}
+
+#[test]
+fn ep8_usage_helper_rejects_historical_substring_false_positives() {
+    // The old helper accepted this despite zero token events and usage=20.
+    let body = concat!(
+        "data: {\"id\":\"cmpl-ferrule-1\",\"object\":\"text_completion\",\"choices\":[{\"index\":0,\"text\":\"\",\"finish_reason\":\"length\"}]}\n\n",
+        "data: {\"id\":\"cmpl-ferrule-1\",\"object\":\"text_completion\",\"choices\":[],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":20,\"total_tokens\":23}}\n\n",
+        "data: [DONE]\n\n",
     );
-    Ok(())
+    assert!(require_ep8_usage("numeric-prefix", body, 2).is_err());
+    let with_error = body.replace(
+        "data: [DONE]",
+        "data: {\"error\" : {\"message\":\"failed\"}}\n\ndata: [DONE]",
+    );
+    assert!(require_ep8_usage("spaced-error", &with_error, 2).is_err());
 }
 
 #[cfg(feature = "cuda")]
 async fn qwen35_35b_http_smoke(ep: bool) {
-    use ferrule_runtime::{BackendSelection, ModelFactoryOptions, ResidentModelPlanner};
+    use ferrule_composition::{BackendSelection, ModelFactoryOptions, ResidentModelPlanner};
     let path = std::env::var_os("FERRULE_NUMERIC_FP8_MODEL_DIR")
         .unwrap_or_else(|| "/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8".into());
     let config = ferrule_model::AutoConfig::from_pretrained(path).unwrap();
@@ -874,6 +850,7 @@ async fn qwen35_35b_http_smoke(ep: bool) {
         expert_reader_max_tensor_mebibytes: 64,
         expert_cache: Default::default(),
         qwen35_moe_capacity: None,
+        numeric_fp8_profile: None,
         qwen35_host_cache: ep.then(|| {
             ferrule_model::transformer::host_experts::HostExpertCacheOptions {
                 max_bytes: 32u64 << 30,
@@ -896,7 +873,7 @@ async fn qwen35_35b_http_smoke(ep: bool) {
                 BackendSelection::Auto,
                 None,
                 options,
-                ferrule_runtime::engine::model_factory::PipelineBuildOptions {
+                ferrule_composition::model_factory::PipelineBuildOptions {
                     parallelism: ferrule_common::ParallelismPlan {
                         expert_parallel: 8,
                         ..Default::default()
@@ -954,10 +931,8 @@ async fn qwen35_35b_http_smoke(ep: bool) {
             "EP={ep} prompt={prompt:?} elapsed={:.3}s SSE:\n{text}",
             started.elapsed().as_secs_f64()
         );
-        assert!(text.contains(&format!("\"text\":\"{expected}\"")), "{text}");
-        assert!(text.contains("\"finish_reason\":\"length\""), "{text}");
-        assert!(text.contains("\"completion_tokens\":1"), "{text}");
-        assert!(text.contains("data: [DONE]"), "{text}");
+        require_ep8_usage("qwen35-35b-smoke", &text, 1).unwrap();
+        assert_eq!(sse_contract::Sample::parse(&text).unwrap().text, expected);
     }
     #[cfg(target_os = "linux")]
     eprintln!(
@@ -1218,8 +1193,7 @@ async fn real_cpu_missing_cleanup_forwarding_holds_permits_until_shutdown() {
     // BodyExt::collect consumes the whole stream, as in the EP8 test.
     for _ in 0..2 {
         let body = text(app.clone().oneshot(request(1)).await.unwrap()).await;
-        assert_eq!(body.matches("data: [DONE]").count(), 1);
-        assert!(body.contains("\"completion_tokens\":1"), "{body}");
+        require_ep8_usage("missing-cleanup-forwarding", &body, 1).unwrap();
     }
     let before = probe.tokens.load(Ordering::Acquire);
     let response = app.clone().oneshot(request(24)).await.unwrap();
@@ -1240,8 +1214,7 @@ async fn real_cpu_missing_cleanup_forwarding_holds_permits_until_shutdown() {
     .await
     .unwrap();
     let independent = text(app.oneshot(request(1)).await.unwrap()).await;
-    assert_eq!(independent.matches("data: [DONE]").count(), 1);
-    assert!(independent.contains("\"completion_tokens\":1"));
+    require_ep8_usage("independent-after-cancel", &independent, 1).unwrap();
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             let released = {

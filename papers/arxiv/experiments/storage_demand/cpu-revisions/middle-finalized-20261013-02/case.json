@@ -1,0 +1,206 @@
+{
+  "schema": "ferrule.paper.storage-demand.tp1-finalized-case.v1",
+  "parent_case_sha256": "c0c6c548bafe002dc75615f81eebe86fe8f5a55c90cc0c44d6ab9ab18b203086",
+  "purpose": "storage_demand_tp1_middle_four_requests_v1",
+  "argv": [
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/cpu-revisions/middle-finalized-20261013-02/staged/ferrule",
+    "serve",
+    "/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8",
+    "--backend",
+    "cuda",
+    "--engine",
+    "resident",
+    "--model-profile",
+    "qwen35-mixed-bf16",
+    "--expert-prewarm",
+    "lazy",
+    "--kv-execution-policy",
+    "resident",
+    "--ctx-size",
+    "128",
+    "--max-active-sequences",
+    "2",
+    "--max-batch-tokens",
+    "8",
+    "--prefill-chunk-size",
+    "8",
+    "--kv-cache-mb",
+    "16",
+    "--max-tensor-mb",
+    "1024",
+    "--cuda-device-budget-mb",
+    "7168",
+    "--cuda-workspace-mb",
+    "2048",
+    "--cuda-expert-scratch-mb",
+    "8",
+    "--cuda-expert-device-entries",
+    "64",
+    "--cuda-expert-device-bytes",
+    "335544320",
+    "--request-queue-capacity",
+    "2",
+    "--max-inflight-requests",
+    "2",
+    "--served-model-name",
+    "qwen35-storage-demand-paper",
+    "--host",
+    "127.0.0.1",
+    "--port",
+    "18369"
+  ],
+  "environment": {
+    "CUBLAS_WORKSPACE_CONFIG": ":0:0",
+    "CUDA_VISIBLE_DEVICES": "0",
+    "NVIDIA_VISIBLE_DEVICES": "0",
+    "FERRULE_LOG": "info,ferrule_performance=debug",
+    "FERRULE_LOG_FORMAT": "json",
+    "LD_LIBRARY_PATH": "/home/admin/wxw403883/anaconda3/envs/tao/lib:/usr/lib64"
+  },
+  "topology": {
+    "pp": 1,
+    "tp": 1,
+    "ep": 1,
+    "rank_backend": "thread",
+    "owners": 1,
+    "visible_ordinals": [
+      0
+    ]
+  },
+  "model": "/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8",
+  "request_count": 4,
+  "schedule": [
+    {
+      "name": "hello2",
+      "prompt": "Hello",
+      "input_tokens": 1,
+      "max_tokens": 2,
+      "reference": null,
+      "payload": {
+        "model": "qwen35-storage-demand-paper",
+        "prompt": "Hello",
+        "temperature": 0,
+        "seed": 1,
+        "n": 1,
+        "max_tokens": 2,
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        }
+      }
+    },
+    {
+      "name": "canary-qa",
+      "prompt": "The capital of Japan is",
+      "input_tokens": 5,
+      "max_tokens": 8,
+      "reference": {
+        "id": "qa",
+        "prompt": "The capital of Japan is",
+        "input_tokens": 5,
+        "reference_ids": [
+          25358,
+          13,
+          198,
+          760,
+          6511,
+          314,
+          6124,
+          369
+        ],
+        "reference_text": " Tokyo.\nThe capital of Japan is"
+      },
+      "payload": {
+        "model": "qwen35-storage-demand-paper",
+        "prompt": "The capital of Japan is",
+        "temperature": 0,
+        "seed": 1,
+        "n": 1,
+        "max_tokens": 8,
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        }
+      }
+    },
+    {
+      "name": "canary-arithmetic",
+      "prompt": "7 + 8 =",
+      "input_tokens": 5,
+      "max_tokens": 8,
+      "reference": {
+        "id": "arithmetic",
+        "prompt": "7 + 8 =",
+        "input_tokens": 5,
+        "reference_ids": [
+          907,
+          271,
+          22,
+          478,
+          220,
+          23,
+          283,
+          220
+        ],
+        "reference_text": " ?\n\n7 + 8 = "
+      },
+      "payload": {
+        "model": "qwen35-storage-demand-paper",
+        "prompt": "7 + 8 =",
+        "temperature": 0,
+        "seed": 1,
+        "n": 1,
+        "max_tokens": 8,
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        }
+      }
+    },
+    {
+      "name": "canary-chinese",
+      "prompt": "\u4e2d\u56fd\u7684\u9996\u90fd\u662f",
+      "input_tokens": 3,
+      "max_tokens": 8,
+      "reference": {
+        "id": "chinese",
+        "prompt": "\u4e2d\u56fd\u7684\u9996\u90fd\u662f",
+        "input_tokens": 3,
+        "reference_ids": [
+          98116,
+          3709,
+          98116,
+          108820,
+          102357,
+          95983,
+          1710,
+          97486
+        ],
+        "reference_text": "\u5317\u4eac\uff0c\u5317\u4eac\u662f\u4e2d\u56fd\u7684\u9996\u90fd\u3002\u90a3\u4e48"
+      },
+      "payload": {
+        "model": "qwen35-storage-demand-paper",
+        "prompt": "\u4e2d\u56fd\u7684\u9996\u90fd\u662f",
+        "temperature": 0,
+        "seed": 1,
+        "n": 1,
+        "max_tokens": 8,
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        }
+      }
+    }
+  ],
+  "expert_prewarm": "lazy",
+  "expert_entries": 64,
+  "expert_device_bytes": 335544320,
+  "expert_scratch_mib": 8,
+  "warmup_requests": 0,
+  "qa_extension_authorized": false,
+  "actual_generated_ids": null,
+  "resource_contract_complete": "unknown",
+  "physical_nas_read": "unknown",
+  "os_pagecache": "uncontrolled",
+  "cache_policy": "software GPU expert cache; not a physical host cap or disk-necessity claim"
+}

@@ -1,5 +1,6 @@
 //! Incremental host admission, not a reservation of the configured cache cap.
 use super::{HostExpertCacheError, error, invalid};
+pub use ferrule_backend::resources::host_memory::HostMemorySnapshot;
 use ferrule_common::Result;
 
 /// Additional model allocations relative to the snapshot taken by warm().
@@ -50,6 +51,47 @@ fn sum(parts: &[u64]) -> Result<u64> {
     })
 }
 impl HostCacheMemoryPlan {
+    /// Serial child startup: all shards stay resident, while only one child's
+    /// read session/staging/worker stacks coexist. Conservative for every order.
+    pub fn serial_partitions(plans: &[Self]) -> Result<Self> {
+        if plans.is_empty() {
+            return Err(invalid("empty host partition plan"));
+        }
+        let mut aggregate = Self {
+            payload_bytes: 0,
+            retained_metadata_bytes: 0,
+            session_metadata_bytes: 0,
+            worker_staging_bytes: 0,
+            worker_stack_bytes: 0,
+        };
+        for plan in plans {
+            aggregate.payload_bytes = sum(&[aggregate.payload_bytes, plan.payload_bytes])?;
+            aggregate.retained_metadata_bytes = sum(&[
+                aggregate.retained_metadata_bytes,
+                plan.retained_metadata_bytes,
+            ])?;
+            let temporary = sum(&[
+                plan.session_metadata_bytes,
+                plan.worker_staging_bytes,
+                plan.worker_stack_bytes,
+            ])?;
+            // Keep the peak's complete components, not independently chosen maxima.
+            if temporary
+                > sum(&[
+                    aggregate.session_metadata_bytes,
+                    aggregate.worker_staging_bytes,
+                    aggregate.worker_stack_bytes,
+                ])?
+            {
+                aggregate.session_metadata_bytes = plan.session_metadata_bytes;
+                aggregate.worker_staging_bytes = plan.worker_staging_bytes;
+                aggregate.worker_stack_bytes = plan.worker_stack_bytes;
+            }
+        }
+        aggregate.peak_bytes()?;
+        Ok(aggregate)
+    }
+
     pub fn retained_bytes(self) -> Result<u64> {
         sum(&[self.payload_bytes, self.retained_metadata_bytes])
     }
@@ -60,25 +102,6 @@ impl HostCacheMemoryPlan {
             self.worker_staging_bytes,
             self.worker_stack_bytes,
         ])
-    }
-}
-
-/// Values sampled after metadata planning, before the first payload read.
-/// Cgroup fields describe the tightest visible limit/high/hierarchical limit.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct HostMemorySnapshot {
-    pub system_available_bytes: u64,
-    pub process_rss_bytes: u64,
-    pub cgroup_limit_bytes: Option<u64>,
-    pub cgroup_current_bytes: Option<u64>,
-}
-impl HostMemorySnapshot {
-    pub fn available_bytes(self) -> u64 {
-        self.cgroup_limit_bytes
-            .zip(self.cgroup_current_bytes)
-            .map_or(self.system_available_bytes, |(limit, used)| {
-                self.system_available_bytes.min(limit.saturating_sub(used))
-            })
     }
 }
 
@@ -137,6 +160,10 @@ impl HostMemoryBudget {
         Ok(admission)
     }
 }
+
+#[cfg(test)]
+#[path = "../../../tests/unit/host_experts/serial_partitions.rs"]
+mod serial_partition_tests;
 
 #[cfg(test)]
 mod tests {

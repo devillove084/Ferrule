@@ -1,0 +1,16 @@
+{
+  "selector": "transformer::standard::cuda::hybrid_rank::mixed::decoded_gpu_tests::decoded_pair_single_cold_hot_fit_exact_and_no_cache_dma",
+  "binary_sha256": "e0e956282450b7fadf349c7921e4c4caab9e1e427a9c77f1bab438b918cf6fad",
+  "source_digest": "e3592ec70f5073d1a2a6a3a43141ce56cdc081ef2693f29b1226dccfd7e3b436",
+  "assertions_passed": true,
+  "cache_values": "source-pinned model assertions; no raw per-step counters exported",
+  "assertion_contract": null,
+  "gpu_memory": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-allocator-v3-20261011-03/model-cold-hot-fit/resources.json",
+    "sha256": "da46c6e4fcbeec17f3aa836139f1ee5ae085aa612ca26d204ab1d73851961e52"
+  },
+  "log": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-allocator-v3-20261011-03/model-cold-hot-fit/test.log",
+    "sha256": "101516e0d34a981408a3fee49a96ca93efa7e175b6673afd350b71e858d40167"
+  }
+}

@@ -5,6 +5,8 @@ mod ledger;
 mod provider;
 mod registry;
 mod resolver;
+#[cfg(any(test, feature = "cpu-reference"))]
+#[path = "../../tests/support/materialization.rs"]
 pub mod testing;
 mod waiters;
 
@@ -29,3 +31,6 @@ pub use resolver::{RuntimeMaterializationResolver, RuntimeMaterializationResolve
 pub use waiters::{
     ContinuationDetach, OperationResolution, WaiterDetach, WaiterIndex, WaiterIndexError,
 };
+
+pub mod host_kv_adapters;
+pub use host_kv_adapters as host_kv;

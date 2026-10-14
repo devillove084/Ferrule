@@ -1,0 +1,28 @@
+{
+  "status": "pass_cpu_preparation_only",
+  "checks": {
+    "current_binary_pin": true,
+    "handoff_pin": true,
+    "help_passed": true,
+    "three_generation8_references": true,
+    "context_bounds": true,
+    "exact_history_accepts_reference": true,
+    "exact_history_rejects_missing": true,
+    "exact_history_rejects_short": true,
+    "physical_missing_is_null": true,
+    "full_schedule_blocked": true,
+    "finite_greedy": true,
+    "reject_nonfinite": true,
+    "reject_unknown": true,
+    "reject_oversize": true,
+    "reject_changed_pin": true
+  },
+  "source_pins": 597,
+  "runtime_pins": 12,
+  "all_pins": 702,
+  "tensor_payload_bytes_read": 0,
+  "gpu_queries": 0,
+  "gpu_locks": 0,
+  "gpu_runs": 0,
+  "scope": "pure contract negative checks, not worker dispatch/parser integration or GPU math"
+}

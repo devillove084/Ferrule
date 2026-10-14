@@ -1,0 +1,48 @@
+{
+  "stage": "actual CPU paired compatibility/preparation",
+  "utc": "2026-10-11T22:11:36.621417+00:00",
+  "tests": [
+    "test_fused_after_info_only_and_actual_smoke_required",
+    "test_fused_after_rejects_artifact_or_handoff_override",
+    "test_fused_after_rejects_request_debug_and_rankperf",
+    "test_fused_after_single_slot_and_smoke_has_no_qa",
+    "test_routebatch_pair_fixed_v_flags_and_isolation",
+    "test_routebatch_pair_matches_previous_actual_formal_flags"
+  ],
+  "tests_run": 6,
+  "tests_passed": true,
+  "original_admission": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/admission/route-batch-release-20261012-01/paired-admission.json",
+    "sha256": "475b05a01e7c761c6df1dc03744a9e80b149b9b4838f9e911d170c5561d82b7f"
+  },
+  "admission": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/admission/route-batch-release-20261012-01/paired-crossblocks-20261012-01.json",
+    "sha256": "c29045f178968c78516820dc7e6c1d87e89740be3b6e3ecc77ef52f864320e58"
+  },
+  "prepared": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/route-batch-vllm-crossblocks-20261012-01/prepared.json",
+    "sha256": "926570c20b3ff77b607fb68c4775e12ffd18e3feaad8b77562ade322cccd2a16"
+  },
+  "specs_unchanged": true,
+  "actual_same_binary_smoke": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/route-batch-smoke-20261012-01/serving-smoke.json",
+    "sha256": "ebaa00d2db4ba28f35aa0413b11349fd3b4b15e88ab191417a07571597c62471"
+  },
+  "V_versions": {
+    "checkpoint": "same pinned FP8 HF checkpoint",
+    "activation": "BF16",
+    "kv": "auto resolves model BF16",
+    "conv": "BF16",
+    "ssm": "F32",
+    "linear_backend": "Marlin",
+    "moe_backend": "Marlin",
+    "vllm": "0.28.0+cu129",
+    "torch": "2.13.0+cu129",
+    "cuda_toolchain": "12.9.86",
+    "internal_rounding": "unobserved",
+    "kernel_activity": null
+  },
+  "memory_policy": "Ferrule KV16 MiB/max-tensor2048 MiB/workspace4096 MiB including decoded arena3072 MiB, device22528 MiB; V utilization0.8 of24 GiB (19.2 GiB planning), unchanged; common sampled ceiling22 GiB is not identical allocation flags or a hard partition",
+  "isolated_launcher": "/usr/bin/env -i",
+  "GPU_launched": false
+}

@@ -353,6 +353,16 @@ pub struct DecoderKvCapacity {
 }
 /// Model-neutral transactional KV backend.
 pub trait DecoderKvBackend {
+    fn idle_kv_reclaim_config(&self) -> Option<super::IdleKvReclaimConfig> {
+        None
+    }
+    fn idle_kv_physical_stats(&self) -> Option<super::IdleKvPhysicalStats> {
+        None
+    }
+    fn trim_idle_kv(&mut self) -> Result<()> {
+        Ok(())
+    }
+
     type SequenceState;
     /// Non-cloneable backend transaction. Errors retain it and remain
     /// retryable; only `Complete` and `ConsumedRejected` consume it.

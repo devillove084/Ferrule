@@ -59,7 +59,7 @@ fn buffer<T: DeviceCopy>(
             required,
         });
     }
-    if value.cu_deviceptr() % 4 != 0 {
+    if !value.cu_deviceptr().is_multiple_of(4) {
         return Err(F32GemmError::Misaligned { operand });
     }
     Ok(())

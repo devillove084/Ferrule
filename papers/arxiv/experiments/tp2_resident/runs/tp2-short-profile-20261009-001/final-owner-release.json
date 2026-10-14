@@ -1,0 +1,16 @@
+{
+  "unix": 1791541589.5642927,
+  "status": "released",
+  "gpu_uuids": [
+    "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+    "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9"
+  ],
+  "all_eight_idle": true,
+  "compute_apps": "",
+  "device_inventory": "0, GPU-b980f22b-58a3-fc88-21c1-ae86053d8535, 0, 0\n1, GPU-63f1bd01-ddf9-a742-ee48-9389892493d9, 0, 0\n2, GPU-0bc01d70-2ade-0714-8959-b25ae75469b6, 0, 0\n3, GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011, 0, 0\n4, GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86, 0, 0\n5, GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685, 0, 0\n6, GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d, 0, 0\n7, GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f, 0, 0\n",
+  "nsys_sessions": "              ID         TIME                                      STATE LAUNCH NAME\n",
+  "nsys_session_returncode": 0,
+  "foreign_signals": false,
+  "profiling_attempts": 1,
+  "retries": 0
+}

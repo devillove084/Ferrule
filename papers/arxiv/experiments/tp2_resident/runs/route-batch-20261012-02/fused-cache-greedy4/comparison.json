@@ -1,0 +1,193 @@
+{
+  "schema": "ferrule.paper.routed-fusion-unobserved-logits.v1",
+  "gate": "fused-cache-greedy4",
+  "oracle_manifest_sha256": "4fafda33e51d7cec3d82beb59aac73eb12dc6b9904dc0a74535ea35e9d68df81",
+  "calls": [
+    {
+      "case": "call-00",
+      "stage": "call",
+      "input_token_ids": [
+        9419
+      ],
+      "actual": {
+        "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/route-batch-20261012-02/fused-cache-greedy4/call-00.call.actual.f32le",
+        "sha256": "9bf6dff82a46e7b6aca7dc72d4112248f13d4c89c39260e42d37e27921765786"
+      },
+      "compared": 248320,
+      "failures": 0,
+      "nonfinite": 0,
+      "max_abs": 0.0,
+      "rmse": 0.0,
+      "greedy": 11,
+      "all_exact": true
+    },
+    {
+      "case": "call-01",
+      "stage": "call",
+      "input_token_ids": [
+        11
+      ],
+      "actual": {
+        "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/route-batch-20261012-02/fused-cache-greedy4/call-01.call.actual.f32le",
+        "sha256": "a247ba2a4f8c24e51a5d7bef9f37cd12e897155e4fed96d0a2ca91b041cb92f3"
+      },
+      "compared": 248320,
+      "failures": 0,
+      "nonfinite": 0,
+      "max_abs": 0.0,
+      "rmse": 0.0,
+      "greedy": 353,
+      "all_exact": true
+    },
+    {
+      "case": "call-02",
+      "stage": "call",
+      "input_token_ids": [
+        353
+      ],
+      "actual": {
+        "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/route-batch-20261012-02/fused-cache-greedy4/call-02.call.actual.f32le",
+        "sha256": "7714e1e3abdf3d4cd91a128da102292a3f041d988fe40254c94544dd02f4a89b"
+      },
+      "compared": 248320,
+      "failures": 0,
+      "nonfinite": 0,
+      "max_abs": 0.0,
+      "rmse": 0.0,
+      "greedy": 1044,
+      "all_exact": true
+    },
+    {
+      "case": "call-03",
+      "stage": "call",
+      "input_token_ids": [
+        1044
+      ],
+      "actual": {
+        "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/route-batch-20261012-02/fused-cache-greedy4/call-03.call.actual.f32le",
+        "sha256": "0daf660cebbbde38b2f0acf93dfba015cb4714b20915d8ca1f27f39c047db06e"
+      },
+      "compared": 248320,
+      "failures": 0,
+      "nonfinite": 0,
+      "max_abs": 0.0,
+      "rmse": 0.0,
+      "greedy": 264,
+      "all_exact": true
+    },
+    {
+      "case": "call-04",
+      "stage": "call",
+      "input_token_ids": [
+        264
+      ],
+      "actual": {
+        "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/route-batch-20261012-02/fused-cache-greedy4/call-04.call.actual.f32le",
+        "sha256": "d61dc4af9338029d0b8918ea39c0fe74311a1e2750378fb70be8a6b5a259630e"
+      },
+      "compared": 248320,
+      "failures": 0,
+      "nonfinite": 0,
+      "max_abs": 0.0,
+      "rmse": 0.0,
+      "greedy": 220,
+      "all_exact": true
+    },
+    {
+      "case": "call-05",
+      "stage": "call",
+      "input_token_ids": [
+        760,
+        6511,
+        314,
+        9338,
+        369
+      ],
+      "actual": {
+        "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/route-batch-20261012-02/fused-cache-greedy4/call-05.call.actual.f32le",
+        "sha256": "46438456e938ee9011ee954034f7e55734488213637827f763dccc1279d4459a"
+      },
+      "compared": 1241600,
+      "failures": 0,
+      "nonfinite": 0,
+      "max_abs": 0.0,
+      "rmse": 0.0,
+      "greedy": 11751,
+      "all_exact": true
+    },
+    {
+      "case": "call-06",
+      "stage": "call",
+      "input_token_ids": [
+        11751
+      ],
+      "actual": {
+        "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/route-batch-20261012-02/fused-cache-greedy4/call-06.call.actual.f32le",
+        "sha256": "d911572d21929d9519f302b6634fd505f190f49ab1880a3edfa074ab9bf2d6a9"
+      },
+      "compared": 248320,
+      "failures": 0,
+      "nonfinite": 0,
+      "max_abs": 0.0,
+      "rmse": 0.0,
+      "greedy": 13,
+      "all_exact": true
+    },
+    {
+      "case": "call-07",
+      "stage": "call",
+      "input_token_ids": [
+        13
+      ],
+      "actual": {
+        "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/route-batch-20261012-02/fused-cache-greedy4/call-07.call.actual.f32le",
+        "sha256": "bd623d0f2d1dec961539b4847f67582758236677d2c89d8350ca85fa090ded85"
+      },
+      "compared": 248320,
+      "failures": 0,
+      "nonfinite": 0,
+      "max_abs": 0.0,
+      "rmse": 0.0,
+      "greedy": 198,
+      "all_exact": true
+    },
+    {
+      "case": "call-08",
+      "stage": "call",
+      "input_token_ids": [
+        198
+      ],
+      "actual": {
+        "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/route-batch-20261012-02/fused-cache-greedy4/call-08.call.actual.f32le",
+        "sha256": "d59d86ec91619db5830e14649652bdb42e3feacf03985e945d83417b0d213e52"
+      },
+      "compared": 248320,
+      "failures": 0,
+      "nonfinite": 0,
+      "max_abs": 0.0,
+      "rmse": 0.0,
+      "greedy": 760,
+      "all_exact": true
+    },
+    {
+      "case": "call-09",
+      "stage": "call",
+      "input_token_ids": [
+        760
+      ],
+      "actual": {
+        "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/route-batch-20261012-02/fused-cache-greedy4/call-09.call.actual.f32le",
+        "sha256": "612ca0ed1a8a8df57c67b6a3aaff3709d1817b9b7b2d4304265b5c66eceea5f6"
+      },
+      "compared": 248320,
+      "failures": 0,
+      "nonfinite": 0,
+      "max_abs": 0.0,
+      "rmse": 0.0,
+      "greedy": 6511,
+      "all_exact": true
+    }
+  ],
+  "passed": true,
+  "internal_tensor_comparison": false
+}

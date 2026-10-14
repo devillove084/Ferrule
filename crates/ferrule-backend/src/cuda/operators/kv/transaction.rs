@@ -7,18 +7,44 @@ use std::rc::Rc;
 
 use super::CudaKvPagePool;
 use crate::cpu::{KvCapacity, KvEndProgress, KvPageStatus, PagedKvBatch, PagedKvPrepare};
-use crate::cuda::context::{CudaComputeEvent, CudaOperators};
+use crate::cuda::operator_owner::{CudaComputeEvent, CudaOperators};
 use ferrule_common::Result;
 use ferrule_common::execution::{ExecutionTransactionId, KvPageId, KvPlaneDescriptor};
 
+mod bf16;
+mod chunked;
+#[cfg(test)]
+#[path = "../../../../tests/chunked_kv/entry_faults.rs"]
+mod chunked_entry_faults;
+mod chunked_protocol;
+#[path = "committed_read.rs"]
+mod committed_read;
 mod lifecycle;
+mod diagnostic;
+pub use diagnostic::{CudaCommittedBf16KvChunk, committed_bf16_kv_trace_host_bytes};
+pub use chunked::{CudaKvPhysicalStats, CudaKvReclaim};
+pub use committed_read::CudaCommittedRead;
+pub mod append_bridge;
 mod plan;
+// Internal DMA is connected; ordinary decoder dispatch still requires a trusted bridge.
+#[allow(dead_code)]
+mod append_dma;
+#[cfg(test)]
+#[path = "../../../../tests/host_kv/append_dma_cuda.rs"]
+mod append_dma_cuda_tests;
+#[allow(dead_code)]
+mod append_read;
+#[allow(dead_code)]
+mod append_stream;
+#[allow(dead_code)]
+mod prefix_read;
 #[cfg(test)]
 mod prepare_tests;
 mod prepared;
 #[cfg(test)]
 mod tests;
 mod view;
+pub use bf16::{CudaBf16GqaPlanes, CudaBf16GqaRows};
 use plan::{Plan, error, unique, validate_schema};
 pub use view::{CudaF32GqaPlanes, CudaKvView};
 
@@ -39,6 +65,10 @@ struct Entry {
     entered: bool,
     epoch: u64,
     fence: Option<CudaComputeEvent>,
+    completion: chunked_protocol::StickyCompletion,
+    prefix_read: prefix_read::PrefixReadCustody<append_dma::AppendEvidence>,
+    prefix_dma: Option<append_dma::AppendResources>,
+    staging: Option<chunked::ChunkStaging>,
     phase: Phase,
     generation: Option<u64>,
     quarantine: Vec<u32>,
@@ -46,14 +76,22 @@ struct Entry {
 }
 
 impl Entry {
+    fn prefix_unknown(&self) -> bool {
+        self.completion.is_unknown()
+            || self.prefix_read.is_unknown()
+            || self.prefix_dma.as_ref().is_some_and(|r| r.is_unknown())
+    }
     fn quiescent(&self) -> Result<bool> {
+        self.prefix_read.ensure_idle()?;
         if self.entered {
             return Err(error("CUDA KV transaction is still entered"));
         }
-        self.fence
-            .as_ref()
-            .ok_or_else(|| error("CUDA KV writes fence is unknown; custody retained"))?
-            .is_complete()
+        self.completion.probe(|| {
+            self.fence
+                .as_ref()
+                .ok_or_else(|| error("CUDA KV writes fence is unknown; custody retained"))?
+                .is_complete()
+        })
     }
 
     fn generation(&self, generation: u64) -> Result<()> {
@@ -70,6 +108,8 @@ struct Inner {
     storage: Option<CudaKvPagePool>,
     entries: BTreeMap<ExecutionTransactionId, Entry>,
     next_nonce: u64,
+    committed_reader: Option<u64>,
+    committed_logical_owner: Option<u64>,
     poisoned: bool,
     shutdown: bool,
 }
@@ -81,8 +121,24 @@ impl Inner {
     fn storage_mut(&mut self) -> &mut CudaKvPagePool {
         self.storage.as_mut().expect("owned CUDA KV storage")
     }
+    fn no_committed_reader(&self) -> Result<()> {
+        if self.committed_reader.is_some() {
+            return Err(error("CUDA pool has an isolated committed reader"));
+        }
+        Ok(())
+    }
+    fn no_prefix_readers(&self) -> Result<()> {
+        for entry in self.entries.values() {
+            entry.prefix_read.ensure_idle()?;
+        }
+        Ok(())
+    }
     fn available(&self) -> Result<()> {
-        if self.poisoned || self.shutdown {
+        if self.poisoned
+            || self.shutdown
+            || self.storage().has_chunk_dma()
+            || self.entries.values().any(|e| e.prefix_unknown())
+        {
             return Err(error("CUDA KV pool is quarantined or shut down"));
         }
         Ok(())
@@ -103,6 +159,7 @@ impl Inner {
     }
     fn validate_active(&self, tx: &CudaPagedKvTransaction) -> Result<&Entry> {
         let entry = self.entry(tx)?;
+        entry.prefix_read.ensure_idle()?;
         if entry.phase != Phase::Active || entry.entered {
             return Err(error("CUDA KV reservation is not active and left"));
         }
@@ -116,6 +173,7 @@ impl Inner {
     }
     fn unpinned(&self, pages: &[KvPageId], except: Option<ExecutionTransactionId>) -> Result<()> {
         self.available()?;
+        self.no_committed_reader()?;
         for (id, entry) in &self.entries {
             if Some(*id) != except
                 && pages
@@ -133,7 +191,11 @@ impl Inner {
 
 impl Drop for Inner {
     fn drop(&mut self) {
-        if self.poisoned || !self.entries.is_empty() {
+        if self.poisoned
+            || self.storage().has_chunk_dma()
+            || !self.entries.is_empty()
+            || self.committed_reader.is_some()
+        {
             // Unknown device completion (or abandoned prepared custody) must not
             // return allocations to the allocator, even after the last clone.
             std::mem::forget(self.storage.take());
@@ -156,7 +218,8 @@ impl CudaPagedKvTransaction {
     }
 }
 
-/// Fixed capacity includes resident, provisional/shadow, and quarantined slots.
+/// Logical capacity includes resident, provisional/shadow, and quarantined slots.
+/// Fixed contiguous storage is the default; `new_chunked` opts into real release.
 #[derive(Clone)]
 pub struct CudaPagedKvPool {
     inner: Rc<RefCell<Inner>>,
@@ -178,17 +241,23 @@ impl CudaPagedKvPool {
     ) -> Result<Self> {
         validate_schema(planes, page_size, max_slots)?;
         let storage = CudaKvPagePool::new(&context, planes, page_size, max_slots)?;
-        Ok(Self {
+        Ok(Self::from_storage(context, storage))
+    }
+
+    fn from_storage(context: Rc<CudaOperators>, storage: CudaKvPagePool) -> Self {
+        Self {
             inner: Rc::new(RefCell::new(Inner {
                 identity: Rc::new(()),
                 context,
                 storage: Some(storage),
                 entries: BTreeMap::new(),
                 next_nonce: 1,
+                committed_reader: None,
+                committed_logical_owner: None,
                 poisoned: false,
                 shutdown: false,
             })),
-        })
+        }
     }
     pub fn planes(&self) -> Vec<KvPlaneDescriptor> {
         self.inner.borrow().storage().planes().to_vec()
@@ -208,13 +277,23 @@ impl CudaPagedKvPool {
             resident_pages: stats.resident_pages,
             preempted_pages: inner.storage().transaction_snapshot_count(),
             active_transactions: inner.entries.len(),
-            free_pages: if inner.poisoned { 0 } else { stats.free_slots },
+            free_pages: if inner.poisoned
+                || inner.storage().has_chunk_dma()
+                || inner.entries.values().any(|e| e.prefix_unknown())
+            {
+                0
+            } else {
+                stats.free_slots
+            },
         }
     }
     /// An error is not a cleanup ACK while this is true. Available even when
     /// poisoned, so adapters retain logical custody despite no returned handle.
     pub fn has_unresolved_custody(&self) -> bool {
-        self.inner.borrow().poisoned
+        let inner = self.inner.borrow();
+        inner.poisoned
+            || inner.storage().has_chunk_dma()
+            || inner.entries.values().any(|e| e.prefix_unknown())
     }
 
     pub fn page_status(&self, page: KvPageId) -> KvPageStatus {
@@ -230,6 +309,7 @@ impl CudaPagedKvPool {
     pub fn configure_capacity(&mut self, capacity: usize) -> Result<()> {
         let inner = self.inner.borrow();
         inner.available()?;
+        inner.no_committed_reader()?;
         if !inner.entries.is_empty()
             || inner.storage().stats().resident_pages != 0
             || inner.storage().transaction_snapshot_count() != 0
@@ -248,7 +328,7 @@ impl CudaPagedKvPool {
                 if let Some(source) = source {
                     inner.storage_mut().copy_slot(&context, source, slot)?;
                 } else {
-                    inner.storage_mut().clear_transaction_slot(&context, slot)?;
+                    bf16::clear_transaction_slot(inner, &context, slot)?;
                 }
             }
             context.record_compute_event()
@@ -264,6 +344,20 @@ impl CudaPagedKvPool {
     ) -> Result<CudaPagedKvTransaction> {
         let mut inner = self.inner.borrow_mut();
         inner.available()?;
+        inner.no_committed_reader()?;
+        inner.no_prefix_readers()?;
+        plan::validate_storage_mode(
+            inner.storage().planes(),
+            inner.storage().staging_page_limit().is_some(),
+        )?;
+        if inner.storage().planes()[0].element_type
+            == ferrule_common::execution::KvElementType::Bf16
+            && inner.context.stream_clone().context().is_capturing()
+        {
+            return Err(error(
+                "transactional BF16 KV does not support graph capture",
+            ));
+        }
         if inner.entries.contains_key(&request.transaction) {
             return Err(error("duplicate CUDA KV transaction"));
         }
@@ -280,6 +374,12 @@ impl CudaPagedKvPool {
             return Err(error(
                 "CUDA KV read/write set conflicts with shared physical custody",
             ));
+        }
+        if let Some(limit) = inner.storage().staging_page_limit() {
+            chunked_protocol::admit(plan.original.len(), limit, inner.entries.len())?;
+            if inner.context.stream_clone().context().is_capturing() {
+                return Err(error("chunked KV does not support graph capture"));
+            }
         }
         let nonce = inner.next_nonce;
         let next = nonce
@@ -304,6 +404,10 @@ impl CudaPagedKvPool {
                 entered: false,
                 epoch: 0,
                 fence: None,
+                completion: Default::default(),
+                prefix_read: prefix_read::PrefixReadCustody::default(),
+                prefix_dma: None,
+                staging: None,
                 phase: Phase::Active,
                 generation: None,
                 quarantine: Vec::new(),
@@ -311,8 +415,10 @@ impl CudaPagedKvPool {
             },
         );
         inner.next_nonce = next;
+        inner.poisoned = true;
         match submit(&mut inner, &copies) {
             Ok(fence) => {
+                inner.poisoned = false;
                 inner
                     .entries
                     .get_mut(&request.transaction)
@@ -348,6 +454,14 @@ impl CudaPagedKvPool {
         entry.batch = Some(batch);
         entry.entered = true;
         entry.fence = None;
+        if inner.storage().staging_page_limit().is_some() {
+            inner.poisoned = true;
+            if let Err(err) = inner.gather_chunked(tx.id) {
+                inner.poisoned = true;
+                return Err(err);
+            }
+            inner.poisoned = false;
+        }
         Ok(())
     }
     pub fn active_view(&mut self, tx: &mut CudaPagedKvTransaction) -> Result<CudaKvView> {
@@ -365,10 +479,23 @@ impl CudaPagedKvPool {
     }
     pub fn leave(&mut self, tx: &mut CudaPagedKvTransaction) -> Result<()> {
         let mut inner = self.inner.borrow_mut();
-        if !inner.entry(tx)?.entered {
+        inner.no_prefix_readers()?;
+        let entry = inner.entry(tx)?;
+        if !entry.entered {
             return Err(error("CUDA KV transaction is not entered"));
         }
-        let fence = inner.context.record_compute_event()?;
+        inner.poisoned = true;
+        if inner.storage().staging_page_limit().is_some() {
+            inner.scatter_chunked(tx.id)?;
+        }
+        let fence = match inner.context.record_compute_event() {
+            Ok(fence) => fence,
+            Err(err) => {
+                inner.poisoned = true;
+                return Err(err);
+            }
+        };
+        inner.poisoned = false;
         let entry = inner.entries.get_mut(&tx.id).expect("validated");
         entry.fence = Some(fence);
         entry.entered = false;

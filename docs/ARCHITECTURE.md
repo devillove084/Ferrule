@@ -5,12 +5,14 @@
 This document describes Ferrule's implemented runtime contracts. Model-specific
 numerical rules are documented in [COMPUTATION.md](COMPUTATION.md), performance
 measurement in [THROUGHPUT.md](THROUGHPUT.md), and unfinished work in
-[ROADMAP.md](ROADMAP.md).
+[ROADMAP.md](ROADMAP.md). Source-pinned results and exclusions belong in
+[CURRENT_ACCEPTANCE.md](CURRENT_ACCEPTANCE.md), not in this contract description.
 
 ## 1. System boundary
 
-Ferrule is a Rust-owned, resource-aware inference runtime. One authoritative
-Rust owner coordinates the complete lifetime of each loaded model:
+Ferrule is a Rust-owned, resource-aware inference runtime. A coordinator owns
+logical scheduling and publication for each execution scope; physical resources
+stay with the executor/worker that owns them. The resident request path is:
 
 ```text
 HTTP or CLI request
@@ -25,15 +27,94 @@ HTTP or CLI request
   -> caller-visible token publication
 ```
 
-The owner is the sole writer of requests, transactions, queues, resource
-credits, waiter indices, KV branches, residency generations, leases, and
-retirement records. For CUDA execution, the same owner thread creates and uses
-the context, streams, events, graphs, allocations, prepared resources, and
-model runner.
+Each mutable request, transaction, queue, credit, KV branch and residency
+record has one authority. In a resident execution this is centered on the model
+owner; a pipeline uses the existing coordinator and owner-local stage journals.
+CUDA contexts, streams, events, allocations and prepared model resources remain
+with their physical owners. This is not one thread owning every device in a
+parallel execution.
 
-Workers and native providers receive owner-authorized immutable commands. They
-may hold temporary physical custody, but they do not publish residency, mutate
-transactions, choose model semantics, or own caller-visible state.
+Workers carry out authorized stage/expert work and retain their local state and
+custody until quiescence is proven. They do not acquire the parent coordinator's
+publication authority. Expert owners do not vote as KV owners. Native providers
+borrow authorized descriptors/resources; they do not choose model families,
+schedule requests or publish caller-visible state.
+
+### Composition and durable layer boundaries
+
+| Layer | Authority | Not its responsibility |
+|---|---|---|
+| CLI/server | Parse explicit intent, project effective configuration and HTTP/session results | Model-family lowering, a replacement inference loop or cleanup proof |
+| Composition | One built-in catalog; family/profile selection, immutable resolved construction, admission and owner assembly | Forward math, a second catalog/coordinator or KV publication authority |
+| Model | Checkpoint semantics, typed precision/lowering, geometry, state and operator requirements | Process lifetime, request scheduling or global commit |
+| Runtime | Resident/pipeline execution, scheduling, transaction/KV publication, worker transport and custody | Choosing concrete model families or rediscovering constructors from arithmetic |
+| Backend/providers | Physical buffers, kernels, streams/events and completion evidence | Serving policy or logical publication |
+
+Catalog selection normalizes explicit request intent and returns a resolved
+strategy containing construction, backend, option policy and topology policy.
+The build path consumes that decision rather than reselecting a whole factory
+from PP/TP/EP degrees or a precision enum. The public engine kind is
+`Resident` or `Pipeline`; model family, numeric arithmetic, storage, expert
+attachment and transport are separate facts. Resident EP remains resident.
+
+Parallel composition shares validated geometry, binding, provider budget and
+assembly. TP1 segment and TP-rank providers supply typed stage/collective leaves,
+not independent PP×EP and TP×EP admission/prewarm/startup algorithms. Transport
+constructors supply thread/process lifetime rules only for admitted profiles;
+sharing assembly does not enable process TP, numeric process PP×EP or BF16
+expert transport. Family adapters retain strict checkpoint/profile capability
+and source validation; metadata support is not live capacity or quality proof.
+
+The extracted source entry map is below; numerical acceptance remains solely in
+[CURRENT_ACCEPTANCE.md](CURRENT_ACCEPTANCE.md), and supported combinations in
+[PARALLELISM.md](PARALLELISM.md).
+
+| Entry | Responsibility |
+|---|---|
+| [Catalog](../crates/ferrule-composition/src/model_factory/mod.rs) / [resolved selection](../crates/ferrule-composition/src/model_factory/selection.rs) | One built-in registration point and frozen construction/policy decision |
+| Qwen adapter: [mod](../crates/ferrule-composition/src/model_factory/adapters/qwen35/mod.rs), [binding](../crates/ferrule-composition/src/model_factory/adapters/qwen35/binding.rs), [capacity](../crates/ferrule-composition/src/model_factory/adapters/qwen35/capacity.rs), [options](../crates/ferrule-composition/src/model_factory/adapters/qwen35/options.rs) | Strict family recipe/checkpoint validation, capacity facade and consumed-option policy; lower inputs for shared providers |
+| Qwen [composition](../crates/ferrule-composition/src/model_factory/adapters/qwen35/composition.rs), [EP](../crates/ferrule-composition/src/model_factory/adapters/qwen35/ep.rs), [compatibility](../crates/ferrule-composition/src/model_factory/adapters/qwen35/compatibility.rs) | Family selection/capability, thin resident EP binding, and retained public facades |
+| Shared [inputs](../crates/ferrule-composition/src/model_factory/parallel/inputs.rs), [bindings](../crates/ferrule-composition/src/model_factory/parallel/bindings.rs), [plan](../crates/ferrule-composition/src/model_factory/parallel/plan.rs) | Provider inputs, already-bound resource checks and geometry; no family checkpoint re-selection |
+| Shared [budget](../crates/ferrule-composition/src/model_factory/parallel/budget.rs): [common](../crates/ferrule-composition/src/model_factory/parallel/budget/common.rs), [local](../crates/ferrule-composition/src/model_factory/parallel/budget/local.rs), [resident](../crates/ferrule-composition/src/model_factory/parallel/budget/resident.rs) | Provider representations and host/device/colocation admission, not a physical reservation |
+| Shared [experts](../crates/ferrule-composition/src/model_factory/parallel/experts.rs), [assembly](../crates/ferrule-composition/src/model_factory/parallel/assembly.rs), [resident](../crates/ferrule-composition/src/model_factory/parallel/resident.rs), [process](../crates/ferrule-composition/src/model_factory/parallel/process.rs), [reporting](../crates/ferrule-composition/src/model_factory/parallel/reporting.rs) | Owner preparation/Ready, assembly, resident/process execution setup and reports; runtime retains commit and custody authority |
+
+The public Rust path `model_factory::qwen35_composition` is preserved by the
+`#[path]` mount in `model_factory/mod.rs`; moving its source file is not removing
+that API. Qwen-named placement/capacity facades likewise wrap shared provider
+calculations rather than a duplicate family factory. Private test modules can
+retain their mounted names independently of source-directory names.
+
+### Factory API migration
+
+Concrete factories live in `ferrule_composition::model_factory` (also available
+through its crate-root public re-exports), not
+`ferrule_runtime::engine::model_factory`. The old runtime factory path has no
+compatibility alias. Process binding is explicitly injected by composition;
+runtime does not select concrete model families. Retained public aliases are
+same-type/module re-exports, not duplicate owners or implementations, and do
+not promise stable `std::any::type_name` strings after source/API renaming.
+
+### Adding a model
+
+A new family requires three pieces, not a copied PP×EP/TP×EP factory:
+
+1. **Model recipe and strict binder:** define semantics and state/parameter
+   requirements; validate checkpoint schema, shapes, storage/precision, source
+   identity and supported attachments before lowering bound resources.
+2. **One catalog entry and family policy:** resolve explicit backend, numeric,
+   topology and serving intent into the matching construction/option policy.
+   Reject unsupported or unconsumed options; lower typed inputs into the shared
+   admission, resident or pipeline providers.
+3. **Compatible operators and state contracts:** reuse existing execution only
+   where its operators, state/KV layout, precision and completion/custody contracts
+   actually fit. Otherwise implement and validate the missing model/backend
+   capability first; metadata registration is neither execution nor quality proof.
+
+Shared process preparation does **not** grant universal numeric model support:
+[the numeric process binder](../crates/ferrule-composition/src/process_binding.rs)
+still accepts only strict Qwen3.5-35B-A3B FP8. Another family needs an explicit
+binder/boot capability and validation; this extraction does not enable process
+TP, numeric hybrid process PP×EP, or BF16/Mixed expert wire.
 
 ## 2. Execution transactions
 
@@ -63,9 +144,12 @@ resources. Only then may the owner publish or discard provisional generations,
 release materialization custody, detach continuations, retire KV branches, and
 restore scheduler ownership.
 
-Cancellation records `Abort` and permanently forbids publication. It does not
-pretend an in-flight read, upload, kernel, or event has disappeared. The
-mandatory order is:
+Accepted cancellation determines the caller-visible terminal outcome. Before
+irreversible physical Publish starts, cancellation selects `Abort`; it does not
+revoke an already-started irreversible physical Publish or rewrite its intent.
+That work must still reach its physical completion/retirement boundary, without
+turning the canceled request into successful caller-visible output. Cancellation
+is not a fence and does not release in-flight resources. The mandatory order is:
 
 ```text
 request Publish or Abort

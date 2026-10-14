@@ -1,0 +1,6 @@
+{
+  "returncode": 0,
+  "one_test_passed": true,
+  "selector": "gpu::arena_errors_never_submit_initialization",
+  "binary_sha256": "39943878ce3a3dcf5e657aba82cb63156b97001698d063da15c14670a7d993c7"
+}

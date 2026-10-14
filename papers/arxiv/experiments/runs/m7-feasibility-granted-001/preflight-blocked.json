@@ -1,0 +1,131 @@
+{
+  "schema": "ferrule.paper.m7.preflight-blocked.v1",
+  "status": "blocked_before_launch",
+  "run_id": "m7-feasibility-granted-001",
+  "append_only": true,
+  "authorization": {
+    "sole_gpu_owner_granted": true,
+    "scope": "GPU0 feasibility ownership, finite discovery, and one authenticated PID-mapping probe",
+    "signals_to_foreign_processes": [],
+    "foreign_processes_killed": false,
+    "automatic_retries": false
+  },
+  "device": {
+    "selected_index": 0,
+    "selected_uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+    "name": "NVIDIA GeForce RTX 3090",
+    "pci_bus_id": "00000000:69:00.0",
+    "total_bytes": 25769803776,
+    "driver": "575.57.08",
+    "release_verification": {
+      "artifact": "runs/m7-feasibility-granted-001/release.json",
+      "status": "verified",
+      "finite_queries": 2,
+      "all_eight_idle_each_query": true,
+      "selected_gpu_memory_used_bytes": 0,
+      "selected_gpu_utilization": 0,
+      "apps_csv": ""
+    },
+    "local_lock": {
+      "mode": "nonblocking_flock",
+      "held_for_preflight": true,
+      "global_reservation_claimed": false
+    }
+  },
+  "prepared_reference": {
+    "path": "runs/m7-prepared-granted-001/prepared.json",
+    "sha256": "0a15fa47cac0a4a52fb6d3b672bd44a46115538c54fc96813357f8ec8fc48fbd",
+    "model_identity": "partial_by_design; checkpoint_payload_not_hashed",
+    "binary_sha256": "219d8b77bbeceecedf83272b880cd3a8175db7bf5bedea5dcfc537888461ff80",
+    "diagnostic_log_target": "info,ferrule_performance=debug",
+    "baseline_log_target": "FERRULE_LOG=info"
+  },
+  "frozen_protocol": {
+    "checkpoint": "/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8",
+    "seed": 1,
+    "prompt": "Hello",
+    "feasibility_max_tokens": 2,
+    "context_tokens": 128,
+    "tp": 1,
+    "pp": 1,
+    "ep": 1,
+    "activation": "bfloat16",
+    "kv": "bfloat16",
+    "conv": "bfloat16",
+    "ssm": "float32",
+    "prefix_cache": false,
+    "eos": "natural",
+    "endpoint": "raw-completions",
+    "gpu_target_bytes": 7516192768,
+    "host_target_bytes": 68719476736,
+    "hard_memory_partition": false,
+    "automatic_precision_or_offload_fallback": false,
+    "engines": ["ferrule", "vllm"]
+  },
+  "planned_cases": {
+    "ferrule": {
+      "launched": false,
+      "server_spec": "frozen-not-launched.json",
+      "runtime_observations": null
+    },
+    "vllm": {
+      "launched": false,
+      "server_spec": "frozen-not-launched.json",
+      "runtime_observations": null
+    }
+  },
+  "pid_mapping_probe": {
+    "status": "observed_but_not_proven",
+    "artifact": "runs/m7-pid-probe-001/observation.json",
+    "artifact_sha256": "b5cd18767cfbf7e67960798bd8a8dc8eec3f7498094543016ec6d4a65e3f1fb2",
+    "probe_exit": 0,
+    "probe_gpu_context_released": true,
+    "local_pid": 166933,
+    "local_nspid": [166933],
+    "driver_reported_pid": 39486,
+    "driver_pid_visible_in_mounted_proc": false,
+    "mapping_proven": false,
+    "reason": "The mounted container procfs exposes no independent host NSpid mapping for the driver PID. The observed local/driver PID pair cannot be reused as a translation rule.",
+    "decision": "block_nested_namespace_ownership_proof"
+  },
+  "runtime_evidence": {
+    "servers_started": false,
+    "requests_sent": false,
+    "hello_output": null,
+    "actual_output_token_counts": null,
+    "actual_dtype": null,
+    "actual_backend": null,
+    "actual_offload_fallback": null,
+    "gpu_peak": null,
+    "host_rss_pss": null,
+    "natural_eos": null,
+    "exact_speedup": null,
+    "fairmatch": false,
+    "performance_fields_observed": false
+  },
+  "validation": {
+    "paper_test_suite": "33 passed",
+    "diagnostic_target_source": "crates/ferrule-model/src/transformer/standard/cuda/invocation_trace.rs",
+    "diagnostic_target_verified": "ferrule_performance",
+    "release_binary_sha256": "219d8b77bbeceecedf83272b880cd3a8175db7bf5bedea5dcfc537888461ff80",
+    "release_build": "verified; opt-level3; fat-LTO; codegen-units1; debuginfo0; CUDA feature; SM86; CUDA12.4",
+    "staged_executable": "target/paper-m7-release-artifacts/m7-build-new-002/staged/ferrule",
+    "frozen_receipt_sha256": "f6b7152ec1408a26941a4018829205287c95e0ed1d7d0a37ba341fa7acf0d1bf"
+  },
+  "unblock_requirement": {
+    "required": true,
+    "accepted_evidence": [
+      "read-only host procfs with kernel NSpid mapping visible",
+      "independently authenticated host-side PID translation",
+      "execution in a verified host PID namespace"
+    ],
+    "prohibited_workarounds": [
+      "numeric PID offsets",
+      "inference from the single probe pair",
+      "signaling driver-reported foreign/unmapped PIDs",
+      "Docker socket privilege escalation",
+      "arbitrary nsenter",
+      "relaxing descendant ownership proof"
+    ]
+  }
+}

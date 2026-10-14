@@ -1,0 +1,37 @@
+{
+  "stage": "actual S1/S2 cancellation/serving smoke, never formal performance",
+  "argv": [
+    "/home/admin/wxw403883/anaconda3/bin/python3.12",
+    "-S",
+    "-B",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/paired.py",
+    "run",
+    "--id",
+    "pair-swiglu-fused-smoke-20261011-02",
+    "--purpose",
+    "serving_smoke",
+    "--sole-gpu-owner-granted",
+    "--owner-note",
+    "User explicitly authorized unique GPU owner on 2026-10-11; existing sealed S1/S2 request-debug cancellation gate only; no performance, no V or profiler; stop on error/ECHILD/unknown custody"
+  ],
+  "started_utc": "2026-10-11T12:02:38.767835+00:00",
+  "completed_utc": "2026-10-11T12:15:40.500768+00:00",
+  "wall_seconds": 781.7329295817763,
+  "returncode": 0,
+  "error": null,
+  "prepared": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/pair-swiglu-fused-smoke-20261011-02/prepared.json",
+    "sha256": "dde05fc56f6d5c69f0fe308b50dc3b9bda6e5da387edb1ee2e709cf2416376e0"
+  },
+  "execution": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/pair-swiglu-fused-smoke-20261011-02/execution.json",
+    "sha256": "3c6a7105f381b1382947d5c941f5b0fe6538f50aa45013f71d78497ab377e989"
+  },
+  "status": "complete_smoke",
+  "gpu_process_state": "see authenticated existing custody receipts; unknown if absent",
+  "performance_measured": false,
+  "logs": {
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/admission/pair-swiglu-fused-release-20261011-01/actual-smoke.stdout.log": "e5cbc4e384125be46e9d62295c398c52b512b748013fe51f16465196014e9d32",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/admission/pair-swiglu-fused-release-20261011-01/actual-smoke.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "status": "pass",
+  "handoff": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/route-batch-release-20261012-01/handoff.json",
+    "sha256": "955c4d0f9d4ac111bc2dcbf46ebc51612114d97c164606598903c90424065c4a"
+  },
+  "binary_sha256": "e674eda31c0b1379e19afbd1446662278d98047c27b77c0f1233670e601c87f7",
+  "ready": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/route-batch-incremental-20261012-01/ready-release-builder.json",
+    "sha256": "4d870c9aadd427fc5a52eda03de474ed0b5bc9c01e5f1a2f9741810115430b0b"
+  },
+  "source_relation": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/route-batch-release-20261012-01/sourceCPUdelta.json",
+    "sha256": "9a6a1cbe09f10e5b64017fb6ca40111665591f9636e6dc8f6427d2058cfc52b4"
+  },
+  "historical_dependency_identity": "Historical per-file registry source hashes and missing auxiliary metadata hashes are Unknown, not falsely claimed equal; current source identity is newly authenticated by the unchanged lock and cached archive.",
+  "mode": {
+    "default_data_location": "Host",
+    "device_participation_default": false,
+    "nccl_provider_enabled": false,
+    "nccl_private_device_bound": "Unknown",
+    "nccl_private_host_bound": "Unknown",
+    "hard_cap_claim_rejected": true,
+    "default_host_cpu_exact_passed": true
+  },
+  "fresh_cpu_help": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/route-batch-cpu-help-20261012-01.json",
+    "sha256": "7fea58ede124e51d20025cefc5bb03663f549a193e004a20e3141138c48dd4d1"
+  },
+  "paper_tests_passed": 4,
+  "prepared": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/route-batch-smoke-20261012-01/prepared.json",
+    "sha256": "ef716d23e770e937f6022a568c4b233cde98f324ff09ecb8d6227e5e669506df"
+  }
+}

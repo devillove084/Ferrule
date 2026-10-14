@@ -1,0 +1,69 @@
+{
+  "status": "cpu_policy_tested_not_live_wired",
+  "execute_allowed": false,
+  "metrics_flags": [
+    "--gpu-metrics-devices=none",
+    "--gpu-video-devices=none",
+    "--gpuctxsw=false",
+    "--cuda-trace-scope=process-tree"
+  ],
+  "enumeration_suppression": "No documented no-enumeration switch found; disabled metrics is not proof",
+  "probe": {
+    "explicit_grant": "all_eight_instrumentation_probe",
+    "atomic_sorted_locks": 8,
+    "model_visible_gpus": 2,
+    "stable_samples": 3,
+    "min_stable_seconds": 4,
+    "deadline_seconds": 60,
+    "instrumentation_ceiling_bytes": 16777216,
+    "model_nonselected_tolerance_bytes": 1048576
+  },
+  "sequence": [
+    "grant + lock all eight, then authenticated raw idle",
+    "same authenticated supervisor launches collector with gated non-CUDA target, NO model yet",
+    "freeze collector-only stable baseline and bind PID/starttime/launch ID",
+    "release model gate only after live custody recheck, selected UUID0/1 visibility",
+    "Ready + Hello/canaries; start trace; warm1 + measured1; stop trace",
+    "drain model and return to frozen instrumentation anchor",
+    "drain collector; original all-eight zero baseline; release all locks"
+  ],
+  "unimplemented": [
+    "gated pre-model target and authenticated baseline handoff into existing worker",
+    "live collector stability / no further nonselected allocation on model launch or trace start",
+    "two-device CUDA coverage and request-window timestamps in exported report"
+  ],
+  "release_policy": "fresh optimized release requires source/build/numerical + same-release smoke, then no-trace paired pilot; profile timings never substituted",
+  "inspection": "saved exact installed CLI help + installed UserGuide; no nsys process, GPU query or locks",
+  "evidence_pins": {
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-short-profile-20261009-001/tools/profile-help.txt": "bb618694583301dbcc2ac8b87f8239ee7bf2e5c707b13affc01f90590723e958",
+    "/opt/nvidia/nsight-systems/2026.1.3/documentation/UserGuide/index.html": "c627dedbd29f59c9a1692b4c09bd5314e94039f5f3847ce01862314796fa88ef"
+  },
+  "existing_defaults": {
+    "gpu_metrics_devices": "none",
+    "gpu_video_devices": "none",
+    "gpuctxsw": false
+  },
+  "interactive_documented": [
+    "nsys start --session-new=mysession",
+    "nsys launch --session=mysession myapp [application-arguments]"
+  ],
+  "caveat": "Documented session separation is not proof of deferred CUDA/NVML discovery; model launch/start tracing may allocate again",
+  "observer": {
+    "fields": [
+      "Anonymous",
+      "Pss_Anon",
+      "Pss_File",
+      "Private_Dirty"
+    ],
+    "missing": "null per field; missing optional component does not fail aggregate PSS",
+    "phases": [
+      "startup",
+      "ready_before_first",
+      "first_request",
+      "after_first_request"
+    ],
+    "stable_claim": false,
+    "old_fields_unchanged": true,
+    "first_request": "Hello2 client send to successful HTTP EOF; not QA first_after_ready label"
+  }
+}

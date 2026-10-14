@@ -1,0 +1,1640 @@
+{
+  "status": "descriptive_only",
+  "old_release_sha256": "e017a3a8c8ec4019a7f291a818643d9693e32b2dfee0a9cc503fcf84926c1b0b",
+  "optimized_release_sha256": "4d40c34738d36a1c78f62c0e400dd732da40e34c316ce4bd3c356dc4d29b3173",
+  "populations": {
+    "old": [
+      {
+        "slot": "F1",
+        "launch_id": "232ee94989854072bd248163c89bb964",
+        "startup_seconds": 385.9790650513023,
+        "summary": {
+          "scheduled": 5,
+          "offered": 5,
+          "not_issued": 0,
+          "statuses": {
+            "success": 5
+          },
+          "success": 5,
+          "failed": 0,
+          "success_fraction": 1.0,
+          "scheduled_success_fraction": 1.0,
+          "wall_seconds": 7.244697250425816,
+          "successful_output_tokens": 40,
+          "known_usage_output_tokens": 40,
+          "requests_without_usage": 0,
+          "committed_visible_token_rate": null,
+          "committed_visible_token_rate_reason": "SSE text is not token IDs; usage may include hidden/EOS tokens; partial counts unknown",
+          "actual_output_counts": {
+            "8": 5
+          },
+          "actual_input_counts": {
+            "5": 5
+          },
+          "length_matched_success": 5,
+          "slo_qualified_success": null,
+          "successful_requests_per_second": 0.6901599648910269,
+          "successful_output_tokens_per_second": 5.5212797191282155,
+          "length_matched_requests_per_second": 0.6901599648910269,
+          "length_matched_output_tokens_per_second": 5.5212797191282155,
+          "slo_goodput_requests_per_second": null,
+          "distributions": {
+            "success_ttft_seconds": {
+              "count": 5,
+              "mean": 0.5161282557994127,
+              "p50": 0.5095711927860975,
+              "p95": 0.5315744709223509
+            },
+            "success_request_e2e_seconds": {
+              "count": 5,
+              "mean": 1.4412671789526939,
+              "p50": 1.4408582393079996,
+              "p95": 1.4676843546330929
+            },
+            "success_mean_tpot_usage_proxy_seconds": {
+              "count": 5,
+              "mean": 0.13213551097682547,
+              "p50": 0.13272510788270406,
+              "p95": 0.13390006140938826
+            },
+            "success_content_event_itl_seconds": {
+              "count": 35,
+              "mean": 0.13213551097682544,
+              "p50": 0.13045384734869003,
+              "p95": 0.13875137809664012
+            },
+            "failure_ttft_seconds": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null
+            },
+            "failure_request_e2e_seconds": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null
+            },
+            "failure_mean_tpot_usage_proxy_seconds": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null
+            },
+            "failure_content_event_itl_seconds": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null
+            }
+          },
+          "window_kind": "fixed-work",
+          "denominator": "first measured HTTP send (dispatch fallback if none) to last client-observed terminal/deadline, including failures and client overhead",
+          "denominator_seconds": 7.244697250425816,
+          "time_to_complete_seconds": 7.244697250425816
+        },
+        "actual_measured_tokens": 40,
+        "requests": [
+          {
+            "status": "success",
+            "actual_output_tokens": 8,
+            "ttft_seconds": 0.5081478450447321,
+            "request_e2e_seconds": 1.4259091969579458
+          },
+          {
+            "status": "success",
+            "actual_output_tokens": 8,
+            "ttft_seconds": 0.531905384734273,
+            "request_e2e_seconds": 1.4611938335001469
+          },
+          {
+            "status": "success",
+            "actual_output_tokens": 8,
+            "ttft_seconds": 0.5095711927860975,
+            "request_e2e_seconds": 1.4408582393079996
+          },
+          {
+            "status": "success",
+            "actual_output_tokens": 8,
+            "ttft_seconds": 0.5302508156746626,
+            "request_e2e_seconds": 1.4693069849163294
+          },
+          {
+            "status": "success",
+            "actual_output_tokens": 8,
+            "ttft_seconds": 0.5007660407572985,
+            "request_e2e_seconds": 1.409067640081048
+          }
+        ],
+        "gpu_peak_bytes": {
+          "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 19372441600,
+          "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 19372441600
+        },
+        "pss_peak_bytes": 52868139008,
+        "phase_memory": null,
+        "memory_components": null
+      },
+      {
+        "slot": "V1",
+        "launch_id": "113836a0f083424a8923c3f3724a4ffa",
+        "startup_seconds": 63.79388231039047,
+        "summary": {
+          "scheduled": 5,
+          "offered": 5,
+          "not_issued": 0,
+          "statuses": {
+            "success": 5
+          },
+          "success": 5,
+          "failed": 0,
+          "success_fraction": 1.0,
+          "scheduled_success_fraction": 1.0,
+          "wall_seconds": 3.847396159544587,
+          "successful_output_tokens": 40,
+          "known_usage_output_tokens": 40,
+          "requests_without_usage": 0,
+          "committed_visible_token_rate": null,
+          "committed_visible_token_rate_reason": "SSE text is not token IDs; usage may include hidden/EOS tokens; partial counts unknown",
+          "actual_output_counts": {
+            "8": 5
+          },
+          "actual_input_counts": {
+            "5": 5
+          },
+          "length_matched_success": 5,
+          "slo_qualified_success": null,
+          "successful_requests_per_second": 1.2995802336590796,
+          "successful_output_tokens_per_second": 10.396641869272637,
+          "length_matched_requests_per_second": 1.2995802336590796,
+          "length_matched_output_tokens_per_second": 10.396641869272637,
+          "slo_goodput_requests_per_second": null,
+          "distributions": {
+            "success_ttft_seconds": {
+              "count": 5,
+              "mean": 0.134080857783556,
+              "p50": 0.13259750977158546,
+              "p95": 0.13923037983477116
+            },
+            "success_request_e2e_seconds": {
+              "count": 5,
+              "mean": 0.7097993545234204,
+              "p50": 0.7054966166615486,
+              "p95": 0.7373802497982979
+            },
+            "success_mean_tpot_usage_proxy_seconds": {
+              "count": 5,
+              "mean": 0.08222266121634415,
+              "p50": 0.08169077948800155,
+              "p95": 0.08547495491802692
+            },
+            "success_content_event_itl_seconds": {
+              "count": 35,
+              "mean": 0.08222266121634415,
+              "p50": 0.08115271851420403,
+              "p95": 0.08269396871328354
+            },
+            "failure_ttft_seconds": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null
+            },
+            "failure_request_e2e_seconds": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null
+            },
+            "failure_mean_tpot_usage_proxy_seconds": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null
+            },
+            "failure_content_event_itl_seconds": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null
+            }
+          },
+          "window_kind": "fixed-work",
+          "denominator": "first measured HTTP send (dispatch fallback if none) to last client-observed terminal/deadline, including failures and client overhead",
+          "denominator_seconds": 3.847396159544587,
+          "time_to_complete_seconds": 3.847396159544587
+        },
+        "actual_measured_tokens": 40,
+        "requests": [
+          {
+            "status": "success",
+            "actual_output_tokens": 8,
+            "ttft_seconds": 0.14065968059003353,
+            "request_e2e_seconds": 0.7452634666115046
+          },
+          {
+            "status": "success",
+            "actual_output_tokens": 8,
+            "ttft_seconds": 0.13259750977158546,
+            "request_e2e_seconds": 0.6932709291577339
+          },
+          {
+            "status": "success",
+            "actual_output_tokens": 8,
+            "ttft_seconds": 0.13351317681372166,
+            "request_e2e_seconds": 0.7054966166615486
+          },
+          {
+            "status": "success",
+            "actual_output_tokens": 8,
+            "ttft_seconds": 0.1317302118986845,
+            "request_e2e_seconds": 0.7058473825454712
+          },
+          {
+            "status": "success",
+            "actual_output_tokens": 8,
+            "ttft_seconds": 0.13190370984375477,
+            "request_e2e_seconds": 0.6991183776408434
+          }
+        ],
+        "gpu_peak_bytes": {
+          "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 20706230272,
+          "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 20706230272
+        },
+        "pss_peak_bytes": 8049137664,
+        "phase_memory": null,
+        "memory_components": null
+      },
+      {
+        "slot": "V2",
+        "launch_id": "faa1f1c6a50d4413a6a3715a9f9e1887",
+        "startup_seconds": 60.09492717683315,
+        "summary": {
+          "scheduled": 5,
+          "offered": 5,
+          "not_issued": 0,
+          "statuses": {
+            "success": 5
+          },
+          "success": 5,
+          "failed": 0,
+          "success_fraction": 1.0,
+          "scheduled_success_fraction": 1.0,
+          "wall_seconds": 3.7871323972940445,
+          "successful_output_tokens": 40,
+          "known_usage_output_tokens": 40,
+          "requests_without_usage": 0,
+          "committed_visible_token_rate": null,
+          "committed_visible_token_rate_reason": "SSE text is not token IDs; usage may include hidden/EOS tokens; partial counts unknown",
+          "actual_output_counts": {
+            "8": 5
+          },
+          "actual_input_counts": {
+            "5": 5
+          },
+          "length_matched_success": 5,
+          "slo_qualified_success": null,
+          "successful_requests_per_second": 1.3202601534534586,
+          "successful_output_tokens_per_second": 10.562081227627669,
+          "length_matched_requests_per_second": 1.3202601534534586,
+          "length_matched_output_tokens_per_second": 10.562081227627669,
+          "slo_goodput_requests_per_second": null,
+          "distributions": {
+            "success_ttft_seconds": {
+              "count": 5,
+              "mean": 0.13016082644462584,
+              "p50": 0.1295939702540636,
+              "p95": 0.13272068537771703
+            },
+            "success_request_e2e_seconds": {
+              "count": 5,
+              "mean": 0.6955067288130522,
+              "p50": 0.6962765324860811,
+              "p95": 0.6994647480547428
+            },
+            "success_mean_tpot_usage_proxy_seconds": {
+              "count": 5,
+              "mean": 0.08074180388024875,
+              "p50": 0.08097719667213303,
+              "p95": 0.08144688467894282
+            },
+            "success_content_event_itl_seconds": {
+              "count": 35,
+              "mean": 0.08074180388024875,
+              "p50": 0.08040389604866505,
+              "p95": 0.0826328057795763
+            },
+            "failure_ttft_seconds": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null
+            },
+            "failure_request_e2e_seconds": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null
+            },
+            "failure_mean_tpot_usage_proxy_seconds": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null
+            },
+            "failure_content_event_itl_seconds": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null
+            }
+          },
+          "window_kind": "fixed-work",
+          "denominator": "first measured HTTP send (dispatch fallback if none) to last client-observed terminal/deadline, including failures and client overhead",
+          "denominator_seconds": 3.7871323972940445,
+          "time_to_complete_seconds": 3.7871323972940445
+        },
+        "actual_measured_tokens": 40,
+        "requests": [
+          {
+            "status": "success",
+            "actual_output_tokens": 8,
+            "ttft_seconds": 0.1295939702540636,
+            "request_e2e_seconds": 0.6996286138892174
+          },
+          {
+            "status": "success",
+            "actual_output_tokens": 8,
+            "ttft_seconds": 0.13008307106792927,
+            "request_e2e_seconds": 0.688549105077982
+          },
+          {
+            "status": "success",
+            "actual_output_tokens": 8,
+            "ttft_seconds": 0.13338008895516396,
+            "request_e2e_seconds": 0.6942701078951359
+          },
+          {
+            "status": "success",
+            "actual_output_tokens": 8,
+            "ttft_seconds": 0.12846964597702026,
+            "request_e2e_seconds": 0.6988092847168446
+          },
+          {
+            "status": "success",
+            "actual_output_tokens": 8,
+            "ttft_seconds": 0.12927735596895218,
+            "request_e2e_seconds": 0.6962765324860811
+          }
+        ],
+        "gpu_peak_bytes": {
+          "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 20706230272,
+          "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 20706230272
+        },
+        "pss_peak_bytes": 7526782976,
+        "phase_memory": null,
+        "memory_components": null
+      },
+      {
+        "slot": "F2",
+        "launch_id": "ca030a5d73df4f348e6c07b49211b5bd",
+        "startup_seconds": 367.233680550009,
+        "summary": {
+          "scheduled": 5,
+          "offered": 5,
+          "not_issued": 0,
+          "statuses": {
+            "success": 5
+          },
+          "success": 5,
+          "failed": 0,
+          "success_fraction": 1.0,
+          "scheduled_success_fraction": 1.0,
+          "wall_seconds": 7.218412537127733,
+          "successful_output_tokens": 40,
+          "known_usage_output_tokens": 40,
+          "requests_without_usage": 0,
+          "committed_visible_token_rate": null,
+          "committed_visible_token_rate_reason": "SSE text is not token IDs; usage may include hidden/EOS tokens; partial counts unknown",
+          "actual_output_counts": {
+            "8": 5
+          },
+          "actual_input_counts": {
+            "5": 5
+          },
+          "length_matched_success": 5,
+          "slo_qualified_success": null,
+          "successful_requests_per_second": 0.69267307379325,
+          "successful_output_tokens_per_second": 5.541384590346,
+          "length_matched_requests_per_second": 0.69267307379325,
+          "length_matched_output_tokens_per_second": 5.541384590346,
+          "slo_goodput_requests_per_second": null,
+          "distributions": {
+            "success_ttft_seconds": {
+              "count": 5,
+              "mean": 0.511283166334033,
+              "p50": 0.5101763773709536,
+              "p95": 0.5145158708095551
+            },
+            "success_request_e2e_seconds": {
+              "count": 5,
+              "mean": 1.437886382266879,
+              "p50": 1.4360588900744915,
+              "p95": 1.4495257772505283
+            },
+            "success_mean_tpot_usage_proxy_seconds": {
+              "count": 5,
+              "mean": 0.13234199796404159,
+              "p50": 0.13250115859721387,
+              "p95": 0.1336301767932517
+            },
+            "success_content_event_itl_seconds": {
+              "count": 35,
+              "mean": 0.13234199796404159,
+              "p50": 0.13261667639017105,
+              "p95": 0.13623797725886105
+            },
+            "failure_ttft_seconds": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null
+            },
+            "failure_request_e2e_seconds": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null
+            },
+            "failure_mean_tpot_usage_proxy_seconds": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null
+            },
+            "failure_content_event_itl_seconds": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null
+            }
+          },
+          "window_kind": "fixed-work",
+          "denominator": "first measured HTTP send (dispatch fallback if none) to last client-observed terminal/deadline, including failures and client overhead",
+          "denominator_seconds": 7.218412537127733,
+          "time_to_complete_seconds": 7.218412537127733
+        },
+        "actual_measured_tokens": 40,
+        "requests": [
+          {
+            "status": "success",
+            "actual_output_tokens": 8,
+            "ttft_seconds": 0.5083537045866251,
+            "request_e2e_seconds": 1.4360588900744915
+          },
+          {
+            "status": "success",
+            "actual_output_tokens": 8,
+            "ttft_seconds": 0.513681173324585,
+            "request_e2e_seconds": 1.449996581301093
+          },
+          {
+            "status": "success",
+            "actual_output_tokens": 8,
+            "ttft_seconds": 0.5094800312072039,
+            "request_e2e_seconds": 1.4313401710242033
+          },
+          {
+            "status": "success",
+            "actual_output_tokens": 8,
+            "ttft_seconds": 0.5101763773709536,
+            "request_e2e_seconds": 1.4243937078863382
+          },
+          {
+            "status": "success",
+            "actual_output_tokens": 8,
+            "ttft_seconds": 0.5147245451807976,
+            "request_e2e_seconds": 1.4476425610482693
+          }
+        ],
+        "gpu_peak_bytes": {
+          "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 19372441600,
+          "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 19372441600
+        },
+        "pss_peak_bytes": 52868240384,
+        "phase_memory": null,
+        "memory_components": null
+      }
+    ],
+    "optimized": [
+      {
+        "slot": "F1",
+        "launch_id": "942fd979942a429299fd27cd097e9371",
+        "startup_seconds": 243.48004019632936,
+        "summary": {
+          "scheduled": 5,
+          "offered": 5,
+          "not_issued": 0,
+          "statuses": {
+            "success": 5
+          },
+          "success": 5,
+          "failed": 0,
+          "success_fraction": 1.0,
+          "scheduled_success_fraction": 1.0,
+          "wall_seconds": 7.209365060552955,
+          "successful_output_tokens": 40,
+          "known_usage_output_tokens": 40,
+          "requests_without_usage": 0,
+          "committed_visible_token_rate": null,
+          "committed_visible_token_rate_reason": "SSE text is not token IDs; usage may include hidden/EOS tokens; partial counts unknown",
+          "actual_output_counts": {
+            "8": 5
+          },
+          "actual_input_counts": {
+            "5": 5
+          },
+          "length_matched_success": 5,
+          "slo_qualified_success": null,
+          "successful_requests_per_second": 0.6935423519275222,
+          "successful_output_tokens_per_second": 5.548338815420178,
+          "length_matched_requests_per_second": 0.6935423519275222,
+          "length_matched_output_tokens_per_second": 5.548338815420178,
+          "slo_goodput_requests_per_second": null,
+          "distributions": {
+            "success_ttft_seconds": {
+              "count": 5,
+              "mean": 0.5120989058166743,
+              "p50": 0.5095464549958706,
+              "p95": 0.5209080655127764
+            },
+            "success_request_e2e_seconds": {
+              "count": 5,
+              "mean": 1.4356823656708002,
+              "p50": 1.4321823101490736,
+              "p95": 1.4479679632931948
+            },
+            "success_mean_tpot_usage_proxy_seconds": {
+              "count": 5,
+              "mean": 0.13191149165587765,
+              "p50": 0.13177331031433173,
+              "p95": 0.1339784525334835
+            },
+            "success_content_event_itl_seconds": {
+              "count": 35,
+              "mean": 0.13191149165587765,
+              "p50": 0.13048525899648666,
+              "p95": 0.14298809822648764
+            },
+            "failure_ttft_seconds": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null
+            },
+            "failure_request_e2e_seconds": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null
+            },
+            "failure_mean_tpot_usage_proxy_seconds": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null
+            },
+            "failure_content_event_itl_seconds": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null
+            }
+          },
+          "window_kind": "fixed-work",
+          "denominator": "first measured HTTP send (dispatch fallback if none) to last client-observed terminal/deadline, including failures and client overhead",
+          "denominator_seconds": 7.209365060552955,
+          "time_to_complete_seconds": 7.209365060552955
+        },
+        "actual_measured_tokens": 40,
+        "requests": [
+          {
+            "status": "success",
+            "actual_output_tokens": 8,
+            "ttft_seconds": 0.5090928934514523,
+            "request_e2e_seconds": 1.4501175004988909
+          },
+          {
+            "status": "success",
+            "actual_output_tokens": 8,
+            "ttft_seconds": 0.5225507840514183,
+            "request_e2e_seconds": 1.4393698144704103
+          },
+          {
+            "status": "success",
+            "actual_output_tokens": 8,
+            "ttft_seconds": 0.5049672052264214,
+            "request_e2e_seconds": 1.4311816152185202
+          },
+          {
+            "status": "success",
+            "actual_output_tokens": 8,
+            "ttft_seconds": 0.5143371913582087,
+            "request_e2e_seconds": 1.425560588017106
+          },
+          {
+            "status": "success",
+            "actual_output_tokens": 8,
+            "ttft_seconds": 0.5095464549958706,
+            "request_e2e_seconds": 1.4321823101490736
+          }
+        ],
+        "gpu_peak_bytes": {
+          "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 19372441600,
+          "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 19372441600
+        },
+        "pss_peak_bytes": 52877595648,
+        "phase_memory": {
+          "bounds": {
+            "ready_monotonic": 8497657.805283014,
+            "first_sent_monotonic": 8497658.124667723,
+            "first_terminal_monotonic": 8497658.645804755
+          },
+          "phases": {
+            "startup": {
+              "sample_count": 105,
+              "complete_host_samples": 105,
+              "gpu_samples": 105,
+              "gpu_peak_bytes": {
+                "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 19305332736,
+                "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 19305332736
+              },
+              "tree_pss_peak_bytes": 52877595648,
+              "tree_rss_peak_bytes": 52880719872,
+              "tree_anonymous_peak_bytes": 52636348416,
+              "tree_pss_anon_peak_bytes": null,
+              "tree_pss_file_peak_bytes": null,
+              "tree_private_dirty_peak_bytes": 52679004160,
+              "component_sample_counts": {
+                "anonymous_bytes": 105,
+                "pss_anon_bytes": 0,
+                "pss_file_bytes": 0,
+                "private_dirty_bytes": 105
+              },
+              "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+              "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+            },
+            "ready_before_first": {
+              "sample_count": 0,
+              "complete_host_samples": 0,
+              "gpu_samples": 0,
+              "gpu_peak_bytes": {
+                "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": null,
+                "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": null
+              },
+              "tree_pss_peak_bytes": null,
+              "tree_rss_peak_bytes": null,
+              "tree_anonymous_peak_bytes": null,
+              "tree_pss_anon_peak_bytes": null,
+              "tree_pss_file_peak_bytes": null,
+              "tree_private_dirty_peak_bytes": null,
+              "component_sample_counts": {
+                "anonymous_bytes": 0,
+                "pss_anon_bytes": 0,
+                "pss_file_bytes": 0,
+                "private_dirty_bytes": 0
+              },
+              "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+              "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+            },
+            "first_request": {
+              "sample_count": 0,
+              "complete_host_samples": 0,
+              "gpu_samples": 0,
+              "gpu_peak_bytes": {
+                "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": null,
+                "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": null
+              },
+              "tree_pss_peak_bytes": null,
+              "tree_rss_peak_bytes": null,
+              "tree_anonymous_peak_bytes": null,
+              "tree_pss_anon_peak_bytes": null,
+              "tree_pss_file_peak_bytes": null,
+              "tree_private_dirty_peak_bytes": null,
+              "component_sample_counts": {
+                "anonymous_bytes": 0,
+                "pss_anon_bytes": 0,
+                "pss_file_bytes": 0,
+                "private_dirty_bytes": 0
+              },
+              "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+              "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+            },
+            "after_first_request": {
+              "sample_count": 6,
+              "complete_host_samples": 6,
+              "gpu_samples": 6,
+              "gpu_peak_bytes": {
+                "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 19372441600,
+                "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 19372441600
+              },
+              "tree_pss_peak_bytes": 52856938496,
+              "tree_rss_peak_bytes": 52860084224,
+              "tree_anonymous_peak_bytes": 52612894720,
+              "tree_pss_anon_peak_bytes": null,
+              "tree_pss_file_peak_bytes": null,
+              "tree_private_dirty_peak_bytes": 52655796224,
+              "component_sample_counts": {
+                "anonymous_bytes": 6,
+                "pss_anon_bytes": 0,
+                "pss_file_bytes": 0,
+                "private_dirty_bytes": 6
+              },
+              "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+              "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+            }
+          },
+          "unassigned_or_boundary_samples": 0,
+          "steady_state_claim": false,
+          "policy": "after first request includes later canaries/warmup/requests; not a steady-state proof"
+        },
+        "memory_components": {
+          "sample_count": 111,
+          "complete_host_samples": 111,
+          "gpu_samples": 111,
+          "gpu_peak_bytes": {
+            "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 19372441600,
+            "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 19372441600
+          },
+          "tree_pss_peak_bytes": 52877595648,
+          "tree_rss_peak_bytes": 52880719872,
+          "tree_anonymous_peak_bytes": 52636348416,
+          "tree_pss_anon_peak_bytes": null,
+          "tree_pss_file_peak_bytes": null,
+          "tree_private_dirty_peak_bytes": 52679004160,
+          "component_sample_counts": {
+            "anonymous_bytes": 111,
+            "pss_anon_bytes": 0,
+            "pss_file_bytes": 0,
+            "private_dirty_bytes": 111
+          },
+          "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+          "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+        }
+      },
+      {
+        "slot": "V1",
+        "launch_id": "a568de8b78ab4caeb00943f4c755f4ab",
+        "startup_seconds": 57.58249111287296,
+        "summary": {
+          "scheduled": 5,
+          "offered": 5,
+          "not_issued": 0,
+          "statuses": {
+            "success": 5
+          },
+          "success": 5,
+          "failed": 0,
+          "success_fraction": 1.0,
+          "scheduled_success_fraction": 1.0,
+          "wall_seconds": 3.8155508637428284,
+          "successful_output_tokens": 40,
+          "known_usage_output_tokens": 40,
+          "requests_without_usage": 0,
+          "committed_visible_token_rate": null,
+          "committed_visible_token_rate_reason": "SSE text is not token IDs; usage may include hidden/EOS tokens; partial counts unknown",
+          "actual_output_counts": {
+            "8": 5
+          },
+          "actual_input_counts": {
+            "5": 5
+          },
+          "length_matched_success": 5,
+          "slo_qualified_success": null,
+          "successful_requests_per_second": 1.3104267715344509,
+          "successful_output_tokens_per_second": 10.483414172275607,
+          "length_matched_requests_per_second": 1.3104267715344509,
+          "length_matched_output_tokens_per_second": 10.483414172275607,
+          "slo_goodput_requests_per_second": null,
+          "distributions": {
+            "success_ttft_seconds": {
+              "count": 5,
+              "mean": 0.13157627172768116,
+              "p50": 0.13031360879540443,
+              "p95": 0.1365337584167719
+            },
+            "success_request_e2e_seconds": {
+              "count": 5,
+              "mean": 0.7031279902905225,
+              "p50": 0.7024677135050297,
+              "p95": 0.7106966491788625
+            },
+            "success_mean_tpot_usage_proxy_seconds": {
+              "count": 5,
+              "mean": 0.08162712412221092,
+              "p50": 0.08187925868800708,
+              "p95": 0.08290623878794058
+            },
+            "success_content_event_itl_seconds": {
+              "count": 35,
+              "mean": 0.08162712412221092,
+              "p50": 0.08069289848208427,
+              "p95": 0.08669405411928892
+            },
+            "failure_ttft_seconds": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null
+            },
+            "failure_request_e2e_seconds": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null
+            },
+            "failure_mean_tpot_usage_proxy_seconds": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null
+            },
+            "failure_content_event_itl_seconds": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null
+            }
+          },
+          "window_kind": "fixed-work",
+          "denominator": "first measured HTTP send (dispatch fallback if none) to last client-observed terminal/deadline, including failures and client overhead",
+          "denominator_seconds": 3.8155508637428284,
+          "time_to_complete_seconds": 3.8155508637428284
+        },
+        "actual_measured_tokens": 40,
+        "requests": [
+          {
+            "status": "success",
+            "actual_output_tokens": 8,
+            "ttft_seconds": 0.12911801412701607,
+            "request_e2e_seconds": 0.7024677135050297
+          },
+          {
+            "status": "success",
+            "actual_output_tokens": 8,
+            "ttft_seconds": 0.13068013079464436,
+            "request_e2e_seconds": 0.6950557883828878
+          },
+          {
+            "status": "success",
+            "actual_output_tokens": 8,
+            "ttft_seconds": 0.13799716532230377,
+            "request_e2e_seconds": 0.7024201788008213
+          },
+          {
+            "status": "success",
+            "actual_output_tokens": 8,
+            "ttft_seconds": 0.13031360879540443,
+            "request_e2e_seconds": 0.7125956583768129
+          },
+          {
+            "status": "success",
+            "actual_output_tokens": 8,
+            "ttft_seconds": 0.12977243959903717,
+            "request_e2e_seconds": 0.7031006123870611
+          }
+        ],
+        "gpu_peak_bytes": {
+          "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 20706230272,
+          "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 20706230272
+        },
+        "pss_peak_bytes": 8441266176,
+        "phase_memory": {
+          "bounds": {
+            "ready_monotonic": 8497828.303652963,
+            "first_sent_monotonic": 8497828.828700026,
+            "first_terminal_monotonic": 8497829.160779344
+          },
+          "phases": {
+            "startup": {
+              "sample_count": 25,
+              "complete_host_samples": 25,
+              "gpu_samples": 25,
+              "gpu_peak_bytes": {
+                "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 20706230272,
+                "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 20706230272
+              },
+              "tree_pss_peak_bytes": 8441266176,
+              "tree_rss_peak_bytes": 10156969984,
+              "tree_anonymous_peak_bytes": 5986414592,
+              "tree_pss_anon_peak_bytes": null,
+              "tree_pss_file_peak_bytes": null,
+              "tree_private_dirty_peak_bytes": 6046281728,
+              "component_sample_counts": {
+                "anonymous_bytes": 25,
+                "pss_anon_bytes": 0,
+                "pss_file_bytes": 0,
+                "private_dirty_bytes": 25
+              },
+              "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+              "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+            },
+            "ready_before_first": {
+              "sample_count": 0,
+              "complete_host_samples": 0,
+              "gpu_samples": 0,
+              "gpu_peak_bytes": {
+                "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": null,
+                "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": null
+              },
+              "tree_pss_peak_bytes": null,
+              "tree_rss_peak_bytes": null,
+              "tree_anonymous_peak_bytes": null,
+              "tree_pss_anon_peak_bytes": null,
+              "tree_pss_file_peak_bytes": null,
+              "tree_private_dirty_peak_bytes": null,
+              "component_sample_counts": {
+                "anonymous_bytes": 0,
+                "pss_anon_bytes": 0,
+                "pss_file_bytes": 0,
+                "private_dirty_bytes": 0
+              },
+              "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+              "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+            },
+            "first_request": {
+              "sample_count": 0,
+              "complete_host_samples": 0,
+              "gpu_samples": 0,
+              "gpu_peak_bytes": {
+                "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": null,
+                "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": null
+              },
+              "tree_pss_peak_bytes": null,
+              "tree_rss_peak_bytes": null,
+              "tree_anonymous_peak_bytes": null,
+              "tree_pss_anon_peak_bytes": null,
+              "tree_pss_file_peak_bytes": null,
+              "tree_private_dirty_peak_bytes": null,
+              "component_sample_counts": {
+                "anonymous_bytes": 0,
+                "pss_anon_bytes": 0,
+                "pss_file_bytes": 0,
+                "private_dirty_bytes": 0
+              },
+              "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+              "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+            },
+            "after_first_request": {
+              "sample_count": 4,
+              "complete_host_samples": 4,
+              "gpu_samples": 4,
+              "gpu_peak_bytes": {
+                "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 20706230272,
+                "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 20706230272
+              },
+              "tree_pss_peak_bytes": 7174637568,
+              "tree_rss_peak_bytes": 8768966656,
+              "tree_anonymous_peak_bytes": 6182363136,
+              "tree_pss_anon_peak_bytes": null,
+              "tree_pss_file_peak_bytes": null,
+              "tree_private_dirty_peak_bytes": 6247489536,
+              "component_sample_counts": {
+                "anonymous_bytes": 4,
+                "pss_anon_bytes": 0,
+                "pss_file_bytes": 0,
+                "private_dirty_bytes": 4
+              },
+              "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+              "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+            }
+          },
+          "unassigned_or_boundary_samples": 1,
+          "steady_state_claim": false,
+          "policy": "after first request includes later canaries/warmup/requests; not a steady-state proof"
+        },
+        "memory_components": {
+          "sample_count": 30,
+          "complete_host_samples": 30,
+          "gpu_samples": 30,
+          "gpu_peak_bytes": {
+            "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 20706230272,
+            "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 20706230272
+          },
+          "tree_pss_peak_bytes": 8441266176,
+          "tree_rss_peak_bytes": 10156969984,
+          "tree_anonymous_peak_bytes": 6182363136,
+          "tree_pss_anon_peak_bytes": null,
+          "tree_pss_file_peak_bytes": null,
+          "tree_private_dirty_peak_bytes": 6247489536,
+          "component_sample_counts": {
+            "anonymous_bytes": 30,
+            "pss_anon_bytes": 0,
+            "pss_file_bytes": 0,
+            "private_dirty_bytes": 30
+          },
+          "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+          "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+        }
+      },
+      {
+        "slot": "V2",
+        "launch_id": "f03a5b0521384c83a021f7b2a595dd18",
+        "startup_seconds": 58.3004359100014,
+        "summary": {
+          "scheduled": 5,
+          "offered": 5,
+          "not_issued": 0,
+          "statuses": {
+            "success": 5
+          },
+          "success": 5,
+          "failed": 0,
+          "success_fraction": 1.0,
+          "scheduled_success_fraction": 1.0,
+          "wall_seconds": 3.7435097992420197,
+          "successful_output_tokens": 40,
+          "known_usage_output_tokens": 40,
+          "requests_without_usage": 0,
+          "committed_visible_token_rate": null,
+          "committed_visible_token_rate_reason": "SSE text is not token IDs; usage may include hidden/EOS tokens; partial counts unknown",
+          "actual_output_counts": {
+            "8": 5
+          },
+          "actual_input_counts": {
+            "5": 5
+          },
+          "length_matched_success": 5,
+          "slo_qualified_success": null,
+          "successful_requests_per_second": 1.3356449610502936,
+          "successful_output_tokens_per_second": 10.685159688402349,
+          "length_matched_requests_per_second": 1.3356449610502936,
+          "length_matched_output_tokens_per_second": 10.685159688402349,
+          "slo_goodput_requests_per_second": null,
+          "distributions": {
+            "success_ttft_seconds": {
+              "count": 5,
+              "mean": 0.1295825194567442,
+              "p50": 0.12925552763044834,
+              "p95": 0.13060261458158492
+            },
+            "success_request_e2e_seconds": {
+              "count": 5,
+              "mean": 0.6886567030102014,
+              "p50": 0.6846816949546337,
+              "p95": 0.7031608175486326
+            },
+            "success_mean_tpot_usage_proxy_seconds": {
+              "count": 5,
+              "mean": 0.07984481214412621,
+              "p50": 0.07939355447888374,
+              "p95": 0.08184765747615269
+            },
+            "success_content_event_itl_seconds": {
+              "count": 35,
+              "mean": 0.07984481214412621,
+              "p50": 0.07925291359424591,
+              "p95": 0.08119297679513693
+            },
+            "failure_ttft_seconds": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null
+            },
+            "failure_request_e2e_seconds": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null
+            },
+            "failure_mean_tpot_usage_proxy_seconds": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null
+            },
+            "failure_content_event_itl_seconds": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null
+            }
+          },
+          "window_kind": "fixed-work",
+          "denominator": "first measured HTTP send (dispatch fallback if none) to last client-observed terminal/deadline, including failures and client overhead",
+          "denominator_seconds": 3.7435097992420197,
+          "time_to_complete_seconds": 3.7435097992420197
+        },
+        "actual_measured_tokens": 40,
+        "requests": [
+          {
+            "status": "success",
+            "actual_output_tokens": 8,
+            "ttft_seconds": 0.12925552763044834,
+            "request_e2e_seconds": 0.6829753443598747
+          },
+          {
+            "status": "success",
+            "actual_output_tokens": 8,
+            "ttft_seconds": 0.1292201578617096,
+            "request_e2e_seconds": 0.6782984640449286
+          },
+          {
+            "status": "success",
+            "actual_output_tokens": 8,
+            "ttft_seconds": 0.13077526167035103,
+            "request_e2e_seconds": 0.6911693196743727
+          },
+          {
+            "status": "success",
+            "actual_output_tokens": 8,
+            "ttft_seconds": 0.12991202622652054,
+            "request_e2e_seconds": 0.7061586920171976
+          },
+          {
+            "status": "success",
+            "actual_output_tokens": 8,
+            "ttft_seconds": 0.12874962389469147,
+            "request_e2e_seconds": 0.6846816949546337
+          }
+        ],
+        "gpu_peak_bytes": {
+          "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 20706230272,
+          "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 20706230272
+        },
+        "pss_peak_bytes": 8115883008,
+        "phase_memory": {
+          "bounds": {
+            "ready_monotonic": 8497992.681434996,
+            "first_sent_monotonic": 8497993.203604795,
+            "first_terminal_monotonic": 8497993.506855842
+          },
+          "phases": {
+            "startup": {
+              "sample_count": 25,
+              "complete_host_samples": 25,
+              "gpu_samples": 25,
+              "gpu_peak_bytes": {
+                "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 20706230272,
+                "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 20706230272
+              },
+              "tree_pss_peak_bytes": 8115883008,
+              "tree_rss_peak_bytes": 10031190016,
+              "tree_anonymous_peak_bytes": 5780729856,
+              "tree_pss_anon_peak_bytes": null,
+              "tree_pss_file_peak_bytes": null,
+              "tree_private_dirty_peak_bytes": 5840789504,
+              "component_sample_counts": {
+                "anonymous_bytes": 25,
+                "pss_anon_bytes": 0,
+                "pss_file_bytes": 0,
+                "private_dirty_bytes": 25
+              },
+              "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+              "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+            },
+            "ready_before_first": {
+              "sample_count": 0,
+              "complete_host_samples": 0,
+              "gpu_samples": 0,
+              "gpu_peak_bytes": {
+                "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": null,
+                "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": null
+              },
+              "tree_pss_peak_bytes": null,
+              "tree_rss_peak_bytes": null,
+              "tree_anonymous_peak_bytes": null,
+              "tree_pss_anon_peak_bytes": null,
+              "tree_pss_file_peak_bytes": null,
+              "tree_private_dirty_peak_bytes": null,
+              "component_sample_counts": {
+                "anonymous_bytes": 0,
+                "pss_anon_bytes": 0,
+                "pss_file_bytes": 0,
+                "private_dirty_bytes": 0
+              },
+              "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+              "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+            },
+            "first_request": {
+              "sample_count": 0,
+              "complete_host_samples": 0,
+              "gpu_samples": 0,
+              "gpu_peak_bytes": {
+                "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": null,
+                "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": null
+              },
+              "tree_pss_peak_bytes": null,
+              "tree_rss_peak_bytes": null,
+              "tree_anonymous_peak_bytes": null,
+              "tree_pss_anon_peak_bytes": null,
+              "tree_pss_file_peak_bytes": null,
+              "tree_private_dirty_peak_bytes": null,
+              "component_sample_counts": {
+                "anonymous_bytes": 0,
+                "pss_anon_bytes": 0,
+                "pss_file_bytes": 0,
+                "private_dirty_bytes": 0
+              },
+              "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+              "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+            },
+            "after_first_request": {
+              "sample_count": 4,
+              "complete_host_samples": 4,
+              "gpu_samples": 4,
+              "gpu_peak_bytes": {
+                "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 20706230272,
+                "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 20706230272
+              },
+              "tree_pss_peak_bytes": 7149274112,
+              "tree_rss_peak_bytes": 8761270272,
+              "tree_anonymous_peak_bytes": 6151225344,
+              "tree_pss_anon_peak_bytes": null,
+              "tree_pss_file_peak_bytes": null,
+              "tree_private_dirty_peak_bytes": 6216347648,
+              "component_sample_counts": {
+                "anonymous_bytes": 4,
+                "pss_anon_bytes": 0,
+                "pss_file_bytes": 0,
+                "private_dirty_bytes": 4
+              },
+              "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+              "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+            }
+          },
+          "unassigned_or_boundary_samples": 1,
+          "steady_state_claim": false,
+          "policy": "after first request includes later canaries/warmup/requests; not a steady-state proof"
+        },
+        "memory_components": {
+          "sample_count": 30,
+          "complete_host_samples": 30,
+          "gpu_samples": 30,
+          "gpu_peak_bytes": {
+            "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 20706230272,
+            "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 20706230272
+          },
+          "tree_pss_peak_bytes": 8115883008,
+          "tree_rss_peak_bytes": 10031190016,
+          "tree_anonymous_peak_bytes": 6151225344,
+          "tree_pss_anon_peak_bytes": null,
+          "tree_pss_file_peak_bytes": null,
+          "tree_private_dirty_peak_bytes": 6216347648,
+          "component_sample_counts": {
+            "anonymous_bytes": 30,
+            "pss_anon_bytes": 0,
+            "pss_file_bytes": 0,
+            "private_dirty_bytes": 30
+          },
+          "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+          "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+        }
+      },
+      {
+        "slot": "F2",
+        "launch_id": "c075898e4b18403abb3e6233fb5ac6dd",
+        "startup_seconds": 241.20939252898097,
+        "summary": {
+          "scheduled": 5,
+          "offered": 5,
+          "not_issued": 0,
+          "statuses": {
+            "success": 5
+          },
+          "success": 5,
+          "failed": 0,
+          "success_fraction": 1.0,
+          "scheduled_success_fraction": 1.0,
+          "wall_seconds": 7.19610321521759,
+          "successful_output_tokens": 40,
+          "known_usage_output_tokens": 40,
+          "requests_without_usage": 0,
+          "committed_visible_token_rate": null,
+          "committed_visible_token_rate_reason": "SSE text is not token IDs; usage may include hidden/EOS tokens; partial counts unknown",
+          "actual_output_counts": {
+            "8": 5
+          },
+          "actual_input_counts": {
+            "5": 5
+          },
+          "length_matched_success": 5,
+          "slo_qualified_success": null,
+          "successful_requests_per_second": 0.6948204952683984,
+          "successful_output_tokens_per_second": 5.558563962147187,
+          "length_matched_requests_per_second": 0.6948204952683984,
+          "length_matched_output_tokens_per_second": 5.558563962147187,
+          "slo_goodput_requests_per_second": null,
+          "distributions": {
+            "success_ttft_seconds": {
+              "count": 5,
+              "mean": 0.5118897516280413,
+              "p50": 0.5131106674671173,
+              "p95": 0.51767752841115
+            },
+            "success_request_e2e_seconds": {
+              "count": 5,
+              "mean": 1.4330959528684617,
+              "p50": 1.4325246158987284,
+              "p95": 1.4416338875889778
+            },
+            "success_mean_tpot_usage_proxy_seconds": {
+              "count": 5,
+              "mean": 0.13157133305711405,
+              "p50": 0.1313156932592392,
+              "p95": 0.1329035376331636
+            },
+            "success_content_event_itl_seconds": {
+              "count": 35,
+              "mean": 0.13157133305711405,
+              "p50": 0.13103347644209862,
+              "p95": 0.1345829289406538
+            },
+            "failure_ttft_seconds": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null
+            },
+            "failure_request_e2e_seconds": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null
+            },
+            "failure_mean_tpot_usage_proxy_seconds": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null
+            },
+            "failure_content_event_itl_seconds": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null
+            }
+          },
+          "window_kind": "fixed-work",
+          "denominator": "first measured HTTP send (dispatch fallback if none) to last client-observed terminal/deadline, including failures and client overhead",
+          "denominator_seconds": 7.19610321521759,
+          "time_to_complete_seconds": 7.19610321521759
+        },
+        "actual_measured_tokens": 40,
+        "requests": [
+          {
+            "status": "success",
+            "actual_output_tokens": 8,
+            "ttft_seconds": 0.5106424074620008,
+            "request_e2e_seconds": 1.4432347603142262
+          },
+          {
+            "status": "success",
+            "actual_output_tokens": 8,
+            "ttft_seconds": 0.5131106674671173,
+            "request_e2e_seconds": 1.4325246158987284
+          },
+          {
+            "status": "success",
+            "actual_output_tokens": 8,
+            "ttft_seconds": 0.5180088803172112,
+            "request_e2e_seconds": 1.4352303966879845
+          },
+          {
+            "status": "success",
+            "actual_output_tokens": 8,
+            "ttft_seconds": 0.5163521207869053,
+            "request_e2e_seconds": 1.430840216577053
+          },
+          {
+            "status": "success",
+            "actual_output_tokens": 8,
+            "ttft_seconds": 0.5013346821069717,
+            "request_e2e_seconds": 1.423649774864316
+          }
+        ],
+        "gpu_peak_bytes": {
+          "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 19372441600,
+          "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 19372441600
+        },
+        "pss_peak_bytes": 53233220608,
+        "phase_memory": {
+          "bounds": {
+            "ready_monotonic": 8498339.854377776,
+            "first_sent_monotonic": 8498340.17523828,
+            "first_terminal_monotonic": 8498340.692212863
+          },
+          "phases": {
+            "startup": {
+              "sample_count": 104,
+              "complete_host_samples": 104,
+              "gpu_samples": 104,
+              "gpu_peak_bytes": {
+                "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 19269681152,
+                "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 17984126976
+              },
+              "tree_pss_peak_bytes": 53233220608,
+              "tree_rss_peak_bytes": 53236301824,
+              "tree_anonymous_peak_bytes": 52992299008,
+              "tree_pss_anon_peak_bytes": null,
+              "tree_pss_file_peak_bytes": null,
+              "tree_private_dirty_peak_bytes": 53034893312,
+              "component_sample_counts": {
+                "anonymous_bytes": 104,
+                "pss_anon_bytes": 0,
+                "pss_file_bytes": 0,
+                "private_dirty_bytes": 104
+              },
+              "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+              "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+            },
+            "ready_before_first": {
+              "sample_count": 0,
+              "complete_host_samples": 0,
+              "gpu_samples": 0,
+              "gpu_peak_bytes": {
+                "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": null,
+                "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": null
+              },
+              "tree_pss_peak_bytes": null,
+              "tree_rss_peak_bytes": null,
+              "tree_anonymous_peak_bytes": null,
+              "tree_pss_anon_peak_bytes": null,
+              "tree_pss_file_peak_bytes": null,
+              "tree_private_dirty_peak_bytes": null,
+              "component_sample_counts": {
+                "anonymous_bytes": 0,
+                "pss_anon_bytes": 0,
+                "pss_file_bytes": 0,
+                "private_dirty_bytes": 0
+              },
+              "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+              "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+            },
+            "first_request": {
+              "sample_count": 0,
+              "complete_host_samples": 0,
+              "gpu_samples": 0,
+              "gpu_peak_bytes": {
+                "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": null,
+                "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": null
+              },
+              "tree_pss_peak_bytes": null,
+              "tree_rss_peak_bytes": null,
+              "tree_anonymous_peak_bytes": null,
+              "tree_pss_anon_peak_bytes": null,
+              "tree_pss_file_peak_bytes": null,
+              "tree_private_dirty_peak_bytes": null,
+              "component_sample_counts": {
+                "anonymous_bytes": 0,
+                "pss_anon_bytes": 0,
+                "pss_file_bytes": 0,
+                "private_dirty_bytes": 0
+              },
+              "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+              "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+            },
+            "after_first_request": {
+              "sample_count": 6,
+              "complete_host_samples": 6,
+              "gpu_samples": 6,
+              "gpu_peak_bytes": {
+                "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 19372441600,
+                "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 19372441600
+              },
+              "tree_pss_peak_bytes": 52865727488,
+              "tree_rss_peak_bytes": 52868808704,
+              "tree_anonymous_peak_bytes": 52621856768,
+              "tree_pss_anon_peak_bytes": null,
+              "tree_pss_file_peak_bytes": null,
+              "tree_private_dirty_peak_bytes": 52664696832,
+              "component_sample_counts": {
+                "anonymous_bytes": 6,
+                "pss_anon_bytes": 0,
+                "pss_file_bytes": 0,
+                "private_dirty_bytes": 6
+              },
+              "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+              "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+            }
+          },
+          "unassigned_or_boundary_samples": 1,
+          "steady_state_claim": false,
+          "policy": "after first request includes later canaries/warmup/requests; not a steady-state proof"
+        },
+        "memory_components": {
+          "sample_count": 111,
+          "complete_host_samples": 111,
+          "gpu_samples": 111,
+          "gpu_peak_bytes": {
+            "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 19372441600,
+            "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 19372441600
+          },
+          "tree_pss_peak_bytes": 53233220608,
+          "tree_rss_peak_bytes": 53236301824,
+          "tree_anonymous_peak_bytes": 52992299008,
+          "tree_pss_anon_peak_bytes": null,
+          "tree_pss_file_peak_bytes": null,
+          "tree_private_dirty_peak_bytes": 53034893312,
+          "component_sample_counts": {
+            "anonymous_bytes": 111,
+            "pss_anon_bytes": 0,
+            "pss_file_bytes": 0,
+            "private_dirty_bytes": 111
+          },
+          "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+          "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+        }
+      }
+    ]
+  },
+  "artifact_pins": {
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-fv-qa8-20261009-001/serving-pilot-summary.json": "be0bd38d70387260160243736ca233adfbd1fb594eeebbb45282db8271d281e7",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-fv-qa8-20261009-001/prepared.json": "111bc24c35192e1e80a14b68a262ac4ee3808fcec71c84f9bd4aaf530b0f1c0b",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-fv-qa8-20261009-001/execution.json": "fc0e3ad5b64102816b369697a0efb6ee4f1ba38da822a95c6291b29e706b75e0",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-fv-qa8-20261009-001/runs/F1/execution.json": "6f6b7a5e257ba60ffb552fb5d692915e6667ccd46a0db3b8169d6d6381eb6ecd",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-fv-qa8-20261009-001/runs/F1/session/supervisor.json": "9f3a2cfa0fc2592bf036bf8c70de5b85a8da8e86ad684b6106d907419783a3dd",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-fv-qa8-20261009-001/runs/F1/lock-release.json": "39ae688106ea715f00f8c7694b2a52e2819bb6f666208c5b1c0cb4e273e3df79",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-fv-qa8-20261009-001/runs/F1/session/hello2/gate.json": "7d656bdfc2d95676360be83b5e9bd35fac5e593ee26329ce41a6d5ed30828f9c",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-fv-qa8-20261009-001/runs/F1/session/canary8/gate.json": "08454c6677f7c8025cf0817a9b5d7c24d121193a7cf54d75d7e56f5ae59e97f8",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-fv-qa8-20261009-001/runs/F1/session/qa8-V1/gate.json": "af24339ed8c49ab2826cbc612e19e4e1af3dcbc9c2316f691f3f90894ce0edbd",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-fv-qa8-20261009-001/runs/F1/session/qa8-V1/http.json": "283f16f0a9eb5bb54fe9c465d29fd30da89a904f8241bd0fe608b5d96c99eb84",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-fv-qa8-20261009-001/runs/F1/session/case.json": "f636e1550f40178a56da5c76c72f7894c536154698f7f01610a3549dbb12ff35",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-fv-qa8-20261009-001/runs/F1/session/server.log": "4d147480fab3399307356989af47b92548cdf9f4321c44e96f8bb167bf240fff",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-fv-qa8-20261009-001/runs/V1/execution.json": "239aac08c4e099419fb6f8b27d905758292be8c5c36a8f14b7cdd023424dbbc8",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-fv-qa8-20261009-001/runs/V1/session/supervisor.json": "05f9b4fbbd063728c9b4a0690466a8501a09d09106f346f4efff266bd121f55f",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-fv-qa8-20261009-001/runs/V1/lock-release.json": "39ae688106ea715f00f8c7694b2a52e2819bb6f666208c5b1c0cb4e273e3df79",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-fv-qa8-20261009-001/runs/V1/session/hello2/gate.json": "c02d2659cfed5b1dcb74b31e62b9914015811fb3f42b70f84a3a33da30aa68ee",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-fv-qa8-20261009-001/runs/V1/session/canary8/gate.json": "e21d8c952694829a3109ab19537d8fa95c01d1d7ae567164ff526dbf38c0a036",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-fv-qa8-20261009-001/runs/V1/session/qa8-V1/gate.json": "a87f714f2cab660f0662ced809b63ad0ca82fc30b29b4bf7bcc2474e03a4ffdd",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-fv-qa8-20261009-001/runs/V1/session/qa8-V1/http.json": "9bcbde7183a200a61d13c4383950f083408e996b6e21e6cb31e5ebc4b4b763d2",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-fv-qa8-20261009-001/runs/V1/session/case.json": "d557b10d66b3c69a5496e6213de5d6e1f108f7835a869ccf98326338a202d96a",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-fv-qa8-20261009-001/runs/V1/session/server.log": "da25d12fb6626e38f61840e2fe188910e5f9be4aacbda2d1842d895f56ac31c7",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-fv-qa8-20261009-001/runs/V2/execution.json": "6c07f98a6f3a2ff5f5ee62a5d77e67d3ce8b828c1e698e9395a6453ef8d7e113",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-fv-qa8-20261009-001/runs/V2/session/supervisor.json": "1ca725d62fab6848122c0b2b0c49b5f9f5761a4554e7b0ccf16bb15f0b07229c",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-fv-qa8-20261009-001/runs/V2/lock-release.json": "39ae688106ea715f00f8c7694b2a52e2819bb6f666208c5b1c0cb4e273e3df79",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-fv-qa8-20261009-001/runs/V2/session/hello2/gate.json": "e41494e77437370c97955586211178bb9b3f6bacb960478702b83aa6ec5ac68b",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-fv-qa8-20261009-001/runs/V2/session/canary8/gate.json": "0e0f6e2e2e5077c985a862f14affff279d5591536849b0b47469d82e0ff04d6d",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-fv-qa8-20261009-001/runs/V2/session/qa8-V1/gate.json": "9afd0856401ecec20c4115c7b0982d5f1f660ae3723fa9b88808f328319a0e0d",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-fv-qa8-20261009-001/runs/V2/session/qa8-V1/http.json": "83ce486e0854c69c09f5e193ae2d61d630ac0238f89a332a5ace448766f4836d",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-fv-qa8-20261009-001/runs/V2/session/case.json": "8d9319639cb347de35e9230ba4186363b52e0a324f2f0497c0e2a1fa3d1b8d35",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-fv-qa8-20261009-001/runs/V2/session/server.log": "c42f910b7d6b27f21020044407f7ea86744de488a0a57e7a5e5bbf8b1d964884",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-fv-qa8-20261009-001/runs/F2/execution.json": "38c3a050c33c48959e01ac9df06bd09672699ebc130f1341d81e9918161b313b",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-fv-qa8-20261009-001/runs/F2/session/supervisor.json": "1727e3d306f7d512e33d2c32a2723770e5a2becff8948944d1843ae1830ed96c",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-fv-qa8-20261009-001/runs/F2/lock-release.json": "39ae688106ea715f00f8c7694b2a52e2819bb6f666208c5b1c0cb4e273e3df79",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-fv-qa8-20261009-001/runs/F2/session/hello2/gate.json": "6d36debbc963a32873245c24981d06ec1805d6cd3eb160af0ba0daef871f906a",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-fv-qa8-20261009-001/runs/F2/session/canary8/gate.json": "1c78386aa95e53d8518b1a9eb5641026506f69efafece809f34d546c61b87f47",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-fv-qa8-20261009-001/runs/F2/session/qa8-V1/gate.json": "e4f97c7c9341e5cad051de01cb3aefb60716aa81fe766f466e800af1c4761609",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-fv-qa8-20261009-001/runs/F2/session/qa8-V1/http.json": "f98337ff66c3a573f8b278d5864d9fc61662a51f1e15d6d6bfb24543bac6be05",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-fv-qa8-20261009-001/runs/F2/session/case.json": "0217a5b8c19f1b1558fbc8d864d1253fe7aac3a4a804c35df58e7edec4285f5b",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-fv-qa8-20261009-001/runs/F2/session/server.log": "8765572e4bc74d6cbdf5fa123b9e35035b8b1c465ab93d325242d3f7f61e0dca",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-fv-qa8-20261009-001/prepared.json": "776df5424ed4f95ac28ff23f783bf0c97d620fbe97eb61fbd59efa4b37ddf542",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-fv-qa8-20261009-001/execution.json": "17f67ff4d5d320970e4323e02df279c161952a41b29365e6e86a80177c2cc8e1",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-fv-qa8-20261009-001/runs/F1/execution.json": "c04e39a54504e0408c5c670bf65695d0acd9682cce1edf2ca3573dfa8050fd44",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-fv-qa8-20261009-001/runs/F1/session/supervisor.json": "b4a561986a1c19989bd4e069d957bedef99831a0f0878a3d7422d099e5985526",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-fv-qa8-20261009-001/runs/F1/lock-release.json": "39ae688106ea715f00f8c7694b2a52e2819bb6f666208c5b1c0cb4e273e3df79",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-fv-qa8-20261009-001/runs/F1/session/hello2/gate.json": "4feaba907f607039ab485858db5fce26dbb63b7d13c171519e8cc71fa87f4db9",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-fv-qa8-20261009-001/runs/F1/session/canary8/gate.json": "4329c06fd4fabfabe437984b529bece0fead7a83aae3629e46ba5c5b0bbd3e75",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-fv-qa8-20261009-001/runs/F1/session/qa8-V1/gate.json": "2ff748a44f8460ac54397b1ff2ad1263b5f3d2bc1bec9b9d09f7fc052bcd0327",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-fv-qa8-20261009-001/runs/F1/session/qa8-V1/http.json": "a3a3fe7c998eaa91c3d482d746e1ec658fe66462715c328cd832f2dc89c26446",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-fv-qa8-20261009-001/runs/F1/session/case.json": "6fc7fe342f928055084d7e5ec3c57d6c423387b0b6011eff4dbd433a6ebf3dde",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-fv-qa8-20261009-001/runs/F1/session/server.log": "25eb6cdd4d9bd503c9d170bcb613c6f0a6abeb162aa4461df3dd3ef6307c9fe8",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-fv-qa8-20261009-001/runs/V1/execution.json": "c272384a5aa718cda234c73f1daedcf0c008917cc347d4b48bb7bb276da06b17",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-fv-qa8-20261009-001/runs/V1/session/supervisor.json": "04929f6e3fb94e5203e1907406c502d80b5cca4cc42f0a55527768a3841198ae",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-fv-qa8-20261009-001/runs/V1/lock-release.json": "39ae688106ea715f00f8c7694b2a52e2819bb6f666208c5b1c0cb4e273e3df79",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-fv-qa8-20261009-001/runs/V1/session/hello2/gate.json": "7adbf7a0f9034d18431a82b32f514d30f8b6e5b082e496ceb1cf5179ad6e0657",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-fv-qa8-20261009-001/runs/V1/session/canary8/gate.json": "144b14c246e6f27716d27ec3e7b3d9c992b491e2fc1c32de8a5b0a66ca1129ee",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-fv-qa8-20261009-001/runs/V1/session/qa8-V1/gate.json": "014bc4496002bb662d61f32d4f9b6b20f40937480028665a5a0da23184637c0d",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-fv-qa8-20261009-001/runs/V1/session/qa8-V1/http.json": "26e34846fe94c2bfcd6af624bd27c4c80b9f5c142238200310a93810ea057fdc",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-fv-qa8-20261009-001/runs/V1/session/case.json": "8b00e2084a6c82a56134885c1f306a7eb2b6fdda18a759f792336d375b9796cf",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-fv-qa8-20261009-001/runs/V1/session/server.log": "f18108bba9e0a6b4428a7c68e368db88d82ccabd192aa3abd525df0af7eac8db",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-fv-qa8-20261009-001/runs/V2/execution.json": "b8b6094bbe6a5476bad34c998fc4554487afd16276b9242a613b9809910f5aa6",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-fv-qa8-20261009-001/runs/V2/session/supervisor.json": "3c89221d1d4325a5f63b70e36612a6723e17d80fa3a9174a955b93d379260c14",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-fv-qa8-20261009-001/runs/V2/lock-release.json": "39ae688106ea715f00f8c7694b2a52e2819bb6f666208c5b1c0cb4e273e3df79",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-fv-qa8-20261009-001/runs/V2/session/hello2/gate.json": "b6a8dfe3a34e3e1632229cd76ea7d856e0c6044c2bceff42739be778ec7eeb1e",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-fv-qa8-20261009-001/runs/V2/session/canary8/gate.json": "eaa6e9fed7a23cf9201320aa4090f0f86707be3fa455a6ea0105644b42a95342",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-fv-qa8-20261009-001/runs/V2/session/qa8-V1/gate.json": "ef15610e9f81e08ee6857671e7bc98a517ec30ef6b140e0faca94f0ef57a3fc6",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-fv-qa8-20261009-001/runs/V2/session/qa8-V1/http.json": "ee3d9e51c58fc4fcdec883f5d43966f3693a61b3046710291b7c380cdb1362b8",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-fv-qa8-20261009-001/runs/V2/session/case.json": "209c7ecc43a462ffa85acaa3e2be3937ecc147b9202e1b944efb0b61454938f2",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-fv-qa8-20261009-001/runs/V2/session/server.log": "1105917e06e5658f9d8fb189285b35288d2e925e07cfc7247490c14eabb7fdfe",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-fv-qa8-20261009-001/runs/F2/execution.json": "4b61684e1fd2b172923c476e806897362e35fe1758db1fe3a11a6c794c6faf82",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-fv-qa8-20261009-001/runs/F2/session/supervisor.json": "2c91b646154b56b618a01658d3173ada16216e98c0f6e4523f7ac6fad25a64f6",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-fv-qa8-20261009-001/runs/F2/lock-release.json": "39ae688106ea715f00f8c7694b2a52e2819bb6f666208c5b1c0cb4e273e3df79",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-fv-qa8-20261009-001/runs/F2/session/hello2/gate.json": "9f82bcc4874ad61a1a85da39c266a194ab7c55883346d514784ee0f2e503b6b8",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-fv-qa8-20261009-001/runs/F2/session/canary8/gate.json": "f995b335b48086666bbed3b0f256277f149f5769fd99799d325783bcefcc2027",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-fv-qa8-20261009-001/runs/F2/session/qa8-V1/gate.json": "da752ab9dfa78c71576f50e3617c7ff5462ca7e652d2bccb5a5b4dc29d848d56",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-fv-qa8-20261009-001/runs/F2/session/qa8-V1/http.json": "fdb18ad3286dc776cbcd4279f4503a321f147a5cad5fd78862534f7e046a5cdc",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-fv-qa8-20261009-001/runs/F2/session/case.json": "bf44c399d971127fff847563778d9bd56ae9ad38de87aa76f96b46778001d77e",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-fv-qa8-20261009-001/runs/F2/session/server.log": "b0a908b3d2cd985b486bff94e40c92b1943b5171d2a5b1287ff0b8ed76788aa0"
+  },
+  "fairmatch": false,
+  "exact_speedup": null,
+  "e2_complete": false,
+  "limitations": [
+    "Five same-server measured requests per slot; no statistics, parity, optimality, extrapolation or causal attribution",
+    "Historical sources/scripts are not revalidated against current worktree; consumed raw receipts checked against original summary pins",
+    "Old phase smaps absent is null, not zero; after-first samples are not proof of steady state",
+    "CPU collective vs NCCL; Mixed/HF-eager reference vs Marlin; effective decodebatch1 vs requested seq2",
+    "OS/JIT/page cache uncontrolled; profiler and correctness durations excluded"
+  ]
+}

@@ -1,0 +1,37 @@
+{
+  "status": "pass",
+  "returncode": 0,
+  "argv": [
+    "/home/admin/wxw403883/anaconda3/bin/python3.12",
+    "-S",
+    "-B",
+    "-m",
+    "unittest",
+    "test_operator_retirement_ab",
+    "test_paired",
+    "test_cache_ab",
+    "test_arena_index_ab",
+    "test_pre_serving",
+    "test_pair_contract",
+    "test_profile",
+    "test_profile_2025",
+    "test_profile_trace_audit",
+    "test_profile_trace_audit_v2",
+    "test_instrumentation_scope",
+    "test_instrumentation_live",
+    "test_import_isolation"
+  ],
+  "cwd": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident",
+  "environment": {
+    "CUDA_VISIBLE_DEVICES": "",
+    "NVIDIA_VISIBLE_DEVICES": "none"
+  },
+  "log": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/plans/operator-retirement-v3-cpu-20261011-01/cpu-tests.log",
+    "sha256": "f19198d7bdcdc21dc19ec6ab952756a3f0b8ab2e876cc666c6db3d0fdf821ea0"
+  },
+  "gpu_query_performed": false,
+  "gpu_lock_acquired": false,
+  "gpu_execution_performed": false,
+  "scope": "CPU policy tests; launch paths mocked, no new GPU claim"
+}

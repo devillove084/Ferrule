@@ -4,6 +4,7 @@ members = [
   "crates/ferrule-model",
   "crates/ferrule-backend",
   "crates/ferrule-runtime",
+  "crates/ferrule-composition",
   "crates/ferrule-server",
   "crates/ferrule-cli",
 ]
@@ -11,6 +12,7 @@ default-members = [
   "crates/ferrule-common",
   "crates/ferrule-model",
   "crates/ferrule-runtime",
+  "crates/ferrule-composition",
   "crates/ferrule-server",
   "crates/ferrule-cli",
 ]

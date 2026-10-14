@@ -1,0 +1,169 @@
+{
+  "entries": 20,
+  "fixtures": 10,
+  "mismatching_words": 0,
+  "passed": true,
+  "release_sha256": "807e5b5643ecce603088052e39fbee36ce15dca4a3ba319b51be120e2922d40c",
+  "results": [
+    {
+      "fixture": "hello-decode0-layer00-expert021-rank0",
+      "mismatches": [],
+      "path": "cold",
+      "rank": 0,
+      "rows": 1,
+      "words": 256
+    },
+    {
+      "fixture": "hello-decode0-layer00-expert021-rank0",
+      "mismatches": [],
+      "path": "resident",
+      "rank": 0,
+      "rows": 1,
+      "words": 256
+    },
+    {
+      "fixture": "hello-decode0-layer00-expert021-rank1",
+      "mismatches": [],
+      "path": "cold",
+      "rank": 1,
+      "rows": 1,
+      "words": 256
+    },
+    {
+      "fixture": "hello-decode0-layer00-expert021-rank1",
+      "mismatches": [],
+      "path": "resident",
+      "rank": 1,
+      "rows": 1,
+      "words": 256
+    },
+    {
+      "fixture": "hello-decode0-layer03-expert037-rank0",
+      "mismatches": [],
+      "path": "cold",
+      "rank": 0,
+      "rows": 1,
+      "words": 256
+    },
+    {
+      "fixture": "hello-decode0-layer03-expert037-rank0",
+      "mismatches": [],
+      "path": "resident",
+      "rank": 0,
+      "rows": 1,
+      "words": 256
+    },
+    {
+      "fixture": "hello-decode0-layer03-expert037-rank1",
+      "mismatches": [],
+      "path": "cold",
+      "rank": 1,
+      "rows": 1,
+      "words": 256
+    },
+    {
+      "fixture": "hello-decode0-layer03-expert037-rank1",
+      "mismatches": [],
+      "path": "resident",
+      "rank": 1,
+      "rows": 1,
+      "words": 256
+    },
+    {
+      "fixture": "capital-decode0-layer00-expert072-rank0",
+      "mismatches": [],
+      "path": "cold",
+      "rank": 0,
+      "rows": 1,
+      "words": 256
+    },
+    {
+      "fixture": "capital-decode0-layer00-expert072-rank0",
+      "mismatches": [],
+      "path": "resident",
+      "rank": 0,
+      "rows": 1,
+      "words": 256
+    },
+    {
+      "fixture": "capital-decode0-layer00-expert072-rank1",
+      "mismatches": [],
+      "path": "cold",
+      "rank": 1,
+      "rows": 1,
+      "words": 256
+    },
+    {
+      "fixture": "capital-decode0-layer00-expert072-rank1",
+      "mismatches": [],
+      "path": "resident",
+      "rank": 1,
+      "rows": 1,
+      "words": 256
+    },
+    {
+      "fixture": "capital-decode0-layer03-expert010-rank0",
+      "mismatches": [],
+      "path": "cold",
+      "rank": 0,
+      "rows": 1,
+      "words": 256
+    },
+    {
+      "fixture": "capital-decode0-layer03-expert010-rank0",
+      "mismatches": [],
+      "path": "resident",
+      "rank": 0,
+      "rows": 1,
+      "words": 256
+    },
+    {
+      "fixture": "capital-decode0-layer03-expert010-rank1",
+      "mismatches": [],
+      "path": "cold",
+      "rank": 1,
+      "rows": 1,
+      "words": 256
+    },
+    {
+      "fixture": "capital-decode0-layer03-expert010-rank1",
+      "mismatches": [],
+      "path": "resident",
+      "rank": 1,
+      "rows": 1,
+      "words": 256
+    },
+    {
+      "fixture": "capital-prefill-layer09-expert095-rank0",
+      "mismatches": [],
+      "path": "cold",
+      "rank": 0,
+      "rows": 5,
+      "words": 1280
+    },
+    {
+      "fixture": "capital-prefill-layer09-expert095-rank0",
+      "mismatches": [],
+      "path": "resident",
+      "rank": 0,
+      "rows": 5,
+      "words": 1280
+    },
+    {
+      "fixture": "capital-prefill-layer09-expert095-rank1",
+      "mismatches": [],
+      "path": "cold",
+      "rank": 1,
+      "rows": 5,
+      "words": 1280
+    },
+    {
+      "fixture": "capital-prefill-layer09-expert095-rank1",
+      "mismatches": [],
+      "path": "resident",
+      "rank": 1,
+      "rows": 5,
+      "words": 1280
+    }
+  ]
+}

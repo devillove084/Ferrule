@@ -1,0 +1,6 @@
+
+running 1 test
+test cuda::runtime::context_drop_gpu_tests::gpu_context_drop_shutdown_sync_fault_retains_primary_and_segments ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 291 filtered out; finished in 0.30s
+

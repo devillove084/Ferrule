@@ -20,6 +20,7 @@ use super::{ExpertCacheKey, cuda_error};
 
 pub(super) enum ResidentLinearStorage {
     Dense(CudaArtifactLinearHandle),
+    Bf16(ferrule_backend::cuda::operators::linear::CudaBf16Buffer),
     Numeric(super::numeric_binding::NumericBinding),
 }
 
@@ -33,6 +34,12 @@ pub(super) struct ResidentLinear {
     pub bytes: usize,
 }
 
+impl ResidentLinear {
+    pub(super) fn role(&self) -> &crate::support::TensorRole {
+        self.parameter.role()
+    }
+}
+
 pub(super) struct ResidentRope {
     pub table: PreparedRope,
     pub cosine: CudaF32Buffer,
@@ -43,8 +50,11 @@ pub(super) struct Bindings {
     pub generation: PreparedDecoderGeneration,
     pub bounded_experts: bool,
     pub numeric_fp8: bool,
+    pub bf16: bool,
     pub expert_admission: Option<ExpertCacheKey>,
     allowed: BTreeMap<ParameterId, BoundParameter>,
+    numeric_rank_allowed: BTreeMap<(ParameterId, crate::support::TensorRole), BoundParameter>,
+    pub numeric_rank: Option<super::numeric_binding::rank::RankBindings>,
     aliased_experts: bool,
     linear: BTreeMap<(ParameterId, Option<crate::support::TensorRole>), Rc<ResidentLinear>>,
     vectors: BTreeMap<ParameterId, Rc<CudaF32Buffer>>,
@@ -73,8 +83,14 @@ impl Bindings {
             generation: PreparedDecoderGeneration::take()?,
             bounded_experts: false,
             numeric_fp8: false,
+            bf16: false,
             expert_admission: None,
             allowed,
+            numeric_rank_allowed: parameters
+                .iter()
+                .map(|p| ((p.id(), p.role().clone()), p.clone()))
+                .collect(),
+            numeric_rank: None,
             aliased_experts: parameters.iter().any(|p| {
                 matches!(p.residency(), ParameterResidency::Expert { .. }) && p.is_alias()
             }),
@@ -103,6 +119,11 @@ impl Bindings {
             return Err(cuda_error("parameter belongs to another prepared image"));
         }
         if let Some(artifact) = parameter.numeric_fp8() {
+            if self.numeric_rank.is_some() {
+                return Err(cuda_error(
+                    "configured numeric rank requires rank-local binding, not full linear upload",
+                ));
+            }
             if !self.numeric_fp8 {
                 return Err(cuda_error(
                     "numeric FP8 requires the explicit numeric profile",
@@ -336,10 +357,29 @@ impl Bindings {
                 storage: ResidentLinearStorage::Numeric(super::numeric_binding::NumericBinding {
                     artifact: handle,
                     source: artifact.provenance().source().clone(),
+                    role: linear.role().clone(),
                 }),
                 bias,
                 shape: (layout.n, layout.k),
                 bias_values: linear.bias().map(<[f32]>::to_vec),
+                bytes,
+            });
+            self.bytes += bytes;
+            self.linear.insert(id, Rc::clone(&resident));
+            return Ok(resident);
+        }
+        if self.bf16 {
+            if linear.bias().is_some() || linear.tensor_shard().is_some() {
+                return Err(cuda_error("BF16 numeric image rejects bias/TP"));
+            }
+            let words = linear.parameter().values_bf16_words()?;
+            let bytes = words.len() * 2;
+            let resident = Rc::new(ResidentLinear {
+                parameter: linear.parameter().binding().clone(),
+                storage: ResidentLinearStorage::Bf16(ops.upload_bf16_words(&words)?),
+                bias: None,
+                shape: (linear.out_features(), linear.in_features()),
+                bias_values: None,
                 bytes,
             });
             self.bytes += bytes;
@@ -439,6 +479,7 @@ impl Bindings {
     }
 
     pub fn retain_on_unknown_completion(&mut self) {
+        std::mem::forget(self.numeric_rank.take());
         std::mem::forget(std::mem::take(&mut self.linear));
         std::mem::forget(std::mem::take(&mut self.vectors));
         std::mem::forget(std::mem::take(&mut self.ropes));
@@ -448,6 +489,9 @@ impl Bindings {
         self.bytes
     }
 }
+
+#[path = "numeric_shard_binding.rs"]
+mod numeric_shard;
 
 #[cfg(test)]
 mod metadata_tests {

@@ -13,7 +13,7 @@ use crate::nn::ParameterResidency;
 use crate::support::TensorRole;
 
 use super::standard::{
-    RoutedLayerExecution, execute_standard_layer, execute_standard_output_rows,
+    LayerOperators, RoutedLayerExecution, execute_standard_layer, execute_standard_output_rows,
     packed_gqa_metadata, prepare_embedding, prepare_layer, prepare_output, ready,
     validate_standard_descriptors,
 };
@@ -106,7 +106,8 @@ impl LayerSegmentPlan {
         self.output
     }
 
-    /// Local layer indices are also the segment-local KV plane indices.
+    /// Local decoder coordinate. Only standard all-GQA segments also use this
+    /// as a KV plane index; hybrid segments must use their schema mapping.
     pub fn local_layer(&self, global: usize) -> Option<usize> {
         self.layers
             .contains(&global)
@@ -179,7 +180,7 @@ pub enum SegmentError {
 }
 
 impl SegmentError {
-    fn at(stage: SegmentStage) -> impl FnOnce(ferrule_common::Error) -> Self {
+    fn at(stage: SegmentStage) -> impl Fn(ferrule_common::Error) -> Self + Copy {
         move |source| Self::Execution { stage, source }
     }
 }
@@ -344,6 +345,8 @@ impl StandardDecoderSegment {
         {
             return Err(SegmentError::Precision);
         }
+        crate::moe::catalog::ValidatedExpertCatalog::for_decoder_range(resources, plan.layers())
+            .map_err(SegmentError::at(SegmentStage::Prepare))?;
         let descriptors = &spec.layers()[plan.layers()];
         validate_standard_descriptors(spec, descriptors)
             .map_err(SegmentError::at(SegmentStage::Prepare))?;
@@ -436,7 +439,7 @@ impl StandardDecoderSegment {
         kv: &mut CpuKvView,
     ) -> SegmentResult<SegmentOutput> {
         let mut operators = CpuStandardDecoderOperators::new(self.precision);
-        self.execute_inner(batch, input.into(), kv, &mut operators, None)?
+        self.execute_bound(batch, input.into(), kv, &mut operators)?
             .into_host(&mut operators)
     }
 
@@ -484,6 +487,16 @@ impl StandardDecoderSegment {
         kv: &mut dyn StandardDecoderKvView,
         operators: &mut dyn StandardDecoderOperators,
     ) -> SegmentResult<DeviceSegmentOutput> {
+        self.execute_with_layer_operators(batch, input, kv, LayerOperators::Standard(operators))
+    }
+
+    pub(super) fn execute_with_layer_operators(
+        &self,
+        batch: &PackedDecoderBatch,
+        input: DeviceSegmentInput,
+        kv: &mut dyn StandardDecoderKvView,
+        operators: LayerOperators<'_>,
+    ) -> SegmentResult<DeviceSegmentOutput> {
         self.execute_inner(batch, input, kv, operators, None)
     }
 
@@ -494,6 +507,28 @@ impl StandardDecoderSegment {
         input: DeviceSegmentInput,
         kv: &mut dyn StandardDecoderKvView,
         operators: &mut dyn StandardDecoderOperators,
+        context: (ExecutionTransactionId, ParallelRankId, &[u64]),
+        executor: &mut dyn RoutedSwiGluExecutor,
+        check_active: &mut dyn FnMut(ExecutionTransactionId) -> ferrule_common::Result<()>,
+    ) -> SegmentResult<DeviceSegmentOutput> {
+        self.execute_with_experts_and_layer_operators(
+            batch,
+            input,
+            kv,
+            LayerOperators::Standard(operators),
+            context,
+            executor,
+            check_active,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn execute_with_experts_and_layer_operators(
+        &self,
+        batch: &PackedDecoderBatch,
+        input: DeviceSegmentInput,
+        kv: &mut dyn StandardDecoderKvView,
+        operators: LayerOperators<'_>,
         context: (ExecutionTransactionId, ParallelRankId, &[u64]),
         executor: &mut dyn RoutedSwiGluExecutor,
         check_active: &mut dyn FnMut(ExecutionTransactionId) -> ferrule_common::Result<()>,
@@ -534,10 +569,10 @@ impl StandardDecoderSegment {
         batch: &PackedDecoderBatch,
         input: DeviceSegmentInput,
         kv: &mut dyn StandardDecoderKvView,
-        operators: &mut dyn StandardDecoderOperators,
+        mut operators: LayerOperators<'_>,
         mut experts: Option<&mut RoutedLayerExecution<'_>>,
     ) -> SegmentResult<DeviceSegmentOutput> {
-        if operators.precision() != self.precision {
+        if operators.operators().precision() != self.precision {
             return Err(SegmentError::Precision);
         }
         if let Some(execution) = experts.as_deref_mut() {
@@ -557,6 +592,7 @@ impl StandardDecoderSegment {
         let rows = match (&self.embedding, input) {
             (Some(embedding), DeviceSegmentInput::Tokens) => ready(
                 operators
+                    .operators()
                     .embedding(embedding, batch.token_ids(), None)
                     .map_err(SegmentError::at(SegmentStage::Embedding))?,
             )
@@ -584,6 +620,7 @@ impl StandardDecoderSegment {
                     });
                 }
                 operators
+                    .operators()
                     .bind_rows(rows)
                     .map_err(SegmentError::at(SegmentStage::Input))?
             }
@@ -602,7 +639,7 @@ impl StandardDecoderSegment {
                 execution.check_active().map_err(SegmentError::at(stage))?;
             }
             execute_standard_layer(
-                operators,
+                &mut operators,
                 &self.materializer,
                 layer,
                 local,
@@ -621,7 +658,7 @@ impl StandardDecoderSegment {
                 .map_err(SegmentError::at(SegmentStage::Output))?;
         }
         let output = match &self.output {
-            Some(output) => execute_standard_output_rows(operators, output, &hidden)
+            Some(output) => execute_standard_output_rows(operators.operators(), output, &hidden)
                 .map(DeviceSegmentOutput::Logits)
                 .map_err(SegmentError::at(SegmentStage::Output)),
             None => Ok(DeviceSegmentOutput::Hidden {
@@ -636,6 +673,407 @@ impl StandardDecoderSegment {
                 .check_active()
                 .map_err(SegmentError::at(SegmentStage::Output))?;
         }
+        Ok(output)
+    }
+}
+
+/// Stateful F32 hybrid segment. This is a computation image, not a runner or a
+/// transaction owner. CPU and CUDA use the same loop and standard layer math.
+#[derive(Debug)]
+pub struct HybridDecoderSegment {
+    plan: LayerSegmentPlan,
+    schema: crate::decoder::HybridStateSchema,
+    hidden_size: usize,
+    max_positions: usize,
+    materializer: StateDictMaterializer,
+    parameters: Box<[BoundParameter]>,
+    embedding: Option<PreparedEmbedding>,
+    layers: Box<[super::PreparedStandardLayer]>,
+    output: Option<PreparedCpuOutput>,
+}
+
+impl HybridDecoderSegment {
+    pub fn prepare(
+        resources: &BoundDecoderResources,
+        plan: LayerSegmentPlan,
+        precision: ExecutionPrecisionPolicy,
+        max_positions: usize,
+        max_parameter_bytes: u64,
+    ) -> SegmentResult<Self> {
+        let materializer = StateDictMaterializer::new(max_parameter_bytes)
+            .map_err(SegmentError::at(SegmentStage::Prepare))?;
+        Self::prepare_with_materializer(
+            resources,
+            plan,
+            precision,
+            max_positions,
+            materializer,
+            None,
+        )
+    }
+
+    pub(super) fn prepare_with_materializer(
+        resources: &BoundDecoderResources,
+        plan: LayerSegmentPlan,
+        precision: ExecutionPrecisionPolicy,
+        max_positions: usize,
+        materializer: StateDictMaterializer,
+        local_schema: Option<crate::decoder::HybridStateSchema>,
+    ) -> SegmentResult<Self> {
+        let spec = resources.spec();
+        if plan.total_layers() != spec.layers().len() {
+            return Err(SegmentError::LayerCount {
+                planned: plan.total_layers(),
+                actual: spec.layers().len(),
+            });
+        }
+        if precision != ExecutionPrecisionPolicy::f32() {
+            return Err(SegmentError::Precision);
+        }
+        if max_positions == 0
+            || spec
+                .max_sequence_length()
+                .is_some_and(|max| max_positions > max)
+        {
+            return Err(SegmentError::PositionLimit { max_positions });
+        }
+        let prepare = SegmentError::at(SegmentStage::Prepare);
+        crate::moe::catalog::ValidatedExpertCatalog::for_decoder_range(resources, plan.layers())
+            .map_err(prepare)?;
+        let inventory = super::segment_inventory::HybridSegmentInventory::new(resources, &plan)
+            .map_err(prepare)?;
+        let schema = local_schema.unwrap_or_else(|| inventory.schema().clone());
+        let descriptors = inventory.layers();
+        super::standard::validate_hybrid_descriptors(spec, descriptors).map_err(prepare)?;
+        let embedding = plan
+            .owns_embedding()
+            .then(|| prepare_embedding(resources, &materializer))
+            .transpose()
+            .map_err(SegmentError::at(SegmentStage::Embedding))?;
+        let output = plan
+            .owns_output()
+            .then(|| prepare_output(resources, &materializer))
+            .transpose()
+            .map_err(SegmentError::at(SegmentStage::Output))?;
+        let layers = descriptors
+            .iter()
+            .enumerate()
+            .map(|(local, layer)| {
+                super::standard::hybrid::prepare_standard_layer(
+                    layer,
+                    resources,
+                    &materializer,
+                    &mut MemoryLayerWeightCache::new(),
+                    max_positions,
+                )
+                .map_err(SegmentError::at(SegmentStage::Layer {
+                    global: layer.index(),
+                    local,
+                }))
+            })
+            .collect::<SegmentResult<Vec<_>>>()?
+            .into_boxed_slice();
+        let parameters = inventory
+            .parameters()
+            .cloned()
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+        Ok(Self {
+            plan,
+            schema,
+            hidden_size: spec.hidden_size(),
+            max_positions,
+            materializer,
+            parameters,
+            embedding,
+            layers,
+            output,
+        })
+    }
+    #[cfg(feature = "cpu-reference")]
+    pub(super) fn preparation_reads(
+        &self,
+    ) -> ferrule_common::Result<Vec<super::parallel::TensorParallelPreparationRead>> {
+        self.materializer.tensor_reads()
+    }
+    #[cfg(feature = "cpu-reference")]
+    pub(super) fn checkpoint_read_counters(&self) -> crate::checkpoint::CheckpointReadCounters {
+        self.materializer.checkpoint_read_counters()
+    }
+    pub fn plan(&self) -> &LayerSegmentPlan {
+        &self.plan
+    }
+    pub fn schema(&self) -> &crate::decoder::HybridStateSchema {
+        &self.schema
+    }
+    /// OutputHead retains its canonical storage dependency even when embedding
+    /// is unowned. No unowned layers or attachment payloads enter this image.
+    pub fn parameters(&self) -> &[BoundParameter] {
+        &self.parameters
+    }
+
+    pub fn validate_execution<S: crate::decoder::StandardSequenceState>(
+        &self,
+        batch: &PackedDecoderBatch,
+        states: &[S],
+    ) -> SegmentResult<()> {
+        batch
+            .validate_states(states)
+            .map_err(SegmentError::at(SegmentStage::Input))?;
+        if let Some(&position) = batch.positions().iter().find(|&&p| p >= self.max_positions) {
+            return Err(SegmentError::Position {
+                position,
+                max_positions: self.max_positions,
+            });
+        }
+        for sequence in batch.sequences() {
+            states[sequence.state_index()]
+                .validate_standard_state_at(&self.schema, sequence.context_len())
+                .map_err(SegmentError::at(SegmentStage::Input))?;
+        }
+        Ok(())
+    }
+
+    /// Verify recurrent completion while the logical core is STILL at the input
+    /// frontier. Only the outer journal may advance it after completion evidence.
+    pub fn validate_frontier<S: crate::decoder::StandardSequenceState>(
+        &self,
+        batch: &PackedDecoderBatch,
+        states: &[S],
+    ) -> SegmentResult<()> {
+        batch
+            .validate_states(states)
+            .map_err(SegmentError::at(SegmentStage::Output))?;
+        for sequence in batch.sequences() {
+            states[sequence.state_index()]
+                .validate_standard_state_at(&self.schema, sequence.sequence_len())
+                .map_err(SegmentError::at(SegmentStage::Output))?;
+        }
+        Ok(())
+    }
+    pub fn execute(
+        &self,
+        batch: &PackedDecoderBatch,
+        input: SegmentInput,
+        states: &mut [crate::decoder::HybridDecoderSequenceState],
+        kv: &mut CpuKvView,
+    ) -> SegmentResult<SegmentOutput> {
+        self.execute_checked(batch, input, states, kv, &mut |_| Ok(()))
+    }
+    pub fn execute_checked(
+        &self,
+        batch: &PackedDecoderBatch,
+        input: SegmentInput,
+        states: &mut [crate::decoder::HybridDecoderSequenceState],
+        kv: &mut CpuKvView,
+        check_active: &mut dyn FnMut(ExecutionTransactionId) -> ferrule_common::Result<()>,
+    ) -> SegmentResult<SegmentOutput> {
+        let mut operators = CpuStandardDecoderOperators::new(ExecutionPrecisionPolicy::f32());
+        self.execute_bound(
+            batch,
+            input.into(),
+            states,
+            kv,
+            LayerOperators::Standard(&mut operators),
+            check_active,
+        )?
+        .into_host(&mut operators)
+    }
+
+    /// Execute the ordinary hybrid layers with only routed SwiGLU delegated.
+    /// `context` uses the KV transaction and sequence IDs in packed-sequence
+    /// order, not token-row or state-slot order. No executor or transaction
+    /// authority is retained. Failure requires the caller's existing journal
+    /// to roll back both recurrent state and KV. This is not TP execution.
+    #[cfg(feature = "cpu-reference")]
+    #[allow(clippy::too_many_arguments)]
+    pub fn execute_with_experts(
+        &self,
+        batch: &PackedDecoderBatch,
+        input: SegmentInput,
+        states: &mut [crate::decoder::HybridDecoderSequenceState],
+        kv: &mut CpuKvView,
+        context: (ExecutionTransactionId, ParallelRankId, &[u64]),
+        executor: &mut dyn RoutedSwiGluExecutor,
+        check_active: &mut dyn FnMut(ExecutionTransactionId) -> ferrule_common::Result<()>,
+    ) -> SegmentResult<SegmentOutput> {
+        let mut operators = CpuStandardDecoderOperators::new(ExecutionPrecisionPolicy::f32());
+        self.execute_bound_inner(
+            batch,
+            input.into(),
+            states,
+            kv,
+            LayerOperators::Standard(&mut operators),
+            check_active,
+            Some((context, executor)),
+        )?
+        .into_host(&mut operators)
+    }
+
+    #[cfg(feature = "cuda")]
+    pub(super) fn prepare_cuda_bindings(
+        &self,
+        operators: &mut super::standard::cuda::CudaStandardDecoderOperators,
+    ) -> ferrule_common::Result<()> {
+        operators.prepare_hybrid_segment_image(
+            self.embedding.as_ref(),
+            &self.layers,
+            self.output.as_ref(),
+        )
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn execute_bound<S: crate::decoder::StandardSequenceState>(
+        &self,
+        batch: &PackedDecoderBatch,
+        input: DeviceSegmentInput,
+        states: &mut [S],
+        kv: &mut dyn StandardDecoderKvView,
+        operators: LayerOperators<'_>,
+        check_active: &mut dyn FnMut(ExecutionTransactionId) -> ferrule_common::Result<()>,
+    ) -> SegmentResult<DeviceSegmentOutput> {
+        self.execute_bound_inner(batch, input, states, kv, operators, check_active, None)
+    }
+
+    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+    pub(super) fn execute_bound_inner<S: crate::decoder::StandardSequenceState>(
+        &self,
+        batch: &PackedDecoderBatch,
+        input: DeviceSegmentInput,
+        states: &mut [S],
+        kv: &mut dyn StandardDecoderKvView,
+        mut operators: LayerOperators<'_>,
+        check_active: &mut dyn FnMut(ExecutionTransactionId) -> ferrule_common::Result<()>,
+        mut experts: Option<(
+            (ExecutionTransactionId, ParallelRankId, &[u64]),
+            &mut dyn RoutedSwiGluExecutor,
+        )>,
+    ) -> SegmentResult<DeviceSegmentOutput> {
+        let row_sequences = if let Some(((transaction, _, sequences), _)) = &experts {
+            if *transaction != kv.transaction() {
+                return Err(SegmentError::ExpertTransaction {
+                    expected: kv.transaction(),
+                    actual: *transaction,
+                });
+            }
+            if sequences.len() != batch.sequences().len() {
+                return Err(SegmentError::ExpertSequenceCount {
+                    expected: batch.sequences().len(),
+                    actual: sequences.len(),
+                });
+            }
+            batch
+                .row_to_sequence()
+                .iter()
+                .map(|&i| sequences[i])
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        if operators.operators().precision() != ExecutionPrecisionPolicy::f32() {
+            return Err(SegmentError::Precision);
+        }
+        check_active(kv.transaction()).map_err(SegmentError::at(SegmentStage::Input))?;
+        self.validate_execution(batch, states)?;
+        kv.validate_batch(batch)
+            .map_err(SegmentError::at(SegmentStage::Input))?;
+        let metadata = packed_gqa_metadata(batch).map_err(SegmentError::at(SegmentStage::Input))?;
+        let rows = match (&self.embedding, input) {
+            (Some(embedding), DeviceSegmentInput::Tokens) => ready(
+                operators
+                    .operators()
+                    .embedding(embedding, batch.token_ids(), None)
+                    .map_err(SegmentError::at(SegmentStage::Embedding))?,
+            )
+            .map_err(SegmentError::at(SegmentStage::Embedding))?,
+            (None, DeviceSegmentInput::Hidden { next_layer, rows }) => {
+                if next_layer != self.plan.layers.start {
+                    return Err(SegmentError::HiddenBoundary {
+                        expected: self.plan.layers.start,
+                        actual: next_layer,
+                    });
+                }
+                if rows.shape().rows() != batch.len()
+                    || rows.shape().width() != self.hidden_size
+                    || rows.dtype() != RowsDType::F32
+                {
+                    return Err(SegmentError::HiddenLayout {
+                        rows: batch.len(),
+                        width: self.hidden_size,
+                        dtype: RowsDType::F32,
+                    });
+                }
+                operators
+                    .operators()
+                    .bind_rows(rows)
+                    .map_err(SegmentError::at(SegmentStage::Input))?
+            }
+            _ => return Err(SegmentError::EmbeddingOwnership),
+        };
+        let mut hidden = CpuTransformerHidden {
+            rows: Some(rows),
+            metadata,
+        };
+        // GDN metadata indexes packed sequences, not arbitrary caller state slots.
+        // Taking disjoint mutable references does not require Clone or Send.
+        let mut slots = states.iter_mut().map(Some).collect::<Vec<_>>();
+        let mut working = batch
+            .sequences()
+            .iter()
+            .map(|sequence| {
+                slots[sequence.state_index()]
+                    .take()
+                    .expect("validated unique state slot")
+                    as &mut dyn crate::decoder::StandardSequenceState
+            })
+            .collect::<Vec<_>>();
+        for (local, layer) in self.layers.iter().enumerate() {
+            let stage = SegmentStage::Layer {
+                global: layer.index(),
+                local,
+            };
+            check_active(kv.transaction()).map_err(SegmentError::at(stage))?;
+            let entry = &self.schema.entries()[local];
+            let mut execution =
+                experts
+                    .as_mut()
+                    .map(
+                        |((transaction, source_rank, _), executor)| RoutedLayerExecution {
+                            transaction: *transaction,
+                            source_rank: *source_rank,
+                            sequences: &row_sequences,
+                            executor: &mut **executor,
+                            check_active: &mut *check_active,
+                        },
+                    );
+            operators
+                .execute_layer(
+                    &self.materializer,
+                    layer.index(),
+                    layer.attention().block().as_ref(),
+                    layer.feed_forward().block(),
+                    entry.local_kv_layer.unwrap_or(0),
+                    &mut hidden,
+                    kv,
+                    &mut working,
+                    execution.as_mut(),
+                )
+                .map_err(SegmentError::at(stage))?;
+            check_active(kv.transaction()).map_err(SegmentError::at(stage))?;
+        }
+        let output = match &self.output {
+            Some(output) => DeviceSegmentOutput::Logits(
+                execute_standard_output_rows(operators.operators(), output, &hidden)
+                    .map_err(SegmentError::at(SegmentStage::Output))?,
+            ),
+            None => DeviceSegmentOutput::Hidden {
+                next_layer: self.plan.layers.end,
+                rows: hidden
+                    .take_rows()
+                    .map_err(SegmentError::at(SegmentStage::Output))?,
+            },
+        };
+        check_active(kv.transaction()).map_err(SegmentError::at(SegmentStage::Output))?;
+        self.validate_frontier(batch, states)?;
         Ok(output)
     }
 }

@@ -1,0 +1,63 @@
+{
+  "status": "pass",
+  "checks": [
+    {
+      "id": "qa",
+      "expected_text": " Tokyo.\nThe capital of Japan is",
+      "observed_text": " Tokyo.\nThe capital of Japan is",
+      "reference_ids": [
+        25358,
+        13,
+        198,
+        760,
+        6511,
+        314,
+        6124,
+        369
+      ],
+      "observed_ids": null,
+      "actual_output_tokens": 8,
+      "actual_input_tokens": 5,
+      "passed": true
+    },
+    {
+      "id": "arithmetic",
+      "expected_text": " ?\n\n7 + 8 = ",
+      "observed_text": " ?\n\n7 + 8 = ",
+      "reference_ids": [
+        907,
+        271,
+        22,
+        478,
+        220,
+        23,
+        283,
+        220
+      ],
+      "observed_ids": null,
+      "actual_output_tokens": 8,
+      "actual_input_tokens": 5,
+      "passed": true
+    },
+    {
+      "id": "chinese",
+      "expected_text": "\u5317\u4eac\uff0c\u5317\u4eac\u662f\u4e2d\u56fd\u7684\u9996\u90fd\u3002\u90a3\u4e48",
+      "observed_text": "\u5317\u4eac\uff0c\u5317\u4eac\u662f\u4e2d\u56fd\u7684\u9996\u90fd\u3002\u90a3\u4e48",
+      "reference_ids": [
+        98116,
+        3709,
+        98116,
+        108820,
+        102357,
+        95983,
+        1710,
+        97486
+      ],
+      "observed_ids": null,
+      "actual_output_tokens": 8,
+      "actual_input_tokens": 3,
+      "passed": true
+    }
+  ],
+  "limitation": "Exact visible first8 text + usage only; not observed token IDs/logits/routes or full numerical oracle"
+}

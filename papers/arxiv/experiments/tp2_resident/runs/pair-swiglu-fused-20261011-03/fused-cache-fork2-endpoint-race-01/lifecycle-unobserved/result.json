@@ -1,0 +1,268 @@
+{
+  "canonical_candidate_complete": false,
+  "events": [
+    {
+      "case": "hello",
+      "epoch": 0,
+      "frontier": 0,
+      "op": "create",
+      "runtime_session": 1,
+      "session": "parent"
+    },
+    {
+      "call": {
+        "input_token_ids": [
+          9419
+        ],
+        "next_token_id": 11,
+        "position_start": 0,
+        "sequence_length_after": 1,
+        "stage": "call"
+      },
+      "epoch": 0,
+      "id": "call-00",
+      "input": {
+        "ids": [
+          9419
+        ],
+        "kind": "tokens"
+      },
+      "op": "call",
+      "publication": {
+        "committed_tokens": 1,
+        "outstanding": 0,
+        "position_start": 0,
+        "publications_after": 1,
+        "publications_before": 0,
+        "quarantined": false,
+        "schema": "ferrule.paper.unobserved-publication.v1",
+        "session": 1,
+        "submitted_rows": 1,
+        "tensor_readback": false
+      },
+      "runtime_session": 1,
+      "session": "parent",
+      "transaction": 1,
+      "untouched_sessions": []
+    },
+    {
+      "epoch": 0,
+      "frontier": 1,
+      "op": "fork",
+      "runtime_session": 2,
+      "runtime_source_session": 1,
+      "session": "left",
+      "source": "parent",
+      "state_binding": "source preceding publication; validate branch before-state on its next call"
+    },
+    {
+      "epoch": 0,
+      "frontier": 1,
+      "op": "fork",
+      "runtime_session": 3,
+      "runtime_source_session": 1,
+      "session": "right",
+      "source": "parent",
+      "state_binding": "source preceding publication; validate branch before-state on its next call"
+    },
+    {
+      "call": {
+        "input_token_ids": [
+          11
+        ],
+        "next_token_id": 353,
+        "position_start": 1,
+        "sequence_length_after": 2,
+        "stage": "call"
+      },
+      "epoch": 0,
+      "id": "call-01",
+      "input": {
+        "kind": "greedy"
+      },
+      "op": "call",
+      "publication": {
+        "committed_tokens": 2,
+        "outstanding": 0,
+        "position_start": 1,
+        "publications_after": 2,
+        "publications_before": 1,
+        "quarantined": false,
+        "schema": "ferrule.paper.unobserved-publication.v1",
+        "session": 2,
+        "submitted_rows": 1,
+        "tensor_readback": false
+      },
+      "runtime_session": 2,
+      "session": "left",
+      "transaction": 2,
+      "untouched_sessions": [
+        "parent",
+        "right"
+      ]
+    },
+    {
+      "call": {
+        "input_token_ids": [
+          353
+        ],
+        "next_token_id": 1044,
+        "position_start": 2,
+        "sequence_length_after": 3,
+        "stage": "call"
+      },
+      "epoch": 0,
+      "id": "call-02",
+      "input": {
+        "kind": "greedy"
+      },
+      "op": "call",
+      "publication": {
+        "committed_tokens": 3,
+        "outstanding": 0,
+        "position_start": 2,
+        "publications_after": 3,
+        "publications_before": 2,
+        "quarantined": false,
+        "schema": "ferrule.paper.unobserved-publication.v1",
+        "session": 2,
+        "submitted_rows": 1,
+        "tensor_readback": false
+      },
+      "runtime_session": 2,
+      "session": "left",
+      "transaction": 3,
+      "untouched_sessions": [
+        "parent",
+        "right"
+      ]
+    },
+    {
+      "epoch": 0,
+      "op": "drop",
+      "session": "left"
+    },
+    {
+      "call": {
+        "input_token_ids": [
+          11
+        ],
+        "next_token_id": 353,
+        "position_start": 1,
+        "sequence_length_after": 2,
+        "stage": "call"
+      },
+      "epoch": 0,
+      "id": "call-03",
+      "input": {
+        "kind": "greedy"
+      },
+      "op": "call",
+      "publication": {
+        "committed_tokens": 2,
+        "outstanding": 0,
+        "position_start": 1,
+        "publications_after": 4,
+        "publications_before": 3,
+        "quarantined": false,
+        "schema": "ferrule.paper.unobserved-publication.v1",
+        "session": 3,
+        "submitted_rows": 1,
+        "tensor_readback": false
+      },
+      "runtime_session": 3,
+      "session": "right",
+      "transaction": 4,
+      "untouched_sessions": [
+        "parent"
+      ]
+    },
+    {
+      "call": {
+        "input_token_ids": [
+          760
+        ],
+        "next_token_id": 2614,
+        "position_start": 2,
+        "sequence_length_after": 3,
+        "stage": "call"
+      },
+      "epoch": 0,
+      "id": "call-04",
+      "input": {
+        "ids": [
+          760
+        ],
+        "kind": "tokens"
+      },
+      "op": "call",
+      "publication": {
+        "committed_tokens": 3,
+        "outstanding": 0,
+        "position_start": 2,
+        "publications_after": 5,
+        "publications_before": 4,
+        "quarantined": false,
+        "schema": "ferrule.paper.unobserved-publication.v1",
+        "session": 3,
+        "submitted_rows": 1,
+        "tensor_readback": false
+      },
+      "runtime_session": 3,
+      "session": "right",
+      "transaction": 5,
+      "untouched_sessions": [
+        "parent"
+      ]
+    },
+    {
+      "epoch": 0,
+      "op": "drop",
+      "session": "right"
+    },
+    {
+      "call": {
+        "input_token_ids": [
+          11
+        ],
+        "next_token_id": 353,
+        "position_start": 1,
+        "sequence_length_after": 2,
+        "stage": "call"
+      },
+      "epoch": 0,
+      "id": "call-05",
+      "input": {
+        "kind": "greedy"
+      },
+      "op": "call",
+      "publication": {
+        "committed_tokens": 2,
+        "outstanding": 0,
+        "position_start": 1,
+        "publications_after": 6,
+        "publications_before": 5,
+        "quarantined": false,
+        "schema": "ferrule.paper.unobserved-publication.v1",
+        "session": 1,
+        "submitted_rows": 1,
+        "tensor_readback": false
+      },
+      "runtime_session": 1,
+      "session": "parent",
+      "transaction": 6,
+      "untouched_sessions": []
+    },
+    {
+      "epoch": 0,
+      "op": "drop",
+      "session": "parent"
+    }
+  ],
+  "independent_quality": "independent full-vocabulary logits and per-call tokens; host publication checks only",
+  "numeric_observer_installed": false,
+  "schema": "ferrule.mixed-lifecycle-unobserved.v1",
+  "shutdown_ok": true,
+  "status": "executed_unobserved",
+  "writer_complete": null
+}

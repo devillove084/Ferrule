@@ -304,10 +304,20 @@ pub enum TransactionEndProgress {
 /// to share prepared resources without a serial fallback.
 ///
 /// Models implement this trait; the runtime crate provides a generic
-/// [`NativeMultiSessionExecutor`] that works over any `MultiSessionRunner`.
+/// [`RunnerMultiSessionExecutor`] that works over any `MultiSessionRunner`.
 ///
-/// [`NativeMultiSessionExecutor`]: ../../ferrule_runtime/engine/struct.NativeMultiSessionExecutor.html
+/// [`RunnerMultiSessionExecutor`]: ../../ferrule_runtime/engine/struct.RunnerMultiSessionExecutor.html
 pub trait MultiSessionRunner: ModelRunner {
+    fn idle_kv_reclaim_config(&self) -> Option<crate::decoder::IdleKvReclaimConfig> {
+        None
+    }
+    fn idle_kv_physical_stats(&self) -> Option<crate::decoder::IdleKvPhysicalStats> {
+        None
+    }
+    fn trim_idle_kv(&mut self) -> Result<()> {
+        Ok(())
+    }
+
     /// Per-sequence execution state (position, KV, predictor, etc.).
     type SequenceState;
 
@@ -656,6 +666,14 @@ pub trait ResidentModelRunner: MultiSessionRunner {
     /// Return one model-owned typed observability snapshot. Runtime transports the
     /// associated type without knowing model-specific fields.
     fn observability_snapshot(&self) -> Self::ObservabilitySnapshot;
+
+    /// Read retained physical-owner evidence without polling, synchronization,
+    /// resource release, or inferred quiescence. Unsupported fields stay unobserved.
+    fn physical_resource_snapshot(
+        &self,
+    ) -> crate::resource_observability::PhysicalResourceObservation {
+        Default::default()
+    }
 
     /// Return the cloneable wake hub shared by every model-side completion producer.
     fn completion_hub(&self) -> CompletionHub;

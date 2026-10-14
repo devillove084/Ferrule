@@ -95,6 +95,14 @@ pub enum HostExpertCacheError {
     WorkerSpawn { source: std::io::Error },
 }
 
+impl From<ferrule_backend::resources::host_memory::HostMemoryProbeError> for HostExpertCacheError {
+    fn from(source: ferrule_backend::resources::host_memory::HostMemoryProbeError) -> Self {
+        Self::MemoryProbe {
+            reason: source.reason,
+        }
+    }
+}
+
 fn error(source: HostExpertCacheError) -> Error {
     Error::ModelSource {
         source: Box::new(source),
@@ -144,6 +152,35 @@ impl HostExpertWarmPlan {
         options: HostExpertCacheOptions,
         max_parameter_bytes: u64,
     ) -> Result<Self> {
+        Self::selected(state_dict, options, max_parameter_bytes, None)
+    }
+
+    /// Only these complete global (layer, expert) identities are read or retained.
+    /// An empty, duplicate or missing identity is rejected before payload I/O.
+    pub fn for_owned(
+        state_dict: &BoundStateDict,
+        options: HostExpertCacheOptions,
+        max_parameter_bytes: u64,
+        owned: impl IntoIterator<Item = (usize, usize)>,
+    ) -> Result<Self> {
+        let mut selected = BTreeSet::new();
+        for id in owned {
+            if !selected.insert(id) {
+                return Err(invalid("duplicate owned expert"));
+            }
+        }
+        if selected.is_empty() {
+            return Err(invalid("empty owned expert set"));
+        }
+        Self::selected(state_dict, options, max_parameter_bytes, Some(&selected))
+    }
+
+    fn selected(
+        state_dict: &BoundStateDict,
+        options: HostExpertCacheOptions,
+        max_parameter_bytes: u64,
+        selected: Option<&BTreeSet<(usize, usize)>>,
+    ) -> Result<Self> {
         options.validate()?;
         if options.mode != ExpertPrewarmMode::Full {
             return Err(invalid("a warm plan requires full mode"));
@@ -159,6 +196,9 @@ impl HostExpertWarmPlan {
             let ParameterResidency::Expert { layer, expert } = *binding.residency() else {
                 continue;
             };
+            if selected.is_some_and(|ids| !ids.contains(&(layer, expert))) {
+                continue;
+            }
             let role = match binding.role() {
                 TensorRole::RoutedExpertGate => 0,
                 TensorRole::RoutedExpertUp => 1,
@@ -203,6 +243,9 @@ impl HostExpertWarmPlan {
                 binding: binding.clone(),
                 read,
             });
+        }
+        if selected.is_some_and(|ids| ids.len() != groups.len()) {
+            return Err(invalid("owned expert not found in bound state dict"));
         }
         if groups.is_empty() || groups.values().any(|roles| roles.len() != 3) {
             return Err(invalid("full prewarm requires complete routed experts"));

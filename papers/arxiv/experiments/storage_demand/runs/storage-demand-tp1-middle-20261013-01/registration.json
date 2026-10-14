@@ -1,0 +1,204 @@
+{
+  "purpose": "storage_demand_tp1_middle_four_requests_v1",
+  "prepared_sha256": "5c7a01147084aa95f6a6604cf727f69754c7e7b51539afd7423539723e4bc696",
+  "wrapper_sha256": "383ec35f9479f49628da94d6e3753e3825c8dfe59b0dcd8d4471a79d1c0242c1",
+  "original_binary": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/storage-paper-current-release-20261013-01/ferrule-storage-paper-current",
+  "staged_binary_sha256": "36e6aaa54d1aff7c8cc35d63dcee0df1cad91fcc8f6d3e746369504f2c70a58c",
+  "spec": {
+    "engine": "ferrule",
+    "argv": [
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-01/staged/ferrule",
+      "serve",
+      "/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8",
+      "--backend",
+      "cuda",
+      "--engine",
+      "resident",
+      "--model-profile",
+      "qwen35-mixed-bf16",
+      "--expert-prewarm",
+      "lazy",
+      "--kv-execution-policy",
+      "resident",
+      "--ctx-size",
+      "128",
+      "--max-active-sequences",
+      "2",
+      "--max-batch-tokens",
+      "8",
+      "--prefill-chunk-size",
+      "8",
+      "--kv-cache-mb",
+      "16",
+      "--max-tensor-mb",
+      "1024",
+      "--cuda-device-budget-mb",
+      "7168",
+      "--cuda-workspace-mb",
+      "2048",
+      "--cuda-expert-scratch-mb",
+      "8",
+      "--cuda-expert-device-entries",
+      "64",
+      "--cuda-expert-device-bytes",
+      "335544320",
+      "--request-queue-capacity",
+      "2",
+      "--max-inflight-requests",
+      "2",
+      "--served-model-name",
+      "qwen35-storage-demand-paper",
+      "--host",
+      "127.0.0.1",
+      "--port",
+      "18369"
+    ],
+    "environment": {
+      "PATH": "/usr/bin:/bin",
+      "HOME": "/root",
+      "CUDA_VISIBLE_DEVICES": "0",
+      "NVIDIA_VISIBLE_DEVICES": "0",
+      "PYTHONDONTWRITEBYTECODE": "1",
+      "CUBLAS_WORKSPACE_CONFIG": ":0:0",
+      "FERRULE_LOG": "info,ferrule_performance=debug",
+      "FERRULE_LOG_FORMAT": "json",
+      "LD_LIBRARY_PATH": "/home/admin/wxw403883/anaconda3/envs/tao/lib:/usr/lib64"
+    },
+    "model": "qwen35-storage-demand-paper",
+    "url": "http://127.0.0.1:18369/v1/completions"
+  },
+  "schedule": [
+    {
+      "name": "hello2",
+      "prompt": "Hello",
+      "input_tokens": 1,
+      "max_tokens": 2,
+      "reference": null,
+      "payload": {
+        "model": "qwen35-storage-demand-paper",
+        "prompt": "Hello",
+        "temperature": 0,
+        "seed": 1,
+        "n": 1,
+        "max_tokens": 2,
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        }
+      }
+    },
+    {
+      "name": "canary-qa",
+      "prompt": "The capital of Japan is",
+      "input_tokens": 5,
+      "max_tokens": 8,
+      "reference": {
+        "id": "qa",
+        "prompt": "The capital of Japan is",
+        "input_tokens": 5,
+        "reference_ids": [
+          25358,
+          13,
+          198,
+          760,
+          6511,
+          314,
+          6124,
+          369
+        ],
+        "reference_text": " Tokyo.\nThe capital of Japan is"
+      },
+      "payload": {
+        "model": "qwen35-storage-demand-paper",
+        "prompt": "The capital of Japan is",
+        "temperature": 0,
+        "seed": 1,
+        "n": 1,
+        "max_tokens": 8,
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        }
+      }
+    },
+    {
+      "name": "canary-arithmetic",
+      "prompt": "7 + 8 =",
+      "input_tokens": 5,
+      "max_tokens": 8,
+      "reference": {
+        "id": "arithmetic",
+        "prompt": "7 + 8 =",
+        "input_tokens": 5,
+        "reference_ids": [
+          907,
+          271,
+          22,
+          478,
+          220,
+          23,
+          283,
+          220
+        ],
+        "reference_text": " ?\n\n7 + 8 = "
+      },
+      "payload": {
+        "model": "qwen35-storage-demand-paper",
+        "prompt": "7 + 8 =",
+        "temperature": 0,
+        "seed": 1,
+        "n": 1,
+        "max_tokens": 8,
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        }
+      }
+    },
+    {
+      "name": "canary-chinese",
+      "prompt": "\u4e2d\u56fd\u7684\u9996\u90fd\u662f",
+      "input_tokens": 3,
+      "max_tokens": 8,
+      "reference": {
+        "id": "chinese",
+        "prompt": "\u4e2d\u56fd\u7684\u9996\u90fd\u662f",
+        "input_tokens": 3,
+        "reference_ids": [
+          98116,
+          3709,
+          98116,
+          108820,
+          102357,
+          95983,
+          1710,
+          97486
+        ],
+        "reference_text": "\u5317\u4eac\uff0c\u5317\u4eac\u662f\u4e2d\u56fd\u7684\u9996\u90fd\u3002\u90a3\u4e48"
+      },
+      "payload": {
+        "model": "qwen35-storage-demand-paper",
+        "prompt": "\u4e2d\u56fd\u7684\u9996\u90fd\u662f",
+        "temperature": 0,
+        "seed": 1,
+        "n": 1,
+        "max_tokens": 8,
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        }
+      }
+    }
+  ],
+  "startup_seconds": 700,
+  "request_seconds": 120,
+  "all_requests_seconds": 300,
+  "lifetime_seconds": 1100,
+  "shutdown_seconds": 45,
+  "supervisor_seconds": 1100,
+  "n": 1,
+  "observer_effect": "ferrule_performance DEBUG overhead unmeasured; not a fast-performance baseline",
+  "physical_host_cap_bytes": null,
+  "PssAnon": null,
+  "physical_nas_bytes": null
+}

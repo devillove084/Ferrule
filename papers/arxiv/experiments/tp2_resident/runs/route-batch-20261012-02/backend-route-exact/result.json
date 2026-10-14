@@ -1,0 +1,16 @@
+{
+  "passed": true,
+  "gate": {
+    "name": "backend-route-exact",
+    "binary": "backend",
+    "selector": "cuda::operators::standard_bf16::tests::packed_routes_gpu_old_expert_gathers_and_combine_match_batch",
+    "evidence": "route_batch_backend_words_counts_custody",
+    "devices": 1,
+    "reference": null,
+    "cache_bytes": null,
+    "observer": null
+  },
+  "proven_drained": true,
+  "all_eight_idle": true,
+  "performance_claim": false
+}

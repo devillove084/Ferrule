@@ -1,0 +1,15 @@
+
+running 1 test
+test cuda::providers::bf16_gemmex::mixed_decode_reuse_tests::mixed_decode_resident_single_pair_m1_m5 ... 
+thread 'cuda::providers::bf16_gemmex::mixed_decode_reuse_tests::mixed_decode_resident_single_pair_m1_m5' (50128) panicked at crates/ferrule-backend/src/cuda/providers/../../../tests/numeric_bf16_gemv/mixed_decode_reuse.rs:210:46:
+called `Result::unwrap()` on an `Err` value: Backend { source: CudaError { operation: "cuInit", code: 3, name: "CUDA_ERROR_NOT_INITIALIZED", message: "initialization error" } }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    cuda::providers::bf16_gemmex::mixed_decode_reuse_tests::mixed_decode_resident_single_pair_m1_m5
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 287 filtered out; finished in 0.42s
+

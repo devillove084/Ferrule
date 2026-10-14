@@ -26,6 +26,16 @@ impl CudaOperators {
         layout: crate::cuda::operators::ProposalHeadLayout,
         workspace: &mut CudaProposalHeadWorkspace,
     ) -> Result<()> {
+        Self::f32_no_alias(
+            &[hc_state, hc_function, hc_scale, hc_base, norm_weight],
+            &[
+                &workspace.hidden,
+                &workspace.normalized,
+                &workspace.base_logits,
+                &workspace.partial_values,
+                &workspace.confidence,
+            ],
+        )?;
         let lm_head = lm_head.operator_view();
         let markov_w1 = markov_w1.operator_view();
         let markov_w2 = markov_w2.operator_view();
@@ -88,8 +98,8 @@ impl CudaOperators {
                 hc_base.as_device_buffer(),
                 norm_weight.as_device_buffer(),
                 lm_head.weight,
-                &markov_w1.weight,
-                &markov_w2.weight,
+                markov_w1.weight,
+                markov_w2.weight,
                 confidence_weight.weight,
                 workspace.hidden.as_device_buffer_mut(),
                 workspace.normalized.as_device_buffer_mut(),
@@ -121,6 +131,7 @@ impl CudaOperators {
         inv_rms: &mut CudaF32Buffer,
         output: &mut CudaF32Buffer,
     ) -> Result<()> {
+        Self::f32_no_alias(&[input, norm_weight], &[inv_rms, output])?;
         let projection = projection.operator_view();
         let activation = activation.operator_storage_mut();
         let CudaArtifactLinearShape::Fp8E4M3WithE8M0Scale {

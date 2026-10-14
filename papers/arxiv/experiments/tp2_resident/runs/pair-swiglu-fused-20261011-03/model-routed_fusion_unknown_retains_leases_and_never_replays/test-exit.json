@@ -1,0 +1,7 @@
+{
+  "returncode": 0,
+  "one_test_passed": true,
+  "selector": "transformer::standard::cuda::hybrid_rank::mixed::decoded_gpu_tests::routed_fusion::routed_fusion_unknown_retains_leases_and_never_replays",
+  "binary_sha256": "8726aa9785e0615b9bac88423ba48ec2f8a5c561772c04a3fc15da7d88bb9bcf",
+  "log_sha256": "0fffb665dbf49c313e35c5cf632d79d61f3904d2f20b2735cb0e56673f1b4ce3"
+}

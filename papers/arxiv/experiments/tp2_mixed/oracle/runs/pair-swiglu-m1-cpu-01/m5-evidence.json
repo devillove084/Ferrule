@@ -1,0 +1,2406 @@
+{
+  "candidate_executed": false,
+  "cuda_executed": false,
+  "full_control_calls": {
+    "cuda_tasks": 1,
+    "down_linear": 48,
+    "logical_ranks": 2,
+    "native_experts_forward": 2,
+    "norm": 1,
+    "packed_gate_up_linear": 48,
+    "physical_devices": 1,
+    "router": 2
+  },
+  "input_token_ids": [
+    760,
+    6511,
+    314,
+    9338,
+    369
+  ],
+  "missing": [
+    "actual normalized BF16 [5,2048] input",
+    "actual HF pre-down activation BF16 [5,256] per rank",
+    "CPU-frozen original layer-9 norm/router and all 24 active expert gate/up/down payloads for full control"
+  ],
+  "route_inventory": [
+    {
+      "active_expert_count": 36,
+      "all_five_experts": [],
+      "layer": 0,
+      "selected_expert_ids": [
+        [
+          112,
+          106,
+          107,
+          238,
+          57,
+          200,
+          181,
+          43
+        ],
+        [
+          70,
+          109,
+          24,
+          151,
+          31,
+          192,
+          231,
+          55
+        ],
+        [
+          226,
+          247,
+          11,
+          96,
+          187,
+          128,
+          107,
+          171
+        ],
+        [
+          254,
+          139,
+          81,
+          191,
+          208,
+          181,
+          71,
+          19
+        ],
+        [
+          127,
+          112,
+          11,
+          49,
+          153,
+          85,
+          18,
+          146
+        ]
+      ],
+      "selected_ids_sha256": "ac28669e2ef4c6ac61090bd7add0598e4cef2ca5694a305a56511e5e43d71b7f",
+      "tensor_key_rank0": "prefill.rank.0.layers.00.selected_expert_ids"
+    },
+    {
+      "active_expert_count": 32,
+      "all_five_experts": [],
+      "layer": 1,
+      "selected_expert_ids": [
+        [
+          214,
+          132,
+          112,
+          19,
+          226,
+          86,
+          250,
+          167
+        ],
+        [
+          236,
+          226,
+          22,
+          68,
+          85,
+          205,
+          109,
+          52
+        ],
+        [
+          236,
+          2,
+          165,
+          169,
+          68,
+          109,
+          52,
+          171
+        ],
+        [
+          153,
+          253,
+          150,
+          98,
+          48,
+          205,
+          190,
+          167
+        ],
+        [
+          123,
+          235,
+          43,
+          66,
+          205,
+          223,
+          57,
+          29
+        ]
+      ],
+      "selected_ids_sha256": "79cc85d8f99ad24ff84bee3b9b3887afa28879b08f1fb269ab7921ede001dd17",
+      "tensor_key_rank0": "prefill.rank.0.layers.01.selected_expert_ids"
+    },
+    {
+      "active_expert_count": 34,
+      "all_five_experts": [],
+      "layer": 2,
+      "selected_expert_ids": [
+        [
+          11,
+          255,
+          60,
+          217,
+          80,
+          233,
+          49,
+          197
+        ],
+        [
+          221,
+          58,
+          3,
+          143,
+          5,
+          49,
+          216,
+          158
+        ],
+        [
+          131,
+          254,
+          206,
+          67,
+          208,
+          83,
+          138,
+          174
+        ],
+        [
+          211,
+          67,
+          223,
+          131,
+          138,
+          206,
+          184,
+          100
+        ],
+        [
+          70,
+          14,
+          164,
+          184,
+          26,
+          40,
+          107,
+          43
+        ]
+      ],
+      "selected_ids_sha256": "b547f30bd381105daea62f04787cac4e874c7ee22452356999cd18becef2d2f3",
+      "tensor_key_rank0": "prefill.rank.0.layers.02.selected_expert_ids"
+    },
+    {
+      "active_expert_count": 33,
+      "all_five_experts": [],
+      "layer": 3,
+      "selected_expert_ids": [
+        [
+          214,
+          113,
+          162,
+          191,
+          246,
+          75,
+          171,
+          123
+        ],
+        [
+          167,
+          23,
+          197,
+          199,
+          163,
+          225,
+          19,
+          113
+        ],
+        [
+          209,
+          221,
+          188,
+          67,
+          202,
+          112,
+          180,
+          47
+        ],
+        [
+          209,
+          21,
+          115,
+          39,
+          163,
+          5,
+          242,
+          178
+        ],
+        [
+          116,
+          39,
+          171,
+          225,
+          20,
+          67,
+          27,
+          226
+        ]
+      ],
+      "selected_ids_sha256": "153dee945f518d15aa91aee6fa0432e8a24191f0b79b69c80683c2663b1f8b45",
+      "tensor_key_rank0": "prefill.rank.0.layers.03.selected_expert_ids"
+    },
+    {
+      "active_expert_count": 31,
+      "all_five_experts": [],
+      "layer": 4,
+      "selected_expert_ids": [
+        [
+          88,
+          195,
+          233,
+          172,
+          87,
+          54,
+          74,
+          72
+        ],
+        [
+          233,
+          243,
+          154,
+          88,
+          175,
+          132,
+          78,
+          134
+        ],
+        [
+          25,
+          204,
+          119,
+          243,
+          134,
+          113,
+          77,
+          86
+        ],
+        [
+          234,
+          206,
+          217,
+          135,
+          245,
+          32,
+          180,
+          154
+        ],
+        [
+          12,
+          25,
+          154,
+          204,
+          215,
+          217,
+          110,
+          80
+        ]
+      ],
+      "selected_ids_sha256": "eb77a6bb00d7462d9b5f608d3129232ddb7a9691a16ef726ca321f4a2e5cfa89",
+      "tensor_key_rank0": "prefill.rank.0.layers.04.selected_expert_ids"
+    },
+    {
+      "active_expert_count": 25,
+      "all_five_experts": [],
+      "layer": 5,
+      "selected_expert_ids": [
+        [
+          15,
+          159,
+          57,
+          166,
+          110,
+          174,
+          13,
+          60
+        ],
+        [
+          147,
+          64,
+          164,
+          105,
+          60,
+          94,
+          217,
+          226
+        ],
+        [
+          61,
+          94,
+          226,
+          142,
+          133,
+          232,
+          105,
+          217
+        ],
+        [
+          252,
+          94,
+          105,
+          17,
+          77,
+          64,
+          226,
+          232
+        ],
+        [
+          94,
+          226,
+          133,
+          169,
+          105,
+          142,
+          249,
+          48
+        ]
+      ],
+      "selected_ids_sha256": "8f36bc273974457848b0b65f7ef8019621b437fe15d1c22a9f2991c42c3c6f92",
+      "tensor_key_rank0": "prefill.rank.0.layers.05.selected_expert_ids"
+    },
+    {
+      "active_expert_count": 27,
+      "all_five_experts": [],
+      "layer": 6,
+      "selected_expert_ids": [
+        [
+          110,
+          40,
+          138,
+          46,
+          24,
+          91,
+          173,
+          254
+        ],
+        [
+          149,
+          196,
+          168,
+          195,
+          222,
+          36,
+          95,
+          162
+        ],
+        [
+          100,
+          149,
+          16,
+          85,
+          196,
+          91,
+          120,
+          246
+        ],
+        [
+          100,
+          85,
+          91,
+          207,
+          129,
+          195,
+          48,
+          187
+        ],
+        [
+          100,
+          85,
+          182,
+          196,
+          246,
+          216,
+          187,
+          91
+        ]
+      ],
+      "selected_ids_sha256": "ec262fd831b9f02268170748966ff2c951cf6fc50b5bdbc97b67c5dd7f328f01",
+      "tensor_key_rank0": "prefill.rank.0.layers.06.selected_expert_ids"
+    },
+    {
+      "active_expert_count": 25,
+      "all_five_experts": [],
+      "layer": 7,
+      "selected_expert_ids": [
+        [
+          221,
+          191,
+          112,
+          200,
+          142,
+          241,
+          39,
+          148
+        ],
+        [
+          166,
+          116,
+          100,
+          75,
+          94,
+          147,
+          221,
+          252
+        ],
+        [
+          94,
+          147,
+          116,
+          75,
+          85,
+          126,
+          245,
+          6
+        ],
+        [
+          166,
+          6,
+          94,
+          245,
+          193,
+          207,
+          38,
+          141
+        ],
+        [
+          6,
+          147,
+          245,
+          94,
+          224,
+          129,
+          126,
+          85
+        ]
+      ],
+      "selected_ids_sha256": "96f01fb048c3f6730f773a96dfcfdc5e4645e6024dc8d95e3ecda3d09df4b84b",
+      "tensor_key_rank0": "prefill.rank.0.layers.07.selected_expert_ids"
+    },
+    {
+      "active_expert_count": 23,
+      "all_five_experts": [],
+      "layer": 8,
+      "selected_expert_ids": [
+        [
+          175,
+          217,
+          127,
+          123,
+          17,
+          78,
+          223,
+          92
+        ],
+        [
+          123,
+          232,
+          191,
+          52,
+          189,
+          183,
+          62,
+          214
+        ],
+        [
+          191,
+          232,
+          123,
+          112,
+          183,
+          52,
+          82,
+          72
+        ],
+        [
+          32,
+          63,
+          183,
+          232,
+          82,
+          72,
+          172,
+          253
+        ],
+        [
+          120,
+          183,
+          82,
+          232,
+          191,
+          32,
+          52,
+          63
+        ]
+      ],
+      "selected_ids_sha256": "0c13261d394d48dc9610ba948be087abcea078c45b6f26e4528633cd06535686",
+      "tensor_key_rank0": "prefill.rank.0.layers.08.selected_expert_ids"
+    },
+    {
+      "active_expert_count": 24,
+      "all_five_experts": [
+        95
+      ],
+      "layer": 9,
+      "selected_expert_ids": [
+        [
+          72,
+          246,
+          210,
+          122,
+          95,
+          184,
+          12,
+          71
+        ],
+        [
+          95,
+          70,
+          187,
+          139,
+          48,
+          100,
+          157,
+          84
+        ],
+        [
+          95,
+          139,
+          206,
+          0,
+          159,
+          138,
+          70,
+          196
+        ],
+        [
+          139,
+          95,
+          154,
+          138,
+          0,
+          65,
+          159,
+          84
+        ],
+        [
+          95,
+          139,
+          138,
+          159,
+          65,
+          0,
+          44,
+          86
+        ]
+      ],
+      "selected_ids_sha256": "19f88872884ba12049cd49d52a09df6f4fa6378f1c204ba95945a9ef1e9e72d5",
+      "tensor_key_rank0": "prefill.rank.0.layers.09.selected_expert_ids"
+    },
+    {
+      "active_expert_count": 28,
+      "all_five_experts": [],
+      "layer": 10,
+      "selected_expert_ids": [
+        [
+          175,
+          120,
+          100,
+          183,
+          14,
+          249,
+          179,
+          50
+        ],
+        [
+          124,
+          228,
+          181,
+          235,
+          53,
+          133,
+          128,
+          209
+        ],
+        [
+          181,
+          124,
+          228,
+          128,
+          225,
+          133,
+          40,
+          164
+        ],
+        [
+          170,
+          225,
+          181,
+          59,
+          146,
+          124,
+          70,
+          29
+        ],
+        [
+          124,
+          218,
+          24,
+          181,
+          18,
+          164,
+          194,
+          70
+        ]
+      ],
+      "selected_ids_sha256": "6e7e33da9732f615c2c76ea5923f90fa9773b1e3ee292cf3346ea1b13a524cb2",
+      "tensor_key_rank0": "prefill.rank.0.layers.10.selected_expert_ids"
+    },
+    {
+      "active_expert_count": 27,
+      "all_five_experts": [],
+      "layer": 11,
+      "selected_expert_ids": [
+        [
+          180,
+          41,
+          246,
+          96,
+          149,
+          152,
+          215,
+          213
+        ],
+        [
+          217,
+          198,
+          131,
+          124,
+          107,
+          232,
+          12,
+          110
+        ],
+        [
+          18,
+          115,
+          107,
+          131,
+          110,
+          121,
+          194,
+          124
+        ],
+        [
+          37,
+          176,
+          110,
+          201,
+          131,
+          237,
+          171,
+          124
+        ],
+        [
+          107,
+          114,
+          121,
+          194,
+          110,
+          131,
+          191,
+          124
+        ]
+      ],
+      "selected_ids_sha256": "7fa7997a70eaebcb79d0f47456cd073118b30a0db85a2f82b60a102023a60028",
+      "tensor_key_rank0": "prefill.rank.0.layers.11.selected_expert_ids"
+    },
+    {
+      "active_expert_count": 25,
+      "all_five_experts": [],
+      "layer": 12,
+      "selected_expert_ids": [
+        [
+          4,
+          124,
+          68,
+          167,
+          216,
+          24,
+          77,
+          83
+        ],
+        [
+          221,
+          1,
+          135,
+          16,
+          13,
+          239,
+          171,
+          185
+        ],
+        [
+          3,
+          1,
+          221,
+          106,
+          13,
+          239,
+          230,
+          89
+        ],
+        [
+          36,
+          230,
+          87,
+          4,
+          50,
+          3,
+          13,
+          6
+        ],
+        [
+          3,
+          1,
+          230,
+          221,
+          36,
+          50,
+          48,
+          4
+        ]
+      ],
+      "selected_ids_sha256": "e68a0d94090818077dce4fb43bcf059f250e93fb5bc0ed2f0618df09fdd786c3",
+      "tensor_key_rank0": "prefill.rank.0.layers.12.selected_expert_ids"
+    },
+    {
+      "active_expert_count": 28,
+      "all_five_experts": [],
+      "layer": 13,
+      "selected_expert_ids": [
+        [
+          231,
+          119,
+          132,
+          221,
+          167,
+          177,
+          216,
+          161
+        ],
+        [
+          230,
+          99,
+          155,
+          202,
+          47,
+          224,
+          218,
+          26
+        ],
+        [
+          47,
+          185,
+          200,
+          202,
+          224,
+          99,
+          157,
+          180
+        ],
+        [
+          47,
+          185,
+          4,
+          194,
+          224,
+          226,
+          126,
+          239
+        ],
+        [
+          47,
+          99,
+          224,
+          108,
+          185,
+          38,
+          225,
+          239
+        ]
+      ],
+      "selected_ids_sha256": "27064626b15ffaa4bc2d5630904b17a1efacdd5ec2d3bf594be0f4cef0f64ca3",
+      "tensor_key_rank0": "prefill.rank.0.layers.13.selected_expert_ids"
+    },
+    {
+      "active_expert_count": 29,
+      "all_five_experts": [],
+      "layer": 14,
+      "selected_expert_ids": [
+        [
+          217,
+          57,
+          211,
+          244,
+          123,
+          136,
+          191,
+          31
+        ],
+        [
+          12,
+          71,
+          238,
+          65,
+          97,
+          142,
+          30,
+          228
+        ],
+        [
+          160,
+          105,
+          238,
+          70,
+          250,
+          30,
+          164,
+          104
+        ],
+        [
+          104,
+          225,
+          142,
+          250,
+          17,
+          70,
+          27,
+          160
+        ],
+        [
+          160,
+          104,
+          137,
+          70,
+          250,
+          152,
+          242,
+          239
+        ]
+      ],
+      "selected_ids_sha256": "3740640b791b4dd37e467a67e9939ce4456337c071b807aebfe20654c33e0422",
+      "tensor_key_rank0": "prefill.rank.0.layers.14.selected_expert_ids"
+    },
+    {
+      "active_expert_count": 28,
+      "all_five_experts": [],
+      "layer": 15,
+      "selected_expert_ids": [
+        [
+          225,
+          247,
+          218,
+          191,
+          117,
+          82,
+          157,
+          48
+        ],
+        [
+          18,
+          150,
+          138,
+          156,
+          255,
+          112,
+          218,
+          92
+        ],
+        [
+          18,
+          229,
+          17,
+          241,
+          159,
+          85,
+          150,
+          226
+        ],
+        [
+          237,
+          27,
+          17,
+          95,
+          155,
+          26,
+          18,
+          85
+        ],
+        [
+          17,
+          237,
+          85,
+          229,
+          148,
+          159,
+          27,
+          102
+        ]
+      ],
+      "selected_ids_sha256": "61edf6b4cb11cd75b6f86f1ccf21c3ab026bb5f4e66db6923cb816d88f7dc44c",
+      "tensor_key_rank0": "prefill.rank.0.layers.15.selected_expert_ids"
+    },
+    {
+      "active_expert_count": 26,
+      "all_five_experts": [],
+      "layer": 16,
+      "selected_expert_ids": [
+        [
+          89,
+          245,
+          166,
+          88,
+          16,
+          203,
+          141,
+          107
+        ],
+        [
+          14,
+          130,
+          187,
+          214,
+          233,
+          113,
+          84,
+          143
+        ],
+        [
+          130,
+          233,
+          14,
+          149,
+          84,
+          30,
+          132,
+          190
+        ],
+        [
+          225,
+          130,
+          16,
+          233,
+          59,
+          51,
+          132,
+          30
+        ],
+        [
+          130,
+          233,
+          132,
+          225,
+          51,
+          244,
+          218,
+          28
+        ]
+      ],
+      "selected_ids_sha256": "72b4121bffdcef45f48bda9b24dbf815b4248661024438de81bc622aaf7a4276",
+      "tensor_key_rank0": "prefill.rank.0.layers.16.selected_expert_ids"
+    },
+    {
+      "active_expert_count": 26,
+      "all_five_experts": [],
+      "layer": 17,
+      "selected_expert_ids": [
+        [
+          96,
+          106,
+          150,
+          171,
+          26,
+          25,
+          125,
+          86
+        ],
+        [
+          126,
+          248,
+          35,
+          144,
+          64,
+          247,
+          145,
+          251
+        ],
+        [
+          64,
+          180,
+          220,
+          35,
+          248,
+          232,
+          237,
+          34
+        ],
+        [
+          253,
+          220,
+          64,
+          35,
+          144,
+          180,
+          71,
+          25
+        ],
+        [
+          64,
+          35,
+          220,
+          241,
+          71,
+          253,
+          101,
+          115
+        ]
+      ],
+      "selected_ids_sha256": "e37213ddfc326e06da08219a12ebc06e637bc6d87545e99192d5198f66497130",
+      "tensor_key_rank0": "prefill.rank.0.layers.17.selected_expert_ids"
+    },
+    {
+      "active_expert_count": 27,
+      "all_five_experts": [],
+      "layer": 18,
+      "selected_expert_ids": [
+        [
+          100,
+          201,
+          174,
+          141,
+          44,
+          172,
+          94,
+          3
+        ],
+        [
+          55,
+          199,
+          195,
+          34,
+          101,
+          145,
+          234,
+          13
+        ],
+        [
+          235,
+          34,
+          145,
+          199,
+          6,
+          13,
+          105,
+          1
+        ],
+        [
+          99,
+          133,
+          30,
+          199,
+          13,
+          34,
+          229,
+          182
+        ],
+        [
+          30,
+          34,
+          20,
+          133,
+          13,
+          235,
+          126,
+          182
+        ]
+      ],
+      "selected_ids_sha256": "67595c52136bde235bbcb810ecca3aaf9d1a14a4ab57d16eeac8fcb505b2c810",
+      "tensor_key_rank0": "prefill.rank.0.layers.18.selected_expert_ids"
+    },
+    {
+      "active_expert_count": 27,
+      "all_five_experts": [],
+      "layer": 19,
+      "selected_expert_ids": [
+        [
+          41,
+          221,
+          44,
+          204,
+          142,
+          238,
+          207,
+          32
+        ],
+        [
+          35,
+          237,
+          239,
+          64,
+          114,
+          100,
+          162,
+          247
+        ],
+        [
+          197,
+          35,
+          162,
+          36,
+          16,
+          14,
+          132,
+          10
+        ],
+        [
+          114,
+          197,
+          162,
+          184,
+          35,
+          47,
+          16,
+          215
+        ],
+        [
+          162,
+          215,
+          197,
+          36,
+          35,
+          114,
+          194,
+          153
+        ]
+      ],
+      "selected_ids_sha256": "e8159f27bfb6f52d0b6c315eafa950c3bb27415f8169b8a26416b81449bed23e",
+      "tensor_key_rank0": "prefill.rank.0.layers.19.selected_expert_ids"
+    },
+    {
+      "active_expert_count": 28,
+      "all_five_experts": [],
+      "layer": 20,
+      "selected_expert_ids": [
+        [
+          17,
+          127,
+          175,
+          217,
+          223,
+          18,
+          11,
+          8
+        ],
+        [
+          172,
+          62,
+          214,
+          176,
+          189,
+          254,
+          26,
+          9
+        ],
+        [
+          82,
+          183,
+          232,
+          26,
+          105,
+          112,
+          228,
+          72
+        ],
+        [
+          172,
+          82,
+          32,
+          183,
+          228,
+          232,
+          72,
+          3
+        ],
+        [
+          120,
+          82,
+          191,
+          186,
+          183,
+          3,
+          72,
+          232
+        ]
+      ],
+      "selected_ids_sha256": "fffb1444afd9fb8ab63cc5d9b09f83562018219a857b7834c54444064254f8be",
+      "tensor_key_rank0": "prefill.rank.0.layers.20.selected_expert_ids"
+    },
+    {
+      "active_expert_count": 28,
+      "all_five_experts": [],
+      "layer": 21,
+      "selected_expert_ids": [
+        [
+          72,
+          246,
+          184,
+          232,
+          210,
+          58,
+          155,
+          113
+        ],
+        [
+          95,
+          48,
+          70,
+          139,
+          45,
+          157,
+          17,
+          30
+        ],
+        [
+          95,
+          139,
+          62,
+          206,
+          52,
+          159,
+          44,
+          65
+        ],
+        [
+          95,
+          154,
+          214,
+          65,
+          58,
+          139,
+          44,
+          201
+        ],
+        [
+          95,
+          65,
+          44,
+          139,
+          128,
+          159,
+          228,
+          20
+        ]
+      ],
+      "selected_ids_sha256": "a5c53bd749dd0cc251c00d7e0c3e94d25dcd78e3b67edae19e02283492546183",
+      "tensor_key_rank0": "prefill.rank.0.layers.21.selected_expert_ids"
+    },
+    {
+      "active_expert_count": 32,
+      "all_five_experts": [],
+      "layer": 22,
+      "selected_expert_ids": [
+        [
+          120,
+          175,
+          100,
+          50,
+          82,
+          192,
+          231,
+          141
+        ],
+        [
+          133,
+          109,
+          124,
+          191,
+          228,
+          69,
+          170,
+          182
+        ],
+        [
+          124,
+          181,
+          170,
+          228,
+          163,
+          40,
+          79,
+          142
+        ],
+        [
+          170,
+          29,
+          124,
+          118,
+          255,
+          25,
+          59,
+          181
+        ],
+        [
+          60,
+          88,
+          218,
+          25,
+          46,
+          70,
+          65,
+          124
+        ]
+      ],
+      "selected_ids_sha256": "7624533d29e0cc0d3bad4eeb7b54ba2c0eb3e4c4f931b6f9198e000e6babbe6b",
+      "tensor_key_rank0": "prefill.rank.0.layers.22.selected_expert_ids"
+    },
+    {
+      "active_expert_count": 32,
+      "all_five_experts": [],
+      "layer": 23,
+      "selected_expert_ids": [
+        [
+          180,
+          41,
+          87,
+          96,
+          152,
+          213,
+          187,
+          92
+        ],
+        [
+          217,
+          125,
+          135,
+          131,
+          198,
+          108,
+          124,
+          232
+        ],
+        [
+          131,
+          18,
+          110,
+          69,
+          61,
+          248,
+          107,
+          115
+        ],
+        [
+          176,
+          131,
+          40,
+          71,
+          171,
+          110,
+          92,
+          24
+        ],
+        [
+          114,
+          176,
+          131,
+          108,
+          188,
+          107,
+          7,
+          46
+        ]
+      ],
+      "selected_ids_sha256": "0ccbdae71b2ec11e0b6487e74769a94f8383eef0f3e51143bfefee6dde1590e9",
+      "tensor_key_rank0": "prefill.rank.0.layers.23.selected_expert_ids"
+    },
+    {
+      "active_expert_count": 25,
+      "all_five_experts": [],
+      "layer": 24,
+      "selected_expert_ids": [
+        [
+          53,
+          216,
+          124,
+          4,
+          167,
+          24,
+          62,
+          100
+        ],
+        [
+          221,
+          1,
+          202,
+          135,
+          101,
+          239,
+          16,
+          168
+        ],
+        [
+          1,
+          221,
+          239,
+          155,
+          230,
+          27,
+          36,
+          107
+        ],
+        [
+          1,
+          36,
+          158,
+          230,
+          105,
+          221,
+          4,
+          155
+        ],
+        [
+          1,
+          60,
+          221,
+          230,
+          36,
+          100,
+          65,
+          107
+        ]
+      ],
+      "selected_ids_sha256": "cb49143dd7a2e5c42acb69a3ce7fda5f0208daf4a03917b1a106d97730373a7f",
+      "tensor_key_rank0": "prefill.rank.0.layers.24.selected_expert_ids"
+    },
+    {
+      "active_expert_count": 26,
+      "all_five_experts": [],
+      "layer": 25,
+      "selected_expert_ids": [
+        [
+          167,
+          52,
+          236,
+          221,
+          119,
+          242,
+          231,
+          114
+        ],
+        [
+          155,
+          129,
+          230,
+          7,
+          202,
+          229,
+          80,
+          31
+        ],
+        [
+          47,
+          202,
+          157,
+          244,
+          26,
+          198,
+          224,
+          110
+        ],
+        [
+          194,
+          26,
+          47,
+          224,
+          244,
+          99,
+          202,
+          110
+        ],
+        [
+          224,
+          26,
+          202,
+          110,
+          244,
+          99,
+          157,
+          117
+        ]
+      ],
+      "selected_ids_sha256": "c0daec961f3cb4e1bf7bdbc6071a00c4a86b702eafde7e300643ebdf3d74fcb4",
+      "tensor_key_rank0": "prefill.rank.0.layers.25.selected_expert_ids"
+    },
+    {
+      "active_expert_count": 29,
+      "all_five_experts": [],
+      "layer": 26,
+      "selected_expert_ids": [
+        [
+          217,
+          81,
+          57,
+          136,
+          181,
+          211,
+          244,
+          123
+        ],
+        [
+          228,
+          12,
+          54,
+          238,
+          65,
+          70,
+          100,
+          255
+        ],
+        [
+          160,
+          152,
+          238,
+          70,
+          250,
+          105,
+          27,
+          142
+        ],
+        [
+          160,
+          104,
+          142,
+          105,
+          17,
+          225,
+          64,
+          152
+        ],
+        [
+          142,
+          160,
+          225,
+          152,
+          218,
+          105,
+          0,
+          80
+        ]
+      ],
+      "selected_ids_sha256": "18226fd47e5fc86da9f221e431cb297082d127265d97849ed965e62d4cf2391c",
+      "tensor_key_rank0": "prefill.rank.0.layers.26.selected_expert_ids"
+    },
+    {
+      "active_expert_count": 27,
+      "all_five_experts": [],
+      "layer": 27,
+      "selected_expert_ids": [
+        [
+          191,
+          247,
+          225,
+          218,
+          82,
+          108,
+          83,
+          53
+        ],
+        [
+          18,
+          85,
+          144,
+          138,
+          223,
+          161,
+          218,
+          156
+        ],
+        [
+          85,
+          17,
+          241,
+          218,
+          191,
+          92,
+          220,
+          226
+        ],
+        [
+          27,
+          237,
+          85,
+          95,
+          6,
+          17,
+          209,
+          155
+        ],
+        [
+          85,
+          17,
+          27,
+          218,
+          237,
+          209,
+          229,
+          155
+        ]
+      ],
+      "selected_ids_sha256": "a2ce14635a9eaca4a7c574c645a734dbbb1178fec0fa08e51988442031082735",
+      "tensor_key_rank0": "prefill.rank.0.layers.27.selected_expert_ids"
+    },
+    {
+      "active_expert_count": 22,
+      "all_five_experts": [],
+      "layer": 28,
+      "selected_expert_ids": [
+        [
+          158,
+          107,
+          88,
+          166,
+          93,
+          18,
+          89,
+          218
+        ],
+        [
+          14,
+          187,
+          130,
+          214,
+          113,
+          56,
+          233,
+          30
+        ],
+        [
+          130,
+          30,
+          233,
+          14,
+          113,
+          149,
+          132,
+          98
+        ],
+        [
+          16,
+          130,
+          233,
+          225,
+          98,
+          113,
+          30,
+          28
+        ],
+        [
+          233,
+          16,
+          98,
+          130,
+          30,
+          113,
+          218,
+          132
+        ]
+      ],
+      "selected_ids_sha256": "53c0b03905757898e5b129187e473fea54265ed28e79494c545bf8d316dfd2d9",
+      "tensor_key_rank0": "prefill.rank.0.layers.28.selected_expert_ids"
+    },
+    {
+      "active_expert_count": 28,
+      "all_five_experts": [],
+      "layer": 29,
+      "selected_expert_ids": [
+        [
+          106,
+          96,
+          171,
+          25,
+          86,
+          125,
+          112,
+          249
+        ],
+        [
+          19,
+          60,
+          248,
+          180,
+          145,
+          239,
+          123,
+          237
+        ],
+        [
+          220,
+          232,
+          180,
+          64,
+          101,
+          237,
+          34,
+          48
+        ],
+        [
+          64,
+          220,
+          253,
+          180,
+          9,
+          71,
+          48,
+          99
+        ],
+        [
+          64,
+          220,
+          71,
+          180,
+          218,
+          232,
+          48,
+          73
+        ]
+      ],
+      "selected_ids_sha256": "94c6430f7ad829b897a18e05203883acb9e2afdd80d9856269c07d566f6f5741",
+      "tensor_key_rank0": "prefill.rank.0.layers.29.selected_expert_ids"
+    },
+    {
+      "active_expert_count": 28,
+      "all_five_experts": [],
+      "layer": 30,
+      "selected_expert_ids": [
+        [
+          31,
+          174,
+          75,
+          94,
+          32,
+          141,
+          44,
+          217
+        ],
+        [
+          55,
+          95,
+          101,
+          13,
+          27,
+          199,
+          228,
+          234
+        ],
+        [
+          235,
+          6,
+          122,
+          13,
+          158,
+          145,
+          234,
+          199
+        ],
+        [
+          99,
+          235,
+          30,
+          90,
+          1,
+          229,
+          234,
+          20
+        ],
+        [
+          235,
+          30,
+          20,
+          1,
+          223,
+          122,
+          199,
+          145
+        ]
+      ],
+      "selected_ids_sha256": "139286e6f951682a77717e45393b127c233c150d5bcb6ba7fda511ce6dfdde46",
+      "tensor_key_rank0": "prefill.rank.0.layers.30.selected_expert_ids"
+    },
+    {
+      "active_expert_count": 26,
+      "all_five_experts": [],
+      "layer": 31,
+      "selected_expert_ids": [
+        [
+          36,
+          35,
+          237,
+          19,
+          167,
+          162,
+          75,
+          94
+        ],
+        [
+          247,
+          64,
+          83,
+          223,
+          172,
+          35,
+          100,
+          157
+        ],
+        [
+          132,
+          162,
+          35,
+          16,
+          197,
+          14,
+          13,
+          8
+        ],
+        [
+          162,
+          114,
+          197,
+          215,
+          35,
+          132,
+          16,
+          194
+        ],
+        [
+          194,
+          162,
+          215,
+          132,
+          197,
+          16,
+          184,
+          216
+        ]
+      ],
+      "selected_ids_sha256": "8037629c92ba708018d426ef907d08f2b7bb3499f35991b8b6239f5b331aa470",
+      "tensor_key_rank0": "prefill.rank.0.layers.31.selected_expert_ids"
+    },
+    {
+      "active_expert_count": 30,
+      "all_five_experts": [],
+      "layer": 32,
+      "selected_expert_ids": [
+        [
+          42,
+          252,
+          224,
+          112,
+          27,
+          237,
+          2,
+          43
+        ],
+        [
+          115,
+          22,
+          182,
+          85,
+          171,
+          101,
+          232,
+          14
+        ],
+        [
+          232,
+          89,
+          101,
+          222,
+          199,
+          171,
+          17,
+          219
+        ],
+        [
+          232,
+          22,
+          171,
+          41,
+          26,
+          66,
+          191,
+          27
+        ],
+        [
+          221,
+          232,
+          171,
+          41,
+          254,
+          102,
+          13,
+          205
+        ]
+      ],
+      "selected_ids_sha256": "8a60b9a17b0ad4dd240f00ee2c63d4b6388291dfa9d3ac56d6811fd6b9a73557",
+      "tensor_key_rank0": "prefill.rank.0.layers.32.selected_expert_ids"
+    },
+    {
+      "active_expert_count": 29,
+      "all_five_experts": [
+        127
+      ],
+      "layer": 33,
+      "selected_expert_ids": [
+        [
+          127,
+          201,
+          179,
+          9,
+          241,
+          39,
+          156,
+          255
+        ],
+        [
+          127,
+          91,
+          68,
+          221,
+          160,
+          10,
+          124,
+          142
+        ],
+        [
+          68,
+          127,
+          214,
+          142,
+          23,
+          94,
+          7,
+          29
+        ],
+        [
+          127,
+          47,
+          205,
+          142,
+          132,
+          68,
+          49,
+          17
+        ],
+        [
+          127,
+          205,
+          121,
+          168,
+          142,
+          17,
+          220,
+          165
+        ]
+      ],
+      "selected_ids_sha256": "d162b135ea09e36c24da14e4734659d2eed3d9d7fb9ce3e6ebb590d5ec926815",
+      "tensor_key_rank0": "prefill.rank.0.layers.33.selected_expert_ids"
+    },
+    {
+      "active_expert_count": 30,
+      "all_five_experts": [],
+      "layer": 34,
+      "selected_expert_ids": [
+        [
+          63,
+          231,
+          234,
+          85,
+          204,
+          51,
+          40,
+          202
+        ],
+        [
+          94,
+          48,
+          73,
+          236,
+          87,
+          248,
+          72,
+          247
+        ],
+        [
+          153,
+          182,
+          114,
+          47,
+          187,
+          214,
+          236,
+          51
+        ],
+        [
+          103,
+          175,
+          153,
+          48,
+          202,
+          51,
+          67,
+          173
+        ],
+        [
+          81,
+          51,
+          153,
+          208,
+          55,
+          114,
+          67,
+          222
+        ]
+      ],
+      "selected_ids_sha256": "39478c09071a60df6d1b66960898a229a564878d37e4434fc0d437bf1759b071",
+      "tensor_key_rank0": "prefill.rank.0.layers.34.selected_expert_ids"
+    },
+    {
+      "active_expert_count": 33,
+      "all_five_experts": [],
+      "layer": 35,
+      "selected_expert_ids": [
+        [
+          225,
+          203,
+          102,
+          210,
+          97,
+          215,
+          213,
+          112
+        ],
+        [
+          117,
+          6,
+          13,
+          210,
+          156,
+          187,
+          249,
+          77
+        ],
+        [
+          71,
+          117,
+          155,
+          115,
+          189,
+          58,
+          152,
+          182
+        ],
+        [
+          152,
+          94,
+          71,
+          255,
+          85,
+          9,
+          5,
+          2
+        ],
+        [
+          152,
+          71,
+          39,
+          255,
+          99,
+          35,
+          128,
+          79
+        ]
+      ],
+      "selected_ids_sha256": "5d29cc5752ce9d3e361bd04b8f89bb3c98edc119ddff1e825f116f81c10f53a9",
+      "tensor_key_rank0": "prefill.rank.0.layers.35.selected_expert_ids"
+    },
+    {
+      "active_expert_count": 34,
+      "all_five_experts": [
+        73
+      ],
+      "layer": 36,
+      "selected_expert_ids": [
+        [
+          73,
+          159,
+          255,
+          186,
+          201,
+          45,
+          141,
+          212
+        ],
+        [
+          82,
+          44,
+          58,
+          73,
+          125,
+          15,
+          28,
+          37
+        ],
+        [
+          253,
+          40,
+          73,
+          16,
+          31,
+          32,
+          136,
+          112
+        ],
+        [
+          61,
+          67,
+          202,
+          73,
+          14,
+          39,
+          142,
+          110
+        ],
+        [
+          49,
+          61,
+          73,
+          92,
+          14,
+          12,
+          94,
+          195
+        ]
+      ],
+      "selected_ids_sha256": "2fd7abd801bf154e468ad86b99911d49c8b6c72a9138925be44865a887d1896c",
+      "tensor_key_rank0": "prefill.rank.0.layers.36.selected_expert_ids"
+    },
+    {
+      "active_expert_count": 32,
+      "all_five_experts": [],
+      "layer": 37,
+      "selected_expert_ids": [
+        [
+          109,
+          72,
+          245,
+          165,
+          219,
+          50,
+          145,
+          13
+        ],
+        [
+          225,
+          162,
+          112,
+          196,
+          102,
+          126,
+          94,
+          108
+        ],
+        [
+          164,
+          102,
+          84,
+          108,
+          219,
+          91,
+          109,
+          121
+        ],
+        [
+          102,
+          43,
+          55,
+          174,
+          80,
+          197,
+          233,
+          60
+        ],
+        [
+          102,
+          15,
+          55,
+          145,
+          220,
+          99,
+          166,
+          193
+        ]
+      ],
+      "selected_ids_sha256": "18d9ecf0188fa145b532c7933f5c28f01e0458a10e9a62507935ac6d6561b36e",
+      "tensor_key_rank0": "prefill.rank.0.layers.37.selected_expert_ids"
+    },
+    {
+      "active_expert_count": 26,
+      "all_five_experts": [
+        209
+      ],
+      "layer": 38,
+      "selected_expert_ids": [
+        [
+          209,
+          120,
+          146,
+          249,
+          0,
+          125,
+          248,
+          151
+        ],
+        [
+          209,
+          185,
+          188,
+          52,
+          171,
+          74,
+          244,
+          163
+        ],
+        [
+          209,
+          136,
+          4,
+          131,
+          157,
+          99,
+          72,
+          228
+        ],
+        [
+          209,
+          163,
+          72,
+          173,
+          201,
+          157,
+          4,
+          125
+        ],
+        [
+          209,
+          80,
+          4,
+          173,
+          157,
+          72,
+          168,
+          228
+        ]
+      ],
+      "selected_ids_sha256": "2adb7f68034952ca361b5e0f45ffe3ad5ee51a008aad2778e5d1dc37026483b4",
+      "tensor_key_rank0": "prefill.rank.0.layers.38.selected_expert_ids"
+    },
+    {
+      "active_expert_count": 30,
+      "all_five_experts": [],
+      "layer": 39,
+      "selected_expert_ids": [
+        [
+          108,
+          13,
+          85,
+          177,
+          10,
+          162,
+          159,
+          78
+        ],
+        [
+          99,
+          44,
+          77,
+          108,
+          147,
+          251,
+          215,
+          6
+        ],
+        [
+          146,
+          16,
+          23,
+          182,
+          213,
+          145,
+          108,
+          14
+        ],
+        [
+          239,
+          138,
+          182,
+          215,
+          246,
+          1,
+          6,
+          197
+        ],
+        [
+          244,
+          182,
+          72,
+          146,
+          183,
+          14,
+          213,
+          108
+        ]
+      ],
+      "selected_ids_sha256": "8702db8af235b626562879edbb74b063ddaab83364f614885ab03d04a63e7ece",
+      "tensor_key_rank0": "prefill.rank.0.layers.39.selected_expert_ids"
+    }
+  ],
+  "schema": "ferrule.paper.pair-swiglu.m5-evidence.v1",
+  "selected_expert": 95,
+  "selected_layer": 9,
+  "selection": "First layer, then minimum expert ID actually routed by all five Capital prefill tokens",
+  "source": {
+    "bytes": 277869920,
+    "file": "runs/full40-20261009-03/capital.safetensors",
+    "sha256": "4fe3d64cc559d5365100e34841db2934579e05a2a334d38a8766406814e90b6d"
+  },
+  "status": "pending_authorized_capture"
+}

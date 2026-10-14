@@ -1,0 +1,15 @@
+{
+  "argv": [
+    "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/nsight-systems-cli-2025.3.1/opt/nvidia/nsight-systems-cli/2025.3.1/target-linux-x64/nsys",
+    "--version"
+  ],
+  "exit_code": 0,
+  "stdout": "NVIDIA Nsight Systems version 2025.3.1.90-253135822126v0\n",
+  "stderr": "",
+  "tool_pins": {
+    "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/nsight-systems-cli-2025.3.1/opt/nvidia/nsight-systems-cli/2025.3.1/target-linux-x64/nsys": "525f35a10de49b396e91a3831ae40e98a8631d619b7c8bbb4c54469b8c08a72e",
+    "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/nsight-systems-cli-2025.3.1/opt/nvidia/nsight-systems-cli/2025.3.1/host-linux-x64/QdstrmImporter": "23e4185b7b20d00c27dc2e521c1048a75abe04f04dbbd88e411b6dfba2cc8053",
+    "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/nsight-systems-cli-2025.3.1/opt/nvidia/nsight-systems-cli/2025.3.1/target-linux-x64/libcupti.so.12.9": "19f0f06e0c5579113840169d5f6d6d4222d4a4fc2d66403cbe3cad2d91db1ace"
+  },
+  "all_fixed_hashes_verified": true
+}

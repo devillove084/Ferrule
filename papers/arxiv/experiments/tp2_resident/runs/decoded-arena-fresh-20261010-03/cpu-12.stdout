@@ -1,0 +1,6 @@
+
+running 1 test
+test transformer::standard::mixed_decoded::snapshot_tests::decoded_snapshot_partial_view_failure_partitions_installed_root_once ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 750 filtered out; finished in 0.00s
+

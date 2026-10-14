@@ -1,0 +1,83 @@
+{
+  "acceptance": "Reject fixture_ready=false. Future gate compares every BF16 word to independent HF activation; shared helper equivalence alone is insufficient.",
+  "complete_rank_fixtures": 0,
+  "fixture_ready": false,
+  "fixtures": [
+    {
+      "directory": "hello-decode0-layer00-expert021",
+      "fixture_ready": false,
+      "manifest_sha256": "713dc6a42354c71f60dd507261873a58ef640b5b75be7c030e3495faccf248ec",
+      "sha256sums_sha256": "5eb860ec83f419ceec07479d2738b4745cce2705af435a07d66009346e8d8a47"
+    },
+    {
+      "directory": "hello-decode0-layer03-expert037",
+      "fixture_ready": false,
+      "manifest_sha256": "bf34a68c8d5d3ddd0ecec65f99adbc6d468a527b1bebd8a8a2151a550cb7c9c3",
+      "sha256sums_sha256": "a266d8c2e890c23c9e3e654a20ddcd29c45c94c2ee3b45012dc7a88921313a11"
+    },
+    {
+      "directory": "capital-decode0-layer00-expert072",
+      "fixture_ready": false,
+      "manifest_sha256": "4b69385842e56a33bc5008205b0115733f9d4e8c397a27ef2c5a97279df11b00",
+      "sha256sums_sha256": "ab67c49e8c7d24aa783e34d95f19beb37bfcee8de9612e968247e8297d9c637e"
+    },
+    {
+      "directory": "capital-decode0-layer03-expert010",
+      "fixture_ready": false,
+      "manifest_sha256": "793b430a1577aaf2547d5c8121cb8dd0ae1859af5c9e398a067ed986eea3586c",
+      "sha256sums_sha256": "f0f07f3c824e69f926a392023dd0fc96ba7a8e60ba79ef9ffed9e3e5d4aa9cf3"
+    }
+  ],
+  "generation_identity": {
+    "candidate_executed": false,
+    "cpu_numerical_expected_computed": false,
+    "cuda_executed": false,
+    "extractor_sha256": "11ad2ffab9ae6bb92786c190e6ec297f90874cf7920dc16ffeaba38516fc5df7",
+    "gpu_visibility": {
+      "CUDA_VISIBLE_DEVICES": "",
+      "NVIDIA_VISIBLE_DEVICES": "void"
+    },
+    "method": "stdlib raw-byte verification, row slicing and HF activation identity copy only",
+    "python": "3.10.9 (main, Jan 11 2023, 15:21:40) [GCC 11.2.0]",
+    "run": "pair-swiglu-m1-cpu-01"
+  },
+  "m5_evidence": {
+    "file": "m5-evidence.json",
+    "sha256": "105a9856c12ebb53c32f72b2237643e1e1876991ef70be63bfe9257a97d8de85"
+  },
+  "prepared_weight_activation_rank_pairs": 8,
+  "schema": "ferrule.paper.pair-swiglu.cpu-preparation.v1",
+  "source_pins": [
+    {
+      "bytes": 31534,
+      "file": "runs/routed-down-m1-cpu-01/SHA256SUMS.cpu-extract",
+      "sha256": "6fe6b0c5b8d886586fef422be52f61151fc72345b4077eae33987e8fa325c65f"
+    },
+    {
+      "bytes": 211529,
+      "file": "runs/routed-down-m1-cpu-01/manifest.json",
+      "sha256": "2971f6122bcf4b00fa5d3c19a5c2be07b4b28805d7aedc6c39e763b3874e5ecb"
+    },
+    {
+      "bytes": 31088,
+      "file": "runs/routed-down-m1-cuda-01/manifest.json",
+      "sha256": "4f3081e16cc496121817bd49e4732cb5b49a030ca9853f616751c17d23ba1704"
+    },
+    {
+      "bytes": 661,
+      "file": "runs/routed-down-m1-cuda-01/numerical-authentication.json",
+      "sha256": "d969682d7448ec2b45bb35525c836a21d29bdf3b3d55747f21dfb5bb2c6f8f42"
+    },
+    {
+      "bytes": 11000,
+      "file": "runs/routed-down-m1-cuda-01/worker-launch.json",
+      "sha256": "b75764f24346c6c52039490b4637776e5b72d9e44bee8ae419e4a701cc96aa22"
+    },
+    {
+      "bytes": 33135,
+      "file": "runs/full40-20261009-03/manifest.json",
+      "sha256": "fb96ba4dd134761af30b4025b4cce86f96136cb01f05b5b4fca3e74587caa71d"
+    }
+  ],
+  "status": "blocked_missing_actual_normalized_expert_input"
+}

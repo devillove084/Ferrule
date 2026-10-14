@@ -1,0 +1,338 @@
+{
+  "schema": "ferrule.paper.tp2-mixed-candidate.v1",
+  "profile": "SystemMixedTP2EP1",
+  "status": "complete",
+  "cases": [
+    {
+      "id": "hello",
+      "file": "hello.safetensors",
+      "sha256": "c950f2824ac03f8963d9135b1a32aad915bc1d11c550cf179397dc3257ce43e6",
+      "bytes": 265756824,
+      "report": {
+        "file": "hello.json",
+        "sha256": "14dce96b517a7a27f62659d17e09f3087bdfff03e905f783e26e64a985b80d87",
+        "bytes": 311146
+      }
+    },
+    {
+      "id": "capital",
+      "file": "capital.safetensors",
+      "sha256": "b7efc6467899adef1bef33b090c5dfa89a846ccd7180306b851c5df66daabe70",
+      "bytes": 277822512,
+      "report": {
+        "file": "capital.json",
+        "sha256": "a977037a9c5070bb9cea6b94226503943551705f1d1c30eb6c1fcc183ba6570f",
+        "bytes": 311208
+      }
+    }
+  ],
+  "protocol": {
+    "schema": "ferrule.paper.tp2-mixed-independent-oracle.protocol.v1",
+    "profile": "SystemMixedTP2EP1",
+    "versions": {
+      "torch": "2.13.0+cu129",
+      "transformers": "5.5.3"
+    },
+    "topology": {
+      "logical_tp": 2,
+      "pp": 1,
+      "ep": 1,
+      "simulation_devices": 1,
+      "production_transport_validated": false
+    },
+    "storage": "Original E4M3FN x numeric BF16 128x128 scale in F32, then BF16 RNE; no reciprocal/E8M0 conversion",
+    "precision": {
+      "activation": "BF16",
+      "parameters": "BF16 including once-rounded native F32 GDN A_log/norm",
+      "rope_frequency": "native F32",
+      "ssm": "explicit F32 preallocation",
+      "conv": "BF16",
+      "kv": "BF16",
+      "tf32": false,
+      "bf16_reduced_precision_reduction": false
+    },
+    "partitions": {
+      "attention": "contiguous whole query+gate heads; whole KV heads; local native HF normalization/RoPE/attention; O input-column shards",
+      "gdn": "local Q segment + local K segment + local V segment; matching depthwise conv; contiguous whole Z/B/A/value heads; local head-group repeat and norm; F32 per-rank state; output input-column shards",
+      "mlp": "each rank has a slice of every expert, gate/up independently row-sharded then concatenated gate-before-up; down input-column shard",
+      "embedding_and_final_norm": "replicated semantics; one computation on identical post-reduction hidden states",
+      "output": "contiguous BF16 vocab row shards; concatenate rank0 then rank1 without reduction; actual vocab 248320 divisible by TP2, no padded vocab values exported; ragged/padded gather checked on independent 11-token fixture"
+    },
+    "reduction": "Each local partial writes BF16; rank0.float + rank1.float; one BF16 RNE cast",
+    "moe": {
+      "expert_execution": "all experts logically resident/available on both ranks; lazy checkpoint operands allowed; not a measured residency/performance result",
+      "routing": "replicated original BF16 weights; native F32 full softmax/topk/renormalization; lower expert ID substitutions ONLY at equal raw logits; unequal raw softmax collisions stay native",
+      "accumulation": "pinned HF eager ascending expert ID, per-expert F32 routing product cast BF16 and BF16 index_add; NOT slot-major or fused F32 accumulation",
+      "combine": "native shared sigmoid BF16 gating; local routed+shared BF16 add; exactly ONE TP sum afterwards",
+      "vllm_bitexact": false
+    },
+    "cases": {
+      "hello": [
+        9419
+      ],
+      "capital": [
+        760,
+        6511,
+        314,
+        9338,
+        369
+      ]
+    },
+    "stages": [
+      "prefill",
+      "decode.0"
+    ],
+    "continuation": "own greedy full-vocab argmax after prefill; consumer MUST use recorded decode input; baseline drift skips same-input claims when continuations differ",
+    "comparison": {
+      "atol": 0.00025,
+      "rtol": 0.012,
+      "formula": "abs(actual-expected) <= atol + rtol*abs(expected)",
+      "ids_and_inputs": "exact",
+      "state": "report exactness AND unchanged tolerance, no a-priori CPU/CUDA state or exp equivalence claim",
+      "all_boundaries_required": "all except oracle-only pre-canonicalization native_expert_ids; canonical selected IDs remain exact",
+      "oracle_only_diagnostics": [
+        "native_expert_ids"
+      ]
+    },
+    "limits": {
+      "max_timeout_seconds": 1700,
+      "default_capture_mib_per_case": 512,
+      "default_decoded_weight_cache_mib": 256,
+      "max_capture_mib": 2048,
+      "max_decoded_weight_cache_mib": 1024,
+      "outer_terminal_timeout_ms": 1800000
+    },
+    "custody": "existing paper launch_guard seal/authenticate + test_vllm_qwen35.run_process subreaper; fresh explicit sole-owner grant and shared owner lock; never signal foreign PIDs",
+    "admission": "CPU tests and a completed reference are NOT factory enablement or a Ferrule full40 PASS; caller must provide reference directory and manifest SHA256 to the runtime gate",
+    "unvalidated_math_sites": [
+      "CUDA GEMM/softmax/norm/SiLU/sigmoid/reduction implementation drift versus production",
+      "HF GDN chunk prefill versus production recurrence/chunk policy, exp/softplus/L2 normalization and exact F32 state updates",
+      "HF eager per-expert accumulation versus vLLM fused MoE (different contract; no bit-exact claim)"
+    ],
+    "blocker_policy": "Any uncovered math-site difference or failed unchanged tolerance blocks runtime admission; no silent policy or threshold change",
+    "pre_weight_gate": "Mandatory authenticated one-GPU synthetic TP1/native equality, TP2 GQA/GDN inventory, independent frozen row/local-MoE/route/head and CUDA-F32-state fixtures; abort before full checkpoint reads on failure"
+  },
+  "checkpoint": {
+    "directory": "/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8",
+    "config_sha256": "236c373b0682a4f40c2fa49ef8e5f722a87a8dbfe265286b6d5260b23d7cb229",
+    "effective_text_config": {
+      "transformers_version": "5.5.3",
+      "architectures": null,
+      "output_hidden_states": false,
+      "return_dict": true,
+      "dtype": "bfloat16",
+      "chunk_size_feed_forward": 0,
+      "is_encoder_decoder": false,
+      "id2label": {
+        "0": "LABEL_0",
+        "1": "LABEL_1"
+      },
+      "label2id": {
+        "LABEL_0": 0,
+        "LABEL_1": 1
+      },
+      "problem_type": null,
+      "vocab_size": 248320,
+      "hidden_size": 2048,
+      "num_hidden_layers": 40,
+      "num_attention_heads": 16,
+      "num_key_value_heads": 2,
+      "hidden_act": "silu",
+      "max_position_embeddings": 262144,
+      "initializer_range": 0.02,
+      "rms_norm_eps": 1e-06,
+      "use_cache": true,
+      "tie_word_embeddings": false,
+      "rope_parameters": {
+        "mrope_interleaved": true,
+        "mrope_section": [
+          11,
+          11,
+          10
+        ],
+        "rope_type": "default",
+        "rope_theta": 10000000,
+        "partial_rotary_factor": 0.25
+      },
+      "attention_bias": false,
+      "attention_dropout": 0.0,
+      "head_dim": 256,
+      "linear_conv_kernel_dim": 4,
+      "linear_key_head_dim": 128,
+      "linear_value_head_dim": 128,
+      "linear_num_key_heads": 16,
+      "linear_num_value_heads": 32,
+      "moe_intermediate_size": 512,
+      "shared_expert_intermediate_size": 512,
+      "num_experts_per_tok": 8,
+      "num_experts": 256,
+      "output_router_logits": false,
+      "router_aux_loss_coef": 0.001,
+      "layer_types": [
+        "linear_attention",
+        "linear_attention",
+        "linear_attention",
+        "full_attention",
+        "linear_attention",
+        "linear_attention",
+        "linear_attention",
+        "full_attention",
+        "linear_attention",
+        "linear_attention",
+        "linear_attention",
+        "full_attention",
+        "linear_attention",
+        "linear_attention",
+        "linear_attention",
+        "full_attention",
+        "linear_attention",
+        "linear_attention",
+        "linear_attention",
+        "full_attention",
+        "linear_attention",
+        "linear_attention",
+        "linear_attention",
+        "full_attention",
+        "linear_attention",
+        "linear_attention",
+        "linear_attention",
+        "full_attention",
+        "linear_attention",
+        "linear_attention",
+        "linear_attention",
+        "full_attention",
+        "linear_attention",
+        "linear_attention",
+        "linear_attention",
+        "full_attention",
+        "linear_attention",
+        "linear_attention",
+        "linear_attention",
+        "full_attention"
+      ],
+      "pad_token_id": null,
+      "bos_token_id": null,
+      "eos_token_id": 248044,
+      "_name_or_path": "",
+      "attn_output_gate": true,
+      "full_attention_interval": 4,
+      "mlp_only_layers": [],
+      "model_type": "qwen3_5_moe_text",
+      "mtp_num_hidden_layers": 1,
+      "mtp_use_dedicated_embeddings": false,
+      "mamba_ssm_dtype": "float32",
+      "partial_rotary_factor": 0.25,
+      "output_attentions": false
+    },
+    "index_sha256": "b009f7a49c442fce959a2ff6fee41c69248879b90d7ff5636ec6d2068ac4876d",
+    "full_shards": {
+      "model.safetensors-00001-of-00014.safetensors": "8eec0929a43c759abc4e230ca6c55b1a314f26b8870cb63941b674b95ce6d49e",
+      "model.safetensors-00002-of-00014.safetensors": "4cb364215f617628defac9a1345c9122ab65b36d555349285f73b7595eb068a6",
+      "model.safetensors-00003-of-00014.safetensors": "f94b20e10e856926b902a51c9aa575ff8beb483cef6130996e098a40e3a2a92a",
+      "model.safetensors-00004-of-00014.safetensors": "c3a0d1593280aeb44ba100a1dbef643071284519b58654b14591984ae558c5d3",
+      "model.safetensors-00005-of-00014.safetensors": "a754c48ee879302bbb16debedea9032010bb616aa3fe9f1fd0340f81230b5e12",
+      "model.safetensors-00006-of-00014.safetensors": "b5435e836f62b7d915e84f0f327d07ed773a0939d4acd3e16b9b082c35318ce9",
+      "model.safetensors-00007-of-00014.safetensors": "684840ee3af77f22ddaa5df7330384c472b7e50efdd4ba1699558152a182045c",
+      "model.safetensors-00008-of-00014.safetensors": "70ac96a66c7bc85d97649e460bdfaebc5947c191bb0742d596c35d53d833060a",
+      "model.safetensors-00009-of-00014.safetensors": "775cec9a6755ecddcd3d41954f14e40051a5d8306ce6d5f6ccd96af58a8d93cb",
+      "model.safetensors-00010-of-00014.safetensors": "5a86d13781bb91dbfce6602095e424f9b53fe76d3bb0d1ea1800f584fc1f41ab",
+      "model.safetensors-00011-of-00014.safetensors": "6f0c1b222c972fb8ce4936f861a71e6f2987db80b523d290954473d7643bf417",
+      "model.safetensors-00012-of-00014.safetensors": "040c27529a66e43f3a2cfef338ac121f5897ea476984ee3ba35540a49388809b",
+      "model.safetensors-00013-of-00014.safetensors": "ee1088b806b0ce6ad374eec852503efa68d70f01480bd75815f8ca7b91327df0",
+      "model.safetensors-00014-of-00014.safetensors": "38842b8f3d0a4ea29c064317591c4b6529efbcc0a1f7665c41b58e6852638dc9"
+    },
+    "shard_bytes": {
+      "model.safetensors-00001-of-00014.safetensors": 2685395560,
+      "model.safetensors-00002-of-00014.safetensors": 2685393512,
+      "model.safetensors-00003-of-00014.safetensors": 2685393512,
+      "model.safetensors-00004-of-00014.safetensors": 2685394536,
+      "model.safetensors-00005-of-00014.safetensors": 2685395560,
+      "model.safetensors-00006-of-00014.safetensors": 2685394536,
+      "model.safetensors-00007-of-00014.safetensors": 2685393512,
+      "model.safetensors-00008-of-00014.safetensors": 2685393512,
+      "model.safetensors-00009-of-00014.safetensors": 3645492144,
+      "model.safetensors-00010-of-00014.safetensors": 2685398632,
+      "model.safetensors-00011-of-00014.safetensors": 2685400680,
+      "model.safetensors-00012-of-00014.safetensors": 2685399144,
+      "model.safetensors-00013-of-00014.safetensors": 3011229472,
+      "model.safetensors-00014-of-00014.safetensors": 1267650368
+    },
+    "tensor_count": 64196,
+    "total_shard_bytes": 37463724680,
+    "tokenizer_files": {
+      "tokenizer.json": "5f9e4d4901a92b997e463c1f46055088b6cca5ca61a6522d1b9f64c4bb81cb42",
+      "tokenizer_config.json": "316230d6a809701f4db5ea8f8fc862bc3a6f3229c937c174e674ff3ca0a64ac8"
+    },
+    "full_shard_set_sha256": "b51014a9d40c300ea77f12bf8cada444f79c8300277611f6e5f27a62fcb95090",
+    "hash_scope": "all original indexed shard files, including unused experts/vision/MTP"
+  },
+  "reference_manifest_sha256": "fb96ba4dd134761af30b4025b4cce86f96136cb01f05b5b4fca3e74587caa71d",
+  "boundary_inventory_complete": true,
+  "bridge_source_sha256": "142af27db400daae79a344d445245b8a8dca1091bf556efef96503089066e487",
+  "execution_claim": "Canonical observed tensors only; producer custody/authenticated execution must be checked separately",
+  "checkpoint_identity_scope": "Runtime contract attests validation against pinned oracle checkpoint; bridge did not reopen model weights",
+  "owner_bindings": [
+    {
+      "data_sites": "[TensorCollectiveSite { site: 0, layer: Some(0), operator: Protocol { version: 2, operation: AttentionOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 1, layer: Some(0), operator: Protocol { version: 2, operation: RoutedExpertOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 2, layer: Some(1), operator: Protocol { version: 2, operation: AttentionOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 3, layer: Some(1), operator: Protocol { version: 2, operation: RoutedExpertOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 4, layer: Some(2), operator: Protocol { version: 2, operation: AttentionOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 5, layer: Some(2), operator: Protocol { version: 2, operation: RoutedExpertOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 6, layer: Some(3), operator: Protocol { version: 2, operation: AttentionOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 7, layer: Some(3), operator: Protocol { version: 2, operation: RoutedExpertOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 8, layer: Some(4), operator: Protocol { version: 2, operation: AttentionOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 9, layer: Some(4), operator: Protocol { version: 2, operation: RoutedExpertOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 10, layer: Some(5), operator: Protocol { version: 2, operation: AttentionOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 11, layer: Some(5), operator: Protocol { version: 2, operation: RoutedExpertOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 12, layer: Some(6), operator: Protocol { version: 2, operation: AttentionOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 13, layer: Some(6), operator: Protocol { version: 2, operation: RoutedExpertOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 14, layer: Some(7), operator: Protocol { version: 2, operation: AttentionOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 15, layer: Some(7), operator: Protocol { version: 2, operation: RoutedExpertOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 16, layer: Some(8), operator: Protocol { version: 2, operation: AttentionOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 17, layer: Some(8), operator: Protocol { version: 2, operation: RoutedExpertOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 18, layer: Some(9), operator: Protocol { version: 2, operation: AttentionOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 19, layer: Some(9), operator: Protocol { version: 2, operation: RoutedExpertOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 20, layer: Some(10), operator: Protocol { version: 2, operation: AttentionOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 21, layer: Some(10), operator: Protocol { version: 2, operation: RoutedExpertOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 22, layer: Some(11), operator: Protocol { version: 2, operation: AttentionOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 23, layer: Some(11), operator: Protocol { version: 2, operation: RoutedExpertOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 24, layer: Some(12), operator: Protocol { version: 2, operation: AttentionOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 25, layer: Some(12), operator: Protocol { version: 2, operation: RoutedExpertOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 26, layer: Some(13), operator: Protocol { version: 2, operation: AttentionOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 27, layer: Some(13), operator: Protocol { version: 2, operation: RoutedExpertOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 28, layer: Some(14), operator: Protocol { version: 2, operation: AttentionOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 29, layer: Some(14), operator: Protocol { version: 2, operation: RoutedExpertOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 30, layer: Some(15), operator: Protocol { version: 2, operation: AttentionOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 31, layer: Some(15), operator: Protocol { version: 2, operation: RoutedExpertOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 32, layer: Some(16), operator: Protocol { version: 2, operation: AttentionOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 33, layer: Some(16), operator: Protocol { version: 2, operation: RoutedExpertOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 34, layer: Some(17), operator: Protocol { version: 2, operation: AttentionOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 35, layer: Some(17), operator: Protocol { version: 2, operation: RoutedExpertOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 36, layer: Some(18), operator: Protocol { version: 2, operation: AttentionOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 37, layer: Some(18), operator: Protocol { version: 2, operation: RoutedExpertOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 38, layer: Some(19), operator: Protocol { version: 2, operation: AttentionOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 39, layer: Some(19), operator: Protocol { version: 2, operation: RoutedExpertOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 40, layer: Some(20), operator: Protocol { version: 2, operation: AttentionOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 41, layer: Some(20), operator: Protocol { version: 2, operation: RoutedExpertOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 42, layer: Some(21), operator: Protocol { version: 2, operation: AttentionOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 43, layer: Some(21), operator: Protocol { version: 2, operation: RoutedExpertOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 44, layer: Some(22), operator: Protocol { version: 2, operation: AttentionOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 45, layer: Some(22), operator: Protocol { version: 2, operation: RoutedExpertOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 46, layer: Some(23), operator: Protocol { version: 2, operation: AttentionOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 47, layer: Some(23), operator: Protocol { version: 2, operation: RoutedExpertOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 48, layer: Some(24), operator: Protocol { version: 2, operation: AttentionOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 49, layer: Some(24), operator: Protocol { version: 2, operation: RoutedExpertOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 50, layer: Some(25), operator: Protocol { version: 2, operation: AttentionOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 51, layer: Some(25), operator: Protocol { version: 2, operation: RoutedExpertOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 52, layer: Some(26), operator: Protocol { version: 2, operation: AttentionOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 53, layer: Some(26), operator: Protocol { version: 2, operation: RoutedExpertOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 54, layer: Some(27), operator: Protocol { version: 2, operation: AttentionOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 55, layer: Some(27), operator: Protocol { version: 2, operation: RoutedExpertOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 56, layer: Some(28), operator: Protocol { version: 2, operation: AttentionOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 57, layer: Some(28), operator: Protocol { version: 2, operation: RoutedExpertOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 58, layer: Some(29), operator: Protocol { version: 2, operation: AttentionOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 59, layer: Some(29), operator: Protocol { version: 2, operation: RoutedExpertOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 60, layer: Some(30), operator: Protocol { version: 2, operation: AttentionOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 61, layer: Some(30), operator: Protocol { version: 2, operation: RoutedExpertOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 62, layer: Some(31), operator: Protocol { version: 2, operation: AttentionOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 63, layer: Some(31), operator: Protocol { version: 2, operation: RoutedExpertOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 64, layer: Some(32), operator: Protocol { version: 2, operation: AttentionOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 65, layer: Some(32), operator: Protocol { version: 2, operation: RoutedExpertOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 66, layer: Some(33), operator: Protocol { version: 2, operation: AttentionOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 67, layer: Some(33), operator: Protocol { version: 2, operation: RoutedExpertOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 68, layer: Some(34), operator: Protocol { version: 2, operation: AttentionOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 69, layer: Some(34), operator: Protocol { version: 2, operation: RoutedExpertOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 70, layer: Some(35), operator: Protocol { version: 2, operation: AttentionOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 71, layer: Some(35), operator: Protocol { version: 2, operation: RoutedExpertOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 72, layer: Some(36), operator: Protocol { version: 2, operation: AttentionOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 73, layer: Some(36), operator: Protocol { version: 2, operation: RoutedExpertOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 74, layer: Some(37), operator: Protocol { version: 2, operation: AttentionOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 75, layer: Some(37), operator: Protocol { version: 2, operation: RoutedExpertOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 76, layer: Some(38), operator: Protocol { version: 2, operation: AttentionOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 77, layer: Some(38), operator: Protocol { version: 2, operation: RoutedExpertOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 78, layer: Some(39), operator: Protocol { version: 2, operation: AttentionOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 79, layer: Some(39), operator: Protocol { version: 2, operation: RoutedExpertOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 80, layer: None, operator: Protocol { version: 2, operation: OutputHead, kind: AllGatherBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 124160 } } }]",
+      "decoded_weight_cache": {
+        "capacity_grants": 3221225472,
+        "pinned_grants": 1405091840,
+        "routed_entries": 20480,
+        "routed_working_set_grants": 805306368
+      },
+      "device": 0,
+      "epoch": 1,
+      "group": 1,
+      "ordered_members": [
+        0,
+        1
+      ],
+      "owner": 0,
+      "rank_layout": {
+        "lane": 0,
+        "layers": [
+          0,
+          40
+        ],
+        "precision": "MixedBf16F32",
+        "routed_execution": "LocalTensorShards"
+      },
+      "route_sites": "[HybridMixedRouteSite { layer: 0, output_site: 1, experts: 256, top_k: 8, max_rows: 8, accumulation: HfEagerBf16ExpertOrder, combine: LocalBf16AddThenReduce }, HybridMixedRouteSite { layer: 1, output_site: 3, experts: 256, top_k: 8, max_rows: 8, accumulation: HfEagerBf16ExpertOrder, combine: LocalBf16AddThenReduce }, HybridMixedRouteSite { layer: 2, output_site: 5, experts: 256, top_k: 8, max_rows: 8, accumulation: HfEagerBf16ExpertOrder, combine: LocalBf16AddThenReduce }, HybridMixedRouteSite { layer: 3, output_site: 7, experts: 256, top_k: 8, max_rows: 8, accumulation: HfEagerBf16ExpertOrder, combine: LocalBf16AddThenReduce }, HybridMixedRouteSite { layer: 4, output_site: 9, experts: 256, top_k: 8, max_rows: 8, accumulation: HfEagerBf16ExpertOrder, combine: LocalBf16AddThenReduce }, HybridMixedRouteSite { layer: 5, output_site: 11, experts: 256, top_k: 8, max_rows: 8, accumulation: HfEagerBf16ExpertOrder, combine: LocalBf16AddThenReduce }, HybridMixedRouteSite { layer: 6, output_site: 13, experts: 256, top_k: 8, max_rows: 8, accumulation: HfEagerBf16ExpertOrder, combine: LocalBf16AddThenReduce }, HybridMixedRouteSite { layer: 7, output_site: 15, experts: 256, top_k: 8, max_rows: 8, accumulation: HfEagerBf16ExpertOrder, combine: LocalBf16AddThenReduce }, HybridMixedRouteSite { layer: 8, output_site: 17, experts: 256, top_k: 8, max_rows: 8, accumulation: HfEagerBf16ExpertOrder, combine: LocalBf16AddThenReduce }, HybridMixedRouteSite { layer: 9, output_site: 19, experts: 256, top_k: 8, max_rows: 8, accumulation: HfEagerBf16ExpertOrder, combine: LocalBf16AddThenReduce }, HybridMixedRouteSite { layer: 10, output_site: 21, experts: 256, top_k: 8, max_rows: 8, accumulation: HfEagerBf16ExpertOrder, combine: LocalBf16AddThenReduce }, HybridMixedRouteSite { layer: 11, output_site: 23, experts: 256, top_k: 8, max_rows: 8, accumulation: HfEagerBf16ExpertOrder, combine: LocalBf16AddThenReduce }, HybridMixedRouteSite { layer: 12, output_site: 25, experts: 256, top_k: 8, max_rows: 8, accumulation: HfEagerBf16ExpertOrder, combine: LocalBf16AddThenReduce }, HybridMixedRouteSite { layer: 13, output_site: 27, experts: 256, top_k: 8, max_rows: 8, accumulation: HfEagerBf16ExpertOrder, combine: LocalBf16AddThenReduce }, HybridMixedRouteSite { layer: 14, output_site: 29, experts: 256, top_k: 8, max_rows: 8, accumulation: HfEagerBf16ExpertOrder, combine: LocalBf16AddThenReduce }, HybridMixedRouteSite { layer: 15, output_site: 31, experts: 256, top_k: 8, max_rows: 8, accumulation: HfEagerBf16ExpertOrder, combine: LocalBf16AddThenReduce }, HybridMixedRouteSite { layer: 16, output_site: 33, experts: 256, top_k: 8, max_rows: 8, accumulation: HfEagerBf16ExpertOrder, combine: LocalBf16AddThenReduce }, HybridMixedRouteSite { layer: 17, output_site: 35, experts: 256, top_k: 8, max_rows: 8, accumulation: HfEagerBf16ExpertOrder, combine: LocalBf16AddThenReduce }, HybridMixedRouteSite { layer: 18, output_site: 37, experts: 256, top_k: 8, max_rows: 8, accumulation: HfEagerBf16ExpertOrder, combine: LocalBf16AddThenReduce }, HybridMixedRouteSite { layer: 19, output_site: 39, experts: 256, top_k: 8, max_rows: 8, accumulation: HfEagerBf16ExpertOrder, combine: LocalBf16AddThenReduce }, HybridMixedRouteSite { layer: 20, output_site: 41, experts: 256, top_k: 8, max_rows: 8, accumulation: HfEagerBf16ExpertOrder, combine: LocalBf16AddThenReduce }, HybridMixedRouteSite { layer: 21, output_site: 43, experts: 256, top_k: 8, max_rows: 8, accumulation: HfEagerBf16ExpertOrder, combine: LocalBf16AddThenReduce }, HybridMixedRouteSite { layer: 22, output_site: 45, experts: 256, top_k: 8, max_rows: 8, accumulation: HfEagerBf16ExpertOrder, combine: LocalBf16AddThenReduce }, HybridMixedRouteSite { layer: 23, output_site: 47, experts: 256, top_k: 8, max_rows: 8, accumulation: HfEagerBf16ExpertOrder, combine: LocalBf16AddThenReduce }, HybridMixedRouteSite { layer: 24, output_site: 49, experts: 256, top_k: 8, max_rows: 8, accumulation: HfEagerBf16ExpertOrder, combine: LocalBf16AddThenReduce }, HybridMixedRouteSite { layer: 25, output_site: 51, experts: 256, top_k: 8, max_rows: 8, accumulation: HfEagerBf16ExpertOrder, combine: LocalBf16AddThenReduce }, HybridMixedRouteSite { layer: 26, output_site: 53, experts: 256, top_k: 8, max_rows: 8, accumulation: HfEagerBf16ExpertOrder, combine: LocalBf16AddThenReduce }, HybridMixedRouteSite { layer: 27, output_site: 55, experts: 256, top_k: 8, max_rows: 8, accumulation: HfEagerBf16ExpertOrder, combine: LocalBf16AddThenReduce }, HybridMixedRouteSite { layer: 28, output_site: 57, experts: 256, top_k: 8, max_rows: 8, accumulation: HfEagerBf16ExpertOrder, combine: LocalBf16AddThenReduce }, HybridMixedRouteSite { layer: 29, output_site: 59, experts: 256, top_k: 8, max_rows: 8, accumulation: HfEagerBf16ExpertOrder, combine: LocalBf16AddThenReduce }, HybridMixedRouteSite { layer: 30, output_site: 61, experts: 256, top_k: 8, max_rows: 8, accumulation: HfEagerBf16ExpertOrder, combine: LocalBf16AddThenReduce }, HybridMixedRouteSite { layer: 31, output_site: 63, experts: 256, top_k: 8, max_rows: 8, accumulation: HfEagerBf16ExpertOrder, combine: LocalBf16AddThenReduce }, HybridMixedRouteSite { layer: 32, output_site: 65, experts: 256, top_k: 8, max_rows: 8, accumulation: HfEagerBf16ExpertOrder, combine: LocalBf16AddThenReduce }, HybridMixedRouteSite { layer: 33, output_site: 67, experts: 256, top_k: 8, max_rows: 8, accumulation: HfEagerBf16ExpertOrder, combine: LocalBf16AddThenReduce }, HybridMixedRouteSite { layer: 34, output_site: 69, experts: 256, top_k: 8, max_rows: 8, accumulation: HfEagerBf16ExpertOrder, combine: LocalBf16AddThenReduce }, HybridMixedRouteSite { layer: 35, output_site: 71, experts: 256, top_k: 8, max_rows: 8, accumulation: HfEagerBf16ExpertOrder, combine: LocalBf16AddThenReduce }, HybridMixedRouteSite { layer: 36, output_site: 73, experts: 256, top_k: 8, max_rows: 8, accumulation: HfEagerBf16ExpertOrder, combine: LocalBf16AddThenReduce }, HybridMixedRouteSite { layer: 37, output_site: 75, experts: 256, top_k: 8, max_rows: 8, accumulation: HfEagerBf16ExpertOrder, combine: LocalBf16AddThenReduce }, HybridMixedRouteSite { layer: 38, output_site: 77, experts: 256, top_k: 8, max_rows: 8, accumulation: HfEagerBf16ExpertOrder, combine: LocalBf16AddThenReduce }, HybridMixedRouteSite { layer: 39, output_site: 79, experts: 256, top_k: 8, max_rows: 8, accumulation: HfEagerBf16ExpertOrder, combine: LocalBf16AddThenReduce }]",
+      "source": 0
+    },
+    {
+      "data_sites": "[TensorCollectiveSite { site: 0, layer: Some(0), operator: Protocol { version: 2, operation: AttentionOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 1, layer: Some(0), operator: Protocol { version: 2, operation: RoutedExpertOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 2, layer: Some(1), operator: Protocol { version: 2, operation: AttentionOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 3, layer: Some(1), operator: Protocol { version: 2, operation: RoutedExpertOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 4, layer: Some(2), operator: Protocol { version: 2, operation: AttentionOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 5, layer: Some(2), operator: Protocol { version: 2, operation: RoutedExpertOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 6, layer: Some(3), operator: Protocol { version: 2, operation: AttentionOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 7, layer: Some(3), operator: Protocol { version: 2, operation: RoutedExpertOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 8, layer: Some(4), operator: Protocol { version: 2, operation: AttentionOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 9, layer: Some(4), operator: Protocol { version: 2, operation: RoutedExpertOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 10, layer: Some(5), operator: Protocol { version: 2, operation: AttentionOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 11, layer: Some(5), operator: Protocol { version: 2, operation: RoutedExpertOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 12, layer: Some(6), operator: Protocol { version: 2, operation: AttentionOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 13, layer: Some(6), operator: Protocol { version: 2, operation: RoutedExpertOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 14, layer: Some(7), operator: Protocol { version: 2, operation: AttentionOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 15, layer: Some(7), operator: Protocol { version: 2, operation: RoutedExpertOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 16, layer: Some(8), operator: Protocol { version: 2, operation: AttentionOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 17, layer: Some(8), operator: Protocol { version: 2, operation: RoutedExpertOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 18, layer: Some(9), operator: Protocol { version: 2, operation: AttentionOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 19, layer: Some(9), operator: Protocol { version: 2, operation: RoutedExpertOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 20, layer: Some(10), operator: Protocol { version: 2, operation: AttentionOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 21, layer: Some(10), operator: Protocol { version: 2, operation: RoutedExpertOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 22, layer: Some(11), operator: Protocol { version: 2, operation: AttentionOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 23, layer: Some(11), operator: Protocol { version: 2, operation: RoutedExpertOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 24, layer: Some(12), operator: Protocol { version: 2, operation: AttentionOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 25, layer: Some(12), operator: Protocol { version: 2, operation: RoutedExpertOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 26, layer: Some(13), operator: Protocol { version: 2, operation: AttentionOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 27, layer: Some(13), operator: Protocol { version: 2, operation: RoutedExpertOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 28, layer: Some(14), operator: Protocol { version: 2, operation: AttentionOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 29, layer: Some(14), operator: Protocol { version: 2, operation: RoutedExpertOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 30, layer: Some(15), operator: Protocol { version: 2, operation: AttentionOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 31, layer: Some(15), operator: Protocol { version: 2, operation: RoutedExpertOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 32, layer: Some(16), operator: Protocol { version: 2, operation: AttentionOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 33, layer: Some(16), operator: Protocol { version: 2, operation: RoutedExpertOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 34, layer: Some(17), operator: Protocol { version: 2, operation: AttentionOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 35, layer: Some(17), operator: Protocol { version: 2, operation: RoutedExpertOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 36, layer: Some(18), operator: Protocol { version: 2, operation: AttentionOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 37, layer: Some(18), operator: Protocol { version: 2, operation: RoutedExpertOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 38, layer: Some(19), operator: Protocol { version: 2, operation: AttentionOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 39, layer: Some(19), operator: Protocol { version: 2, operation: RoutedExpertOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 40, layer: Some(20), operator: Protocol { version: 2, operation: AttentionOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 41, layer: Some(20), operator: Protocol { version: 2, operation: RoutedExpertOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 42, layer: Some(21), operator: Protocol { version: 2, operation: AttentionOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 43, layer: Some(21), operator: Protocol { version: 2, operation: RoutedExpertOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 44, layer: Some(22), operator: Protocol { version: 2, operation: AttentionOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 45, layer: Some(22), operator: Protocol { version: 2, operation: RoutedExpertOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 46, layer: Some(23), operator: Protocol { version: 2, operation: AttentionOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 47, layer: Some(23), operator: Protocol { version: 2, operation: RoutedExpertOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 48, layer: Some(24), operator: Protocol { version: 2, operation: AttentionOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 49, layer: Some(24), operator: Protocol { version: 2, operation: RoutedExpertOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 50, layer: Some(25), operator: Protocol { version: 2, operation: AttentionOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 51, layer: Some(25), operator: Protocol { version: 2, operation: RoutedExpertOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 52, layer: Some(26), operator: Protocol { version: 2, operation: AttentionOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 53, layer: Some(26), operator: Protocol { version: 2, operation: RoutedExpertOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 54, layer: Some(27), operator: Protocol { version: 2, operation: AttentionOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 55, layer: Some(27), operator: Protocol { version: 2, operation: RoutedExpertOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 56, layer: Some(28), operator: Protocol { version: 2, operation: AttentionOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 57, layer: Some(28), operator: Protocol { version: 2, operation: RoutedExpertOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 58, layer: Some(29), operator: Protocol { version: 2, operation: AttentionOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 59, layer: Some(29), operator: Protocol { version: 2, operation: RoutedExpertOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 60, layer: Some(30), operator: Protocol { version: 2, operation: AttentionOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 61, layer: Some(30), operator: Protocol { version: 2, operation: RoutedExpertOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 62, layer: Some(31), operator: Protocol { version: 2, operation: AttentionOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 63, layer: Some(31), operator: Protocol { version: 2, operation: RoutedExpertOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 64, layer: Some(32), operator: Protocol { version: 2, operation: AttentionOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 65, layer: Some(32), operator: Protocol { version: 2, operation: RoutedExpertOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 66, layer: Some(33), operator: Protocol { version: 2, operation: AttentionOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 67, layer: Some(33), operator: Protocol { version: 2, operation: RoutedExpertOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 68, layer: Some(34), operator: Protocol { version: 2, operation: AttentionOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 69, layer: Some(34), operator: Protocol { version: 2, operation: RoutedExpertOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 70, layer: Some(35), operator: Protocol { version: 2, operation: AttentionOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 71, layer: Some(35), operator: Protocol { version: 2, operation: RoutedExpertOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 72, layer: Some(36), operator: Protocol { version: 2, operation: AttentionOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 73, layer: Some(36), operator: Protocol { version: 2, operation: RoutedExpertOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 74, layer: Some(37), operator: Protocol { version: 2, operation: AttentionOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 75, layer: Some(37), operator: Protocol { version: 2, operation: RoutedExpertOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 76, layer: Some(38), operator: Protocol { version: 2, operation: AttentionOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 77, layer: Some(38), operator: Protocol { version: 2, operation: RoutedExpertOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 78, layer: Some(39), operator: Protocol { version: 2, operation: AttentionOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 79, layer: Some(39), operator: Protocol { version: 2, operation: RoutedExpertOutput, kind: AllReduceSumBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 2048 } } }, TensorCollectiveSite { site: 80, layer: None, operator: Protocol { version: 2, operation: OutputHead, kind: AllGatherBf16, shape: PerSequence { fixed: 0, per_sequence: 0, per_row: 124160 } } }]",
+      "decoded_weight_cache": {
+        "capacity_grants": 3221225472,
+        "pinned_grants": 1405091840,
+        "routed_entries": 20480,
+        "routed_working_set_grants": 805306368
+      },
+      "device": 1,
+      "epoch": 1,
+      "group": 1,
+      "ordered_members": [
+        0,
+        1
+      ],
+      "owner": 1,
+      "rank_layout": {
+        "lane": 1,
+        "layers": [
+          0,
+          40
+        ],
+        "precision": "MixedBf16F32",
+        "routed_execution": "LocalTensorShards"
+      },
+      "route_sites": "[HybridMixedRouteSite { layer: 0, output_site: 1, experts: 256, top_k: 8, max_rows: 8, accumulation: HfEagerBf16ExpertOrder, combine: LocalBf16AddThenReduce }, HybridMixedRouteSite { layer: 1, output_site: 3, experts: 256, top_k: 8, max_rows: 8, accumulation: HfEagerBf16ExpertOrder, combine: LocalBf16AddThenReduce }, HybridMixedRouteSite { layer: 2, output_site: 5, experts: 256, top_k: 8, max_rows: 8, accumulation: HfEagerBf16ExpertOrder, combine: LocalBf16AddThenReduce }, HybridMixedRouteSite { layer: 3, output_site: 7, experts: 256, top_k: 8, max_rows: 8, accumulation: HfEagerBf16ExpertOrder, combine: LocalBf16AddThenReduce }, HybridMixedRouteSite { layer: 4, output_site: 9, experts: 256, top_k: 8, max_rows: 8, accumulation: HfEagerBf16ExpertOrder, combine: LocalBf16AddThenReduce }, HybridMixedRouteSite { layer: 5, output_site: 11, experts: 256, top_k: 8, max_rows: 8, accumulation: HfEagerBf16ExpertOrder, combine: LocalBf16AddThenReduce }, HybridMixedRouteSite { layer: 6, output_site: 13, experts: 256, top_k: 8, max_rows: 8, accumulation: HfEagerBf16ExpertOrder, combine: LocalBf16AddThenReduce }, HybridMixedRouteSite { layer: 7, output_site: 15, experts: 256, top_k: 8, max_rows: 8, accumulation: HfEagerBf16ExpertOrder, combine: LocalBf16AddThenReduce }, HybridMixedRouteSite { layer: 8, output_site: 17, experts: 256, top_k: 8, max_rows: 8, accumulation: HfEagerBf16ExpertOrder, combine: LocalBf16AddThenReduce }, HybridMixedRouteSite { layer: 9, output_site: 19, experts: 256, top_k: 8, max_rows: 8, accumulation: HfEagerBf16ExpertOrder, combine: LocalBf16AddThenReduce }, HybridMixedRouteSite { layer: 10, output_site: 21, experts: 256, top_k: 8, max_rows: 8, accumulation: HfEagerBf16ExpertOrder, combine: LocalBf16AddThenReduce }, HybridMixedRouteSite { layer: 11, output_site: 23, experts: 256, top_k: 8, max_rows: 8, accumulation: HfEagerBf16ExpertOrder, combine: LocalBf16AddThenReduce }, HybridMixedRouteSite { layer: 12, output_site: 25, experts: 256, top_k: 8, max_rows: 8, accumulation: HfEagerBf16ExpertOrder, combine: LocalBf16AddThenReduce }, HybridMixedRouteSite { layer: 13, output_site: 27, experts: 256, top_k: 8, max_rows: 8, accumulation: HfEagerBf16ExpertOrder, combine: LocalBf16AddThenReduce }, HybridMixedRouteSite { layer: 14, output_site: 29, experts: 256, top_k: 8, max_rows: 8, accumulation: HfEagerBf16ExpertOrder, combine: LocalBf16AddThenReduce }, HybridMixedRouteSite { layer: 15, output_site: 31, experts: 256, top_k: 8, max_rows: 8, accumulation: HfEagerBf16ExpertOrder, combine: LocalBf16AddThenReduce }, HybridMixedRouteSite { layer: 16, output_site: 33, experts: 256, top_k: 8, max_rows: 8, accumulation: HfEagerBf16ExpertOrder, combine: LocalBf16AddThenReduce }, HybridMixedRouteSite { layer: 17, output_site: 35, experts: 256, top_k: 8, max_rows: 8, accumulation: HfEagerBf16ExpertOrder, combine: LocalBf16AddThenReduce }, HybridMixedRouteSite { layer: 18, output_site: 37, experts: 256, top_k: 8, max_rows: 8, accumulation: HfEagerBf16ExpertOrder, combine: LocalBf16AddThenReduce }, HybridMixedRouteSite { layer: 19, output_site: 39, experts: 256, top_k: 8, max_rows: 8, accumulation: HfEagerBf16ExpertOrder, combine: LocalBf16AddThenReduce }, HybridMixedRouteSite { layer: 20, output_site: 41, experts: 256, top_k: 8, max_rows: 8, accumulation: HfEagerBf16ExpertOrder, combine: LocalBf16AddThenReduce }, HybridMixedRouteSite { layer: 21, output_site: 43, experts: 256, top_k: 8, max_rows: 8, accumulation: HfEagerBf16ExpertOrder, combine: LocalBf16AddThenReduce }, HybridMixedRouteSite { layer: 22, output_site: 45, experts: 256, top_k: 8, max_rows: 8, accumulation: HfEagerBf16ExpertOrder, combine: LocalBf16AddThenReduce }, HybridMixedRouteSite { layer: 23, output_site: 47, experts: 256, top_k: 8, max_rows: 8, accumulation: HfEagerBf16ExpertOrder, combine: LocalBf16AddThenReduce }, HybridMixedRouteSite { layer: 24, output_site: 49, experts: 256, top_k: 8, max_rows: 8, accumulation: HfEagerBf16ExpertOrder, combine: LocalBf16AddThenReduce }, HybridMixedRouteSite { layer: 25, output_site: 51, experts: 256, top_k: 8, max_rows: 8, accumulation: HfEagerBf16ExpertOrder, combine: LocalBf16AddThenReduce }, HybridMixedRouteSite { layer: 26, output_site: 53, experts: 256, top_k: 8, max_rows: 8, accumulation: HfEagerBf16ExpertOrder, combine: LocalBf16AddThenReduce }, HybridMixedRouteSite { layer: 27, output_site: 55, experts: 256, top_k: 8, max_rows: 8, accumulation: HfEagerBf16ExpertOrder, combine: LocalBf16AddThenReduce }, HybridMixedRouteSite { layer: 28, output_site: 57, experts: 256, top_k: 8, max_rows: 8, accumulation: HfEagerBf16ExpertOrder, combine: LocalBf16AddThenReduce }, HybridMixedRouteSite { layer: 29, output_site: 59, experts: 256, top_k: 8, max_rows: 8, accumulation: HfEagerBf16ExpertOrder, combine: LocalBf16AddThenReduce }, HybridMixedRouteSite { layer: 30, output_site: 61, experts: 256, top_k: 8, max_rows: 8, accumulation: HfEagerBf16ExpertOrder, combine: LocalBf16AddThenReduce }, HybridMixedRouteSite { layer: 31, output_site: 63, experts: 256, top_k: 8, max_rows: 8, accumulation: HfEagerBf16ExpertOrder, combine: LocalBf16AddThenReduce }, HybridMixedRouteSite { layer: 32, output_site: 65, experts: 256, top_k: 8, max_rows: 8, accumulation: HfEagerBf16ExpertOrder, combine: LocalBf16AddThenReduce }, HybridMixedRouteSite { layer: 33, output_site: 67, experts: 256, top_k: 8, max_rows: 8, accumulation: HfEagerBf16ExpertOrder, combine: LocalBf16AddThenReduce }, HybridMixedRouteSite { layer: 34, output_site: 69, experts: 256, top_k: 8, max_rows: 8, accumulation: HfEagerBf16ExpertOrder, combine: LocalBf16AddThenReduce }, HybridMixedRouteSite { layer: 35, output_site: 71, experts: 256, top_k: 8, max_rows: 8, accumulation: HfEagerBf16ExpertOrder, combine: LocalBf16AddThenReduce }, HybridMixedRouteSite { layer: 36, output_site: 73, experts: 256, top_k: 8, max_rows: 8, accumulation: HfEagerBf16ExpertOrder, combine: LocalBf16AddThenReduce }, HybridMixedRouteSite { layer: 37, output_site: 75, experts: 256, top_k: 8, max_rows: 8, accumulation: HfEagerBf16ExpertOrder, combine: LocalBf16AddThenReduce }, HybridMixedRouteSite { layer: 38, output_site: 77, experts: 256, top_k: 8, max_rows: 8, accumulation: HfEagerBf16ExpertOrder, combine: LocalBf16AddThenReduce }, HybridMixedRouteSite { layer: 39, output_site: 79, experts: 256, top_k: 8, max_rows: 8, accumulation: HfEagerBf16ExpertOrder, combine: LocalBf16AddThenReduce }]",
+      "source": 0
+    }
+  ],
+  "raw_source": {
+    "file": "raw-source.json",
+    "sha256": "04d47f80f263a72c24e318bdaddebdfd77975c05913fe3df49e8883fa24f6e51",
+    "bytes": 3106
+  },
+  "candidate_kind": "runtime-v2-publication-joined-native-trace"
+}

@@ -1,0 +1,10 @@
+{
+  "paired.py": "ade070b14ce864c66e82501489583547e9d56d33a05bd042e4e5b933abff6fe3",
+  "pre_serving.py": "b54b749178184af0c240afd378bc58cbd05d75fbee5b06e7bde29b79451bd7f5",
+  "observer.py": "1dc9c30e2684bbedd19466f566cfd879907db7168930c61a90e3d72742377f3f",
+  "instrumentation_scope.py": "d216e30743a5075010322d1bf6f3b52c941f093797b9a8e0a1ff079f049cb347",
+  "instrumentation_capture.py": "08404d4dc56374bb16c9b37e915f978b9c9dc4ff2dc47a0ff89f2189710191ed",
+  "test_profile.py": "27a4dc7406a799aa760adca830a54d40ffd77acddc00bf5b81216e43f88a54e8",
+  "CURRENT.md": "a5a4c030014b345052c8789a9ca9170bca2d6c5577c594296c91a5c6d832bbe6",
+  "INSTRUMENTATION-BASELINE.md": "f65d58d7d5343e6c93047f3c91d93f53d7ba4d5823b5140b95b08074d0d30908"
+}

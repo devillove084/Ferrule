@@ -106,14 +106,7 @@ impl PipelineInferenceEngine {
         if kv_plan.configured_pages != first.physical_pages {
             return Err(invalid("pipeline physical capacity differs from KV budget"));
         }
-        let physical_bytes =
-            pipeline
-                .stage_descriptions()
-                .iter()
-                .try_fold(0u64, |sum, stage| {
-                    sum.checked_add(stage.physical_bytes()?)
-                        .ok_or_else(|| invalid("pipeline physical byte total overflow"))
-                })?;
+        let physical_bytes = pipeline.physical_kv_bytes()?;
         if kv_plan
             .configured_bytes
             .is_some_and(|bytes| bytes != physical_bytes)
@@ -606,6 +599,7 @@ impl SessionInferenceEngine for PipelineInferenceEngine {
             prefix_cache: Default::default(),
             materialization: Default::default(),
             kv_cache: Some(ResidentKvCacheObservability {
+                idle_physical: None,
                 page_size_tokens: self.pipeline.config().page_size,
                 full_capacity_pages: self.kv_plan.full_capacity_pages,
                 configured_pages: self.kv_plan.configured_pages,

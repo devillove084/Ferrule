@@ -15,17 +15,14 @@ use serde_json::{Value, json};
 type Owner = ProcessRankOwner<Value, Value, Value>;
 type Supervisor = ProcessRankSupervisor<Value, Value, Value>;
 
+#[path = "support/build_process_child.rs"]
+mod build_process_child;
+
 fn launch(mode: &str) -> ProcessLaunch {
-    let executable = std::env::current_exe().unwrap();
-    // Covers both deps/<test> and Cargo's build/<crate>/<hash>/out layout,
-    // including a caller-selected target directory or target triple.
-    let fixture = executable
-        .ancestors()
-        .map(|directory| directory.join("examples/process_rank_child"))
-        .find(|candidate| candidate.is_file())
-        .expect(
-            "build test fixture first: cargo build -p ferrule-runtime --example process_rank_child",
-        );
+    static CHILD: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+    let fixture = CHILD.get_or_init(|| {
+        build_process_child::build("ferrule-runtime", "example", "process_rank_child")
+    });
     ProcessLaunch::new(fixture).arg(mode)
 }
 fn identity(epoch: u64, owner: u64) -> ProcessIdentity {
@@ -565,4 +562,79 @@ fn local_encode_failure_and_encode_deadline_preserve_ready() {
     assert_eq!(reply["command"], 1);
     assert_eq!(reply["value"], 42);
     owner.shutdown().unwrap();
+}
+
+#[test]
+fn typed_raw_command_duplicate_fields_are_fenced_without_replay() {
+    use ferrule_runtime::parallel::expert_process::NumericReply;
+    use serde_json::value::RawValue;
+    let mut owner = ProcessRankOwner::<Value, Box<RawValue>, NumericReply>::spawn(
+        launch("typed_cpu"),
+        identity(1, 1),
+        &json!({}),
+        options(),
+    )
+    .unwrap();
+    let pid = owner.pid();
+    for bad in [
+        r#"{"type":"compute","transaction":1,"transaction":2,"source":0,"layer":0,"tokens":[]}"#,
+        r#"{"type":"compute","transaction":1,"source":0,"layer":0,"tokens":[],"unexpected":0}"#,
+    ] {
+        let input = RawValue::from_string(bad.into()).unwrap();
+        assert!(matches!(
+            owner.execute(tx(1), 0, &input),
+            Err(ProcessError::RemoteFailure {
+                failure: ProcessHandlerError {
+                    kind: ProcessFailureKind::CommandDecode,
+                    quiescence: ProcessQuiescence::Fenced,
+                    ..
+                }
+            })
+        ));
+        assert_eq!(owner.state(), ProcessOwnerState::Ready);
+        assert_eq!(owner.pid(), pid);
+    }
+    let good = RawValue::from_string(
+        r#"{"type":"compute","transaction":1,"source":0,"layer":0,"tokens":[]}"#.into(),
+    )
+    .unwrap();
+    assert!(
+        matches!(owner.execute(tx(1),0,&good).unwrap(), NumericReply::Results { tokens, .. } if tokens.is_empty())
+    );
+    assert_eq!(owner.shutdown().unwrap().reap, ReapOutcome::Reaped);
+}
+
+#[test]
+fn typed_output_serialization_and_depth_failures_send_unknown_negative_response() {
+    use ferrule_runtime::parallel::expert_process::{NumericCommand, NumericReply};
+    for layer in [1, 2] {
+        let mut owner = ProcessRankOwner::<Value, NumericCommand, NumericReply>::spawn(
+            launch("typed_cpu"),
+            identity(1, 1),
+            &json!({}),
+            options(),
+        )
+        .unwrap();
+        let input = NumericCommand::Compute {
+            transaction: 1,
+            source: 0,
+            layer,
+            tokens: vec![],
+        };
+        let error = owner.execute(tx(1), 0, &input).unwrap_err();
+        let ProcessError::QuiescenceUnknown { source, .. } = error else {
+            panic!("{error}")
+        };
+        assert!(matches!(
+            *source,
+            ProcessError::RemoteFailure {
+                failure: ProcessHandlerError {
+                    kind: ProcessFailureKind::OutputEncode,
+                    quiescence: ProcessQuiescence::Unknown,
+                    ..
+                }
+            }
+        ));
+        assert!(owner.execute(tx(2), 0, &input).is_err());
+    }
 }

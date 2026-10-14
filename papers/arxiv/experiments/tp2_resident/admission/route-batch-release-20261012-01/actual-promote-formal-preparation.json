@@ -1,0 +1,21 @@
+{
+  "status": "pass",
+  "utc": "2026-10-11T21:33:42.629402+00:00",
+  "actual_smoke": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/route-batch-smoke-20261012-01/serving-smoke.json",
+    "sha256": "ebaa00d2db4ba28f35aa0413b11349fd3b4b15e88ab191417a07571597c62471"
+  },
+  "prepared": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/route-batch-info-after-20261012-01/prepared.json",
+    "sha256": "1b9155eccc376df165614cbb96885f1f66e6047c9e52645bcb79f3b3cdf083ae"
+  },
+  "purpose": "fused_after",
+  "optimization": "routebatch",
+  "slots": [
+    "F1"
+  ],
+  "log": "info",
+  "smoke_timing_included": false,
+  "rankperf": false,
+  "profiler": false
+}

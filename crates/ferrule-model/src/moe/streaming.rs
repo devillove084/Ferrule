@@ -27,17 +27,19 @@ pub use source::{
 };
 #[allow(unused_imports)] // Compatibility exports also exist in non-CUDA builds.
 pub(crate) use source::{infer_expert_linear_format, typed_expert_bundle_layout};
+#[cfg(target_os = "linux")]
+#[allow(unused_imports)] // Capacity planning needs no CUDA allocator.
+pub(crate) use storage::ExpertIoPlan;
 #[cfg(all(target_os = "linux", feature = "cuda"))]
 #[allow(unused_imports)] // Preserve the existing crate-private return type path.
 pub(crate) use storage::ReservedPinnedExpertLoad;
-#[cfg(all(target_os = "linux", feature = "cuda"))]
-pub(crate) use storage::{
-    ExpertIoPlan, PinnedExpertArtifactPayload, PinnedExpertLoadPlan, PinnedExpertReadPoll,
-    PinnedExpertReadTicket,
-};
 pub use storage::{
     ExpertIoStats, ExpertIoTransport, ExpertIoTransportError, ExpertStreamingReader,
     read_experts_concurrent,
+};
+#[cfg(all(target_os = "linux", feature = "cuda"))]
+pub(crate) use storage::{
+    PinnedExpertArtifactPayload, PinnedExpertLoadPlan, PinnedExpertReadPoll, PinnedExpertReadTicket,
 };
 
 /// Per-layer routed-expert source catalog and its streaming policy.

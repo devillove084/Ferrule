@@ -1,0 +1,132 @@
+{
+  "case": "capital",
+  "stage": "prefill",
+  "layer": 9,
+  "expert": 95,
+  "rows": 5,
+  "selected_expert_ids": [
+    0,
+    12,
+    44,
+    48,
+    65,
+    70,
+    71,
+    72,
+    84,
+    86,
+    95,
+    100,
+    122,
+    138,
+    139,
+    154,
+    157,
+    159,
+    184,
+    187,
+    196,
+    206,
+    210,
+    246
+  ],
+  "selected_expert_ids_by_token": [
+    [
+      72,
+      246,
+      210,
+      122,
+      95,
+      184,
+      12,
+      71
+    ],
+    [
+      95,
+      70,
+      187,
+      139,
+      48,
+      100,
+      157,
+      84
+    ],
+    [
+      95,
+      139,
+      206,
+      0,
+      159,
+      138,
+      70,
+      196
+    ],
+    [
+      139,
+      95,
+      154,
+      138,
+      0,
+      65,
+      159,
+      84
+    ],
+    [
+      95,
+      139,
+      138,
+      159,
+      65,
+      0,
+      44,
+      86
+    ]
+  ],
+  "selection": "First layer with a five-token expert; minimum all-five expert ID",
+  "reference_case": {
+    "id": "capital",
+    "file": "capital.safetensors",
+    "sha256": "4fe3d64cc559d5365100e34841db2934579e05a2a334d38a8766406814e90b6d",
+    "bytes": 277869920,
+    "report": {
+      "file": "capital.json",
+      "sha256": "144693807830d1d0211b2a0d06eb3f2e3ac820d484063154fa01693c6a21ee1f",
+      "bytes": 617117
+    },
+    "statistics": {
+      "file": "capital.stats.json",
+      "sha256": "d5c77e86e16ba8fb0a3e2640a432a99e7b0f300e3116511465d373f31f6c4997",
+      "bytes": 580811
+    }
+  },
+  "call": {
+    "stage": "prefill",
+    "input_token_ids": [
+      760,
+      6511,
+      314,
+      9338,
+      369
+    ],
+    "position_start": 0,
+    "sequence_length_after": 5,
+    "next_token_id": 11751
+  },
+  "observed_tensor_keys": [
+    "prefill.layers.08.hidden",
+    "prefill.layers.09.attention",
+    "prefill.layers.09.moe",
+    "prefill.rank.0.layers.09.routed_partial",
+    "prefill.rank.0.layers.09.selected_expert_ids",
+    "prefill.rank.0.layers.09.routing_weights",
+    "prefill.rank.0.layers.09.raw_router_logits",
+    "prefill.rank.0.layers.09.router_probabilities",
+    "prefill.rank.1.layers.09.routed_partial",
+    "prefill.rank.1.layers.09.selected_expert_ids",
+    "prefill.rank.1.layers.09.routing_weights",
+    "prefill.rank.1.layers.09.raw_router_logits",
+    "prefill.rank.1.layers.09.router_probabilities"
+  ],
+  "checkpoint_sha256": "fb96ba4dd134761af30b4025b4cce86f96136cb01f05b5b4fca3e74587caa71d",
+  "checkpoint_shard_set_sha256": "b51014a9d40c300ea77f12bf8cada444f79c8300277611f6e5f27a62fcb95090"
+}

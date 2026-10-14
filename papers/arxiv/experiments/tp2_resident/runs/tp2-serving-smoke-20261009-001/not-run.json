@@ -1,0 +1,6 @@
+{
+  "status": "not_run",
+  "server_starts": 0,
+  "reason": "CPU-only preparation superseded before launch: add actual root return-code receipt",
+  "prepared_sha256": "0b540b788a4df85bbb6c95340f131044e2a63bb5c6e80835ac7f15509a613cea"
+}

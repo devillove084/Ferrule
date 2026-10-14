@@ -1,0 +1,7 @@
+{
+  "returncode": 0,
+  "one_test_passed": true,
+  "selector": "cuda::operators::standard_bf16::tests::packed_routes_gpu_old_expert_gathers_and_combine_match_batch",
+  "binary_sha256": "2636ee8fb65102fb69421e5926655d68e98ec34ada23462ac19448a9a2b36308",
+  "log_sha256": "33e24fb0dda8afb64893aa9b6e40e5e0126ade8b68cac040abe80af626e33325"
+}

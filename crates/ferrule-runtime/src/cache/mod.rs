@@ -5,6 +5,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 pub mod page_manager;
 pub mod radix;
 
+pub use page_manager::kv_read_authority as host_kv;
+pub use page_manager::kv_read_authority::{self, CommittedKvReadLease};
 pub use page_manager::{
     AbortKvReservationsError, BlockTable as PageBlockTable, ConfirmKvRetirementError,
     KvPageManager, KvPageManagerStats, KvPrefixSnapshot, KvReservation, KvReservationBindings,

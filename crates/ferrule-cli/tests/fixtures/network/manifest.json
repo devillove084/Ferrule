@@ -1,0 +1,28 @@
+{
+  "ranks": [
+    {
+      "address": "127.0.0.1:9443",
+      "server_name": "localhost",
+      "tls": {"ca": "tls/ca.pem", "certificate_chain": "tls/controller.pem", "private_key": "tls/controller.key", "peer_leaf": "tls/worker.pem"},
+      "binding": {
+        "run_id": "example-unique-run", "controller_id": "controller-a", "node_id": "worker-a",
+        "identity": {"epoch": 1, "rank": 0, "owner_instance": 1},
+        "target": {"mode": "tp_column", "world": 2, "device": 0, "in_features": 3, "out_features": 5, "max_rows": 2}
+      },
+      "startup_timeout_ms": 30000, "command_timeout_ms": 30000,
+      "limits": {"max_frame_bytes": 8388608, "max_config_bytes": 4194304, "max_command_bytes": 4194304, "max_output_bytes": 4194304, "max_error_bytes": 4096}
+    },
+    {
+      "address": "127.0.0.1:9444",
+      "server_name": "localhost",
+      "tls": {"ca": "tls/ca.pem", "certificate_chain": "tls/controller.pem", "private_key": "tls/controller.key", "peer_leaf": "tls/worker.pem"},
+      "binding": {
+        "run_id": "example-unique-run", "controller_id": "controller-a", "node_id": "worker-a",
+        "identity": {"epoch": 1, "rank": 1, "owner_instance": 2},
+        "target": {"mode": "tp_column", "world": 2, "device": 1, "in_features": 3, "out_features": 5, "max_rows": 2}
+      },
+      "startup_timeout_ms": 30000, "command_timeout_ms": 30000,
+      "limits": {"max_frame_bytes": 8388608, "max_config_bytes": 4194304, "max_command_bytes": 4194304, "max_output_bytes": 4194304, "max_error_bytes": 4096}
+    }
+  ]
+}

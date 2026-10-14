@@ -1,0 +1,12 @@
+Traceback (most recent call last):
+  File "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/instrumentation_capture.py", line 91, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/instrumentation_capture.py", line 84, in main
+    return run(args.directory, args.manifest_sha256, args.command[1:])
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/instrumentation_capture.py", line 55, in run
+    ct.require(all(os.environ.get(key) == ','.join(live.shared.UUIDS)
+  File "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/contract.py", line 46, in require
+    raise ValueError(reason)
+ValueError: Target must retain exactly selected model visibility

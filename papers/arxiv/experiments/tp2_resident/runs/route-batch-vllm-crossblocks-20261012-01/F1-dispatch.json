@@ -1,0 +1,27 @@
+{
+  "protocol": "tp2-resident-fv-qa8-descriptive",
+  "purpose": "paired",
+  "status": "incomplete",
+  "sole_gpu_owner_granted": true,
+  "owner_note": "User explicitly authorized unique GPU owner for e674 routebatch versus frozen vllm028-py312/cu129; exactly F1V1/V2F2 fresh; prior actual same-binary smoke reused; unchanged flags/util0.8/Marlin; info/no rankperf/V upgrades/Nsight/matrix/readback; finite authenticated supervision; stop on ABI/numeric/resource/ECHILD/unknown custody and no foreign signals",
+  "fairmatch": false,
+  "exact_speedup": null,
+  "slots": [
+    {
+      "id": "F1",
+      "status": "dispatched_unknown"
+    },
+    {
+      "id": "V1",
+      "status": "not_run"
+    },
+    {
+      "id": "V2",
+      "status": "not_run"
+    },
+    {
+      "id": "F2",
+      "status": "not_run"
+    }
+  ]
+}

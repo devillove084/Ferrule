@@ -1,0 +1,478 @@
+{
+  "schema": "ferrule.http_bench.v1",
+  "engine": "ferrule",
+  "url": "http://127.0.0.1:18369/v1/completions",
+  "served_model": "qwen35-storage-demand-paper",
+  "created_unix": 1791893812.7489073,
+  "status": "complete",
+  "metadata": {
+    "source": {
+      "status": "unavailable",
+      "reason": "Not supplied by server owner"
+    },
+    "model": {
+      "status": "unavailable",
+      "reason": "Not supplied by server owner"
+    },
+    "binary": {
+      "status": "unavailable",
+      "reason": "Not supplied by server owner"
+    },
+    "dependencies": {
+      "status": "unavailable",
+      "reason": "Not supplied by server owner"
+    },
+    "precision": {
+      "status": "unavailable",
+      "reason": "Not supplied by server owner"
+    },
+    "topology": {
+      "status": "unavailable",
+      "reason": "Not supplied by server owner"
+    },
+    "resources": {
+      "status": "unavailable",
+      "reason": "Not supplied by server owner"
+    },
+    "cache": {
+      "status": "unavailable",
+      "reason": "Not supplied by server owner"
+    },
+    "startup": {
+      "status": "unavailable",
+      "reason": "Not supplied by server owner"
+    },
+    "quality_gate": {
+      "status": "unavailable",
+      "reason": "Not supplied by server owner"
+    },
+    "tokenizer": {
+      "status": "unavailable",
+      "reason": "Not supplied by server owner"
+    },
+    "engine_capability": {
+      "status": "unavailable",
+      "reason": "Not supplied by server owner"
+    },
+    "runtime_contract": {
+      "status": "unavailable",
+      "reason": "Not supplied by server owner"
+    },
+    "comparison_intent": {
+      "status": "unavailable",
+      "reason": "Not supplied by server owner"
+    },
+    "unavailable_categories": [
+      "source",
+      "model",
+      "binary",
+      "dependencies",
+      "precision",
+      "topology",
+      "resources",
+      "cache",
+      "startup",
+      "quality_gate",
+      "tokenizer",
+      "engine_capability",
+      "runtime_contract",
+      "comparison_intent"
+    ],
+    "operator_extra": {},
+    "verification": "Operator declarations only; HTTP client cannot verify remote runtime or physical resources",
+    "metadata_file_sha256": null
+  },
+  "workload": {
+    "max_tokens": 8,
+    "seed": 1,
+    "temperature": 0,
+    "n": 1,
+    "endpoint": "raw completions",
+    "template": "none; literal UTF-8 prompt",
+    "input_tokens_expected": null,
+    "warmup": 0,
+    "requests": 1,
+    "repeat": 1,
+    "concurrency": 1,
+    "request_timeout_seconds": 120.0,
+    "measurement_seconds": 120.0,
+    "window_kind": "fixed-work",
+    "arrival": "finite closed-loop; no retries",
+    "ttft_slo": null,
+    "e2e_slo": null
+  },
+  "corpus": [
+    {
+      "id": "canary-chinese",
+      "prompt": "\u4e2d\u56fd\u7684\u9996\u90fd\u662f",
+      "input_tokens": 3,
+      "sha256": "1a176247202551abe92187f32578f28f25601848c6f55d64acff7a261f030e56"
+    }
+  ],
+  "client": {
+    "script_sha256": "0abc2a72eac5abe4430dd79d07ddcf7a457fccd921be9c55144e913c2f7617fd",
+    "python": "3.12.4 | packaged by Anaconda, Inc. | (main, Jun 18 2024, 15:12:24) [GCC 11.2.0]",
+    "executable": "/home/admin/wxw403883/anaconda3/bin/python3.12",
+    "platform": "Linux-4.19.91-009.ali4000.alios7.x86_64-x86_64-with-glibc2.32",
+    "transport": "urllib HTTP/1.1, new TCP/TLS per request; no proxy; persistent CPU client workers",
+    "checkpointing": "atomic fsync at phases; no per-terminal measured checkpoint"
+  },
+  "definitions": {
+    "send": "client HTTP operation start, includes serialization/connect/TLS; not packet-level send",
+    "ttft": "send to first nonempty content SSE event; not exact token time",
+    "request_e2e": "send to full response EOF/error/deadline; DONE time is separately recorded",
+    "content_event_itl": "gaps between nonempty content events, possibly multi-token; NOT token ITL",
+    "mean_tpot_usage_proxy": "(last content event - first content event)/(usage.completion_tokens - 1); success, N>1, >=2 events, no observed reasoning; batching/hidden tokens can bias it",
+    "goodput": "successful usage tokens or length-matched requests divided by the selected common wall denominator; no quality claim; optional SLO thresholds explicit",
+    "percentiles": "linear interpolation at (count-1)*p; separate success/failure populations",
+    "repeats": "same-server windows, not independent cold replicas",
+    "wall": "fixed-time: measurement_seconds including padded idle; fixed-work: first measured HTTP send (dispatch fallback if none) to last client-observed terminal/deadline, no padded idle; failures stay in both denominators"
+  },
+  "warmups": [],
+  "runs": [
+    {
+      "repetition": 0,
+      "started_at": 8836755.869923292,
+      "cutoff_at": 8836875.869923292,
+      "observed_end_at": 8836765.802855203,
+      "stop_reason": null,
+      "requests": [
+        {
+          "index": 0,
+          "repetition": 0,
+          "population": "measured",
+          "prompt_id": "canary-chinese",
+          "prompt_sha256": "1a176247202551abe92187f32578f28f25601848c6f55d64acff7a261f030e56",
+          "expected_input_tokens": 3,
+          "status": "success",
+          "error": null,
+          "sent_at": 8836755.870427743,
+          "client_dispatch_at": 8836755.870195216,
+          "http_status": 200,
+          "headers_at": 8836755.894031165,
+          "request_payload": {
+            "model": "qwen35-storage-demand-paper",
+            "prompt": "\u4e2d\u56fd\u7684\u9996\u90fd\u662f",
+            "temperature": 0,
+            "seed": 1,
+            "n": 1,
+            "max_tokens": 8,
+            "stream": true,
+            "stream_options": {
+              "include_usage": true
+            }
+          },
+          "after_deadline_events": [],
+          "sent_unix": 1791893812.833909,
+          "content_type": "text/event-stream",
+          "ended_at": 8836765.802520841,
+          "deadline_at": 8836875.869923292,
+          "text": "\u5317\u4eac\uff0c\u5317\u4eac\u662f\u4e2d\u56fd\u7684\u9996\u90fd\u3002\u90a3\u4e48",
+          "raw_sse_events": [
+            {
+              "at": 8836758.475208705,
+              "event": "",
+              "data": "{\"id\":\"cmpl-ferrule-4\",\"object\":\"text_completion\",\"created\":1791893812,\"model\":\"qwen35-storage-demand-paper\",\"choices\":[{\"text\":\"\u5317\u4eac\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}"
+            },
+            {
+              "at": 8836759.331866866,
+              "event": "",
+              "data": "{\"id\":\"cmpl-ferrule-4\",\"object\":\"text_completion\",\"created\":1791893812,\"model\":\"qwen35-storage-demand-paper\",\"choices\":[{\"text\":\"\uff0c\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}"
+            },
+            {
+              "at": 8836760.228869196,
+              "event": "",
+              "data": "{\"id\":\"cmpl-ferrule-4\",\"object\":\"text_completion\",\"created\":1791893812,\"model\":\"qwen35-storage-demand-paper\",\"choices\":[{\"text\":\"\u5317\u4eac\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}"
+            },
+            {
+              "at": 8836761.200181812,
+              "event": "",
+              "data": "{\"id\":\"cmpl-ferrule-4\",\"object\":\"text_completion\",\"created\":1791893812,\"model\":\"qwen35-storage-demand-paper\",\"choices\":[{\"text\":\"\u662f\u4e2d\u56fd\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}"
+            },
+            {
+              "at": 8836762.087700924,
+              "event": "",
+              "data": "{\"id\":\"cmpl-ferrule-4\",\"object\":\"text_completion\",\"created\":1791893812,\"model\":\"qwen35-storage-demand-paper\",\"choices\":[{\"text\":\"\u7684\u9996\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}"
+            },
+            {
+              "at": 8836763.00978759,
+              "event": "",
+              "data": "{\"id\":\"cmpl-ferrule-4\",\"object\":\"text_completion\",\"created\":1791893812,\"model\":\"qwen35-storage-demand-paper\",\"choices\":[{\"text\":\"\u90fd\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}"
+            },
+            {
+              "at": 8836763.880190592,
+              "event": "",
+              "data": "{\"id\":\"cmpl-ferrule-4\",\"object\":\"text_completion\",\"created\":1791893812,\"model\":\"qwen35-storage-demand-paper\",\"choices\":[{\"text\":\"\u3002\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}"
+            },
+            {
+              "at": 8836764.666101333,
+              "event": "",
+              "data": "{\"id\":\"cmpl-ferrule-4\",\"object\":\"text_completion\",\"created\":1791893812,\"model\":\"qwen35-storage-demand-paper\",\"choices\":[{\"text\":\"\u90a3\u4e48\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}"
+            },
+            {
+              "at": 8836765.802283159,
+              "event": "",
+              "data": "{\"id\":\"cmpl-ferrule-4\",\"object\":\"text_completion\",\"created\":1791893812,\"model\":\"qwen35-storage-demand-paper\",\"choices\":[{\"text\":\"\",\"index\":0,\"logprobs\":null,\"finish_reason\":\"length\"}]}"
+            },
+            {
+              "at": 8836765.80239237,
+              "event": "",
+              "data": "{\"id\":\"cmpl-ferrule-4\",\"object\":\"text_completion\",\"created\":1791893812,\"model\":\"qwen35-storage-demand-paper\",\"choices\":[],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":8,\"total_tokens\":11}}"
+            },
+            {
+              "at": 8836765.802443696,
+              "event": "",
+              "data": "[DONE]"
+            }
+          ],
+          "content_event_times": [
+            8836758.475208705,
+            8836759.331866866,
+            8836760.228869196,
+            8836761.200181812,
+            8836762.087700924,
+            8836763.00978759,
+            8836763.880190592,
+            8836764.666101333
+          ],
+          "content_event_itl_seconds": [
+            0.8566581606864929,
+            0.8970023300498724,
+            0.971312616020441,
+            0.8875191118568182,
+            0.9220866654068232,
+            0.8704030029475689,
+            0.7859107404947281
+          ],
+          "content_events": 8,
+          "usage": {
+            "prompt_tokens": 3,
+            "completion_tokens": 8,
+            "total_tokens": 11
+          },
+          "actual_output_tokens": 8,
+          "actual_input_tokens": 3,
+          "finish_reason": "length",
+          "finish_at": 8836765.802283159,
+          "usage_at": 8836765.80239237,
+          "done_at": 8836765.802443696,
+          "ttft_seconds": 2.604780962690711,
+          "request_e2e_seconds": 9.932093098759651,
+          "mean_tpot_usage_proxy_seconds": 0.8844132324946778,
+          "token_itl_seconds": null,
+          "exact_token_tpot_seconds": null,
+          "reasoning_observed": false,
+          "output_token_ids": null,
+          "partial_token_count": 8,
+          "input_length_matches": true,
+          "output_length_matches": true,
+          "length_matched_success": true,
+          "client_observed_at": 8836765.80265773,
+          "right_censored": false
+        }
+      ],
+      "not_issued_indices": [],
+      "measurements": {
+        "window_kind": "fixed-work",
+        "denominator": "first measured HTTP send (dispatch fallback if none) to last client-observed terminal/deadline, including failures and client overhead",
+        "denominator_seconds": 9.932352712377906,
+        "dispatch_start_at": 8836755.870427743,
+        "terminal_observed_at": 8836765.802780455,
+        "elapsed_to_last_terminal_seconds": 9.932352712377906,
+        "time_to_complete_seconds": 9.932352712377906,
+        "all_scheduled_requests_terminal": true,
+        "work_completed": true,
+        "all_requests_successful": true,
+        "intentional_idle_seconds": 0.0,
+        "deadline_limit_seconds": 120.0
+      },
+      "summary": {
+        "scheduled": 1,
+        "offered": 1,
+        "not_issued": 0,
+        "statuses": {
+          "success": 1
+        },
+        "success": 1,
+        "failed": 0,
+        "success_fraction": 1.0,
+        "scheduled_success_fraction": 1.0,
+        "wall_seconds": 9.932352712377906,
+        "successful_output_tokens": 8,
+        "known_usage_output_tokens": 8,
+        "requests_without_usage": 0,
+        "committed_visible_token_rate": null,
+        "committed_visible_token_rate_reason": "SSE text is not token IDs; usage may include hidden/EOS tokens; partial counts unknown",
+        "actual_output_counts": {
+          "8": 1
+        },
+        "actual_input_counts": {
+          "3": 1
+        },
+        "length_matched_success": 1,
+        "slo_qualified_success": null,
+        "successful_requests_per_second": 0.10068108019903271,
+        "successful_output_tokens_per_second": 0.8054486415922617,
+        "length_matched_requests_per_second": 0.10068108019903271,
+        "length_matched_output_tokens_per_second": 0.8054486415922617,
+        "slo_goodput_requests_per_second": null,
+        "distributions": {
+          "success_ttft_seconds": {
+            "count": 1,
+            "mean": 2.604780962690711,
+            "p50": 2.604780962690711,
+            "p95": 2.604780962690711
+          },
+          "success_request_e2e_seconds": {
+            "count": 1,
+            "mean": 9.932093098759651,
+            "p50": 9.932093098759651,
+            "p95": 9.932093098759651
+          },
+          "success_mean_tpot_usage_proxy_seconds": {
+            "count": 1,
+            "mean": 0.8844132324946778,
+            "p50": 0.8844132324946778,
+            "p95": 0.8844132324946778
+          },
+          "success_content_event_itl_seconds": {
+            "count": 7,
+            "mean": 0.8844132324946778,
+            "p50": 0.8875191118568182,
+            "p95": 0.9565448308363557
+          },
+          "failure_ttft_seconds": {
+            "count": 0,
+            "mean": null,
+            "p50": null,
+            "p95": null
+          },
+          "failure_request_e2e_seconds": {
+            "count": 0,
+            "mean": null,
+            "p50": null,
+            "p95": null
+          },
+          "failure_mean_tpot_usage_proxy_seconds": {
+            "count": 0,
+            "mean": null,
+            "p50": null,
+            "p95": null
+          },
+          "failure_content_event_itl_seconds": {
+            "count": 0,
+            "mean": null,
+            "p50": null,
+            "p95": null
+          }
+        },
+        "window_kind": "fixed-work",
+        "denominator": "first measured HTTP send (dispatch fallback if none) to last client-observed terminal/deadline, including failures and client overhead",
+        "denominator_seconds": 9.932352712377906,
+        "time_to_complete_seconds": 9.932352712377906
+      }
+    }
+  ],
+  "errors": [],
+  "comparison_speedup": null,
+  "aggregate": {
+    "scheduled": 1,
+    "offered": 1,
+    "not_issued": 0,
+    "statuses": {
+      "success": 1
+    },
+    "success": 1,
+    "failed": 0,
+    "success_fraction": 1.0,
+    "scheduled_success_fraction": 1.0,
+    "wall_seconds": 9.932352712377906,
+    "successful_output_tokens": 8,
+    "known_usage_output_tokens": 8,
+    "requests_without_usage": 0,
+    "committed_visible_token_rate": null,
+    "committed_visible_token_rate_reason": "SSE text is not token IDs; usage may include hidden/EOS tokens; partial counts unknown",
+    "actual_output_counts": {
+      "8": 1
+    },
+    "actual_input_counts": {
+      "3": 1
+    },
+    "length_matched_success": 1,
+    "slo_qualified_success": null,
+    "successful_requests_per_second": 0.10068108019903271,
+    "successful_output_tokens_per_second": 0.8054486415922617,
+    "length_matched_requests_per_second": 0.10068108019903271,
+    "length_matched_output_tokens_per_second": 0.8054486415922617,
+    "slo_goodput_requests_per_second": null,
+    "distributions": {
+      "success_ttft_seconds": {
+        "count": 1,
+        "mean": 2.604780962690711,
+        "p50": 2.604780962690711,
+        "p95": 2.604780962690711
+      },
+      "success_request_e2e_seconds": {
+        "count": 1,
+        "mean": 9.932093098759651,
+        "p50": 9.932093098759651,
+        "p95": 9.932093098759651
+      },
+      "success_mean_tpot_usage_proxy_seconds": {
+        "count": 1,
+        "mean": 0.8844132324946778,
+        "p50": 0.8844132324946778,
+        "p95": 0.8844132324946778
+      },
+      "success_content_event_itl_seconds": {
+        "count": 7,
+        "mean": 0.8844132324946778,
+        "p50": 0.8875191118568182,
+        "p95": 0.9565448308363557
+      },
+      "failure_ttft_seconds": {
+        "count": 0,
+        "mean": null,
+        "p50": null,
+        "p95": null
+      },
+      "failure_request_e2e_seconds": {
+        "count": 0,
+        "mean": null,
+        "p50": null,
+        "p95": null
+      },
+      "failure_mean_tpot_usage_proxy_seconds": {
+        "count": 0,
+        "mean": null,
+        "p50": null,
+        "p95": null
+      },
+      "failure_content_event_itl_seconds": {
+        "count": 0,
+        "mean": null,
+        "p50": null,
+        "p95": null
+      }
+    },
+    "unstarted_windows": 0,
+    "window_kind": "fixed-work",
+    "denominator": "sum of started-run wall_seconds; warmup/startup excluded",
+    "denominator_seconds": 9.932352712377906,
+    "unobserved_request_budget": 0
+  },
+  "finalized": true,
+  "checkpoint_unix": 1791893822.7663841,
+  "measurements": {
+    "window_kind": "fixed-work",
+    "denominator": "sum of started-run wall_seconds; warmup/startup excluded",
+    "denominator_seconds": 9.932352712377906,
+    "work_completed": true,
+    "all_requests_successful": true,
+    "time_to_complete_seconds": 9.932352712377906,
+    "intentional_idle_seconds": 0.0
+  },
+  "measurement_in_progress": false,
+  "active_requests": [],
+  "server_drain": "unverified; client completion/timeout/close does not prove GPU quiescence"
+}

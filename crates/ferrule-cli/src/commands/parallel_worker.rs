@@ -1,28 +1,9 @@
 //! One CUDA workload and quiescence implementation for thread and process ranks.
 
-use anyhow::{Context, Result, ensure};
+pub(crate) use super::parallel_shape::{bytes, elements};
+use anyhow::Result;
 use ferrule_runtime::parallel::data::PanicQuiescence;
-use std::mem::size_of;
 use std::panic::{AssertUnwindSafe, catch_unwind};
-
-pub(crate) fn bytes<T>(count: usize) -> Result<usize> {
-    count
-        .checked_mul(size_of::<T>())
-        .filter(|&bytes| bytes <= isize::MAX as usize)
-        .context("allocation byte size overflow")
-}
-
-pub(crate) fn elements(rows: usize, width: usize) -> Result<usize> {
-    ensure!(
-        rows > 0 && width > 0,
-        "shape dimensions must be greater than zero"
-    );
-    let count = rows
-        .checked_mul(width)
-        .context("shape element count overflow")?;
-    bytes::<f32>(count)?;
-    Ok(count)
-}
 
 // Panic paths must retain the allocation, not merely suppress a stack
 // value's destructor. Only release after proving all device/transport fences.
@@ -384,6 +365,7 @@ mod tests {
 #[cfg(feature = "cuda")]
 pub(crate) mod cuda {
     use super::*;
+    use anyhow::{Context, ensure};
     use ferrule_backend::cuda::operators::linear::{CudaF32Buffer, CudaOperators};
     use ferrule_backend::cuda::providers::CudaContext;
     use ferrule_common::ParallelRankId;

@@ -1,0 +1,68 @@
+{
+  "returncode": 0,
+  "timed_out": false,
+  "wall_seconds": 474.51806104928255,
+  "stdout": "{\"repetition\": 0, \"summary\": {\"scheduled\": 1, \"offered\": 1, \"not_issued\": 0, \"statuses\": {\"success\": 1}, \"success\": 1, \"failed\": 0, \"success_fraction\": 1.0, \"scheduled_success_fraction\": 1.0, \"wall_seconds\": 0.6155029907822609, \"successful_output_tokens\": 2, \"known_usage_output_tokens\": 2, \"requests_without_usage\": 0, \"committed_visible_token_rate\": null, \"committed_visible_token_rate_reason\": \"SSE text is not token IDs; usage may include hidden/EOS tokens; partial counts unknown\", \"actual_output_counts\": {\"2\": 1}, \"actual_input_counts\": {\"1\": 1}, \"length_matched_success\": 1, \"slo_qualified_success\": null, \"successful_requests_per_second\": 1.624687475082892, \"successful_output_tokens_per_second\": 3.249374950165784, \"length_matched_requests_per_second\": 1.624687475082892, \"length_matched_output_tokens_per_second\": 3.249374950165784, \"slo_goodput_requests_per_second\": null, \"distributions\": {\"success_ttft_seconds\": {\"count\": 1, \"mean\": 0.38287519104778767, \"p50\": 0.38287519104778767, \"p95\": 0.38287519104778767}, \"success_request_e2e_seconds\": {\"count\": 1, \"mean\": 0.615241127088666, \"p50\": 0.615241127088666, \"p95\": 0.615241127088666}, \"success_mean_tpot_usage_proxy_seconds\": {\"count\": 1, \"mean\": 0.23212341964244843, \"p50\": 0.23212341964244843, \"p95\": 0.23212341964244843}, \"success_content_event_itl_seconds\": {\"count\": 1, \"mean\": 0.23212341964244843, \"p50\": 0.23212341964244843, \"p95\": 0.23212341964244843}, \"failure_ttft_seconds\": {\"count\": 0, \"mean\": null, \"p50\": null, \"p95\": null}, \"failure_request_e2e_seconds\": {\"count\": 0, \"mean\": null, \"p50\": null, \"p95\": null}, \"failure_mean_tpot_usage_proxy_seconds\": {\"count\": 0, \"mean\": null, \"p50\": null, \"p95\": null}, \"failure_content_event_itl_seconds\": {\"count\": 0, \"mean\": null, \"p50\": null, \"p95\": null}}, \"window_kind\": \"fixed-work\", \"denominator\": \"first measured HTTP send (dispatch fallback if none) to last client-observed terminal/deadline, including failures and client overhead\", \"denominator_seconds\": 0.6155029907822609, \"time_to_complete_seconds\": 0.6155029907822609}}\n{\"stage\": \"hello2\", \"gate\": {\"status\": \"pass\", \"engine\": \"ferrule\", \"checks\": [{\"index\": 0, \"passed\": true, \"actual_input_tokens\": 1, \"actual_output_tokens\": 2}], \"first_qa_requests\": 0, \"warmup_requests\": 0, \"measured_requests\": 1, \"http_receipt_sha256\": \"54771e3d04e41e48ed124dfdbdafb303c7e54a2d79001343a2ff1ff8177bc952\", \"coverage\": \"visible text/usage only; separate pinned numerical acceptance, not arithmetic parity\", \"fairmatch\": false, \"exact_speedup\": null}}\n{\"repetition\": 0, \"summary\": {\"scheduled\": 3, \"offered\": 3, \"not_issued\": 0, \"statuses\": {\"success\": 3}, \"success\": 3, \"failed\": 0, \"success_fraction\": 1.0, \"scheduled_success_fraction\": 1.0, \"wall_seconds\": 8.987304488196969, \"successful_output_tokens\": 24, \"known_usage_output_tokens\": 24, \"requests_without_usage\": 0, \"committed_visible_token_rate\": null, \"committed_visible_token_rate_reason\": \"SSE text is not token IDs; usage may include hidden/EOS tokens; partial counts unknown\", \"actual_output_counts\": {\"8\": 3}, \"actual_input_counts\": {\"5\": 2, \"3\": 1}, \"length_matched_success\": 3, \"slo_qualified_success\": null, \"successful_requests_per_second\": 0.3338042016869353, \"successful_output_tokens_per_second\": 2.6704336134954825, \"length_matched_requests_per_second\": 0.3338042016869353, \"length_matched_output_tokens_per_second\": 2.6704336134954825, \"slo_goodput_requests_per_second\": null, \"distributions\": {\"success_ttft_seconds\": {\"count\": 3, \"mean\": 1.2203713686515887, \"p50\": 1.2315370794385672, \"p95\": 1.3301442123949527}, \"success_request_e2e_seconds\": {\"count\": 3, \"mean\": 2.9953385336945453, \"p50\": 3.0729968175292015, \"p95\": 3.0973244650289415}, \"success_mean_tpot_usage_proxy_seconds\": {\"count\": 3, \"mean\": 0.2535279925380434, \"p50\": 0.247378301939794, \"p95\": 0.264941464284701}, \"success_content_event_itl_seconds\": {\"count\": 21, \"mean\": 0.2535279925380434, \"p50\": 0.25002705678343773, \"p95\": 0.29192711412906647}, \"failure_ttft_seconds\": {\"count\": 0, \"mean\": null, \"p50\": null, \"p95\": null}, \"failure_request_e2e_seconds\": {\"count\": 0, \"mean\": null, \"p50\": null, \"p95\": null}, \"failure_mean_tpot_usage_proxy_seconds\": {\"count\": 0, \"mean\": null, \"p50\": null, \"p95\": null}, \"failure_content_event_itl_seconds\": {\"count\": 0, \"mean\": null, \"p50\": null, \"p95\": null}}, \"window_kind\": \"fixed-work\", \"denominator\": \"first measured HTTP send (dispatch fallback if none) to last client-observed terminal/deadline, including failures and client overhead\", \"denominator_seconds\": 8.987304488196969, \"time_to_complete_seconds\": 8.987304488196969}}\n{\"stage\": \"canary8\", \"gate\": {\"status\": \"pass\", \"engine\": \"ferrule\", \"checks\": [{\"index\": 0, \"passed\": true, \"actual_input_tokens\": 5, \"actual_output_tokens\": 8}, {\"index\": 1, \"passed\": true, \"actual_input_tokens\": 5, \"actual_output_tokens\": 8}, {\"index\": 2, \"passed\": true, \"actual_input_tokens\": 3, \"actual_output_tokens\": 8}], \"first_qa_requests\": 0, \"warmup_requests\": 0, \"measured_requests\": 3, \"http_receipt_sha256\": \"3d209ad6fa8c2fa9a568507e7cb5056fbcd1007e12cc04454b2b065b052db9c9\", \"coverage\": \"visible text/usage only; separate pinned numerical acceptance, not arithmetic parity\", \"fairmatch\": false, \"exact_speedup\": null}}\n{\"repetition\": 0, \"summary\": {\"scheduled\": 5, \"offered\": 5, \"not_issued\": 0, \"statuses\": {\"success\": 5}, \"success\": 5, \"failed\": 0, \"success_fraction\": 1.0, \"scheduled_success_fraction\": 1.0, \"wall_seconds\": 15.954496456310153, \"successful_output_tokens\": 40, \"known_usage_output_tokens\": 40, \"requests_without_usage\": 0, \"committed_visible_token_rate\": null, \"committed_visible_token_rate_reason\": \"SSE text is not token IDs; usage may include hidden/EOS tokens; partial counts unknown\", \"actual_output_counts\": {\"8\": 5}, \"actual_input_counts\": {\"5\": 5}, \"length_matched_success\": 5, \"slo_qualified_success\": null, \"successful_requests_per_second\": 0.31339127585079335, \"successful_output_tokens_per_second\": 2.507130206806347, \"length_matched_requests_per_second\": 0.31339127585079335, \"length_matched_output_tokens_per_second\": 2.507130206806347, \"slo_goodput_requests_per_second\": null, \"distributions\": {\"success_ttft_seconds\": {\"count\": 5, \"mean\": 1.3644776444882154, \"p50\": 1.345250565558672, \"p95\": 1.416498115286231}, \"success_request_e2e_seconds\": {\"count\": 5, \"mean\": 3.1488714326173066, \"p50\": 3.1358440835028887, \"p95\": 3.207751876860857}, \"success_mean_tpot_usage_proxy_seconds\": {\"count\": 5, \"mean\": 0.2548814919378076, \"p50\": 0.2535103921379362, \"p95\": 0.25798046860311713}, \"success_content_event_itl_seconds\": {\"count\": 35, \"mean\": 0.2548814919378076, \"p50\": 0.2410087212920189, \"p95\": 0.3101411145180464}, \"failure_ttft_seconds\": {\"count\": 0, \"mean\": null, \"p50\": null, \"p95\": null}, \"failure_request_e2e_seconds\": {\"count\": 0, \"mean\": null, \"p50\": null, \"p95\": null}, \"failure_mean_tpot_usage_proxy_seconds\": {\"count\": 0, \"mean\": null, \"p50\": null, \"p95\": null}, \"failure_content_event_itl_seconds\": {\"count\": 0, \"mean\": null, \"p50\": null, \"p95\": null}}, \"window_kind\": \"fixed-work\", \"denominator\": \"first measured HTTP send (dispatch fallback if none) to last client-observed terminal/deadline, including failures and client overhead\", \"denominator_seconds\": 15.954496456310153, \"time_to_complete_seconds\": 15.954496456310153}}\n{\"stage\": \"qa8-V1\", \"gate\": {\"status\": \"pass\", \"engine\": \"ferrule\", \"checks\": [{\"index\": 0, \"passed\": true, \"actual_input_tokens\": 5, \"actual_output_tokens\": 8}, {\"index\": 1, \"passed\": true, \"actual_input_tokens\": 5, \"actual_output_tokens\": 8}, {\"index\": 2, \"passed\": true, \"actual_input_tokens\": 5, \"actual_output_tokens\": 8}, {\"index\": 3, \"passed\": true, \"actual_input_tokens\": 5, \"actual_output_tokens\": 8}, {\"index\": 4, \"passed\": true, \"actual_input_tokens\": 5, \"actual_output_tokens\": 8}, {\"index\": 5, \"passed\": true, \"actual_input_tokens\": 5, \"actual_output_tokens\": 8}, {\"index\": 6, \"passed\": true, \"actual_input_tokens\": 5, \"actual_output_tokens\": 8}, {\"index\": 7, \"passed\": true, \"actual_input_tokens\": 5, \"actual_output_tokens\": 8}], \"first_qa_requests\": 1, \"warmup_requests\": 2, \"measured_requests\": 5, \"http_receipt_sha256\": \"cedf49efc478673e0919dc15aa5af3baa55a4d5192e013338c78aa94e9602e3a\", \"coverage\": \"visible text/usage only; separate pinned numerical acceptance, not arithmetic parity\", \"fairmatch\": false, \"exact_speedup\": null}}\n",
+  "stderr": "",
+  "cleanup_errors": [],
+  "cleanup_scope": "isolated_subreaper_direct_children",
+  "descendant_custody": "proven_drained",
+  "gpu_quiescence": "unverified",
+  "custody": {
+    "status": "proven_drained",
+    "method": "linux-subreaper-waitid",
+    "containment_verified": true,
+    "launch_id": "4ba4b703f453469fa0bcff7912a2f3ff",
+    "helper_identity": {
+      "pid": 95314,
+      "birth_ticks": 95087152,
+      "ppid": 94658,
+      "pgrp": 95314,
+      "session": 95314
+    },
+    "root_identity": {
+      "pid": 95315,
+      "birth_ticks": 95087155,
+      "ppid": 95314,
+      "pgrp": 95314,
+      "session": 95314
+    },
+    "boot_id": "4dd3497d-570c-4693-a876-5c26e06ab360",
+    "entries": [
+      {
+        "identity": {
+          "pid": 95315,
+          "birth_ticks": 95087155,
+          "ppid": 95314,
+          "pgrp": 95314,
+          "session": 95314
+        },
+        "role": "root",
+        "signals": [],
+        "reaped": true,
+        "exit_code": 0,
+        "first_observed_at": 8586991.909911754,
+        "reaped_at": 8587466.364119671
+      }
+    ],
+    "errors": [],
+    "reporting_errors": [],
+    "echild": true
+  },
+  "handshake": {
+    "kind": "ready",
+    "protocol": 1,
+    "launch_id": "4ba4b703f453469fa0bcff7912a2f3ff",
+    "helper_identity": {
+      "pid": 95314,
+      "birth_ticks": 95087152,
+      "ppid": 94658,
+      "pgrp": 95314,
+      "session": 95314
+    },
+    "containment_verified": true,
+    "method": "linux-subreaper-waitid"
+  },
+  "stdout_truncated": false,
+  "stderr_truncated": false
+}

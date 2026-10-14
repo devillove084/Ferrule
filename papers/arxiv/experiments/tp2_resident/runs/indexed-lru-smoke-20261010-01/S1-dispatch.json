@@ -1,0 +1,19 @@
+{
+  "protocol": "tp2-serving-smoke-c1",
+  "purpose": "serving_smoke",
+  "status": "incomplete",
+  "sole_gpu_owner_granted": true,
+  "owner_note": "User explicitly authorizes this agent as sole GPU owner: actual same-9ef9841598b4694fb611250bf8876c4314d252400136ddb23f606a979cadb656 S1/S2 smoke before promotion and two crossed arena_index_ab cycles; selected UUID locks and roster, finite authenticated supervisor, ECHILD/drain, pre/post eight idle; fail-stop on GPU numerical, budget, root/quarantine or identity failure; no Nsight/vLLM/foreign kill",
+  "fairmatch": false,
+  "exact_speedup": null,
+  "slots": [
+    {
+      "id": "S1",
+      "status": "dispatched_unknown"
+    },
+    {
+      "id": "S2",
+      "status": "not_run"
+    }
+  ]
+}

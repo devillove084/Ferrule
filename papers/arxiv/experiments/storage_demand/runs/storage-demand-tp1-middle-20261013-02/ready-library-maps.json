@@ -1,0 +1,107 @@
+{
+  "identity": {
+    "pid": 71457,
+    "birth_ticks": 120057413,
+    "ppid": 71447,
+    "state": "R"
+  },
+  "monotonic": 8836713.861705525,
+  "unix_ns": 1791893770825187181,
+  "libraries": [
+    {
+      "path": "/home/admin/wxw403883/anaconda3/envs/tao/lib/libcublas.so.12.4.5.8",
+      "resolved": "/home/admin/wxw403883/anaconda3/envs/tao/lib/libcublas.so.12.4.5.8",
+      "sha256": "88397a191cfc25f94c272b638ffa942be58d5594ba5d41ac4b766c2cd3fe54ac",
+      "expected_sha256": "88397a191cfc25f94c272b638ffa942be58d5594ba5d41ac4b766c2cd3fe54ac",
+      "pinned": true
+    },
+    {
+      "path": "/home/admin/wxw403883/anaconda3/envs/tao/lib/libcublasLt.so.12.4.5.8",
+      "resolved": "/home/admin/wxw403883/anaconda3/envs/tao/lib/libcublasLt.so.12.4.5.8",
+      "sha256": "a18a341a9b6de15918e410a2337a74f2a644fd80c0600e61d69ddad69be15687",
+      "expected_sha256": "a18a341a9b6de15918e410a2337a74f2a644fd80c0600e61d69ddad69be15687",
+      "pinned": true
+    },
+    {
+      "path": "/home/admin/wxw403883/anaconda3/envs/tao/lib/libcudart.so.12.4.99",
+      "resolved": "/home/admin/wxw403883/anaconda3/envs/tao/lib/libcudart.so.12.4.99",
+      "sha256": "e8023d1aa80d86175f22986faf55e23c0a9286ff625cede0b560220c6cd8a560",
+      "expected_sha256": "e8023d1aa80d86175f22986faf55e23c0a9286ff625cede0b560220c6cd8a560",
+      "pinned": true
+    },
+    {
+      "path": "/home/admin/wxw403883/anaconda3/envs/tao/lib/libgcc_s.so.1",
+      "resolved": "/home/admin/wxw403883/anaconda3/envs/tao/lib/libgcc_s.so.1",
+      "sha256": "f43f5563b8e01388eacf8f0b4898a53b88fe8aea535a2424ffb576d85845677e",
+      "expected_sha256": "f43f5563b8e01388eacf8f0b4898a53b88fe8aea535a2424ffb576d85845677e",
+      "pinned": true
+    },
+    {
+      "path": "/usr/lib64/ld-2.32.so",
+      "resolved": "/usr/lib64/ld-2.32.so",
+      "sha256": "385218198df39d3931fbb0666db2838bce66a7658c82c61454d4903a4e1d2ed3",
+      "expected_sha256": "385218198df39d3931fbb0666db2838bce66a7658c82c61454d4903a4e1d2ed3",
+      "pinned": true
+    },
+    {
+      "path": "/usr/lib64/libc-2.32.so",
+      "resolved": "/usr/lib64/libc-2.32.so",
+      "sha256": "d589c6aea9b813d2392b1c8bdeda73afe694d399687ab867bd26735175faadf1",
+      "expected_sha256": "d589c6aea9b813d2392b1c8bdeda73afe694d399687ab867bd26735175faadf1",
+      "pinned": true
+    },
+    {
+      "path": "/usr/lib64/libcuda.so.575.57.08",
+      "resolved": "/usr/lib64/libcuda.so.575.57.08",
+      "sha256": "f2470aa637fa72422534edeaeb9de19afe3d0646388baf7ffb5337b2edafc59e",
+      "expected_sha256": "f2470aa637fa72422534edeaeb9de19afe3d0646388baf7ffb5337b2edafc59e",
+      "pinned": true
+    },
+    {
+      "path": "/usr/lib64/libdl-2.32.so",
+      "resolved": "/usr/lib64/libdl-2.32.so",
+      "sha256": "4eec77f1e5131f2b84aaa83c21772dc233ff9a44d2715a195249fee9d1dd3cae",
+      "expected_sha256": "4eec77f1e5131f2b84aaa83c21772dc233ff9a44d2715a195249fee9d1dd3cae",
+      "pinned": true
+    },
+    {
+      "path": "/usr/lib64/libm-2.32.so",
+      "resolved": "/usr/lib64/libm-2.32.so",
+      "sha256": "3ad871eb16ece2c91050642503aa18757d3b018b1491afb662aec555fff683dd",
+      "expected_sha256": "3ad871eb16ece2c91050642503aa18757d3b018b1491afb662aec555fff683dd",
+      "pinned": true
+    },
+    {
+      "path": "/usr/lib64/libpthread-2.32.so",
+      "resolved": "/usr/lib64/libpthread-2.32.so",
+      "sha256": "6fd5dbf2a630b845af36c36e4d4509fef9da415b48fa25c6661184000bc3f3ce",
+      "expected_sha256": "6fd5dbf2a630b845af36c36e4d4509fef9da415b48fa25c6661184000bc3f3ce",
+      "pinned": true
+    },
+    {
+      "path": "/usr/lib64/librt-2.32.so",
+      "resolved": "/usr/lib64/librt-2.32.so",
+      "sha256": "68bf882c5011e80b654ace48ac7e4164d62fb6991d475514f299c6da57892196",
+      "expected_sha256": "68bf882c5011e80b654ace48ac7e4164d62fb6991d475514f299c6da57892196",
+      "pinned": true
+    },
+    {
+      "path": "/usr/lib64/libstdc++.so.6.0.28",
+      "resolved": "/usr/lib64/libstdc++.so.6.0.28",
+      "sha256": "729ce0312dcd9dd2301f66a1c157fade62d60809dcb0647a5906b3f7e28c88d7",
+      "expected_sha256": "729ce0312dcd9dd2301f66a1c157fade62d60809dcb0647a5906b3f7e28c88d7",
+      "pinned": true
+    }
+  ],
+  "actual_environment": {
+    "CUBLAS_WORKSPACE_CONFIG": ":0:0",
+    "CUDA_VISIBLE_DEVICES": "0",
+    "NVIDIA_VISIBLE_DEVICES": "0",
+    "FERRULE_LOG": "info,ferrule_performance=debug",
+    "FERRULE_LOG_FORMAT": "json",
+    "LD_LIBRARY_PATH": "/home/admin/wxw403883/anaconda3/envs/tao/lib:/usr/lib64"
+  },
+  "visible_gpu_mask": "0",
+  "nccl_mapped": false,
+  "all_mapped_libraries_pinned": true
+}

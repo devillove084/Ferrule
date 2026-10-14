@@ -1,0 +1,295 @@
+{
+  "engine": "vllm",
+  "supervisor": {
+    "returncode": 1,
+    "timed_out": false,
+    "wall_seconds": 45.0035382732749,
+    "stdout": "",
+    "stderr": "",
+    "cleanup_errors": [],
+    "cleanup_scope": "isolated_subreaper_direct_children",
+    "descendant_custody": "proven_drained",
+    "gpu_quiescence": "unverified",
+    "custody": {
+      "status": "proven_drained",
+      "method": "linux-subreaper-waitid",
+      "containment_verified": true,
+      "launch_id": "5e4895ce59de495d8c47f59c69ab02c8",
+      "helper_identity": {
+        "pid": 167518,
+        "birth_ticks": 77395022,
+        "ppid": 167286,
+        "pgrp": 167518,
+        "session": 167518
+      },
+      "root_identity": {
+        "pid": 167519,
+        "birth_ticks": 77395025,
+        "ppid": 167518,
+        "pgrp": 167518,
+        "session": 167518
+      },
+      "boot_id": "4dd3497d-570c-4693-a876-5c26e06ab360",
+      "entries": [
+        {
+          "identity": {
+            "pid": 167519,
+            "birth_ticks": 77395025,
+            "ppid": 167518,
+            "pgrp": 167518,
+            "session": 167518
+          },
+          "role": "root",
+          "signals": [],
+          "reaped": true,
+          "exit_code": 1,
+          "first_observed_at": 8410070.601262836,
+          "reaped_at": 8410115.53320103
+        },
+        {
+          "identity": {
+            "pid": 168238,
+            "birth_ticks": 77399324,
+            "ppid": 167518,
+            "pgrp": 167519,
+            "session": 167519
+          },
+          "role": "adopted",
+          "signals": [],
+          "reaped": true,
+          "exit_code": 0,
+          "first_observed_at": 8410115.448340207,
+          "reaped_at": 8410115.45093224
+        }
+      ],
+      "errors": [],
+      "reporting_errors": [],
+      "echild": true
+    },
+    "handshake": {
+      "kind": "ready",
+      "protocol": 1,
+      "launch_id": "5e4895ce59de495d8c47f59c69ab02c8",
+      "helper_identity": {
+        "pid": 167518,
+        "birth_ticks": 77395022,
+        "ppid": 167286,
+        "pgrp": 167518,
+        "session": 167518
+      },
+      "containment_verified": true,
+      "method": "linux-subreaper-waitid"
+    },
+    "stdout_truncated": false,
+    "stderr_truncated": false
+  },
+  "after": {
+    "status": "verified",
+    "observations": [
+      {
+        "index": 0,
+        "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+        "total_bytes": 25769803776,
+        "gpu_bytes": 0,
+        "utilization": 0,
+        "devices": [
+          {
+            "index": 0,
+            "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 0,
+            "utilization": 0
+          },
+          {
+            "index": 1,
+            "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 0,
+            "utilization": 0
+          },
+          {
+            "index": 2,
+            "uuid": "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 0,
+            "utilization": 0
+          },
+          {
+            "index": 3,
+            "uuid": "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 0,
+            "utilization": 0
+          },
+          {
+            "index": 4,
+            "uuid": "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 0,
+            "utilization": 0
+          },
+          {
+            "index": 5,
+            "uuid": "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 0,
+            "utilization": 0
+          },
+          {
+            "index": 6,
+            "uuid": "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 0,
+            "utilization": 0
+          },
+          {
+            "index": 7,
+            "uuid": "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 0,
+            "utilization": 0
+          }
+        ],
+        "apps": [],
+        "monotonic": 8410115.808019621
+      },
+      {
+        "index": 0,
+        "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+        "total_bytes": 25769803776,
+        "gpu_bytes": 0,
+        "utilization": 0,
+        "devices": [
+          {
+            "index": 0,
+            "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 0,
+            "utilization": 0
+          },
+          {
+            "index": 1,
+            "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 0,
+            "utilization": 0
+          },
+          {
+            "index": 2,
+            "uuid": "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 0,
+            "utilization": 0
+          },
+          {
+            "index": 3,
+            "uuid": "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 0,
+            "utilization": 0
+          },
+          {
+            "index": 4,
+            "uuid": "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 0,
+            "utilization": 0
+          },
+          {
+            "index": 5,
+            "uuid": "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 0,
+            "utilization": 0
+          },
+          {
+            "index": 6,
+            "uuid": "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 0,
+            "utilization": 0
+          },
+          {
+            "index": 7,
+            "uuid": "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 0,
+            "utilization": 0
+          }
+        ],
+        "apps": [],
+        "monotonic": 8410116.281307846
+      }
+    ],
+    "scope": "all eight physical GPUs"
+  },
+  "observation": {
+    "status": "failed",
+    "started_monotonic": 8410070.706822263,
+    "exact_speedup": null,
+    "contract_validation_seconds": 20.49415541253984,
+    "server_launch_monotonic": 8410091.20097945,
+    "executable_binding": "verified read-only staged inode executed through inherited fd",
+    "error": "ProtocolError: Server exited before Ready",
+    "resources": {
+      "status": "observed_within_targets",
+      "sampled_device_high_water_bytes": 3145728,
+      "sampled_tree_pss_high_water_bytes": 2215332864,
+      "sampled_tree_rss_high_water_bytes": 3220934656,
+      "samples": 11,
+      "errors": [],
+      "sample_interval_seconds": 2,
+      "exact_peaks": false,
+      "hard_memory_partition": false,
+      "pinned_bytes": null,
+      "caveats": [
+        "CUDA pinning not measured by VmLck/VmPin alone",
+        "PSS excludes unmapped OS file cache; not a total physical-host-memory proof",
+        "Device samples include baseline; between-sample peaks may be missed"
+      ],
+      "identity_mode": "device_exclusive_local_custody",
+      "measurement_scope": "whole_selected_device",
+      "owned_process_gpu_peak_bytes": null,
+      "owned_gpu_attribution": "unknown",
+      "nvml_pid_set_changes": 0,
+      "absence_of_foreign_interference_proven": false
+    },
+    "shutdown": {
+      "status": "root_exited_descendants_unknown",
+      "seconds": 4.725530743598938e-06,
+      "timed_out": false,
+      "gpu_quiescence": "unverified; no GPU probe"
+    },
+    "runtime": {
+      "status": "blocked",
+      "evidence": {
+        "moe_marlin": [],
+        "linear_marlin": [],
+        "offloader_uva": [],
+        "offloaded_amount": [],
+        "model_bf16": []
+      },
+      "contradictions": [],
+      "missing": [
+        "moe_marlin",
+        "linear_marlin",
+        "offloader_uva",
+        "offloaded_amount",
+        "model_bf16"
+      ],
+      "reasons": [
+        "Effective KV/conv/SSM dtype and physical pinning need runtime evidence",
+        "UVA selection log alone does not prove UVA path rather than functional_call fallback"
+      ],
+      "exact_arithmetic_match": false,
+      "log_sha256": "b991a10cc31ee3968ad0f0eea62d641dc2beb3544a6e895a7a27a87b5e901ca7",
+      "scanned_prefix_bytes": 9918,
+      "truncated": false,
+      "performance_fields_observed": false,
+      "performance_parser": "profile/backend evidence only; no performance-field extraction implemented"
+    },
+    "wall_seconds": 44.801668241620064
+  },
+  "eligible_observation": false,
+  "exact_speedup": null
+}

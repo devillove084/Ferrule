@@ -3,7 +3,6 @@
 //! Generic transaction, page custody, COW, and provisional ownership live exclusively
 //! in [`crate::decoder::PagedKvBackend`]. This module owns only MLA payload planes,
 //! views, recurrent attachments, and prefix checkpoints.
-#[cfg(feature = "cuda")]
 use crate::attention_backend::SparseAttentionSpec;
 use crate::checkpoint::LinearWeight;
 
@@ -12,15 +11,11 @@ use crate::decoder::{
     PackedDecoderBatch, PhysicalKvPool,
 };
 use crate::execution::SequenceTopologyId;
-#[cfg(feature = "cuda")]
 use crate::runner::SequenceStateReleaseError;
-#[cfg(feature = "cuda")]
 use ferrule_backend::cuda::operators::kv::{
     CudaCompressorRecurrentCheckpointSlab, CudaCompressorRecurrentState, KvPoolReservation,
 };
-#[cfg(feature = "cuda")]
 use ferrule_backend::cuda::operators::linear::PROPOSAL_ROWS;
-#[cfg(feature = "cuda")]
 use ferrule_backend::cuda::operators::{
     attention::{
         self as cuda_attention, HybridMlaAttentionLayout,
@@ -33,13 +28,9 @@ use ferrule_common::execution::{
     KvPlaneDescriptor,
 };
 use ferrule_common::{Error, Result};
-#[cfg(feature = "cuda")]
 use std::cell::RefCell;
-#[cfg(feature = "cuda")]
 use std::collections::{BTreeSet, HashMap};
-#[cfg(feature = "cuda")]
 use std::rc::Rc;
-#[cfg(feature = "cuda")]
 use std::time::Instant;
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MlaRopeConfig {
@@ -320,7 +311,6 @@ impl MlaLayerState {
     }
 }
 
-#[cfg(feature = "cuda")]
 #[derive(Debug, Clone, Default)]
 pub(crate) struct MlaPagedKvBinding {
     logical_pages: Vec<KvPageId>,
@@ -330,7 +320,6 @@ pub(crate) struct MlaPagedKvBinding {
     pub(crate) layer_count: usize,
 }
 
-#[cfg(feature = "cuda")]
 impl MlaPagedKvBinding {
     pub(crate) fn retain_sequence_len(&mut self, sequence_len: usize) -> Result<()> {
         if self.page_tokens == 0 {
@@ -598,7 +587,6 @@ where
     }
 }
 
-#[cfg(feature = "cuda")]
 fn clone_layer_cuda_state(
     source: &MlaLayerState,
     clone: &mut MlaLayerState,
@@ -616,7 +604,6 @@ fn clone_layer_cuda_state(
     *clone.kv.window.cuda_state_mut() = source_cuda.fork_paged_prefix(operators)?;
     Ok(())
 }
-#[cfg(feature = "cuda")]
 #[derive(Default)]
 pub(crate) struct MlaRecurrentState {
     pub(crate) main_compressor_recurrent: Option<CudaCompressorRecurrentState>,
@@ -624,7 +611,6 @@ pub(crate) struct MlaRecurrentState {
     pub(crate) indexer_compressor_recurrent: Option<CudaCompressorRecurrentState>,
     pub(crate) indexer_compressor_needs_reset: bool,
 }
-#[cfg(feature = "cuda")]
 impl MlaRecurrentState {
     pub(crate) fn fork_paged_prefix(
         &self,
@@ -653,7 +639,6 @@ impl MlaRecurrentState {
         self.indexer_compressor_needs_reset = self.indexer_compressor_recurrent.is_some();
     }
 }
-#[cfg(feature = "cuda")]
 impl std::fmt::Debug for MlaRecurrentState {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -669,7 +654,6 @@ impl std::fmt::Debug for MlaRecurrentState {
             .finish()
     }
 }
-#[cfg(feature = "cuda")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct MlaPrefixCheckpoint {
     pub(crate) window_len: usize,
@@ -2832,7 +2816,6 @@ impl MlaExecution {
     }
 }
 
-#[cfg(feature = "cuda")]
 fn debug_cuda_attention_values(layer: usize, stage: &str, values: &[f32]) -> Result<()> {
     if std::env::var("FERRULE_DEBUG_ATTENTION_LAYER")
         .ok()
@@ -2877,7 +2860,6 @@ fn debug_cuda_attention_values(layer: usize, stage: &str, values: &[f32]) -> Res
     Ok(())
 }
 
-#[cfg(feature = "cuda")]
 fn debug_cuda_attention_stage(
     layer: usize,
     stage: &str,
@@ -2895,7 +2877,6 @@ fn debug_cuda_attention_stage(
     debug_cuda_attention_values(layer, stage, &values)
 }
 
-#[cfg(feature = "cuda")]
 fn debug_cuda_attention_bf16_stage(
     layer: usize,
     stage: &str,
@@ -2980,7 +2961,6 @@ pub struct PreparedMla {
     pub compressed: Option<MlaCompression>,
 }
 
-#[cfg(feature = "cuda")]
 struct MlaCompressorArena {
     kv: ferrule_backend::cuda::operators::linear::CudaF32Buffer,
     score: ferrule_backend::cuda::operators::linear::CudaF32Buffer,
@@ -2988,7 +2968,6 @@ struct MlaCompressorArena {
     normalized: ferrule_backend::cuda::operators::linear::CudaF32Buffer,
 }
 
-#[cfg(feature = "cuda")]
 impl MlaCompressorArena {
     fn new(
         payload: &MlaCompressor,
@@ -3011,14 +2990,12 @@ impl MlaCompressorArena {
     }
 }
 
-#[cfg(feature = "cuda")]
 pub(crate) struct MlaRowsTransitionArena {
     input: ferrule_backend::cuda::operators::linear::CudaF32Buffer,
     main_compressor: Option<MlaCompressorArena>,
     indexer_compressor: Option<MlaCompressorArena>,
 }
 
-#[cfg(feature = "cuda")]
 impl MlaRowsTransitionArena {
     pub(crate) fn new(attention: &PreparedMla, operators: &mut MlaExecution) -> Result<Self> {
         let cfg = attention.config;
@@ -3041,7 +3018,6 @@ impl MlaRowsTransitionArena {
     }
 }
 
-#[cfg(feature = "cuda")]
 pub(crate) struct MlaDecodeArena {
     q_latent: ferrule_backend::cuda::operators::linear::CudaF32Buffer,
     q_norm: ferrule_backend::cuda::operators::linear::CudaF32Buffer,
@@ -3074,7 +3050,6 @@ pub(crate) struct MlaDecodeArena {
     indexer_compressor: Option<MlaCompressorArena>,
 }
 
-#[cfg(feature = "cuda")]
 impl MlaDecodeArena {
     pub(crate) fn new(
         attention: &PreparedMla,
@@ -3141,7 +3116,6 @@ impl MlaDecodeArena {
     }
 }
 
-#[cfg(feature = "cuda")]
 fn decode_metadata_i32(values: &[usize], label: &str) -> Result<Vec<i32>> {
     values
         .iter()
@@ -3292,7 +3266,6 @@ impl PreparedMla {
         Ok(())
     }
 
-    #[cfg(feature = "cuda")]
     fn project_decode_rows_from_device_into(
         &self,
         hidden_dev: &ferrule_backend::cuda::operators::linear::CudaF32Buffer,
@@ -3440,7 +3413,6 @@ impl PreparedMla {
         Ok(())
     }
 
-    #[cfg(feature = "cuda")]
     fn project_decode_context_rows_from_device_into(
         &self,
         max_position: usize,
@@ -3492,7 +3464,6 @@ impl PreparedMla {
         Ok(())
     }
 
-    #[cfg(feature = "cuda")]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn packed_rows_from_device_into(
         &self,
@@ -4112,7 +4083,6 @@ impl PreparedMla {
     /// Proposal attention is deliberately separate from ordinary packed
     /// target attention: all five rows see the complete ephemeral block, and the
     /// block KV is never appended to the committed page table.
-    #[cfg(feature = "cuda")]
     pub(crate) fn proposal_block_from_device_into(
         &self,
         kv: &mut MlaKvView,
@@ -4326,7 +4296,6 @@ fn record_attention_stage(
     Ok(())
 }
 
-#[cfg(feature = "cuda")]
 fn required_rope_positions(
     start_position: usize,
     position_stride: usize,
@@ -4443,7 +4412,6 @@ impl MlaKvState {
         self.indexer_compressed_rows = 0;
     }
 
-    #[cfg(any(feature = "cuda", test))]
     pub(crate) fn fork_paged_prefix_metadata(&self) -> Self {
         let mut window = MlaWindowKv::new(self.window.window_size, self.window.head_dim);
         window.len = self.window.len;
@@ -4456,7 +4424,6 @@ impl MlaKvState {
         }
     }
 
-    #[cfg(feature = "cuda")]
     pub(crate) fn restore_provisional_prefix_metadata(
         &mut self,
         metadata: MlaPrefixCheckpoint,
@@ -4475,7 +4442,6 @@ impl MlaKvState {
         Ok(())
     }
 
-    #[cfg(feature = "cuda")]
     pub(crate) fn restore_uncompressed_prefix_from(
         &mut self,
         source: &Self,
@@ -4499,7 +4465,6 @@ impl MlaKvState {
         Ok(())
     }
 
-    #[cfg(feature = "cuda")]
     fn record_compressed_rows(&mut self, rows: usize) -> Result<()> {
         self.compressed_rows =
             self.compressed_rows
@@ -4510,7 +4475,6 @@ impl MlaKvState {
         Ok(())
     }
 
-    #[cfg(feature = "cuda")]
     fn record_indexer_compressed_rows(&mut self, rows: usize) -> Result<()> {
         self.indexer_compressed_rows =
             self.indexer_compressed_rows
@@ -4543,7 +4507,6 @@ impl MlaCompressorState {
         }
     }
 
-    #[cfg(feature = "cuda")]
     fn append_step_from_device_into(
         &mut self,
         payload: &MlaCompressor,
@@ -4592,7 +4555,6 @@ impl MlaCompressorState {
         )
     }
 
-    #[cfg(feature = "cuda")]
     #[allow(clippy::too_many_arguments)]
     fn append_projected_step_from_device_into(
         &mut self,
@@ -4646,7 +4608,6 @@ impl MlaCompressorState {
         )
     }
 
-    #[cfg(feature = "cuda")]
     #[allow(clippy::too_many_arguments)]
     fn finish_projected_step_from_device_into(
         &mut self,
@@ -4723,7 +4684,6 @@ impl MlaCompressorState {
         Ok(true)
     }
 
-    #[cfg(feature = "cuda")]
     fn validate_append_payload(&self, payload: &MlaCompressor) -> Result<()> {
         if payload.compress_ratio != self.ratio
             || payload.head_dim != self.head_dim
@@ -4805,7 +4765,6 @@ impl MlaWindowKv {
         &self.cuda
     }
 
-    #[cfg(feature = "cuda")]
     pub(crate) fn cuda_state_mut(&mut self) -> &mut MlaRecurrentState {
         &mut self.cuda
     }
@@ -5169,7 +5128,6 @@ mod provisional_retain_tests {
     }
 
     #[test]
-    #[cfg(feature = "cuda")]
     fn cuda_retain_failure_keeps_transaction_checkpoint_state_and_pages_retryable() {
         let Ok(operators) = cuda_linear::CudaOperators::new() else {
             return;

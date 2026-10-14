@@ -173,7 +173,7 @@ fn column_weight_is_contiguous_and_input_is_complete() {
 #[test]
 fn column_gather_interleaves_rows_instead_of_flattening_rank_major() {
     let plan = TensorParallelLinearPlan::new(5, 2, 2, Partition::Column).unwrap();
-    let partials = vec![
+    let partials = [
         vec![10.0, 11.0, 12.0, 20.0, 21.0, 22.0, 30.0, 31.0, 32.0],
         vec![13.0, 14.0, 23.0, 24.0, 33.0, 34.0],
     ];
@@ -200,6 +200,27 @@ fn column_gather_interleaves_rows_instead_of_flattening_rank_major() {
         ]
     );
     assert_ne!(actual, partials.concat());
+}
+
+#[test]
+fn bf16_ragged_column_transport_preserves_words_and_discards_padding() {
+    let plan = TensorParallelLinearPlan::new(5, 2, 2, Partition::Column).unwrap();
+    let rank0 = plan
+        .pack_column_bf16(rank(0), &[10, 11, 12, 20, 21, 22], 2)
+        .unwrap();
+    let mut rank1 = plan
+        .pack_column_bf16(rank(1), &[13, 14, 23, 24], 2)
+        .unwrap();
+    assert_eq!(rank0, vec![10, 11, 12, 20, 21, 22]);
+    assert_eq!(rank1, vec![13, 14, 0, 23, 24, 0]);
+    rank1[2] = u16::MAX;
+    rank1[5] = u16::MAX;
+    assert_eq!(
+        plan.unpack_column_bf16(&[rank0, rank1].concat(), 2)
+            .unwrap(),
+        vec![10, 11, 12, 13, 14, 20, 21, 22, 23, 24]
+    );
+    assert!(plan.pack_column_bf16(rank(1), &[13, 14], 2).is_err());
 }
 
 #[test]

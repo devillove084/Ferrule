@@ -1,0 +1,16 @@
+{
+  "passed": true,
+  "gate": {
+    "name": "fused-cache-greedy4",
+    "binary": "composition",
+    "selector": "lifecycle::full40_decoded_cache_unobserved_fused_lifecycle",
+    "evidence": "unobserved_fused_logits_publication",
+    "devices": 2,
+    "reference": "greedy4",
+    "cache_bytes": 3221225472,
+    "observer": false
+  },
+  "proven_drained": true,
+  "all_eight_idle": true,
+  "performance_claim": false
+}

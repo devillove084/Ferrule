@@ -1,0 +1,37 @@
+{
+  "directory": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-20261008-001/hello2",
+  "stage": "hello2",
+  "prepared_sha256": "36a2938ee0432dde854f6344d2b0a7c51f340274e39cb78141cf2999a31b360b",
+  "owner_locks": {
+    "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/GPU-63f1bd01-ddf9-a742-ee48-9389892493d9.lock",
+      "fd": 3,
+      "device": 64785,
+      "inode": 58519247,
+      "coordinator_pid": 68467,
+      "mode": "local_nonblocking_flock",
+      "global_reservation": false
+    },
+    "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/GPU-b980f22b-58a3-fc88-21c1-ae86053d8535.lock",
+      "fd": 4,
+      "device": 64785,
+      "inode": 58519119,
+      "coordinator_pid": 68467,
+      "mode": "local_nonblocking_flock",
+      "global_reservation": false
+    }
+  },
+  "worker_token": "1067d533821c0c106eb1df731fab7f0ff919fef1e014003c3a9e2a7e45c74deb",
+  "manifest": {
+    "protocol": "ferrule.paper.m7.worker.v2"
+  },
+  "coordinator": {
+    "pid": 68467,
+    "birth_ticks": 77977628,
+    "ppid": 68466,
+    "pgrp": 68467,
+    "session": 68466
+  },
+  "worker_source_sha256": "f1e87f00822445a708c5ffe50124ea0d34e928fd56fe6943ccaf7a052bb9d95a"
+}

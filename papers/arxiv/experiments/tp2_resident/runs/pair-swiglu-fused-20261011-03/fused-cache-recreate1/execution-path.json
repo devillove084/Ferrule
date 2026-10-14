@@ -1,0 +1,11 @@
+{
+  "atol": 0.00025,
+  "cache_grants_per_owner": 3221225472,
+  "committed_tensor_export": false,
+  "device_cap_bytes": 23622320128,
+  "numeric_observer_installed": false,
+  "path": "unobserved_fused",
+  "quality_scope": "independent finite full-vocabulary logits and tokens; host publication/frontier checks; no internal tensor equality claim",
+  "rtol": 0.012,
+  "schema": "ferrule.paper.routed-fusion-execution-path.v1"
+}

@@ -47,14 +47,12 @@ use crate::transformer::{
 
 use crate::execution::ExecutionShapeKey;
 
-#[cfg(feature = "cuda")]
 pub(crate) struct CudaTransformerBuffers {
     pub(crate) hc_input: ferrule_backend::cuda::operators::linear::CudaF32Buffer,
     pub(crate) final_hidden: ferrule_backend::cuda::operators::linear::CudaF32Buffer,
     pub(crate) topk_row: ferrule_backend::cuda::operators::linear::CudaF32Buffer,
 }
 
-#[cfg(feature = "cuda")]
 fn debug_cuda_stage(
     layer: usize,
     position: Option<usize>,
@@ -114,21 +112,18 @@ pub struct MlaHyperMoeLayer {
     pub feed_forward: RoutedMoePayload,
 }
 
-#[cfg(feature = "cuda")]
 pub(crate) struct CudaMlaHyperMoeContinuation {
     rows: usize,
     position: Option<usize>,
     moe: RoutedMoeContinuation,
 }
 
-#[cfg(feature = "cuda")]
 impl CudaMlaHyperMoeContinuation {
     pub(crate) fn pending_experts(&self) -> Vec<crate::moe::RoutedMoePendingExpert> {
         self.moe.pending_experts()
     }
 }
 
-#[cfg(feature = "cuda")]
 #[allow(clippy::large_enum_variant)]
 pub(crate) enum CudaMlaHyperMoeProgress {
     Waiting(CudaMlaHyperMoeContinuation),
@@ -136,7 +131,6 @@ pub(crate) enum CudaMlaHyperMoeProgress {
 }
 
 /// Exact per-row dimensions of one compressor's CUDA scratch buffers.
-#[cfg(any(feature = "cuda", test))]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct MlaCompressorArenaShapeKey {
     compress_ratio: usize,
@@ -153,7 +147,6 @@ struct MlaCompressorArenaShapeKey {
 }
 
 /// Exact per-row dimensions of every CUDA attention arena buffer.
-#[cfg(any(feature = "cuda", test))]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct PreparedMlaArenaShapeKey {
     q_latent_width: usize,
@@ -185,7 +178,6 @@ struct PreparedMlaArenaShapeKey {
 ///
 /// `rows` and execution phase remain in the outer `ExecutionShapeKey` bucket;
 /// this key distinguishes the exact arena variants within that bucket.
-#[cfg(any(feature = "cuda", test))]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct CudaMlaHyperMoeArenaShapeKey {
     attn_hidden_width: usize,
@@ -215,7 +207,6 @@ struct CudaMlaHyperMoeArenaShapeKey {
     layer_output_width: usize,
 }
 
-#[cfg(any(feature = "cuda", test))]
 impl MlaCompressorArenaShapeKey {
     fn from_payload(payload: &crate::transformer::attention::mla::MlaCompressor) -> Self {
         Self {
@@ -234,7 +225,6 @@ impl MlaCompressorArenaShapeKey {
     }
 }
 
-#[cfg(any(feature = "cuda", test))]
 impl CudaMlaHyperMoeArenaShapeKey {
     fn for_layer(layer: &MlaHyperMoeLayer) -> Self {
         let config = layer.hyper_connection.config();
@@ -318,7 +308,6 @@ impl CudaMlaHyperMoeArenaShapeKey {
     }
 }
 
-#[cfg(any(feature = "cuda", test))]
 pub(crate) fn layer_arena_variant_layout(layers: &[MlaHyperMoeLayer]) -> (Vec<usize>, Vec<usize>) {
     let mut variants = HashMap::new();
     let mut layer_to_variant = Vec::with_capacity(layers.len());
@@ -362,7 +351,6 @@ pub(crate) enum CudaMlaLayerRequest<'a> {
 impl MlaHyperMoeLayer {
     /// Starts the shared MLA/HyperConnection/RoutedMoE layer composition.
     /// Target and proposal modes differ only in the MLA attention semantic.
-    #[cfg(feature = "cuda")]
     pub(crate) fn begin_device_hc_device(
         &self,
         mut request: CudaMlaLayerRequest<'_>,
@@ -668,7 +656,6 @@ impl MlaHyperMoeLayer {
         ))
     }
 
-    #[cfg(feature = "cuda")]
     pub(crate) fn resume_device_hc_device(
         &self,
         continuation: CudaMlaHyperMoeContinuation,
@@ -734,7 +721,6 @@ impl MlaHyperMoeLayer {
         }
     }
 
-    #[cfg(feature = "cuda")]
     pub(crate) fn poll_cancel_ready(
         &self,
         continuation: &mut CudaMlaHyperMoeContinuation,
@@ -746,7 +732,6 @@ impl MlaHyperMoeLayer {
             .map(|progress| matches!(progress, RoutedMoeCancelProgress::Complete))
     }
 
-    #[cfg(feature = "cuda")]
     pub(crate) fn cancel_device_hc_device(
         &self,
         mut continuation: CudaMlaHyperMoeContinuation,
@@ -762,7 +747,6 @@ impl MlaHyperMoeLayer {
     }
 }
 
-#[cfg(feature = "cuda")]
 pub(crate) struct CudaMlaHyperMoeArena {
     pub(super) attn_hidden: ferrule_backend::cuda::operators::linear::CudaF32Buffer,
     pub(super) attn_pre: ferrule_backend::cuda::operators::linear::CudaF32Buffer,
@@ -787,13 +771,11 @@ pub(crate) struct CudaMlaHyperMoeArena {
 }
 
 /// One exact phase/rows bucket containing one arena per unique transformer scratch shape.
-#[cfg(feature = "cuda")]
 pub(crate) struct CudaMlaHyperMoeArenaVariants {
     arenas: Vec<CudaMlaHyperMoeArena>,
     layer_to_variant: Box<[usize]>,
 }
 
-#[cfg(feature = "cuda")]
 impl CudaMlaHyperMoeArenaVariants {
     pub(crate) fn try_build_for_packed_mode(
         layers: &[MlaHyperMoeLayer],
@@ -834,7 +816,6 @@ impl CudaMlaHyperMoeArenaVariants {
     }
 }
 
-#[cfg(feature = "cuda")]
 impl std::fmt::Debug for CudaMlaHyperMoeArena {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CudaMlaHyperMoeArena")
@@ -844,7 +825,6 @@ impl std::fmt::Debug for CudaMlaHyperMoeArena {
     }
 }
 
-#[cfg(feature = "cuda")]
 impl CudaMlaHyperMoeArena {
     pub(crate) fn new(
         layer: &MlaHyperMoeLayer,
@@ -903,20 +883,17 @@ impl CudaMlaHyperMoeArena {
     }
 }
 
-#[cfg(feature = "cuda")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CudaTransformerRowLayout {
     IndependentRows,
 }
 
-#[cfg(feature = "cuda")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct CudaTransformerArenaKey {
     shape: ExecutionShapeKey,
     row_layout: CudaTransformerRowLayout,
 }
 
-#[cfg(feature = "cuda")]
 impl CudaTransformerArenaKey {
     pub const fn new(shape: ExecutionShapeKey, row_layout: CudaTransformerRowLayout) -> Self {
         Self { shape, row_layout }
@@ -927,12 +904,10 @@ impl CudaTransformerArenaKey {
     }
 }
 
-#[cfg(feature = "cuda")]
 pub struct CudaMtpHeadBuffers {
     pub(crate) workspace: ferrule_backend::cuda::operators::attention::CudaProposalHeadWorkspace,
 }
 
-#[cfg(feature = "cuda")]
 #[derive(Default)]
 struct CudaTransformerMetrics {
     output_head_calls: u64,
@@ -940,7 +915,6 @@ struct CudaTransformerMetrics {
     output_head_topk_us: u64,
 }
 
-#[cfg(feature = "cuda")]
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct CudaTransformerRuntimeConfig {
     profile: bool,
@@ -948,7 +922,6 @@ pub(crate) struct CudaTransformerRuntimeConfig {
     managed_experts: bool,
 }
 
-#[cfg(feature = "cuda")]
 impl CudaTransformerRuntimeConfig {
     pub(crate) const fn new(profile: bool, profile_sync: bool, managed_experts: bool) -> Self {
         Self {
@@ -959,13 +932,11 @@ impl CudaTransformerRuntimeConfig {
     }
 }
 
-#[cfg(feature = "cuda")]
 pub(crate) struct CudaTransformerMtpSource<'a, E> {
     pub(crate) attachment: &'a MtpAttachment<MlaHyperMoeLayer, E>,
     pub(crate) kernel_plan: &'a ModelKernelPlan,
 }
 
-#[cfg(feature = "cuda")]
 pub(crate) struct CudaTransformerSource<'a, E> {
     pub(crate) embedding: &'a CheckpointMatrixSlice,
     pub(crate) output_norm: &'a [f32],
@@ -976,10 +947,8 @@ pub(crate) struct CudaTransformerSource<'a, E> {
     pub(crate) mtp: Option<CudaTransformerMtpSource<'a, E>>,
 }
 
-#[cfg(feature = "cuda")]
 pub(crate) type CudaTransformerRuntimeHandle = Rc<RefCell<CudaTransformerRuntime>>;
 
-#[cfg(feature = "cuda")]
 pub(crate) struct CudaTransformerRuntime {
     pub(crate) ops: Rc<cuda_linear::CudaOperators>,
     pub(crate) mla: MlaExecution,
@@ -998,19 +967,16 @@ pub(crate) struct CudaTransformerRuntime {
 }
 
 /// Device-side HyperConnection weights shared by reference.
-#[cfg(feature = "cuda")]
 pub(crate) type CudaHyperConnection =
     Rc<PreparedHyperConnection<cuda_linear::CudaF32Buffer, cuda_linear::CudaF32Buffer>>;
 
 /// Prepared MLA/HyperConnection/routed-MoE layer composition on device.
-#[cfg(feature = "cuda")]
 pub(crate) type CudaPreparedMlaHyperMoeLayer = TransformerLayer<
     Connected<CudaHyperConnection, Rc<PreparedMlaWeights>>,
     Connected<CudaHyperConnection, Rc<PreparedRoutedMoe>>,
 >;
 
 /// Output HC reduction, final norm, and LM head pipeline on device.
-#[cfg(feature = "cuda")]
 type CudaOutputPipeline = OutputPipeline<
     HyperReduction<PreparedHyperConnectionHead<cuda_linear::CudaF32Buffer>>,
     cuda_linear::CudaF32Buffer,
@@ -1018,7 +984,6 @@ type CudaOutputPipeline = OutputPipeline<
 >;
 
 /// Fully prepared CUDA transformer composition with the MTP target tap.
-#[cfg(feature = "cuda")]
 type CudaPreparedTransformerComposition = PreparedTransformer<
     cuda_linear::CudaArtifactLinearHandle,
     CudaPreparedMlaHyperMoeLayer,
@@ -1027,7 +992,6 @@ type CudaPreparedTransformerComposition = PreparedTransformer<
 >;
 
 /// Prepared MTP attachment with device-side stage backbones and heads.
-#[cfg(feature = "cuda")]
 type CudaPreparedMtpAttachment = PreparedMtpAttachment<
     CudaPreparedMlaHyperMoeLayer,
     PreparedHyperConnectionHead<cuda_linear::CudaF32Buffer>,
@@ -1036,14 +1000,12 @@ type CudaPreparedMtpAttachment = PreparedMtpAttachment<
     ModelKernelPlan,
 >;
 
-#[cfg(feature = "cuda")]
 pub struct PreparedCudaTransformer {
     transformer: CudaPreparedTransformerComposition,
     kernel_plan: ModelKernelPlan,
     mtp: Option<CudaPreparedMtpAttachment>,
 }
 
-#[cfg(feature = "cuda")]
 impl PreparedCudaTransformer {
     fn embedding(&self) -> &cuda_linear::CudaArtifactLinearHandle {
         self.transformer.embedding()
@@ -1068,7 +1030,6 @@ impl PreparedCudaTransformer {
     }
 }
 
-#[cfg(feature = "cuda")]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct CudaTransformerCompileProfile {
     pub globals_us: u64,
@@ -1079,7 +1040,6 @@ pub(crate) struct CudaTransformerCompileProfile {
     pub total_us: u64,
 }
 
-#[cfg(feature = "cuda")]
 impl CudaTransformerRuntime {
     pub(crate) fn mtp_input_device_into(
         &self,
@@ -1299,7 +1259,6 @@ impl CudaTransformerRuntime {
     }
 }
 
-#[cfg(feature = "cuda")]
 impl CudaTransformerRuntime {
     pub(crate) fn pinned_host_allocator(&self) -> cuda_moe::CudaPinnedHostAllocator {
         self.ops.pinned_host_allocator()
@@ -1869,12 +1828,10 @@ impl CudaTransformerRuntime {
     }
 }
 
-#[cfg(feature = "cuda")]
 fn duration_us(duration: Duration) -> u64 {
     duration.as_micros().min(u128::from(u64::MAX)) as u64
 }
 /// Kernel requirements for one MLA/HyperConnection/routed-MoE layer.
-#[cfg(feature = "cuda")]
 pub(crate) fn mla_hyper_moe_kernel_requirements(
     layer: &MlaHyperMoeLayer,
 ) -> Result<LayerKernelRequirements> {
@@ -1918,7 +1875,6 @@ pub(crate) fn mla_hyper_moe_kernel_requirements(
 }
 
 /// Compiles the target and optional MTP kernel plans for an MLA/HC/MoE model.
-#[cfg(feature = "cuda")]
 pub(crate) fn compile_mla_hyper_moe_plans(
     layers: &[MlaHyperMoeLayer],
     proposal: Option<&MtpAttachment<MlaHyperMoeLayer, Arc<ExpertSourceCatalog>>>,
@@ -1960,7 +1916,6 @@ pub(crate) fn compile_mla_hyper_moe_plans(
     Ok((base, proposal))
 }
 
-#[cfg(feature = "cuda")]
 fn fp8_bundle(
     operation: KernelOperation,
     [first, second]: [&LinearWeight; 2],
@@ -1996,7 +1951,6 @@ fn fp8_bundle(
     ))
 }
 
-#[cfg(feature = "cuda")]
 fn fp8_single(operation: KernelOperation, value: &LinearWeight) -> Result<LinearBundleRequirement> {
     let LinearWeightFormat::Fp8E4M3WithE8M0Scale {
         out_features,
@@ -2017,7 +1971,6 @@ fn fp8_single(operation: KernelOperation, value: &LinearWeight) -> Result<Linear
     ))
 }
 
-#[cfg(feature = "cuda")]
 fn bf16_bundle(
     operation: KernelOperation,
     [first, second]: [&LinearWeight; 2],
@@ -2051,10 +2004,8 @@ fn bf16_bundle(
     ))
 }
 
-#[cfg(feature = "cuda")]
 pub(crate) use cuda_runtime::CudaOutputHeadTopKDownload;
 
-#[cfg(feature = "cuda")]
 pub(crate) mod cuda_runtime {
 
     use super::{CudaTransformerBuffers, CudaTransformerRuntime};

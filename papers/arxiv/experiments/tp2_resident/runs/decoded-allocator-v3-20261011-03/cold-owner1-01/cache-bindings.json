@@ -1,0 +1,26 @@
+[
+  {
+    "events": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-allocator-v3-20261011-03/cold-owner1-01/lifecycle-raw/epoch-0/rank-0/events.jsonl",
+      "sha256": "1c7641a15a766f6964afce24f65d1249efed104e5f414635756f9f4972966f5f"
+    },
+    "budget": {
+      "capacity_grants": 3221225472,
+      "pinned_grants": 1405091840,
+      "routed_entries": 20480,
+      "routed_working_set_grants": 805306368
+    }
+  },
+  {
+    "events": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-allocator-v3-20261011-03/cold-owner1-01/lifecycle-raw/epoch-0/rank-1/events.jsonl",
+      "sha256": "11af40980cb0c8521f6c6655d68df5b3e6ccb8713819b1911444babbdad172a6"
+    },
+    "budget": {
+      "capacity_grants": 3221225472,
+      "pinned_grants": 1405091840,
+      "routed_entries": 20480,
+      "routed_working_set_grants": 805306368
+    }
+  }
+]

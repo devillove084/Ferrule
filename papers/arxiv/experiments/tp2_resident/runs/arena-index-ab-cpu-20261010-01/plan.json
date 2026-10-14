@@ -1,0 +1,98 @@
+{
+  "protocol": "tp2-arena-index-matched4g-qa8-descriptive-v1",
+  "status": "CPU_plan_only_AFTER_release_quality_smoke_and_delta_pending",
+  "execute_allowed": false,
+  "before": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/admission/arena-public-20261010-01/cache-ab-qualified-candidate.json",
+    "sha256": "1b0f093c39ffbb91befe96db954a79314449c28d34a95dc2440f949105d86da6",
+    "binary_sha256": "ae3e76d420cdff234be4262575b3bee29e89252c89bc2f21c744aefd47731bc7"
+  },
+  "cycles": [
+    {
+      "policy": "frozen_qualified_ae3e_arena_before_v1",
+      "cycle": 1,
+      "order": [
+        "BEFORE",
+        "AFTER"
+      ],
+      "fresh_lifecycles": 2,
+      "arena_bytes_per_owner": 3221225472,
+      "workspace_mib": 4096,
+      "device_cap_mib": 22528,
+      "concurrency": 1,
+      "qa8_unmeasured": 3,
+      "qa8_unmeasured_layout": "excluded first + 2 warmups",
+      "qa8_measured": 5,
+      "actual_input_tokens": 5,
+      "actual_output_tokens": 8,
+      "rankperf": false,
+      "profiler": false,
+      "scope": "TP2 ctx128 batch8 seq2 resident/no-offload; identical argv/environment/runtime except executable",
+      "source_delta": "Exactly expert_cache.rs and standard/mixed_decoded.rs production hashes; tests reported separately",
+      "attribution": "Two crossed-order cycles remain descriptive; neither an all-differences attribution nor statistical significance",
+      "cpu_observation": {
+        "affinity": null,
+        "thread_count": null,
+        "reason": "Existing sampler captures memory/process identity, not affinity/thread counts; observer unchanged to preserve timing"
+      }
+    },
+    {
+      "policy": "frozen_qualified_ae3e_arena_before_v1",
+      "cycle": 2,
+      "order": [
+        "AFTER",
+        "BEFORE"
+      ],
+      "fresh_lifecycles": 2,
+      "arena_bytes_per_owner": 3221225472,
+      "workspace_mib": 4096,
+      "device_cap_mib": 22528,
+      "concurrency": 1,
+      "qa8_unmeasured": 3,
+      "qa8_unmeasured_layout": "excluded first + 2 warmups",
+      "qa8_measured": 5,
+      "actual_input_tokens": 5,
+      "actual_output_tokens": 8,
+      "rankperf": false,
+      "profiler": false,
+      "scope": "TP2 ctx128 batch8 seq2 resident/no-offload; identical argv/environment/runtime except executable",
+      "source_delta": "Exactly expert_cache.rs and standard/mixed_decoded.rs production hashes; tests reported separately",
+      "attribution": "Two crossed-order cycles remain descriptive; neither an all-differences attribution nor statistical significance",
+      "cpu_observation": {
+        "affinity": null,
+        "thread_count": null,
+        "reason": "Existing sampler captures memory/process identity, not affinity/thread counts; observer unchanged to preserve timing"
+      }
+    }
+  ],
+  "after_binary_sha256": null,
+  "builder_delta_schema": {
+    "schema": "ferrule.paper.arena-index-production-delta.v1",
+    "required_fields": [
+      "before_binary_sha256",
+      "after_binary_sha256",
+      "before_production_source_digest",
+      "after_production_source_digest",
+      "production_changes"
+    ],
+    "production_changes_fields": [
+      "path",
+      "before_sha256",
+      "after_sha256"
+    ],
+    "allowed_paths": [
+      "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-model/src/transformer/standard/expert_cache.rs",
+      "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-model/src/transformer/standard/mixed_decoded.rs"
+    ],
+    "digest": "contract.digest(pre_serving.release_sources(builder source_pins_before)); includes native .cc",
+    "binding": "Exact delta file path/hash must be included in AFTER build_evidence_pins"
+  },
+  "after_requirements": [
+    "Reviewed release adapter, current source pins, stable before/after build inputs",
+    "Fresh authenticated 23 named gates, 37 calls / 40293 exact; no inherited baseline launch IDs",
+    "Actual same-binary S1/S2 PASS before A/B admission",
+    "Exactly two production files changed; identical build environment/profile/toolchain and runtime/serving flags"
+  ],
+  "launcher": "paired.py --purpose arena_index_ab; no new harness",
+  "gpu_started": false
+}

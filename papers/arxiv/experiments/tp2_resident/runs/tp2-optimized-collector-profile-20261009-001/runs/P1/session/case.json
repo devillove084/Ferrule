@@ -1,0 +1,32 @@
+{
+  "status": "failed",
+  "started_monotonic": 8498492.818244392,
+  "fairmatch": false,
+  "exact_speedup": null,
+  "launch_monotonic": 8498493.566295352,
+  "server_pid": 152917,
+  "server_identity": {
+    "pid": 152917,
+    "birth_ticks": 86237329,
+    "ppid": 152908,
+    "state": "R"
+  },
+  "error": "CustodyLost: Authenticated server root exited",
+  "startup_failure_seconds": 5.337631374597549,
+  "resources": {
+    "status": "blocked",
+    "errors": [
+      "Authenticated server root exited"
+    ],
+    "phase_memory": null,
+    "gpu_peak_bytes": null,
+    "tree_pss_peak_bytes": null
+  },
+  "shutdown": {
+    "timed_out": false,
+    "returncode": 1,
+    "status": "collector_exited_descendants_require_custodian",
+    "seconds": 0.0013976804912090302
+  },
+  "wall_seconds": 6.087101083248854
+}

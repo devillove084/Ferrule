@@ -1,10 +1,10 @@
 //! Call-scoped computation binding over the independent CUDA KV custodian.
 //! Slot allocation, rollback, COW and commit stay entirely in decoder/KV.
 
-use ferrule_backend::cuda::context::standard::{
+use ferrule_backend::cuda::operators::linear::CudaOperators;
+use ferrule_backend::cuda::operators::standard::{
     PagedF32GqaBuffers, PagedF32GqaLayout, PagedF32GqaMetadata,
 };
-use ferrule_backend::cuda::operators::linear::CudaOperators;
 use ferrule_common::Result;
 use ferrule_common::execution::ExecutionTransactionId;
 
@@ -14,12 +14,15 @@ use crate::transformer::{
 };
 
 use super::{cuda_error, device_rows};
+#[path = "append_gqa.rs"]
+mod append_gqa;
 
 /// Borrows an entered view and its exact batch for one standard forward call.
 /// It neither allocates pages nor acknowledges transaction completion.
 pub struct CudaStandardKvBinding<'a> {
     view: &'a mut CudaKvView,
     batch: &'a PackedDecoderBatch,
+    attention: Option<std::rc::Rc<std::cell::RefCell<super::bf16_attention::PreparedAttention>>>,
 }
 
 impl StandardDecoderKvView for CudaKvView {
@@ -32,9 +35,67 @@ impl StandardDecoderKvView for CudaKvView {
 }
 
 impl<'a> CudaStandardKvBinding<'a> {
+    /// Call-scoped selection in the normal layer implementation. Neither branch
+    /// can retain the context borrow or output guard in a continuation.
+    pub(super) fn with_context<T>(
+        view: &mut CudaKvView,
+        batch: &PackedDecoderBatch,
+        context: &crate::decoder::DecoderTransactionContext<'_>,
+        layer: usize,
+        attention: Option<
+            std::rc::Rc<std::cell::RefCell<super::bf16_attention::PreparedAttention>>,
+        >,
+        run: impl FnOnce(&mut dyn KvView) -> Result<T>,
+    ) -> Result<T> {
+        if let Some(invocation) = context.invocation() {
+            let append = invocation.cuda_host_kv()?;
+            invocation.begin_layer(layer)?;
+            let mut binding = append_gqa::CudaStandardAppendKvBinding::new(
+                view,
+                batch,
+                append.layer(layer)?,
+                append.budget(),
+                append.block_tokens(),
+            )?;
+            let result = run(&mut binding)?;
+            binding.ensure_retired()?;
+            invocation.retire_layer(layer)?;
+            Ok(result)
+        } else {
+            let mut binding = CudaStandardKvBinding::new(view, batch)?;
+            binding.attention = attention;
+            run(&mut binding)
+        }
+    }
+
+    /// Explicit runtime-authorized route; default binding remains Drop-free.
+    pub fn with_append_prefix(
+        view: &'a mut CudaKvView,
+        batch: &'a PackedDecoderBatch,
+        authority: &'a dyn ferrule_backend::cuda::operators::kv::transaction::append_bridge::AppendPrefixAuthority,
+        budget: &'a ferrule_common::host_kv::placement::PlacementBudget,
+        block_tokens: usize,
+    ) -> Result<append_gqa::CudaStandardAppendKvBinding<'a>> {
+        append_gqa::CudaStandardAppendKvBinding::new(view, batch, authority, budget, block_tokens)
+    }
+
+    pub(super) fn with_prepared_attention(
+        view: &'a mut CudaKvView,
+        batch: &'a PackedDecoderBatch,
+        attention: std::rc::Rc<std::cell::RefCell<super::bf16_attention::PreparedAttention>>,
+    ) -> Result<Self> {
+        let mut result = Self::new(view, batch)?;
+        result.attention = Some(attention);
+        Ok(result)
+    }
+
     pub fn new(view: &'a mut CudaKvView, batch: &'a PackedDecoderBatch) -> Result<Self> {
         view.validate_batch(batch)?;
-        Ok(Self { view, batch })
+        Ok(Self {
+            view,
+            batch,
+            attention: None,
+        })
     }
 }
 
@@ -110,6 +171,49 @@ impl KvView for CudaStandardKvBinding<'_> {
         {
             return Err(cuda_error("GQA row shape mismatch"));
         }
+        if query.dtype() == crate::transformer::RowsDType::Bf16 {
+            let query_buffer = ops.bf16_to_f32(
+                query
+                    .bf16_buffer()
+                    .ok_or_else(|| cuda_error("BF16 Q required"))?,
+            )?;
+            let key_buffer = key
+                .bf16_buffer()
+                .ok_or_else(|| cuda_error("BF16 K required"))?;
+            let value_buffer = value
+                .bf16_buffer()
+                .ok_or_else(|| cuda_error("BF16 V required"))?;
+            let mut output = ops.zero_f32_buffer(query.shape().elements())?;
+            let transaction = self.view.transaction();
+            self.view
+                .with_bf16_gqa_planes(ops, request.layer, self.batch, |mut planes| {
+                    let layout = planes.attention_layout(
+                        request.query_heads,
+                        request.kv_heads,
+                        request.head_dim,
+                        request.softmax_scale,
+                    )?;
+                    let rows = ferrule_backend::cuda::operators::kv::CudaBf16GqaRows {
+                        query: &query_buffer,
+                        append_key: key_buffer,
+                        append_value: value_buffer,
+                        output: &mut output,
+                    };
+                    if let Some(owner) = &self.attention {
+                        let mut owner = owner.borrow_mut();
+                        owner.validate_transaction(transaction)?;
+                        let super::bf16_attention::PreparedAttention {
+                            provider, status, ..
+                        } = &mut *owner;
+                        planes.append_and_attend_prepared(rows, layout, provider, status)
+                    } else {
+                        planes.append_and_attend_eager(rows, layout)
+                    }
+                })?;
+            // Q/output are declared F32 scratch, never activation or cache storage.
+            return super::bf16::round_rows(ops, query.shape(), request.arena, &output)
+                .map(OperatorProgress::Ready);
+        }
         let query_buffer = query
             .f32_buffer()
             .ok_or_else(|| cuda_error("query must be F32"))?;
@@ -123,7 +227,7 @@ impl KvView for CudaStandardKvBinding<'_> {
         let positions = checked_i32(self.batch.positions().iter().copied())?;
         let committed = checked_i32(self.batch.sequences().iter().map(|s| s.context_len()))?;
         let mut output = ops.zero_f32_buffer(query.shape().elements())?;
-        self.view.with_f32_gqa_planes_mut(
+        self.view.try_with_f32_gqa_planes_mut(
             ops,
             request.layer,
             self.batch,
@@ -173,8 +277,8 @@ impl KvView for CudaStandardKvBinding<'_> {
                         output: &mut output,
                     },
                     PagedF32GqaMetadata {
-                        block_slots: &planes.block_slots,
-                        block_offsets: &planes.block_offsets,
+                        block_slots: planes.block_slots,
+                        block_offsets: planes.block_offsets,
                         row_sequence_ids: &sequences,
                         row_positions: &positions,
                         committed_lengths: &committed,
@@ -182,7 +286,7 @@ impl KvView for CudaStandardKvBinding<'_> {
                     layout,
                 )
             },
-        )??;
+        )?;
         ops.sync_stream()?;
         device_rows(query.shape(), request.arena, output).map(OperatorProgress::Ready)
     }

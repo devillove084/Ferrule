@@ -1,0 +1,12 @@
+{
+  "index": 0,
+  "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+  "name": "NVIDIA GeForce RTX 3090",
+  "driver": "575.57.08",
+  "pci_bus_id": "00000000:69:00.0",
+  "total_bytes": 25769803776,
+  "gpu_bytes": 0,
+  "utilization": 0,
+  "apps": [],
+  "monotonic": 8468040.866734479
+}

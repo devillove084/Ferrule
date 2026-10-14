@@ -1,0 +1,378 @@
+{
+  "mode": "feasibility",
+  "config": {
+    "schema": "ferrule.paper.m7.config.v2",
+    "model": "/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8",
+    "quality_history": "target/validation/bf16-attention-model-current-20261007/FINAL.json",
+    "ferrule_build_environment": "target/validation/mixed-public-serve-owner-20261007/admission-deadline-fix/build-environment.json",
+    "vllm_fix_environment": "target/validation/vllm028-py312/jit-cuda12/fix-env.json",
+    "vllm": "target/vendor/vllm028-py312/bin/vllm",
+    "cargo": "/root/.rustup/toolchains/nightly-2026-08-01-x86_64-unknown-linux-gnu/bin/cargo",
+    "build_target": "target/paper-m7-release",
+    "protocol": {
+      "seed": 1,
+      "prompt": "Hello",
+      "input_tokens": 1,
+      "context": 128,
+      "batch_tokens": 8,
+      "active_sequences": 2,
+      "concurrency": 1,
+      "tp": 1,
+      "pp": 1,
+      "ep": 1,
+      "activation": "bfloat16",
+      "kv": "bfloat16",
+      "conv": "bfloat16",
+      "ssm": "float32",
+      "prefix_cache": false,
+      "eos": "natural",
+      "endpoint": "raw-completions",
+      "protocol_id": "m7-device-exclusive-local-custody-v2",
+      "identity_mode": "device_exclusive_local_custody"
+    },
+    "resources": {
+      "gpu_target_bytes": 7516192768,
+      "host_target_bytes": 68719476736,
+      "gpu_expected_total_bytes": 25769803776,
+      "idle_max_device_mib": 512,
+      "sample_interval_seconds": 2,
+      "hard_memory_partition": false,
+      "host_policy": "process-tree PSS monitored; RSS also reported; uncharged file cache and CUDA pinning remain separately unknown",
+      "gpu_policy": "7 GiB soft target; Ferrule admission and vLLM utilization planning are not hard device partitions"
+    },
+    "limits": {
+      "startup_seconds": 900,
+      "request_seconds": 120,
+      "measurement_seconds": 360,
+      "cleanup_seconds": 120,
+      "case_seconds": 1600,
+      "idle_seconds": 20,
+      "build_seconds": 1500
+    },
+    "workloads": {
+      "feasibility": {
+        "max_tokens": 2,
+        "requests": 1,
+        "warmup": 0
+      },
+      "run": {
+        "max_tokens": 32,
+        "requests": 4,
+        "warmup": 1
+      }
+    },
+    "ferrule_flags": {
+      "--backend": "cuda",
+      "--engine": "resident",
+      "--model-profile": "qwen35-mixed-bf16",
+      "--pipeline-parallel": "1",
+      "--tensor-parallel": "1",
+      "--expert-parallel": "1",
+      "--expert-prewarm": "lazy",
+      "--kv-execution-policy": "resident",
+      "--ctx-size": "128",
+      "--max-active-sequences": "2",
+      "--max-batch-tokens": "8",
+      "--prefill-chunk-size": "8",
+      "--kv-cache-mb": "16",
+      "--max-tensor-mb": "1024",
+      "--cuda-expert-device-entries": "8",
+      "--cuda-expert-device-bytes": "335544320",
+      "--cuda-expert-scratch-mb": "8",
+      "--cuda-workspace-mb": "2048",
+      "--cuda-device-budget-mb": "7168",
+      "--served-model-name": "qwen35-mixed-paper",
+      "--host": "127.0.0.1",
+      "--port": "18359"
+    },
+    "vllm_flags": {
+      "--host": "127.0.0.1",
+      "--port": "18357",
+      "--served-model-name": "qwen35-vllm-paper",
+      "--language-model-only": true,
+      "--tensor-parallel-size": "1",
+      "--pipeline-parallel-size": "1",
+      "--data-parallel-size": "1",
+      "--dtype": "bfloat16",
+      "--kv-cache-dtype": "auto",
+      "--mamba-cache-dtype": "bfloat16",
+      "--mamba-ssm-cache-dtype": "float32",
+      "--linear-backend": "marlin",
+      "--moe-backend": "marlin",
+      "--offload-backend": "uva",
+      "--cpu-offload-gb": "30",
+      "--cpu-offload-params": [
+        "w13_weight",
+        "w2_weight"
+      ],
+      "--max-model-len": "128",
+      "--max-num-seqs": "2",
+      "--max-num-batched-tokens": "8",
+      "--enable-chunked-prefill": true,
+      "--gpu-memory-utilization": "0.2916666666666667",
+      "--no-enable-prefix-caching": true,
+      "--generation-config": "vllm",
+      "--seed": "1",
+      "--enforce-eager": true
+    }
+  },
+  "config_sha256": "cb843e69454cc29c3e710586bc2e8335a99e7d275df164de8dcf5be6c629fd4c",
+  "directory": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/m7-feasibility-exclusive-002/ferrule",
+  "binary": "/home/admin/luhuanbing.lhb/Ferrule/target/paper-m7-release-artifacts/m7-build-new-002/staged/ferrule",
+  "binary_sha256": "219d8b77bbeceecedf83272b880cd3a8175db7bf5bedea5dcfc537888461ff80",
+  "granted": true,
+  "executable_sha256": "219d8b77bbeceecedf83272b880cd3a8175db7bf5bedea5dcfc537888461ff80",
+  "diagnostic_performance": false,
+  "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+  "owner_note": "User renewed exclusive physical GPU0 ownership and authorized device_exclusive_local_custody v2; new pair after paper-only Python spawn launch fix, unchanged release/model/precision/offload/resource flags; no verified NVML PID attribution claimed",
+  "gpu_tool": "/usr/bin/nvidia-smi",
+  "spec": {
+    "engine": "ferrule",
+    "environment": {
+      "HOME": "/home/admin",
+      "PATH": "/home/admin/wxw403883/anaconda3/envs/tao/bin:/root/.cargo/bin:/usr/bin:/bin",
+      "PYTHONDONTWRITEBYTECODE": "1",
+      "CUDA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "NVIDIA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
+      "HF_HUB_OFFLINE": "1",
+      "TRANSFORMERS_OFFLINE": "1",
+      "CUDA_HOME": "/home/admin/wxw403883/anaconda3/envs/tao",
+      "NVCC": "/home/admin/wxw403883/anaconda3/envs/tao/bin/nvcc",
+      "LD_LIBRARY_PATH": "/home/admin/wxw403883/anaconda3/envs/tao/lib:/usr/lib64",
+      "CUBLAS_WORKSPACE_CONFIG": ":0:0",
+      "FERRULE_LOG": "info",
+      "FERRULE_LOG_FORMAT": "json"
+    },
+    "argv": [
+      "/home/admin/luhuanbing.lhb/Ferrule/target/paper-m7-release-artifacts/m7-build-new-002/staged/ferrule",
+      "serve",
+      "/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8",
+      "--backend",
+      "cuda",
+      "--engine",
+      "resident",
+      "--model-profile",
+      "qwen35-mixed-bf16",
+      "--pipeline-parallel",
+      "1",
+      "--tensor-parallel",
+      "1",
+      "--expert-parallel",
+      "1",
+      "--expert-prewarm",
+      "lazy",
+      "--kv-execution-policy",
+      "resident",
+      "--ctx-size",
+      "128",
+      "--max-active-sequences",
+      "2",
+      "--max-batch-tokens",
+      "8",
+      "--prefill-chunk-size",
+      "8",
+      "--kv-cache-mb",
+      "16",
+      "--max-tensor-mb",
+      "1024",
+      "--cuda-expert-device-entries",
+      "8",
+      "--cuda-expert-device-bytes",
+      "335544320",
+      "--cuda-expert-scratch-mb",
+      "8",
+      "--cuda-workspace-mb",
+      "2048",
+      "--cuda-device-budget-mb",
+      "7168",
+      "--served-model-name",
+      "qwen35-mixed-paper",
+      "--host",
+      "127.0.0.1",
+      "--port",
+      "18359"
+    ],
+    "model": "qwen35-mixed-paper",
+    "url": "http://127.0.0.1:18359/v1/completions"
+  },
+  "owner_lock": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/GPU-b980f22b-58a3-fc88-21c1-ae86053d8535.lock",
+    "fd": 3,
+    "device": 64785,
+    "inode": 58519119,
+    "coordinator_pid": 168299,
+    "mode": "local_nonblocking_flock",
+    "global_reservation": false
+  },
+  "prepared_path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/m7-prepared-exclusive-002/prepared.json",
+  "prepared_sha256": "169767c0f2fef7d08423eabd9a60b577107cc5cff870b39065bee324b1d4b262",
+  "manifest_sha256": "860c91218705d877696dc646513c1dc72604151c2c27a7205078d37575516048",
+  "quality_path": null,
+  "quality_sha256": null,
+  "feasibility_path": null,
+  "feasibility_sha256": null,
+  "metadata": {
+    "comparison_intent": "system-level",
+    "source": {
+      "prepared_sha256": "860c91218705d877696dc646513c1dc72604151c2c27a7205078d37575516048"
+    },
+    "model": {
+      "path": "/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8",
+      "metadata_sha256": {
+        "config.json": "236c373b0682a4f40c2fa49ef8e5f722a87a8dbfe265286b6d5260b23d7cb229",
+        "model.safetensors.index.json": "b009f7a49c442fce959a2ff6fee41c69248879b90d7ff5636ec6d2068ac4876d",
+        "tokenizer.json": "5f9e4d4901a92b997e463c1f46055088b6cca5ca61a6522d1b9f64c4bb81cb42",
+        "tokenizer_config.json": "316230d6a809701f4db5ea8f8fc862bc3a6f3229c937c174e674ff3ca0a64ac8"
+      },
+      "shard_stats": {
+        "model.safetensors-00001-of-00014.safetensors": {
+          "bytes": 2685395560,
+          "mtime_ns": 1772424992657055256,
+          "inode": 38524559,
+          "device": 236
+        },
+        "model.safetensors-00002-of-00014.safetensors": {
+          "bytes": 2685393512,
+          "mtime_ns": 1772424806750938380,
+          "inode": 38524557,
+          "device": 236
+        },
+        "model.safetensors-00003-of-00014.safetensors": {
+          "bytes": 2685393512,
+          "mtime_ns": 1772425351626122160,
+          "inode": 38524563,
+          "device": 236
+        },
+        "model.safetensors-00004-of-00014.safetensors": {
+          "bytes": 2685394536,
+          "mtime_ns": 1772425557825932903,
+          "inode": 38524564,
+          "device": 236
+        },
+        "model.safetensors-00005-of-00014.safetensors": {
+          "bytes": 2685395560,
+          "mtime_ns": 1772425889647579315,
+          "inode": 38524566,
+          "device": 236
+        },
+        "model.safetensors-00006-of-00014.safetensors": {
+          "bytes": 2685394536,
+          "mtime_ns": 1772425164292942735,
+          "inode": 38524561,
+          "device": 236
+        },
+        "model.safetensors-00007-of-00014.safetensors": {
+          "bytes": 2685393512,
+          "mtime_ns": 1772426151999313636,
+          "inode": 38524567,
+          "device": 236
+        },
+        "model.safetensors-00008-of-00014.safetensors": {
+          "bytes": 2685393512,
+          "mtime_ns": 1772426339785901318,
+          "inode": 38524569,
+          "device": 236
+        },
+        "model.safetensors-00009-of-00014.safetensors": {
+          "bytes": 3645492144,
+          "mtime_ns": 1772426665613745394,
+          "inode": 38524570,
+          "device": 236
+        },
+        "model.safetensors-00010-of-00014.safetensors": {
+          "bytes": 2685398632,
+          "mtime_ns": 1772426854560705584,
+          "inode": 38524571,
+          "device": 236
+        },
+        "model.safetensors-00011-of-00014.safetensors": {
+          "bytes": 2685400680,
+          "mtime_ns": 1772427035405551264,
+          "inode": 38524573,
+          "device": 236
+        },
+        "model.safetensors-00012-of-00014.safetensors": {
+          "bytes": 2685399144,
+          "mtime_ns": 1772427235837349585,
+          "inode": 38524574,
+          "device": 236
+        },
+        "model.safetensors-00013-of-00014.safetensors": {
+          "bytes": 3011229472,
+          "mtime_ns": 1772427400537041055,
+          "inode": 38524576,
+          "device": 236
+        },
+        "model.safetensors-00014-of-00014.safetensors": {
+          "bytes": 1267650368,
+          "mtime_ns": 1772427480416081771,
+          "inode": 38524577,
+          "device": 236
+        }
+      },
+      "index_payload_bytes": 37454799072,
+      "identity_strength": "partial: metadata hashes + shard stat pins; payloads NOT hashed",
+      "full_checkpoint_sha256": null
+    },
+    "precision": {
+      "declared": {
+        "seed": 1,
+        "prompt": "Hello",
+        "input_tokens": 1,
+        "context": 128,
+        "batch_tokens": 8,
+        "active_sequences": 2,
+        "concurrency": 1,
+        "tp": 1,
+        "pp": 1,
+        "ep": 1,
+        "activation": "bfloat16",
+        "kv": "bfloat16",
+        "conv": "bfloat16",
+        "ssm": "float32",
+        "prefix_cache": false,
+        "eos": "natural",
+        "endpoint": "raw-completions",
+        "protocol_id": "m7-device-exclusive-local-custody-v2",
+        "identity_mode": "device_exclusive_local_custody"
+      },
+      "effective": "unverified"
+    },
+    "topology": {
+      "tp": 1,
+      "pp": 1,
+      "ep": 1,
+      "dp": 1,
+      "physical_gpu_uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535"
+    },
+    "resources": {
+      "gpu_target_bytes": 7516192768,
+      "host_target_bytes": 68719476736,
+      "gpu_expected_total_bytes": 25769803776,
+      "idle_max_device_mib": 512,
+      "sample_interval_seconds": 2,
+      "hard_memory_partition": false,
+      "host_policy": "process-tree PSS monitored; RSS also reported; uncharged file cache and CUDA pinning remain separately unknown",
+      "gpu_policy": "7 GiB soft target; Ferrule admission and vLLM utilization planning are not hard device partitions"
+    },
+    "cache": {
+      "prefix_mode": "off",
+      "state_reset": "per_request",
+      "os_cache": "uncontrolled"
+    },
+    "quality_gate": {
+      "historical": "PASS_mixed_prepared_attention_original_full40_and_fresh_quality",
+      "release": "separate owner evidence"
+    },
+    "runtime_contract": {
+      "status": "unverified",
+      "identity_mode": "device_exclusive_local_custody",
+      "performance_basis": "exclusive_operator_allocation_assumption",
+      "owned_process_gpu_peak_bytes": null
+    },
+    "operator_note": "Boundary-aligned candidate only; exact arithmetic/speedup not claimed",
+    "engine": "ferrule"
+  },
+  "contract_sha256": "f228bc42598651c1b217e9ecd2daba15152a5491d8a7db3e10e776d893764d81"
+}

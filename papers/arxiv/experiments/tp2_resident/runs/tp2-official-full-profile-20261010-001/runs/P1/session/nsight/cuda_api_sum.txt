@@ -1,0 +1,27 @@
+Generating SQLite file /home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-official-full-profile-20261010-001/runs/P1/session/nsight/nsys.sqlite from /home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-official-full-profile-20261010-001/runs/P1/session/nsight/nsys.nsys-rep
+Processing [/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-official-full-profile-20261010-001/runs/P1/session/nsight/nsys.sqlite] with [/home/admin/luhuanbing.lhb/Ferrule/target/vendor/nsight-systems-cli-2025.3.1/opt/nvidia/nsight-systems-cli/2025.3.1/target-linux-x64/reports/cuda_api_sum.py]... 
+Time (%),Total Time (ns),Num Calls,Avg (ns),Med (ns),Min (ns),Max (ns),StdDev (ns),Name
+27.0,1066486108,6330,168481.2,12892.0,2150,467274350,8300124.9,cuMemcpyDtoHAsync_v2
+21.9,863263738,202680,4259.2,4056.0,2605,34734,996.3,cudaLaunchKernel
+9.8,387039603,123908,3123.6,2963.0,1321,38800,1084.5,cuMemsetD8Async
+9.5,376144336,482915,778.9,655.0,154,217648,625.5,cuEventCreate
+9.0,353771465,32242,10972.4,2366.0,312,598942,30193.6,cuEventSynchronize
+4.6,180113602,465428,387.0,318.0,188,27366,200.6,cuEventQuery
+3.8,150333580,126879,1184.9,375.0,295,96235,1742.6,cuStreamSynchronize
+3.5,136889601,482915,283.5,253.0,196,10662,142.1,cuEventRecord
+3.3,131155229,25503,5142.7,4739.0,2052,207571,3334.5,cuMemcpyHtoDAsync_v2
+3.2,126146977,482183,261.6,251.0,94,110637,352.3,cuEventDestroy_v2
+2.6,100824685,14847,6790.9,6820.0,3418,20024,1183.1,cuMemcpyDtoDAsync_v2
+1.6,63805618,907357,70.3,65.0,55,9910,50.7,cuCtxSetCurrent
+0.2,7885235,1864,4230.3,4121.0,2614,23523,977.3,cuLaunchKernel
+0.0,1246361,1864,668.6,649.0,228,3493,256.7,cuKernelGetFunction
+0.0,439197,816,538.2,475.0,278,2576,282.4,cuStreamWaitEvent
+0.0,347396,340,1021.8,914.5,677,7687,436.4,cudaStreamIsCapturing_v10000
+0.0,111825,34,3289.0,3306.0,2436,5183,587.2,cudaMemsetAsync
+0.0,15773,306,51.5,46.0,37,860,50.6,cuCtxGetCurrent
+0.0,5505,62,88.8,77.0,65,234,35.8,cudaGetLastError
+0.0,3054,8,381.8,324.5,207,783,206.1,cudaGetDevice
+0.0,2748,10,274.8,257.5,154,431,105.1,cuOccupancyMaxActiveBlocksPerMultiprocessorWithFlags
+0.0,2735,8,341.9,308.5,188,685,170.6,cudaDeviceGetAttribute
+0.0,1434,5,286.8,288.0,227,356,52.6,cuFuncGetAttribute
+

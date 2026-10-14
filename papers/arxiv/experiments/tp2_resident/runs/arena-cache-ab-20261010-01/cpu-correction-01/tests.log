@@ -1,0 +1,12 @@
+test_actual_history_counts_rates_and_hashes_are_preserved (test_correct_closeout.HistoricalCorrection.test_actual_history_counts_rates_and_hashes_are_preserved) ... ok
+test_formula_or_timing_drift_rejected (test_correct_closeout.RunWindow.test_formula_or_timing_drift_rejected) ... ok
+test_tail_is_disclosed_without_replacing_rate_or_window (test_correct_closeout.RunWindow.test_tail_is_disclosed_without_replacing_rate_or_window) ... ok
+test_actual_null_or_absent_gpu_sample_is_missing (test_correct_closeout.SampleCounts.test_actual_null_or_absent_gpu_sample_is_missing) ... ok
+test_empty_stream_has_no_samples_or_missing (test_correct_closeout.SampleCounts.test_empty_stream_has_no_samples_or_missing) ... ok
+test_other_kinds_are_excluded_even_when_gpu_is_present (test_correct_closeout.SampleCounts.test_other_kinds_are_excluded_even_when_gpu_is_present) ... ok
+test_terminal_without_gpu_is_not_a_missing_sample (test_correct_closeout.SampleCounts.test_terminal_without_gpu_is_not_a_missing_sample) ... ok
+
+----------------------------------------------------------------------
+Ran 7 tests in 0.053s
+
+OK

@@ -29,7 +29,7 @@ pub(crate) fn floats(value: &Value) -> Vec<f32> {
         .map(|v| v.as_f64().unwrap() as f32)
         .collect()
 }
-fn spec() -> DecoderModelSpec {
+pub(crate) fn spec() -> DecoderModelSpec {
     let norm = |width| RmsNorm::new(width, 1e-6).unwrap().with_one_plus_weight();
     let rope = RotaryEmbedding::new(
         8,
@@ -137,7 +137,7 @@ impl Fixture {
             header.insert(name.clone(), serde_json::json!({"shape": tensor["shape"], "dtype": "F32", "data_offsets": [start, payload.len()]}));
         }
         let mut header = serde_json::to_vec(&header).unwrap();
-        while header.len() % 8 != 0 {
+        while !header.len().is_multiple_of(8) {
             header.push(b' ');
         }
         let mut bytes = (header.len() as u64).to_le_bytes().to_vec();
@@ -189,6 +189,29 @@ impl Fixture {
                 )
                 .unwrap();
             mapper.insert(name, NameMapping::weight(path)).unwrap();
+        }
+        if spec.tie_word_embeddings() {
+            let embedding = self.oracle["tensors"]
+                .as_object()
+                .unwrap()
+                .keys()
+                .position(|name| name == "token_embedding.weight")
+                .unwrap() as u64
+                + 1;
+            schema
+                .register_with_role(
+                    ParameterSpec::new(
+                        ParameterId::new(10000),
+                        ModulePath::new("output.weight").unwrap(),
+                        DTypeConstraint::exact(ParameterDType::F32),
+                        vec![11, 8],
+                        ParameterResidency::Static,
+                    )
+                    .unwrap()
+                    .with_alias(ParameterId::new(embedding)),
+                    TensorRole::OutputHead,
+                )
+                .unwrap();
         }
         HFDecoderCheckpoint::open(
             &self.dir,

@@ -1,0 +1,68 @@
+{
+  "returncode": 1,
+  "timed_out": false,
+  "wall_seconds": 1.0480595752596855,
+  "stdout": "",
+  "stderr": "Traceback (most recent call last):\n  File \"/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/decoded_cache_gate.py\", line 740, in <module>\n    sys.exit(main())\n             ^^^^^^\n  File \"/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/decoded_cache_gate.py\", line 721, in main\n    return worker(a.worker_pin)\n           ^^^^^^^^^^^^^^^^^^^^\n  File \"/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/decoded_cache_gate.py\", line 498, in worker\n    ct.require(one, 'Exact GPU selector failed')\n  File \"/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/contract.py\", line 46, in require\n    raise ValueError(reason)\nValueError: Exact GPU selector failed\n",
+  "cleanup_errors": [],
+  "cleanup_scope": "isolated_subreaper_direct_children",
+  "descendant_custody": "proven_drained",
+  "gpu_quiescence": "unverified",
+  "custody": {
+    "status": "proven_drained",
+    "method": "linux-subreaper-waitid",
+    "containment_verified": true,
+    "launch_id": "896c02c1922049bb9556c476583ad0e2",
+    "helper_identity": {
+      "pid": 50122,
+      "birth_ticks": 93711419,
+      "ppid": 50112,
+      "pgrp": 50122,
+      "session": 50122
+    },
+    "root_identity": {
+      "pid": 50123,
+      "birth_ticks": 93711423,
+      "ppid": 50122,
+      "pgrp": 50122,
+      "session": 50122
+    },
+    "boot_id": "4dd3497d-570c-4693-a876-5c26e06ab360",
+    "entries": [
+      {
+        "identity": {
+          "pid": 50123,
+          "birth_ticks": 93711423,
+          "ppid": 50122,
+          "pgrp": 50122,
+          "session": 50122
+        },
+        "role": "root",
+        "signals": [],
+        "reaped": true,
+        "exit_code": 1,
+        "first_observed_at": 8573234.585953599,
+        "reaped_at": 8573235.561057486
+      }
+    ],
+    "errors": [],
+    "reporting_errors": [],
+    "echild": true
+  },
+  "handshake": {
+    "kind": "ready",
+    "protocol": 1,
+    "launch_id": "896c02c1922049bb9556c476583ad0e2",
+    "helper_identity": {
+      "pid": 50122,
+      "birth_ticks": 93711419,
+      "ppid": 50112,
+      "pgrp": 50122,
+      "session": 50122
+    },
+    "containment_verified": true,
+    "method": "linux-subreaper-waitid"
+  },
+  "stdout_truncated": false,
+  "stderr_truncated": false
+}

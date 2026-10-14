@@ -1,0 +1,23 @@
+{
+  "status": "pass_receipt_audit_profile_blocked",
+  "tests": {
+    "tp2": 83,
+    "original": 42
+  },
+  "executable_and_runtime_revalidated": true,
+  "source_archive_pins": {
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-short-profile-20261009-001/executed-source/paired.py.txt": "258f834a080cff846b3936cfe6273e5a544f90ecc62497c0cf3ceb8ef5c94b44",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-short-profile-20261009-001/executed-source/pre_serving.py.txt": "b75e52776ecfd9c6661b60b413f622bc609c2731819d06103ad24e3710921637",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-short-profile-20261009-001/executed-source/test_profile.py.txt": "1f5e94ce1591c04c664cae7d8e991db68bef1d24488230d7f10148fd53fd9cb1"
+  },
+  "result_pins": {
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/RESULTS-short-profile.md": "ef9447ef5c3ec1141ee84cad6ec6f4ab09f16d3fc500957c8818e166e70ebf10",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-short-profile-20261009-001/profiling-failure-analysis.json": "46da52b8aa00766076ffd3e51f3a72ce697a9339bbc9df0f14beb9be07d4d36c",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-short-profile-20261009-001/profiling-failure-report.json": "e442d9fff07321652f67aa750e4146035d06b7c7afdb17319edb4e32446ca151",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-short-profile-20261009-001/source-startup-audit.json": "adb0a022a230ac4c2e334b16245281cfc07cb3ec1acd7475de57e9d7df74bd24"
+  },
+  "gpu_work_after_final_release": false,
+  "benchmark": false,
+  "profiling_attempts": 1,
+  "retries": 0
+}

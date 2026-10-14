@@ -1,0 +1,19 @@
+{
+  "protocol": "tp2-serving-smoke-c1",
+  "purpose": "serving_smoke",
+  "status": "incomplete",
+  "sole_gpu_owner_granted": true,
+  "owner_note": "User explicitly authorized unique GPU owner for actual routebatch e674; exact CPU review passed; S1/S2 request-debug cancellation/reuse gate only, no performance; finite sealed supervisor; stop on error/ECHILD/unknown custody; no V/profiler",
+  "fairmatch": false,
+  "exact_speedup": null,
+  "slots": [
+    {
+      "id": "S1",
+      "status": "not_run"
+    },
+    {
+      "id": "S2",
+      "status": "not_run"
+    }
+  ]
+}

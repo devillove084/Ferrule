@@ -1,0 +1,16 @@
+{
+  "passed": true,
+  "gate": {
+    "name": "model-route-foreign-source-preflight",
+    "binary": "model",
+    "selector": "transformer::standard::cuda::hybrid_rank::mixed::decoded_gpu_tests::route_batch::foreign_model_sources_reject_before_payload_cuda_work",
+    "evidence": "actual_route_batch_model_synthetic_partials_not_hf_R64",
+    "devices": 1,
+    "reference": null,
+    "cache_bytes": null,
+    "observer": null
+  },
+  "proven_drained": true,
+  "all_eight_idle": true,
+  "performance_claim": false
+}

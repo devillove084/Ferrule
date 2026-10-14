@@ -1,0 +1,61 @@
+{
+  "status": "failed_before_model_gate",
+  "launch_id": "ec99752b7b6f4219b22b651a3e883af8",
+  "root_cause": "instrumentation_capture imports instrumentation_live -> pair_contract -> experiment_current -> experiment_v4 -> runner; runner.py:15 unconditionally overwrites process CUDA_VISIBLE_DEVICES to empty and NVIDIA_VISIBLE_DEVICES to none, so target visibility assertion fails before handshake/B1/model gate",
+  "evidence": {
+    "target_failure": {
+      "error": "ValueError: Target must retain exactly selected model visibility"
+    },
+    "worker_failure": {
+      "error": "Authenticated server root exited"
+    },
+    "pinned_visibility": {
+      "CUDA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "NVIDIA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9"
+    },
+    "cpu_only_import_reproduction": {
+      "argv": [
+        "/home/admin/wxw403883/anaconda3/bin/python3.12",
+        "-S",
+        "-B",
+        "-c",
+        "import os,json; keys=('CUDA_VISIBLE_DEVICES','NVIDIA_VISIBLE_DEVICES'); before={k:os.environ.get(k) for k in keys}; import instrumentation_capture; after={k:os.environ.get(k) for k in keys}; print(json.dumps(dict(before=before,after=after)))"
+      ],
+      "returncode": 0,
+      "stdout": "{\"before\": {\"CUDA_VISIBLE_DEVICES\": \"GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9\", \"NVIDIA_VISIBLE_DEVICES\": \"GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9\"}, \"after\": {\"CUDA_VISIBLE_DEVICES\": \"\", \"NVIDIA_VISIBLE_DEVICES\": \"none\"}}\n",
+      "stderr": "",
+      "observation": {
+        "before": {
+          "CUDA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+          "NVIDIA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9"
+        },
+        "after": {
+          "CUDA_VISIBLE_DEVICES": "",
+          "NVIDIA_VISIBLE_DEVICES": "none"
+        }
+      }
+    }
+  },
+  "model_started": false,
+  "B1_frozen": false,
+  "model_release": false,
+  "actual_trace_report_present": false,
+  "kernel_sync_copy_metrics": null,
+  "prior_nonselected_memory_cause_repeated": false,
+  "production_changes": false,
+  "retry_performed": false,
+  "minimal_next_fix": "Keep gated target import graph free of runner import-time environment mutation, or retain and authenticate inherited selected visibility before importing CPU orchestration and restore only these validated keys at model handoff while retaining Nsight injection. Add real fresh-interpreter import test; do not alter precision/visibility scope or original runner.",
+  "artifacts": {
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runner.py": "f1e87f00822445a708c5ffe50124ea0d34e928fd56fe6943ccaf7a052bb9d95a",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/instrumentation_capture.py": "cd51a39234b75641118d716b61be28649fce438fb4d9168b5e0515b1576e710b",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/instrumentation_live.py": "f70474f42aa9f936964430812d369a5313e9a1b824497faf00a2bc12c34f7b14",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-collector-profile-20261009-001/runs/P1/probe-lock-release.json": "aff4f68d7b05f833122c36031f0e48aebe3c19cdf8e0cceb05f9b27350a7313e",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-collector-profile-20261009-001/runs/P1/session/case.json": "043f886ce2913b7a0657fd19828147d29f549b5d4bb3f29f199527a4971a47d5",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-collector-profile-20261009-001/runs/P1/session/collector-handoff-failure.json": "ac1d5b7e9da4a83a53ffbb523f9f4bd167860dcc973bc8817d946a87e1cffa79",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-collector-profile-20261009-001/runs/P1/session/collector-target-failure.json": "c5e73569565fe63e5a1419e0e747742f1e625f7df076fcc7f391c23ee8914200",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-collector-profile-20261009-001/runs/P1/session/server.log": "9a400af0dcf178388c798fa90291cddc0b7abb354b49e044a0c0cca189d0adc3",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-collector-profile-20261009-001/runs/P1/session/supervisor.json": "53aa394cc36ff4d1931a26a891a3c7b6b0f00092ad7771d8771b164646a92b4a"
+  },
+  "fairmatch": false,
+  "exact_speedup": null
+}

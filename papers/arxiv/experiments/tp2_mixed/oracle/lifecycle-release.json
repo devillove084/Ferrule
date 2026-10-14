@@ -1,0 +1,996 @@
+{
+  "schema": "ferrule.paper.tp2-mixed-lifecycle-release.v1",
+  "status": "reference_complete_verified",
+  "runtime_lifecycle_status": "not_compared",
+  "created_unix_seconds": 1791526134.3837073,
+  "contract": {
+    "file": "lifecycle-contract.json",
+    "sha256": "684dd2f85798745178a3a6719daaf23cc44471072fb3c35e3155065fb8ba170d"
+  },
+  "protocol_sha256": "c6e7836f3797c16502dc21b8c756c87495525c2cf2faac26ba11077f62cfbb57",
+  "legacy_reference_manifest_sha256": "fb96ba4dd134761af30b4025b4cce86f96136cb01f05b5b4fca3e74587caa71d",
+  "legacy_comparison_sha256": "66fed066ce64765656bd086e81b9b1393495648cc8b113d1fd3d6e615d28d78c",
+  "exports": 6,
+  "model_calls": 33,
+  "verified_reference_tensors": 38577,
+  "runs": [
+    {
+      "directory": "runs/lifecycle-greedy4-01",
+      "status": "complete_verified",
+      "manifest_sha256": "4fafda33e51d7cec3d82beb59aac73eb12dc6b9904dc0a74535ea35e9d68df81",
+      "scenario": "greedy",
+      "plan_sha256": "672bab8cd0550c4a5fecf28bb90450cf053f5f8d82469d7d11f25da28753077e",
+      "calls": [
+        {
+          "id": "call-00",
+          "session": "hello",
+          "epoch": 0,
+          "stage": "call",
+          "input_token_ids": [
+            9419
+          ],
+          "position_start": 0,
+          "sequence_length_after": 1,
+          "next_token_id": 11
+        },
+        {
+          "id": "call-01",
+          "session": "hello",
+          "epoch": 0,
+          "stage": "call",
+          "input_token_ids": [
+            11
+          ],
+          "position_start": 1,
+          "sequence_length_after": 2,
+          "next_token_id": 353
+        },
+        {
+          "id": "call-02",
+          "session": "hello",
+          "epoch": 0,
+          "stage": "call",
+          "input_token_ids": [
+            353
+          ],
+          "position_start": 2,
+          "sequence_length_after": 3,
+          "next_token_id": 1044
+        },
+        {
+          "id": "call-03",
+          "session": "hello",
+          "epoch": 0,
+          "stage": "call",
+          "input_token_ids": [
+            1044
+          ],
+          "position_start": 3,
+          "sequence_length_after": 4,
+          "next_token_id": 264
+        },
+        {
+          "id": "call-04",
+          "session": "hello",
+          "epoch": 0,
+          "stage": "call",
+          "input_token_ids": [
+            264
+          ],
+          "position_start": 4,
+          "sequence_length_after": 5,
+          "next_token_id": 220
+        },
+        {
+          "id": "call-05",
+          "session": "capital",
+          "epoch": 0,
+          "stage": "call",
+          "input_token_ids": [
+            760,
+            6511,
+            314,
+            9338,
+            369
+          ],
+          "position_start": 0,
+          "sequence_length_after": 5,
+          "next_token_id": 11751
+        },
+        {
+          "id": "call-06",
+          "session": "capital",
+          "epoch": 0,
+          "stage": "call",
+          "input_token_ids": [
+            11751
+          ],
+          "position_start": 5,
+          "sequence_length_after": 6,
+          "next_token_id": 13
+        },
+        {
+          "id": "call-07",
+          "session": "capital",
+          "epoch": 0,
+          "stage": "call",
+          "input_token_ids": [
+            13
+          ],
+          "position_start": 6,
+          "sequence_length_after": 7,
+          "next_token_id": 198
+        },
+        {
+          "id": "call-08",
+          "session": "capital",
+          "epoch": 0,
+          "stage": "call",
+          "input_token_ids": [
+            198
+          ],
+          "position_start": 7,
+          "sequence_length_after": 8,
+          "next_token_id": 760
+        },
+        {
+          "id": "call-09",
+          "session": "capital",
+          "epoch": 0,
+          "stage": "call",
+          "input_token_ids": [
+            760
+          ],
+          "position_start": 8,
+          "sequence_length_after": 9,
+          "next_token_id": 6511
+        }
+      ],
+      "reference_tensors_per_call": 1169,
+      "candidate_tensors_per_call": 1089,
+      "all_shapes_dtypes_finite_statistics_and_state_digests_verified": true,
+      "cuda_small_checks": 89,
+      "custody": {
+        "file": "supervisor.json",
+        "sha256": "fc0bdd5275dc8274c49e6dabe1203fa14d8456c1e187382ccaade3601c4dbfeb"
+      },
+      "idle_before": {
+        "file": "before.json",
+        "sha256": "30b2e84583c97e44ccbc5245a6b4ca521d9bc3f0dd0e0cbe35ed75e00d4cd2dc"
+      },
+      "idle_after": {
+        "file": "after.json",
+        "sha256": "c6d909879bfcae6de39893c6b2121a61c7adb2922d65da8dee46c2da16784925"
+      },
+      "numerical_authentication": {
+        "file": "numerical-authentication.json",
+        "sha256": "dc6b0386d0de26ebc51c8da36b7c9cc6c3c5990c10dac4f08e6de8da7f52afd9",
+        "bytes": 661
+      },
+      "launch_id": "270cd01d3dd549c0bffcce0285cc7fea",
+      "child_identity": {
+        "pid": 115818,
+        "birth_ticks": 83063496,
+        "ppid": 115812,
+        "pgrp": 115812,
+        "session": 115812
+      },
+      "wall_seconds": 397.8903926368803,
+      "source_payloads": {
+        "file": "source-payloads.json",
+        "sha256": "c9365ead1f17da96178d6d3d69a74e30c5b15492fcf4c083198a2f57a1ced618",
+        "bytes": 4333563
+      },
+      "checkpoint_metadata": {
+        "file": "checkpoint-metadata.json",
+        "sha256": "0cff1cfeb5f7eb215cf3f1be00e5db3746fc7370765af786c6420fa77115085d",
+        "bytes": 18426485
+      },
+      "interception_after": {
+        "file": "interception-after.json",
+        "sha256": "dcbc645bea29fcc2af9152bc20e92a1107347ff5d0a74b4aeb2334a8ca26504e",
+        "bytes": 8555
+      },
+      "workflow_pins_sha256": "be89b8ff2c98563a61871f2f0de34a6391859c3c06b4e2088b0bdbe7ec792ccc"
+    },
+    {
+      "directory": "runs/lifecycle-fork2-01",
+      "status": "complete_verified",
+      "manifest_sha256": "098820b7839ed74b643066dcebd6e7e7b86d0716a8cbcecec708068d37b2a6dd",
+      "scenario": "fork",
+      "plan_sha256": "61c1436102bd6f60a42d72aa78ab2cc329f13f4f5f650fbf9d38c72677bca20b",
+      "calls": [
+        {
+          "id": "call-00",
+          "session": "parent",
+          "epoch": 0,
+          "stage": "call",
+          "input_token_ids": [
+            9419
+          ],
+          "position_start": 0,
+          "sequence_length_after": 1,
+          "next_token_id": 11
+        },
+        {
+          "id": "call-01",
+          "session": "left",
+          "epoch": 0,
+          "stage": "call",
+          "input_token_ids": [
+            11
+          ],
+          "position_start": 1,
+          "sequence_length_after": 2,
+          "next_token_id": 353
+        },
+        {
+          "id": "call-02",
+          "session": "left",
+          "epoch": 0,
+          "stage": "call",
+          "input_token_ids": [
+            353
+          ],
+          "position_start": 2,
+          "sequence_length_after": 3,
+          "next_token_id": 1044
+        },
+        {
+          "id": "call-03",
+          "session": "right",
+          "epoch": 0,
+          "stage": "call",
+          "input_token_ids": [
+            11
+          ],
+          "position_start": 1,
+          "sequence_length_after": 2,
+          "next_token_id": 353
+        },
+        {
+          "id": "call-04",
+          "session": "right",
+          "epoch": 0,
+          "stage": "call",
+          "input_token_ids": [
+            760
+          ],
+          "position_start": 2,
+          "sequence_length_after": 3,
+          "next_token_id": 2614
+        },
+        {
+          "id": "call-05",
+          "session": "parent",
+          "epoch": 0,
+          "stage": "call",
+          "input_token_ids": [
+            11
+          ],
+          "position_start": 1,
+          "sequence_length_after": 2,
+          "next_token_id": 353
+        }
+      ],
+      "reference_tensors_per_call": 1169,
+      "candidate_tensors_per_call": 1089,
+      "all_shapes_dtypes_finite_statistics_and_state_digests_verified": true,
+      "cuda_small_checks": 89,
+      "custody": {
+        "file": "supervisor.json",
+        "sha256": "d07ffa636bf86f8757db700fffdf4cfd71020c5acb427209db6d706be5d07816"
+      },
+      "idle_before": {
+        "file": "before.json",
+        "sha256": "41415983d02dc789d8f61f82f8ee7ede6e40a7f8b2ed1219cce51535fcf28645"
+      },
+      "idle_after": {
+        "file": "after.json",
+        "sha256": "0900818096190b545aaa06e83f2621e85d35dabc467f195b84b218be0a2abb33"
+      },
+      "numerical_authentication": {
+        "file": "numerical-authentication.json",
+        "sha256": "1f1617363e47a3980e780df0264fcacab086893e86f0e26eed0ebf18977a6bdc",
+        "bytes": 661
+      },
+      "launch_id": "ed0e2dc2b96e46a98a1c58450f2044c2",
+      "child_identity": {
+        "pid": 130397,
+        "birth_ticks": 83138067,
+        "ppid": 130382,
+        "pgrp": 130382,
+        "session": 130382
+      },
+      "wall_seconds": 233.585962170735,
+      "source_payloads": {
+        "file": "source-payloads.json",
+        "sha256": "9c389364328e619406abfddb8913307ebf834c2bfdb745f4a55ac1cb8c8e6cc3",
+        "bytes": 1922898
+      },
+      "checkpoint_metadata": {
+        "file": "checkpoint-metadata.json",
+        "sha256": "0cff1cfeb5f7eb215cf3f1be00e5db3746fc7370765af786c6420fa77115085d",
+        "bytes": 18426485
+      },
+      "interception_after": {
+        "file": "interception-after.json",
+        "sha256": "dcbc645bea29fcc2af9152bc20e92a1107347ff5d0a74b4aeb2334a8ca26504e",
+        "bytes": 8555
+      },
+      "workflow_pins_sha256": "be89b8ff2c98563a61871f2f0de34a6391859c3c06b4e2088b0bdbe7ec792ccc"
+    },
+    {
+      "directory": "runs/lifecycle-canary2-01",
+      "status": "complete_verified",
+      "manifest_sha256": "4069b0e3f4dbead859654855a576c402867fa6ea2908d3dc67cf78c3ea2f672f",
+      "scenario": "canary",
+      "plan_sha256": "fb2acf3880159a661e98362b610a09714effd6e612b2b9877b3cc7dca501d1ba",
+      "calls": [
+        {
+          "id": "call-00",
+          "session": "main",
+          "epoch": 0,
+          "stage": "call",
+          "input_token_ids": [
+            9419
+          ],
+          "position_start": 0,
+          "sequence_length_after": 1,
+          "next_token_id": 11
+        },
+        {
+          "id": "call-01",
+          "session": "canary",
+          "epoch": 0,
+          "stage": "call",
+          "input_token_ids": [
+            760,
+            6511,
+            314,
+            9338,
+            369
+          ],
+          "position_start": 0,
+          "sequence_length_after": 5,
+          "next_token_id": 11751
+        },
+        {
+          "id": "call-02",
+          "session": "canary",
+          "epoch": 0,
+          "stage": "call",
+          "input_token_ids": [
+            11751
+          ],
+          "position_start": 5,
+          "sequence_length_after": 6,
+          "next_token_id": 13
+        },
+        {
+          "id": "call-03",
+          "session": "main",
+          "epoch": 0,
+          "stage": "call",
+          "input_token_ids": [
+            11
+          ],
+          "position_start": 1,
+          "sequence_length_after": 2,
+          "next_token_id": 353
+        },
+        {
+          "id": "call-04",
+          "session": "main",
+          "epoch": 0,
+          "stage": "call",
+          "input_token_ids": [
+            353
+          ],
+          "position_start": 2,
+          "sequence_length_after": 3,
+          "next_token_id": 1044
+        }
+      ],
+      "reference_tensors_per_call": 1169,
+      "candidate_tensors_per_call": 1089,
+      "all_shapes_dtypes_finite_statistics_and_state_digests_verified": true,
+      "cuda_small_checks": 89,
+      "custody": {
+        "file": "supervisor.json",
+        "sha256": "3c7045607f90ceff950d1b8eb4e87ff917d36a277920bce6624538bddc76aca2"
+      },
+      "idle_before": {
+        "file": "before.json",
+        "sha256": "b0ce8f5b6988b03b56a45512636a2229baf7ddd01e8934b5f953c02eedc7ef4b"
+      },
+      "idle_after": {
+        "file": "after.json",
+        "sha256": "b94c531ed00c7f9997425108f329c815f95e644ac65ea8d5c5fece1d00b0a52f"
+      },
+      "numerical_authentication": {
+        "file": "numerical-authentication.json",
+        "sha256": "b0ab90d79ab58a66f71baa8f8b6e9bcee1c36220aa0edab2f9cfc4d6de8f64bd",
+        "bytes": 661
+      },
+      "launch_id": "e93091a1a5c642ebb4c325254bb8775c",
+      "child_identity": {
+        "pid": 136569,
+        "birth_ticks": 83163898,
+        "ppid": 136546,
+        "pgrp": 136546,
+        "session": 136546
+      },
+      "wall_seconds": 253.0994689296931,
+      "source_payloads": {
+        "file": "source-payloads.json",
+        "sha256": "a61cda18dec3eca6182076b1da20b47a88784cd8fd342f1993aa35b5dced5f30",
+        "bytes": 3346677
+      },
+      "checkpoint_metadata": {
+        "file": "checkpoint-metadata.json",
+        "sha256": "0cff1cfeb5f7eb215cf3f1be00e5db3746fc7370765af786c6420fa77115085d",
+        "bytes": 18426485
+      },
+      "interception_after": {
+        "file": "interception-after.json",
+        "sha256": "dcbc645bea29fcc2af9152bc20e92a1107347ff5d0a74b4aeb2334a8ca26504e",
+        "bytes": 8555
+      },
+      "workflow_pins_sha256": "be89b8ff2c98563a61871f2f0de34a6391859c3c06b4e2088b0bdbe7ec792ccc"
+    },
+    {
+      "directory": "runs/lifecycle-recreate1-01",
+      "status": "complete_verified",
+      "manifest_sha256": "5747d1ee3793d629aff5d87488d2dbd970fb02be11742b88ac16e3dca05e5a59",
+      "scenario": "recreate",
+      "plan_sha256": "3ab677110b6e2f12f8d6bf20743bb718fb97270b88a15bf51a239880b445f939",
+      "calls": [
+        {
+          "id": "call-00",
+          "session": "main",
+          "epoch": 0,
+          "stage": "call",
+          "input_token_ids": [
+            9419
+          ],
+          "position_start": 0,
+          "sequence_length_after": 1,
+          "next_token_id": 11
+        },
+        {
+          "id": "call-01",
+          "session": "main",
+          "epoch": 0,
+          "stage": "call",
+          "input_token_ids": [
+            11
+          ],
+          "position_start": 1,
+          "sequence_length_after": 2,
+          "next_token_id": 353
+        },
+        {
+          "id": "call-02",
+          "session": "main",
+          "epoch": 1,
+          "stage": "call",
+          "input_token_ids": [
+            9419
+          ],
+          "position_start": 0,
+          "sequence_length_after": 1,
+          "next_token_id": 11
+        },
+        {
+          "id": "call-03",
+          "session": "main",
+          "epoch": 1,
+          "stage": "call",
+          "input_token_ids": [
+            11
+          ],
+          "position_start": 1,
+          "sequence_length_after": 2,
+          "next_token_id": 353
+        }
+      ],
+      "reference_tensors_per_call": 1169,
+      "candidate_tensors_per_call": 1089,
+      "all_shapes_dtypes_finite_statistics_and_state_digests_verified": true,
+      "cuda_small_checks": 89,
+      "custody": {
+        "file": "supervisor.json",
+        "sha256": "57879fb5fd2cd0ebe3b7fd636db03df27dc3aa0eea5ff6847b72a6db34de74ce"
+      },
+      "idle_before": {
+        "file": "before.json",
+        "sha256": "d8461bc981d5d21a862a03ddb6259e182635796ce10631749f1ea63ac65cda87"
+      },
+      "idle_after": {
+        "file": "after.json",
+        "sha256": "f8f80494756be1d0c7ed8eb03eea6c6d78d9e695e237a43544e757e07627d091"
+      },
+      "numerical_authentication": {
+        "file": "numerical-authentication.json",
+        "sha256": "037e0db1e26f9baacdd21f6cc1b92b0567bcdc155670f9ccb3e14cba711ebd9f",
+        "bytes": 661
+      },
+      "launch_id": "59e0d38357f24f7086cf1d41b6416aab",
+      "child_identity": {
+        "pid": 143377,
+        "birth_ticks": 83192063,
+        "ppid": 143371,
+        "pgrp": 143371,
+        "session": 143371
+      },
+      "wall_seconds": 183.8554753307253,
+      "source_payloads": {
+        "file": "source-payloads.json",
+        "sha256": "99a22806ee247e13eb5919ea08bbeaf76a513e3635aaa20ac40d6ae13e8159e4",
+        "bytes": 1344330
+      },
+      "checkpoint_metadata": {
+        "file": "checkpoint-metadata.json",
+        "sha256": "0cff1cfeb5f7eb215cf3f1be00e5db3746fc7370765af786c6420fa77115085d",
+        "bytes": 18426485
+      },
+      "interception_after": {
+        "file": "interception-after.json",
+        "sha256": "dcbc645bea29fcc2af9152bc20e92a1107347ff5d0a74b4aeb2334a8ca26504e",
+        "bytes": 8555
+      },
+      "workflow_pins_sha256": "be89b8ff2c98563a61871f2f0de34a6391859c3c06b4e2088b0bdbe7ec792ccc"
+    },
+    {
+      "directory": "runs/lifecycle-cold-owner1-01",
+      "status": "complete_verified",
+      "manifest_sha256": "fe7fb83bf8cae99164209aad077f5c1ff92adf902aaca43e8dbb99f8af8166ae",
+      "scenario": "cold-owner",
+      "plan_sha256": "22fade69743473880328feb350449baad853402d8ac2a9ebe83bccfc317f71bf",
+      "calls": [
+        {
+          "id": "call-00",
+          "session": "hello",
+          "epoch": 0,
+          "stage": "call",
+          "input_token_ids": [
+            9419
+          ],
+          "position_start": 0,
+          "sequence_length_after": 1,
+          "next_token_id": 11
+        },
+        {
+          "id": "call-01",
+          "session": "hello",
+          "epoch": 0,
+          "stage": "call",
+          "input_token_ids": [
+            11
+          ],
+          "position_start": 1,
+          "sequence_length_after": 2,
+          "next_token_id": 353
+        },
+        {
+          "id": "call-02",
+          "session": "capital",
+          "epoch": 0,
+          "stage": "call",
+          "input_token_ids": [
+            760,
+            6511,
+            314,
+            9338,
+            369
+          ],
+          "position_start": 0,
+          "sequence_length_after": 5,
+          "next_token_id": 11751
+        },
+        {
+          "id": "call-03",
+          "session": "capital",
+          "epoch": 0,
+          "stage": "call",
+          "input_token_ids": [
+            11751
+          ],
+          "position_start": 5,
+          "sequence_length_after": 6,
+          "next_token_id": 13
+        }
+      ],
+      "reference_tensors_per_call": 1169,
+      "candidate_tensors_per_call": 1089,
+      "all_shapes_dtypes_finite_statistics_and_state_digests_verified": true,
+      "cuda_small_checks": 89,
+      "custody": {
+        "file": "supervisor.json",
+        "sha256": "2c7d52f9c49fd3bb5ec63f86d535eea965f4377868ce0692ebebeacd23e9069a"
+      },
+      "idle_before": {
+        "file": "before.json",
+        "sha256": "1239779fc3607f3aaab24af9a3d9365572adf4da28e5adddf2bc71b0233b496f"
+      },
+      "idle_after": {
+        "file": "after.json",
+        "sha256": "b86854533415681638e9abd00e4c9a834f3fc9132bcd836df4df41a48dcb9a5c"
+      },
+      "numerical_authentication": {
+        "file": "numerical-authentication.json",
+        "sha256": "343bbfe43439d6d6f170d63185b3326c01dcb4ecf06ca235e750829a792922e4",
+        "bytes": 661
+      },
+      "launch_id": "80831c30ee84480383a5100bfb890d4e",
+      "child_identity": {
+        "pid": 150664,
+        "birth_ticks": 83214739,
+        "ppid": 150621,
+        "pgrp": 150621,
+        "session": 150621
+      },
+      "wall_seconds": 222.84904662519693,
+      "source_payloads": {
+        "file": "source-payloads.json",
+        "sha256": "6058481f72e8936363c91afaab77b936dcae7f3ad8dee658f29f1a6e5592fb81",
+        "bytes": 3108447
+      },
+      "checkpoint_metadata": {
+        "file": "checkpoint-metadata.json",
+        "sha256": "0cff1cfeb5f7eb215cf3f1be00e5db3746fc7370765af786c6420fa77115085d",
+        "bytes": 18426485
+      },
+      "interception_after": {
+        "file": "interception-after.json",
+        "sha256": "dcbc645bea29fcc2af9152bc20e92a1107347ff5d0a74b4aeb2334a8ca26504e",
+        "bytes": 8555
+      },
+      "workflow_pins_sha256": "be89b8ff2c98563a61871f2f0de34a6391859c3c06b4e2088b0bdbe7ec792ccc"
+    },
+    {
+      "directory": "runs/lifecycle-cold-owner1-02",
+      "status": "complete_verified",
+      "manifest_sha256": "a67492ddb2a5a3d4a4f40abc1ca92c672f74605238d2f06ea62827f17cda3d54",
+      "scenario": "cold-owner",
+      "plan_sha256": "22fade69743473880328feb350449baad853402d8ac2a9ebe83bccfc317f71bf",
+      "calls": [
+        {
+          "id": "call-00",
+          "session": "hello",
+          "epoch": 0,
+          "stage": "call",
+          "input_token_ids": [
+            9419
+          ],
+          "position_start": 0,
+          "sequence_length_after": 1,
+          "next_token_id": 11
+        },
+        {
+          "id": "call-01",
+          "session": "hello",
+          "epoch": 0,
+          "stage": "call",
+          "input_token_ids": [
+            11
+          ],
+          "position_start": 1,
+          "sequence_length_after": 2,
+          "next_token_id": 353
+        },
+        {
+          "id": "call-02",
+          "session": "capital",
+          "epoch": 0,
+          "stage": "call",
+          "input_token_ids": [
+            760,
+            6511,
+            314,
+            9338,
+            369
+          ],
+          "position_start": 0,
+          "sequence_length_after": 5,
+          "next_token_id": 11751
+        },
+        {
+          "id": "call-03",
+          "session": "capital",
+          "epoch": 0,
+          "stage": "call",
+          "input_token_ids": [
+            11751
+          ],
+          "position_start": 5,
+          "sequence_length_after": 6,
+          "next_token_id": 13
+        }
+      ],
+      "reference_tensors_per_call": 1169,
+      "candidate_tensors_per_call": 1089,
+      "all_shapes_dtypes_finite_statistics_and_state_digests_verified": true,
+      "cuda_small_checks": 89,
+      "custody": {
+        "file": "supervisor.json",
+        "sha256": "2a8d3bd0bb42652569b715d4700ea5412fb1a47ae273ac67c8e62df07c318474"
+      },
+      "idle_before": {
+        "file": "before.json",
+        "sha256": "05b228add9a4a0abe106428b9932cf6e8d333d8060de6aa74078ba6a703063f4"
+      },
+      "idle_after": {
+        "file": "after.json",
+        "sha256": "294365690ad349f0d3ea05831633a052f393cb97cd01c6294af55d8a4917b29d"
+      },
+      "numerical_authentication": {
+        "file": "numerical-authentication.json",
+        "sha256": "8c07a91e3a994876e6518f714ce89d088c7360d12f702184086b464bb13ca10a",
+        "bytes": 661
+      },
+      "launch_id": "e007c7993fa24bd7bc85dc82d56d84e9",
+      "child_identity": {
+        "pid": 153591,
+        "birth_ticks": 83241063,
+        "ppid": 153585,
+        "pgrp": 153585,
+        "session": 153585
+      },
+      "wall_seconds": 223.228097980842,
+      "source_payloads": {
+        "file": "source-payloads.json",
+        "sha256": "6058481f72e8936363c91afaab77b936dcae7f3ad8dee658f29f1a6e5592fb81",
+        "bytes": 3108447
+      },
+      "checkpoint_metadata": {
+        "file": "checkpoint-metadata.json",
+        "sha256": "0cff1cfeb5f7eb215cf3f1be00e5db3746fc7370765af786c6420fa77115085d",
+        "bytes": 18426485
+      },
+      "interception_after": {
+        "file": "interception-after.json",
+        "sha256": "dcbc645bea29fcc2af9152bc20e92a1107347ff5d0a74b4aeb2334a8ca26504e",
+        "bytes": 8555
+      },
+      "workflow_pins_sha256": "be89b8ff2c98563a61871f2f0de34a6391859c3c06b4e2088b0bdbe7ec792ccc"
+    }
+  ],
+  "versions": {
+    "torch": "2.13.0+cu129",
+    "transformers": "5.5.3"
+  },
+  "native_source": {
+    "modeling_qwen3_5_moe": {
+      "file": "/opt/conda310/lib/python3.10/site-packages/transformers/models/qwen3_5_moe/modeling_qwen3_5_moe.py",
+      "sha256": "0f8ca77e875c31d448137c9ac291bed505c6b9927a85b5b8460af29d1e1ee647"
+    },
+    "cache_utils": {
+      "file": "/opt/conda310/lib/python3.10/site-packages/transformers/cache_utils.py",
+      "sha256": "a51d2cd525f4458941a20cb5b3b8a8d989d8ca5bcd451855a27bb41743fed586"
+    },
+    "modeling_utils": {
+      "file": "/opt/conda310/lib/python3.10/site-packages/transformers/modeling_utils.py",
+      "sha256": "b8467e1ada952862d2e4d76632475ac2f9fa198121d0e1ce64fa393ea3773e16"
+    }
+  },
+  "checkpoint": {
+    "config_sha256": "236c373b0682a4f40c2fa49ef8e5f722a87a8dbfe265286b6d5260b23d7cb229",
+    "index_sha256": "b009f7a49c442fce959a2ff6fee41c69248879b90d7ff5636ec6d2068ac4876d",
+    "full_shard_set_sha256": "b51014a9d40c300ea77f12bf8cada444f79c8300277611f6e5f27a62fcb95090",
+    "tensor_count": 64196,
+    "total_shard_bytes": 37463724680
+  },
+  "validation": {
+    "methods": [
+      "compare.load_manifest(reference=True,lifecycle=True)",
+      "lifecycle_compare.validate_suite(reference=True)",
+      "all per-tensor SHA256, element/byte counts, finite/min/max statistics verified against arrays",
+      "bytewise reference/reference repeat checks; no runtime candidates synthesized"
+    ],
+    "cpu_cuda_initialized": false,
+    "reference_pair_checks": [
+      {
+        "label": "cold-owner-independent-process",
+        "left": "lifecycle-cold-owner1-01/call-00",
+        "right": "lifecycle-cold-owner1-02/call-00",
+        "tensors": 1169,
+        "nonexact": 0
+      },
+      {
+        "label": "cold-owner-independent-process",
+        "left": "lifecycle-cold-owner1-01/call-01",
+        "right": "lifecycle-cold-owner1-02/call-01",
+        "tensors": 1169,
+        "nonexact": 0
+      },
+      {
+        "label": "cold-owner-independent-process",
+        "left": "lifecycle-cold-owner1-01/call-02",
+        "right": "lifecycle-cold-owner1-02/call-02",
+        "tensors": 1169,
+        "nonexact": 0
+      },
+      {
+        "label": "cold-owner-independent-process",
+        "left": "lifecycle-cold-owner1-01/call-03",
+        "right": "lifecycle-cold-owner1-02/call-03",
+        "tensors": 1169,
+        "nonexact": 0
+      },
+      {
+        "label": "recreate",
+        "left": "lifecycle-recreate1-01/call-00",
+        "right": "lifecycle-recreate1-01/call-02",
+        "tensors": 1169,
+        "nonexact": 0
+      },
+      {
+        "label": "recreate",
+        "left": "lifecycle-recreate1-01/call-01",
+        "right": "lifecycle-recreate1-01/call-03",
+        "tensors": 1169,
+        "nonexact": 0
+      },
+      {
+        "label": "fork-parent-preserved",
+        "left": "lifecycle-fork2-01/call-01",
+        "right": "lifecycle-fork2-01/call-03",
+        "tensors": 1169,
+        "nonexact": 0
+      },
+      {
+        "label": "fork-parent-preserved",
+        "left": "lifecycle-fork2-01/call-01",
+        "right": "lifecycle-fork2-01/call-05",
+        "tensors": 1169,
+        "nonexact": 0
+      },
+      {
+        "label": "canary-isolation",
+        "left": "lifecycle-canary2-01/call-00",
+        "right": "lifecycle-greedy4-01/call-00",
+        "tensors": 1169,
+        "nonexact": 0
+      },
+      {
+        "label": "canary-isolation",
+        "left": "lifecycle-canary2-01/call-01",
+        "right": "lifecycle-greedy4-01/call-05",
+        "tensors": 1169,
+        "nonexact": 0
+      },
+      {
+        "label": "canary-isolation",
+        "left": "lifecycle-canary2-01/call-02",
+        "right": "lifecycle-greedy4-01/call-06",
+        "tensors": 1169,
+        "nonexact": 0
+      },
+      {
+        "label": "canary-isolation",
+        "left": "lifecycle-canary2-01/call-03",
+        "right": "lifecycle-greedy4-01/call-01",
+        "tensors": 1169,
+        "nonexact": 0
+      },
+      {
+        "label": "canary-isolation",
+        "left": "lifecycle-canary2-01/call-04",
+        "right": "lifecycle-greedy4-01/call-02",
+        "tensors": 1169,
+        "nonexact": 0
+      }
+    ],
+    "legacy_prefix_checks": [
+      {
+        "case": "hello",
+        "stage": "prefill",
+        "tensors": 1169,
+        "nonexact": 0
+      },
+      {
+        "case": "hello",
+        "stage": "decode.0",
+        "tensors": 1169,
+        "nonexact": 0
+      },
+      {
+        "case": "capital",
+        "stage": "prefill",
+        "tensors": 1169,
+        "nonexact": 0
+      },
+      {
+        "case": "capital",
+        "stage": "decode.0",
+        "tensors": 1169,
+        "nonexact": 0
+      }
+    ],
+    "cpu_tests": {
+      "numerical_bridge_lifecycle": 46,
+      "base_python_launcher": 5,
+      "passed": 51,
+      "invocation_corrections": [
+        "Unified discovery in numerical Python rejected launcher base-Python contract",
+        "Numerical Python -S discovery has no Torch; rerun split interpreters passed"
+      ]
+    }
+  },
+  "release": {
+    "all_eight_idle": [
+      {
+        "index": 0,
+        "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+        "memory_mib": 0,
+        "utilization": 0
+      },
+      {
+        "index": 1,
+        "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+        "memory_mib": 0,
+        "utilization": 0
+      },
+      {
+        "index": 2,
+        "uuid": "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6",
+        "memory_mib": 0,
+        "utilization": 0
+      },
+      {
+        "index": 3,
+        "uuid": "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011",
+        "memory_mib": 0,
+        "utilization": 0
+      },
+      {
+        "index": 4,
+        "uuid": "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86",
+        "memory_mib": 0,
+        "utilization": 0
+      },
+      {
+        "index": 5,
+        "uuid": "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685",
+        "memory_mib": 0,
+        "utilization": 0
+      },
+      {
+        "index": 6,
+        "uuid": "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d",
+        "memory_mib": 0,
+        "utilization": 0
+      },
+      {
+        "index": 7,
+        "uuid": "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f",
+        "memory_mib": 0,
+        "utilization": 0
+      }
+    ],
+    "compute_apps": [],
+    "local_lock_available": true,
+    "local_lock_path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/GPU-b980f22b-58a3-fc88-21c1-ae86053d8535.lock",
+    "all_owned_process_birth_identities_absent": true,
+    "no_foreign_signals": true
+  },
+  "tolerance": {
+    "atol": 0.00025,
+    "rtol": 0.012
+  },
+  "unresolved_math_sites": [
+    "CUDA GEMM/softmax/norm/SiLU/sigmoid/reduction implementation drift versus production",
+    "HF GDN chunk prefill versus production recurrence/chunk policy, exp/softplus/L2 normalization and exact F32 state updates",
+    "HF eager per-expert accumulation versus vLLM fused MoE (different contract; no bit-exact claim)"
+  ],
+  "scope": [
+    "Independent HF CUDA numerical reference: logical TP2 on one GPU, no physical TP2 or performance claim",
+    "Runtime lifecycle candidate not supplied or compared by this release",
+    "Fork HF deep copy is numerical authority only; runtime shared-KV/COW authority and publication/export receipts remain mandatory",
+    "Distinct cold-owner process proof here applies only to these two oracle launches; runtime process proof remains separate",
+    "No vLLM fused-MoE bit-exactness or CPU/CUDA exponential-state equality claim",
+    "No thresholds or historical artifacts changed"
+  ]
+}

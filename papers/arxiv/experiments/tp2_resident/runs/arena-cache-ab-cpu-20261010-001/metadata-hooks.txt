@@ -1,0 +1,137 @@
+def required_gate_rows(plan,summary):
+    """The prepared manifest is authoritative: names/selectors/kinds, not 13/19."""
+    ct.require(plan.get('schema')=='ferrule.paper.decoded-cache-plan.v1'
+        and plan['arena_required']['physical_root_cap_bytes']==plan['cache_grants_per_owner']==3 << 30
+        and plan['device_capacity']==22 << 30, 'Wrong arena required manifest/cap')
+    required={}
+    for name,spec in plan['small_selectors'].items():
+        ct.require(len(spec)==3 and spec[2] in (1,2), 'Invalid named small gate contract')
+        required[name]=dict(kind=spec[0],selector=spec[1],owners=spec[2])
+    for name,selector in plan['gpu_selectors'].items():
+        ct.require(name not in required, 'Duplicate required gate name')
+        required[name]=dict(kind='composition',selector=selector,owners=2)
+    rows=summary['rows']
+    ct.require(required and len(rows)==len(required) and {r['gate'] for r in rows}==set(required),
+               'Required manifest gate missing/extra/duplicated')
+    reused=set(summary.get('reused_backend_gates',[]))
+    ct.require(len(reused)==len(summary.get('reused_backend_gates',[])) and reused<=set(required),
+               'Reused gate set invalid')
+    for row in rows:
+        requirement=required[row['gate']]
+        ct.require(row['selector']==requirement['selector']
+            and row['binary_sha256']==summary['binaries'][requirement['kind']]['sha256']
+            and row['reused_unchanged_backend'] is (row['gate'] in reused),
+            'Gate selector/binary/reuse differs from prepared manifest')
+        ct.require(row['gate'] not in reused or requirement['kind'] in ('backend','backend-slice'),
+                   'Model/public qualification cannot be inherited as backend reuse')
+    ct.require(summary['fresh_gpu_gates']==len(rows)-len(reused)
+        and summary['fresh_small_gates']==len(plan['small_selectors'])-len(reused),
+        'Fresh/reused gate counts differ from named rows')
+    return required
+
+
+def arena_metadata_report(summary_link):
+    """Audit existing test receipts only; not a current-release or GPU launch gate."""
+    import decoded_cache_release as release
+    gates=release.gates
+    evidence=release.Evidence()
+    root=Path(summary_link['path']).resolve().parent
+    ct.require(root.is_relative_to(pre.HERE/'runs'), 'Paper-local quality summary required')
+    summary=evidence.linked(summary_link,root/'acceptance-summary.json')
+    ct.require(summary['schema']=='ferrule.paper.decoded-cache-acceptance.v2'
+        and summary['status']=='fresh_arena_numerical_quality_pass'
+        and summary['all_exact'] is True and summary['failures']==summary['max_abs']==0
+        and summary['public_e2e_accepted'] is False, 'Arena test summary incomplete/overclaimed')
+    prepared=evidence.linked(summary['prepared'],root/'prepared.json')
+    ct.require(prepared['sources']==summary['sources'] and prepared['binaries']==summary['binaries'],
+               'Summary source/binary preparation differs')
+    plan_path=root/'plan.json';plan_pin=prepared['pins'].get(str(plan_path))
+    ct.require(pre.contract._sha(plan_pin), 'Required manifest not pinned by preparation')
+    plan=evidence.read(plan_path,plan_pin)
+    required=required_gate_rows(plan,summary)
+    ct.require(set(plan['gpu_selectors'])==set(release.CALLS), 'Full40/six-recipe numerical scope differs')
+    cpu=[(kind,selector) for kind,selector in plan['host_small_selectors']]
+    cpu += [('composition',selector) for selector in plan['cpu_selectors']]
+    ct.require(len(prepared['cpu_receipts'])==len(cpu), 'Required named CPU gate coverage differs')
+    for link,(kind,selector) in zip(prepared['cpu_receipts'],cpu):
+        receipt=evidence.linked(link)
+        ct.require(receipt['argv'][:2]==[summary['binaries'][kind]['path'],selector]
+            and '--exact' in receipt['argv'] and ct.successful_process(receipt['supervisor']),
+            'CPU selector/binary/custody differs')
+        stdout=evidence.pin(Path(link['path']).with_suffix('.stdout')).read_text()
+        ct.require('1 passed; 0 failed; 0 ignored' in stdout, 'Required CPU selector did not execute')
+    for binary in summary['binaries'].values(): evidence.pin(binary['path'],binary['sha256'])
+    inherited=gates.backend_reuse(root,prepared)
+    if inherited:
+        proof=evidence.linked(summary['backend_reuse'],root/'backend-reuse.json')
+        ct.require(set(proof['gates'])==set(summary['reused_backend_gates']), 'Backend reuse proof scope differs')
+        for path,digest in proof['pins'].items(): evidence.pin(path,digest)
+    else:
+        ct.require(not summary['reused_backend_gates'] and summary['backend_reuse'] is None, 'Missing backend reuse proof')
+    rows=[];calls=metrics=0
+    for row in summary['rows']:
+        name=row['gate'];req=required[name];reused=row['reused_unchanged_backend']
+        directory=(inherited[0] if reused else root)/name
+        sources=inherited[1]['sources'] if reused else prepared['sources']
+        records={key:evidence.linked(row[key],directory/(key+'.json')) for key in
+            ('supervisor','authentication','worker-launch','test-exit','resources','release','before','after','result')}
+        launch=records['supervisor'];auth=records['authentication'];worker=records['worker-launch'];exit=records['test-exit']
+        ct.require(ct.successful_process(launch) and launch['custody']['echild'] is True
+            and auth['launch_id']==launch['handshake']['launch_id']==row['launch_id']
+            and records['result']['passed'] is True and records['result']['drained'] is True
+            and all(records['release'][k] is True for k in ('drained','all_eight_idle','gpu_owner_released')),
+            'Arena gate authentication/drain/release incomplete')
+        ct.require(exit['one_test_passed'] is True and exit['returncode']==0
+            and exit['selector']==req['selector'] and exit['binary_sha256']==row['binary_sha256']
+            and worker['gate']==name and worker['binary_sha256']==row['binary_sha256']
+            and worker['sources']==sources, 'Actual gate binary/source/selector differs')
+        selected=gates.UUIDS[:req['owners']]
+        devices=dict(selected=selected,environment=dict(CUDA_VISIBLE_DEVICES=','.join(selected),NVIDIA_VISIBLE_DEVICES=','.join(selected)))
+        ct.require(worker['devices']==row['selected_and_visible']==devices, 'Gate device roster differs from manifest')
+        resources=records['resources']
+        ct.require(resources['status']=='observed_within_targets' and not resources['errors']
+            and all(records[k]['status']=='verified' for k in ('before','after')), 'Gate resource/idle evidence failed')
+        log_path=evidence.pin(row['log']['path'],row['log']['sha256'])
+        ct.require(log_path==directory/'test.log', 'Gate raw log path differs')
+        item=dict(gate=name,selector=req['selector'],binary_sha256=row['binary_sha256'],reused_backend=reused,
+                  launch_id=row['launch_id'],gpu_peak_bytes=resources['gpu_peak_bytes'])
+        if name in plan['small_selectors']:
+            assertion=evidence.linked(row['assertions'],directory/'small-receipt.json')
+            ct.require(assertion['assertions_passed'] is True and assertion['selector']==req['selector']
+                and assertion['binary_sha256']==row['binary_sha256'] and assertion['source_digest']==ct.digest(sources),
+                'Small assertion not tied to test source/binary')
+            item.update(assertion_contract=assertion.get('assertion_contract'),
+                        counter_scope='successful source-pinned assertions, not raw per-step counters')
+        else:
+            receipt=evidence.linked(row['comparison_receipt'],directory/'comparison-receipt.json')
+            comparison=evidence.linked(row['comparison'],root/(name+'-comparison.json'))
+            gates.exact_inventory(comparison,name)
+            groups=comparison['cases'] if name=='full40' else comparison['calls']
+            count=sum(len(g['metrics']) for g in groups.values())
+            ct.require(all(m['rmse']==0 for g in groups.values() for m in g['metrics'].values())
+                and (row['calls'],row['metrics'])==(release.CALLS[name],count)
+                and receipt['all_exact'] is True and receipt['report']==row['comparison'], 'Exact comparator counts/binding differ')
+            reference,sha=gates.FULL if name=='full40' else gates.RECIPES[name]
+            ct.require(receipt['reference_sha256']==comparison['reference_manifest_sha256']==sha,'Frozen reference changed')
+            evidence.pin(gates.ORACLE/'runs'/reference/'manifest.json',sha)
+            evidence.pin(root/(name+'-canonical')/'manifest.json',comparison['actual_manifest_sha256'])
+            bindings=gates.trace_budgets(directory,name)
+            for binding in bindings:evidence.pin(binding['events']['path'],binding['events']['sha256'])
+            snapshots=evidence.linked(row['snapshots'],directory/'cache-snapshots.json')
+            ct.require(snapshots==gates.internal_snapshot_rows(log_path.read_text(),bindings), 'Raw arena snapshots differ')
+            item.update(calls=release.CALLS[name],metrics=count,arena_capacity=arena_capacity_rows(snapshots['rows']))
+            calls+=release.CALLS[name];metrics+=count
+        rows.append(item)
+    ct.require((calls,metrics)==(summary['full_model_calls'],summary['quality_metrics'])==(37,40293),
+               'Full40/six-recipe numerical inventory incomplete')
+    return dict(schema='ferrule.paper.arena-metadata-report.v1',status='historical_test_evidence_audited_not_final_release_acceptance',
+        summary=summary_link,prepared=summary['prepared'],required_manifest=dict(path=str(plan_path),sha256=plan_pin),
+        required_gates=required,required_cpu_gates=[dict(kind=k,selector=s) for k,s in cpu],
+        required_manifest_matches_current_definition=ct.digest(plan)==ct.digest(gates.manifest()),
+        tested_source_digest=ct.digest(prepared['sources']),rows=rows,calls=calls,metrics=metrics,
+        fresh_gpu_gates=summary['fresh_gpu_gates'],reused_backend_gates=summary['reused_backend_gates'],
+        current_tree_qualified=False,final_allocation_only_fix_qualified=False,public_release_accepted=False,
+        same_binary_smoke_accepted=False,gpu_workload_started=False,artifact_pins=evidence.pins,
+        limitation='Actual prior test data only; await final safety-fix qualification, actual release input relation and same-binary smoke. Root partition is not an old segment-slack sum; activity null stays uncollected.')
+
+

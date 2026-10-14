@@ -1,0 +1,10 @@
+{
+  "all_exact": true,
+  "report": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-allocator-v3-20261011-03/recreate1-comparison.json",
+    "sha256": "a9c38e398b394150294fb5b22fa12e3aad9bf59168079d6921a7b83e5c5d3988"
+  },
+  "raw_sha256": "e3fbb5e2110c4fe91ebf99e8b110a2f860877db682f3bfea93f4a0fd035a180a",
+  "reference_sha256": "5747d1ee3793d629aff5d87488d2dbd970fb02be11742b88ac16e3dca05e5a59",
+  "public_e2e_accepted": false
+}

@@ -1,6 +1,8 @@
 //! Prefix operations on the driver's existing authority.
 
+use super::trace::PrefixTraceObserver;
 use super::*;
+use crate::engine::kv_trace::{LookupOutcome, RemovalReason};
 
 pub(super) fn prefix_cache_error(operation: &str, error: impl std::fmt::Display) -> Error {
     Error::Invariant {
@@ -16,6 +18,7 @@ pub(super) struct ResidentPrefixPayload<S> {
 pub(super) struct PreparedPrefixAdmission {
     pub(super) pages: PreparedKvSnapshotFork,
     pub(super) matched_tokens: usize,
+    pub(super) snapshot: u64,
 }
 
 pub(super) struct PendingPrefixCleanup<S> {
@@ -92,10 +95,28 @@ impl<S> PrefixLifecycleState<S> {
         tokens: &[u32],
         payload: ResidentPrefixPayload<S>,
         charge: usize,
+        trace: &mut impl PrefixTraceObserver,
     ) -> std::result::Result<(), crate::cache::PrefixCacheError> {
         match self.cache.insert(namespace, tokens, payload, charge) {
             Ok(outcome) => {
-                let (_, replaced, evicted) = outcome.into_parts();
+                let (entry_id, replaced, evicted) = outcome.into_parts();
+                if trace.enabled() {
+                    for entry in &evicted {
+                        trace.prefix_entry_removed(
+                            entry.tokens(),
+                            entry.charge(),
+                            entry.last_used_generation(),
+                            RemovalReason::Capacity,
+                        );
+                    }
+                    trace.prefix_entry_published(
+                        entry_id.get(),
+                        tokens,
+                        charge,
+                        self.cache.lru_generation(),
+                        replaced.is_some(),
+                    );
+                }
                 if let Some(replaced) = replaced {
                     self.queue_removed(replaced);
                 }
@@ -112,21 +133,33 @@ impl<S> PrefixLifecycleState<S> {
         }
     }
 
-    fn drain_into_cleanup(&mut self) -> Result<()> {
+    fn drain_into_cleanup(&mut self, trace: &mut impl PrefixTraceObserver) -> Result<()> {
         let removed = self
             .cache
             .drain()
             .map_err(|error| prefix_cache_error("prefix cache drain", error))?;
         for entry in removed {
+            trace.prefix_entry_removed(
+                entry.tokens(),
+                entry.charge(),
+                entry.last_used_generation(),
+                RemovalReason::Drain,
+            );
             self.queue_removed(entry);
         }
         Ok(())
     }
 
-    fn evict_into_cleanup(&mut self) -> bool {
+    fn evict_into_cleanup(&mut self, trace: &mut impl PrefixTraceObserver) -> bool {
         let Some(removed) = self.cache.evict_lru() else {
             return false;
         };
+        trace.prefix_entry_removed(
+            removed.tokens(),
+            removed.charge(),
+            removed.last_used_generation(),
+            RemovalReason::PagePressure,
+        );
         self.queue_removed(removed);
         true
     }
@@ -148,12 +181,20 @@ impl<S> PrefixLifecycleState<S> {
             .map_err(|error| prefix_cache_error("pinned prefix payload", error))
     }
 
-    fn unpin_admission(&mut self, pin: &mut PrefixAdmissionPin) -> Result<()> {
+    fn unpin_admission(
+        &mut self,
+        pin: &mut PrefixAdmissionPin,
+        trace: &mut impl PrefixTraceObserver,
+    ) -> Result<()> {
         let Some(lease) = pin.lease.take() else {
             return Ok(());
         };
+        let entry = lease.entry_id().get();
         match self.cache.unpin(lease) {
-            Ok(()) => Ok(()),
+            Ok(()) => {
+                trace.prefix_unpin_ack(entry);
+                Ok(())
+            }
             Err(failure) => {
                 let (error, lease) = failure.into_parts();
                 pin.lease = Some(lease);
@@ -277,6 +318,8 @@ where
                     ));
                 }
             };
+            self.trace
+                .snapshot_released(snapshot.id(), retirement.pages().len());
             cleanup.snapshot = None;
             cleanup.retirement = Some(PendingKvRetirement::BackendRelease(retirement));
         }
@@ -310,7 +353,7 @@ where
     }
 
     pub(super) fn drain_prefix_cache(&mut self) -> Result<()> {
-        self.prefix.drain_into_cleanup()?;
+        self.prefix.drain_into_cleanup(&mut self.trace)?;
         self.progress_prefix_cleanups()
     }
 
@@ -322,7 +365,7 @@ where
             return Ok(());
         }
         while self.available_kv_page_credits() < required {
-            if !self.prefix.evict_into_cleanup() {
+            if !self.prefix.evict_into_cleanup(&mut self.trace) {
                 break;
             }
             self.progress_prefix_cleanups()?;
@@ -357,7 +400,30 @@ where
             return Ok(None);
         }
         let prompt = prepared.prompt_tokens().to_vec();
-        let lease = self.prefix.lookup_pinned(namespace, &prompt)?;
+        let result = self.prefix.lookup_pinned(namespace, &prompt);
+        if self.trace.enabled() {
+            let (outcome, entry, matched_tokens, generation) = match &result {
+                Ok(Some(pin)) => {
+                    let lease = pin.lease.as_ref().unwrap();
+                    (
+                        LookupOutcome::Hit,
+                        Some(lease.entry_id().get()),
+                        lease.matched_tokens(),
+                        lease.lru_generation(),
+                    )
+                }
+                Ok(None) => (LookupOutcome::Miss, None, 0, 0),
+                Err(_) => (LookupOutcome::Error, None, 0, 0),
+            };
+            self.trace.lookup(
+                prepared.session_id().0,
+                outcome,
+                entry,
+                matched_tokens,
+                generation,
+            );
+        }
+        let lease = result?;
         let Some(lease) = lease else {
             return Ok(None);
         };
@@ -404,6 +470,7 @@ where
         Ok(Some(PreparedPrefixAdmission {
             pages,
             matched_tokens,
+            snapshot: snapshot.id(),
         }))
     }
 
@@ -412,7 +479,7 @@ where
         self.fail_stage("prefix unpin")?;
         match self.sessions.cleanup_mut(&session_id) {
             Some(PendingSequenceCleanup::Admission { lease, .. }) => {
-                self.prefix.unpin_admission(lease)
+                self.prefix.unpin_admission(lease, &mut self.trace)
             }
             _ => Ok(()),
         }

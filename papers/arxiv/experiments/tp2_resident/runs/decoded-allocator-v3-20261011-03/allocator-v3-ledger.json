@@ -1,0 +1,1048 @@
+{
+  "schema": "ferrule.paper.allocator-v3-full-model-ledger.v1",
+  "gates": [
+    {
+      "gate": "full40",
+      "calls": 4,
+      "metrics": 4356,
+      "observed_gpu_peak_bytes": 22593667072,
+      "allocator_peak_reserved_bytes": 22307405824,
+      "observation": {
+        "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-allocator-v3-20261011-03/full40/allocator-v3-observations.json",
+        "sha256": "acb1c3d844e5e9105845a47a3a1231136eb655909529bac11bee677675877112"
+      },
+      "shutdown_rows": [
+        {
+          "owner": 1,
+          "epoch": 0,
+          "stage": "shutdown",
+          "metrics": {
+            "allocation_requests": 84588,
+            "allocation_failures": 0,
+            "reuse_allocations": 84330,
+            "small_allocations": 84467,
+            "large_allocations": 116,
+            "huge_allocations": 5,
+            "requested_bytes": 22562863140,
+            "granted_bytes": 22608041728,
+            "live_requested_bytes": 22203264132,
+            "live_granted_bytes": 22215985920,
+            "peak_live_requested_bytes": 22275594372,
+            "peak_live_granted_bytes": 22291352320,
+            "reserved_bytes": 22307405824,
+            "peak_reserved_bytes": 22307405824,
+            "free_bytes": 91419904,
+            "largest_free_extent": 67108864,
+            "pending_retirement_blocks": 0,
+            "pending_retirement_bytes": 0,
+            "capture_retirement_bytes": 0,
+            "retired_blocks": 22276,
+            "retirement_batches": 4740,
+            "retirement_created_fences": 14220,
+            "pending_retirement_batches": 0,
+            "pending_unfenced_bytes": 0,
+            "shutdown_quiescent": false,
+            "shutdown_retained": false,
+            "internal_fragmentation": 0.0005726411623508987,
+            "external_fragmentation": 0.2659272098994985,
+            "segments": 258,
+            "driver_allocations": 258,
+            "driver_allocation_bytes": 22307405824,
+            "driver_frees": 0,
+            "driver_free_bytes": 0
+          }
+        },
+        {
+          "owner": 0,
+          "epoch": 0,
+          "stage": "shutdown",
+          "metrics": {
+            "allocation_requests": 84588,
+            "allocation_failures": 0,
+            "reuse_allocations": 84330,
+            "small_allocations": 84467,
+            "large_allocations": 116,
+            "huge_allocations": 5,
+            "requested_bytes": 22562863140,
+            "granted_bytes": 22608041728,
+            "live_requested_bytes": 22203264132,
+            "live_granted_bytes": 22215985920,
+            "peak_live_requested_bytes": 22275594372,
+            "peak_live_granted_bytes": 22291352320,
+            "reserved_bytes": 22307405824,
+            "peak_reserved_bytes": 22307405824,
+            "free_bytes": 91419904,
+            "largest_free_extent": 67108864,
+            "pending_retirement_blocks": 0,
+            "pending_retirement_bytes": 0,
+            "capture_retirement_bytes": 0,
+            "retired_blocks": 22276,
+            "retirement_batches": 4740,
+            "retirement_created_fences": 14220,
+            "pending_retirement_batches": 0,
+            "pending_unfenced_bytes": 0,
+            "shutdown_quiescent": false,
+            "shutdown_retained": false,
+            "internal_fragmentation": 0.0005726411623508987,
+            "external_fragmentation": 0.2659272098994985,
+            "segments": 258,
+            "driver_allocations": 258,
+            "driver_allocation_bytes": 22307405824,
+            "driver_frees": 0,
+            "driver_free_bytes": 0
+          }
+        }
+      ],
+      "observed_pending_peak_bytes": 0,
+      "exact_pending_high_watermark_bytes": null
+    },
+    {
+      "gate": "greedy4",
+      "calls": 10,
+      "metrics": 10890,
+      "observed_gpu_peak_bytes": 22593667072,
+      "allocator_peak_reserved_bytes": 22307405824,
+      "observation": {
+        "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-allocator-v3-20261011-03/greedy4/allocator-v3-observations.json",
+        "sha256": "011454d5f745be5cfe2d9f7b0f43d0f6461514dfd4ad86dff8727b53a84bb9b1"
+      },
+      "shutdown_rows": [
+        {
+          "owner": 1,
+          "epoch": 0,
+          "stage": "shutdown",
+          "metrics": {
+            "allocation_requests": 109164,
+            "allocation_failures": 0,
+            "reuse_allocations": 108906,
+            "small_allocations": 109043,
+            "large_allocations": 116,
+            "huge_allocations": 5,
+            "requested_bytes": 22859842476,
+            "granted_bytes": 22906856704,
+            "live_requested_bytes": 22203264132,
+            "live_granted_bytes": 22215985920,
+            "peak_live_requested_bytes": 22275594372,
+            "peak_live_granted_bytes": 22291352320,
+            "reserved_bytes": 22307405824,
+            "peak_reserved_bytes": 22307405824,
+            "free_bytes": 91419904,
+            "largest_free_extent": 67108864,
+            "pending_retirement_blocks": 0,
+            "pending_retirement_bytes": 0,
+            "capture_retirement_bytes": 0,
+            "retired_blocks": 46852,
+            "retirement_batches": 10578,
+            "retirement_created_fences": 31734,
+            "pending_retirement_batches": 0,
+            "pending_unfenced_bytes": 0,
+            "shutdown_quiescent": false,
+            "shutdown_retained": false,
+            "internal_fragmentation": 0.0005726411623508987,
+            "external_fragmentation": 0.2659272098994985,
+            "segments": 258,
+            "driver_allocations": 258,
+            "driver_allocation_bytes": 22307405824,
+            "driver_frees": 0,
+            "driver_free_bytes": 0
+          }
+        },
+        {
+          "owner": 0,
+          "epoch": 0,
+          "stage": "shutdown",
+          "metrics": {
+            "allocation_requests": 109164,
+            "allocation_failures": 0,
+            "reuse_allocations": 108906,
+            "small_allocations": 109043,
+            "large_allocations": 116,
+            "huge_allocations": 5,
+            "requested_bytes": 22859842476,
+            "granted_bytes": 22906856704,
+            "live_requested_bytes": 22203264132,
+            "live_granted_bytes": 22215985920,
+            "peak_live_requested_bytes": 22275594372,
+            "peak_live_granted_bytes": 22291352320,
+            "reserved_bytes": 22307405824,
+            "peak_reserved_bytes": 22307405824,
+            "free_bytes": 91419904,
+            "largest_free_extent": 67108864,
+            "pending_retirement_blocks": 0,
+            "pending_retirement_bytes": 0,
+            "capture_retirement_bytes": 0,
+            "retired_blocks": 46852,
+            "retirement_batches": 10578,
+            "retirement_created_fences": 31734,
+            "pending_retirement_batches": 0,
+            "pending_unfenced_bytes": 0,
+            "shutdown_quiescent": false,
+            "shutdown_retained": false,
+            "internal_fragmentation": 0.0005726411623508987,
+            "external_fragmentation": 0.2659272098994985,
+            "segments": 258,
+            "driver_allocations": 258,
+            "driver_allocation_bytes": 22307405824,
+            "driver_frees": 0,
+            "driver_free_bytes": 0
+          }
+        }
+      ],
+      "observed_pending_peak_bytes": 0,
+      "exact_pending_high_watermark_bytes": null
+    },
+    {
+      "gate": "fork2",
+      "calls": 6,
+      "metrics": 6534,
+      "observed_gpu_peak_bytes": 22660775936,
+      "allocator_peak_reserved_bytes": 22374514688,
+      "observation": {
+        "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-allocator-v3-20261011-03/fork2/allocator-v3-observations.json",
+        "sha256": "5fd4b2704dff3490ebbc7f5470d2cdca5d0aa259f08adc814e439399146ced72"
+      },
+      "shutdown_rows": [
+        {
+          "owner": 0,
+          "epoch": 0,
+          "stage": "shutdown",
+          "metrics": {
+            "allocation_requests": 87248,
+            "allocation_failures": 0,
+            "reuse_allocations": 86989,
+            "small_allocations": 87130,
+            "large_allocations": 113,
+            "huge_allocations": 5,
+            "requested_bytes": 22631971068,
+            "granted_bytes": 22646543616,
+            "live_requested_bytes": 22203264132,
+            "live_granted_bytes": 22215985920,
+            "peak_live_requested_bytes": 22334515332,
+            "peak_live_granted_bytes": 22347320064,
+            "reserved_bytes": 22374514688,
+            "peak_reserved_bytes": 22374514688,
+            "free_bytes": 158528768,
+            "largest_free_extent": 67108864,
+            "pending_retirement_blocks": 0,
+            "pending_retirement_bytes": 0,
+            "capture_retirement_bytes": 0,
+            "retired_blocks": 24936,
+            "retirement_batches": 5872,
+            "retirement_created_fences": 17616,
+            "pending_retirement_batches": 0,
+            "pending_unfenced_bytes": 0,
+            "shutdown_quiescent": false,
+            "shutdown_retained": false,
+            "internal_fragmentation": 0.0005726411623508987,
+            "external_fragmentation": 0.5766770609104841,
+            "segments": 259,
+            "driver_allocations": 259,
+            "driver_allocation_bytes": 22374514688,
+            "driver_frees": 0,
+            "driver_free_bytes": 0
+          }
+        },
+        {
+          "owner": 1,
+          "epoch": 0,
+          "stage": "shutdown",
+          "metrics": {
+            "allocation_requests": 87248,
+            "allocation_failures": 0,
+            "reuse_allocations": 86989,
+            "small_allocations": 87130,
+            "large_allocations": 113,
+            "huge_allocations": 5,
+            "requested_bytes": 22631971068,
+            "granted_bytes": 22646543616,
+            "live_requested_bytes": 22203264132,
+            "live_granted_bytes": 22215985920,
+            "peak_live_requested_bytes": 22334515332,
+            "peak_live_granted_bytes": 22347320064,
+            "reserved_bytes": 22374514688,
+            "peak_reserved_bytes": 22374514688,
+            "free_bytes": 158528768,
+            "largest_free_extent": 67108864,
+            "pending_retirement_blocks": 0,
+            "pending_retirement_bytes": 0,
+            "capture_retirement_bytes": 0,
+            "retired_blocks": 24936,
+            "retirement_batches": 5872,
+            "retirement_created_fences": 17616,
+            "pending_retirement_batches": 0,
+            "pending_unfenced_bytes": 0,
+            "shutdown_quiescent": false,
+            "shutdown_retained": false,
+            "internal_fragmentation": 0.0005726411623508987,
+            "external_fragmentation": 0.5766770609104841,
+            "segments": 259,
+            "driver_allocations": 259,
+            "driver_allocation_bytes": 22374514688,
+            "driver_frees": 0,
+            "driver_free_bytes": 0
+          }
+        }
+      ],
+      "observed_pending_peak_bytes": 0,
+      "exact_pending_high_watermark_bytes": null
+    },
+    {
+      "gate": "canary2",
+      "calls": 5,
+      "metrics": 5445,
+      "observed_gpu_peak_bytes": 22660775936,
+      "allocator_peak_reserved_bytes": 22374514688,
+      "observation": {
+        "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-allocator-v3-20261011-03/canary2/allocator-v3-observations.json",
+        "sha256": "044591a2f860bef358948471ed304361a21ff0726ac056bbcc9e15f5de540f34"
+      },
+      "shutdown_rows": [
+        {
+          "owner": 1,
+          "epoch": 0,
+          "stage": "shutdown",
+          "metrics": {
+            "allocation_requests": 88684,
+            "allocation_failures": 0,
+            "reuse_allocations": 88425,
+            "small_allocations": 88563,
+            "large_allocations": 116,
+            "huge_allocations": 5,
+            "requested_bytes": 22612359696,
+            "granted_bytes": 22657844224,
+            "live_requested_bytes": 22203264132,
+            "live_granted_bytes": 22215985920,
+            "peak_live_requested_bytes": 22308034692,
+            "peak_live_granted_bytes": 22323792640,
+            "reserved_bytes": 22374514688,
+            "peak_reserved_bytes": 22374514688,
+            "free_bytes": 158528768,
+            "largest_free_extent": 67108864,
+            "pending_retirement_blocks": 0,
+            "pending_retirement_bytes": 0,
+            "capture_retirement_bytes": 0,
+            "retired_blocks": 26372,
+            "retirement_batches": 5713,
+            "retirement_created_fences": 17139,
+            "pending_retirement_batches": 0,
+            "pending_unfenced_bytes": 0,
+            "shutdown_quiescent": false,
+            "shutdown_retained": false,
+            "internal_fragmentation": 0.0005726411623508987,
+            "external_fragmentation": 0.5766770609104841,
+            "segments": 259,
+            "driver_allocations": 259,
+            "driver_allocation_bytes": 22374514688,
+            "driver_frees": 0,
+            "driver_free_bytes": 0
+          }
+        },
+        {
+          "owner": 0,
+          "epoch": 0,
+          "stage": "shutdown",
+          "metrics": {
+            "allocation_requests": 88684,
+            "allocation_failures": 0,
+            "reuse_allocations": 88425,
+            "small_allocations": 88563,
+            "large_allocations": 116,
+            "huge_allocations": 5,
+            "requested_bytes": 22612359696,
+            "granted_bytes": 22657844224,
+            "live_requested_bytes": 22203264132,
+            "live_granted_bytes": 22215985920,
+            "peak_live_requested_bytes": 22308034692,
+            "peak_live_granted_bytes": 22323792640,
+            "reserved_bytes": 22374514688,
+            "peak_reserved_bytes": 22374514688,
+            "free_bytes": 158528768,
+            "largest_free_extent": 67108864,
+            "pending_retirement_blocks": 0,
+            "pending_retirement_bytes": 0,
+            "capture_retirement_bytes": 0,
+            "retired_blocks": 26372,
+            "retirement_batches": 5713,
+            "retirement_created_fences": 17139,
+            "pending_retirement_batches": 0,
+            "pending_unfenced_bytes": 0,
+            "shutdown_quiescent": false,
+            "shutdown_retained": false,
+            "internal_fragmentation": 0.0005726411623508987,
+            "external_fragmentation": 0.5766770609104841,
+            "segments": 259,
+            "driver_allocations": 259,
+            "driver_allocation_bytes": 22374514688,
+            "driver_frees": 0,
+            "driver_free_bytes": 0
+          }
+        }
+      ],
+      "observed_pending_peak_bytes": 0,
+      "exact_pending_high_watermark_bytes": null
+    },
+    {
+      "gate": "recreate1",
+      "calls": 4,
+      "metrics": 4356,
+      "observed_gpu_peak_bytes": 22593667072,
+      "allocator_peak_reserved_bytes": 22307405824,
+      "observation": {
+        "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-allocator-v3-20261011-03/recreate1/allocator-v3-observations.json",
+        "sha256": "bfbe9bb6914fe5db948adc141b94f01b6f631145ac1b0970cb355e738b5c4db2"
+      },
+      "shutdown_rows": [
+        {
+          "owner": 1,
+          "epoch": 0,
+          "stage": "shutdown",
+          "metrics": {
+            "allocation_requests": 70624,
+            "allocation_failures": 0,
+            "reuse_allocations": 70366,
+            "small_allocations": 70506,
+            "large_allocations": 113,
+            "huge_allocations": 5,
+            "requested_bytes": 22367137884,
+            "granted_bytes": 22380471552,
+            "live_requested_bytes": 22203264132,
+            "live_granted_bytes": 22215985920,
+            "peak_live_requested_bytes": 22269634692,
+            "peak_live_granted_bytes": 22282439424,
+            "reserved_bytes": 22307405824,
+            "peak_reserved_bytes": 22307405824,
+            "free_bytes": 91419904,
+            "largest_free_extent": 67108864,
+            "pending_retirement_blocks": 0,
+            "pending_retirement_bytes": 0,
+            "capture_retirement_bytes": 0,
+            "retired_blocks": 8312,
+            "retirement_batches": 1918,
+            "retirement_created_fences": 5754,
+            "pending_retirement_batches": 0,
+            "pending_unfenced_bytes": 0,
+            "shutdown_quiescent": false,
+            "shutdown_retained": false,
+            "internal_fragmentation": 0.0005726411623508987,
+            "external_fragmentation": 0.2659272098994985,
+            "segments": 258,
+            "driver_allocations": 258,
+            "driver_allocation_bytes": 22307405824,
+            "driver_frees": 0,
+            "driver_free_bytes": 0
+          }
+        },
+        {
+          "owner": 0,
+          "epoch": 0,
+          "stage": "shutdown",
+          "metrics": {
+            "allocation_requests": 70624,
+            "allocation_failures": 0,
+            "reuse_allocations": 70366,
+            "small_allocations": 70506,
+            "large_allocations": 113,
+            "huge_allocations": 5,
+            "requested_bytes": 22367137884,
+            "granted_bytes": 22380471552,
+            "live_requested_bytes": 22203264132,
+            "live_granted_bytes": 22215985920,
+            "peak_live_requested_bytes": 22269634692,
+            "peak_live_granted_bytes": 22282439424,
+            "reserved_bytes": 22307405824,
+            "peak_reserved_bytes": 22307405824,
+            "free_bytes": 91419904,
+            "largest_free_extent": 67108864,
+            "pending_retirement_blocks": 0,
+            "pending_retirement_bytes": 0,
+            "capture_retirement_bytes": 0,
+            "retired_blocks": 8312,
+            "retirement_batches": 1918,
+            "retirement_created_fences": 5754,
+            "pending_retirement_batches": 0,
+            "pending_unfenced_bytes": 0,
+            "shutdown_quiescent": false,
+            "shutdown_retained": false,
+            "internal_fragmentation": 0.0005726411623508987,
+            "external_fragmentation": 0.2659272098994985,
+            "segments": 258,
+            "driver_allocations": 258,
+            "driver_allocation_bytes": 22307405824,
+            "driver_frees": 0,
+            "driver_free_bytes": 0
+          }
+        },
+        {
+          "owner": 0,
+          "epoch": 1,
+          "stage": "shutdown",
+          "metrics": {
+            "allocation_requests": 70624,
+            "allocation_failures": 0,
+            "reuse_allocations": 70366,
+            "small_allocations": 70506,
+            "large_allocations": 113,
+            "huge_allocations": 5,
+            "requested_bytes": 22367137884,
+            "granted_bytes": 22380471552,
+            "live_requested_bytes": 22203264132,
+            "live_granted_bytes": 22215985920,
+            "peak_live_requested_bytes": 22269634692,
+            "peak_live_granted_bytes": 22282439424,
+            "reserved_bytes": 22307405824,
+            "peak_reserved_bytes": 22307405824,
+            "free_bytes": 91419904,
+            "largest_free_extent": 67108864,
+            "pending_retirement_blocks": 0,
+            "pending_retirement_bytes": 0,
+            "capture_retirement_bytes": 0,
+            "retired_blocks": 8312,
+            "retirement_batches": 1918,
+            "retirement_created_fences": 5754,
+            "pending_retirement_batches": 0,
+            "pending_unfenced_bytes": 0,
+            "shutdown_quiescent": false,
+            "shutdown_retained": false,
+            "internal_fragmentation": 0.0005726411623508987,
+            "external_fragmentation": 0.2659272098994985,
+            "segments": 258,
+            "driver_allocations": 258,
+            "driver_allocation_bytes": 22307405824,
+            "driver_frees": 0,
+            "driver_free_bytes": 0
+          }
+        },
+        {
+          "owner": 1,
+          "epoch": 1,
+          "stage": "shutdown",
+          "metrics": {
+            "allocation_requests": 70624,
+            "allocation_failures": 0,
+            "reuse_allocations": 70366,
+            "small_allocations": 70506,
+            "large_allocations": 113,
+            "huge_allocations": 5,
+            "requested_bytes": 22367137884,
+            "granted_bytes": 22380471552,
+            "live_requested_bytes": 22203264132,
+            "live_granted_bytes": 22215985920,
+            "peak_live_requested_bytes": 22269634692,
+            "peak_live_granted_bytes": 22282439424,
+            "reserved_bytes": 22307405824,
+            "peak_reserved_bytes": 22307405824,
+            "free_bytes": 91419904,
+            "largest_free_extent": 67108864,
+            "pending_retirement_blocks": 0,
+            "pending_retirement_bytes": 0,
+            "capture_retirement_bytes": 0,
+            "retired_blocks": 8312,
+            "retirement_batches": 1918,
+            "retirement_created_fences": 5754,
+            "pending_retirement_batches": 0,
+            "pending_unfenced_bytes": 0,
+            "shutdown_quiescent": false,
+            "shutdown_retained": false,
+            "internal_fragmentation": 0.0005726411623508987,
+            "external_fragmentation": 0.2659272098994985,
+            "segments": 258,
+            "driver_allocations": 258,
+            "driver_allocation_bytes": 22307405824,
+            "driver_frees": 0,
+            "driver_free_bytes": 0
+          }
+        }
+      ],
+      "observed_pending_peak_bytes": 0,
+      "exact_pending_high_watermark_bytes": null
+    },
+    {
+      "gate": "cold-owner1-01",
+      "calls": 4,
+      "metrics": 4356,
+      "observed_gpu_peak_bytes": 22593667072,
+      "allocator_peak_reserved_bytes": 22307405824,
+      "observation": {
+        "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-allocator-v3-20261011-03/cold-owner1-01/allocator-v3-observations.json",
+        "sha256": "b4910d443dd7088bde8351a34cd467b807830be35d8fb1e67535f1f4f3d9cef5"
+      },
+      "shutdown_rows": [
+        {
+          "owner": 0,
+          "epoch": 0,
+          "stage": "shutdown",
+          "metrics": {
+            "allocation_requests": 84588,
+            "allocation_failures": 0,
+            "reuse_allocations": 84330,
+            "small_allocations": 84467,
+            "large_allocations": 116,
+            "huge_allocations": 5,
+            "requested_bytes": 22562863140,
+            "granted_bytes": 22608041728,
+            "live_requested_bytes": 22203264132,
+            "live_granted_bytes": 22215985920,
+            "peak_live_requested_bytes": 22275594372,
+            "peak_live_granted_bytes": 22291352320,
+            "reserved_bytes": 22307405824,
+            "peak_reserved_bytes": 22307405824,
+            "free_bytes": 91419904,
+            "largest_free_extent": 67108864,
+            "pending_retirement_blocks": 0,
+            "pending_retirement_bytes": 0,
+            "capture_retirement_bytes": 0,
+            "retired_blocks": 22276,
+            "retirement_batches": 4740,
+            "retirement_created_fences": 14220,
+            "pending_retirement_batches": 0,
+            "pending_unfenced_bytes": 0,
+            "shutdown_quiescent": false,
+            "shutdown_retained": false,
+            "internal_fragmentation": 0.0005726411623508987,
+            "external_fragmentation": 0.2659272098994985,
+            "segments": 258,
+            "driver_allocations": 258,
+            "driver_allocation_bytes": 22307405824,
+            "driver_frees": 0,
+            "driver_free_bytes": 0
+          }
+        },
+        {
+          "owner": 1,
+          "epoch": 0,
+          "stage": "shutdown",
+          "metrics": {
+            "allocation_requests": 84588,
+            "allocation_failures": 0,
+            "reuse_allocations": 84330,
+            "small_allocations": 84467,
+            "large_allocations": 116,
+            "huge_allocations": 5,
+            "requested_bytes": 22562863140,
+            "granted_bytes": 22608041728,
+            "live_requested_bytes": 22203264132,
+            "live_granted_bytes": 22215985920,
+            "peak_live_requested_bytes": 22275594372,
+            "peak_live_granted_bytes": 22291352320,
+            "reserved_bytes": 22307405824,
+            "peak_reserved_bytes": 22307405824,
+            "free_bytes": 91419904,
+            "largest_free_extent": 67108864,
+            "pending_retirement_blocks": 0,
+            "pending_retirement_bytes": 0,
+            "capture_retirement_bytes": 0,
+            "retired_blocks": 22276,
+            "retirement_batches": 4740,
+            "retirement_created_fences": 14220,
+            "pending_retirement_batches": 0,
+            "pending_unfenced_bytes": 0,
+            "shutdown_quiescent": false,
+            "shutdown_retained": false,
+            "internal_fragmentation": 0.0005726411623508987,
+            "external_fragmentation": 0.2659272098994985,
+            "segments": 258,
+            "driver_allocations": 258,
+            "driver_allocation_bytes": 22307405824,
+            "driver_frees": 0,
+            "driver_free_bytes": 0
+          }
+        }
+      ],
+      "observed_pending_peak_bytes": 0,
+      "exact_pending_high_watermark_bytes": null
+    },
+    {
+      "gate": "cold-owner1-02",
+      "calls": 4,
+      "metrics": 4356,
+      "observed_gpu_peak_bytes": 22593667072,
+      "allocator_peak_reserved_bytes": 22307405824,
+      "observation": {
+        "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-allocator-v3-20261011-03/cold-owner1-02/allocator-v3-observations.json",
+        "sha256": "ef97d9bfb792ad8afbabb3ba8bc8025a163791506f550402d9d18ed2bb203d6f"
+      },
+      "shutdown_rows": [
+        {
+          "owner": 1,
+          "epoch": 0,
+          "stage": "shutdown",
+          "metrics": {
+            "allocation_requests": 84588,
+            "allocation_failures": 0,
+            "reuse_allocations": 84330,
+            "small_allocations": 84467,
+            "large_allocations": 116,
+            "huge_allocations": 5,
+            "requested_bytes": 22562863140,
+            "granted_bytes": 22608041728,
+            "live_requested_bytes": 22203264132,
+            "live_granted_bytes": 22215985920,
+            "peak_live_requested_bytes": 22275594372,
+            "peak_live_granted_bytes": 22291352320,
+            "reserved_bytes": 22307405824,
+            "peak_reserved_bytes": 22307405824,
+            "free_bytes": 91419904,
+            "largest_free_extent": 67108864,
+            "pending_retirement_blocks": 0,
+            "pending_retirement_bytes": 0,
+            "capture_retirement_bytes": 0,
+            "retired_blocks": 22276,
+            "retirement_batches": 4740,
+            "retirement_created_fences": 14220,
+            "pending_retirement_batches": 0,
+            "pending_unfenced_bytes": 0,
+            "shutdown_quiescent": false,
+            "shutdown_retained": false,
+            "internal_fragmentation": 0.0005726411623508987,
+            "external_fragmentation": 0.2659272098994985,
+            "segments": 258,
+            "driver_allocations": 258,
+            "driver_allocation_bytes": 22307405824,
+            "driver_frees": 0,
+            "driver_free_bytes": 0
+          }
+        },
+        {
+          "owner": 0,
+          "epoch": 0,
+          "stage": "shutdown",
+          "metrics": {
+            "allocation_requests": 84588,
+            "allocation_failures": 0,
+            "reuse_allocations": 84330,
+            "small_allocations": 84467,
+            "large_allocations": 116,
+            "huge_allocations": 5,
+            "requested_bytes": 22562863140,
+            "granted_bytes": 22608041728,
+            "live_requested_bytes": 22203264132,
+            "live_granted_bytes": 22215985920,
+            "peak_live_requested_bytes": 22275594372,
+            "peak_live_granted_bytes": 22291352320,
+            "reserved_bytes": 22307405824,
+            "peak_reserved_bytes": 22307405824,
+            "free_bytes": 91419904,
+            "largest_free_extent": 67108864,
+            "pending_retirement_blocks": 0,
+            "pending_retirement_bytes": 0,
+            "capture_retirement_bytes": 0,
+            "retired_blocks": 22276,
+            "retirement_batches": 4740,
+            "retirement_created_fences": 14220,
+            "pending_retirement_batches": 0,
+            "pending_unfenced_bytes": 0,
+            "shutdown_quiescent": false,
+            "shutdown_retained": false,
+            "internal_fragmentation": 0.0005726411623508987,
+            "external_fragmentation": 0.2659272098994985,
+            "segments": 258,
+            "driver_allocations": 258,
+            "driver_allocation_bytes": 22307405824,
+            "driver_frees": 0,
+            "driver_free_bytes": 0
+          }
+        }
+      ],
+      "observed_pending_peak_bytes": 0,
+      "exact_pending_high_watermark_bytes": null
+    }
+  ],
+  "full_model_calls": 37,
+  "quality_metrics": 40293,
+  "allocator_peak_reserved_bytes": 22374514688,
+  "observed_gpu_peak_bytes": 22660775936,
+  "device_cap_bytes": 23622320128,
+  "arena_grant_per_owner": 3221225472,
+  "quiescent_shutdown_owner_epochs": 16,
+  "ordinary_pressure_errors": 0,
+  "allocation_failures": 0,
+  "all_quiescent_pending_bytes_zero": true,
+  "exact_pending_high_watermark_bytes": null,
+  "pending_observation_limit": "V3 exports current pending only. Existing ready/shutdown snapshots are all zero; transient all-operation peak is not measured and is not claimed.",
+  "owner_lifecycles": [
+    {
+      "gate": "full40",
+      "launch_id": "1b695a44db64458796882541c3e8e218",
+      "worker": {
+        "pid": 158923,
+        "birth_ticks": 97426806,
+        "ppid": 158922,
+        "pgrp": 158923,
+        "session": 158923
+      },
+      "owner_images": [
+        {
+          "epoch": 0,
+          "owner": 0,
+          "stage": "ready",
+          "image_generation": 1
+        },
+        {
+          "epoch": 0,
+          "owner": 0,
+          "stage": "shutdown",
+          "image_generation": 1
+        },
+        {
+          "epoch": 0,
+          "owner": 1,
+          "stage": "ready",
+          "image_generation": 2
+        },
+        {
+          "epoch": 0,
+          "owner": 1,
+          "stage": "shutdown",
+          "image_generation": 2
+        }
+      ]
+    },
+    {
+      "gate": "greedy4",
+      "launch_id": "347900810c644480b3bb903fc92e196e",
+      "worker": {
+        "pid": 160505,
+        "birth_ticks": 97463183,
+        "ppid": 160504,
+        "pgrp": 160505,
+        "session": 160505
+      },
+      "owner_images": [
+        {
+          "epoch": 0,
+          "owner": 0,
+          "stage": "ready",
+          "image_generation": 1
+        },
+        {
+          "epoch": 0,
+          "owner": 0,
+          "stage": "shutdown",
+          "image_generation": 1
+        },
+        {
+          "epoch": 0,
+          "owner": 1,
+          "stage": "ready",
+          "image_generation": 2
+        },
+        {
+          "epoch": 0,
+          "owner": 1,
+          "stage": "shutdown",
+          "image_generation": 2
+        }
+      ]
+    },
+    {
+      "gate": "fork2",
+      "launch_id": "758113a4ca98470abb0bf639aeff488c",
+      "worker": {
+        "pid": 162113,
+        "birth_ticks": 97507267,
+        "ppid": 162112,
+        "pgrp": 162113,
+        "session": 162113
+      },
+      "owner_images": [
+        {
+          "epoch": 0,
+          "owner": 0,
+          "stage": "ready",
+          "image_generation": 1
+        },
+        {
+          "epoch": 0,
+          "owner": 0,
+          "stage": "shutdown",
+          "image_generation": 1
+        },
+        {
+          "epoch": 0,
+          "owner": 1,
+          "stage": "ready",
+          "image_generation": 2
+        },
+        {
+          "epoch": 0,
+          "owner": 1,
+          "stage": "shutdown",
+          "image_generation": 2
+        }
+      ]
+    },
+    {
+      "gate": "canary2",
+      "launch_id": "639b3abcfa274fdb8a457eab856bb0ed",
+      "worker": {
+        "pid": 163697,
+        "birth_ticks": 97545682,
+        "ppid": 163696,
+        "pgrp": 163697,
+        "session": 163697
+      },
+      "owner_images": [
+        {
+          "epoch": 0,
+          "owner": 0,
+          "stage": "ready",
+          "image_generation": 2
+        },
+        {
+          "epoch": 0,
+          "owner": 0,
+          "stage": "shutdown",
+          "image_generation": 2
+        },
+        {
+          "epoch": 0,
+          "owner": 1,
+          "stage": "ready",
+          "image_generation": 1
+        },
+        {
+          "epoch": 0,
+          "owner": 1,
+          "stage": "shutdown",
+          "image_generation": 1
+        }
+      ]
+    },
+    {
+      "gate": "recreate1",
+      "launch_id": "1ba047d3aa304291804ea835ae62c945",
+      "worker": {
+        "pid": 165278,
+        "birth_ticks": 97585503,
+        "ppid": 165277,
+        "pgrp": 165278,
+        "session": 165278
+      },
+      "owner_images": [
+        {
+          "epoch": 0,
+          "owner": 0,
+          "stage": "ready",
+          "image_generation": 2
+        },
+        {
+          "epoch": 0,
+          "owner": 0,
+          "stage": "shutdown",
+          "image_generation": 2
+        },
+        {
+          "epoch": 0,
+          "owner": 1,
+          "stage": "ready",
+          "image_generation": 1
+        },
+        {
+          "epoch": 0,
+          "owner": 1,
+          "stage": "shutdown",
+          "image_generation": 1
+        },
+        {
+          "epoch": 1,
+          "owner": 0,
+          "stage": "ready",
+          "image_generation": 3
+        },
+        {
+          "epoch": 1,
+          "owner": 0,
+          "stage": "shutdown",
+          "image_generation": 3
+        },
+        {
+          "epoch": 1,
+          "owner": 1,
+          "stage": "ready",
+          "image_generation": 4
+        },
+        {
+          "epoch": 1,
+          "owner": 1,
+          "stage": "shutdown",
+          "image_generation": 4
+        }
+      ]
+    },
+    {
+      "gate": "cold-owner1-01",
+      "launch_id": "ae68b37e38224460b523dd3807148af7",
+      "worker": {
+        "pid": 167560,
+        "birth_ticks": 97646740,
+        "ppid": 167559,
+        "pgrp": 167560,
+        "session": 167560
+      },
+      "owner_images": [
+        {
+          "epoch": 0,
+          "owner": 0,
+          "stage": "ready",
+          "image_generation": 1
+        },
+        {
+          "epoch": 0,
+          "owner": 0,
+          "stage": "shutdown",
+          "image_generation": 1
+        },
+        {
+          "epoch": 0,
+          "owner": 1,
+          "stage": "ready",
+          "image_generation": 2
+        },
+        {
+          "epoch": 0,
+          "owner": 1,
+          "stage": "shutdown",
+          "image_generation": 2
+        }
+      ]
+    },
+    {
+      "gate": "cold-owner1-02",
+      "launch_id": "ae4e9e9980ee4f918550e447ab73d814",
+      "worker": {
+        "pid": 169126,
+        "birth_ticks": 97684268,
+        "ppid": 169125,
+        "pgrp": 169126,
+        "session": 169126
+      },
+      "owner_images": [
+        {
+          "epoch": 0,
+          "owner": 0,
+          "stage": "ready",
+          "image_generation": 2
+        },
+        {
+          "epoch": 0,
+          "owner": 0,
+          "stage": "shutdown",
+          "image_generation": 2
+        },
+        {
+          "epoch": 0,
+          "owner": 1,
+          "stage": "ready",
+          "image_generation": 1
+        },
+        {
+          "epoch": 0,
+          "owner": 1,
+          "stage": "shutdown",
+          "image_generation": 1
+        }
+      ]
+    }
+  ],
+  "unique_authenticated_gpu_launches": 23
+}

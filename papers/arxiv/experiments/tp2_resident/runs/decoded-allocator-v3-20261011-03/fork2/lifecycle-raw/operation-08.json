@@ -1,0 +1,26 @@
+{
+  "call": {
+    "input_token_ids": [
+      760
+    ],
+    "next_token_id": 2614,
+    "position_start": 2,
+    "sequence_length_after": 3,
+    "stage": "call"
+  },
+  "epoch": 0,
+  "id": "call-04",
+  "input": {
+    "ids": [
+      760
+    ],
+    "kind": "tokens"
+  },
+  "op": "call",
+  "runtime_session": 3,
+  "session": "right",
+  "transaction": 5,
+  "untouched_sessions": [
+    "parent"
+  ]
+}

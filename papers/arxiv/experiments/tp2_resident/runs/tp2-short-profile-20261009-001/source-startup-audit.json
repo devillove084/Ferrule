@@ -1,0 +1,167 @@
+{
+  "status": "source_and_historical_logs_only",
+  "startup": [
+    {
+      "slot": "F1",
+      "startup_seconds": 385.9790650513023,
+      "events": [
+        {
+          "unix": 1791537675.259638,
+          "timestamp": "2026-10-09T09:21:15.259638Z",
+          "event": "resident model build entering owner-local admission",
+          "owner": null
+        },
+        {
+          "unix": 1791537747.427487,
+          "timestamp": "2026-10-09T09:22:27.427487Z",
+          "event": "Mixed experimental source-bound admission",
+          "owner": null
+        },
+        {
+          "unix": 1791537876.252067,
+          "timestamp": "2026-10-09T09:24:36.252067Z",
+          "event": "Mixed owner preparation claim completion",
+          "owner": 0
+        },
+        {
+          "unix": 1791537977.983747,
+          "timestamp": "2026-10-09T09:26:17.983747Z",
+          "event": "Mixed owner preparation claim completion",
+          "owner": 1
+        },
+        {
+          "unix": 1791537978.14347,
+          "timestamp": "2026-10-09T09:26:18.143470Z",
+          "event": "Ferrule OpenAI server listening",
+          "owner": null
+        }
+      ],
+      "logged_event_deltas": [
+        {
+          "start": "resident model build entering owner-local admission",
+          "start_owner": null,
+          "end": "Mixed experimental source-bound admission",
+          "end_owner": null,
+          "seconds": 72.16784882545471
+        },
+        {
+          "start": "Mixed experimental source-bound admission",
+          "start_owner": null,
+          "end": "Mixed owner preparation claim completion",
+          "end_owner": 0,
+          "seconds": 128.82458019256592
+        },
+        {
+          "start": "Mixed owner preparation claim completion",
+          "start_owner": 0,
+          "end": "Mixed owner preparation claim completion",
+          "end_owner": 1,
+          "seconds": 101.73167991638184
+        },
+        {
+          "start": "Mixed owner preparation claim completion",
+          "start_owner": 1,
+          "end": "Ferrule OpenAI server listening",
+          "end_owner": null,
+          "seconds": 0.15972304344177246
+        }
+      ],
+      "caveat": "Historical unprofiled successful release; timestamp deltas are intervals, not exclusive kernel/materialization phases"
+    },
+    {
+      "slot": "F2",
+      "startup_seconds": 367.233680550009,
+      "events": [
+        {
+          "unix": 1791538528.756377,
+          "timestamp": "2026-10-09T09:35:28.756377Z",
+          "event": "resident model build entering owner-local admission",
+          "owner": null
+        },
+        {
+          "unix": 1791538599.599605,
+          "timestamp": "2026-10-09T09:36:39.599605Z",
+          "event": "Mixed experimental source-bound admission",
+          "owner": null
+        },
+        {
+          "unix": 1791538728.481279,
+          "timestamp": "2026-10-09T09:38:48.481279Z",
+          "event": "Mixed owner preparation claim completion",
+          "owner": 0
+        },
+        {
+          "unix": 1791538829.080657,
+          "timestamp": "2026-10-09T09:40:29.080657Z",
+          "event": "Mixed owner preparation claim completion",
+          "owner": 1
+        },
+        {
+          "unix": 1791538829.230697,
+          "timestamp": "2026-10-09T09:40:29.230697Z",
+          "event": "Ferrule OpenAI server listening",
+          "owner": null
+        }
+      ],
+      "logged_event_deltas": [
+        {
+          "start": "resident model build entering owner-local admission",
+          "start_owner": null,
+          "end": "Mixed experimental source-bound admission",
+          "end_owner": null,
+          "seconds": 70.84322810173035
+        },
+        {
+          "start": "Mixed experimental source-bound admission",
+          "start_owner": null,
+          "end": "Mixed owner preparation claim completion",
+          "end_owner": 0,
+          "seconds": 128.8816738128662
+        },
+        {
+          "start": "Mixed owner preparation claim completion",
+          "start_owner": 0,
+          "end": "Mixed owner preparation claim completion",
+          "end_owner": 1,
+          "seconds": 100.59937810897827
+        },
+        {
+          "start": "Mixed owner preparation claim completion",
+          "start_owner": 1,
+          "end": "Ferrule OpenAI server listening",
+          "end_owner": null,
+          "seconds": 0.1500399112701416
+        }
+      ],
+      "caveat": "Historical unprofiled successful release; timestamp deltas are intervals, not exclusive kernel/materialization phases"
+    }
+  ],
+  "runtime_sync_counts": null,
+  "runtime_sync_durations": null,
+  "kernel_times": null,
+  "copy_bytes": null,
+  "gpu_gaps": null,
+  "reason": "One profile attempt aborted before HTTP readiness/capture on nonselected memory delta; no rerun",
+  "three_candidates_not_measured_bottlenecks": [
+    "Repeated consumer/stream completion proofs",
+    "Host BF16 D2H/exchange/H2D boundary and route rendezvous",
+    "Per-linear FP8 decode/pack/GemmEx plus per-route scratch/upload"
+  ],
+  "fallback": "Current mixed_decoder_invocation facade counters are on CudaHybridModule; no proven TP2 MixedGqaInvocation hook; info logs from prior pilot contain no these debug counters",
+  "artifact_pins": {
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-fv-qa8-20261009-001/runs/F1/session/case.json": "f636e1550f40178a56da5c76c72f7894c536154698f7f01610a3549dbb12ff35",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-fv-qa8-20261009-001/runs/F1/session/server.log": "4d147480fab3399307356989af47b92548cdf9f4321c44e96f8bb167bf240fff",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-fv-qa8-20261009-001/runs/F2/session/case.json": "0217a5b8c19f1b1558fbc8d864d1253fe7aac3a4a804c35df58e7edec4285f5b",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-fv-qa8-20261009-001/runs/F2/session/server.log": "8765572e4bc74d6cbdf5fa123b9e35035b8b1c465ab93d325242d3f7f61e0dca",
+    "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-backend/native/cuda/cutlass/bf16_gemmex.cuh": "b36d03aebe3cc4f86620212bc416f7ef3e4fc3cb46154072fa52aa41334d7444",
+    "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-model/src/transformer/standard/cuda/hybrid_rank/mixed.rs": "4980282953f62b9d2e4f4ff8dc140458b637f60b473ce47d7fa565b6a7751634",
+    "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-model/src/transformer/standard/cuda/hybrid_rank/mixed_layer.rs": "e1d7b753b534a6d28e82f3674970e3bdd0104c5ef66f6985d02c5f36be40bab4",
+    "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-model/src/transformer/standard/cuda/invocation_trace.rs": "61c2b6022bb65edafe09fb771092fa14e31e0229b5453f416296e6be901885a1",
+    "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-model/src/transformer/standard/cuda/residency.rs": "9d4a0761d4721ac218f718867b769514d6872a8080e1018b38f80a5251ef4ed7",
+    "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-model/src/transformer/standard/cuda.rs": "654fac13af6cef6f2750ecd1843cc81be98749444784da765e00c9b72eb513bb",
+    "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-runtime/src/parallel/mixed_route_collective.rs": "a9def405290daddd69034452a2fcb7f55389934476b759ba44fe52ac2e924375",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-short-profile-20261009-001/final-owner-release.json": "6075b813f651ee510857864b0589159c1af8555e53dd0723bba50554900cc6b0",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-short-profile-20261009-001/profiling-failure-analysis.json": "46da52b8aa00766076ffd3e51f3a72ce697a9339bbc9df0f14beb9be07d4d36c",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-short-profile-20261009-001/profiling-failure-report.json": "e442d9fff07321652f67aa750e4146035d06b7c7afdb17319edb4e32446ca151"
+  }
+}

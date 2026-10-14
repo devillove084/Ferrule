@@ -1,0 +1,86 @@
+{
+  "status": "proven_drained",
+  "method": "linux-subreaper-waitid",
+  "containment_verified": true,
+  "launch_id": "e6ba877811d34cdfbc56ad36dd46e3cc",
+  "helper_identity": {
+    "pid": 16156,
+    "birth_ticks": 92797982,
+    "ppid": 13442,
+    "pgrp": 16156,
+    "session": 16156
+  },
+  "root_identity": {
+    "pid": 16157,
+    "birth_ticks": 92797986,
+    "ppid": 16156,
+    "pgrp": 16156,
+    "session": 16156
+  },
+  "boot_id": "4dd3497d-570c-4693-a876-5c26e06ab360",
+  "entries": [
+    {
+      "identity": {
+        "pid": 16157,
+        "birth_ticks": 92797986,
+        "ppid": 16156,
+        "pgrp": 16156,
+        "session": 16156
+      },
+      "role": "root",
+      "signals": [],
+      "reaped": true,
+      "exit_code": 0,
+      "first_observed_at": 8564100.21057259,
+      "reaped_at": 8564208.111686874
+    },
+    {
+      "identity": {
+        "pid": 16809,
+        "birth_ticks": 92803167,
+        "ppid": 16156,
+        "pgrp": 16157,
+        "session": 16157
+      },
+      "role": "adopted",
+      "signals": [],
+      "reaped": true,
+      "exit_code": -9,
+      "first_observed_at": 8564207.425274724,
+      "reaped_at": 8564207.76897103
+    },
+    {
+      "identity": {
+        "pid": 16810,
+        "birth_ticks": 92803167,
+        "ppid": 16156,
+        "pgrp": 16157,
+        "session": 16157
+      },
+      "role": "adopted",
+      "signals": [],
+      "reaped": true,
+      "exit_code": -9,
+      "first_observed_at": 8564207.42985635,
+      "reaped_at": 8564207.695208238
+    },
+    {
+      "identity": {
+        "pid": 16529,
+        "birth_ticks": 92802539,
+        "ppid": 16156,
+        "pgrp": 16157,
+        "session": 16157
+      },
+      "role": "adopted",
+      "signals": [],
+      "reaped": true,
+      "exit_code": 0,
+      "first_observed_at": 8564208.03078642,
+      "reaped_at": 8564208.059437776
+    }
+  ],
+  "errors": [],
+  "reporting_errors": [],
+  "echild": true
+}

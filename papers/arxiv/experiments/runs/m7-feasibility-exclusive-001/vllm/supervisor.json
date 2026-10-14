@@ -1,0 +1,83 @@
+{
+  "returncode": 1,
+  "timed_out": false,
+  "wall_seconds": 45.0035382732749,
+  "stdout": "",
+  "stderr": "",
+  "cleanup_errors": [],
+  "cleanup_scope": "isolated_subreaper_direct_children",
+  "descendant_custody": "proven_drained",
+  "gpu_quiescence": "unverified",
+  "custody": {
+    "status": "proven_drained",
+    "method": "linux-subreaper-waitid",
+    "containment_verified": true,
+    "launch_id": "5e4895ce59de495d8c47f59c69ab02c8",
+    "helper_identity": {
+      "pid": 167518,
+      "birth_ticks": 77395022,
+      "ppid": 167286,
+      "pgrp": 167518,
+      "session": 167518
+    },
+    "root_identity": {
+      "pid": 167519,
+      "birth_ticks": 77395025,
+      "ppid": 167518,
+      "pgrp": 167518,
+      "session": 167518
+    },
+    "boot_id": "4dd3497d-570c-4693-a876-5c26e06ab360",
+    "entries": [
+      {
+        "identity": {
+          "pid": 167519,
+          "birth_ticks": 77395025,
+          "ppid": 167518,
+          "pgrp": 167518,
+          "session": 167518
+        },
+        "role": "root",
+        "signals": [],
+        "reaped": true,
+        "exit_code": 1,
+        "first_observed_at": 8410070.601262836,
+        "reaped_at": 8410115.53320103
+      },
+      {
+        "identity": {
+          "pid": 168238,
+          "birth_ticks": 77399324,
+          "ppid": 167518,
+          "pgrp": 167519,
+          "session": 167519
+        },
+        "role": "adopted",
+        "signals": [],
+        "reaped": true,
+        "exit_code": 0,
+        "first_observed_at": 8410115.448340207,
+        "reaped_at": 8410115.45093224
+      }
+    ],
+    "errors": [],
+    "reporting_errors": [],
+    "echild": true
+  },
+  "handshake": {
+    "kind": "ready",
+    "protocol": 1,
+    "launch_id": "5e4895ce59de495d8c47f59c69ab02c8",
+    "helper_identity": {
+      "pid": 167518,
+      "birth_ticks": 77395022,
+      "ppid": 167286,
+      "pgrp": 167518,
+      "session": 167518
+    },
+    "containment_verified": true,
+    "method": "linux-subreaper-waitid"
+  },
+  "stdout_truncated": false,
+  "stderr_truncated": false
+}

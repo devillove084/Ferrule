@@ -1,0 +1,174 @@
+{
+  "schema": "ferrule.paper.m7.comparison-assessment.v2",
+  "status": "infeasible",
+  "run_id": "m7-feasibility-exclusive-002",
+  "execution_receipt": {
+    "path": "papers/arxiv/experiments/runs/m7-feasibility-exclusive-002/execution.json",
+    "sha256": "f20cf45a1f6e4034a7a724fec4144b97e5968bbf4df05979c8b47a51051b76bc"
+  },
+  "protocol": {
+    "config": "m7-device-exclusive.json",
+    "protocol_id": "m7-device-exclusive-local-custody-v2",
+    "identity_mode": "device_exclusive_local_custody",
+    "gpu_uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+    "seed": 1,
+    "prompt": "Hello",
+    "input_tokens": 1,
+    "max_output_tokens": 2,
+    "context": 128,
+    "tp": 1,
+    "pp": 1,
+    "ep": 1,
+    "activation": "bfloat16",
+    "kv": "bfloat16",
+    "conv": "bfloat16",
+    "ssm": "float32",
+    "prefix_cache": false,
+    "eos": "natural",
+    "gpu_target_bytes": 7516192768,
+    "host_pss_target_bytes": 68719476736,
+    "hard_memory_partition": false,
+    "same_frozen_argv": true
+  },
+  "ownership_and_measurement": {
+    "operator_grant": true,
+    "physical_uuid_lock": "nonblocking_flock held through both cases and cleanup",
+    "pre_post_idle_scope": "all eight physical GPUs",
+    "pre_post_idle_verified": true,
+    "local_descendant_custody": "authenticated proven_drained for both cases",
+    "nvml_pid_mapping": "unmapped in nested namespace",
+    "owned_gpu_attribution": "unknown",
+    "owned_process_gpu_peak_bytes": null,
+    "whole_device_memory_conservative": true,
+    "absence_of_foreign_interference_proven": false,
+    "performance_basis": "exclusive_operator_allocation_assumption"
+  },
+  "cases": {
+    "ferrule": {
+      "classification": "eligible_feasibility_observation",
+      "request_sent": true,
+      "status": "complete",
+      "text": ", I",
+      "actual_input_tokens": 1,
+      "actual_output_tokens": 2,
+      "finish_reason": "length",
+      "ttft_seconds": 0.6655100006610155,
+      "request_e2e_seconds": 1.8603699430823326,
+      "mean_tpot_usage_proxy_seconds": 0.6120898853987455,
+      "startup_seconds": 16.402618324384093,
+      "contract_validation_seconds": 20.876275127753615,
+      "sampled_whole_device_high_water_bytes": 4191158272,
+      "sampled_server_tree_pss_bytes": 7978124288,
+      "sampled_server_tree_rss_bytes": 7981219840,
+      "samples": 9,
+      "resource_status": "observed_within_targets",
+      "runtime_effective": {
+        "status": "blocked",
+        "evidence": {
+          "mixed_profile": [
+            "cuda-hybrid-numeric-fp8-model-bf16-mixed-f32-ssm",
+            "cuda-hybrid-numeric-fp8-model-bf16-mixed-f32-ssm",
+            "cuda-hybrid-numeric-fp8-model-bf16-mixed-f32-ssm",
+            "cuda-hybrid-numeric-fp8-model-bf16-mixed-f32-ssm"
+          ]
+        },
+        "contradictions": [],
+        "missing": [],
+        "reasons": [
+          "Effective KV/conv/SSM dtype and physical pinning need runtime evidence",
+          "UVA selection log alone does not prove UVA path rather than functional_call fallback"
+        ],
+        "exact_arithmetic_match": false,
+        "log_sha256": "75d8f7787735042f3cba6663e1ed321179ba532d8e7d4b5c8cb0fbdb6add9a14",
+        "scanned_prefix_bytes": 8238,
+        "truncated": false,
+        "performance_fields_observed": false,
+        "performance_parser": "profile/backend evidence only; no performance-field extraction implemented"
+      },
+      "custody": "proven_drained",
+      "after_idle": "verified"
+    },
+    "vllm": {
+      "classification": "comparison_infeasible_resource_ceiling",
+      "request_sent": false,
+      "status": "resource_failed",
+      "reason": "Sampled whole-device memory exceeded the fixed 7GiB soft eligibility ceiling during startup; no policy or flag was changed",
+      "startup_ready_observed_seconds": 228.185640623793,
+      "resource_breach_seconds_after_server_launch": 104.68092415295541,
+      "sampled_whole_device_high_water_bytes": 7634681856,
+      "gpu_target_bytes": 7516192768,
+      "over_target_bytes": 118489088,
+      "sampled_server_tree_pss_bytes": 37738962944,
+      "sampled_server_tree_rss_bytes": 38155132928,
+      "samples": 43,
+      "resource_status": "blocked",
+      "resource_errors": [
+        "Sampled GPU target exceeded"
+      ],
+      "runtime_effective": {
+        "dtype_bfloat16": true,
+        "linear_marlin": true,
+        "moe_marlin": true,
+        "uva": true,
+        "cpu_offloaded_parameters": true,
+        "gdn_fallback_observed": true,
+        "performance_fields_observed": false
+      },
+      "allocator_warnings": [
+        "20MiB allocation OOM warnings recorded during model load; retained as runtime evidence, not converted into a separate policy"
+      ],
+      "custody": "proven_drained",
+      "after_idle": "verified"
+    }
+  },
+  "comparison": {
+    "status": "infeasible",
+    "ferrule_observed": true,
+    "vllm_request_observed": false,
+    "fairmatch": false,
+    "exact_speedup": null,
+    "ttft_comparison": null,
+    "pending_fair_limits": [
+      "partial checkpoint identity",
+      "unknown NVML PID attribution",
+      "different runtime arithmetic",
+      "sampled rather than exact memory peaks"
+    ]
+  },
+  "source_after_fix": {
+    "runner_py_sha256": "f1e87f00822445a708c5ffe50124ea0d34e928fd56fe6943ccaf7a052bb9d95a",
+    "contract_py_sha256": "96f9664cb16e4b861b4902f6c07b234ca08d89106d4d99a9ff8db74511de25bf",
+    "schema_json_sha256": "18b3034c3154d1fdbdfc925ae3afea7e853ab535f45c947423b2f608c5d0032b"
+  },
+  "artifact_pins": {
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/m7-feasibility-exclusive-002/assessment-final.json": "8b51de703b6d998719e428653cdcd14107e65defffeba814b4a5de2fbdacde21",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/m7-feasibility-exclusive-002/execution.json": "f20cf45a1f6e4034a7a724fec4144b97e5968bbf4df05979c8b47a51051b76bc",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/m7-feasibility-exclusive-002/ferrule/after.json": "6b8660e506a55546981b7052b2a36dad7d14c1cf30b41609ee059fc4e52fd8dc",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/m7-feasibility-exclusive-002/ferrule/assessment.json": "b28707f89fdb190b1abae54b98add7da623ac4cca466dd99b5ea70a000fa1346",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/m7-feasibility-exclusive-002/ferrule/before.json": "dc7f7bea0659fa6255af0af5f31bbce1f0326d625ca3ad5a5ef7ab75188815cc",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/m7-feasibility-exclusive-002/ferrule/case.json": "16c9b02317aa1843e4001e3ba6c1cbce901acff277cd84b9cbf4cd8cd120f101",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/m7-feasibility-exclusive-002/ferrule/custody.json": "f5fae65c8faabe73982f9e6c0a61dbfc7714b914491405630629b031fe02b15c",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/m7-feasibility-exclusive-002/ferrule/http.json": "326e4597cd93b2f50cb4ca22184288be6f6dc7822b7334cd120e6d1a18b066e1",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/m7-feasibility-exclusive-002/ferrule/launch.json": "ccbaba6b0c9b9247e444f4099e4171a22ce45a34bf941feef5f48b5c7ece0a8b",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/m7-feasibility-exclusive-002/ferrule/metadata.json": "ce7bcf626bb6d2d86c7c5e079f1975186e4c696a0f4084e0c243ff1343168514",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/m7-feasibility-exclusive-002/ferrule/samples.jsonl": "fc18a873041ce06ad5ab7ff6930468d9594a407c6dab198edc4bc8a12ff121b0",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/m7-feasibility-exclusive-002/ferrule/server.log": "75d8f7787735042f3cba6663e1ed321179ba532d8e7d4b5c8cb0fbdb6add9a14",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/m7-feasibility-exclusive-002/ferrule/supervisor.json": "08c17dedeadb2125cc97ba06a6d07df37e351484336212d5bc7e2f671e6cf0ff",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/m7-feasibility-exclusive-002/ferrule/worker-launch.json": "a7497bb16911ccb7909e76da0b81685e9a624866caa0e372f1f67886596a9ec2",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/m7-feasibility-exclusive-002/final-release.json": "3c0a5b05faf8eb658d299318affd4c62a999322c9b519df65dd6e888c3896807",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/m7-feasibility-exclusive-002/launch.json": "05e2443e9ee5cefac5d3ad808714d690f91a659f2cbd2da4fab26ce4d3055c3b",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/m7-feasibility-exclusive-002/vllm/after.json": "9ac412ca1f12633dd0e56660e94e14321115f8f2795b5b8f5e0e614668c09c29",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/m7-feasibility-exclusive-002/vllm/assessment.json": "94de5e67089c42cff1a9885907bf64083edaf729c923f5e9d72500cd975c54c6",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/m7-feasibility-exclusive-002/vllm/before.json": "c7c453dcd22a2ba79d9cbd7fc228d4c1399401bf2fbca45a4260573eab96d43b",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/m7-feasibility-exclusive-002/vllm/case.json": "b6559937cb508d451f4c4075c0445f54f68ea73eb0e1872d09373ec8bee87620",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/m7-feasibility-exclusive-002/vllm/custody.json": "83eb3b7cda2682102f54a649a9162594ac85369d7e13bb0f4caee127ca603df4",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/m7-feasibility-exclusive-002/vllm/launch.json": "de26881aacaaac047800891ce10fa1ae6de9ab3871b7092229a7f3b3b87728a3",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/m7-feasibility-exclusive-002/vllm/metadata.json": "41fe94df11058f1f97f3fe59b5f54fe277c6454b17663e3e998855384de04a61",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/m7-feasibility-exclusive-002/vllm/samples.jsonl": "8af83a057126e534e90fdeaa1b37c5883cd225f0c9539317f01adf14061848f6",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/m7-feasibility-exclusive-002/vllm/server.log": "ab6743624503e533102916cdd36fd489dd5c47470670787ace5dc664737a5837",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/m7-feasibility-exclusive-002/vllm/supervisor.json": "dd164943a6e9858f2879d7ea9fd3a13a270aaeb006ff0341e75b069d04700845",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/m7-feasibility-exclusive-002/vllm/worker-launch.json": "aa3156c972f75be266658b7602f2bc8a6361eaa725bdf5b9017bd77a1cefa0e1"
+  },
+  "supersedes_artifact": "assessment-final.json",
+  "artifact_pins_note": "Absolute keys satisfy the paper receipt pin contract; original assessment remains append-only historical artifact."
+}

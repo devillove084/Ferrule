@@ -1,0 +1,16 @@
+{
+  "selector": "transformer::standard::cuda::hybrid_rank::mixed::decoded_gpu_tests::decoded_pair_single_cold_hot_fit_exact_and_no_cache_dma",
+  "binary_sha256": "b0a1f243076045b1503ec21f6f004383e6c58686e6a24c9ca85ec76df854a366",
+  "source_digest": "561a7b47a538b7c96d72ca3c4790b05f472643e876219847fdf7a962bd84faa9",
+  "assertions_passed": true,
+  "cache_values": "source-pinned model assertions; no raw per-step counters exported",
+  "assertion_contract": null,
+  "gpu_memory": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-indexed-lru-20261010-01/model-cold-hot-fit/resources.json",
+    "sha256": "1499e3ba307e5c6b40a4c387e41a2faa60f53dbf2d4a4393a5f0781a83860b3c"
+  },
+  "log": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-indexed-lru-20261010-01/model-cold-hot-fit/test.log",
+    "sha256": "be67b32182ec6d5a8d8b078519b7a4750ec61d6f1f1e97293ec426da4d8d8ad4"
+  }
+}

@@ -1,84 +1,18 @@
 //! DeepSeek-V4 model configuration.
 
 #[cfg(feature = "cuda")]
-use crate::TensorRole;
+mod cuda;
 #[cfg(feature = "cuda")]
-use crate::transformer::attention::mla::{MlaConfig, MlaWeights};
+pub(crate) use cuda::{
+    with_deepseek_v4_attention_execution_policies, with_deepseek_v4_linear_execution_policy,
+    with_deepseek_v4_swiglu_execution_policies,
+};
 
-#[cfg(feature = "cuda")]
-use crate::checkpoint::weight::{LinearExecutionPolicy, LinearWeight, LinearWeightFormat};
 use crate::families::deepseek_v4;
-#[cfg(feature = "cuda")]
-use crate::ffn::SwiGluFfnPayload;
 use crate::transformer::connection::HyperConnectionConfig;
 use ferrule_common::{Error, Result};
 
 use crate::models::common::config_json::{f32_key, usize_key};
-
-#[cfg(feature = "cuda")]
-const DSV4_LINEAR_ACTIVATION_QUANT_BLOCK_SIZE: usize = 128;
-
-#[cfg(feature = "cuda")]
-fn deepseek_v4_quantized_linear_execution_policy() -> LinearExecutionPolicy {
-    LinearExecutionPolicy::fp8_e4m3_e8m0_activation(DSV4_LINEAR_ACTIVATION_QUANT_BLOCK_SIZE)
-}
-
-#[cfg(feature = "cuda")]
-pub(crate) fn with_deepseek_v4_linear_execution_policy(linear: LinearWeight) -> LinearWeight {
-    if deepseek_v4_role_uses_official_linear_activation_quantization(&linear.role)
-        && artifact_linear_format_has_quantized_weight(&linear.format)
-    {
-        linear.with_execution_policy(deepseek_v4_quantized_linear_execution_policy())
-    } else {
-        linear
-    }
-}
-
-#[cfg(feature = "cuda")]
-pub(crate) fn with_deepseek_v4_attention_execution_policies(mut payload: MlaWeights) -> MlaWeights {
-    payload.query_a = with_deepseek_v4_linear_execution_policy(payload.query_a);
-    payload.query_b = with_deepseek_v4_linear_execution_policy(payload.query_b);
-    payload.key_value = with_deepseek_v4_linear_execution_policy(payload.key_value);
-    // Official DSV4 does not call `linear()` for `wo_a`; it uses a grouped einsum
-    // over the dequantized FP8 weight, so activation quantization must not be applied.
-    payload.output_b = with_deepseek_v4_linear_execution_policy(payload.output_b);
-    payload
-}
-
-#[cfg(feature = "cuda")]
-pub(crate) fn with_deepseek_v4_swiglu_execution_policies(
-    mut ffn: SwiGluFfnPayload,
-) -> SwiGluFfnPayload {
-    ffn.gate = with_deepseek_v4_linear_execution_policy(ffn.gate);
-    ffn.up = with_deepseek_v4_linear_execution_policy(ffn.up);
-    ffn.down = with_deepseek_v4_linear_execution_policy(ffn.down);
-    ffn
-}
-
-#[cfg(feature = "cuda")]
-fn deepseek_v4_role_uses_official_linear_activation_quantization(role: &TensorRole) -> bool {
-    matches!(
-        role,
-        TensorRole::AttentionLatentQueryA
-            | TensorRole::AttentionLatentQueryB
-            | TensorRole::AttentionLatentKv
-            | TensorRole::AttentionLatentOutputB
-            | TensorRole::SharedExpertGate
-            | TensorRole::SharedExpertUp
-            | TensorRole::SharedExpertDown
-            | TensorRole::AuxIndexer
-            | TensorRole::SpeculativeProjection
-    )
-}
-
-#[cfg(feature = "cuda")]
-fn artifact_linear_format_has_quantized_weight(format: &LinearWeightFormat) -> bool {
-    matches!(
-        format,
-        LinearWeightFormat::Fp8E4M3WithE8M0Scale { .. }
-            | LinearWeightFormat::Fp4E2M1PackedWithE8M0Scale { .. }
-    )
-}
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct DeepSeekV4Config {
@@ -326,35 +260,10 @@ impl DeepSeekV4Config {
             return Err(config_error("proposal confidence width overflows usize"));
         }
         #[cfg(feature = "cuda")]
-        {
-            let frequency = crate::models::common::rope::yarn_frequency(
-                0,
-                self.qk_rope_head_dim,
-                crate::models::common::rope::RopeParams {
-                    theta: self.compress_rope_theta,
-                    original_seq_len: self.original_seq_len,
-                    factor: self.rope_factor,
-                    beta_fast: self.beta_fast,
-                    beta_slow: self.beta_slow,
-                },
-            );
-            if !frequency.is_finite() || frequency <= 0.0 {
-                return Err(config_error("compressed RoPE frequency is invalid"));
-            }
-        }
+        self.validate_cuda_rope()?;
         Ok(())
     }
 
-    #[cfg(feature = "cuda")]
-    /// Returns the model-independent MTP configuration.
-    pub(super) fn mtp_config(&self) -> crate::transformer::proposal::MtpConfig {
-        crate::transformer::proposal::MtpConfig {
-            block_size: self.proposal_block_size,
-            noise_token_id: self.proposal_noise_token_id,
-            target_layer_ids: self.proposal_target_layer_ids.clone(),
-            markov_rank: self.proposal_markov_rank,
-        }
-    }
     pub(super) fn hc_config(&self) -> HyperConnectionConfig {
         HyperConnectionConfig {
             hc_mult: self.hc_mult,
@@ -363,71 +272,6 @@ impl DeepSeekV4Config {
             eps: self.hc_eps,
             norm_eps: self.norm_eps,
         }
-    }
-
-    /// Returns an attention configuration for one proposal transformer stage.
-    ///
-    #[cfg(feature = "cuda")]
-    /// Proposal stages share the target MLA structure but do not use compressed
-    /// attention.
-    pub(super) fn attention_config_for_proposal_stage(
-        &self,
-        _proposal_stage: usize,
-    ) -> Result<MlaConfig> {
-        Ok(MlaConfig {
-            hidden_size: self.hidden_size,
-            num_heads: self.num_heads,
-            head_dim: self.head_dim,
-            q_lora_rank: self.q_lora_rank,
-            rope_head_dim: self.qk_rope_head_dim,
-            o_groups: self.o_groups,
-            o_lora_rank: self.o_lora_rank,
-            window_size: self.window_size,
-            compress_ratio: 0,
-            norm_eps: self.norm_eps,
-            rope_theta: self.rope_theta,
-            compress_rope_theta: self.compress_rope_theta,
-            original_seq_len: self.original_seq_len,
-            rope_factor: self.rope_factor,
-            beta_fast: self.beta_fast,
-            beta_slow: self.beta_slow,
-            index_n_heads: self.index_n_heads,
-            index_head_dim: self.index_head_dim,
-            index_topk: self.index_topk,
-        })
-    }
-
-    #[cfg(feature = "cuda")]
-    pub(super) fn attention_config_for_layer(&self, layer: usize) -> Result<MlaConfig> {
-        if layer >= self.num_layers {
-            return Err(Error::Model {
-                message: format!(
-                    "DeepSeek-V4 layer {layer} exceeds layer count {}",
-                    self.num_layers
-                ),
-            });
-        }
-        Ok(MlaConfig {
-            hidden_size: self.hidden_size,
-            num_heads: self.num_heads,
-            head_dim: self.head_dim,
-            q_lora_rank: self.q_lora_rank,
-            rope_head_dim: self.qk_rope_head_dim,
-            o_groups: self.o_groups,
-            o_lora_rank: self.o_lora_rank,
-            window_size: self.window_size,
-            compress_ratio: self.compress_ratios.get(layer).copied().unwrap_or(0),
-            norm_eps: self.norm_eps,
-            rope_theta: self.rope_theta,
-            compress_rope_theta: self.compress_rope_theta,
-            original_seq_len: self.original_seq_len,
-            rope_factor: self.rope_factor,
-            beta_fast: self.beta_fast,
-            beta_slow: self.beta_slow,
-            index_n_heads: self.index_n_heads,
-            index_head_dim: self.index_head_dim,
-            index_topk: self.index_topk,
-        })
     }
 }
 

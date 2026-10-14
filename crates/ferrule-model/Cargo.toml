@@ -11,6 +11,8 @@ categories = ["science", "machine-learning"]
 
 [features]
 default = []
+# Opt-in CPU reference/provider surface for correctness tests and fixtures.
+cpu-reference = ["ferrule-backend/cpu-reference"]
 cuda = ["ferrule-backend/cuda"]
 # Explicit opt-in for real materialization composition tests only.
 cuda-test-support = ["cuda"]
@@ -35,7 +37,7 @@ libc = "0.2"
 tokio = { version = "1", features = ["net", "rt", "sync"] }
 
 [dev-dependencies]
-ferrule-runtime = { path = "../ferrule-runtime", default-features = false }
+ferrule-runtime = { version = "0.2.0", path = "../ferrule-runtime", default-features = false }
 
 # The real-provider composition test is excluded unless explicitly enabled.
 [[test]]
@@ -44,3 +46,7 @@ required-features = ["cuda-test-support"]
 
 [lints]
 workspace = true
+
+[[test]]
+name = "cpu_reference_api"
+required-features = ["cpu-reference"]

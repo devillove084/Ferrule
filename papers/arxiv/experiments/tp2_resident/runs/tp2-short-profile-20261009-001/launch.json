@@ -1,0 +1,15 @@
+{
+  "protocol": "tp2-serving-profile-c1",
+  "purpose": "profiling",
+  "status": "incomplete",
+  "sole_gpu_owner_granted": true,
+  "owner_note": "User renewed sole GPU0/1 ownership for exactly one short same-release Nsight profile, warm1+measured1 QA8, no full numerical capture, no production edits, no foreign signals; release after authenticated drain",
+  "fairmatch": false,
+  "exact_speedup": null,
+  "slots": [
+    {
+      "id": "P1",
+      "status": "not_run"
+    }
+  ]
+}

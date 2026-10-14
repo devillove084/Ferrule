@@ -20,9 +20,10 @@ use ferrule_model::decoder::{
 };
 use ferrule_model::transformer::{SegmentInput, SegmentOutput};
 
+use super::completion_boundary::{Boundary, CompletionClass, CompletionContext, needs_quarantine};
 use super::{PipelineOwnerStats, PipelineRank, PipelineStageDescription, error};
 use crate::SessionId;
-use crate::parallel::data::{CompletionOutcome, DataParallelExecutor};
+use crate::parallel::data::DataParallelExecutor;
 
 /// Address of one active physical operation, never authority to reconstruct it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -64,10 +65,20 @@ impl PipelineCommandKey {
 
 /// All stage operations are dispatched through the same owner journal. Prepare
 /// lowers and reserves only; Execute enters that exact reservation once.
+/// Thread-only observation request. Only the parent publication/lease seam constructs it.
+#[cfg(feature = "cuda")]
+#[derive(Debug)]
+pub struct CommittedTraceRequest {
+    pub(super) key: PipelineCommandKey,
+    pub(super) source: ferrule_common::host_kv::CommittedKvSource,
+}
+
 #[derive(Debug)]
 pub enum PipelineCommand {
     Describe,
     Stats,
+    #[cfg(feature = "cuda")]
+    TraceCommitted(CommittedTraceRequest),
     Create {
         session: SessionId,
     },
@@ -114,6 +125,36 @@ pub enum PipelineCommand {
         pages: Vec<KvPageId>,
     },
     Finish(PipelineCommandKey),
+}
+
+impl PipelineCommand {
+    pub(crate) fn completion_context(&self, rank: PipelineRank) -> CompletionContext {
+        let (stage, key) = match self {
+            Self::Describe => ("describe", None),
+            Self::Stats => ("stats", None),
+            #[cfg(feature = "cuda")]
+            Self::TraceCommitted(request) => ("trace_committed", Some(&request.key)),
+            Self::Create { .. } => ("create", None),
+            Self::Fork { .. } => ("fork", None),
+            Self::Release { .. } => ("release", None),
+            Self::Prepare { key, .. } => ("prepare", Some(key)),
+            Self::Execute { key, .. } => ("execute", Some(key)),
+            Self::Ready(key) => ("ready", Some(key)),
+            Self::Install { key, .. } => ("install", Some(key)),
+            Self::PollInstall { key, .. } => ("poll_install", Some(key)),
+            Self::Abort { key, .. } => ("abort", Some(key)),
+            Self::Rollback(key) => ("rollback", Some(key)),
+            Self::Publish(key) => ("publish", Some(key)),
+            Self::CheckRetirement { key, .. } => ("check_retirement", Some(key)),
+            Self::Retire { key, .. } => ("retire", Some(key)),
+            Self::Finish(key) => ("finish", Some(key)),
+        };
+        CompletionContext {
+            rank,
+            stage,
+            transaction: key.map(|key| key.binding.transaction()),
+        }
+    }
 }
 
 /// Portable preparation projection: no sequence topology, private KV token,
@@ -408,8 +449,9 @@ impl PipelineTransport for DataPoolPipelineTransport {
         command: PipelineCommand,
         poll: &mut dyn FnMut(),
     ) -> Result<PipelineReply> {
+        let mut context = command.completion_context(rank);
         if self.unavailable {
-            return Err(error("pipeline transport is quarantined"));
+            return Err(context.failure(CompletionClass::Unknown, true, None));
         }
         let pool = self
             .pool
@@ -420,6 +462,8 @@ impl PipelineTransport for DataPoolPipelineTransport {
             .next_id
             .checked_add(1)
             .ok_or_else(|| error("pipeline command identity exhausted"))?;
+        context.transaction = context.transaction.or(Some(id));
+        let boundary = Boundary::new("pipeline.thread", context);
         let route = SessionId(u64::from(rank.local.get()) + 1);
         pool.try_submit_to(route, rank.local, id, command)
             .map_err(|submit| error(format!("pipeline owner admission: {:?}", submit.kind)))?;
@@ -430,21 +474,21 @@ impl PipelineTransport for DataPoolPipelineTransport {
             }
             std::thread::sleep(Duration::from_micros(50));
         };
-        if completion.transaction != id
+        let result = if completion.transaction != id
             || completion.rank != rank.local
             || completion.session != route
         {
-            self.unavailable = true;
-            return Err(error("pipeline completion identity mismatch"));
-        }
-        match completion.outcome {
-            CompletionOutcome::Success(reply) => Ok(reply),
-            CompletionOutcome::Failed(source) => Err(source),
-            other => {
-                self.unavailable = true;
-                Err(error(format!("pipeline owner unavailable: {other:?}")))
-            }
-        }
+            Err(context.failure(
+                CompletionClass::Unknown,
+                true,
+                Some(Box::new(error("pipeline completion identity mismatch"))),
+            ))
+        } else {
+            context.completion(completion.outcome)
+        };
+        self.unavailable |= result.as_ref().err().is_some_and(needs_quarantine);
+        boundary.finish(&result);
+        result
     }
 
     fn call_batch_observed(
@@ -461,8 +505,16 @@ impl PipelineTransport for DataPoolPipelineTransport {
         poll: &mut dyn FnMut(),
         on_failure: &mut dyn FnMut(),
     ) -> Result<Vec<PipelineReply>> {
-        if self.unavailable || commands.is_empty() {
-            return Err(error("empty batch or unavailable pipeline transport"));
+        if commands.is_empty() {
+            return Err(error("empty pipeline batch"));
+        }
+        if self.unavailable {
+            let (rank, command) = &commands[0];
+            return Err(command.completion_context(*rank).failure(
+                CompletionClass::Unknown,
+                true,
+                None,
+            ));
         }
         let pool = self
             .pool
@@ -497,9 +549,12 @@ impl PipelineTransport for DataPoolPipelineTransport {
         for (index, (rank, command)) in commands.into_iter().enumerate() {
             let id = ExecutionTransactionId::new(start + index as u64)?;
             let route = SessionId(u64::from(rank.local.get()) + 1);
+            let mut context = command.completion_context(rank);
+            context.transaction = context.transaction.or(Some(id));
+            let boundary = Boundary::new("pipeline.thread", context);
             match pool.try_submit_to(route, rank.local, id, command) {
                 Ok(_) => {
-                    pending.insert(id, (index, rank, route));
+                    pending.insert(id, (index, context, route, boundary));
                 }
                 Err(rejected) => {
                     on_failure();
@@ -524,30 +579,44 @@ impl PipelineTransport for DataPoolPipelineTransport {
                 continue;
             };
             let expected = pending.remove(&completion.transaction);
-            let Some((index, rank, route)) = expected else {
+            let Some((index, context, route, boundary)) = expected else {
                 on_failure();
                 self.unavailable = true;
-                failures.push(error("unknown pipeline batch completion"));
+                failures.push(
+                    CompletionContext {
+                        rank: PipelineRank {
+                            local: completion.rank,
+                            global: completion.rank,
+                        },
+                        stage: "dispatch",
+                        transaction: Some(completion.transaction),
+                    }
+                    .failure(
+                        CompletionClass::Unknown,
+                        true,
+                        Some(Box::new(error("unknown pipeline batch completion"))),
+                    ),
+                );
                 continue;
             };
-            if completion.rank != rank.local || completion.session != route {
-                on_failure();
-                self.unavailable = true;
-                failures.push(error("pipeline batch completion identity mismatch"));
-                continue;
-            }
-            match completion.outcome {
-                CompletionOutcome::Success(reply) => replies[index] = Some(reply),
-                CompletionOutcome::Failed(source) => {
+            let result = if completion.rank != context.rank.local || completion.session != route {
+                Err(context.failure(
+                    CompletionClass::Unknown,
+                    true,
+                    Some(Box::new(error(
+                        "pipeline batch completion identity mismatch",
+                    ))),
+                ))
+            } else {
+                context.completion(completion.outcome)
+            };
+            boundary.finish(&result);
+            match result {
+                Ok(reply) => replies[index] = Some(reply),
+                Err(source) => {
                     on_failure();
-                    failures.push(source)
-                }
-                other => {
-                    on_failure();
-                    self.unavailable = true;
-                    failures.push(error(format!(
-                        "pipeline batch owner unavailable: {other:?}"
-                    )));
+                    self.unavailable |= needs_quarantine(&source);
+                    failures.push(source);
                 }
             }
         }
@@ -568,12 +637,16 @@ impl PipelineTransport for DataPoolPipelineTransport {
     }
 
     fn shutdown(&mut self) -> Result<()> {
-        match self.pool.as_mut() {
-            Some(pool) => pool
-                .shutdown()
-                .map_err(|failure| super::pool_shutdown_error(failure)),
-            None => Ok(()),
+        if self.unavailable {
+            // Quarantine is not a fence, even after queue credits were drained.
+            return Err(super::completion_boundary::quarantined());
         }
+        let result = match self.pool.as_mut() {
+            Some(pool) => pool.shutdown().map_err(super::pool_shutdown_error),
+            None => Ok(()),
+        };
+        self.unavailable |= result.as_ref().err().is_some_and(needs_quarantine);
+        result
     }
 
     fn quarantine(&mut self) {

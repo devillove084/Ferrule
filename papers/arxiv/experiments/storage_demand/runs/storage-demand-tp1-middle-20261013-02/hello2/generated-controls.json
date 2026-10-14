@@ -1,0 +1,12 @@
+{
+  "model": "qwen35-storage-demand-paper",
+  "prompt": "Hello",
+  "temperature": 0,
+  "seed": 1,
+  "n": 1,
+  "max_tokens": 2,
+  "stream": true,
+  "stream_options": {
+    "include_usage": true
+  }
+}

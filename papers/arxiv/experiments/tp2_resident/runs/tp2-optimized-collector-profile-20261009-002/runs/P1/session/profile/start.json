@@ -1,0 +1,19 @@
+{
+  "action": "start",
+  "argv": [
+    "/opt/nvidia/nsight-systems/2026.1.3/target-linux-x64/nsys",
+    "start",
+    "--session=FerruleProfile_tp2-optimized-collector-profile-20261009-002"
+  ],
+  "returncode": 0,
+  "stdout": "",
+  "stderr": "",
+  "start": {
+    "monotonic_ns": 8499523286620622,
+    "unix_ns": 1791556580250102405
+  },
+  "end": {
+    "monotonic_ns": 8499526875960545,
+    "unix_ns": 1791556583839442466
+  }
+}

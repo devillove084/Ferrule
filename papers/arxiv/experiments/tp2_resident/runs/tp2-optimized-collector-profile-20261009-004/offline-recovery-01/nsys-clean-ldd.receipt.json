@@ -1,0 +1,14 @@
+{
+  "argv": [
+    "/usr/bin/ldd",
+    "/opt/nvidia/nsight-systems/2026.1.3/target-linux-x64/nsys"
+  ],
+  "environment": {
+    "PATH": "/usr/bin:/bin",
+    "HOME": "/root",
+    "CUDA_VISIBLE_DEVICES": "",
+    "NVIDIA_VISIBLE_DEVICES": "none",
+    "QT_QPA_PLATFORM": "offscreen"
+  },
+  "returncode": 0
+}

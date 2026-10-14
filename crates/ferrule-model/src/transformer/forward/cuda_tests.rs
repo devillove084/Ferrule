@@ -270,9 +270,5 @@ fn assert_unknown(error: &Error) {
     let Error::ModelSource { source } = error else {
         panic!("expected typed unknown, got {error:?}")
     };
-    assert!(
-        source
-            .downcast_ref::<HybridCudaCompletionUnknown>()
-            .is_some()
-    );
+    assert!(source.downcast_ref::<CompletionUnknown>().is_some());
 }

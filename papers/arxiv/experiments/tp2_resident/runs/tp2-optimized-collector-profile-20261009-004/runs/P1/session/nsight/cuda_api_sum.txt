@@ -1,0 +1,25 @@
+Generating SQLite file /home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-collector-profile-20261009-004/runs/P1/session/nsight/nsys.sqlite from /home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-collector-profile-20261009-004/runs/P1/session/nsight/nsys.nsys-rep
+Processing [/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-collector-profile-20261009-004/runs/P1/session/nsight/nsys.sqlite] with [/opt/nvidia/nsight-systems/2026.1.3/target-linux-x64/reports/cuda_api_sum.py]... 
+Time (%),Total Time (ns),Num Calls,Avg (ns),Med (ns),Min (ns),Max (ns),StdDev (ns),Name
+88.4,470789399,11772,39992.3,816.0,308,452435521,4169943.3,cuEventRecord
+5.5,29116644,28893,1007.7,516.0,282,24008,2031.2,cuEventQuery
+2.2,11603727,41103,282.3,275.0,120,40504,282.9,cuEventDestroy_v2
+1.7,9053025,11713,772.9,639.0,147,55410,736.4,cuEventCreate
+1.0,5086544,69419,73.3,71.0,65,7871,49.9,cuCtxSetCurrent
+0.9,4595025,825,5569.7,3605.0,1515,68093,7067.0,cuMemsetD8Async
+0.2,892741,14576,61.2,56.0,43,3399,30.3,cuCtxGetCurrent
+0.1,641769,153,4194.6,946.0,334,89538,11837.3,cuEventSynchronize
+0.1,410326,475,863.8,465.0,327,7277,1235.3,cuStreamSynchronize
+0.0,240092,42,5716.5,5102.5,2475,17080,2903.3,cuMemcpyHtoDAsync_v2
+0.0,233776,41,5701.9,3292.0,2815,20840,4701.0,cuMemcpyDtoHAsync_v2
+0.0,49825,11,4529.5,4165.0,3057,7032,1047.6,cudaLaunchKernel
+0.0,13100,33,397.0,366.0,357,542,56.1,cuStreamWaitEvent
+0.0,10139,2,5069.5,5069.5,4114,6025,1351.3,cuMemcpyDtoDAsync_v2
+0.0,2695,28,96.3,96.5,67,142,19.6,cudaGetLastError
+0.0,2054,3,684.7,675.0,652,727,38.4,cuKernelGetFunction
+0.0,2005,2,1002.5,1002.5,989,1016,19.1,cudaOccupancyMaxActiveBlocksPerMultiprocessor
+0.0,1037,4,259.3,284.0,147,322,77.0,cuOccupancyMaxActiveBlocksPerMultiprocessorWithFlags
+0.0,977,3,325.7,366.0,224,387,88.7,cudaGetDevice
+0.0,887,3,295.7,313.0,214,360,74.5,cudaDeviceGetAttribute
+0.0,324,3,108.0,97.0,84,143,31.0,cudaPeekAtLastError
+

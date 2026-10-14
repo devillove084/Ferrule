@@ -1,0 +1,77 @@
+{
+  "status": "cpu_ready_awaiting_gpu_authorization",
+  "gpu_queries": 0,
+  "gpu_locks": 0,
+  "servers_started": 0,
+  "tests": [
+    {
+      "argv": [
+        "/home/admin/wxw403883/anaconda3/bin/python3.12",
+        "-S",
+        "-B",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "papers/arxiv/experiments/tp2_resident",
+        "-p",
+        "test_*.py"
+      ],
+      "returncode": 0,
+      "log": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/plans/collector-handoff-20261009/tp2-tests.log",
+      "sha256": "67ad5af67a3d9d78f181c6040f9fb61fa549be7f2f931bf188562edfeba24d46"
+    },
+    {
+      "argv": [
+        "/home/admin/wxw403883/anaconda3/bin/python3.12",
+        "-S",
+        "-B",
+        "-m",
+        "unittest",
+        "papers/arxiv/experiments/test_experiments.py"
+      ],
+      "returncode": 0,
+      "log": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/plans/collector-handoff-20261009/original-tests.log",
+      "sha256": "70a893a96f9ad6e010d08ad18486b4408c1a1b7827d518d56235181d24d9344a"
+    }
+  ],
+  "tp2_tests": 124,
+  "original_tests": 42,
+  "source_pins": {
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/compare_pilots.py": "4d28cbcdf6b6f3bbe07623e41cd65dae75d743246e204f3c51cdde8e2fb84247",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/instrumentation_capture.py": "cd51a39234b75641118d716b61be28649fce438fb4d9168b5e0515b1576e710b",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/instrumentation_live.py": "f70474f42aa9f936964430812d369a5313e9a1b824497faf00a2bc12c34f7b14",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/instrumentation_scope.py": "ad979721db0a9dffef24fdd70a723756c0ac05cbdc02f9cf2f56baebdf4b211a",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/observer.py": "9866b8bb3ce390a4929b6e6d59ac9c85fd5fe2f0a74974d2fd78ded13abc313d",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/optimized_release.py": "e400125d1fbacca2612bf07456781e6a449c4014e2cc96ab205a4b62f4896c8a",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/paired.py": "1799c88cd6919858ec8828c9408cb55c4bcb07ffa96c03b1272a7352072b846b",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/pre_serving.py": "c355d3f29c5bf67de26974c5c691ce02a5d5044bb9feeb30845460473781a423",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/test_instrumentation_live.py": "c56fe5d9a336176b81b64ec139e7e90ea3a5f8dabee399bd85e9e80281c5cb53",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/test_optimized_release.py": "163a6b47fb83c91ba31e613565eea7cc8e1a8ed9206c27dc1f49c5d85ba4d3b0"
+  },
+  "optimized_release_sha256": "4d40c34738d36a1c78f62c0e400dd732da40e34c316ce4bd3c356dc4d29b3173",
+  "quality": {
+    "successful_gates": 19,
+    "calls": 37,
+    "metrics": 40293,
+    "kind": "test_binary_not_serving"
+  },
+  "prepared_smoke": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-smoke-20261009-001",
+  "prepared_sha256": "0008c989fc7aff1f3369def9b1d12737b19d1f4672aa702fe4bad064b6e5c7df",
+  "historical_pilot_and_smoke_raw_pins_rechecked": 232,
+  "historical_baseline_pins_rechecked": 235,
+  "preserved_failed_profile_pins": {
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-short-profile-20261009-001/execution.json": "cfcf2fb863d1d94cd22567c58b6307f9ea24dee886ef3dae9cef8c088f656f8e",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-short-profile-20261009-001/final-owner-release.json": "6075b813f651ee510857864b0589159c1af8555e53dd0723bba50554900cc6b0",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-short-profile-20261009-001/profiling-failure-report.json": "e442d9fff07321652f67aa750e4146035d06b7c7afdb17319edb4e32446ca151"
+  },
+  "pending": [
+    "renewed explicit GPU owner grant",
+    "same-release S1/S2 HTTP smoke",
+    "no-trace F1V1/V2F2 pair",
+    "separate explicit eight-UUID collector probe authorization and trace coverage"
+  ],
+  "fairmatch": false,
+  "exact_speedup": null,
+  "e2_complete": false
+}

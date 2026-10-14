@@ -1,0 +1,6 @@
+
+running 1 test
+test transformer::standard::cuda::hybrid_rank::mixed::decoded_gpu_tests::decoded_fixture_descriptors_preserve_pair_and_separate_fixed_roles ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 753 filtered out; finished in 0.01s
+

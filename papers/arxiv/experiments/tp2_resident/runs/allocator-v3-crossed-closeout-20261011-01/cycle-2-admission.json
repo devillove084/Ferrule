@@ -1,0 +1,30 @@
+{
+  "argv": [
+    "/home/admin/wxw403883/anaconda3/bin/python3.12",
+    "-S",
+    "-B",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/operator_retirement_ab.py",
+    "admission",
+    "--after-admission",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/admission/allocator-v3-release-20261011-01/paired-admission.json",
+    "--after-admission-sha256",
+    "5b410aacbe8f986fe8cf592f46e239e2fd5e61fa85f62c6aaf6dc0fc55231c4b",
+    "--review-manifest",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/plans/operator-retirement-v3-release-20261011-01/review-manifest.json",
+    "--review-manifest-sha256",
+    "5519bdbaf6089ebba5bbac9640f84875fa8e90698e53b3464916b3c0564b4b71",
+    "--cycle",
+    "2",
+    "--output",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/admission/allocator-v3-release-20261011-01/operator-retirement-cycle-2.json"
+  ],
+  "cwd": "/home/admin/luhuanbing.lhb/Ferrule",
+  "exit_code": 0,
+  "elapsed_seconds": 18.344807863235474,
+  "log": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-crossed-closeout-20261011-01/cycle-2-admission.log",
+  "log_sha256": "bcb42e9671a0b499c71bf6c78e23a655b45b754b10f377cf7d900d85075a8089",
+  "environment": {
+    "CUDA_VISIBLE_DEVICES": "",
+    "NVIDIA_VISIBLE_DEVICES": "none"
+  }
+}

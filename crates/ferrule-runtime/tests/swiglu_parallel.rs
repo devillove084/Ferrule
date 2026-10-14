@@ -571,9 +571,9 @@ mod checkpoint_stage {
         Cuda,
     }
     enum Local {
-        Cpu(CpuSwiGluShard),
+        Cpu(Box<CpuSwiGluShard>),
         #[cfg(feature = "cuda")]
-        Cuda(cuda::Resident),
+        Cuda(Box<cuda::Resident>),
     }
     struct Worker {
         rank: TensorRank,
@@ -749,12 +749,13 @@ mod checkpoint_stage {
                     let weights = catalog.load(&plan, r.local)?;
                     let local = match backend {
                         Backend::Cpu => {
-                            Local::Cpu(CpuSwiGluShard::from_local(weights).map_err(text)?)
+                            Local::Cpu(Box::new(CpuSwiGluShard::from_local(weights).map_err(text)?))
                         }
                         #[cfg(feature = "cuda")]
-                        Backend::Cuda => {
-                            Local::Cuda(cuda::Resident::new(r.global.get() as usize, weights)?)
-                        }
+                        Backend::Cuda => Local::Cuda(Box::new(cuda::Resident::new(
+                            r.global.get() as usize,
+                            weights,
+                        )?)),
                     };
                     observed.owners.lock().unwrap().push((r, owner));
                     Ok(Worker {

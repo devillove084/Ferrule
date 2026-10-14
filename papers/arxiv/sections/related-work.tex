@@ -1,0 +1,80 @@
+\section{Related Work and Positioning}
+\label{sec:related}
+
+Storage-backed and offloaded inference predate \system{}. The comparison here
+is by resource representation, physical domains, quality contract, and measured
+traffic---not by model name or an engine's feature list.
+
+\paragraph{Storage-backed inference.}
+FlexGen~\cite{sheng2023flexgen} places tensors across GPU, CPU, and disk and
+optimizes throughput-oriented schedules with compression and attention-cache
+management. DeepSpeed ZeRO-Inference's technical report~\cite{deepspeed2022zeroinference}
+describes CPU/NVMe weight hosting, layer streaming, prefetch, and release.
+PowerInfer-2~\cite{xue2024powerinfer2} studies smartphone inference beyond
+resident capacity with neuron clusters, segmented caching, and an
+I/O/computation pipeline. These systems establish that storage-backed model
+inference and transfer/computation scheduling are prior art. Their existence
+also rules out a first-storage-inference claim for \system{}.
+
+The relevant distinction is not whether a GPU cache is small. A comparison
+must say whether complete compact encoded weights and metadata can remain
+resident, whether expanded execution weights are streamed, which physical
+pools are disjoint, and whether request-time reads are physical backing reads
+or cache-served logical reads. A configured cache budget or an expanded-weight
+overflow does not establish storage necessity.
+
+\paragraph{Resident-domain offload and serving.}
+PowerInfer~\cite{song2023powerinfer} uses activation locality to place hot
+neurons on a GPU and compute cold neurons on a CPU. This is a GPU--CPU hybrid
+and should not be conflated with PowerInfer-2's storage pipeline. Host/device
+movement, page migration, and file-backed I/O are different observables;
+shared physical pools must not be added twice. vLLM's PagedAttention
+\cite{kwon2023pagedattention} addresses serving KV memory and is a useful
+resident-state comparison, but KV paging is not request-time weight
+materialization. The frozen vLLM 0.28 resident observations in this paper are
+supplementary and arithmetic/resource-budget non-equivalent, although both
+selected crossblock engines use PP1/TP2; they are not a speedup proof.
+We make no capability-absence claim about other serving systems whose primary
+sources and exact profiles were not audited here.
+
+\paragraph{Lifecycle and scheduling comparison.}
+The design question in RQ3 is narrower than ``which system is asynchronous?''
+The comparison requires submission/completion separation, dependency-ready
+work, progress ownership, bounded queues, and completion-driven physical
+lifetime. An asynchronous API does not prove event-driven progress, and
+worker offload does not prove nonblocking execution. Measured
+storage/transfer/compute overlap requires correlated provider or hardware
+traces. The safe blocking reference needed for this comparison is not yet
+implemented in the TP1 path.
+
+\paragraph{Positioning.}
+\system{} contributes a profile-scoped contract connecting source-bound plans,
+stage-local admission, exact generations, physical custody, publication, and
+retirement. This is a protocol and measurement position, not a claim that
+prior systems lack equivalent mechanisms; their custody and failure semantics
+were not exhaustively audited here. The concrete difference remains an
+empirical question: whether a selected integrated profile can complete a
+quality-accepted workload under declared per-domain working-set limits, what
+physical traffic it causes, and whether its safety contracts survive faults.
+Registry coverage, OS-cache hard caps, durable ACID, cross-rank atomicity,
+NCCL/device-collective defaults, multimodal integration, and performance
+leadership are not implied by the design.
+
+\begin{table}[tbp]
+\centering
+\small
+\begin{tabularx}{\linewidth}{@{}p{0.20\linewidth}XX@{}}
+\toprule
+Prior work & Resource/backing focus & Scheduling or state focus \\
+\midrule
+FlexGen & GPU, CPU, disk & Tensor placement, batching, compression \\
+ZeRO-Inference & CPU or NVMe to GPU & Layer streaming, release, prefetch \\
+PowerInfer & GPU--CPU hybrid & Hot/cold neuron execution \\
+PowerInfer-2 & Smartphone memory/storage & Neuron clusters, cache, I/O pipeline \\
+vLLM & Resident serving KV memory & PagedAttention \\
+\bottomrule
+\end{tabularx}
+\caption{Source-described comparison axes, not matched measurements or an
+exhaustive protocol audit. Unassessed guarantees are not marked unsupported.}
+\label{tab:prior-work}
+\end{table}

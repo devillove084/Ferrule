@@ -1,0 +1,6 @@
+
+running 1 test
+test transformer::standard::mixed_decoded::tests::every_class_at_capacity_has_no_warm_eviction_with_healthy_boundaries ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 759 filtered out; finished in 0.00s
+

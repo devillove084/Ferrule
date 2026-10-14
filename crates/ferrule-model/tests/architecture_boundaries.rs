@@ -5,13 +5,16 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::process::Command;
 
 const DEEPSEEK_SOURCE_ROOT: &str = "src/models/deepseek_v4";
-const DEEPSEEK_PRODUCTION_FILE_BUDGET: usize = 6;
+// Keep pure recipe/schema separate from CUDA-gated prepared assembly.
+const DEEPSEEK_PRODUCTION_FILE_BUDGET: usize = 8;
 
 const FINAL_DEEPSEEK_FILES: &[&str] = &[
     "mod.rs",
     "adapter.rs",
+    "assembly.rs",
     "checkpoint.rs",
     "config.rs",
+    "config/cuda.rs",
     "recipe.rs",
     "name_mapper.rs",
     "tests.rs",
@@ -63,7 +66,7 @@ const FORBIDDEN_QWEN_FILES: &[&str] = &[
 // expose the DSV4 model family. The model-neutral cuda::operators facade is
 // deliberately allowed. Whitespace is accepted around Rust path separators so
 // formatting cannot bypass the guard.
-const RESTRICTED_BACKEND_REFERENCE: &str = r"\bferrule_backend[[:space:]]*::[[:space:]]*(?:\{[[:space:]]*)?(?:cuda[[:space:]]*::[[:space:]]*(?:\{[[:space:]]*)?(?:context|runtime|cutlass|ffi|kernels|provider|providers|qwen|transformer)\b|(?:ffi|native|provider|providers)\b|cpu[[:space:]]*::[[:space:]]*(?:\{[[:space:]]*)?(?:provider|NativeCpuProvider|ReferenceCpuProvider)\b)(?:[[:space:]]*::[[:space:]]*[A-Za-z_][A-Za-z0-9_]*)*";
+const RESTRICTED_BACKEND_REFERENCE: &str = r"\bferrule_backend[[:space:]]*::[[:space:]]*(?:\{[[:space:]]*)?(?:cuda[[:space:]]*::[[:space:]]*(?:\{[[:space:]]*)?(?:context|operator_owner|runtime|cutlass|ffi|kernels|provider|providers|qwen|transformer)\b|(?:ffi|native|provider|providers)\b|cpu[[:space:]]*::[[:space:]]*(?:\{[[:space:]]*)?(?:provider|NativeCpuProvider|ReferenceCpuProvider)\b)(?:[[:space:]]*::[[:space:]]*[A-Za-z_][A-Za-z0-9_]*)*";
 
 // Provider-specific backend references have no symbol or occurrence exceptions.
 // Every model family is enforced by default.
@@ -378,6 +381,41 @@ fn restricted_references(root: &str) -> BTreeMap<(String, String), Vec<usize>> {
 
 #[test]
 fn rg_boundary_fixtures_cover_legal_invalid_whitespace_and_new_files() {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    for source in [
+        "use ferrule_backend::cuda::operator_owner::CudaOperators;",
+        "use ferrule_backend::{cuda::{operator_owner::CudaOperators}};",
+    ] {
+        let mut child = Command::new("rg")
+            .args([
+                "--no-config",
+                "--multiline",
+                "--regexp",
+                RESTRICTED_BACKEND_REFERENCE,
+                "-",
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("architecture guard requires ripgrep on PATH");
+        child
+            .stdin
+            .take()
+            .expect("piped rg stdin")
+            .write_all(source.as_bytes())
+            .expect("write canonical backend import to rg");
+        let output = child.wait_with_output().expect("wait for rg guard");
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "missing restricted canonical backend import {source}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
     let root = "tests/fixtures/architecture_boundaries";
     let observed = restricted_references(root);
     for (name, line) in [
@@ -597,4 +635,66 @@ fn boundary_debt(
         }
     }
     debt
+}
+
+#[test]
+fn decoder_neutral_contracts_have_single_feature_independent_implementations() {
+    let modules = include_str!("../src/decoder/mod.rs");
+    let sequence = include_str!("../src/decoder/sequence.rs");
+    let runtime = include_str!("../src/decoder/runtime.rs");
+    let memory = include_str!("../src/decoder/hybrid_memory_plan.rs");
+    let cuda = include_str!("../src/decoder/hybrid_cuda.rs");
+    assert!(modules.contains("mod sequence;"));
+    assert!(modules.contains("mod hybrid_memory_plan;"));
+    for definition in [
+        "pub trait DecoderSequence {",
+        "pub struct DecoderSequenceCheckout {",
+        "pub trait DecoderSequenceLifecycle<S> {",
+    ] {
+        assert_eq!(sequence.matches(definition).count(), 1);
+        assert!(!runtime.contains(definition));
+    }
+    assert_eq!(memory.matches("pub struct HybridMemoryPlan {").count(), 1);
+    assert!(!cuda.contains("fn for_resources_inner("));
+    for source in [sequence, memory] {
+        assert!(!source.contains("feature = \"cuda\""));
+        assert!(!source.contains("ferrule_backend::cuda::"));
+    }
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    for retired in [
+        "src/decoder/hybrid_cuda_admission.rs",
+        "src/decoder/tests.rs",
+        "src/decoder/custom_runtime_tests.rs",
+    ] {
+        assert!(!root.join(retired).exists(), "retired path: {retired}");
+    }
+    assert!(modules.contains("../../tests/unit/decoder/tests.rs"));
+    assert!(modules.contains("../../tests/unit/decoder/custom_runtime_tests.rs"));
+}
+
+#[test]
+fn reference_helpers_stay_test_owned_and_opt_in() {
+    let executor = include_str!("../src/moe/executor.rs");
+    let gate = r#"#[cfg(any(test, feature = "cpu-reference"))]"#;
+    assert!(executor.contains(gate));
+    assert!(executor.contains("../../tests/support/expert_reference.rs"));
+    assert!(!executor.contains("pub struct CpuReferenceExpertExecutor"));
+    let runtime = include_str!("../../ferrule-runtime/src/io/mod.rs");
+    assert!(runtime.contains("../../tests/support/materialization.rs"));
+    assert!(runtime.contains(gate));
+    for manifest in [
+        include_str!("../../ferrule-backend/Cargo.toml"),
+        include_str!("../Cargo.toml"),
+        include_str!("../../ferrule-runtime/Cargo.toml"),
+        include_str!("../../ferrule-cli/Cargo.toml"),
+        include_str!("../../ferrule-server/Cargo.toml"),
+    ] {
+        assert!(manifest.lines().any(|line| line == "default = []"));
+        let reference = manifest
+            .lines()
+            .find(|line| line.starts_with("cpu-reference = "))
+            .unwrap();
+        assert!(!reference.contains("cuda"), "{reference}");
+    }
+    assert!(include_str!("../Cargo.toml").contains(r#"cuda-test-support = ["cuda"]"#));
 }

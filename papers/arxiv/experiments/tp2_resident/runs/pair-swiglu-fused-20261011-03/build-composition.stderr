@@ -1,0 +1,12 @@
+   Compiling bitflags v2.13.0
+   Compiling rustix v1.1.5
+   Compiling onig v6.5.3
+   Compiling io-uring v0.7.13
+   Compiling tokenizers v0.23.1
+   Compiling linux-raw-sys v0.12.1
+   Compiling fastrand v2.5.0
+   Compiling ferrule-model v0.2.0 (/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-model)
+   Compiling ferrule-runtime v0.2.0 (/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-runtime)
+   Compiling ferrule-composition v0.2.0 (/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-composition)
+   Compiling tempfile v3.27.0
+    Finished `test` profile [optimized + debuginfo] target(s) in 3m 05s

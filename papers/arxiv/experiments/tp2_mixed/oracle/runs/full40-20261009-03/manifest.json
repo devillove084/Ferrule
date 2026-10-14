@@ -1,0 +1,715 @@
+{
+  "schema": "ferrule.paper.tp2-mixed-independent-oracle.v1",
+  "profile": "SystemMixedTP2EP1",
+  "status": "complete",
+  "full_reference_complete": true,
+  "strict_ferrule_full40": false,
+  "versions": {
+    "torch": "2.13.0+cu129",
+    "transformers": "5.5.3"
+  },
+  "cases": [
+    {
+      "id": "hello",
+      "file": "hello.safetensors",
+      "sha256": "363a33af3a269ad17059a39763ed0911b2c51d97eb6cca247db2e364878d8eea",
+      "bytes": 265783872,
+      "report": {
+        "file": "hello.json",
+        "sha256": "a5dc8f1b7fe6227d203f174ce669b33f3dac58c1a1e0256e7369462f27f4e94f",
+        "bytes": 614421
+      },
+      "statistics": {
+        "file": "hello.stats.json",
+        "sha256": "e69a01f2971949e5bc71a3dc2fb56c2c196e321bbc34167de94d0417d0eb321b",
+        "bytes": 579861
+      }
+    },
+    {
+      "id": "capital",
+      "file": "capital.safetensors",
+      "sha256": "4fe3d64cc559d5365100e34841db2934579e05a2a334d38a8766406814e90b6d",
+      "bytes": 277869920,
+      "report": {
+        "file": "capital.json",
+        "sha256": "144693807830d1d0211b2a0d06eb3f2e3ac820d484063154fa01693c6a21ee1f",
+        "bytes": 617117
+      },
+      "statistics": {
+        "file": "capital.stats.json",
+        "sha256": "d5c77e86e16ba8fb0a3e2640a432a99e7b0f300e3116511465d373f31f6c4997",
+        "bytes": 580811
+      }
+    }
+  ],
+  "numerical_authentication": {
+    "file": "numerical-authentication.json",
+    "sha256": "7185e5f4f5941893d3109e349e32a1dd3ee8b823a0abaaf55827b0e095168eab",
+    "bytes": 646
+  },
+  "protocol": {
+    "schema": "ferrule.paper.tp2-mixed-independent-oracle.protocol.v1",
+    "profile": "SystemMixedTP2EP1",
+    "versions": {
+      "torch": "2.13.0+cu129",
+      "transformers": "5.5.3"
+    },
+    "topology": {
+      "logical_tp": 2,
+      "pp": 1,
+      "ep": 1,
+      "simulation_devices": 1,
+      "production_transport_validated": false
+    },
+    "storage": "Original E4M3FN x numeric BF16 128x128 scale in F32, then BF16 RNE; no reciprocal/E8M0 conversion",
+    "precision": {
+      "activation": "BF16",
+      "parameters": "BF16 including once-rounded native F32 GDN A_log/norm",
+      "rope_frequency": "native F32",
+      "ssm": "explicit F32 preallocation",
+      "conv": "BF16",
+      "kv": "BF16",
+      "tf32": false,
+      "bf16_reduced_precision_reduction": false
+    },
+    "partitions": {
+      "attention": "contiguous whole query+gate heads; whole KV heads; local native HF normalization/RoPE/attention; O input-column shards",
+      "gdn": "local Q segment + local K segment + local V segment; matching depthwise conv; contiguous whole Z/B/A/value heads; local head-group repeat and norm; F32 per-rank state; output input-column shards",
+      "mlp": "each rank has a slice of every expert, gate/up independently row-sharded then concatenated gate-before-up; down input-column shard",
+      "embedding_and_final_norm": "replicated semantics; one computation on identical post-reduction hidden states",
+      "output": "contiguous BF16 vocab row shards; concatenate rank0 then rank1 without reduction; actual vocab 248320 divisible by TP2, no padded vocab values exported; ragged/padded gather checked on independent 11-token fixture"
+    },
+    "reduction": "Each local partial writes BF16; rank0.float + rank1.float; one BF16 RNE cast",
+    "moe": {
+      "expert_execution": "all experts logically resident/available on both ranks; lazy checkpoint operands allowed; not a measured residency/performance result",
+      "routing": "replicated original BF16 weights; native F32 full softmax/topk/renormalization; lower expert ID substitutions ONLY at equal raw logits; unequal raw softmax collisions stay native",
+      "accumulation": "pinned HF eager ascending expert ID, per-expert F32 routing product cast BF16 and BF16 index_add; NOT slot-major or fused F32 accumulation",
+      "combine": "native shared sigmoid BF16 gating; local routed+shared BF16 add; exactly ONE TP sum afterwards",
+      "vllm_bitexact": false
+    },
+    "cases": {
+      "hello": [
+        9419
+      ],
+      "capital": [
+        760,
+        6511,
+        314,
+        9338,
+        369
+      ]
+    },
+    "stages": [
+      "prefill",
+      "decode.0"
+    ],
+    "continuation": "own greedy full-vocab argmax after prefill; consumer MUST use recorded decode input; baseline drift skips same-input claims when continuations differ",
+    "comparison": {
+      "atol": 0.00025,
+      "rtol": 0.012,
+      "formula": "abs(actual-expected) <= atol + rtol*abs(expected)",
+      "ids_and_inputs": "exact",
+      "state": "report exactness AND unchanged tolerance, no a-priori CPU/CUDA state or exp equivalence claim",
+      "all_boundaries_required": "all except oracle-only pre-canonicalization native_expert_ids; canonical selected IDs remain exact",
+      "oracle_only_diagnostics": [
+        "native_expert_ids"
+      ]
+    },
+    "limits": {
+      "max_timeout_seconds": 1700,
+      "default_capture_mib_per_case": 512,
+      "default_decoded_weight_cache_mib": 256,
+      "max_capture_mib": 2048,
+      "max_decoded_weight_cache_mib": 1024,
+      "outer_terminal_timeout_ms": 1800000
+    },
+    "custody": "existing paper launch_guard seal/authenticate + test_vllm_qwen35.run_process subreaper; fresh explicit sole-owner grant and shared owner lock; never signal foreign PIDs",
+    "admission": "CPU tests and a completed reference are NOT factory enablement or a Ferrule full40 PASS; caller must provide reference directory and manifest SHA256 to the runtime gate",
+    "unvalidated_math_sites": [
+      "CUDA GEMM/softmax/norm/SiLU/sigmoid/reduction implementation drift versus production",
+      "HF GDN chunk prefill versus production recurrence/chunk policy, exp/softplus/L2 normalization and exact F32 state updates",
+      "HF eager per-expert accumulation versus vLLM fused MoE (different contract; no bit-exact claim)"
+    ],
+    "blocker_policy": "Any uncovered math-site difference or failed unchanged tolerance blocks runtime admission; no silent policy or threshold change",
+    "pre_weight_gate": "Mandatory authenticated one-GPU synthetic TP1/native equality, TP2 GQA/GDN inventory, independent frozen row/local-MoE/route/head and CUDA-F32-state fixtures; abort before full checkpoint reads on failure"
+  },
+  "workflow_pins": {
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/contract.py": "96f9664cb16e4b861b4902f6c07b234ca08d89106d4d99a9ff8db74511de25bf",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/launch_guard.py": "b4ec4dc1b1e7e61fe322847e4a07ce2c3b2ed43d8d3e9bc3bd6602979ad00b9f",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runner.py": "f1e87f00822445a708c5ffe50124ea0d34e928fd56fe6943ccaf7a052bb9d95a",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/telemetry.py": "766a2e62730e3b56efd553d013554b18520c4883f6e5a3ee7ddeef4211091900",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_mixed/oracle/compare.py": "5131f61aeae051df5b65b69e4b376cfe239fc27a12d594e1b7ee9f786824c7be",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_mixed/oracle/cuda_gate.py": "4908f1f228fb668b9d04ec69af9696f7c1c2f77d0e60a9f6b576fc85267d1e88",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_mixed/oracle/launch.py": "1fa3d762a02ca98a66a4c4332e7dce08ec37a59d7fe6f46c2fce42897d863683",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_mixed/oracle/protocol.json": "c6e7836f3797c16502dc21b8c756c87495525c2cf2faac26ba11077f62cfbb57",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_mixed/oracle/test_compare.py": "e656cbc53dbe38fb6b3223a7bd5cc30d810b127400d9bc16c3d759c56ae74bdf",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_mixed/oracle/test_launch.py": "5a9bb7e1dd29f56cd1a2b3b0b304ed0abbc103e3638645a29df81b84813f2ea1",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_mixed/oracle/test_tp2_oracle.py": "981b0789e980da83fd946865f9ffb6f7bfe3179a36cb30ec51cf7bf3fe86fbb0",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_mixed/oracle/tp2_oracle.py": "cd61da26aa341177db83d4826660c89d27a567a31ab5140a90f8fb155e6f84e3",
+    "/home/admin/luhuanbing.lhb/Ferrule/scripts/_owned_subreaper.py": "19ef9006089cde1abdca87177e01d26b925dcf996bfebaf6e3dc51ea71a77ff0",
+    "/home/admin/luhuanbing.lhb/Ferrule/scripts/qwen35_fp8_bf16_reference.py": "103f294f76ac88dfe170392613a3fb6f0a87aba005a1a89cbd768959f52400ab",
+    "/home/admin/luhuanbing.lhb/Ferrule/scripts/qwen35_fp8_cuda_reference.py": "b69072155a45f8fb354e54dd93265d2d04296e04513a0b416bcafa9b67d25920",
+    "/home/admin/luhuanbing.lhb/Ferrule/scripts/test_vllm_qwen35.py": "1c330dac0727d54254a1c1648adcb9a4b747a2303fe183c2ba38f9ccd83ec2a1"
+  },
+  "execution": {
+    "device": "cuda:0",
+    "physical_gpu_uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+    "logical_tp": 2,
+    "ep": 1,
+    "pp": 1,
+    "tf32": false,
+    "bf16_reduced_precision_reduction": false,
+    "production_imports": false,
+    "transport": "rank-order Torch simulation on one granted device; no NCCL/transport/performance proof"
+  },
+  "runtime_gate": {
+    "status": "not_run",
+    "requires": "caller-supplied reference path plus SHA256 and fresh Ferrule full40 comparison"
+  },
+  "open_claims": [
+    "No vLLM fused-MoE bit equivalence",
+    "No CPU-to-CUDA exponential/state equality claim",
+    "No full40 Ferrule equivalence until caller compares every required tensor"
+  ],
+  "native_source": {
+    "modeling_qwen3_5_moe": {
+      "file": "/opt/conda310/lib/python3.10/site-packages/transformers/models/qwen3_5_moe/modeling_qwen3_5_moe.py",
+      "sha256": "0f8ca77e875c31d448137c9ac291bed505c6b9927a85b5b8460af29d1e1ee647"
+    },
+    "cache_utils": {
+      "file": "/opt/conda310/lib/python3.10/site-packages/transformers/cache_utils.py",
+      "sha256": "a51d2cd525f4458941a20cb5b3b8a8d989d8ca5bcd451855a27bb41743fed586"
+    },
+    "modeling_utils": {
+      "file": "/opt/conda310/lib/python3.10/site-packages/transformers/modeling_utils.py",
+      "sha256": "b8467e1ada952862d2e4d76632475ac2f9fa198121d0e1ce64fa393ea3773e16"
+    }
+  },
+  "interception_audit": {
+    "live_functions": {
+      "Qwen3_5MoeDecoderLayer.forward": {
+        "source_sha256": "ee0813966c21bdd277c530659d66bdf0e84e63389ee94b3ba50d3c933f2f627b",
+        "code_sha256": "7f59439772d5fbd2a49e787655d22cbf63f96ecd7128d71e66e24eb337ddb238",
+        "code_file": "/opt/conda310/lib/python3.10/site-packages/transformers/models/qwen3_5_moe/modeling_qwen3_5_moe.py",
+        "wrapper_code_sha256": "7f59439772d5fbd2a49e787655d22cbf63f96ecd7128d71e66e24eb337ddb238"
+      },
+      "Qwen3_5MoeAttention.forward": {
+        "source_sha256": "282e26183eb923131affae687e924eab5cda69c6128b4956a76ecc2230bec424",
+        "code_sha256": "6b47ee62703fdc3f271ba3e89d74c3d16587a5d418d03b92cfcbe39ef6869ce0",
+        "code_file": "/opt/conda310/lib/python3.10/site-packages/transformers/models/qwen3_5_moe/modeling_qwen3_5_moe.py",
+        "wrapper_code_sha256": "6b47ee62703fdc3f271ba3e89d74c3d16587a5d418d03b92cfcbe39ef6869ce0"
+      },
+      "Qwen3_5MoeGatedDeltaNet.forward": {
+        "source_sha256": "7c437c5a9ee098edde2f984305f843ec927c5222448411487dd5155ed610f5e8",
+        "code_sha256": "d8730fa6053955b63131001eefbf027aaa782bf107a34ce550b5f4ddd778d3c0",
+        "code_file": "/opt/conda310/lib/python3.10/site-packages/transformers/models/qwen3_5_moe/modeling_qwen3_5_moe.py",
+        "wrapper_code_sha256": "d8730fa6053955b63131001eefbf027aaa782bf107a34ce550b5f4ddd778d3c0"
+      },
+      "Qwen3_5MoeSparseMoeBlock.forward": {
+        "source_sha256": "6e32d7a4987af26fb91c4a8c3a83a0eb02e0cc0a52cb526290d3e7c72b6f3907",
+        "code_sha256": "6c3c66c71c0a386b9424b23718b74242c1f61c3f3911c664c4fe9cff110866c6",
+        "code_file": "/opt/conda310/lib/python3.10/site-packages/transformers/models/qwen3_5_moe/modeling_qwen3_5_moe.py",
+        "wrapper_code_sha256": "6c3c66c71c0a386b9424b23718b74242c1f61c3f3911c664c4fe9cff110866c6"
+      },
+      "Qwen3_5MoeExperts.forward": {
+        "source_sha256": "99ca265927013010174286a6de93cbdf3bb601c5e6709397fbd70b5ee294c2b6",
+        "code_sha256": "17a2ca65590f851e4c2ec126ab8a1ca3c95ce400286a6f8834ceef15386bd686",
+        "code_file": "/opt/conda310/lib/python3.10/site-packages/transformers/models/qwen3_5_moe/modeling_qwen3_5_moe.py",
+        "wrapper_code_sha256": "88bcf0f5e2f53666a2a7bc45bb393f794d6f54673a15a2f71a0bbd38ca18ae8e"
+      },
+      "Qwen3_5MoeTopKRouter.forward": {
+        "source_sha256": "c2d3a1a00818a9047fda48934b1025265905a9432aaebc2ea1a45c2467f353f5",
+        "code_sha256": "5873dcd97f7486ec6c3a53284029459834ad926011b8a7a899a0fdca94bbfbb3",
+        "code_file": "/opt/conda310/lib/python3.10/site-packages/transformers/models/qwen3_5_moe/modeling_qwen3_5_moe.py",
+        "wrapper_code_sha256": "5873dcd97f7486ec6c3a53284029459834ad926011b8a7a899a0fdca94bbfbb3"
+      },
+      "Qwen3_5MoeRMSNorm.forward": {
+        "source_sha256": "a2f6910ff951867de4a6049f8f8a20b8f99948cf126f0616b354a1e7e24b1e8e",
+        "code_sha256": "19a7e1d756dba12327e6bc6e09fde791f63a1f30dabc5970301190969692989f",
+        "code_file": "/opt/conda310/lib/python3.10/site-packages/transformers/models/qwen3_5_moe/modeling_qwen3_5_moe.py",
+        "wrapper_code_sha256": "19a7e1d756dba12327e6bc6e09fde791f63a1f30dabc5970301190969692989f"
+      },
+      "Qwen3_5MoeRMSNormGated.forward": {
+        "source_sha256": "9e4a919ddd7afcb4301dd2bdaab79f193dd5c0732482e8ac1dae510c3bf2ded9",
+        "code_sha256": "72b419d6271407d71894208fe23d36b54e07f9cbc6b9c07719079a30bdae1118",
+        "code_file": "/opt/conda310/lib/python3.10/site-packages/transformers/models/qwen3_5_moe/modeling_qwen3_5_moe.py",
+        "wrapper_code_sha256": "72b419d6271407d71894208fe23d36b54e07f9cbc6b9c07719079a30bdae1118"
+      },
+      "torch_chunk_gated_delta_rule": {
+        "source_sha256": "3cf91cd1d7af6970672f5b78dd7889b54b24568c16326e73259e57bc32a4a361",
+        "code_sha256": "95100e3199137197229c7e7b4302cf5f27fe6492d04b64b560f533e530bcf886",
+        "code_file": "/opt/conda310/lib/python3.10/site-packages/transformers/models/qwen3_5_moe/modeling_qwen3_5_moe.py",
+        "wrapper_code_sha256": "95100e3199137197229c7e7b4302cf5f27fe6492d04b64b560f533e530bcf886"
+      },
+      "torch_recurrent_gated_delta_rule": {
+        "source_sha256": "0764d99b2091eb050b0d8009d97167a4b0f67f7452a3530b6c8cbc49f530e28e",
+        "code_sha256": "d82c131005d1aebee09df98e2302f2df9018ed889e94638a5089c75946680f16",
+        "code_file": "/opt/conda310/lib/python3.10/site-packages/transformers/models/qwen3_5_moe/modeling_qwen3_5_moe.py",
+        "wrapper_code_sha256": "d82c131005d1aebee09df98e2302f2df9018ed889e94638a5089c75946680f16"
+      },
+      "torch_causal_conv1d_update": {
+        "source_sha256": "3e69946e91492dea1d3650f62d88566ba654c3f954894d6079e0ed0cb6ef106c",
+        "code_sha256": "d10aa1a5ca252646fe8bb83180004c96b72872e0ee5ff1cfe0957fc6ee24320d",
+        "code_file": "/opt/conda310/lib/python3.10/site-packages/transformers/models/qwen3_5_moe/modeling_qwen3_5_moe.py",
+        "wrapper_code_sha256": "d10aa1a5ca252646fe8bb83180004c96b72872e0ee5ff1cfe0957fc6ee24320d"
+      },
+      "eager_attention_forward": {
+        "source_sha256": "cb34ccea28710ae8d5d94a241b704ea3d974048f85372f0b1b3c2a8a2ef1ee20",
+        "code_sha256": "027836f1553b9bf5d9d972d322d1a49eb197a495fc40391818908ccc4252afa8",
+        "code_file": "/opt/conda310/lib/python3.10/site-packages/transformers/models/qwen3_5_moe/modeling_qwen3_5_moe.py",
+        "wrapper_code_sha256": "027836f1553b9bf5d9d972d322d1a49eb197a495fc40391818908ccc4252afa8"
+      },
+      "apply_rotary_pos_emb": {
+        "source_sha256": "ab8feb64f19555713efc4c559ce306b35205b1197f8431784585999d9a5b6662",
+        "code_sha256": "497c39e93cf26dce660b32879bad6bfa69f09edf25a092c1b4986852150e045c",
+        "code_file": "/opt/conda310/lib/python3.10/site-packages/transformers/models/qwen3_5_moe/modeling_qwen3_5_moe.py",
+        "wrapper_code_sha256": "497c39e93cf26dce660b32879bad6bfa69f09edf25a092c1b4986852150e045c"
+      },
+      "repeat_kv": {
+        "source_sha256": "e9b1ad4a8df3194d5b12f94567c3a2dfed2c0d9833af1b8f775e5875575ff9c4",
+        "code_sha256": "d29d8fe57207738959f42cf57ea46da52fc63beddf1b35c5b9ad3da007ae34ea",
+        "code_file": "/opt/conda310/lib/python3.10/site-packages/transformers/models/qwen3_5_moe/modeling_qwen3_5_moe.py",
+        "wrapper_code_sha256": "d29d8fe57207738959f42cf57ea46da52fc63beddf1b35c5b9ad3da007ae34ea"
+      },
+      "l2norm": {
+        "source_sha256": "6bfc53d1a491d0ae3856b85cb7fde1ea2198d5e3ed427953652cf2ede696e6fd",
+        "code_sha256": "55ee155de07d18bec79aa1f81d9fe5de0055b07ff0bc716a341626a740a4fb46",
+        "code_file": "/opt/conda310/lib/python3.10/site-packages/transformers/models/qwen3_5_moe/modeling_qwen3_5_moe.py",
+        "wrapper_code_sha256": "55ee155de07d18bec79aa1f81d9fe5de0055b07ff0bc716a341626a740a4fb46"
+      },
+      "apply_mask_to_padding_states": {
+        "source_sha256": "694b0342a3bfdf0403562fb16ebadb4edea90521dfcf07114322d4737ca49a35",
+        "code_sha256": "e638704fdc3ca1db9aeae00d4210d05c4f770a39bea846dec133fc49b016c256",
+        "code_file": "/opt/conda310/lib/python3.10/site-packages/transformers/models/qwen3_5_moe/modeling_qwen3_5_moe.py",
+        "wrapper_code_sha256": "e638704fdc3ca1db9aeae00d4210d05c4f770a39bea846dec133fc49b016c256"
+      }
+    },
+    "native_forwards": {
+      "Qwen3_5MoeDecoderLayer": "ee0813966c21bdd277c530659d66bdf0e84e63389ee94b3ba50d3c933f2f627b",
+      "Qwen3_5MoeAttention": "282e26183eb923131affae687e924eab5cda69c6128b4956a76ecc2230bec424",
+      "Qwen3_5MoeGatedDeltaNet": "7c437c5a9ee098edde2f984305f843ec927c5222448411487dd5155ed610f5e8",
+      "Qwen3_5MoeSparseMoeBlock": "6e32d7a4987af26fb91c4a8c3a83a0eb02e0cc0a52cb526290d3e7c72b6f3907",
+      "Qwen3_5MoeExperts": "99ca265927013010174286a6de93cbdf3bb601c5e6709397fbd70b5ee294c2b6",
+      "Qwen3_5MoeTopKRouter": "c2d3a1a00818a9047fda48934b1025265905a9432aaebc2ea1a45c2467f353f5",
+      "Qwen3_5MoeRMSNorm": "a2f6910ff951867de4a6049f8f8a20b8f99948cf126f0616b354a1e7e24b1e8e",
+      "Qwen3_5MoeRMSNormGated": "9e4a919ddd7afcb4301dd2bdaab79f193dd5c0732482e8ac1dae510c3bf2ded9"
+    },
+    "replacements": [
+      "linear operands",
+      "expert bank operands",
+      "raw-ties-only router forward hook",
+      "two native local attention calls + sum/cache assembly",
+      "two native local MoE calls + sum",
+      "vocabulary shards + gather"
+    ],
+    "unchanged": [
+      "HF norm/attention/GDN/experts/router/decoder forward source",
+      "F32 RoPE construction"
+    ],
+    "production_imports": false,
+    "hf_implementation": "eager",
+    "actual_compute_device": "recorded in manifest",
+    "simulation": "two logical ranks on one granted CUDA device; no NCCL or performance claim",
+    "vllm_bitexact": false,
+    "routed_order": "HF ascending expert ID; each F32 weighted product cast BF16 then BF16 index_add"
+  },
+  "loading_evidence": {
+    "parameter_load": {
+      "model.layers.0.linear_attn.A_log": {
+        "source_dtype": "torch.float32",
+        "loaded_dtype": "torch.bfloat16",
+        "source_values": [
+          0.12345000356435776,
+          0.23455999791622162,
+          0.3456699848175049,
+          0.45677998661994934
+        ],
+        "loaded_values": [
+          0.12353515625,
+          0.234375,
+          0.345703125,
+          0.45703125
+        ],
+        "equals_source_bf16_rne": true,
+        "differs_from_source_f32": true
+      },
+      "model.layers.0.linear_attn.norm.weight": {
+        "source_dtype": "torch.float32",
+        "loaded_dtype": "torch.bfloat16",
+        "source_values": [
+          0.12345000356435776,
+          0.23455999791622162,
+          0.3456699848175049,
+          0.45677998661994934
+        ],
+        "loaded_values": [
+          0.12353515625,
+          0.234375,
+          0.345703125,
+          0.45703125
+        ],
+        "equals_source_bf16_rne": true,
+        "differs_from_source_f32": true
+      }
+    },
+    "source_pins": {
+      "modeling_qwen3_5_moe": "0f8ca77e875c31d448137c9ac291bed505c6b9927a85b5b8460af29d1e1ee647",
+      "cache_utils": "a51d2cd525f4458941a20cb5b3b8a8d989d8ca5bcd451855a27bb41743fed586",
+      "modeling_utils": "b8467e1ada952862d2e4d76632475ac2f9fa198121d0e1ce64fa393ea3773e16"
+    },
+    "versions": {
+      "torch": "2.13.0+cu129",
+      "transformers": "5.5.3"
+    },
+    "device": "cpu",
+    "loader": "save_pretrained mixed native BF16/F32 state_dict -> from_pretrained(dtype=torch.bfloat16)",
+    "baseline": "decoded-storage native eager BF16 model, NOT the HF dynamic-FP8 quantizer",
+    "native_bf16_words_preserved": true,
+    "rope": {
+      "inv_freq_dtype": "torch.float32",
+      "original_inv_freq_dtype": "torch.float32",
+      "native_f32_exact": true,
+      "inv_freq_sha256": "9d877756a0997bd64e5c564ef48548b144e1fc500cee3eda442fbe375355f683"
+    },
+    "cache_runs": {
+      "hf_default": [
+        {
+          "tokens": [
+            1,
+            3,
+            2
+          ],
+          "conv": "torch.bfloat16",
+          "ssm": "torch.bfloat16",
+          "kv": "torch.bfloat16",
+          "logits": "torch.bfloat16"
+        },
+        {
+          "tokens": [
+            5
+          ],
+          "conv": "torch.bfloat16",
+          "ssm": "torch.bfloat16",
+          "kv": "torch.bfloat16",
+          "logits": "torch.bfloat16"
+        }
+      ],
+      "explicit_f32_ssm": [
+        {
+          "tokens": [
+            1,
+            3,
+            2
+          ],
+          "conv": "torch.bfloat16",
+          "ssm": "torch.float32",
+          "kv": "torch.bfloat16",
+          "logits": "torch.bfloat16"
+        },
+        {
+          "tokens": [
+            5
+          ],
+          "conv": "torch.bfloat16",
+          "ssm": "torch.float32",
+          "kv": "torch.bfloat16",
+          "logits": "torch.bfloat16"
+        }
+      ]
+    },
+    "native_exp_observations": [
+      {
+        "input_dtype": "torch.float32",
+        "output_dtype": "torch.float32"
+      },
+      {
+        "input_dtype": "torch.float32",
+        "output_dtype": "torch.float32"
+      },
+      {
+        "input_dtype": "torch.float32",
+        "output_dtype": "torch.float32"
+      },
+      {
+        "input_dtype": "torch.float32",
+        "output_dtype": "torch.float32"
+      },
+      {
+        "input_dtype": "torch.float32",
+        "output_dtype": "torch.float32"
+      },
+      {
+        "input_dtype": "torch.float32",
+        "output_dtype": "torch.float32"
+      },
+      {
+        "input_dtype": "torch.float32",
+        "output_dtype": "torch.float32"
+      },
+      {
+        "input_dtype": "torch.float32",
+        "output_dtype": "torch.float32"
+      },
+      {
+        "input_dtype": "torch.float32",
+        "output_dtype": "torch.float32"
+      },
+      {
+        "input_dtype": "torch.float32",
+        "output_dtype": "torch.float32"
+      },
+      {
+        "input_dtype": "torch.float32",
+        "output_dtype": "torch.float32"
+      },
+      {
+        "input_dtype": "torch.float32",
+        "output_dtype": "torch.float32"
+      },
+      {
+        "input_dtype": "torch.float32",
+        "output_dtype": "torch.float32"
+      },
+      {
+        "input_dtype": "torch.float32",
+        "output_dtype": "torch.float32"
+      },
+      {
+        "input_dtype": "torch.float32",
+        "output_dtype": "torch.float32"
+      },
+      {
+        "input_dtype": "torch.float32",
+        "output_dtype": "torch.float32"
+      }
+    ],
+    "ssm_policy": "F32 explicitly preallocated; NOT the HF default cache dtype"
+  },
+  "cuda_small_gate": {
+    "file": "cuda-small-gate.json",
+    "sha256": "77473e78cd51ad55de32f8a9789de8e995b1c01d8648e1cf1e601e58008fa479",
+    "bytes": 21658
+  },
+  "checkpoint_metadata": {
+    "file": "checkpoint-metadata.json",
+    "sha256": "0cff1cfeb5f7eb215cf3f1be00e5db3746fc7370765af786c6420fa77115085d",
+    "bytes": 18426485
+  },
+  "checkpoint": {
+    "directory": "/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8",
+    "config_sha256": "236c373b0682a4f40c2fa49ef8e5f722a87a8dbfe265286b6d5260b23d7cb229",
+    "effective_text_config": {
+      "transformers_version": "5.5.3",
+      "architectures": null,
+      "output_hidden_states": false,
+      "return_dict": true,
+      "dtype": "bfloat16",
+      "chunk_size_feed_forward": 0,
+      "is_encoder_decoder": false,
+      "id2label": {
+        "0": "LABEL_0",
+        "1": "LABEL_1"
+      },
+      "label2id": {
+        "LABEL_0": 0,
+        "LABEL_1": 1
+      },
+      "problem_type": null,
+      "vocab_size": 248320,
+      "hidden_size": 2048,
+      "num_hidden_layers": 40,
+      "num_attention_heads": 16,
+      "num_key_value_heads": 2,
+      "hidden_act": "silu",
+      "max_position_embeddings": 262144,
+      "initializer_range": 0.02,
+      "rms_norm_eps": 1e-06,
+      "use_cache": true,
+      "tie_word_embeddings": false,
+      "rope_parameters": {
+        "mrope_interleaved": true,
+        "mrope_section": [
+          11,
+          11,
+          10
+        ],
+        "rope_type": "default",
+        "rope_theta": 10000000,
+        "partial_rotary_factor": 0.25
+      },
+      "attention_bias": false,
+      "attention_dropout": 0.0,
+      "head_dim": 256,
+      "linear_conv_kernel_dim": 4,
+      "linear_key_head_dim": 128,
+      "linear_value_head_dim": 128,
+      "linear_num_key_heads": 16,
+      "linear_num_value_heads": 32,
+      "moe_intermediate_size": 512,
+      "shared_expert_intermediate_size": 512,
+      "num_experts_per_tok": 8,
+      "num_experts": 256,
+      "output_router_logits": false,
+      "router_aux_loss_coef": 0.001,
+      "layer_types": [
+        "linear_attention",
+        "linear_attention",
+        "linear_attention",
+        "full_attention",
+        "linear_attention",
+        "linear_attention",
+        "linear_attention",
+        "full_attention",
+        "linear_attention",
+        "linear_attention",
+        "linear_attention",
+        "full_attention",
+        "linear_attention",
+        "linear_attention",
+        "linear_attention",
+        "full_attention",
+        "linear_attention",
+        "linear_attention",
+        "linear_attention",
+        "full_attention",
+        "linear_attention",
+        "linear_attention",
+        "linear_attention",
+        "full_attention",
+        "linear_attention",
+        "linear_attention",
+        "linear_attention",
+        "full_attention",
+        "linear_attention",
+        "linear_attention",
+        "linear_attention",
+        "full_attention",
+        "linear_attention",
+        "linear_attention",
+        "linear_attention",
+        "full_attention",
+        "linear_attention",
+        "linear_attention",
+        "linear_attention",
+        "full_attention"
+      ],
+      "pad_token_id": null,
+      "bos_token_id": null,
+      "eos_token_id": 248044,
+      "_name_or_path": "",
+      "attn_output_gate": true,
+      "full_attention_interval": 4,
+      "mlp_only_layers": [],
+      "model_type": "qwen3_5_moe_text",
+      "mtp_num_hidden_layers": 1,
+      "mtp_use_dedicated_embeddings": false,
+      "mamba_ssm_dtype": "float32",
+      "partial_rotary_factor": 0.25,
+      "output_attentions": false
+    },
+    "index_sha256": "b009f7a49c442fce959a2ff6fee41c69248879b90d7ff5636ec6d2068ac4876d",
+    "full_shards": {
+      "model.safetensors-00001-of-00014.safetensors": "8eec0929a43c759abc4e230ca6c55b1a314f26b8870cb63941b674b95ce6d49e",
+      "model.safetensors-00002-of-00014.safetensors": "4cb364215f617628defac9a1345c9122ab65b36d555349285f73b7595eb068a6",
+      "model.safetensors-00003-of-00014.safetensors": "f94b20e10e856926b902a51c9aa575ff8beb483cef6130996e098a40e3a2a92a",
+      "model.safetensors-00004-of-00014.safetensors": "c3a0d1593280aeb44ba100a1dbef643071284519b58654b14591984ae558c5d3",
+      "model.safetensors-00005-of-00014.safetensors": "a754c48ee879302bbb16debedea9032010bb616aa3fe9f1fd0340f81230b5e12",
+      "model.safetensors-00006-of-00014.safetensors": "b5435e836f62b7d915e84f0f327d07ed773a0939d4acd3e16b9b082c35318ce9",
+      "model.safetensors-00007-of-00014.safetensors": "684840ee3af77f22ddaa5df7330384c472b7e50efdd4ba1699558152a182045c",
+      "model.safetensors-00008-of-00014.safetensors": "70ac96a66c7bc85d97649e460bdfaebc5947c191bb0742d596c35d53d833060a",
+      "model.safetensors-00009-of-00014.safetensors": "775cec9a6755ecddcd3d41954f14e40051a5d8306ce6d5f6ccd96af58a8d93cb",
+      "model.safetensors-00010-of-00014.safetensors": "5a86d13781bb91dbfce6602095e424f9b53fe76d3bb0d1ea1800f584fc1f41ab",
+      "model.safetensors-00011-of-00014.safetensors": "6f0c1b222c972fb8ce4936f861a71e6f2987db80b523d290954473d7643bf417",
+      "model.safetensors-00012-of-00014.safetensors": "040c27529a66e43f3a2cfef338ac121f5897ea476984ee3ba35540a49388809b",
+      "model.safetensors-00013-of-00014.safetensors": "ee1088b806b0ce6ad374eec852503efa68d70f01480bd75815f8ca7b91327df0",
+      "model.safetensors-00014-of-00014.safetensors": "38842b8f3d0a4ea29c064317591c4b6529efbcc0a1f7665c41b58e6852638dc9"
+    },
+    "shard_bytes": {
+      "model.safetensors-00001-of-00014.safetensors": 2685395560,
+      "model.safetensors-00002-of-00014.safetensors": 2685393512,
+      "model.safetensors-00003-of-00014.safetensors": 2685393512,
+      "model.safetensors-00004-of-00014.safetensors": 2685394536,
+      "model.safetensors-00005-of-00014.safetensors": 2685395560,
+      "model.safetensors-00006-of-00014.safetensors": 2685394536,
+      "model.safetensors-00007-of-00014.safetensors": 2685393512,
+      "model.safetensors-00008-of-00014.safetensors": 2685393512,
+      "model.safetensors-00009-of-00014.safetensors": 3645492144,
+      "model.safetensors-00010-of-00014.safetensors": 2685398632,
+      "model.safetensors-00011-of-00014.safetensors": 2685400680,
+      "model.safetensors-00012-of-00014.safetensors": 2685399144,
+      "model.safetensors-00013-of-00014.safetensors": 3011229472,
+      "model.safetensors-00014-of-00014.safetensors": 1267650368
+    },
+    "tensor_count": 64196,
+    "total_shard_bytes": 37463724680,
+    "tokenizer_files": {
+      "tokenizer.json": "5f9e4d4901a92b997e463c1f46055088b6cca5ca61a6522d1b9f64c4bb81cb42",
+      "tokenizer_config.json": "316230d6a809701f4db5ea8f8fc862bc3a6f3229c937c174e674ff3ca0a64ac8"
+    },
+    "full_shard_set_sha256": "b51014a9d40c300ea77f12bf8cada444f79c8300277611f6e5f27a62fcb95090",
+    "hash_scope": "all original indexed shard files, including unused experts/vision/MTP"
+  },
+  "device": {
+    "free_before": 24895225856,
+    "total": 25296044032,
+    "name": "NVIDIA GeForce RTX 3090",
+    "peak_allocated": 4069939712,
+    "peak_reserved": 4326424576,
+    "peak_operand_cache": 268435456
+  },
+  "interception_after": {
+    "file": "interception-after.json",
+    "sha256": "dcbc645bea29fcc2af9152bc20e92a1107347ff5d0a74b4aeb2334a8ca26504e",
+    "bytes": 8555
+  },
+  "marshal_diagnostic_only": {
+    "before": {
+      "Qwen3_5MoeDecoderLayer": "cbc695c29e5412abca90fb18dd35f13d8860cd1de0cafc5052d487db74687b77",
+      "Qwen3_5MoeAttention": "d0270e1c9c57687e10bd112c6ef60abd95846570cc1e683a0a75b420709d54f1",
+      "Qwen3_5MoeGatedDeltaNet": "6f7ccc05515478b7982a553df2e488e7828c689f5722465c078f9822ad45429c",
+      "Qwen3_5MoeExperts": "3f3ed492b63f742f89651df68be33456dcf905cbfb9b88d4bd12e2846680729a"
+    },
+    "after": {
+      "Qwen3_5MoeDecoderLayer": "cbc695c29e5412abca90fb18dd35f13d8860cd1de0cafc5052d487db74687b77",
+      "Qwen3_5MoeAttention": "25fc4231b32ec2e3e258ad248361b4e6670ccfc793938011c76115a95697a28b",
+      "Qwen3_5MoeGatedDeltaNet": "78fde6e4dba1a22c70417a9d0831d259681520c4fe15faebb6d660ca5664e6ec",
+      "Qwen3_5MoeExperts": "3f3ed492b63f742f89651df68be33456dcf905cbfb9b88d4bd12e2846680729a"
+    },
+    "policy": "Python marshal serializes object-sharing references; canonical bytecode/source identity is the acceptance check"
+  },
+  "operand_layout": {
+    "file": "operand-layout.json",
+    "sha256": "b7f939dae4503bc3548a9cb41cc1c3fc9548bb73f95e9cfbbce738c752e501bf",
+    "bytes": 22819094
+  },
+  "boundary_inventory_complete": true,
+  "reference_kind": "independent_profile_matched_tp2_hf_eager",
+  "source_payloads": {
+    "file": "source-payloads.json",
+    "sha256": "6058481f72e8936363c91afaab77b936dcae7f3ad8dee658f29f1a6e5592fb81",
+    "bytes": 3108447
+  },
+  "peak_host_rss_bytes": 5011218432,
+  "host_memory_policy": "lazy one-tensor reads; no all-model GPU residency; peak RSS reported, not a hard partition",
+  "elapsed_seconds": 218.57148424349725,
+  "custody": {
+    "file": "supervisor.json",
+    "sha256": "38404c750574761e09db23957e9faaf8dc18ea9e4557da41a36245f3ca649748"
+  },
+  "authentication": {
+    "file": "authentication.json",
+    "sha256": "51423484ff84146fcfe29f40de75c57d77af0c8aec0eefa2d7ed9a2afc493eae"
+  },
+  "launch": {
+    "file": "worker-launch.json",
+    "sha256": "000cd5adf39c81e6565601a8202ef4f6646bf5ce6b4134f19a2f2f5600d400b2"
+  },
+  "idle_before": {
+    "file": "before.json",
+    "sha256": "9b99d96f6ac93d71773fd6816d7a9be43a5f547547555a4e77c257acce85d8d3"
+  },
+  "idle_after": {
+    "file": "after.json",
+    "sha256": "d506f495c8f115e2cdd454574851e7ab61c960b3b197093564a9883db252eda3"
+  }
+}

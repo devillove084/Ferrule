@@ -1,0 +1,9 @@
+.....................{"stage": "hello2", "gate": {"status": "pass"}}
+{"stage": "canary8", "gate": {"status": "fail"}}
+...START single lifecycle; no retry
+{"status": "complete", "launch_id": "fixture", "server_starts": 1, "authenticated_drained": true, "after": "verified"}
+....................................................................................................................................
+----------------------------------------------------------------------
+Ran 156 tests in 65.175s
+
+OK

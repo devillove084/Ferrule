@@ -1,0 +1,2009 @@
+{
+  "protocol": "tp2-resident-fv-qa8-descriptive",
+  "purpose": "paired",
+  "status": "incomplete",
+  "sole_gpu_owner_granted": true,
+  "owner_note": "User renewed sole GPU owner authorization; optimized same-scope no-trace F1,V1,V2,F2 descriptive pair after smoke; no fairmatch/speedup; stop on failure",
+  "fairmatch": false,
+  "exact_speedup": null,
+  "slots": [
+    {
+      "id": "F1",
+      "status": "complete",
+      "launch_id": "942fd979942a429299fd27cd097e9371",
+      "execution_sha256": "c04e39a54504e0408c5c670bf65695d0acd9682cce1edf2ca3573dfa8050fd44",
+      "supervisor_sha256": "b4a561986a1c19989bd4e069d957bedef99831a0f0878a3d7422d099e5985526",
+      "observation": {
+        "status": "complete",
+        "started_monotonic": 8497413.633946696,
+        "fairmatch": false,
+        "exact_speedup": null,
+        "launch_monotonic": 8497414.325242817,
+        "server_pid": 147891,
+        "server_identity": {
+          "pid": 147891,
+          "birth_ticks": 86129402,
+          "ppid": 147882,
+          "state": "R"
+        },
+        "startup_seconds": 243.48004019632936,
+        "request_gate": {
+          "status": "complete",
+          "phases": [
+            {
+              "stage": "hello2",
+              "gate": {
+                "status": "pass",
+                "engine": "ferrule",
+                "checks": [
+                  {
+                    "index": 0,
+                    "passed": true,
+                    "actual_input_tokens": 1,
+                    "actual_output_tokens": 2
+                  }
+                ],
+                "first_qa_requests": 0,
+                "warmup_requests": 0,
+                "measured_requests": 1,
+                "http_receipt_sha256": "3d44ea88455ef25e72ce0a5e62d5181d699e1fc45a76c21fc9f5ef1de95c81aa",
+                "coverage": "visible text/usage only; separate pinned numerical acceptance, not arithmetic parity",
+                "fairmatch": false,
+                "exact_speedup": null
+              }
+            },
+            {
+              "stage": "canary8",
+              "gate": {
+                "status": "pass",
+                "engine": "ferrule",
+                "checks": [
+                  {
+                    "index": 0,
+                    "passed": true,
+                    "actual_input_tokens": 5,
+                    "actual_output_tokens": 8
+                  },
+                  {
+                    "index": 1,
+                    "passed": true,
+                    "actual_input_tokens": 5,
+                    "actual_output_tokens": 8
+                  },
+                  {
+                    "index": 2,
+                    "passed": true,
+                    "actual_input_tokens": 3,
+                    "actual_output_tokens": 8
+                  }
+                ],
+                "first_qa_requests": 0,
+                "warmup_requests": 0,
+                "measured_requests": 3,
+                "http_receipt_sha256": "9673e10e79b99e94cbfb82f7e9eda93cce099e581e0dcb1d56e0836d500d36e2",
+                "coverage": "visible text/usage only; separate pinned numerical acceptance, not arithmetic parity",
+                "fairmatch": false,
+                "exact_speedup": null
+              }
+            },
+            {
+              "stage": "qa8-V1",
+              "gate": {
+                "status": "pass",
+                "engine": "ferrule",
+                "checks": [
+                  {
+                    "index": 0,
+                    "passed": true,
+                    "actual_input_tokens": 5,
+                    "actual_output_tokens": 8
+                  },
+                  {
+                    "index": 1,
+                    "passed": true,
+                    "actual_input_tokens": 5,
+                    "actual_output_tokens": 8
+                  },
+                  {
+                    "index": 2,
+                    "passed": true,
+                    "actual_input_tokens": 5,
+                    "actual_output_tokens": 8
+                  },
+                  {
+                    "index": 3,
+                    "passed": true,
+                    "actual_input_tokens": 5,
+                    "actual_output_tokens": 8
+                  },
+                  {
+                    "index": 4,
+                    "passed": true,
+                    "actual_input_tokens": 5,
+                    "actual_output_tokens": 8
+                  },
+                  {
+                    "index": 5,
+                    "passed": true,
+                    "actual_input_tokens": 5,
+                    "actual_output_tokens": 8
+                  },
+                  {
+                    "index": 6,
+                    "passed": true,
+                    "actual_input_tokens": 5,
+                    "actual_output_tokens": 8
+                  },
+                  {
+                    "index": 7,
+                    "passed": true,
+                    "actual_input_tokens": 5,
+                    "actual_output_tokens": 8
+                  }
+                ],
+                "first_qa_requests": 1,
+                "warmup_requests": 2,
+                "measured_requests": 5,
+                "http_receipt_sha256": "a3a3fe7c998eaa91c3d482d746e1ec658fe66462715c328cd832f2dc89c26446",
+                "coverage": "visible text/usage only; separate pinned numerical acceptance, not arithmetic parity",
+                "fairmatch": false,
+                "exact_speedup": null
+              }
+            }
+          ],
+          "same_server": true
+        },
+        "resources": {
+          "status": "observed_within_targets",
+          "errors": [],
+          "memory_components": {
+            "sample_count": 111,
+            "complete_host_samples": 111,
+            "gpu_samples": 111,
+            "gpu_peak_bytes": {
+              "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 19372441600,
+              "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 19372441600
+            },
+            "tree_pss_peak_bytes": 52877595648,
+            "tree_rss_peak_bytes": 52880719872,
+            "tree_anonymous_peak_bytes": 52636348416,
+            "tree_pss_anon_peak_bytes": null,
+            "tree_pss_file_peak_bytes": null,
+            "tree_private_dirty_peak_bytes": 52679004160,
+            "component_sample_counts": {
+              "anonymous_bytes": 111,
+              "pss_anon_bytes": 0,
+              "pss_file_bytes": 0,
+              "private_dirty_bytes": 111
+            },
+            "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+            "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+          },
+          "phase_memory": {
+            "bounds": {
+              "ready_monotonic": 8497657.805283014,
+              "first_sent_monotonic": 8497658.124667723,
+              "first_terminal_monotonic": 8497658.645804755
+            },
+            "phases": {
+              "startup": {
+                "sample_count": 105,
+                "complete_host_samples": 105,
+                "gpu_samples": 105,
+                "gpu_peak_bytes": {
+                  "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 19305332736,
+                  "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 19305332736
+                },
+                "tree_pss_peak_bytes": 52877595648,
+                "tree_rss_peak_bytes": 52880719872,
+                "tree_anonymous_peak_bytes": 52636348416,
+                "tree_pss_anon_peak_bytes": null,
+                "tree_pss_file_peak_bytes": null,
+                "tree_private_dirty_peak_bytes": 52679004160,
+                "component_sample_counts": {
+                  "anonymous_bytes": 105,
+                  "pss_anon_bytes": 0,
+                  "pss_file_bytes": 0,
+                  "private_dirty_bytes": 105
+                },
+                "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+                "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+              },
+              "ready_before_first": {
+                "sample_count": 0,
+                "complete_host_samples": 0,
+                "gpu_samples": 0,
+                "gpu_peak_bytes": {
+                  "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": null,
+                  "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": null
+                },
+                "tree_pss_peak_bytes": null,
+                "tree_rss_peak_bytes": null,
+                "tree_anonymous_peak_bytes": null,
+                "tree_pss_anon_peak_bytes": null,
+                "tree_pss_file_peak_bytes": null,
+                "tree_private_dirty_peak_bytes": null,
+                "component_sample_counts": {
+                  "anonymous_bytes": 0,
+                  "pss_anon_bytes": 0,
+                  "pss_file_bytes": 0,
+                  "private_dirty_bytes": 0
+                },
+                "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+                "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+              },
+              "first_request": {
+                "sample_count": 0,
+                "complete_host_samples": 0,
+                "gpu_samples": 0,
+                "gpu_peak_bytes": {
+                  "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": null,
+                  "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": null
+                },
+                "tree_pss_peak_bytes": null,
+                "tree_rss_peak_bytes": null,
+                "tree_anonymous_peak_bytes": null,
+                "tree_pss_anon_peak_bytes": null,
+                "tree_pss_file_peak_bytes": null,
+                "tree_private_dirty_peak_bytes": null,
+                "component_sample_counts": {
+                  "anonymous_bytes": 0,
+                  "pss_anon_bytes": 0,
+                  "pss_file_bytes": 0,
+                  "private_dirty_bytes": 0
+                },
+                "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+                "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+              },
+              "after_first_request": {
+                "sample_count": 6,
+                "complete_host_samples": 6,
+                "gpu_samples": 6,
+                "gpu_peak_bytes": {
+                  "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 19372441600,
+                  "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 19372441600
+                },
+                "tree_pss_peak_bytes": 52856938496,
+                "tree_rss_peak_bytes": 52860084224,
+                "tree_anonymous_peak_bytes": 52612894720,
+                "tree_pss_anon_peak_bytes": null,
+                "tree_pss_file_peak_bytes": null,
+                "tree_private_dirty_peak_bytes": 52655796224,
+                "component_sample_counts": {
+                  "anonymous_bytes": 6,
+                  "pss_anon_bytes": 0,
+                  "pss_file_bytes": 0,
+                  "private_dirty_bytes": 6
+                },
+                "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+                "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+              }
+            },
+            "unassigned_or_boundary_samples": 0,
+            "steady_state_claim": false,
+            "policy": "after first request includes later canaries/warmup/requests; not a steady-state proof"
+          },
+          "phase_metadata_error": null,
+          "gpu_peak_bytes": {
+            "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 19372441600,
+            "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 19372441600
+          },
+          "tree_pss_peak_bytes": 52877595648,
+          "tree_rss_peak_bytes": 52880719872,
+          "complete_host_samples": 111,
+          "incomplete_host_samples": 0,
+          "gpu_samples": 111,
+          "missing_gpu_attempts": 0,
+          "baseline": {
+            "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": {
+              "index": 0,
+              "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+              "total_bytes": 25769803776,
+              "gpu_bytes": 0,
+              "utilization": 0
+            },
+            "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": {
+              "index": 1,
+              "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+              "total_bytes": 25769803776,
+              "gpu_bytes": 0,
+              "utilization": 0
+            },
+            "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6": {
+              "index": 2,
+              "uuid": "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6",
+              "total_bytes": 25769803776,
+              "gpu_bytes": 0,
+              "utilization": 0
+            },
+            "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011": {
+              "index": 3,
+              "uuid": "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011",
+              "total_bytes": 25769803776,
+              "gpu_bytes": 0,
+              "utilization": 0
+            },
+            "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86": {
+              "index": 4,
+              "uuid": "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86",
+              "total_bytes": 25769803776,
+              "gpu_bytes": 0,
+              "utilization": 0
+            },
+            "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685": {
+              "index": 5,
+              "uuid": "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685",
+              "total_bytes": 25769803776,
+              "gpu_bytes": 0,
+              "utilization": 0
+            },
+            "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d": {
+              "index": 6,
+              "uuid": "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d",
+              "total_bytes": 25769803776,
+              "gpu_bytes": 0,
+              "utilization": 0
+            },
+            "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f": {
+              "index": 7,
+              "uuid": "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f",
+              "total_bytes": 25769803776,
+              "gpu_bytes": 0,
+              "utilization": 0
+            }
+          },
+          "delta_high_water_bytes": {
+            "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 19372441600,
+            "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 19372441600,
+            "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6": 0,
+            "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011": 0,
+            "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86": 0,
+            "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685": 0,
+            "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d": 0,
+            "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f": 0
+          },
+          "final_process_diagnostics": [
+            {
+              "identity": {
+                "pid": 147891,
+                "birth_ticks": 86129402,
+                "ppid": 147882,
+                "state": "S"
+              },
+              "command": "/proc/self/fd/4 serve /mnt/nas1/hf/Qwen3.5-35B-A3B-FP8 --backend cuda --engine pipeline --model-profile qwen35-mixed-bf16 --tensor-parallel 2 --pipeline-parallel 1 --expert-parallel 1 --rank-backend thread --devices 0,1 --rank-restarts 0 --kv-execution-policy resident --ctx-size 128 --max-active-sequences 2 --max-batch-tokens 8 --prefill-chunk-size 8 --cuda-device-budget-mb 22528 --kv-cache-mb 16 --max-tensor-mb 2048 --cuda-workspace-mb 1024 --host 127.0.0.1 --port 18367 --served-model-name qwen35-ferrule-tp2-resident-paper ",
+              "environment": {
+                "HOME": "/root",
+                "PATH": "/home/admin/wxw403883/anaconda3/envs/tao/bin:/root/.cargo/bin:/usr/bin:/bin",
+                "PYTHONDONTWRITEBYTECODE": "1",
+                "CUDA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+                "NVIDIA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+                "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
+                "HF_HUB_OFFLINE": "1",
+                "TRANSFORMERS_OFFLINE": "1",
+                "CUDA_HOME": "/home/admin/wxw403883/anaconda3/envs/tao",
+                "NVCC": "/home/admin/wxw403883/anaconda3/envs/tao/bin/nvcc",
+                "LD_LIBRARY_PATH": "/home/admin/wxw403883/anaconda3/envs/tao/lib:/usr/lib64",
+                "CUBLAS_WORKSPACE_CONFIG": ":0:0",
+                "FERRULE_LOG": "info",
+                "FERRULE_LOG_FORMAT": "json"
+              },
+              "libraries": [
+                "/home/admin/wxw403883/anaconda3/envs/tao/lib/libcudart.so.12.4.99",
+                "/usr/lib64/libcuda.so.575.57.08"
+              ]
+            }
+          ],
+          "owned_gpu_attribution": "unknown",
+          "owned_process_gpu_peak_bytes": null,
+          "exact_peaks": false,
+          "hard_memory_partition": false,
+          "continuous_coverage": false
+        },
+        "shutdown": {
+          "status": "root_exited_descendants_unknown",
+          "seconds": 4.319169670343399,
+          "timed_out": false,
+          "gpu_quiescence": "unverified; no GPU probe",
+          "returncode": 0
+        },
+        "wall_seconds": 266.42391726002097
+      },
+      "runtime": {
+        "evidence": {
+          "profile": [
+            "[model plan] qwen3.5-35b-a3b-numeric-bf16 Pipeline: backend Cuda -> Cuda, profile=cuda-qwen35-mixed-bf16-tp2-local-shards-serial; numeric arithmetic=not applicable; ModelSupport { required_feature: Some(\"cuda\"), cuda_feature_enabled: true, static_constraints: \"Mixed PP1 TP2 EP1 CUDA threads; two distinct devices; resident local expert shards; BF16 activation/KV/conv, F32 SSM/accumulation; serial greedy; context<=128 batch<=8 sessions<=2; <=22 GiB/card; no offload/process/restart; public quality gate required\", static_supported: true, buildability: CatalogValidated, admission: OwnerLiveAdmissionRequired, storage: NumericFp8E4m3fnBf16Scales, arithmetic: Bf16Compatibility }; topology=ModelTopologyPlacement { rank_backend: Some(Thread), logical: LogicalTopology { pipeline_parallel: 1, tensor_parallel: 2, expert_parallel: 1, data_parallel: 1, sequence_parallel: 1, context_parallel: 1 }, physical: PhysicalPlacement { devices: Some([0, 1]), root_device: None, expert_devices: None, source_identity: None } }; scheduler requested=ResidentSchedulerConfig { prefill_chunk_size: 8, max_active_sequences: 2, max_decode_batch: 2, decode_cohort_target: 4, decode_cohort_max_deferrals: 3, max_batch_tokens: 8, prefill_reserve_tokens: 1, allow_mixed_batches: true, prefix_cache_capacity_pages: 0 }, effective=ResidentSchedulerConfig { prefill_chunk_size: 8, max_active_sequences: 2, max_decode_batch: 1, decode_cohort_target: 1, decode_cohort_max_deferrals: 0, max_batch_tokens: 8, prefill_reserve_tokens: 1, allow_mixed_batches: false, prefix_cache_capacity_pages: 0 }; context=128; adjustments=[max_layers: descriptor default -> 40 (use the descriptor layer count); scheduler_config.max_decode_batch: 2 -> 1 (generic pipeline is serial; batch <= context and prefill <= batch; no mixed batches/cohort deferral/native proposals); scheduler_config.allow_mixed_batches: true -> false (generic pipeline is serial; batch <= context and prefill <= batch; no mixed batches/cohort deferral/native proposals); scheduler_config.decode_cohort_target: 4 -> 1 (generic pipeline is serial; batch <= context and prefill <= batch; no mixed batches/cohort deferral/native proposals); scheduler_config.decode_cohort_max_deferrals: 3 -> 0 (generic pipeline is serial; batch <= context and prefill <= batch; no mixed batches/cohort deferral/native proposals)]; metadata only, owner live admission required (source identity, free memory, allocator/headroom and cleanup are not guaranteed); KV logical pages L and physical transaction slots P remain separately owner-planned",
+            "loading qwen35-ferrule-tp2-resident-paper with qwen3.5-35b-a3b-numeric-bf16 on cuda-qwen35-mixed-bf16-tp2-local-shards-serial (cuda backend) in the dedicated model worker...",
+            "{\"timestamp\":\"2026-10-09T14:02:10.513245Z\",\"level\":\"INFO\",\"fields\":{\"message\":\"resident model build entering owner-local admission\",\"report\":\"qwen3.5-35b-a3b-numeric-bf16 Pipeline: backend Cuda -> Cuda, profile=cuda-qwen35-mixed-bf16-tp2-local-shards-serial; numeric arithmetic=not applicable; ModelSupport { required_feature: Some(\\\"cuda\\\"), cuda_feature_enabled: true, static_constraints: \\\"Mixed PP1 TP2 EP1 CUDA threads; two distinct devices; resident local expert shards; BF16 activation/KV/conv, F32 SSM/accumulation; serial greedy; context<=128 batch<=8 sessions<=2; <=22 GiB/card; no offload/process/restart; public quality gate required\\\", static_supported: true, buildability: CatalogValidated, admission: OwnerLiveAdmissionRequired, storage: NumericFp8E4m3fnBf16Scales, arithmetic: Bf16Compatibility }; topology=ModelTopologyPlacement { rank_backend: Some(Thread), logical: LogicalTopology { pipeline_parallel: 1, tensor_parallel: 2, expert_parallel: 1, data_parallel: 1, sequence_parallel: 1, context_parallel: 1 }, physical: PhysicalPlacement { devices: Some([0, 1]), root_device: None, expert_devices: None, source_identity: None } }; scheduler requested=ResidentSchedulerConfig { prefill_chunk_size: 8, max_active_sequences: 2, max_decode_batch: 2, decode_cohort_target: 4, decode_cohort_max_deferrals: 3, max_batch_tokens: 8, prefill_reserve_tokens: 1, allow_mixed_batches: true, prefix_cache_capacity_pages: 0 }, effective=ResidentSchedulerConfig { prefill_chunk_size: 8, max_active_sequences: 2, max_decode_batch: 1, decode_cohort_target: 1, decode_cohort_max_deferrals: 0, max_batch_tokens: 8, prefill_reserve_tokens: 1, allow_mixed_batches: false, prefix_cache_capacity_pages: 0 }; context=128; adjustments=[max_layers: descriptor default -> 40 (use the descriptor layer count); scheduler_config.max_decode_batch: 2 -> 1 (generic pipeline is serial; batch <= context and prefill <= batch; no mixed batches/cohort deferral/native proposals); scheduler_config.allow_mixed_batches: true -> false (generic pipeline is serial; batch <= context and prefill <= batch; no mixed batches/cohort deferral/native proposals); scheduler_config.decode_cohort_target: 4 -> 1 (generic pipeline is serial; batch <= context and prefill <= batch; no mixed batches/cohort deferral/native proposals); scheduler_config.decode_cohort_max_deferrals: 3 -> 0 (generic pipeline is serial; batch <= context and prefill <= batch; no mixed batches/cohort deferral/native proposals)]; metadata only, owner live admission required (source identity, free memory, allocator/headroom and cleanup are not guaranteed); KV logical pages L and physical transaction slots P remain separately owner-planned\"},\"target\":\"ferrule_composition::model_factory\"}"
+          ],
+          "budget": [
+            "[Mixed TP2 device budget] required_bytes_per_card=[(0, 19820048384), (1, 19820048384)]; ceiling_bytes_per_card=23622320128; resident local expert shards, no lazy cache/host offload; BF16 activation/KV/conv, F32 SSM/accumulation; source-bound claims and live admission remain required; not a VRAM reservation"
+          ],
+          "resident": [
+            "[model plan] qwen3.5-35b-a3b-numeric-bf16 Pipeline: backend Cuda -> Cuda, profile=cuda-qwen35-mixed-bf16-tp2-local-shards-serial; numeric arithmetic=not applicable; ModelSupport { required_feature: Some(\"cuda\"), cuda_feature_enabled: true, static_constraints: \"Mixed PP1 TP2 EP1 CUDA threads; two distinct devices; resident local expert shards; BF16 activation/KV/conv, F32 SSM/accumulation; serial greedy; context<=128 batch<=8 sessions<=2; <=22 GiB/card; no offload/process/restart; public quality gate required\", static_supported: true, buildability: CatalogValidated, admission: OwnerLiveAdmissionRequired, storage: NumericFp8E4m3fnBf16Scales, arithmetic: Bf16Compatibility }; topology=ModelTopologyPlacement { rank_backend: Some(Thread), logical: LogicalTopology { pipeline_parallel: 1, tensor_parallel: 2, expert_parallel: 1, data_parallel: 1, sequence_parallel: 1, context_parallel: 1 }, physical: PhysicalPlacement { devices: Some([0, 1]), root_device: None, expert_devices: None, source_identity: None } }; scheduler requested=ResidentSchedulerConfig { prefill_chunk_size: 8, max_active_sequences: 2, max_decode_batch: 2, decode_cohort_target: 4, decode_cohort_max_deferrals: 3, max_batch_tokens: 8, prefill_reserve_tokens: 1, allow_mixed_batches: true, prefix_cache_capacity_pages: 0 }, effective=ResidentSchedulerConfig { prefill_chunk_size: 8, max_active_sequences: 2, max_decode_batch: 1, decode_cohort_target: 1, decode_cohort_max_deferrals: 0, max_batch_tokens: 8, prefill_reserve_tokens: 1, allow_mixed_batches: false, prefix_cache_capacity_pages: 0 }; context=128; adjustments=[max_layers: descriptor default -> 40 (use the descriptor layer count); scheduler_config.max_decode_batch: 2 -> 1 (generic pipeline is serial; batch <= context and prefill <= batch; no mixed batches/cohort deferral/native proposals); scheduler_config.allow_mixed_batches: true -> false (generic pipeline is serial; batch <= context and prefill <= batch; no mixed batches/cohort deferral/native proposals); scheduler_config.decode_cohort_target: 4 -> 1 (generic pipeline is serial; batch <= context and prefill <= batch; no mixed batches/cohort deferral/native proposals); scheduler_config.decode_cohort_max_deferrals: 3 -> 0 (generic pipeline is serial; batch <= context and prefill <= batch; no mixed batches/cohort deferral/native proposals)]; metadata only, owner live admission required (source identity, free memory, allocator/headroom and cleanup are not guaranteed); KV logical pages L and physical transaction slots P remain separately owner-planned",
+            "[Mixed TP2 device budget] required_bytes_per_card=[(0, 19820048384), (1, 19820048384)]; ceiling_bytes_per_card=23622320128; resident local expert shards, no lazy cache/host offload; BF16 activation/KV/conv, F32 SSM/accumulation; source-bound claims and live admission remain required; not a VRAM reservation",
+            "{\"timestamp\":\"2026-10-09T14:02:10.513245Z\",\"level\":\"INFO\",\"fields\":{\"message\":\"resident model build entering owner-local admission\",\"report\":\"qwen3.5-35b-a3b-numeric-bf16 Pipeline: backend Cuda -> Cuda, profile=cuda-qwen35-mixed-bf16-tp2-local-shards-serial; numeric arithmetic=not applicable; ModelSupport { required_feature: Some(\\\"cuda\\\"), cuda_feature_enabled: true, static_constraints: \\\"Mixed PP1 TP2 EP1 CUDA threads; two distinct devices; resident local expert shards; BF16 activation/KV/conv, F32 SSM/accumulation; serial greedy; context<=128 batch<=8 sessions<=2; <=22 GiB/card; no offload/process/restart; public quality gate required\\\", static_supported: true, buildability: CatalogValidated, admission: OwnerLiveAdmissionRequired, storage: NumericFp8E4m3fnBf16Scales, arithmetic: Bf16Compatibility }; topology=ModelTopologyPlacement { rank_backend: Some(Thread), logical: LogicalTopology { pipeline_parallel: 1, tensor_parallel: 2, expert_parallel: 1, data_parallel: 1, sequence_parallel: 1, context_parallel: 1 }, physical: PhysicalPlacement { devices: Some([0, 1]), root_device: None, expert_devices: None, source_identity: None } }; scheduler requested=ResidentSchedulerConfig { prefill_chunk_size: 8, max_active_sequences: 2, max_decode_batch: 2, decode_cohort_target: 4, decode_cohort_max_deferrals: 3, max_batch_tokens: 8, prefill_reserve_tokens: 1, allow_mixed_batches: true, prefix_cache_capacity_pages: 0 }, effective=ResidentSchedulerConfig { prefill_chunk_size: 8, max_active_sequences: 2, max_decode_batch: 1, decode_cohort_target: 1, decode_cohort_max_deferrals: 0, max_batch_tokens: 8, prefill_reserve_tokens: 1, allow_mixed_batches: false, prefix_cache_capacity_pages: 0 }; context=128; adjustments=[max_layers: descriptor default -> 40 (use the descriptor layer count); scheduler_config.max_decode_batch: 2 -> 1 (generic pipeline is serial; batch <= context and prefill <= batch; no mixed batches/cohort deferral/native proposals); scheduler_config.allow_mixed_batches: true -> false (generic pipeline is serial; batch <= context and prefill <= batch; no mixed batches/cohort deferral/native proposals); scheduler_config.decode_cohort_target: 4 -> 1 (generic pipeline is serial; batch <= context and prefill <= batch; no mixed batches/cohort deferral/native proposals); scheduler_config.decode_cohort_max_deferrals: 3 -> 0 (generic pipeline is serial; batch <= context and prefill <= batch; no mixed batches/cohort deferral/native proposals)]; metadata only, owner live admission required (source identity, free memory, allocator/headroom and cleanup are not guaranteed); KV logical pages L and physical transaction slots P remain separately owner-planned\"},\"target\":\"ferrule_composition::model_factory\"}"
+          ],
+          "precision": [
+            "[model plan] qwen3.5-35b-a3b-numeric-bf16 Pipeline: backend Cuda -> Cuda, profile=cuda-qwen35-mixed-bf16-tp2-local-shards-serial; numeric arithmetic=not applicable; ModelSupport { required_feature: Some(\"cuda\"), cuda_feature_enabled: true, static_constraints: \"Mixed PP1 TP2 EP1 CUDA threads; two distinct devices; resident local expert shards; BF16 activation/KV/conv, F32 SSM/accumulation; serial greedy; context<=128 batch<=8 sessions<=2; <=22 GiB/card; no offload/process/restart; public quality gate required\", static_supported: true, buildability: CatalogValidated, admission: OwnerLiveAdmissionRequired, storage: NumericFp8E4m3fnBf16Scales, arithmetic: Bf16Compatibility }; topology=ModelTopologyPlacement { rank_backend: Some(Thread), logical: LogicalTopology { pipeline_parallel: 1, tensor_parallel: 2, expert_parallel: 1, data_parallel: 1, sequence_parallel: 1, context_parallel: 1 }, physical: PhysicalPlacement { devices: Some([0, 1]), root_device: None, expert_devices: None, source_identity: None } }; scheduler requested=ResidentSchedulerConfig { prefill_chunk_size: 8, max_active_sequences: 2, max_decode_batch: 2, decode_cohort_target: 4, decode_cohort_max_deferrals: 3, max_batch_tokens: 8, prefill_reserve_tokens: 1, allow_mixed_batches: true, prefix_cache_capacity_pages: 0 }, effective=ResidentSchedulerConfig { prefill_chunk_size: 8, max_active_sequences: 2, max_decode_batch: 1, decode_cohort_target: 1, decode_cohort_max_deferrals: 0, max_batch_tokens: 8, prefill_reserve_tokens: 1, allow_mixed_batches: false, prefix_cache_capacity_pages: 0 }; context=128; adjustments=[max_layers: descriptor default -> 40 (use the descriptor layer count); scheduler_config.max_decode_batch: 2 -> 1 (generic pipeline is serial; batch <= context and prefill <= batch; no mixed batches/cohort deferral/native proposals); scheduler_config.allow_mixed_batches: true -> false (generic pipeline is serial; batch <= context and prefill <= batch; no mixed batches/cohort deferral/native proposals); scheduler_config.decode_cohort_target: 4 -> 1 (generic pipeline is serial; batch <= context and prefill <= batch; no mixed batches/cohort deferral/native proposals); scheduler_config.decode_cohort_max_deferrals: 3 -> 0 (generic pipeline is serial; batch <= context and prefill <= batch; no mixed batches/cohort deferral/native proposals)]; metadata only, owner live admission required (source identity, free memory, allocator/headroom and cleanup are not guaranteed); KV logical pages L and physical transaction slots P remain separately owner-planned",
+            "[Mixed TP2 device budget] required_bytes_per_card=[(0, 19820048384), (1, 19820048384)]; ceiling_bytes_per_card=23622320128; resident local expert shards, no lazy cache/host offload; BF16 activation/KV/conv, F32 SSM/accumulation; source-bound claims and live admission remain required; not a VRAM reservation",
+            "{\"timestamp\":\"2026-10-09T14:02:10.513245Z\",\"level\":\"INFO\",\"fields\":{\"message\":\"resident model build entering owner-local admission\",\"report\":\"qwen3.5-35b-a3b-numeric-bf16 Pipeline: backend Cuda -> Cuda, profile=cuda-qwen35-mixed-bf16-tp2-local-shards-serial; numeric arithmetic=not applicable; ModelSupport { required_feature: Some(\\\"cuda\\\"), cuda_feature_enabled: true, static_constraints: \\\"Mixed PP1 TP2 EP1 CUDA threads; two distinct devices; resident local expert shards; BF16 activation/KV/conv, F32 SSM/accumulation; serial greedy; context<=128 batch<=8 sessions<=2; <=22 GiB/card; no offload/process/restart; public quality gate required\\\", static_supported: true, buildability: CatalogValidated, admission: OwnerLiveAdmissionRequired, storage: NumericFp8E4m3fnBf16Scales, arithmetic: Bf16Compatibility }; topology=ModelTopologyPlacement { rank_backend: Some(Thread), logical: LogicalTopology { pipeline_parallel: 1, tensor_parallel: 2, expert_parallel: 1, data_parallel: 1, sequence_parallel: 1, context_parallel: 1 }, physical: PhysicalPlacement { devices: Some([0, 1]), root_device: None, expert_devices: None, source_identity: None } }; scheduler requested=ResidentSchedulerConfig { prefill_chunk_size: 8, max_active_sequences: 2, max_decode_batch: 2, decode_cohort_target: 4, decode_cohort_max_deferrals: 3, max_batch_tokens: 8, prefill_reserve_tokens: 1, allow_mixed_batches: true, prefix_cache_capacity_pages: 0 }, effective=ResidentSchedulerConfig { prefill_chunk_size: 8, max_active_sequences: 2, max_decode_batch: 1, decode_cohort_target: 1, decode_cohort_max_deferrals: 0, max_batch_tokens: 8, prefill_reserve_tokens: 1, allow_mixed_batches: false, prefix_cache_capacity_pages: 0 }; context=128; adjustments=[max_layers: descriptor default -> 40 (use the descriptor layer count); scheduler_config.max_decode_batch: 2 -> 1 (generic pipeline is serial; batch <= context and prefill <= batch; no mixed batches/cohort deferral/native proposals); scheduler_config.allow_mixed_batches: true -> false (generic pipeline is serial; batch <= context and prefill <= batch; no mixed batches/cohort deferral/native proposals); scheduler_config.decode_cohort_target: 4 -> 1 (generic pipeline is serial; batch <= context and prefill <= batch; no mixed batches/cohort deferral/native proposals); scheduler_config.decode_cohort_max_deferrals: 3 -> 0 (generic pipeline is serial; batch <= context and prefill <= batch; no mixed batches/cohort deferral/native proposals)]; metadata only, owner live admission required (source identity, free memory, allocator/headroom and cleanup are not guaranteed); KV logical pages L and physical transaction slots P remain separately owner-planned\"},\"target\":\"ferrule_composition::model_factory\"}"
+          ]
+        },
+        "missing": [],
+        "contradictions": [],
+        "transport": "raw log retained; Ferrule local thread collectives are not asserted to be NCCL",
+        "exact_arithmetic_match": false
+      },
+      "fairmatch": false,
+      "exact_speedup": null
+    },
+    {
+      "id": "V1",
+      "status": "complete",
+      "launch_id": "a568de8b78ab4caeb00943f4c755f4ab",
+      "execution_sha256": "c272384a5aa718cda234c73f1daedcf0c008917cc347d4b48bb7bb276da06b17",
+      "supervisor_sha256": "04929f6e3fb94e5203e1907406c502d80b5cca4cc42f0a55527768a3841198ae",
+      "observation": {
+        "status": "complete",
+        "started_monotonic": 8497770.029715156,
+        "fairmatch": false,
+        "exact_speedup": null,
+        "launch_monotonic": 8497770.72116185,
+        "server_pid": 148525,
+        "server_identity": {
+          "pid": 148525,
+          "birth_ticks": 86165037,
+          "ppid": 148516,
+          "state": "R"
+        },
+        "startup_seconds": 57.58249111287296,
+        "request_gate": {
+          "status": "complete",
+          "phases": [
+            {
+              "stage": "hello2",
+              "gate": {
+                "status": "pass",
+                "engine": "vllm",
+                "checks": [
+                  {
+                    "index": 0,
+                    "passed": true,
+                    "actual_input_tokens": 1,
+                    "actual_output_tokens": 2
+                  }
+                ],
+                "first_qa_requests": 0,
+                "warmup_requests": 0,
+                "measured_requests": 1,
+                "http_receipt_sha256": "1871bd7e1da9724a3340f1da1cf232a696b73fafbe635f66b47f393dbe5e1fc0",
+                "coverage": "visible text/usage only; separate pinned numerical acceptance, not arithmetic parity",
+                "fairmatch": false,
+                "exact_speedup": null
+              }
+            },
+            {
+              "stage": "canary8",
+              "gate": {
+                "status": "pass",
+                "engine": "vllm",
+                "checks": [
+                  {
+                    "index": 0,
+                    "passed": true,
+                    "actual_input_tokens": 5,
+                    "actual_output_tokens": 8
+                  },
+                  {
+                    "index": 1,
+                    "passed": true,
+                    "actual_input_tokens": 5,
+                    "actual_output_tokens": 8
+                  },
+                  {
+                    "index": 2,
+                    "passed": true,
+                    "actual_input_tokens": 3,
+                    "actual_output_tokens": 8
+                  }
+                ],
+                "first_qa_requests": 0,
+                "warmup_requests": 0,
+                "measured_requests": 3,
+                "http_receipt_sha256": "39bd0d02bb111327570ebd649a6938373fdc8a63dde3c1baf5bd43853a8d2002",
+                "coverage": "visible text/usage only; separate pinned numerical acceptance, not arithmetic parity",
+                "fairmatch": false,
+                "exact_speedup": null
+              }
+            },
+            {
+              "stage": "qa8-V1",
+              "gate": {
+                "status": "pass",
+                "engine": "vllm",
+                "checks": [
+                  {
+                    "index": 0,
+                    "passed": true,
+                    "actual_input_tokens": 5,
+                    "actual_output_tokens": 8
+                  },
+                  {
+                    "index": 1,
+                    "passed": true,
+                    "actual_input_tokens": 5,
+                    "actual_output_tokens": 8
+                  },
+                  {
+                    "index": 2,
+                    "passed": true,
+                    "actual_input_tokens": 5,
+                    "actual_output_tokens": 8
+                  },
+                  {
+                    "index": 3,
+                    "passed": true,
+                    "actual_input_tokens": 5,
+                    "actual_output_tokens": 8
+                  },
+                  {
+                    "index": 4,
+                    "passed": true,
+                    "actual_input_tokens": 5,
+                    "actual_output_tokens": 8
+                  },
+                  {
+                    "index": 5,
+                    "passed": true,
+                    "actual_input_tokens": 5,
+                    "actual_output_tokens": 8
+                  },
+                  {
+                    "index": 6,
+                    "passed": true,
+                    "actual_input_tokens": 5,
+                    "actual_output_tokens": 8
+                  },
+                  {
+                    "index": 7,
+                    "passed": true,
+                    "actual_input_tokens": 5,
+                    "actual_output_tokens": 8
+                  }
+                ],
+                "first_qa_requests": 1,
+                "warmup_requests": 2,
+                "measured_requests": 5,
+                "http_receipt_sha256": "26e34846fe94c2bfcd6af624bd27c4c80b9f5c142238200310a93810ea057fdc",
+                "coverage": "visible text/usage only; separate pinned numerical acceptance, not arithmetic parity",
+                "fairmatch": false,
+                "exact_speedup": null
+              }
+            }
+          ],
+          "same_server": true
+        },
+        "resources": {
+          "status": "observed_within_targets",
+          "errors": [],
+          "memory_components": {
+            "sample_count": 30,
+            "complete_host_samples": 30,
+            "gpu_samples": 30,
+            "gpu_peak_bytes": {
+              "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 20706230272,
+              "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 20706230272
+            },
+            "tree_pss_peak_bytes": 8441266176,
+            "tree_rss_peak_bytes": 10156969984,
+            "tree_anonymous_peak_bytes": 6182363136,
+            "tree_pss_anon_peak_bytes": null,
+            "tree_pss_file_peak_bytes": null,
+            "tree_private_dirty_peak_bytes": 6247489536,
+            "component_sample_counts": {
+              "anonymous_bytes": 30,
+              "pss_anon_bytes": 0,
+              "pss_file_bytes": 0,
+              "private_dirty_bytes": 30
+            },
+            "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+            "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+          },
+          "phase_memory": {
+            "bounds": {
+              "ready_monotonic": 8497828.303652963,
+              "first_sent_monotonic": 8497828.828700026,
+              "first_terminal_monotonic": 8497829.160779344
+            },
+            "phases": {
+              "startup": {
+                "sample_count": 25,
+                "complete_host_samples": 25,
+                "gpu_samples": 25,
+                "gpu_peak_bytes": {
+                  "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 20706230272,
+                  "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 20706230272
+                },
+                "tree_pss_peak_bytes": 8441266176,
+                "tree_rss_peak_bytes": 10156969984,
+                "tree_anonymous_peak_bytes": 5986414592,
+                "tree_pss_anon_peak_bytes": null,
+                "tree_pss_file_peak_bytes": null,
+                "tree_private_dirty_peak_bytes": 6046281728,
+                "component_sample_counts": {
+                  "anonymous_bytes": 25,
+                  "pss_anon_bytes": 0,
+                  "pss_file_bytes": 0,
+                  "private_dirty_bytes": 25
+                },
+                "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+                "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+              },
+              "ready_before_first": {
+                "sample_count": 0,
+                "complete_host_samples": 0,
+                "gpu_samples": 0,
+                "gpu_peak_bytes": {
+                  "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": null,
+                  "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": null
+                },
+                "tree_pss_peak_bytes": null,
+                "tree_rss_peak_bytes": null,
+                "tree_anonymous_peak_bytes": null,
+                "tree_pss_anon_peak_bytes": null,
+                "tree_pss_file_peak_bytes": null,
+                "tree_private_dirty_peak_bytes": null,
+                "component_sample_counts": {
+                  "anonymous_bytes": 0,
+                  "pss_anon_bytes": 0,
+                  "pss_file_bytes": 0,
+                  "private_dirty_bytes": 0
+                },
+                "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+                "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+              },
+              "first_request": {
+                "sample_count": 0,
+                "complete_host_samples": 0,
+                "gpu_samples": 0,
+                "gpu_peak_bytes": {
+                  "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": null,
+                  "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": null
+                },
+                "tree_pss_peak_bytes": null,
+                "tree_rss_peak_bytes": null,
+                "tree_anonymous_peak_bytes": null,
+                "tree_pss_anon_peak_bytes": null,
+                "tree_pss_file_peak_bytes": null,
+                "tree_private_dirty_peak_bytes": null,
+                "component_sample_counts": {
+                  "anonymous_bytes": 0,
+                  "pss_anon_bytes": 0,
+                  "pss_file_bytes": 0,
+                  "private_dirty_bytes": 0
+                },
+                "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+                "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+              },
+              "after_first_request": {
+                "sample_count": 4,
+                "complete_host_samples": 4,
+                "gpu_samples": 4,
+                "gpu_peak_bytes": {
+                  "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 20706230272,
+                  "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 20706230272
+                },
+                "tree_pss_peak_bytes": 7174637568,
+                "tree_rss_peak_bytes": 8768966656,
+                "tree_anonymous_peak_bytes": 6182363136,
+                "tree_pss_anon_peak_bytes": null,
+                "tree_pss_file_peak_bytes": null,
+                "tree_private_dirty_peak_bytes": 6247489536,
+                "component_sample_counts": {
+                  "anonymous_bytes": 4,
+                  "pss_anon_bytes": 0,
+                  "pss_file_bytes": 0,
+                  "private_dirty_bytes": 4
+                },
+                "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+                "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+              }
+            },
+            "unassigned_or_boundary_samples": 1,
+            "steady_state_claim": false,
+            "policy": "after first request includes later canaries/warmup/requests; not a steady-state proof"
+          },
+          "phase_metadata_error": null,
+          "gpu_peak_bytes": {
+            "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 20706230272,
+            "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 20706230272
+          },
+          "tree_pss_peak_bytes": 8441266176,
+          "tree_rss_peak_bytes": 10156969984,
+          "complete_host_samples": 30,
+          "incomplete_host_samples": 0,
+          "gpu_samples": 30,
+          "missing_gpu_attempts": 0,
+          "baseline": {
+            "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": {
+              "index": 0,
+              "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+              "total_bytes": 25769803776,
+              "gpu_bytes": 0,
+              "utilization": 0
+            },
+            "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": {
+              "index": 1,
+              "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+              "total_bytes": 25769803776,
+              "gpu_bytes": 0,
+              "utilization": 0
+            },
+            "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6": {
+              "index": 2,
+              "uuid": "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6",
+              "total_bytes": 25769803776,
+              "gpu_bytes": 0,
+              "utilization": 0
+            },
+            "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011": {
+              "index": 3,
+              "uuid": "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011",
+              "total_bytes": 25769803776,
+              "gpu_bytes": 0,
+              "utilization": 0
+            },
+            "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86": {
+              "index": 4,
+              "uuid": "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86",
+              "total_bytes": 25769803776,
+              "gpu_bytes": 0,
+              "utilization": 0
+            },
+            "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685": {
+              "index": 5,
+              "uuid": "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685",
+              "total_bytes": 25769803776,
+              "gpu_bytes": 0,
+              "utilization": 0
+            },
+            "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d": {
+              "index": 6,
+              "uuid": "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d",
+              "total_bytes": 25769803776,
+              "gpu_bytes": 0,
+              "utilization": 0
+            },
+            "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f": {
+              "index": 7,
+              "uuid": "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f",
+              "total_bytes": 25769803776,
+              "gpu_bytes": 0,
+              "utilization": 0
+            }
+          },
+          "delta_high_water_bytes": {
+            "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 20706230272,
+            "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 20706230272,
+            "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6": 0,
+            "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011": 0,
+            "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86": 0,
+            "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685": 0,
+            "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d": 0,
+            "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f": 0
+          },
+          "final_process_diagnostics": [
+            {
+              "identity": {
+                "pid": 148525,
+                "birth_ticks": 86165037,
+                "ppid": 148516,
+                "state": "S"
+              },
+              "command": "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/bin/python /home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-single-lifecycle-20261009-001/staged/ferrule serve /mnt/nas1/hf/Qwen3.5-35B-A3B-FP8 --host 127.0.0.1 --port 18367 --served-model-name qwen35-vllm-tp2-resident-paper --language-model-only --tensor-parallel-size 2 --pipeline-parallel-size 1 --data-parallel-size 1 --dtype bfloat16 --kv-cache-dtype auto --mamba-cache-dtype bfloat16 --mamba-ssm-cache-dtype float32 --linear-backend marlin --moe-backend marlin --cpu-offload-gb 0 --max-model-len 128 --max-num-seqs 2 --max-num-batched-tokens 8 --enable-chunked-prefill --gpu-memory-utilization 0.8 --no-enable-prefix-caching --generation-config vllm --seed 1 --enforce-eager ",
+              "environment": {
+                "HOME": "/home/admin",
+                "PYTHONDONTWRITEBYTECODE": "1",
+                "PYTHONNOUSERSITE": "1",
+                "CUDA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+                "NVIDIA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+                "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
+                "HF_HUB_OFFLINE": "1",
+                "TRANSFORMERS_OFFLINE": "1",
+                "CUDA_HOME": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86",
+                "CUDA_PATH": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86",
+                "CUDACXX": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86/bin/nvcc",
+                "NVCC": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86/bin/nvcc",
+                "FLASHINFER_NVCC": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86/bin/nvcc",
+                "PATH": "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/bin:/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86/bin:/root/.cargo/bin:/usr/share/Modules/bin:/sbin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/root/bin:/usr/X11R6/bin",
+                "FLASHINFER_WORKSPACE_BASE": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/flashinfer-cu129",
+                "MAX_JOBS": "4",
+                "NCCL_P2P_DISABLE": "1",
+                "NCCL_DEBUG": "INFO",
+                "NCCL_DEBUG_SUBSYS": "INIT,GRAPH,P2P,SHM,NET"
+              },
+              "libraries": [
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/nvidia/cuda_nvrtc/lib/libnvrtc-builtins.so.12.9",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/nvidia/cuda_nvrtc/lib/libnvrtc.so.12",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/nvidia/cuda_runtime/lib/libcudart.so.12",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/nvidia/nccl/lib/libnccl.so.2",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libc10_cuda.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_cpu.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_cuda.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_global_deps.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_nvshmem.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_python.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torchaudio/lib/libtorchaudio.abi3.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torchcodec/libtorchcodec_image.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torchcodec/libtorchcodec_pybind_ops.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torchvision.libs/libcudart.6ead8f7a.so.12",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/vllm/_C_stable_libtorch.abi3.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/vllm/_moe_C_stable_libtorch.abi3.so",
+                "/usr/lib64/libcuda.so.575.57.08",
+                "/usr/lib64/libnvidia-ml.so.575.57.08",
+                "/usr/local/cuda-13.2/targets/x86_64-linux/lib/libcudart.so.13.2.86",
+                "/usr/local/cuda-13.2/targets/x86_64-linux/lib/libnvrtc.so.13.2.86"
+              ]
+            },
+            {
+              "identity": {
+                "pid": 148738,
+                "birth_ticks": 86165724,
+                "ppid": 148525,
+                "state": "R"
+              },
+              "command": "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/bin/python -c import humming.utils.nvrtc; humming.utils.nvrtc.may_build_nvrtc_compile_binary() ",
+              "environment": {
+                "HOME": "/home/admin",
+                "PYTHONDONTWRITEBYTECODE": "1",
+                "PYTHONNOUSERSITE": "1",
+                "CUDA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+                "NVIDIA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+                "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
+                "HF_HUB_OFFLINE": "1",
+                "TRANSFORMERS_OFFLINE": "1",
+                "CUDA_HOME": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86",
+                "CUDA_PATH": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86",
+                "CUDACXX": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86/bin/nvcc",
+                "NVCC": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86/bin/nvcc",
+                "FLASHINFER_NVCC": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86/bin/nvcc",
+                "PATH": "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/bin:/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86/bin:/root/.cargo/bin:/usr/share/Modules/bin:/sbin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/root/bin:/usr/X11R6/bin",
+                "FLASHINFER_WORKSPACE_BASE": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/flashinfer-cu129",
+                "MAX_JOBS": "4",
+                "NCCL_P2P_DISABLE": "1",
+                "NCCL_DEBUG": "INFO",
+                "NCCL_DEBUG_SUBSYS": "INIT,GRAPH,P2P,SHM,NET"
+              },
+              "libraries": [
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/nvidia/cuda_runtime/lib/libcudart.so.12",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_global_deps.so",
+                "/usr/lib64/libcuda.so.575.57.08"
+              ]
+            },
+            {
+              "identity": {
+                "pid": 148740,
+                "birth_ticks": 86165727,
+                "ppid": 148525,
+                "state": "R"
+              },
+              "command": "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/bin/python -c import humming.ops.utils; humming.ops.utils.init_humming_launcher() ",
+              "environment": {
+                "HOME": "/home/admin",
+                "PYTHONDONTWRITEBYTECODE": "1",
+                "PYTHONNOUSERSITE": "1",
+                "CUDA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+                "NVIDIA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+                "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
+                "HF_HUB_OFFLINE": "1",
+                "TRANSFORMERS_OFFLINE": "1",
+                "CUDA_HOME": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86",
+                "CUDA_PATH": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86",
+                "CUDACXX": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86/bin/nvcc",
+                "NVCC": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86/bin/nvcc",
+                "FLASHINFER_NVCC": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86/bin/nvcc",
+                "PATH": "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/bin:/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86/bin:/root/.cargo/bin:/usr/share/Modules/bin:/sbin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/root/bin:/usr/X11R6/bin",
+                "FLASHINFER_WORKSPACE_BASE": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/flashinfer-cu129",
+                "MAX_JOBS": "4",
+                "NCCL_P2P_DISABLE": "1",
+                "NCCL_DEBUG": "INFO",
+                "NCCL_DEBUG_SUBSYS": "INIT,GRAPH,P2P,SHM,NET"
+              },
+              "libraries": [
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/nvidia/cuda_runtime/lib/libcudart.so.12",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_global_deps.so"
+              ]
+            },
+            {
+              "identity": {
+                "pid": 148888,
+                "birth_ticks": 86166217,
+                "ppid": 148525,
+                "state": "S"
+              },
+              "command": "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/bin/python -B -s -c from multiprocessing.resource_tracker import main;main(75) ",
+              "environment": {
+                "HOME": "/home/admin",
+                "PYTHONDONTWRITEBYTECODE": "1",
+                "PYTHONNOUSERSITE": "1",
+                "CUDA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+                "NVIDIA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+                "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
+                "HF_HUB_OFFLINE": "1",
+                "TRANSFORMERS_OFFLINE": "1",
+                "CUDA_HOME": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86",
+                "CUDA_PATH": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86",
+                "CUDACXX": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86/bin/nvcc",
+                "NVCC": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86/bin/nvcc",
+                "FLASHINFER_NVCC": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86/bin/nvcc",
+                "PATH": "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/bin:/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86/bin:/root/.cargo/bin:/usr/share/Modules/bin:/sbin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/root/bin:/usr/X11R6/bin",
+                "FLASHINFER_WORKSPACE_BASE": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/flashinfer-cu129",
+                "MAX_JOBS": "4",
+                "NCCL_P2P_DISABLE": "1",
+                "NCCL_DEBUG": "INFO",
+                "NCCL_DEBUG_SUBSYS": "INIT,GRAPH,P2P,SHM,NET"
+              },
+              "libraries": []
+            },
+            {
+              "identity": {
+                "pid": 148889,
+                "birth_ticks": 86166217,
+                "ppid": 148525,
+                "state": "R"
+              },
+              "command": "VLLM::EngineCore                                                                                                                                                                                  ",
+              "environment": {},
+              "libraries": [
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/nvidia/cuda_nvrtc/lib/libnvrtc-builtins.so.12.9",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/nvidia/cuda_nvrtc/lib/libnvrtc.so.12",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/nvidia/cuda_runtime/lib/libcudart.so.12",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/nvidia/nccl/lib/libnccl.so.2",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libc10_cuda.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_cpu.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_cuda.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_global_deps.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_nvshmem.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_python.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torchaudio/lib/libtorchaudio.abi3.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torchcodec/libtorchcodec_image.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torchcodec/libtorchcodec_pybind_ops.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torchvision.libs/libcudart.6ead8f7a.so.12",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/vllm/_C_stable_libtorch.abi3.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/vllm/_moe_C_stable_libtorch.abi3.so",
+                "/usr/lib64/libcuda.so.575.57.08",
+                "/usr/lib64/libnvidia-ml.so.575.57.08",
+                "/usr/local/cuda-13.2/targets/x86_64-linux/lib/libcudart.so.13.2.86",
+                "/usr/local/cuda-13.2/targets/x86_64-linux/lib/libnvrtc.so.13.2.86"
+              ]
+            },
+            {
+              "identity": {
+                "pid": 149164,
+                "birth_ticks": 86166812,
+                "ppid": 148889,
+                "state": "R"
+              },
+              "command": "VLLM::Worker_TP0                                                                                                                                                                                  ",
+              "environment": {},
+              "libraries": [
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/nvidia/cuda_nvrtc/lib/libnvrtc-builtins.so.12.9",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/nvidia/cuda_nvrtc/lib/libnvrtc.so.12",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/nvidia/cuda_runtime/lib/libcudart.so.12",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/nvidia/nccl/lib/libnccl.so.2",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libc10_cuda.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_cpu.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_cuda.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_global_deps.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_nvshmem.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_python.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torchaudio/lib/libtorchaudio.abi3.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torchcodec/libtorchcodec_image.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torchcodec/libtorchcodec_pybind_ops.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torchvision.libs/libcudart.6ead8f7a.so.12",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/vllm/_C_stable_libtorch.abi3.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/vllm/_moe_C_stable_libtorch.abi3.so",
+                "/usr/lib64/libcuda.so.575.57.08",
+                "/usr/lib64/libnvidia-ml.so.575.57.08",
+                "/usr/lib64/libnvidia-ptxjitcompiler.so.575.57.08",
+                "/usr/local/cuda-13.2/targets/x86_64-linux/lib/libcudart.so.13.2.86",
+                "/usr/local/cuda-13.2/targets/x86_64-linux/lib/libnvrtc.so.13.2.86"
+              ]
+            },
+            {
+              "identity": {
+                "pid": 149165,
+                "birth_ticks": 86166813,
+                "ppid": 148889,
+                "state": "R"
+              },
+              "command": "VLLM::Worker_TP1                                                                                                                                                                                  ",
+              "environment": {},
+              "libraries": [
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/nvidia/cuda_nvrtc/lib/libnvrtc-builtins.so.12.9",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/nvidia/cuda_nvrtc/lib/libnvrtc.so.12",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/nvidia/cuda_runtime/lib/libcudart.so.12",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/nvidia/nccl/lib/libnccl.so.2",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libc10_cuda.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_cpu.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_cuda.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_global_deps.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_nvshmem.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_python.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torchaudio/lib/libtorchaudio.abi3.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torchcodec/libtorchcodec_image.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torchcodec/libtorchcodec_pybind_ops.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torchvision.libs/libcudart.6ead8f7a.so.12",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/vllm/_C_stable_libtorch.abi3.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/vllm/_moe_C_stable_libtorch.abi3.so",
+                "/usr/lib64/libcuda.so.575.57.08",
+                "/usr/lib64/libnvidia-ml.so.575.57.08",
+                "/usr/lib64/libnvidia-ptxjitcompiler.so.575.57.08",
+                "/usr/local/cuda-13.2/targets/x86_64-linux/lib/libcudart.so.13.2.86",
+                "/usr/local/cuda-13.2/targets/x86_64-linux/lib/libnvrtc.so.13.2.86"
+              ]
+            }
+          ],
+          "owned_gpu_attribution": "unknown",
+          "owned_process_gpu_peak_bytes": null,
+          "exact_peaks": false,
+          "hard_memory_partition": false,
+          "continuous_coverage": false
+        },
+        "shutdown": {
+          "status": "root_exited_descendants_unknown",
+          "seconds": 0.5645418558269739,
+          "timed_out": false,
+          "gpu_quiescence": "unverified; no GPU probe",
+          "returncode": 0
+        },
+        "wall_seconds": 70.26663006655872
+      },
+      "runtime": {
+        "evidence": {
+          "linear_marlin": [
+            "(Worker_TP0 pid=149164) INFO 10-09 22:07:35 [__init__.py:689] Selected MarlinFP8ScaledMMLinearKernel for Fp8LinearMethod"
+          ],
+          "moe_marlin": [
+            "(Worker_TP0 pid=149164) INFO 10-09 22:07:35 [fp8.py:325] Using MARLIN Fp8 MoE backend out of potential backends: ['AITER', 'FLASHINFER_TRTLLM', 'FLASHINFER_CUTLASS', 'DEEPGEMM', 'VLLM_CUTLASS', 'TRITON', 'MARLIN', 'HUMMING', 'BATCHED_DEEPGEMM', 'BATCHED_VLLM_CUTLASS', 'BATCHED_TRITON', 'XPU', 'CPU', 'HPC']."
+          ],
+          "model_load": [
+            "(Worker_TP0 pid=149164) INFO 10-09 22:07:59 [gpu_model_runner.py:5515] Model loading took 17.04 GiB memory and 23.485221 seconds"
+          ],
+          "offload": [],
+          "topology": [
+            "(EngineCore pid=148889) INFO 10-09 22:07:25 [core.py:122] Initializing a V1 LLM engine (v0.28.0) with config: model='/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8', speculative_config=None, tokenizer='/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.bfloat16, max_seq_len=128, download_dir=None, load_format=auto, tensor_parallel_size=2, pipeline_parallel_size=1, data_parallel_size=1, decode_context_parallel_size=1, dcp_comm_backend=ag_rs, disable_custom_all_reduce=False, quantization=fp8, quantization_config=None, enforce_eager=True, enable_return_routed_experts=False, kv_cache_dtype=auto, device_config=cuda, structured_outputs_config=StructuredOutputsConfig(backend='auto', disable_any_whitespace=False, disable_additional_properties=False, reasoning_parser='', reasoning_parser_plugin='', enable_in_reasoning=False), observability_config=ObservabilityConfig(show_hidden_metrics_for_version=None, otlp_traces_endpoint=None, collect_detailed_traces=None, kv_cache_metrics=False, kv_cache_metrics_sample=0.01, cudagraph_metrics=False, enable_layerwise_nvtx_tracing=False, enable_mfu_metrics=False, enable_mm_processor_stats=False, enable_logging_iteration_details=False, jit_monitor_mode='warn', jit_monitor_verbose=False), seed=1, served_model_name=qwen35-vllm-tp2-resident-paper, enable_prefix_caching=False, enable_chunked_prefill=True, pooler_config=None, compilation_config={'mode': <CompilationMode.NONE: 0>, 'debug_dump_path': None, 'cache_dir': '', 'compile_cache_save_format': 'binary', 'backend': 'inductor', 'custom_ops': ['+quant_fp8', 'all', '+quant_fp8'], 'ir_enable_torch_wrap': False, 'splitting_ops': [], 'compile_mm_encoder': False, 'cudagraph_mm_encoder': False, 'encoder_cudagraph_token_budgets': [], 'encoder_cudagraph_max_vision_items_per_batch': 0, 'encoder_cudagraph_max_frames_per_batch': None, 'compile_sizes': [], 'compile_ranges_endpoints': [8], 'inductor_compile_config': {'enable_auto_functionalized_v2': False, 'combo_kernels': True, 'benchmark_combo_kernel': True}, 'inductor_passes': {}, 'cudagraph_mode': <CUDAGraphMode.NONE: 0>, 'cudagraph_num_of_warmups': 0, 'cudagraph_capture_sizes': [], 'cudagraph_copy_inputs': False, 'cudagraph_specialize_lora': True, 'use_inductor_graph_partition': False, 'pass_config': {'fuse_norm_quant': True, 'fuse_act_quant': True, 'fuse_attn_quant': False, 'enable_sp': False, 'fuse_gemm_comms': False, 'fuse_allreduce_rms': False, 'enable_qk_norm_rope_fusion': False, 'fuse_rope_kvcache_cat_mla': False, 'fuse_act_padding': False, 'fuse_qk_norm_rope_kvcache': False}, 'max_cudagraph_capture_size': 0, 'dynamic_shapes_config': {'type': <DynamicShapesType.BACKED: 'backed'>, 'evaluate_guards': False, 'assume_32_bit_indexing': False}, 'local_cache_dir': None, 'fast_moe_cold_start': False, 'static_all_moe_layers': []}, kernel_config=KernelConfig(ir_op_priority=IrOpPriorityConfig(rms_norm=['vllm_c', 'native'], fused_add_rms_norm=['vllm_c', 'native']), enable_flashinfer_autotune=True, enable_cutedsl_warmup=True, enable_jit_warmup=True, enable_bf16x3_router_gemm=False, moe_backend='marlin', linear_backend='marlin')",
+            "(EngineCore pid=148889) INFO 10-09 22:07:25 [multiproc_executor.py:150] DP group leader: node_rank=0, node_rank_within_dp=0, master_addr=127.0.0.1, mq_connect_ip=11.166.42.141 (local), world_size=2, local_world_size=2",
+            "(Worker pid=149164) INFO 10-09 22:07:33 [parallel_state.py:1638] world_size=2 rank=0 local_rank=0 distributed_init_method=file:///tmp/vllm_dist_a2ad42ec4e0044718107df45d28706ce backend=nccl",
+            "(Worker pid=149165) INFO 10-09 22:07:33 [parallel_state.py:1638] world_size=2 rank=1 local_rank=1 distributed_init_method=file:///tmp/vllm_dist_a2ad42ec4e0044718107df45d28706ce backend=nccl",
+            "(Worker pid=149164) INFO 10-09 22:07:34 [parallel_state.py:1982] rank 0 in world size 2 is assigned as DP rank 0, PP rank 0, PCP rank 0, TP rank 0, EP rank 0, EPLB rank N/A"
+          ],
+          "gdn": [
+            "(Worker_TP0 pid=149164) INFO 10-09 22:07:35 [qwen_gdn_linear_attn.py:158] Using Triton/FLA GDN prefill kernel (requested=auto, head_k_dim=128).",
+            "(Worker_TP0 pid=149164) INFO 10-09 22:07:35 [qwen_gdn_linear_attn.py:500] Falling back to the Triton GDN decode path: torch.ops._C.fused_gdn_decode_post_conv_mtp is not built",
+            "(Worker_TP0 pid=149164) INFO 10-09 22:07:35 [qwen_gdn_linear_attn.py:505] GDN decode kernel: triton",
+            "(Worker_TP0 pid=149164) WARNING 10-09 22:08:05 [jit_monitor.py:141] Triton kernel JIT compilation during inference: fused_recurrent_gated_delta_rule_packed_decode_kernel. This causes a latency spike; consider extending warmup to cover this shape/config."
+          ],
+          "transport": [
+            "(Worker pid=149164) INFO 10-09 22:07:33 [parallel_state.py:1638] world_size=2 rank=0 local_rank=0 distributed_init_method=file:///tmp/vllm_dist_a2ad42ec4e0044718107df45d28706ce backend=nccl",
+            "(Worker pid=149165) INFO 10-09 22:07:33 [parallel_state.py:1638] world_size=2 rank=1 local_rank=1 distributed_init_method=file:///tmp/vllm_dist_a2ad42ec4e0044718107df45d28706ce backend=nccl",
+            "(Worker pid=149164) INFO 10-09 22:07:34 [pynccl.py:113] vLLM is using nccl==2.29.7",
+            "gpu-public011166042141:149165:149165 [1] NCCL INFO ENV/Plugin: Could not find: libnccl-env.so",
+            "gpu-public011166042141:149165:149165 [1] NCCL INFO cudaDriverVersion 12090",
+            "gpu-public011166042141:149165:149165 [1] NCCL INFO NCCL version 2.29.7+cuda12.9",
+            "gpu-public011166042141:149165:149165 [1] NCCL INFO NCCL git version stable b81d6a5a3",
+            "gpu-public011166042141:149165:149165 [1] NCCL INFO NET/Plugin: Could not find: libnccl-net.so",
+            "gpu-public011166042141:149165:149165 [1] NCCL INFO NET/IB : No device found.",
+            "gpu-public011166042141:149165:149165 [1] NCCL INFO NET/IB : Using [RO]; OOB eth0:11.166.42.141<0>",
+            "gpu-public011166042141:149165:149165 [1] NCCL INFO Failed to initialize NET plugin IB",
+            "gpu-public011166042141:149165:149165 [1] NCCL INFO NET/Socket : Using [0]eth0:11.166.42.141<0> [1]underlay:10.0.130.204<0>",
+            "gpu-public011166042141:149165:149165 [1] NCCL INFO Initialized NET plugin Socket",
+            "gpu-public011166042141:149165:149165 [1] NCCL INFO Could not get speed from /sys/class/net/eth0/speed. Defaulting to 10 Gbps.",
+            "gpu-public011166042141:149165:149165 [1] NCCL INFO Assigned NET plugin Socket to comm",
+            "gpu-public011166042141:149165:149165 [1] NCCL INFO GIN/Plugin: Could not find: libnccl-gin.so",
+            "gpu-public011166042141:149165:149165 [1] NCCL INFO Failed to initialize any GIN plugin",
+            "gpu-public011166042141:149165:149165 [1] NCCL INFO Using network Socket",
+            "gpu-public011166042141:149165:149165 [1] NCCL INFO [Rank 1] ncclCommInitRank comm 0x15619400 rank 1 nranks 2 cudaDev 1 nvmlDev 1 busId 6a000 commId 0x6544f4249e9190d - Init START",
+            "gpu-public011166042141:149165:149165 [1] NCCL INFO RAS client listening socket at 127.0.0.1<28028>",
+            "gpu-public011166042141:149165:149165 [1] NCCL INFO NCCL_P2P_DISABLE set by environment to 1",
+            "gpu-public011166042141:149165:149165 [1] NCCL INFO TOPO/NET : Importing network plugins to topology",
+            "gpu-public011166042141:149165:149165 [1] NCCL INFO Could not get speed from /sys/class/net/eth0/speed. Defaulting to 10 Gbps.",
+            "gpu-public011166042141:149165:149165 [1] NCCL INFO Topology detection: network path (name = eth0) /sys/devices/pci0000:0f/0000:0f:02.0/0000:10:00.0/0000:11:11.0/0000:23:00.0/virtio1 is not a PCI device (virtio). Attaching to first CPU",
+            "gpu-public011166042141:149165:149165 [1] NCCL INFO NET/Socket : GPU Direct RDMA Disabled for HCA 0 'eth0'",
+            "gpu-public011166042141:149165:149165 [1] NCCL INFO ncclTopoPopulateNics : Filled eth0 in topo with pciPath=/sys/devices/pci0000:0f/0000:0f:02.0/0000:10:00.0/0000:11:11.0/0000:23:00.0/virtio1 net=1 gin=(null) keep=1 coll=(null)",
+            "gpu-public011166042141:149165:149165 [1] NCCL INFO Could not get speed from /sys/class/net/underlay/speed. Defaulting to 10 Gbps.",
+            "gpu-public011166042141:149165:149165 [1] NCCL INFO NET/Socket : GPU Direct RDMA Disabled for HCA 1 'underlay'",
+            "gpu-public011166042141:149165:149165 [1] NCCL INFO ncclTopoPopulateNics : Filled underlay in topo with pciPath=(null) net=1 gin=(null) keep=1 coll=(null)",
+            "gpu-public011166042141:149165:149165 [1] NCCL INFO === System : maxBw 24.0 totalBw 24.0 ===",
+            "gpu-public011166042141:149165:149165 [1] NCCL INFO CPU/0-0 (1/1/2)",
+            "gpu-public011166042141:149165:149165 [1] NCCL INFO + PCI[5000.0] - NIC/0-0",
+            "gpu-public011166042141:149165:149165 [1] NCCL INFO                 + NET[1.2] - NET/0-0 (0/0/0/1.250000)",
+            "gpu-public011166042141:149165:149165 [1] NCCL INFO                 + NET[1.2] - NET/0-1 (0/1/0/1.250000)",
+            "gpu-public011166042141:149165:149165 [1] NCCL INFO + PCI[24.0] - PCI/0-65000 (1000c0101000ffff)",
+            "gpu-public011166042141:149165:149165 [1] NCCL INFO               + PCI[24.0] - GPU/0-69000 (0)",
+            "gpu-public011166042141:149165:149165 [1] NCCL INFO               + PCI[24.0] - GPU/0-6a000 (1)",
+            "gpu-public011166042141:149165:149165 [1] NCCL INFO ==========================================",
+            "gpu-public011166042141:149165:149165 [1] NCCL INFO GPU/0-69000 :GPU/0-69000 (0/5000.0/LOC) GPU/0-6a000 (4/24.0/PHB) CPU/0-0 (2/24.0/PHB) NET/0-0 (4/1.2/PHB) NET/0-1 (4/1.2/PHB) ",
+            "gpu-public011166042141:149165:149165 [1] NCCL INFO GPU/0-6a000 :GPU/0-69000 (4/24.0/PHB) GPU/0-6a000 (0/5000.0/LOC) CPU/0-0 (2/24.0/PHB) NET/0-0 (4/1.2/PHB) NET/0-1 (4/1.2/PHB) ",
+            "gpu-public011166042141:149164:149164 [0] NCCL INFO ENV/Plugin: Could not find: libnccl-env.so",
+            "gpu-public011166042141:149164:149164 [0] NCCL INFO cudaDriverVersion 12090",
+            "gpu-public011166042141:149164:149164 [0] NCCL INFO NCCL version 2.29.7+cuda12.9",
+            "gpu-public011166042141:149164:149164 [0] NCCL INFO NCCL git version stable b81d6a5a3",
+            "gpu-public011166042141:149164:149164 [0] NCCL INFO NET/Plugin: Could not find: libnccl-net.so",
+            "gpu-public011166042141:149164:149164 [0] NCCL INFO NET/IB : No device found.",
+            "gpu-public011166042141:149164:149164 [0] NCCL INFO NET/IB : Using [RO]; OOB eth0:11.166.42.141<0>",
+            "gpu-public011166042141:149164:149164 [0] NCCL INFO Failed to initialize NET plugin IB",
+            "gpu-public011166042141:149164:149164 [0] NCCL INFO NET/Socket : Using [0]eth0:11.166.42.141<0> [1]underlay:10.0.130.204<0>",
+            "gpu-public011166042141:149164:149164 [0] NCCL INFO Initialized NET plugin Socket",
+            "gpu-public011166042141:149164:149164 [0] NCCL INFO Could not get speed from /sys/class/net/eth0/speed. Defaulting to 10 Gbps.",
+            "gpu-public011166042141:149164:149164 [0] NCCL INFO Assigned NET plugin Socket to comm",
+            "gpu-public011166042141:149164:149164 [0] NCCL INFO GIN/Plugin: Could not find: libnccl-gin.so",
+            "gpu-public011166042141:149164:149164 [0] NCCL INFO Failed to initialize any GIN plugin",
+            "gpu-public011166042141:149164:149164 [0] NCCL INFO Using network Socket",
+            "gpu-public011166042141:149164:149164 [0] NCCL INFO [Rank 0] ncclCommInitRank comm 0x14d9d670 rank 0 nranks 2 cudaDev 0 nvmlDev 0 busId 69000 commId 0x6544f4249e9190d - Init START",
+            "gpu-public011166042141:149164:149164 [0] NCCL INFO RAS client listening socket at 127.0.0.1<28028>",
+            "gpu-public011166042141:149164:149164 [0] NCCL INFO NCCL_P2P_DISABLE set by environment to 1",
+            "gpu-public011166042141:149164:149164 [0] NCCL INFO TOPO/NET : Importing network plugins to topology",
+            "gpu-public011166042141:149164:149164 [0] NCCL INFO Could not get speed from /sys/class/net/eth0/speed. Defaulting to 10 Gbps.",
+            "gpu-public011166042141:149164:149164 [0] NCCL INFO Topology detection: network path (name = eth0) /sys/devices/pci0000:0f/0000:0f:02.0/0000:10:00.0/0000:11:11.0/0000:23:00.0/virtio1 is not a PCI device (virtio). Attaching to first CPU",
+            "gpu-public011166042141:149164:149164 [0] NCCL INFO NET/Socket : GPU Direct RDMA Disabled for HCA 0 'eth0'",
+            "gpu-public011166042141:149164:149164 [0] NCCL INFO ncclTopoPopulateNics : Filled eth0 in topo with pciPath=/sys/devices/pci0000:0f/0000:0f:02.0/0000:10:00.0/0000:11:11.0/0000:23:00.0/virtio1 net=1 gin=(null) keep=1 coll=(null)",
+            "gpu-public011166042141:149164:149164 [0] NCCL INFO Could not get speed from /sys/class/net/underlay/speed. Defaulting to 10 Gbps.",
+            "gpu-public011166042141:149164:149164 [0] NCCL INFO NET/Socket : GPU Direct RDMA Disabled for HCA 1 'underlay'",
+            "gpu-public011166042141:149164:149164 [0] NCCL INFO ncclTopoPopulateNics : Filled underlay in topo with pciPath=(null) net=1 gin=(null) keep=1 coll=(null)",
+            "gpu-public011166042141:149164:149164 [0] NCCL INFO === System : maxBw 24.0 totalBw 24.0 ===",
+            "gpu-public011166042141:149164:149164 [0] NCCL INFO CPU/0-0 (1/1/2)",
+            "gpu-public011166042141:149164:149164 [0] NCCL INFO + PCI[5000.0] - NIC/0-0",
+            "gpu-public011166042141:149164:149164 [0] NCCL INFO                 + NET[1.2] - NET/0-0 (0/0/0/1.250000)",
+            "gpu-public011166042141:149164:149164 [0] NCCL INFO                 + NET[1.2] - NET/0-1 (0/1/0/1.250000)",
+            "gpu-public011166042141:149164:149164 [0] NCCL INFO + PCI[24.0] - PCI/0-65000 (1000c0101000ffff)",
+            "gpu-public011166042141:149164:149164 [0] NCCL INFO               + PCI[24.0] - GPU/0-69000 (0)",
+            "gpu-public011166042141:149164:149164 [0] NCCL INFO               + PCI[24.0] - GPU/0-6a000 (1)",
+            "gpu-public011166042141:149164:149164 [0] NCCL INFO ==========================================",
+            "gpu-public011166042141:149164:149164 [0] NCCL INFO GPU/0-69000 :GPU/0-69000 (0/5000.0/LOC) GPU/0-6a000 (4/24.0/PHB) CPU/0-0 (2/24.0/PHB) NET/0-0 (4/1.2/PHB) NET/0-1 (4/1.2/PHB) ",
+            "gpu-public011166042141:149164:149164 [0] NCCL INFO GPU/0-6a000 :GPU/0-69000 (4/24.0/PHB) GPU/0-6a000 (0/5000.0/LOC) CPU/0-0 (2/24.0/PHB) NET/0-0 (4/1.2/PHB) NET/0-1 (4/1.2/PHB) ",
+            "gpu-public011166042141:149165:149165 [1] NCCL INFO NET/0-0 :GPU/0-69000 (4/1.2/PHB) GPU/0-6a000 (4/1.2/PHB) CPU/0-0 (2/1.2/PHB) NET/0-0 (0/5000.0/LOC) NET/0-1 (2/1.2/LOC) ",
+            "gpu-public011166042141:149165:149165 [1] NCCL INFO NET/0-1 :GPU/0-69000 (4/1.2/PHB) GPU/0-6a000 (4/1.2/PHB) CPU/0-0 (2/1.2/PHB) NET/0-0 (2/1.2/LOC) NET/0-1 (0/5000.0/LOC) ",
+            "gpu-public011166042141:149165:149165 [1] NCCL INFO ncclTopoGetCpuAffinity: Affinity for GPU 1 is 0-127. (GPU affinity = 0-127 ; CPU affinity = 0-127).",
+            "gpu-public011166042141:149165:149165 [1] NCCL INFO NVLS multicast support is not available on dev 1 (NVLS_NCHANNELS 0)",
+            "gpu-public011166042141:149165:149165 [1] NCCL INFO Pattern 4, crossNic 0, nChannels 1, bw 10.000000/10.000000, type PHB/PIX, sameChannels 1",
+            "gpu-public011166042141:149165:149165 [1] NCCL INFO  0 : GPU/0-69000 GPU/0-6a000",
+            "gpu-public011166042141:149165:149165 [1] NCCL INFO Pattern 1, crossNic 0, nChannels 1, bw 20.000000/20.000000, type PHB/PIX, sameChannels 1",
+            "gpu-public011166042141:149165:149165 [1] NCCL INFO  0 : GPU/0-69000 GPU/0-6a000",
+            "gpu-public011166042141:149165:149165 [1] NCCL INFO Could not get speed from /sys/class/net/eth0/speed. Defaulting to 10 Gbps.",
+            "gpu-public011166042141:149165:149165 [1] NCCL INFO Could not get speed from /sys/class/net/underlay/speed. Defaulting to 10 Gbps.",
+            "gpu-public011166042141:149165:149165 [1] NCCL INFO comm 0x15619400 rank 1 nRanks 2 nNodes 1 localRanks 2 localRank 1 MNNVL 0",
+            "gpu-public011166042141:149165:149165 [1] NCCL INFO Tree 0 : 0 -> 1 -> -1/-1/-1",
+            "gpu-public011166042141:149165:149165 [1] NCCL INFO Tree 1 : 0 -> 1 -> -1/-1/-1",
+            "gpu-public011166042141:149165:149165 [1] NCCL INFO Ring 00 : 0 -> 1 -> 0",
+            "gpu-public011166042141:149165:149165 [1] NCCL INFO Ring 01 : 0 -> 1 -> 0",
+            "gpu-public011166042141:149165:149165 [1] NCCL INFO Trees [0] -1/-1/-1->1->0 [1] -1/-1/-1->1->0",
+            "gpu-public011166042141:149165:149165 [1] NCCL INFO P2P Chunksize set to 131072",
+            "gpu-public011166042141:149165:149165 [1] NCCL INFO PROFILER/Plugin: Could not find: libnccl-profiler.so",
+            "gpu-public011166042141:149165:149165 [1] NCCL INFO Check P2P Type isAllDirectP2p 0 directMode 0 isAllCudaP2p 0",
+            "gpu-public011166042141:149165:149883 [0] NCCL INFO [Proxy Service] Device 1 CPU core 119",
+            "gpu-public011166042141:149165:149165 [1] NCCL INFO ncclP2pSchedule: group size used is 2",
+            "gpu-public011166042141:149165:149884 [0] NCCL INFO [Proxy Service UDS] Device 1 CPU core 22",
+            "gpu-public011166042141:149165:149165 [1] NCCL INFO TUNER/Plugin: Could not find: libnccl-tuner.so"
+          ],
+          "transport_channels": [
+            "gpu-public011166042141:149165:149165 [1] NCCL INFO NCCL_P2P_DISABLE set by environment to 1",
+            "gpu-public011166042141:149164:149164 [0] NCCL INFO NCCL_P2P_DISABLE set by environment to 1",
+            "(Worker pid=149165) WARNING 10-09 22:07:34 [custom_all_reduce.py:195] Custom allreduce is disabled because your platform lacks GPU P2P capability or P2P test failed. To silence this warning, specify disable_custom_all_reduce=True explicitly.",
+            "(Worker pid=149164) WARNING 10-09 22:07:34 [custom_all_reduce.py:195] Custom allreduce is disabled because your platform lacks GPU P2P capability or P2P test failed. To silence this warning, specify disable_custom_all_reduce=True explicitly.",
+            "gpu-public011166042141:149165:149165 [1] NCCL INFO Channel 00 : 1[1] -> 0[0] via SHM/direct/direct",
+            "gpu-public011166042141:149165:149165 [1] NCCL INFO Channel 01 : 1[1] -> 0[0] via SHM/direct/direct",
+            "gpu-public011166042141:149164:149164 [0] NCCL INFO Channel 00 : 0[0] -> 1[1] via SHM/direct/direct",
+            "gpu-public011166042141:149164:149164 [0] NCCL INFO Channel 01 : 0[0] -> 1[1] via SHM/direct/direct"
+          ],
+          "cache_dtype": [
+            "(APIServer pid=148525) INFO 10-09 22:07:14 [api_utils.py:272] non-default args: {'model_tag': '/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8', 'host': '127.0.0.1', 'port': 18367, 'model': '/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8', 'dtype': 'bfloat16', 'seed': 1, 'max_model_len': 128, 'enforce_eager': True, 'served_model_name': ['qwen35-vllm-tp2-resident-paper'], 'generation_config': 'vllm', 'tensor_parallel_size': 2, 'gpu_memory_utilization': 0.8, 'enable_prefix_caching': False, 'mamba_cache_dtype': 'bfloat16', 'mamba_ssm_cache_dtype': 'float32', 'language_model_only': True, 'max_num_batched_tokens': 8, 'max_num_seqs': 2, 'enable_chunked_prefill': True, 'moe_backend': 'marlin', 'linear_backend': 'marlin'}",
+            "(EngineCore pid=148889) INFO 10-09 22:07:25 [core.py:122] Initializing a V1 LLM engine (v0.28.0) with config: model='/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8', speculative_config=None, tokenizer='/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.bfloat16, max_seq_len=128, download_dir=None, load_format=auto, tensor_parallel_size=2, pipeline_parallel_size=1, data_parallel_size=1, decode_context_parallel_size=1, dcp_comm_backend=ag_rs, disable_custom_all_reduce=False, quantization=fp8, quantization_config=None, enforce_eager=True, enable_return_routed_experts=False, kv_cache_dtype=auto, device_config=cuda, structured_outputs_config=StructuredOutputsConfig(backend='auto', disable_any_whitespace=False, disable_additional_properties=False, reasoning_parser='', reasoning_parser_plugin='', enable_in_reasoning=False), observability_config=ObservabilityConfig(show_hidden_metrics_for_version=None, otlp_traces_endpoint=None, collect_detailed_traces=None, kv_cache_metrics=False, kv_cache_metrics_sample=0.01, cudagraph_metrics=False, enable_layerwise_nvtx_tracing=False, enable_mfu_metrics=False, enable_mm_processor_stats=False, enable_logging_iteration_details=False, jit_monitor_mode='warn', jit_monitor_verbose=False), seed=1, served_model_name=qwen35-vllm-tp2-resident-paper, enable_prefix_caching=False, enable_chunked_prefill=True, pooler_config=None, compilation_config={'mode': <CompilationMode.NONE: 0>, 'debug_dump_path': None, 'cache_dir': '', 'compile_cache_save_format': 'binary', 'backend': 'inductor', 'custom_ops': ['+quant_fp8', 'all', '+quant_fp8'], 'ir_enable_torch_wrap': False, 'splitting_ops': [], 'compile_mm_encoder': False, 'cudagraph_mm_encoder': False, 'encoder_cudagraph_token_budgets': [], 'encoder_cudagraph_max_vision_items_per_batch': 0, 'encoder_cudagraph_max_frames_per_batch': None, 'compile_sizes': [], 'compile_ranges_endpoints': [8], 'inductor_compile_config': {'enable_auto_functionalized_v2': False, 'combo_kernels': True, 'benchmark_combo_kernel': True}, 'inductor_passes': {}, 'cudagraph_mode': <CUDAGraphMode.NONE: 0>, 'cudagraph_num_of_warmups': 0, 'cudagraph_capture_sizes': [], 'cudagraph_copy_inputs': False, 'cudagraph_specialize_lora': True, 'use_inductor_graph_partition': False, 'pass_config': {'fuse_norm_quant': True, 'fuse_act_quant': True, 'fuse_attn_quant': False, 'enable_sp': False, 'fuse_gemm_comms': False, 'fuse_allreduce_rms': False, 'enable_qk_norm_rope_fusion': False, 'fuse_rope_kvcache_cat_mla': False, 'fuse_act_padding': False, 'fuse_qk_norm_rope_kvcache': False}, 'max_cudagraph_capture_size': 0, 'dynamic_shapes_config': {'type': <DynamicShapesType.BACKED: 'backed'>, 'evaluate_guards': False, 'assume_32_bit_indexing': False}, 'local_cache_dir': None, 'fast_moe_cold_start': False, 'static_all_moe_layers': []}, kernel_config=KernelConfig(ir_op_priority=IrOpPriorityConfig(rms_norm=['vllm_c', 'native'], fused_add_rms_norm=['vllm_c', 'native']), enable_flashinfer_autotune=True, enable_cutedsl_warmup=True, enable_jit_warmup=True, enable_bf16x3_router_gemm=False, moe_backend='marlin', linear_backend='marlin')"
+          ]
+        },
+        "contradictions": [],
+        "no_cpu_offload": "source-default/config verified; Noop selection may be debug-only; residency telemetry/logs retained",
+        "exact_arithmetic_match": false,
+        "effective_full_dtype_and_kernel_closure": "unknown; logged operations only"
+      },
+      "fairmatch": false,
+      "exact_speedup": null
+    },
+    {
+      "id": "V2",
+      "status": "complete",
+      "launch_id": "f03a5b0521384c83a021f7b2a595dd18",
+      "execution_sha256": "b8b6094bbe6a5476bad34c998fc4554487afd16276b9242a613b9809910f5aa6",
+      "supervisor_sha256": "3c89221d1d4325a5f63b70e36612a6723e17d80fa3a9174a955b93d379260c14",
+      "observation": {
+        "status": "complete",
+        "started_monotonic": 8497933.680888785,
+        "fairmatch": false,
+        "exact_speedup": null,
+        "launch_monotonic": 8497934.380999086,
+        "server_pid": 150391,
+        "server_identity": {
+          "pid": 150391,
+          "birth_ticks": 86181403,
+          "ppid": 150382,
+          "state": "R"
+        },
+        "startup_seconds": 58.3004359100014,
+        "request_gate": {
+          "status": "complete",
+          "phases": [
+            {
+              "stage": "hello2",
+              "gate": {
+                "status": "pass",
+                "engine": "vllm",
+                "checks": [
+                  {
+                    "index": 0,
+                    "passed": true,
+                    "actual_input_tokens": 1,
+                    "actual_output_tokens": 2
+                  }
+                ],
+                "first_qa_requests": 0,
+                "warmup_requests": 0,
+                "measured_requests": 1,
+                "http_receipt_sha256": "91525e50efe93abeb16e4d368df27cb3db8f5fbcfb84fb8920036752e06b46dc",
+                "coverage": "visible text/usage only; separate pinned numerical acceptance, not arithmetic parity",
+                "fairmatch": false,
+                "exact_speedup": null
+              }
+            },
+            {
+              "stage": "canary8",
+              "gate": {
+                "status": "pass",
+                "engine": "vllm",
+                "checks": [
+                  {
+                    "index": 0,
+                    "passed": true,
+                    "actual_input_tokens": 5,
+                    "actual_output_tokens": 8
+                  },
+                  {
+                    "index": 1,
+                    "passed": true,
+                    "actual_input_tokens": 5,
+                    "actual_output_tokens": 8
+                  },
+                  {
+                    "index": 2,
+                    "passed": true,
+                    "actual_input_tokens": 3,
+                    "actual_output_tokens": 8
+                  }
+                ],
+                "first_qa_requests": 0,
+                "warmup_requests": 0,
+                "measured_requests": 3,
+                "http_receipt_sha256": "eefc509c080402cf1803eccc7bbf7bce48fcec91bf967a0a223f13e82f33c1aa",
+                "coverage": "visible text/usage only; separate pinned numerical acceptance, not arithmetic parity",
+                "fairmatch": false,
+                "exact_speedup": null
+              }
+            },
+            {
+              "stage": "qa8-V1",
+              "gate": {
+                "status": "pass",
+                "engine": "vllm",
+                "checks": [
+                  {
+                    "index": 0,
+                    "passed": true,
+                    "actual_input_tokens": 5,
+                    "actual_output_tokens": 8
+                  },
+                  {
+                    "index": 1,
+                    "passed": true,
+                    "actual_input_tokens": 5,
+                    "actual_output_tokens": 8
+                  },
+                  {
+                    "index": 2,
+                    "passed": true,
+                    "actual_input_tokens": 5,
+                    "actual_output_tokens": 8
+                  },
+                  {
+                    "index": 3,
+                    "passed": true,
+                    "actual_input_tokens": 5,
+                    "actual_output_tokens": 8
+                  },
+                  {
+                    "index": 4,
+                    "passed": true,
+                    "actual_input_tokens": 5,
+                    "actual_output_tokens": 8
+                  },
+                  {
+                    "index": 5,
+                    "passed": true,
+                    "actual_input_tokens": 5,
+                    "actual_output_tokens": 8
+                  },
+                  {
+                    "index": 6,
+                    "passed": true,
+                    "actual_input_tokens": 5,
+                    "actual_output_tokens": 8
+                  },
+                  {
+                    "index": 7,
+                    "passed": true,
+                    "actual_input_tokens": 5,
+                    "actual_output_tokens": 8
+                  }
+                ],
+                "first_qa_requests": 1,
+                "warmup_requests": 2,
+                "measured_requests": 5,
+                "http_receipt_sha256": "ee3d9e51c58fc4fcdec883f5d43966f3693a61b3046710291b7c380cdb1362b8",
+                "coverage": "visible text/usage only; separate pinned numerical acceptance, not arithmetic parity",
+                "fairmatch": false,
+                "exact_speedup": null
+              }
+            }
+          ],
+          "same_server": true
+        },
+        "resources": {
+          "status": "observed_within_targets",
+          "errors": [],
+          "memory_components": {
+            "sample_count": 30,
+            "complete_host_samples": 30,
+            "gpu_samples": 30,
+            "gpu_peak_bytes": {
+              "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 20706230272,
+              "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 20706230272
+            },
+            "tree_pss_peak_bytes": 8115883008,
+            "tree_rss_peak_bytes": 10031190016,
+            "tree_anonymous_peak_bytes": 6151225344,
+            "tree_pss_anon_peak_bytes": null,
+            "tree_pss_file_peak_bytes": null,
+            "tree_private_dirty_peak_bytes": 6216347648,
+            "component_sample_counts": {
+              "anonymous_bytes": 30,
+              "pss_anon_bytes": 0,
+              "pss_file_bytes": 0,
+              "private_dirty_bytes": 30
+            },
+            "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+            "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+          },
+          "phase_memory": {
+            "bounds": {
+              "ready_monotonic": 8497992.681434996,
+              "first_sent_monotonic": 8497993.203604795,
+              "first_terminal_monotonic": 8497993.506855842
+            },
+            "phases": {
+              "startup": {
+                "sample_count": 25,
+                "complete_host_samples": 25,
+                "gpu_samples": 25,
+                "gpu_peak_bytes": {
+                  "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 20706230272,
+                  "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 20706230272
+                },
+                "tree_pss_peak_bytes": 8115883008,
+                "tree_rss_peak_bytes": 10031190016,
+                "tree_anonymous_peak_bytes": 5780729856,
+                "tree_pss_anon_peak_bytes": null,
+                "tree_pss_file_peak_bytes": null,
+                "tree_private_dirty_peak_bytes": 5840789504,
+                "component_sample_counts": {
+                  "anonymous_bytes": 25,
+                  "pss_anon_bytes": 0,
+                  "pss_file_bytes": 0,
+                  "private_dirty_bytes": 25
+                },
+                "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+                "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+              },
+              "ready_before_first": {
+                "sample_count": 0,
+                "complete_host_samples": 0,
+                "gpu_samples": 0,
+                "gpu_peak_bytes": {
+                  "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": null,
+                  "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": null
+                },
+                "tree_pss_peak_bytes": null,
+                "tree_rss_peak_bytes": null,
+                "tree_anonymous_peak_bytes": null,
+                "tree_pss_anon_peak_bytes": null,
+                "tree_pss_file_peak_bytes": null,
+                "tree_private_dirty_peak_bytes": null,
+                "component_sample_counts": {
+                  "anonymous_bytes": 0,
+                  "pss_anon_bytes": 0,
+                  "pss_file_bytes": 0,
+                  "private_dirty_bytes": 0
+                },
+                "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+                "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+              },
+              "first_request": {
+                "sample_count": 0,
+                "complete_host_samples": 0,
+                "gpu_samples": 0,
+                "gpu_peak_bytes": {
+                  "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": null,
+                  "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": null
+                },
+                "tree_pss_peak_bytes": null,
+                "tree_rss_peak_bytes": null,
+                "tree_anonymous_peak_bytes": null,
+                "tree_pss_anon_peak_bytes": null,
+                "tree_pss_file_peak_bytes": null,
+                "tree_private_dirty_peak_bytes": null,
+                "component_sample_counts": {
+                  "anonymous_bytes": 0,
+                  "pss_anon_bytes": 0,
+                  "pss_file_bytes": 0,
+                  "private_dirty_bytes": 0
+                },
+                "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+                "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+              },
+              "after_first_request": {
+                "sample_count": 4,
+                "complete_host_samples": 4,
+                "gpu_samples": 4,
+                "gpu_peak_bytes": {
+                  "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 20706230272,
+                  "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 20706230272
+                },
+                "tree_pss_peak_bytes": 7149274112,
+                "tree_rss_peak_bytes": 8761270272,
+                "tree_anonymous_peak_bytes": 6151225344,
+                "tree_pss_anon_peak_bytes": null,
+                "tree_pss_file_peak_bytes": null,
+                "tree_private_dirty_peak_bytes": 6216347648,
+                "component_sample_counts": {
+                  "anonymous_bytes": 4,
+                  "pss_anon_bytes": 0,
+                  "pss_file_bytes": 0,
+                  "private_dirty_bytes": 4
+                },
+                "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+                "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+              }
+            },
+            "unassigned_or_boundary_samples": 1,
+            "steady_state_claim": false,
+            "policy": "after first request includes later canaries/warmup/requests; not a steady-state proof"
+          },
+          "phase_metadata_error": null,
+          "gpu_peak_bytes": {
+            "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 20706230272,
+            "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 20706230272
+          },
+          "tree_pss_peak_bytes": 8115883008,
+          "tree_rss_peak_bytes": 10031190016,
+          "complete_host_samples": 30,
+          "incomplete_host_samples": 0,
+          "gpu_samples": 30,
+          "missing_gpu_attempts": 0,
+          "baseline": {
+            "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": {
+              "index": 0,
+              "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+              "total_bytes": 25769803776,
+              "gpu_bytes": 0,
+              "utilization": 0
+            },
+            "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": {
+              "index": 1,
+              "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+              "total_bytes": 25769803776,
+              "gpu_bytes": 0,
+              "utilization": 0
+            },
+            "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6": {
+              "index": 2,
+              "uuid": "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6",
+              "total_bytes": 25769803776,
+              "gpu_bytes": 0,
+              "utilization": 0
+            },
+            "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011": {
+              "index": 3,
+              "uuid": "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011",
+              "total_bytes": 25769803776,
+              "gpu_bytes": 0,
+              "utilization": 0
+            },
+            "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86": {
+              "index": 4,
+              "uuid": "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86",
+              "total_bytes": 25769803776,
+              "gpu_bytes": 0,
+              "utilization": 0
+            },
+            "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685": {
+              "index": 5,
+              "uuid": "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685",
+              "total_bytes": 25769803776,
+              "gpu_bytes": 0,
+              "utilization": 0
+            },
+            "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d": {
+              "index": 6,
+              "uuid": "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d",
+              "total_bytes": 25769803776,
+              "gpu_bytes": 0,
+              "utilization": 0
+            },
+            "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f": {
+              "index": 7,
+              "uuid": "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f",
+              "total_bytes": 25769803776,
+              "gpu_bytes": 0,
+              "utilization": 0
+            }
+          },
+          "delta_high_water_bytes": {
+            "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 20706230272,
+            "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 20706230272,
+            "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6": 0,
+            "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011": 0,
+            "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86": 0,
+            "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685": 0,
+            "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d": 0,
+            "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f": 0
+          },
+          "final_process_diagnostics": [
+            {
+              "identity": {
+                "pid": 150391,
+                "birth_ticks": 86181403,
+                "ppid": 150382,
+                "state": "S"
+              },
+              "command": "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/bin/python /home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-single-lifecycle-20261009-001/staged/ferrule serve /mnt/nas1/hf/Qwen3.5-35B-A3B-FP8 --host 127.0.0.1 --port 18367 --served-model-name qwen35-vllm-tp2-resident-paper --language-model-only --tensor-parallel-size 2 --pipeline-parallel-size 1 --data-parallel-size 1 --dtype bfloat16 --kv-cache-dtype auto --mamba-cache-dtype bfloat16 --mamba-ssm-cache-dtype float32 --linear-backend marlin --moe-backend marlin --cpu-offload-gb 0 --max-model-len 128 --max-num-seqs 2 --max-num-batched-tokens 8 --enable-chunked-prefill --gpu-memory-utilization 0.8 --no-enable-prefix-caching --generation-config vllm --seed 1 --enforce-eager ",
+              "environment": {
+                "HOME": "/home/admin",
+                "PYTHONDONTWRITEBYTECODE": "1",
+                "PYTHONNOUSERSITE": "1",
+                "CUDA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+                "NVIDIA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+                "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
+                "HF_HUB_OFFLINE": "1",
+                "TRANSFORMERS_OFFLINE": "1",
+                "CUDA_HOME": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86",
+                "CUDA_PATH": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86",
+                "CUDACXX": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86/bin/nvcc",
+                "NVCC": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86/bin/nvcc",
+                "FLASHINFER_NVCC": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86/bin/nvcc",
+                "PATH": "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/bin:/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86/bin:/root/.cargo/bin:/usr/share/Modules/bin:/sbin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/root/bin:/usr/X11R6/bin",
+                "FLASHINFER_WORKSPACE_BASE": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/flashinfer-cu129",
+                "MAX_JOBS": "4",
+                "NCCL_P2P_DISABLE": "1",
+                "NCCL_DEBUG": "INFO",
+                "NCCL_DEBUG_SUBSYS": "INIT,GRAPH,P2P,SHM,NET"
+              },
+              "libraries": [
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/nvidia/cuda_nvrtc/lib/libnvrtc-builtins.so.12.9",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/nvidia/cuda_nvrtc/lib/libnvrtc.so.12",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/nvidia/cuda_runtime/lib/libcudart.so.12",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/nvidia/nccl/lib/libnccl.so.2",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libc10_cuda.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_cpu.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_cuda.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_global_deps.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_nvshmem.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_python.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torchaudio/lib/libtorchaudio.abi3.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torchcodec/libtorchcodec_image.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torchcodec/libtorchcodec_pybind_ops.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torchvision.libs/libcudart.6ead8f7a.so.12",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/vllm/_C_stable_libtorch.abi3.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/vllm/_moe_C_stable_libtorch.abi3.so",
+                "/usr/lib64/libcuda.so.575.57.08",
+                "/usr/lib64/libnvidia-ml.so.575.57.08",
+                "/usr/local/cuda-13.2/targets/x86_64-linux/lib/libcudart.so.13.2.86",
+                "/usr/local/cuda-13.2/targets/x86_64-linux/lib/libnvrtc.so.13.2.86"
+              ]
+            },
+            {
+              "identity": {
+                "pid": 150602,
+                "birth_ticks": 86182086,
+                "ppid": 150391,
+                "state": "R"
+              },
+              "command": "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/bin/python -c import humming.utils.nvrtc; humming.utils.nvrtc.may_build_nvrtc_compile_binary() ",
+              "environment": {
+                "HOME": "/home/admin",
+                "PYTHONDONTWRITEBYTECODE": "1",
+                "PYTHONNOUSERSITE": "1",
+                "CUDA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+                "NVIDIA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+                "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
+                "HF_HUB_OFFLINE": "1",
+                "TRANSFORMERS_OFFLINE": "1",
+                "CUDA_HOME": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86",
+                "CUDA_PATH": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86",
+                "CUDACXX": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86/bin/nvcc",
+                "NVCC": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86/bin/nvcc",
+                "FLASHINFER_NVCC": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86/bin/nvcc",
+                "PATH": "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/bin:/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86/bin:/root/.cargo/bin:/usr/share/Modules/bin:/sbin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/root/bin:/usr/X11R6/bin",
+                "FLASHINFER_WORKSPACE_BASE": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/flashinfer-cu129",
+                "MAX_JOBS": "4",
+                "NCCL_P2P_DISABLE": "1",
+                "NCCL_DEBUG": "INFO",
+                "NCCL_DEBUG_SUBSYS": "INIT,GRAPH,P2P,SHM,NET"
+              },
+              "libraries": [
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/nvidia/cuda_nvrtc/lib/libnvrtc-builtins.so.12.9",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/nvidia/cuda_nvrtc/lib/libnvrtc.so.12",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/nvidia/cuda_runtime/lib/libcudart.so.12",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/nvidia/nccl/lib/libnccl.so.2",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libc10_cuda.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_cpu.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_cuda.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_global_deps.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_nvshmem.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_python.so",
+                "/usr/lib64/libcuda.so.575.57.08"
+              ]
+            },
+            {
+              "identity": {
+                "pid": 150606,
+                "birth_ticks": 86182088,
+                "ppid": 150391,
+                "state": "R"
+              },
+              "command": "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/bin/python -c import humming.ops.utils; humming.ops.utils.init_humming_launcher() ",
+              "environment": {
+                "HOME": "/home/admin",
+                "PYTHONDONTWRITEBYTECODE": "1",
+                "PYTHONNOUSERSITE": "1",
+                "CUDA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+                "NVIDIA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+                "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
+                "HF_HUB_OFFLINE": "1",
+                "TRANSFORMERS_OFFLINE": "1",
+                "CUDA_HOME": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86",
+                "CUDA_PATH": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86",
+                "CUDACXX": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86/bin/nvcc",
+                "NVCC": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86/bin/nvcc",
+                "FLASHINFER_NVCC": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86/bin/nvcc",
+                "PATH": "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/bin:/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86/bin:/root/.cargo/bin:/usr/share/Modules/bin:/sbin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/root/bin:/usr/X11R6/bin",
+                "FLASHINFER_WORKSPACE_BASE": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/flashinfer-cu129",
+                "MAX_JOBS": "4",
+                "NCCL_P2P_DISABLE": "1",
+                "NCCL_DEBUG": "INFO",
+                "NCCL_DEBUG_SUBSYS": "INIT,GRAPH,P2P,SHM,NET"
+              },
+              "libraries": [
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/nvidia/cuda_nvrtc/lib/libnvrtc-builtins.so.12.9",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/nvidia/cuda_nvrtc/lib/libnvrtc.so.12",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/nvidia/cuda_runtime/lib/libcudart.so.12",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_global_deps.so",
+                "/usr/lib64/libcuda.so.575.57.08"
+              ]
+            },
+            {
+              "identity": {
+                "pid": 150754,
+                "birth_ticks": 86182579,
+                "ppid": 150391,
+                "state": "S"
+              },
+              "command": "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/bin/python -B -s -c from multiprocessing.resource_tracker import main;main(75) ",
+              "environment": {
+                "HOME": "/home/admin",
+                "PYTHONDONTWRITEBYTECODE": "1",
+                "PYTHONNOUSERSITE": "1",
+                "CUDA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+                "NVIDIA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+                "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
+                "HF_HUB_OFFLINE": "1",
+                "TRANSFORMERS_OFFLINE": "1",
+                "CUDA_HOME": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86",
+                "CUDA_PATH": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86",
+                "CUDACXX": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86/bin/nvcc",
+                "NVCC": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86/bin/nvcc",
+                "FLASHINFER_NVCC": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86/bin/nvcc",
+                "PATH": "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/bin:/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/toolchain/cuda-12.9.86/bin:/root/.cargo/bin:/usr/share/Modules/bin:/sbin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/root/bin:/usr/X11R6/bin",
+                "FLASHINFER_WORKSPACE_BASE": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/vllm028-py312/jit-cuda12/flashinfer-cu129",
+                "MAX_JOBS": "4",
+                "NCCL_P2P_DISABLE": "1",
+                "NCCL_DEBUG": "INFO",
+                "NCCL_DEBUG_SUBSYS": "INIT,GRAPH,P2P,SHM,NET"
+              },
+              "libraries": []
+            },
+            {
+              "identity": {
+                "pid": 150755,
+                "birth_ticks": 86182579,
+                "ppid": 150391,
+                "state": "S"
+              },
+              "command": "VLLM::EngineCore                                                                                                                                                                                  ",
+              "environment": {},
+              "libraries": [
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/nvidia/cuda_nvrtc/lib/libnvrtc-builtins.so.12.9",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/nvidia/cuda_nvrtc/lib/libnvrtc.so.12",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/nvidia/cuda_runtime/lib/libcudart.so.12",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/nvidia/nccl/lib/libnccl.so.2",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libc10_cuda.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_cpu.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_cuda.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_global_deps.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_nvshmem.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_python.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torchaudio/lib/libtorchaudio.abi3.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torchcodec/libtorchcodec_image.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torchcodec/libtorchcodec_pybind_ops.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torchvision.libs/libcudart.6ead8f7a.so.12",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/vllm/_C_stable_libtorch.abi3.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/vllm/_moe_C_stable_libtorch.abi3.so",
+                "/usr/lib64/libcuda.so.575.57.08",
+                "/usr/lib64/libnvidia-ml.so.575.57.08",
+                "/usr/local/cuda-13.2/targets/x86_64-linux/lib/libcudart.so.13.2.86",
+                "/usr/local/cuda-13.2/targets/x86_64-linux/lib/libnvrtc.so.13.2.86"
+              ]
+            },
+            {
+              "identity": {
+                "pid": 151030,
+                "birth_ticks": 86183173,
+                "ppid": 150755,
+                "state": "R"
+              },
+              "command": "VLLM::Worker_TP0                                                                                                                                                                                  ",
+              "environment": {},
+              "libraries": [
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/nvidia/cuda_nvrtc/lib/libnvrtc-builtins.so.12.9",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/nvidia/cuda_nvrtc/lib/libnvrtc.so.12",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/nvidia/cuda_runtime/lib/libcudart.so.12",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/nvidia/nccl/lib/libnccl.so.2",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libc10_cuda.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_cpu.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_cuda.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_global_deps.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_nvshmem.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_python.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torchaudio/lib/libtorchaudio.abi3.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torchcodec/libtorchcodec_image.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torchcodec/libtorchcodec_pybind_ops.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torchvision.libs/libcudart.6ead8f7a.so.12",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/vllm/_C_stable_libtorch.abi3.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/vllm/_moe_C_stable_libtorch.abi3.so",
+                "/usr/lib64/libcuda.so.575.57.08",
+                "/usr/lib64/libnvidia-ml.so.575.57.08",
+                "/usr/lib64/libnvidia-ptxjitcompiler.so.575.57.08",
+                "/usr/local/cuda-13.2/targets/x86_64-linux/lib/libcudart.so.13.2.86",
+                "/usr/local/cuda-13.2/targets/x86_64-linux/lib/libnvrtc.so.13.2.86"
+              ]
+            },
+            {
+              "identity": {
+                "pid": 151031,
+                "birth_ticks": 86183173,
+                "ppid": 150755,
+                "state": "R"
+              },
+              "command": "VLLM::Worker_TP1                                                                                                                                                                                  ",
+              "environment": {},
+              "libraries": [
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/nvidia/cuda_nvrtc/lib/libnvrtc-builtins.so.12.9",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/nvidia/cuda_nvrtc/lib/libnvrtc.so.12",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/nvidia/cuda_runtime/lib/libcudart.so.12",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/nvidia/nccl/lib/libnccl.so.2",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libc10_cuda.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_cpu.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_cuda.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_global_deps.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_nvshmem.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/lib/libtorch_python.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torchaudio/lib/libtorchaudio.abi3.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torchcodec/libtorchcodec_image.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torchcodec/libtorchcodec_pybind_ops.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torchvision.libs/libcudart.6ead8f7a.so.12",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/vllm/_C_stable_libtorch.abi3.so",
+                "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/vllm/_moe_C_stable_libtorch.abi3.so",
+                "/usr/lib64/libcuda.so.575.57.08",
+                "/usr/lib64/libnvidia-ml.so.575.57.08",
+                "/usr/lib64/libnvidia-ptxjitcompiler.so.575.57.08",
+                "/usr/local/cuda-13.2/targets/x86_64-linux/lib/libcudart.so.13.2.86",
+                "/usr/local/cuda-13.2/targets/x86_64-linux/lib/libnvrtc.so.13.2.86"
+              ]
+            }
+          ],
+          "owned_gpu_attribution": "unknown",
+          "owned_process_gpu_peak_bytes": null,
+          "exact_peaks": false,
+          "hard_memory_partition": false,
+          "continuous_coverage": false
+        },
+        "shutdown": {
+          "status": "root_exited_descendants_unknown",
+          "seconds": 0.614594342187047,
+          "timed_out": false,
+          "gpu_quiescence": "unverified; no GPU probe",
+          "returncode": 0
+        },
+        "wall_seconds": 70.81283167563379
+      },
+      "runtime": {
+        "evidence": {
+          "linear_marlin": [
+            "(Worker_TP0 pid=151030) INFO 10-09 22:10:19 [__init__.py:689] Selected MarlinFP8ScaledMMLinearKernel for Fp8LinearMethod"
+          ],
+          "moe_marlin": [
+            "(Worker_TP0 pid=151030) INFO 10-09 22:10:19 [fp8.py:325] Using MARLIN Fp8 MoE backend out of potential backends: ['AITER', 'FLASHINFER_TRTLLM', 'FLASHINFER_CUTLASS', 'DEEPGEMM', 'VLLM_CUTLASS', 'TRITON', 'MARLIN', 'HUMMING', 'BATCHED_DEEPGEMM', 'BATCHED_VLLM_CUTLASS', 'BATCHED_TRITON', 'XPU', 'CPU', 'HPC']."
+          ],
+          "model_load": [
+            "(Worker_TP0 pid=151030) INFO 10-09 22:10:43 [gpu_model_runner.py:5515] Model loading took 17.04 GiB memory and 23.971592 seconds"
+          ],
+          "offload": [],
+          "topology": [
+            "(EngineCore pid=150755) INFO 10-09 22:10:09 [core.py:122] Initializing a V1 LLM engine (v0.28.0) with config: model='/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8', speculative_config=None, tokenizer='/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.bfloat16, max_seq_len=128, download_dir=None, load_format=auto, tensor_parallel_size=2, pipeline_parallel_size=1, data_parallel_size=1, decode_context_parallel_size=1, dcp_comm_backend=ag_rs, disable_custom_all_reduce=False, quantization=fp8, quantization_config=None, enforce_eager=True, enable_return_routed_experts=False, kv_cache_dtype=auto, device_config=cuda, structured_outputs_config=StructuredOutputsConfig(backend='auto', disable_any_whitespace=False, disable_additional_properties=False, reasoning_parser='', reasoning_parser_plugin='', enable_in_reasoning=False), observability_config=ObservabilityConfig(show_hidden_metrics_for_version=None, otlp_traces_endpoint=None, collect_detailed_traces=None, kv_cache_metrics=False, kv_cache_metrics_sample=0.01, cudagraph_metrics=False, enable_layerwise_nvtx_tracing=False, enable_mfu_metrics=False, enable_mm_processor_stats=False, enable_logging_iteration_details=False, jit_monitor_mode='warn', jit_monitor_verbose=False), seed=1, served_model_name=qwen35-vllm-tp2-resident-paper, enable_prefix_caching=False, enable_chunked_prefill=True, pooler_config=None, compilation_config={'mode': <CompilationMode.NONE: 0>, 'debug_dump_path': None, 'cache_dir': '', 'compile_cache_save_format': 'binary', 'backend': 'inductor', 'custom_ops': ['+quant_fp8', 'all', '+quant_fp8'], 'ir_enable_torch_wrap': False, 'splitting_ops': [], 'compile_mm_encoder': False, 'cudagraph_mm_encoder': False, 'encoder_cudagraph_token_budgets': [], 'encoder_cudagraph_max_vision_items_per_batch': 0, 'encoder_cudagraph_max_frames_per_batch': None, 'compile_sizes': [], 'compile_ranges_endpoints': [8], 'inductor_compile_config': {'enable_auto_functionalized_v2': False, 'combo_kernels': True, 'benchmark_combo_kernel': True}, 'inductor_passes': {}, 'cudagraph_mode': <CUDAGraphMode.NONE: 0>, 'cudagraph_num_of_warmups': 0, 'cudagraph_capture_sizes': [], 'cudagraph_copy_inputs': False, 'cudagraph_specialize_lora': True, 'use_inductor_graph_partition': False, 'pass_config': {'fuse_norm_quant': True, 'fuse_act_quant': True, 'fuse_attn_quant': False, 'enable_sp': False, 'fuse_gemm_comms': False, 'fuse_allreduce_rms': False, 'enable_qk_norm_rope_fusion': False, 'fuse_rope_kvcache_cat_mla': False, 'fuse_act_padding': False, 'fuse_qk_norm_rope_kvcache': False}, 'max_cudagraph_capture_size': 0, 'dynamic_shapes_config': {'type': <DynamicShapesType.BACKED: 'backed'>, 'evaluate_guards': False, 'assume_32_bit_indexing': False}, 'local_cache_dir': None, 'fast_moe_cold_start': False, 'static_all_moe_layers': []}, kernel_config=KernelConfig(ir_op_priority=IrOpPriorityConfig(rms_norm=['vllm_c', 'native'], fused_add_rms_norm=['vllm_c', 'native']), enable_flashinfer_autotune=True, enable_cutedsl_warmup=True, enable_jit_warmup=True, enable_bf16x3_router_gemm=False, moe_backend='marlin', linear_backend='marlin')",
+            "(EngineCore pid=150755) INFO 10-09 22:10:09 [multiproc_executor.py:150] DP group leader: node_rank=0, node_rank_within_dp=0, master_addr=127.0.0.1, mq_connect_ip=11.166.42.141 (local), world_size=2, local_world_size=2",
+            "(Worker pid=151030) INFO 10-09 22:10:16 [parallel_state.py:1638] world_size=2 rank=0 local_rank=0 distributed_init_method=file:///tmp/vllm_dist_323ae34941f24165813487b740a49438 backend=nccl",
+            "(Worker pid=151031) INFO 10-09 22:10:17 [parallel_state.py:1638] world_size=2 rank=1 local_rank=1 distributed_init_method=file:///tmp/vllm_dist_323ae34941f24165813487b740a49438 backend=nccl",
+            "(Worker pid=151030) INFO 10-09 22:10:18 [parallel_state.py:1982] rank 0 in world size 2 is assigned as DP rank 0, PP rank 0, PCP rank 0, TP rank 0, EP rank 0, EPLB rank N/A"
+          ],
+          "gdn": [
+            "(Worker_TP0 pid=151030) INFO 10-09 22:10:19 [qwen_gdn_linear_attn.py:158] Using Triton/FLA GDN prefill kernel (requested=auto, head_k_dim=128).",
+            "(Worker_TP0 pid=151030) INFO 10-09 22:10:19 [qwen_gdn_linear_attn.py:500] Falling back to the Triton GDN decode path: torch.ops._C.fused_gdn_decode_post_conv_mtp is not built",
+            "(Worker_TP0 pid=151030) INFO 10-09 22:10:19 [qwen_gdn_linear_attn.py:505] GDN decode kernel: triton",
+            "(Worker_TP0 pid=151030) WARNING 10-09 22:10:50 [jit_monitor.py:141] Triton kernel JIT compilation during inference: fused_recurrent_gated_delta_rule_packed_decode_kernel. This causes a latency spike; consider extending warmup to cover this shape/config."
+          ],
+          "transport": [
+            "(Worker pid=151030) INFO 10-09 22:10:16 [parallel_state.py:1638] world_size=2 rank=0 local_rank=0 distributed_init_method=file:///tmp/vllm_dist_323ae34941f24165813487b740a49438 backend=nccl",
+            "(Worker pid=151031) INFO 10-09 22:10:17 [parallel_state.py:1638] world_size=2 rank=1 local_rank=1 distributed_init_method=file:///tmp/vllm_dist_323ae34941f24165813487b740a49438 backend=nccl",
+            "(Worker pid=151030) INFO 10-09 22:10:17 [pynccl.py:113] vLLM is using nccl==2.29.7",
+            "gpu-public011166042141:151031:151031 [1] NCCL INFO ENV/Plugin: Could not find: libnccl-env.so",
+            "gpu-public011166042141:151031:151031 [1] NCCL INFO cudaDriverVersion 12090",
+            "gpu-public011166042141:151031:151031 [1] NCCL INFO NCCL version 2.29.7+cuda12.9",
+            "gpu-public011166042141:151031:151031 [1] NCCL INFO NCCL git version stable b81d6a5a3",
+            "gpu-public011166042141:151031:151031 [1] NCCL INFO NET/Plugin: Could not find: libnccl-net.so",
+            "gpu-public011166042141:151031:151031 [1] NCCL INFO NET/IB : No device found.",
+            "gpu-public011166042141:151031:151031 [1] NCCL INFO NET/IB : Using [RO]; OOB eth0:11.166.42.141<0>",
+            "gpu-public011166042141:151031:151031 [1] NCCL INFO Failed to initialize NET plugin IB",
+            "gpu-public011166042141:151031:151031 [1] NCCL INFO NET/Socket : Using [0]eth0:11.166.42.141<0> [1]underlay:10.0.130.204<0>",
+            "gpu-public011166042141:151031:151031 [1] NCCL INFO Initialized NET plugin Socket",
+            "gpu-public011166042141:151031:151031 [1] NCCL INFO Could not get speed from /sys/class/net/eth0/speed. Defaulting to 10 Gbps.",
+            "gpu-public011166042141:151031:151031 [1] NCCL INFO Assigned NET plugin Socket to comm",
+            "gpu-public011166042141:151031:151031 [1] NCCL INFO GIN/Plugin: Could not find: libnccl-gin.so",
+            "gpu-public011166042141:151031:151031 [1] NCCL INFO Failed to initialize any GIN plugin",
+            "gpu-public011166042141:151031:151031 [1] NCCL INFO Using network Socket",
+            "gpu-public011166042141:151031:151031 [1] NCCL INFO [Rank 1] ncclCommInitRank comm 0x155f6080 rank 1 nranks 2 cudaDev 1 nvmlDev 1 busId 6a000 commId 0x3ed4e9e76fb48b3e - Init START",
+            "gpu-public011166042141:151031:151031 [1] NCCL INFO RAS client listening socket at 127.0.0.1<28028>",
+            "gpu-public011166042141:151031:151031 [1] NCCL INFO NCCL_P2P_DISABLE set by environment to 1",
+            "gpu-public011166042141:151031:151031 [1] NCCL INFO TOPO/NET : Importing network plugins to topology",
+            "gpu-public011166042141:151031:151031 [1] NCCL INFO Could not get speed from /sys/class/net/eth0/speed. Defaulting to 10 Gbps.",
+            "gpu-public011166042141:151031:151031 [1] NCCL INFO Topology detection: network path (name = eth0) /sys/devices/pci0000:0f/0000:0f:02.0/0000:10:00.0/0000:11:11.0/0000:23:00.0/virtio1 is not a PCI device (virtio). Attaching to first CPU",
+            "gpu-public011166042141:151031:151031 [1] NCCL INFO NET/Socket : GPU Direct RDMA Disabled for HCA 0 'eth0'",
+            "gpu-public011166042141:151031:151031 [1] NCCL INFO ncclTopoPopulateNics : Filled eth0 in topo with pciPath=/sys/devices/pci0000:0f/0000:0f:02.0/0000:10:00.0/0000:11:11.0/0000:23:00.0/virtio1 net=1 gin=(null) keep=1 coll=(null)",
+            "gpu-public011166042141:151031:151031 [1] NCCL INFO Could not get speed from /sys/class/net/underlay/speed. Defaulting to 10 Gbps.",
+            "gpu-public011166042141:151031:151031 [1] NCCL INFO NET/Socket : GPU Direct RDMA Disabled for HCA 1 'underlay'",
+            "gpu-public011166042141:151031:151031 [1] NCCL INFO ncclTopoPopulateNics : Filled underlay in topo with pciPath=(null) net=1 gin=(null) keep=1 coll=(null)",
+            "gpu-public011166042141:151031:151031 [1] NCCL INFO === System : maxBw 24.0 totalBw 24.0 ===",
+            "gpu-public011166042141:151031:151031 [1] NCCL INFO CPU/0-0 (1/1/2)",
+            "gpu-public011166042141:151031:151031 [1] NCCL INFO + PCI[5000.0] - NIC/0-0",
+            "gpu-public011166042141:151031:151031 [1] NCCL INFO                 + NET[1.2] - NET/0-0 (0/0/0/1.250000)",
+            "gpu-public011166042141:151031:151031 [1] NCCL INFO                 + NET[1.2] - NET/0-1 (0/1/0/1.250000)",
+            "gpu-public011166042141:151031:151031 [1] NCCL INFO + PCI[24.0] - PCI/0-65000 (1000c0101000ffff)",
+            "gpu-public011166042141:151031:151031 [1] NCCL INFO               + PCI[24.0] - GPU/0-69000 (0)",
+            "gpu-public011166042141:151031:151031 [1] NCCL INFO               + PCI[24.0] - GPU/0-6a000 (1)",
+            "gpu-public011166042141:151031:151031 [1] NCCL INFO ==========================================",
+            "gpu-public011166042141:151031:151031 [1] NCCL INFO GPU/0-69000 :GPU/0-69000 (0/5000.0/LOC) GPU/0-6a000 (4/24.0/PHB) CPU/0-0 (2/24.0/PHB) NET/0-0 (4/1.2/PHB) NET/0-1 (4/1.2/PHB) ",
+            "gpu-public011166042141:151031:151031 [1] NCCL INFO GPU/0-6a000 :GPU/0-69000 (4/24.0/PHB) GPU/0-6a000 (0/5000.0/LOC) CPU/0-0 (2/24.0/PHB) NET/0-0 (4/1.2/PHB) NET/0-1 (4/1.2/PHB) gpu-public011166042141:151030:151030 [0] NCCL INFO ENV/Plugin: Could not find: libnccl-env.so",
+            "gpu-public011166042141:151030:151030 [0] NCCL INFO cudaDriverVersion 12090",
+            "gpu-public011166042141:151030:151030 [0] NCCL INFO NCCL version 2.29.7+cuda12.9",
+            "gpu-public011166042141:151030:151030 [0] NCCL INFO NCCL git version stable b81d6a5a3",
+            "gpu-public011166042141:151030:151030 [0] NCCL INFO NET/Plugin: Could not find: libnccl-net.so",
+            "gpu-public011166042141:151030:151030 [0] NCCL INFO NET/IB : No device found.",
+            "gpu-public011166042141:151030:151030 [0] NCCL INFO NET/IB : Using [RO]; OOB eth0:11.166.42.141<0>",
+            "gpu-public011166042141:151030:151030 [0] NCCL INFO Failed to initialize NET plugin IB",
+            "gpu-public011166042141:151030:151030 [0] NCCL INFO NET/Socket : Using [0]eth0:11.166.42.141<0> [1]underlay:10.0.130.204<0>",
+            "gpu-public011166042141:151030:151030 [0] NCCL INFO Initialized NET plugin Socket",
+            "gpu-public011166042141:151030:151030 [0] NCCL INFO Could not get speed from /sys/class/net/eth0/speed. Defaulting to 10 Gbps.",
+            "gpu-public011166042141:151030:151030 [0] NCCL INFO Assigned NET plugin Socket to comm",
+            "gpu-public011166042141:151030:151030 [0] NCCL INFO GIN/Plugin: Could not find: libnccl-gin.so",
+            "gpu-public011166042141:151030:151030 [0] NCCL INFO Failed to initialize any GIN plugin",
+            "gpu-public011166042141:151030:151030 [0] NCCL INFO Using network Socket",
+            "gpu-public011166042141:151030:151030 [0] NCCL INFO [Rank 0] ncclCommInitRank comm 0x14d9df60 rank 0 nranks 2 cudaDev 0 nvmlDev 0 busId 69000 commId 0x3ed4e9e76fb48b3e - Init START",
+            "gpu-public011166042141:151030:151030 [0] NCCL INFO RAS client listening socket at 127.0.0.1<28028>",
+            "gpu-public011166042141:151030:151030 [0] NCCL INFO NCCL_P2P_DISABLE set by environment to 1",
+            "gpu-public011166042141:151030:151030 [0] NCCL INFO TOPO/NET : Importing network plugins to topology",
+            "gpu-public011166042141:151030:151030 [0] NCCL INFO Could not get speed from /sys/class/net/eth0/speed. Defaulting to 10 Gbps.",
+            "gpu-public011166042141:151030:151030 [0] NCCL INFO Topology detection: network path (name = eth0) /sys/devices/pci0000:0f/0000:0f:02.0/0000:10:00.0/0000:11:11.0/0000:23:00.0/virtio1 is not a PCI device (virtio). Attaching to first CPU",
+            "gpu-public011166042141:151030:151030 [0] NCCL INFO NET/Socket : GPU Direct RDMA Disabled for HCA 0 'eth0'",
+            "gpu-public011166042141:151030:151030 [0] NCCL INFO ncclTopoPopulateNics : Filled eth0 in topo with pciPath=/sys/devices/pci0000:0f/0000:0f:02.0/0000:10:00.0/0000:11:11.0/0000:23:00.0/virtio1 net=1 gin=(null) keep=1 coll=(null)",
+            "gpu-public011166042141:151030:151030 [0] NCCL INFO Could not get speed from /sys/class/net/underlay/speed. Defaulting to 10 Gbps.",
+            "gpu-public011166042141:151030:151030 [0] NCCL INFO NET/Socket : GPU Direct RDMA Disabled for HCA 1 'underlay'",
+            "gpu-public011166042141:151030:151030 [0] NCCL INFO ncclTopoPopulateNics : Filled underlay in topo with pciPath=(null) net=1 gin=(null) keep=1 coll=(null)",
+            "gpu-public011166042141:151030:151030 [0] NCCL INFO === System : maxBw 24.0 totalBw 24.0 ===",
+            "gpu-public011166042141:151030:151030 [0] NCCL INFO CPU/0-0 (1/1/2)",
+            "gpu-public011166042141:151030:151030 [0] NCCL INFO + PCI[5000.0] - NIC/0-0",
+            "gpu-public011166042141:151030:151030 [0] NCCL INFO                 + NET[1.2] - NET/0-0 (0/0/0/1.250000)",
+            "gpu-public011166042141:151030:151030 [0] NCCL INFO                 + NET[1.2] - NET/0-1 (0/1/0/1.250000)",
+            "gpu-public011166042141:151030:151030 [0] NCCL INFO + PCI[24.0] - PCI/0-65000 (1000c0101000ffff)",
+            "gpu-public011166042141:151030:151030 [0] NCCL INFO               + PCI[24.0] - GPU/0-69000 (0)",
+            "gpu-public011166042141:151030:151030 [0] NCCL INFO               + PCI[24.0] - GPU/0-6a000 (1)",
+            "gpu-public011166042141:151030:151030 [0] NCCL INFO ==========================================",
+            "gpu-public011166042141:151030:151030 [0] NCCL INFO GPU/0-69000 :GPU/0-69000 (0/5000.0/LOC) GPU/0-6a000 (4/24.0/PHB) CPU/0-0 (2/24.0/PHB) NET/0-0 (4/1.2/PHB) NET/0-1 (4/1.2/PHB) ",
+            "gpu-public011166042141:151030:151030 [0] NCCL INFO GPU/0-6a000 :GPU/0-69000 (4/24.0/PHB) GPU/0-6a000 (0/5000.0/LOC) CPU/0-0 (2/24.0/PHB) NET/0-0 (4/1.2/PHB) NET/0-1 (4/1.2/PHB) ",
+            "gpu-public011166042141:151031:151031 [1] NCCL INFO NET/0-0 :GPU/0-69000 (4/1.2/PHB) GPU/0-6a000 (4/1.2/PHB) CPU/0-0 (2/1.2/PHB) NET/0-0 (0/5000.0/LOC) NET/0-1 (2/1.2/LOC) ",
+            "gpu-public011166042141:151031:151031 [1] NCCL INFO NET/0-1 :GPU/0-69000 (4/1.2/PHB) GPU/0-6a000 (4/1.2/PHB) CPU/0-0 (2/1.2/PHB) NET/0-0 (2/1.2/LOC) NET/0-1 (0/5000.0/LOC) ",
+            "gpu-public011166042141:151031:151031 [1] NCCL INFO ncclTopoGetCpuAffinity: Affinity for GPU 1 is 0-127. (GPU affinity = 0-127 ; CPU affinity = 0-127).",
+            "gpu-public011166042141:151031:151031 [1] NCCL INFO NVLS multicast support is not available on dev 1 (NVLS_NCHANNELS 0)",
+            "gpu-public011166042141:151031:151031 [1] NCCL INFO Pattern 4, crossNic 0, nChannels 1, bw 10.000000/10.000000, type PHB/PIX, sameChannels 1",
+            "gpu-public011166042141:151031:151031 [1] NCCL INFO  0 : GPU/0-69000 GPU/0-6a000",
+            "gpu-public011166042141:151031:151031 [1] NCCL INFO Pattern 1, crossNic 0, nChannels 1, bw 20.000000/20.000000, type PHB/PIX, sameChannels 1",
+            "gpu-public011166042141:151031:151031 [1] NCCL INFO  0 : GPU/0-69000 GPU/0-6a000",
+            "gpu-public011166042141:151031:151031 [1] NCCL INFO Could not get speed from /sys/class/net/eth0/speed. Defaulting to 10 Gbps.",
+            "gpu-public011166042141:151031:151031 [1] NCCL INFO Could not get speed from /sys/class/net/underlay/speed. Defaulting to 10 Gbps.",
+            "gpu-public011166042141:151031:151031 [1] NCCL INFO comm 0x155f6080 rank 1 nRanks 2 nNodes 1 localRanks 2 localRank 1 MNNVL 0",
+            "gpu-public011166042141:151031:151031 [1] NCCL INFO Tree 0 : 0 -> 1 -> -1/-1/-1",
+            "gpu-public011166042141:151031:151031 [1] NCCL INFO Tree 1 : 0 -> 1 -> -1/-1/-1",
+            "gpu-public011166042141:151031:151031 [1] NCCL INFO Ring 00 : 0 -> 1 -> 0",
+            "gpu-public011166042141:151031:151031 [1] NCCL INFO Ring 01 : 0 -> 1 -> 0",
+            "gpu-public011166042141:151031:151031 [1] NCCL INFO Trees [0] -1/-1/-1->1->0 [1] -1/-1/-1->1->0",
+            "gpu-public011166042141:151031:151031 [1] NCCL INFO P2P Chunksize set to 131072",
+            "gpu-public011166042141:151031:151031 [1] NCCL INFO PROFILER/Plugin: Could not find: libnccl-profiler.so",
+            "gpu-public011166042141:151031:151031 [1] NCCL INFO Check P2P Type isAllDirectP2p 0 directMode 0 isAllCudaP2p 0",
+            "gpu-public011166042141:151031:151031 [1] NCCL INFO ncclP2pSchedule: group size used is 2",
+            "gpu-public011166042141:151031:151751 [0] NCCL INFO [Proxy Service UDS] Device 1 CPU core 48",
+            "gpu-public011166042141:151031:151749 [0] NCCL INFO [Proxy Service] Device 1 CPU core 48",
+            "gpu-public011166042141:151031:151031 [1] NCCL INFO TUNER/Plugin: Could not find: libnccl-tuner.so",
+            "gpu-public011166042141:151031:151031 [1] NCCL INFO threadThresholds 8/8/64 | 16/8/64 | 512 | 512"
+          ],
+          "transport_channels": [
+            "gpu-public011166042141:151031:151031 [1] NCCL INFO NCCL_P2P_DISABLE set by environment to 1",
+            "gpu-public011166042141:151030:151030 [0] NCCL INFO NCCL_P2P_DISABLE set by environment to 1",
+            "(Worker pid=151031) WARNING 10-09 22:10:18 [custom_all_reduce.py:195] Custom allreduce is disabled because your platform lacks GPU P2P capability or P2P test failed. To silence this warning, specify disable_custom_all_reduce=True explicitly.",
+            "(Worker pid=151030) WARNING 10-09 22:10:18 [custom_all_reduce.py:195] Custom allreduce is disabled because your platform lacks GPU P2P capability or P2P test failed. To silence this warning, specify disable_custom_all_reduce=True explicitly.",
+            "gpu-public011166042141:151030:151030 [0] NCCL INFO Channel 00 : 0[0] -> 1[1] via SHM/direct/direct",
+            "gpu-public011166042141:151030:151030 [0] NCCL INFO Channel 01 : 0[0] -> 1[1] via SHM/direct/direct",
+            "gpu-public011166042141:151031:151031 [1] NCCL INFO Channel 00 : 1[1] -> 0[0] via SHM/direct/direct",
+            "gpu-public011166042141:151031:151031 [1] NCCL INFO Channel 01 : 1[1] -> 0[0] via SHM/direct/direct"
+          ],
+          "cache_dtype": [
+            "(APIServer pid=150391) INFO 10-09 22:09:57 [api_utils.py:272] non-default args: {'model_tag': '/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8', 'host': '127.0.0.1', 'port': 18367, 'model': '/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8', 'dtype': 'bfloat16', 'seed': 1, 'max_model_len': 128, 'enforce_eager': True, 'served_model_name': ['qwen35-vllm-tp2-resident-paper'], 'generation_config': 'vllm', 'tensor_parallel_size': 2, 'gpu_memory_utilization': 0.8, 'enable_prefix_caching': False, 'mamba_cache_dtype': 'bfloat16', 'mamba_ssm_cache_dtype': 'float32', 'language_model_only': True, 'max_num_batched_tokens': 8, 'max_num_seqs': 2, 'enable_chunked_prefill': True, 'moe_backend': 'marlin', 'linear_backend': 'marlin'}",
+            "(EngineCore pid=150755) INFO 10-09 22:10:09 [core.py:122] Initializing a V1 LLM engine (v0.28.0) with config: model='/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8', speculative_config=None, tokenizer='/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.bfloat16, max_seq_len=128, download_dir=None, load_format=auto, tensor_parallel_size=2, pipeline_parallel_size=1, data_parallel_size=1, decode_context_parallel_size=1, dcp_comm_backend=ag_rs, disable_custom_all_reduce=False, quantization=fp8, quantization_config=None, enforce_eager=True, enable_return_routed_experts=False, kv_cache_dtype=auto, device_config=cuda, structured_outputs_config=StructuredOutputsConfig(backend='auto', disable_any_whitespace=False, disable_additional_properties=False, reasoning_parser='', reasoning_parser_plugin='', enable_in_reasoning=False), observability_config=ObservabilityConfig(show_hidden_metrics_for_version=None, otlp_traces_endpoint=None, collect_detailed_traces=None, kv_cache_metrics=False, kv_cache_metrics_sample=0.01, cudagraph_metrics=False, enable_layerwise_nvtx_tracing=False, enable_mfu_metrics=False, enable_mm_processor_stats=False, enable_logging_iteration_details=False, jit_monitor_mode='warn', jit_monitor_verbose=False), seed=1, served_model_name=qwen35-vllm-tp2-resident-paper, enable_prefix_caching=False, enable_chunked_prefill=True, pooler_config=None, compilation_config={'mode': <CompilationMode.NONE: 0>, 'debug_dump_path': None, 'cache_dir': '', 'compile_cache_save_format': 'binary', 'backend': 'inductor', 'custom_ops': ['+quant_fp8', 'all', '+quant_fp8'], 'ir_enable_torch_wrap': False, 'splitting_ops': [], 'compile_mm_encoder': False, 'cudagraph_mm_encoder': False, 'encoder_cudagraph_token_budgets': [], 'encoder_cudagraph_max_vision_items_per_batch': 0, 'encoder_cudagraph_max_frames_per_batch': None, 'compile_sizes': [], 'compile_ranges_endpoints': [8], 'inductor_compile_config': {'enable_auto_functionalized_v2': False, 'combo_kernels': True, 'benchmark_combo_kernel': True}, 'inductor_passes': {}, 'cudagraph_mode': <CUDAGraphMode.NONE: 0>, 'cudagraph_num_of_warmups': 0, 'cudagraph_capture_sizes': [], 'cudagraph_copy_inputs': False, 'cudagraph_specialize_lora': True, 'use_inductor_graph_partition': False, 'pass_config': {'fuse_norm_quant': True, 'fuse_act_quant': True, 'fuse_attn_quant': False, 'enable_sp': False, 'fuse_gemm_comms': False, 'fuse_allreduce_rms': False, 'enable_qk_norm_rope_fusion': False, 'fuse_rope_kvcache_cat_mla': False, 'fuse_act_padding': False, 'fuse_qk_norm_rope_kvcache': False}, 'max_cudagraph_capture_size': 0, 'dynamic_shapes_config': {'type': <DynamicShapesType.BACKED: 'backed'>, 'evaluate_guards': False, 'assume_32_bit_indexing': False}, 'local_cache_dir': None, 'fast_moe_cold_start': False, 'static_all_moe_layers': []}, kernel_config=KernelConfig(ir_op_priority=IrOpPriorityConfig(rms_norm=['vllm_c', 'native'], fused_add_rms_norm=['vllm_c', 'native']), enable_flashinfer_autotune=True, enable_cutedsl_warmup=True, enable_jit_warmup=True, enable_bf16x3_router_gemm=False, moe_backend='marlin', linear_backend='marlin')"
+          ]
+        },
+        "contradictions": [],
+        "no_cpu_offload": "source-default/config verified; Noop selection may be debug-only; residency telemetry/logs retained",
+        "exact_arithmetic_match": false,
+        "effective_full_dtype_and_kernel_closure": "unknown; logged operations only"
+      },
+      "fairmatch": false,
+      "exact_speedup": null
+    },
+    {
+      "id": "F2",
+      "status": "dispatched_unknown"
+    }
+  ]
+}

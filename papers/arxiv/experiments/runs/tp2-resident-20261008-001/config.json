@@ -1,0 +1,97 @@
+{
+  "schema": "ferrule.paper.tp2-resident.config.v1",
+  "profile": "vllm-tp2-resident-noep-v1",
+  "model": "/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8",
+  "vllm": "target/vendor/vllm028-py312/bin/vllm",
+  "vllm_fix_environment": "target/validation/vllm028-py312/jit-cuda12/fix-env.json",
+  "protocol": {
+    "seed": 1,
+    "prompt": "Hello",
+    "input_tokens": 1,
+    "context": 128,
+    "batch_tokens": 8,
+    "active_sequences": 2,
+    "concurrency": 1,
+    "tp": 2,
+    "pp": 1,
+    "ep": 1,
+    "activation": "bfloat16",
+    "kv": "bfloat16",
+    "conv": "bfloat16",
+    "ssm": "float32",
+    "prefix_cache": false,
+    "eos": "natural",
+    "endpoint": "raw-completions",
+    "protocol_id": "vllm-tp2-resident-noep-v1",
+    "identity_mode": "device_exclusive_local_custody",
+    "dp": 1,
+    "enable_expert_parallel": false,
+    "expert_policy": "MoE weights tensor-sharded; NOT TP2EP2"
+  },
+  "resources": {
+    "gpu_target_bytes": 23622320128,
+    "host_target_bytes": 137438953472,
+    "gpu_expected_total_bytes": 25769803776,
+    "idle_max_device_mib": 0,
+    "sample_interval_seconds": 2,
+    "hard_memory_partition": false,
+    "host_policy": "128 GiB sampled server-tree PSS, predeclared common future Ferrule budget; not total physical host cap",
+    "gpu_policy": "22 GiB/card sampled ceiling; 0.8*24=19.2 GiB/card vLLM planning; not a partition"
+  },
+  "limits": {
+    "startup_seconds": 900,
+    "request_seconds": 120,
+    "cleanup_seconds": 120,
+    "case_seconds": 1600,
+    "idle_seconds": 20
+  },
+  "workloads": {
+    "hello2": {
+      "max_tokens": 2,
+      "requests": 1,
+      "warmup": 0
+    },
+    "canary8": {
+      "max_tokens": 8,
+      "requests": 3,
+      "warmup": 0
+    },
+    "qa8": {
+      "max_tokens": 8,
+      "requests": 5,
+      "warmup": 2,
+      "first_after_ready": true
+    }
+  },
+  "vllm_flags": {
+    "--host": "127.0.0.1",
+    "--port": "18367",
+    "--served-model-name": "qwen35-vllm-tp2-resident-paper",
+    "--language-model-only": true,
+    "--tensor-parallel-size": "2",
+    "--pipeline-parallel-size": "1",
+    "--data-parallel-size": "1",
+    "--dtype": "bfloat16",
+    "--kv-cache-dtype": "auto",
+    "--mamba-cache-dtype": "bfloat16",
+    "--mamba-ssm-cache-dtype": "float32",
+    "--linear-backend": "marlin",
+    "--moe-backend": "marlin",
+    "--cpu-offload-gb": "0",
+    "--max-model-len": "128",
+    "--max-num-seqs": "2",
+    "--max-num-batched-tokens": "8",
+    "--enable-chunked-prefill": true,
+    "--gpu-memory-utilization": "0.8",
+    "--no-enable-prefix-caching": true,
+    "--generation-config": "vllm",
+    "--seed": "1",
+    "--enforce-eager": true
+  },
+  "transport": {
+    "NCCL_P2P_DISABLE": "1",
+    "NCCL_DEBUG": "INFO",
+    "NCCL_DEBUG_SUBSYS": "INIT,GRAPH,P2P,SHM,NET",
+    "policy": "Fixed before first launch; historical and live CNS evidence; no retry/transport override"
+  }
+}

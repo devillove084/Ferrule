@@ -1,0 +1,27 @@
+{
+  "protocol": "tp2-resident-fv-qa8-descriptive",
+  "purpose": "paired",
+  "status": "incomplete",
+  "sole_gpu_owner_granted": true,
+  "owner_note": "2026-10-09 user renewed sole physical GPU0/1 ownership; same release smoke003 PASS; authorized fresh F1V1 V2F2 descriptive QA8, no trace, no foreign signals, fail stop with authenticated drain",
+  "fairmatch": false,
+  "exact_speedup": null,
+  "slots": [
+    {
+      "id": "F1",
+      "status": "dispatched_unknown"
+    },
+    {
+      "id": "V1",
+      "status": "not_run"
+    },
+    {
+      "id": "V2",
+      "status": "not_run"
+    },
+    {
+      "id": "F2",
+      "status": "not_run"
+    }
+  ]
+}

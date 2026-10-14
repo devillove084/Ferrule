@@ -1,0 +1,15 @@
+{
+  "target": {
+    "identity": {
+      "pid": 165760,
+      "birth_ticks": 86884450,
+      "ppid": 165759,
+      "state": "R"
+    },
+    "manifest_sha256": "0ae90ec3322c311e9828a6c1af17614ec1dd0272f12a29fb6af55a0fdefef9ea",
+    "nonce": "78068612b51598f72e96c1a78621aa8ad731094e66f0ffa37c4cdf2f60e27f11"
+  },
+  "manifest_sha256": "0ae90ec3322c311e9828a6c1af17614ec1dd0272f12a29fb6af55a0fdefef9ea",
+  "wrapper_sha256": "3daf63c7ab5f0588229f0aa9fb26cee54fbeac1ed1e7db1095e6b25f5796f305",
+  "result": 0
+}

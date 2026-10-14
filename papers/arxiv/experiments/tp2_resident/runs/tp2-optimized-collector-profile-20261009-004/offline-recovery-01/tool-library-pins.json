@@ -1,0 +1,548 @@
+[
+  {
+    "path": "/home/admin/wxw403883/anaconda3/envs/tao/lib/libgcc_s.so.1",
+    "resolved": "/home/admin/wxw403883/anaconda3/envs/tao/lib/libgcc_s.so.1",
+    "sha256": "f43f5563b8e01388eacf8f0b4898a53b88fe8aea535a2424ffb576d85845677e",
+    "capture_pin": null,
+    "matches_capture_pin": null
+  },
+  {
+    "path": "/lib64/libc.so.6",
+    "resolved": "/usr/lib64/libc-2.32.so",
+    "sha256": "d589c6aea9b813d2392b1c8bdeda73afe694d399687ab867bd26735175faadf1",
+    "capture_pin": null,
+    "matches_capture_pin": null
+  },
+  {
+    "path": "/lib64/libdl.so.2",
+    "resolved": "/usr/lib64/libdl-2.32.so",
+    "sha256": "4eec77f1e5131f2b84aaa83c21772dc233ff9a44d2715a195249fee9d1dd3cae",
+    "capture_pin": null,
+    "matches_capture_pin": null
+  },
+  {
+    "path": "/lib64/libgcc_s.so.1",
+    "resolved": "/usr/lib64/libgcc_s-10-20200828.so.1",
+    "sha256": "f308f4c8c88da5902dc50a0a55c5788772159ab7afe9358ca8dd581db79d97e7",
+    "capture_pin": null,
+    "matches_capture_pin": null
+  },
+  {
+    "path": "/lib64/libm.so.6",
+    "resolved": "/usr/lib64/libm-2.32.so",
+    "sha256": "3ad871eb16ece2c91050642503aa18757d3b018b1491afb662aec555fff683dd",
+    "capture_pin": null,
+    "matches_capture_pin": null
+  },
+  {
+    "path": "/lib64/libpthread.so.0",
+    "resolved": "/usr/lib64/libpthread-2.32.so",
+    "sha256": "6fd5dbf2a630b845af36c36e4d4509fef9da415b48fa25c6661184000bc3f3ce",
+    "capture_pin": null,
+    "matches_capture_pin": null
+  },
+  {
+    "path": "/lib64/librt.so.1",
+    "resolved": "/usr/lib64/librt-2.32.so",
+    "sha256": "68bf882c5011e80b654ace48ac7e4164d62fb6991d475514f299c6da57892196",
+    "capture_pin": null,
+    "matches_capture_pin": null
+  },
+  {
+    "path": "/lib64/libutil.so.1",
+    "resolved": "/usr/lib64/libutil-2.32.so",
+    "sha256": "84800f70117cb0954ec2d07a5489fffd2cc29bfb2f97cc1e17f426b112aa3e9b",
+    "capture_pin": null,
+    "matches_capture_pin": null
+  },
+  {
+    "path": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/QdstrmImporter",
+    "resolved": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/QdstrmImporter",
+    "sha256": "b09da4419dc0bec9c459843ba5606b65f78e41caff9268918b305acd7455e9ae",
+    "capture_pin": "b09da4419dc0bec9c459843ba5606b65f78e41caff9268918b305acd7455e9ae",
+    "matches_capture_pin": true
+  },
+  {
+    "path": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libAgentAPI.so",
+    "resolved": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libAgentAPI.so",
+    "sha256": "5bc864a14955558ded8da726a9b621945f7187386c76362eb8004144c507ea36",
+    "capture_pin": "5bc864a14955558ded8da726a9b621945f7187386c76362eb8004144c507ea36",
+    "matches_capture_pin": true
+  },
+  {
+    "path": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libAnalysis.so",
+    "resolved": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libAnalysis.so",
+    "sha256": "4ae34668c2432ad42a55bd6600de5765d9949455fb9eb26091cc7352470ae87c",
+    "capture_pin": "4ae34668c2432ad42a55bd6600de5765d9949455fb9eb26091cc7352470ae87c",
+    "matches_capture_pin": true
+  },
+  {
+    "path": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libAnalysisContainersData.so",
+    "resolved": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libAnalysisContainersData.so",
+    "sha256": "a62b914b4e60d2bae520194f6ad5daf612bdd0daafc698165746c07729e89bfd",
+    "capture_pin": "a62b914b4e60d2bae520194f6ad5daf612bdd0daafc698165746c07729e89bfd",
+    "matches_capture_pin": true
+  },
+  {
+    "path": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libAnalysisData.so",
+    "resolved": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libAnalysisData.so",
+    "sha256": "b3038e03fe2fd1f3f3902fc31e91816d4443564dbfe2e022002f3b468977461b",
+    "capture_pin": "b3038e03fe2fd1f3f3902fc31e91816d4443564dbfe2e022002f3b468977461b",
+    "matches_capture_pin": true
+  },
+  {
+    "path": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libAnalysisProto.so",
+    "resolved": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libAnalysisProto.so",
+    "sha256": "bb2f67cf8a5a914f8556f43e40756f119058e0a84a62328b445bd9cf63f6ef68",
+    "capture_pin": "bb2f67cf8a5a914f8556f43e40756f119058e0a84a62328b445bd9cf63f6ef68",
+    "matches_capture_pin": true
+  },
+  {
+    "path": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libAssert.so",
+    "resolved": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libAssert.so",
+    "sha256": "0d379cd1a9692db3146c8486dbaf20ae63292791746b76c3bbf41f7e1783070b",
+    "capture_pin": "0d379cd1a9692db3146c8486dbaf20ae63292791746b76c3bbf41f7e1783070b",
+    "matches_capture_pin": true
+  },
+  {
+    "path": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libCommonProtoServices.so",
+    "resolved": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libCommonProtoServices.so",
+    "sha256": "cc2b155bc7eff5fadf091b83b29cb23dbb41c2845b3acc205776d07d275648f2",
+    "capture_pin": "cc2b155bc7eff5fadf091b83b29cb23dbb41c2845b3acc205776d07d275648f2",
+    "matches_capture_pin": true
+  },
+  {
+    "path": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libCommonProtoStreamSections.so",
+    "resolved": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libCommonProtoStreamSections.so",
+    "sha256": "6c3c728ea7a8c33557bd0e68cec0916dd39fb10ae52c9a0ff0ed2b2b08b4e7ac",
+    "capture_pin": "6c3c728ea7a8c33557bd0e68cec0916dd39fb10ae52c9a0ff0ed2b2b08b4e7ac",
+    "matches_capture_pin": true
+  },
+  {
+    "path": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libCore.so",
+    "resolved": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libCore.so",
+    "sha256": "d29e0d830ba137f761b3321b2c9d99d82776c83d5876574d11b356ee8f6e3a8d",
+    "capture_pin": "d29e0d830ba137f761b3321b2c9d99d82776c83d5876574d11b356ee8f6e3a8d",
+    "matches_capture_pin": true
+  },
+  {
+    "path": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libCudaDrvApiWrapper.so",
+    "resolved": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libCudaDrvApiWrapper.so",
+    "sha256": "c34d081ac1982567b3da053bc659053c7ca6d03a598788e500eefea739877f52",
+    "capture_pin": "c34d081ac1982567b3da053bc659053c7ca6d03a598788e500eefea739877f52",
+    "matches_capture_pin": true
+  },
+  {
+    "path": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libDeviceProperty.so",
+    "resolved": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libDeviceProperty.so",
+    "sha256": "d6b5caf752496dc016af6658a87582a3b057e943645d90663c9f600c99e297bf",
+    "capture_pin": "d6b5caf752496dc016af6658a87582a3b057e943645d90663c9f600c99e297bf",
+    "matches_capture_pin": true
+  },
+  {
+    "path": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libDevicePropertyProto.so",
+    "resolved": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libDevicePropertyProto.so",
+    "sha256": "85a7d8ab543ac950e0a3d4d1f43c5bce656d952aa1cc6bb63ff68bf86db36983",
+    "capture_pin": "85a7d8ab543ac950e0a3d4d1f43c5bce656d952aa1cc6bb63ff68bf86db36983",
+    "matches_capture_pin": true
+  },
+  {
+    "path": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libEventHandler.so",
+    "resolved": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libEventHandler.so",
+    "sha256": "ece0eac430b5c5b6cf96a769962933468fc707ac45a40b922bc49239d5bcecae",
+    "capture_pin": "ece0eac430b5c5b6cf96a769962933468fc707ac45a40b922bc49239d5bcecae",
+    "matches_capture_pin": true
+  },
+  {
+    "path": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libGenericHierarchy.so",
+    "resolved": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libGenericHierarchy.so",
+    "sha256": "b8eec4599324b280718100bcfe762349588bcdd6180d2366c68ce678e837ed57",
+    "capture_pin": "b8eec4599324b280718100bcfe762349588bcdd6180d2366c68ce678e837ed57",
+    "matches_capture_pin": true
+  },
+  {
+    "path": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libGpuInfo.so",
+    "resolved": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libGpuInfo.so",
+    "sha256": "7090ba6f6d06104661ee041eb940f9c8b4e7f0762b1fb0d299815f275a7f2442",
+    "capture_pin": "7090ba6f6d06104661ee041eb940f9c8b4e7f0762b1fb0d299815f275a7f2442",
+    "matches_capture_pin": true
+  },
+  {
+    "path": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libHostCommon.so",
+    "resolved": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libHostCommon.so",
+    "sha256": "0656ccede03cc1dfb0d4f4bf60dd8c90090c019e73cfb95d4ce29beea5f0bf28",
+    "capture_pin": "0656ccede03cc1dfb0d4f4bf60dd8c90090c019e73cfb95d4ce29beea5f0bf28",
+    "matches_capture_pin": true
+  },
+  {
+    "path": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libInterfaceSharedBase.so",
+    "resolved": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libInterfaceSharedBase.so",
+    "sha256": "d4e8248dd3649d8cd53e307109651af273bfc5f4dce68c119640c23f5e2095ba",
+    "capture_pin": "d4e8248dd3649d8cd53e307109651af273bfc5f4dce68c119640c23f5e2095ba",
+    "matches_capture_pin": true
+  },
+  {
+    "path": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libInterfaceSharedLoggers.so",
+    "resolved": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libInterfaceSharedLoggers.so",
+    "sha256": "8f83d51d81f38665a03980088df8ef0a5ed6b5ae119fed511080ba2ff7626b17",
+    "capture_pin": "8f83d51d81f38665a03980088df8ef0a5ed6b5ae119fed511080ba2ff7626b17",
+    "matches_capture_pin": true
+  },
+  {
+    "path": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libLinuxPerf.so",
+    "resolved": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libLinuxPerf.so",
+    "sha256": "c6f7e691947db0b6690b0bdb9388229130a8106ea828e92b97a7d7978640efcc",
+    "capture_pin": "c6f7e691947db0b6690b0bdb9388229130a8106ea828e92b97a7d7978640efcc",
+    "matches_capture_pin": true
+  },
+  {
+    "path": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libNvmlWrapper.so",
+    "resolved": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libNvmlWrapper.so",
+    "sha256": "d72ad303a874fa1e876005809c11cc8903a3cb5c159954bd5c33fa1b0b3c7119",
+    "capture_pin": "d72ad303a874fa1e876005809c11cc8903a3cb5c159954bd5c33fa1b0b3c7119",
+    "matches_capture_pin": true
+  },
+  {
+    "path": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libNvtxExtData.so",
+    "resolved": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libNvtxExtData.so",
+    "sha256": "ff26c0fccb8e568e2fe96de05bd03749d19f6a679bf53aa0c15644fa1dc75542",
+    "capture_pin": "ff26c0fccb8e568e2fe96de05bd03749d19f6a679bf53aa0c15644fa1dc75542",
+    "matches_capture_pin": true
+  },
+  {
+    "path": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libProcessLauncher.so",
+    "resolved": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libProcessLauncher.so",
+    "sha256": "afe53bb977ae9ecfcaee18db53243cee022065b22b466fda70f6281aaa476a7b",
+    "capture_pin": "afe53bb977ae9ecfcaee18db53243cee022065b22b466fda70f6281aaa476a7b",
+    "matches_capture_pin": true
+  },
+  {
+    "path": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libProtobufComm.so",
+    "resolved": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libProtobufComm.so",
+    "sha256": "7e05998dda1e21bc0775d76b3239e6f40191e728a5c31354410cec9f272b3adb",
+    "capture_pin": "7e05998dda1e21bc0775d76b3239e6f40191e728a5c31354410cec9f272b3adb",
+    "matches_capture_pin": true
+  },
+  {
+    "path": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libProtobufCommClient.so",
+    "resolved": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libProtobufCommClient.so",
+    "sha256": "591c3bb01145b51904f770cd5e4794628550b4df09812f8ba328d0210616eb5e",
+    "capture_pin": "591c3bb01145b51904f770cd5e4794628550b4df09812f8ba328d0210616eb5e",
+    "matches_capture_pin": true
+  },
+  {
+    "path": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libProtobufCommProto.so",
+    "resolved": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libProtobufCommProto.so",
+    "sha256": "738202f22f7be403400dcc7098867c21a7e22843a24df9e907a8017581a37efd",
+    "capture_pin": "738202f22f7be403400dcc7098867c21a7e22843a24df9e907a8017581a37efd",
+    "matches_capture_pin": true
+  },
+  {
+    "path": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libQuiverContainers.so",
+    "resolved": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libQuiverContainers.so",
+    "sha256": "f94d40b34bbe68c02e2b2db60068b958bdeb01be8fe0e37e364b3090bf119ec4",
+    "capture_pin": "f94d40b34bbe68c02e2b2db60068b958bdeb01be8fe0e37e364b3090bf119ec4",
+    "matches_capture_pin": true
+  },
+  {
+    "path": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libQuiverEvents.so",
+    "resolved": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libQuiverEvents.so",
+    "sha256": "502430a0213ba1dfa77c6f8b91053109b0b625acc53bda0ee5e6e5abefe36d3f",
+    "capture_pin": "502430a0213ba1dfa77c6f8b91053109b0b625acc53bda0ee5e6e5abefe36d3f",
+    "matches_capture_pin": true
+  },
+  {
+    "path": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libSessionState.so",
+    "resolved": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libSessionState.so",
+    "sha256": "4376ec0b235a740e9454f2a77ccecb8d90bc2ee389df6d9c07472d9349e15416",
+    "capture_pin": "4376ec0b235a740e9454f2a77ccecb8d90bc2ee389df6d9c07472d9349e15416",
+    "matches_capture_pin": true
+  },
+  {
+    "path": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libSshClient.so",
+    "resolved": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libSshClient.so",
+    "sha256": "eca48c6ffbdcd132229807b629fcdb7bc123be770570db69f042743683d532f3",
+    "capture_pin": "eca48c6ffbdcd132229807b629fcdb7bc123be770570db69f042743683d532f3",
+    "matches_capture_pin": true
+  },
+  {
+    "path": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libStreamSections.so",
+    "resolved": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libStreamSections.so",
+    "sha256": "bbed2c645b5b5754f5f48ddcadc03801eedab1a7ccbc22ec716e8725e3a93ffc",
+    "capture_pin": "bbed2c645b5b5754f5f48ddcadc03801eedab1a7ccbc22ec716e8725e3a93ffc",
+    "matches_capture_pin": true
+  },
+  {
+    "path": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libSymbolAnalyzer.so",
+    "resolved": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libSymbolAnalyzer.so",
+    "sha256": "d4925727376a31b020b24c3344cafe54f669755949df5c6bb742bcb0811f52f5",
+    "capture_pin": "d4925727376a31b020b24c3344cafe54f669755949df5c6bb742bcb0811f52f5",
+    "matches_capture_pin": true
+  },
+  {
+    "path": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libSymbolAnalyzerLight.so",
+    "resolved": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libSymbolAnalyzerLight.so",
+    "sha256": "5e4c4cb6e22cf9e092b79d949080b778132a4fc83f3fd005fa1c452e487e3b75",
+    "capture_pin": "5e4c4cb6e22cf9e092b79d949080b778132a4fc83f3fd005fa1c452e487e3b75",
+    "matches_capture_pin": true
+  },
+  {
+    "path": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libSymbolDemangler.so",
+    "resolved": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libSymbolDemangler.so",
+    "sha256": "ec14d1c96d72caa05f48f3a0c4fe09e1fc1524011f4b270351b6a2e9b6357cec",
+    "capture_pin": "ec14d1c96d72caa05f48f3a0c4fe09e1fc1524011f4b270351b6a2e9b6357cec",
+    "matches_capture_pin": true
+  },
+  {
+    "path": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libTimelineAssert.so",
+    "resolved": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libTimelineAssert.so",
+    "sha256": "d178e9b032fb266121a61428b7b74a018cb6aea7e299e61f20f6729d28eeba96",
+    "capture_pin": "d178e9b032fb266121a61428b7b74a018cb6aea7e299e61f20f6729d28eeba96",
+    "matches_capture_pin": true
+  },
+  {
+    "path": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libTimelineCommon.so",
+    "resolved": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libTimelineCommon.so",
+    "sha256": "f3bb8f8c1dcd0e454f6caf42e5ab2c77653eeab0fe838a53112530cc9563eeea",
+    "capture_pin": "f3bb8f8c1dcd0e454f6caf42e5ab2c77653eeab0fe838a53112530cc9563eeea",
+    "matches_capture_pin": true
+  },
+  {
+    "path": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libarrow_devtools.so.1700",
+    "resolved": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libarrow_devtools.so.1700",
+    "sha256": "be9eff2a835da66d4d20ed4a643d3f50509fa1225984b939d403882a8be8b202",
+    "capture_pin": "be9eff2a835da66d4d20ed4a643d3f50509fa1225984b939d403882a8be8b202",
+    "matches_capture_pin": true
+  },
+  {
+    "path": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libboost_atomic.so.1.78.0",
+    "resolved": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libboost_atomic.so.1.78.0",
+    "sha256": "ed15b899ae3d319e91a19f5eb5754aa720b7d6597ab784fb8de98d5c73dc0793",
+    "capture_pin": "ed15b899ae3d319e91a19f5eb5754aa720b7d6597ab784fb8de98d5c73dc0793",
+    "matches_capture_pin": true
+  },
+  {
+    "path": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libboost_chrono.so.1.78.0",
+    "resolved": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libboost_chrono.so.1.78.0",
+    "sha256": "96b90c7dc1362cacb4ffe9c3519b100110dc15eb1df9aa94425fd5799bffce69",
+    "capture_pin": "96b90c7dc1362cacb4ffe9c3519b100110dc15eb1df9aa94425fd5799bffce69",
+    "matches_capture_pin": true
+  },
+  {
+    "path": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libboost_container.so.1.78.0",
+    "resolved": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libboost_container.so.1.78.0",
+    "sha256": "a8d5c0607494a01de5540b2c9090b12363376e2e14f9b7d4a83a8a8c0ddc6ed1",
+    "capture_pin": "a8d5c0607494a01de5540b2c9090b12363376e2e14f9b7d4a83a8a8c0ddc6ed1",
+    "matches_capture_pin": true
+  },
+  {
+    "path": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libboost_filesystem.so.1.78.0",
+    "resolved": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libboost_filesystem.so.1.78.0",
+    "sha256": "794c177da6a9a63c8c87bdb27527b776ebcf6ef2cbb713eb2ec7004311650bb7",
+    "capture_pin": "794c177da6a9a63c8c87bdb27527b776ebcf6ef2cbb713eb2ec7004311650bb7",
+    "matches_capture_pin": true
+  },
+  {
+    "path": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libboost_iostreams.so.1.78.0",
+    "resolved": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libboost_iostreams.so.1.78.0",
+    "sha256": "9507ed18abfb2f9fa3bab2fca8f783d1a14e063d8377e928a7729a86f623f37e",
+    "capture_pin": "9507ed18abfb2f9fa3bab2fca8f783d1a14e063d8377e928a7729a86f623f37e",
+    "matches_capture_pin": true
+  },
+  {
+    "path": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libboost_program_options.so.1.78.0",
+    "resolved": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libboost_program_options.so.1.78.0",
+    "sha256": "cd53eb1215045386684f97721d1c2d49e3b90208d8b29bcab4e1981103d9f61a",
+    "capture_pin": "cd53eb1215045386684f97721d1c2d49e3b90208d8b29bcab4e1981103d9f61a",
+    "matches_capture_pin": true
+  },
+  {
+    "path": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libboost_serialization.so.1.78.0",
+    "resolved": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libboost_serialization.so.1.78.0",
+    "sha256": "46e8df95986cfb527ae3c7ddaaf600aef5e85387b36c5b840e77d050064f91f1",
+    "capture_pin": "46e8df95986cfb527ae3c7ddaaf600aef5e85387b36c5b840e77d050064f91f1",
+    "matches_capture_pin": true
+  },
+  {
+    "path": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libboost_thread.so.1.78.0",
+    "resolved": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libboost_thread.so.1.78.0",
+    "sha256": "14b6c91d0973f0b6de2556ec4c9c85ab8c0c5185f2f88f68d5aab2aa4e62f9d9",
+    "capture_pin": "14b6c91d0973f0b6de2556ec4c9c85ab8c0c5185f2f88f68d5aab2aa4e62f9d9",
+    "matches_capture_pin": true
+  },
+  {
+    "path": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libboost_timer.so.1.78.0",
+    "resolved": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libboost_timer.so.1.78.0",
+    "sha256": "5cbfc19a232c09a7a7af149b4e13499eecbdd3fcde974546df55197627cfa6a8",
+    "capture_pin": "5cbfc19a232c09a7a7af149b4e13499eecbdd3fcde974546df55197627cfa6a8",
+    "matches_capture_pin": true
+  },
+  {
+    "path": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libcap.so.2",
+    "resolved": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libcap.so.2",
+    "sha256": "ce62953cdc4d16f9a55aa299e93bd3a6a132dee2a3247258e117358714a5b3a5",
+    "capture_pin": "ce62953cdc4d16f9a55aa299e93bd3a6a132dee2a3247258e117358714a5b3a5",
+    "matches_capture_pin": true
+  },
+  {
+    "path": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libcrypto.so.3",
+    "resolved": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libcrypto.so.3",
+    "sha256": "44bf295ae1ae4d8099ff7790f2a42a0deccec1f1c1804b4eb9bb6d46ca6ec919",
+    "capture_pin": "44bf295ae1ae4d8099ff7790f2a42a0deccec1f1c1804b4eb9bb6d46ca6ec919",
+    "matches_capture_pin": true
+  },
+  {
+    "path": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libdw.so.1",
+    "resolved": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libdw.so.1",
+    "sha256": "efbb521de8fd551c127a15596319522056876ffd36414b508f50a052fc687d2d",
+    "capture_pin": "efbb521de8fd551c127a15596319522056876ffd36414b508f50a052fc687d2d",
+    "matches_capture_pin": true
+  },
+  {
+    "path": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libelf.so.1",
+    "resolved": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libelf.so.1",
+    "sha256": "6279bbfbf884f7e9fe60d94e61f35c4bb3bd8e2f9559db19743f72e4bc13f97b",
+    "capture_pin": "6279bbfbf884f7e9fe60d94e61f35c4bb3bd8e2f9559db19743f72e4bc13f97b",
+    "matches_capture_pin": true
+  },
+  {
+    "path": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libnvlog.so",
+    "resolved": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libnvlog.so",
+    "sha256": "724769dd73459ca65c8fb5a8255cf5cfb3d0abaa0082914c1a3e7644021f2263",
+    "capture_pin": "724769dd73459ca65c8fb5a8255cf5cfb3d0abaa0082914c1a3e7644021f2263",
+    "matches_capture_pin": true
+  },
+  {
+    "path": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libpapi.so.5",
+    "resolved": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libpapi.so.5",
+    "sha256": "cae4539ddd900d9e6022819747dac20f4147c158df5071fef8fbc9a9fbacb723",
+    "capture_pin": "cae4539ddd900d9e6022819747dac20f4147c158df5071fef8fbc9a9fbacb723",
+    "matches_capture_pin": true
+  },
+  {
+    "path": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libpfm.so.4",
+    "resolved": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libpfm.so.4",
+    "sha256": "24d274c3c71b57cf0a5c7adc5737dc805de3f39d06cbbed0f7385814d5df0191",
+    "capture_pin": "24d274c3c71b57cf0a5c7adc5737dc805de3f39d06cbbed0f7385814d5df0191",
+    "matches_capture_pin": true
+  },
+  {
+    "path": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libprotobuf-shared.so",
+    "resolved": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libprotobuf-shared.so",
+    "sha256": "c703a9b205d20397cd23aa76da376b00cb402cba546ca8996942944d0da7e206",
+    "capture_pin": "c703a9b205d20397cd23aa76da376b00cb402cba546ca8996942944d0da7e206",
+    "matches_capture_pin": true
+  },
+  {
+    "path": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libssh.so",
+    "resolved": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libssh.so",
+    "sha256": "7680d0d2e553c4642ba165851f983b9cd20f5b4b908da53e4d4572d447ac2605",
+    "capture_pin": "7680d0d2e553c4642ba165851f983b9cd20f5b4b908da53e4d4572d447ac2605",
+    "matches_capture_pin": true
+  },
+  {
+    "path": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libstdc++.so.6",
+    "resolved": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/libstdc++.so.6",
+    "sha256": "787d556086768f5e5b42179c5de1730ab31d8f24e4c7df5781545af17dd16f14",
+    "capture_pin": "787d556086768f5e5b42179c5de1730ab31d8f24e4c7df5781545af17dd16f14",
+    "matches_capture_pin": true
+  },
+  {
+    "path": "/opt/nvidia/nsight-systems/2026.1.3/target-linux-x64/libToolsInjection64.so",
+    "resolved": "/opt/nvidia/nsight-systems/2026.1.3/target-linux-x64/libToolsInjection64.so",
+    "sha256": "ff50bb30041444b61ec14ac582680d3697bbfb9307fb7e76b92762c92c6fb3ce",
+    "capture_pin": "ff50bb30041444b61ec14ac582680d3697bbfb9307fb7e76b92762c92c6fb3ce",
+    "matches_capture_pin": true
+  },
+  {
+    "path": "/opt/nvidia/nsight-systems/2026.1.3/target-linux-x64/libbpf.so.1",
+    "resolved": "/opt/nvidia/nsight-systems/2026.1.3/target-linux-x64/libbpf.so.1.3.0",
+    "sha256": "0ae24dfb553478a099a53fcf67315d395649c558b1c3d4713b7b131f60ace11b",
+    "capture_pin": null,
+    "matches_capture_pin": null
+  },
+  {
+    "path": "/opt/nvidia/nsight-systems/2026.1.3/target-linux-x64/libcap.so.2",
+    "resolved": "/opt/nvidia/nsight-systems/2026.1.3/target-linux-x64/libcap.so.2",
+    "sha256": "ce62953cdc4d16f9a55aa299e93bd3a6a132dee2a3247258e117358714a5b3a5",
+    "capture_pin": "ce62953cdc4d16f9a55aa299e93bd3a6a132dee2a3247258e117358714a5b3a5",
+    "matches_capture_pin": true
+  },
+  {
+    "path": "/opt/nvidia/nsight-systems/2026.1.3/target-linux-x64/libcrypto.so.3",
+    "resolved": "/opt/nvidia/nsight-systems/2026.1.3/target-linux-x64/libcrypto.so.3",
+    "sha256": "44bf295ae1ae4d8099ff7790f2a42a0deccec1f1c1804b4eb9bb6d46ca6ec919",
+    "capture_pin": "44bf295ae1ae4d8099ff7790f2a42a0deccec1f1c1804b4eb9bb6d46ca6ec919",
+    "matches_capture_pin": true
+  },
+  {
+    "path": "/opt/nvidia/nsight-systems/2026.1.3/target-linux-x64/libcupti.so.12.9",
+    "resolved": "/opt/nvidia/nsight-systems/2026.1.3/target-linux-x64/libcupti.so.12.9",
+    "sha256": "f448f85c69aa04fd50b46927e549ff53054727eeae5047cd406c2420e8970967",
+    "capture_pin": "f448f85c69aa04fd50b46927e549ff53054727eeae5047cd406c2420e8970967",
+    "matches_capture_pin": true
+  },
+  {
+    "path": "/opt/nvidia/nsight-systems/2026.1.3/target-linux-x64/libelf.so.1",
+    "resolved": "/opt/nvidia/nsight-systems/2026.1.3/target-linux-x64/libelf.so.1",
+    "sha256": "6279bbfbf884f7e9fe60d94e61f35c4bb3bd8e2f9559db19743f72e4bc13f97b",
+    "capture_pin": "6279bbfbf884f7e9fe60d94e61f35c4bb3bd8e2f9559db19743f72e4bc13f97b",
+    "matches_capture_pin": true
+  },
+  {
+    "path": "/opt/nvidia/nsight-systems/2026.1.3/target-linux-x64/libssl.so.3",
+    "resolved": "/opt/nvidia/nsight-systems/2026.1.3/target-linux-x64/libssl.so.3",
+    "sha256": "6cc37260da5cc6aef5735520a5d0f84fa615d0b6813f0c8c6834f256e7c9648b",
+    "capture_pin": "6cc37260da5cc6aef5735520a5d0f84fa615d0b6813f0c8c6834f256e7c9648b",
+    "matches_capture_pin": true
+  },
+  {
+    "path": "/opt/nvidia/nsight-systems/2026.1.3/target-linux-x64/nsys",
+    "resolved": "/opt/nvidia/nsight-systems/2026.1.3/target-linux-x64/nsys",
+    "sha256": "00d4740dbad9db391f736853e4c677a74bdc8a4ce3f0d2308be78fced3771797",
+    "capture_pin": "00d4740dbad9db391f736853e4c677a74bdc8a4ce3f0d2308be78fced3771797",
+    "matches_capture_pin": true
+  },
+  {
+    "path": "/usr/lib64/libc.so.6",
+    "resolved": "/usr/lib64/libc-2.32.so",
+    "sha256": "d589c6aea9b813d2392b1c8bdeda73afe694d399687ab867bd26735175faadf1",
+    "capture_pin": null,
+    "matches_capture_pin": null
+  },
+  {
+    "path": "/usr/lib64/libdl.so.2",
+    "resolved": "/usr/lib64/libdl-2.32.so",
+    "sha256": "4eec77f1e5131f2b84aaa83c21772dc233ff9a44d2715a195249fee9d1dd3cae",
+    "capture_pin": null,
+    "matches_capture_pin": null
+  },
+  {
+    "path": "/usr/lib64/libm.so.6",
+    "resolved": "/usr/lib64/libm-2.32.so",
+    "sha256": "3ad871eb16ece2c91050642503aa18757d3b018b1491afb662aec555fff683dd",
+    "capture_pin": null,
+    "matches_capture_pin": null
+  },
+  {
+    "path": "/usr/lib64/libpthread.so.0",
+    "resolved": "/usr/lib64/libpthread-2.32.so",
+    "sha256": "6fd5dbf2a630b845af36c36e4d4509fef9da415b48fa25c6661184000bc3f3ce",
+    "capture_pin": null,
+    "matches_capture_pin": null
+  },
+  {
+    "path": "/usr/lib64/librt.so.1",
+    "resolved": "/usr/lib64/librt-2.32.so",
+    "sha256": "68bf882c5011e80b654ace48ac7e4164d62fb6991d475514f299c6da57892196",
+    "capture_pin": null,
+    "matches_capture_pin": null
+  },
+  {
+    "path": "/usr/lib64/libutil.so.1",
+    "resolved": "/usr/lib64/libutil-2.32.so",
+    "sha256": "84800f70117cb0954ec2d07a5489fffd2cc29bfb2f97cc1e17f426b112aa3e9b",
+    "capture_pin": null,
+    "matches_capture_pin": null
+  }
+]

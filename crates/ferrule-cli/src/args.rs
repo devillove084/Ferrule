@@ -42,7 +42,7 @@ pub(crate) enum Command {
         max_tokens: usize,
         #[command(flatten)]
         sampling: SamplingArgs,
-        /// Override the model execution backend (cpu or cuda).
+        /// Execution backend (default: cuda; cpu requires a cpu-reference test build).
         #[arg(long)]
         backend: Option<String>,
         /// Override auto-detected chat template.
@@ -50,11 +50,14 @@ pub(crate) enum Command {
         chat_template: Option<String>,
     },
     /// Serve an OpenAI-compatible asynchronous HTTP API.
-    Serve(ServeArgs),
+    Serve(Box<ServeArgs>),
     /// Benchmark multi-turn chat latency and runtime-owned materialization critical paths.
     #[command(name = "bench-interactive")]
     BenchInteractive {
         model: String,
+        /// Execution backend (default: cuda; cpu requires a cpu-reference test build).
+        #[arg(long)]
+        backend: Option<String>,
         /// Prompts to feed, one per turn. Can be repeated.
         #[arg(short = 'p', long = "prompt", default_value = "Hello")]
         prompts: Vec<String>,
@@ -84,7 +87,9 @@ pub(crate) enum Command {
         /// Path to a golden interactive trace JSON for correctness comparison.
         #[arg(long = "golden")]
         golden: Option<String>,
-        /// Emit the versioned interactive benchmark JSON schema (currently v2).
+        #[command(flatten)]
+        trace: BenchTraceArgs,
+        /// Emit the versioned interactive benchmark JSON schema.
         #[arg(long)]
         json: bool,
     },
@@ -93,13 +98,126 @@ pub(crate) enum Command {
     #[command(name = "bench-parallel")]
     BenchParallel(BenchParallelArgs),
 
+    /// One-shot mutually authenticated TLS linear rank endpoint (Unix + CUDA only).
+    RankServe(RankServeArgs),
+
     /// Private framed rank-worker protocol endpoint, not a user benchmark.
     #[command(name = "__rank-worker", hide = true)]
     RankWorker(RankWorkerArgs),
 
+    /// Analyze a bounded KV trace offline; token IDs may contain sensitive data.
+    AnalyzeKvset(Box<AnalyzeKvsetArgs>),
+
     /// Inspect a WeightPack file header.
     #[command(name = "inspect-weightpack")]
     InspectWeightPack { path: String },
+}
+
+#[derive(Debug, Args, Default)]
+pub(crate) struct BenchTraceArgs {
+    /// Use a fresh automatic session at position 0 and the first-turn template for every prompt.
+    #[arg(long, conflicts_with = "golden")]
+    pub(crate) independent_prompts: bool,
+    /// New trace file (never stdout/overwrite). Contains sensitive prompt/generated token IDs.
+    #[arg(long, requires = "independent_prompts", conflicts_with = "golden")]
+    pub(crate) kv_trace: Option<PathBuf>,
+    /// Recorder and collected-trace event budget (default: 65536).
+    #[arg(long, requires = "kv_trace")]
+    pub(crate) kv_trace_max_events: Option<usize>,
+    /// Recorder and collected-trace token byte budget (default: 4194304).
+    #[arg(long, requires = "kv_trace")]
+    pub(crate) kv_trace_max_token_bytes: Option<usize>,
+    /// Observed runtime prefix cache capacity; omitted preserves the scheduler default.
+    #[arg(long)]
+    pub(crate) prefix_cache_capacity_pages: Option<usize>,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub(crate) enum KvsetFormat {
+    Json,
+    Jsonl,
+    RuntimeJson,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub(crate) enum KvsetTargetBasis {
+    TheoreticalReusable,
+    EligibleTokens,
+    FullPrompt,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub(crate) enum KvsetDenominator {
+    Opportunity,
+    AllDemands,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct AnalyzeKvsetArgs {
+    /// Trace file, or - for stdin. Token IDs may disclose sensitive prompts/outputs.
+    #[arg(long)]
+    pub(crate) trace: PathBuf,
+    /// JSON: TraceInput; JSONL: bare header then events; runtime-json: v2 snapshot or ordered batches.
+    #[arg(long, value_enum, default_value = "json")]
+    pub(crate) format: KvsetFormat,
+    /// AnalyzerConfig JSON file, or - for stdin (cannot share stdin with trace).
+    #[arg(long)]
+    pub(crate) config: Option<PathBuf>,
+    /// Sample equal-charge logical page capacities; repeated values replace the config list.
+    #[arg(long = "capacity")]
+    pub(crate) capacities: Vec<usize>,
+    /// Exact fraction a/b in [0,1]; repeated values replace the config alpha list.
+    #[arg(long = "alpha", value_parser = parse_kvset_ratio)]
+    pub(crate) alphas: Vec<ferrule_common::kvset::Ratio>,
+    /// Exact coverage fraction a/b; repeated values replace the config p list.
+    #[arg(long = "coverage", value_parser = parse_kvset_ratio)]
+    pub(crate) coverage: Vec<ferrule_common::kvset::Ratio>,
+    #[arg(long, value_enum)]
+    pub(crate) target_basis: Option<KvsetTargetBasis>,
+    #[arg(long, value_enum)]
+    pub(crate) denominator: Option<KvsetDenominator>,
+    #[arg(long)]
+    pub(crate) capacity_budget: Option<usize>,
+    /// Warm-history measurement window [start,end); both endpoints are required.
+    #[arg(long, requires = "window_end")]
+    pub(crate) window_start: Option<u64>,
+    #[arg(long, requires = "window_start")]
+    pub(crate) window_end: Option<u64>,
+    #[arg(long, default_value_t = 67_108_864)]
+    pub(crate) max_input_bytes: usize,
+    /// JSONL record limit, including the newline. Blank lines are invalid.
+    #[arg(long, default_value_t = 4_194_304)]
+    pub(crate) max_line_bytes: usize,
+    #[arg(long, default_value_t = 1_048_576)]
+    pub(crate) max_config_bytes: usize,
+    /// Lower the official runtime projection event ceiling (includes source events).
+    #[arg(long, default_value_t = 1_000_000)]
+    pub(crate) max_projected_events: usize,
+    /// Lower the cumulative runtime projection token ceiling, checked before copying.
+    #[arg(long, default_value_t = 16_000_000)]
+    pub(crate) max_projected_tokens: usize,
+    /// Lower the cumulative runtime projection page ceiling, checked before expansion.
+    #[arg(long, default_value_t = 4_000_000)]
+    pub(crate) max_projected_pages: usize,
+    /// Emit the versioned JSON report. Trace limits are capped by common defaults.
+    #[arg(long)]
+    pub(crate) json: bool,
+    /// New output file (never overwritten), or - for stdout (the default).
+    #[arg(long)]
+    pub(crate) output: Option<PathBuf>,
+}
+
+fn parse_kvset_ratio(value: &str) -> Result<ferrule_common::kvset::Ratio, String> {
+    let invalid = || "expected an exact a/b fraction in [0,1] with u64 terms".to_owned();
+    let (a, b) = value.split_once('/').ok_or_else(invalid)?;
+    if a.is_empty() || b.is_empty() || !a.bytes().chain(b.bytes()).all(|c| c.is_ascii_digit()) {
+        return Err(invalid());
+    }
+    ferrule_common::kvset::Ratio::new(
+        a.parse().map_err(|_| invalid())?,
+        b.parse().map_err(|_| invalid())?,
+    )
+    .map_err(|_| invalid())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, serde::Serialize, serde::Deserialize)]
@@ -127,6 +245,19 @@ pub(crate) struct RankWorkerArgs {
     pub(crate) io_timeout_ms: u64,
 }
 
+#[derive(Debug, Args)]
+pub(crate) struct RankServeArgs {
+    /// Strict endpoint JSON. Credentials, fixture and child executable stay local.
+    #[arg(long)]
+    pub(crate) config: PathBuf,
+    /// One connection consumes the endpoint. Do not use TCP readiness probes.
+    #[arg(long, default_value = "127.0.0.1:9443")]
+    pub(crate) bind: std::net::SocketAddr,
+    /// Explicitly authorize non-loopback bind; never disables mTLS or peer pinning.
+    #[arg(long)]
+    pub(crate) allow_remote_bind: bool,
+}
+
 #[derive(Debug, Args, Clone)]
 pub(crate) struct BenchParallelArgs {
     #[arg(long, value_enum)]
@@ -137,6 +268,9 @@ pub(crate) struct BenchParallelArgs {
     /// Rank isolation backend. Process mode creates CUDA only inside child Boot.
     #[arg(long, value_enum, default_value = "thread")]
     pub(crate) rank_backend: RankBackend,
+    /// Strict mTLS rank manifest. Mutually exclusive with explicit local placement.
+    #[arg(long, conflicts_with_all = ["rank_backend", "devices"])]
+    pub(crate) remote_manifest: Option<PathBuf>,
     /// Process startup/command/shutdown deadline in ms; does not bound thread-mode CUDA.
     #[arg(long, default_value_t = 30000)]
     pub(crate) rank_timeout_ms: u64,
@@ -175,9 +309,29 @@ pub(crate) enum ServeEngine {
     Pipeline,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub(crate) enum ServeKvExecutionPolicy {
+    Resident,
+    HostKvDecode,
+}
+impl From<ServeKvExecutionPolicy> for ferrule_runtime::KvExecutionPolicy {
+    fn from(policy: ServeKvExecutionPolicy) -> Self {
+        match policy {
+            ServeKvExecutionPolicy::Resident => Self::Resident,
+            ServeKvExecutionPolicy::HostKvDecode => {
+                Self::HostKvDecode(ferrule_runtime::HostKvDecodeConfig::default())
+            }
+        }
+    }
+}
+
 /// Not pageable/pinned host retention and not per-layer hotset preloading.
 #[derive(Debug, Args, Clone, Default)]
 pub(crate) struct CudaExpertDeviceArgs {
+    /// Numeric FP8 arithmetic (Qwen3.5 MoE CUDA only; default f32). W8A16 uses
+    /// BF16-RNE operands, F32 accumulation/output/model/KV/state boundaries.
+    #[arg(long = "numeric-fp8-precision", value_parser = ["f32", "w8a16-bf16"])]
+    pub(crate) numeric_precision: Option<String>,
     /// Qwen3.5 FP8 CUDA cache entries across all layers (default: 1024).
     #[arg(long = "cuda-expert-device-entries")]
     pub(crate) entries: Option<usize>,
@@ -188,13 +342,24 @@ pub(crate) struct CudaExpertDeviceArgs {
 }
 
 impl CudaExpertDeviceArgs {
+    pub(crate) fn numeric_profile(
+        &self,
+    ) -> Option<ferrule_composition::model_factory::NumericFp8Profile> {
+        use ferrule_composition::model_factory::NumericFp8Profile;
+        self.numeric_precision.as_deref().map(|value| match value {
+            "f32" => NumericFp8Profile::F32,
+            "w8a16-bf16" => NumericFp8Profile::W8A16Bf16,
+            _ => unreachable!("clap validated numeric precision"),
+        })
+    }
+
     pub(crate) fn capacity_limits(
         &self,
-    ) -> Option<ferrule_runtime::engine::model_factory::Qwen35MoeCapacityLimits> {
+    ) -> Option<ferrule_composition::model_factory::Qwen35MoeCapacityLimits> {
         if self.entries.is_none() && self.bytes.is_none() {
             return None;
         }
-        let mut limits = ferrule_runtime::engine::model_factory::Qwen35MoeCapacityLimits::default();
+        let mut limits = ferrule_composition::model_factory::Qwen35MoeCapacityLimits::default();
         if let Some(entries) = self.entries {
             limits.max_experts = entries;
         }
@@ -202,6 +367,64 @@ impl CudaExpertDeviceArgs {
             limits.max_bytes = bytes;
         }
         Some(limits)
+    }
+}
+
+/// Host-only checkpoint staging; independent of expert residency and CUDA cache caps.
+#[derive(Debug, Args, Clone, Default)]
+pub(crate) struct ExpertReadArgs {
+    /// Opt-in host schedule; omitted with a host budget selects blocking.
+    #[arg(long = "expert-read-schedule", value_parser = ["blocking", "lookahead"], requires = "host_mb")]
+    pub(crate) schedule: Option<String>,
+    /// Combined host staging, metadata and requested worker stack cap in MiB.
+    /// Required to enable the pipeline; not deducted from CUDA expert cache bytes.
+    #[arg(long = "expert-read-host-mb")]
+    pub(crate) host_mb: Option<u64>,
+    /// Metadata allowance INCLUDED in the host cap (default when enabled: 8 MiB).
+    #[arg(long = "expert-read-metadata-mb", requires = "host_mb")]
+    pub(crate) metadata_mb: Option<u64>,
+    /// Requested worker stack INCLUDED in the host cap (default when enabled: 2 MiB).
+    /// OS rounding/TLS/allocator overhead require separate host headroom.
+    #[arg(long = "expert-read-worker-stack-mb", requires = "host_mb")]
+    pub(crate) worker_stack_mb: Option<u64>,
+}
+
+impl ExpertReadArgs {
+    pub(crate) fn options(
+        &self,
+    ) -> anyhow::Result<Option<ferrule_model::transformer::ExpertReadPipelineOptions>> {
+        use ferrule_model::transformer::{ExpertReadPipelineOptions, ExpertReadSchedule};
+        let Some(host_mb) = self.host_mb else {
+            anyhow::ensure!(
+                self.schedule.is_none()
+                    && self.metadata_mb.is_none()
+                    && self.worker_stack_mb.is_none(),
+                "expert read schedule/metadata/stack require --expert-read-host-mb"
+            );
+            return Ok(None);
+        };
+        let bytes = |name: &str, mb: u64| -> anyhow::Result<u64> {
+            anyhow::ensure!(mb > 0, "{name} must be positive");
+            mb.checked_mul(1 << 20)
+                .ok_or_else(|| anyhow::anyhow!("{name} MiB budget overflows bytes"))
+        };
+        let schedule = match self.schedule.as_deref() {
+            None | Some("blocking") => ExpertReadSchedule::Blocking,
+            Some("lookahead") => ExpertReadSchedule::Lookahead,
+            Some(value) => anyhow::bail!("unsupported expert read schedule: {value}"),
+        };
+        let options = ExpertReadPipelineOptions {
+            schedule,
+            max_host_bytes: bytes("expert-read-host-mb", host_mb)?,
+            max_metadata_bytes: bytes("expert-read-metadata-mb", self.metadata_mb.unwrap_or(8))?,
+            worker_stack_bytes: usize::try_from(bytes(
+                "expert-read-worker-stack-mb",
+                self.worker_stack_mb.unwrap_or(2),
+            )?)
+            .map_err(|_| anyhow::anyhow!("expert-read-worker-stack-mb exceeds address space"))?,
+        };
+        options.validate()?;
+        Ok(Some(options))
     }
 }
 
@@ -264,8 +487,46 @@ fn parse_admission_limit(value: &str) -> Result<usize, String> {
     Ok(limit)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub(crate) enum ServeModelPrecision {
+    F32,
+    Bf16,
+}
+
+impl From<ServeModelPrecision> for ferrule_composition::model_factory::ModelPrecision {
+    fn from(value: ServeModelPrecision) -> Self {
+        match value {
+            ServeModelPrecision::F32 => Self::F32,
+            ServeModelPrecision::Bf16 => Self::Bf16,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub(crate) enum ServeModelProfile {
+    /// Experimental 35B numeric FP8/BF16-scale Mixed: BF16 activation/KV/conv,
+    /// F32 SSM/accumulation. Public TP1: single CUDA owner, lazy experts, resident KV.
+    /// Public TP2 is restricted to PP1/TP2/EP1 CUDA threads, two distinct devices,
+    /// resident local expert shards and the authorized full40 multistep/lifecycle gate.
+    /// TP2: context<=128, batch<=8, sequences<=2; no process/PP>1/EP>1.
+    /// TP1 frozen two-prompt PASS is not universal; fresh quality is blocking.
+    /// Unverified process/PP/EP/profile combinations remain rejected.
+    /// Requires startup CUBLAS_WORKSPACE_CONFIG=:0:0. Not legacy W8A16.
+    Qwen35MixedBf16,
+}
+
+impl From<ServeModelProfile> for ferrule_composition::model_factory::ServingModelProfile {
+    fn from(value: ServeModelProfile) -> Self {
+        match value {
+            ServeModelProfile::Qwen35MixedBf16 => Self::Qwen35MixedBf16,
+        }
+    }
+}
+
 #[derive(Args, Clone)]
 pub(crate) struct ServeArgs {
+    #[command(flatten)]
+    pub(crate) expert_read: ExpertReadArgs,
     #[command(flatten)]
     pub(crate) expert_prewarm: ExpertPrewarmArgs,
     #[command(flatten)]
@@ -276,26 +537,59 @@ pub(crate) struct ServeArgs {
     /// Defaults to the resolved model adapter ID.
     #[arg(long = "served-model-name")]
     pub(crate) served_model_name: Option<String>,
-    /// Override the model execution backend (cpu or cuda).
+    /// Execution backend (default: cuda; cpu requires a cpu-reference test build).
     #[arg(long)]
     pub(crate) backend: Option<String>,
-    /// Serial greedy CPU/CUDA PP, MoE EP, or dense CUDA thread PP x TP.
+    /// Serial greedy CPU/CUDA PP, MoE EP, dense TP or Qwen3.5 CUDA thread TP x EP.
     #[arg(long, value_enum, default_value = "auto")]
     pub(crate) engine: ServeEngine,
+    /// Model storage/boundary precision, separate from --numeric-fp8-precision.
+    /// BF16: native BF16 dense Qwen3 only, CUDA TP1/PP1/EP1, resident typed KV,
+    /// engine auto/pipeline. No GDN/MoE/HostKV/IdleReclaim. Omitted preserves defaults.
+    #[arg(long, value_enum)]
+    pub(crate) model_precision: Option<ServeModelPrecision>,
+    /// Explicit experimental model/storage/arithmetic bundle; omitted keeps defaults.
+    /// qwen35-mixed-bf16 implies BF16 boundaries, not --numeric-fp8-precision.
+    #[arg(long, value_enum)]
+    pub(crate) model_profile: Option<ServeModelProfile>,
+    /// Mixed-only total device admission ceiling in MiB, including allocator margin.
+    /// TP1 uses its existing budget; TP2 uses at most 22528 MiB PER CARD.
+    /// Not a physical VRAM reservation; live source-bound admission still applies.
+    #[arg(long, requires = "model_profile")]
+    pub(crate) cuda_device_budget_mb: Option<usize>,
+    /// Mixed-only operator workspace ceiling in MiB per owner (TP1 excludes expert scratch).
+    /// Strict TP2 includes its 3072 MiB decoded BF16 cache; default 4096 MiB.
+    /// Explicit 1024 MiB cannot admit TP2 cache-on. The total ceiling remains 22528 MiB/card;
+    /// TP1 and legacy defaults are unchanged.
+    #[arg(long, requires = "model_profile")]
+    pub(crate) cuda_workspace_mb: Option<usize>,
+    /// Mixed-only scratch in MiB, INCLUDED in --cuda-expert-device-bytes.
+    #[arg(long, requires = "model_profile")]
+    pub(crate) cuda_expert_scratch_mb: Option<usize>,
+    /// HostKV: resident prefill warming, then synchronous decode on local dense
+    /// F32 all-GQA CUDA (full-depth dense Qwen3). Requires max-active-sequences=1;
+    /// rejects GDN/numeric/TP/EP. Scratch cap: 64 MiB per byte domain, block=16 tokens.
+    /// Does not evict resident KV or reduce device KV capacity.
+    #[arg(long = "kv-execution-policy", value_enum, default_value = "resident")]
+    pub(crate) kv_execution_policy: ServeKvExecutionPolicy,
     #[arg(long, default_value_t = 1)]
     pub(crate) pipeline_parallel: usize,
-    /// Dense CUDA tensor owners per stage (1, 2 or 4); thread only, no EP x TP.
+    /// CUDA tensor owners per stage (1, 2 or 4); thread only.
+    /// Qwen3.5-35B supports PP1/2 TP2/4 EP2; dense Qwen3 requires EP1.
     #[arg(long, default_value_t = 1)]
     pub(crate) tensor_parallel: usize,
-    /// Expert owners: Qwen3-MoE pipeline or Qwen3.5 GPU-thread EP (2/4/8); F32.
+    /// Stage expert owners: Qwen3-MoE pipeline or Qwen3.5 CUDA EP2/4/8.
+    /// Qwen3.5 PP2 TP1 EP2/4/8 and PP1/2 TP2/4 EP2 are thread-only.
+    /// Resident PP1 TP1 EP also supports process ranks.
     #[arg(long, default_value_t = 1)]
     pub(crate) expert_parallel: usize,
     /// Rank isolation. Process uses private child pipes; there is no automatic replay.
     #[arg(long, value_enum, default_value = "thread")]
     pub(crate) rank_backend: RankBackend,
-    /// CUDA ordinals: TP uses PP-stage-major then TP-rank order (PP * TP distinct devices).
-    /// Otherwise PP owners, then stage-ordered EP owners; only non-TP allows colocation.
-    /// Qwen3.5 EP requires an explicit distinct list: root = first, experts = same list.
+    /// CUDA ordinals: dense TP uses PP-stage-major then TP-rank order (PP * TP distinct devices).
+    /// Hybrid TP: PP-major TP roots, then stage-ordered EP children; colocation is budgeted.
+    /// Qwen3.5 requires explicit placement: PP1 EP uses a distinct list (root = first);
+    /// Pipeline hybrid uses PP*(TP+EP) ordinals (not PP*TP*EP), roots then stage EP.
     /// Other models default to 0..owner-count.
     #[arg(long, value_delimiter = ',')]
     pub(crate) devices: Option<Vec<usize>>,
@@ -371,6 +665,7 @@ pub(crate) struct ServeArgs {
     #[arg(long, default_value_t = 4096)]
     pub(crate) output_head_chunk_rows: usize,
     /// Single tensor materialization limit in MiB (Qwen3.5: 1024, others: 128).
+    /// Qwen3.5-35B TP x EP requires explicit --max-tensor-mb 2048 for its replicated F32 embedding.
     #[arg(long = "max-tensor-mb")]
     pub(crate) max_tensor_mb: Option<u64>,
     /// Maximum single expert artifact read size.
@@ -381,12 +676,12 @@ pub(crate) struct ServeArgs {
     #[arg(long)]
     pub(crate) moe_hotset_experts: Option<usize>,
     /// Maximum whole experts retained in pageable host memory (0 disables retention).
-    /// 35B full-prewarm default: 10240; other resident models: 64. Pipeline unsupported.
+    /// 35B full-prewarm default: 10240 (including hybrid PP/TP x EP); other resident models: 64.
     #[arg(long = "expert-host-cache-entries")]
     pub(crate) expert_host_cache_entries: Option<usize>,
     /// Pageable host expert-cache budget in MiB (0 = entry-limited only).
     /// 35B default: 40960, including staging/metadata (0 is invalid for full prewarm).
-    /// Other resident models: 1024. Pipeline unsupported.
+    /// Other resident models: 1024. Generic pipeline unsupported.
     #[arg(long = "expert-host-cache-mb")]
     pub(crate) expert_host_cache_mb: Option<u64>,
     /// Maximum whole experts retained in pinned host memory (0 disables retention).
@@ -653,6 +948,8 @@ mod tests {
                 "serve",
                 "bench-interactive",
                 "bench-parallel",
+                "rank-serve",
+                "analyze-kvset",
                 "inspect-weightpack",
             ]
         );
@@ -854,3 +1151,7 @@ mod tests {
         assert_eq!(args.backend, None);
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/unit/numeric_profile.rs"]
+mod numeric_profile_tests;

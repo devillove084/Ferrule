@@ -1,0 +1,12 @@
+{
+  "returncode": 0,
+  "passed": true,
+  "sample": {
+    "path": "/home/admin/wxw403883/anaconda3/envs/tao/demo_suite/vectorAdd",
+    "sha256": "b3994c4eaccd8b7d616dea4bea6a7bdc3454a0e01bfcfe3ad483ac70a0f8d1ed"
+  },
+  "log": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-init-probe-20261010-02/vectorAdd.log",
+    "sha256": "736c5b64ce0336f00e2fbf99a8ef7122c9d3f0b29bb6a5ec5a1de673078152a1"
+  }
+}

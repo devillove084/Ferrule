@@ -1,0 +1,26 @@
+[
+  {
+    "events": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-allocator-v3-20261011-03/greedy4/lifecycle-raw/epoch-0/rank-0/events.jsonl",
+      "sha256": "cb084496def6b686aa8d98eb1fe448c5537401c672c413130d9ae662b4d5689c"
+    },
+    "budget": {
+      "capacity_grants": 3221225472,
+      "pinned_grants": 1405091840,
+      "routed_entries": 20480,
+      "routed_working_set_grants": 805306368
+    }
+  },
+  {
+    "events": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-allocator-v3-20261011-03/greedy4/lifecycle-raw/epoch-0/rank-1/events.jsonl",
+      "sha256": "c39f2fd4a39ed15f3f481d8175bfd3e6722cbab4bec0bd025317f0fae8d112a5"
+    },
+    "budget": {
+      "capacity_grants": 3221225472,
+      "pinned_grants": 1405091840,
+      "routed_entries": 20480,
+      "routed_working_set_grants": 805306368
+    }
+  }
+]

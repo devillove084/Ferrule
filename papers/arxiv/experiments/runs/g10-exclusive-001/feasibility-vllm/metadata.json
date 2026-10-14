@@ -1,0 +1,163 @@
+{
+  "comparison_intent": "system-level",
+  "source": {
+    "original_manifest_sha256": "fa684a58544831f258f5d885b774a0bb11e79da01193775a6aba6256eb15531b",
+    "g10_prepared_sha256": "fe232184c85f39d064d600bf0b4a2e165fc247f4f1a4293d4b7c185878d57783"
+  },
+  "model": {
+    "path": "/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8",
+    "metadata_sha256": {
+      "config.json": "236c373b0682a4f40c2fa49ef8e5f722a87a8dbfe265286b6d5260b23d7cb229",
+      "model.safetensors.index.json": "b009f7a49c442fce959a2ff6fee41c69248879b90d7ff5636ec6d2068ac4876d",
+      "tokenizer.json": "5f9e4d4901a92b997e463c1f46055088b6cca5ca61a6522d1b9f64c4bb81cb42",
+      "tokenizer_config.json": "316230d6a809701f4db5ea8f8fc862bc3a6f3229c937c174e674ff3ca0a64ac8"
+    },
+    "shard_stats": {
+      "model.safetensors-00001-of-00014.safetensors": {
+        "bytes": 2685395560,
+        "mtime_ns": 1772424992657055256,
+        "inode": 38524559,
+        "device": 236
+      },
+      "model.safetensors-00002-of-00014.safetensors": {
+        "bytes": 2685393512,
+        "mtime_ns": 1772424806750938380,
+        "inode": 38524557,
+        "device": 236
+      },
+      "model.safetensors-00003-of-00014.safetensors": {
+        "bytes": 2685393512,
+        "mtime_ns": 1772425351626122160,
+        "inode": 38524563,
+        "device": 236
+      },
+      "model.safetensors-00004-of-00014.safetensors": {
+        "bytes": 2685394536,
+        "mtime_ns": 1772425557825932903,
+        "inode": 38524564,
+        "device": 236
+      },
+      "model.safetensors-00005-of-00014.safetensors": {
+        "bytes": 2685395560,
+        "mtime_ns": 1772425889647579315,
+        "inode": 38524566,
+        "device": 236
+      },
+      "model.safetensors-00006-of-00014.safetensors": {
+        "bytes": 2685394536,
+        "mtime_ns": 1772425164292942735,
+        "inode": 38524561,
+        "device": 236
+      },
+      "model.safetensors-00007-of-00014.safetensors": {
+        "bytes": 2685393512,
+        "mtime_ns": 1772426151999313636,
+        "inode": 38524567,
+        "device": 236
+      },
+      "model.safetensors-00008-of-00014.safetensors": {
+        "bytes": 2685393512,
+        "mtime_ns": 1772426339785901318,
+        "inode": 38524569,
+        "device": 236
+      },
+      "model.safetensors-00009-of-00014.safetensors": {
+        "bytes": 3645492144,
+        "mtime_ns": 1772426665613745394,
+        "inode": 38524570,
+        "device": 236
+      },
+      "model.safetensors-00010-of-00014.safetensors": {
+        "bytes": 2685398632,
+        "mtime_ns": 1772426854560705584,
+        "inode": 38524571,
+        "device": 236
+      },
+      "model.safetensors-00011-of-00014.safetensors": {
+        "bytes": 2685400680,
+        "mtime_ns": 1772427035405551264,
+        "inode": 38524573,
+        "device": 236
+      },
+      "model.safetensors-00012-of-00014.safetensors": {
+        "bytes": 2685399144,
+        "mtime_ns": 1772427235837349585,
+        "inode": 38524574,
+        "device": 236
+      },
+      "model.safetensors-00013-of-00014.safetensors": {
+        "bytes": 3011229472,
+        "mtime_ns": 1772427400537041055,
+        "inode": 38524576,
+        "device": 236
+      },
+      "model.safetensors-00014-of-00014.safetensors": {
+        "bytes": 1267650368,
+        "mtime_ns": 1772427480416081771,
+        "inode": 38524577,
+        "device": 236
+      }
+    },
+    "index_payload_bytes": 37454799072,
+    "identity_strength": "partial: metadata hashes + shard stat pins; payloads NOT hashed",
+    "full_checkpoint_sha256": null
+  },
+  "precision": {
+    "declared": {
+      "seed": 1,
+      "prompt": "Hello",
+      "input_tokens": 1,
+      "context": 128,
+      "batch_tokens": 8,
+      "active_sequences": 2,
+      "concurrency": 1,
+      "tp": 1,
+      "pp": 1,
+      "ep": 1,
+      "activation": "bfloat16",
+      "kv": "bfloat16",
+      "conv": "bfloat16",
+      "ssm": "float32",
+      "prefix_cache": false,
+      "eos": "natural",
+      "endpoint": "raw-completions",
+      "protocol_id": "m7-device-exclusive-local-custody-v2",
+      "identity_mode": "device_exclusive_local_custody"
+    },
+    "effective": "unverified"
+  },
+  "topology": {
+    "tp": 1,
+    "pp": 1,
+    "ep": 1,
+    "dp": 1,
+    "physical_gpu_uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535"
+  },
+  "resources": {
+    "gpu_target_bytes": 10737418240,
+    "host_target_bytes": 68719476736,
+    "gpu_expected_total_bytes": 25769803776,
+    "idle_max_device_mib": 512,
+    "sample_interval_seconds": 2,
+    "hard_memory_partition": false,
+    "host_policy": "process-tree PSS monitored; RSS also reported; uncharged file cache and CUDA pinning remain separately unknown",
+    "gpu_policy": "10 GiB observed whole-device ceiling; sampled, not a hard partition; vLLM planning remains M7"
+  },
+  "cache": {
+    "prefix_mode": "off",
+    "state_reset": "per_request",
+    "os_cache": "uncontrolled"
+  },
+  "quality_gate": {
+    "status": "independent_canary_required"
+  },
+  "runtime_contract": {
+    "status": "unverified",
+    "identity_mode": "device_exclusive_local_custody",
+    "performance_basis": "exclusive_operator_allocation_assumption",
+    "owned_process_gpu_peak_bytes": null
+  },
+  "operator_note": "Boundary-aligned candidate only; exact arithmetic/speedup not claimed",
+  "engine": "vllm",
+  "protocol_id": "g10-device-exclusive-local-custody-v1"
+}

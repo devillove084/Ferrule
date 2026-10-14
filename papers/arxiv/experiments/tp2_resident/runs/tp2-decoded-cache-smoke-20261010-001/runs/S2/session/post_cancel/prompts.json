@@ -1,0 +1,17 @@
+[
+  {
+    "id": "qa",
+    "prompt": "The capital of Japan is",
+    "input_tokens": 5
+  },
+  {
+    "id": "arithmetic",
+    "prompt": "7 + 8 =",
+    "input_tokens": 5
+  },
+  {
+    "id": "chinese",
+    "prompt": "\u4e2d\u56fd\u7684\u9996\u90fd\u662f",
+    "input_tokens": 3
+  }
+]

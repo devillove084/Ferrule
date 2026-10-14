@@ -12,6 +12,8 @@ categories = ["science", "machine-learning"]
 
 [features]
 default = []
+# Shared reference-test opt-in marker; GPU host contracts remain available.
+cpu-reference = []
 cuda = [
     "dep:rayon",
     "dep:memmap2",

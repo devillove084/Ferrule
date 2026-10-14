@@ -1,0 +1,16 @@
+{
+  "selector": "transformer::standard::cuda::hybrid_rank::mixed::decoded_gpu_tests::decoded_physical_full_native_fallback_before_submit_exact",
+  "binary_sha256": "e0e956282450b7fadf349c7921e4c4caab9e1e427a9c77f1bab438b918cf6fad",
+  "source_digest": "e3592ec70f5073d1a2a6a3a43141ce56cdc081ef2693f29b1226dccfd7e3b436",
+  "assertions_passed": true,
+  "cache_values": "source-pinned model assertions; no raw per-step counters exported",
+  "assertion_contract": null,
+  "gpu_memory": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-allocator-v3-20261011-02/model-physical-full/resources.json",
+    "sha256": "69ef22f07a6463f02561849390fd1e7ad2745e1384b3022fbd4990185e1dfc19"
+  },
+  "log": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-allocator-v3-20261011-02/model-physical-full/test.log",
+    "sha256": "66d46a43e315bc6f6e3fce35424882c8891471a086171188e6b325f401704000"
+  }
+}

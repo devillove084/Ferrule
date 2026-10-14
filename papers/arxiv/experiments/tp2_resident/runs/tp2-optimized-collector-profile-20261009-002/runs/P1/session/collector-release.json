@@ -1,0 +1,5 @@
+{
+  "status": "release_for_drain",
+  "failure": "ValueError: Baseline requires idle utilization and known memory; missing is not zero",
+  "manifest_sha256": "6f3147e6a2675c5c64e1edeb0a716347311b2ba1a9d384116c1243eb852346cf"
+}

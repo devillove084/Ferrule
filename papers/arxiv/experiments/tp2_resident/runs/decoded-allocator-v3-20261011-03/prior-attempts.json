@@ -1,0 +1,44 @@
+{
+  "cpu_manifest_contract": {
+    "receipt": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-v3-cpu-preflight-20261011-01/backend-unit-release.json",
+      "sha256": "7c80008f825783c69bc59ee9ad9a234824ce5cfd328f28536ba4ea0b087fc16e"
+    },
+    "actual_mask": 32134,
+    "old_expected_mask": 15750,
+    "fix": "test-only missing NumericBf16M1Gemv capability bit; no native changes"
+  },
+  "supplemental_path_binding": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-allocator-v3-20261011-01/PREPARATION_FAILURE.json",
+    "sha256": "369fe71c59fd2b759cc5e642e078b183bbf9ee2821eae6a53eb9ced1defe7801"
+  },
+  "observer_exit_race": {
+    "stop": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-allocator-v3-20261011-02/STOP.json",
+      "sha256": "76e8c0bd2327d5bc0fc0e402dc7500b80ee243cee4c364bbb10e564b0751b9fa"
+    },
+    "supervisor": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-allocator-v3-20261011-02/greedy4/supervisor.json",
+      "sha256": "b99d40f39bc7719fddc325facc47fed4b6253e05fac8f6388489329ac599384a"
+    },
+    "resources": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-allocator-v3-20261011-02/greedy4/resources.json",
+      "sha256": "ccc0d5af6a8887e378fdd9fbf7cc1c310551d738b6c0a98253f3d4374b279d44"
+    },
+    "cpu_reproduction": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-allocator-v3-20261011-02/observer-exit-race-cpu-proof.json",
+      "sha256": "f40e1a077ad0bac77ec113023fd53be7907c0db656935ddbf6b53cde672da0b9"
+    },
+    "archived_runner": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/history/pre-allocator-v3-exit-wait-20261011/decoded_cache_gate.py",
+      "sha256": "7a1297a81672c4d4ca0701f86393970af64eb674f1c5cfe0482fe3a5d7780a8b"
+    },
+    "archived_tests": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/history/pre-allocator-v3-exit-wait-20261011/test_decoded_cache_gate.py",
+      "sha256": "8633cbf4b4d46cfe885fe4d6fd1ceb7b636cbb0c203fb91d312a1deeb1538b5d"
+    },
+    "fix": "V3 worker no longer competes with live observer for Popen waitpid lock; observer/custody/resource checks unchanged",
+    "old_gpu_passes_reused": false,
+    "all_23_rerun_in_current_prepared": true
+  }
+}

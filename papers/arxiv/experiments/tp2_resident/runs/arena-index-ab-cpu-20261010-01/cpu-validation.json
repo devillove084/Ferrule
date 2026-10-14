@@ -1,0 +1,79 @@
+{
+  "status": "CPU_branch_and_45_tests_pass_AFTER_pending",
+  "gpu_queries_performed": false,
+  "gpu_started": false,
+  "after_binary_sha256": null,
+  "executable_after_prepared_created": false,
+  "plan": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/arena-index-ab-cpu-20261010-01/plan.json",
+    "sha256": "e22a8b598e6319f8f6077a8955638cf02e2e400044cbc2d8afc3609425384765"
+  },
+  "builder_contract": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/arena-index-ab-cpu-20261010-01/builder-contract.json",
+    "sha256": "519ec784e52561e2b5bd979461cc1ced2e2414421e315719dfd01a36e0685bb4"
+  },
+  "baseline_audit": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/arena-index-ab-cpu-20261010-01/baseline-audit.json",
+    "sha256": "4360f499a24f697b1860090ae96a6b7fb6e73fe0870761cd1b6d7caaf620f4bf"
+  },
+  "handoff": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/arena-index-ab-cpu-20261010-01/HANDOFF.md",
+    "sha256": "f7c426c790ddb26b1b4818cb9cf9226a39622b6cd2b6a3e26e9f3a76b0e7ccb4"
+  },
+  "tests": [
+    {
+      "module": "test_arena_index_ab",
+      "passed": 15,
+      "log": {
+        "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/arena-index-ab-cpu-20261010-01/arena-index-tests-03.log",
+        "sha256": "f0d6398d79447f662db672694da4119d7f2c58ba9399600ae4dbadcfae78a8bf"
+      }
+    },
+    {
+      "module": "test_cache_ab",
+      "passed": 13,
+      "log": {
+        "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/arena-index-ab-cpu-20261010-01/cache-ab-regression-02.log",
+        "sha256": "bc9d91de1936c6acb32c8645ce50de8a314d4e3108ac7c49c40822f9d0a80978"
+      }
+    },
+    {
+      "module": "test_paired",
+      "passed": 17,
+      "log": {
+        "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/arena-index-ab-cpu-20261010-01/paired-regression-02.log",
+        "sha256": "cc744b34d4e7fb31e8883c207a5dd19263c156748e90f6be9fc44a7529b1743d"
+      }
+    }
+  ],
+  "changed_code": [
+    {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/arena_index_ab.py",
+      "sha256": "a4d155066b97bc3f3f8231233df4413a191c207d8b9233466fef5c9b5308155b"
+    },
+    {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/paired.py",
+      "sha256": "f14573bd209d681139cc4549be97a3a85b05694754ffef848070908f475d40eb"
+    },
+    {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/test_arena_index_ab.py",
+      "sha256": "ee7b622408744931fe2f77fe56747cf3e74be5bf8b0ac0dac8026eb870f756c8"
+    }
+  ],
+  "preserved_original_workflow": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/history/pre-arena-index-ab-20261010/paired.py.txt",
+    "sha256": "1b7c5ab3a40daf32134058ed20ce2b875c295091b9cb3328d881a3167d42abbd"
+  },
+  "unchanged_legacy_cache_ab": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/cache_ab.py",
+    "sha256": "6248942d43f1dda010db1753905a07fc82476493d5912c1738e31a9459c23d8f"
+  },
+  "unchanged_observer": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/observer.py",
+    "sha256": "9866b8bb3ce390a4929b6e6d59ac9c85fd5fe2f0a74974d2fd78ded13abc313d"
+  },
+  "source_delta_readonly": [
+    "crates/ferrule-model/src/transformer/standard/expert_cache.rs",
+    "crates/ferrule-model/src/transformer/standard/mixed_decoded.rs"
+  ]
+}

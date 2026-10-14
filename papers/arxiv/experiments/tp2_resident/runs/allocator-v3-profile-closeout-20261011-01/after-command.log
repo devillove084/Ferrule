@@ -1,0 +1,2 @@
+START single lifecycle; no retry
+{"status": "complete", "launch_id": "c4cde017c4a34161a1add10e29acf86d", "server_starts": 1, "authenticated_drained": true, "after": "verified"}

@@ -1,0 +1,91 @@
+{
+  "before": {
+    "count": 0,
+    "host_api_duration_sum_ns": 0,
+    "union_across_threads_ns": 0,
+    "top": [],
+    "scope": "Formal exported host CUDA API calls >=1ms; overlapping calls not added as wall savings; matching memcpy duration is separate. Cause of long host call is unproven without scheduling/CPU stacks."
+  },
+  "after": {
+    "count": 2,
+    "host_api_duration_sum_ns": 1514783781,
+    "union_across_threads_ns": 757468828,
+    "top": [
+      {
+        "start": 2993440186,
+        "end": 3750903668,
+        "eventClass": 1,
+        "globalTid": 284636207047241,
+        "correlationId": 2177732,
+        "nameId": 631,
+        "returnValue": 0,
+        "callchainId": null,
+        "name": "cuMemcpyDtoHAsync_v2",
+        "duration_ns": 757463482,
+        "matched_memcpy": [
+          {
+            "start": 3750887177,
+            "end": 3750891209,
+            "deviceId": 0,
+            "contextId": 1,
+            "greenContextId": 0,
+            "streamId": 27,
+            "correlationId": 2177732,
+            "globalPid": 284636206858240,
+            "bytes": 65536,
+            "copyKind": 2,
+            "deprecatedSrcId": null,
+            "srcKind": 2,
+            "dstKind": 1,
+            "srcDeviceId": null,
+            "srcContextId": null,
+            "dstDeviceId": null,
+            "dstContextId": null,
+            "migrationCause": null,
+            "graphNodeId": null,
+            "virtualAddress": null,
+            "copyCount": 1
+          }
+        ]
+      },
+      {
+        "start": 2993588715,
+        "end": 3750909014,
+        "eventClass": 1,
+        "globalTid": 284636207047242,
+        "correlationId": 2177918,
+        "nameId": 631,
+        "returnValue": 0,
+        "callchainId": null,
+        "name": "cuMemcpyDtoHAsync_v2",
+        "duration_ns": 757320299,
+        "matched_memcpy": [
+          {
+            "start": 3750889901,
+            "end": 3750894221,
+            "deviceId": 1,
+            "contextId": 2,
+            "greenContextId": 0,
+            "streamId": 24,
+            "correlationId": 2177918,
+            "globalPid": 284636206858240,
+            "bytes": 65536,
+            "copyKind": 2,
+            "deprecatedSrcId": null,
+            "srcKind": 2,
+            "dstKind": 1,
+            "srcDeviceId": null,
+            "srcContextId": null,
+            "dstDeviceId": null,
+            "dstContextId": null,
+            "migrationCause": null,
+            "graphNodeId": null,
+            "virtualAddress": null,
+            "copyCount": 1
+          }
+        ]
+      }
+    ],
+    "scope": "Formal exported host CUDA API calls >=1ms; overlapping calls not added as wall savings; matching memcpy duration is separate. Cause of long host call is unproven without scheduling/CPU stacks."
+  }
+}

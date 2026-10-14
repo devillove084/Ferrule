@@ -1,0 +1,324 @@
+{
+  "schema": "ferrule.paper.g10.recovery.v1",
+  "status": "blocked_resource_ceiling",
+  "recovered_run": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/g10-exclusive-001",
+  "recovery_time_unix": 1791471880.7875147,
+  "no_duplicate_launch": true,
+  "launches_during_recovery": 0,
+  "engines": [
+    {
+      "engine": "ferrule",
+      "status": "complete",
+      "error": null,
+      "launches": 1,
+      "startup_seconds": 16.511282877996564,
+      "startup_failure_seconds": null,
+      "requests": [
+        {
+          "status": "success",
+          "text": ", I",
+          "actual_input_tokens": 1,
+          "actual_output_tokens": 2,
+          "finish_reason": "length",
+          "ttft_seconds": 0.6268567871302366,
+          "request_e2e_seconds": 1.7686595972627401,
+          "output_token_ids": null
+        }
+      ],
+      "windows": [
+        {
+          "window_kind": "fixed-work",
+          "denominator": "first measured HTTP send (dispatch fallback if none) to last client-observed terminal/deadline, including failures and client overhead",
+          "denominator_seconds": 1.768964046612382,
+          "dispatch_start_at": 8413812.624210648,
+          "terminal_observed_at": 8413814.393174695,
+          "elapsed_to_last_terminal_seconds": 1.768964046612382,
+          "time_to_complete_seconds": 1.768964046612382,
+          "all_scheduled_requests_terminal": true,
+          "work_completed": true,
+          "all_requests_successful": true,
+          "intentional_idle_seconds": 0.0,
+          "deadline_limit_seconds": 360.0
+        }
+      ],
+      "output_tokens_per_second": [
+        1.1306052284273718
+      ],
+      "resources": {
+        "status": "observed_within_targets",
+        "sampled_device_high_water_bytes": 4191158272,
+        "sampled_tree_pss_high_water_bytes": 7077563392,
+        "sampled_tree_rss_high_water_bytes": 7080718336,
+        "samples": 9,
+        "errors": [],
+        "sample_interval_seconds": 2,
+        "exact_peaks": false,
+        "hard_memory_partition": false,
+        "pinned_bytes": null,
+        "caveats": [
+          "CUDA pinning not measured by VmLck/VmPin alone",
+          "PSS excludes unmapped OS file cache; not a total physical-host-memory proof",
+          "Device samples include baseline; between-sample peaks may be missed"
+        ],
+        "identity_mode": "device_exclusive_local_custody",
+        "measurement_scope": "whole_selected_device",
+        "owned_process_gpu_peak_bytes": null,
+        "owned_gpu_attribution": "unknown",
+        "nvml_pid_set_changes": 1,
+        "absence_of_foreign_interference_proven": false
+      },
+      "gpu_gib": 3.9033203125,
+      "host_pss_gib": 6.591494560241699,
+      "authenticated_descendants_drained": true,
+      "before_after_all_gpu_idle": true,
+      "supervisor_seconds": 40.39898048527539,
+      "supervisor_timed_out": false,
+      "runtime": {
+        "status": "blocked",
+        "evidence": {
+          "mixed_profile": [
+            "cuda-hybrid-numeric-fp8-model-bf16-mixed-f32-ssm",
+            "cuda-hybrid-numeric-fp8-model-bf16-mixed-f32-ssm",
+            "cuda-hybrid-numeric-fp8-model-bf16-mixed-f32-ssm",
+            "cuda-hybrid-numeric-fp8-model-bf16-mixed-f32-ssm"
+          ]
+        },
+        "contradictions": [],
+        "fallback_observations": [],
+        "missing": [],
+        "reasons": [
+          "Effective KV/conv/SSM dtype and physical pinning need runtime evidence",
+          "UVA selection log alone does not prove UVA path rather than functional_call fallback"
+        ],
+        "exact_arithmetic_match": false,
+        "log_sha256": "e5aacd6aa7e81fcd52f5635c27dadf59561f04595b0c05be7dec92200d6fcaf4"
+      }
+    },
+    {
+      "engine": "vllm",
+      "status": "failed",
+      "error": "ValueError: Resource monitor failed during startup",
+      "launches": 1,
+      "startup_seconds": null,
+      "startup_failure_seconds": 89.35886846296489,
+      "requests": [],
+      "windows": [],
+      "output_tokens_per_second": [],
+      "resources": {
+        "status": "blocked",
+        "sampled_device_high_water_bytes": 11801722880,
+        "sampled_tree_pss_high_water_bytes": 37366041600,
+        "sampled_tree_rss_high_water_bytes": 37784666112,
+        "samples": 37,
+        "errors": [
+          "Sampled GPU target exceeded"
+        ],
+        "sample_interval_seconds": 2,
+        "exact_peaks": false,
+        "hard_memory_partition": false,
+        "pinned_bytes": null,
+        "caveats": [
+          "CUDA pinning not measured by VmLck/VmPin alone",
+          "PSS excludes unmapped OS file cache; not a total physical-host-memory proof",
+          "Device samples include baseline; between-sample peaks may be missed"
+        ],
+        "identity_mode": "device_exclusive_local_custody",
+        "measurement_scope": "whole_selected_device",
+        "owned_process_gpu_peak_bytes": null,
+        "owned_gpu_attribution": "unknown",
+        "nvml_pid_set_changes": 1,
+        "absence_of_foreign_interference_proven": false
+      },
+      "gpu_gib": 10.9912109375,
+      "host_pss_gib": 34.799838066101074,
+      "authenticated_descendants_drained": true,
+      "before_after_all_gpu_idle": true,
+      "supervisor_seconds": 117.85067205317318,
+      "supervisor_timed_out": false,
+      "runtime": {
+        "status": "blocked",
+        "evidence": {
+          "moe_marlin": [
+            "Using MARLIN Fp8 MoE backend"
+          ],
+          "linear_marlin": [
+            "MarlinFP8ScaledMMLinearKernel"
+          ],
+          "offloader_uva": [
+            "Offloader set to UVAOffloader"
+          ],
+          "offloaded_amount": [
+            "Total CPU offloaded parameters: 30.0"
+          ],
+          "model_bf16": [
+            "dtype=torch.bfloat16"
+          ]
+        },
+        "contradictions": [],
+        "fallback_observations": [
+          "(EngineCore pid=171536) INFO 10-08 22:48:35 [qwen_gdn_linear_attn.py:500] Falling back to the Triton GDN decode path: torch.ops._C.fused_gdn_decode_post_conv_mtp is not built"
+        ],
+        "missing": [],
+        "reasons": [
+          "Effective KV/conv/SSM dtype and physical pinning need runtime evidence",
+          "UVA selection log alone does not prove UVA path rather than functional_call fallback"
+        ],
+        "exact_arithmetic_match": false,
+        "log_sha256": "75f22a9b54e0d01acb7b59c5aec08b83a6cb068972628f946ee472bcfb259f9d"
+      }
+    }
+  ],
+  "blocker": "vLLM whole-device sampled GPU 11801722880 bytes exceeds immutable 10737418240-byte ceiling during startup; no request sent",
+  "not_cuda_oom": true,
+  "quality_failure_observed": false,
+  "no_auto_retry": true,
+  "no_config_fallback": true,
+  "canaries_status": "not_run_feasibility_gate_failed",
+  "performance_status": "not_run_feasibility_gate_failed",
+  "independent_reference_verified": true,
+  "later_quality_receipt_prefixes_verified": true,
+  "no_hf_regeneration": true,
+  "references": [
+    {
+      "id": "qa",
+      "prompt": "The capital of Japan is",
+      "input_tokens": 5,
+      "reference_ids": [
+        25358,
+        13,
+        198,
+        760,
+        6511,
+        314,
+        6124,
+        369
+      ],
+      "reference_text": " Tokyo.\nThe capital of Japan is"
+    },
+    {
+      "id": "arithmetic",
+      "prompt": "7 + 8 =",
+      "input_tokens": 5,
+      "reference_ids": [
+        907,
+        271,
+        22,
+        478,
+        220,
+        23,
+        283,
+        220
+      ],
+      "reference_text": " ?\n\n7 + 8 = "
+    },
+    {
+      "id": "chinese",
+      "prompt": "\u4e2d\u56fd\u7684\u9996\u90fd\u662f",
+      "input_tokens": 3,
+      "reference_ids": [
+        98116,
+        3709,
+        98116,
+        108820,
+        102357,
+        95983,
+        1710,
+        97486
+      ],
+      "reference_text": "\u5317\u4eac\uff0c\u5317\u4eac\u662f\u4e2d\u56fd\u7684\u9996\u90fd\u3002\u90a3\u4e48"
+    }
+  ],
+  "reference_sha256": "102c798baeb5200bc8ed8386eabed6146870b3b6da2a90fc6010677041352c7e",
+  "fairmatch": false,
+  "exact_speedup": null,
+  "descriptive_system_ratio": null,
+  "identity_mode": "device_exclusive_local_custody",
+  "owned_gpu_attribution": "unknown",
+  "owned_process_gpu_peak_bytes": null,
+  "absence_of_foreign_interference_proven": false,
+  "performance_basis": "exclusive_operator_allocation_assumption",
+  "no_host_pid_translation": true,
+  "no_foreign_signals": true,
+  "hard_memory_partition": false,
+  "protocol_notes": [
+    "Ferrule admission 10240 MiB and vLLM utilization 7/24 have different planning semantics, not equivalent caps.",
+    "Both subject to sampled whole-device 10 GiB GPU and process-tree PSS 64 GiB observed ceilings.",
+    "Sampling interval 2 seconds; between-sample peaks, CUDA physical pinning, and unmapped host file cache remain unknown.",
+    "Historical G10 unexecuted pilot is Hello max8, 1 warmup, 2 measured, no separate first-request capture: it does NOT implement requested QA8 pilot.",
+    "Requested but unexecuted pilot: fresh-process F/V then V/F; QA prompt The capital of Japan is; max8, raw, greedy seed1, natural EOS; 1 first request, 2 warmups, 3 measured per process.",
+    "No change to historical script or receipts; failed feasibility precludes pilot eligibility. A new pinned protocol would be needed before any later pilot.",
+    "Reference visible text and HTTP usage counts are canary evidence only; HTTP token IDs unavailable. Full numerical HF equivalence is not claimed.",
+    "Marlin arithmetic differs from Ferrule mixed BF16; no exact speedup permitted.",
+    "Baseline FERRULE_LOG=info. No optional diagnostic run; parser instrumentation not observed.",
+    "vLLM logs select UVA30 and Marlin but do not fully prove effective KV/conv/SSM dtypes or physical UVA behavior; built-in Triton GDN fallback retained in logs."
+  ],
+  "validation": {
+    "cpu_tests": {
+      "status": "pass",
+      "suites": [
+        {
+          "suite": "contracts",
+          "argv": [
+            "/home/admin/wxw403883/anaconda3/bin/python3.12",
+            "-S",
+            "-B",
+            "-m",
+            "unittest",
+            "discover",
+            "-s",
+            "papers/arxiv/experiments",
+            "-p",
+            "test_experiments.py"
+          ],
+          "returncode": 0,
+          "seconds": 1.4768982995301485,
+          "log": "papers/arxiv/experiments/runs/g10-recovery-001/contracts-tests.log"
+        },
+        {
+          "suite": "analysis",
+          "argv": [
+            "/home/admin/wxw403883/anaconda3/bin/python3.12",
+            "-S",
+            "-B",
+            "-m",
+            "unittest",
+            "discover",
+            "-s",
+            "papers/arxiv/experiments/analysis",
+            "-p",
+            "test_*.py"
+          ],
+          "returncode": 0,
+          "seconds": 0.06661617197096348,
+          "log": "papers/arxiv/experiments/runs/g10-recovery-001/analysis-tests.log"
+        }
+      ]
+    },
+    "full_prepared_manifest": true,
+    "source_inventory_digest": "150ccd99f12db4dd51090e25923f580e53d410e7bce3f291519b8cc881590ecf",
+    "source_files": 2895,
+    "binary_sha256": "219d8b77bbeceecedf83272b880cd3a8175db7bf5bedea5dcfc537888461ff80",
+    "original_manifest_sha256": "fa684a58544831f258f5d885b774a0bb11e79da01193775a6aba6256eb15531b",
+    "g10_prepared_sha256": "fe232184c85f39d064d600bf0b4a2e165fc247f4f1a4293d4b7c185878d57783",
+    "g10_config_sha256": "bd2838591f7f54914e00e4b6cc4be6aad3c779c6ba2f32278d7d01e1ca8c2ebc",
+    "existing_m7_and_g10_preserved": true,
+    "binary_rebuilt": false,
+    "system_code_edited": false
+  },
+  "cleanup": {
+    "authenticated_local_descendants_drained_for_both": true,
+    "prior_before_after_all_gpu_idle": true,
+    "fresh_all_eight_idle": true,
+    "physical_uuid_lock_available_and_released": true
+  },
+  "artifact_pins": {
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/g10-recovery-001/ferrule-log-analysis.json": "de9194e9e689525a7b559d26080ce79628d4b80b0422adcb842d24a9f2b09fe5",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/g10-recovery-001/contracts-tests.log": "6f93a85e32659447cdd820c31cf65b967eece95809739651846ea48b0731a643",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/g10-recovery-001/per-engine-results.json": "e6de796ddc1a566d95e8c7f6f7b8653413fada049352b8d407027d4007e2edea",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/g10-recovery-001/cpu-validation.json": "8254eb1110943f2cd038fca700c39403148a2144528e03a5099ffb80c3be8236",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/g10-recovery-001/analysis-tests.log": "f4f6d0a43e7982b8c072e18cfaa1b4b704a163a99cd9bb56597062d945f7e643",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/g10-recovery-001/lock-release.json": "516bb51ad11663175a49970eec7c748b1de640a1c9a39acef1eabf499dd21c5f",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/g10-recovery-001/final-release.json": "97b5d4188def321f3d7b6b52ab680ed4afe1a746522b9e9a0bcb368ddbefa72f",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/g10-recovery-001/identity-validation.json": "51babaf43f795fba6776a474c457a294bf9d60c540263a4f7e3fea59069c04aa"
+  }
+}

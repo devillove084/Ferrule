@@ -1,0 +1,394 @@
+{
+  "schema": "ferrule.paper.decoded-cache-source-review.v1",
+  "quality_summary_sha256": "575c99ce008f199f03d553742201e4c655658c2203c13d9ad46c360a4c62fa91",
+  "changed": {
+    "crates/ferrule-cli/src/args.rs": {
+      "quality_sha256": "73cc451564dd23dd6a1ec038d3c1a54d5af802212c5e7fa7679d4a68bd9e01ab",
+      "approved_release_sha256": [
+        "a200ce6609a4527a7e73ee90a55514a78aaa4175dc3cf54cd32bea04f271ce4c"
+      ],
+      "meaning": "Strict TP2 cache-aware workspace default, CLI help and public admission ledger logging"
+    },
+    "crates/ferrule-cli/src/commands/serve.rs": {
+      "quality_sha256": "97c2513bfa635e8136a05612b5117b6f6e5b29ece438abddf8e5c437d8280c44",
+      "approved_release_sha256": [
+        "2e1fabc6f8c49f514d5d29ab2b2bca142eeaa7927890b1f0caf5629c25e8230b"
+      ],
+      "meaning": "Strict TP2 cache-aware workspace default, CLI help and public admission ledger logging"
+    },
+    "crates/ferrule-cli/tests/unit/model_precision/mixed_tp2.rs": {
+      "quality_sha256": "64cbfc3e548a62ffc2368aa78b6b52a5ae86a6911ad42770aacdbf1336a1b5aa",
+      "approved_release_sha256": [
+        "01c5e7fcb9beaad71e29b3e953eff2991a07f548b6eb97f5cf06b421fd831dda"
+      ],
+      "meaning": "CPU policy/snapshot coverage input; not inherited GPU execution"
+    },
+    "crates/ferrule-composition/src/model_factory/mixed_tensor_serving.rs": {
+      "quality_sha256": "2c829ebc74e42796c9d93f1eff0a2e50f3e0d2560595ed0c08f485aace774059",
+      "approved_release_sha256": [
+        "1cf2e77e2e1e98baa6d6de1a5474b48fdfedf12bfbc91f6bdd5a61eaf7055660"
+      ],
+      "meaning": "Public 3 GiB cache policy and shared source-derived model program/resource admission; public integration requires fresh smoke"
+    },
+    "crates/ferrule-composition/src/model_factory/mod.rs": {
+      "quality_sha256": "008e5a6815442f8f9705fb7b44c2ea47fee05f359130e5ee572feaeb40a39110",
+      "approved_release_sha256": [
+        "acd13c592c31f48a1c77f33a84567c321dce5cb805dc4e7b66f199fe0f5c9f5d"
+      ],
+      "meaning": "Public 3 GiB cache policy and shared source-derived model program/resource admission; public integration requires fresh smoke"
+    },
+    "crates/ferrule-composition/src/model_factory/parallel/assembly.rs": {
+      "quality_sha256": "dc6f822ed16ecf9022974098dea71398b9b0663619ef31416c39b6a8f448d971",
+      "approved_release_sha256": [
+        "47ef25da0139de1ebf80d35a6e899b48900ddbde04d6c4544b34f6cfe5342dfd"
+      ],
+      "meaning": "Public 3 GiB cache policy and shared source-derived model program/resource admission; public integration requires fresh smoke"
+    },
+    "crates/ferrule-composition/src/model_factory/parallel/requirements.rs": {
+      "quality_sha256": "9b8e2af39e5bcf183cbf9fded9a00d97c6e7a1d0fdc7fbf891a383259f364863",
+      "approved_release_sha256": [
+        "defd83090f566eacb6b80038d30cc7326212cf02a1800ec15e7adb8911aceba1"
+      ],
+      "meaning": "Public 3 GiB cache policy and shared source-derived model program/resource admission; public integration requires fresh smoke"
+    },
+    "crates/ferrule-composition/tests/tp2_mixed_execution/decoded_cache.rs": {
+      "quality_sha256": "9e0d0b9b35c78abe3b8a757abe1fafb9a74a90f245b61f26a470c063212310b7",
+      "approved_release_sha256": [
+        "ae8630f327c45132e5dc650981f928afe1c427fadc3eb5887ebf68ffb2db9cab"
+      ],
+      "meaning": "CPU policy/snapshot coverage input; not inherited GPU execution"
+    },
+    "crates/ferrule-composition/tests/unit/engine/model_factory/mixed_tensor_serving.rs": {
+      "quality_sha256": "e2bc4f511507203429b40f01632fbb20c50ec8441091a24768756782925aa365",
+      "approved_release_sha256": [
+        "56a87552410c52566cdd9d51984ea30602d23a793aaa71533d9e04959333957a"
+      ],
+      "meaning": "CPU policy/snapshot coverage input; not inherited GPU execution"
+    },
+    "crates/ferrule-model/src/transformer/mod.rs": {
+      "quality_sha256": "ab246917911ccddead71429014c1de2641bd0e8602b24ddc2318eaaf9f9d88cc",
+      "approved_release_sha256": [
+        "ff1b1785bcd28559f6ff3ef1a2847c5331f5e80baf9182afdf33d5dcd352332f"
+      ],
+      "meaning": "Read-only cache snapshot/accounting exports and opt-in cumulative observation; changed file is not itself GPU-requalified"
+    },
+    "crates/ferrule-model/src/transformer/standard/cuda/hybrid_rank/mixed.rs": {
+      "quality_sha256": "a824df8a655cdafb060dabc8c4b9297d171c5ed1140193161a01df7838b1e2fc",
+      "approved_release_sha256": [
+        "72a7de733d1ddd8729b9ca56080694d93e22a3a212ffa8d3619ddf49d5cf59bf"
+      ],
+      "meaning": "Read-only cache snapshot/accounting exports and opt-in cumulative observation; changed file is not itself GPU-requalified",
+      "observation_only_removals": [
+        "    /// Cache-only host ledger observation. No CUDA/allocator query, sync, payload\n    /// read, map iteration, clock, allocation or logging. None means no current\n    /// cache custody (disabled, not yet installed, or healthy rollback removed it).\n    ///\n    /// Before preparation returns, pins/leases may still be pending. After its\n    /// healthy return the published snapshot is Idle. During synchronous work it\n    /// is Executing; after the existing completion it is Idle again, with empty\n    /// borrowed/pending lease sets. Idle is an observation, not a new GPU proof.\n    /// Native fallback and retained failed-allocation reserves remain visible.\n    pub fn mixed_decoded_cache_snapshot(&self) -> Option<MixedDecodedCacheSnapshot> {\n        let image = self.mixed_rank_block.as_ref()?;\n        let cache = image.decoded.as_ref()?;\n        let active_profile = self\n            .rank_performance\n            .as_ref()\n            .map(|p| p.timings.ledger.borrow().decoded_cache);\n        Some(cache.snapshot(\n            image.published,\n            self.mixed_decoded_depth != 0,\n            self.needs_quarantine(),\n            self.rank_performance_enabled,\n            active_profile,\n        ))\n    }\n    pub(in crate::transformer::standard::cuda) fn record_mixed_decoded_profile(\n        &mut self,\n        counters: [u64; 4],\n    ) {\n        if let Some(cache) = self\n            .mixed_rank_block\n            .as_mut()\n            .and_then(|i| i.decoded.as_mut())\n        {\n            cache.record_profiled_invocation(counters);\n        }\n    }\n\n"
+      ]
+    },
+    "crates/ferrule-model/src/transformer/standard/cuda/rank_performance.rs": {
+      "quality_sha256": "d4a0c1459f0f5f21cbf87608c9381a9ef04dccf117be521713feadccb4ac1edf",
+      "approved_release_sha256": [
+        "fdfbcfc2b2d5eb666065d6b03514ad1c3629ac72edfb6f183fcadfa52e6cb991"
+      ],
+      "meaning": "Read-only cache snapshot/accounting exports and opt-in cumulative observation; changed file is not itself GPU-requalified",
+      "observation_only_removals": [
+        "        self.record_mixed_decoded_profile(p.timings.ledger.borrow().decoded_cache);\n"
+      ]
+    },
+    "crates/ferrule-model/src/transformer/standard/cuda.rs": {
+      "quality_sha256": "fe574c331875d271c4e1b011dbb47db4a117fc4193ab7b1f004710cdce9dc289",
+      "approved_release_sha256": [
+        "7d7f20180624713b97c6883dcfbbd1f2c9d6d7225b9ccb3885ef35c3c2e27fc0"
+      ],
+      "meaning": "Read-only cache snapshot/accounting exports and opt-in cumulative observation; changed file is not itself GPU-requalified"
+    },
+    "crates/ferrule-model/src/transformer/standard/mixed_decoded.rs": {
+      "quality_sha256": "cedab67841bc3556f05a11dffafa6ea7211fc1febd572e0e6eca026a58776c31",
+      "approved_release_sha256": [
+        "51a713e5e8da7e3c71f30a520d52c5215b61380c5a913a2807293fad2caeaf8f"
+      ],
+      "meaning": "Read-only cache snapshot/accounting exports and opt-in cumulative observation; changed file is not itself GPU-requalified",
+      "observation_only_removals": [
+        "use super::decoded_snapshot::{\n    MixedDecodedCacheActivity, MixedDecodedCachePhase, MixedDecodedCacheSnapshot,\n};\n",
+        "    // Observation only: never consulted by admission, LRU, reuse or completion.\n    pinned_allocated: usize,\n    profiled_activity: Option<MixedDecodedCacheActivity>,\n",
+        "            pinned_allocated: 0,\n            profiled_activity: None,\n",
+        "            if d.routed_layer.is_none() {\n                self.pinned_allocated += backing.grants;\n            }\n",
+        "        if d.routed_layer.is_none() {\n            self.pinned_allocated += d.grants;\n        }\n",
+        "\n#[cfg(test)]\n#[path = \"../../../tests/unit/transformer/mixed_decoded_snapshot.rs\"]\nmod snapshot_tests;\n",
+        "    /// Called only when existing rankperf finalizes an observed invocation.\n    /// Four fixed counter additions; no new per-hit/per-decode instrumentation.\n    pub fn record_profiled_invocation(&mut self, counters: [u64; 4]) {\n        self.profiled_activity = Some(\n            self.profiled_activity\n                .unwrap_or_default()\n                .with_invocation(counters),\n        );\n    }\n    pub fn snapshot(\n        &self,\n        published: bool,\n        executing: bool,\n        owner_quarantined: bool,\n        rank_performance_enabled: bool,\n        active_profile: Option<[u64; 4]>,\n    ) -> MixedDecodedCacheSnapshot {\n        let logical = self.ledger.stats();\n        let p = self.physical;\n        let quarantined = owner_quarantined || logical.quarantined;\n        let phase = if quarantined {\n            MixedDecodedCachePhase::Quarantined\n        } else if !published {\n            MixedDecodedCachePhase::Preparing\n        } else if executing {\n            MixedDecodedCachePhase::Executing\n        } else {\n            MixedDecodedCachePhase::Idle\n        };\n        let profiled_activity = match active_profile {\n            Some(counters) => Some(\n                self.profiled_activity\n                    .unwrap_or_default()\n                    .with_invocation(counters),\n            ),\n            None => self.profiled_activity,\n        };\n        MixedDecodedCacheSnapshot {\n            image_generation: self.generation,\n            phase,\n            published,\n            quarantined,\n            capacity_grants: self.capacity,\n            pin_target_grants: logical.scratch_bytes,\n            pinned_grants: self.pinned_allocated,\n            unallocated_pin_grants: logical.scratch_bytes - self.pinned_allocated,\n            active_routed_grants: p.active - self.pinned_allocated,\n            pooled_grants: p.pooled,\n            pending_reserved_grants: p.reserved_grants - p.active - p.pooled,\n            pending_allocation_count: self.allocations.len(),\n            pending_lease_count: self.pending.len(),\n            borrowed_key_count: self.borrowed.len(),\n            segment_slack_bytes: p.segment_slack,\n            pending_segment_slack_bytes: p.pending_slack,\n            physical_current_bytes: p.charged(),\n            physical_peak_bytes: p.peak,\n            driver_allocation_growth_bytes: p.driver_growth,\n            unknown_reserved_bytes: if quarantined {\n                p.unknown.max(p.charged())\n            } else {\n                p.unknown\n            },\n            backing_reuses: p.reuses,\n            native_fallbacks: p.fallbacks,\n            evictions: logical.evictions,\n            rank_performance_enabled,\n            rank_performance_active: active_profile.is_some(),\n            profiled_activity,\n        }\n    }\n"
+      ]
+    },
+    "crates/ferrule-model/src/transformer/standard/mod.rs": {
+      "quality_sha256": "44767b6274caf39c0d1968f6b48690d95f0115233ca30b1fd3b7632c67916703",
+      "approved_release_sha256": [
+        "940afefd9df5c472da1f05126200ed5ee9b10e7d4f1501ed132afb6b2c84d64a"
+      ],
+      "meaning": "Read-only cache snapshot/accounting exports and opt-in cumulative observation; changed file is not itself GPU-requalified"
+    },
+    "crates/ferrule-runtime/src/parallel/pipeline/mixed_cuda_tensor.rs": {
+      "quality_sha256": "03be6b29881491dc6530bed4031264bde21d34a26c11795d80e608fb11496999",
+      "approved_release_sha256": [
+        "347834710faee2eabbee20c659af42ff0f7ce8c1b8a5941beb22d2eff176942a",
+        "56cd8090cc39a623e72e8d3e3f05627e0a24969be2a468a6f15e62cc6512f073"
+      ],
+      "meaning": "Cache-program plumbing, ready/shutdown observation and rankperf subscriber switch; public integration requires fresh smoke",
+      "additional_change": "Only removal of unused MixedDecodedCacheSnapshot import: reinsertion reconstructs prior builder SHA exactly"
+    },
+    "crates/ferrule-runtime/src/parallel/pipeline/mixed_tensor_plan.rs": {
+      "quality_sha256": "acb0132f627f186a4b2fb1614bcce0191291d9135cb483d8889cf4970e7ae4a8",
+      "approved_release_sha256": [
+        "f54fa862923af99b8b3bc5838e97b1debdcc9441d9797c0a56ce946bb744e093"
+      ],
+      "meaning": "Cache-program plumbing, ready/shutdown observation and rankperf subscriber switch; public integration requires fresh smoke"
+    }
+  },
+  "new_dependency_inputs": {
+    "crates/ferrule-model/src/transformer/standard/decoded_snapshot.rs": {
+      "sha256": "18a97f812c6e7f7032414849e79a5e45c35bdc4be79d71c36ee2d5b0abbb6d71",
+      "meaning": "New snapshot serialization/public logging input; not in GPU quality source set"
+    },
+    "crates/ferrule-model/tests/compile/cpu_reference_api.md": {
+      "sha256": "0fea42c776f7749c29b85fed4b2ae08bb609028248d3680cd8e0a055d405fa77",
+      "meaning": "Pinned compile-time doc/vendor input; not executed GPU test coverage"
+    },
+    "crates/ferrule-model/tests/compile/cuda_hybrid_state.md": {
+      "sha256": "1ba7bb706384a132ff015591424856758392215377d98eab392643f073d8bd6c",
+      "meaning": "Pinned compile-time doc/vendor input; not executed GPU test coverage"
+    },
+    "crates/ferrule-model/tests/compile/hybrid_parallel.md": {
+      "sha256": "be54d7d873ae92834d7adec19597892795d3337b5342126df1c1b7f89548bfd1",
+      "meaning": "Pinned compile-time doc/vendor input; not executed GPU test coverage"
+    },
+    "crates/ferrule-model/tests/compile/numeric_w8a16.md": {
+      "sha256": "b49daeda668737d43eda9eed7fcfe3003e5c488109aafa71118dcc890f6a13c5",
+      "meaning": "Pinned compile-time doc/vendor input; not executed GPU test coverage"
+    },
+    "crates/ferrule-model/tests/compile/standard_sequence_state.md": {
+      "sha256": "e0c0e8297a8a83af98c8c37e90d76aae5dbcaea8a2bdd6ca83d67f56a4b169da",
+      "meaning": "Pinned compile-time doc/vendor input; not executed GPU test coverage"
+    },
+    "crates/ferrule-runtime/src/parallel/pipeline/mixed_cache_observation.rs": {
+      "sha256": "cecd1509d244bef1a04b85aeb5c23861a9c64ecb33d0e12388d5e0b6bb4ab9d6",
+      "meaning": "New snapshot serialization/public logging input; not in GPU quality source set"
+    },
+    "crates/ferrule-runtime/tests/compile/cpu_reference_api.md": {
+      "sha256": "f08e77f32dbb43a80082c3441042884d28ea71390acf62ee24e48073001b3a2a",
+      "meaning": "Pinned compile-time doc/vendor input; not executed GPU test coverage"
+    },
+    "crates/ferrule-runtime/tests/compile/host_kv/append_custody.md": {
+      "sha256": "e407067a267e0e8ae1aea6789fb12782a24b92ac1e0cade977d72f0d00dfd1c4",
+      "meaning": "Pinned compile-time doc/vendor input; not executed GPU test coverage"
+    },
+    "crates/ferrule-runtime/tests/compile/host_kv/live_custody.md": {
+      "sha256": "0dba6592e699050c7587fb1894329bf6d44ac13e53fd12535839b6b63ed42196",
+      "meaning": "Pinned compile-time doc/vendor input; not executed GPU test coverage"
+    },
+    "crates/ferrule-runtime/tests/compile/pipeline_state_program.md": {
+      "sha256": "cd16c30980fdea1e09186058cb1aa1006c33853368b823c23b7438fa7161c385",
+      "meaning": "Pinned compile-time doc/vendor input; not executed GPU test coverage"
+    },
+    "crates/ferrule-runtime/tests/pipeline_capacity/compile.md": {
+      "sha256": "66f94bae7cd763e2411ad96a048d9d4dafdb8bd069051efeee5bb341696ef7d2",
+      "meaning": "Pinned compile-time doc/vendor input; not executed GPU test coverage"
+    },
+    "target/vendor/cutlass/include/cutlass/version.h": {
+      "sha256": "95e7c73a46ba3b4c75b78eb7cd1ab5e4531ea79ffc931ae40321840df81c208f",
+      "meaning": "Pinned compile-time doc/vendor input; not executed GPU test coverage"
+    }
+  },
+  "claim": "Reviewed source relationship, not inheritance of GPU PASS; fresh same-binary public smoke mandatory",
+  "cpu_validations": {
+    "composition-public": {
+      "argv": [
+        "/root/.cargo/bin/cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "ferrule-composition",
+        "--features",
+        "cuda",
+        "--lib",
+        "mixed_tp2_",
+        "--",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "passed_selectors": [
+        "model_factory::mixed_serving::tensor::tests::mixed_tp2_authorized_gate_covers_named_and_direct_precision",
+        "model_factory::mixed_serving::tensor::tests::mixed_tp2_cache_defaults_and_explicit_workspace_rejection_are_profile_local",
+        "model_factory::mixed_serving::tensor::tests::mixed_tp2_public_catalog_uses_existing_pipeline_and_complete_claims",
+        "model_factory::mixed_serving::tensor::tests::mixed_tp2_rejects_unvalidated_topologies_and_policies_without_cuda"
+      ],
+      "ignored_selectors": []
+    },
+    "composition-cache": {
+      "argv": [
+        "/root/.cargo/bin/cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "ferrule-composition",
+        "--features",
+        "cuda",
+        "--test",
+        "tp2_mixed_execution",
+        "decoded_cache::",
+        "--",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "passed_selectors": [
+        "decoded_cache::admitted_cache_programs_survive_runtime_binding_and_reject_owner_geometry_drift",
+        "decoded_cache::cache_capacity_follows_device_placement_not_lane_number",
+        "decoded_cache::cache_rejects_low_budget_capacity_and_configuration_drift",
+        "decoded_cache::native_default_off_and_cache_report_claim_share_exact_grant"
+      ],
+      "ignored_selectors": [
+        "decoded_cache::full40_cache_candidate_boundaries_two_cases_two_phases",
+        "decoded_cache::full40_cache_header_ledger",
+        "decoded_cache::lifecycle_cache_header_ledger"
+      ]
+    },
+    "runtime-snapshot": {
+      "argv": [
+        "/root/.cargo/bin/cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "ferrule-runtime",
+        "--features",
+        "cuda",
+        "--test",
+        "mixed_decoded_snapshot",
+        "--",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "passed_selectors": [
+        "absent_cache_snapshot_requires_no_cuda_owner",
+        "observation::decoded_snapshot_tests::decoded_snapshot_runtime_json_preserves_physical_fields_and_unobserved_activity",
+        "observation::decoded_snapshot_tests::decoded_snapshot_runtime_json_preserves_profile_coverage_and_quarantine"
+      ],
+      "ignored_selectors": []
+    },
+    "cli-public": {
+      "argv": [
+        "/root/.cargo/bin/cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "ferrule-cli",
+        "--features",
+        "cuda",
+        "--bin",
+        "ferrule",
+        "mixed_tp2_",
+        "--",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "passed_selectors": [
+        "commands::serve::tests::mixed_tp2_workspace_default_is_cache_aware_without_changing_tp1_or_legacy",
+        "commands::serve::tests::model_precision_tests::mixed_tp2::mixed_tp2_cli_accepts_authorized_catalog_plan_without_starting_server",
+        "commands::serve::tests::model_precision_tests::mixed_tp2::mixed_tp2_cli_explicit_cache_workspace_is_preserved_and_low_budget_fails_before_io",
+        "commands::serve::tests::model_precision_tests::mixed_tp2::mixed_tp2_cli_rejects_unvalidated_shapes_and_unused_tp1_flags"
+      ],
+      "ignored_selectors": []
+    },
+    "check-public": {
+      "argv": [
+        "/root/.cargo/bin/cargo",
+        "check",
+        "--locked",
+        "--offline",
+        "-p",
+        "ferrule-cli",
+        "--no-default-features",
+        "--features",
+        "cuda",
+        "--bin",
+        "ferrule"
+      ],
+      "passed_selectors": [],
+      "ignored_selectors": []
+    },
+    "clippy-libs-strict": {
+      "argv": [
+        "/root/.cargo/bin/cargo",
+        "clippy",
+        "--locked",
+        "--offline",
+        "-p",
+        "ferrule-runtime",
+        "-p",
+        "ferrule-composition",
+        "--features",
+        "cuda",
+        "--lib",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "passed_selectors": [],
+      "ignored_selectors": []
+    },
+    "clippy-cli-strict": {
+      "argv": [
+        "/root/.cargo/bin/cargo",
+        "clippy",
+        "--locked",
+        "--offline",
+        "-p",
+        "ferrule-cli",
+        "--features",
+        "cuda",
+        "--bin",
+        "ferrule",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "passed_selectors": [],
+      "ignored_selectors": []
+    },
+    "clippy-snapshot-strict": {
+      "argv": [
+        "/root/.cargo/bin/cargo",
+        "clippy",
+        "--locked",
+        "--offline",
+        "-p",
+        "ferrule-runtime",
+        "--features",
+        "cuda",
+        "--test",
+        "mixed_decoded_snapshot",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "passed_selectors": [],
+      "ignored_selectors": []
+    },
+    "clippy-cache-plan-strict": {
+      "argv": [
+        "/root/.cargo/bin/cargo",
+        "clippy",
+        "--locked",
+        "--offline",
+        "-p",
+        "ferrule-composition",
+        "--features",
+        "cuda",
+        "--test",
+        "tp2_mixed_execution",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "passed_selectors": [],
+      "ignored_selectors": []
+    }
+  }
+}

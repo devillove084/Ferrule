@@ -3,6 +3,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 mod architecture_target;
+#[path = "src/cuda/providers/nccl_sha256.rs"]
+mod nccl_sha256;
 
 use architecture_target::CudaTarget;
 
@@ -16,10 +18,14 @@ fn main() {
     println!("cargo:rerun-if-env-changed={CUDA_ARCH_ENV}");
     println!("cargo:rerun-if-env-changed={CUTLASS_DIR_ENV}");
     println!("cargo:rerun-if-env-changed={CUDA_TEST_ORACLE_ENV}");
+    println!("cargo:rerun-if-env-changed=FERRULE_NCCL_INCLUDE_DIR");
+    println!("cargo:rerun-if-changed=src/cuda/providers/nccl_sha256.rs");
     println!("cargo:rustc-check-cfg=cfg(ferrule_cuda_test_oracle)");
     println!("cargo:rerun-if-changed=native/cpu");
     println!("cargo:rerun-if-changed=native/cuda");
     println!("cargo:rerun-if-changed=architecture_target.rs");
+    println!("cargo:rerun-if-changed=tests/numeric_w8a16/reference.cu");
+    println!("cargo:rerun-if-changed=tests/numeric_bf16_gemv/pair_swiglu_tail_oracle.cuh");
 
     let cuda_test_oracle = env::var(CUDA_TEST_ORACLE_ENV).is_ok_and(|value| value == "1");
     if cuda_test_oracle {
@@ -54,6 +60,26 @@ fn main() {
     let capabilities = target.capabilities();
     let capability_flag = |enabled| if enabled { "1" } else { "0" };
     let native_root = manifest_dir.join("native/cuda");
+    let nccl_include = env::var_os("FERRULE_NCCL_INCLUDE_DIR").map(PathBuf::from)
+        .unwrap_or_else(|| manifest_dir.join("../../target/vendor/vllm-baseline/lib/python3.10/site-packages/nvidia/nccl/include"));
+    let nccl_header = nccl_include.join("nccl.h");
+    println!("cargo:rerun-if-changed={}", nccl_header.display());
+    let have_nccl = nccl_header.is_file();
+    if have_nccl {
+        let hash = nccl_sha256::digest(std::io::BufReader::new(
+            std::fs::File::open(&nccl_header).expect("open pinned nccl.h"),
+        ))
+        .expect("hash pinned nccl.h");
+        assert_eq!(
+            hash, "4b240a1fa79858ca8cdffcf5c2fc40aeaca8b3eaec61728213715f0902aba3a8",
+            "only pinned CUDA12 NCCL 2.27.5 header is supported"
+        );
+    } else if env::var_os("FERRULE_NCCL_INCLUDE_DIR").is_some() {
+        panic!("explicit NCCL include directory has no nccl.h");
+    }
+    if env::var("CARGO_CFG_TARGET_OS").is_ok_and(|os| os == "linux") {
+        println!("cargo:rustc-link-lib=dylib=dl");
+    }
 
     let cutlass_include = cutlass_dir.join("include");
     let cutlass_tools_include = cutlass_dir.join("tools/util/include");
@@ -108,6 +134,11 @@ fn main() {
                 "FERRULE_CUDA_HAS_SM12X_MXFP4_MMA_SYNC",
                 Some(capability_flag(capabilities.sm12x_mxfp4_mma_sync)),
             );
+        if have_nccl {
+            build
+                .include(&nccl_include)
+                .define("FERRULE_TP_NCCL_HEADER", None);
+        }
         if cuda_test_oracle {
             build.define("FERRULE_CUDA_TEST_ORACLE", Some("1"));
         }
@@ -120,7 +151,24 @@ fn main() {
     // directives even though these providers share no device symbols.
     configure_provider(native_root.join("core/provider.cu")).compile("ferrule_cuda_core");
     configure_provider(native_root.join("cutlass/provider.cu")).compile("ferrule_cuda_cutlass");
+    if cuda_test_oracle {
+        // Separate test-only TU: no production includes, macros or fast math.
+        cc::Build::new()
+            .cuda(true)
+            .cudart("shared")
+            .cpp(true)
+            .warnings(false)
+            .file(manifest_dir.join("tests/numeric_w8a16/reference.cu"))
+            .flag("-std=c++17")
+            .flag("--ftz=false")
+            .flag("--fmad=false")
+            .flag("--Werror=all-warnings")
+            .flag("-Xcompiler=-Wall,-Wextra")
+            .flag(&generate_code)
+            .compile("ferrule_test_w8a16_scalar");
+    }
     println!("cargo:rustc-link-lib=dylib=cublasLt");
+    println!("cargo:rustc-link-lib=dylib=cublas");
 }
 
 fn build_native_cpu() {

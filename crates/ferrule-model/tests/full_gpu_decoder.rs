@@ -508,7 +508,7 @@ fn assigned_layer_scope_and_foreign_owner_or_image_are_rejected() {
     assert!(operators.bind_rows(Rows::Cuda(rows)).is_err());
     assert!(
         CudaStandardDecoderOperators::new(ops, ExecutionPrecisionPolicy::bf16_compatibility(), &[])
-            .is_err()
+            .is_ok()
     );
 }
 

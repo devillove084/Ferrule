@@ -1,0 +1,267 @@
+{
+  "status": "complete",
+  "started_monotonic": 8481404.37647278,
+  "fairmatch": false,
+  "exact_speedup": null,
+  "launch_monotonic": 8481405.076065263,
+  "server_pid": 194345,
+  "server_identity": {
+    "pid": 194345,
+    "birth_ticks": 84528477,
+    "ppid": 194336,
+    "state": "R"
+  },
+  "startup_seconds": 367.233680550009,
+  "request_gate": {
+    "status": "complete",
+    "phases": [
+      {
+        "stage": "hello2",
+        "gate": {
+          "status": "pass",
+          "engine": "ferrule",
+          "checks": [
+            {
+              "index": 0,
+              "passed": true,
+              "actual_input_tokens": 1,
+              "actual_output_tokens": 2
+            }
+          ],
+          "first_qa_requests": 0,
+          "warmup_requests": 0,
+          "measured_requests": 1,
+          "http_receipt_sha256": "edbebd3fc86e90faa110fdfbf189a8513bcd892689da9034e04eef6fdda9a187",
+          "coverage": "visible text/usage only; separate pinned numerical acceptance, not arithmetic parity",
+          "fairmatch": false,
+          "exact_speedup": null
+        }
+      },
+      {
+        "stage": "canary8",
+        "gate": {
+          "status": "pass",
+          "engine": "ferrule",
+          "checks": [
+            {
+              "index": 0,
+              "passed": true,
+              "actual_input_tokens": 5,
+              "actual_output_tokens": 8
+            },
+            {
+              "index": 1,
+              "passed": true,
+              "actual_input_tokens": 5,
+              "actual_output_tokens": 8
+            },
+            {
+              "index": 2,
+              "passed": true,
+              "actual_input_tokens": 3,
+              "actual_output_tokens": 8
+            }
+          ],
+          "first_qa_requests": 0,
+          "warmup_requests": 0,
+          "measured_requests": 3,
+          "http_receipt_sha256": "10eb17673b2711c732167b8c7ca7b6c9c395fa83825229d05aa82aa8bc4379d3",
+          "coverage": "visible text/usage only; separate pinned numerical acceptance, not arithmetic parity",
+          "fairmatch": false,
+          "exact_speedup": null
+        }
+      },
+      {
+        "stage": "qa8-V1",
+        "gate": {
+          "status": "pass",
+          "engine": "ferrule",
+          "checks": [
+            {
+              "index": 0,
+              "passed": true,
+              "actual_input_tokens": 5,
+              "actual_output_tokens": 8
+            },
+            {
+              "index": 1,
+              "passed": true,
+              "actual_input_tokens": 5,
+              "actual_output_tokens": 8
+            },
+            {
+              "index": 2,
+              "passed": true,
+              "actual_input_tokens": 5,
+              "actual_output_tokens": 8
+            },
+            {
+              "index": 3,
+              "passed": true,
+              "actual_input_tokens": 5,
+              "actual_output_tokens": 8
+            },
+            {
+              "index": 4,
+              "passed": true,
+              "actual_input_tokens": 5,
+              "actual_output_tokens": 8
+            },
+            {
+              "index": 5,
+              "passed": true,
+              "actual_input_tokens": 5,
+              "actual_output_tokens": 8
+            },
+            {
+              "index": 6,
+              "passed": true,
+              "actual_input_tokens": 5,
+              "actual_output_tokens": 8
+            },
+            {
+              "index": 7,
+              "passed": true,
+              "actual_input_tokens": 5,
+              "actual_output_tokens": 8
+            }
+          ],
+          "first_qa_requests": 1,
+          "warmup_requests": 2,
+          "measured_requests": 5,
+          "http_receipt_sha256": "f98337ff66c3a573f8b278d5864d9fc61662a51f1e15d6d6bfb24543bac6be05",
+          "coverage": "visible text/usage only; separate pinned numerical acceptance, not arithmetic parity",
+          "fairmatch": false,
+          "exact_speedup": null
+        }
+      }
+    ],
+    "same_server": true
+  },
+  "resources": {
+    "status": "observed_within_targets",
+    "errors": [],
+    "gpu_peak_bytes": {
+      "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 19372441600,
+      "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 19372441600
+    },
+    "tree_pss_peak_bytes": 52868240384,
+    "tree_rss_peak_bytes": 52871106560,
+    "complete_host_samples": 161,
+    "incomplete_host_samples": 0,
+    "gpu_samples": 161,
+    "missing_gpu_attempts": 0,
+    "baseline": {
+      "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": {
+        "index": 0,
+        "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+        "total_bytes": 25769803776,
+        "gpu_bytes": 0,
+        "utilization": 0
+      },
+      "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": {
+        "index": 1,
+        "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+        "total_bytes": 25769803776,
+        "gpu_bytes": 0,
+        "utilization": 0
+      },
+      "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6": {
+        "index": 2,
+        "uuid": "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6",
+        "total_bytes": 25769803776,
+        "gpu_bytes": 0,
+        "utilization": 0
+      },
+      "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011": {
+        "index": 3,
+        "uuid": "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011",
+        "total_bytes": 25769803776,
+        "gpu_bytes": 0,
+        "utilization": 0
+      },
+      "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86": {
+        "index": 4,
+        "uuid": "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86",
+        "total_bytes": 25769803776,
+        "gpu_bytes": 0,
+        "utilization": 0
+      },
+      "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685": {
+        "index": 5,
+        "uuid": "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685",
+        "total_bytes": 25769803776,
+        "gpu_bytes": 0,
+        "utilization": 0
+      },
+      "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d": {
+        "index": 6,
+        "uuid": "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d",
+        "total_bytes": 25769803776,
+        "gpu_bytes": 0,
+        "utilization": 0
+      },
+      "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f": {
+        "index": 7,
+        "uuid": "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f",
+        "total_bytes": 25769803776,
+        "gpu_bytes": 0,
+        "utilization": 0
+      }
+    },
+    "delta_high_water_bytes": {
+      "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 19372441600,
+      "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 19372441600,
+      "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6": 0,
+      "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011": 0,
+      "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86": 0,
+      "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685": 0,
+      "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d": 0,
+      "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f": 0
+    },
+    "final_process_diagnostics": [
+      {
+        "identity": {
+          "pid": 194345,
+          "birth_ticks": 84528477,
+          "ppid": 194336,
+          "state": "S"
+        },
+        "command": "/proc/self/fd/4 serve /mnt/nas1/hf/Qwen3.5-35B-A3B-FP8 --backend cuda --engine pipeline --model-profile qwen35-mixed-bf16 --tensor-parallel 2 --pipeline-parallel 1 --expert-parallel 1 --rank-backend thread --devices 0,1 --rank-restarts 0 --kv-execution-policy resident --ctx-size 128 --max-active-sequences 2 --max-batch-tokens 8 --prefill-chunk-size 8 --cuda-device-budget-mb 22528 --kv-cache-mb 16 --max-tensor-mb 2048 --cuda-workspace-mb 1024 --host 127.0.0.1 --port 18367 --served-model-name qwen35-ferrule-tp2-resident-paper ",
+        "environment": {
+          "CUBLAS_WORKSPACE_CONFIG": ":0:0",
+          "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
+          "CUDA_HOME": "/home/admin/wxw403883/anaconda3/envs/tao",
+          "CUDA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+          "FERRULE_LOG": "info",
+          "FERRULE_LOG_FORMAT": "json",
+          "HF_HUB_OFFLINE": "1",
+          "HOME": "/root",
+          "LD_LIBRARY_PATH": "/home/admin/wxw403883/anaconda3/envs/tao/lib:/usr/lib64",
+          "NVCC": "/home/admin/wxw403883/anaconda3/envs/tao/bin/nvcc",
+          "NVIDIA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+          "PATH": "/home/admin/wxw403883/anaconda3/envs/tao/bin:/root/.cargo/bin:/usr/bin:/bin",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "TRANSFORMERS_OFFLINE": "1"
+        },
+        "libraries": [
+          "/home/admin/wxw403883/anaconda3/envs/tao/lib/libcudart.so.12.4.99",
+          "/usr/lib64/libcuda.so.575.57.08"
+        ]
+      }
+    ],
+    "owned_gpu_attribution": "unknown",
+    "owned_process_gpu_peak_bytes": null,
+    "exact_peaks": false,
+    "hard_memory_partition": false,
+    "continuous_coverage": false
+  },
+  "shutdown": {
+    "status": "root_exited_descendants_unknown",
+    "seconds": 4.369467653334141,
+    "timed_out": false,
+    "gpu_quiescence": "unverified; no GPU probe",
+    "returncode": 0
+  },
+  "wall_seconds": 390.25926848873496
+}

@@ -1,0 +1,11 @@
+{
+  "case": "call-01",
+  "error": null,
+  "input_token_ids": [
+    11
+  ],
+  "phase": "decode",
+  "published": true,
+  "session": 2,
+  "transaction": 2
+}

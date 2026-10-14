@@ -1,0 +1,6 @@
+
+running 1 test
+test cuda::providers::bf16_gemmex::pair_swiglu_tests::pair_swiglu_validation_and_poison ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 297 filtered out; finished in 0.70s
+

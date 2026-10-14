@@ -1,0 +1,16 @@
+{
+  "selector": "bf16_slice_gpu_shared_pointer_no_work_parent_drop",
+  "binary_sha256": "8a28410b3927f8372a2aca86ecaf07f14c77c51fde736516efc331fba5b22012",
+  "source_digest": "e3592ec70f5073d1a2a6a3a43141ce56cdc081ef2693f29b1226dccfd7e3b436",
+  "assertions_passed": true,
+  "cache_values": "source-pinned model assertions; no raw per-step counters exported",
+  "assertion_contract": null,
+  "gpu_memory": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-allocator-v3-20261011-02/backend-typed-view/resources.json",
+    "sha256": "50089e62668a60b07ea5867e3a0dbc710dc380f0bf0adf9cf4ab25b4ce1d6bcf"
+  },
+  "log": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-allocator-v3-20261011-02/backend-typed-view/test.log",
+    "sha256": "34345a81e2d0f9feeb796b1d6905111e85c85da2280434b53d7c8e4785888e01"
+  }
+}

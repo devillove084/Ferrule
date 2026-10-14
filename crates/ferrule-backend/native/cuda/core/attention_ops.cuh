@@ -589,7 +589,9 @@ transformer_gqa_score(const FerruleCoreTransformerArgs &args, uint32_t sequence,
         const_pointer<T>(args.key_cache_bf16 + key_offset)[0]);
     score += query * key;
   }
+  if (args.flags & 1u) score = bf16_round(score);
   score *= args.softmax_scale;
+  if (args.flags & 1u) score = bf16_round(score);
   *result = score;
   return true;
 }
@@ -620,6 +622,33 @@ transformer_causal_gqa_element(const FerruleCoreTransformerArgs &args,
       static_cast<uint64_t>(row) * args.query_row_stride_bytes +
       static_cast<uint64_t>(q_head) * args.query_head_stride_bytes;
 
+  // Opt-in eager BF16 path. F32 and legacy BF16/online semantics stay intact.
+  if (args.flags & 1u) {
+    float maximum = -CUDART_INF_F;
+    for (uint32_t token = 0; token < visible; ++token) {
+      float score;
+      if (!transformer_gqa_score<T>(args, sequence, token, kv_head, query_head, &score)) return;
+      maximum = fmaxf(maximum, score);
+    }
+    float denominator = 0.0f;
+    for (uint32_t token = 0; token < visible; ++token) {
+      float score;
+      if (!transformer_gqa_score<T>(args, sequence, token, kv_head, query_head, &score)) return;
+      denominator += expf(score - maximum);
+    }
+    float output = 0.0f;
+    for (uint32_t token = 0; token < visible; ++token) {
+      float score; uint64_t offset;
+      if (!transformer_gqa_score<T>(args, sequence, token, kv_head, query_head, &score) ||
+          !transformer_cache_offset(args, sequence, token, kv_head, dimension, true, &offset, sizeof(T))) return;
+      const float probability = bf16_round(expf(score - maximum) / denominator);
+      output += probability * transformer_value(const_pointer<T>(args.value_cache_bf16 + offset)[0]);
+    }
+    const uint64_t offset = uint64_t(row) * args.output_row_stride_bytes +
+        uint64_t(q_head) * args.output_head_stride_bytes + uint64_t(dimension) * sizeof(float);
+    pointer<float>(args.output_f32 + offset)[0] = output;
+    return;
+  }
   float maximum = -CUDART_INF_F;
   float denominator = 0.0f;
   float accumulator = 0.0f;
@@ -665,9 +694,8 @@ __global__ void transformer_causal_gqa_kernel(FerruleCoreTransformerArgs args) {
     transformer_causal_gqa_element<T>(args, index);
 }
 
-// Bounded per-block scratch, not a rows*heads*context score allocation. About
-// 10 KiB covers default ctx1024/short prefill without ABI/state changes or an
-// opt-in shared-memory limit. Longer rows retain the original scalar GPU math.
+// Fixed-size tiles bound shared scratch independently of the visible context.
+// Each token's QK is computed once per query head/row, in serial dimension order.
 constexpr uint32_t kTransformerGqaSharedTokens = 2048;
 
 __global__ void
@@ -677,8 +705,8 @@ transformer_causal_gqa_cooperative_f32_kernel(FerruleCoreTransformerArgs args) {
   const uint32_t row = static_cast<uint32_t>(head_row / args.q_heads);
   const uint32_t kv_head = q_head / (args.q_heads / args.kv_heads);
   uint32_t sequence, position, kv_len;
-  // Metadata/fallback decisions are block-uniform. Never return per-thread
-  // before the score barrier, even on invalid device addresses.
+  // Metadata decisions are block-uniform. Address failures below must also
+  // reach the barriers before any thread exits.
   if (!transformer_row_metadata(args, row, &sequence, &position, &kv_len))
     return;
   const uint32_t effective_kv_len =
@@ -686,84 +714,111 @@ transformer_causal_gqa_cooperative_f32_kernel(FerruleCoreTransformerArgs args) {
           ? max(kv_len, position + 1)
           : kv_len;
   const uint32_t visible = min(effective_kv_len, position + 1);
-  if (visible > kTransformerGqaSharedTokens) {
-    for (uint32_t dimension = threadIdx.x; dimension < args.head_dim;
-         dimension += blockDim.x) {
-      transformer_causal_gqa_element<float>(args, head_row * args.head_dim +
-                                                      dimension);
-    }
-    return;
-  }
   __shared__ float coefficients[kTransformerGqaSharedTokens];
   __shared__ uint8_t rescales[kTransformerGqaSharedTokens];
-  __shared__ float denominator;
-  __shared__ int invalid_score;
-  if (threadIdx.x == 0)
-    invalid_score = 0;
-  __syncthreads();
+  __shared__ float maximum, denominator;
+  __shared__ int invalid_address;
+  if (threadIdx.x == 0) {
+    maximum = -CUDART_INF_F;
+    denominator = 0.0f;
+    invalid_address = 0;
+  }
   const uint64_t query_head =
       static_cast<uint64_t>(row) * args.query_row_stride_bytes +
       static_cast<uint64_t>(q_head) * args.query_head_stride_bytes;
-  // One thread per key, serial D dot: remove D-fold duplicate QK/softmax work
-  // across output dimensions without introducing parallel reduction rounding.
-  for (uint32_t token = threadIdx.x; token < visible; token += blockDim.x) {
-    float score;
-    if (transformer_gqa_score<float>(args, sequence, token, kv_head, query_head,
-                                     &score)) {
-      coefficients[token] = score;
-    } else {
-      atomicExch(&invalid_score, 1);
-    }
-  }
-  __syncthreads();
-  if (invalid_score)
-    return;
-  if (threadIdx.x == 0) {
-    float maximum = -CUDART_INF_F;
-    float sum = 0.0f;
-    // Preserve online softmax, NOT two-pass max/sum. Share each weight/rescale
-    // event so value dimensions replay the original accumulator order exactly.
-    for (uint32_t token = 0; token < visible; ++token) {
-      const float score = coefficients[token];
-      const bool rescale = sum == 0.0f || score > maximum;
-      rescales[token] = rescale;
-      if (rescale) {
-        const float weight = sum == 0.0f ? 0.0f : expf(maximum - score);
-        coefficients[token] = weight;
-        sum = sum * weight + 1.0f;
-        maximum = score;
-      } else {
-        const float weight = score == maximum ? 1.0f : expf(score - maximum);
-        coefficients[token] = weight;
-        sum += weight;
-      }
-    }
-    denominator = sum;
-  }
-  __syncthreads();
+  float *output = pointer<float>(
+      args.output_f32 + static_cast<uint64_t>(row) * args.output_row_stride_bytes +
+      static_cast<uint64_t>(q_head) * args.output_head_stride_bytes);
+  // Caller-owned output holds unnormalized accumulators, including D larger
+  // than blockDim. Normalizing between tiles would change the scalar F32 math.
   for (uint32_t dimension = threadIdx.x; dimension < args.head_dim;
-       dimension += blockDim.x) {
-    float accumulator = 0.0f;
-    for (uint32_t token = 0; token < visible; ++token) {
-      uint64_t value_offset;
-      if (!transformer_cache_offset(args, sequence, token, kv_head, dimension,
-                                    true, &value_offset, sizeof(float)))
-        return;
-      const float value =
-          const_pointer<float>(args.value_cache_bf16 + value_offset)[0];
-      const float weight = coefficients[token];
-      if (rescales[token]) {
-        accumulator = accumulator * weight + value;
+       dimension += blockDim.x)
+    output[dimension] = 0.0f;
+  __syncthreads();
+  for (uint32_t base = 0; base < visible;) {
+    const uint32_t count = min(kTransformerGqaSharedTokens, visible - base);
+    for (uint32_t local = threadIdx.x; local < count; local += blockDim.x) {
+      float score;
+      if (transformer_gqa_score<float>(args, sequence, base + local, kv_head,
+                                       query_head, &score)) {
+        coefficients[local] = score;
       } else {
-        accumulator += weight * value;
+        atomicExch(&invalid_address, 1);
       }
     }
-    const uint64_t output_offset =
-        static_cast<uint64_t>(row) * args.output_row_stride_bytes +
-        static_cast<uint64_t>(q_head) * args.output_head_stride_bytes +
-        static_cast<uint64_t>(dimension) * sizeof(float);
-    pointer<float>(args.output_f32 + output_offset)[0] =
-        denominator > 0.0f ? accumulator / denominator : 0.0f;
+    __syncthreads();
+    if (invalid_address)
+      return;
+    if (threadIdx.x == 0) {
+      float m = maximum;
+      float sum = denominator;
+      // Preserve all online-softmax events across tiles, including score ties
+      // and the original NaN/Inf behavior, rather than merging tile max/sums.
+      for (uint32_t local = 0; local < count; ++local) {
+        const float score = coefficients[local];
+        const bool rescale = sum == 0.0f || score > m;
+        rescales[local] = rescale;
+        if (rescale) {
+          const float weight = sum == 0.0f ? 0.0f : expf(m - score);
+          coefficients[local] = weight;
+          sum = sum * weight + 1.0f;
+          m = score;
+        } else {
+          const float weight = score == m ? 1.0f : expf(score - m);
+          coefficients[local] = weight;
+          sum += weight;
+        }
+      }
+      maximum = m;
+      denominator = sum;
+    }
+    __syncthreads();
+    for (uint32_t dimension = threadIdx.x; dimension < args.head_dim;
+         dimension += blockDim.x) {
+      float accumulator = output[dimension];
+      for (uint32_t local = 0; local < count; ++local) {
+        uint64_t value_offset;
+        if (!transformer_cache_offset(args, sequence, base + local, kv_head,
+                                      dimension, true, &value_offset,
+                                      sizeof(float))) {
+          atomicExch(&invalid_address, 1);
+          break;
+        }
+        const float value =
+            const_pointer<float>(args.value_cache_bf16 + value_offset)[0];
+        const float weight = coefficients[local];
+        if (rescales[local]) {
+          accumulator = accumulator * weight + value;
+        } else {
+          accumulator += weight * value;
+        }
+      }
+      output[dimension] = accumulator;
+    }
+    __syncthreads();
+    if (invalid_address)
+      return;
+    // Finish reading the shared failure flag before the next tile can write it.
+    __syncthreads();
+    base += count;
+  }
+  for (uint32_t dimension = threadIdx.x; dimension < args.head_dim;
+       dimension += blockDim.x)
+    output[dimension] =
+        denominator > 0.0f ? output[dimension] / denominator : 0.0f;
+}
+
+inline void
+launch_transformer_causal_gqa_f32(const FerruleCoreTransformerArgs &args) {
+  const uint64_t heads = static_cast<uint64_t>(args.rows) * args.q_heads;
+  // Retain scalar only beyond CUDA's one-dimensional query-head grid limit.
+  if (heads <= INT32_MAX) {
+    transformer_causal_gqa_cooperative_f32_kernel<<<
+        static_cast<uint32_t>(heads), kBlock, 0, stream(args.stream)>>>(args);
+  } else {
+    const uint64_t count = heads * args.head_dim;
+    transformer_causal_gqa_kernel<float><<<blocks_for(count), kBlock, 0,
+                                          stream(args.stream)>>>(args);
   }
 }
 
@@ -840,4 +895,72 @@ inline bool valid_transformer(const FerruleCoreTransformerArgs *args, bool f32 =
   return true;
 }
 
+} // namespace ferrule::cuda::core
+
+namespace ferrule::cuda::core {
+// Reconstructed partial variant of cooperative F32 GQA. Fixed shared tiles
+// preserve online m/L/U across arbitrarily many tokens without context scratch.
+__global__ void streaming_gqa_partial_kernel(FerruleCoreStreamingGqaArgs a) {
+  const uint64_t h = blockIdx.x;
+  const uint64_t position = a.query_start + h / a.q_heads;
+  const uint32_t kh = (h % a.q_heads) / (a.q_heads / a.kv_heads);
+  float *out = pointer<float>(a.partial) + h * (uint64_t(a.head_dim) + 2);
+  const float *q = const_pointer<float>(a.query) + h * a.head_dim;
+  __shared__ float weights[kTransformerGqaSharedTokens];
+  __shared__ uint8_t modes[kTransformerGqaSharedTokens];
+  __shared__ float maximum, denominator;
+  __shared__ int invalid;
+  if (threadIdx.x == 0) { maximum = -CUDART_INF_F; denominator = 0; invalid = 0; }
+  for (uint64_t d = threadIdx.x; d < a.head_dim; d += blockDim.x) out[d + 2] = 0;
+  __syncthreads();
+  for (uint64_t base = 0; base < a.tokens; base += kTransformerGqaSharedTokens) {
+    const uint32_t count = static_cast<uint32_t>(min(uint64_t(kTransformerGqaSharedTokens), uint64_t(a.tokens) - base));
+    for (uint32_t i = threadIdx.x; i < count; i += blockDim.x) {
+      const uint64_t p = a.kv_start + base + i;
+      const bool visible = p <= position && (a.window == 0 || position - p < a.window);
+      modes[i] = visible ? 1 : 0;
+      if (visible) {
+        const float *k = const_pointer<float>(a.key) + ((base + i) * a.kv_heads + kh) * a.head_dim;
+        float score = 0;
+        for (uint64_t d = 0; d < a.head_dim; ++d) score += q[d] * k[d];
+        score *= a.softmax_scale;
+        weights[i] = score;
+        if (!isfinite(score)) atomicExch(&invalid, 1);
+      }
+    }
+    __syncthreads();
+    if (threadIdx.x == 0) {
+      for (uint32_t i = 0; i < count; ++i) {
+        if (!modes[i]) continue;
+        const float score = weights[i];
+        if (denominator == 0 || score > maximum) {
+          weights[i] = denominator == 0 ? 0 : expf(maximum - score);
+          denominator = denominator * weights[i] + 1;
+          maximum = score;
+          modes[i] = 2;
+        } else {
+          weights[i] = expf(score - maximum);
+          denominator += weights[i];
+        }
+      }
+    }
+    __syncthreads();
+    for (uint64_t d = threadIdx.x; d < a.head_dim; d += blockDim.x) {
+      float u = out[d + 2];
+      for (uint32_t i = 0; i < count; ++i) {
+        if (!modes[i]) continue;
+        const float v = const_pointer<float>(a.value)[((base + i) * a.kv_heads + kh) * a.head_dim + d];
+        if (!isfinite(v)) atomicExch(&invalid, 1);
+        u = modes[i] == 2 ? u * weights[i] + v : u + weights[i] * v;
+      }
+      out[d + 2] = u;
+      if (!isfinite(u)) atomicExch(&invalid, 1);
+    }
+    __syncthreads();
+  }
+  if (threadIdx.x == 0) {
+    out[0] = maximum;
+    out[1] = invalid ? CUDART_NAN_F : denominator;
+  }
+}
 } // namespace ferrule::cuda::core

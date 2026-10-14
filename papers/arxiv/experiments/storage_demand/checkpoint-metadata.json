@@ -1,0 +1,174 @@
+{
+  "scope": "CPU header/catalog identities, not Rust TP1 capacity admission",
+  "shards": [
+    {
+      "path": "/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8/model.safetensors-00001-of-00014.safetensors",
+      "identity": [
+        236,
+        38524559,
+        2685395560,
+        1772424992657055256,
+        1772424992657055256
+      ],
+      "header_bytes": 713320,
+      "header_sha256": "0ddc68ef040e28c0f8f4370068bd0c0cf69e1ff847df2f8cdb07bded2786327d"
+    },
+    {
+      "path": "/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8/model.safetensors-00002-of-00014.safetensors",
+      "identity": [
+        236,
+        38524557,
+        2685393512,
+        1772424806750938380,
+        1772424806750938380
+      ],
+      "header_bytes": 711272,
+      "header_sha256": "01c77271cd4c48a7d96133b744a7f9ceffbd50d0aabfadf988ce522dd42d1517"
+    },
+    {
+      "path": "/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8/model.safetensors-00003-of-00014.safetensors",
+      "identity": [
+        236,
+        38524563,
+        2685393512,
+        1772425351626122160,
+        1772425351626122160
+      ],
+      "header_bytes": 711272,
+      "header_sha256": "4b5b4b62f25010dd074ef6a5bae2fda041111e13d658d71c2408fcfe97304cf8"
+    },
+    {
+      "path": "/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8/model.safetensors-00004-of-00014.safetensors",
+      "identity": [
+        236,
+        38524564,
+        2685394536,
+        1772425557825932903,
+        1772425557825932903
+      ],
+      "header_bytes": 712296,
+      "header_sha256": "42c1928be8f18a7192bce76e156aae6a4af9f101c3f14f3976437735fa5d082d"
+    },
+    {
+      "path": "/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8/model.safetensors-00005-of-00014.safetensors",
+      "identity": [
+        236,
+        38524566,
+        2685395560,
+        1772425889647579315,
+        1772425889647579315
+      ],
+      "header_bytes": 713320,
+      "header_sha256": "9f58588a971e17ce0292e53988e1fed641e6080504afe1156246afa2db63382e"
+    },
+    {
+      "path": "/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8/model.safetensors-00006-of-00014.safetensors",
+      "identity": [
+        236,
+        38524561,
+        2685394536,
+        1772425164292942735,
+        1772425164292942735
+      ],
+      "header_bytes": 712296,
+      "header_sha256": "2cc8f33ab7024f64619c8ed4588c45566d845f0387b004e66824059ddcdf5de5"
+    },
+    {
+      "path": "/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8/model.safetensors-00007-of-00014.safetensors",
+      "identity": [
+        236,
+        38524567,
+        2685393512,
+        1772426151999313636,
+        1772426151999313636
+      ],
+      "header_bytes": 711272,
+      "header_sha256": "9d0aa33cf830a7f0781a0bd57e046533c93781e2fefcc760498c2bd3edd6bf58"
+    },
+    {
+      "path": "/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8/model.safetensors-00008-of-00014.safetensors",
+      "identity": [
+        236,
+        38524569,
+        2685393512,
+        1772426339785901318,
+        1772426339785901318
+      ],
+      "header_bytes": 711272,
+      "header_sha256": "334f553a9532a759b7ed0ba01b83359ad04dcc956bb0b08a9846de23b756ede2"
+    },
+    {
+      "path": "/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8/model.safetensors-00009-of-00014.safetensors",
+      "identity": [
+        236,
+        38524570,
+        3645492144,
+        1772426665613745394,
+        1772426665613745394
+      ],
+      "header_bytes": 445360,
+      "header_sha256": "869fd02fcef835a0edc4f0c0404bf82c95d991a516d01bef048c1f9db64937c5"
+    },
+    {
+      "path": "/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8/model.safetensors-00010-of-00014.safetensors",
+      "identity": [
+        236,
+        38524571,
+        2685398632,
+        1772426854560705584,
+        1772426854560705584
+      ],
+      "header_bytes": 716392,
+      "header_sha256": "4368aef5400706c0fad5c837c9c3379020993dfef9d49bb467fc7b40c5b3c84a"
+    },
+    {
+      "path": "/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8/model.safetensors-00011-of-00014.safetensors",
+      "identity": [
+        236,
+        38524573,
+        2685400680,
+        1772427035405551264,
+        1772427035405551264
+      ],
+      "header_bytes": 718440,
+      "header_sha256": "9bc6f39f73106bd9e916b50e8e9caed5774d0cb7ab49a938d7c638ac1e0b5c4f"
+    },
+    {
+      "path": "/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8/model.safetensors-00012-of-00014.safetensors",
+      "identity": [
+        236,
+        38524574,
+        2685399144,
+        1772427235837349585,
+        1772427235837349585
+      ],
+      "header_bytes": 716904,
+      "header_sha256": "2350ec08d9829028f12446c9a56140e6e363b0a9102c1e3c6d98364168dab3ed"
+    },
+    {
+      "path": "/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8/model.safetensors-00013-of-00014.safetensors",
+      "identity": [
+        236,
+        38524576,
+        3011229472,
+        1772427400537041055,
+        1772427400537041055
+      ],
+      "header_bytes": 324384,
+      "header_sha256": "288c4eae89e4c07fd7cf334df1a7169a0ecf66f3639e651c4a2492dfb2f0317d"
+    },
+    {
+      "path": "/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8/model.safetensors-00014-of-00014.safetensors",
+      "identity": [
+        236,
+        38524577,
+        1267650368,
+        1772427480416081771,
+        1772427480416081771
+      ],
+      "header_bytes": 307808,
+      "header_sha256": "da471e34b0c637e6ede9f75edf4c3372c32794b6c9b9f1f0e80528787fb21eac"
+    }
+  ],
+  "tensor_payload_bytes_read": 0
+}

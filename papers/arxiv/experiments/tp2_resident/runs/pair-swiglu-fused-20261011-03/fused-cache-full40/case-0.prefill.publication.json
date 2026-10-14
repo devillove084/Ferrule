@@ -1,0 +1,12 @@
+{
+  "committed_tokens": 1,
+  "outstanding": 0,
+  "position_start": 0,
+  "publications_after": 1,
+  "publications_before": 0,
+  "quarantined": false,
+  "schema": "ferrule.paper.unobserved-publication.v1",
+  "session": 1,
+  "submitted_rows": 1,
+  "tensor_readback": false
+}

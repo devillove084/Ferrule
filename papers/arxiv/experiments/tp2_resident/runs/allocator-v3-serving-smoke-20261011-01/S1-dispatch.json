@@ -1,0 +1,19 @@
+{
+  "protocol": "tp2-serving-smoke-c1",
+  "purpose": "serving_smoke",
+  "status": "incomplete",
+  "sole_gpu_owner_granted": true,
+  "owner_note": "User explicit sole GPU owner authorization 2026-10-11: fixed 7e1c S1/S2 then two crossed 9ef/7e1c cycles only; no profile, no foreign kill",
+  "fairmatch": false,
+  "exact_speedup": null,
+  "slots": [
+    {
+      "id": "S1",
+      "status": "dispatched_unknown"
+    },
+    {
+      "id": "S2",
+      "status": "not_run"
+    }
+  ]
+}

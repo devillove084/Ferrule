@@ -1,0 +1,24 @@
+{
+  "stage": "CPU routebatch paper integration",
+  "ast_valid": true,
+  "existing_formal_policy_tests_run": 4,
+  "tests_passed": true,
+  "ready": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/route-batch-incremental-20261012-01/ready-release-builder.json",
+    "sha256": "4d870c9aadd427fc5a52eda03de474ed0b5bc9c01e5f1a2f9741810115430b0b"
+  },
+  "ready_audit_status": "blocked_on_exact_source",
+  "ready_audit_error": "Stale or malformed pin: /home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-model/src/transformer/hybrid_parallel/mixed_channel.rs",
+  "actual_release_pins_absent": true,
+  "purpose": "fused_after",
+  "slots": [
+    "F1"
+  ],
+  "optimization": "routebatch",
+  "gpu_command_submitted": false,
+  "build_performed": false,
+  "prepare_performed": false,
+  "production_edits_submitted": false,
+  "test_write_transport_error_execution_unknown": true,
+  "test_write_canceled_execution_unknown": true
+}

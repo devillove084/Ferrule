@@ -36,7 +36,7 @@ use crate::cache::{
     KvPageManager, KvReservation, KvReservationBindings, KvReservationCommit, KvRetirement,
     PreparedKvCommit,
 };
-use crate::engine::NativeMultiSessionExecutor;
+use crate::engine::RunnerMultiSessionExecutor;
 
 // ── Transaction types ─────────────────────────────────────────────────
 
@@ -386,7 +386,7 @@ fn quiesced_speculative_failure<S>(
 /// declare non-blocking materialization work before calling
 /// [`begin_prepared_speculative_verification`].
 pub(crate) fn prepare_speculative_verification_transaction<R>(
-    executor: &mut NativeMultiSessionExecutor<R>,
+    executor: &mut RunnerMultiSessionExecutor<R>,
     page_manager: &mut KvPageManager,
     transaction_id: ExecutionTransactionId,
     source_states: &[R::SequenceState],
@@ -413,7 +413,7 @@ where
 
 /// Activate and execute a fully constructed target-verification transaction.
 pub(crate) fn begin_prepared_speculative_verification<R>(
-    executor: &mut NativeMultiSessionExecutor<R>,
+    executor: &mut RunnerMultiSessionExecutor<R>,
     page_manager: &mut KvPageManager,
     source_states: &[R::SequenceState],
     mut transaction: SpeculativeCohortTransaction<R::SequenceState>,
@@ -477,7 +477,7 @@ where
 
 /// Resume the exact stored verification batch and branch set.
 pub(crate) fn resume_resumable_speculative_verification_cohort<R>(
-    executor: &mut NativeMultiSessionExecutor<R>,
+    executor: &mut RunnerMultiSessionExecutor<R>,
     page_manager: &mut KvPageManager,
     source_states: &[R::SequenceState],
     mut pending: PendingSpeculativeVerificationCohort<R::SequenceState>,
@@ -518,7 +518,7 @@ where
 }
 
 fn prepare_speculative_cohort_transaction<R: MultiSessionRunner>(
-    executor: &mut NativeMultiSessionExecutor<R>,
+    executor: &mut RunnerMultiSessionExecutor<R>,
     page_manager: &mut KvPageManager,
     transaction_id: ExecutionTransactionId,
     source_states: &[R::SequenceState],
@@ -697,7 +697,7 @@ fn prepare_speculative_cohort_transaction<R: MultiSessionRunner>(
 }
 
 fn prepare_speculative_cohort_result<R: MultiSessionRunner>(
-    executor: &mut NativeMultiSessionExecutor<R>,
+    executor: &mut RunnerMultiSessionExecutor<R>,
     page_manager: &mut KvPageManager,
     source_states: &[R::SequenceState],
     mut transaction: SpeculativeCohortTransaction<R::SequenceState>,
@@ -820,7 +820,7 @@ fn prepare_speculative_cohort_result<R: MultiSessionRunner>(
 }
 
 pub(crate) fn publish_quiesced_speculative_cohort<R: MultiSessionRunner>(
-    executor: &mut NativeMultiSessionExecutor<R>,
+    executor: &mut RunnerMultiSessionExecutor<R>,
     page_manager: &mut KvPageManager,
     source_states: &mut [R::SequenceState],
     progress: &mut QuiescedSpeculativePublishProgress<R::SequenceState>,
@@ -868,7 +868,7 @@ pub(crate) fn publish_quiesced_speculative_cohort<R: MultiSessionRunner>(
 }
 
 pub(crate) fn abort_quiesced_speculative_transaction<R: MultiSessionRunner>(
-    executor: &mut NativeMultiSessionExecutor<R>,
+    executor: &mut RunnerMultiSessionExecutor<R>,
     page_manager: &mut KvPageManager,
     progress: &mut QuiescedSpeculativeAbortProgress<R::SequenceState>,
     retirements: &mut Vec<KvRetirement>,

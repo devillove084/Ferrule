@@ -272,6 +272,18 @@ where
         request_id: RequestId,
     ) -> Option<crate::scheduling::RequestTerminal> {
         let terminal = self.scheduler.take_request_terminal(request_id)?;
+        let status = match &terminal {
+            crate::scheduling::RequestTerminal::Finished(_) => {
+                crate::engine::kv_trace::TerminalStatus::Success
+            }
+            crate::scheduling::RequestTerminal::Cancelled(_) => {
+                crate::engine::kv_trace::TerminalStatus::Cancelled
+            }
+            crate::scheduling::RequestTerminal::Failed(_) => {
+                crate::engine::kv_trace::TerminalStatus::Failed
+            }
+        };
+        self.trace_terminal(terminal.sequence(), status);
         if let Some(record) = self.request_identities.get_mut(&request_id) {
             record.terminal_consumed = true;
         }
@@ -282,6 +294,7 @@ where
     pub fn drain_finished(&mut self) -> Vec<SequenceState> {
         let sequences = self.scheduler.drain_finished();
         for sequence in &sequences {
+            self.trace_terminal(sequence, crate::engine::kv_trace::TerminalStatus::Success);
             self.consume_terminal_identity(sequence);
         }
         self.reap_request_identities();
@@ -291,6 +304,7 @@ where
     pub fn drain_cancelled(&mut self) -> Vec<SequenceState> {
         let sequences = self.scheduler.drain_cancelled();
         for sequence in &sequences {
+            self.trace_terminal(sequence, crate::engine::kv_trace::TerminalStatus::Cancelled);
             self.consume_terminal_identity(sequence);
         }
         self.reap_request_identities();
@@ -300,6 +314,7 @@ where
     pub fn drain_failed(&mut self) -> Vec<SequenceState> {
         let sequences = self.scheduler.drain_failed();
         for sequence in &sequences {
+            self.trace_terminal(sequence, crate::engine::kv_trace::TerminalStatus::Failed);
             self.consume_terminal_identity(sequence);
         }
         self.reap_request_identities();

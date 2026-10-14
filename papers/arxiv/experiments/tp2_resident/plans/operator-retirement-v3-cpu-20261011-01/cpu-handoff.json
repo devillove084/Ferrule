@@ -1,0 +1,49 @@
+{
+  "schema": "ferrule.paper.operator-retirement-cpu-handoff.v1",
+  "status": "CPU_ADAPTER_TESTS_PASS_AFTER_REVIEW_RELEASE_ADAPTER_SMOKE_AND_GPU_GRANT_PENDING",
+  "tests_passed": 156,
+  "new_tests_passed": 17,
+  "paired_cli_plan_matches_module_plan": true,
+  "qualification_handoff": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-allocator-v3-20261011-03/handoff.json",
+    "sha256": "faa71361682e8b454b2e85feffd456c06598bcc4ff4572a34bfaa54367e83fd4"
+  },
+  "before_binary_sha256": "9ef9841598b4694fb611250bf8876c4314d252400136ddb23f606a979cadb656",
+  "after_binary_sha256": null,
+  "registered_build_review": null,
+  "execute_allowed": false,
+  "production_modified": false,
+  "gpu_queries_performed": false,
+  "gpu_locks_acquired": false,
+  "gpu_workloads_started": false,
+  "release_build_started": false,
+  "after_release_audited": false,
+  "after_same_binary_smoke_passed": false,
+  "benchmark_started": false,
+  "profile_started": false,
+  "unknown_pressure": null,
+  "pending_peak": null,
+  "legacy_adapter_pins": {
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/arena_index_ab.py": "a4d155066b97bc3f3f8231233df4413a191c207d8b9233466fef5c9b5308155b",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/cache_ab.py": "6248942d43f1dda010db1753905a07fc82476493d5912c1738e31a9459c23d8f"
+  },
+  "artifact_pins": {
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/history/pre-operator-retirement-ab-20261011/paired.py.txt": "f14573bd209d681139cc4549be97a3a85b05694754ffef848070908f475d40eb",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/operator_retirement_ab.py": "37efbb7d095d1e263550e57621ce7ba92df4ecf5d5d667b8c1be290a2140a819",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/paired.py": "d0541c3d1104ad5f8cf4849cde1bed88816fb5bedc5569487a7dc7fc22e32ef5",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/plans/operator-retirement-v3-cpu-20261011-01/README.md": "a4f713a08551200dc46f9eccd29ee7e3e89587b4a895036513dbe2e2448afbc4",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/plans/operator-retirement-v3-cpu-20261011-01/cpu-tests.json": "1b00eae27b6aeeb0ce48a1c78535763b266098ab763bd7c133db2606d7f84d15",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/plans/operator-retirement-v3-cpu-20261011-01/cpu-tests.log": "f19198d7bdcdc21dc19ec6ab952756a3f0b8ab2e876cc666c6db3d0fdf821ea0",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/plans/operator-retirement-v3-cpu-20261011-01/paired-cli-plan.json": "970196f04b627d442f3a71c89f8cd2bc9cf46711ad8d9327209ae5568b562604",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/plans/operator-retirement-v3-cpu-20261011-01/plan.json": "970196f04b627d442f3a71c89f8cd2bc9cf46711ad8d9327209ae5568b562604",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/plans/operator-retirement-v3-cpu-20261011-01/source-review.json": "ef9a06851047d2ccee229ee9e630191f3edbf95ff34c562cc1f04b908858078c",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/test_operator_retirement_ab.py": "28d3167dd9b53add286915b2dd1dad0db4639b5873c29e83d3da8c81dbfea07f"
+  },
+  "next_required": [
+    "Actual AFTER hash/handoff and fixed reviewed source manifest",
+    "Typed release auditor with full qualification receipt and dependency validation",
+    "Fresh explicit main-agent GPU grant before S1/S2; promote only same-AFTER-binary smoke PASS",
+    "Two crossed serial QA8 cycles via paired.py",
+    "Reviewed rankperf-off official profile policy; separate exact-9ef short trace for before/after attribution"
+  ]
+}

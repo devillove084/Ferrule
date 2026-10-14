@@ -1,0 +1,19 @@
+{
+  "PATH": "/usr/bin:/bin",
+  "HOME": "/root",
+  "CUDA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+  "NVIDIA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+  "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
+  "LD_LIBRARY_PATH": "/home/admin/wxw403883/anaconda3/envs/tao/lib:/usr/lib64",
+  "CUBLAS_WORKSPACE_CONFIG": ":0:0",
+  "FERRULE_MIXED_GPU_RUN": "1",
+  "FERRULE_RUN_MIXED_RANK_GPU": "1",
+  "FERRULE_MIXED_MODEL": "/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8",
+  "FERRULE_MIXED_ORACLE_DIR": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_mixed/oracle/runs/full40-20261009-03",
+  "FERRULE_MIXED_ORACLE_SHA256": "fb96ba4dd134761af30b4025b4cce86f96136cb01f05b5b4fca3e74587caa71d",
+  "FERRULE_MIXED_EVIDENCE_DIR": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/route-batch-20261012-02/model-route-late-consumer-unknown",
+  "FERRULE_PAIR_SWIGLU_FIXTURE_ROOT": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_mixed/oracle/runs/pair-swiglu-m1-m5-cuda-01",
+  "FERRULE_PAPER_WORKER_TOKEN": "0c19b325011f61911390c8f5e5082eb6e449cf48d154c5c665a71659f27dfa32",
+  "FERRULE_LOG": "info",
+  "FERRULE_LOG_FORMAT": "json"
+}

@@ -1,0 +1,56 @@
+{
+  "schema": "ferrule.storage-demand.execution-cpu-validation.v2",
+  "status": "pass_cpu_mock_fixtures_only_candidate_unbound",
+  "recorded_unix_ns": 1791945611227464647,
+  "execution_prepared_path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/newversionedprotocol/execution-prepared-20261014-01.json",
+  "execution_prepared_sha256": "4c8a1d5ddf0e602cc602935d42baeeda621687dc823ecc241d1264170c616ea5",
+  "execution_prepared_digest": "b549dc4c8b58e337176ea0098ce2cc90912d6dc57cd1c5654b1f16f60f318a43",
+  "historical_prepared_sha256": "117a03af3700f46c213b581e10b58f126c725c5cb515c1acc2adb0391b351767",
+  "checks": [
+    {
+      "command": "CUDA_VISIBLE_DEVICES='' NVIDIA_VISIBLE_DEVICES=none /home/admin/wxw403883/anaconda3/bin/python3.12 -S -B -m unittest discover -s papers/arxiv/experiments/storage_demand/tests -p test_execution_v2.py -v",
+      "tests": 33,
+      "passed": true
+    },
+    {
+      "command": "CUDA_VISIBLE_DEVICES='' NVIDIA_VISIBLE_DEVICES=none /home/admin/wxw403883/anaconda3/bin/python3.12 -S -B -m unittest discover -s papers/arxiv/experiments/storage_demand/tests -v",
+      "tests": 70,
+      "passed": true
+    },
+    {
+      "command": "CUDA_VISIBLE_DEVICES='' NVIDIA_VISIBLE_DEVICES=none /home/admin/wxw403883/anaconda3/bin/python3.12 -S -B papers/arxiv/experiments/storage_demand/newversionedprotocol/protocol.py plan",
+      "passed": true
+    },
+    {
+      "command": "CUDA_VISIBLE_DEVICES='' NVIDIA_VISIBLE_DEVICES=none /home/admin/wxw403883/anaconda3/bin/python3.12 -S -B papers/arxiv/experiments/storage_demand/newversionedprotocol/protocol.py check",
+      "passed": true
+    },
+    {
+      "command": "CUDA_VISIBLE_DEVICES='' NVIDIA_VISIBLE_DEVICES=none /home/admin/wxw403883/anaconda3/bin/python3.12 -S -B papers/arxiv/experiments/storage_demand/newversionedprotocol/run_pilot.py plan",
+      "passed": true
+    },
+    {
+      "command": "CUDA_VISIBLE_DEVICES='' NVIDIA_VISIBLE_DEVICES=none /home/admin/wxw403883/anaconda3/bin/python3.12 -S -B papers/arxiv/experiments/storage_demand/newversionedprotocol/run_pilot.py check",
+      "passed": true
+    }
+  ],
+  "syntax": {
+    "method": "ast.parse",
+    "files": 3,
+    "passed": true,
+    "bytecode_created": false
+  },
+  "new_run_entry": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/newversionedprotocol/run_pilot.py",
+  "new_adapter": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/runnerhelpers/execution_v2.py",
+  "artifact_pin_count": 36,
+  "final_candidate_sealed": false,
+  "gpu_queries": 0,
+  "gpu_locks": 0,
+  "gpu_launches": 0,
+  "real_server_launches": 0,
+  "real_http_requests": 0,
+  "checkpoint_tensor_payload_bytes_read": 0,
+  "actual_pilot_observations": null,
+  "interpretation": "33 adapter plus 37 original CPU tests; actual maintained HTTP main/Stream and run_target with mocked Popen, locks and GPU queries; no quality or physical NAS result",
+  "git_note": "/papers/ is ignored by repository .gitignore; no force-add, ignore edit, commit or branch created"
+}

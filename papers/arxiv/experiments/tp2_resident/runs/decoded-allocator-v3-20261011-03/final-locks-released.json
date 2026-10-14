@@ -1,0 +1,14 @@
+{
+  "gpu_owner_released": true,
+  "all_eight_idle": true,
+  "uuid_locks": [
+    "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+    "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9"
+  ],
+  "all_locks_reacquired_and_released": true,
+  "foreign_processes_killed": false,
+  "proof": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-allocator-v3-20261011-03/final-idle.json",
+    "sha256": "447bdc87577ba5bf8ad96cec7e6de8ac9154a22deb6d9c871e1443aa6cb2473a"
+  }
+}

@@ -1,0 +1,182 @@
+{
+  "source": {
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/cli_audit.py": "5a84aebec98de43a997b7a92d88a25eab6a1749a79c32870e68e2dafdc54cbbf",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/contract.py": "96f9664cb16e4b861b4902f6c07b234ca08d89106d4d99a9ff8db74511de25bf",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/launch_guard.py": "b4ec4dc1b1e7e61fe322847e4a07ce2c3b2ed43d8d3e9bc3bd6602979ad00b9f",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runner.py": "f1e87f00822445a708c5ffe50124ea0d34e928fd56fe6943ccaf7a052bb9d95a",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/telemetry.py": "766a2e62730e3b56efd553d013554b18520c4883f6e5a3ee7ddeef4211091900",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/experiment.py": "ba59769f59a6be5a732acc3bd7c8237063031198fb069d9e15e71761b580f67f",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/test_tp2.py": "de1082be324604cb108f159fe9246b7227696e0bfa69284ead9dd94aef78ad1c",
+    "/home/admin/luhuanbing.lhb/Ferrule/scripts/_owned_subreaper.py": "19ef9006089cde1abdca87177e01d26b925dcf996bfebaf6e3dc51ea71a77ff0",
+    "/home/admin/luhuanbing.lhb/Ferrule/scripts/bench_ferrule_vllm.py": "0abc2a72eac5abe4430dd79d07ddcf7a457fccd921be9c55144e913c2f7617fd",
+    "/home/admin/luhuanbing.lhb/Ferrule/scripts/test_vllm_qwen35.py": "1c330dac0727d54254a1c1648adcb9a4b747a2303fe183c2ba38f9ccd83ec2a1"
+  },
+  "model": {
+    "path": "/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8",
+    "metadata_sha256": {
+      "config.json": "236c373b0682a4f40c2fa49ef8e5f722a87a8dbfe265286b6d5260b23d7cb229",
+      "model.safetensors.index.json": "b009f7a49c442fce959a2ff6fee41c69248879b90d7ff5636ec6d2068ac4876d",
+      "tokenizer.json": "5f9e4d4901a92b997e463c1f46055088b6cca5ca61a6522d1b9f64c4bb81cb42",
+      "tokenizer_config.json": "316230d6a809701f4db5ea8f8fc862bc3a6f3229c937c174e674ff3ca0a64ac8"
+    },
+    "shard_stats": {
+      "model.safetensors-00001-of-00014.safetensors": {
+        "bytes": 2685395560,
+        "mtime_ns": 1772424992657055256,
+        "inode": 38524559,
+        "device": 236
+      },
+      "model.safetensors-00002-of-00014.safetensors": {
+        "bytes": 2685393512,
+        "mtime_ns": 1772424806750938380,
+        "inode": 38524557,
+        "device": 236
+      },
+      "model.safetensors-00003-of-00014.safetensors": {
+        "bytes": 2685393512,
+        "mtime_ns": 1772425351626122160,
+        "inode": 38524563,
+        "device": 236
+      },
+      "model.safetensors-00004-of-00014.safetensors": {
+        "bytes": 2685394536,
+        "mtime_ns": 1772425557825932903,
+        "inode": 38524564,
+        "device": 236
+      },
+      "model.safetensors-00005-of-00014.safetensors": {
+        "bytes": 2685395560,
+        "mtime_ns": 1772425889647579315,
+        "inode": 38524566,
+        "device": 236
+      },
+      "model.safetensors-00006-of-00014.safetensors": {
+        "bytes": 2685394536,
+        "mtime_ns": 1772425164292942735,
+        "inode": 38524561,
+        "device": 236
+      },
+      "model.safetensors-00007-of-00014.safetensors": {
+        "bytes": 2685393512,
+        "mtime_ns": 1772426151999313636,
+        "inode": 38524567,
+        "device": 236
+      },
+      "model.safetensors-00008-of-00014.safetensors": {
+        "bytes": 2685393512,
+        "mtime_ns": 1772426339785901318,
+        "inode": 38524569,
+        "device": 236
+      },
+      "model.safetensors-00009-of-00014.safetensors": {
+        "bytes": 3645492144,
+        "mtime_ns": 1772426665613745394,
+        "inode": 38524570,
+        "device": 236
+      },
+      "model.safetensors-00010-of-00014.safetensors": {
+        "bytes": 2685398632,
+        "mtime_ns": 1772426854560705584,
+        "inode": 38524571,
+        "device": 236
+      },
+      "model.safetensors-00011-of-00014.safetensors": {
+        "bytes": 2685400680,
+        "mtime_ns": 1772427035405551264,
+        "inode": 38524573,
+        "device": 236
+      },
+      "model.safetensors-00012-of-00014.safetensors": {
+        "bytes": 2685399144,
+        "mtime_ns": 1772427235837349585,
+        "inode": 38524574,
+        "device": 236
+      },
+      "model.safetensors-00013-of-00014.safetensors": {
+        "bytes": 3011229472,
+        "mtime_ns": 1772427400537041055,
+        "inode": 38524576,
+        "device": 236
+      },
+      "model.safetensors-00014-of-00014.safetensors": {
+        "bytes": 1267650368,
+        "mtime_ns": 1772427480416081771,
+        "inode": 38524577,
+        "device": 236
+      }
+    },
+    "index_payload_bytes": 37454799072,
+    "identity_strength": "partial: metadata hashes + shard stat pins; payloads NOT hashed",
+    "full_checkpoint_sha256": null
+  },
+  "binary": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-20261008-001/staged/ferrule",
+    "sha256": "fa5be271423d704d89b038d89ee8b75e0e62d6de8a7072fc5c22c7c8ab00d18a"
+  },
+  "dependencies": {
+    "vllm": "0.28.0+cu129",
+    "torch": "2.13.0+cu129"
+  },
+  "precision": {
+    "declared": {
+      "seed": 1,
+      "prompt": "Hello",
+      "input_tokens": 1,
+      "context": 128,
+      "batch_tokens": 8,
+      "active_sequences": 2,
+      "concurrency": 1,
+      "tp": 2,
+      "pp": 1,
+      "ep": 1,
+      "activation": "bfloat16",
+      "kv": "bfloat16",
+      "conv": "bfloat16",
+      "ssm": "float32",
+      "prefix_cache": false,
+      "eos": "natural",
+      "endpoint": "raw-completions",
+      "protocol_id": "vllm-tp2-resident-noep-v1",
+      "identity_mode": "device_exclusive_local_custody",
+      "dp": 1,
+      "enable_expert_parallel": false,
+      "expert_policy": "MoE weights tensor-sharded; NOT TP2EP2"
+    },
+    "effective": "logged operations, not full arithmetic verification"
+  },
+  "topology": {
+    "tp": 2,
+    "pp": 1,
+    "dp": 1,
+    "ep": 1,
+    "enable_expert_parallel": false,
+    "physical_gpu_uuids": [
+      "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9"
+    ]
+  },
+  "resources": {
+    "gpu_target_bytes": 23622320128,
+    "host_target_bytes": 137438953472,
+    "gpu_expected_total_bytes": 25769803776,
+    "idle_max_device_mib": 0,
+    "sample_interval_seconds": 2,
+    "hard_memory_partition": false,
+    "host_policy": "128 GiB sampled server-tree PSS, predeclared common future Ferrule budget; not total physical host cap",
+    "gpu_policy": "22 GiB/card sampled ceiling; 0.8*24=19.2 GiB/card vLLM planning; not a partition"
+  },
+  "cache": {
+    "prefix_mode": "off",
+    "state_reset": "per_request",
+    "os_cache": "uncontrolled"
+  },
+  "runtime_contract": {
+    "identity_mode": "device_exclusive_local_custody",
+    "owned_gpu_attribution": "unknown"
+  },
+  "quality_gate": {
+    "status": "independent_limited_canary_required"
+  },
+  "fairmatch": false,
+  "exact_speedup": null
+}

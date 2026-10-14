@@ -1,0 +1,50 @@
+[
+  {
+    "events": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-allocator-v3-20261011-03/recreate1/lifecycle-raw/epoch-0/rank-0/events.jsonl",
+      "sha256": "08c3d3920e29e3dc0b7ad6cd30a8f9887021673939c9af7a607b51f3c8277d8a"
+    },
+    "budget": {
+      "capacity_grants": 3221225472,
+      "pinned_grants": 1405091840,
+      "routed_entries": 20480,
+      "routed_working_set_grants": 805306368
+    }
+  },
+  {
+    "events": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-allocator-v3-20261011-03/recreate1/lifecycle-raw/epoch-0/rank-1/events.jsonl",
+      "sha256": "44095bd65cbccfffe97cc120aa1344e603dbc9afa4424385662a900f9b9bfe29"
+    },
+    "budget": {
+      "capacity_grants": 3221225472,
+      "pinned_grants": 1405091840,
+      "routed_entries": 20480,
+      "routed_working_set_grants": 805306368
+    }
+  },
+  {
+    "events": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-allocator-v3-20261011-03/recreate1/lifecycle-raw/epoch-1/rank-0/events.jsonl",
+      "sha256": "1b6a9452ff6c54d975e4c6a768c7af3423e32521f0e26d7e248957205150d58d"
+    },
+    "budget": {
+      "capacity_grants": 3221225472,
+      "pinned_grants": 1405091840,
+      "routed_entries": 20480,
+      "routed_working_set_grants": 805306368
+    }
+  },
+  {
+    "events": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-allocator-v3-20261011-03/recreate1/lifecycle-raw/epoch-1/rank-1/events.jsonl",
+      "sha256": "6b4b52020ebaaaf96ec68b656867c5e60f34011a44e20c53376ab0746fe00723"
+    },
+    "budget": {
+      "capacity_grants": 3221225472,
+      "pinned_grants": 1405091840,
+      "routed_entries": 20480,
+      "routed_working_set_grants": 805306368
+    }
+  }
+]

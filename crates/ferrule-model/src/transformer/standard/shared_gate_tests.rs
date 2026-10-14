@@ -272,14 +272,14 @@ fn shared_gate_is_added_once_after_expert_parallel_weighted_combine() {
     let mut p0 = StateDictExpertProvider {
         layer: 0,
         bindings: experts,
-        activation_limit: None,
         materializer: &f.materializer,
+        reads: None,
     };
     let mut p1 = StateDictExpertProvider {
         layer: 0,
         bindings: experts,
-        activation_limit: None,
         materializer: &f.materializer,
+        reads: None,
     };
     let mut w0 = CpuReferenceExpertWorker::new(ParallelRankId::new(0), &placement, &mut p0);
     let mut w1 = CpuReferenceExpertWorker::new(ParallelRankId::new(1), &placement, &mut p1);
@@ -355,4 +355,36 @@ fn shared_gate_descriptor_and_operator_fail_closed() {
         ops.shared_expert_gate(rows(&input), &rows(&serde_json::json!([[0.]])))
             .is_err()
     );
+}
+
+#[path = "../../../tests/unit/transformer/external_routed_execution.rs"]
+mod external_routed_execution;
+
+#[test]
+fn local_expert_provider_remains_lazy_and_keeps_validated_metadata_after_payload_disappears() {
+    let f = Fixture::new(false);
+    let PreparedFeedForwardKind::Routed {
+        experts, shared, ..
+    } = &f.block.kind
+    else {
+        panic!()
+    };
+    assert!(shared.is_some());
+    std::fs::remove_file(&f.file).unwrap();
+    let mut provider = StateDictExpertProvider {
+        layer: 0,
+        bindings: experts,
+        materializer: &f.materializer,
+        reads: None,
+    };
+    for id in 0..3 {
+        let metadata = provider.expert_metadata_bindings(0, id).unwrap().unwrap();
+        assert_eq!(metadata.parameters[0].role(), &TensorRole::RoutedExpertGate);
+        assert_eq!(metadata.activation_limit, experts[id].activation_limit());
+    }
+    assert!(provider.expert_metadata_bindings(1, 0).is_err());
+    assert!(provider.expert_metadata_bindings(0, 3).is_err());
+    // FFN preparation did not eagerly cache any routed payload. Only selection
+    // reaches the materializer, which still checks the original source snapshot.
+    assert!(provider.expert(0, 0).is_err());
 }

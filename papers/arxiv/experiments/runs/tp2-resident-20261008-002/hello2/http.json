@@ -1,0 +1,565 @@
+{
+  "schema": "ferrule.http_bench.v1",
+  "engine": "vllm",
+  "url": "http://127.0.0.1:18367/v1/completions",
+  "served_model": "qwen35-vllm-tp2-resident-paper",
+  "created_unix": 1791473566.2842987,
+  "status": "complete",
+  "metadata": {
+    "source": {
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/cli_audit.py": "5a84aebec98de43a997b7a92d88a25eab6a1749a79c32870e68e2dafdc54cbbf",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/contract.py": "96f9664cb16e4b861b4902f6c07b234ca08d89106d4d99a9ff8db74511de25bf",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/launch_guard.py": "b4ec4dc1b1e7e61fe322847e4a07ce2c3b2ed43d8d3e9bc3bd6602979ad00b9f",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runner.py": "f1e87f00822445a708c5ffe50124ea0d34e928fd56fe6943ccaf7a052bb9d95a",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/telemetry.py": "766a2e62730e3b56efd553d013554b18520c4883f6e5a3ee7ddeef4211091900",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/experiment.py": "ba59769f59a6be5a732acc3bd7c8237063031198fb069d9e15e71761b580f67f",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/experiment_v2.py": "ff57bbba5c7e81e454b6793b413ef354af8b3085da2a5f4892c5593264b0be92",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/sampling_v2.py": "5cf4245642db39420f1e9592433129b11e215f2073edb1271b44858b6461dfc6",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/test_sampling_v2.py": "7290077427090c0dc1ed6a0775b98ed38fc2dfd60ee82b732a658afb77a7590f",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/test_tp2.py": "de1082be324604cb108f159fe9246b7227696e0bfa69284ead9dd94aef78ad1c",
+      "/home/admin/luhuanbing.lhb/Ferrule/scripts/_owned_subreaper.py": "19ef9006089cde1abdca87177e01d26b925dcf996bfebaf6e3dc51ea71a77ff0",
+      "/home/admin/luhuanbing.lhb/Ferrule/scripts/bench_ferrule_vllm.py": "0abc2a72eac5abe4430dd79d07ddcf7a457fccd921be9c55144e913c2f7617fd",
+      "/home/admin/luhuanbing.lhb/Ferrule/scripts/test_vllm_qwen35.py": "1c330dac0727d54254a1c1648adcb9a4b747a2303fe183c2ba38f9ccd83ec2a1"
+    },
+    "model": {
+      "path": "/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8",
+      "metadata_sha256": {
+        "config.json": "236c373b0682a4f40c2fa49ef8e5f722a87a8dbfe265286b6d5260b23d7cb229",
+        "model.safetensors.index.json": "b009f7a49c442fce959a2ff6fee41c69248879b90d7ff5636ec6d2068ac4876d",
+        "tokenizer.json": "5f9e4d4901a92b997e463c1f46055088b6cca5ca61a6522d1b9f64c4bb81cb42",
+        "tokenizer_config.json": "316230d6a809701f4db5ea8f8fc862bc3a6f3229c937c174e674ff3ca0a64ac8"
+      },
+      "shard_stats": {
+        "model.safetensors-00001-of-00014.safetensors": {
+          "bytes": 2685395560,
+          "mtime_ns": 1772424992657055256,
+          "inode": 38524559,
+          "device": 236
+        },
+        "model.safetensors-00002-of-00014.safetensors": {
+          "bytes": 2685393512,
+          "mtime_ns": 1772424806750938380,
+          "inode": 38524557,
+          "device": 236
+        },
+        "model.safetensors-00003-of-00014.safetensors": {
+          "bytes": 2685393512,
+          "mtime_ns": 1772425351626122160,
+          "inode": 38524563,
+          "device": 236
+        },
+        "model.safetensors-00004-of-00014.safetensors": {
+          "bytes": 2685394536,
+          "mtime_ns": 1772425557825932903,
+          "inode": 38524564,
+          "device": 236
+        },
+        "model.safetensors-00005-of-00014.safetensors": {
+          "bytes": 2685395560,
+          "mtime_ns": 1772425889647579315,
+          "inode": 38524566,
+          "device": 236
+        },
+        "model.safetensors-00006-of-00014.safetensors": {
+          "bytes": 2685394536,
+          "mtime_ns": 1772425164292942735,
+          "inode": 38524561,
+          "device": 236
+        },
+        "model.safetensors-00007-of-00014.safetensors": {
+          "bytes": 2685393512,
+          "mtime_ns": 1772426151999313636,
+          "inode": 38524567,
+          "device": 236
+        },
+        "model.safetensors-00008-of-00014.safetensors": {
+          "bytes": 2685393512,
+          "mtime_ns": 1772426339785901318,
+          "inode": 38524569,
+          "device": 236
+        },
+        "model.safetensors-00009-of-00014.safetensors": {
+          "bytes": 3645492144,
+          "mtime_ns": 1772426665613745394,
+          "inode": 38524570,
+          "device": 236
+        },
+        "model.safetensors-00010-of-00014.safetensors": {
+          "bytes": 2685398632,
+          "mtime_ns": 1772426854560705584,
+          "inode": 38524571,
+          "device": 236
+        },
+        "model.safetensors-00011-of-00014.safetensors": {
+          "bytes": 2685400680,
+          "mtime_ns": 1772427035405551264,
+          "inode": 38524573,
+          "device": 236
+        },
+        "model.safetensors-00012-of-00014.safetensors": {
+          "bytes": 2685399144,
+          "mtime_ns": 1772427235837349585,
+          "inode": 38524574,
+          "device": 236
+        },
+        "model.safetensors-00013-of-00014.safetensors": {
+          "bytes": 3011229472,
+          "mtime_ns": 1772427400537041055,
+          "inode": 38524576,
+          "device": 236
+        },
+        "model.safetensors-00014-of-00014.safetensors": {
+          "bytes": 1267650368,
+          "mtime_ns": 1772427480416081771,
+          "inode": 38524577,
+          "device": 236
+        }
+      },
+      "index_payload_bytes": 37454799072,
+      "identity_strength": "partial: metadata hashes + shard stat pins; payloads NOT hashed",
+      "full_checkpoint_sha256": null
+    },
+    "binary": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-20261008-002/staged/ferrule",
+      "sha256": "fa5be271423d704d89b038d89ee8b75e0e62d6de8a7072fc5c22c7c8ab00d18a"
+    },
+    "dependencies": {
+      "vllm": "0.28.0+cu129",
+      "torch": "2.13.0+cu129"
+    },
+    "precision": {
+      "declared": {
+        "seed": 1,
+        "prompt": "Hello",
+        "input_tokens": 1,
+        "context": 128,
+        "batch_tokens": 8,
+        "active_sequences": 2,
+        "concurrency": 1,
+        "tp": 2,
+        "pp": 1,
+        "ep": 1,
+        "activation": "bfloat16",
+        "kv": "bfloat16",
+        "conv": "bfloat16",
+        "ssm": "float32",
+        "prefix_cache": false,
+        "eos": "natural",
+        "endpoint": "raw-completions",
+        "protocol_id": "vllm-tp2-resident-noep-observer-v2",
+        "identity_mode": "device_exclusive_local_custody",
+        "dp": 1,
+        "enable_expert_parallel": false,
+        "expert_policy": "MoE weights tensor-sharded; NOT TP2EP2"
+      },
+      "effective": "logged operations, not full arithmetic verification"
+    },
+    "topology": {
+      "tp": 2,
+      "pp": 1,
+      "dp": 1,
+      "ep": 1,
+      "enable_expert_parallel": false,
+      "physical_gpu_uuids": [
+        "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+        "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9"
+      ]
+    },
+    "resources": {
+      "gpu_target_bytes": 23622320128,
+      "host_target_bytes": 137438953472,
+      "gpu_expected_total_bytes": 25769803776,
+      "idle_max_device_mib": 0,
+      "sample_interval_seconds": 2,
+      "hard_memory_partition": false,
+      "host_policy": "128 GiB sampled server-tree PSS, predeclared common future Ferrule budget; not total physical host cap",
+      "gpu_policy": "22 GiB/card sampled ceiling; 0.8*24=19.2 GiB/card vLLM planning; not a partition"
+    },
+    "cache": {
+      "prefix_mode": "off",
+      "state_reset": "per_request",
+      "os_cache": "uncontrolled"
+    },
+    "startup": {
+      "status": "unavailable",
+      "reason": "Not supplied by server owner"
+    },
+    "quality_gate": {
+      "status": "independent_limited_canary_required"
+    },
+    "tokenizer": {
+      "status": "unavailable",
+      "reason": "Not supplied by server owner"
+    },
+    "engine_capability": {
+      "status": "unavailable",
+      "reason": "Not supplied by server owner"
+    },
+    "runtime_contract": {
+      "identity_mode": "device_exclusive_local_custody",
+      "owned_gpu_attribution": "unknown"
+    },
+    "comparison_intent": {
+      "status": "unavailable",
+      "reason": "Not supplied by server owner"
+    },
+    "unavailable_categories": [
+      "startup",
+      "tokenizer",
+      "engine_capability",
+      "comparison_intent"
+    ],
+    "operator_extra": {
+      "fairmatch": false,
+      "exact_speedup": null
+    },
+    "verification": "Operator declarations only; HTTP client cannot verify remote runtime or physical resources",
+    "metadata_file_sha256": "701af2cddf8100e7832f0aed6c82e3ce51732491d0743dd55e6c0e9775da9bff"
+  },
+  "workload": {
+    "max_tokens": 2,
+    "seed": 1,
+    "temperature": 0,
+    "n": 1,
+    "endpoint": "raw completions",
+    "template": "none; literal UTF-8 prompt",
+    "input_tokens_expected": 1,
+    "warmup": 0,
+    "requests": 1,
+    "repeat": 1,
+    "concurrency": 1,
+    "request_timeout_seconds": 120.0,
+    "measurement_seconds": 600.0,
+    "window_kind": "fixed-work",
+    "arrival": "finite closed-loop; no retries",
+    "ttft_slo": null,
+    "e2e_slo": null
+  },
+  "corpus": [
+    {
+      "id": "prompt-0",
+      "prompt": "Hello",
+      "input_tokens": 1,
+      "sha256": "185f8db32271fe25f561a6fc938b2e264306ec304eda518007d1764826381969"
+    }
+  ],
+  "client": {
+    "script_sha256": "0abc2a72eac5abe4430dd79d07ddcf7a457fccd921be9c55144e913c2f7617fd",
+    "python": "3.12.4 | packaged by Anaconda, Inc. | (main, Jun 18 2024, 15:12:24) [GCC 11.2.0]",
+    "executable": "/home/admin/wxw403883/anaconda3/bin/python3.12",
+    "platform": "Linux-4.19.91-009.ali4000.alios7.x86_64-x86_64-with-glibc2.32",
+    "transport": "urllib HTTP/1.1, new TCP/TLS per request; no proxy; persistent CPU client workers",
+    "checkpointing": "atomic fsync at phases; no per-terminal measured checkpoint"
+  },
+  "definitions": {
+    "send": "client HTTP operation start, includes serialization/connect/TLS; not packet-level send",
+    "ttft": "send to first nonempty content SSE event; not exact token time",
+    "request_e2e": "send to full response EOF/error/deadline; DONE time is separately recorded",
+    "content_event_itl": "gaps between nonempty content events, possibly multi-token; NOT token ITL",
+    "mean_tpot_usage_proxy": "(last content event - first content event)/(usage.completion_tokens - 1); success, N>1, >=2 events, no observed reasoning; batching/hidden tokens can bias it",
+    "goodput": "successful usage tokens or length-matched requests divided by the selected common wall denominator; no quality claim; optional SLO thresholds explicit",
+    "percentiles": "linear interpolation at (count-1)*p; separate success/failure populations",
+    "repeats": "same-server windows, not independent cold replicas",
+    "wall": "fixed-time: measurement_seconds including padded idle; fixed-work: first measured HTTP send (dispatch fallback if none) to last client-observed terminal/deadline, no padded idle; failures stay in both denominators"
+  },
+  "warmups": [],
+  "runs": [
+    {
+      "repetition": 0,
+      "started_at": 8416509.39896905,
+      "cutoff_at": 8417109.39896905,
+      "observed_end_at": 8416510.52905736,
+      "stop_reason": null,
+      "requests": [
+        {
+          "index": 0,
+          "repetition": 0,
+          "population": "measured",
+          "prompt_id": "prompt-0",
+          "prompt_sha256": "185f8db32271fe25f561a6fc938b2e264306ec304eda518007d1764826381969",
+          "expected_input_tokens": 1,
+          "status": "success",
+          "error": null,
+          "sent_at": 8416509.399473745,
+          "client_dispatch_at": 8416509.39916599,
+          "http_status": 200,
+          "headers_at": 8416509.442582782,
+          "request_payload": {
+            "model": "qwen35-vllm-tp2-resident-paper",
+            "prompt": "Hello",
+            "temperature": 0,
+            "seed": 1,
+            "n": 1,
+            "max_tokens": 2,
+            "stream": true,
+            "stream_options": {
+              "include_usage": true
+            }
+          },
+          "after_deadline_events": [],
+          "sent_unix": 1791473566.3629553,
+          "content_type": "text/event-stream",
+          "ended_at": 8416510.528687121,
+          "deadline_at": 8416629.39916599,
+          "text": ", I",
+          "raw_sse_events": [
+            {
+              "at": 8416510.448643688,
+              "event": "",
+              "data": "{\"id\":\"cmpl-9551245696daccd7\",\"object\":\"text_completion\",\"created\":1791473566,\"model\":\"qwen35-vllm-tp2-resident-paper\",\"choices\":[{\"index\":0,\"text\":\",\",\"logprobs\":null,\"finish_reason\":null,\"stop_reason\":null,\"prompt_token_ids\":null,\"token_ids\":null}]}"
+            },
+            {
+              "at": 8416510.528510768,
+              "event": "",
+              "data": "{\"id\":\"cmpl-9551245696daccd7\",\"object\":\"text_completion\",\"created\":1791473566,\"model\":\"qwen35-vllm-tp2-resident-paper\",\"choices\":[{\"index\":0,\"text\":\" I\",\"logprobs\":null,\"finish_reason\":\"length\",\"stop_reason\":null,\"prompt_token_ids\":null,\"token_ids\":null}]}"
+            },
+            {
+              "at": 8416510.528577492,
+              "event": "",
+              "data": "{\"id\":\"cmpl-9551245696daccd7\",\"object\":\"text_completion\",\"created\":1791473566,\"model\":\"qwen35-vllm-tp2-resident-paper\",\"choices\":[],\"usage\":{\"prompt_tokens\":1,\"total_tokens\":3,\"completion_tokens\":2},\"system_fingerprint\":\"vllm-0.28.0-tp2-50c81650\"}"
+            },
+            {
+              "at": 8416510.5286185,
+              "event": "",
+              "data": "[DONE]"
+            }
+          ],
+          "content_event_times": [
+            8416510.448643688,
+            8416510.528510768
+          ],
+          "content_event_itl_seconds": [
+            0.07986707985401154
+          ],
+          "content_events": 2,
+          "usage": {
+            "prompt_tokens": 1,
+            "total_tokens": 3,
+            "completion_tokens": 2
+          },
+          "actual_output_tokens": 2,
+          "actual_input_tokens": 1,
+          "finish_reason": "length",
+          "finish_at": 8416510.528510768,
+          "usage_at": 8416510.528577492,
+          "done_at": 8416510.5286185,
+          "ttft_seconds": 1.0491699427366257,
+          "request_e2e_seconds": 1.1292133759707212,
+          "mean_tpot_usage_proxy_seconds": 0.07986707985401154,
+          "token_itl_seconds": null,
+          "exact_token_tpot_seconds": null,
+          "reasoning_observed": false,
+          "output_token_ids": null,
+          "partial_token_count": 2,
+          "input_length_matches": true,
+          "output_length_matches": true,
+          "length_matched_success": true,
+          "client_observed_at": 8416510.528808383,
+          "right_censored": false
+        }
+      ],
+      "not_issued_indices": [],
+      "measurements": {
+        "window_kind": "fixed-work",
+        "denominator": "first measured HTTP send (dispatch fallback if none) to last client-observed terminal/deadline, including failures and client overhead",
+        "denominator_seconds": 1.129500150680542,
+        "dispatch_start_at": 8416509.399473745,
+        "terminal_observed_at": 8416510.528973896,
+        "elapsed_to_last_terminal_seconds": 1.129500150680542,
+        "time_to_complete_seconds": 1.129500150680542,
+        "all_scheduled_requests_terminal": true,
+        "work_completed": true,
+        "all_requests_successful": true,
+        "intentional_idle_seconds": 0.0,
+        "deadline_limit_seconds": 600.0
+      },
+      "summary": {
+        "scheduled": 1,
+        "offered": 1,
+        "not_issued": 0,
+        "statuses": {
+          "success": 1
+        },
+        "success": 1,
+        "failed": 0,
+        "success_fraction": 1.0,
+        "scheduled_success_fraction": 1.0,
+        "wall_seconds": 1.129500150680542,
+        "successful_output_tokens": 2,
+        "known_usage_output_tokens": 2,
+        "requests_without_usage": 0,
+        "committed_visible_token_rate": null,
+        "committed_visible_token_rate_reason": "SSE text is not token IDs; usage may include hidden/EOS tokens; partial counts unknown",
+        "actual_output_counts": {
+          "2": 1
+        },
+        "actual_input_counts": {
+          "1": 1
+        },
+        "length_matched_success": 1,
+        "slo_qualified_success": null,
+        "successful_requests_per_second": 0.8853473807838661,
+        "successful_output_tokens_per_second": 1.7706947615677322,
+        "length_matched_requests_per_second": 0.8853473807838661,
+        "length_matched_output_tokens_per_second": 1.7706947615677322,
+        "slo_goodput_requests_per_second": null,
+        "distributions": {
+          "success_ttft_seconds": {
+            "count": 1,
+            "mean": 1.0491699427366257,
+            "p50": 1.0491699427366257,
+            "p95": 1.0491699427366257
+          },
+          "success_request_e2e_seconds": {
+            "count": 1,
+            "mean": 1.1292133759707212,
+            "p50": 1.1292133759707212,
+            "p95": 1.1292133759707212
+          },
+          "success_mean_tpot_usage_proxy_seconds": {
+            "count": 1,
+            "mean": 0.07986707985401154,
+            "p50": 0.07986707985401154,
+            "p95": 0.07986707985401154
+          },
+          "success_content_event_itl_seconds": {
+            "count": 1,
+            "mean": 0.07986707985401154,
+            "p50": 0.07986707985401154,
+            "p95": 0.07986707985401154
+          },
+          "failure_ttft_seconds": {
+            "count": 0,
+            "mean": null,
+            "p50": null,
+            "p95": null
+          },
+          "failure_request_e2e_seconds": {
+            "count": 0,
+            "mean": null,
+            "p50": null,
+            "p95": null
+          },
+          "failure_mean_tpot_usage_proxy_seconds": {
+            "count": 0,
+            "mean": null,
+            "p50": null,
+            "p95": null
+          },
+          "failure_content_event_itl_seconds": {
+            "count": 0,
+            "mean": null,
+            "p50": null,
+            "p95": null
+          }
+        },
+        "window_kind": "fixed-work",
+        "denominator": "first measured HTTP send (dispatch fallback if none) to last client-observed terminal/deadline, including failures and client overhead",
+        "denominator_seconds": 1.129500150680542,
+        "time_to_complete_seconds": 1.129500150680542
+      }
+    }
+  ],
+  "errors": [],
+  "comparison_speedup": null,
+  "aggregate": {
+    "scheduled": 1,
+    "offered": 1,
+    "not_issued": 0,
+    "statuses": {
+      "success": 1
+    },
+    "success": 1,
+    "failed": 0,
+    "success_fraction": 1.0,
+    "scheduled_success_fraction": 1.0,
+    "wall_seconds": 1.129500150680542,
+    "successful_output_tokens": 2,
+    "known_usage_output_tokens": 2,
+    "requests_without_usage": 0,
+    "committed_visible_token_rate": null,
+    "committed_visible_token_rate_reason": "SSE text is not token IDs; usage may include hidden/EOS tokens; partial counts unknown",
+    "actual_output_counts": {
+      "2": 1
+    },
+    "actual_input_counts": {
+      "1": 1
+    },
+    "length_matched_success": 1,
+    "slo_qualified_success": null,
+    "successful_requests_per_second": 0.8853473807838661,
+    "successful_output_tokens_per_second": 1.7706947615677322,
+    "length_matched_requests_per_second": 0.8853473807838661,
+    "length_matched_output_tokens_per_second": 1.7706947615677322,
+    "slo_goodput_requests_per_second": null,
+    "distributions": {
+      "success_ttft_seconds": {
+        "count": 1,
+        "mean": 1.0491699427366257,
+        "p50": 1.0491699427366257,
+        "p95": 1.0491699427366257
+      },
+      "success_request_e2e_seconds": {
+        "count": 1,
+        "mean": 1.1292133759707212,
+        "p50": 1.1292133759707212,
+        "p95": 1.1292133759707212
+      },
+      "success_mean_tpot_usage_proxy_seconds": {
+        "count": 1,
+        "mean": 0.07986707985401154,
+        "p50": 0.07986707985401154,
+        "p95": 0.07986707985401154
+      },
+      "success_content_event_itl_seconds": {
+        "count": 1,
+        "mean": 0.07986707985401154,
+        "p50": 0.07986707985401154,
+        "p95": 0.07986707985401154
+      },
+      "failure_ttft_seconds": {
+        "count": 0,
+        "mean": null,
+        "p50": null,
+        "p95": null
+      },
+      "failure_request_e2e_seconds": {
+        "count": 0,
+        "mean": null,
+        "p50": null,
+        "p95": null
+      },
+      "failure_mean_tpot_usage_proxy_seconds": {
+        "count": 0,
+        "mean": null,
+        "p50": null,
+        "p95": null
+      },
+      "failure_content_event_itl_seconds": {
+        "count": 0,
+        "mean": null,
+        "p50": null,
+        "p95": null
+      }
+    },
+    "unstarted_windows": 0,
+    "window_kind": "fixed-work",
+    "denominator": "sum of started-run wall_seconds; warmup/startup excluded",
+    "denominator_seconds": 1.129500150680542,
+    "unobserved_request_budget": 0
+  },
+  "finalized": true,
+  "checkpoint_unix": 1791473567.4925973,
+  "measurements": {
+    "window_kind": "fixed-work",
+    "denominator": "sum of started-run wall_seconds; warmup/startup excluded",
+    "denominator_seconds": 1.129500150680542,
+    "work_completed": true,
+    "all_requests_successful": true,
+    "time_to_complete_seconds": 1.129500150680542,
+    "intentional_idle_seconds": 0.0
+  },
+  "measurement_in_progress": false,
+  "active_requests": [],
+  "server_drain": "unverified; client completion/timeout/close does not prove GPU quiescence"
+}

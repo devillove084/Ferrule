@@ -1,6 +1,8 @@
 //! Device/transport seams exercised without CUDA or a second pipeline journal.
 //! Numerical CPU/EP equivalence remains covered by pipeline_decoder.
 
+use ferrule_model::ModelExecutionBackend;
+use ferrule_runtime::parallel::pipeline::PhysicalKvLayout;
 use std::error::Error as StdError;
 use std::num::NonZeroU32;
 use std::rc::Rc;
@@ -135,6 +137,8 @@ struct Probe {
     prepare_calls: AtomicUsize,
     hide_retained_count: AtomicBool,
     fail_program_shutdown: AtomicBool,
+    unknown_capacity: Mutex<Option<DecoderKvCapacity>>,
+    cleanup_calls: Mutex<Vec<&'static str>>,
 }
 
 // A deliberately distinct, non-Send view. The program cannot accidentally
@@ -152,6 +156,16 @@ struct DeviceBackend {
 impl DeviceBackend {
     fn here(&self) {
         assert_eq!(*self.owner, thread::current().id());
+    }
+
+    fn record_cleanup(&self, operation: &'static str) {
+        self.here();
+        self.probe.cleanup_calls.lock().unwrap().push(operation);
+    }
+}
+impl Drop for DeviceBackend {
+    fn drop(&mut self) {
+        self.record_cleanup("drop");
     }
 }
 impl DecoderKvBackend for DeviceBackend {
@@ -183,6 +197,9 @@ impl DecoderKvBackend for DeviceBackend {
             }
             PrepareFailure::Unknown | PrepareFailure::UntypedUnknown => {
                 self.retained = Some(transaction);
+                // Observe on the owner thread before returning Unknown, not via
+                // a transport Stats ACK after quiescence has become unknown.
+                *self.probe.unknown_capacity.lock().unwrap() = Some(self.cpu.capacity());
                 let source = fault("injected prepare quiescence unknown");
                 Err(if matches!(failure, PrepareFailure::Unknown) {
                     KvPrepareQuiescenceUnknown::wrap(id, source)
@@ -217,17 +234,21 @@ impl DecoderKvBackend for DeviceBackend {
         panic!("pipeline must use cohort commit")
     }
     fn rollback(&mut self, tx: &mut Option<Self::Transaction>) -> Result<KvEndProgress> {
+        self.record_cleanup("rollback");
         self.here();
         self.cpu.rollback(tx)
     }
     fn release(&mut self, pages: &[KvPageId]) -> Result<()> {
+        self.record_cleanup("release");
         self.here();
         self.cpu.release(pages)
     }
     fn preempt(&mut self, pages: &[KvPageId]) -> Result<()> {
+        self.record_cleanup("preempt");
         self.cpu.preempt(pages)
     }
     fn restore(&mut self, pages: &[KvPageId]) -> Result<()> {
+        self.record_cleanup("restore");
         self.cpu.restore(pages)
     }
     fn capacity(&self) -> DecoderKvCapacity {
@@ -244,6 +265,7 @@ impl DecoderKvBackend for DeviceBackend {
     }
     fn shutdown(&mut self) -> Result<()> {
         self.here();
+        self.record_cleanup("shutdown");
         self.probe.backend_shutdown.fetch_add(1, Ordering::Relaxed);
         self.cpu.shutdown()
     }
@@ -282,6 +304,7 @@ impl DecoderKvCommitBackend for DeviceBackend {
         tx: &mut Self::Transaction,
         generation: u64,
     ) -> Result<KvEndProgress> {
+        self.record_cleanup("abort");
         self.cpu.abort_prepared(tx, generation)
     }
     fn publish_committed(&mut self, tx: &Self::Transaction) {
@@ -297,9 +320,11 @@ impl DecoderKvCommitBackend for DeviceBackend {
         generation: u64,
         pages: &[KvPageId],
     ) -> Result<KvEndProgress> {
+        self.record_cleanup("retire");
         self.cpu.retire_prepared(tx, generation, pages)
     }
     fn finish_prepared(&mut self, tx: Self::Transaction) {
+        self.record_cleanup("finish");
         self.cpu.finish_prepared(tx);
     }
 }
@@ -349,7 +374,9 @@ impl PipelineStageProgram for DeviceProgram {
         };
         if self.plan.owns_output() {
             let logits = values
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .flat_map(|row| [row[0], row[1], row[0] + 2.0, row[1] + 2.0])
                 .collect::<Vec<_>>();
             Ok(SegmentOutput::Logits(DenseLogits::new(
@@ -553,6 +580,8 @@ impl PipelineTransport for LocalTransport {
         poll: &mut dyn FnMut(),
     ) -> Result<PipelineReply> {
         let name = match &command {
+            #[cfg(feature = "cuda")]
+            PipelineCommand::TraceCommitted(_) => "trace_committed",
             PipelineCommand::Describe => "describe",
             PipelineCommand::Stats => "stats",
             PipelineCommand::Create { .. } => "create",
@@ -1370,12 +1399,34 @@ fn injected_transport_observes_all_ready_abort_and_finish() {
     pipeline.shutdown().unwrap();
 }
 
+// CompletionFailure is crate-private: inspect its source diagnostic rather
+// than exporting an unsafe post-quarantine statistics/classification bypass.
+fn assert_unknown_stats_rejected(pipeline: &PipelineParallelExecutor) {
+    let failure = pipeline.owner_stats().unwrap_err();
+    let Error::ModelSource { source } = failure else {
+        panic!("expected typed completion failure, got {failure:?}");
+    };
+    assert_eq!(
+        source.to_string(),
+        "pipeline stats rank 0 transaction None: unknown (quarantine=true)"
+    );
+    let evidence = format!("{source:?}");
+    assert!(evidence.starts_with("CompletionFailure {"), "{evidence}");
+    assert!(
+        evidence.contains("class: Unknown, quarantine: true"),
+        "{evidence}"
+    );
+}
+
 #[test]
 fn physical_shadow_capacity_never_widens_parent_or_releases_unknown_custody() {
     let probe = Arc::new(Probe::default());
     let mut specs = boots();
     for boot in &mut specs {
-        boot.physical_pages = boot.config.physical_pages(true).unwrap();
+        boot.physical_pages = boot
+            .config
+            .physical_pages(PhysicalKvLayout::standard(ModelExecutionBackend::Cuda))
+            .unwrap();
     }
     let make = Arc::clone(&probe);
     let mut pipeline = PipelineParallelExecutor::new_with_factory(topology(), specs, move |boot| {
@@ -1396,15 +1447,58 @@ fn physical_shadow_capacity_never_widens_parent_or_releases_unknown_custody() {
             .is_err()
     );
     assert!(pipeline.is_quarantined());
-    let before = pipeline.owner_stats().unwrap();
-    assert!(before[0].kv.active_transactions > 0);
-    assert!(pipeline.release_session(SessionId(1)).is_err());
-    assert!(pipeline.create_session(SessionId(2)).is_err());
-    assert!(pipeline.shutdown().is_err());
-    let after = pipeline.owner_stats().unwrap();
-    assert_eq!(after[0].kv.physical_pages, 16);
-    assert_eq!(after[0].kv.free_pages, before[0].kv.free_pages);
-    assert_eq!(pipeline.page_manager().max_pages(), 8);
+    let before = probe.unknown_capacity.lock().unwrap().unwrap();
+    assert_eq!(before.active_transactions, 1);
+    assert_eq!(before.physical_pages, 16);
+    assert!(before.free_pages < before.physical_pages);
+    let cleanup = probe.cleanup_calls.lock().unwrap().clone();
+    // Both owners completed the prefill cleanup; Unknown must not replay it.
+    assert_eq!(cleanup.len(), 4);
+    assert_eq!(cleanup.iter().filter(|&&call| call == "retire").count(), 2);
+    assert_eq!(cleanup.iter().filter(|&&call| call == "finish").count(), 2);
+    let prepares = probe.prepare_calls.load(Ordering::Acquire);
+    let executions = probe.executed.load(Ordering::Acquire);
+    let allocated = pipeline.page_manager().allocated_pages();
+    let committed = pipeline.page_manager().stats().committed_tokens;
+    let retained = pipeline.coordinator().retained_transaction_count();
+    let credits = pipeline.coordinator().in_use_credits();
+    assert_eq!(allocated, 1);
+    assert_eq!(committed, 1);
+    assert_eq!(retained, 1);
+    assert_eq!(credits, 2);
+
+    for _ in 0..2 {
+        assert_unknown_stats_rejected(&pipeline);
+        assert!(pipeline.release_session(SessionId(1)).is_err());
+        assert!(pipeline.create_session(SessionId(2)).is_err());
+        assert!(
+            pipeline
+                .forward(SessionId(1), &[2], ForwardPhase::Decode)
+                .is_err()
+        );
+        assert!(pipeline.shutdown().is_err());
+        assert_unknown_stats_rejected(&pipeline);
+        assert!(pipeline.is_quarantined());
+        assert_eq!(pipeline.page_manager().max_pages(), 8);
+        assert_eq!(pipeline.page_manager().allocated_pages(), allocated);
+        assert_eq!(pipeline.page_manager().stats().committed_tokens, committed);
+        assert_eq!(
+            pipeline.coordinator().retained_transaction_count(),
+            retained
+        );
+        assert_eq!(pipeline.coordinator().in_use_credits(), credits);
+        assert_eq!(pipeline.coordinator().publication_count(), 1);
+    }
+    drop(pipeline);
+    // This is a saved owner-local observation, not a fresh quiescence proof.
+    // No cleanup entry (including backend Drop) may free the observed slots or
+    // consume the retained handle, even on repeated shutdown or executor Drop.
+    assert_eq!(probe.unknown_capacity.lock().unwrap().unwrap(), before);
+    assert_eq!(*probe.cleanup_calls.lock().unwrap(), cleanup);
+    assert_eq!(probe.prepare_calls.load(Ordering::Acquire), prepares);
+    assert_eq!(probe.executed.load(Ordering::Acquire), executions);
+    assert_eq!(probe.backend_shutdown.load(Ordering::Acquire), 0);
+    assert_eq!(probe.program_shutdown.load(Ordering::Acquire), 0);
 }
 
 #[test]
@@ -1420,10 +1514,23 @@ fn boot_stage_and_backend_require_exact_physical_capacity() {
     let mut config = config();
     config.page_size = 1;
     config.max_pages = i32::MAX as usize / 2 + 2;
-    assert!(config.physical_pages(true).is_err());
-    assert_eq!(config.physical_pages(false).unwrap(), config.max_pages);
+    assert!(
+        config
+            .physical_pages(PhysicalKvLayout::standard(ModelExecutionBackend::Cuda))
+            .is_err()
+    );
+    assert_eq!(
+        config
+            .physical_pages(PhysicalKvLayout::standard(ModelExecutionBackend::Cpu))
+            .unwrap(),
+        config.max_pages
+    );
     config.max_pages = usize::MAX;
-    assert!(config.physical_pages(true).is_err());
+    assert!(
+        config
+            .physical_pages(PhysicalKvLayout::standard(ModelExecutionBackend::Cuda))
+            .is_err()
+    );
 }
 
 #[test]
@@ -1437,10 +1544,10 @@ fn parent_rejects_disagreeing_physical_stage_descriptions() {
             poll: &mut dyn FnMut(),
         ) -> Result<PipelineReply> {
             let mut reply = self.0.call_observed(rank, command, poll)?;
-            if rank.local.get() == 1 {
-                if let PipelineReply::Description(description) = &mut reply {
-                    description.physical_pages *= 2;
-                }
+            if rank.local.get() == 1
+                && let PipelineReply::Description(description) = &mut reply
+            {
+                description.physical_pages *= 2;
             }
             Ok(reply)
         }

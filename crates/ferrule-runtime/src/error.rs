@@ -1,4 +1,5 @@
 use snafu::Snafu;
+use std::sync::Arc;
 
 use ferrule_common::io_protocol::{CancellationReason, FailureReason, StaleReason};
 use ferrule_common::{IoProtocolError, MaterializationResolveError, MaterializationResourceError};
@@ -72,6 +73,11 @@ pub enum Error {
     #[snafu(display("runtime shutdown is incomplete: {message}"))]
     ShutdownIncomplete { message: String },
 
+    /// An immutable failure shared by a retained cleanup owner and its caller.
+    /// This carries diagnostics only, never resource custody or cleanup authority.
+    #[snafu(display("{source}"))]
+    Shared { source: Arc<Error> },
+
     #[snafu(display("{operation} failed: {source}; cleanup also failed: {cleanup}"))]
     Cleanup {
         operation: &'static str,
@@ -123,6 +129,94 @@ pub struct CleanupStep {
 }
 
 impl Error {
+    /// The original runtime failure, excluding runtime cleanup branches.
+    /// Common/backend sources remain typed and can be inspected with `ErrorChain`.
+    /// Independent failure batches deliberately have no elected primary.
+    pub fn primary(&self) -> &Self {
+        match self {
+            Self::Shared { source } => source.primary(),
+            Self::Cleanup { source, .. } | Self::CleanupBatch { source, .. } => source.primary(),
+            _ => self,
+        }
+    }
+
+    /// Runtime cleanup branches, in occurrence order. These are diagnostics,
+    /// not HTTP classification inputs or proof that cleanup succeeded.
+    /// Each branch retains its typed source and any nested common error chain.
+    pub fn cleanup_errors(&self) -> Vec<&Self> {
+        let mut errors = Vec::new();
+        self.collect_cleanup_errors(&mut errors);
+        errors
+    }
+
+    fn collect_cleanup_errors<'a>(&'a self, errors: &mut Vec<&'a Self>) {
+        match self {
+            Self::Shared { source } => source.collect_cleanup_errors(errors),
+            Self::Cleanup {
+                source, cleanup, ..
+            } => {
+                source.collect_cleanup_errors(errors);
+                errors.push(cleanup);
+            }
+            Self::CleanupBatch {
+                source, cleanup, ..
+            } => {
+                source.collect_cleanup_errors(errors);
+                errors.extend(cleanup.iter().map(|step| &step.source));
+            }
+            Self::CleanupFailures { cleanup, .. } => {
+                errors.extend(cleanup.iter().map(|step| &step.source));
+            }
+            _ => {}
+        }
+    }
+
+    /// Internal diagnostics across runtime and common primary/cleanup branches.
+    /// Unlike `primary()`, this must never be used to choose HTTP policy.
+    pub fn diagnostic_chain(
+        &self,
+    ) -> Box<dyn Iterator<Item = &(dyn std::error::Error + 'static)> + '_> {
+        use ferrule_common::ErrorChain;
+        let branches: Box<dyn Iterator<Item = &(dyn std::error::Error + 'static)> + '_> = match self
+        {
+            Self::Shared { source } => source.diagnostic_chain(),
+            Self::Backend { source } => Box::new(ErrorChain::new(source)),
+            Self::Cleanup {
+                source, cleanup, ..
+            } => Box::new(source.diagnostic_chain().chain(cleanup.diagnostic_chain())),
+            Self::CleanupBatch {
+                source, cleanup, ..
+            } => Box::new(
+                source.diagnostic_chain().chain(
+                    cleanup
+                        .iter()
+                        .flat_map(|step| step.source.diagnostic_chain()),
+                ),
+            ),
+            Self::CleanupFailures { cleanup, .. } => Box::new(
+                cleanup
+                    .iter()
+                    .flat_map(|step| step.source.diagnostic_chain()),
+            ),
+            Self::FailureBatch { failures, .. } => {
+                Box::new(failures.iter().flat_map(Self::diagnostic_chain))
+            }
+            _ => return Box::new(ErrorChain::new(self)),
+        };
+        Box::new(std::iter::once(self as &(dyn std::error::Error + 'static)).chain(branches))
+    }
+
+    /// Keep the complete failure at the existing retry owner while reporting the
+    /// same snapshot now. Only the error path allocates or increments an Arc.
+    pub(crate) fn retain_cleanup(&mut self, operation: &'static str, cleanup: Error) -> Self {
+        let primary = std::mem::replace(self, Self::EngineUnavailable);
+        let source = Arc::new(Self::cleanup(operation, primary, cleanup));
+        *self = Self::Shared {
+            source: Arc::clone(&source),
+        };
+        Self::Shared { source }
+    }
+
     pub(crate) fn cleanup(
         operation: &'static str,
         source: impl Into<Error>,
@@ -188,3 +282,7 @@ impl CleanupStep {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/unit/error.rs"]
+mod tests;

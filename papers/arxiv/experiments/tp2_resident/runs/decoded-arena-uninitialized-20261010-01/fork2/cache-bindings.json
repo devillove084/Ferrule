@@ -1,0 +1,26 @@
+[
+  {
+    "events": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-uninitialized-20261010-01/fork2/lifecycle-raw/epoch-0/rank-0/events.jsonl",
+      "sha256": "6b7d9c33f94294e40c2810fbb8d824d2d44322c394d4307cf4c839737b28c097"
+    },
+    "budget": {
+      "capacity_grants": 3221225472,
+      "pinned_grants": 1405091840,
+      "routed_entries": 20480,
+      "routed_working_set_grants": 805306368
+    }
+  },
+  {
+    "events": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-uninitialized-20261010-01/fork2/lifecycle-raw/epoch-0/rank-1/events.jsonl",
+      "sha256": "fd95c058a640e63fb8fcaa1c227996c3db0db6d51e2a255445ed207542238f68"
+    },
+    "budget": {
+      "capacity_grants": 3221225472,
+      "pinned_grants": 1405091840,
+      "routed_entries": 20480,
+      "routed_working_set_grants": 805306368
+    }
+  }
+]

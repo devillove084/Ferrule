@@ -1,0 +1,6 @@
+{
+  "returncode": 0,
+  "one_test_passed": true,
+  "selector": "lifecycle::full40_decoded_cache_bounded_multistep_fork_recreate_cold_owner",
+  "binary_sha256": "1a605fe1bb7705324d09f6a4ee5b8cb7419a981c31400b7ee0f3831b030e7acd"
+}

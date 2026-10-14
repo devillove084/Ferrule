@@ -311,11 +311,95 @@ impl NumericFp8Read {
         Ok(artifact)
     }
 
+    /// Validate a whole paired completion against the exact original ticket,
+    /// including operation, source-image generation, snapshots and extent order.
+    /// This borrows custody: the packed completion remains charged. Reserve the
+    /// separately owned artifact's storage before calling; retain that staged
+    /// budget through upload completion. Slices copy directly into final Arcs.
+    pub fn materialize_verified_read(
+        &self,
+        completion: &super::ReadCompletion,
+        expected: &super::ReadTicket,
+    ) -> Result<NumericFp8Artifact> {
+        if expected.read_plan() != self.read_plan() {
+            return Err(invalid(
+                "verified completion must match the exact paired plan",
+            ));
+        }
+        let end = usize::try_from(self.plan.storage_bytes())
+            .map_err(|_| invalid("paired storage does not fit host address space"))?;
+        self.materialize_verified_read_range(completion, expected, 0..end)
+    }
+
+    /// Select one paired projection in a larger verified batch. The range must
+    /// follow exact extent boundaries and match this plan's ordered extents and
+    /// original snapshots, not just its size. Concatenated Q/K/V or gate/up/down
+    /// plans can share a single completion. The whole batch is rechecked before
+    /// and after numeric validation, so a changed sibling source also fails.
+    pub fn materialize_verified_read_range(
+        &self,
+        completion: &super::ReadCompletion,
+        expected: &super::ReadTicket,
+        packed_range: Range<usize>,
+    ) -> Result<NumericFp8Artifact> {
+        let packed = completion.verified_packed_range(expected, &self.plan, packed_range)?;
+        let check_boundary = || {
+            self.source.validate_source_identity()?;
+            expected
+                .read_plan()
+                .validate_source_identity()
+                .map_err(|reason| {
+                    invalid(format!("stale verified batch source identity: {reason:?}"))
+                })
+        };
+        check_boundary()?;
+        let artifact = self.materialize_packed(packed)?;
+        check_boundary()?;
+        Ok(artifact)
+    }
+
+    fn materialize_packed(&self, packed: &[u8]) -> Result<NumericFp8Artifact> {
+        if packed.len() as u64 != self.plan.storage_bytes() {
+            return Err(invalid("packed paired byte length mismatch"));
+        }
+        let weight = usize::try_from(self.weight_read.read_plan().storage_bytes())
+            .map_err(|_| invalid("packed weight does not fit host address space"))?;
+        let (weight, scale) = packed
+            .split_at_checked(weight)
+            .ok_or_else(|| invalid("packed weight/scale byte length mismatch"))?;
+        self.materialize_bytes(weight, scale)
+    }
+
     // Shared byte validation; the local reader encloses this in its verified
     // session, while external providers retain the legacy publication checks.
-    fn materialize_bytes(&self, weight: Vec<u8>, scale: Vec<u8>) -> Result<NumericFp8Artifact> {
-        if weight.len() as u64 != self.weight_read.read_plan().storage_bytes()
-            || scale.len() as u64 != self.scale_read.read_plan().storage_bytes()
+    fn materialize_bytes(
+        &self,
+        weight: impl AsRef<[u8]> + Into<Arc<[u8]>>,
+        scale: impl AsRef<[u8]> + Into<Arc<[u8]>>,
+    ) -> Result<NumericFp8Artifact> {
+        if self.source.weight.dtype != CheckpointDType::F8E4M3
+            || self.source.scale.dtype != self.source.encoding.scale_dtype()
+            || self.weight_read.tensor().dtype != CheckpointDType::F8E4M3
+            || self.scale_read.tensor().dtype != self.source.encoding.scale_dtype()
+        {
+            return Err(invalid(
+                "expected E4M3FN weight and the explicitly selected numeric scale dtype",
+            ));
+        }
+        if !self.plan.extents().iter().eq(self
+            .weight_read
+            .read_plan()
+            .extents()
+            .iter()
+            .chain(self.scale_read.read_plan().extents()))
+        {
+            return Err(invalid(
+                "paired extent layout does not match weight/scale descriptors",
+            ));
+        }
+
+        if weight.as_ref().len() as u64 != self.weight_read.read_plan().storage_bytes()
+            || scale.as_ref().len() as u64 != self.scale_read.read_plan().storage_bytes()
         {
             return Err(invalid("packed weight/scale byte length mismatch"));
         }
@@ -346,7 +430,10 @@ impl NumericFp8Read {
                 }
             })?;
         #[cfg(test)]
-        proof_tests::validated(&payload);
+        {
+            proof_tests::validated(&payload);
+            completion_tests::after_validation();
+        }
         // This result is still private: read_validated's final source boundary
         // (or materialize's post-check) must succeed before it is published.
         Ok(NumericFp8Artifact {
@@ -376,6 +463,27 @@ impl PartialEq for NumericFp8Artifact {
 impl Eq for NumericFp8Artifact {}
 
 impl NumericFp8Artifact {
+    /// Construct from a real source-verified pipeline completion, without a
+    /// slice-to-Vec-to-Arc transient. See the read descriptor's custody contract.
+    pub fn from_verified_read(
+        read: &NumericFp8Read,
+        completion: &super::ReadCompletion,
+        expected: &super::ReadTicket,
+    ) -> Result<Self> {
+        read.materialize_verified_read(completion, expected)
+    }
+
+    /// Construct one projection from an extent-aligned packed range in a shared
+    /// verified batch. The exact original ticket (including generation) is required.
+    pub fn from_verified_read_range(
+        read: &NumericFp8Read,
+        completion: &super::ReadCompletion,
+        expected: &super::ReadTicket,
+        packed_range: Range<usize>,
+    ) -> Result<Self> {
+        read.materialize_verified_read_range(completion, expected, packed_range)
+    }
+
     pub fn provenance(&self) -> &NumericFp8Read {
         &self.provenance
     }
@@ -499,3 +607,7 @@ fn invalid(message: impl Into<String>) -> Error {
 #[cfg(test)]
 #[path = "numeric_fp8_tests.rs"]
 pub(crate) mod proof_tests;
+
+#[cfg(test)]
+#[path = "../../tests/checkpoint_read_pipeline/numeric.rs"]
+mod completion_tests;

@@ -8,6 +8,8 @@ allow = [
   "Apache-2.0",
   "BSD-3-Clause",
   "BSL-1.0",
+  # rustls-webpki, ring and untrusted: authenticated rank transport.
+  "ISC",
 
   "MIT",
   "Unicode-3.0",

@@ -95,6 +95,7 @@ impl CudaOperators {
         query_a_output: &mut CudaF32Buffer,
         key_value_output: &mut CudaF32Buffer,
     ) -> Result<()> {
+        Self::f32_no_alias(&[], &[query_a_output, key_value_output])?;
         let query_a = query_a.operator_view();
         let key_value = key_value.operator_view();
         let activation = activation.operator_view();
@@ -189,6 +190,9 @@ impl CudaOperators {
         workspace: &mut CudaArtifactLinearWorkspace,
         output: &mut CudaF32Buffer,
     ) -> Result<()> {
+        // All context reads finish into the separate BF16 latent before
+        // output-B writes (stream order for one row, grid barrier otherwise).
+        // Thus context/output aliasing needs no additional restriction here.
         let output_a = output_a.operator_view();
         let output_b = output_b.operator_view();
         let workspace = workspace.operator_storage_mut();

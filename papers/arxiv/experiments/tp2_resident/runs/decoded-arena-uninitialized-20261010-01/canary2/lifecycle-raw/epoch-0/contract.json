@@ -1,0 +1,113 @@
+{
+  "complete_required_inventory": false,
+  "epoch": 0,
+  "max_bytes_per_owner": 2147483645,
+  "max_events_per_owner": 50000,
+  "max_invocations": 5,
+  "max_metadata_bytes_per_owner": 67108864,
+  "oracle_manifest_sha256": "4069b0e3f4dbead859654855a576c402867fa6ea2908d3dc67cf78c3ea2f672f",
+  "owners": [
+    0,
+    1
+  ],
+  "plan": {
+    "capture": "every call; complete old inventory at stage call; cache reflects committed post-call state",
+    "cold_owner": "one fresh authenticated numerical child per launch; repeat in a second launch to establish different owner identity",
+    "decode_steps": 2,
+    "fork": "deep independent HF global/rank cache snapshots, not a runtime COW implementation",
+    "limits": {
+      "max_calls": 20,
+      "max_live_sessions": 3,
+      "max_total_capture_bytes": 4294967296
+    },
+    "operations": [
+      {
+        "case": "hello",
+        "op": "create",
+        "session": "main"
+      },
+      {
+        "id": "call-00",
+        "input": {
+          "ids": [
+            9419
+          ],
+          "kind": "tokens"
+        },
+        "op": "call",
+        "session": "main"
+      },
+      {
+        "case": "capital",
+        "op": "create",
+        "session": "canary"
+      },
+      {
+        "id": "call-01",
+        "input": {
+          "ids": [
+            760,
+            6511,
+            314,
+            9338,
+            369
+          ],
+          "kind": "tokens"
+        },
+        "op": "call",
+        "session": "canary"
+      },
+      {
+        "id": "call-02",
+        "input": {
+          "kind": "greedy"
+        },
+        "op": "call",
+        "session": "canary"
+      },
+      {
+        "op": "drop",
+        "session": "canary"
+      },
+      {
+        "id": "call-03",
+        "input": {
+          "kind": "greedy"
+        },
+        "op": "call",
+        "session": "main"
+      },
+      {
+        "id": "call-04",
+        "input": {
+          "kind": "greedy"
+        },
+        "op": "call",
+        "session": "main"
+      },
+      {
+        "op": "drop",
+        "session": "main"
+      }
+    ],
+    "prompts": {
+      "capital": [
+        760,
+        6511,
+        314,
+        9338,
+        369
+      ],
+      "hello": [
+        9419
+      ]
+    },
+    "scenario": "canary",
+    "schema": "ferrule.paper.tp2-mixed-lifecycle-plan.v1",
+    "stop": "fixed bounded decode count, including EOS; not natural-stop quality/performance evaluation"
+  },
+  "queue_record_limit": 50016,
+  "schema": "ferrule.mixed-lifecycle-owner-capture.v1",
+  "state_scope": "provisional GDN observations joined to parent publication; retained-source committed KV",
+  "storage": "f32le-native-host-view"
+}

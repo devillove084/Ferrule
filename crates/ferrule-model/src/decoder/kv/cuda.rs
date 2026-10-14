@@ -12,6 +12,10 @@ pub struct TypedCudaPagedKvPool<S> {
     state: std::marker::PhantomData<fn() -> S>,
     inner: device::CudaPagedKvPool,
     max_sequence_len: Option<usize>,
+    idle_reclaim: Option<(
+        super::super::IdleKvReclaimConfig,
+        super::super::IdleKvMemoryPlan,
+    )>,
 }
 
 /// Physical authority plus the exact decoder projection captured at prepare.
@@ -40,6 +44,7 @@ impl<S> Clone for TypedCudaPagedKvPool<S> {
         Self {
             inner: self.inner.clone(),
             max_sequence_len: self.max_sequence_len,
+            idle_reclaim: self.idle_reclaim,
             state: std::marker::PhantomData,
         }
     }
@@ -55,6 +60,7 @@ impl<S> TypedCudaPagedKvPool<S> {
         Ok(Self {
             inner: device::CudaPagedKvPool::new(context, &planes, page_size, max_slots)?,
             max_sequence_len: None,
+            idle_reclaim: None,
             state: std::marker::PhantomData,
         })
     }
@@ -77,12 +83,41 @@ impl<S> TypedCudaPagedKvPool<S> {
         pool.max_sequence_len = Some(strategy.max_sequence_len());
         Ok(pool)
     }
+    pub fn from_strategy_with_idle_reclaim(
+        context: Rc<CudaOperators>,
+        strategy: &impl DecoderKvPlaneStrategy,
+        max_slots: usize,
+        config: super::super::IdleKvReclaimConfig,
+    ) -> Result<Self> {
+        if strategy.max_sequence_len() == 0 || strategy.max_sequence_len() > u32::MAX as usize {
+            return Err(kv_error(
+                "CUDA KV maximum sequence length must fit positive u32",
+            ));
+        }
+        let plan = config.plan(strategy.planes(), strategy.page_size(), max_slots)?;
+        Ok(Self {
+            state: std::marker::PhantomData,
+            inner: device::CudaPagedKvPool::new_chunked(
+                context,
+                strategy.planes(),
+                strategy.page_size(),
+                max_slots,
+                config.staging_page_limit,
+            )?,
+            max_sequence_len: Some(strategy.max_sequence_len()),
+            idle_reclaim: Some((config, plan)),
+        })
+    }
     pub fn from_schema(
         context: Rc<CudaOperators>,
         schema: &impl DecoderKvPlaneStrategy,
         max_slots: usize,
     ) -> Result<Self> {
         Self::from_strategy(context, schema, max_slots)
+    }
+    /// Completed typed preemption payload, never a mutable storage capability.
+    pub fn typed_host_snapshot(&self, page: KvPageId) -> Result<device::TypedKvHostSnapshot> {
+        self.inner.typed_host_snapshot(page)
     }
     pub fn planes(&self) -> Vec<KvPlaneDescriptor> {
         self.inner.planes()
@@ -106,6 +141,31 @@ impl<S> DecoderKvPageView for TypedCudaPagedKvPool<S> {
     }
 }
 impl<S: super::super::DecoderSequence> PhysicalKvPool for TypedCudaPagedKvPool<S> {
+    fn idle_kv_reclaim_config(&self) -> Option<super::super::IdleKvReclaimConfig> {
+        self.idle_reclaim.map(|c| c.0)
+    }
+    fn idle_kv_physical_stats(&self) -> Option<super::super::IdleKvPhysicalStats> {
+        let (_, admission) = self.idle_reclaim?;
+        let s = self.inner.physical_stats();
+        Some(super::super::IdleKvPhysicalStats {
+            admission,
+            live_payload_bytes: s.device_payload_bytes,
+            entry_staging_payload_bytes: s.entry_staging_payload_bytes,
+            host_snapshot_bytes: s.host_snapshot_bytes,
+            pinned_bytes: s.pending_pinned_bytes,
+            allocator_live_grant_bytes: s.allocator.live_granted_bytes,
+            allocator_reserved_bytes: s.allocator.reserved_bytes,
+            allocator_pending_bytes: s.allocator.pending_retirement_bytes,
+            driver_freed_bytes: s.allocator.driver_free_bytes,
+            unknown: self.inner.has_unresolved_custody(),
+        })
+    }
+    fn trim_idle_kv(&mut self) -> Result<()> {
+        if self.idle_reclaim.is_some() {
+            self.inner.trim_physical_allocations()?;
+        }
+        Ok(())
+    }
     type SequenceState = S;
     type Transaction = CudaPagedKvTransaction;
     type KvView = CudaKvView;
@@ -352,6 +412,38 @@ impl CudaKvView {
             }))
         })
     }
+    pub fn try_with_f32_gqa_planes_mut<R>(
+        &mut self,
+        context: &CudaOperators,
+        local_layer: usize,
+        batch: &PackedDecoderBatch,
+        readset: &[KvPageId],
+        run: impl FnOnce(CudaGqaPlanesMut<'_>) -> Result<R>,
+    ) -> Result<R> {
+        self.with_f32_gqa_planes(context, local_layer, batch, readset, |planes| {
+            run(CudaGqaPlanesMut {
+                key: planes.key,
+                value: planes.value,
+                key_layout: planes.layout,
+                value_layout: planes.layout,
+                block_slots: planes.block_slots,
+                block_offsets: planes.block_offsets,
+            })
+        })
+    }
+    /// BF16 counterpart over the same entered transaction; no independent KV owner.
+    pub fn with_bf16_gqa_planes<R>(
+        &mut self,
+        context: &CudaOperators,
+        local_layer: usize,
+        batch: &PackedDecoderBatch,
+        run: impl FnOnce(device::CudaBf16GqaPlanes<'_>) -> Result<R>,
+    ) -> Result<R> {
+        self.validate_batch(batch)?;
+        self.inner
+            .with_bf16_gqa_planes(context, local_layer, &backend_batch(batch), run)
+    }
+
     /// Validates the full packed projection and declared read set before lending
     /// K/V buffers under an exclusive guard. Slots prefer shadow over resident.
     pub fn with_f32_gqa_planes<R>(
@@ -400,5 +492,68 @@ impl TransformerKvView for CudaKvView {
         Err(kv_error(
             "CUDA KV host history unsupported; use GPU plane bindings",
         ))
+    }
+}
+
+impl<S: super::super::DecoderSequence> PagedKvBackend<TypedCudaPagedKvPool<S>> {
+    /// Explicit runtime composition; do not infer ownership from matching IDs.
+    pub fn bind_committed_logical_owner(&mut self, owner: u64) -> Result<()> {
+        if !self.ownership()?.is_quiescent() {
+            return Err(kv_error(
+                "committed binding requires quiescent decoder custody",
+            ));
+        }
+        self.pool.inner.bind_committed_logical_owner(owner)
+    }
+    /// Post-publication native KV trace. The caller must retain a validated
+    /// logical source lease from the bound manager. This method checks physical
+    /// custody, not global publication or generation/session freshness. Keep the
+    /// logical lease on Unknown; a later successful fence cannot authorize release.
+    /// Never call from an execution
+    /// observer: working state/append is not committed at that boundary.
+    /// Source positions must span 0..committed_tokens, including retained pages.
+    /// Device scratch is zero; host staging <= max_chunk_words * 2 bytes plus
+    /// O(committed pages) mapping metadata. BF16 words are not reconstructed.
+    pub fn export_committed_bf16_kv(
+        &mut self,
+        source: &ferrule_common::host_kv::CommittedKvSource,
+        local_kv_layer: usize,
+        max_chunk_words: usize,
+        observe: impl FnMut(device::CudaCommittedBf16KvChunk<'_>) -> Result<()>,
+    ) -> Result<()> {
+        if self.pool.inner.has_unresolved_custody() {
+            return Err(super::super::CompletionUnknown::wrap(kv_error(
+                "committed BF16 trace pool retains Unknown custody",
+            )));
+        }
+        let ownership = self.ownership()?;
+        if !ownership.is_quiescent() || source.pages.iter().any(|p| ownership.status(*p) != DecoderKvPageStatus::Resident) {
+            return Err(kv_error("committed BF16 trace requires quiescent resident decoder custody"));
+        }
+        let result = self.pool.inner.export_committed_bf16_kv(source, local_kv_layer, max_chunk_words, observe);
+        if self.pool.inner.has_unresolved_custody() {
+            result.map_err(super::super::CompletionUnknown::wrap)
+        } else {
+            result
+        }
+    }
+    /// Sealed to model composition: logical runtime validation remains separate.
+    pub(crate) fn committed_read(
+        &mut self,
+        source: &ferrule_common::host_kv::CommittedKvSource,
+        layer: usize,
+    ) -> Result<device::CudaCommittedRead> {
+        let ownership = self.ownership()?;
+        if !ownership.is_quiescent()
+            || source
+                .pages
+                .iter()
+                .any(|p| ownership.status(*p) != DecoderKvPageStatus::Resident)
+        {
+            return Err(kv_error(
+                "committed read requires quiescent resident decoder custody",
+            ));
+        }
+        self.pool.inner.acquire_committed_read(source, layer)
     }
 }

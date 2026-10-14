@@ -1,0 +1,12 @@
+{
+  "cpu_only": true,
+  "actual_child": true,
+  "waitpid_lock_held": true,
+  "first_poll": null,
+  "second_poll": null,
+  "verify_root_error": "Authenticated server root exited",
+  "waitid_exit_status": 0,
+  "final_returncode": 0,
+  "explanation": "CPython Popen.poll returns None while another thread owns _waitpid_lock, even for a waitable exited child; worker proc.wait races observer polls",
+  "gpu_executed": false
+}

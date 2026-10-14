@@ -1,0 +1,414 @@
+{
+  "first_stage": [
+    {
+      "name": "hello2",
+      "prompt": "Hello",
+      "max_tokens": 2,
+      "expected": null,
+      "payload": {
+        "model": "qwen35-storage-demand-paper",
+        "prompt": "Hello",
+        "max_tokens": 2,
+        "temperature": 0,
+        "seed": 1,
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        }
+      },
+      "actual_generated_ids": null,
+      "actual_request_id": null,
+      "result": "not_run"
+    },
+    {
+      "name": "canary-qa",
+      "prompt": "The capital of Japan is",
+      "max_tokens": 8,
+      "expected": {
+        "id": "qa",
+        "prompt": "The capital of Japan is",
+        "input_tokens": 5,
+        "reference_ids": [
+          25358,
+          13,
+          198,
+          760,
+          6511,
+          314,
+          6124,
+          369
+        ],
+        "reference_text": " Tokyo.\nThe capital of Japan is"
+      },
+      "payload": {
+        "model": "qwen35-storage-demand-paper",
+        "prompt": "The capital of Japan is",
+        "max_tokens": 8,
+        "temperature": 0,
+        "seed": 1,
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        }
+      },
+      "actual_generated_ids": null,
+      "actual_request_id": null,
+      "result": "not_run"
+    },
+    {
+      "name": "canary-arithmetic",
+      "prompt": "7 + 8 =",
+      "max_tokens": 8,
+      "expected": {
+        "id": "arithmetic",
+        "prompt": "7 + 8 =",
+        "input_tokens": 5,
+        "reference_ids": [
+          907,
+          271,
+          22,
+          478,
+          220,
+          23,
+          283,
+          220
+        ],
+        "reference_text": " ?\n\n7 + 8 = "
+      },
+      "payload": {
+        "model": "qwen35-storage-demand-paper",
+        "prompt": "7 + 8 =",
+        "max_tokens": 8,
+        "temperature": 0,
+        "seed": 1,
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        }
+      },
+      "actual_generated_ids": null,
+      "actual_request_id": null,
+      "result": "not_run"
+    },
+    {
+      "name": "canary-chinese",
+      "prompt": "\u4e2d\u56fd\u7684\u9996\u90fd\u662f",
+      "max_tokens": 8,
+      "expected": {
+        "id": "chinese",
+        "prompt": "\u4e2d\u56fd\u7684\u9996\u90fd\u662f",
+        "input_tokens": 3,
+        "reference_ids": [
+          98116,
+          3709,
+          98116,
+          108820,
+          102357,
+          95983,
+          1710,
+          97486
+        ],
+        "reference_text": "\u5317\u4eac\uff0c\u5317\u4eac\u662f\u4e2d\u56fd\u7684\u9996\u90fd\u3002\u90a3\u4e48"
+      },
+      "payload": {
+        "model": "qwen35-storage-demand-paper",
+        "prompt": "\u4e2d\u56fd\u7684\u9996\u90fd\u662f",
+        "max_tokens": 8,
+        "temperature": 0,
+        "seed": 1,
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        }
+      },
+      "actual_generated_ids": null,
+      "actual_request_id": null,
+      "result": "not_run"
+    }
+  ],
+  "qa_extension": [
+    {
+      "name": "qa-first-excluded",
+      "prompt": "The capital of Japan is",
+      "max_tokens": 8,
+      "expected": {
+        "id": "qa",
+        "prompt": "The capital of Japan is",
+        "input_tokens": 5,
+        "reference_ids": [
+          25358,
+          13,
+          198,
+          760,
+          6511,
+          314,
+          6124,
+          369
+        ],
+        "reference_text": " Tokyo.\nThe capital of Japan is"
+      },
+      "payload": {
+        "model": "qwen35-storage-demand-paper",
+        "prompt": "The capital of Japan is",
+        "max_tokens": 8,
+        "temperature": 0,
+        "seed": 1,
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        }
+      },
+      "actual_generated_ids": null,
+      "actual_request_id": null,
+      "result": "not_run"
+    },
+    {
+      "name": "qa-warm-1",
+      "prompt": "The capital of Japan is",
+      "max_tokens": 8,
+      "expected": {
+        "id": "qa",
+        "prompt": "The capital of Japan is",
+        "input_tokens": 5,
+        "reference_ids": [
+          25358,
+          13,
+          198,
+          760,
+          6511,
+          314,
+          6124,
+          369
+        ],
+        "reference_text": " Tokyo.\nThe capital of Japan is"
+      },
+      "payload": {
+        "model": "qwen35-storage-demand-paper",
+        "prompt": "The capital of Japan is",
+        "max_tokens": 8,
+        "temperature": 0,
+        "seed": 1,
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        }
+      },
+      "actual_generated_ids": null,
+      "actual_request_id": null,
+      "result": "not_run"
+    },
+    {
+      "name": "qa-warm-2",
+      "prompt": "The capital of Japan is",
+      "max_tokens": 8,
+      "expected": {
+        "id": "qa",
+        "prompt": "The capital of Japan is",
+        "input_tokens": 5,
+        "reference_ids": [
+          25358,
+          13,
+          198,
+          760,
+          6511,
+          314,
+          6124,
+          369
+        ],
+        "reference_text": " Tokyo.\nThe capital of Japan is"
+      },
+      "payload": {
+        "model": "qwen35-storage-demand-paper",
+        "prompt": "The capital of Japan is",
+        "max_tokens": 8,
+        "temperature": 0,
+        "seed": 1,
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        }
+      },
+      "actual_generated_ids": null,
+      "actual_request_id": null,
+      "result": "not_run"
+    },
+    {
+      "name": "qa-measure-1",
+      "prompt": "The capital of Japan is",
+      "max_tokens": 8,
+      "expected": {
+        "id": "qa",
+        "prompt": "The capital of Japan is",
+        "input_tokens": 5,
+        "reference_ids": [
+          25358,
+          13,
+          198,
+          760,
+          6511,
+          314,
+          6124,
+          369
+        ],
+        "reference_text": " Tokyo.\nThe capital of Japan is"
+      },
+      "payload": {
+        "model": "qwen35-storage-demand-paper",
+        "prompt": "The capital of Japan is",
+        "max_tokens": 8,
+        "temperature": 0,
+        "seed": 1,
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        }
+      },
+      "actual_generated_ids": null,
+      "actual_request_id": null,
+      "result": "not_run"
+    },
+    {
+      "name": "qa-measure-2",
+      "prompt": "The capital of Japan is",
+      "max_tokens": 8,
+      "expected": {
+        "id": "qa",
+        "prompt": "The capital of Japan is",
+        "input_tokens": 5,
+        "reference_ids": [
+          25358,
+          13,
+          198,
+          760,
+          6511,
+          314,
+          6124,
+          369
+        ],
+        "reference_text": " Tokyo.\nThe capital of Japan is"
+      },
+      "payload": {
+        "model": "qwen35-storage-demand-paper",
+        "prompt": "The capital of Japan is",
+        "max_tokens": 8,
+        "temperature": 0,
+        "seed": 1,
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        }
+      },
+      "actual_generated_ids": null,
+      "actual_request_id": null,
+      "result": "not_run"
+    },
+    {
+      "name": "qa-measure-3",
+      "prompt": "The capital of Japan is",
+      "max_tokens": 8,
+      "expected": {
+        "id": "qa",
+        "prompt": "The capital of Japan is",
+        "input_tokens": 5,
+        "reference_ids": [
+          25358,
+          13,
+          198,
+          760,
+          6511,
+          314,
+          6124,
+          369
+        ],
+        "reference_text": " Tokyo.\nThe capital of Japan is"
+      },
+      "payload": {
+        "model": "qwen35-storage-demand-paper",
+        "prompt": "The capital of Japan is",
+        "max_tokens": 8,
+        "temperature": 0,
+        "seed": 1,
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        }
+      },
+      "actual_generated_ids": null,
+      "actual_request_id": null,
+      "result": "not_run"
+    },
+    {
+      "name": "qa-measure-4",
+      "prompt": "The capital of Japan is",
+      "max_tokens": 8,
+      "expected": {
+        "id": "qa",
+        "prompt": "The capital of Japan is",
+        "input_tokens": 5,
+        "reference_ids": [
+          25358,
+          13,
+          198,
+          760,
+          6511,
+          314,
+          6124,
+          369
+        ],
+        "reference_text": " Tokyo.\nThe capital of Japan is"
+      },
+      "payload": {
+        "model": "qwen35-storage-demand-paper",
+        "prompt": "The capital of Japan is",
+        "max_tokens": 8,
+        "temperature": 0,
+        "seed": 1,
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        }
+      },
+      "actual_generated_ids": null,
+      "actual_request_id": null,
+      "result": "not_run"
+    },
+    {
+      "name": "qa-measure-5",
+      "prompt": "The capital of Japan is",
+      "max_tokens": 8,
+      "expected": {
+        "id": "qa",
+        "prompt": "The capital of Japan is",
+        "input_tokens": 5,
+        "reference_ids": [
+          25358,
+          13,
+          198,
+          760,
+          6511,
+          314,
+          6124,
+          369
+        ],
+        "reference_text": " Tokyo.\nThe capital of Japan is"
+      },
+      "payload": {
+        "model": "qwen35-storage-demand-paper",
+        "prompt": "The capital of Japan is",
+        "max_tokens": 8,
+        "temperature": 0,
+        "seed": 1,
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        }
+      },
+      "actual_generated_ids": null,
+      "actual_request_id": null,
+      "result": "not_run"
+    }
+  ],
+  "requested_ceiling": 10,
+  "full_requests": 12,
+  "extension_blocked": true
+}

@@ -1,0 +1,86 @@
+{
+  "argv": [
+    "/root/.rustup/toolchains/nightly-2026-08-01-x86_64-unknown-linux-gnu/bin/cargo",
+    "test",
+    "--locked",
+    "--offline",
+    "--release",
+    "-p",
+    "ferrule-backend",
+    "--features",
+    "cuda",
+    "--lib",
+    "--target-dir",
+    "/home/admin/luhuanbing.lhb/Ferrule/target/validation/qwen35-35b-current/toolchain/cargo-cuda124",
+    "--",
+    "--test-threads=1"
+  ],
+  "supervisor": {
+    "returncode": 0,
+    "timed_out": false,
+    "wall_seconds": 2.2464468348771334,
+    "stdout": "",
+    "stderr": "",
+    "cleanup_errors": [],
+    "cleanup_scope": "isolated_subreaper_direct_children",
+    "descendant_custody": "proven_drained",
+    "gpu_quiescence": "unverified",
+    "custody": {
+      "status": "proven_drained",
+      "method": "linux-subreaper-waitid",
+      "containment_verified": true,
+      "launch_id": "81531579641c4480945cada8fb893a27",
+      "helper_identity": {
+        "pid": 157851,
+        "birth_ticks": 97390511,
+        "ppid": 157844,
+        "pgrp": 157851,
+        "session": 157851
+      },
+      "root_identity": {
+        "pid": 157852,
+        "birth_ticks": 97390513,
+        "ppid": 157851,
+        "pgrp": 157851,
+        "session": 157851
+      },
+      "boot_id": "4dd3497d-570c-4693-a876-5c26e06ab360",
+      "entries": [
+        {
+          "identity": {
+            "pid": 157852,
+            "birth_ticks": 97390513,
+            "ppid": 157851,
+            "pgrp": 157851,
+            "session": 157851
+          },
+          "role": "root",
+          "signals": [],
+          "reaped": true,
+          "exit_code": 0,
+          "first_observed_at": 8610025.489683047,
+          "reaped_at": 8610027.624939663
+        }
+      ],
+      "errors": [],
+      "reporting_errors": [],
+      "echild": true
+    },
+    "handshake": {
+      "kind": "ready",
+      "protocol": 1,
+      "launch_id": "81531579641c4480945cada8fb893a27",
+      "helper_identity": {
+        "pid": 157851,
+        "birth_ticks": 97390511,
+        "ppid": 157844,
+        "pgrp": 157851,
+        "session": 157851
+      },
+      "containment_verified": true,
+      "method": "linux-subreaper-waitid"
+    },
+    "stdout_truncated": false,
+    "stderr_truncated": false
+  }
+}

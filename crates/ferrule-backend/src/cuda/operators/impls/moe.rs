@@ -25,6 +25,12 @@ impl CudaOperators {
         output: &mut CudaF32Buffer,
         accumulate_output: bool,
     ) -> Result<()> {
+        // Overwrite mode consumes all hidden F32 values into the separate FP8
+        // pack before output writes (grid barrier). Accumulation additionally
+        // needs the original output, which gate/up must not clobber.
+        if accumulate_output {
+            Self::f32_no_alias(&[], &[hidden_f32, output])?;
+        }
         let gate = gate.operator_view();
         let up = up.operator_view();
         let down = down.operator_view();

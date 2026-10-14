@@ -1,0 +1,34 @@
+{
+  "schema": "ferrule.paper.indexed-lru-cpu-benchmark.v1",
+  "selector": "transformer::standard::expert_cache::grouped_tests::cpu_grouped_selector_benchmark",
+  "binary": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-allocator-v3-20261011-03/binary-model/staged/ferrule",
+    "sha256": "e0e956282450b7fadf349c7921e4c4caab9e1e427a9c77f1bab438b918cf6fad"
+  },
+  "source_digest": "e3592ec70f5073d1a2a6a3a43141ce56cdc081ef2693f29b1226dccfd7e3b436",
+  "production_sources": {
+    "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-model/src/transformer/standard/expert_cache.rs": "cbb6b8cf01119ca649f3446ecf5a189fcd0e3d0886d449b1aa0a9989428be229",
+    "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-model/src/transformer/standard/mixed_decoded.rs": "bfb5faa7f7098b067df7e2e463a281e43547d1c95314d2aa6289aa2c9f28859f"
+  },
+  "test_source": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-model/tests/unit/transformer/grouped_expert_cache.rs",
+    "sha256": "e971f2d296d8e729a64eb7a56ed210dd72b05061bcbf7a719968e5e92d34b6f5"
+  },
+  "supervisor_receipt": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-allocator-v3-20261011-03/cpu-31.json",
+    "sha256": "d755725c54a1ec7d0479d654b9a3b5415bc70d5d6bd6570d21077a0bc06405a4"
+  },
+  "raw_stderr": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-allocator-v3-20261011-03/cpu-31.stderr",
+    "sha256": "82e72b46815501ce7bcb366da4cbe126e451a39f10eb2343e050b9ec31b9057a"
+  },
+  "summary_lines": [
+    "CPU only indexed=false entries=1155 classes=2 descriptors=20000 misses=50000 wall=5.681481307s victim_work=Work { scanned_entries: 57750000, descriptor_lookups: 57750000, selected: 50000 } incoming_descriptor_lookups=50000 frozen_registration_lookups=0 (excludes preparation; includes lease/complete/index maintenance; not E2E)",
+    "CPU only indexed=true entries=1155 classes=2 descriptors=20000 misses=50000 wall=42.966152ms victim_work=Work { scanned_entries: 0, descriptor_lookups: 0, selected: 50000 } incoming_descriptor_lookups=50000 frozen_registration_lookups=50000 (excludes preparation; includes lease/complete/index maintenance; not E2E)"
+  ],
+  "equal_victim_sequence_stats_and_final_entries_asserted": true,
+  "timing_assertion": false,
+  "gpu_used": false,
+  "end_to_end": false,
+  "scope": "1155 resident entries, 20000 descriptors, 50000 misses; excludes preparation, includes lease/completion/index maintenance; not E2E"
+}

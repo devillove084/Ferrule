@@ -5,7 +5,9 @@ use super::{CudaStream, CutlassKernelId, DeviceBuffer, NumericFp8Precision, Resu
 /// Temporary source-compatibility bridge. This inherent const method cannot be
 /// hidden from the semantic type without breaking old callers (including const
 /// expressions). Only this legacy impl mentions the vendor capability; operator
-/// contracts and production dispatch must not call it.
+/// contracts and production dispatch must not call it. This reports the historical
+/// precision family, NOT the selected implementation: F32 M1 now uses
+/// `NumericFp8LinearPlan::selected_kernel()` and `NumericFp8FusedM1` capability.
 impl NumericFp8Precision {
     #[deprecated(note = "legacy provider bridge; submit a semantic numeric FP8 plan instead")]
     pub const fn kernel(self) -> CutlassKernelId {

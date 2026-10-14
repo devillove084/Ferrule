@@ -1,0 +1,56 @@
+{
+  "status": "CPU_correction_and_7_tests_passed",
+  "gpu_queries_performed": false,
+  "current_production_source_or_quality_touched": false,
+  "historical_receipt": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/arena-cache-ab-20261010-01/owner-closeout.json",
+    "sha256": "918ced0f852b36c01b6d3616b2b9fbe30e4421305df9d8cbb7352bf7f5d4d8bb"
+  },
+  "historical_report": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/arena-cache-ab-20261010-01/RESULTS.md",
+    "sha256": "d571acaed8b9a003d7fbf40b6376d05ce7b5dccf96521a52db516ecdeb1e87b4"
+  },
+  "historical_ab_summary": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/arena-cache-ab-20261010-01/cache-ab-summary.json",
+    "sha256": "28aedb7441b2362cb0862bcc32b6f8b818198a68ee3c326445ae026258d756ed"
+  },
+  "corrected_receipt": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/arena-cache-ab-20261010-01/cpu-correction-01/owner-closeout-corrected.json",
+    "sha256": "746a83463daa64a57d85af36c4166a1c469cad8ab5659fceb99e728ec8eec3b3"
+  },
+  "corrected_report": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/arena-cache-ab-20261010-01/cpu-correction-01/RESULTS-corrected.md",
+    "sha256": "e92e6c16d0ea7fed859500720ab3dccc29b4668b25b261d9d8d4a93e9c9aa629"
+  },
+  "implementation": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/arena-cache-ab-20261010-01/cpu-correction-01/correct_closeout.py",
+    "sha256": "61ae99389f6367b9bb294bc87a9191bb69f8cf15ace95964e307de0772b5a579"
+  },
+  "tests": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/arena-cache-ab-20261010-01/cpu-correction-01/test_correct_closeout.py",
+    "sha256": "7c247d330d0e69a5df600cda23249bef80b1a4f79db7cd283f3d42b5b9973f58"
+  },
+  "test_log": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/arena-cache-ab-20261010-01/cpu-correction-01/tests.log",
+    "sha256": "8715525e40e0e6a2afbd0a75348a4dba7d3acd3fd699a6299f9905145ad01125"
+  },
+  "historical_metrics_unchanged": true,
+  "counts": {
+    "S1": {
+      "samples": 161,
+      "missing": 0
+    },
+    "S2": {
+      "samples": 159,
+      "missing": 0
+    },
+    "OFF": {
+      "samples": 113,
+      "missing": 0
+    },
+    "ON": {
+      "samples": 162,
+      "missing": 0
+    }
+  }
+}

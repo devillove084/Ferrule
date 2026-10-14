@@ -1,0 +1,86 @@
+{
+  "argv": [
+    "/root/.rustup/toolchains/nightly-2026-08-01-x86_64-unknown-linux-gnu/bin/cargo",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "ferrule-backend",
+    "--features",
+    "cuda",
+    "--test",
+    "numeric_bf16_gemv",
+    "--no-run",
+    "--message-format=json",
+    "--target-dir",
+    "/home/admin/luhuanbing.lhb/Ferrule/target/pair-swiglu-cuda124"
+  ],
+  "supervisor": {
+    "returncode": 0,
+    "timed_out": false,
+    "wall_seconds": 0.19354223646223545,
+    "stdout": "",
+    "stderr": "",
+    "cleanup_errors": [],
+    "cleanup_scope": "isolated_subreaper_direct_children",
+    "descendant_custody": "proven_drained",
+    "gpu_quiescence": "unverified",
+    "custody": {
+      "status": "proven_drained",
+      "method": "linux-subreaper-waitid",
+      "containment_verified": true,
+      "launch_id": "93a8c1a04d46430d8391054259b6ea19",
+      "helper_identity": {
+        "pid": 229307,
+        "birth_ticks": 101790639,
+        "ppid": 229290,
+        "pgrp": 229307,
+        "session": 229307
+      },
+      "root_identity": {
+        "pid": 229308,
+        "birth_ticks": 101790641,
+        "ppid": 229307,
+        "pgrp": 229307,
+        "session": 229307
+      },
+      "boot_id": "4dd3497d-570c-4693-a876-5c26e06ab360",
+      "entries": [
+        {
+          "identity": {
+            "pid": 229308,
+            "birth_ticks": 101790641,
+            "ppid": 229307,
+            "pgrp": 229307,
+            "session": 229307
+          },
+          "role": "root",
+          "signals": [],
+          "reaped": true,
+          "exit_code": 0,
+          "first_observed_at": 8654026.770323837,
+          "reaped_at": 8654026.881831404
+        }
+      ],
+      "errors": [],
+      "reporting_errors": [],
+      "echild": true
+    },
+    "handshake": {
+      "kind": "ready",
+      "protocol": 1,
+      "launch_id": "93a8c1a04d46430d8391054259b6ea19",
+      "helper_identity": {
+        "pid": 229307,
+        "birth_ticks": 101790639,
+        "ppid": 229290,
+        "pgrp": 229307,
+        "session": 229307
+      },
+      "containment_verified": true,
+      "method": "linux-subreaper-waitid"
+    },
+    "stdout_truncated": false,
+    "stderr_truncated": false
+  }
+}

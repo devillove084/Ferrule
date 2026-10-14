@@ -1,0 +1,2942 @@
+{
+  "rows": [
+    {
+      "cycle": 1,
+      "order": [
+        "BEFORE",
+        "AFTER"
+      ],
+      "slot": "BEFORE",
+      "launch_id": "b976eafa524947cd96f569f85aafcdf0",
+      "startup_seconds": 349.61484047584236,
+      "ttft_seconds": {
+        "count": 5,
+        "mean": 0.5295169647783041,
+        "p50": 0.5308470521122217,
+        "p95": 0.5429984997957945
+      },
+      "request_e2e_seconds": {
+        "count": 5,
+        "mean": 1.438295179232955,
+        "p50": 1.4379614442586899,
+        "p95": 1.450992839038372
+      },
+      "successful_output_tokens_per_second": 5.4021258004593875,
+      "measured_window_seconds": 7.404492504894733,
+      "rate_denominator": "first measured HTTP send (dispatch fallback if none) to last client-observed terminal/deadline, including failures and client overhead",
+      "unmeasured_qa8": 3,
+      "measured_qa8": 5,
+      "actual_input_tokens_each": 5,
+      "actual_output_tokens_each": 8,
+      "measured_output_tokens": 40,
+      "summary": {
+        "slot": "BEFORE",
+        "binary": {
+          "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/admission/indexed-lru-20261010-01/staged/ferrule",
+          "sha256": "9ef9841598b4694fb611250bf8876c4314d252400136ddb23f606a979cadb656",
+          "kind": "public_serving"
+        },
+        "launch_id": "b976eafa524947cd96f569f85aafcdf0",
+        "startup_seconds": 349.61484047584236,
+        "summary": {
+          "scheduled": 5,
+          "offered": 5,
+          "not_issued": 0,
+          "statuses": {
+            "success": 5
+          },
+          "success": 5,
+          "failed": 0,
+          "success_fraction": 1.0,
+          "scheduled_success_fraction": 1.0,
+          "wall_seconds": 7.404492504894733,
+          "successful_output_tokens": 40,
+          "known_usage_output_tokens": 40,
+          "requests_without_usage": 0,
+          "committed_visible_token_rate": null,
+          "committed_visible_token_rate_reason": "SSE text is not token IDs; usage may include hidden/EOS tokens; partial counts unknown",
+          "actual_output_counts": {
+            "8": 5
+          },
+          "actual_input_counts": {
+            "5": 5
+          },
+          "length_matched_success": 5,
+          "slo_qualified_success": null,
+          "successful_requests_per_second": 0.6752657250574234,
+          "successful_output_tokens_per_second": 5.4021258004593875,
+          "length_matched_requests_per_second": 0.6752657250574234,
+          "length_matched_output_tokens_per_second": 5.4021258004593875,
+          "slo_goodput_requests_per_second": null,
+          "distributions": {
+            "success_ttft_seconds": {
+              "count": 5,
+              "mean": 0.5295169647783041,
+              "p50": 0.5308470521122217,
+              "p95": 0.5429984997957945
+            },
+            "success_request_e2e_seconds": {
+              "count": 5,
+              "mean": 1.438295179232955,
+              "p50": 1.4379614442586899,
+              "p95": 1.450992839038372
+            },
+            "success_mean_tpot_usage_proxy_seconds": {
+              "count": 5,
+              "mean": 0.12979429119399616,
+              "p50": 0.12963554236505712,
+              "p95": 0.13034726796405657
+            },
+            "success_content_event_itl_seconds": {
+              "count": 35,
+              "mean": 0.12979429119399616,
+              "p50": 0.12879869900643826,
+              "p95": 0.13636805210262537
+            },
+            "failure_ttft_seconds": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null
+            },
+            "failure_request_e2e_seconds": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null
+            },
+            "failure_mean_tpot_usage_proxy_seconds": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null
+            },
+            "failure_content_event_itl_seconds": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null
+            }
+          },
+          "window_kind": "fixed-work",
+          "denominator": "first measured HTTP send (dispatch fallback if none) to last client-observed terminal/deadline, including failures and client overhead",
+          "denominator_seconds": 7.404492504894733,
+          "time_to_complete_seconds": 7.404492504894733
+        },
+        "resources": {
+          "status": "observed_within_targets",
+          "errors": [],
+          "memory_components": {
+            "sample_count": 155,
+            "complete_host_samples": 155,
+            "gpu_samples": 155,
+            "gpu_peak_bytes": {
+              "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 22593667072,
+              "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 22593667072
+            },
+            "tree_pss_peak_bytes": 65281692672,
+            "tree_rss_peak_bytes": 65283809280,
+            "tree_anonymous_peak_bytes": 65039835136,
+            "tree_pss_anon_peak_bytes": null,
+            "tree_pss_file_peak_bytes": null,
+            "tree_private_dirty_peak_bytes": 65082429440,
+            "component_sample_counts": {
+              "anonymous_bytes": 155,
+              "pss_anon_bytes": 0,
+              "pss_file_bytes": 0,
+              "private_dirty_bytes": 155
+            },
+            "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+            "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+          },
+          "phase_memory": {
+            "bounds": {
+              "ready_monotonic": 8639794.775506767,
+              "first_sent_monotonic": 8639795.221381005,
+              "first_terminal_monotonic": 8639795.746439388
+            },
+            "phases": {
+              "startup": {
+                "sample_count": 148,
+                "complete_host_samples": 148,
+                "gpu_samples": 148,
+                "gpu_peak_bytes": {
+                  "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 22526558208,
+                  "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 21473787904
+                },
+                "tree_pss_peak_bytes": 65281692672,
+                "tree_rss_peak_bytes": 65283809280,
+                "tree_anonymous_peak_bytes": 65039835136,
+                "tree_pss_anon_peak_bytes": null,
+                "tree_pss_file_peak_bytes": null,
+                "tree_private_dirty_peak_bytes": 65082429440,
+                "component_sample_counts": {
+                  "anonymous_bytes": 148,
+                  "pss_anon_bytes": 0,
+                  "pss_file_bytes": 0,
+                  "private_dirty_bytes": 148
+                },
+                "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+                "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+              },
+              "ready_before_first": {
+                "sample_count": 0,
+                "complete_host_samples": 0,
+                "gpu_samples": 0,
+                "gpu_peak_bytes": {
+                  "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": null,
+                  "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": null
+                },
+                "tree_pss_peak_bytes": null,
+                "tree_rss_peak_bytes": null,
+                "tree_anonymous_peak_bytes": null,
+                "tree_pss_anon_peak_bytes": null,
+                "tree_pss_file_peak_bytes": null,
+                "tree_private_dirty_peak_bytes": null,
+                "component_sample_counts": {
+                  "anonymous_bytes": 0,
+                  "pss_anon_bytes": 0,
+                  "pss_file_bytes": 0,
+                  "private_dirty_bytes": 0
+                },
+                "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+                "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+              },
+              "first_request": {
+                "sample_count": 0,
+                "complete_host_samples": 0,
+                "gpu_samples": 0,
+                "gpu_peak_bytes": {
+                  "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": null,
+                  "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": null
+                },
+                "tree_pss_peak_bytes": null,
+                "tree_rss_peak_bytes": null,
+                "tree_anonymous_peak_bytes": null,
+                "tree_pss_anon_peak_bytes": null,
+                "tree_pss_file_peak_bytes": null,
+                "tree_private_dirty_peak_bytes": null,
+                "component_sample_counts": {
+                  "anonymous_bytes": 0,
+                  "pss_anon_bytes": 0,
+                  "pss_file_bytes": 0,
+                  "private_dirty_bytes": 0
+                },
+                "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+                "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+              },
+              "after_first_request": {
+                "sample_count": 6,
+                "complete_host_samples": 6,
+                "gpu_samples": 6,
+                "gpu_peak_bytes": {
+                  "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 22593667072,
+                  "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 22593667072
+                },
+                "tree_pss_peak_bytes": 64562148352,
+                "tree_rss_peak_bytes": 64564310016,
+                "tree_anonymous_peak_bytes": 64317321216,
+                "tree_pss_anon_peak_bytes": null,
+                "tree_pss_file_peak_bytes": null,
+                "tree_private_dirty_peak_bytes": 64360161280,
+                "component_sample_counts": {
+                  "anonymous_bytes": 6,
+                  "pss_anon_bytes": 0,
+                  "pss_file_bytes": 0,
+                  "private_dirty_bytes": 6
+                },
+                "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+                "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+              }
+            },
+            "unassigned_or_boundary_samples": 1,
+            "steady_state_claim": false,
+            "policy": "after first request includes later canaries/warmup/requests; not a steady-state proof"
+          },
+          "phase_metadata_error": null,
+          "gpu_peak_bytes": {
+            "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 22593667072,
+            "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 22593667072
+          },
+          "tree_pss_peak_bytes": 65281692672,
+          "tree_rss_peak_bytes": 65283809280,
+          "complete_host_samples": 155,
+          "incomplete_host_samples": 0,
+          "gpu_samples": 155,
+          "missing_gpu_attempts": 0,
+          "baseline": {
+            "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": {
+              "index": 0,
+              "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+              "total_bytes": 25769803776,
+              "gpu_bytes": 0,
+              "utilization": 0
+            },
+            "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": {
+              "index": 1,
+              "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+              "total_bytes": 25769803776,
+              "gpu_bytes": 0,
+              "utilization": 0
+            },
+            "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6": {
+              "index": 2,
+              "uuid": "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6",
+              "total_bytes": 25769803776,
+              "gpu_bytes": 0,
+              "utilization": 0
+            },
+            "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011": {
+              "index": 3,
+              "uuid": "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011",
+              "total_bytes": 25769803776,
+              "gpu_bytes": 0,
+              "utilization": 0
+            },
+            "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86": {
+              "index": 4,
+              "uuid": "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86",
+              "total_bytes": 25769803776,
+              "gpu_bytes": 0,
+              "utilization": 0
+            },
+            "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685": {
+              "index": 5,
+              "uuid": "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685",
+              "total_bytes": 25769803776,
+              "gpu_bytes": 0,
+              "utilization": 0
+            },
+            "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d": {
+              "index": 6,
+              "uuid": "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d",
+              "total_bytes": 25769803776,
+              "gpu_bytes": 0,
+              "utilization": 0
+            },
+            "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f": {
+              "index": 7,
+              "uuid": "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f",
+              "total_bytes": 25769803776,
+              "gpu_bytes": 0,
+              "utilization": 0
+            }
+          },
+          "delta_high_water_bytes": {
+            "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 22593667072,
+            "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 22593667072,
+            "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6": 0,
+            "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011": 0,
+            "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86": 0,
+            "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685": 0,
+            "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d": 0,
+            "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f": 0
+          },
+          "final_process_diagnostics": [
+            {
+              "identity": {
+                "pid": 178575,
+                "birth_ticks": 100332485,
+                "ppid": 178566,
+                "state": "S"
+              },
+              "command": "/proc/self/fd/4 serve /mnt/nas1/hf/Qwen3.5-35B-A3B-FP8 --backend cuda --engine pipeline --model-profile qwen35-mixed-bf16 --tensor-parallel 2 --pipeline-parallel 1 --expert-parallel 1 --rank-backend thread --devices 0,1 --rank-restarts 0 --kv-execution-policy resident --ctx-size 128 --max-active-sequences 2 --max-batch-tokens 8 --prefill-chunk-size 8 --cuda-device-budget-mb 22528 --kv-cache-mb 16 --max-tensor-mb 2048 --cuda-workspace-mb 4096 --host 127.0.0.1 --port 18367 --served-model-name qwen35-ferrule-tp2-resident-paper ",
+              "environment": {
+                "HOME": "/root",
+                "PATH": "/home/admin/wxw403883/anaconda3/envs/tao/bin:/root/.cargo/bin:/usr/bin:/bin",
+                "PYTHONDONTWRITEBYTECODE": "1",
+                "CUDA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+                "NVIDIA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+                "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
+                "HF_HUB_OFFLINE": "1",
+                "TRANSFORMERS_OFFLINE": "1",
+                "CUDA_HOME": "/home/admin/wxw403883/anaconda3/envs/tao",
+                "NVCC": "/home/admin/wxw403883/anaconda3/envs/tao/bin/nvcc",
+                "LD_LIBRARY_PATH": "/home/admin/wxw403883/anaconda3/envs/tao/lib:/usr/lib64",
+                "CUBLAS_WORKSPACE_CONFIG": ":0:0",
+                "FERRULE_LOG": "info",
+                "FERRULE_LOG_FORMAT": "json"
+              },
+              "libraries": [
+                "/home/admin/wxw403883/anaconda3/envs/tao/lib/libcudart.so.12.4.99",
+                "/usr/lib64/libcuda.so.575.57.08"
+              ]
+            }
+          ],
+          "owned_gpu_attribution": "unknown",
+          "owned_process_gpu_peak_bytes": null,
+          "exact_peaks": false,
+          "hard_memory_partition": false,
+          "continuous_coverage": false
+        },
+        "cache_snapshots": [
+          {
+            "owner": 0,
+            "stage": "ready",
+            "schema_version": 2,
+            "snapshot": {
+              "image_generation": 1,
+              "phase": "idle",
+              "published": true,
+              "quarantined": false,
+              "capacity_grants": 3221225472,
+              "arena_backing_grants": 3221225472,
+              "pin_target_grants": 1405091840,
+              "pinned_grants": 1405091840,
+              "unallocated_pin_grants": 0,
+              "active_routed_grants": 0,
+              "pooled_grants": 0,
+              "free_slot_grants": 1816133632,
+              "unused_tail_bytes": 0,
+              "slot_padding_bytes": 0,
+              "pending_reserved_grants": 0,
+              "pending_allocation_count": 0,
+              "pending_lease_count": 0,
+              "borrowed_key_count": 0,
+              "segment_slack_bytes": 0,
+              "pending_segment_slack_bytes": 0,
+              "physical_current_bytes": 3221225472,
+              "physical_peak_bytes": 3221225472,
+              "driver_allocation_growth_bytes": 3221225472,
+              "unknown_reserved_bytes": 0,
+              "backing_reuses": 0,
+              "native_fallbacks": 0,
+              "evictions": 0,
+              "rank_performance_enabled": false,
+              "rank_performance_active": false,
+              "profiled_activity": null
+            },
+            "profiled_hit_fraction": null,
+            "activity_scope": "Cumulative rankperf-enabled invocations only; not a measured-request or GPU-completion counter"
+          },
+          {
+            "owner": 0,
+            "stage": "shutdown",
+            "schema_version": 2,
+            "snapshot": {
+              "image_generation": 1,
+              "phase": "idle",
+              "published": true,
+              "quarantined": false,
+              "capacity_grants": 3221225472,
+              "arena_backing_grants": 3221225472,
+              "pin_target_grants": 1405091840,
+              "pinned_grants": 1405091840,
+              "unallocated_pin_grants": 0,
+              "active_routed_grants": 1816133632,
+              "pooled_grants": 0,
+              "free_slot_grants": 0,
+              "unused_tail_bytes": 0,
+              "slot_padding_bytes": 0,
+              "pending_reserved_grants": 0,
+              "pending_allocation_count": 0,
+              "pending_lease_count": 0,
+              "borrowed_key_count": 0,
+              "segment_slack_bytes": 0,
+              "pending_segment_slack_bytes": 0,
+              "physical_current_bytes": 3221225472,
+              "physical_peak_bytes": 3221225472,
+              "driver_allocation_growth_bytes": 3221225472,
+              "unknown_reserved_bytes": 0,
+              "backing_reuses": 54621,
+              "native_fallbacks": 0,
+              "evictions": 54621,
+              "rank_performance_enabled": false,
+              "rank_performance_active": false,
+              "profiled_activity": null
+            },
+            "profiled_hit_fraction": null,
+            "activity_scope": "Cumulative rankperf-enabled invocations only; not a measured-request or GPU-completion counter"
+          },
+          {
+            "owner": 1,
+            "stage": "ready",
+            "schema_version": 2,
+            "snapshot": {
+              "image_generation": 2,
+              "phase": "idle",
+              "published": true,
+              "quarantined": false,
+              "capacity_grants": 3221225472,
+              "arena_backing_grants": 3221225472,
+              "pin_target_grants": 1405091840,
+              "pinned_grants": 1405091840,
+              "unallocated_pin_grants": 0,
+              "active_routed_grants": 0,
+              "pooled_grants": 0,
+              "free_slot_grants": 1816133632,
+              "unused_tail_bytes": 0,
+              "slot_padding_bytes": 0,
+              "pending_reserved_grants": 0,
+              "pending_allocation_count": 0,
+              "pending_lease_count": 0,
+              "borrowed_key_count": 0,
+              "segment_slack_bytes": 0,
+              "pending_segment_slack_bytes": 0,
+              "physical_current_bytes": 3221225472,
+              "physical_peak_bytes": 3221225472,
+              "driver_allocation_growth_bytes": 3221225472,
+              "unknown_reserved_bytes": 0,
+              "backing_reuses": 0,
+              "native_fallbacks": 0,
+              "evictions": 0,
+              "rank_performance_enabled": false,
+              "rank_performance_active": false,
+              "profiled_activity": null
+            },
+            "profiled_hit_fraction": null,
+            "activity_scope": "Cumulative rankperf-enabled invocations only; not a measured-request or GPU-completion counter"
+          },
+          {
+            "owner": 1,
+            "stage": "shutdown",
+            "schema_version": 2,
+            "snapshot": {
+              "image_generation": 2,
+              "phase": "idle",
+              "published": true,
+              "quarantined": false,
+              "capacity_grants": 3221225472,
+              "arena_backing_grants": 3221225472,
+              "pin_target_grants": 1405091840,
+              "pinned_grants": 1405091840,
+              "unallocated_pin_grants": 0,
+              "active_routed_grants": 1816133632,
+              "pooled_grants": 0,
+              "free_slot_grants": 0,
+              "unused_tail_bytes": 0,
+              "slot_padding_bytes": 0,
+              "pending_reserved_grants": 0,
+              "pending_allocation_count": 0,
+              "pending_lease_count": 0,
+              "borrowed_key_count": 0,
+              "segment_slack_bytes": 0,
+              "pending_segment_slack_bytes": 0,
+              "physical_current_bytes": 3221225472,
+              "physical_peak_bytes": 3221225472,
+              "driver_allocation_growth_bytes": 3221225472,
+              "unknown_reserved_bytes": 0,
+              "backing_reuses": 54621,
+              "native_fallbacks": 0,
+              "evictions": 54621,
+              "rank_performance_enabled": false,
+              "rank_performance_active": false,
+              "profiled_activity": null
+            },
+            "profiled_hit_fraction": null,
+            "activity_scope": "Cumulative rankperf-enabled invocations only; not a measured-request or GPU-completion counter"
+          }
+        ],
+        "allocator_retirement": {
+          "schema": "ferrule.paper.operator-retirement-boundaries.v1",
+          "binary_sha256": "9ef9841598b4694fb611250bf8876c4314d252400136ddb23f606a979cadb656",
+          "metric_schema": "historical_9ef",
+          "rows": [
+            {
+              "owner": 0,
+              "stage": "ready",
+              "metrics": {
+                "allocation_requests": 62372,
+                "allocation_failures": 0,
+                "reuse_allocations": 62114,
+                "small_allocations": 62254,
+                "large_allocations": 113,
+                "huge_allocations": 5,
+                "requested_bytes": 22230461572,
+                "granted_bytes": 22244231936,
+                "live_requested_bytes": 22198021252,
+                "live_granted_bytes": 22211791616,
+                "peak_live_requested_bytes": 22230461572,
+                "peak_live_granted_bytes": 22244231936,
+                "reserved_bytes": 22307405824,
+                "peak_reserved_bytes": 22307405824,
+                "free_bytes": 95614208,
+                "largest_free_extent": 67108864,
+                "pending_retirement_blocks": 0,
+                "pending_retirement_bytes": 0,
+                "capture_retirement_bytes": 0,
+                "internal_fragmentation": 0.0006199573739058799,
+                "external_fragmentation": 0.29812874672349954,
+                "segments": 258,
+                "driver_allocations": 258,
+                "driver_allocation_bytes": 22307405824,
+                "driver_frees": 0,
+                "driver_free_bytes": 0
+              }
+            },
+            {
+              "owner": 1,
+              "stage": "ready",
+              "metrics": {
+                "allocation_requests": 62372,
+                "allocation_failures": 0,
+                "reuse_allocations": 62114,
+                "small_allocations": 62254,
+                "large_allocations": 113,
+                "huge_allocations": 5,
+                "requested_bytes": 22230461572,
+                "granted_bytes": 22244231936,
+                "live_requested_bytes": 22198021252,
+                "live_granted_bytes": 22211791616,
+                "peak_live_requested_bytes": 22230461572,
+                "peak_live_granted_bytes": 22244231936,
+                "reserved_bytes": 22307405824,
+                "peak_reserved_bytes": 22307405824,
+                "free_bytes": 95614208,
+                "largest_free_extent": 67108864,
+                "pending_retirement_blocks": 0,
+                "pending_retirement_bytes": 0,
+                "capture_retirement_bytes": 0,
+                "internal_fragmentation": 0.0006199573739058799,
+                "external_fragmentation": 0.29812874672349954,
+                "segments": 258,
+                "driver_allocations": 258,
+                "driver_allocation_bytes": 22307405824,
+                "driver_frees": 0,
+                "driver_free_bytes": 0
+              }
+            },
+            {
+              "owner": 1,
+              "stage": "shutdown",
+              "metrics": {
+                "allocation_requests": 535149,
+                "allocation_failures": 0,
+                "reuse_allocations": 534891,
+                "small_allocations": 534999,
+                "large_allocations": 145,
+                "huge_allocations": 5,
+                "requested_bytes": 28337560036,
+                "granted_bytes": 28706352128,
+                "live_requested_bytes": 22198021252,
+                "live_granted_bytes": 22211791616,
+                "peak_live_requested_bytes": 22270351492,
+                "peak_live_granted_bytes": 22287158016,
+                "reserved_bytes": 22307405824,
+                "peak_reserved_bytes": 22307405824,
+                "free_bytes": 95614208,
+                "largest_free_extent": 67108864,
+                "pending_retirement_blocks": 0,
+                "pending_retirement_bytes": 0,
+                "capture_retirement_bytes": 0,
+                "internal_fragmentation": 0.0006199573739058799,
+                "external_fragmentation": 0.29812874672349954,
+                "segments": 258,
+                "driver_allocations": 258,
+                "driver_allocation_bytes": 22307405824,
+                "driver_frees": 0,
+                "driver_free_bytes": 0
+              }
+            },
+            {
+              "owner": 0,
+              "stage": "shutdown",
+              "metrics": {
+                "allocation_requests": 535149,
+                "allocation_failures": 0,
+                "reuse_allocations": 534891,
+                "small_allocations": 534999,
+                "large_allocations": 145,
+                "huge_allocations": 5,
+                "requested_bytes": 28337560036,
+                "granted_bytes": 28706352128,
+                "live_requested_bytes": 22198021252,
+                "live_granted_bytes": 22211791616,
+                "peak_live_requested_bytes": 22270351492,
+                "peak_live_granted_bytes": 22287158016,
+                "reserved_bytes": 22307405824,
+                "peak_reserved_bytes": 22307405824,
+                "free_bytes": 95614208,
+                "largest_free_extent": 67108864,
+                "pending_retirement_blocks": 0,
+                "pending_retirement_bytes": 0,
+                "capture_retirement_bytes": 0,
+                "internal_fragmentation": 0.0006199573739058799,
+                "external_fragmentation": 0.29812874672349954,
+                "segments": 258,
+                "driver_allocations": 258,
+                "driver_allocation_bytes": 22307405824,
+                "driver_frees": 0,
+                "driver_free_bytes": 0
+              }
+            }
+          ],
+          "arena_bytes_per_owner": 3221225472,
+          "quiescent_pending_zero": true,
+          "ordinary_pressure_failure_count": 0,
+          "observed_boundary_pending_bytes": 0,
+          "pending_peak": null,
+          "unknown_peak": null,
+          "unknown_pressure": null,
+          "observation_scope": "Ready/shutdown only; absent high-watermarks remain null, never zero. V3 fences count successful complete event sets, not all CUDA event calls; BEFORE fields stay historical."
+        },
+        "activity": null,
+        "unknown_pressure": null,
+        "pending_peak": null,
+        "unknown_peak": null,
+        "retirement_event_counts": null,
+        "cuda_api_event_counts": null,
+        "cpu_observation": {
+          "affinity": null,
+          "thread_count": null,
+          "reason": "Existing sampler captures memory/process identity, not affinity/thread counts; observer unchanged to preserve timing"
+        },
+        "gpu_samples": 155,
+        "missing_gpu_samples": 0
+      },
+      "allocator_counters": [
+        {
+          "owner": 0,
+          "available": false,
+          "ready": null,
+          "shutdown": null,
+          "boundary_delta": null
+        },
+        {
+          "owner": 1,
+          "available": false,
+          "ready": null,
+          "shutdown": null,
+          "boundary_delta": null
+        }
+      ],
+      "http_receipt": {
+        "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-crossed-c1-20261011-01/runs/BEFORE/session/qa8-V1/http.json",
+        "sha256": "e089e29a9f039dc78bebd29e1125c79f01ad78c86bc0002eaf4991fc93283b18"
+      }
+    },
+    {
+      "cycle": 1,
+      "order": [
+        "BEFORE",
+        "AFTER"
+      ],
+      "slot": "AFTER",
+      "launch_id": "8ee77c2c01ae498e9f78a8aaf580df28",
+      "startup_seconds": 360.7678313534707,
+      "ttft_seconds": {
+        "count": 5,
+        "mean": 0.49069233052432537,
+        "p50": 0.48964280821383,
+        "p95": 0.49666956923902034
+      },
+      "request_e2e_seconds": {
+        "count": 5,
+        "mean": 1.336878875643015,
+        "p50": 1.334173645824194,
+        "p95": 1.3462161365896463
+      },
+      "successful_output_tokens_per_second": 5.821679634247523,
+      "measured_window_seconds": 6.870869321748614,
+      "rate_denominator": "first measured HTTP send (dispatch fallback if none) to last client-observed terminal/deadline, including failures and client overhead",
+      "unmeasured_qa8": 3,
+      "measured_qa8": 5,
+      "actual_input_tokens_each": 5,
+      "actual_output_tokens_each": 8,
+      "measured_output_tokens": 40,
+      "summary": {
+        "slot": "AFTER",
+        "binary": {
+          "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/admission/allocator-v3-release-20261011-01/staged/ferrule",
+          "sha256": "7e1c23a88143cb6455e3c6e10bfe43a567fc97b5fd45745800eae3a1e39a0e73",
+          "kind": "public_serving"
+        },
+        "launch_id": "8ee77c2c01ae498e9f78a8aaf580df28",
+        "startup_seconds": 360.7678313534707,
+        "summary": {
+          "scheduled": 5,
+          "offered": 5,
+          "not_issued": 0,
+          "statuses": {
+            "success": 5
+          },
+          "success": 5,
+          "failed": 0,
+          "success_fraction": 1.0,
+          "scheduled_success_fraction": 1.0,
+          "wall_seconds": 6.870869321748614,
+          "successful_output_tokens": 40,
+          "known_usage_output_tokens": 40,
+          "requests_without_usage": 0,
+          "committed_visible_token_rate": null,
+          "committed_visible_token_rate_reason": "SSE text is not token IDs; usage may include hidden/EOS tokens; partial counts unknown",
+          "actual_output_counts": {
+            "8": 5
+          },
+          "actual_input_counts": {
+            "5": 5
+          },
+          "length_matched_success": 5,
+          "slo_qualified_success": null,
+          "successful_requests_per_second": 0.7277099542809404,
+          "successful_output_tokens_per_second": 5.821679634247523,
+          "length_matched_requests_per_second": 0.7277099542809404,
+          "length_matched_output_tokens_per_second": 5.821679634247523,
+          "slo_goodput_requests_per_second": null,
+          "distributions": {
+            "success_ttft_seconds": {
+              "count": 5,
+              "mean": 0.49069233052432537,
+              "p50": 0.48964280821383,
+              "p95": 0.49666956923902034
+            },
+            "success_request_e2e_seconds": {
+              "count": 5,
+              "mean": 1.336878875643015,
+              "p50": 1.334173645824194,
+              "p95": 1.3462161365896463
+            },
+            "success_mean_tpot_usage_proxy_seconds": {
+              "count": 5,
+              "mean": 0.12085228423987115,
+              "p50": 0.12060494933809553,
+              "p95": 0.12208602667919227
+            },
+            "success_content_event_itl_seconds": {
+              "count": 35,
+              "mean": 0.12085228423987115,
+              "p50": 0.12055153213441372,
+              "p95": 0.12350627537816763
+            },
+            "failure_ttft_seconds": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null
+            },
+            "failure_request_e2e_seconds": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null
+            },
+            "failure_mean_tpot_usage_proxy_seconds": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null
+            },
+            "failure_content_event_itl_seconds": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null
+            }
+          },
+          "window_kind": "fixed-work",
+          "denominator": "first measured HTTP send (dispatch fallback if none) to last client-observed terminal/deadline, including failures and client overhead",
+          "denominator_seconds": 6.870869321748614,
+          "time_to_complete_seconds": 6.870869321748614
+        },
+        "resources": {
+          "status": "observed_within_targets",
+          "errors": [],
+          "memory_components": {
+            "sample_count": 158,
+            "complete_host_samples": 158,
+            "gpu_samples": 158,
+            "gpu_peak_bytes": {
+              "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 22593667072,
+              "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 22593667072
+            },
+            "tree_pss_peak_bytes": 64562056192,
+            "tree_rss_peak_bytes": 64564195328,
+            "tree_anonymous_peak_bytes": 64317165568,
+            "tree_pss_anon_peak_bytes": null,
+            "tree_pss_file_peak_bytes": null,
+            "tree_private_dirty_peak_bytes": 64360005632,
+            "component_sample_counts": {
+              "anonymous_bytes": 158,
+              "pss_anon_bytes": 0,
+              "pss_file_bytes": 0,
+              "private_dirty_bytes": 158
+            },
+            "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+            "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+          },
+          "phase_memory": {
+            "bounds": {
+              "ready_monotonic": 8640280.393163007,
+              "first_sent_monotonic": 8640280.815586055,
+              "first_terminal_monotonic": 8640281.295657128
+            },
+            "phases": {
+              "startup": {
+                "sample_count": 152,
+                "complete_host_samples": 152,
+                "gpu_samples": 152,
+                "gpu_peak_bytes": {
+                  "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 19057868800,
+                  "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 22593667072
+                },
+                "tree_pss_peak_bytes": 64545129472,
+                "tree_rss_peak_bytes": 64547233792,
+                "tree_anonymous_peak_bytes": 64302641152,
+                "tree_pss_anon_peak_bytes": null,
+                "tree_pss_file_peak_bytes": null,
+                "tree_private_dirty_peak_bytes": 64345235456,
+                "component_sample_counts": {
+                  "anonymous_bytes": 152,
+                  "pss_anon_bytes": 0,
+                  "pss_file_bytes": 0,
+                  "private_dirty_bytes": 152
+                },
+                "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+                "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+              },
+              "ready_before_first": {
+                "sample_count": 0,
+                "complete_host_samples": 0,
+                "gpu_samples": 0,
+                "gpu_peak_bytes": {
+                  "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": null,
+                  "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": null
+                },
+                "tree_pss_peak_bytes": null,
+                "tree_rss_peak_bytes": null,
+                "tree_anonymous_peak_bytes": null,
+                "tree_pss_anon_peak_bytes": null,
+                "tree_pss_file_peak_bytes": null,
+                "tree_private_dirty_peak_bytes": null,
+                "component_sample_counts": {
+                  "anonymous_bytes": 0,
+                  "pss_anon_bytes": 0,
+                  "pss_file_bytes": 0,
+                  "private_dirty_bytes": 0
+                },
+                "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+                "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+              },
+              "first_request": {
+                "sample_count": 0,
+                "complete_host_samples": 0,
+                "gpu_samples": 0,
+                "gpu_peak_bytes": {
+                  "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": null,
+                  "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": null
+                },
+                "tree_pss_peak_bytes": null,
+                "tree_rss_peak_bytes": null,
+                "tree_anonymous_peak_bytes": null,
+                "tree_pss_anon_peak_bytes": null,
+                "tree_pss_file_peak_bytes": null,
+                "tree_private_dirty_peak_bytes": null,
+                "component_sample_counts": {
+                  "anonymous_bytes": 0,
+                  "pss_anon_bytes": 0,
+                  "pss_file_bytes": 0,
+                  "private_dirty_bytes": 0
+                },
+                "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+                "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+              },
+              "after_first_request": {
+                "sample_count": 5,
+                "complete_host_samples": 5,
+                "gpu_samples": 5,
+                "gpu_peak_bytes": {
+                  "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 22593667072,
+                  "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 22593667072
+                },
+                "tree_pss_peak_bytes": 64562056192,
+                "tree_rss_peak_bytes": 64564195328,
+                "tree_anonymous_peak_bytes": 64317165568,
+                "tree_pss_anon_peak_bytes": null,
+                "tree_pss_file_peak_bytes": null,
+                "tree_private_dirty_peak_bytes": 64360005632,
+                "component_sample_counts": {
+                  "anonymous_bytes": 5,
+                  "pss_anon_bytes": 0,
+                  "pss_file_bytes": 0,
+                  "private_dirty_bytes": 5
+                },
+                "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+                "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+              }
+            },
+            "unassigned_or_boundary_samples": 1,
+            "steady_state_claim": false,
+            "policy": "after first request includes later canaries/warmup/requests; not a steady-state proof"
+          },
+          "phase_metadata_error": null,
+          "gpu_peak_bytes": {
+            "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 22593667072,
+            "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 22593667072
+          },
+          "tree_pss_peak_bytes": 64562056192,
+          "tree_rss_peak_bytes": 64564195328,
+          "complete_host_samples": 158,
+          "incomplete_host_samples": 0,
+          "gpu_samples": 158,
+          "missing_gpu_attempts": 0,
+          "baseline": {
+            "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": {
+              "index": 0,
+              "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+              "total_bytes": 25769803776,
+              "gpu_bytes": 0,
+              "utilization": 0
+            },
+            "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": {
+              "index": 1,
+              "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+              "total_bytes": 25769803776,
+              "gpu_bytes": 0,
+              "utilization": 0
+            },
+            "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6": {
+              "index": 2,
+              "uuid": "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6",
+              "total_bytes": 25769803776,
+              "gpu_bytes": 0,
+              "utilization": 0
+            },
+            "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011": {
+              "index": 3,
+              "uuid": "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011",
+              "total_bytes": 25769803776,
+              "gpu_bytes": 0,
+              "utilization": 0
+            },
+            "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86": {
+              "index": 4,
+              "uuid": "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86",
+              "total_bytes": 25769803776,
+              "gpu_bytes": 0,
+              "utilization": 0
+            },
+            "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685": {
+              "index": 5,
+              "uuid": "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685",
+              "total_bytes": 25769803776,
+              "gpu_bytes": 0,
+              "utilization": 0
+            },
+            "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d": {
+              "index": 6,
+              "uuid": "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d",
+              "total_bytes": 25769803776,
+              "gpu_bytes": 0,
+              "utilization": 0
+            },
+            "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f": {
+              "index": 7,
+              "uuid": "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f",
+              "total_bytes": 25769803776,
+              "gpu_bytes": 0,
+              "utilization": 0
+            }
+          },
+          "delta_high_water_bytes": {
+            "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 22593667072,
+            "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 22593667072,
+            "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6": 0,
+            "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011": 0,
+            "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86": 0,
+            "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685": 0,
+            "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d": 0,
+            "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f": 0
+          },
+          "final_process_diagnostics": [
+            {
+              "identity": {
+                "pid": 179385,
+                "birth_ticks": 100379932,
+                "ppid": 179376,
+                "state": "S"
+              },
+              "command": "/proc/self/fd/4 serve /mnt/nas1/hf/Qwen3.5-35B-A3B-FP8 --backend cuda --engine pipeline --model-profile qwen35-mixed-bf16 --tensor-parallel 2 --pipeline-parallel 1 --expert-parallel 1 --rank-backend thread --devices 0,1 --rank-restarts 0 --kv-execution-policy resident --ctx-size 128 --max-active-sequences 2 --max-batch-tokens 8 --prefill-chunk-size 8 --cuda-device-budget-mb 22528 --kv-cache-mb 16 --max-tensor-mb 2048 --cuda-workspace-mb 4096 --host 127.0.0.1 --port 18367 --served-model-name qwen35-ferrule-tp2-resident-paper ",
+              "environment": {
+                "HOME": "/root",
+                "PATH": "/home/admin/wxw403883/anaconda3/envs/tao/bin:/root/.cargo/bin:/usr/bin:/bin",
+                "PYTHONDONTWRITEBYTECODE": "1",
+                "CUDA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+                "NVIDIA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+                "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
+                "HF_HUB_OFFLINE": "1",
+                "TRANSFORMERS_OFFLINE": "1",
+                "CUDA_HOME": "/home/admin/wxw403883/anaconda3/envs/tao",
+                "NVCC": "/home/admin/wxw403883/anaconda3/envs/tao/bin/nvcc",
+                "LD_LIBRARY_PATH": "/home/admin/wxw403883/anaconda3/envs/tao/lib:/usr/lib64",
+                "CUBLAS_WORKSPACE_CONFIG": ":0:0",
+                "FERRULE_LOG": "info",
+                "FERRULE_LOG_FORMAT": "json"
+              },
+              "libraries": [
+                "/home/admin/wxw403883/anaconda3/envs/tao/lib/libcudart.so.12.4.99",
+                "/usr/lib64/libcuda.so.575.57.08"
+              ]
+            }
+          ],
+          "owned_gpu_attribution": "unknown",
+          "owned_process_gpu_peak_bytes": null,
+          "exact_peaks": false,
+          "hard_memory_partition": false,
+          "continuous_coverage": false
+        },
+        "cache_snapshots": [
+          {
+            "owner": 0,
+            "stage": "ready",
+            "schema_version": 2,
+            "snapshot": {
+              "image_generation": 2,
+              "phase": "idle",
+              "published": true,
+              "quarantined": false,
+              "capacity_grants": 3221225472,
+              "arena_backing_grants": 3221225472,
+              "pin_target_grants": 1405091840,
+              "pinned_grants": 1405091840,
+              "unallocated_pin_grants": 0,
+              "active_routed_grants": 0,
+              "pooled_grants": 0,
+              "free_slot_grants": 1816133632,
+              "unused_tail_bytes": 0,
+              "slot_padding_bytes": 0,
+              "pending_reserved_grants": 0,
+              "pending_allocation_count": 0,
+              "pending_lease_count": 0,
+              "borrowed_key_count": 0,
+              "segment_slack_bytes": 0,
+              "pending_segment_slack_bytes": 0,
+              "physical_current_bytes": 3221225472,
+              "physical_peak_bytes": 3221225472,
+              "driver_allocation_growth_bytes": 3221225472,
+              "unknown_reserved_bytes": 0,
+              "backing_reuses": 0,
+              "native_fallbacks": 0,
+              "evictions": 0,
+              "rank_performance_enabled": false,
+              "rank_performance_active": false,
+              "profiled_activity": null
+            },
+            "profiled_hit_fraction": null,
+            "activity_scope": "Cumulative rankperf-enabled invocations only; not a measured-request or GPU-completion counter"
+          },
+          {
+            "owner": 0,
+            "stage": "shutdown",
+            "schema_version": 2,
+            "snapshot": {
+              "image_generation": 2,
+              "phase": "idle",
+              "published": true,
+              "quarantined": false,
+              "capacity_grants": 3221225472,
+              "arena_backing_grants": 3221225472,
+              "pin_target_grants": 1405091840,
+              "pinned_grants": 1405091840,
+              "unallocated_pin_grants": 0,
+              "active_routed_grants": 1816133632,
+              "pooled_grants": 0,
+              "free_slot_grants": 0,
+              "unused_tail_bytes": 0,
+              "slot_padding_bytes": 0,
+              "pending_reserved_grants": 0,
+              "pending_allocation_count": 0,
+              "pending_lease_count": 0,
+              "borrowed_key_count": 0,
+              "segment_slack_bytes": 0,
+              "pending_segment_slack_bytes": 0,
+              "physical_current_bytes": 3221225472,
+              "physical_peak_bytes": 3221225472,
+              "driver_allocation_growth_bytes": 3221225472,
+              "unknown_reserved_bytes": 0,
+              "backing_reuses": 54621,
+              "native_fallbacks": 0,
+              "evictions": 54621,
+              "rank_performance_enabled": false,
+              "rank_performance_active": false,
+              "profiled_activity": null
+            },
+            "profiled_hit_fraction": null,
+            "activity_scope": "Cumulative rankperf-enabled invocations only; not a measured-request or GPU-completion counter"
+          },
+          {
+            "owner": 1,
+            "stage": "ready",
+            "schema_version": 2,
+            "snapshot": {
+              "image_generation": 1,
+              "phase": "idle",
+              "published": true,
+              "quarantined": false,
+              "capacity_grants": 3221225472,
+              "arena_backing_grants": 3221225472,
+              "pin_target_grants": 1405091840,
+              "pinned_grants": 1405091840,
+              "unallocated_pin_grants": 0,
+              "active_routed_grants": 0,
+              "pooled_grants": 0,
+              "free_slot_grants": 1816133632,
+              "unused_tail_bytes": 0,
+              "slot_padding_bytes": 0,
+              "pending_reserved_grants": 0,
+              "pending_allocation_count": 0,
+              "pending_lease_count": 0,
+              "borrowed_key_count": 0,
+              "segment_slack_bytes": 0,
+              "pending_segment_slack_bytes": 0,
+              "physical_current_bytes": 3221225472,
+              "physical_peak_bytes": 3221225472,
+              "driver_allocation_growth_bytes": 3221225472,
+              "unknown_reserved_bytes": 0,
+              "backing_reuses": 0,
+              "native_fallbacks": 0,
+              "evictions": 0,
+              "rank_performance_enabled": false,
+              "rank_performance_active": false,
+              "profiled_activity": null
+            },
+            "profiled_hit_fraction": null,
+            "activity_scope": "Cumulative rankperf-enabled invocations only; not a measured-request or GPU-completion counter"
+          },
+          {
+            "owner": 1,
+            "stage": "shutdown",
+            "schema_version": 2,
+            "snapshot": {
+              "image_generation": 1,
+              "phase": "idle",
+              "published": true,
+              "quarantined": false,
+              "capacity_grants": 3221225472,
+              "arena_backing_grants": 3221225472,
+              "pin_target_grants": 1405091840,
+              "pinned_grants": 1405091840,
+              "unallocated_pin_grants": 0,
+              "active_routed_grants": 1816133632,
+              "pooled_grants": 0,
+              "free_slot_grants": 0,
+              "unused_tail_bytes": 0,
+              "slot_padding_bytes": 0,
+              "pending_reserved_grants": 0,
+              "pending_allocation_count": 0,
+              "pending_lease_count": 0,
+              "borrowed_key_count": 0,
+              "segment_slack_bytes": 0,
+              "pending_segment_slack_bytes": 0,
+              "physical_current_bytes": 3221225472,
+              "physical_peak_bytes": 3221225472,
+              "driver_allocation_growth_bytes": 3221225472,
+              "unknown_reserved_bytes": 0,
+              "backing_reuses": 54621,
+              "native_fallbacks": 0,
+              "evictions": 54621,
+              "rank_performance_enabled": false,
+              "rank_performance_active": false,
+              "profiled_activity": null
+            },
+            "profiled_hit_fraction": null,
+            "activity_scope": "Cumulative rankperf-enabled invocations only; not a measured-request or GPU-completion counter"
+          }
+        ],
+        "allocator_retirement": {
+          "schema": "ferrule.paper.operator-retirement-boundaries.v1",
+          "binary_sha256": "7e1c23a88143cb6455e3c6e10bfe43a567fc97b5fd45745800eae3a1e39a0e73",
+          "metric_schema": "allocator_v3",
+          "rows": [
+            {
+              "owner": 1,
+              "stage": "ready",
+              "metrics": {
+                "allocation_requests": 62372,
+                "allocation_failures": 0,
+                "reuse_allocations": 62114,
+                "small_allocations": 62254,
+                "large_allocations": 113,
+                "huge_allocations": 5,
+                "requested_bytes": 22230461572,
+                "granted_bytes": 22244231936,
+                "live_requested_bytes": 22198021252,
+                "live_granted_bytes": 22211791616,
+                "peak_live_requested_bytes": 22230461572,
+                "peak_live_granted_bytes": 22244231936,
+                "reserved_bytes": 22307405824,
+                "peak_reserved_bytes": 22307405824,
+                "free_bytes": 95614208,
+                "largest_free_extent": 67108864,
+                "pending_retirement_blocks": 0,
+                "pending_retirement_bytes": 0,
+                "capture_retirement_bytes": 0,
+                "retired_blocks": 60,
+                "retirement_batches": 1,
+                "retirement_created_fences": 3,
+                "pending_retirement_batches": 0,
+                "pending_unfenced_bytes": 0,
+                "shutdown_quiescent": false,
+                "shutdown_retained": false,
+                "internal_fragmentation": 0.0006199573739058799,
+                "external_fragmentation": 0.29812874672349954,
+                "segments": 258,
+                "driver_allocations": 258,
+                "driver_allocation_bytes": 22307405824,
+                "driver_frees": 0,
+                "driver_free_bytes": 0
+              }
+            },
+            {
+              "owner": 0,
+              "stage": "ready",
+              "metrics": {
+                "allocation_requests": 62372,
+                "allocation_failures": 0,
+                "reuse_allocations": 62114,
+                "small_allocations": 62254,
+                "large_allocations": 113,
+                "huge_allocations": 5,
+                "requested_bytes": 22230461572,
+                "granted_bytes": 22244231936,
+                "live_requested_bytes": 22198021252,
+                "live_granted_bytes": 22211791616,
+                "peak_live_requested_bytes": 22230461572,
+                "peak_live_granted_bytes": 22244231936,
+                "reserved_bytes": 22307405824,
+                "peak_reserved_bytes": 22307405824,
+                "free_bytes": 95614208,
+                "largest_free_extent": 67108864,
+                "pending_retirement_blocks": 0,
+                "pending_retirement_bytes": 0,
+                "capture_retirement_bytes": 0,
+                "retired_blocks": 60,
+                "retirement_batches": 1,
+                "retirement_created_fences": 3,
+                "pending_retirement_batches": 0,
+                "pending_unfenced_bytes": 0,
+                "shutdown_quiescent": false,
+                "shutdown_retained": false,
+                "internal_fragmentation": 0.0006199573739058799,
+                "external_fragmentation": 0.29812874672349954,
+                "segments": 258,
+                "driver_allocations": 258,
+                "driver_allocation_bytes": 22307405824,
+                "driver_frees": 0,
+                "driver_free_bytes": 0
+              }
+            },
+            {
+              "owner": 1,
+              "stage": "shutdown",
+              "metrics": {
+                "allocation_requests": 535149,
+                "allocation_failures": 0,
+                "reuse_allocations": 534891,
+                "small_allocations": 534999,
+                "large_allocations": 145,
+                "huge_allocations": 5,
+                "requested_bytes": 28337560036,
+                "granted_bytes": 28706352128,
+                "live_requested_bytes": 22198021252,
+                "live_granted_bytes": 22211791616,
+                "peak_live_requested_bytes": 22270351492,
+                "peak_live_granted_bytes": 22287158016,
+                "reserved_bytes": 22307405824,
+                "peak_reserved_bytes": 22307405824,
+                "free_bytes": 95614208,
+                "largest_free_extent": 67108864,
+                "pending_retirement_blocks": 0,
+                "pending_retirement_bytes": 0,
+                "capture_retirement_bytes": 0,
+                "retired_blocks": 472837,
+                "retirement_batches": 108149,
+                "retirement_created_fences": 324447,
+                "pending_retirement_batches": 0,
+                "pending_unfenced_bytes": 0,
+                "shutdown_quiescent": false,
+                "shutdown_retained": false,
+                "internal_fragmentation": 0.0006199573739058799,
+                "external_fragmentation": 0.29812874672349954,
+                "segments": 258,
+                "driver_allocations": 258,
+                "driver_allocation_bytes": 22307405824,
+                "driver_frees": 0,
+                "driver_free_bytes": 0
+              }
+            },
+            {
+              "owner": 0,
+              "stage": "shutdown",
+              "metrics": {
+                "allocation_requests": 535149,
+                "allocation_failures": 0,
+                "reuse_allocations": 534891,
+                "small_allocations": 534999,
+                "large_allocations": 145,
+                "huge_allocations": 5,
+                "requested_bytes": 28337560036,
+                "granted_bytes": 28706352128,
+                "live_requested_bytes": 22198021252,
+                "live_granted_bytes": 22211791616,
+                "peak_live_requested_bytes": 22270351492,
+                "peak_live_granted_bytes": 22287158016,
+                "reserved_bytes": 22307405824,
+                "peak_reserved_bytes": 22307405824,
+                "free_bytes": 95614208,
+                "largest_free_extent": 67108864,
+                "pending_retirement_blocks": 0,
+                "pending_retirement_bytes": 0,
+                "capture_retirement_bytes": 0,
+                "retired_blocks": 472837,
+                "retirement_batches": 108149,
+                "retirement_created_fences": 324447,
+                "pending_retirement_batches": 0,
+                "pending_unfenced_bytes": 0,
+                "shutdown_quiescent": false,
+                "shutdown_retained": false,
+                "internal_fragmentation": 0.0006199573739058799,
+                "external_fragmentation": 0.29812874672349954,
+                "segments": 258,
+                "driver_allocations": 258,
+                "driver_allocation_bytes": 22307405824,
+                "driver_frees": 0,
+                "driver_free_bytes": 0
+              }
+            }
+          ],
+          "arena_bytes_per_owner": 3221225472,
+          "quiescent_pending_zero": true,
+          "ordinary_pressure_failure_count": 0,
+          "observed_boundary_pending_bytes": 0,
+          "pending_peak": null,
+          "unknown_peak": null,
+          "unknown_pressure": null,
+          "observation_scope": "Ready/shutdown only; absent high-watermarks remain null, never zero. V3 fences count successful complete event sets, not all CUDA event calls; BEFORE fields stay historical."
+        },
+        "activity": null,
+        "unknown_pressure": null,
+        "pending_peak": null,
+        "unknown_peak": null,
+        "retirement_event_counts": null,
+        "cuda_api_event_counts": null,
+        "cpu_observation": {
+          "affinity": null,
+          "thread_count": null,
+          "reason": "Existing sampler captures memory/process identity, not affinity/thread counts; observer unchanged to preserve timing"
+        },
+        "gpu_samples": 158,
+        "missing_gpu_samples": 0
+      },
+      "allocator_counters": [
+        {
+          "owner": 0,
+          "available": true,
+          "ready": {
+            "retired_blocks": 60,
+            "retirement_batches": 1,
+            "retirement_created_fences": 3
+          },
+          "shutdown": {
+            "retired_blocks": 472837,
+            "retirement_batches": 108149,
+            "retirement_created_fences": 324447
+          },
+          "boundary_delta": {
+            "retired_blocks": 472777,
+            "retirement_batches": 108148,
+            "retirement_created_fences": 324444
+          }
+        },
+        {
+          "owner": 1,
+          "available": true,
+          "ready": {
+            "retired_blocks": 60,
+            "retirement_batches": 1,
+            "retirement_created_fences": 3
+          },
+          "shutdown": {
+            "retired_blocks": 472837,
+            "retirement_batches": 108149,
+            "retirement_created_fences": 324447
+          },
+          "boundary_delta": {
+            "retired_blocks": 472777,
+            "retirement_batches": 108148,
+            "retirement_created_fences": 324444
+          }
+        }
+      ],
+      "http_receipt": {
+        "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-crossed-c1-20261011-01/runs/AFTER/session/qa8-V1/http.json",
+        "sha256": "24e2cb891c821ee52583ab68b7590e39e7e63c5f5b8cba89044ab9e4585aef77"
+      }
+    },
+    {
+      "cycle": 2,
+      "order": [
+        "AFTER",
+        "BEFORE"
+      ],
+      "slot": "AFTER",
+      "launch_id": "eb77476176e748a88db25b9d9b56235f",
+      "startup_seconds": 366.3976424727589,
+      "ttft_seconds": {
+        "count": 5,
+        "mean": 0.49862750694155694,
+        "p50": 0.494174599647522,
+        "p95": 0.507165352627635
+      },
+      "request_e2e_seconds": {
+        "count": 5,
+        "mean": 1.3679310698062181,
+        "p50": 1.3637272492051125,
+        "p95": 1.3897642396390437
+      },
+      "successful_output_tokens_per_second": 5.6648726307975945,
+      "measured_window_seconds": 7.061059022322297,
+      "rate_denominator": "first measured HTTP send (dispatch fallback if none) to last client-observed terminal/deadline, including failures and client overhead",
+      "unmeasured_qa8": 3,
+      "measured_qa8": 5,
+      "actual_input_tokens_each": 5,
+      "actual_output_tokens_each": 8,
+      "measured_output_tokens": 40,
+      "summary": {
+        "slot": "AFTER",
+        "binary": {
+          "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/admission/allocator-v3-release-20261011-01/staged/ferrule",
+          "sha256": "7e1c23a88143cb6455e3c6e10bfe43a567fc97b5fd45745800eae3a1e39a0e73",
+          "kind": "public_serving"
+        },
+        "launch_id": "eb77476176e748a88db25b9d9b56235f",
+        "startup_seconds": 366.3976424727589,
+        "summary": {
+          "scheduled": 5,
+          "offered": 5,
+          "not_issued": 0,
+          "statuses": {
+            "success": 5
+          },
+          "success": 5,
+          "failed": 0,
+          "success_fraction": 1.0,
+          "scheduled_success_fraction": 1.0,
+          "wall_seconds": 7.061059022322297,
+          "successful_output_tokens": 40,
+          "known_usage_output_tokens": 40,
+          "requests_without_usage": 0,
+          "committed_visible_token_rate": null,
+          "committed_visible_token_rate_reason": "SSE text is not token IDs; usage may include hidden/EOS tokens; partial counts unknown",
+          "actual_output_counts": {
+            "8": 5
+          },
+          "actual_input_counts": {
+            "5": 5
+          },
+          "length_matched_success": 5,
+          "slo_qualified_success": null,
+          "successful_requests_per_second": 0.7081090788496993,
+          "successful_output_tokens_per_second": 5.6648726307975945,
+          "length_matched_requests_per_second": 0.7081090788496993,
+          "length_matched_output_tokens_per_second": 5.6648726307975945,
+          "slo_goodput_requests_per_second": null,
+          "distributions": {
+            "success_ttft_seconds": {
+              "count": 5,
+              "mean": 0.49862750694155694,
+              "p50": 0.494174599647522,
+              "p95": 0.507165352627635
+            },
+            "success_request_e2e_seconds": {
+              "count": 5,
+              "mean": 1.3679310698062181,
+              "p50": 1.3637272492051125,
+              "p95": 1.3897642396390437
+            },
+            "success_mean_tpot_usage_proxy_seconds": {
+              "count": 5,
+              "mean": 0.12415079117885659,
+              "p50": 0.1231583950242826,
+              "p95": 0.12760448679327965
+            },
+            "success_content_event_itl_seconds": {
+              "count": 35,
+              "mean": 0.12415079117885658,
+              "p50": 0.12166720815002918,
+              "p95": 0.1324484260752797
+            },
+            "failure_ttft_seconds": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null
+            },
+            "failure_request_e2e_seconds": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null
+            },
+            "failure_mean_tpot_usage_proxy_seconds": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null
+            },
+            "failure_content_event_itl_seconds": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null
+            }
+          },
+          "window_kind": "fixed-work",
+          "denominator": "first measured HTTP send (dispatch fallback if none) to last client-observed terminal/deadline, including failures and client overhead",
+          "denominator_seconds": 7.061059022322297,
+          "time_to_complete_seconds": 7.061059022322297
+        },
+        "resources": {
+          "status": "observed_within_targets",
+          "errors": [],
+          "memory_components": {
+            "sample_count": 161,
+            "complete_host_samples": 161,
+            "gpu_samples": 161,
+            "gpu_peak_bytes": {
+              "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 22593667072,
+              "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 22593667072
+            },
+            "tree_pss_peak_bytes": 64571157504,
+            "tree_rss_peak_bytes": 64573267968,
+            "tree_anonymous_peak_bytes": 64328847360,
+            "tree_pss_anon_peak_bytes": null,
+            "tree_pss_file_peak_bytes": null,
+            "tree_private_dirty_peak_bytes": 64371499008,
+            "component_sample_counts": {
+              "anonymous_bytes": 161,
+              "pss_anon_bytes": 0,
+              "pss_file_bytes": 0,
+              "private_dirty_bytes": 161
+            },
+            "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+            "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+          },
+          "phase_memory": {
+            "bounds": {
+              "ready_monotonic": 8640825.87089592,
+              "first_sent_monotonic": 8640826.315948574,
+              "first_terminal_monotonic": 8640826.81226148
+            },
+            "phases": {
+              "startup": {
+                "sample_count": 155,
+                "complete_host_samples": 155,
+                "gpu_samples": 155,
+                "gpu_peak_bytes": {
+                  "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 22526558208,
+                  "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 22526558208
+                },
+                "tree_pss_peak_bytes": 64571157504,
+                "tree_rss_peak_bytes": 64573267968,
+                "tree_anonymous_peak_bytes": 64328847360,
+                "tree_pss_anon_peak_bytes": null,
+                "tree_pss_file_peak_bytes": null,
+                "tree_private_dirty_peak_bytes": 64371499008,
+                "component_sample_counts": {
+                  "anonymous_bytes": 155,
+                  "pss_anon_bytes": 0,
+                  "pss_file_bytes": 0,
+                  "private_dirty_bytes": 155
+                },
+                "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+                "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+              },
+              "ready_before_first": {
+                "sample_count": 0,
+                "complete_host_samples": 0,
+                "gpu_samples": 0,
+                "gpu_peak_bytes": {
+                  "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": null,
+                  "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": null
+                },
+                "tree_pss_peak_bytes": null,
+                "tree_rss_peak_bytes": null,
+                "tree_anonymous_peak_bytes": null,
+                "tree_pss_anon_peak_bytes": null,
+                "tree_pss_file_peak_bytes": null,
+                "tree_private_dirty_peak_bytes": null,
+                "component_sample_counts": {
+                  "anonymous_bytes": 0,
+                  "pss_anon_bytes": 0,
+                  "pss_file_bytes": 0,
+                  "private_dirty_bytes": 0
+                },
+                "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+                "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+              },
+              "first_request": {
+                "sample_count": 0,
+                "complete_host_samples": 0,
+                "gpu_samples": 0,
+                "gpu_peak_bytes": {
+                  "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": null,
+                  "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": null
+                },
+                "tree_pss_peak_bytes": null,
+                "tree_rss_peak_bytes": null,
+                "tree_anonymous_peak_bytes": null,
+                "tree_pss_anon_peak_bytes": null,
+                "tree_pss_file_peak_bytes": null,
+                "tree_private_dirty_peak_bytes": null,
+                "component_sample_counts": {
+                  "anonymous_bytes": 0,
+                  "pss_anon_bytes": 0,
+                  "pss_file_bytes": 0,
+                  "private_dirty_bytes": 0
+                },
+                "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+                "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+              },
+              "after_first_request": {
+                "sample_count": 6,
+                "complete_host_samples": 6,
+                "gpu_samples": 6,
+                "gpu_peak_bytes": {
+                  "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 22593667072,
+                  "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 22593667072
+                },
+                "tree_pss_peak_bytes": 64562183168,
+                "tree_rss_peak_bytes": 64564293632,
+                "tree_anonymous_peak_bytes": 64317251584,
+                "tree_pss_anon_peak_bytes": null,
+                "tree_pss_file_peak_bytes": null,
+                "tree_private_dirty_peak_bytes": 64360148992,
+                "component_sample_counts": {
+                  "anonymous_bytes": 6,
+                  "pss_anon_bytes": 0,
+                  "pss_file_bytes": 0,
+                  "private_dirty_bytes": 6
+                },
+                "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+                "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+              }
+            },
+            "unassigned_or_boundary_samples": 0,
+            "steady_state_claim": false,
+            "policy": "after first request includes later canaries/warmup/requests; not a steady-state proof"
+          },
+          "phase_metadata_error": null,
+          "gpu_peak_bytes": {
+            "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 22593667072,
+            "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 22593667072
+          },
+          "tree_pss_peak_bytes": 64571157504,
+          "tree_rss_peak_bytes": 64573267968,
+          "complete_host_samples": 161,
+          "incomplete_host_samples": 0,
+          "gpu_samples": 161,
+          "missing_gpu_attempts": 0,
+          "baseline": {
+            "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": {
+              "index": 0,
+              "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+              "total_bytes": 25769803776,
+              "gpu_bytes": 0,
+              "utilization": 0
+            },
+            "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": {
+              "index": 1,
+              "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+              "total_bytes": 25769803776,
+              "gpu_bytes": 0,
+              "utilization": 0
+            },
+            "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6": {
+              "index": 2,
+              "uuid": "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6",
+              "total_bytes": 25769803776,
+              "gpu_bytes": 0,
+              "utilization": 0
+            },
+            "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011": {
+              "index": 3,
+              "uuid": "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011",
+              "total_bytes": 25769803776,
+              "gpu_bytes": 0,
+              "utilization": 0
+            },
+            "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86": {
+              "index": 4,
+              "uuid": "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86",
+              "total_bytes": 25769803776,
+              "gpu_bytes": 0,
+              "utilization": 0
+            },
+            "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685": {
+              "index": 5,
+              "uuid": "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685",
+              "total_bytes": 25769803776,
+              "gpu_bytes": 0,
+              "utilization": 0
+            },
+            "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d": {
+              "index": 6,
+              "uuid": "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d",
+              "total_bytes": 25769803776,
+              "gpu_bytes": 0,
+              "utilization": 0
+            },
+            "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f": {
+              "index": 7,
+              "uuid": "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f",
+              "total_bytes": 25769803776,
+              "gpu_bytes": 0,
+              "utilization": 0
+            }
+          },
+          "delta_high_water_bytes": {
+            "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 22593667072,
+            "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 22593667072,
+            "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6": 0,
+            "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011": 0,
+            "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86": 0,
+            "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685": 0,
+            "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d": 0,
+            "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f": 0
+          },
+          "final_process_diagnostics": [
+            {
+              "identity": {
+                "pid": 180211,
+                "birth_ticks": 100433917,
+                "ppid": 180202,
+                "state": "S"
+              },
+              "command": "/proc/self/fd/4 serve /mnt/nas1/hf/Qwen3.5-35B-A3B-FP8 --backend cuda --engine pipeline --model-profile qwen35-mixed-bf16 --tensor-parallel 2 --pipeline-parallel 1 --expert-parallel 1 --rank-backend thread --devices 0,1 --rank-restarts 0 --kv-execution-policy resident --ctx-size 128 --max-active-sequences 2 --max-batch-tokens 8 --prefill-chunk-size 8 --cuda-device-budget-mb 22528 --kv-cache-mb 16 --max-tensor-mb 2048 --cuda-workspace-mb 4096 --host 127.0.0.1 --port 18367 --served-model-name qwen35-ferrule-tp2-resident-paper ",
+              "environment": {
+                "HOME": "/root",
+                "PATH": "/home/admin/wxw403883/anaconda3/envs/tao/bin:/root/.cargo/bin:/usr/bin:/bin",
+                "PYTHONDONTWRITEBYTECODE": "1",
+                "CUDA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+                "NVIDIA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+                "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
+                "HF_HUB_OFFLINE": "1",
+                "TRANSFORMERS_OFFLINE": "1",
+                "CUDA_HOME": "/home/admin/wxw403883/anaconda3/envs/tao",
+                "NVCC": "/home/admin/wxw403883/anaconda3/envs/tao/bin/nvcc",
+                "LD_LIBRARY_PATH": "/home/admin/wxw403883/anaconda3/envs/tao/lib:/usr/lib64",
+                "CUBLAS_WORKSPACE_CONFIG": ":0:0",
+                "FERRULE_LOG": "info",
+                "FERRULE_LOG_FORMAT": "json"
+              },
+              "libraries": [
+                "/home/admin/wxw403883/anaconda3/envs/tao/lib/libcudart.so.12.4.99",
+                "/usr/lib64/libcuda.so.575.57.08"
+              ]
+            }
+          ],
+          "owned_gpu_attribution": "unknown",
+          "owned_process_gpu_peak_bytes": null,
+          "exact_peaks": false,
+          "hard_memory_partition": false,
+          "continuous_coverage": false
+        },
+        "cache_snapshots": [
+          {
+            "owner": 0,
+            "stage": "ready",
+            "schema_version": 2,
+            "snapshot": {
+              "image_generation": 2,
+              "phase": "idle",
+              "published": true,
+              "quarantined": false,
+              "capacity_grants": 3221225472,
+              "arena_backing_grants": 3221225472,
+              "pin_target_grants": 1405091840,
+              "pinned_grants": 1405091840,
+              "unallocated_pin_grants": 0,
+              "active_routed_grants": 0,
+              "pooled_grants": 0,
+              "free_slot_grants": 1816133632,
+              "unused_tail_bytes": 0,
+              "slot_padding_bytes": 0,
+              "pending_reserved_grants": 0,
+              "pending_allocation_count": 0,
+              "pending_lease_count": 0,
+              "borrowed_key_count": 0,
+              "segment_slack_bytes": 0,
+              "pending_segment_slack_bytes": 0,
+              "physical_current_bytes": 3221225472,
+              "physical_peak_bytes": 3221225472,
+              "driver_allocation_growth_bytes": 3221225472,
+              "unknown_reserved_bytes": 0,
+              "backing_reuses": 0,
+              "native_fallbacks": 0,
+              "evictions": 0,
+              "rank_performance_enabled": false,
+              "rank_performance_active": false,
+              "profiled_activity": null
+            },
+            "profiled_hit_fraction": null,
+            "activity_scope": "Cumulative rankperf-enabled invocations only; not a measured-request or GPU-completion counter"
+          },
+          {
+            "owner": 0,
+            "stage": "shutdown",
+            "schema_version": 2,
+            "snapshot": {
+              "image_generation": 2,
+              "phase": "idle",
+              "published": true,
+              "quarantined": false,
+              "capacity_grants": 3221225472,
+              "arena_backing_grants": 3221225472,
+              "pin_target_grants": 1405091840,
+              "pinned_grants": 1405091840,
+              "unallocated_pin_grants": 0,
+              "active_routed_grants": 1816133632,
+              "pooled_grants": 0,
+              "free_slot_grants": 0,
+              "unused_tail_bytes": 0,
+              "slot_padding_bytes": 0,
+              "pending_reserved_grants": 0,
+              "pending_allocation_count": 0,
+              "pending_lease_count": 0,
+              "borrowed_key_count": 0,
+              "segment_slack_bytes": 0,
+              "pending_segment_slack_bytes": 0,
+              "physical_current_bytes": 3221225472,
+              "physical_peak_bytes": 3221225472,
+              "driver_allocation_growth_bytes": 3221225472,
+              "unknown_reserved_bytes": 0,
+              "backing_reuses": 54621,
+              "native_fallbacks": 0,
+              "evictions": 54621,
+              "rank_performance_enabled": false,
+              "rank_performance_active": false,
+              "profiled_activity": null
+            },
+            "profiled_hit_fraction": null,
+            "activity_scope": "Cumulative rankperf-enabled invocations only; not a measured-request or GPU-completion counter"
+          },
+          {
+            "owner": 1,
+            "stage": "ready",
+            "schema_version": 2,
+            "snapshot": {
+              "image_generation": 1,
+              "phase": "idle",
+              "published": true,
+              "quarantined": false,
+              "capacity_grants": 3221225472,
+              "arena_backing_grants": 3221225472,
+              "pin_target_grants": 1405091840,
+              "pinned_grants": 1405091840,
+              "unallocated_pin_grants": 0,
+              "active_routed_grants": 0,
+              "pooled_grants": 0,
+              "free_slot_grants": 1816133632,
+              "unused_tail_bytes": 0,
+              "slot_padding_bytes": 0,
+              "pending_reserved_grants": 0,
+              "pending_allocation_count": 0,
+              "pending_lease_count": 0,
+              "borrowed_key_count": 0,
+              "segment_slack_bytes": 0,
+              "pending_segment_slack_bytes": 0,
+              "physical_current_bytes": 3221225472,
+              "physical_peak_bytes": 3221225472,
+              "driver_allocation_growth_bytes": 3221225472,
+              "unknown_reserved_bytes": 0,
+              "backing_reuses": 0,
+              "native_fallbacks": 0,
+              "evictions": 0,
+              "rank_performance_enabled": false,
+              "rank_performance_active": false,
+              "profiled_activity": null
+            },
+            "profiled_hit_fraction": null,
+            "activity_scope": "Cumulative rankperf-enabled invocations only; not a measured-request or GPU-completion counter"
+          },
+          {
+            "owner": 1,
+            "stage": "shutdown",
+            "schema_version": 2,
+            "snapshot": {
+              "image_generation": 1,
+              "phase": "idle",
+              "published": true,
+              "quarantined": false,
+              "capacity_grants": 3221225472,
+              "arena_backing_grants": 3221225472,
+              "pin_target_grants": 1405091840,
+              "pinned_grants": 1405091840,
+              "unallocated_pin_grants": 0,
+              "active_routed_grants": 1816133632,
+              "pooled_grants": 0,
+              "free_slot_grants": 0,
+              "unused_tail_bytes": 0,
+              "slot_padding_bytes": 0,
+              "pending_reserved_grants": 0,
+              "pending_allocation_count": 0,
+              "pending_lease_count": 0,
+              "borrowed_key_count": 0,
+              "segment_slack_bytes": 0,
+              "pending_segment_slack_bytes": 0,
+              "physical_current_bytes": 3221225472,
+              "physical_peak_bytes": 3221225472,
+              "driver_allocation_growth_bytes": 3221225472,
+              "unknown_reserved_bytes": 0,
+              "backing_reuses": 54621,
+              "native_fallbacks": 0,
+              "evictions": 54621,
+              "rank_performance_enabled": false,
+              "rank_performance_active": false,
+              "profiled_activity": null
+            },
+            "profiled_hit_fraction": null,
+            "activity_scope": "Cumulative rankperf-enabled invocations only; not a measured-request or GPU-completion counter"
+          }
+        ],
+        "allocator_retirement": {
+          "schema": "ferrule.paper.operator-retirement-boundaries.v1",
+          "binary_sha256": "7e1c23a88143cb6455e3c6e10bfe43a567fc97b5fd45745800eae3a1e39a0e73",
+          "metric_schema": "allocator_v3",
+          "rows": [
+            {
+              "owner": 0,
+              "stage": "ready",
+              "metrics": {
+                "allocation_requests": 62372,
+                "allocation_failures": 0,
+                "reuse_allocations": 62114,
+                "small_allocations": 62254,
+                "large_allocations": 113,
+                "huge_allocations": 5,
+                "requested_bytes": 22230461572,
+                "granted_bytes": 22244231936,
+                "live_requested_bytes": 22198021252,
+                "live_granted_bytes": 22211791616,
+                "peak_live_requested_bytes": 22230461572,
+                "peak_live_granted_bytes": 22244231936,
+                "reserved_bytes": 22307405824,
+                "peak_reserved_bytes": 22307405824,
+                "free_bytes": 95614208,
+                "largest_free_extent": 67108864,
+                "pending_retirement_blocks": 0,
+                "pending_retirement_bytes": 0,
+                "capture_retirement_bytes": 0,
+                "retired_blocks": 60,
+                "retirement_batches": 1,
+                "retirement_created_fences": 3,
+                "pending_retirement_batches": 0,
+                "pending_unfenced_bytes": 0,
+                "shutdown_quiescent": false,
+                "shutdown_retained": false,
+                "internal_fragmentation": 0.0006199573739058799,
+                "external_fragmentation": 0.29812874672349954,
+                "segments": 258,
+                "driver_allocations": 258,
+                "driver_allocation_bytes": 22307405824,
+                "driver_frees": 0,
+                "driver_free_bytes": 0
+              }
+            },
+            {
+              "owner": 1,
+              "stage": "ready",
+              "metrics": {
+                "allocation_requests": 62372,
+                "allocation_failures": 0,
+                "reuse_allocations": 62114,
+                "small_allocations": 62254,
+                "large_allocations": 113,
+                "huge_allocations": 5,
+                "requested_bytes": 22230461572,
+                "granted_bytes": 22244231936,
+                "live_requested_bytes": 22198021252,
+                "live_granted_bytes": 22211791616,
+                "peak_live_requested_bytes": 22230461572,
+                "peak_live_granted_bytes": 22244231936,
+                "reserved_bytes": 22307405824,
+                "peak_reserved_bytes": 22307405824,
+                "free_bytes": 95614208,
+                "largest_free_extent": 67108864,
+                "pending_retirement_blocks": 0,
+                "pending_retirement_bytes": 0,
+                "capture_retirement_bytes": 0,
+                "retired_blocks": 60,
+                "retirement_batches": 1,
+                "retirement_created_fences": 3,
+                "pending_retirement_batches": 0,
+                "pending_unfenced_bytes": 0,
+                "shutdown_quiescent": false,
+                "shutdown_retained": false,
+                "internal_fragmentation": 0.0006199573739058799,
+                "external_fragmentation": 0.29812874672349954,
+                "segments": 258,
+                "driver_allocations": 258,
+                "driver_allocation_bytes": 22307405824,
+                "driver_frees": 0,
+                "driver_free_bytes": 0
+              }
+            },
+            {
+              "owner": 1,
+              "stage": "shutdown",
+              "metrics": {
+                "allocation_requests": 535149,
+                "allocation_failures": 0,
+                "reuse_allocations": 534891,
+                "small_allocations": 534999,
+                "large_allocations": 145,
+                "huge_allocations": 5,
+                "requested_bytes": 28337560036,
+                "granted_bytes": 28706352128,
+                "live_requested_bytes": 22198021252,
+                "live_granted_bytes": 22211791616,
+                "peak_live_requested_bytes": 22270351492,
+                "peak_live_granted_bytes": 22287158016,
+                "reserved_bytes": 22307405824,
+                "peak_reserved_bytes": 22307405824,
+                "free_bytes": 95614208,
+                "largest_free_extent": 67108864,
+                "pending_retirement_blocks": 0,
+                "pending_retirement_bytes": 0,
+                "capture_retirement_bytes": 0,
+                "retired_blocks": 472837,
+                "retirement_batches": 108149,
+                "retirement_created_fences": 324447,
+                "pending_retirement_batches": 0,
+                "pending_unfenced_bytes": 0,
+                "shutdown_quiescent": false,
+                "shutdown_retained": false,
+                "internal_fragmentation": 0.0006199573739058799,
+                "external_fragmentation": 0.29812874672349954,
+                "segments": 258,
+                "driver_allocations": 258,
+                "driver_allocation_bytes": 22307405824,
+                "driver_frees": 0,
+                "driver_free_bytes": 0
+              }
+            },
+            {
+              "owner": 0,
+              "stage": "shutdown",
+              "metrics": {
+                "allocation_requests": 535149,
+                "allocation_failures": 0,
+                "reuse_allocations": 534891,
+                "small_allocations": 534999,
+                "large_allocations": 145,
+                "huge_allocations": 5,
+                "requested_bytes": 28337560036,
+                "granted_bytes": 28706352128,
+                "live_requested_bytes": 22198021252,
+                "live_granted_bytes": 22211791616,
+                "peak_live_requested_bytes": 22270351492,
+                "peak_live_granted_bytes": 22287158016,
+                "reserved_bytes": 22307405824,
+                "peak_reserved_bytes": 22307405824,
+                "free_bytes": 95614208,
+                "largest_free_extent": 67108864,
+                "pending_retirement_blocks": 0,
+                "pending_retirement_bytes": 0,
+                "capture_retirement_bytes": 0,
+                "retired_blocks": 472837,
+                "retirement_batches": 108149,
+                "retirement_created_fences": 324447,
+                "pending_retirement_batches": 0,
+                "pending_unfenced_bytes": 0,
+                "shutdown_quiescent": false,
+                "shutdown_retained": false,
+                "internal_fragmentation": 0.0006199573739058799,
+                "external_fragmentation": 0.29812874672349954,
+                "segments": 258,
+                "driver_allocations": 258,
+                "driver_allocation_bytes": 22307405824,
+                "driver_frees": 0,
+                "driver_free_bytes": 0
+              }
+            }
+          ],
+          "arena_bytes_per_owner": 3221225472,
+          "quiescent_pending_zero": true,
+          "ordinary_pressure_failure_count": 0,
+          "observed_boundary_pending_bytes": 0,
+          "pending_peak": null,
+          "unknown_peak": null,
+          "unknown_pressure": null,
+          "observation_scope": "Ready/shutdown only; absent high-watermarks remain null, never zero. V3 fences count successful complete event sets, not all CUDA event calls; BEFORE fields stay historical."
+        },
+        "activity": null,
+        "unknown_pressure": null,
+        "pending_peak": null,
+        "unknown_peak": null,
+        "retirement_event_counts": null,
+        "cuda_api_event_counts": null,
+        "cpu_observation": {
+          "affinity": null,
+          "thread_count": null,
+          "reason": "Existing sampler captures memory/process identity, not affinity/thread counts; observer unchanged to preserve timing"
+        },
+        "gpu_samples": 161,
+        "missing_gpu_samples": 0
+      },
+      "allocator_counters": [
+        {
+          "owner": 0,
+          "available": true,
+          "ready": {
+            "retired_blocks": 60,
+            "retirement_batches": 1,
+            "retirement_created_fences": 3
+          },
+          "shutdown": {
+            "retired_blocks": 472837,
+            "retirement_batches": 108149,
+            "retirement_created_fences": 324447
+          },
+          "boundary_delta": {
+            "retired_blocks": 472777,
+            "retirement_batches": 108148,
+            "retirement_created_fences": 324444
+          }
+        },
+        {
+          "owner": 1,
+          "available": true,
+          "ready": {
+            "retired_blocks": 60,
+            "retirement_batches": 1,
+            "retirement_created_fences": 3
+          },
+          "shutdown": {
+            "retired_blocks": 472837,
+            "retirement_batches": 108149,
+            "retirement_created_fences": 324447
+          },
+          "boundary_delta": {
+            "retired_blocks": 472777,
+            "retirement_batches": 108148,
+            "retirement_created_fences": 324444
+          }
+        }
+      ],
+      "http_receipt": {
+        "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-crossed-c2-20261011-01/runs/AFTER/session/qa8-V1/http.json",
+        "sha256": "695cd67fb6abe93fe03833027da8db5666381490875fb96a28a04ca1bb5482cf"
+      }
+    },
+    {
+      "cycle": 2,
+      "order": [
+        "AFTER",
+        "BEFORE"
+      ],
+      "slot": "BEFORE",
+      "launch_id": "5245d1105f8f4729ac9094c6573023fc",
+      "startup_seconds": 366.17958841472864,
+      "ttft_seconds": {
+        "count": 5,
+        "mean": 0.5422463774681091,
+        "p50": 0.5318969767540693,
+        "p95": 0.5790692877024413
+      },
+      "request_e2e_seconds": {
+        "count": 5,
+        "mean": 1.4780234437435866,
+        "p50": 1.4568312522023916,
+        "p95": 1.5148444030433894
+      },
+      "successful_output_tokens_per_second": 5.201363066674683,
+      "measured_window_seconds": 7.690291849896312,
+      "rate_denominator": "first measured HTTP send (dispatch fallback if none) to last client-observed terminal/deadline, including failures and client overhead",
+      "unmeasured_qa8": 3,
+      "measured_qa8": 5,
+      "actual_input_tokens_each": 5,
+      "actual_output_tokens_each": 8,
+      "measured_output_tokens": 40,
+      "summary": {
+        "slot": "BEFORE",
+        "binary": {
+          "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/admission/indexed-lru-20261010-01/staged/ferrule",
+          "sha256": "9ef9841598b4694fb611250bf8876c4314d252400136ddb23f606a979cadb656",
+          "kind": "public_serving"
+        },
+        "launch_id": "5245d1105f8f4729ac9094c6573023fc",
+        "startup_seconds": 366.17958841472864,
+        "summary": {
+          "scheduled": 5,
+          "offered": 5,
+          "not_issued": 0,
+          "statuses": {
+            "success": 5
+          },
+          "success": 5,
+          "failed": 0,
+          "success_fraction": 1.0,
+          "scheduled_success_fraction": 1.0,
+          "wall_seconds": 7.690291849896312,
+          "successful_output_tokens": 40,
+          "known_usage_output_tokens": 40,
+          "requests_without_usage": 0,
+          "committed_visible_token_rate": null,
+          "committed_visible_token_rate_reason": "SSE text is not token IDs; usage may include hidden/EOS tokens; partial counts unknown",
+          "actual_output_counts": {
+            "8": 5
+          },
+          "actual_input_counts": {
+            "5": 5
+          },
+          "length_matched_success": 5,
+          "slo_qualified_success": null,
+          "successful_requests_per_second": 0.6501703833343354,
+          "successful_output_tokens_per_second": 5.201363066674683,
+          "length_matched_requests_per_second": 0.6501703833343354,
+          "length_matched_output_tokens_per_second": 5.201363066674683,
+          "slo_goodput_requests_per_second": null,
+          "distributions": {
+            "success_ttft_seconds": {
+              "count": 5,
+              "mean": 0.5422463774681091,
+              "p50": 0.5318969767540693,
+              "p95": 0.5790692877024413
+            },
+            "success_request_e2e_seconds": {
+              "count": 5,
+              "mean": 1.4780234437435866,
+              "p50": 1.4568312522023916,
+              "p95": 1.5148444030433894
+            },
+            "success_mean_tpot_usage_proxy_seconds": {
+              "count": 5,
+              "mean": 0.13365102192120892,
+              "p50": 0.1314126013645104,
+              "p95": 0.1397666331380606
+            },
+            "success_content_event_itl_seconds": {
+              "count": 35,
+              "mean": 0.13365102192120892,
+              "p50": 0.13088515773415565,
+              "p95": 0.14127313420176507
+            },
+            "failure_ttft_seconds": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null
+            },
+            "failure_request_e2e_seconds": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null
+            },
+            "failure_mean_tpot_usage_proxy_seconds": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null
+            },
+            "failure_content_event_itl_seconds": {
+              "count": 0,
+              "mean": null,
+              "p50": null,
+              "p95": null
+            }
+          },
+          "window_kind": "fixed-work",
+          "denominator": "first measured HTTP send (dispatch fallback if none) to last client-observed terminal/deadline, including failures and client overhead",
+          "denominator_seconds": 7.690291849896312,
+          "time_to_complete_seconds": 7.690291849896312
+        },
+        "resources": {
+          "status": "observed_within_targets",
+          "errors": [],
+          "memory_components": {
+            "sample_count": 162,
+            "complete_host_samples": 162,
+            "gpu_samples": 162,
+            "gpu_peak_bytes": {
+              "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 22593667072,
+              "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 22593667072
+            },
+            "tree_pss_peak_bytes": 65180753920,
+            "tree_rss_peak_bytes": 65182871552,
+            "tree_anonymous_peak_bytes": 64938778624,
+            "tree_pss_anon_peak_bytes": null,
+            "tree_pss_file_peak_bytes": null,
+            "tree_private_dirty_peak_bytes": 64981372928,
+            "component_sample_counts": {
+              "anonymous_bytes": 162,
+              "pss_anon_bytes": 0,
+              "pss_file_bytes": 0,
+              "private_dirty_bytes": 162
+            },
+            "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+            "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+          },
+          "phase_memory": {
+            "bounds": {
+              "ready_monotonic": 8641315.258556757,
+              "first_sent_monotonic": 8641315.684531115,
+              "first_terminal_monotonic": 8641316.205537563
+            },
+            "phases": {
+              "startup": {
+                "sample_count": 156,
+                "complete_host_samples": 156,
+                "gpu_samples": 156,
+                "gpu_peak_bytes": {
+                  "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 22526558208,
+                  "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 22526558208
+                },
+                "tree_pss_peak_bytes": 65180753920,
+                "tree_rss_peak_bytes": 65182871552,
+                "tree_anonymous_peak_bytes": 64938778624,
+                "tree_pss_anon_peak_bytes": null,
+                "tree_pss_file_peak_bytes": null,
+                "tree_private_dirty_peak_bytes": 64981372928,
+                "component_sample_counts": {
+                  "anonymous_bytes": 156,
+                  "pss_anon_bytes": 0,
+                  "pss_file_bytes": 0,
+                  "private_dirty_bytes": 156
+                },
+                "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+                "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+              },
+              "ready_before_first": {
+                "sample_count": 0,
+                "complete_host_samples": 0,
+                "gpu_samples": 0,
+                "gpu_peak_bytes": {
+                  "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": null,
+                  "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": null
+                },
+                "tree_pss_peak_bytes": null,
+                "tree_rss_peak_bytes": null,
+                "tree_anonymous_peak_bytes": null,
+                "tree_pss_anon_peak_bytes": null,
+                "tree_pss_file_peak_bytes": null,
+                "tree_private_dirty_peak_bytes": null,
+                "component_sample_counts": {
+                  "anonymous_bytes": 0,
+                  "pss_anon_bytes": 0,
+                  "pss_file_bytes": 0,
+                  "private_dirty_bytes": 0
+                },
+                "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+                "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+              },
+              "first_request": {
+                "sample_count": 0,
+                "complete_host_samples": 0,
+                "gpu_samples": 0,
+                "gpu_peak_bytes": {
+                  "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": null,
+                  "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": null
+                },
+                "tree_pss_peak_bytes": null,
+                "tree_rss_peak_bytes": null,
+                "tree_anonymous_peak_bytes": null,
+                "tree_pss_anon_peak_bytes": null,
+                "tree_pss_file_peak_bytes": null,
+                "tree_private_dirty_peak_bytes": null,
+                "component_sample_counts": {
+                  "anonymous_bytes": 0,
+                  "pss_anon_bytes": 0,
+                  "pss_file_bytes": 0,
+                  "private_dirty_bytes": 0
+                },
+                "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+                "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+              },
+              "after_first_request": {
+                "sample_count": 6,
+                "complete_host_samples": 6,
+                "gpu_samples": 6,
+                "gpu_peak_bytes": {
+                  "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 22593667072,
+                  "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 22593667072
+                },
+                "tree_pss_peak_bytes": 64562217984,
+                "tree_rss_peak_bytes": 64564371456,
+                "tree_anonymous_peak_bytes": 64317263872,
+                "tree_pss_anon_peak_bytes": null,
+                "tree_pss_file_peak_bytes": null,
+                "tree_private_dirty_peak_bytes": 64360103936,
+                "component_sample_counts": {
+                  "anonymous_bytes": 6,
+                  "pss_anon_bytes": 0,
+                  "pss_file_bytes": 0,
+                  "private_dirty_bytes": 6
+                },
+                "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+                "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+              }
+            },
+            "unassigned_or_boundary_samples": 0,
+            "steady_state_claim": false,
+            "policy": "after first request includes later canaries/warmup/requests; not a steady-state proof"
+          },
+          "phase_metadata_error": null,
+          "gpu_peak_bytes": {
+            "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 22593667072,
+            "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 22593667072
+          },
+          "tree_pss_peak_bytes": 65180753920,
+          "tree_rss_peak_bytes": 65182871552,
+          "complete_host_samples": 162,
+          "incomplete_host_samples": 0,
+          "gpu_samples": 162,
+          "missing_gpu_attempts": 0,
+          "baseline": {
+            "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": {
+              "index": 0,
+              "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+              "total_bytes": 25769803776,
+              "gpu_bytes": 0,
+              "utilization": 0
+            },
+            "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": {
+              "index": 1,
+              "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+              "total_bytes": 25769803776,
+              "gpu_bytes": 0,
+              "utilization": 0
+            },
+            "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6": {
+              "index": 2,
+              "uuid": "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6",
+              "total_bytes": 25769803776,
+              "gpu_bytes": 0,
+              "utilization": 0
+            },
+            "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011": {
+              "index": 3,
+              "uuid": "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011",
+              "total_bytes": 25769803776,
+              "gpu_bytes": 0,
+              "utilization": 0
+            },
+            "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86": {
+              "index": 4,
+              "uuid": "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86",
+              "total_bytes": 25769803776,
+              "gpu_bytes": 0,
+              "utilization": 0
+            },
+            "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685": {
+              "index": 5,
+              "uuid": "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685",
+              "total_bytes": 25769803776,
+              "gpu_bytes": 0,
+              "utilization": 0
+            },
+            "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d": {
+              "index": 6,
+              "uuid": "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d",
+              "total_bytes": 25769803776,
+              "gpu_bytes": 0,
+              "utilization": 0
+            },
+            "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f": {
+              "index": 7,
+              "uuid": "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f",
+              "total_bytes": 25769803776,
+              "gpu_bytes": 0,
+              "utilization": 0
+            }
+          },
+          "delta_high_water_bytes": {
+            "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 22593667072,
+            "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 22593667072,
+            "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6": 0,
+            "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011": 0,
+            "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86": 0,
+            "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685": 0,
+            "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d": 0,
+            "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f": 0
+          },
+          "final_process_diagnostics": [
+            {
+              "identity": {
+                "pid": 181045,
+                "birth_ticks": 100482877,
+                "ppid": 181036,
+                "state": "S"
+              },
+              "command": "/proc/self/fd/4 serve /mnt/nas1/hf/Qwen3.5-35B-A3B-FP8 --backend cuda --engine pipeline --model-profile qwen35-mixed-bf16 --tensor-parallel 2 --pipeline-parallel 1 --expert-parallel 1 --rank-backend thread --devices 0,1 --rank-restarts 0 --kv-execution-policy resident --ctx-size 128 --max-active-sequences 2 --max-batch-tokens 8 --prefill-chunk-size 8 --cuda-device-budget-mb 22528 --kv-cache-mb 16 --max-tensor-mb 2048 --cuda-workspace-mb 4096 --host 127.0.0.1 --port 18367 --served-model-name qwen35-ferrule-tp2-resident-paper ",
+              "environment": {
+                "HOME": "/root",
+                "PATH": "/home/admin/wxw403883/anaconda3/envs/tao/bin:/root/.cargo/bin:/usr/bin:/bin",
+                "PYTHONDONTWRITEBYTECODE": "1",
+                "CUDA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+                "NVIDIA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+                "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
+                "HF_HUB_OFFLINE": "1",
+                "TRANSFORMERS_OFFLINE": "1",
+                "CUDA_HOME": "/home/admin/wxw403883/anaconda3/envs/tao",
+                "NVCC": "/home/admin/wxw403883/anaconda3/envs/tao/bin/nvcc",
+                "LD_LIBRARY_PATH": "/home/admin/wxw403883/anaconda3/envs/tao/lib:/usr/lib64",
+                "CUBLAS_WORKSPACE_CONFIG": ":0:0",
+                "FERRULE_LOG": "info",
+                "FERRULE_LOG_FORMAT": "json"
+              },
+              "libraries": [
+                "/home/admin/wxw403883/anaconda3/envs/tao/lib/libcudart.so.12.4.99",
+                "/usr/lib64/libcuda.so.575.57.08"
+              ]
+            }
+          ],
+          "owned_gpu_attribution": "unknown",
+          "owned_process_gpu_peak_bytes": null,
+          "exact_peaks": false,
+          "hard_memory_partition": false,
+          "continuous_coverage": false
+        },
+        "cache_snapshots": [
+          {
+            "owner": 0,
+            "stage": "ready",
+            "schema_version": 2,
+            "snapshot": {
+              "image_generation": 1,
+              "phase": "idle",
+              "published": true,
+              "quarantined": false,
+              "capacity_grants": 3221225472,
+              "arena_backing_grants": 3221225472,
+              "pin_target_grants": 1405091840,
+              "pinned_grants": 1405091840,
+              "unallocated_pin_grants": 0,
+              "active_routed_grants": 0,
+              "pooled_grants": 0,
+              "free_slot_grants": 1816133632,
+              "unused_tail_bytes": 0,
+              "slot_padding_bytes": 0,
+              "pending_reserved_grants": 0,
+              "pending_allocation_count": 0,
+              "pending_lease_count": 0,
+              "borrowed_key_count": 0,
+              "segment_slack_bytes": 0,
+              "pending_segment_slack_bytes": 0,
+              "physical_current_bytes": 3221225472,
+              "physical_peak_bytes": 3221225472,
+              "driver_allocation_growth_bytes": 3221225472,
+              "unknown_reserved_bytes": 0,
+              "backing_reuses": 0,
+              "native_fallbacks": 0,
+              "evictions": 0,
+              "rank_performance_enabled": false,
+              "rank_performance_active": false,
+              "profiled_activity": null
+            },
+            "profiled_hit_fraction": null,
+            "activity_scope": "Cumulative rankperf-enabled invocations only; not a measured-request or GPU-completion counter"
+          },
+          {
+            "owner": 0,
+            "stage": "shutdown",
+            "schema_version": 2,
+            "snapshot": {
+              "image_generation": 1,
+              "phase": "idle",
+              "published": true,
+              "quarantined": false,
+              "capacity_grants": 3221225472,
+              "arena_backing_grants": 3221225472,
+              "pin_target_grants": 1405091840,
+              "pinned_grants": 1405091840,
+              "unallocated_pin_grants": 0,
+              "active_routed_grants": 1816133632,
+              "pooled_grants": 0,
+              "free_slot_grants": 0,
+              "unused_tail_bytes": 0,
+              "slot_padding_bytes": 0,
+              "pending_reserved_grants": 0,
+              "pending_allocation_count": 0,
+              "pending_lease_count": 0,
+              "borrowed_key_count": 0,
+              "segment_slack_bytes": 0,
+              "pending_segment_slack_bytes": 0,
+              "physical_current_bytes": 3221225472,
+              "physical_peak_bytes": 3221225472,
+              "driver_allocation_growth_bytes": 3221225472,
+              "unknown_reserved_bytes": 0,
+              "backing_reuses": 54621,
+              "native_fallbacks": 0,
+              "evictions": 54621,
+              "rank_performance_enabled": false,
+              "rank_performance_active": false,
+              "profiled_activity": null
+            },
+            "profiled_hit_fraction": null,
+            "activity_scope": "Cumulative rankperf-enabled invocations only; not a measured-request or GPU-completion counter"
+          },
+          {
+            "owner": 1,
+            "stage": "ready",
+            "schema_version": 2,
+            "snapshot": {
+              "image_generation": 2,
+              "phase": "idle",
+              "published": true,
+              "quarantined": false,
+              "capacity_grants": 3221225472,
+              "arena_backing_grants": 3221225472,
+              "pin_target_grants": 1405091840,
+              "pinned_grants": 1405091840,
+              "unallocated_pin_grants": 0,
+              "active_routed_grants": 0,
+              "pooled_grants": 0,
+              "free_slot_grants": 1816133632,
+              "unused_tail_bytes": 0,
+              "slot_padding_bytes": 0,
+              "pending_reserved_grants": 0,
+              "pending_allocation_count": 0,
+              "pending_lease_count": 0,
+              "borrowed_key_count": 0,
+              "segment_slack_bytes": 0,
+              "pending_segment_slack_bytes": 0,
+              "physical_current_bytes": 3221225472,
+              "physical_peak_bytes": 3221225472,
+              "driver_allocation_growth_bytes": 3221225472,
+              "unknown_reserved_bytes": 0,
+              "backing_reuses": 0,
+              "native_fallbacks": 0,
+              "evictions": 0,
+              "rank_performance_enabled": false,
+              "rank_performance_active": false,
+              "profiled_activity": null
+            },
+            "profiled_hit_fraction": null,
+            "activity_scope": "Cumulative rankperf-enabled invocations only; not a measured-request or GPU-completion counter"
+          },
+          {
+            "owner": 1,
+            "stage": "shutdown",
+            "schema_version": 2,
+            "snapshot": {
+              "image_generation": 2,
+              "phase": "idle",
+              "published": true,
+              "quarantined": false,
+              "capacity_grants": 3221225472,
+              "arena_backing_grants": 3221225472,
+              "pin_target_grants": 1405091840,
+              "pinned_grants": 1405091840,
+              "unallocated_pin_grants": 0,
+              "active_routed_grants": 1816133632,
+              "pooled_grants": 0,
+              "free_slot_grants": 0,
+              "unused_tail_bytes": 0,
+              "slot_padding_bytes": 0,
+              "pending_reserved_grants": 0,
+              "pending_allocation_count": 0,
+              "pending_lease_count": 0,
+              "borrowed_key_count": 0,
+              "segment_slack_bytes": 0,
+              "pending_segment_slack_bytes": 0,
+              "physical_current_bytes": 3221225472,
+              "physical_peak_bytes": 3221225472,
+              "driver_allocation_growth_bytes": 3221225472,
+              "unknown_reserved_bytes": 0,
+              "backing_reuses": 54621,
+              "native_fallbacks": 0,
+              "evictions": 54621,
+              "rank_performance_enabled": false,
+              "rank_performance_active": false,
+              "profiled_activity": null
+            },
+            "profiled_hit_fraction": null,
+            "activity_scope": "Cumulative rankperf-enabled invocations only; not a measured-request or GPU-completion counter"
+          }
+        ],
+        "allocator_retirement": {
+          "schema": "ferrule.paper.operator-retirement-boundaries.v1",
+          "binary_sha256": "9ef9841598b4694fb611250bf8876c4314d252400136ddb23f606a979cadb656",
+          "metric_schema": "historical_9ef",
+          "rows": [
+            {
+              "owner": 1,
+              "stage": "ready",
+              "metrics": {
+                "allocation_requests": 62372,
+                "allocation_failures": 0,
+                "reuse_allocations": 62114,
+                "small_allocations": 62254,
+                "large_allocations": 113,
+                "huge_allocations": 5,
+                "requested_bytes": 22230461572,
+                "granted_bytes": 22244231936,
+                "live_requested_bytes": 22198021252,
+                "live_granted_bytes": 22211791616,
+                "peak_live_requested_bytes": 22230461572,
+                "peak_live_granted_bytes": 22244231936,
+                "reserved_bytes": 22307405824,
+                "peak_reserved_bytes": 22307405824,
+                "free_bytes": 95614208,
+                "largest_free_extent": 67108864,
+                "pending_retirement_blocks": 0,
+                "pending_retirement_bytes": 0,
+                "capture_retirement_bytes": 0,
+                "internal_fragmentation": 0.0006199573739058799,
+                "external_fragmentation": 0.29812874672349954,
+                "segments": 258,
+                "driver_allocations": 258,
+                "driver_allocation_bytes": 22307405824,
+                "driver_frees": 0,
+                "driver_free_bytes": 0
+              }
+            },
+            {
+              "owner": 0,
+              "stage": "ready",
+              "metrics": {
+                "allocation_requests": 62372,
+                "allocation_failures": 0,
+                "reuse_allocations": 62114,
+                "small_allocations": 62254,
+                "large_allocations": 113,
+                "huge_allocations": 5,
+                "requested_bytes": 22230461572,
+                "granted_bytes": 22244231936,
+                "live_requested_bytes": 22198021252,
+                "live_granted_bytes": 22211791616,
+                "peak_live_requested_bytes": 22230461572,
+                "peak_live_granted_bytes": 22244231936,
+                "reserved_bytes": 22307405824,
+                "peak_reserved_bytes": 22307405824,
+                "free_bytes": 95614208,
+                "largest_free_extent": 67108864,
+                "pending_retirement_blocks": 0,
+                "pending_retirement_bytes": 0,
+                "capture_retirement_bytes": 0,
+                "internal_fragmentation": 0.0006199573739058799,
+                "external_fragmentation": 0.29812874672349954,
+                "segments": 258,
+                "driver_allocations": 258,
+                "driver_allocation_bytes": 22307405824,
+                "driver_frees": 0,
+                "driver_free_bytes": 0
+              }
+            },
+            {
+              "owner": 0,
+              "stage": "shutdown",
+              "metrics": {
+                "allocation_requests": 535149,
+                "allocation_failures": 0,
+                "reuse_allocations": 534891,
+                "small_allocations": 534999,
+                "large_allocations": 145,
+                "huge_allocations": 5,
+                "requested_bytes": 28337560036,
+                "granted_bytes": 28706352128,
+                "live_requested_bytes": 22198021252,
+                "live_granted_bytes": 22211791616,
+                "peak_live_requested_bytes": 22270351492,
+                "peak_live_granted_bytes": 22287158016,
+                "reserved_bytes": 22307405824,
+                "peak_reserved_bytes": 22307405824,
+                "free_bytes": 95614208,
+                "largest_free_extent": 67108864,
+                "pending_retirement_blocks": 0,
+                "pending_retirement_bytes": 0,
+                "capture_retirement_bytes": 0,
+                "internal_fragmentation": 0.0006199573739058799,
+                "external_fragmentation": 0.29812874672349954,
+                "segments": 258,
+                "driver_allocations": 258,
+                "driver_allocation_bytes": 22307405824,
+                "driver_frees": 0,
+                "driver_free_bytes": 0
+              }
+            },
+            {
+              "owner": 1,
+              "stage": "shutdown",
+              "metrics": {
+                "allocation_requests": 535149,
+                "allocation_failures": 0,
+                "reuse_allocations": 534891,
+                "small_allocations": 534999,
+                "large_allocations": 145,
+                "huge_allocations": 5,
+                "requested_bytes": 28337560036,
+                "granted_bytes": 28706352128,
+                "live_requested_bytes": 22198021252,
+                "live_granted_bytes": 22211791616,
+                "peak_live_requested_bytes": 22270351492,
+                "peak_live_granted_bytes": 22287158016,
+                "reserved_bytes": 22307405824,
+                "peak_reserved_bytes": 22307405824,
+                "free_bytes": 95614208,
+                "largest_free_extent": 67108864,
+                "pending_retirement_blocks": 0,
+                "pending_retirement_bytes": 0,
+                "capture_retirement_bytes": 0,
+                "internal_fragmentation": 0.0006199573739058799,
+                "external_fragmentation": 0.29812874672349954,
+                "segments": 258,
+                "driver_allocations": 258,
+                "driver_allocation_bytes": 22307405824,
+                "driver_frees": 0,
+                "driver_free_bytes": 0
+              }
+            }
+          ],
+          "arena_bytes_per_owner": 3221225472,
+          "quiescent_pending_zero": true,
+          "ordinary_pressure_failure_count": 0,
+          "observed_boundary_pending_bytes": 0,
+          "pending_peak": null,
+          "unknown_peak": null,
+          "unknown_pressure": null,
+          "observation_scope": "Ready/shutdown only; absent high-watermarks remain null, never zero. V3 fences count successful complete event sets, not all CUDA event calls; BEFORE fields stay historical."
+        },
+        "activity": null,
+        "unknown_pressure": null,
+        "pending_peak": null,
+        "unknown_peak": null,
+        "retirement_event_counts": null,
+        "cuda_api_event_counts": null,
+        "cpu_observation": {
+          "affinity": null,
+          "thread_count": null,
+          "reason": "Existing sampler captures memory/process identity, not affinity/thread counts; observer unchanged to preserve timing"
+        },
+        "gpu_samples": 162,
+        "missing_gpu_samples": 0
+      },
+      "allocator_counters": [
+        {
+          "owner": 0,
+          "available": false,
+          "ready": null,
+          "shutdown": null,
+          "boundary_delta": null
+        },
+        {
+          "owner": 1,
+          "available": false,
+          "ready": null,
+          "shutdown": null,
+          "boundary_delta": null
+        }
+      ],
+      "http_receipt": {
+        "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-crossed-c2-20261011-01/runs/BEFORE/session/qa8-V1/http.json",
+        "sha256": "5e96a04b00a2636445d20f90c7b11cf4181057a661925d2e4896410a43c0546d"
+      }
+    }
+  ],
+  "comparisons": [
+    {
+      "cycle": 1,
+      "observed_rate_change_percent": 7.766458044210256,
+      "ttft_mean_change_percent": -7.332085057979909,
+      "e2e_mean_change_percent": -7.051146736376146
+    },
+    {
+      "cycle": 2,
+      "observed_rate_change_percent": 8.911309558308545,
+      "ttft_mean_change_percent": -8.044105472907015,
+      "e2e_mean_change_percent": -7.448621630690977
+    }
+  ]
+}

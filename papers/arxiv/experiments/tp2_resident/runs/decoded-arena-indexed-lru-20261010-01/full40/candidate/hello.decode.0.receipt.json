@@ -1,0 +1,11 @@
+{
+  "case": "hello",
+  "error": null,
+  "input_token_ids": [
+    11
+  ],
+  "phase": "decode.0",
+  "published": true,
+  "session": 1,
+  "transaction": 2
+}

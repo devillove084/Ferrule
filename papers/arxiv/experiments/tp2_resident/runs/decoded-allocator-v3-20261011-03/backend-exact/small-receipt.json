@@ -1,0 +1,16 @@
+{
+  "selector": "cuda::providers::bf16_gemmex::mixed_decode_reuse_tests::mixed_decode_resident_single_pair_m1_m5",
+  "binary_sha256": "48a1f4c9a9b4d3227d421d67835142fb30c1477f6a0f27f44f44f43810127426",
+  "source_digest": "e3592ec70f5073d1a2a6a3a43141ce56cdc081ef2693f29b1226dccfd7e3b436",
+  "assertions_passed": true,
+  "cache_values": "source-pinned model assertions; no raw per-step counters exported",
+  "assertion_contract": null,
+  "gpu_memory": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-allocator-v3-20261011-03/backend-exact/resources.json",
+    "sha256": "fc008545c0825c3dda49945efaa25cf5288c567f1ff352977334a86871dd2cb3"
+  },
+  "log": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-allocator-v3-20261011-03/backend-exact/test.log",
+    "sha256": "60b8c41de3b27f1b2741b85059cafdf4a9cd33a5193de8c94621b5efb9b610d3"
+  }
+}

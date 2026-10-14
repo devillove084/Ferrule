@@ -1,0 +1,76 @@
+test_counterfactual_flags_are_nonlaunching_and_2g_is_under_10g (analysis.test_analysis.CachePlanTests.test_counterfactual_flags_are_nonlaunching_and_2g_is_under_10g) ... ok
+test_cross_layer_entry_and_byte_bounds (analysis.test_analysis.CachePlanTests.test_cross_layer_entry_and_byte_bounds) ... ok
+test_header_only_numeric_payload_accounting (analysis.test_analysis.CachePlanTests.test_header_only_numeric_payload_accounting) ... ok
+test_invalid_cache_caps_are_rejected (analysis.test_analysis.CachePlanTests.test_invalid_cache_caps_are_rejected) ... ok
+test_conflicting_identity_blocks_totals (analysis.test_analysis.PerformanceAnalysisTests.test_conflicting_identity_blocks_totals) ... ok
+test_disabled_baseline_log_has_no_causal_counters (analysis.test_analysis.PerformanceAnalysisTests.test_disabled_baseline_log_has_no_causal_counters) ... ok
+test_duplicate_identity_is_not_summed (analysis.test_analysis.PerformanceAnalysisTests.test_duplicate_identity_is_not_summed) ... ok
+test_failure_quarantine_and_no_snapshot_are_preserved (analysis.test_analysis.PerformanceAnalysisTests.test_failure_quarantine_and_no_snapshot_are_preserved) ... ok
+test_first_prefill_means_first_observed_not_per_request (analysis.test_analysis.PerformanceAnalysisTests.test_first_prefill_means_first_observed_not_per_request) ... ok
+test_gauges_are_max_last_not_sum (analysis.test_analysis.PerformanceAnalysisTests.test_gauges_are_max_last_not_sum) ... ok
+test_http_nan_and_missing_remain_unknown (analysis.test_analysis.PerformanceAnalysisTests.test_http_nan_and_missing_remain_unknown) ... ok
+test_inconsistent_worker_endpoints_reject_mean (analysis.test_analysis.PerformanceAnalysisTests.test_inconsistent_worker_endpoints_reject_mean) ... ok
+test_invalid_numbers_are_never_coerced (analysis.test_analysis.PerformanceAnalysisTests.test_invalid_numbers_are_never_coerced) ... ok
+test_invalid_rows_disable_normalization (analysis.test_analysis.PerformanceAnalysisTests.test_invalid_rows_disable_normalization) ... ok
+test_missing_nan_and_reset_are_unknown_not_zero (analysis.test_analysis.PerformanceAnalysisTests.test_missing_nan_and_reset_are_unknown_not_zero) ... ok
+test_missing_worker_flag_is_unknown_not_false (analysis.test_analysis.PerformanceAnalysisTests.test_missing_worker_flag_is_unknown_not_false) ... ok
+test_mixed_is_not_counted_in_both_phases (analysis.test_analysis.PerformanceAnalysisTests.test_mixed_is_not_counted_in_both_phases) ... ok
+test_proof_times_are_separate_nonoverlapping_observed_call_groups (analysis.test_analysis.PerformanceAnalysisTests.test_proof_times_are_separate_nonoverlapping_observed_call_groups) ... ok
+test_shared_cost_is_summed_once_and_phase_partitioned (analysis.test_analysis.PerformanceAnalysisTests.test_shared_cost_is_summed_once_and_phase_partitioned) ... ok
+test_unknown_allocation_cost_is_explicit (analysis.test_analysis.PerformanceAnalysisTests.test_unknown_allocation_cost_is_explicit) ... ok
+test_valid_zero_remains_zero (analysis.test_analysis.PerformanceAnalysisTests.test_valid_zero_remains_zero) ... ok
+test_worker_intervals_are_distinct_from_client_tpot (analysis.test_analysis.PerformanceAnalysisTests.test_worker_intervals_are_distinct_from_client_tpot) ... ok
+test_wrong_targets_and_malformed_lines_do_not_manufacture_events (analysis.test_analysis.PerformanceAnalysisTests.test_wrong_targets_and_malformed_lines_do_not_manufacture_events) ... ok
+test_zero_one_and_disabled_worker_intervals (analysis.test_analysis.PerformanceAnalysisTests.test_zero_one_and_disabled_worker_intervals) ... ok
+test_authenticated_custody_not_exit_code (test_experiments.Contracts.test_authenticated_custody_not_exit_code) ... ok
+test_authorization_precedes_telemetry_and_launch (test_experiments.Contracts.test_authorization_precedes_telemetry_and_launch) ... BLOCKED: Explicit --sole-gpu-owner-granted and --owner-note required; no GPU query/launch
+BLOCKED: Explicit --sole-gpu-owner-granted and --owner-note required; no GPU query/launch
+ok
+test_cpu_build_is_explicit_release_offline (test_experiments.Contracts.test_cpu_build_is_explicit_release_offline) ... BLOCKED: Build requires explicit --execute-build; default plan is CPU-only
+ok
+test_cpu_interpreter_rejects_venv (test_experiments.Contracts.test_cpu_interpreter_rejects_venv) ... ok
+test_default_plan_never_spawns_or_queries (test_experiments.Contracts.test_default_plan_never_spawns_or_queries) ... ok
+test_diagnostic_target_matches_actual_rust_source (test_experiments.Contracts.test_diagnostic_target_matches_actual_rust_source) ... ok
+test_exclusive_all_device_idle_rejects_other_gpu_activity (test_experiments.Contracts.test_exclusive_all_device_idle_rejects_other_gpu_activity) ... ok
+test_exclusive_known_foreign_gpu_process_still_blocks (test_experiments.Contracts.test_exclusive_known_foreign_gpu_process_still_blocks) ... ok
+test_exclusive_schema_requires_assumption_not_verified_attribution (test_experiments.Contracts.test_exclusive_schema_requires_assumption_not_verified_attribution) ... ok
+test_exclusive_unmapped_not_verified_but_local_custody_required (test_experiments.Contracts.test_exclusive_unmapped_not_verified_but_local_custody_required) ... ok
+test_exclusive_version_is_explicit_and_frozen (test_experiments.Contracts.test_exclusive_version_is_explicit_and_frozen) ... BLOCKED: Explicit --sole-gpu-owner-granted and --owner-note required; no GPU query/launch
+BLOCKED: Explicit identity mode must match config
+ok
+test_fail_stop_unknown_custody_never_starts_second_engine (test_experiments.Contracts.test_fail_stop_unknown_custody_never_starts_second_engine) ... ok
+test_finish_records_inflight_failure (test_experiments.Contracts.test_finish_records_inflight_failure) ... ok
+test_gdn_kernel_fallback_is_not_offload_contract_fallback (test_experiments.Contracts.test_gdn_kernel_fallback_is_not_offload_contract_fallback) ... ok
+test_gpu_query_failure_never_becomes_idle (test_experiments.Contracts.test_gpu_query_failure_never_becomes_idle) ... ok
+test_historical_build_paper_pins_do_not_replace_current_preparation (test_experiments.Contracts.test_historical_build_paper_pins_do_not_replace_current_preparation) ... ok
+test_immutable_stage_and_hash_binding (test_experiments.Contracts.test_immutable_stage_and_hash_binding) ... ok
+test_inventory_missing_group_or_added_file (test_experiments.Contracts.test_inventory_missing_group_or_added_file) ... ok
+test_missing_http_counts_or_timeout_is_not_zero_success (test_experiments.Contracts.test_missing_http_counts_or_timeout_is_not_zero_success) ... ok
+test_missing_telemetry_and_budget_excess_block (test_experiments.Contracts.test_missing_telemetry_and_budget_excess_block) ... ok
+test_missing_telemetry_is_not_measured_infeasibility (test_experiments.Contracts.test_missing_telemetry_is_not_measured_infeasibility) ... ok
+test_no_heavy_runtime_imported (test_experiments.Contracts.test_no_heavy_runtime_imported) ... ok
+test_owner_lock_nonblocking (test_experiments.Contracts.test_owner_lock_nonblocking) ... ok
+test_pid_namespace_unknown_and_foreign_app_block (test_experiments.Contracts.test_pid_namespace_unknown_and_foreign_app_block) ... ok
+test_real_cpu_child_authenticated_supervision (test_experiments.Contracts.test_real_cpu_child_authenticated_supervision) ... ok
+test_real_cpu_timeout_is_failure (test_experiments.Contracts.test_real_cpu_timeout_is_failure) ... ok
+test_release_artifact_rejects_historical_debug (test_experiments.Contracts.test_release_artifact_rejects_historical_debug) ... ok
+test_release_quality_requires_exact_new_binary_and_reference (test_experiments.Contracts.test_release_quality_requires_exact_new_binary_and_reference) ... ok
+test_runtime_missing_evidence_never_claims_match (test_experiments.Contracts.test_runtime_missing_evidence_never_claims_match) ... ok
+test_schema_config_and_negative_quality (test_experiments.Contracts.test_schema_config_and_negative_quality) ... ok
+test_schema_rejects_incomplete_prepared_duplicate_engines_and_unbound_run (test_experiments.Contracts.test_schema_rejects_incomplete_prepared_duplicate_engines_and_unbound_run) ... ok
+test_sealed_worker_authentication_under_real_cpu_supervisor (test_experiments.Contracts.test_sealed_worker_authentication_under_real_cpu_supervisor) ... ok
+test_staged_python_entrypoint_supports_real_spawn (test_experiments.Contracts.test_staged_python_entrypoint_supports_real_spawn) ... ok
+test_stale_manifest_fails_before_query (test_experiments.Contracts.test_stale_manifest_fails_before_query) ... ok
+test_stale_pin (test_experiments.Contracts.test_stale_pin) ... ok
+test_startup_monitor_failure_enters_cleanup_without_waiting_for_ready (test_experiments.Contracts.test_startup_monitor_failure_enters_cleanup_without_waiting_for_ready) ... ok
+test_static_cli_values_and_false_negation (test_experiments.Contracts.test_static_cli_values_and_false_negation) ... ok
+test_unknown_and_stale_parameters (test_experiments.Contracts.test_unknown_and_stale_parameters) ... ok
+test_unsafe_ids_and_append_only (test_experiments.Contracts.test_unsafe_ids_and_append_only) ... ok
+test_vllm_environment_isolated_and_dtype_flags_actual (test_experiments.Contracts.test_vllm_environment_isolated_and_dtype_flags_actual) ... ok
+test_vllm_fix_env_rejects_overrides (test_experiments.Contracts.test_vllm_fix_env_rejects_overrides) ... ok
+test_worker_entry_cannot_bypass_contract (test_experiments.Contracts.test_worker_entry_cannot_bypass_contract) ... ok
+
+----------------------------------------------------------------------
+Ran 66 tests in 1.365s
+
+OK

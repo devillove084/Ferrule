@@ -1,0 +1,16 @@
+{
+  "passed": true,
+  "gate": {
+    "name": "real-hf-pair",
+    "binary": "model-hf",
+    "selector": "real_hf_pair_swiglu_cold_and_resident_every_word",
+    "evidence": "independent_real_hf_every_bf16_word",
+    "devices": 1,
+    "reference": null,
+    "cache_bytes": null,
+    "observer": null
+  },
+  "proven_drained": true,
+  "all_eight_idle": true,
+  "performance_claim": false
+}

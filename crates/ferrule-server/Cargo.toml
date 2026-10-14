@@ -11,7 +11,8 @@ categories = ["science", "machine-learning", "web-programming::http-server"]
 
 [features]
 default = []
-cuda = ["ferrule-runtime/cuda"]
+cpu-reference = ["ferrule-runtime/cpu-reference", "ferrule-composition/cpu-reference"]
+cuda = ["ferrule-runtime/cuda", "ferrule-composition/cuda"]
 
 [dependencies]
 ferrule-common = { version = "0.2.0", path = "../ferrule-common" }
@@ -25,6 +26,7 @@ tracing = "0.1"
 futures-core = "0.3"
 
 [dev-dependencies]
+ferrule-composition = { version = "0.2.0", path = "../ferrule-composition", default-features = false }
 tokio = { version = "1", features = ["test-util"] }
 http-body-util = "0.1"
 tower = { version = "0.5", features = ["util"] }

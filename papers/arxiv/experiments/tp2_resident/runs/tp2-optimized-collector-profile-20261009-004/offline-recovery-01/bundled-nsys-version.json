@@ -1,0 +1,14 @@
+{
+  "argv": [
+    "/opt/nvidia/nsight-compute/2026.1.1/host/target-linux-x64/nsys",
+    "--version"
+  ],
+  "environment": {
+    "PATH": "/usr/bin:/bin",
+    "HOME": "/root",
+    "CUDA_VISIBLE_DEVICES": "",
+    "NVIDIA_VISIBLE_DEVICES": "none",
+    "QT_QPA_PLATFORM": "offscreen"
+  },
+  "returncode": 0
+}

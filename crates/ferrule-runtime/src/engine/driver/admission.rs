@@ -216,7 +216,7 @@ where
         request: &GenerateRequest,
         position: usize,
     ) -> Result<()> {
-        super::super::composition::validate_context_envelope(
+        super::super::resident_composition::validate_context_envelope(
             self.config.ctx_size,
             position,
             request.prompt_tokens.len(),
@@ -232,12 +232,12 @@ where
         let session = self.check_admission(&request, true)?;
         self.validate_configuration()?;
         let retained_position = self.sessions.retained_position(&session);
-        if let (Some(supplied), Some(expected)) = (supplied_position, retained_position) {
-            if supplied != expected {
-                return Err(
-                    RuntimeAdmissionError::RetainedPositionMismatch { supplied, expected }.into(),
-                );
-            }
+        if let (Some(supplied), Some(expected)) = (supplied_position, retained_position)
+            && supplied != expected
+        {
+            return Err(
+                RuntimeAdmissionError::RetainedPositionMismatch { supplied, expected }.into(),
+            );
         }
         let position = supplied_position.or(retained_position).unwrap_or(0);
         self.validate_admission_position(&request, position)?;
@@ -255,6 +255,8 @@ where
         if automatic_session {
             self.next_admission_session = session.0.checked_add(1);
         }
+        self.admission_started = true;
+        self.trace_demand(&request, session, position);
         if supplied_position.or(retained_position).is_some() {
             self.scheduler.submit_at_position(request, position);
         } else {
@@ -289,6 +291,7 @@ where
         target_request: GenerateRequest,
         expected_committed_position: usize,
     ) -> Result<SessionId> {
+        self.trace_unsupported();
         let target_identity = self.check_admission(&target_request, false)?;
         self.validate_configuration()?;
         self.validate_admission_position(&target_request, expected_committed_position)?;
@@ -436,10 +439,10 @@ where
     }
 
     pub(super) fn consume_terminal_identity(&mut self, sequence: &SequenceState) {
-        if let Some(request_id) = sequence.request_id {
-            if let Some(record) = self.request_identities.get_mut(&request_id) {
-                record.terminal_consumed = true;
-            }
+        if let Some(request_id) = sequence.request_id
+            && let Some(record) = self.request_identities.get_mut(&request_id)
+        {
+            record.terminal_consumed = true;
         }
     }
 
@@ -472,12 +475,12 @@ where
         else {
             return Ok(());
         };
-        if let Some(state) = model_state.take() {
-            if let Err(failure) = self.executor.try_release_sequence_state(state) {
-                let (error, state) = failure.into_parts();
-                *model_state = Some(state);
-                failures.push(CleanupStep::new("admission model release", error));
-            }
+        if let Some(state) = model_state.take()
+            && let Err(failure) = self.executor.try_release_sequence_state(state)
+        {
+            let (error, state) = failure.into_parts();
+            *model_state = Some(state);
+            failures.push(CleanupStep::new("admission model release", error));
         }
         if let Some(handle) = *slot {
             match self.slot_pool.free_slot(handle) {
@@ -530,6 +533,7 @@ where
                 break;
             }
             if self.sessions.contains_sequence_state(&session_id) {
+                self.trace_unsupported();
                 self.scheduler.publish_waiting_admission(prepared);
                 #[cfg(test)]
                 self.tick_trace.push(DriverTickEvent::Admitted(session_id));
@@ -569,14 +573,15 @@ where
                 match self.prepare_prefix_admission(&mut prepared, target_slot) {
                     Ok(Some(prefix)) => {
                         debug_assert!(prefix.matched_tokens > 0);
-                        let publication = (|| {
+                        let publish = || {
                             #[cfg(test)]
                             self.fail_stage("prefix publish")?;
                             self.page_manager
                                 .as_mut()
                                 .expect("prefix page manager")
                                 .publish_fork_prefix_snapshot(prefix.pages)
-                        })();
+                        };
+                        let publication = publish();
                         if let Err(error) = publication {
                             let scheduler_cleanup = self
                                 .scheduler
@@ -604,6 +609,9 @@ where
                             next_page_slot.expect("page-manager admission reserves the next slot");
                         self.prefix.mark_cached_session(session_id);
                         self.scheduler.publish_waiting_admission(prepared);
+                        self.trace
+                            .snapshot_fork_published(prefix.snapshot, session_id.0);
+                        self.trace_admitted(session_id, prefix.matched_tokens, false);
                         #[cfg(test)]
                         self.tick_trace.push(DriverTickEvent::Admitted(session_id));
                         self.observability.prefix_cache.hits =
@@ -714,6 +722,7 @@ where
                 self.prefix.mark_cached_session(session_id);
             }
             self.scheduler.publish_waiting_admission(prepared);
+            self.trace_admitted(session_id, 0, !cache_eligible);
             #[cfg(test)]
             self.tick_trace.push(DriverTickEvent::Admitted(session_id));
             if cache_eligible {
@@ -762,10 +771,11 @@ impl<S> AdmissionSessions<S> {
 
 /// Transient custody between session claim and successful backend preparation.
 /// On failure the same payload moves into the existing resident cleanup phase;
-/// there is no second registry and no backend end submission for a rejected
-/// preparation. In particular a failed compensation cannot drop claimed states.
+/// there is no second registry. A quiescent rejection needs no backend end;
+/// typed unknown preparation must retain custody until an Abort ACK arrives.
 struct TransactionAdmission<S> {
     transaction: ExecutionTransactionId,
+    execution_mode: crate::engine::KvExecutionMode,
     action: SchedulerAction,
     scheduled: ScheduledBatch,
     kv: Option<PendingResidentKv>,
@@ -778,6 +788,7 @@ impl<S> TransactionAdmission<S> {
         let (schedules, states) = self.sessions.commit();
         PendingResidentBatch {
             transaction: self.transaction,
+            execution_mode: self.execution_mode,
             action: self.action,
             scheduled: self.scheduled,
             kv: self.kv,
@@ -801,6 +812,29 @@ impl<S> TransactionAdmission<S> {
             .prefetch_declared
             .then_some(TransactionCustodyOutcome::RolledBack);
         let mut pending = self.commit();
+        if error
+            .diagnostic_chain()
+            .any(|cause| cause.is::<ferrule_model::decoder::KvPrepareQuiescenceUnknown>())
+        {
+            // No handle is not an Abort ACK. Keep the existing transaction owner
+            // and report the same typed failure without releasing logical pages.
+            let source = std::sync::Arc::new(error);
+            pending.phase = ResidentTransactionPhase::Aborting {
+                request: None,
+                custody: TransactionCustodyOutcome::RolledBack,
+                continuation: None,
+                failure: Some((
+                    Error::Shared {
+                        source: source.clone(),
+                    },
+                    stage,
+                )),
+            };
+            driver
+                .resident_transactions
+                .insert(pending.transaction, pending);
+            return Error::Shared { source };
+        }
         pending.phase = ResidentTransactionPhase::BackendAbortedPendingCleanup {
             request: None,
             custody,
@@ -824,7 +858,16 @@ where
         action: SchedulerAction,
         scheduled: ScheduledBatch,
     ) -> Result<(PendingResidentBatch<R::SequenceState>, u64)> {
+        let execution_mode = self
+            .executor
+            .kv_execution_mode(scheduled.execution())
+            .map_err(|error| self.abort_action(&action, error, false, "KV mode admission"))?;
         let transaction = self.take_transaction_id()?;
+        tracing::debug!(
+            transaction = transaction.get(),
+            kv_execution_mode = execution_mode.as_str(),
+            "KV execution admitted"
+        );
         let session_ids = scheduled
             .sequences
             .iter()
@@ -832,8 +875,10 @@ where
             .collect::<Vec<_>>();
         let sessions = AdmissionSessions::claim(self, transaction, &session_ids)
             .map_err(|error| self.abort_action(&action, error, false, "session claim"))?;
+        self.trace_batch_input(&scheduled, transaction);
         let mut admission = TransactionAdmission {
             transaction,
+            execution_mode,
             action,
             scheduled,
             kv: None,
@@ -883,10 +928,13 @@ where
             self.fail_stage("transaction prepare")
                 .map_err(|error| (error, "backend prepare"))?;
             self.executor
-                .prepare_batch_with_kv(
+                .prepare_scoped_batch(
+                    admission.execution_mode,
                     transaction,
                     &mut admission.sessions.states,
                     admission.scheduled.execution(),
+                    self.page_manager.as_ref(),
+                    reservations,
                     &views,
                 )
                 .map_err(|error| (error, "backend prepare"))?;

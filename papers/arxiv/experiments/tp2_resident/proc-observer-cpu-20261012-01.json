@@ -1,0 +1,161 @@
+{
+  "POST_sent": false,
+  "actual_self_smaps_values": {
+    "Anonymous": 27009024,
+    "Private_Dirty": 27009024,
+    "Pss": 37069824,
+    "Pss_Anon": null,
+    "Pss_File": null,
+    "Rss": 39084032
+  },
+  "additional_narrow_validation": {
+    "passed": true,
+    "scope": [
+      "test_observer.Lifecycle",
+      "test_paired.Paired.test_fused_after_single_slot_and_smoke_has_no_qa"
+    ],
+    "tests_run": 2,
+    "utc": "2026-10-12T13:14:45.425638+00:00"
+  },
+  "cpu_self_snapshot": {
+    "errors": [],
+    "heap_live_bytes": null,
+    "memory_semantics": "status Vm/RssAnon/RssFile plus stat faults only; no PSS subcomponent or heap-live proof",
+    "memory_unit": "bytes; task Vm/RSS describe shared process address space and must not be summed across TIDs",
+    "numa_resident_pages": null,
+    "phase": "CPU_self_schema_only",
+    "pid": 28138,
+    "pss_anon_bytes": null,
+    "pss_file_bytes": null,
+    "read_only": true,
+    "root_identity": {
+      "birth_ticks": 111764630,
+      "pid": 28138,
+      "ppid": 28137,
+      "state": "R"
+    },
+    "sample_end_monotonic": 8753767.02208924,
+    "sample_start_monotonic": 8753767.021757185,
+    "schema": "ferrule.proc-process-timeline.v1",
+    "thread_count": 1,
+    "threads": [
+      {
+        "Cpus_allowed_list": "0-127",
+        "Mems_allowed_list": "0",
+        "RssAnon": 27009024,
+        "RssFile": 12075008,
+        "RssShmem": 0,
+        "Threads": 1,
+        "VmRSS": 39084032,
+        "VmSize": 57307136,
+        "is_main": true,
+        "major_faults": 0,
+        "minor_faults": 29782,
+        "nonvoluntary_ctxt_switches": 0,
+        "num_threads": 1,
+        "starttime_ticks": 111764630,
+        "state": "R",
+        "tid": 28138,
+        "voluntary_ctxt_switches": 19
+      }
+    ],
+    "timing_semantics": "CPU proc read bounds only; phase is caller label, not CUDA synchronization or a production-stage timer",
+    "wall_clock_ns": 1791810823985570809
+  },
+  "execution_preparation": {
+    "admission_opt_in": {
+      "max_snapshots": 5,
+      "measured_window_scans": false,
+      "periodic_scans": false,
+      "phases": [
+        "main_pid_first_identified",
+        "ready_before_first",
+        "afterwarm_before_measured",
+        "postmeasured",
+        "shutdown_after_exit"
+      ],
+      "schema": "ferrule.proc-process-timeline.v1"
+    },
+    "enabled_by_default": false,
+    "heap_live": null,
+    "hooks_installed": true,
+    "malloc_info": false,
+    "max_snapshots": 5,
+    "measured_window_scans": false,
+    "new_actual_prepare": false,
+    "numa_resident_pages": null,
+    "periodic_scans": false,
+    "ptrace": false,
+    "raw_anchors": "Monitor root first identified; existing ready timestamp; after warmup before original measure call; original measure result; existing shutdown returned",
+    "receipt_cost": "Atomic receipt write also outside original measure call; write cost not separately measured",
+    "shared_http_globals_mutation": false,
+    "timing_semantics": "CPU proc read start/end/cost retained; no CUDA synchronization or named weightsload phase",
+    "weights_load_phase": null
+  },
+  "gpu_launched": false,
+  "gpu_queried": false,
+  "interval_changed": false,
+  "kernel": "4.19.91-009.ali4000.alios7.x86_64",
+  "preserved_crossblocks": {
+    "crossblocks-results.json": "103f39226f70e79efe4c4a9921115c52cf7363c6d1eb4bb6b44de90b2658ce53",
+    "postflight.json": "982db62b72ccf9eff98d01aeb336373fdd91ce660ac6febf78aae6e296cc5a60",
+    "sealed-identities.json": "71e03496f4c16ccb4ab930ddad178ed840990e1d308155c357712db00d5dcb89"
+  },
+  "preserved_raw_pin_count": 130,
+  "production_modified": false,
+  "release_artifact": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/route-batch-release-20261012-01/ferrule-route-batch",
+    "sha256": "e674eda31c0b1379e19afbd1446662278d98047c27b77c0f1233670e601c87f7"
+  },
+  "schema": "ferrule.proc-observer-cpu-preparation.v1",
+  "smaps_rollup_keys": [
+    "00400000-7fff3a7da000 ---p 00000000 00",
+    "Rss",
+    "Pss",
+    "Shared_Clean",
+    "Shared_Dirty",
+    "Private_Clean",
+    "Private_Dirty",
+    "Referenced",
+    "Anonymous",
+    "LazyFree",
+    "AnonHugePages",
+    "ShmemPmdMapped",
+    "FilePmdMapped",
+    "Shared_Hugetlb",
+    "Private_Hugetlb",
+    "Swap",
+    "SwapPss",
+    "Locked"
+  ],
+  "source_pins": {
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/observer.py": "b47940ad01102708cb6b89fdfa6bc07ea7f72affbfbcc530c22fce19973c10a8",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/paired.py": "d5a5330f466494c7dbb4d7bc369f9ed2fefeb119be7db5ce9a5410b97730b7dc",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/test_observer.py": "39bc5ad8f1a86520545748dc9b295446e1093e1e55ed2016e4b382dad394eb1c"
+  },
+  "status": "pass",
+  "tests": [
+    "Snapshot.test_dead_intermediate_omits_whole_branch",
+    "Snapshot.test_departed_leaf_missing_not_zero_and_root_survives",
+    "Snapshot.test_enumeration_foreign_disappearance_does_not_lose_root",
+    "Snapshot.test_memory_components_are_additive_optional_fields",
+    "Snapshot.test_missing_component_is_null_not_zero",
+    "Snapshot.test_missing_root_memory_is_incomplete_not_custody_loss",
+    "Snapshot.test_mixed_component_coverage_nulls_only_missing_component",
+    "Snapshot.test_next_complete_snapshot_recovers_without_restart",
+    "Snapshot.test_no_startup_or_steady_fabrication_for_straddling_missing_samples",
+    "Snapshot.test_optional_components_do_not_invalidate_old_memory_rows",
+    "Snapshot.test_phase_memory_distinguishes_startup_and_after_first_request",
+    "Snapshot.test_proc_status_rss_anon_never_substitutes_missing_rollup_pss",
+    "Snapshot.test_proc_timeline_self_snapshot_has_no_sampler_or_gpu_query",
+    "Snapshot.test_root_reuse_is_fatal",
+    "Snapshot.test_status_cannot_override_rollup_fields",
+    "ProcTimelineHooks.test_all_five_anchors_are_finite_and_gpu_free",
+    "ProcTimelineHooks.test_departed_shutdown_is_unavailable_not_zero_or_heap_proof",
+    "ProcTimelineHooks.test_measured_body_contains_no_proc_scan_and_result_is_unchanged",
+    "ProcTimelineHooks.test_private_lifecycle_hooks_preserve_shared_measure_and_require_opt_in"
+  ],
+  "tests_passed": true,
+  "tests_run": 19,
+  "utc": "2026-10-12T13:13:44.192692+00:00"
+}

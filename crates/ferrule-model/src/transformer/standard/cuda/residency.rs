@@ -58,7 +58,7 @@ impl CudaStandardDecoderOperators {
                 linear
                     .in_features()
                     .checked_mul(linear.out_features())
-                    .and_then(|n| n.checked_mul(4))
+                    .and_then(|n| n.checked_mul(if self.bf16.is_some() { 2 } else { 4 }))
                     .ok_or_else(|| cuda_error("expert bytes overflow"))?
             };
             bytes = bytes
@@ -66,6 +66,9 @@ impl CudaStandardDecoderOperators {
                 .ok_or_else(|| cuda_error("expert bytes overflow"))?;
         }
         let scratch = SwiGluScratchPlan::for_prepared(expert, rows)?.total_bytes()?;
+        let scratch = scratch
+            .checked_mul(if self.bf16.is_some() { 2 } else { 1 })
+            .ok_or_else(|| cuda_error("BF16 scratch overflow"))?;
         Ok((
             ExpertCacheKey {
                 image_generation: self.image_generation(),
@@ -100,6 +103,9 @@ impl CudaStandardDecoderOperators {
             }
         }
         let scratch = SwiGluScratchPlan::for_metadata(metadata, rows)?.total_bytes()?;
+        let scratch = scratch
+            .checked_mul(if self.bf16.is_some() { 2 } else { 1 })
+            .ok_or_else(|| cuda_error("BF16 scratch overflow"))?;
         Ok((
             ExpertCacheKey {
                 image_generation: self.image_generation(),
@@ -111,7 +117,23 @@ impl CudaStandardDecoderOperators {
                     .each_ref()
                     .map(|p| (p.canonical_id(), p.role().clone())),
             },
-            metadata.expected_device_bytes(),
+            if self.bf16.is_some() {
+                metadata.parameters().iter().try_fold(0usize, |n, p| {
+                    let bytes = p
+                        .weight()
+                        .slice()
+                        .bytes
+                        .checked_add(p.scale().map_or(0, |s| s.slice().bytes))
+                        .ok_or_else(|| cuda_error("BF16 expert bytes overflow"))?;
+                    n.checked_add(
+                        usize::try_from(bytes)
+                            .map_err(|_| cuda_error("BF16 expert bytes overflow"))?,
+                    )
+                    .ok_or_else(|| cuda_error("BF16 expert bytes overflow"))
+                })?
+            } else {
+                metadata.expected_device_bytes()
+            },
             scratch,
         ))
     }
@@ -121,9 +143,7 @@ impl CudaStandardDecoderOperators {
         parameters: &[crate::transformer::BoundParameter; 3],
         rows: usize,
     ) -> Result<()> {
-        use ferrule_backend::cuda::operators::linear::{
-            NumericFp8Layout, NumericFp8LinearPlan, NumericFp8ScaleType,
-        };
+        use ferrule_backend::cuda::operators::linear::{NumericFp8Layout, NumericFp8ScaleType};
         for parameter in parameters {
             let shape = parameter.spec().shape();
             if rows
@@ -142,7 +162,8 @@ impl CudaStandardDecoderOperators {
                         NumericFp8ScaleType::F32
                     }
                 };
-                NumericFp8LinearPlan::new(
+                state.precision.linear_plan(
+                    parameter.role(),
                     NumericFp8Layout {
                         n: shape[0],
                         k: shape[1],
@@ -152,7 +173,6 @@ impl CudaStandardDecoderOperators {
                     },
                     rows,
                     state.stats.reserved_bytes,
-                    state.precision.backend(),
                 )?;
             }
         }
@@ -177,11 +197,24 @@ impl CudaStandardDecoderOperators {
     }
 
     pub(super) fn cache_scratch(&mut self, bytes: usize) -> Result<()> {
+        // A synchronous host/opaque operation inside the lexical scope must
+        // not release the scope's reservation before its next GPU segment.
+        let bytes = self
+            .root_submission
+            .as_ref()
+            .map_or(bytes, |s| bytes.max(s.limit()));
         let total = SwiGluScratchPlan::reserved_bytes(
             bytes,
             0,
             self.numeric.as_ref().map_or(0, |n| n.stats.reserved_bytes),
         )?;
+        if self
+            .bounded_experts
+            .as_ref()
+            .is_some_and(|cache| cache.stats().scratch_bytes < total)
+        {
+            self.root_barrier(super::BarrierReason::CacheEvictionOrRebind)?;
+        }
         if let Some(cache) = &mut self.bounded_experts {
             cache.scratch(total, |key| self.bindings.evict_expert(key))?;
         }
@@ -211,6 +244,9 @@ impl CudaStandardDecoderOperators {
     /// All views share allocations; they do not copy activations or extend a
     /// host weight cache. They survive error/unwind until a proven event.
     pub(super) fn hold_expert_buffer(&mut self, buffer: &CudaF32Buffer) -> Result<()> {
+        if self.root_is_submitting() {
+            return self.root_pin(buffer);
+        }
         if self.bindings.expert_admission.is_some()
             || self.numeric.is_some()
             || self.route_scratch_bytes != 0
@@ -230,30 +266,59 @@ impl CudaStandardDecoderOperators {
     }
 
     pub(super) fn consumer_proof(&mut self) -> Result<()> {
-        if self.bounded_experts.is_none() && self.numeric.is_none() && self.route_scratch_bytes == 0
-        {
-            return Ok(());
-        }
+        let generation = super::upload_proof::SubmissionGeneration::new(None);
+        self.consumer_completion(&generation).map(|_| ())
+    }
+
+    /// The receipt belongs to this lexical submission, not a reusable owner flag.
+    /// Existing callers of consumer_proof retain their original wait behavior.
+    pub(super) fn consumer_completion<'a>(
+        &mut self,
+        generation: &'a super::upload_proof::SubmissionGeneration,
+    ) -> Result<Option<super::upload_proof::ConsumerCompletion<'a>>> {
         if self.needs_quarantine() {
+            self.poisoned = true;
+            self.cache_quarantine();
             return Err(cuda_error("expert completion remains unknown"));
         }
-        let compute = self
-            .ops
-            .record_compute_event()
-            .and_then(|event| event.synchronize());
-        let upload = self.ops.sync_upload_stream();
+        if self.bounded_experts.is_none()
+            && self.numeric.is_none()
+            && self.route_scratch_bytes == 0
+            && self.root_submission.is_none()
+        {
+            return Ok(None);
+        }
+        #[cfg(test)]
+        {
+            self.consumer_proofs += 1;
+        }
+        let prove = || {
+            self.ops
+                .record_compute_event()
+                .and_then(|event| event.synchronize())
+        };
+        let compute = match &mut self.performance_proofs {
+            Some(timing) => timing.consumer_event.measure(prove),
+            None => prove(),
+        };
+        let upload = match &mut self.performance_proofs {
+            Some(timing) => timing.upload_sync.measure(|| self.ops.sync_upload_stream()),
+            None => self.ops.sync_upload_stream(),
+        };
         #[cfg(test)]
         let compute = if std::mem::take(&mut self.lose_next_consumer_proof) {
             Err(cuda_error("injected lost consumer completion proof"))
         } else {
             compute
         };
-        if let Err(error) = compute.and(upload) {
-            self.poisoned = true;
-            self.cache_quarantine();
-            return Err(error);
+        match generation.prove(compute, upload) {
+            Ok(proof) => Ok(Some(proof)),
+            Err(error) => {
+                self.poisoned = true;
+                self.cache_quarantine();
+                Err(error)
+            }
         }
-        Ok(())
     }
 
     pub(super) fn expert_operation<T>(
@@ -304,12 +369,23 @@ impl CudaStandardDecoderOperators {
         // This event is on the actual matmul consumer stream, not an upload
         // completion event. Failed recording is unknown even if a later sync works.
         if let Err(error) = self.consumer_proof() {
-            if let Ok(value) = result {
-                std::mem::forget(value);
-            }
-            return Err(error);
+            return Err(match result {
+                Ok(value) => {
+                    std::mem::forget(value);
+                    error
+                }
+                // Keep the operation's first typed failure as primary; the
+                // missing completion proof is cleanup, never its replacement.
+                Err(source) => crate::transformer::parallel_transfer::CudaShardError::wrap(
+                    source,
+                    Some(error),
+                    false,
+                    true,
+                ),
+            });
         }
         self.expert_hold.clear();
+        self.expert_artifacts.clear();
         self.bindings.expert_admission = None;
         if result.is_err() {
             self.bindings.evict_expert(&lease.key);
@@ -326,15 +402,19 @@ impl CudaStandardDecoderOperators {
             return Err(cuda_error("cannot release unknown expert scratch"));
         }
         self.expert_hold.clear();
+        self.expert_artifacts.clear();
         self.route_hold.clear();
         self.route_ids.clear();
         self.route_scratch_bytes = 0;
+        self.bf16_hold.clear();
         self.cache_scratch(0)
     }
 
     pub(super) fn retain_cache_on_unknown(&mut self) {
         self.cache_quarantine();
         std::mem::forget(std::mem::take(&mut self.expert_hold));
+        std::mem::forget(std::mem::take(&mut self.bf16_hold));
+        std::mem::forget(std::mem::take(&mut self.expert_artifacts));
         std::mem::forget(std::mem::take(&mut self.route_hold));
         std::mem::forget(std::mem::take(&mut self.route_ids));
         std::mem::forget(self.bounded_experts.take());

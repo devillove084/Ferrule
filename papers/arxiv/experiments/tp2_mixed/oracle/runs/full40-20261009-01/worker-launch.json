@@ -1,0 +1,140 @@
+{
+  "directory": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_mixed/oracle/runs/full40-20261009-01",
+  "model": "/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8",
+  "execute_cuda": true,
+  "sole_gpu_owner_granted": true,
+  "gpu_uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+  "owner_note": "User explicitly grants sole ownership of all eight idle GPUs for bounded independent logical TP2 oracle, 2026-10-09; one GPU used, no performance claim",
+  "python": "/opt/conda310/bin/python",
+  "python_sha256": "7c84bfc80924906d03ecc3671d49b0e86f7d41c53707f83a5bed6eb38a916111",
+  "timeout": 1700,
+  "cache_mib": 256,
+  "capture_mib": 512,
+  "protocol": {
+    "schema": "ferrule.paper.tp2-mixed-independent-oracle.protocol.v1",
+    "profile": "SystemMixedTP2EP1",
+    "versions": {
+      "torch": "2.13.0+cu129",
+      "transformers": "5.5.3"
+    },
+    "topology": {
+      "logical_tp": 2,
+      "pp": 1,
+      "ep": 1,
+      "simulation_devices": 1,
+      "production_transport_validated": false
+    },
+    "storage": "Original E4M3FN x numeric BF16 128x128 scale in F32, then BF16 RNE; no reciprocal/E8M0 conversion",
+    "precision": {
+      "activation": "BF16",
+      "parameters": "BF16 including once-rounded native F32 GDN A_log/norm",
+      "rope_frequency": "native F32",
+      "ssm": "explicit F32 preallocation",
+      "conv": "BF16",
+      "kv": "BF16",
+      "tf32": false,
+      "bf16_reduced_precision_reduction": false
+    },
+    "partitions": {
+      "attention": "contiguous whole query+gate heads; whole KV heads; local native HF normalization/RoPE/attention; O input-column shards",
+      "gdn": "local Q segment + local K segment + local V segment; matching depthwise conv; contiguous whole Z/B/A/value heads; local head-group repeat and norm; F32 per-rank state; output input-column shards",
+      "mlp": "each rank has a slice of every expert, gate/up independently row-sharded then concatenated gate-before-up; down input-column shard",
+      "embedding_and_final_norm": "replicated semantics; one computation on identical post-reduction hidden states",
+      "output": "contiguous BF16 vocab row shards; concatenate rank0 then rank1 without reduction; actual vocab 248320 divisible by TP2, no padded vocab values exported; ragged/padded gather checked on independent 11-token fixture"
+    },
+    "reduction": "Each local partial writes BF16; rank0.float + rank1.float; one BF16 RNE cast",
+    "moe": {
+      "expert_execution": "all experts logically resident/available on both ranks; lazy checkpoint operands allowed; not a measured residency/performance result",
+      "routing": "replicated original BF16 weights; native F32 full softmax/topk/renormalization; lower expert ID substitutions ONLY at equal raw logits; unequal raw softmax collisions stay native",
+      "accumulation": "pinned HF eager ascending expert ID, per-expert F32 routing product cast BF16 and BF16 index_add; NOT slot-major or fused F32 accumulation",
+      "combine": "native shared sigmoid BF16 gating; local routed+shared BF16 add; exactly ONE TP sum afterwards",
+      "vllm_bitexact": false
+    },
+    "cases": {
+      "hello": [
+        9419
+      ],
+      "capital": [
+        760,
+        6511,
+        314,
+        9338,
+        369
+      ]
+    },
+    "stages": [
+      "prefill",
+      "decode.0"
+    ],
+    "continuation": "own greedy full-vocab argmax after prefill; consumer MUST use recorded decode input; baseline drift skips same-input claims when continuations differ",
+    "comparison": {
+      "atol": 0.00025,
+      "rtol": 0.012,
+      "formula": "abs(actual-expected) <= atol + rtol*abs(expected)",
+      "ids_and_inputs": "exact",
+      "state": "report exactness AND unchanged tolerance, no a-priori CPU/CUDA state or exp equivalence claim",
+      "all_boundaries_required": "all except oracle-only pre-canonicalization native_expert_ids; canonical selected IDs remain exact",
+      "oracle_only_diagnostics": [
+        "native_expert_ids"
+      ]
+    },
+    "limits": {
+      "max_timeout_seconds": 1700,
+      "default_capture_mib_per_case": 512,
+      "default_decoded_weight_cache_mib": 256,
+      "max_capture_mib": 2048,
+      "max_decoded_weight_cache_mib": 1024,
+      "outer_terminal_timeout_ms": 1800000
+    },
+    "custody": "existing paper launch_guard seal/authenticate + test_vllm_qwen35.run_process subreaper; fresh explicit sole-owner grant and shared owner lock; never signal foreign PIDs",
+    "admission": "CPU tests and a completed reference are NOT factory enablement or a Ferrule full40 PASS; caller must provide reference directory and manifest SHA256 to the runtime gate",
+    "unvalidated_math_sites": [
+      "CUDA GEMM/softmax/norm/SiLU/sigmoid/reduction implementation drift versus production",
+      "HF GDN chunk prefill versus production recurrence/chunk policy, exp/softplus/L2 normalization and exact F32 state updates",
+      "HF eager per-expert accumulation versus vLLM fused MoE (different contract; no bit-exact claim)"
+    ],
+    "blocker_policy": "Any uncovered math-site difference or failed unchanged tolerance blocks runtime admission; no silent policy or threshold change",
+    "pre_weight_gate": "Mandatory authenticated one-GPU synthetic TP1/native equality, TP2 GQA/GDN inventory, independent frozen row/local-MoE/route/head and CUDA-F32-state fixtures; abort before full checkpoint reads on failure"
+  },
+  "pins": {
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/contract.py": "96f9664cb16e4b861b4902f6c07b234ca08d89106d4d99a9ff8db74511de25bf",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/launch_guard.py": "b4ec4dc1b1e7e61fe322847e4a07ce2c3b2ed43d8d3e9bc3bd6602979ad00b9f",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runner.py": "f1e87f00822445a708c5ffe50124ea0d34e928fd56fe6943ccaf7a052bb9d95a",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/telemetry.py": "766a2e62730e3b56efd553d013554b18520c4883f6e5a3ee7ddeef4211091900",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_mixed/oracle/compare.py": "12e51bd3ec18b3b3e0d97eb51ee19ddaf93c653edcd4f850a4cfda47d80551fc",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_mixed/oracle/cuda_gate.py": "4908f1f228fb668b9d04ec69af9696f7c1c2f77d0e60a9f6b576fc85267d1e88",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_mixed/oracle/launch.py": "7d66d64b35e4f3c234b1046d3493092e26ebee2b4a0b8ad8428d9c67e81811b4",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_mixed/oracle/protocol.json": "c6e7836f3797c16502dc21b8c756c87495525c2cf2faac26ba11077f62cfbb57",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_mixed/oracle/test_compare.py": "e656cbc53dbe38fb6b3223a7bd5cc30d810b127400d9bc16c3d759c56ae74bdf",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_mixed/oracle/test_launch.py": "5a9bb7e1dd29f56cd1a2b3b0b304ed0abbc103e3638645a29df81b84813f2ea1",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_mixed/oracle/test_tp2_oracle.py": "3466c516b6815aaaa2a9f8aae391a7d0db5f86d778bf648e490f486d42edc6e9",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_mixed/oracle/tp2_oracle.py": "566ab571ea758811ddb86727cf213a18b764e1c665a2b0cef86b2dbd35f8fff8",
+    "/home/admin/luhuanbing.lhb/Ferrule/scripts/_owned_subreaper.py": "19ef9006089cde1abdca87177e01d26b925dcf996bfebaf6e3dc51ea71a77ff0",
+    "/home/admin/luhuanbing.lhb/Ferrule/scripts/qwen35_fp8_bf16_reference.py": "103f294f76ac88dfe170392613a3fb6f0a87aba005a1a89cbd768959f52400ab",
+    "/home/admin/luhuanbing.lhb/Ferrule/scripts/qwen35_fp8_cuda_reference.py": "b69072155a45f8fb354e54dd93265d2d04296e04513a0b416bcafa9b67d25920",
+    "/home/admin/luhuanbing.lhb/Ferrule/scripts/test_vllm_qwen35.py": "1c330dac0727d54254a1c1648adcb9a4b747a2303fe183c2ba38f9ccd83ec2a1"
+  },
+  "unsharded_reference": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/numeric-bf16-gate-20261004-v2/native-reference",
+  "unsharded_sha256": "8772456576dc0568241b53a47db01751f33bbd0e90ee5e21680ead0cb13b727b",
+  "owner_lock": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/GPU-b980f22b-58a3-fc88-21c1-ae86053d8535.lock",
+    "fd": 3,
+    "device": 64785,
+    "inode": 58519119,
+    "coordinator_pid": 82936,
+    "mode": "local_nonblocking_flock",
+    "global_reservation": false
+  },
+  "worker_token": "2ed5c58e73daf9603c4d8425dc5fb667b26b5ebdc349be37fec44b8929c34197",
+  "manifest": {
+    "protocol": "ferrule.paper.m7.worker.v2"
+  },
+  "coordinator": {
+    "pid": 82936,
+    "birth_ticks": 80516048,
+    "ppid": 172272,
+    "pgrp": 82936,
+    "session": 82936
+  },
+  "worker_source_sha256": "f1e87f00822445a708c5ffe50124ea0d34e928fd56fe6943ccaf7a052bb9d95a"
+}

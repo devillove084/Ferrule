@@ -4,6 +4,7 @@ use super::*;
 
 pub(super) struct PendingResidentBatch<S> {
     pub(super) transaction: ExecutionTransactionId,
+    pub(super) execution_mode: crate::engine::KvExecutionMode,
     pub(super) action: SchedulerAction,
     pub(super) scheduled: ScheduledBatch,
     pub(super) kv: Option<PendingResidentKv>,
@@ -369,7 +370,8 @@ where
         }
 
         if let Some(kv) = pending.kv.take()
-            && let Err((error, kv)) = self.progress_committed_resident_kv(kv)
+            && let Err((error, kv)) =
+                self.progress_committed_resident_kv(kv, &pending.action, transaction)
         {
             pending.kv = Some(kv);
             pending.phase = ResidentTransactionPhase::BackendCommittedPendingPublish {
@@ -514,10 +516,7 @@ where
                 self.resident_transactions.insert(transaction, pending);
                 Ok(ResidentDriverStep::Blocked)
             }
-            Err(error) => {
-                self.resident_transactions.insert(transaction, pending);
-                Err(error)
-            }
+            Err(error) => self.retain_resident_ending_error(pending, error),
             Ok(TransactionEndProgress::Complete) => {
                 let phase = std::mem::replace(
                     &mut pending.phase,
@@ -586,6 +585,7 @@ where
             continuation = None;
         }
 
+        self.trace_action_end(&pending.action, transaction, false);
         if let Some(kv) = pending.kv.take()
             && let Err((error, kv)) = self.progress_aborted_resident_kv(kv)
         {
@@ -669,9 +669,20 @@ where
 
     pub(super) fn retain_resident_ending_error<T>(
         &mut self,
-        pending: PendingResidentBatch<R::SequenceState>,
+        mut pending: PendingResidentBatch<R::SequenceState>,
         error: Error,
     ) -> Result<T> {
+        let error = match &mut pending.phase {
+            ResidentTransactionPhase::Aborting {
+                failure: Some((primary, _)),
+                ..
+            }
+            | ResidentTransactionPhase::BackendAbortedPendingCleanup {
+                failure: Some((primary, _)),
+                ..
+            } => primary.retain_cleanup("resident transaction abort", error),
+            _ => error,
+        };
         self.resident_transactions
             .insert(pending.transaction, pending);
         Err(error)
@@ -686,7 +697,7 @@ where
         if let ResidentTransactionPhase::Aborting { failure, .. } = &mut pending.phase {
             *failure = Some(match failure.take() {
                 Some((previous, previous_stage)) => (
-                    Error::combine("resident transaction abort", previous, error),
+                    Error::cleanup("resident transaction abort", previous, error),
                     previous_stage,
                 ),
                 None => (error, stage),

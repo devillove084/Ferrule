@@ -9,6 +9,7 @@ use ferrule_model::transformer::{
 };
 use ferrule_runtime::parallel::collective::HostCollectiveLimits;
 use ferrule_runtime::parallel::tensor::decoder_collective::DecoderTensorCollective;
+use std::sync::{Arc, atomic::AtomicBool};
 use std::time::{Duration, Instant};
 
 fn config() -> serde_json::Value {
@@ -147,31 +148,39 @@ fn dense_admission_validates_geometry_placement_and_pp_segments() {
 
 #[test]
 fn collective_orders_members_and_reuses_one_group_across_sites_and_transactions() {
-    let workers = endpoints(Duration::from_secs(2), 2)
-        .into_iter()
-        .enumerate()
-        .map(|(rank, mut endpoint)| {
-            std::thread::spawn(move || {
-                assert_eq!(endpoint.owner().get(), 100 - rank as u32 * 7);
-                for step in 1..=16 {
-                    assert_eq!(
-                        endpoint
-                            .exchange(tx(step), 10, Sum, vec![rank as f32 + 1.0, 2.0])
-                            .unwrap(),
-                        vec![3.0, 4.0]
-                    );
-                    assert_eq!(
-                        endpoint
-                            .exchange(tx(step), 20, AllGather, vec![rank as f32, step as f32])
-                            .unwrap(),
-                        vec![0.0, step as f32, 1.0, step as f32]
-                    );
-                }
-            })
-        })
-        .collect::<Vec<_>>();
-    for worker in workers {
-        worker.join().unwrap();
+    let mut peers = endpoints(Duration::from_secs(2), 2);
+    let control = peers[0].control();
+    for step in 1..=16 {
+        control
+            .begin(tx(step), Arc::new(AtomicBool::new(false)))
+            .unwrap();
+        std::thread::scope(|scope| {
+            let workers = peers
+                .iter_mut()
+                .enumerate()
+                .map(|(rank, endpoint)| {
+                    scope.spawn(move || {
+                        assert_eq!(endpoint.owner().get(), 100 - rank as u32 * 7);
+                        assert_eq!(
+                            endpoint
+                                .exchange(tx(step), 10, Sum, vec![rank as f32 + 1.0, 2.0])
+                                .unwrap(),
+                            vec![3.0, 4.0]
+                        );
+                        assert_eq!(
+                            endpoint
+                                .exchange(tx(step), 20, AllGather, vec![rank as f32, step as f32])
+                                .unwrap(),
+                            vec![0.0, step as f32, 1.0, step as f32]
+                        );
+                    })
+                })
+                .collect::<Vec<_>>();
+            for worker in workers {
+                worker.join().unwrap();
+            }
+        });
+        control.finish(tx(step)).unwrap();
     }
 }
 
@@ -179,6 +188,10 @@ fn collective_orders_members_and_reuses_one_group_across_sites_and_transactions(
 fn mismatched_transaction_site_kind_count_and_budget_wake_all_peers() {
     for case in 0..5 {
         let mut group = endpoints(Duration::from_secs(2), 2);
+        group[0]
+            .control()
+            .begin(tx(1), Arc::new(AtomicBool::new(false)))
+            .unwrap();
         let mut second = group.pop().unwrap();
         let mut first = group.pop().unwrap();
         let worker = std::thread::spawn(move || first.exchange(tx(1), 10, Sum, vec![1.0]));
@@ -200,6 +213,10 @@ fn mismatched_transaction_site_kind_count_and_budget_wake_all_peers() {
 fn timeout_abort_and_dropped_peer_fail_closed_without_unbounded_wait() {
     for case in 0..3 {
         let mut group = endpoints(Duration::from_millis(25), 2);
+        group[0]
+            .control()
+            .begin(tx(1), Arc::new(AtomicBool::new(false)))
+            .unwrap();
         let mut second = group.pop().unwrap();
         let mut first = group.pop().unwrap();
         let start = Instant::now();
@@ -251,9 +268,16 @@ fn pipeline_collective_control_checks_lifetime_and_cancellation_without_a_peer()
             .begin(tx(1), Arc::new(AtomicBool::new(false)))
             .is_err()
     );
-    control
-        .begin(tx(2), Arc::new(AtomicBool::new(true)))
-        .unwrap();
+    assert!(
+        control
+            .begin(tx(2), Arc::new(AtomicBool::new(true)))
+            .is_err()
+    );
+    assert!(!control.is_failed());
+    assert!(control.finish(tx(2)).is_err());
+    let cancelled = Arc::new(AtomicBool::new(false));
+    control.begin(tx(2), cancelled.clone()).unwrap();
+    cancelled.store(true, std::sync::atomic::Ordering::Release);
     let before = Instant::now();
     assert!(peers[0].exchange(tx(2), 1, Sum, vec![1.0]).is_err());
     assert!(before.elapsed() < Duration::from_secs(1));
@@ -395,5 +419,27 @@ fn standard_cuda_tensor_admits_tp2_before_owner_resource_loading() {
             "{message}"
         );
         assert!(!message.contains("generic tensor program requires TP=1"));
+    }
+}
+
+#[test]
+fn exchange_without_admission_fails_even_after_rejected_cancelled_begin() {
+    for cancelled in [false, true] {
+        let mut peers = endpoints(Duration::from_secs(30), 2);
+        let control = peers[0].control();
+        if cancelled {
+            assert!(
+                control
+                    .begin(tx(1), Arc::new(AtomicBool::new(true)))
+                    .is_err()
+            );
+        }
+        assert!(peers[0].exchange(tx(1), 0, Sum, vec![1.]).is_err());
+        assert!(control.is_failed());
+        assert!(
+            control
+                .begin(tx(1), Arc::new(AtomicBool::new(false)))
+                .is_err()
+        );
     }
 }

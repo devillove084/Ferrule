@@ -1,0 +1,16 @@
+{
+  "passed": true,
+  "gate": {
+    "name": "model-route-partials",
+    "binary": "model",
+    "selector": "transformer::standard::cuda::hybrid_rank::mixed::decoded_gpu_tests::route_batch::raw_partial_legacy_vs_batch_exact_after_source_retirement",
+    "evidence": "actual_route_batch_model_synthetic_partials_not_hf_R64",
+    "devices": 2,
+    "reference": null,
+    "cache_bytes": null,
+    "observer": null
+  },
+  "proven_drained": true,
+  "all_eight_idle": true,
+  "performance_claim": false
+}

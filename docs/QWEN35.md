@@ -1,9 +1,20 @@
 # Qwen3.5：0.8B dense 与 35B-A3B FP8 支持
 
+当前运行证据统一见 [CURRENT_ACCEPTANCE.md](CURRENT_ACCEPTANCE.md)：最新单-owner
+Mixed bounded quality、composition 重构后的四个 F32 full40 拓扑、较早另一份 binary
+的 Hello public-serving lifecycle 分开列出。下文带日期的测量和诊断只证明原冻结运行，
+不等于最新 checkout、所有 workload 或公平 vLLM 性能通过。
+
+**Experimental Mixed BF16 serving:** the explicit single-owner
+`--model-profile qwen35-mixed-bf16` route, budgets, quality limits and owner-run
+command are documented in [Mixed BF16 serving](QWEN35_MIXED_SERVING.md). This is
+separate from the historical F32/W8A16 and parallel paths below.
+
 前半部分描述 **dense Qwen3.5-0.8B、完整 24 层、纯文本**路径；文末的
 **35B-A3B FP8 runtime 接线与实际验收**记录 F32/TF32x3 单 GPU resident 与
-专用 GPU-thread EP2/4/8。generic pipeline 的 TP/PP/process 仍不支持；EP8 的
-strict 数值/lifecycle proof 与 EP8 release 性能验证均已完成：这些实测场景已交互可用，
+resident GPU-thread/process EP，以及共享 parallel composition 的 CUDA thread
+PP×EP segment / TP×EP tensor-rank providers。35B 不走 generic dense TP provider；
+下文旧 EP8 strict 数值/lifecycle 与 release 性能结果仅证明各自冻结的实测场景，
 不外推为多用户容量、数千 token context 或线性八倍扩展性。
 两者 precision、默认 backend 和验收证据分别报告，
 不把通用 Qwen3 的 TP/PP/EP 能力外推到 Qwen3.5。并行集成总览见
@@ -18,19 +29,56 @@ CUDA 测试、1 个比较器验证、6 个 CPU reference 测试**；独立 forwa
 HTTP/SSE。本地 CLI/HTTP 日志也记录了真实 CUDA serving 成功，不能再把 CUDA
 描述为仅 metadata 支持或待接入。下面分别列出实现边界、证据和复现命令。
 
+Dense 0.8B has a strict thread/process PP2 construction path. Scope, commands,
+frame/memory admission, CPU-reference tests and the real-checkpoint GPU smoke are
+documented in [Dense process pipeline](QWEN35_DENSE_PROCESS.md). The real 0.8B
+checkpoint process-PP2 path now has a current-owner GPU smoke
+pass (one request, 8 output tokens); this is smoke/lifecycle evidence, not a
+full quality or performance acceptance. MoE PP2×EP2 and TP2×EP2 now compose through
+`PipelineParallelExecutor::new_hybrid_cpu_tensor`, including the actual PP2×TP2×EP2
+CPU-reference owner path. See [parallel composition](PARALLEL_COMPOSITION.md) for
+local preparation, the sealed global protocol and test ownership. The production
+CUDA thread tensor-rank provider within shared composition is documented in
+[TP×EP runtime and exact commands](../crates/ferrule-runtime/tests/support/hybrid_cuda_tensor.md).
+Its PP1/2 TP2 EP2 F32 full40 GPU-owner strict acceptance passed; process TP remains rejected.
+The factory also admits TP4, but TP4 has no full-model strict evidence. Runtime
+[typed capability validation](../crates/ferrule-runtime/tests/support/hybrid_cuda_tensor.md#typed-capability-and-production-validation)
+separates factory support from that frozen evidence and rejects W8A16 production
+quality (the explicit experimental opt-in remains available) and sparse KV rosters.
+
+历史 `target/validation` 链接保留原始 provenance；其中部分 artifact 在本 checkout
+缺失，不能据此宣称已重新核验旧测量。本文新增验收链接已核对本地文件存在，
+但本次不重跑其 GPU/服务命令，也不重建或修改历史收据。
+
+## 独立能力与证据边界
+
+HostKV quiescent committed-slice 与 append transaction 是不同范围；read-only
+fixture 的 DMA/cancel/reaper 证据不自动开放 append DMA 或证明普通 decoder 节省显存。
+具体边界见 [append contract](../crates/ferrule-backend/tests/host_kv/TRANSACTION_PREFIX.md)
+与 [当前验收](CURRENT_ACCEPTANCE.md)。
+
+W8A16 是独立的 experimental opt-in，full40 strict **FAIL** 不因 kernel 修复、
+argmax 一致或 serving 成功而关闭；单-owner Mixed bounded **PASS** 属于另一精度合同。
+[FIRST_DIVERGENCE.json](../target/validation/w8a16-first-divergence-20261002/FIRST_DIVERGENCE.json)
+只诊断已追踪的早期 BF16 rounding/reduction 分歧，不证明后续误差无害或不可约。
+性能测量与限制统一见 [性能协议](PERFORMANCE_EVALUATION.md)，不在此复制进度表。
+
+当前 CLI CPU serving 需 opt-in `cpu-reference` 与 `--backend cpu`；默认/auto 选择 CUDA，
+不是旧批次的默认 CPU。此为测试/CLI policy 边界，不表示 native CPU/provider 已全面删除。
+
 ## 0.8B 支持矩阵与通用拒绝边界
 
 | 项目 | 当前范围 | 源码依据 |
 | --- | --- | --- |
 | checkpoint | HF safetensors，nested `qwen3_5` / `qwen3_5_text`，严格 0.8B 几何；24 层中 18 层 GatedDeltaNet、6 层 full GQA | [`config.rs`](../crates/ferrule-model/src/models/qwen35/config.rs)、[`recipe.rs`](../crates/ferrule-model/src/models/qwen35/recipe.rs) |
-| CPU | F32 text decoder，默认 backend 选择 CPU | [`model_factory/qwen35.rs`](../crates/ferrule-runtime/src/engine/model_factory/qwen35.rs) |
+| CPU | F32 text decoder；当前 CLI 需 `cpu-reference` + `--backend cpu` | [`model_factory/adapters/qwen35/mod.rs`](../crates/ferrule-composition/src/model_factory/adapters/qwen35/mod.rs) |
 | CUDA | `cuda` feature 下的单设备 resident F32 tensor 路径；显式 `--backend cuda`，当前 factory 使用可见 ordinal 0 | 同上；[`hybrid_cuda.rs`](../crates/ferrule-model/src/decoder/hybrid_cuda.rs) |
 | 文本 serving | completion/chat、greedy generation、HTTP/SSE、stop/EOS、取消、reset、shutdown；使用 Qwen35 chat template | [`serve.rs`](../crates/ferrule-cli/src/commands/serve.rs)、[`qwen35_http.rs`](../crates/ferrule-server/tests/qwen35_http.rs)、[`qwen35_chat.rs`](../crates/ferrule-model/tests/qwen35_chat.rs) |
 | vision / MTP | **不执行**；已知附件可缺席，若出现则必须是完整且合法的 partition，校验后排除出 text state dict | [`name_mapper.rs`](../crates/ferrule-model/src/models/qwen35/name_mapper.rs)、[`adapter.rs`](../crates/ferrule-model/src/models/qwen35/adapter.rs) |
 | MoE / 35B / FP8 | 精确 35B-A3B FP8 profile 已有独立 CUDA F32/TF32x3 factory；详见文末。不是 0.8B profile 的量化开关；其他尺寸、BF16 packed experts 及 flat text export 仍拒绝 | [`config.rs`](../crates/ferrule-model/src/models/qwen35/config.rs)、[`qwen35_metadata.rs`](../crates/ferrule-model/tests/qwen35_metadata.rs) |
-| generic pipeline TP / PP / process ranks | **unsupported**；不能把 Qwen3 的 generic pipeline 拓扑套到 Qwen35 | [`model_factory/pipeline.rs`](../crates/ferrule-runtime/src/engine/model_factory/pipeline.rs)、[`standard/cuda/hybrid.rs`](../crates/ferrule-model/src/transformer/standard/cuda/hybrid.rs) |
-| dedicated GPU-thread EP | **supported only for exact 35B-A3B FP8, EP2/4/8**；resident root + expert owners，显式 distinct `--devices`，`devices[0]` 为 root，owners 使用同一 ordered list | [`model_factory/qwen35.rs`](../crates/ferrule-runtime/src/engine/model_factory/qwen35.rs)、[`model_factory/qwen35_ep.rs`](../crates/ferrule-runtime/src/engine/model_factory/qwen35_ep.rs) |
-| prefix cache / partial retain / speculation | **unsupported**；factory 拒绝非零 prefix cache 与 native proposals，CUDA 仅允许 exact-frontier fork，不能部分保留 recurrent history | [`model_factory/qwen35.rs`](../crates/ferrule-runtime/src/engine/model_factory/qwen35.rs)、[`hybrid_cuda.rs`](../crates/ferrule-model/src/decoder/hybrid_cuda.rs) |
+| dense hybrid pipeline | **strict 0.8B PP2 TP1 EP1, thread/process**; see [scope and validation](QWEN35_DENSE_PROCESS.md); MoE uses [PP×EP](QWEN35_PP_EP.md) segment / [TP×EP](../crates/ferrule-runtime/tests/support/hybrid_cuda_tensor.md) tensor-rank provider leaves in shared composition; CPU-reference compositions are separate | [`model_factory/pipeline.rs`](../crates/ferrule-composition/src/model_factory/pipeline.rs)、[`standard/cuda/hybrid.rs`](../crates/ferrule-model/src/transformer/standard/cuda/hybrid.rs) |
+| resident GPU-thread/process EP | **supported only for exact 35B-A3B FP8, PP1 TP1 EP2/4/8, F32 or opt-in W8A16**；resident root + expert owners，显式 distinct `--devices`；process EP 不授权 process PP×EP | [`model_factory/adapters/qwen35/mod.rs`](../crates/ferrule-composition/src/model_factory/adapters/qwen35/mod.rs)、[`model_factory/adapters/qwen35/ep.rs`](../crates/ferrule-composition/src/model_factory/adapters/qwen35/ep.rs) |
+| prefix cache / partial retain / speculation | **unsupported**；factory 拒绝非零 prefix cache 与 native proposals，CUDA 仅允许 exact-frontier fork，不能部分保留 recurrent history | [`model_factory/adapters/qwen35/mod.rs`](../crates/ferrule-composition/src/model_factory/adapters/qwen35/mod.rs)、[`hybrid_cuda.rs`](../crates/ferrule-model/src/decoder/hybrid_cuda.rs) |
 | 截层 / expert cache options | partial `--max-layers` 被拒绝；35B 的 `--expert-host-cache-*` 是独立 pageable compressed prewarm budget；旧 pinned/hotset/device flags 仍不冒充 host residency | [`serve.rs`](../crates/ferrule-cli/src/commands/serve.rs)、[`host_experts`](../crates/ferrule-model/src/transformer/host_experts/mod.rs) |
 
 严格校验包括 tensor 名称、dtype、shape、bytes、index/header 对应关系及附件完整性，
@@ -100,7 +148,7 @@ inference 为 true，FP8 QueryAKv/Projection 仍为 false；因此不能借新�
 
 CUDA admission 分开核算 weights、workspace、KV 与 recurrent state，不能只为 KV
 预留显存。实现和真实 header 预算测试见
-[`model_factory/qwen35.rs`](../crates/ferrule-runtime/src/engine/model_factory/qwen35.rs)。
+[`model_factory/adapters/qwen35/mod.rs`](../crates/ferrule-composition/src/model_factory/adapters/qwen35/mod.rs)。
 
 - **每个 sequence state 为 20,643,840 bytes**，包括全部 18 个 GDN 层的
   convolution history 和 recurrent matrix。transaction working copy 同样占一份。
@@ -118,21 +166,24 @@ CUDA admission 分开核算 weights、workspace、KV 与 recurrent state，不�
   为 **1,018,167,296 bytes**。它们是 checked admission 上界，不是测得的峰值显存。
   runtime/driver 等额外开销也不能从这些数字中推导为零。
 
-CLI 为 Qwen35 自动将未指定的 `--max-tensor-mb` 设为 1024，关闭 native proposals，
+CLI 为 Qwen35 自动将未指定的 `--max-tensor-mb` 设为 1024；**35B TP×EP 请显式设为 2048**，
+因为 replicated BF16 embedding 的 F32 rank image 是 1940 MiB。只设置 API 的
+`ModelFactoryOptions` 会被 serving 默认覆盖，须用 `ServingModelOptions.max_tensor_mebibytes=Some(2048)`。
+该 override 不改变全局默认或放松 admission。factory 关闭 native proposals，
 并保持 prefix cache 关闭。token-serial execution 将 `max_batch_tokens` 限为
 `min(请求值, 32, ctx_size)`，prefill chunk 再受此限制；默认的 512 不是一次执行
 512 行 full-vocabulary logits 的承诺。这些是现有 factory 行为，不需要另外改 capability。
 
 ## 最小 serve 复现
 
-以下命令从 `/root/Ferrule` 运行。模型、tokenizer 和 CUDA/CUTLASS 构建环境必须已在
+以下命令从仓库根目录运行。模型、tokenizer 和 CUDA/CUTLASS 构建环境必须已在
 本机；不会下载模型。CUDA 例子按 RTX 3090 `sm_86`，其他受支持 GPU 应匹配架构，
 不能据此宣称已验收。两种启动方式是替代关系，不要同时占用端口 8000。
 
 ```sh
-# 默认 backend 是 CPU，不需要 cuda feature。
-cargo run --locked -p ferrule-cli -- \
-  serve /mnt/nas1/hf/Qwen3.5-0.8B
+# 当前 CPU-reference CLI 需显式 feature/backend，不需要 cuda feature。
+cargo run --locked -p ferrule-cli --features cpu-reference -- \
+  serve /mnt/nas1/hf/Qwen3.5-0.8B --backend cpu
 
 # 单卡 CUDA；无需额外传 max-tensor、截层或并行参数。
 FERRULE_CUDA_ARCH=sm_86 cargo run --locked -p ferrule-cli --features cuda -- \
@@ -211,17 +262,21 @@ CUDA targets 使用真实 GPU，不要并行抢占设备；构建 feature 不等
 ### 无 GPU 的定向回归
 
 ```sh
-cargo test --locked -p ferrule-model \
+cargo test --locked -p ferrule-model --features cpu-reference \
   --test qwen35_metadata --test qwen35_validation --test qwen35_chat \
   --test qwen35_cpu --test hybrid_cpu
-cargo test --locked -p ferrule-runtime --lib qwen35 -- --test-threads=1
-cargo test --locked -p ferrule-server --test qwen35_http -- --test-threads=1
-cargo test --locked -p ferrule-cli --bin ferrule \
-  commands::serve::tests::qwen35_default_cli_is_usable_and_explicit_moe_options_are_rejected \
+cargo test --locked -p ferrule-composition --features cpu-reference --lib qwen35 -- --test-threads=1
+cargo test --locked -p ferrule-server --features cpu-reference --test qwen35_http -- --test-threads=1
+cargo test --locked -p ferrule-cli --features cpu-reference --bin ferrule \
+  commands::serve::tests::reference_tests::qwen35_reference_cli_is_usable_and_explicit_moe_options_are_rejected \
   -- --exact --test-threads=1
 ```
 
 ### 真实 metadata 和默认预算（后者编译 CUDA，但不初始化设备）
+
+Qwen adapter 的私有 Rust module mount 与物理目录名不同。下列 composition 命令按
+唯一测试名后缀过滤（不使用 `--exact`）；必须确认实际选中并完成 **1 test**，零匹配
+不算验收。同样规则用于文末 EP8 strict 命令；不从目录迁移推导新的 GPU PASS。
 
 ```sh
 FERRULE_QWEN35_08B_DIR=/mnt/nas1/hf/Qwen3.5-0.8B \
@@ -229,9 +284,9 @@ FERRULE_QWEN35_08B_DIR=/mnt/nas1/hf/Qwen3.5-0.8B \
   real_08b_headers_validate_text_and_known_attachment_partitions \
   -- --ignored --exact --nocapture --test-threads=1
 FERRULE_CUDA_ARCH=sm_86 FERRULE_QWEN35_08B_DIR=/mnt/nas1/hf/Qwen3.5-0.8B \
-  cargo test --locked -p ferrule-runtime --features cuda --lib \
-  engine::model_factory::qwen35::tests::qwen35_real_header_budget_uses_compact_kv_and_all_recurrent_layers \
-  -- --ignored --exact --nocapture --test-threads=1
+  cargo test --locked -p ferrule-composition --features cuda --lib \
+  qwen35_real_header_budget_uses_compact_kv_and_all_recurrent_layers \
+  -- --ignored --nocapture --test-threads=1
 ```
 
 ### CUDA operators 与共享 hybrid lifecycle
@@ -306,50 +361,12 @@ FERRULE_CUDA_ARCH=sm_86 FERRULE_QWEN35_08B_DIR=/mnt/nas1/hf/Qwen3.5-0.8B \
 HTTP lifecycle target 使用自己的有界容量选项；只有 CLI target 验证默认容量启动，
 二者不能混为同一种验收。CLI 信号测试要求 Unix。
 
-### 先前 0.8B / 标准 Qwen3 验证记录与来源
+### 历史 0.8B 验证来源
 
-[最终 GPU 汇总](../target/validation/qwen35-final-gpu-summary.md)、
-[最终 CPU 汇总](../target/validation/qwen35-final-cpu-summary.md)及以下日志都是
-**Git ignored 的本地生成证据**，不随仓库发布。链接仅在保留该次 artifacts 的
-工作区有效；本次文档同步用 `rg` 核查它们，没有重跑 Cargo 或生成 oracle。
-
-以下是先前批次的记录，不覆盖后续 35B 变更；历史 postfix 统计见文末。
-
-- GPU 批次在 8 张 RTX 3090 上串行执行，`CARGO_INCREMENTAL=0`、
-  `FERRULE_CUDA_ARCH=sm_86`、`--locked`、`--test-threads=1`，单命令 timeout 900 秒。
-  CUDA workspace all-targets check、CLI / process child 构建通过。
-- 合计 **186 selected passed、0 failed**，不是 186 项实际 GPU 测试。
-  backend lib 包含 **113 passed / 18 ignored**；其中 KV 10 项随后定向通过，
-  不代表全 ignored 已覆盖。hybrid 13 项和另行执行的 forward UT 按上面的构成计数，
-  不将 0 tests、编译成功或 CPU reference 重命名为 GPU 验收。
-- [CPU 最终 workspace 日志](../target/validation/qwen35-final-cpu-tests-final.log)：
-  该批次为 **1,274 passed、0 failed、6 ignored、2 精确 skip**。首轮 2 项因缺少
-  `models/Qwen3-30B-A3B/config.json` 失败，只跳过
-  `real_qwen3_30b_metadata_binds_to_the_generic_state_dict` 和
-  `qwen_adapter_uses_real_standard_kv_and_rejects_cuda` 后重跑。
-  [doctest](../target/validation/qwen35-final-cpu-doc.log)另 **7 passed**。
-  Qwen35 NAS CPU 数值 target 是在上述 6 ignored 之外随后单独执行的 **1 passed**，
-  不修改 workspace 那一次的 ignored 计数。
-- [最终 Qwen35 HTTP](../target/validation/qwen35-final-gpu-05-qwen35-http.log)为
-  **1 passed，230.51 s**；[最终默认 CLI](../target/validation/qwen35-final-gpu-05-cli-serve.log)
-  为 **1 passed，69.59 s**，后者覆盖 SSE 和 SIGTERM。时间是整个 target 的耗时，
-  不是 ready 或每 token latency；6.77 s ready 和约 15 s/token 仍仅引用先前
-  `target/validation/qwen35-launch-final.log` 的前台启动实测，不作 release 性能声明。
-- [最终 contexts](../target/validation/qwen35-final-gpu-06-final-contexts.log)：
-  **0 个残留 GPU contexts / processes**，compute-apps 仅表头，八卡利用率 0%、
-  显存回到 2–3 MiB 基线；没有 reset GPU 或终止无关进程。
-- **strict Clippy 未全绿**：[原 strict 日志](../target/validation/qwen35-final-cpu-clippy.log)
-  中两个新增 lint，`components.rs` 的 `manual_is_multiple_of` 和
-  `unnecessary_lazy_evaluations`，现已修复；既有 `collapsible_if`、
-  `chunks_exact_to_as_chunks`、`items_after_test_module` 仍是已知阻塞。
-  不把这两处修复、fmt/check/test 通过写成 strict Clippy 全部通过。
-- 未执行全 workspace ignored、全部 process faults；已知旧 shared-FFN formal-shape
-  latency unsupported case 不在该批次范围。该批次不覆盖 35B/FP8；其后完成的
-  35B 单卡及 dedicated thread EP 验收见下文；vision/MTP 执行与 hybrid TP/PP/process 仍不支持。
-
-前次文档收尾的 model 21 passed / 3 ignored、runtime 2 passed，以及后续编译阶段
-120 秒超时，是较早的独立执行记录，不再充当当前最终验收结果。最终结果以上述
-报告和分项日志为准；这不意味着无 skip、无 ignored、无 lint 阻塞的全 workspace 通过。
+[GPU 汇总](../target/validation/qwen35-final-gpu-summary.md)与
+[CPU 汇总](../target/validation/qwen35-final-cpu-summary.md)保留原批次的通过、失败、
+ignored 与 fixture filters。它们是本地历史证据，不随仓库分发，也不证明当前源码、
+35B、全部 GPU tests 或 workspace 全绿；不再重复 lint 修复和测试人口流水账。
 
 ## 35B CPU compressed host prewarm / readiness gate
 
@@ -433,10 +450,72 @@ GPU miss 经 `expert()` → `StateDictMaterializer::expert_parameter()` 取得�
 320 MiB device cache / 64 MiB scratch。schema 单份 F32 target **8,464,263,168 B**
 与后续保守 model admission **12,637,319,680 B** 都不是 GPU 实测，也不是当前默认值。
 当时 registry 的 7/8/10 passed 是不同 CPU/CUDA-feature 批次；编译 120 秒 timeout
-没有执行结果，不计通过。BF16 full40 后来仍未接受，当前生产固定 F32/TF32x3。
+没有执行结果，不计通过。BF16 full40 后来仍未接受，既有默认生产保持 F32/TF32x3；新的 opt-in W8A16 接线见下节。
 这些规划不授权 TP/PP/process；后来开放的 dedicated EP 由自己的 placement/admission
 决定，而不是放开 generic parallel policy。历史完整数值、CLI、shutdown 与 postfix
 proof 在下文单列，不把旧成功或失败改写为当前全量回归。
+
+## 显式 numeric W8A16 profile（runtime / CLI）
+
+以下 precision/EP 示例使用 `serve --numeric-fp8-precision f32|w8a16-bf16`，
+不把 serving 的 profile、rank isolation 或 policy flags 外推到 `chat`。
+**W8A16 是 experimental opt-in；独立 full40 strict quality gate 失败，不是已验收的默认精度。**
+省略仍为既有 **F32** production profile；显式 `f32` 也是一个需要被消费的选择，
+在非 Qwen3.5 MoE FP8 family 上会拒绝，不会默默忽略。CUDA 未编译、kernel 不支持、
+artifact 或预算不满足时返回错误，不会回退到 F32、旧 BF16-RNE 或 CPU。
+旧的 `Bf16RneF32Accumulate` diagnostic profile 不是此 CLI 的选项。
+
+使用已编译的 CUDA binary 与严格 35B checkpoint：
+
+```sh
+# 单 GPU resident
+target/release/ferrule serve /mnt/nas1/hf/Qwen3.5-35B-A3B-FP8 \
+  --backend cuda --numeric-fp8-precision w8a16-bf16
+
+# 既有 numeric process EP；root 驻留，专家子进程继承同一 profile
+target/release/ferrule serve /mnt/nas1/hf/Qwen3.5-35B-A3B-FP8 \
+  --backend cuda --numeric-fp8-precision w8a16-bf16 \
+  --expert-parallel 8 --devices 0,1,2,3,4,5,6,7 \
+  --rank-backend process --rank-timeout-ms 600000
+
+# thread EP：同上改 --rank-backend thread，省略 custom timeout
+target/release/ferrule serve /mnt/nas1/hf/Qwen3.5-35B-A3B-FP8 \
+  --backend cuda --numeric-fp8-precision w8a16-bf16 \
+  --expert-parallel 8 --devices 0,1,2,3,4,5,6,7
+```
+
+该选项不授权新的 hybrid PP/process topology，使用既有 resident / numeric EP transport。
+`NumericBoot.numeric_profile` wire 值为 `"f32"` 或 `"w8a16-bf16"`；仅旧 v2 boot
+省略此字段时取 F32，未知值或组内 mixed profile 拒绝。新版父进程总会序列化字段；
+旧 child 的 strict unknown-field 检查会拒绝，而不是静默执行不同 precision。
+
+Rust factory 选择为
+`ModelFactoryOptions.numeric_fp8_profile = Some(NumericFp8Profile::W8A16Bf16)`；
+类型位于 `ferrule_composition::model_factory`，映射到模型
+`NumericFp8Precision::W8A16Bf16F32Accumulate`。metadata admission 使用
+`Qwen35MoeCapacityPlan::from_config_with_profile` /
+`Qwen35MoeMemoryPlan::open_hf_with_profile`。原有不带 profile 的方法仍为 F32。
+
+观测边界：
+
+- resident backend label 为
+  `cuda-hybrid-numeric-fp8-w8a16-bf16-f32-accumulate-qwen35-35b-a3b`；
+  thread/process EP 分别以 `qwen35-thread-ep` / `qwen35-process-ep` 结尾。
+- `numeric_fp8_profile()`、`observability().numeric_fp8_profile`、capacity target、
+  resolution report、expert report 与 child boot logging 均明确 profile。
+  通用 `support().arithmetic` 表示 **F32 model boundary**，不能当成 numeric operand dtype。
+- W8A16 使用 BF16-RNE operands；E4M3FN 解码乘原始 numeric BF16/F32 scale，
+  先产生 F32 乘积，再 BF16-RNE；M≤8 fused vector、M>8 BF16 MMA，F32 accumulate/output。
+  模型 activation、KV、state、非 numeric 算子与 EP activation/result transport 仍是 F32。
+- fused numeric kernel 的 required global numeric workspace 为 **0**，capacity target 的
+  `minimum_scratch_bytes=0`。runtime 仍保留并计入既有 **64 MiB scratch reservation**；
+  cache、operator activation workspace、root/owner 共卡权重、KV/state、allocator margin
+  不会因为选择 W8A16 而消失。该接线不宣称总显存减少或放宽 admission。
+
+**不是端到端 BF16，也不是 vLLM Marlin same-precision / same-compute / bitwise 等价证明。**
+下节历史 full40 F32 数值/性能结果不自动适用于此 opt-in profile。当前 owner 已有 W8 serving
+smoke/Hello32 观测，但独立 full40 W8 strict oracle 失败；不以 serving 或 kernel microbench
+替代质量门禁。
 
 ## 35B-A3B FP8 runtime 接线与实际验收
 
@@ -448,7 +527,7 @@ proof 在下文单列，不把旧成功或失败改写为当前全量回归。
 回归见 [`qwen35_engine_plan.rs`](../crates/ferrule-model/tests/qwen35_engine_plan.rs)。
 runtime/CLI 的 `Auto` 对这个 exact profile 选择 CUDA；默认单 owner 的公开 profile 为
 `cuda-hybrid-numeric-fp8-f32-tf32x3-qwen35-35b-a3b`。这不是 BF16-RNE profile：
-factory 固定使用已验证的 `NumericFp8Precision::F32Tf32x3`，不提供会隐式切到
+factory 默认使用已验证的 `NumericFp8Precision::F32Tf32x3`；显式 W8A16 见上节，不提供会隐式切到
 BF16 的 fallback。0.8B dense Qwen35 的默认 CPU/CUDA 行为未改变。
 
 ### 单卡与专用 thread EP：不是 generic pipeline
@@ -458,8 +537,10 @@ BF16 的 fallback。0.8B dense Qwen35 的默认 CPU/CUDA 行为未改变。
   4 GiB device cache（含 64 MiB scratch）**，不是每层 1024，也不是旧 64/320 MiB。
   可用 `--cuda-expert-device-entries` / `--cuda-expert-device-bytes` 调整；bytes 是
   原始 bytes，仍受总 device budget 与实际 free VRAM admission 限制。
-- **EP2/4/8**：[`prepare_qwen35_expert_parallel`](../crates/ferrule-runtime/src/engine/model_factory/qwen35.rs)
-  经 resident registry、[`qwen35_ep.rs`](../crates/ferrule-runtime/src/engine/model_factory/qwen35_ep.rs)
+- **EP2/4/8**：[`prepare_qwen35_expert_parallel`](../crates/ferrule-composition/src/model_factory/adapters/qwen35/mod.rs)
+  经 catalog 的 resident selection 与薄
+  [`adapters/qwen35/ep.rs`](../crates/ferrule-composition/src/model_factory/adapters/qwen35/ep.rs)
+  strict binding，交给共享 [`parallel/resident.rs`](../crates/ferrule-composition/src/model_factory/parallel/resident.rs)
   构造 external-routing root、`ExpertParallelExecutor` 和
   `GenericDecoderRunner::<HybridCudaDecoder>::hybrid_cuda_with_routed_experts`。
   一个 resident engine/model worker、一个 root-only KV authority，另有持久 GPU expert
@@ -469,10 +550,13 @@ BF16 的 fallback。0.8B dense Qwen35 的默认 CPU/CUDA 行为未改变。
   contexts。每层按 `expert % N` 分配。CLI 推荐 `--engine auto`；当前 CLI 也将合法
   Qwen35 EP 的 `resident`/`pipeline` 选择导向这个专用入口，不代表 generic pipeline
   family 白名单已开放。普通 generic `EnginePlan` 的 degree 不是 runtime placement admission。
-- EP 必须 full host warm；拒绝单卡 device-cache override、CPU、TP/PP/DP/SP/CP>1、
-  process ranks、custom rank timeout、restart/replay。无自动多卡分配；单卡不会因有
-  八张可见卡自动变成 EP。production 不依赖、链接或调用 NCCL，activation/result
-  仍经 host staging，不是零 host transport。
+- Resident EP 必须 full owned-expert prewarm；拒绝单卡 device-cache override、CPU、
+  TP/PP/DP/SP/CP>1 和自动 restart/replay。Thread 不接受 custom rank timeout；
+  既有 process EP 通过共享 [`parallel/process.rs`](../crates/ferrule-composition/src/model_factory/parallel/process.rs)
+  准备 owned partitions、bounded frames 与 deadlines，但 numeric boot/binder 仍只接受
+  strict Qwen3.5-35B-A3B FP8，不是任意模型的 process provider。
+  无自动多卡分配；单卡不会因有八张可见卡自动变成 EP。production 不依赖、链接或
+  调用 NCCL，activation/result 仍经 host staging，不是零 host transport。
 - 两条 35B 路径都拒绝 legacy pinned cache/hotset、prefix cache、speculation、partial
   layers 和未消费的 reader/head overrides；vision/MTP 只校验附件，不执行。
 
@@ -675,7 +759,7 @@ FERRULE_NUMERIC_FP8_F32_REFERENCE_DIR=/root/Ferrule/target/validation/qwen35-fp8
 
 ### EP8 strict full40 oracle（独立于单卡证据）
 
-[`qwen35_ep_strict_tests.rs`](../crates/ferrule-runtime/src/engine/model_factory/qwen35_ep_strict_tests.rs)
+[`qwen35_ep_strict_tests.rs`](../crates/ferrule-composition/tests/unit/engine/model_factory/qwen35_ep_strict_tests.rs)
 复用真实 factory constructor 的 prepared root runner，不重写 forward。当前 EP backend
 profile 为 `cuda-hybrid-numeric-fp8-f32-tf32x3-qwen35-thread-ep`。检查 oracle
 manifest/profile/hash，双方 finite，在 F64 比较原始 `atol=rtol=2e-4`，未放宽阈值。
@@ -697,12 +781,15 @@ manifest/profile/hash，双方 finite，在 F64 比较原始 `atol=rtol=2e-4`，
 ```sh
 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 FERRULE_CUDA_ARCH=sm_86 CARGO_INCREMENTAL=0 \
   timeout --signal=TERM --kill-after=15s 900s cargo test --locked --release \
-  -p ferrule-runtime --features cuda --lib \
-  engine::model_factory::qwen35::ep::strict::qwen35_ep8_factory_full40_f32_strict_oracle \
-  -- --exact --ignored --nocapture --test-threads=1
+  -p ferrule-composition --features cuda --lib \
+  qwen35_ep8_factory_full40_f32_strict_oracle \
+  -- --ignored --nocapture --test-threads=1
 ```
 
-### BF16 diagnostic：仍未接受
+### 历史 BF16-RNE diagnostic：不是 Mixed profile
+
+此处旧 diagnostic 的失败不代表新的 `Bf16ModelMixedF32Accumulate` 也失败；
+Mixed 的原始 full40/fresh-quality 范围见 [当前验收](CURRENT_ACCEPTANCE.md)。
 
 旧 native BF16-RNE/F32-accumulate full40 路径仍是 **experimental / diagnostic-only、
 known-unaccepted**：此前 Hello prefill/decode 最大误差约 **0.035 / 0.132**，不能用
@@ -814,44 +901,11 @@ error 仍从 join 返回。Generic decoder 测试直接走 trait seam，确认�
   此 readiness launcher exit 0；两次均未发送 generation 请求，不是重跑 Hello SSE、
   capital、full logits 或历史 798 秒完整验证，也不是性能或 driver-fault 恢复声明。
 
-## 最终 CPU gate（既有结果，本次未执行）
+## 历史回归收据
 
-[final CPU 汇总](../target/validation/performance-ep8-final-cpu-20260926T140807Z-summary.txt)
-记录 workspace **1,389 passed、0 failed、13 ignored、2 known-fixture filters**；过滤项为
-`real_qwen3_30b_metadata_binds_to_the_generic_state_dict` 和
-`qwen_adapter_uses_real_standard_kv_and_rejects_cuda`，不算通过。
-[doctests](../target/validation/performance-ep8-final-cpu-20260926T140807Z-doc.log)另 **9 passed**；
-[CPU check](../target/validation/performance-ep8-final-cpu-20260926T140807Z-check.log)、
-[CUDA sm_86 compile-only check](../target/validation/performance-ep8-final-cpu-20260926T140807Z-cuda-check.log)
-与 [fmt](../target/validation/performance-ep8-final-cpu-20260926T140807Z-fmt.log)通过，汇总
-warning lines=0。没有运行 ignored/GPU kernels，不代表 strict Clippy 全绿或 BF16 full40
-已接受；不要把 CPU gate、EP8 性能运行和先前 strict oracle 相互替代。下面旧 postfix
-计数保留为历史，不与当前 gate 累加。
-
-## 历史 postfix 验证口径（非当前全量回归）
-
-本次 docs-only 只核对既有报告与日志、同步文档并检查链接；不读取源码、不运行 Cargo/GPU
-或重新生成 oracle。
-以下本地 artifacts 均为 Git ignored，不随文档发布。
-
-- [最终 GPU 定向汇总](../target/validation/qwen35-35b-final-gpu-summary.log)原始选择
-  **49 cases：48 passed、1 failed**；失败是
-  `cutlass_f32::f32_sm86_exact_capability_and_plan_policy` 的 stale mask assertion：
-  actual `0xD86` vs expected `0x586`。源码现已修正；最新交接确认 metadata-filtered
-  重跑通过。原汇总的失败记录保留，不能改称一次 49/49 全量重跑或全 GPU/all-workspace
-  green。full40 F32 的两个实测本来已通过，不受这个 metadata assertion 影响；
-  zero-test discovery、编译和 CPU-only 检查不计作实际 GPU kernel 验收。
-- [postfix CPU workspace tests](../target/validation/qwen35-35b-postfix-cargo-test-exact-skip2.log)：
-  **1,324 passed、0 failed、8 ignored、2 missing-fixture filters**。缺少
-  `models/Qwen3-30B-A3B/config.json` 的
-  `real_qwen3_30b_metadata_binds_to_the_generic_state_dict` 与
-  `qwen_adapter_uses_real_standard_kv_and_rejects_cuda` 明确过滤，不能当成通过。
-  [postfix doctest](../target/validation/qwen35-35b-postfix-cargo-test-doc.log)另 **7 passed**。
-- [CPU workspace check](../target/validation/qwen35-35b-postfix-cargo-check.log)、
-  [CUDA workspace check](../target/validation/qwen35-35b-postfix-cuda-check-sm86.log)及
-  [fmt](../target/validation/qwen35-35b-postfix-fmt.log)通过，warning 0。
-  这些不更新先前 strict Clippy 的未全绿结论，也不宣称所有 ignored tests 都执行。
-- 真实默认 CLI 的既有 16.42 s ready / 237.11 s Hello / 543.48 s capital SSE 和
-  SIGTERM 证据保留，属于 **debug 功能验收**。最新 explicit physical shutdown 的
-  service criteria 与同端口重启已实测通过，范围及旧 launcher 探针失败见上节；
-  该历史批次不包含后续 EP8 strict full40；当前 EP8 release 性能结果见上文，不能回填到旧批次。
+[CPU gate](../target/validation/performance-ep8-final-cpu-20260926T140807Z-summary.txt)、
+[GPU 定向汇总](../target/validation/qwen35-35b-final-gpu-summary.log)与
+[postfix CPU 日志](../target/validation/qwen35-35b-postfix-cargo-test-exact-skip2.log)
+保留原始失败、缺失 fixture、filters 和 ignored；后续定向修复不是整批重跑。
+这些收据不能与不同 binary 的质量、性能或 physical shutdown 结果合并为一次验收。
+维护中的 source-pinned 结论见 [当前验收](CURRENT_ACCEPTANCE.md)。

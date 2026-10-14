@@ -1,0 +1,198 @@
+{
+  "status": "pass",
+  "root_identity": {
+    "pid": 59589,
+    "birth_ticks": 113532376,
+    "ppid": 59573,
+    "state": "R"
+  },
+  "binary_sha256": "36e6aaa54d1aff7c8cc35d63dcee0df1cad91fcc8f6d3e746369504f2c70a58c",
+  "executable_link": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/admission/startup-metadata-20261013-02/staged/ferrule",
+  "actual_argv": [
+    "/proc/self/fd/4",
+    "serve",
+    "/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8",
+    "--backend",
+    "cuda",
+    "--engine",
+    "pipeline",
+    "--model-profile",
+    "qwen35-mixed-bf16",
+    "--tensor-parallel",
+    "2",
+    "--pipeline-parallel",
+    "1",
+    "--expert-parallel",
+    "1",
+    "--rank-backend",
+    "thread",
+    "--devices",
+    "0,1",
+    "--rank-restarts",
+    "0",
+    "--kv-execution-policy",
+    "resident",
+    "--ctx-size",
+    "128",
+    "--max-active-sequences",
+    "2",
+    "--max-batch-tokens",
+    "8",
+    "--prefill-chunk-size",
+    "8",
+    "--cuda-device-budget-mb",
+    "22528",
+    "--kv-cache-mb",
+    "16",
+    "--max-tensor-mb",
+    "2048",
+    "--cuda-workspace-mb",
+    "4096",
+    "--host",
+    "127.0.0.1",
+    "--port",
+    "18367",
+    "--served-model-name",
+    "qwen35-ferrule-tp2-resident-paper"
+  ],
+  "spec_digest": "65a7effc404ff6936bf98531c5160b741e47033c141e18cd393517f5ba5ece04",
+  "mapped_paths": [
+    "/dev/nvidia-uvm",
+    "/dev/nvidia0",
+    "/dev/nvidia1",
+    "/dev/nvidiactl",
+    "/dev/zero (deleted)",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/admission/startup-metadata-20261013-02/staged/ferrule",
+    "/home/admin/wxw403883/anaconda3/envs/tao/lib/libcublas.so.12.4.5.8",
+    "/home/admin/wxw403883/anaconda3/envs/tao/lib/libcublasLt.so.12.4.5.8",
+    "/home/admin/wxw403883/anaconda3/envs/tao/lib/libcudart.so.12.4.99",
+    "/home/admin/wxw403883/anaconda3/envs/tao/lib/libgcc_s.so.1",
+    "/usr/lib64/ld-2.32.so",
+    "/usr/lib64/libc-2.32.so",
+    "/usr/lib64/libcuda.so.575.57.08",
+    "/usr/lib64/libdl-2.32.so",
+    "/usr/lib64/libm-2.32.so",
+    "/usr/lib64/libpthread-2.32.so",
+    "/usr/lib64/librt-2.32.so",
+    "/usr/lib64/libstdc++.so.6.0.28"
+  ],
+  "runtime_pins": {
+    "/home/admin/wxw403883/anaconda3/envs/tao/lib/libcublas.so.12.4.5.8": "88397a191cfc25f94c272b638ffa942be58d5594ba5d41ac4b766c2cd3fe54ac",
+    "/home/admin/wxw403883/anaconda3/envs/tao/lib/libcublasLt.so.12.4.5.8": "a18a341a9b6de15918e410a2337a74f2a644fd80c0600e61d69ddad69be15687",
+    "/home/admin/wxw403883/anaconda3/envs/tao/lib/libcudart.so.12.4.99": "e8023d1aa80d86175f22986faf55e23c0a9286ff625cede0b560220c6cd8a560",
+    "/home/admin/wxw403883/anaconda3/envs/tao/lib/libgcc_s.so.1": "f43f5563b8e01388eacf8f0b4898a53b88fe8aea535a2424ffb576d85845677e",
+    "/usr/lib64/ld-2.32.so": "385218198df39d3931fbb0666db2838bce66a7658c82c61454d4903a4e1d2ed3",
+    "/usr/lib64/libc-2.32.so": "d589c6aea9b813d2392b1c8bdeda73afe694d399687ab867bd26735175faadf1",
+    "/usr/lib64/libcuda.so.575.57.08": "f2470aa637fa72422534edeaeb9de19afe3d0646388baf7ffb5337b2edafc59e",
+    "/usr/lib64/libdl-2.32.so": "4eec77f1e5131f2b84aaa83c21772dc233ff9a44d2715a195249fee9d1dd3cae",
+    "/usr/lib64/libm-2.32.so": "3ad871eb16ece2c91050642503aa18757d3b018b1491afb662aec555fff683dd",
+    "/usr/lib64/libpthread-2.32.so": "6fd5dbf2a630b845af36c36e4d4509fef9da415b48fa25c6661184000bc3f3ce",
+    "/usr/lib64/librt-2.32.so": "68bf882c5011e80b654ace48ac7e4164d62fb6991d475514f299c6da57892196",
+    "/usr/lib64/libstdc++.so.6.0.28": "729ce0312dcd9dd2301f66a1c157fade62d60809dcb0647a5906b3f7e28c88d7"
+  },
+  "model": {
+    "checkpoint_identity": {
+      "path": "/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8",
+      "metadata_sha256": {
+        "config.json": "236c373b0682a4f40c2fa49ef8e5f722a87a8dbfe265286b6d5260b23d7cb229",
+        "model.safetensors.index.json": "b009f7a49c442fce959a2ff6fee41c69248879b90d7ff5636ec6d2068ac4876d",
+        "tokenizer.json": "5f9e4d4901a92b997e463c1f46055088b6cca5ca61a6522d1b9f64c4bb81cb42",
+        "tokenizer_config.json": "316230d6a809701f4db5ea8f8fc862bc3a6f3229c937c174e674ff3ca0a64ac8"
+      },
+      "shard_stats": {
+        "model.safetensors-00001-of-00014.safetensors": {
+          "bytes": 2685395560,
+          "mtime_ns": 1772424992657055256,
+          "inode": 38524559,
+          "device": 236
+        },
+        "model.safetensors-00002-of-00014.safetensors": {
+          "bytes": 2685393512,
+          "mtime_ns": 1772424806750938380,
+          "inode": 38524557,
+          "device": 236
+        },
+        "model.safetensors-00003-of-00014.safetensors": {
+          "bytes": 2685393512,
+          "mtime_ns": 1772425351626122160,
+          "inode": 38524563,
+          "device": 236
+        },
+        "model.safetensors-00004-of-00014.safetensors": {
+          "bytes": 2685394536,
+          "mtime_ns": 1772425557825932903,
+          "inode": 38524564,
+          "device": 236
+        },
+        "model.safetensors-00005-of-00014.safetensors": {
+          "bytes": 2685395560,
+          "mtime_ns": 1772425889647579315,
+          "inode": 38524566,
+          "device": 236
+        },
+        "model.safetensors-00006-of-00014.safetensors": {
+          "bytes": 2685394536,
+          "mtime_ns": 1772425164292942735,
+          "inode": 38524561,
+          "device": 236
+        },
+        "model.safetensors-00007-of-00014.safetensors": {
+          "bytes": 2685393512,
+          "mtime_ns": 1772426151999313636,
+          "inode": 38524567,
+          "device": 236
+        },
+        "model.safetensors-00008-of-00014.safetensors": {
+          "bytes": 2685393512,
+          "mtime_ns": 1772426339785901318,
+          "inode": 38524569,
+          "device": 236
+        },
+        "model.safetensors-00009-of-00014.safetensors": {
+          "bytes": 3645492144,
+          "mtime_ns": 1772426665613745394,
+          "inode": 38524570,
+          "device": 236
+        },
+        "model.safetensors-00010-of-00014.safetensors": {
+          "bytes": 2685398632,
+          "mtime_ns": 1772426854560705584,
+          "inode": 38524571,
+          "device": 236
+        },
+        "model.safetensors-00011-of-00014.safetensors": {
+          "bytes": 2685400680,
+          "mtime_ns": 1772427035405551264,
+          "inode": 38524573,
+          "device": 236
+        },
+        "model.safetensors-00012-of-00014.safetensors": {
+          "bytes": 2685399144,
+          "mtime_ns": 1772427235837349585,
+          "inode": 38524574,
+          "device": 236
+        },
+        "model.safetensors-00013-of-00014.safetensors": {
+          "bytes": 3011229472,
+          "mtime_ns": 1772427400537041055,
+          "inode": 38524576,
+          "device": 236
+        },
+        "model.safetensors-00014-of-00014.safetensors": {
+          "bytes": 1267650368,
+          "mtime_ns": 1772427480416081771,
+          "inode": 38524577,
+          "device": 236
+        }
+      }
+    },
+    "identity_strength": "partial: metadata hashes + shard stat pins; payloads NOT hashed",
+    "tokenizer_identity": {
+      "tokenizer.json": "5f9e4d4901a92b997e463c1f46055088b6cca5ca61a6522d1b9f64c4bb81cb42",
+      "tokenizer_config.json": "316230d6a809701f4db5ea8f8fc862bc3a6f3229c937c174e674ff3ca0a64ac8"
+    }
+  },
+  "read_cost_seconds": 0.8068260736763477,
+  "nccl_loaded": false,
+  "claims": "Source-bound strict TP2 real checkpoint startup, actual executable and library maps; greedy gates assessed separately; not fresh 14M numerical proof"
+}

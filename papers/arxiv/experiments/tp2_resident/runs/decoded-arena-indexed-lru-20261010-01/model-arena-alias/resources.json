@@ -1,0 +1,229 @@
+{
+  "status": "observed_within_targets",
+  "errors": [],
+  "memory_components": {
+    "sample_count": 1,
+    "complete_host_samples": 1,
+    "gpu_samples": 1,
+    "gpu_peak_bytes": {
+      "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 1048576
+    },
+    "tree_pss_peak_bytes": 125360128,
+    "tree_rss_peak_bytes": 127197184,
+    "tree_anonymous_peak_bytes": 68775936,
+    "tree_pss_anon_peak_bytes": null,
+    "tree_pss_file_peak_bytes": null,
+    "tree_private_dirty_peak_bytes": 68775936,
+    "component_sample_counts": {
+      "anonymous_bytes": 1,
+      "pss_anon_bytes": 0,
+      "pss_file_bytes": 0,
+      "private_dirty_bytes": 1
+    },
+    "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+    "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+  },
+  "phase_memory": {
+    "bounds": {
+      "ready_monotonic": null,
+      "first_sent_monotonic": null,
+      "first_terminal_monotonic": null
+    },
+    "phases": {
+      "startup": {
+        "sample_count": 0,
+        "complete_host_samples": 0,
+        "gpu_samples": 0,
+        "gpu_peak_bytes": {
+          "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": null
+        },
+        "tree_pss_peak_bytes": null,
+        "tree_rss_peak_bytes": null,
+        "tree_anonymous_peak_bytes": null,
+        "tree_pss_anon_peak_bytes": null,
+        "tree_pss_file_peak_bytes": null,
+        "tree_private_dirty_peak_bytes": null,
+        "component_sample_counts": {
+          "anonymous_bytes": 0,
+          "pss_anon_bytes": 0,
+          "pss_file_bytes": 0,
+          "private_dirty_bytes": 0
+        },
+        "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+        "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+      },
+      "ready_before_first": {
+        "sample_count": 0,
+        "complete_host_samples": 0,
+        "gpu_samples": 0,
+        "gpu_peak_bytes": {
+          "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": null
+        },
+        "tree_pss_peak_bytes": null,
+        "tree_rss_peak_bytes": null,
+        "tree_anonymous_peak_bytes": null,
+        "tree_pss_anon_peak_bytes": null,
+        "tree_pss_file_peak_bytes": null,
+        "tree_private_dirty_peak_bytes": null,
+        "component_sample_counts": {
+          "anonymous_bytes": 0,
+          "pss_anon_bytes": 0,
+          "pss_file_bytes": 0,
+          "private_dirty_bytes": 0
+        },
+        "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+        "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+      },
+      "first_request": {
+        "sample_count": 0,
+        "complete_host_samples": 0,
+        "gpu_samples": 0,
+        "gpu_peak_bytes": {
+          "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": null
+        },
+        "tree_pss_peak_bytes": null,
+        "tree_rss_peak_bytes": null,
+        "tree_anonymous_peak_bytes": null,
+        "tree_pss_anon_peak_bytes": null,
+        "tree_pss_file_peak_bytes": null,
+        "tree_private_dirty_peak_bytes": null,
+        "component_sample_counts": {
+          "anonymous_bytes": 0,
+          "pss_anon_bytes": 0,
+          "pss_file_bytes": 0,
+          "private_dirty_bytes": 0
+        },
+        "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+        "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+      },
+      "after_first_request": {
+        "sample_count": 0,
+        "complete_host_samples": 0,
+        "gpu_samples": 0,
+        "gpu_peak_bytes": {
+          "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": null
+        },
+        "tree_pss_peak_bytes": null,
+        "tree_rss_peak_bytes": null,
+        "tree_anonymous_peak_bytes": null,
+        "tree_pss_anon_peak_bytes": null,
+        "tree_pss_file_peak_bytes": null,
+        "tree_private_dirty_peak_bytes": null,
+        "component_sample_counts": {
+          "anonymous_bytes": 0,
+          "pss_anon_bytes": 0,
+          "pss_file_bytes": 0,
+          "private_dirty_bytes": 0
+        },
+        "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+        "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+      }
+    },
+    "unassigned_or_boundary_samples": 1,
+    "steady_state_claim": false,
+    "policy": "after first request includes later canaries/warmup/requests; not a steady-state proof"
+  },
+  "phase_metadata_error": null,
+  "gpu_peak_bytes": {
+    "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 1048576
+  },
+  "tree_pss_peak_bytes": 125360128,
+  "tree_rss_peak_bytes": 127197184,
+  "complete_host_samples": 1,
+  "incomplete_host_samples": 0,
+  "gpu_samples": 1,
+  "missing_gpu_attempts": 0,
+  "baseline": {
+    "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": {
+      "index": 0,
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "total_bytes": 25769803776,
+      "gpu_bytes": 0,
+      "utilization": 0
+    },
+    "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": {
+      "index": 1,
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "total_bytes": 25769803776,
+      "gpu_bytes": 0,
+      "utilization": 0
+    },
+    "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6": {
+      "index": 2,
+      "uuid": "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6",
+      "total_bytes": 25769803776,
+      "gpu_bytes": 0,
+      "utilization": 0
+    },
+    "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011": {
+      "index": 3,
+      "uuid": "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011",
+      "total_bytes": 25769803776,
+      "gpu_bytes": 0,
+      "utilization": 0
+    },
+    "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86": {
+      "index": 4,
+      "uuid": "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86",
+      "total_bytes": 25769803776,
+      "gpu_bytes": 0,
+      "utilization": 0
+    },
+    "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685": {
+      "index": 5,
+      "uuid": "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685",
+      "total_bytes": 25769803776,
+      "gpu_bytes": 0,
+      "utilization": 0
+    },
+    "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d": {
+      "index": 6,
+      "uuid": "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d",
+      "total_bytes": 25769803776,
+      "gpu_bytes": 0,
+      "utilization": 0
+    },
+    "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f": {
+      "index": 7,
+      "uuid": "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f",
+      "total_bytes": 25769803776,
+      "gpu_bytes": 0,
+      "utilization": 0
+    }
+  },
+  "delta_high_water_bytes": {
+    "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 1048576,
+    "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 1048576,
+    "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6": 0,
+    "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011": 0,
+    "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86": 0,
+    "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685": 0,
+    "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d": 0,
+    "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f": 0
+  },
+  "final_process_diagnostics": [
+    {
+      "identity": {
+        "pid": 107274,
+        "birth_ticks": 95502599,
+        "ppid": 107273,
+        "state": "S"
+      },
+      "command": "/proc/self/fd/4 transformer::standard::cuda::hybrid_rank::mixed::decoded_gpu_tests::decoded_arena_alias_retains_whole_root --exact --ignored --nocapture --test-threads=1 ",
+      "environment": {
+        "CUDA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+        "CUBLAS_WORKSPACE_CONFIG": ":0:0",
+        "LD_LIBRARY_PATH": "/home/admin/wxw403883/anaconda3/envs/tao/lib:/usr/lib64"
+      },
+      "libraries": [
+        "/home/admin/wxw403883/anaconda3/envs/tao/lib/libcudart.so.12.4.99",
+        "/usr/lib64/libcuda.so.575.57.08"
+      ]
+    }
+  ],
+  "owned_gpu_attribution": "unknown",
+  "owned_process_gpu_peak_bytes": null,
+  "exact_peaks": false,
+  "hard_memory_partition": false,
+  "continuous_coverage": false
+}

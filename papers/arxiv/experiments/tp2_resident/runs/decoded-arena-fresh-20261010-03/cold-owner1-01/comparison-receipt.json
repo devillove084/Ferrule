@@ -1,0 +1,10 @@
+{
+  "all_exact": true,
+  "report": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-fresh-20261010-03/cold-owner1-01-comparison.json",
+    "sha256": "43c5db52513711d8210b20b12fa5a02924a3ed3ee12c97f4b49bc8b826349068"
+  },
+  "raw_sha256": "cd4b0758251f161daf4a2826917447647e11692599d255ab3853ea3f16de3fdc",
+  "reference_sha256": "fe7fb83bf8cae99164209aad077f5c1ff92adf902aaca43e8dbb99f8af8166ae",
+  "public_e2e_accepted": false
+}

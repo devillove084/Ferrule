@@ -1,0 +1,69 @@
+{
+  "schema": "ferrule.paper.unchanged-backend-reuse.v1",
+  "gates": [
+    "backend-exact",
+    "backend-preflight",
+    "backend-typed-view"
+  ],
+  "previous_prepared": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-fresh-20261010-02/prepared.json",
+    "sha256": "ae12d277b6ee5438320f59cec3fc99f1950961ced8905c04b962632f7ebd51ff"
+  },
+  "current_prepared": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-fresh-20261010-03/prepared.json",
+    "sha256": "b5c4f014bac9cc85bc75e10f334d449cc05580745dbe0a0b833072a5ecb5b3da"
+  },
+  "changed_model_test_sources": {
+    "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-model/src/transformer/standard/cuda/hybrid_rank/mixed.rs": {
+      "before": "4b337751b9bb487b1881f085840a36e5f3be8d4c2501f870777e361b1d414069",
+      "after": "279dc4bdf7cc06ba160efe20f451fd4fe8de01fd892f0b6807acb96a6f74f9ac"
+    },
+    "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-model/tests/unit/transformer/mixed_decoded_gpu.rs": {
+      "before": "32349d0688e63ca25184482af6c52b8e91b8e038536c5c74f619188dc904cab1",
+      "after": "a29750d097e2d9ffa093b2b6a240e55acd49eb451c2b1be9bb44d48620733a7a"
+    }
+  },
+  "pins": {
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-fresh-20261010-02/backend-exact/after.json": "a8f303aa0b07a673da247f60a3ab1713e5f445fc8f6129b41f429b8d505111f3",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-fresh-20261010-02/backend-exact/authentication.json": "f5e8e617e936d53869eb3387f09162a965357ebdebc8eaeadac6ee82bb4694ae",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-fresh-20261010-02/backend-exact/before.json": "0eda507e2862dffb445d52410b1e73d41810b752e601094a4822b9e8aca6f6b5",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-fresh-20261010-02/backend-exact/release.json": "ca7cfa98076aad86385d8215ad64dec01235e0fc2e786052d205cb70cfc9ccbd",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-fresh-20261010-02/backend-exact/resources.json": "1851ad0519e2aea88b2b87e7c03a29961ffa8a28040bc9bc00ba3d42877e9703",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-fresh-20261010-02/backend-exact/result.json": "1e39a57b41fa49ddb14c69284215956527a27a9f6459ff7cd5a43d72d21cdb1e",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-fresh-20261010-02/backend-exact/small-receipt.json": "71aa8d051335456651f8bedfeafedce57506c88d445081a37ffe37467dd8f63f",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-fresh-20261010-02/backend-exact/supervisor.json": "47cafb82c35b6493f24d9d69aeb83880f06269a45847c4bd6f880bb20a686679",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-fresh-20261010-02/backend-exact/test-exit.json": "c3cd5463fcab5f08c276dd44aec7cc8af52bf77ae7990216a8990fba4e29d4c0",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-fresh-20261010-02/backend-exact/test.log": "47a9d9f6ddeda0683cb81ead0395f9fba27739c95f582f2f13b6eded0b869dfd",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-fresh-20261010-02/backend-exact/worker-launch.json": "a30591f99b2eef716b53e86c6ff0ea86a18ce16383935600ec61ea15415b9e11",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-fresh-20261010-02/backend-preflight/after.json": "3289bf0b6c32d20a842f1ae491d5879d9d75032d5bc720b1cdc0d80418ebd478",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-fresh-20261010-02/backend-preflight/authentication.json": "360cef37e5404580d8023dba18c5da2fe2553c3de1acccc1db9d332bb84fe452",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-fresh-20261010-02/backend-preflight/before.json": "2943dca5ca107325ae8b6cf1a9e207c05ef26aff8bca3bf9a837b42f130298ee",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-fresh-20261010-02/backend-preflight/release.json": "ca7cfa98076aad86385d8215ad64dec01235e0fc2e786052d205cb70cfc9ccbd",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-fresh-20261010-02/backend-preflight/resources.json": "a046c813722791aa8d780579a6f4f7a7eb91594ad1ad2d3d93d506c70c7838f5",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-fresh-20261010-02/backend-preflight/result.json": "1e39a57b41fa49ddb14c69284215956527a27a9f6459ff7cd5a43d72d21cdb1e",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-fresh-20261010-02/backend-preflight/small-receipt.json": "2ccaa6e0586c98fd71bf5c9e2e3a4f880026eedefc628d0c2a56cc1aea437626",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-fresh-20261010-02/backend-preflight/supervisor.json": "d2f75b1fc8575d9bba7894774bf171387db8e7b98f63005d528639a0a38554f5",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-fresh-20261010-02/backend-preflight/test-exit.json": "1ee3992544e5dd3a3b8e0fcaee7f39f696220199382735d64569b484ba03c0af",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-fresh-20261010-02/backend-preflight/test.log": "5e93e5c1e8bdc6e33301dfa4227d7a12f1ea9c45ef5a689ccdea6b910ca108e5",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-fresh-20261010-02/backend-preflight/worker-launch.json": "e4eb4612bc00d21c460fc27768928c7328252906c2c2b7659fe01b79686dea7c",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-fresh-20261010-02/backend-typed-view/after.json": "9f0277e0e8ad41fe05cef99b539dfa4ca6681a4440c4f307d3924f9eb082324b",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-fresh-20261010-02/backend-typed-view/authentication.json": "5d2563aeb4bf85dea72e9ed3f1267b843e3b77464fa1c3558def499cd8c06af8",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-fresh-20261010-02/backend-typed-view/before.json": "37ee5697bb71510ed516fe1c86f659e0096b5c052b7be54c0bc12e2096b29280",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-fresh-20261010-02/backend-typed-view/release.json": "ca7cfa98076aad86385d8215ad64dec01235e0fc2e786052d205cb70cfc9ccbd",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-fresh-20261010-02/backend-typed-view/resources.json": "b828ec6712a55ae02eb5b88f30740f3d6588cbc2285af8e79f0a916814394134",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-fresh-20261010-02/backend-typed-view/result.json": "1e39a57b41fa49ddb14c69284215956527a27a9f6459ff7cd5a43d72d21cdb1e",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-fresh-20261010-02/backend-typed-view/small-receipt.json": "8865cfb3d419030be0f25a44ddab56a9f249995e14967d6c0f4d2c5310f8288f",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-fresh-20261010-02/backend-typed-view/supervisor.json": "603e60533cff4eee661742053b63dd349eeff9b4aa24f31a43e07f229a4bbc47",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-fresh-20261010-02/backend-typed-view/test-exit.json": "7af2a3a23bd17f6c1677157fd7c532551139697329632f9452287b457f872682",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-fresh-20261010-02/backend-typed-view/test.log": "e2402b72995b1ad7c55c702d23ceda1239028890b63c0e40cd357da957e15c79",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-fresh-20261010-02/backend-typed-view/worker-launch.json": "a798c451e16742086470310fbf6792e421eedf16b520ec37a639c67fa5130c5f",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-fresh-20261010-02/binary-backend/staged/ferrule": "3fec21e4da5ef5e957f21ff7ebceb9ad292adc5ca97efdaa2f34b8e25478b96d",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-fresh-20261010-02/binary-backend-slice/staged/ferrule": "0a43643fcf7ea6d56d3504eeec3150da914742b2ab62a207a37fe5b0d861f99a",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-fresh-20261010-02/environment.json": "5b55f4fffcb308858279628383d95284561770dfb5f7af1033c28a97c5c0245d",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-fresh-20261010-02/failure-closeout.json": "8752599cf68c5560c174d8961b238d18c36fb5f31a3fd164ac7f7439e6bc3b81",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-fresh-20261010-02/plan.json": "d786723e680b52160de6e3c375415e8641702d5f376c3059d21c2dc3feb47dad",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-fresh-20261010-02/prepared.json": "ae12d277b6ee5438320f59cec3fc99f1950961ced8905c04b962632f7ebd51ff",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-fresh-20261010-03/prepared.json": "b5c4f014bac9cc85bc75e10f334d449cc05580745dbe0a0b833072a5ecb5b3da"
+  },
+  "scope": "Only unchanged backend sources/tools/bit-identical binaries and original authenticated receipts; all eight model gates must run fresh"
+}

@@ -1,20 +1,46 @@
 //! Synchronous, owner-local standard CUDA decoder operators.
 //!
-//! BF16 checkpoints are converted on admission to resident F32 weights. Activations,
-//! KV and logits are genuinely F32; this is NOT BF16 compatibility execution.
+//! Default execution retains F32 weights/activations/KV. The explicit dense BF16
+//! profile uses native BF16 storage with declared F32 reductions/work buffers.
 
 mod hybrid;
+mod hybrid_rank;
+pub use hybrid_rank::{
+    CudaHybridRankLifecycle, CudaHybridRankMemory, CudaHybridRankSegment, CudaHybridRankState,
+    CudaMixedRankLinear,
+};
 mod recurrent;
+pub use super::decoded_snapshot::{
+    MixedDecodedCacheActivity, MixedDecodedCachePhase, MixedDecodedCacheSnapshot,
+};
 pub use hybrid::CudaHybridModule;
+mod bf16;
+mod bf16_attention;
+mod bf16_chunk;
+mod bf16_hybrid;
 mod binding;
 mod boundary;
 mod diagnostic;
-pub use diagnostic::CudaDiagnosticEvent;
+pub use diagnostic::{
+    CudaDiagnosticBuffer, CudaDiagnosticDescriptor, CudaDiagnosticDtype, CudaDiagnosticEvent,
+    CudaDiagnosticLayout, CudaDiagnosticLimits, CudaDiagnosticSequence, CudaNativeDiagnosticEvent,
+};
+mod committed_gqa;
 mod expert;
 mod kv_binding;
+pub use committed_gqa::{CommittedGqa, CommittedGqaOutput, CommittedGqaRequest};
 mod numeric_binding;
+mod rank_performance;
+mod rank_timing;
 mod residency;
+use super::performance;
+mod root_execution;
+mod root_submission;
+mod upload_proof;
+pub(in crate::transformer) use root_submission::BarrierReason;
+mod segment;
 mod stage;
+pub use segment::CudaHybridDecoderSegment;
 
 use super::expert_cache::{ExpertCachePolicy, ExpertCacheStats};
 pub use expert::{CudaExpertParallelRoutedExecutor, CudaExpertWorker, CudaHostRoutedExecutor};
@@ -63,17 +89,41 @@ pub struct ExpertMetadataPreflightStats {
 pub struct CudaStandardDecoderOperators {
     ops: Rc<CudaOperators>,
     deltas: BTreeMap<usize, recurrent::ResidentDelta>,
+    recurrent_scratch: recurrent::RecurrentScratch,
     bindings: Bindings,
+    bf16: Option<bf16::State>,
+    bf16_deltas: BTreeMap<usize, crate::transformer::PreparedGatedDeltaNetBlock>,
+    hybrid_rank: Option<hybrid_rank::RankOperators>,
+    mixed_rank_block: Option<hybrid_rank::MixedRankImage>,
+    mixed_decoded_enabled: bool,
+    mixed_decoded_depth: usize,
+    mixed_decoded_failed: bool,
+    mixed_gqa_block: Option<Rc<hybrid_rank::MixedGqaInvocation>>,
     experts: BTreeMap<(usize, usize), Arc<PreparedSwiGlu>>,
     bounded_experts: Option<BoundedExpertCache<ExpertCacheKey>>,
     expert_hold: Vec<DeviceBuffer<f32>>,
+    bf16_hold: Vec<DeviceBuffer<u16>>,
+    bf16_chunk_workspace: Option<CudaF32Buffer>,
+    bf16_gemmex: Option<ferrule_backend::cuda::operators::linear::CudaBf16GemmEx>,
+    bf16_attention: Option<Rc<std::cell::RefCell<bf16_attention::PreparedAttention>>>,
+    // Physical artifact roots survive closure unwind and unknown completion.
+    expert_artifacts: Vec<Rc<binding::ResidentLinear>>,
     route_hold: Vec<DeviceBuffer<f32>>,
     route_ids: Vec<DeviceBuffer<i32>>,
     route_scratch_bytes: usize,
     numeric: Option<NumericState>,
     diagnostic: DiagnosticTrace,
+    root_submission: Option<root_submission::SubmissionSegment<DeviceBuffer<f32>>>,
+    performance_proofs: Option<super::performance::ProofTiming>,
+    rank_performance_enabled: bool,
+    rank_performance: Option<rank_performance::RankPerformance>,
+    root_bindings: root_execution::PreparedBindings,
     #[cfg(test)]
     lose_next_consumer_proof: bool,
+    #[cfg(test)]
+    consumer_proofs: usize,
+    #[cfg(test)]
+    numeric_allocation_failure: Option<usize>,
 
     boundary: Boundary,
     poisoned: bool,
@@ -131,6 +181,13 @@ impl CudaStandardDecoderOperators {
         numeric_fp8: bool,
     ) -> Result<Self> {
         validate_precision(precision)?;
+        if precision == ExecutionPrecisionPolicy::bf16_compatibility()
+            && (numeric_fp8 || !matches!(policy, ExpertCachePolicy::KeepAll))
+        {
+            return Err(cuda_error(
+                "BF16 dense profile does not admit numeric or expert caches",
+            ));
+        }
         let mut bindings = Bindings::new(parameters)?;
         bindings.bounded_experts = matches!(policy, ExpertCachePolicy::Bounded(_));
         bindings.numeric_fp8 = numeric_fp8;
@@ -152,18 +209,42 @@ impl CudaStandardDecoderOperators {
         };
         Ok(Self {
             deltas: BTreeMap::new(),
+            bf16_deltas: BTreeMap::new(),
+            recurrent_scratch: recurrent::RecurrentScratch::default(),
             ops,
             bindings,
+            bf16: (precision == ExecutionPrecisionPolicy::bf16_compatibility())
+                .then(bf16::State::default),
+            hybrid_rank: None,
+            mixed_rank_block: None,
+            mixed_decoded_enabled: false,
+            mixed_decoded_depth: 0,
+            mixed_decoded_failed: false,
+            mixed_gqa_block: None,
             experts: BTreeMap::new(),
             bounded_experts,
             expert_hold: Vec::new(),
+            bf16_hold: Vec::new(),
+            bf16_chunk_workspace: None,
+            bf16_gemmex: None,
+            bf16_attention: None,
+            expert_artifacts: Vec::new(),
             route_hold: Vec::new(),
             route_ids: Vec::new(),
             route_scratch_bytes: 0,
             numeric: None,
             diagnostic: DiagnosticTrace::default(),
+            root_submission: None,
+            performance_proofs: None,
+            rank_performance_enabled: false,
+            rank_performance: None,
+            root_bindings: root_execution::PreparedBindings::default(),
             #[cfg(test)]
             lose_next_consumer_proof: false,
+            #[cfg(test)]
+            consumer_proofs: 0,
+            #[cfg(test)]
+            numeric_allocation_failure: None,
 
             boundary,
             poisoned: false,
@@ -233,6 +314,9 @@ impl CudaStandardDecoderOperators {
         layers: &[super::PreparedGqaMoeLayer],
         output: Option<&super::PreparedCpuOutput>,
     ) -> Result<()> {
+        if self.bf16.is_some() {
+            return self.prepare_bf16_image(embedding, layers, output);
+        }
         self.synchronous(|this| {
             if let Some(embedding) = embedding {
                 this.bindings
@@ -240,7 +324,7 @@ impl CudaStandardDecoderOperators {
             }
             for layer in layers {
                 let attention = layer.attention().block();
-                this.bindings.norm(&this.ops, &attention.input_norm)?;
+                this.root_norm_binding(&attention.input_norm)?;
                 for linear in [
                     &attention.query,
                     &attention.key,
@@ -253,11 +337,11 @@ impl CudaStandardDecoderOperators {
                     .into_iter()
                     .flatten()
                 {
-                    this.bindings.norm(&this.ops, norm)?;
+                    this.root_norm_binding(norm)?;
                 }
-                this.bindings.rope(&this.ops, &attention.rope)?;
+                this.root_rope_binding(&attention.rope)?;
                 let feed_forward = layer.feed_forward().block();
-                this.bindings.norm(&this.ops, &feed_forward.norm)?;
+                this.root_norm_binding(&feed_forward.norm)?;
                 let dense = match &feed_forward.kind {
                     super::PreparedFeedForwardKind::Dense(expert) => Some(expert),
                     super::PreparedFeedForwardKind::Routed {
@@ -280,7 +364,7 @@ impl CudaStandardDecoderOperators {
                 }
             }
             if let Some(output) = output {
-                this.bindings.norm(&this.ops, output.norm())?;
+                this.root_norm_binding(output.norm())?;
                 this.bindings.linear(&this.ops, output.head())?;
             }
             Ok(())
@@ -304,6 +388,11 @@ impl CudaStandardDecoderOperators {
     }
     pub fn resident_parameter_bytes(&self) -> usize {
         self.bindings.resident_bytes()
+            + self.bf16.as_ref().map_or(0, |s| s.bytes)
+            + self
+                .mixed_rank_block
+                .as_ref()
+                .map_or(0, |i| i.resident_bytes())
     }
 
     /// `None` for compatibility KeepAll. Operation scratch is released after
@@ -327,6 +416,15 @@ impl CudaStandardDecoderOperators {
     }
     pub fn needs_quarantine(&self) -> bool {
         self.poisoned
+            || self
+                .mixed_rank_block
+                .as_ref()
+                .is_some_and(|image| image.needs_quarantine())
+            || self.bf16_gemmex.as_ref().is_some_and(|p| p.is_poisoned())
+            || self
+                .bf16_attention
+                .as_ref()
+                .is_some_and(|p| p.borrow().is_poisoned())
             || self.boundary.needs_quarantine()
             || self
                 .bounded_experts
@@ -340,33 +438,107 @@ impl CudaStandardDecoderOperators {
         self.synchronous(|_| Ok(()))
     }
 
+    fn mixed_upload_proof_scope(&self) -> Option<upload_proof::MixedServingScope> {
+        if self.diagnostic.is_enabled()
+            || self.needs_quarantine()
+            || self.root_submission.is_some()
+            || self.bounded_experts.is_some()
+            || self.hybrid_rank.is_some()
+            || self.bindings.tensor.is_some()
+            || self.numeric_fp8_precision()
+                != Some(crate::transformer::NumericFp8Precision::Bf16ModelMixedF32Accumulate)
+        {
+            return None;
+        }
+        Some(upload_proof::MixedServingScope {
+            image_generation: self.image_generation(),
+            transaction: self.mixed_gqa_block.as_ref()?.upload_proof_transaction()?,
+        })
+    }
+
     fn synchronous<T>(&mut self, run: impl FnOnce(&mut Self) -> Result<T>) -> Result<T> {
+        self.root_barrier(BarrierReason::OpaqueOperator)?;
         if self.needs_quarantine() {
             return Err(cuda_error(
                 "CUDA decoder owner requires quarantine; completion is unknown",
             ));
         }
+        let generation = upload_proof::SubmissionGeneration::new(self.mixed_upload_proof_scope());
         // A caller may catch panics; such an owner must not silently become reusable.
+        let track_decoded = self.mixed_decoded_enabled;
+        if track_decoded {
+            self.mixed_decoded_depth += 1;
+        }
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(self)));
-        let event = self.consumer_proof();
-        let drain = self.boundary.drain();
-        let compute = self.ops.sync_stream();
-        let upload = self.ops.sync_upload_stream();
+        if self.root_submission.is_some() && !matches!(&result, Ok(Ok(_))) {
+            self.poison_root_submission();
+        }
+        let event = self.consumer_completion(&generation);
+        let drain = match &self.rank_performance {
+            Some(p) => p
+                .timings
+                .ledger
+                .borrow_mut()
+                .drain
+                .measure(|| self.boundary.drain()),
+            None => self.boundary.drain(),
+        };
+        let compute = match &mut self.performance_proofs {
+            Some(timing) => timing.compute_sync.measure(|| self.ops.sync_stream()),
+            None => self.ops.sync_stream(),
+        };
+        let (event, proof) = match event {
+            Ok(proof) => (Ok(()), proof),
+            Err(error) => (Err(error), None),
+        };
+        // Between consumer_completion and here, drain only fences existing
+        // transfers; sync_stream still performs pending_copy_cleanup. Neither
+        // submits upload work or calls user code. Every failure retains the
+        // original tail wait, even after an earlier proof succeeded.
+        let reuse_upload = generation.covers_tail_upload(
+            proof,
+            self.mixed_upload_proof_scope(),
+            upload_proof::TailCompletion {
+                operation_succeeded: matches!(&result, Ok(Ok(_))),
+                boundary_drained: drain.is_ok(),
+                compute_synchronized: compute.is_ok(),
+                owner_healthy: !self.needs_quarantine(),
+            },
+        );
+        let upload = if reuse_upload {
+            if let Some(p) = &self.rank_performance {
+                p.timings.ledger.borrow_mut().upload_wait_skips += 1;
+            }
+            Ok(())
+        } else {
+            match &mut self.performance_proofs {
+                Some(timing) => timing.upload_sync.measure(|| self.ops.sync_upload_stream()),
+                None => self.ops.sync_upload_stream(),
+            }
+        };
         let failures = [event, drain, compute, upload]
             .into_iter()
             .filter_map(Result::err)
             .collect::<Vec<_>>();
+        if track_decoded {
+            self.mixed_decoded_depth -= 1;
+            if !matches!(&result, Ok(Ok(_))) {
+                self.mixed_decoded_failed = true;
+            }
+        }
         let result = match result {
             Ok(result) => result,
             Err(panic) => {
                 self.poisoned = true;
                 self.cache_quarantine();
+                self.quarantine_mixed_decoded();
                 std::panic::resume_unwind(panic)
             }
         };
         if !failures.is_empty() || self.needs_quarantine() {
             self.poisoned = true;
             self.cache_quarantine();
+            self.quarantine_mixed_decoded();
             // Successful output may still be referenced by queued work.
             let source = match result {
                 Ok(value) => {
@@ -380,7 +552,16 @@ impl CudaStandardDecoderOperators {
                 source, cleanup, false, true,
             ));
         }
+        self.recurrent_scratch.complete();
         self.finish_cache_operation()?;
+        if track_decoded && self.mixed_decoded_depth == 0 {
+            let succeeded = !std::mem::take(&mut self.mixed_decoded_failed);
+            if let Err(error) = self.complete_mixed_decoded(succeeded) {
+                self.poisoned = true;
+                self.quarantine_mixed_decoded();
+                return Err(error);
+            }
+        }
         result
     }
 
@@ -424,6 +605,14 @@ impl CudaStandardDecoderOperators {
             self.reserve_numeric_temporaries(bytes)?;
         }
         let weight = self.bindings.linear(&self.ops, linear)?;
+        if !matches!(
+            linear.parameter().residency(),
+            crate::nn::ParameterResidency::Expert { .. }
+        ) {
+            self.root_bindings
+                .linears
+                .insert((linear.parameter().canonical_id(), linear.role().clone()));
+        }
         let rows = input.shape().rows();
         let shape = RowsShape::new(rows, weight.shape.0)?;
         let mut output = self.resident_linear_buffer(&weight, input)?;
@@ -480,7 +669,10 @@ impl CudaStandardDecoderOperators {
         if input.shape().width() != weight.shape.1 {
             return Err(cuda_error("linear input width mismatch"));
         }
-        if self.bindings.expert_admission.is_some() || self.numeric.is_some() {
+        self.root_pin_rows(input)?;
+        if !self.root_is_submitting()
+            && (self.bindings.expert_admission.is_some() || self.numeric.is_some())
+        {
             self.expert_hold.push(
                 self.f32(input)?
                     .as_device_buffer()
@@ -491,6 +683,9 @@ impl CudaStandardDecoderOperators {
         let mut output = self.ops.zero_f32_buffer(shape.elements())?;
         self.hold_expert_buffer(&output)?;
         match &weight.storage {
+            binding::ResidentLinearStorage::Bf16(_) => {
+                return Err(cuda_error("typed BF16 weight cannot enter F32 execution"));
+            }
             binding::ResidentLinearStorage::Dense(handle) => {
                 self.ops.linear_f32_into(
                     handle,
@@ -512,14 +707,45 @@ impl CudaStandardDecoderOperators {
         input: &Rows,
         arena: Option<RowsArenaId>,
     ) -> Result<Rows> {
+        self.swiglu_consume(expert, input, arena, |_, output| Ok(output))
+    }
+
+    fn swiglu_consume<T>(
+        &mut self,
+        expert: &PreparedSwiGlu,
+        input: &Rows,
+        arena: Option<RowsArenaId>,
+        consume: impl FnOnce(&mut Self, Rows) -> Result<T>,
+    ) -> Result<T> {
         self.expert_operation(expert, input.shape().rows(), |this| {
             let projections = [expert.gate(), expert.up(), expert.down()];
-            this.swiglu_compute(
+            if this.bounded_experts.is_some()
+                && projections
+                    .iter()
+                    .all(|p| p.numeric_fp8().is_some() && p.bias().is_none())
+                && matches!(
+                    expert.gate().parameter().residency(),
+                    crate::nn::ParameterResidency::Expert { .. }
+                )
+            {
+                let parameters = projections.map(|p| p.parameter().binding().clone());
+                if let Some(output) = this.resident_numeric_swiglu(
+                    &parameters,
+                    Some(expert),
+                    expert.activation_limit(),
+                    input,
+                    arena,
+                )? {
+                    return consume(this, output);
+                }
+            }
+            let output = this.swiglu_compute(
                 input,
                 arena,
                 expert.activation_limit(),
                 |this, index, rows| this.linear_rows(projections[index], rows, arena),
-            )
+            )?;
+            consume(this, output)
         })
     }
 
@@ -533,6 +759,14 @@ impl CudaStandardDecoderOperators {
         let this = self;
         let gate = linear(this, 0, input)?;
         let up = linear(this, 1, input)?;
+        if this.hybrid_rank.is_some() {
+            // Rank projections fence independently. Retain both inputs again
+            // for the following elementwise launch, including error/unwind.
+            let gate_hold = this.f32(&gate)?.prefix(gate.shape().elements())?;
+            let up_hold = this.f32(&up)?.prefix(up.shape().elements())?;
+            this.hold_expert_buffer(&gate_hold)?;
+            this.hold_expert_buffer(&up_hold)?;
+        }
         let mut product = this.ops.zero_f32_buffer(gate.shape().elements())?;
         this.hold_expert_buffer(&product)?;
         match activation_limit {
@@ -552,6 +786,7 @@ impl CudaStandardDecoderOperators {
         Ok(output)
     }
 
+    #[cfg(test)]
     fn metadata_swiglu_rows(
         &mut self,
         metadata: &crate::transformer::ExpertMetadata,
@@ -559,11 +794,51 @@ impl CudaStandardDecoderOperators {
         input: &Rows,
         arena: Option<RowsArenaId>,
     ) -> Result<Rows> {
+        self.metadata_swiglu_consume(metadata, provider, input, arena, |_, output| Ok(output))
+    }
+
+    fn expert_read_lookahead(
+        &self,
+        provider: &mut dyn ExpertProvider,
+        current: &crate::transformer::ExpertMetadata,
+        next: Option<&crate::transformer::ExpertMetadata>,
+    ) {
+        // A read-only physical hit check after current admission/uploads. It
+        // never pins the next expert or changes the completed-only cache LRU.
+        let resident =
+            next.is_some_and(|next| matches!(self.bindings.has_metadata_expert(next), Ok(true)));
+        provider.lookahead_expert_read(current, next, resident);
+    }
+
+    // The last output consumer runs while the admission lease is still pinned.
+    fn metadata_swiglu_consume<T>(
+        &mut self,
+        metadata: &crate::transformer::ExpertMetadata,
+        provider: &mut dyn ExpertProvider,
+        input: &Rows,
+        arena: Option<RowsArenaId>,
+        consume: impl FnOnce(&mut Self, Rows) -> Result<T>,
+    ) -> Result<T> {
+        self.metadata_swiglu_consume_lookahead(metadata, provider, input, arena, None, consume)
+    }
+
+    fn metadata_swiglu_consume_lookahead<T>(
+        &mut self,
+        metadata: &crate::transformer::ExpertMetadata,
+        provider: &mut dyn ExpertProvider,
+        input: &Rows,
+        arena: Option<RowsArenaId>,
+        next: Option<&crate::transformer::ExpertMetadata>,
+        consume: impl FnOnce(&mut Self, Rows) -> Result<T>,
+    ) -> Result<T> {
         let crate::nn::ParameterResidency::Expert { layer, expert: id } =
             *metadata.parameters()[0].residency()
         else {
             return Err(cuda_error("routed expert metadata residency required"));
         };
+        let _span = tracing::debug_span!(target: "ferrule_performance", "routed_expert_bucket_host",
+            image_generation = self.image_generation(), layer, expert = id, rows = input.shape().rows(),
+            timing_scope = "owner_host_scope_not_device_kernel_time").entered();
         let (key, bytes, scratch) = self.metadata_plan(
             metadata,
             layer,
@@ -575,6 +850,22 @@ impl CudaStandardDecoderOperators {
             // Admission may evict a previous hit while reserving scratch. Check
             // physical residency only after the lease has pinned this expert.
             metadata.validate_sources()?;
+            let already_resident = this.bindings.has_metadata_expert(metadata)?;
+            if already_resident {
+                this.expert_read_lookahead(provider, metadata, next);
+            }
+            if this.bf16.is_none()
+                && this.bounded_experts.is_some()
+                && let Some(output) = this.resident_numeric_swiglu(
+                    metadata.parameters(),
+                    None,
+                    metadata.activation_limit(),
+                    input,
+                    arena,
+                )?
+            {
+                return consume(this, output);
+            }
             if !this.bindings.has_metadata_expert(metadata)? {
                 let expert = match provider.expert(layer, id)? {
                     ExpertAvailability::Ready(expert) => expert,
@@ -590,6 +881,13 @@ impl CudaStandardDecoderOperators {
                 }
                 // No payload survives the upload; execution borrows GPU handles
                 // and immutable BoundParameter metadata, not PreparedLinear.
+            }
+            if !already_resident {
+                this.expert_read_lookahead(provider, metadata, next);
+            }
+            if this.bf16.is_some() {
+                let output = this.bf16_metadata_swiglu(metadata, input, arena)?;
+                return consume(this, output);
             }
             let output = this.swiglu_compute(
                 input,
@@ -613,16 +911,46 @@ impl CudaStandardDecoderOperators {
                     device_rows(shape, arena, output)
                 },
             )?;
-            Ok(output)
+            consume(this, output)
         })
     }
 }
 
 impl StandardDecoderOperators for CudaStandardDecoderOperators {
+    fn before_external_routed_execution(&mut self) -> Result<()> {
+        self.root_barrier(BarrierReason::ExternalExperts)
+    }
+
+    fn finish_routed_feed_forward(&mut self, layer: usize, output: Rows) -> Result<Rows> {
+        if self.mixed_gqa_block.is_some() {
+            return self.mixed_finish_routed(layer, output);
+        }
+        Ok(output)
+    }
+
     fn gated_delta_net(
         &mut self,
         request: crate::transformer::GatedDeltaNetRequest<'_>,
     ) -> Result<OperatorProgress<Rows>> {
+        if self.mixed_gqa_block.is_some() {
+            let shape = self.mixed_block_delta_shape(request.layer)?;
+            return self.bf16_delta(crate::transformer::GatedDeltaNetRequest { shape, ..request });
+        }
+        if self.bf16.is_some() {
+            return self.bf16_delta(request);
+        }
+        if let Some(rank) = &self.hybrid_rank {
+            let crate::transformer::hybrid_parallel::HybridLocalAttention::GatedDelta {
+                shape, ..
+            } = rank.layout.attention(request.layer)?
+            else {
+                return Err(cuda_error("rank GDN geometry mismatch"));
+            };
+            return self.delta_rows(crate::transformer::GatedDeltaNetRequest {
+                shape: *shape,
+                ..request
+            });
+        }
         self.delta_rows(request)
     }
     fn unpack_gated_query(
@@ -631,12 +959,21 @@ impl StandardDecoderOperators for CudaStandardDecoderOperators {
         heads: usize,
         head_dim: usize,
     ) -> Result<OperatorProgress<(Rows, Rows)>> {
+        if self.bf16.is_some() {
+            return self.bf16_split_query(input, heads, head_dim);
+        }
         self.split_query_rows(input, heads, head_dim)
     }
     fn sigmoid_gate(&mut self, input: Rows, gate: &Rows) -> Result<OperatorProgress<Rows>> {
+        if self.bf16.is_some() {
+            return self.bf16_gate(input, gate, false);
+        }
         self.gate_rows(input, gate)
     }
     fn shared_expert_gate(&mut self, input: Rows, gate: &Rows) -> Result<OperatorProgress<Rows>> {
+        if self.bf16.is_some() {
+            return self.bf16_gate(input, gate, true);
+        }
         use ferrule_backend::cuda::operators::recurrent::{
             F32GateLayout, F32RowsLayout, GateActivation,
         };
@@ -684,6 +1021,20 @@ impl StandardDecoderOperators for CudaStandardDecoderOperators {
     }
 
     fn attention_heads(&self, query: usize, kv: usize) -> Result<(usize, usize)> {
+        if self.mixed_gqa_block.is_some() {
+            return self.mixed_block_heads(query, kv);
+        }
+        if let Some(rank) = &self.hybrid_rank {
+            let degree = rank.layout.members().len();
+            if query == 0
+                || kv == 0
+                || !query.is_multiple_of(degree)
+                || !(kv.is_multiple_of(degree) || degree.is_multiple_of(kv))
+            {
+                return Err(cuda_error("rank GQA head geometry mismatch"));
+            }
+            return Ok((query / degree, (kv / degree).max(1)));
+        }
         let degree = self
             .bindings
             .tensor
@@ -695,16 +1046,39 @@ impl StandardDecoderOperators for CudaStandardDecoderOperators {
         Ok((query / degree, kv / degree))
     }
     fn backend_name(&self) -> &'static str {
+        if self.mixed_gqa_block.is_some() {
+            return "cuda-hybrid-rank-bf16-gqa-dense-block";
+        }
+        if let Some(precision) = self
+            .numeric_fp8_precision()
+            .filter(|p| p.has_bf16_model_boundaries())
+        {
+            return precision.hybrid_backend_name();
+        }
+        if self.bf16.is_some() {
+            return if self.bf16_deltas.is_empty() {
+                "cuda-standard-bf16-dense-eager"
+            } else {
+                "cuda-hybrid-native-bf16-f32-ssm"
+            };
+        }
         self.numeric_fp8_precision()
             .map_or("cuda-standard-f32", |precision| {
                 precision.standard_backend_name()
             })
     }
     fn precision(&self) -> ExecutionPrecisionPolicy {
-        ExecutionPrecisionPolicy::f32()
+        if self.bf16.is_some() {
+            ExecutionPrecisionPolicy::bf16_compatibility()
+        } else {
+            ExecutionPrecisionPolicy::f32()
+        }
     }
 
     fn bind_rows(&mut self, rows: Rows) -> Result<Rows> {
+        if self.bf16.is_some() {
+            return self.bf16_bind(rows);
+        }
         self.synchronous(|this| match rows {
             Rows::Cuda(rows) => {
                 rows.validate_owner(&this.ops)?;
@@ -724,6 +1098,10 @@ impl StandardDecoderOperators for CudaStandardDecoderOperators {
     }
 
     fn download_rows(&mut self, rows: Rows) -> Result<HostRows> {
+        if self.bf16.is_some() {
+            return self.bf16_download(rows);
+        }
+        self.root_barrier(BarrierReason::HostRead)?;
         self.synchronous(|this| {
             let buffer = this.f32(&rows)?;
             let values = this.boundary.download(&this.ops, buffer)?;
@@ -737,6 +1115,9 @@ impl StandardDecoderOperators for CudaStandardDecoderOperators {
         token_ids: &[u32],
         arena: Option<RowsArenaId>,
     ) -> Result<OperatorProgress<Rows>> {
+        if self.bf16.is_some() {
+            return self.bf16_embedding(embedding, token_ids, arena);
+        }
         self.synchronous(|this| {
             let ids = token_ids
                 .iter()
@@ -763,10 +1144,20 @@ impl StandardDecoderOperators for CudaStandardDecoderOperators {
         input: &Rows,
         arena: Option<RowsArenaId>,
     ) -> Result<OperatorProgress<Rows>> {
-        self.synchronous(|this| {
-            this.linear_rows(linear, input, arena)
-                .map(OperatorProgress::Ready)
-        })
+        if self.mixed_gqa_block.is_some() {
+            return self
+                .mixed_block_linear(linear, input)
+                .map(OperatorProgress::Ready);
+        }
+        if self.bf16.is_some() {
+            return self.bf16_linear(linear, input, arena);
+        }
+        if self.hybrid_rank.is_some() {
+            return self
+                .rank_linear(linear, input, arena)
+                .map(OperatorProgress::Ready);
+        }
+        self.root_linear(linear, input, arena)
     }
 
     fn rms_norm(
@@ -776,7 +1167,12 @@ impl StandardDecoderOperators for CudaStandardDecoderOperators {
         heads: usize,
         arena: Option<RowsArenaId>,
     ) -> Result<OperatorProgress<Rows>> {
-        self.synchronous(|this| {
+        if self.bf16.is_some() {
+            return self.bf16_norm(norm, input, heads, arena);
+        }
+        let bytes = root_execution::operand_bytes(input.shape().elements(), 2)?;
+        self.root_operation(bytes, 2, |this| {
+            this.root_pin_rows(input)?;
             if heads == 0 || norm.weight().len().checked_mul(heads) != Some(input.shape().width()) {
                 return Err(cuda_error("RMSNorm head layout mismatch"));
             }
@@ -789,13 +1185,14 @@ impl StandardDecoderOperators for CudaStandardDecoderOperators {
                 Some(norm),
                 None,
             )?;
-            let weight = this.bindings.norm(&this.ops, norm)?;
+            let weight = this.root_norm_binding(norm)?;
             let rows = input
                 .shape()
                 .rows()
                 .checked_mul(heads)
                 .ok_or_else(|| cuda_error("norm row count overflow"))?;
             let mut output = this.ops.zero_f32_buffer(input.shape().elements())?;
+            this.root_pin(&output)?;
             if norm.one_plus_weight() {
                 this.ops.offset_rms_norm_f32_into(
                     input_buffer,
@@ -836,7 +1233,12 @@ impl StandardDecoderOperators for CudaStandardDecoderOperators {
         heads: usize,
         positions: &[usize],
     ) -> Result<OperatorProgress<Rows>> {
-        self.synchronous(|this| {
+        if self.bf16.is_some() {
+            return self.bf16_rope(descriptor, table, input, heads, positions);
+        }
+        let bytes = root_execution::operand_bytes(input.shape().elements(), 1)?;
+        self.root_operation(bytes, 1, |this| {
+            this.root_pin_rows(&input)?;
             validate_rope(descriptor)?;
             this.f32(&input)?;
             if positions.len() != input.shape().rows()
@@ -850,7 +1252,7 @@ impl StandardDecoderOperators for CudaStandardDecoderOperators {
                 .iter()
                 .map(|&p| i32::try_from(p).map_err(|_| cuda_error("RoPE position exceeds i32 ABI")))
                 .collect::<Result<Vec<_>>>()?;
-            let resident = this.bindings.rope(&this.ops, table)?;
+            let resident = this.root_rope_binding(table)?;
             let mut input = input.into_cuda()?;
             let layout = SplitHalfRopeLayout {
                 rows: input.shape().rows(),
@@ -876,15 +1278,40 @@ impl StandardDecoderOperators for CudaStandardDecoderOperators {
         kv: &mut dyn KvView,
         request: GqaRequest<'_>,
     ) -> Result<OperatorProgress<Rows>> {
-        self.synchronous(|this| {
-            this.f32(request.query)?;
-            this.f32(request.key)?;
-            this.f32(request.value)?;
-            let result = kv.append_and_attend_cuda(&this.ops, request)?;
-            if let OperatorProgress::Ready(rows) = &result {
-                this.f32(rows)?;
+        self.measure_rank_phase(rank_timing::Phase::Gqa, |this| {
+            if this.bf16.is_some() {
+                return this.synchronous(|this| {
+                    for (name, rows) in [
+                        ("gqa.query", request.query),
+                        ("gqa.key", request.key),
+                        ("gqa.value", request.value),
+                    ] {
+                        this.trace_bf16(name, this.bf16_buffer(rows)?, rows.shape(), None, None)?;
+                    }
+                    let result = kv.append_and_attend_cuda(&this.ops, request)?;
+                    if let OperatorProgress::Ready(rows) = &result {
+                        this.trace_bf16(
+                            "gqa.output",
+                            this.bf16_buffer(rows)?,
+                            rows.shape(),
+                            None,
+                            None,
+                        )?;
+                    }
+                    Ok(result)
+                });
             }
-            Ok(result)
+            this.root_barrier(BarrierReason::KvPublish)?;
+            this.synchronous(|this| {
+                this.f32(request.query)?;
+                this.f32(request.key)?;
+                this.f32(request.value)?;
+                let result = kv.append_and_attend_cuda(&this.ops, request)?;
+                if let OperatorProgress::Ready(rows) = &result {
+                    this.f32(rows)?;
+                }
+                Ok(result)
+            })
         })
     }
 
@@ -893,6 +1320,10 @@ impl StandardDecoderOperators for CudaStandardDecoderOperators {
         logits: &Rows,
         policy: &MoeRouterSpec,
     ) -> Result<OperatorProgress<RouterRoutes>> {
+        if self.bf16.is_some() {
+            return self.bf16_router(logits, policy);
+        }
+        self.root_barrier(BarrierReason::CpuRouter)?;
         self.synchronous(|this| {
             if let Some(unsupported) = standard_router_unsupported(policy) {
                 return Ok(OperatorProgress::Unsupported(unsupported));
@@ -965,7 +1396,42 @@ impl StandardDecoderOperators for CudaStandardDecoderOperators {
         input: &Rows,
         arena: Option<RowsArenaId>,
     ) -> Result<OperatorProgress<Rows>> {
+        if self.mixed_gqa_block.is_some() {
+            return self
+                .mixed_block_swiglu(expert, input)
+                .map(OperatorProgress::Ready);
+        }
+        if self.bf16.is_some() {
+            return self.bf16_swiglu(expert, input, arena);
+        }
+        if self.hybrid_rank.is_some() {
+            self.root_barrier(BarrierReason::TensorCollective)?;
+            return self.synchronous(|this| {
+                let projections = [expert.gate(), expert.up(), expert.down()];
+                this.swiglu_compute(
+                    input,
+                    arena,
+                    expert.activation_limit(),
+                    |this, index, rows| this.rank_linear(projections[index], rows, arena),
+                )
+                .map(OperatorProgress::Ready)
+            });
+        }
+        if self.root_submission.is_some()
+            && !self.diagnostic.is_enabled()
+            && self.bindings.tensor.is_none()
+            && self.root_swiglu_resident(expert)?
+        {
+            let bytes = expert.f32_scratch_bytes(input.shape().rows())?;
+            return self.root_operation(bytes, 5, |this| {
+                this.swiglu_rows(expert, input, arena)
+                    .map(OperatorProgress::Ready)
+            });
+        }
         self.synchronous(|this| {
+            if let Some(output) = this.root_numeric_swiglu(expert, input, arena)? {
+                return Ok(OperatorProgress::Ready(output));
+            }
             this.swiglu_rows(expert, input, arena)
                 .map(OperatorProgress::Ready)
         })
@@ -979,6 +1445,15 @@ impl StandardDecoderOperators for CudaStandardDecoderOperators {
         experts: &mut dyn ExpertProvider,
         arena: Option<RowsArenaId>,
     ) -> Result<OperatorProgress<Rows>> {
+        if self.mixed_gqa_block.is_some() {
+            return self
+                .mixed_block_routed(layer, input, routes)
+                .map(OperatorProgress::Ready);
+        }
+        if self.bf16.is_some() {
+            return self.bf16_routed(layer, input, routes, experts, arena);
+        }
+        self.root_barrier(BarrierReason::ExternalExperts)?;
         self.synchronous(|this| {
             this.f32(input)?;
             this.trace_rows("routed.input", input)?;
@@ -992,7 +1467,13 @@ impl StandardDecoderOperators for CudaStandardDecoderOperators {
     }
 
     fn residual(&mut self, residual: Rows, update: &Rows) -> Result<OperatorProgress<Rows>> {
-        self.synchronous(|this| {
+        if self.bf16.is_some() {
+            return self.bf16_residual(residual, update);
+        }
+        let bytes = root_execution::operand_bytes(residual.shape().elements(), 2)?;
+        self.root_operation(bytes, 2, |this| {
+            this.root_pin_rows(&residual)?;
+            this.root_pin_rows(update)?;
             this.f32(&residual)?;
             if residual.shape() != update.shape() {
                 return Err(cuda_error("residual shape mismatch"));
@@ -1021,10 +1502,10 @@ impl StandardDecoderOperators for CudaStandardDecoderOperators {
 }
 
 fn validate_precision(precision: ExecutionPrecisionPolicy) -> Result<()> {
-    if precision != ExecutionPrecisionPolicy::f32() {
-        return Err(cuda_error(
-            "BF16 compatibility CUDA execution is not implemented exactly; use F32 activation/KV precision (F32 or BF16 weights)",
-        ));
+    if precision != ExecutionPrecisionPolicy::f32()
+        && precision != ExecutionPrecisionPolicy::bf16_compatibility()
+    {
+        return Err(cuda_error("unsupported standard CUDA precision"));
     }
     Ok(())
 }
@@ -1208,6 +1689,9 @@ fn cuda_error(message: impl Into<String>) -> Error {
 
 impl Drop for CudaStandardDecoderOperators {
     fn drop(&mut self) {
+        if let Some(block) = &self.mixed_gqa_block {
+            block.abort();
+        }
         let proof = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let drain = self.boundary.drain();
             let compute = self.ops.sync_stream();
@@ -1215,9 +1699,19 @@ impl Drop for CudaStandardDecoderOperators {
             drain.is_ok() && compute.is_ok() && upload.is_ok()
         }));
         if self.needs_quarantine() || !matches!(proof, Ok(true)) {
+            self.quarantine_mixed_decoded();
             self.retain_cache_on_unknown();
+            std::mem::forget(self.root_submission.take());
             self.bindings.retain_on_unknown_completion();
+            std::mem::forget(self.bf16.take());
+            std::mem::forget(self.bf16_chunk_workspace.take());
+            std::mem::forget(self.bf16_gemmex.take());
+            std::mem::forget(self.bf16_attention.take());
+            std::mem::forget(self.hybrid_rank.take());
+            std::mem::forget(self.mixed_rank_block.take());
+            std::mem::forget(self.mixed_gqa_block.take());
             std::mem::forget(std::mem::take(&mut self.deltas));
+            std::mem::forget(std::mem::take(&mut self.recurrent_scratch));
             std::mem::forget(Rc::clone(&self.ops));
         }
     }
@@ -1228,9 +1722,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn precision_contract_never_advertises_bf16_compatibility() {
+    fn precision_contract_accepts_explicit_bf16() {
         assert!(validate_precision(ExecutionPrecisionPolicy::f32()).is_ok());
-        let error = validate_precision(ExecutionPrecisionPolicy::bf16_compatibility()).unwrap_err();
-        assert!(error.to_string().contains("not implemented exactly"));
+        assert!(validate_precision(ExecutionPrecisionPolicy::bf16_compatibility()).is_ok());
     }
 }

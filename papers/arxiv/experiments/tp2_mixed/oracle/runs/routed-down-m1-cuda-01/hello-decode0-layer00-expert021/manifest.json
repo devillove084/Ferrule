@@ -1,0 +1,633 @@
+{
+  "schema": "ferrule.mixed-routed-down.tp2.v1",
+  "role": "RoutedExpertDown",
+  "tp": 2,
+  "rows": 1,
+  "oracle": "hf-eager-bf16-rank-partial",
+  "n": 2048,
+  "local_k": 256,
+  "layer": 0,
+  "expert": 21,
+  "checkpoint_sha256": "fb96ba4dd134761af30b4025b4cce86f96136cb01f05b5b4fca3e74587caa71d",
+  "checkpoint_shard_set_sha256": "b51014a9d40c300ea77f12bf8cada444f79c8300277611f6e5f27a62fcb95090",
+  "provenance": {
+    "schema": "ferrule.paper.mixed-routed-down.pending-fixture.v1",
+    "status": "blocked_missing_cuda_expert_observations",
+    "model_fixture_ready": false,
+    "role": "RoutedExpertDown",
+    "tp": 2,
+    "rows": 1,
+    "n": 2048,
+    "local_k": 256,
+    "layer": 0,
+    "expert": 21,
+    "checkpoint_sha256": "fb96ba4dd134761af30b4025b4cce86f96136cb01f05b5b4fca3e74587caa71d",
+    "checkpoint_shard_set_sha256": "b51014a9d40c300ea77f12bf8cada444f79c8300277611f6e5f27a62fcb95090",
+    "case": "hello",
+    "stage": "decode.0",
+    "call": {
+      "stage": "decode.0",
+      "input_token_ids": [
+        11
+      ],
+      "position_start": 1,
+      "sequence_length_after": 2,
+      "next_token_id": 353
+    },
+    "selected_expert_ids": [
+      97,
+      210,
+      102,
+      166,
+      142,
+      205,
+      113,
+      21
+    ],
+    "selection": "minimum actually selected expert ID, one per case/layer",
+    "route_slot": 7,
+    "reference_case": {
+      "id": "hello",
+      "file": "hello.safetensors",
+      "sha256": "363a33af3a269ad17059a39763ed0911b2c51d97eb6cca247db2e364878d8eea",
+      "bytes": 265783872,
+      "report": {
+        "file": "hello.json",
+        "sha256": "a5dc8f1b7fe6227d203f174ce669b33f3dac58c1a1e0256e7369462f27f4e94f",
+        "bytes": 614421
+      },
+      "statistics": {
+        "file": "hello.stats.json",
+        "sha256": "e69a01f2971949e5bc71a3dc2fb56c2c196e321bbc34167de94d0417d0eb321b",
+        "bytes": 579861
+      }
+    },
+    "observed_tensor_keys": [
+      "decode.0.embedding",
+      "decode.0.layers.00.attention",
+      "decode.0.layers.00.moe",
+      "decode.0.rank.0.layers.00.routed_partial",
+      "decode.0.rank.0.layers.00.selected_expert_ids",
+      "decode.0.rank.0.layers.00.routing_weights",
+      "decode.0.rank.0.layers.00.raw_router_logits",
+      "decode.0.rank.0.layers.00.router_probabilities",
+      "decode.0.rank.1.layers.00.routed_partial",
+      "decode.0.rank.1.layers.00.selected_expert_ids",
+      "decode.0.rank.1.layers.00.routing_weights",
+      "decode.0.rank.1.layers.00.raw_router_logits",
+      "decode.0.rank.1.layers.00.router_probabilities"
+    ],
+    "raw_weight_source": "model.language_model.layers.0.mlp.experts.21.down_proj.weight",
+    "raw_scale_source": "model.language_model.layers.0.mlp.experts.21.down_proj.weight_scale_inv",
+    "partitions": [
+      {
+        "rank": 0,
+        "rows": [
+          0,
+          2048
+        ],
+        "columns": [
+          0,
+          256
+        ],
+        "scale_shape": [
+          16,
+          2
+        ],
+        "global_128_block_coordinates": [
+          [
+            0,
+            0
+          ],
+          [
+            0,
+            1
+          ],
+          [
+            1,
+            0
+          ],
+          [
+            1,
+            1
+          ],
+          [
+            2,
+            0
+          ],
+          [
+            2,
+            1
+          ],
+          [
+            3,
+            0
+          ],
+          [
+            3,
+            1
+          ],
+          [
+            4,
+            0
+          ],
+          [
+            4,
+            1
+          ],
+          [
+            5,
+            0
+          ],
+          [
+            5,
+            1
+          ],
+          [
+            6,
+            0
+          ],
+          [
+            6,
+            1
+          ],
+          [
+            7,
+            0
+          ],
+          [
+            7,
+            1
+          ],
+          [
+            8,
+            0
+          ],
+          [
+            8,
+            1
+          ],
+          [
+            9,
+            0
+          ],
+          [
+            9,
+            1
+          ],
+          [
+            10,
+            0
+          ],
+          [
+            10,
+            1
+          ],
+          [
+            11,
+            0
+          ],
+          [
+            11,
+            1
+          ],
+          [
+            12,
+            0
+          ],
+          [
+            12,
+            1
+          ],
+          [
+            13,
+            0
+          ],
+          [
+            13,
+            1
+          ],
+          [
+            14,
+            0
+          ],
+          [
+            14,
+            1
+          ],
+          [
+            15,
+            0
+          ],
+          [
+            15,
+            1
+          ]
+        ],
+        "block_coordinates_sha256": "1f945cd6a876a8c30db1dd6f3ae7ed245ada61c495a4a3bf038d39c8fee1f926"
+      },
+      {
+        "rank": 1,
+        "rows": [
+          0,
+          2048
+        ],
+        "columns": [
+          256,
+          512
+        ],
+        "scale_shape": [
+          16,
+          2
+        ],
+        "global_128_block_coordinates": [
+          [
+            0,
+            2
+          ],
+          [
+            0,
+            3
+          ],
+          [
+            1,
+            2
+          ],
+          [
+            1,
+            3
+          ],
+          [
+            2,
+            2
+          ],
+          [
+            2,
+            3
+          ],
+          [
+            3,
+            2
+          ],
+          [
+            3,
+            3
+          ],
+          [
+            4,
+            2
+          ],
+          [
+            4,
+            3
+          ],
+          [
+            5,
+            2
+          ],
+          [
+            5,
+            3
+          ],
+          [
+            6,
+            2
+          ],
+          [
+            6,
+            3
+          ],
+          [
+            7,
+            2
+          ],
+          [
+            7,
+            3
+          ],
+          [
+            8,
+            2
+          ],
+          [
+            8,
+            3
+          ],
+          [
+            9,
+            2
+          ],
+          [
+            9,
+            3
+          ],
+          [
+            10,
+            2
+          ],
+          [
+            10,
+            3
+          ],
+          [
+            11,
+            2
+          ],
+          [
+            11,
+            3
+          ],
+          [
+            12,
+            2
+          ],
+          [
+            12,
+            3
+          ],
+          [
+            13,
+            2
+          ],
+          [
+            13,
+            3
+          ],
+          [
+            14,
+            2
+          ],
+          [
+            14,
+            3
+          ],
+          [
+            15,
+            2
+          ],
+          [
+            15,
+            3
+          ]
+        ],
+        "block_coordinates_sha256": "56b0ca2cc77cc71cd0390c5f6235be57c9b6292c9da8161264ef8ccd0ed976b5"
+      }
+    ],
+    "missing": [
+      "rank0.input.bf16",
+      "rank0.hf.partial.bf16",
+      "rank1.input.bf16",
+      "rank1.hf.partial.bf16"
+    ],
+    "warning": "routed_partial is weighted expert accumulation, NOT an unweighted expert down partial"
+  },
+  "original_down_payloads": {
+    "raw_weight_source": {
+      "file": "payloads/model.language_model.layers.0.mlp.experts.21.down_proj.weight.bin",
+      "bytes": 1048576,
+      "sha256": "756bd682cb0e14623f61eb76203d36fbb4816108f8065bfc6428c21dfd80a4c7",
+      "original_header": {
+        "shard": "model.safetensors-00012-of-00014.safetensors",
+        "dtype": "F8_E4M3",
+        "shape": [
+          2048,
+          512
+        ],
+        "data_offsets": [
+          130351104,
+          131399680
+        ]
+      },
+      "original_used_payload": {
+        "sha256": "756bd682cb0e14623f61eb76203d36fbb4816108f8065bfc6428c21dfd80a4c7",
+        "shape": [
+          2048,
+          512
+        ],
+        "dtype": "torch.float8_e4m3fn",
+        "shard": "model.safetensors-00012-of-00014.safetensors"
+      },
+      "historical_whole_shard_sha256": "040c27529a66e43f3a2cfef338ac121f5897ea476984ee3ba35540a49388809b"
+    },
+    "raw_scale_source": {
+      "file": "payloads/model.language_model.layers.0.mlp.experts.21.down_proj.weight_scale_inv.bin",
+      "bytes": 128,
+      "sha256": "8cd222b62b5de2ab7a35846c6d005740865f209c867135bc0593ae762164be95",
+      "original_header": {
+        "shard": "model.safetensors-00012-of-00014.safetensors",
+        "dtype": "BF16",
+        "shape": [
+          16,
+          4
+        ],
+        "data_offsets": [
+          15872,
+          16000
+        ]
+      },
+      "original_used_payload": {
+        "sha256": "8cd222b62b5de2ab7a35846c6d005740865f209c867135bc0593ae762164be95",
+        "shape": [
+          16,
+          4
+        ],
+        "dtype": "torch.bfloat16",
+        "shard": "model.safetensors-00012-of-00014.safetensors"
+      },
+      "historical_whole_shard_sha256": "040c27529a66e43f3a2cfef338ac121f5897ea476984ee3ba35540a49388809b"
+    }
+  },
+  "native_source": {
+    "modeling_qwen3_5_moe": {
+      "file": "/opt/conda310/lib/python3.10/site-packages/transformers/models/qwen3_5_moe/modeling_qwen3_5_moe.py",
+      "sha256": "0f8ca77e875c31d448137c9ac291bed505c6b9927a85b5b8460af29d1e1ee647"
+    },
+    "cache_utils": {
+      "file": "/opt/conda310/lib/python3.10/site-packages/transformers/cache_utils.py",
+      "sha256": "a51d2cd525f4458941a20cb5b3b8a8d989d8ca5bcd451855a27bb41743fed586"
+    },
+    "modeling_utils": {
+      "file": "/opt/conda310/lib/python3.10/site-packages/transformers/modeling_utils.py",
+      "sha256": "b8467e1ada952862d2e4d76632475ac2f9fa198121d0e1ce64fa393ea3773e16"
+    }
+  },
+  "workflow_pins": {
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/contract.py": "05da87fb7f5d795a843b25674fc062c6d4e8d7b8be32f50613a3174e78d1fbe4",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/launch_guard.py": "b4ec4dc1b1e7e61fe322847e4a07ce2c3b2ed43d8d3e9bc3bd6602979ad00b9f",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runner.py": "0aae631cf46bb99f567527d8dbe20b0a56e61c57ca7267858e1eb3e4cc67e16c",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/telemetry.py": "766a2e62730e3b56efd553d013554b18520c4883f6e5a3ee7ddeef4211091900",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_mixed/oracle/bridge.py": "142af27db400daae79a344d445245b8a8dca1091bf556efef96503089066e487",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_mixed/oracle/claim_receipt.py": "7264cb5213da3017c3e4b70a803748e1ea4051d77dce130bc24737c976ff87ee",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_mixed/oracle/compare.py": "ede31cda9bae2a8ea25172bc0f0992c81139eeb32903ff2530cb2c33c37c87eb",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_mixed/oracle/cuda_gate.py": "4908f1f228fb668b9d04ec69af9696f7c1c2f77d0e60a9f6b576fc85267d1e88",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_mixed/oracle/launch.py": "0afd9065308e03b6319a24f8c75a0accddce151908988e8c8a292be1557020d5",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_mixed/oracle/lifecycle_compare.py": "8fefb6d58d14825c6df9e68af671c3a0fe295e1856f2b69825ab09ed210b70ed",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_mixed/oracle/multistep.py": "04f0aac91eeb3c3f674e259435fe15ca5af4bd6552dee8e99111fe50baffb2b1",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_mixed/oracle/protocol.json": "c6e7836f3797c16502dc21b8c756c87495525c2cf2faac26ba11077f62cfbb57",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_mixed/oracle/routed_down_contract.py": "62a4aa138ba96f8e818dfd5d6be3ce5ffd4e6268e26860dc40f9840880ed9067",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_mixed/oracle/routed_down_extract.py": "6d99a796078748e71960bf3a71e4442351ead8f4173fec0d868c92c02cc4dd44",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_mixed/oracle/routed_down_launch.py": "5f53d271c49a4cc6d95418452b59ad275509761ad042191e80c6a1690839eeaf",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_mixed/oracle/routed_down_replay.py": "86ebfd4491d327461d7b0e599ab3149f2c73fe29708148933788a97cba210b74",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_mixed/oracle/test_bridge.py": "93fe0d8f3154a84151c10c914181325f2ada65d832f84be69aa0255227b10bb2",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_mixed/oracle/test_compare.py": "ab7b07f1935d2f17b1c82aaff67581932d3c1646daecdbaad3c66ed59bb12497",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_mixed/oracle/test_launch.py": "5a9bb7e1dd29f56cd1a2b3b0b304ed0abbc103e3638645a29df81b84813f2ea1",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_mixed/oracle/test_lifecycle_compare.py": "841af4f976bf022570f5faed9517d4caadeb455dea1f5695f33113af8e65fd80",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_mixed/oracle/test_multistep.py": "e040c0a98e003456ef1652a165b80880faf08eef5627407344d754dfbe3c997d",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_mixed/oracle/test_routed_down_extract.py": "f5543e929a5c6b11131445070ca18fc4c174b74b2f09346bcbe3c361f42b1ba4",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_mixed/oracle/test_routed_down_launch.py": "fbb50113ac9ca43c74c34019cc35e8aa1e50b9ac94d49d9dc80b32fbb6509eff",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_mixed/oracle/test_tp2_oracle.py": "981b0789e980da83fd946865f9ffb6f7bfe3179a36cb30ec51cf7bf3fe86fbb0",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_mixed/oracle/tp2_oracle.py": "1289af9fb81e78b01ffd7d93a97f30cb73ba5fb29fd536c6993397fef53b1fc2",
+    "/home/admin/luhuanbing.lhb/Ferrule/scripts/_owned_subreaper.py": "19ef9006089cde1abdca87177e01d26b925dcf996bfebaf6e3dc51ea71a77ff0",
+    "/home/admin/luhuanbing.lhb/Ferrule/scripts/qwen35_fp8_bf16_reference.py": "103f294f76ac88dfe170392613a3fb6f0a87aba005a1a89cbd768959f52400ab",
+    "/home/admin/luhuanbing.lhb/Ferrule/scripts/qwen35_fp8_cuda_reference.py": "b69072155a45f8fb354e54dd93265d2d04296e04513a0b416bcafa9b67d25920",
+    "/home/admin/luhuanbing.lhb/Ferrule/scripts/test_vllm_qwen35.py": "1c330dac0727d54254a1c1648adcb9a4b747a2303fe183c2ba38f9ccd83ec2a1"
+  },
+  "versions": {
+    "torch": "2.13.0+cu129",
+    "transformers": "5.5.3"
+  },
+  "source_bundle_sha256": "6fe6b0c5b8d886586fef422be52f61151fc72345b4077eae33987e8fa325c65f",
+  "launch_sha256": "b75764f24346c6c52039490b4637776e5b72d9e44bee8ae419e4a701cc96aa22",
+  "numerical_authentication_sha256": "d969682d7448ec2b45bb35525c836a21d29bdf3b3d55747f21dfb5bb2c6f8f42",
+  "extraction": "Actual unmodified native HF Experts.forward down F.linear input/output before route weighting; transparent observation only",
+  "control": "Same CUDA BF16 norm/router and eight-expert weighted aggregate match immutable upstream oracle word-for-word on both logical ranks",
+  "execution": {
+    "device": "cuda:0",
+    "gpu_uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+    "logical_tp": 2,
+    "tf32": false,
+    "bf16_reduced_precision_reduction": false,
+    "cublas_workspace_config": ":4096:8",
+    "production_imports": false,
+    "full40_forward": false
+  },
+  "acceptance": "Exact BF16 words; no tolerance or candidate data used",
+  "source_audit": {
+    "live_functions": {
+      "Qwen3_5MoeDecoderLayer.forward": {
+        "source_sha256": "ee0813966c21bdd277c530659d66bdf0e84e63389ee94b3ba50d3c933f2f627b",
+        "code_sha256": "7f59439772d5fbd2a49e787655d22cbf63f96ecd7128d71e66e24eb337ddb238",
+        "code_file": "/opt/conda310/lib/python3.10/site-packages/transformers/models/qwen3_5_moe/modeling_qwen3_5_moe.py",
+        "wrapper_code_sha256": "7f59439772d5fbd2a49e787655d22cbf63f96ecd7128d71e66e24eb337ddb238"
+      },
+      "Qwen3_5MoeAttention.forward": {
+        "source_sha256": "282e26183eb923131affae687e924eab5cda69c6128b4956a76ecc2230bec424",
+        "code_sha256": "6b47ee62703fdc3f271ba3e89d74c3d16587a5d418d03b92cfcbe39ef6869ce0",
+        "code_file": "/opt/conda310/lib/python3.10/site-packages/transformers/models/qwen3_5_moe/modeling_qwen3_5_moe.py",
+        "wrapper_code_sha256": "6b47ee62703fdc3f271ba3e89d74c3d16587a5d418d03b92cfcbe39ef6869ce0"
+      },
+      "Qwen3_5MoeGatedDeltaNet.forward": {
+        "source_sha256": "7c437c5a9ee098edde2f984305f843ec927c5222448411487dd5155ed610f5e8",
+        "code_sha256": "d8730fa6053955b63131001eefbf027aaa782bf107a34ce550b5f4ddd778d3c0",
+        "code_file": "/opt/conda310/lib/python3.10/site-packages/transformers/models/qwen3_5_moe/modeling_qwen3_5_moe.py",
+        "wrapper_code_sha256": "d8730fa6053955b63131001eefbf027aaa782bf107a34ce550b5f4ddd778d3c0"
+      },
+      "Qwen3_5MoeSparseMoeBlock.forward": {
+        "source_sha256": "6e32d7a4987af26fb91c4a8c3a83a0eb02e0cc0a52cb526290d3e7c72b6f3907",
+        "code_sha256": "6c3c66c71c0a386b9424b23718b74242c1f61c3f3911c664c4fe9cff110866c6",
+        "code_file": "/opt/conda310/lib/python3.10/site-packages/transformers/models/qwen3_5_moe/modeling_qwen3_5_moe.py",
+        "wrapper_code_sha256": "6c3c66c71c0a386b9424b23718b74242c1f61c3f3911c664c4fe9cff110866c6"
+      },
+      "Qwen3_5MoeExperts.forward": {
+        "source_sha256": "99ca265927013010174286a6de93cbdf3bb601c5e6709397fbd70b5ee294c2b6",
+        "code_sha256": "17a2ca65590f851e4c2ec126ab8a1ca3c95ce400286a6f8834ceef15386bd686",
+        "code_file": "/opt/conda310/lib/python3.10/site-packages/transformers/models/qwen3_5_moe/modeling_qwen3_5_moe.py",
+        "wrapper_code_sha256": "88bcf0f5e2f53666a2a7bc45bb393f794d6f54673a15a2f71a0bbd38ca18ae8e"
+      },
+      "Qwen3_5MoeTopKRouter.forward": {
+        "source_sha256": "c2d3a1a00818a9047fda48934b1025265905a9432aaebc2ea1a45c2467f353f5",
+        "code_sha256": "5873dcd97f7486ec6c3a53284029459834ad926011b8a7a899a0fdca94bbfbb3",
+        "code_file": "/opt/conda310/lib/python3.10/site-packages/transformers/models/qwen3_5_moe/modeling_qwen3_5_moe.py",
+        "wrapper_code_sha256": "5873dcd97f7486ec6c3a53284029459834ad926011b8a7a899a0fdca94bbfbb3"
+      },
+      "Qwen3_5MoeRMSNorm.forward": {
+        "source_sha256": "a2f6910ff951867de4a6049f8f8a20b8f99948cf126f0616b354a1e7e24b1e8e",
+        "code_sha256": "19a7e1d756dba12327e6bc6e09fde791f63a1f30dabc5970301190969692989f",
+        "code_file": "/opt/conda310/lib/python3.10/site-packages/transformers/models/qwen3_5_moe/modeling_qwen3_5_moe.py",
+        "wrapper_code_sha256": "19a7e1d756dba12327e6bc6e09fde791f63a1f30dabc5970301190969692989f"
+      },
+      "Qwen3_5MoeRMSNormGated.forward": {
+        "source_sha256": "9e4a919ddd7afcb4301dd2bdaab79f193dd5c0732482e8ac1dae510c3bf2ded9",
+        "code_sha256": "72b419d6271407d71894208fe23d36b54e07f9cbc6b9c07719079a30bdae1118",
+        "code_file": "/opt/conda310/lib/python3.10/site-packages/transformers/models/qwen3_5_moe/modeling_qwen3_5_moe.py",
+        "wrapper_code_sha256": "72b419d6271407d71894208fe23d36b54e07f9cbc6b9c07719079a30bdae1118"
+      },
+      "torch_chunk_gated_delta_rule": {
+        "source_sha256": "3cf91cd1d7af6970672f5b78dd7889b54b24568c16326e73259e57bc32a4a361",
+        "code_sha256": "95100e3199137197229c7e7b4302cf5f27fe6492d04b64b560f533e530bcf886",
+        "code_file": "/opt/conda310/lib/python3.10/site-packages/transformers/models/qwen3_5_moe/modeling_qwen3_5_moe.py",
+        "wrapper_code_sha256": "95100e3199137197229c7e7b4302cf5f27fe6492d04b64b560f533e530bcf886"
+      },
+      "torch_recurrent_gated_delta_rule": {
+        "source_sha256": "0764d99b2091eb050b0d8009d97167a4b0f67f7452a3530b6c8cbc49f530e28e",
+        "code_sha256": "d82c131005d1aebee09df98e2302f2df9018ed889e94638a5089c75946680f16",
+        "code_file": "/opt/conda310/lib/python3.10/site-packages/transformers/models/qwen3_5_moe/modeling_qwen3_5_moe.py",
+        "wrapper_code_sha256": "d82c131005d1aebee09df98e2302f2df9018ed889e94638a5089c75946680f16"
+      },
+      "torch_causal_conv1d_update": {
+        "source_sha256": "3e69946e91492dea1d3650f62d88566ba654c3f954894d6079e0ed0cb6ef106c",
+        "code_sha256": "d10aa1a5ca252646fe8bb83180004c96b72872e0ee5ff1cfe0957fc6ee24320d",
+        "code_file": "/opt/conda310/lib/python3.10/site-packages/transformers/models/qwen3_5_moe/modeling_qwen3_5_moe.py",
+        "wrapper_code_sha256": "d10aa1a5ca252646fe8bb83180004c96b72872e0ee5ff1cfe0957fc6ee24320d"
+      },
+      "eager_attention_forward": {
+        "source_sha256": "cb34ccea28710ae8d5d94a241b704ea3d974048f85372f0b1b3c2a8a2ef1ee20",
+        "code_sha256": "027836f1553b9bf5d9d972d322d1a49eb197a495fc40391818908ccc4252afa8",
+        "code_file": "/opt/conda310/lib/python3.10/site-packages/transformers/models/qwen3_5_moe/modeling_qwen3_5_moe.py",
+        "wrapper_code_sha256": "027836f1553b9bf5d9d972d322d1a49eb197a495fc40391818908ccc4252afa8"
+      },
+      "apply_rotary_pos_emb": {
+        "source_sha256": "ab8feb64f19555713efc4c559ce306b35205b1197f8431784585999d9a5b6662",
+        "code_sha256": "497c39e93cf26dce660b32879bad6bfa69f09edf25a092c1b4986852150e045c",
+        "code_file": "/opt/conda310/lib/python3.10/site-packages/transformers/models/qwen3_5_moe/modeling_qwen3_5_moe.py",
+        "wrapper_code_sha256": "497c39e93cf26dce660b32879bad6bfa69f09edf25a092c1b4986852150e045c"
+      },
+      "repeat_kv": {
+        "source_sha256": "e9b1ad4a8df3194d5b12f94567c3a2dfed2c0d9833af1b8f775e5875575ff9c4",
+        "code_sha256": "d29d8fe57207738959f42cf57ea46da52fc63beddf1b35c5b9ad3da007ae34ea",
+        "code_file": "/opt/conda310/lib/python3.10/site-packages/transformers/models/qwen3_5_moe/modeling_qwen3_5_moe.py",
+        "wrapper_code_sha256": "d29d8fe57207738959f42cf57ea46da52fc63beddf1b35c5b9ad3da007ae34ea"
+      },
+      "l2norm": {
+        "source_sha256": "6bfc53d1a491d0ae3856b85cb7fde1ea2198d5e3ed427953652cf2ede696e6fd",
+        "code_sha256": "55ee155de07d18bec79aa1f81d9fe5de0055b07ff0bc716a341626a740a4fb46",
+        "code_file": "/opt/conda310/lib/python3.10/site-packages/transformers/models/qwen3_5_moe/modeling_qwen3_5_moe.py",
+        "wrapper_code_sha256": "55ee155de07d18bec79aa1f81d9fe5de0055b07ff0bc716a341626a740a4fb46"
+      },
+      "apply_mask_to_padding_states": {
+        "source_sha256": "694b0342a3bfdf0403562fb16ebadb4edea90521dfcf07114322d4737ca49a35",
+        "code_sha256": "e638704fdc3ca1db9aeae00d4210d05c4f770a39bea846dec133fc49b016c256",
+        "code_file": "/opt/conda310/lib/python3.10/site-packages/transformers/models/qwen3_5_moe/modeling_qwen3_5_moe.py",
+        "wrapper_code_sha256": "e638704fdc3ca1db9aeae00d4210d05c4f770a39bea846dec133fc49b016c256"
+      }
+    },
+    "native_forwards": {
+      "Qwen3_5MoeDecoderLayer": "ee0813966c21bdd277c530659d66bdf0e84e63389ee94b3ba50d3c933f2f627b",
+      "Qwen3_5MoeAttention": "282e26183eb923131affae687e924eab5cda69c6128b4956a76ecc2230bec424",
+      "Qwen3_5MoeGatedDeltaNet": "7c437c5a9ee098edde2f984305f843ec927c5222448411487dd5155ed610f5e8",
+      "Qwen3_5MoeSparseMoeBlock": "6e32d7a4987af26fb91c4a8c3a83a0eb02e0cc0a52cb526290d3e7c72b6f3907",
+      "Qwen3_5MoeExperts": "99ca265927013010174286a6de93cbdf3bb601c5e6709397fbd70b5ee294c2b6",
+      "Qwen3_5MoeTopKRouter": "c2d3a1a00818a9047fda48934b1025265905a9432aaebc2ea1a45c2467f353f5",
+      "Qwen3_5MoeRMSNorm": "a2f6910ff951867de4a6049f8f8a20b8f99948cf126f0616b354a1e7e24b1e8e",
+      "Qwen3_5MoeRMSNormGated": "9e4a919ddd7afcb4301dd2bdaab79f193dd5c0732482e8ac1dae510c3bf2ded9"
+    },
+    "replacements": [
+      "linear operands",
+      "expert bank operands",
+      "raw-ties-only router forward hook",
+      "two native local attention calls + sum/cache assembly",
+      "two native local MoE calls + sum",
+      "vocabulary shards + gather"
+    ],
+    "unchanged": [
+      "HF norm/attention/GDN/experts/router/decoder forward source",
+      "F32 RoPE construction"
+    ],
+    "production_imports": false,
+    "hf_implementation": "eager",
+    "actual_compute_device": "recorded in manifest",
+    "simulation": "two logical ranks on one granted CUDA device; no NCCL or performance claim",
+    "vllm_bitexact": false,
+    "routed_order": "HF ascending expert ID; each F32 weighted product cast BF16 then BF16 index_add"
+  }
+}

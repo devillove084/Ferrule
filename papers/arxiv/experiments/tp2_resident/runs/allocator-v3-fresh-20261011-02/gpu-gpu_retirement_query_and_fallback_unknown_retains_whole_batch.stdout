@@ -1,0 +1,12 @@
+
+running 1 test
+test tests::gpu_retirement_query_and_fallback_unknown_retains_whole_batch ... DEVICE NVIDIA GeForce RTX 3090
+METRICS query_fallback_unknown CudaAllocatorMetrics { allocation_requests: 8, allocation_failures: 0, reuse_allocations: 7, small_allocations: 8, large_allocations: 0, huge_allocations: 0, requested_bytes: 2048, granted_bytes: 2048, live_requested_bytes: 0, live_granted_bytes: 0, peak_live_requested_bytes: 2048, peak_live_granted_bytes: 2048, reserved_bytes: 67108864, peak_reserved_bytes: 67108864, free_bytes: 67106816, largest_free_extent: 67106816, pending_retirement_blocks: 8, pending_retirement_bytes: 2048, capture_retirement_bytes: 0, retired_blocks: 8, retirement_batches: 1, retirement_created_fences: 1, pending_retirement_batches: 1, pending_unfenced_bytes: 2048, shutdown_quiescent: false, shutdown_retained: false, internal_fragmentation: 0.0, external_fragmentation: 0.0, segments: 1, driver_allocations: 1, driver_allocation_bytes: 67108864, driver_frees: 0, driver_free_bytes: 0 }
+DRIVER query_fallback_unknown creates=1 records=1 queries=1 event_syncs=1 context_syncs=0 stream_syncs=1 frees=0 primary_releases=0
+METRICS sticky_unknown CudaAllocatorMetrics { allocation_requests: 8, allocation_failures: 0, reuse_allocations: 7, small_allocations: 8, large_allocations: 0, huge_allocations: 0, requested_bytes: 2048, granted_bytes: 2048, live_requested_bytes: 0, live_granted_bytes: 0, peak_live_requested_bytes: 2048, peak_live_granted_bytes: 2048, reserved_bytes: 67108864, peak_reserved_bytes: 67108864, free_bytes: 67106816, largest_free_extent: 67106816, pending_retirement_blocks: 8, pending_retirement_bytes: 2048, capture_retirement_bytes: 0, retired_blocks: 8, retirement_batches: 1, retirement_created_fences: 1, pending_retirement_batches: 1, pending_unfenced_bytes: 2048, shutdown_quiescent: false, shutdown_retained: false, internal_fragmentation: 0.0, external_fragmentation: 0.0, segments: 1, driver_allocations: 1, driver_allocation_bytes: 67108864, driver_frees: 0, driver_free_bytes: 0 }
+DRIVER sticky_unknown creates=1 records=1 queries=1 event_syncs=1 context_syncs=0 stream_syncs=1 frees=0 primary_releases=0
+DRIVER unknown_process_exit_required creates=1 records=1 queries=1 event_syncs=1 context_syncs=0 stream_syncs=1 frees=0 primary_releases=0
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 30 filtered out; finished in 0.32s
+

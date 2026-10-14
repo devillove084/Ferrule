@@ -1,0 +1,60 @@
+{
+  "status": "pass",
+  "engine": "ferrule",
+  "checks": [
+    {
+      "index": 0,
+      "passed": true,
+      "actual_input_tokens": 5,
+      "actual_output_tokens": 8
+    },
+    {
+      "index": 1,
+      "passed": true,
+      "actual_input_tokens": 5,
+      "actual_output_tokens": 8
+    },
+    {
+      "index": 2,
+      "passed": true,
+      "actual_input_tokens": 3,
+      "actual_output_tokens": 8
+    }
+  ],
+  "first_qa_requests": 0,
+  "warmup_requests": 0,
+  "measured_requests": 3,
+  "http_receipt_sha256": "f24f3af9c017a63c5d83caf086a8d2b16d4e53887b78df831e18e72866f662de",
+  "coverage": "visible text/usage only; separate pinned numerical acceptance, not arithmetic parity",
+  "fairmatch": false,
+  "exact_speedup": null,
+  "cleanup": {
+    "status": "pass",
+    "attempts": [
+      {
+        "snapshot": {
+          "closed": false,
+          "kv": null,
+          "max_body_bytes": 16777216,
+          "prompt_bytes": {
+            "available": 67108864,
+            "held": 0,
+            "limit": 67108864
+          },
+          "requests": {
+            "available": 1024,
+            "held": 0,
+            "limit": 1024
+          },
+          "runtime": {
+            "status": "unsupported"
+          },
+          "scheduler": null
+        },
+        "clean": true
+      }
+    ],
+    "device_quiescence": "not inferred",
+    "runtime_cleanup": "unavailable"
+  }
+}

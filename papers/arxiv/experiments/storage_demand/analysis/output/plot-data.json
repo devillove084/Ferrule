@@ -1,0 +1,1609 @@
+{
+  "attempts": [
+    {
+      "denominator": {
+        "dispatched": 0,
+        "failed_dispatched": 0,
+        "invocations": 0,
+        "not_run": 4,
+        "planned": 4,
+        "success": 0,
+        "successful_output_tokens": 0
+      },
+      "logical_read_bytes": null,
+      "n": 1,
+      "run": "storage-demand-tp1-middle-20261013-01",
+      "startup_seconds": null,
+      "status": "failed"
+    },
+    {
+      "denominator": {
+        "dispatched": 4,
+        "failed_dispatched": 0,
+        "invocations": 30,
+        "not_run": 0,
+        "planned": 4,
+        "success": 4,
+        "successful_output_tokens": 26
+      },
+      "logical_read_bytes": 36240064128,
+      "n": 1,
+      "run": "storage-demand-tp1-middle-20261013-02",
+      "startup_seconds": 18.49747348576784,
+      "status": "complete"
+    }
+  ],
+  "cache_accounting": {
+    "accounting_ceiling_bytes": 335544320,
+    "accounting_ceiling_field": "ExpertCacheLimits.max_bytes",
+    "accounting_ceiling_label": "Cache accounting ceiling",
+    "field": "cache.peak_bytes",
+    "meaning": "cache charged-byte high-water: resident + pending + scratch",
+    "owner_physical_ceiling_bytes": null,
+    "owner_physical_peak_bytes": null,
+    "owner_physical_status": "not independently recorded; cache peak is not owner physical memory",
+    "peak_bytes": 219754496,
+    "peak_last_bytes": 219754496,
+    "source_field": "expert_owner_peak_bytes"
+  },
+  "captions": {
+    "cache-reconciliation": "Expert entry reconciliation and separate cache gauges in storage-demand TP1 middle -02. The 11,519 uploads minus 11,455 evictions equal 64 entries, matching the last observed resident-entry gauge; the implied initial occupancy is zero, not independently measured. Subsequent observed boundaries satisfy the entry balance. The recorded cache.peak_bytes value, 209.574 MiB, is the cache charged-byte high-water (resident + pending + scratch), bounded by ExpertCacheLimits.max_bytes = 320 MiB, a cache accounting ceiling, not owner physical memory. No independently recorded owner physical peak or owner physical ceiling is available; no contradiction is implied. Invocation gauges and lifetime peaks are not accumulated across invocations or a final owner ledger.",
+    "invocation-timeline": "Per-invocation expert upload/eviction deltas and resident-entry observations for the 30 completed invocations in storage-demand TP1 middle -02. Serialized request/log-byte anchors assign the 3/9/9/9 invocations to requests. The x-axis is log-order invocation ordinal, not elapsed time, output-token index, or transaction-as-request ID. Entry occupancy is observed only at invocation completion, not continuously; uploads are not inferred cache misses.",
+    "logical-transfer": "Paired logical checkpoint-reader and facade H2D byte deltas for four serialized requests in storage-demand TP1 middle -02. GiB means 2^30 bytes; the right panel resolves the small H2D-minus-reader differences in KiB (2^10 bytes). These are application counters, not physical storage I/O or physical bus traffic; startup I/O is outside invocation accounting.",
+    "timing": "Launch-to-ready startup and per-request HTTP TTFT/E2E in the single successful DEBUG-instrumented storage-demand TP1 middle -02 run (n=1). TTFT is send to first nonempty SSE content; E2E is send to EOF. Startup has a different origin and is not part of the request bars. Instrumentation overhead is unmeasured; there are no statistics, confidence intervals, kernel timings, or comparative speedups."
+  },
+  "caveats": [
+    "One successful instrumented run (n=1), not independent repetitions; no statistics or confidence intervals.",
+    "ferrule_performance DEBUG overhead is unmeasured; these latencies are not a fast baseline or comparable vLLM throughput.",
+    "Read calls/bytes are logical checkpoint-reader/syscall counters; physical NAS/NFS IO and OS page-cache state are unknown.",
+    "H2D/artifact counters are facade activity, not physical bus traffic or device-kernel timing. Startup IO is not covered by invocation sums.",
+    "Expert uploads are not cache misses. Misses and IO credits are unobserved, not inferred from hits/uploads.",
+    "SSE text/usage matches are not generated-token-ID or logits evidence; frozen reference IDs are never observed generated IDs.",
+    "TTFT is send-to-first-nonempty-SSE content; E2E is send-to-EOF; TPOT is the recorded content-event/usage proxy, not exact token time.",
+    "Cache occupancy/scratch/owner-peak fields are gauges: last invocation and observed maxima, never additive deltas or a final ledger.",
+    "Memory values are independent sampled component maxima, not an additive decomposition, exact peak, hard cap, or continuous coverage.",
+    "Anonymous is resident anonymous memory, not PssAnon. PssAnon/PssFile and physical host cap are unobserved.",
+    "GPU memory is selected-device aggregate telemetry; owned-process attribution and absence of foreign interference remain unproven.",
+    "After-first-request samples include later canaries, not steady state. Shutdown resource_contract_complete is unknown despite exit/custody/idle evidence."
+  ],
+  "configured_limits": {
+    "cache_accounting_bytes": 335544320,
+    "entries": 64,
+    "owner_physical_ceiling_bytes": null,
+    "scratch_bytes": 8388608
+  },
+  "debug_logging": "info,ferrule_performance=debug",
+  "equations": {
+    "bytes": "R_q=sum_i checkpoint_read_bytes_i; H_q=sum_i h2d_bytes_i",
+    "cache_peak": "cache.peak_bytes = high-water resident + pending + scratch; bounded by ExpertCacheLimits.max_bytes",
+    "entries": "N_i-N_(i-1)=uploads_i-evictions_i (observed boundaries i>=2)",
+    "first_boundary": "N_0 implied = N_1 - uploads_1 + evictions_1; N_0 not measured",
+    "gauges": "last and observed maximum only; never accumulate across invocations; cache peak is not owner physical memory",
+    "timing": "startup=ready-launch; TTFT=first_nonempty_content-send; E2E=EOF-send"
+  },
+  "gauges": [
+    {
+      "configured_limit": 64,
+      "configured_limit_label": "Entry ceiling",
+      "divisor": 1,
+      "key": "expert_resident_entries",
+      "label": "Resident entries",
+      "last": 64,
+      "limit_known": true,
+      "maximum": 64,
+      "source_key": "expert_resident_entries",
+      "unit": "entries"
+    },
+    {
+      "configured_limit": 335544320,
+      "configured_limit_label": "Cache accounting ceiling",
+      "divisor": 1048576,
+      "key": "expert_resident_bytes",
+      "label": "Resident bytes",
+      "last": 201351168,
+      "limit_known": true,
+      "maximum": 201351168,
+      "source_key": "expert_resident_bytes",
+      "unit": "MiB"
+    },
+    {
+      "configured_limit": 8388608,
+      "configured_limit_label": "Scratch ceiling",
+      "divisor": 1048576,
+      "key": "expert_scratch_bytes",
+      "label": "Scratch",
+      "last": 8388608,
+      "limit_known": true,
+      "maximum": 8388608,
+      "source_key": "expert_scratch_bytes",
+      "unit": "MiB"
+    },
+    {
+      "configured_limit": 335544320,
+      "configured_limit_label": "Cache accounting ceiling",
+      "divisor": 1048576,
+      "key": "cache.peak_bytes",
+      "label": "Cache charged-byte peak",
+      "last": 219754496,
+      "limit_known": true,
+      "maximum": 219754496,
+      "source_key": "expert_owner_peak_bytes",
+      "unit": "MiB"
+    }
+  ],
+  "independent_successful_runs": 1,
+  "measured_run": "storage-demand-tp1-middle-20261013-02",
+  "other_gauges": {
+    "expert_pending_upload_bytes": {
+      "last": 0,
+      "maximum": 0
+    },
+    "expert_unknown_quarantine_bytes": {
+      "last": 0,
+      "maximum": 0
+    }
+  },
+  "provenance": {
+    "generator_path": "papers/arxiv/experiments/storage_demand/analysis/plot_storage_demand.py",
+    "generator_sha256": "5fa7dd7298234b82990a37242e471e2e5ad8361109f95fd79087e1c77e47a38f",
+    "inputs": [
+      {
+        "bound_sha256": "3c2bd642756c89eefb40a77c82d66cda42ca4d6a3584092b8d2f1620932ab368",
+        "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-01/baseline.json",
+        "sha256": "3c2bd642756c89eefb40a77c82d66cda42ca4d6a3584092b8d2f1620932ab368"
+      },
+      {
+        "bound_sha256": "8b41a2470fbdb6fb78d605913335e169afeb2e41a2de7d3524b904db800be070",
+        "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-01/case.json",
+        "sha256": "8b41a2470fbdb6fb78d605913335e169afeb2e41a2de7d3524b904db800be070"
+      },
+      {
+        "bound_sha256": "202ac899d510a49166be65da3fe728e181b9e52b277dd9577b04a49dc9d56fa7",
+        "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-01/custody.json",
+        "sha256": "202ac899d510a49166be65da3fe728e181b9e52b277dd9577b04a49dc9d56fa7"
+      },
+      {
+        "bound_sha256": "d108cb5ae0a42634371b39a5b9304d6d3d44ebe1de112ad2672950749977dda3",
+        "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-01/post-idle.json",
+        "sha256": "d108cb5ae0a42634371b39a5b9304d6d3d44ebe1de112ad2672950749977dda3"
+      },
+      {
+        "bound_sha256": "be3c8bf2d7d04ef44723b7c52b2c8a9a6131dffe8e58abceb3e3b382b4fc25b5",
+        "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-01/prelaunch.json",
+        "sha256": "be3c8bf2d7d04ef44723b7c52b2c8a9a6131dffe8e58abceb3e3b382b4fc25b5"
+      },
+      {
+        "bound_sha256": "762adbe3baab7883c3f488adca86e57a53919f7c8bdfc109f92fb82baf02c288",
+        "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-01/registration.json",
+        "sha256": "762adbe3baab7883c3f488adca86e57a53919f7c8bdfc109f92fb82baf02c288"
+      },
+      {
+        "bound_sha256": "581f2d5eaa83a209aec950ad7bb308100721e279d550acdd845a0b1bacbf10f1",
+        "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-01/report.json",
+        "sha256": "581f2d5eaa83a209aec950ad7bb308100721e279d550acdd845a0b1bacbf10f1"
+      },
+      {
+        "bound_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-01/server.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "bound_sha256": "1c896f22e38fa324325d681396693584f3a62f8adb2ef168d8d69f78848e0527",
+        "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-01/supervisor.json",
+        "sha256": "1c896f22e38fa324325d681396693584f3a62f8adb2ef168d8d69f78848e0527"
+      },
+      {
+        "bound_sha256": "3c2bd642756c89eefb40a77c82d66cda42ca4d6a3584092b8d2f1620932ab368",
+        "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/baseline.json",
+        "sha256": "3c2bd642756c89eefb40a77c82d66cda42ca4d6a3584092b8d2f1620932ab368"
+      },
+      {
+        "bound_sha256": "891d6effb322b99c08d94ef741c2befe236446c4719f8eb2b108d2bdb2ff0d5f",
+        "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/canary-arithmetic/generated-controls.json",
+        "sha256": "891d6effb322b99c08d94ef741c2befe236446c4719f8eb2b108d2bdb2ff0d5f"
+      },
+      {
+        "bound_sha256": "e699a0dec9ed5ea79dc1088a8e1dc775b978b01cdc174b0e5fa489057f9dd715",
+        "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/canary-arithmetic/http.json",
+        "sha256": "e699a0dec9ed5ea79dc1088a8e1dc775b978b01cdc174b0e5fa489057f9dd715"
+      },
+      {
+        "bound_sha256": "2ac02f64ed1352d365c65abacc27337a390f26f42225998b1d6e773d758261c7",
+        "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/canary-arithmetic/invocations.json",
+        "sha256": "2ac02f64ed1352d365c65abacc27337a390f26f42225998b1d6e773d758261c7"
+      },
+      {
+        "bound_sha256": "c04340df3ca24db4f5a914c712a8cd645314b2815c5c6847c6e8d5cf25886c7a",
+        "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/canary-arithmetic/observed.json",
+        "sha256": "c04340df3ca24db4f5a914c712a8cd645314b2815c5c6847c6e8d5cf25886c7a"
+      },
+      {
+        "bound_sha256": "0e775b44fa912e1b69760570d81d8c8b9e8b11e817ce43adef00a292b7258f46",
+        "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/canary-arithmetic/prompts.json",
+        "sha256": "0e775b44fa912e1b69760570d81d8c8b9e8b11e817ce43adef00a292b7258f46"
+      },
+      {
+        "bound_sha256": "a617afe01b34d6dd5271e75e2685c7e6b135b58eebcda92dd947c225a7b234d6",
+        "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/canary-chinese/generated-controls.json",
+        "sha256": "a617afe01b34d6dd5271e75e2685c7e6b135b58eebcda92dd947c225a7b234d6"
+      },
+      {
+        "bound_sha256": "125093da155f71d1bc79dcbfd0d810cf2d65f778c6ab1fbc93d822c15d2406ba",
+        "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/canary-chinese/http.json",
+        "sha256": "125093da155f71d1bc79dcbfd0d810cf2d65f778c6ab1fbc93d822c15d2406ba"
+      },
+      {
+        "bound_sha256": "8403e162fe56f79cd4a1150c71daffa1ffcd8f9f679d92924dc7f593bf014a80",
+        "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/canary-chinese/invocations.json",
+        "sha256": "8403e162fe56f79cd4a1150c71daffa1ffcd8f9f679d92924dc7f593bf014a80"
+      },
+      {
+        "bound_sha256": "608774e1779777b3c32cb2b551da1bf910939a0682737d6c694f281f6930059f",
+        "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/canary-chinese/observed.json",
+        "sha256": "608774e1779777b3c32cb2b551da1bf910939a0682737d6c694f281f6930059f"
+      },
+      {
+        "bound_sha256": "c1f3d605dbe86516c9c6148be86fcc0bf3f4d9e1086c6593797a7925836e84d3",
+        "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/canary-chinese/prompts.json",
+        "sha256": "c1f3d605dbe86516c9c6148be86fcc0bf3f4d9e1086c6593797a7925836e84d3"
+      },
+      {
+        "bound_sha256": "f86cd633caf68a58b0a27c249e2f3927b069f6036e9436c11631410b1af933a2",
+        "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/canary-qa/generated-controls.json",
+        "sha256": "f86cd633caf68a58b0a27c249e2f3927b069f6036e9436c11631410b1af933a2"
+      },
+      {
+        "bound_sha256": "aa931fa589629d85c852a9e111c993573994fd75199de66418571c864f72589f",
+        "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/canary-qa/http.json",
+        "sha256": "aa931fa589629d85c852a9e111c993573994fd75199de66418571c864f72589f"
+      },
+      {
+        "bound_sha256": "49afde43e4709d9ebafac95d84acf01361c95abb49608a5dbb5cfb0e289668f3",
+        "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/canary-qa/invocations.json",
+        "sha256": "49afde43e4709d9ebafac95d84acf01361c95abb49608a5dbb5cfb0e289668f3"
+      },
+      {
+        "bound_sha256": "688e055fac0f5a10167d6768abf199b902f5f4d8288a77a9ddcda343e4bda1a7",
+        "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/canary-qa/observed.json",
+        "sha256": "688e055fac0f5a10167d6768abf199b902f5f4d8288a77a9ddcda343e4bda1a7"
+      },
+      {
+        "bound_sha256": "b53ff4cfeede55331bae244c61f823c2162018cdb6dc534904788528d3b1645f",
+        "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/canary-qa/prompts.json",
+        "sha256": "b53ff4cfeede55331bae244c61f823c2162018cdb6dc534904788528d3b1645f"
+      },
+      {
+        "bound_sha256": "cec50b599498dede2998aad4f73c1c2f1bb300ab812574f66c10bf1071a7fcb2",
+        "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/case.json",
+        "sha256": "cec50b599498dede2998aad4f73c1c2f1bb300ab812574f66c10bf1071a7fcb2"
+      },
+      {
+        "bound_sha256": "92be2863ac83410287b7ae6c3f2ce42ee4674370c16c237cfe0836346dbc210f",
+        "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/custody.json",
+        "sha256": "92be2863ac83410287b7ae6c3f2ce42ee4674370c16c237cfe0836346dbc210f"
+      },
+      {
+        "bound_sha256": "2cd95112669d9e91f8f2f6535ce4ae2a52438df3125d8e464f8785d87f422399",
+        "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/hello2/generated-controls.json",
+        "sha256": "2cd95112669d9e91f8f2f6535ce4ae2a52438df3125d8e464f8785d87f422399"
+      },
+      {
+        "bound_sha256": "1a11f397db51772a432593b0e26d39d96eb203a4fa09e67a36e0879b9c1c088e",
+        "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/hello2/http.json",
+        "sha256": "1a11f397db51772a432593b0e26d39d96eb203a4fa09e67a36e0879b9c1c088e"
+      },
+      {
+        "bound_sha256": "274023d5df3dc3c64de630fd78551216b24952b534462a7bacf6f0c94ce24cd8",
+        "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/hello2/invocations.json",
+        "sha256": "274023d5df3dc3c64de630fd78551216b24952b534462a7bacf6f0c94ce24cd8"
+      },
+      {
+        "bound_sha256": "f397dceea6e079480bc62bad92b269564ae88701a6b2c61928af2889f4c5d02c",
+        "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/hello2/observed.json",
+        "sha256": "f397dceea6e079480bc62bad92b269564ae88701a6b2c61928af2889f4c5d02c"
+      },
+      {
+        "bound_sha256": "2c85f070c770acdde693be8a4529a3734f5bce2f2ff470acec5a1748b47e7bac",
+        "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/hello2/prompts.json",
+        "sha256": "2c85f070c770acdde693be8a4529a3734f5bce2f2ff470acec5a1748b47e7bac"
+      },
+      {
+        "bound_sha256": "7b99b56382d7ca6582bb9a085109e2f0d6f9bdf6a6307fec38d28b6707749748",
+        "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/post-idle.json",
+        "sha256": "7b99b56382d7ca6582bb9a085109e2f0d6f9bdf6a6307fec38d28b6707749748"
+      },
+      {
+        "bound_sha256": "7c3c46d1a93cb0376297edfdf23911c4525d8500453d28789a604195de475178",
+        "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/prelaunch.json",
+        "sha256": "7c3c46d1a93cb0376297edfdf23911c4525d8500453d28789a604195de475178"
+      },
+      {
+        "bound_sha256": "433205d954ec415e46a2f552384ac9a340bc6225fe78c88d97480cec36003503",
+        "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/profile-server.json",
+        "sha256": "433205d954ec415e46a2f552384ac9a340bc6225fe78c88d97480cec36003503"
+      },
+      {
+        "bound_sha256": "677402df817b284c5924a3ed308a7a1505f7eacef5880dc3bd59df3cd419de08",
+        "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/ready.json",
+        "sha256": "677402df817b284c5924a3ed308a7a1505f7eacef5880dc3bd59df3cd419de08"
+      },
+      {
+        "bound_sha256": "22a574f13d24e7148e365c4c96bdc2913eb63a6e7bd9206f9120b25070e1d8b0",
+        "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/registration.json",
+        "sha256": "22a574f13d24e7148e365c4c96bdc2913eb63a6e7bd9206f9120b25070e1d8b0"
+      },
+      {
+        "bound_sha256": "509448c31afa76ed7c955aeee7a34b618e797c7639fbba2043f193b42ca57297",
+        "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/report.json",
+        "sha256": "509448c31afa76ed7c955aeee7a34b618e797c7639fbba2043f193b42ca57297"
+      },
+      {
+        "bound_sha256": "5a9d6e8335e0661a7194f5cfc02405d5d2244094b263ca403fa21f468a8e1cc8",
+        "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/samples.jsonl",
+        "sha256": "5a9d6e8335e0661a7194f5cfc02405d5d2244094b263ca403fa21f468a8e1cc8"
+      },
+      {
+        "bound_sha256": "2ff930f024ae14b847a4982a3790fedda70a2e49b4550bb32ecabd0d74a7fe9f",
+        "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/server.log",
+        "sha256": "2ff930f024ae14b847a4982a3790fedda70a2e49b4550bb32ecabd0d74a7fe9f"
+      },
+      {
+        "bound_sha256": "b73b1553b05aac91d3c5ec9c37bdcc0e69d39be6dc72dcd3bbfe1df4dbc813c5",
+        "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/supervisor.json",
+        "sha256": "b73b1553b05aac91d3c5ec9c37bdcc0e69d39be6dc72dcd3bbfe1df4dbc813c5"
+      }
+    ],
+    "summarizer": {
+      "generator_path": "papers/arxiv/experiments/storage_demand/analysis/summarize.py",
+      "generator_sha256": "a1eb8dfb4e71175ead15e90e9b048d4b9879dd6fe62a2b0565e45acae4235c15",
+      "input_manifest_path": "papers/arxiv/experiments/storage_demand/analysis/inputs.json",
+      "input_manifest_sha256": "82d1dc579d0cb894134bc45ef7c18d677bfa1711b9e5baf1cda5216b962d185b",
+      "time_policy": "no analysis timestamp; timings come only from bound receipts"
+    },
+    "summary_sha256": "c56aa40625c9a871df8ea77fcc7ea43fb9722390eea945764842aabf7a0c4d3a"
+  },
+  "quality": {
+    "exact_token_pass": null,
+    "full_current_math_pass": false,
+    "http_only_success_requests": 1,
+    "numeric_acceptance_pass": null,
+    "numeric_acceptance_status": "not_established",
+    "observed_generated_token_ids": null,
+    "reference_comparison_requests": 3,
+    "reference_quality_passed_requests": 3,
+    "token_ids_exposed": false
+  },
+  "reconciliation": {
+    "implied_initial_entries": 0,
+    "initial_entries_observed": null,
+    "last_observed_entries": 64,
+    "points": [
+      {
+        "balance_residual": null,
+        "change_from_previous_observation": null,
+        "cumulative_net_entries": 64,
+        "observed_entries": 64
+      },
+      {
+        "balance_residual": 0,
+        "change_from_previous_observation": 0,
+        "cumulative_net_entries": 64,
+        "observed_entries": 64
+      },
+      {
+        "balance_residual": 0,
+        "change_from_previous_observation": 0,
+        "cumulative_net_entries": 64,
+        "observed_entries": 64
+      },
+      {
+        "balance_residual": 0,
+        "change_from_previous_observation": 0,
+        "cumulative_net_entries": 64,
+        "observed_entries": 64
+      },
+      {
+        "balance_residual": 0,
+        "change_from_previous_observation": 0,
+        "cumulative_net_entries": 64,
+        "observed_entries": 64
+      },
+      {
+        "balance_residual": 0,
+        "change_from_previous_observation": 0,
+        "cumulative_net_entries": 64,
+        "observed_entries": 64
+      },
+      {
+        "balance_residual": 0,
+        "change_from_previous_observation": 0,
+        "cumulative_net_entries": 64,
+        "observed_entries": 64
+      },
+      {
+        "balance_residual": 0,
+        "change_from_previous_observation": 0,
+        "cumulative_net_entries": 64,
+        "observed_entries": 64
+      },
+      {
+        "balance_residual": 0,
+        "change_from_previous_observation": 0,
+        "cumulative_net_entries": 64,
+        "observed_entries": 64
+      },
+      {
+        "balance_residual": 0,
+        "change_from_previous_observation": 0,
+        "cumulative_net_entries": 64,
+        "observed_entries": 64
+      },
+      {
+        "balance_residual": 0,
+        "change_from_previous_observation": 0,
+        "cumulative_net_entries": 64,
+        "observed_entries": 64
+      },
+      {
+        "balance_residual": 0,
+        "change_from_previous_observation": 0,
+        "cumulative_net_entries": 64,
+        "observed_entries": 64
+      },
+      {
+        "balance_residual": 0,
+        "change_from_previous_observation": 0,
+        "cumulative_net_entries": 64,
+        "observed_entries": 64
+      },
+      {
+        "balance_residual": 0,
+        "change_from_previous_observation": 0,
+        "cumulative_net_entries": 64,
+        "observed_entries": 64
+      },
+      {
+        "balance_residual": 0,
+        "change_from_previous_observation": 0,
+        "cumulative_net_entries": 64,
+        "observed_entries": 64
+      },
+      {
+        "balance_residual": 0,
+        "change_from_previous_observation": 0,
+        "cumulative_net_entries": 64,
+        "observed_entries": 64
+      },
+      {
+        "balance_residual": 0,
+        "change_from_previous_observation": 0,
+        "cumulative_net_entries": 64,
+        "observed_entries": 64
+      },
+      {
+        "balance_residual": 0,
+        "change_from_previous_observation": 0,
+        "cumulative_net_entries": 64,
+        "observed_entries": 64
+      },
+      {
+        "balance_residual": 0,
+        "change_from_previous_observation": 0,
+        "cumulative_net_entries": 64,
+        "observed_entries": 64
+      },
+      {
+        "balance_residual": 0,
+        "change_from_previous_observation": 0,
+        "cumulative_net_entries": 64,
+        "observed_entries": 64
+      },
+      {
+        "balance_residual": 0,
+        "change_from_previous_observation": 0,
+        "cumulative_net_entries": 64,
+        "observed_entries": 64
+      },
+      {
+        "balance_residual": 0,
+        "change_from_previous_observation": 0,
+        "cumulative_net_entries": 64,
+        "observed_entries": 64
+      },
+      {
+        "balance_residual": 0,
+        "change_from_previous_observation": 0,
+        "cumulative_net_entries": 64,
+        "observed_entries": 64
+      },
+      {
+        "balance_residual": 0,
+        "change_from_previous_observation": 0,
+        "cumulative_net_entries": 64,
+        "observed_entries": 64
+      },
+      {
+        "balance_residual": 0,
+        "change_from_previous_observation": 0,
+        "cumulative_net_entries": 64,
+        "observed_entries": 64
+      },
+      {
+        "balance_residual": 0,
+        "change_from_previous_observation": 0,
+        "cumulative_net_entries": 64,
+        "observed_entries": 64
+      },
+      {
+        "balance_residual": 0,
+        "change_from_previous_observation": 0,
+        "cumulative_net_entries": 64,
+        "observed_entries": 64
+      },
+      {
+        "balance_residual": 0,
+        "change_from_previous_observation": 0,
+        "cumulative_net_entries": 64,
+        "observed_entries": 64
+      },
+      {
+        "balance_residual": 0,
+        "change_from_previous_observation": 0,
+        "cumulative_net_entries": 64,
+        "observed_entries": 64
+      },
+      {
+        "balance_residual": 0,
+        "change_from_previous_observation": 0,
+        "cumulative_net_entries": 64,
+        "observed_entries": 64
+      }
+    ],
+    "total_net_entries": 64
+  },
+  "requests": [
+    {
+      "e2e_seconds": 9.185645993798971,
+      "evictions": 896,
+      "exact_token_pass": null,
+      "facade_h2d_bytes": 3020281452,
+      "facade_h2d_gib": 2.812856297940016,
+      "h2d_minus_read_bytes": 13932,
+      "h2d_minus_read_kib": 13.60546875,
+      "invocations": 3,
+      "label": "Hello2",
+      "last_resident_entries": 64,
+      "local_request_id": "storage_demand_tp1_middle_four_requests_v1/hello2",
+      "log_byte_interval": [
+        8251,
+        12865
+      ],
+      "logical_read_bytes": 3020267520,
+      "logical_read_gib": 2.8128433227539062,
+      "name": "hello2",
+      "net_entries": 64,
+      "numeric_acceptance_pass": null,
+      "observed_generated_token_ids": null,
+      "output_usage_tokens": 2,
+      "quality_scope": "HTTP completion and usage checks only; no reference comparison",
+      "reference_comparison_performed": false,
+      "reference_output_usage_match": null,
+      "reference_quality_passed": null,
+      "reference_text_match": null,
+      "source_log_lines": [
+        13,
+        14,
+        15
+      ],
+      "ttft_seconds": 4.265431670472026,
+      "uploads": 960
+    },
+    {
+      "e2e_seconds": 18.309471419081092,
+      "evictions": 3678,
+      "exact_token_pass": null,
+      "facade_h2d_bytes": 11571459828,
+      "facade_h2d_gib": 10.776761759072542,
+      "h2d_minus_read_bytes": 59892,
+      "h2d_minus_read_kib": 58.48828125,
+      "invocations": 9,
+      "label": "QA canary",
+      "last_resident_entries": 64,
+      "local_request_id": "storage_demand_tp1_middle_four_requests_v1/canary-qa",
+      "log_byte_interval": [
+        12865,
+        26714
+      ],
+      "logical_read_bytes": 11571399936,
+      "logical_read_gib": 10.776705980300903,
+      "name": "canary-qa",
+      "net_entries": 0,
+      "numeric_acceptance_pass": null,
+      "observed_generated_token_ids": null,
+      "output_usage_tokens": 8,
+      "quality_scope": "Visible text and eight-output-token usage checks against frozen HF generation8 only; no exact generated IDs or numeric acceptance",
+      "reference_comparison_performed": true,
+      "reference_output_usage_match": true,
+      "reference_quality_passed": true,
+      "reference_text_match": true,
+      "source_log_lines": [
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24
+      ],
+      "ttft_seconds": 8.331854369491339,
+      "uploads": 3678
+    },
+    {
+      "e2e_seconds": 14.110093329101801,
+      "evictions": 3548,
+      "exact_token_pass": null,
+      "facade_h2d_bytes": 11162465268,
+      "facade_h2d_gib": 10.395855892449617,
+      "h2d_minus_read_bytes": 59892,
+      "h2d_minus_read_kib": 58.48828125,
+      "invocations": 9,
+      "label": "Arithmetic canary",
+      "last_resident_entries": 64,
+      "local_request_id": "storage_demand_tp1_middle_four_requests_v1/canary-arithmetic",
+      "log_byte_interval": [
+        26714,
+        40567
+      ],
+      "logical_read_bytes": 11162405376,
+      "logical_read_gib": 10.395800113677979,
+      "name": "canary-arithmetic",
+      "net_entries": 0,
+      "numeric_acceptance_pass": null,
+      "observed_generated_token_ids": null,
+      "output_usage_tokens": 8,
+      "quality_scope": "Visible text and eight-output-token usage checks against frozen HF generation8 only; no exact generated IDs or numeric acceptance",
+      "reference_comparison_performed": true,
+      "reference_output_usage_match": true,
+      "reference_quality_passed": true,
+      "reference_text_match": true,
+      "source_log_lines": [
+        25,
+        26,
+        27,
+        28,
+        29,
+        30,
+        31,
+        32,
+        33
+      ],
+      "ttft_seconds": 5.307776233181357,
+      "uploads": 3548
+    },
+    {
+      "e2e_seconds": 9.932093098759651,
+      "evictions": 3333,
+      "exact_token_pass": null,
+      "facade_h2d_bytes": 10486042140,
+      "facade_h2d_gib": 9.765887763351202,
+      "h2d_minus_read_bytes": 50844,
+      "h2d_minus_read_kib": 49.65234375,
+      "invocations": 9,
+      "label": "Chinese canary",
+      "last_resident_entries": 64,
+      "local_request_id": "storage_demand_tp1_middle_four_requests_v1/canary-chinese",
+      "log_byte_interval": [
+        40567,
+        54414
+      ],
+      "logical_read_bytes": 10485991296,
+      "logical_read_gib": 9.765840411186218,
+      "name": "canary-chinese",
+      "net_entries": 0,
+      "numeric_acceptance_pass": null,
+      "observed_generated_token_ids": null,
+      "output_usage_tokens": 8,
+      "quality_scope": "Visible text and eight-output-token usage checks against frozen HF generation8 only; no exact generated IDs or numeric acceptance",
+      "reference_comparison_performed": true,
+      "reference_output_usage_match": true,
+      "reference_quality_passed": true,
+      "reference_text_match": true,
+      "source_log_lines": [
+        34,
+        35,
+        36,
+        37,
+        38,
+        39,
+        40,
+        41,
+        42
+      ],
+      "ttft_seconds": 2.604780962690711,
+      "uploads": 3333
+    }
+  ],
+  "schema": "storage_demand_fixed_receipt_plots.v2",
+  "startup_seconds": 18.49747348576784,
+  "timeline": [
+    {
+      "balance_residual": null,
+      "cache_charged_bytes": 209739776,
+      "cache_peak_bytes": 211742720,
+      "change_from_previous_observation": null,
+      "cumulative_net_entries": 64,
+      "evictions": 256,
+      "gauges": {
+        "expert_owner_peak_bytes": 211742720,
+        "expert_pending_upload_bytes": 0,
+        "expert_resident_bytes": 201351168,
+        "expert_resident_entries": 64,
+        "expert_scratch_bytes": 8388608,
+        "expert_unknown_quarantine_bytes": 0
+      },
+      "invocation_id": "server-log-line-13",
+      "local_request_id": "storage_demand_tp1_middle_four_requests_v1/hello2",
+      "log_byte_interval": [
+        8251,
+        12865
+      ],
+      "log_timestamp": "2026-10-13T12:16:15.152539Z",
+      "observed_entries": 64,
+      "ordinal": 1,
+      "request": "hello2",
+      "source_log_line": 13,
+      "uploads": 320
+    },
+    {
+      "balance_residual": 0,
+      "cache_charged_bytes": 209739776,
+      "cache_peak_bytes": 211742720,
+      "change_from_previous_observation": 0,
+      "cumulative_net_entries": 64,
+      "evictions": 320,
+      "gauges": {
+        "expert_owner_peak_bytes": 211742720,
+        "expert_pending_upload_bytes": 0,
+        "expert_resident_bytes": 201351168,
+        "expert_resident_entries": 64,
+        "expert_scratch_bytes": 8388608,
+        "expert_unknown_quarantine_bytes": 0
+      },
+      "invocation_id": "server-log-line-14",
+      "local_request_id": "storage_demand_tp1_middle_four_requests_v1/hello2",
+      "log_byte_interval": [
+        8251,
+        12865
+      ],
+      "log_timestamp": "2026-10-13T12:16:18.267817Z",
+      "observed_entries": 64,
+      "ordinal": 2,
+      "request": "hello2",
+      "source_log_line": 14,
+      "uploads": 320
+    },
+    {
+      "balance_residual": 0,
+      "cache_charged_bytes": 209739776,
+      "cache_peak_bytes": 211742720,
+      "change_from_previous_observation": 0,
+      "cumulative_net_entries": 64,
+      "evictions": 320,
+      "gauges": {
+        "expert_owner_peak_bytes": 211742720,
+        "expert_pending_upload_bytes": 0,
+        "expert_resident_bytes": 201351168,
+        "expert_resident_entries": 64,
+        "expert_scratch_bytes": 8388608,
+        "expert_unknown_quarantine_bytes": 0
+      },
+      "invocation_id": "server-log-line-15",
+      "local_request_id": "storage_demand_tp1_middle_four_requests_v1/hello2",
+      "log_byte_interval": [
+        8251,
+        12865
+      ],
+      "log_timestamp": "2026-10-13T12:16:20.100105Z",
+      "observed_entries": 64,
+      "ordinal": 3,
+      "request": "hello2",
+      "source_log_line": 15,
+      "uploads": 320
+    },
+    {
+      "balance_residual": 0,
+      "cache_charged_bytes": 209739776,
+      "cache_peak_bytes": 219754496,
+      "change_from_previous_observation": 0,
+      "cumulative_net_entries": 64,
+      "evictions": 1118,
+      "gauges": {
+        "expert_owner_peak_bytes": 219754496,
+        "expert_pending_upload_bytes": 0,
+        "expert_resident_bytes": 201351168,
+        "expert_resident_entries": 64,
+        "expert_scratch_bytes": 8388608,
+        "expert_unknown_quarantine_bytes": 0
+      },
+      "invocation_id": "server-log-line-16",
+      "local_request_id": "storage_demand_tp1_middle_four_requests_v1/canary-qa",
+      "log_byte_interval": [
+        12865,
+        26714
+      ],
+      "log_timestamp": "2026-10-13T12:16:28.510018Z",
+      "observed_entries": 64,
+      "ordinal": 4,
+      "request": "canary-qa",
+      "source_log_line": 16,
+      "uploads": 1118
+    },
+    {
+      "balance_residual": 0,
+      "cache_charged_bytes": 209739776,
+      "cache_peak_bytes": 219754496,
+      "change_from_previous_observation": 0,
+      "cumulative_net_entries": 64,
+      "evictions": 320,
+      "gauges": {
+        "expert_owner_peak_bytes": 219754496,
+        "expert_pending_upload_bytes": 0,
+        "expert_resident_bytes": 201351168,
+        "expert_resident_entries": 64,
+        "expert_scratch_bytes": 8388608,
+        "expert_unknown_quarantine_bytes": 0
+      },
+      "invocation_id": "server-log-line-17",
+      "local_request_id": "storage_demand_tp1_middle_four_requests_v1/canary-qa",
+      "log_byte_interval": [
+        12865,
+        26714
+      ],
+      "log_timestamp": "2026-10-13T12:16:29.888543Z",
+      "observed_entries": 64,
+      "ordinal": 5,
+      "request": "canary-qa",
+      "source_log_line": 17,
+      "uploads": 320
+    },
+    {
+      "balance_residual": 0,
+      "cache_charged_bytes": 209739776,
+      "cache_peak_bytes": 219754496,
+      "change_from_previous_observation": 0,
+      "cumulative_net_entries": 64,
+      "evictions": 320,
+      "gauges": {
+        "expert_owner_peak_bytes": 219754496,
+        "expert_pending_upload_bytes": 0,
+        "expert_resident_bytes": 201351168,
+        "expert_resident_entries": 64,
+        "expert_scratch_bytes": 8388608,
+        "expert_unknown_quarantine_bytes": 0
+      },
+      "invocation_id": "server-log-line-18",
+      "local_request_id": "storage_demand_tp1_middle_four_requests_v1/canary-qa",
+      "log_byte_interval": [
+        12865,
+        26714
+      ],
+      "log_timestamp": "2026-10-13T12:16:31.739122Z",
+      "observed_entries": 64,
+      "ordinal": 6,
+      "request": "canary-qa",
+      "source_log_line": 18,
+      "uploads": 320
+    },
+    {
+      "balance_residual": 0,
+      "cache_charged_bytes": 209739776,
+      "cache_peak_bytes": 219754496,
+      "change_from_previous_observation": 0,
+      "cumulative_net_entries": 64,
+      "evictions": 320,
+      "gauges": {
+        "expert_owner_peak_bytes": 219754496,
+        "expert_pending_upload_bytes": 0,
+        "expert_resident_bytes": 201351168,
+        "expert_resident_entries": 64,
+        "expert_scratch_bytes": 8388608,
+        "expert_unknown_quarantine_bytes": 0
+      },
+      "invocation_id": "server-log-line-19",
+      "local_request_id": "storage_demand_tp1_middle_four_requests_v1/canary-qa",
+      "log_byte_interval": [
+        12865,
+        26714
+      ],
+      "log_timestamp": "2026-10-13T12:16:33.161147Z",
+      "observed_entries": 64,
+      "ordinal": 7,
+      "request": "canary-qa",
+      "source_log_line": 19,
+      "uploads": 320
+    },
+    {
+      "balance_residual": 0,
+      "cache_charged_bytes": 209739776,
+      "cache_peak_bytes": 219754496,
+      "change_from_previous_observation": 0,
+      "cumulative_net_entries": 64,
+      "evictions": 320,
+      "gauges": {
+        "expert_owner_peak_bytes": 219754496,
+        "expert_pending_upload_bytes": 0,
+        "expert_resident_bytes": 201351168,
+        "expert_resident_entries": 64,
+        "expert_scratch_bytes": 8388608,
+        "expert_unknown_quarantine_bytes": 0
+      },
+      "invocation_id": "server-log-line-20",
+      "local_request_id": "storage_demand_tp1_middle_four_requests_v1/canary-qa",
+      "log_byte_interval": [
+        12865,
+        26714
+      ],
+      "log_timestamp": "2026-10-13T12:16:34.509672Z",
+      "observed_entries": 64,
+      "ordinal": 8,
+      "request": "canary-qa",
+      "source_log_line": 20,
+      "uploads": 320
+    },
+    {
+      "balance_residual": 0,
+      "cache_charged_bytes": 209739776,
+      "cache_peak_bytes": 219754496,
+      "change_from_previous_observation": 0,
+      "cumulative_net_entries": 64,
+      "evictions": 320,
+      "gauges": {
+        "expert_owner_peak_bytes": 219754496,
+        "expert_pending_upload_bytes": 0,
+        "expert_resident_bytes": 201351168,
+        "expert_resident_entries": 64,
+        "expert_scratch_bytes": 8388608,
+        "expert_unknown_quarantine_bytes": 0
+      },
+      "invocation_id": "server-log-line-21",
+      "local_request_id": "storage_demand_tp1_middle_four_requests_v1/canary-qa",
+      "log_byte_interval": [
+        12865,
+        26714
+      ],
+      "log_timestamp": "2026-10-13T12:16:35.576347Z",
+      "observed_entries": 64,
+      "ordinal": 9,
+      "request": "canary-qa",
+      "source_log_line": 21,
+      "uploads": 320
+    },
+    {
+      "balance_residual": 0,
+      "cache_charged_bytes": 209739776,
+      "cache_peak_bytes": 219754496,
+      "change_from_previous_observation": 0,
+      "cumulative_net_entries": 64,
+      "evictions": 320,
+      "gauges": {
+        "expert_owner_peak_bytes": 219754496,
+        "expert_pending_upload_bytes": 0,
+        "expert_resident_bytes": 201351168,
+        "expert_resident_entries": 64,
+        "expert_scratch_bytes": 8388608,
+        "expert_unknown_quarantine_bytes": 0
+      },
+      "invocation_id": "server-log-line-22",
+      "local_request_id": "storage_demand_tp1_middle_four_requests_v1/canary-qa",
+      "log_byte_interval": [
+        12865,
+        26714
+      ],
+      "log_timestamp": "2026-10-13T12:16:36.591713Z",
+      "observed_entries": 64,
+      "ordinal": 10,
+      "request": "canary-qa",
+      "source_log_line": 22,
+      "uploads": 320
+    },
+    {
+      "balance_residual": 0,
+      "cache_charged_bytes": 209739776,
+      "cache_peak_bytes": 219754496,
+      "change_from_previous_observation": 0,
+      "cumulative_net_entries": 64,
+      "evictions": 320,
+      "gauges": {
+        "expert_owner_peak_bytes": 219754496,
+        "expert_pending_upload_bytes": 0,
+        "expert_resident_bytes": 201351168,
+        "expert_resident_entries": 64,
+        "expert_scratch_bytes": 8388608,
+        "expert_unknown_quarantine_bytes": 0
+      },
+      "invocation_id": "server-log-line-23",
+      "local_request_id": "storage_demand_tp1_middle_four_requests_v1/canary-qa",
+      "log_byte_interval": [
+        12865,
+        26714
+      ],
+      "log_timestamp": "2026-10-13T12:16:37.508076Z",
+      "observed_entries": 64,
+      "ordinal": 11,
+      "request": "canary-qa",
+      "source_log_line": 23,
+      "uploads": 320
+    },
+    {
+      "balance_residual": 0,
+      "cache_charged_bytes": 209739776,
+      "cache_peak_bytes": 219754496,
+      "change_from_previous_observation": 0,
+      "cumulative_net_entries": 64,
+      "evictions": 320,
+      "gauges": {
+        "expert_owner_peak_bytes": 219754496,
+        "expert_pending_upload_bytes": 0,
+        "expert_resident_bytes": 201351168,
+        "expert_resident_entries": 64,
+        "expert_scratch_bytes": 8388608,
+        "expert_unknown_quarantine_bytes": 0
+      },
+      "invocation_id": "server-log-line-24",
+      "local_request_id": "storage_demand_tp1_middle_four_requests_v1/canary-qa",
+      "log_byte_interval": [
+        12865,
+        26714
+      ],
+      "log_timestamp": "2026-10-13T12:16:38.515475Z",
+      "observed_entries": 64,
+      "ordinal": 12,
+      "request": "canary-qa",
+      "source_log_line": 24,
+      "uploads": 320
+    },
+    {
+      "balance_residual": 0,
+      "cache_charged_bytes": 209739776,
+      "cache_peak_bytes": 219754496,
+      "change_from_previous_observation": 0,
+      "cumulative_net_entries": 64,
+      "evictions": 988,
+      "gauges": {
+        "expert_owner_peak_bytes": 219754496,
+        "expert_pending_upload_bytes": 0,
+        "expert_resident_bytes": 201351168,
+        "expert_resident_entries": 64,
+        "expert_scratch_bytes": 8388608,
+        "expert_unknown_quarantine_bytes": 0
+      },
+      "invocation_id": "server-log-line-25",
+      "local_request_id": "storage_demand_tp1_middle_four_requests_v1/canary-arithmetic",
+      "log_byte_interval": [
+        26714,
+        40567
+      ],
+      "log_timestamp": "2026-10-13T12:16:43.895672Z",
+      "observed_entries": 64,
+      "ordinal": 13,
+      "request": "canary-arithmetic",
+      "source_log_line": 25,
+      "uploads": 988
+    },
+    {
+      "balance_residual": 0,
+      "cache_charged_bytes": 209739776,
+      "cache_peak_bytes": 219754496,
+      "change_from_previous_observation": 0,
+      "cumulative_net_entries": 64,
+      "evictions": 320,
+      "gauges": {
+        "expert_owner_peak_bytes": 219754496,
+        "expert_pending_upload_bytes": 0,
+        "expert_resident_bytes": 201351168,
+        "expert_resident_entries": 64,
+        "expert_scratch_bytes": 8388608,
+        "expert_unknown_quarantine_bytes": 0
+      },
+      "invocation_id": "server-log-line-26",
+      "local_request_id": "storage_demand_tp1_middle_four_requests_v1/canary-arithmetic",
+      "log_byte_interval": [
+        26714,
+        40567
+      ],
+      "log_timestamp": "2026-10-13T12:16:44.900901Z",
+      "observed_entries": 64,
+      "ordinal": 14,
+      "request": "canary-arithmetic",
+      "source_log_line": 26,
+      "uploads": 320
+    },
+    {
+      "balance_residual": 0,
+      "cache_charged_bytes": 209739776,
+      "cache_peak_bytes": 219754496,
+      "change_from_previous_observation": 0,
+      "cumulative_net_entries": 64,
+      "evictions": 320,
+      "gauges": {
+        "expert_owner_peak_bytes": 219754496,
+        "expert_pending_upload_bytes": 0,
+        "expert_resident_bytes": 201351168,
+        "expert_resident_entries": 64,
+        "expert_scratch_bytes": 8388608,
+        "expert_unknown_quarantine_bytes": 0
+      },
+      "invocation_id": "server-log-line-27",
+      "local_request_id": "storage_demand_tp1_middle_four_requests_v1/canary-arithmetic",
+      "log_byte_interval": [
+        26714,
+        40567
+      ],
+      "log_timestamp": "2026-10-13T12:16:45.963012Z",
+      "observed_entries": 64,
+      "ordinal": 15,
+      "request": "canary-arithmetic",
+      "source_log_line": 27,
+      "uploads": 320
+    },
+    {
+      "balance_residual": 0,
+      "cache_charged_bytes": 209739776,
+      "cache_peak_bytes": 219754496,
+      "change_from_previous_observation": 0,
+      "cumulative_net_entries": 64,
+      "evictions": 320,
+      "gauges": {
+        "expert_owner_peak_bytes": 219754496,
+        "expert_pending_upload_bytes": 0,
+        "expert_resident_bytes": 201351168,
+        "expert_resident_entries": 64,
+        "expert_scratch_bytes": 8388608,
+        "expert_unknown_quarantine_bytes": 0
+      },
+      "invocation_id": "server-log-line-28",
+      "local_request_id": "storage_demand_tp1_middle_four_requests_v1/canary-arithmetic",
+      "log_byte_interval": [
+        26714,
+        40567
+      ],
+      "log_timestamp": "2026-10-13T12:16:47.186621Z",
+      "observed_entries": 64,
+      "ordinal": 16,
+      "request": "canary-arithmetic",
+      "source_log_line": 28,
+      "uploads": 320
+    },
+    {
+      "balance_residual": 0,
+      "cache_charged_bytes": 209739776,
+      "cache_peak_bytes": 219754496,
+      "change_from_previous_observation": 0,
+      "cumulative_net_entries": 64,
+      "evictions": 320,
+      "gauges": {
+        "expert_owner_peak_bytes": 219754496,
+        "expert_pending_upload_bytes": 0,
+        "expert_resident_bytes": 201351168,
+        "expert_resident_entries": 64,
+        "expert_scratch_bytes": 8388608,
+        "expert_unknown_quarantine_bytes": 0
+      },
+      "invocation_id": "server-log-line-29",
+      "local_request_id": "storage_demand_tp1_middle_four_requests_v1/canary-arithmetic",
+      "log_byte_interval": [
+        26714,
+        40567
+      ],
+      "log_timestamp": "2026-10-13T12:16:48.251922Z",
+      "observed_entries": 64,
+      "ordinal": 17,
+      "request": "canary-arithmetic",
+      "source_log_line": 29,
+      "uploads": 320
+    },
+    {
+      "balance_residual": 0,
+      "cache_charged_bytes": 209739776,
+      "cache_peak_bytes": 219754496,
+      "change_from_previous_observation": 0,
+      "cumulative_net_entries": 64,
+      "evictions": 320,
+      "gauges": {
+        "expert_owner_peak_bytes": 219754496,
+        "expert_pending_upload_bytes": 0,
+        "expert_resident_bytes": 201351168,
+        "expert_resident_entries": 64,
+        "expert_scratch_bytes": 8388608,
+        "expert_unknown_quarantine_bytes": 0
+      },
+      "invocation_id": "server-log-line-30",
+      "local_request_id": "storage_demand_tp1_middle_four_requests_v1/canary-arithmetic",
+      "log_byte_interval": [
+        26714,
+        40567
+      ],
+      "log_timestamp": "2026-10-13T12:16:49.551184Z",
+      "observed_entries": 64,
+      "ordinal": 18,
+      "request": "canary-arithmetic",
+      "source_log_line": 30,
+      "uploads": 320
+    },
+    {
+      "balance_residual": 0,
+      "cache_charged_bytes": 209739776,
+      "cache_peak_bytes": 219754496,
+      "change_from_previous_observation": 0,
+      "cumulative_net_entries": 64,
+      "evictions": 320,
+      "gauges": {
+        "expert_owner_peak_bytes": 219754496,
+        "expert_pending_upload_bytes": 0,
+        "expert_resident_bytes": 201351168,
+        "expert_resident_entries": 64,
+        "expert_scratch_bytes": 8388608,
+        "expert_unknown_quarantine_bytes": 0
+      },
+      "invocation_id": "server-log-line-31",
+      "local_request_id": "storage_demand_tp1_middle_four_requests_v1/canary-arithmetic",
+      "log_byte_interval": [
+        26714,
+        40567
+      ],
+      "log_timestamp": "2026-10-13T12:16:50.535098Z",
+      "observed_entries": 64,
+      "ordinal": 19,
+      "request": "canary-arithmetic",
+      "source_log_line": 31,
+      "uploads": 320
+    },
+    {
+      "balance_residual": 0,
+      "cache_charged_bytes": 209739776,
+      "cache_peak_bytes": 219754496,
+      "change_from_previous_observation": 0,
+      "cumulative_net_entries": 64,
+      "evictions": 320,
+      "gauges": {
+        "expert_owner_peak_bytes": 219754496,
+        "expert_pending_upload_bytes": 0,
+        "expert_resident_bytes": 201351168,
+        "expert_resident_entries": 64,
+        "expert_scratch_bytes": 8388608,
+        "expert_unknown_quarantine_bytes": 0
+      },
+      "invocation_id": "server-log-line-32",
+      "local_request_id": "storage_demand_tp1_middle_four_requests_v1/canary-arithmetic",
+      "log_byte_interval": [
+        26714,
+        40567
+      ],
+      "log_timestamp": "2026-10-13T12:16:51.403710Z",
+      "observed_entries": 64,
+      "ordinal": 20,
+      "request": "canary-arithmetic",
+      "source_log_line": 32,
+      "uploads": 320
+    },
+    {
+      "balance_residual": 0,
+      "cache_charged_bytes": 209739776,
+      "cache_peak_bytes": 219754496,
+      "change_from_previous_observation": 0,
+      "cumulative_net_entries": 64,
+      "evictions": 320,
+      "gauges": {
+        "expert_owner_peak_bytes": 219754496,
+        "expert_pending_upload_bytes": 0,
+        "expert_resident_bytes": 201351168,
+        "expert_resident_entries": 64,
+        "expert_scratch_bytes": 8388608,
+        "expert_unknown_quarantine_bytes": 0
+      },
+      "invocation_id": "server-log-line-33",
+      "local_request_id": "storage_demand_tp1_middle_four_requests_v1/canary-arithmetic",
+      "log_byte_interval": [
+        26714,
+        40567
+      ],
+      "log_timestamp": "2026-10-13T12:16:52.724710Z",
+      "observed_entries": 64,
+      "ordinal": 21,
+      "request": "canary-arithmetic",
+      "source_log_line": 33,
+      "uploads": 320
+    },
+    {
+      "balance_residual": 0,
+      "cache_charged_bytes": 209739776,
+      "cache_peak_bytes": 219754496,
+      "change_from_previous_observation": 0,
+      "cumulative_net_entries": 64,
+      "evictions": 773,
+      "gauges": {
+        "expert_owner_peak_bytes": 219754496,
+        "expert_pending_upload_bytes": 0,
+        "expert_resident_bytes": 201351168,
+        "expert_resident_entries": 64,
+        "expert_scratch_bytes": 8388608,
+        "expert_unknown_quarantine_bytes": 0
+      },
+      "invocation_id": "server-log-line-34",
+      "local_request_id": "storage_demand_tp1_middle_four_requests_v1/canary-chinese",
+      "log_byte_interval": [
+        40567,
+        54414
+      ],
+      "log_timestamp": "2026-10-13T12:16:55.412337Z",
+      "observed_entries": 64,
+      "ordinal": 22,
+      "request": "canary-chinese",
+      "source_log_line": 34,
+      "uploads": 773
+    },
+    {
+      "balance_residual": 0,
+      "cache_charged_bytes": 209739776,
+      "cache_peak_bytes": 219754496,
+      "change_from_previous_observation": 0,
+      "cumulative_net_entries": 64,
+      "evictions": 320,
+      "gauges": {
+        "expert_owner_peak_bytes": 219754496,
+        "expert_pending_upload_bytes": 0,
+        "expert_resident_bytes": 201351168,
+        "expert_resident_entries": 64,
+        "expert_scratch_bytes": 8388608,
+        "expert_unknown_quarantine_bytes": 0
+      },
+      "invocation_id": "server-log-line-35",
+      "local_request_id": "storage_demand_tp1_middle_four_requests_v1/canary-chinese",
+      "log_byte_interval": [
+        40567,
+        54414
+      ],
+      "log_timestamp": "2026-10-13T12:16:56.269318Z",
+      "observed_entries": 64,
+      "ordinal": 23,
+      "request": "canary-chinese",
+      "source_log_line": 35,
+      "uploads": 320
+    },
+    {
+      "balance_residual": 0,
+      "cache_charged_bytes": 209739776,
+      "cache_peak_bytes": 219754496,
+      "change_from_previous_observation": 0,
+      "cumulative_net_entries": 64,
+      "evictions": 320,
+      "gauges": {
+        "expert_owner_peak_bytes": 219754496,
+        "expert_pending_upload_bytes": 0,
+        "expert_resident_bytes": 201351168,
+        "expert_resident_entries": 64,
+        "expert_scratch_bytes": 8388608,
+        "expert_unknown_quarantine_bytes": 0
+      },
+      "invocation_id": "server-log-line-36",
+      "local_request_id": "storage_demand_tp1_middle_four_requests_v1/canary-chinese",
+      "log_byte_interval": [
+        40567,
+        54414
+      ],
+      "log_timestamp": "2026-10-13T12:16:57.166194Z",
+      "observed_entries": 64,
+      "ordinal": 24,
+      "request": "canary-chinese",
+      "source_log_line": 36,
+      "uploads": 320
+    },
+    {
+      "balance_residual": 0,
+      "cache_charged_bytes": 209739776,
+      "cache_peak_bytes": 219754496,
+      "change_from_previous_observation": 0,
+      "cumulative_net_entries": 64,
+      "evictions": 320,
+      "gauges": {
+        "expert_owner_peak_bytes": 219754496,
+        "expert_pending_upload_bytes": 0,
+        "expert_resident_bytes": 201351168,
+        "expert_resident_entries": 64,
+        "expert_scratch_bytes": 8388608,
+        "expert_unknown_quarantine_bytes": 0
+      },
+      "invocation_id": "server-log-line-37",
+      "local_request_id": "storage_demand_tp1_middle_four_requests_v1/canary-chinese",
+      "log_byte_interval": [
+        40567,
+        54414
+      ],
+      "log_timestamp": "2026-10-13T12:16:58.135795Z",
+      "observed_entries": 64,
+      "ordinal": 25,
+      "request": "canary-chinese",
+      "source_log_line": 37,
+      "uploads": 320
+    },
+    {
+      "balance_residual": 0,
+      "cache_charged_bytes": 209739776,
+      "cache_peak_bytes": 219754496,
+      "change_from_previous_observation": 0,
+      "cumulative_net_entries": 64,
+      "evictions": 320,
+      "gauges": {
+        "expert_owner_peak_bytes": 219754496,
+        "expert_pending_upload_bytes": 0,
+        "expert_resident_bytes": 201351168,
+        "expert_resident_entries": 64,
+        "expert_scratch_bytes": 8388608,
+        "expert_unknown_quarantine_bytes": 0
+      },
+      "invocation_id": "server-log-line-38",
+      "local_request_id": "storage_demand_tp1_middle_four_requests_v1/canary-chinese",
+      "log_byte_interval": [
+        40567,
+        54414
+      ],
+      "log_timestamp": "2026-10-13T12:16:59.023251Z",
+      "observed_entries": 64,
+      "ordinal": 26,
+      "request": "canary-chinese",
+      "source_log_line": 38,
+      "uploads": 320
+    },
+    {
+      "balance_residual": 0,
+      "cache_charged_bytes": 209739776,
+      "cache_peak_bytes": 219754496,
+      "change_from_previous_observation": 0,
+      "cumulative_net_entries": 64,
+      "evictions": 320,
+      "gauges": {
+        "expert_owner_peak_bytes": 219754496,
+        "expert_pending_upload_bytes": 0,
+        "expert_resident_bytes": 201351168,
+        "expert_resident_entries": 64,
+        "expert_scratch_bytes": 8388608,
+        "expert_unknown_quarantine_bytes": 0
+      },
+      "invocation_id": "server-log-line-39",
+      "local_request_id": "storage_demand_tp1_middle_four_requests_v1/canary-chinese",
+      "log_byte_interval": [
+        40567,
+        54414
+      ],
+      "log_timestamp": "2026-10-13T12:16:59.946806Z",
+      "observed_entries": 64,
+      "ordinal": 27,
+      "request": "canary-chinese",
+      "source_log_line": 39,
+      "uploads": 320
+    },
+    {
+      "balance_residual": 0,
+      "cache_charged_bytes": 209739776,
+      "cache_peak_bytes": 219754496,
+      "change_from_previous_observation": 0,
+      "cumulative_net_entries": 64,
+      "evictions": 320,
+      "gauges": {
+        "expert_owner_peak_bytes": 219754496,
+        "expert_pending_upload_bytes": 0,
+        "expert_resident_bytes": 201351168,
+        "expert_resident_entries": 64,
+        "expert_scratch_bytes": 8388608,
+        "expert_unknown_quarantine_bytes": 0
+      },
+      "invocation_id": "server-log-line-40",
+      "local_request_id": "storage_demand_tp1_middle_four_requests_v1/canary-chinese",
+      "log_byte_interval": [
+        40567,
+        54414
+      ],
+      "log_timestamp": "2026-10-13T12:17:00.817292Z",
+      "observed_entries": 64,
+      "ordinal": 28,
+      "request": "canary-chinese",
+      "source_log_line": 40,
+      "uploads": 320
+    },
+    {
+      "balance_residual": 0,
+      "cache_charged_bytes": 209739776,
+      "cache_peak_bytes": 219754496,
+      "change_from_previous_observation": 0,
+      "cumulative_net_entries": 64,
+      "evictions": 320,
+      "gauges": {
+        "expert_owner_peak_bytes": 219754496,
+        "expert_pending_upload_bytes": 0,
+        "expert_resident_bytes": 201351168,
+        "expert_resident_entries": 64,
+        "expert_scratch_bytes": 8388608,
+        "expert_unknown_quarantine_bytes": 0
+      },
+      "invocation_id": "server-log-line-41",
+      "local_request_id": "storage_demand_tp1_middle_four_requests_v1/canary-chinese",
+      "log_byte_interval": [
+        40567,
+        54414
+      ],
+      "log_timestamp": "2026-10-13T12:17:01.603556Z",
+      "observed_entries": 64,
+      "ordinal": 29,
+      "request": "canary-chinese",
+      "source_log_line": 41,
+      "uploads": 320
+    },
+    {
+      "balance_residual": 0,
+      "cache_charged_bytes": 209739776,
+      "cache_peak_bytes": 219754496,
+      "change_from_previous_observation": 0,
+      "cumulative_net_entries": 64,
+      "evictions": 320,
+      "gauges": {
+        "expert_owner_peak_bytes": 219754496,
+        "expert_pending_upload_bytes": 0,
+        "expert_resident_bytes": 201351168,
+        "expert_resident_entries": 64,
+        "expert_scratch_bytes": 8388608,
+        "expert_unknown_quarantine_bytes": 0
+      },
+      "invocation_id": "server-log-line-42",
+      "local_request_id": "storage_demand_tp1_middle_four_requests_v1/canary-chinese",
+      "log_byte_interval": [
+        40567,
+        54414
+      ],
+      "log_timestamp": "2026-10-13T12:17:02.765211Z",
+      "observed_entries": 64,
+      "ordinal": 30,
+      "request": "canary-chinese",
+      "source_log_line": 42,
+      "uploads": 320
+    }
+  ],
+  "totals": {
+    "evictions": 11455,
+    "facade_h2d_bytes": 36240248688,
+    "logical_read_bytes": 36240064128,
+    "uploads": 11519
+  },
+  "units": {
+    "GiB_bytes": 1073741824,
+    "KiB_bytes": 1024,
+    "MiB_bytes": 1048576,
+    "legacy_scratch_mb": "binary MiB; confirmed by bound startup plan",
+    "time": "seconds"
+  },
+  "unobserved": {
+    "PssAnon": null,
+    "expert_cache_misses": null,
+    "io_credits": null,
+    "nfs_shared_mount_bytes": null,
+    "observed_generated_token_ids": null,
+    "owned_process_gpu_peak_bytes": null,
+    "owner_physical_ceiling_bytes": null,
+    "owner_physical_peak_bytes": null,
+    "page_cache_state": null,
+    "physical_host_cap_bytes": null,
+    "physical_nas_bytes": null,
+    "proc_read_bytes": null,
+    "startup_io_counters": null
+  },
+  "unsupported": [
+    "physical I/O and page-cache state",
+    "cache misses and IO credits",
+    "full C=F+R+I+L+T credit partition: component ledgers unobserved",
+    "physical-capacity/storage-necessity acceptance",
+    "continuous occupancy and shutdown ledger",
+    "exact generated IDs and full numerical acceptance",
+    "confidence intervals and comparative speedup"
+  ]
+}

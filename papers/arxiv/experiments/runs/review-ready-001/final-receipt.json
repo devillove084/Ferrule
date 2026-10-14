@@ -1,0 +1,40 @@
+{
+  "schema": "ferrule.paper.m7.review-ready.v1",
+  "status": "cpu_release_ready_gpu_blocked",
+  "scope": "papers/arxiv/experiments only",
+  "tests": {
+    "command": "env CUDA_VISIBLE_DEVICES= NVIDIA_VISIBLE_DEVICES=none PYTHONDONTWRITEBYTECODE=1 /home/admin/wxw403883/anaconda3/bin/python3.12 -S -B -m unittest discover -s papers/arxiv/experiments -p test_*.py -v",
+    "passed": 31,
+    "failed": 0
+  },
+  "build": {
+    "receipt": "../m7-build-new-002/build.json",
+    "status": "pass",
+    "binary": "/home/admin/luhuanbing.lhb/Ferrule/target/paper-m7-release-artifacts/m7-build-new-002/staged/ferrule",
+    "binary_sha256": "219d8b77bbeceecedf83272b880cd3a8175db7bf5bedea5dcfc537888461ff80",
+    "mode": "0555 read-only staged copy",
+    "cargo_profile": "release opt-level 3, debuginfo 0, debug_assertions false, overflow_checks false, LTO fat, codegen-units 1",
+    "target_arch": "sm_86",
+    "cuda_visibility": {"CUDA_VISIBLE_DEVICES": "", "NVIDIA_VISIBLE_DEVICES": "none"},
+    "cuda_home": "/home/admin/wxw403883/anaconda3/envs/tao",
+    "cuda_libraries": ["libcudart.so.12.4.99", "libcublas.so.12.4.5.8", "libcublasLt.so.12.4.5.8"],
+    "supervisor": {"returncode": 0, "timed_out": false, "wall_seconds": 348.92531456053257, "descendant_custody": "proven_drained"},
+    "source_snapshot_stable": true,
+    "inventory_status": "complete_declared_build_inputs"
+  },
+  "prepare": {
+    "manifest": "../m7-prepared-new-002/prepared.json",
+    "status": "prepared_cpu_only",
+    "runtime_inventory_status": "complete_declared_runtime_inputs",
+    "checkpoint_identity": "partial metadata/tokenizer hashes plus shard stats; payload hash intentionally null",
+    "vllm_server_not_started": true
+  },
+  "gpu": {
+    "queries": 0,
+    "servers": 0,
+    "feasibility": "not run; explicit sole-owner grant and proven PID namespace mapping required",
+    "readiness": "release/build/preparation ready; GPU execution blocked"
+  },
+  "exact_speedup": null,
+  "fairmatch": false
+}

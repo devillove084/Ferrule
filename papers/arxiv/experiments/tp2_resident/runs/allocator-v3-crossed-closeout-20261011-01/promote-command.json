@@ -1,0 +1,22 @@
+{
+  "argv": [
+    "/home/admin/wxw403883/anaconda3/bin/python3.12",
+    "-S",
+    "-B",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/optimized_release.py",
+    "promote",
+    "--smoke-admission",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/admission/allocator-v3-release-20261011-01/smoke-admission.json",
+    "--smoke-receipt",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-serving-smoke-20261011-01/serving-smoke.json"
+  ],
+  "cwd": "/home/admin/luhuanbing.lhb/Ferrule",
+  "exit_code": 0,
+  "elapsed_seconds": 46.991217613220215,
+  "log": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-crossed-closeout-20261011-01/promote-command.log",
+  "log_sha256": "1fc8c8acc0fc2c387697965dc375d74268b5df9b552f48ee8e2505bb25580e64",
+  "environment": {
+    "CUDA_VISIBLE_DEVICES": "",
+    "NVIDIA_VISIBLE_DEVICES": "none"
+  }
+}

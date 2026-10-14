@@ -1,0 +1,15 @@
+% Paper leaf: requires \usepackage{graphicx} in main.tex.
+\begin{figure}[tbp]
+  \centering
+  \includegraphics[width=\linewidth]{figures/architecture.pdf}
+  \caption{Conceptual, profile-scoped Ferrule architecture. Labeled colors
+  distinguish control/planning, storage/materialization, execution,
+  publication/retirement and uncertainty. Solid arrows denote dependencies;
+  dashed arrows denote evidence or owner control. Immutable source planning
+  and covered-domain admission precede materialization; physical owners retain
+  buffers and supply exact completion evidence. CUDA is a provider instance,
+  not the hardware-neutral boundary. The selected boundaries imply neither a
+  universal registry, OS page-cache hard caps, durable or cross-rank ACID, nor
+  a default NCCL/device-collective route.}
+  \label{fig:architecture}
+\end{figure}

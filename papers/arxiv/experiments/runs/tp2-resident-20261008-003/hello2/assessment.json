@@ -1,0 +1,210 @@
+{
+  "stage": "hello2",
+  "observation": {
+    "status": "failed",
+    "started_monotonic": 8418222.80015233,
+    "fairmatch": false,
+    "exact_speedup": null,
+    "server_launch_monotonic": 8418223.545448462,
+    "server_pid": 149458,
+    "error": "ValueError: Resource monitor failed during startup",
+    "startup_failure_seconds": 12.160802159458399,
+    "resources": {
+      "status": "blocked",
+      "sampled_device_high_water_bytes": 0,
+      "sampled_tree_pss_high_water_bytes": 1001785344,
+      "sampled_tree_rss_high_water_bytes": 1011068928,
+      "samples": 4,
+      "errors": [
+        "Traceback (most recent call last):\n  File \"/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/sampling_v3.py\", line 101, in collect\n    row = telemetry.all_gpu_sample('/usr/bin/nvidia-smi', self.uuids[0], True, self.note)\n          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/telemetry.py\", line 52, in all_gpu_sample\n    for row in query('gpu=index,uuid,memory.total,memory.used,utilization.gpu'):\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/telemetry.py\", line 48, in query\n    result = subprocess.run([tool, '--query-' + fields, '--format=csv,noheader,nounits'],\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/admin/wxw403883/anaconda3/lib/python3.12/subprocess.py\", line 550, in run\n    stdout, stderr = process.communicate(input, timeout=timeout)\n                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/admin/wxw403883/anaconda3/lib/python3.12/subprocess.py\", line 1209, in communicate\n    stdout, stderr = self._communicate(input, endtime, timeout)\n                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/admin/wxw403883/anaconda3/lib/python3.12/subprocess.py\", line 2116, in _communicate\n    self._check_timeout(endtime, orig_timeout, stdout, stderr)\n  File \"/home/admin/wxw403883/anaconda3/lib/python3.12/subprocess.py\", line 1253, in _check_timeout\n    raise TimeoutExpired(\nsubprocess.TimeoutExpired: Command '['/usr/bin/nvidia-smi', '--query-gpu=index,uuid,memory.total,memory.used,utilization.gpu', '--format=csv,noheader,nounits']' timed out after 3 seconds\n"
+      ],
+      "sample_interval_seconds": 2,
+      "exact_peaks": false,
+      "hard_memory_partition": false,
+      "pinned_bytes": null,
+      "caveats": [
+        "CUDA pinning not measured by VmLck/VmPin alone",
+        "PSS excludes unmapped OS file cache; not a total physical-host-memory proof",
+        "Device samples include baseline; between-sample peaks may be missed"
+      ],
+      "per_device": {
+        "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": {
+          "status": "blocked",
+          "sampled_device_high_water_bytes": 0,
+          "sampled_tree_pss_high_water_bytes": 1001785344,
+          "sampled_tree_rss_high_water_bytes": 1011068928,
+          "samples": 4,
+          "errors": [
+            "Traceback (most recent call last):\n  File \"/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/sampling_v3.py\", line 101, in collect\n    row = telemetry.all_gpu_sample('/usr/bin/nvidia-smi', self.uuids[0], True, self.note)\n          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/telemetry.py\", line 52, in all_gpu_sample\n    for row in query('gpu=index,uuid,memory.total,memory.used,utilization.gpu'):\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/telemetry.py\", line 48, in query\n    result = subprocess.run([tool, '--query-' + fields, '--format=csv,noheader,nounits'],\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/admin/wxw403883/anaconda3/lib/python3.12/subprocess.py\", line 550, in run\n    stdout, stderr = process.communicate(input, timeout=timeout)\n                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/admin/wxw403883/anaconda3/lib/python3.12/subprocess.py\", line 1209, in communicate\n    stdout, stderr = self._communicate(input, endtime, timeout)\n                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/admin/wxw403883/anaconda3/lib/python3.12/subprocess.py\", line 2116, in _communicate\n    self._check_timeout(endtime, orig_timeout, stdout, stderr)\n  File \"/home/admin/wxw403883/anaconda3/lib/python3.12/subprocess.py\", line 1253, in _check_timeout\n    raise TimeoutExpired(\nsubprocess.TimeoutExpired: Command '['/usr/bin/nvidia-smi', '--query-gpu=index,uuid,memory.total,memory.used,utilization.gpu', '--format=csv,noheader,nounits']' timed out after 3 seconds\n"
+          ],
+          "sample_interval_seconds": 2,
+          "exact_peaks": false,
+          "hard_memory_partition": false,
+          "pinned_bytes": null,
+          "caveats": [
+            "CUDA pinning not measured by VmLck/VmPin alone",
+            "PSS excludes unmapped OS file cache; not a total physical-host-memory proof",
+            "Device samples include baseline; between-sample peaks may be missed"
+          ]
+        },
+        "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": {
+          "status": "blocked",
+          "sampled_device_high_water_bytes": 0,
+          "sampled_tree_pss_high_water_bytes": 1001785344,
+          "sampled_tree_rss_high_water_bytes": 1011068928,
+          "samples": 4,
+          "errors": [
+            "Traceback (most recent call last):\n  File \"/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/sampling_v3.py\", line 101, in collect\n    row = telemetry.all_gpu_sample('/usr/bin/nvidia-smi', self.uuids[0], True, self.note)\n          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/telemetry.py\", line 52, in all_gpu_sample\n    for row in query('gpu=index,uuid,memory.total,memory.used,utilization.gpu'):\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/telemetry.py\", line 48, in query\n    result = subprocess.run([tool, '--query-' + fields, '--format=csv,noheader,nounits'],\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/admin/wxw403883/anaconda3/lib/python3.12/subprocess.py\", line 550, in run\n    stdout, stderr = process.communicate(input, timeout=timeout)\n                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/admin/wxw403883/anaconda3/lib/python3.12/subprocess.py\", line 1209, in communicate\n    stdout, stderr = self._communicate(input, endtime, timeout)\n                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/admin/wxw403883/anaconda3/lib/python3.12/subprocess.py\", line 2116, in _communicate\n    self._check_timeout(endtime, orig_timeout, stdout, stderr)\n  File \"/home/admin/wxw403883/anaconda3/lib/python3.12/subprocess.py\", line 1253, in _check_timeout\n    raise TimeoutExpired(\nsubprocess.TimeoutExpired: Command '['/usr/bin/nvidia-smi', '--query-gpu=index,uuid,memory.total,memory.used,utilization.gpu', '--format=csv,noheader,nounits']' timed out after 3 seconds\n"
+          ],
+          "sample_interval_seconds": 2,
+          "exact_peaks": false,
+          "hard_memory_partition": false,
+          "pinned_bytes": null,
+          "caveats": [
+            "CUDA pinning not measured by VmLck/VmPin alone",
+            "PSS excludes unmapped OS file cache; not a total physical-host-memory proof",
+            "Device samples include baseline; between-sample peaks may be missed"
+          ]
+        }
+      },
+      "baseline": {
+        "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": {
+          "index": 0,
+          "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+          "total_bytes": 25769803776,
+          "gpu_bytes": 0,
+          "utilization": 0
+        },
+        "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": {
+          "index": 1,
+          "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+          "total_bytes": 25769803776,
+          "gpu_bytes": 0,
+          "utilization": 0
+        },
+        "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6": {
+          "index": 2,
+          "uuid": "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6",
+          "total_bytes": 25769803776,
+          "gpu_bytes": 0,
+          "utilization": 0
+        },
+        "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011": {
+          "index": 3,
+          "uuid": "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011",
+          "total_bytes": 25769803776,
+          "gpu_bytes": 0,
+          "utilization": 0
+        },
+        "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86": {
+          "index": 4,
+          "uuid": "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86",
+          "total_bytes": 25769803776,
+          "gpu_bytes": 0,
+          "utilization": 0
+        },
+        "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685": {
+          "index": 5,
+          "uuid": "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685",
+          "total_bytes": 25769803776,
+          "gpu_bytes": 0,
+          "utilization": 0
+        },
+        "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d": {
+          "index": 6,
+          "uuid": "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d",
+          "total_bytes": 25769803776,
+          "gpu_bytes": 0,
+          "utilization": 0
+        },
+        "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f": {
+          "index": 7,
+          "uuid": "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f",
+          "total_bytes": 25769803776,
+          "gpu_bytes": 0,
+          "utilization": 0
+        }
+      },
+      "nonselected_delta_tolerance_bytes": 1048576,
+      "all_device_delta_high_water_bytes": {
+        "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 0,
+        "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 0,
+        "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6": 0,
+        "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011": 0,
+        "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86": 0,
+        "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685": 0,
+        "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d": 0,
+        "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f": 0
+      },
+      "identity_mode": "device_exclusive_local_custody",
+      "measurement_scope": "all eight physical devices; selected two independently budgeted",
+      "owned_process_gpu_peak_bytes": null,
+      "owned_gpu_attribution": "unknown",
+      "absence_of_foreign_interference_proven": false,
+      "proc_enumeration_resamples": 0,
+      "nvml_pid_set_changes": 0,
+      "pss_policy": "server tree sampled once; never sum per-device copies"
+    },
+    "shutdown": {
+      "status": "root_exited_descendants_unknown",
+      "seconds": 2.0161057226359844,
+      "timed_out": false,
+      "gpu_quiescence": "unverified; no GPU probe"
+    },
+    "runtime": {
+      "evidence": {
+        "linear_marlin": [],
+        "moe_marlin": [],
+        "model_load": [],
+        "offload": [],
+        "topology": [],
+        "gdn": [
+          "(APIServer pid=149458)     from vllm.model_executor.layers.mamba.gdn.qwen_gdn_linear_attn import (",
+          "(APIServer pid=149458)   File \"/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/vllm/model_executor/layers/mamba/gdn/qwen_gdn_linear_attn.py\", line 50, in <module>",
+          "(APIServer pid=149458)     from .chunk import chunk_gated_delta_rule",
+          "(APIServer pid=149458)     from .chunk_delta_h import chunk_gated_delta_rule_fwd_h"
+        ],
+        "transport": [],
+        "transport_channels": [],
+        "cache_dtype": [
+          "(APIServer pid=149458) INFO 10-09 00:01:26 [api_utils.py:272] non-default args: {'model_tag': '/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8', 'host': '127.0.0.1', 'port': 18367, 'model': '/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8', 'dtype': 'bfloat16', 'seed': 1, 'max_model_len': 128, 'enforce_eager': True, 'served_model_name': ['qwen35-vllm-tp2-resident-paper'], 'generation_config': 'vllm', 'tensor_parallel_size': 2, 'gpu_memory_utilization': 0.8, 'enable_prefix_caching': False, 'mamba_cache_dtype': 'bfloat16', 'mamba_ssm_cache_dtype': 'float32', 'language_model_only': True, 'max_num_batched_tokens': 8, 'max_num_seqs': 2, 'enable_chunked_prefill': True, 'moe_backend': 'marlin', 'linear_backend': 'marlin'}"
+        ]
+      },
+      "contradictions": [],
+      "no_cpu_offload": "source-default/config verified; Noop selection may be debug-only; residency telemetry/logs retained",
+      "exact_arithmetic_match": false,
+      "effective_full_dtype_and_kernel_closure": "unknown; logged operations only"
+    },
+    "log_sha256": "bc83244759458833bb7692e473631adfdb372cc09ae9f649eedf0f3dd3e6cdcf",
+    "wall_seconds": 15.268107717856765
+  },
+  "launch_id": "c569bfa823284cb9aadf8da78c0c38d2",
+  "drained": true,
+  "all_gpu_idle": true,
+  "eligible": false,
+  "final_drained_server_log_sha256": "bc83244759458833bb7692e473631adfdb372cc09ae9f649eedf0f3dd3e6cdcf",
+  "final_runtime": {
+    "evidence": {
+      "linear_marlin": [],
+      "moe_marlin": [],
+      "model_load": [],
+      "offload": [],
+      "topology": [],
+      "gdn": [
+        "(APIServer pid=149458)     from vllm.model_executor.layers.mamba.gdn.qwen_gdn_linear_attn import (",
+        "(APIServer pid=149458)   File \"/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/vllm/model_executor/layers/mamba/gdn/qwen_gdn_linear_attn.py\", line 50, in <module>",
+        "(APIServer pid=149458)     from .chunk import chunk_gated_delta_rule",
+        "(APIServer pid=149458)     from .chunk_delta_h import chunk_gated_delta_rule_fwd_h"
+      ],
+      "transport": [],
+      "transport_channels": [],
+      "cache_dtype": [
+        "(APIServer pid=149458) INFO 10-09 00:01:26 [api_utils.py:272] non-default args: {'model_tag': '/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8', 'host': '127.0.0.1', 'port': 18367, 'model': '/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8', 'dtype': 'bfloat16', 'seed': 1, 'max_model_len': 128, 'enforce_eager': True, 'served_model_name': ['qwen35-vllm-tp2-resident-paper'], 'generation_config': 'vllm', 'tensor_parallel_size': 2, 'gpu_memory_utilization': 0.8, 'enable_prefix_caching': False, 'mamba_cache_dtype': 'bfloat16', 'mamba_ssm_cache_dtype': 'float32', 'language_model_only': True, 'max_num_batched_tokens': 8, 'max_num_seqs': 2, 'enable_chunked_prefill': True, 'moe_backend': 'marlin', 'linear_backend': 'marlin'}"
+      ]
+    },
+    "contradictions": [],
+    "no_cpu_offload": "source-default/config verified; Noop selection may be debug-only; residency telemetry/logs retained",
+    "exact_arithmetic_match": false,
+    "effective_full_dtype_and_kernel_closure": "unknown; logged operations only"
+  }
+}

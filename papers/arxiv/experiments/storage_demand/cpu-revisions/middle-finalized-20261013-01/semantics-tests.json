@@ -1,0 +1,20 @@
+{
+  "argv": [
+    "/home/admin/wxw403883/anaconda3/bin/python3.12",
+    "-S",
+    "-B",
+    "-m",
+    "unittest",
+    "discover",
+    "-s",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand",
+    "-p",
+    "test_run_middle_semantics.py",
+    "-v"
+  ],
+  "returncode": 0,
+  "stdout": "",
+  "stderr": "test_each_missing_final_observation_remains_unknown_and_null (test_run_middle_semantics.ShutdownSemantics.test_each_missing_final_observation_remains_unknown_and_null) ... ok\ntest_exit_zero_with_null_ledgers_is_unknown (test_run_middle_semantics.ShutdownSemantics.test_exit_zero_with_null_ledgers_is_unknown) ... ok\ntest_failed_or_unobserved_exit_cannot_verify_complete_mock_evidence (test_run_middle_semantics.ShutdownSemantics.test_failed_or_unobserved_exit_cannot_verify_complete_mock_evidence) ... ok\ntest_only_explicit_complete_mock_owner_sample_verifies (test_run_middle_semantics.ShutdownSemantics.test_only_explicit_complete_mock_owner_sample_verifies) ... ok\ntest_pending_unknown_quarantine_and_invalid_credits_fail_closed (test_run_middle_semantics.ShutdownSemantics.test_pending_unknown_quarantine_and_invalid_credits_fail_closed) ... ok\n\n----------------------------------------------------------------------\nRan 5 tests in 0.004s\n\nOK\n",
+  "tests": 5,
+  "fixture_scope": "mock owner samples, not actual GPU evidence"
+}

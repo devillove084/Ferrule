@@ -405,6 +405,10 @@ impl DecoderCommand {
     pub fn encode(command: &PipelineCommand) -> Result<Self> {
         use PipelineCommand as C;
         Ok(match command {
+            #[cfg(feature = "cuda")]
+            C::TraceCommitted(_) => {
+                return Err(error("committed trace is thread-only; no IPC capability"));
+            }
             C::Describe => Self::Describe,
             C::Stats => Self::Stats,
             C::Create { session } => Self::Create { session: session.0 },
@@ -852,6 +856,7 @@ mod projection_tests {
         };
         let boot = DecoderBoot {
             version: DECODER_WIRE_VERSION,
+            hybrid: None,
             rank: 0,
             checkpoint: "metadata-only-fixture".into(),
             recipe: DecoderRecipeKind::Synthetic,
@@ -942,7 +947,7 @@ mod projection_tests {
         assert_eq!(strong.rows(), 2);
         assert_eq!(boot.kv.max_pages, 4);
         assert_eq!(boot.kv.physical_pages, 4);
-        assert_eq!(DECODER_WIRE_VERSION, 3);
+        assert_eq!(DECODER_WIRE_VERSION, 4);
     }
 
     #[test]

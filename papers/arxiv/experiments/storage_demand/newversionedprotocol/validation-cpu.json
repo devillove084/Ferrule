@@ -1,0 +1,39 @@
+{
+  "schema": "ferrule.paper.storage-demand.cpu-validation.v2",
+  "status": "pass_cpu_fixtures_only_candidate_unbound",
+  "recorded_unix_ns": 1791928346435814905,
+  "prepared_sha256": "117a03af3700f46c213b581e10b58f126c725c5cb515c1acc2adb0391b351767",
+  "prepared_digest": "813b309925243c63cbc584c56bdf96d85333858691a3f256977af16220ac46c9",
+  "checks": [
+    {
+      "command": "CUDA_VISIBLE_DEVICES='' NVIDIA_VISIBLE_DEVICES=none /home/admin/wxw403883/anaconda3/bin/python3.12 -S -B -m unittest discover -s papers/arxiv/experiments/storage_demand/tests -v",
+      "tests": 37,
+      "passed": true
+    },
+    {
+      "command": "CUDA_VISIBLE_DEVICES='' NVIDIA_VISIBLE_DEVICES=none /home/admin/wxw403883/anaconda3/bin/python3.12 -S -B -m unittest discover -s papers/arxiv/experiments/storage_demand -p 'test_run_middle*.py' -v",
+      "tests": 6,
+      "passed": true
+    },
+    {
+      "command": "CUDA_VISIBLE_DEVICES='' NVIDIA_VISIBLE_DEVICES=none /home/admin/wxw403883/anaconda3/bin/python3.12 -S -B papers/arxiv/experiments/storage_demand/newversionedprotocol/protocol.py plan",
+      "passed": true
+    },
+    {
+      "command": "CUDA_VISIBLE_DEVICES='' NVIDIA_VISIBLE_DEVICES=none /home/admin/wxw403883/anaconda3/bin/python3.12 -S -B papers/arxiv/experiments/storage_demand/newversionedprotocol/protocol.py check",
+      "passed": true
+    }
+  ],
+  "syntax_check": "py_compile passed before additive path alignment; post-alignment imports/tests passed; owned caches removed",
+  "artifact_pin_count": 34,
+  "reference_pin_count": 8,
+  "gpu_queries": 0,
+  "gpu_locks": 0,
+  "gpu_runs": 0,
+  "server_launches": 0,
+  "http_requests": 0,
+  "new_checkpoint_tensor_payload_bytes_read": 0,
+  "new_measured_observations": null,
+  "final_candidate_sealed": false,
+  "git_note": "/papers/ ignored by repository .gitignore; no force-add or ignore edit performed"
+}

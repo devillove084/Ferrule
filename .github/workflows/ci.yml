@@ -28,7 +28,7 @@ env:
   RUST_BACKTRACE: "1"
 
 # External administrator setup (NOT configured by this file):
-# - Preserve existing required checks and require CPU tests, CPU coverage,
+# - Preserve existing required checks and require both CPU feature lanes, CPU coverage,
 #   CUDA compile-only and GPU required smoke in branch protection/rulesets.
 #   A job name is not proof that a remote required check is enabled.
 # - Register existing isolated/ephemeral Linux x64 GPU runners with labels
@@ -71,11 +71,21 @@ jobs:
         run: just lint
 
   test:
-    name: CPU tests
+    name: CPU tests (${{ matrix.lane }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - lane: default
+            recipe: ci-cpu
+            profile: ci
+          - lane: reference
+            recipe: ci-cpu-reference
+            profile: cpu-reference
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
-      NEXTEST_PROFILE: ci
+      NEXTEST_PROFILE: ${{ matrix.profile }}
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -92,15 +102,15 @@ jobs:
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
-          shared-key: test
+          shared-key: test-${{ matrix.lane }}
       - name: Run CPU test suite
-        run: just ci-cpu
+        run: just ${{ matrix.recipe }}
       - name: Upload Nextest JUnit report
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: nextest-junit
-          path: target/nextest/ci/junit.xml
+          name: nextest-junit-${{ matrix.lane }}
+          path: target/nextest/${{ matrix.profile }}/junit.xml
           if-no-files-found: error
           retention-days: 14
 
@@ -221,7 +231,7 @@ jobs:
       - name: Install native build prerequisites
         run: |
           apt-get update
-          apt-get install -y --no-install-recommends ca-certificates curl git build-essential pkg-config libssl-dev ripgrep
+          apt-get install -y --no-install-recommends ca-certificates curl git build-essential pkg-config libssl-dev ripgrep python3
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -232,7 +242,7 @@ jobs:
           toolchain: nightly-2026-08-01
       - name: Install just
         uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4.0.0
-      - name: Compile and link CUDA feature, native and CUTLASS all targets
+      - name: Compile and link CUDA targets, opt-in model support and pure doctests
         shell: bash
         run: |
           mkdir -p target/validation/ci/cuda-compile

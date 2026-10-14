@@ -1,0 +1,23 @@
+{
+  "argv": [
+    "/home/admin/wxw403883/anaconda3/bin/python3.12",
+    "-S",
+    "-B",
+    "-m",
+    "unittest",
+    "discover",
+    "-s",
+    ".",
+    "-p",
+    "test*.py"
+  ],
+  "cwd": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident",
+  "exit_code": 0,
+  "elapsed_seconds": 106.15863990783691,
+  "environment": {
+    "CUDA_VISIBLE_DEVICES": "",
+    "NVIDIA_VISIBLE_DEVICES": "none"
+  },
+  "log": "plans/operator-retirement-v3-cpu-closeout-20261011-01/full-resident-sealed.log",
+  "log_sha256": "0242d0c3fe29dcaa122634525fc39b61253ae9efc7959995b4827b6919382b93"
+}

@@ -1,0 +1,221 @@
+{
+  "stage": "hello2",
+  "observation": {
+    "status": "failed",
+    "started_monotonic": 8418529.389654143,
+    "fairmatch": false,
+    "exact_speedup": null,
+    "server_launch_monotonic": 8418530.095012208,
+    "server_pid": 149903,
+    "error": "ValueError: Resource monitor failed during startup",
+    "startup_failure_seconds": 32.31631709448993,
+    "resources": {
+      "status": "blocked",
+      "sampled_device_high_water_bytes": 3145728,
+      "sampled_tree_pss_high_water_bytes": 4899530752,
+      "sampled_tree_rss_high_water_bytes": 7336247296,
+      "samples": 13,
+      "errors": [
+        "Traceback (most recent call last):\n  File \"/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/sampling_v4.py\", line 133, in collect\n    row.update(host_sample(self.server.pid))\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/sampling_v2.py\", line 24, in host_sample\n    result = sampler(root_pid)\n             ^^^^^^^^^^^^^^^^^\n  File \"/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/telemetry.py\", line 109, in host_sample\n    for line in (Path('/proc') / str(pid) / name).read_text().splitlines():\n                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/admin/wxw403883/anaconda3/lib/python3.12/pathlib.py\", line 1028, in read_text\n    return f.read()\n           ^^^^^^^^\nProcessLookupError: [Errno 3] No such process\n"
+      ],
+      "sample_interval_seconds": 2,
+      "exact_peaks": false,
+      "hard_memory_partition": false,
+      "pinned_bytes": null,
+      "caveats": [
+        "CUDA pinning not measured by VmLck/VmPin alone",
+        "PSS excludes unmapped OS file cache; not a total physical-host-memory proof",
+        "Device samples include baseline; between-sample peaks may be missed"
+      ],
+      "per_device": {
+        "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": {
+          "status": "blocked",
+          "sampled_device_high_water_bytes": 3145728,
+          "sampled_tree_pss_high_water_bytes": 4899530752,
+          "sampled_tree_rss_high_water_bytes": 7336247296,
+          "samples": 13,
+          "errors": [
+            "Traceback (most recent call last):\n  File \"/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/sampling_v4.py\", line 133, in collect\n    row.update(host_sample(self.server.pid))\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/sampling_v2.py\", line 24, in host_sample\n    result = sampler(root_pid)\n             ^^^^^^^^^^^^^^^^^\n  File \"/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/telemetry.py\", line 109, in host_sample\n    for line in (Path('/proc') / str(pid) / name).read_text().splitlines():\n                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/admin/wxw403883/anaconda3/lib/python3.12/pathlib.py\", line 1028, in read_text\n    return f.read()\n           ^^^^^^^^\nProcessLookupError: [Errno 3] No such process\n"
+          ],
+          "sample_interval_seconds": 2,
+          "exact_peaks": false,
+          "hard_memory_partition": false,
+          "pinned_bytes": null,
+          "caveats": [
+            "CUDA pinning not measured by VmLck/VmPin alone",
+            "PSS excludes unmapped OS file cache; not a total physical-host-memory proof",
+            "Device samples include baseline; between-sample peaks may be missed"
+          ]
+        },
+        "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": {
+          "status": "blocked",
+          "sampled_device_high_water_bytes": 3145728,
+          "sampled_tree_pss_high_water_bytes": 4899530752,
+          "sampled_tree_rss_high_water_bytes": 7336247296,
+          "samples": 13,
+          "errors": [
+            "Traceback (most recent call last):\n  File \"/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/sampling_v4.py\", line 133, in collect\n    row.update(host_sample(self.server.pid))\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/sampling_v2.py\", line 24, in host_sample\n    result = sampler(root_pid)\n             ^^^^^^^^^^^^^^^^^\n  File \"/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/telemetry.py\", line 109, in host_sample\n    for line in (Path('/proc') / str(pid) / name).read_text().splitlines():\n                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/admin/wxw403883/anaconda3/lib/python3.12/pathlib.py\", line 1028, in read_text\n    return f.read()\n           ^^^^^^^^\nProcessLookupError: [Errno 3] No such process\n"
+          ],
+          "sample_interval_seconds": 2,
+          "exact_peaks": false,
+          "hard_memory_partition": false,
+          "pinned_bytes": null,
+          "caveats": [
+            "CUDA pinning not measured by VmLck/VmPin alone",
+            "PSS excludes unmapped OS file cache; not a total physical-host-memory proof",
+            "Device samples include baseline; between-sample peaks may be missed"
+          ]
+        }
+      },
+      "baseline": {
+        "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": {
+          "index": 0,
+          "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+          "total_bytes": 25769803776,
+          "gpu_bytes": 0,
+          "utilization": 0
+        },
+        "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": {
+          "index": 1,
+          "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+          "total_bytes": 25769803776,
+          "gpu_bytes": 0,
+          "utilization": 0
+        },
+        "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6": {
+          "index": 2,
+          "uuid": "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6",
+          "total_bytes": 25769803776,
+          "gpu_bytes": 0,
+          "utilization": 0
+        },
+        "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011": {
+          "index": 3,
+          "uuid": "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011",
+          "total_bytes": 25769803776,
+          "gpu_bytes": 0,
+          "utilization": 0
+        },
+        "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86": {
+          "index": 4,
+          "uuid": "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86",
+          "total_bytes": 25769803776,
+          "gpu_bytes": 0,
+          "utilization": 0
+        },
+        "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685": {
+          "index": 5,
+          "uuid": "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685",
+          "total_bytes": 25769803776,
+          "gpu_bytes": 0,
+          "utilization": 0
+        },
+        "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d": {
+          "index": 6,
+          "uuid": "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d",
+          "total_bytes": 25769803776,
+          "gpu_bytes": 0,
+          "utilization": 0
+        },
+        "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f": {
+          "index": 7,
+          "uuid": "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f",
+          "total_bytes": 25769803776,
+          "gpu_bytes": 0,
+          "utilization": 0
+        }
+      },
+      "nvidia_smi_timeout_retries": 0,
+      "nonselected_delta_tolerance_bytes": 1048576,
+      "all_device_delta_high_water_bytes": {
+        "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 3145728,
+        "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 3145728,
+        "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6": 0,
+        "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011": 0,
+        "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86": 0,
+        "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685": 0,
+        "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d": 0,
+        "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f": 0
+      },
+      "identity_mode": "device_exclusive_local_custody",
+      "measurement_scope": "all eight physical devices; selected two independently budgeted",
+      "owned_process_gpu_peak_bytes": null,
+      "owned_gpu_attribution": "unknown",
+      "absence_of_foreign_interference_proven": false,
+      "proc_enumeration_resamples": 0,
+      "nvml_pid_set_changes": 0,
+      "pss_policy": "server tree sampled once; never sum per-device copies"
+    },
+    "shutdown": {
+      "status": "root_exited_descendants_unknown",
+      "seconds": 1.8167683128267527,
+      "timed_out": false,
+      "gpu_quiescence": "unverified; no GPU probe"
+    },
+    "runtime": {
+      "evidence": {
+        "linear_marlin": [],
+        "moe_marlin": [],
+        "model_load": [],
+        "offload": [],
+        "topology": [
+          "(EngineCore pid=150267) INFO 10-09 00:06:46 [core.py:122] Initializing a V1 LLM engine (v0.28.0) with config: model='/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8', speculative_config=None, tokenizer='/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.bfloat16, max_seq_len=128, download_dir=None, load_format=auto, tensor_parallel_size=2, pipeline_parallel_size=1, data_parallel_size=1, decode_context_parallel_size=1, dcp_comm_backend=ag_rs, disable_custom_all_reduce=False, quantization=fp8, quantization_config=None, enforce_eager=True, enable_return_routed_experts=False, kv_cache_dtype=auto, device_config=cuda, structured_outputs_config=StructuredOutputsConfig(backend='auto', disable_any_whitespace=False, disable_additional_properties=False, reasoning_parser='', reasoning_parser_plugin='', enable_in_reasoning=False), observability_config=ObservabilityConfig(show_hidden_metrics_for_version=None, otlp_traces_endpoint=None, collect_detailed_traces=None, kv_cache_metrics=False, kv_cache_metrics_sample=0.01, cudagraph_metrics=False, enable_layerwise_nvtx_tracing=False, enable_mfu_metrics=False, enable_mm_processor_stats=False, enable_logging_iteration_details=False, jit_monitor_mode='warn', jit_monitor_verbose=False), seed=1, served_model_name=qwen35-vllm-tp2-resident-paper, enable_prefix_caching=False, enable_chunked_prefill=True, pooler_config=None, compilation_config={'mode': <CompilationMode.NONE: 0>, 'debug_dump_path': None, 'cache_dir': '', 'compile_cache_save_format': 'binary', 'backend': 'inductor', 'custom_ops': ['+quant_fp8', 'all', '+quant_fp8'], 'ir_enable_torch_wrap': False, 'splitting_ops': [], 'compile_mm_encoder': False, 'cudagraph_mm_encoder': False, 'encoder_cudagraph_token_budgets': [], 'encoder_cudagraph_max_vision_items_per_batch': 0, 'encoder_cudagraph_max_frames_per_batch': None, 'compile_sizes': [], 'compile_ranges_endpoints': [8], 'inductor_compile_config': {'enable_auto_functionalized_v2': False, 'combo_kernels': True, 'benchmark_combo_kernel': True}, 'inductor_passes': {}, 'cudagraph_mode': <CUDAGraphMode.NONE: 0>, 'cudagraph_num_of_warmups': 0, 'cudagraph_capture_sizes': [], 'cudagraph_copy_inputs': False, 'cudagraph_specialize_lora': True, 'use_inductor_graph_partition': False, 'pass_config': {'fuse_norm_quant': True, 'fuse_act_quant': True, 'fuse_attn_quant': False, 'enable_sp': False, 'fuse_gemm_comms': False, 'fuse_allreduce_rms': False, 'enable_qk_norm_rope_fusion': False, 'fuse_rope_kvcache_cat_mla': False, 'fuse_act_padding': False, 'fuse_qk_norm_rope_kvcache': False}, 'max_cudagraph_capture_size': 0, 'dynamic_shapes_config': {'type': <DynamicShapesType.BACKED: 'backed'>, 'evaluate_guards': False, 'assume_32_bit_indexing': False}, 'local_cache_dir': None, 'fast_moe_cold_start': False, 'static_all_moe_layers': []}, kernel_config=KernelConfig(ir_op_priority=IrOpPriorityConfig(rms_norm=['vllm_c', 'native'], fused_add_rms_norm=['vllm_c', 'native']), enable_flashinfer_autotune=True, enable_cutedsl_warmup=True, enable_jit_warmup=True, enable_bf16x3_router_gemm=False, moe_backend='marlin', linear_backend='marlin')",
+          "(EngineCore pid=150267) INFO 10-09 00:06:46 [multiproc_executor.py:150] DP group leader: node_rank=0, node_rank_within_dp=0, master_addr=127.0.0.1, mq_connect_ip=11.166.42.141 (local), world_size=2, local_world_size=2",
+          "(Worker pid=150546) INFO 10-09 00:06:57 [parallel_state.py:1638] world_size=2 rank=0 local_rank=0 distributed_init_method=file:///tmp/vllm_dist_35cfecbbcd754e81aa829ff734f68b55 backend=nccl"
+        ],
+        "gdn": [],
+        "transport": [
+          "(Worker pid=150546) INFO 10-09 00:06:57 [parallel_state.py:1638] world_size=2 rank=0 local_rank=0 distributed_init_method=file:///tmp/vllm_dist_35cfecbbcd754e81aa829ff734f68b55 backend=nccl",
+          "(APIServer pid=149903)     if not sync_input_socket.poll(",
+          "(APIServer pid=149903)   File \"/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/zmq/sugar/socket.py\", line 1106, in poll",
+          "(APIServer pid=149903)     return zmq_poll(self.sockets, timeout=timeout)"
+        ],
+        "transport_channels": [],
+        "cache_dtype": [
+          "(APIServer pid=149903) INFO 10-09 00:06:33 [api_utils.py:272] non-default args: {'model_tag': '/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8', 'host': '127.0.0.1', 'port': 18367, 'model': '/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8', 'dtype': 'bfloat16', 'seed': 1, 'max_model_len': 128, 'enforce_eager': True, 'served_model_name': ['qwen35-vllm-tp2-resident-paper'], 'generation_config': 'vllm', 'tensor_parallel_size': 2, 'gpu_memory_utilization': 0.8, 'enable_prefix_caching': False, 'mamba_cache_dtype': 'bfloat16', 'mamba_ssm_cache_dtype': 'float32', 'language_model_only': True, 'max_num_batched_tokens': 8, 'max_num_seqs': 2, 'enable_chunked_prefill': True, 'moe_backend': 'marlin', 'linear_backend': 'marlin'}",
+          "(EngineCore pid=150267) INFO 10-09 00:06:46 [core.py:122] Initializing a V1 LLM engine (v0.28.0) with config: model='/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8', speculative_config=None, tokenizer='/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.bfloat16, max_seq_len=128, download_dir=None, load_format=auto, tensor_parallel_size=2, pipeline_parallel_size=1, data_parallel_size=1, decode_context_parallel_size=1, dcp_comm_backend=ag_rs, disable_custom_all_reduce=False, quantization=fp8, quantization_config=None, enforce_eager=True, enable_return_routed_experts=False, kv_cache_dtype=auto, device_config=cuda, structured_outputs_config=StructuredOutputsConfig(backend='auto', disable_any_whitespace=False, disable_additional_properties=False, reasoning_parser='', reasoning_parser_plugin='', enable_in_reasoning=False), observability_config=ObservabilityConfig(show_hidden_metrics_for_version=None, otlp_traces_endpoint=None, collect_detailed_traces=None, kv_cache_metrics=False, kv_cache_metrics_sample=0.01, cudagraph_metrics=False, enable_layerwise_nvtx_tracing=False, enable_mfu_metrics=False, enable_mm_processor_stats=False, enable_logging_iteration_details=False, jit_monitor_mode='warn', jit_monitor_verbose=False), seed=1, served_model_name=qwen35-vllm-tp2-resident-paper, enable_prefix_caching=False, enable_chunked_prefill=True, pooler_config=None, compilation_config={'mode': <CompilationMode.NONE: 0>, 'debug_dump_path': None, 'cache_dir': '', 'compile_cache_save_format': 'binary', 'backend': 'inductor', 'custom_ops': ['+quant_fp8', 'all', '+quant_fp8'], 'ir_enable_torch_wrap': False, 'splitting_ops': [], 'compile_mm_encoder': False, 'cudagraph_mm_encoder': False, 'encoder_cudagraph_token_budgets': [], 'encoder_cudagraph_max_vision_items_per_batch': 0, 'encoder_cudagraph_max_frames_per_batch': None, 'compile_sizes': [], 'compile_ranges_endpoints': [8], 'inductor_compile_config': {'enable_auto_functionalized_v2': False, 'combo_kernels': True, 'benchmark_combo_kernel': True}, 'inductor_passes': {}, 'cudagraph_mode': <CUDAGraphMode.NONE: 0>, 'cudagraph_num_of_warmups': 0, 'cudagraph_capture_sizes': [], 'cudagraph_copy_inputs': False, 'cudagraph_specialize_lora': True, 'use_inductor_graph_partition': False, 'pass_config': {'fuse_norm_quant': True, 'fuse_act_quant': True, 'fuse_attn_quant': False, 'enable_sp': False, 'fuse_gemm_comms': False, 'fuse_allreduce_rms': False, 'enable_qk_norm_rope_fusion': False, 'fuse_rope_kvcache_cat_mla': False, 'fuse_act_padding': False, 'fuse_qk_norm_rope_kvcache': False}, 'max_cudagraph_capture_size': 0, 'dynamic_shapes_config': {'type': <DynamicShapesType.BACKED: 'backed'>, 'evaluate_guards': False, 'assume_32_bit_indexing': False}, 'local_cache_dir': None, 'fast_moe_cold_start': False, 'static_all_moe_layers': []}, kernel_config=KernelConfig(ir_op_priority=IrOpPriorityConfig(rms_norm=['vllm_c', 'native'], fused_add_rms_norm=['vllm_c', 'native']), enable_flashinfer_autotune=True, enable_cutedsl_warmup=True, enable_jit_warmup=True, enable_bf16x3_router_gemm=False, moe_backend='marlin', linear_backend='marlin')"
+        ]
+      },
+      "contradictions": [],
+      "no_cpu_offload": "source-default/config verified; Noop selection may be debug-only; residency telemetry/logs retained",
+      "exact_arithmetic_match": false,
+      "effective_full_dtype_and_kernel_closure": "unknown; logged operations only"
+    },
+    "log_sha256": "21fbfc56121b7514e8598054510526c5a77f86c8dd7855d96b8882180de845d7",
+    "wall_seconds": 36.27427191846073
+  },
+  "launch_id": "40304c5aaa6f4af0b0b41308866d0300",
+  "drained": true,
+  "all_gpu_idle": true,
+  "eligible": false,
+  "final_drained_server_log_sha256": "21fbfc56121b7514e8598054510526c5a77f86c8dd7855d96b8882180de845d7",
+  "final_runtime": {
+    "evidence": {
+      "linear_marlin": [],
+      "moe_marlin": [],
+      "model_load": [],
+      "offload": [],
+      "topology": [
+        "(EngineCore pid=150267) INFO 10-09 00:06:46 [core.py:122] Initializing a V1 LLM engine (v0.28.0) with config: model='/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8', speculative_config=None, tokenizer='/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.bfloat16, max_seq_len=128, download_dir=None, load_format=auto, tensor_parallel_size=2, pipeline_parallel_size=1, data_parallel_size=1, decode_context_parallel_size=1, dcp_comm_backend=ag_rs, disable_custom_all_reduce=False, quantization=fp8, quantization_config=None, enforce_eager=True, enable_return_routed_experts=False, kv_cache_dtype=auto, device_config=cuda, structured_outputs_config=StructuredOutputsConfig(backend='auto', disable_any_whitespace=False, disable_additional_properties=False, reasoning_parser='', reasoning_parser_plugin='', enable_in_reasoning=False), observability_config=ObservabilityConfig(show_hidden_metrics_for_version=None, otlp_traces_endpoint=None, collect_detailed_traces=None, kv_cache_metrics=False, kv_cache_metrics_sample=0.01, cudagraph_metrics=False, enable_layerwise_nvtx_tracing=False, enable_mfu_metrics=False, enable_mm_processor_stats=False, enable_logging_iteration_details=False, jit_monitor_mode='warn', jit_monitor_verbose=False), seed=1, served_model_name=qwen35-vllm-tp2-resident-paper, enable_prefix_caching=False, enable_chunked_prefill=True, pooler_config=None, compilation_config={'mode': <CompilationMode.NONE: 0>, 'debug_dump_path': None, 'cache_dir': '', 'compile_cache_save_format': 'binary', 'backend': 'inductor', 'custom_ops': ['+quant_fp8', 'all', '+quant_fp8'], 'ir_enable_torch_wrap': False, 'splitting_ops': [], 'compile_mm_encoder': False, 'cudagraph_mm_encoder': False, 'encoder_cudagraph_token_budgets': [], 'encoder_cudagraph_max_vision_items_per_batch': 0, 'encoder_cudagraph_max_frames_per_batch': None, 'compile_sizes': [], 'compile_ranges_endpoints': [8], 'inductor_compile_config': {'enable_auto_functionalized_v2': False, 'combo_kernels': True, 'benchmark_combo_kernel': True}, 'inductor_passes': {}, 'cudagraph_mode': <CUDAGraphMode.NONE: 0>, 'cudagraph_num_of_warmups': 0, 'cudagraph_capture_sizes': [], 'cudagraph_copy_inputs': False, 'cudagraph_specialize_lora': True, 'use_inductor_graph_partition': False, 'pass_config': {'fuse_norm_quant': True, 'fuse_act_quant': True, 'fuse_attn_quant': False, 'enable_sp': False, 'fuse_gemm_comms': False, 'fuse_allreduce_rms': False, 'enable_qk_norm_rope_fusion': False, 'fuse_rope_kvcache_cat_mla': False, 'fuse_act_padding': False, 'fuse_qk_norm_rope_kvcache': False}, 'max_cudagraph_capture_size': 0, 'dynamic_shapes_config': {'type': <DynamicShapesType.BACKED: 'backed'>, 'evaluate_guards': False, 'assume_32_bit_indexing': False}, 'local_cache_dir': None, 'fast_moe_cold_start': False, 'static_all_moe_layers': []}, kernel_config=KernelConfig(ir_op_priority=IrOpPriorityConfig(rms_norm=['vllm_c', 'native'], fused_add_rms_norm=['vllm_c', 'native']), enable_flashinfer_autotune=True, enable_cutedsl_warmup=True, enable_jit_warmup=True, enable_bf16x3_router_gemm=False, moe_backend='marlin', linear_backend='marlin')",
+        "(EngineCore pid=150267) INFO 10-09 00:06:46 [multiproc_executor.py:150] DP group leader: node_rank=0, node_rank_within_dp=0, master_addr=127.0.0.1, mq_connect_ip=11.166.42.141 (local), world_size=2, local_world_size=2",
+        "(Worker pid=150546) INFO 10-09 00:06:57 [parallel_state.py:1638] world_size=2 rank=0 local_rank=0 distributed_init_method=file:///tmp/vllm_dist_35cfecbbcd754e81aa829ff734f68b55 backend=nccl"
+      ],
+      "gdn": [],
+      "transport": [
+        "(Worker pid=150546) INFO 10-09 00:06:57 [parallel_state.py:1638] world_size=2 rank=0 local_rank=0 distributed_init_method=file:///tmp/vllm_dist_35cfecbbcd754e81aa829ff734f68b55 backend=nccl",
+        "(APIServer pid=149903)     if not sync_input_socket.poll(",
+        "(APIServer pid=149903)   File \"/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/zmq/sugar/socket.py\", line 1106, in poll",
+        "(APIServer pid=149903)     return zmq_poll(self.sockets, timeout=timeout)"
+      ],
+      "transport_channels": [],
+      "cache_dtype": [
+        "(APIServer pid=149903) INFO 10-09 00:06:33 [api_utils.py:272] non-default args: {'model_tag': '/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8', 'host': '127.0.0.1', 'port': 18367, 'model': '/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8', 'dtype': 'bfloat16', 'seed': 1, 'max_model_len': 128, 'enforce_eager': True, 'served_model_name': ['qwen35-vllm-tp2-resident-paper'], 'generation_config': 'vllm', 'tensor_parallel_size': 2, 'gpu_memory_utilization': 0.8, 'enable_prefix_caching': False, 'mamba_cache_dtype': 'bfloat16', 'mamba_ssm_cache_dtype': 'float32', 'language_model_only': True, 'max_num_batched_tokens': 8, 'max_num_seqs': 2, 'enable_chunked_prefill': True, 'moe_backend': 'marlin', 'linear_backend': 'marlin'}",
+        "(EngineCore pid=150267) INFO 10-09 00:06:46 [core.py:122] Initializing a V1 LLM engine (v0.28.0) with config: model='/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8', speculative_config=None, tokenizer='/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.bfloat16, max_seq_len=128, download_dir=None, load_format=auto, tensor_parallel_size=2, pipeline_parallel_size=1, data_parallel_size=1, decode_context_parallel_size=1, dcp_comm_backend=ag_rs, disable_custom_all_reduce=False, quantization=fp8, quantization_config=None, enforce_eager=True, enable_return_routed_experts=False, kv_cache_dtype=auto, device_config=cuda, structured_outputs_config=StructuredOutputsConfig(backend='auto', disable_any_whitespace=False, disable_additional_properties=False, reasoning_parser='', reasoning_parser_plugin='', enable_in_reasoning=False), observability_config=ObservabilityConfig(show_hidden_metrics_for_version=None, otlp_traces_endpoint=None, collect_detailed_traces=None, kv_cache_metrics=False, kv_cache_metrics_sample=0.01, cudagraph_metrics=False, enable_layerwise_nvtx_tracing=False, enable_mfu_metrics=False, enable_mm_processor_stats=False, enable_logging_iteration_details=False, jit_monitor_mode='warn', jit_monitor_verbose=False), seed=1, served_model_name=qwen35-vllm-tp2-resident-paper, enable_prefix_caching=False, enable_chunked_prefill=True, pooler_config=None, compilation_config={'mode': <CompilationMode.NONE: 0>, 'debug_dump_path': None, 'cache_dir': '', 'compile_cache_save_format': 'binary', 'backend': 'inductor', 'custom_ops': ['+quant_fp8', 'all', '+quant_fp8'], 'ir_enable_torch_wrap': False, 'splitting_ops': [], 'compile_mm_encoder': False, 'cudagraph_mm_encoder': False, 'encoder_cudagraph_token_budgets': [], 'encoder_cudagraph_max_vision_items_per_batch': 0, 'encoder_cudagraph_max_frames_per_batch': None, 'compile_sizes': [], 'compile_ranges_endpoints': [8], 'inductor_compile_config': {'enable_auto_functionalized_v2': False, 'combo_kernels': True, 'benchmark_combo_kernel': True}, 'inductor_passes': {}, 'cudagraph_mode': <CUDAGraphMode.NONE: 0>, 'cudagraph_num_of_warmups': 0, 'cudagraph_capture_sizes': [], 'cudagraph_copy_inputs': False, 'cudagraph_specialize_lora': True, 'use_inductor_graph_partition': False, 'pass_config': {'fuse_norm_quant': True, 'fuse_act_quant': True, 'fuse_attn_quant': False, 'enable_sp': False, 'fuse_gemm_comms': False, 'fuse_allreduce_rms': False, 'enable_qk_norm_rope_fusion': False, 'fuse_rope_kvcache_cat_mla': False, 'fuse_act_padding': False, 'fuse_qk_norm_rope_kvcache': False}, 'max_cudagraph_capture_size': 0, 'dynamic_shapes_config': {'type': <DynamicShapesType.BACKED: 'backed'>, 'evaluate_guards': False, 'assume_32_bit_indexing': False}, 'local_cache_dir': None, 'fast_moe_cold_start': False, 'static_all_moe_layers': []}, kernel_config=KernelConfig(ir_op_priority=IrOpPriorityConfig(rms_norm=['vllm_c', 'native'], fused_add_rms_norm=['vllm_c', 'native']), enable_flashinfer_autotune=True, enable_cutedsl_warmup=True, enable_jit_warmup=True, enable_bf16x3_router_gemm=False, moe_backend='marlin', linear_backend='marlin')"
+      ]
+    },
+    "contradictions": [],
+    "no_cpu_offload": "source-default/config verified; Noop selection may be debug-only; residency telemetry/logs retained",
+    "exact_arithmetic_match": false,
+    "effective_full_dtype_and_kernel_closure": "unknown; logged operations only"
+  }
+}

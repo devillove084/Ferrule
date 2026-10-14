@@ -5,16 +5,12 @@
 //! payloads and transaction metadata into these model-agnostic APIs.
 
 mod attention;
-mod kv;
 mod moe;
 mod operators;
+mod paged_kv;
 mod provider;
 
 pub use attention::{KvHistory, PagedCausalGqa, PagedKvHistory, paged_causal_gqa};
-pub use kv::{
-    CpuKvPlaneStorage, CpuKvView, CpuPagedKvPool, CpuPagedKvTransaction, KvCapacity, KvEndProgress,
-    KvPageStatus, PagedKvBatch, PagedKvPrepare, PagedKvSequence,
-};
 pub use moe::{
     ExpertLinearRef, ExpertSwiGluRef, RouterRoutes, SwiGluRef, execute_reference_expert,
     execute_reference_expert_with_hidden_transform, expert_linear, softmax_topk_routes,
@@ -28,6 +24,16 @@ pub use operators::{
     rms_norm, rms_norm_heads_in_place, rms_norm_rows, rope_rows, rotary_correction_dimension,
     rotary_correction_range, rotary_frequency, rotary_linear_ramp,
 };
+pub use paged_kv::{
+    CpuKvPlaneStorage, CpuKvView, CpuPagedKvPool, CpuPagedKvTransaction, KvCapacity, KvEndProgress,
+    KvPageStatus, PagedKvBatch, PagedKvPrepare, PagedKvSequence,
+};
 pub use provider::{CpuCapabilities, CpuOperatorProvider, NativeCpuProvider, ReferenceCpuProvider};
 
 pub mod gated_delta;
+
+pub mod streaming_attention;
+pub use streaming_attention::{
+    StreamingF32GqaConfig, StreamingF32GqaOwnedKv, StreamingF32GqaPartial,
+    StreamingF32GqaProtection, StreamingF32GqaRequest, streaming_f32_gqa_partial,
+};

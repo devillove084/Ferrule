@@ -1,0 +1,68 @@
+{
+  "returncode": 1,
+  "timed_out": false,
+  "wall_seconds": 0.44710198044776917,
+  "stdout": "",
+  "stderr": "Traceback (most recent call last):\n  File \"/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/decoded_cache_gate.py\", line 853, in <module>\n    sys.exit(main())\n             ^^^^^^\n  File \"/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/decoded_cache_gate.py\", line 829, in main\n    return init_probe_worker(a.worker_pin)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/decoded_cache_gate.py\", line 719, in init_probe_worker\n    ct.require(os.environ.get(key) == value, 'Probe environment differs: '+key)\n  File \"/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/contract.py\", line 46, in require\n    raise ValueError(reason)\nValueError: Probe environment differs: CUDA_VISIBLE_DEVICES\n",
+  "cleanup_errors": [],
+  "cleanup_scope": "isolated_subreaper_direct_children",
+  "descendant_custody": "proven_drained",
+  "gpu_quiescence": "unverified",
+  "custody": {
+    "status": "proven_drained",
+    "method": "linux-subreaper-waitid",
+    "containment_verified": true,
+    "launch_id": "689446dcf4224959a7ed98f76b8addab",
+    "helper_identity": {
+      "pid": 50415,
+      "birth_ticks": 93747561,
+      "ppid": 50396,
+      "pgrp": 50415,
+      "session": 50415
+    },
+    "root_identity": {
+      "pid": 50416,
+      "birth_ticks": 93747564,
+      "ppid": 50415,
+      "pgrp": 50415,
+      "session": 50415
+    },
+    "boot_id": "4dd3497d-570c-4693-a876-5c26e06ab360",
+    "entries": [
+      {
+        "identity": {
+          "pid": 50416,
+          "birth_ticks": 93747564,
+          "ppid": 50415,
+          "pgrp": 50415,
+          "session": 50415
+        },
+        "role": "root",
+        "signals": [],
+        "reaped": true,
+        "exit_code": 1,
+        "first_observed_at": 8573595.99849623,
+        "reaped_at": 8573596.374372406
+      }
+    ],
+    "errors": [],
+    "reporting_errors": [],
+    "echild": true
+  },
+  "handshake": {
+    "kind": "ready",
+    "protocol": 1,
+    "launch_id": "689446dcf4224959a7ed98f76b8addab",
+    "helper_identity": {
+      "pid": 50415,
+      "birth_ticks": 93747561,
+      "ppid": 50396,
+      "pgrp": 50415,
+      "session": 50415
+    },
+    "containment_verified": true,
+    "method": "linux-subreaper-waitid"
+  },
+  "stdout_truncated": false,
+  "stderr_truncated": false
+}

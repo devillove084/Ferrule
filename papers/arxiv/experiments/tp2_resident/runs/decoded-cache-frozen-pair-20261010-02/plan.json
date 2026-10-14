@@ -1,0 +1,104 @@
+{
+  "schema": "ferrule.paper.decoded-cache-plan.v1",
+  "public_enabled": false,
+  "cache_grants_per_owner": 3221225472,
+  "device_capacity": 23622320128,
+  "pinned_grants": 1405091840,
+  "routed_working_set_grants": 805306368,
+  "cpu_selectors": {
+    "decoded_cache::native_default_off_and_cache_report_claim_share_exact_grant": false,
+    "decoded_cache::cache_rejects_low_budget_capacity_and_configuration_drift": false,
+    "decoded_cache::cache_capacity_follows_device_placement_not_lane_number": false,
+    "decoded_cache::full40_cache_header_ledger": true,
+    "decoded_cache::lifecycle_cache_header_ledger": true
+  },
+  "host_small_selectors": [
+    [
+      "backend",
+      "cuda::providers::bf16_gemmex::mixed_decode_reuse_tests::mixed_decode_preflight_without_device_calls"
+    ],
+    [
+      "backend",
+      "cuda::providers::bf16_gemmex::mixed_decode_reuse_tests::mixed_pair_decode_preflight_without_device_calls"
+    ],
+    [
+      "backend",
+      "cuda::providers::bf16_gemmex::mixed_decode_reuse_tests::mixed_pair_preflight_without_device_calls"
+    ],
+    [
+      "model",
+      "transformer::standard::cuda::hybrid_rank::mixed::preparation_tests::decoded_claim_tests::decoded_claim_compares_full_admission_even_when_grants_match"
+    ],
+    [
+      "model",
+      "transformer::standard::cuda::hybrid_rank::mixed::decoded_gpu_tests::decoded_fixture_descriptors_preserve_pair_and_separate_fixed_roles"
+    ]
+  ],
+  "gpu_selectors": {
+    "full40": "decoded_cache::full40_cache_candidate_boundaries_two_cases_two_phases",
+    "greedy4": "lifecycle::full40_decoded_cache_bounded_multistep_fork_recreate_cold_owner",
+    "fork2": "lifecycle::full40_decoded_cache_bounded_multistep_fork_recreate_cold_owner",
+    "canary2": "lifecycle::full40_decoded_cache_bounded_multistep_fork_recreate_cold_owner",
+    "recreate1": "lifecycle::full40_decoded_cache_bounded_multistep_fork_recreate_cold_owner",
+    "cold-owner1-01": "lifecycle::full40_decoded_cache_bounded_multistep_fork_recreate_cold_owner",
+    "cold-owner1-02": "lifecycle::full40_decoded_cache_bounded_multistep_fork_recreate_cold_owner"
+  },
+  "small_selectors": {
+    "backend-exact": [
+      "backend",
+      "cuda::providers::bf16_gemmex::mixed_decode_reuse_tests::mixed_decode_resident_single_pair_m1_m5",
+      1
+    ],
+    "backend-preflight": [
+      "backend",
+      "cuda::providers::bf16_gemmex::mixed_decode_reuse_tests::mixed_decode_pair_rejections",
+      1
+    ],
+    "model-cold-hot-reload": [
+      "model",
+      "transformer::standard::cuda::hybrid_rank::mixed::decoded_gpu_tests::decoded_pair_single_cold_hot_reload_exact_and_no_cache_dma",
+      2
+    ],
+    "model-fixed-pins": [
+      "model",
+      "transformer::standard::cuda::hybrid_rank::mixed::decoded_gpu_tests::decoded_fixed_pins_prepare_once_and_shared_stays_separate",
+      2
+    ],
+    "model-unknown-panic": [
+      "model",
+      "transformer::standard::cuda::hybrid_rank::mixed::decoded_gpu_tests::decoded_pair_unknown_and_panic_retain_physical_backing",
+      1
+    ],
+    "model-physical-full": [
+      "model",
+      "transformer::standard::cuda::hybrid_rank::mixed::decoded_gpu_tests::decoded_physical_full_native_fallback_before_submit_exact",
+      2
+    ]
+  },
+  "small_required": [
+    "borrowed-retains",
+    "known-failure",
+    "pair-m1-after-retire",
+    "pair-m1-cold",
+    "pair-m1-eviction-reload",
+    "pair-m1-hot",
+    "pair-m5-after-retire",
+    "pair-m5-cold",
+    "pair-m5-eviction-reload",
+    "pair-m5-hot",
+    "single-m1-after-retire",
+    "single-m1-cold",
+    "single-m1-eviction-reload",
+    "single-m1-hot",
+    "single-m5-after-retire",
+    "single-m5-cold",
+    "single-m5-eviction-reload",
+    "single-m5-hot",
+    "unknown-retains"
+  ],
+  "numerical": "native BF16 bit-exact; M1/M5, ordered full-2N routed pair GEMM; no W8",
+  "custody": "healthy completion only; Unknown/borrowed roots never refunded or reused",
+  "performance": "GPU-correlated prefill/decode launch counts, not host misses or historical shape motifs",
+  "progression": "small -> full40 hello/capital each 2178 exact -> six recipes -> fresh public admission/E2E",
+  "status": "plan_only_no_candidate_comparison"
+}

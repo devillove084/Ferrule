@@ -1,0 +1,154 @@
+{
+  "status": "b1_returned",
+  "samples": [
+    {
+      "index": 0,
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "total_bytes": 25769803776,
+      "gpu_bytes": 4194304,
+      "utilization": 0,
+      "devices": [
+        {
+          "index": 0,
+          "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+          "total_bytes": 25769803776,
+          "gpu_bytes": 4194304,
+          "utilization": 0
+        },
+        {
+          "index": 1,
+          "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+          "total_bytes": 25769803776,
+          "gpu_bytes": 4194304,
+          "utilization": 0
+        },
+        {
+          "index": 2,
+          "uuid": "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6",
+          "total_bytes": 25769803776,
+          "gpu_bytes": 1048576,
+          "utilization": 0
+        },
+        {
+          "index": 3,
+          "uuid": "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011",
+          "total_bytes": 25769803776,
+          "gpu_bytes": 1048576,
+          "utilization": 0
+        },
+        {
+          "index": 4,
+          "uuid": "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86",
+          "total_bytes": 25769803776,
+          "gpu_bytes": 1048576,
+          "utilization": 0
+        },
+        {
+          "index": 5,
+          "uuid": "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685",
+          "total_bytes": 25769803776,
+          "gpu_bytes": 1048576,
+          "utilization": 0
+        },
+        {
+          "index": 6,
+          "uuid": "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d",
+          "total_bytes": 25769803776,
+          "gpu_bytes": 1048576,
+          "utilization": 0
+        },
+        {
+          "index": 7,
+          "uuid": "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f",
+          "total_bytes": 25769803776,
+          "gpu_bytes": 1048576,
+          "utilization": 0
+        }
+      ],
+      "apps": [],
+      "monotonic": 8644429.041340033,
+      "diagnostic_retry": false,
+      "missing_attempts": []
+    },
+    {
+      "index": 0,
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "total_bytes": 25769803776,
+      "gpu_bytes": 4194304,
+      "utilization": 0,
+      "devices": [
+        {
+          "index": 0,
+          "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+          "total_bytes": 25769803776,
+          "gpu_bytes": 4194304,
+          "utilization": 0
+        },
+        {
+          "index": 1,
+          "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+          "total_bytes": 25769803776,
+          "gpu_bytes": 4194304,
+          "utilization": 0
+        },
+        {
+          "index": 2,
+          "uuid": "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6",
+          "total_bytes": 25769803776,
+          "gpu_bytes": 1048576,
+          "utilization": 0
+        },
+        {
+          "index": 3,
+          "uuid": "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011",
+          "total_bytes": 25769803776,
+          "gpu_bytes": 1048576,
+          "utilization": 0
+        },
+        {
+          "index": 4,
+          "uuid": "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86",
+          "total_bytes": 25769803776,
+          "gpu_bytes": 1048576,
+          "utilization": 0
+        },
+        {
+          "index": 5,
+          "uuid": "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685",
+          "total_bytes": 25769803776,
+          "gpu_bytes": 1048576,
+          "utilization": 0
+        },
+        {
+          "index": 6,
+          "uuid": "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d",
+          "total_bytes": 25769803776,
+          "gpu_bytes": 1048576,
+          "utilization": 0
+        },
+        {
+          "index": 7,
+          "uuid": "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f",
+          "total_bytes": 25769803776,
+          "gpu_bytes": 1048576,
+          "utilization": 0
+        }
+      ],
+      "apps": [],
+      "monotonic": 8644429.50165113,
+      "diagnostic_retry": false,
+      "missing_attempts": []
+    }
+  ],
+  "target": {
+    "identity": {
+      "pid": 188403,
+      "birth_ticks": 100790545,
+      "ppid": 188402,
+      "state": "R"
+    },
+    "manifest_sha256": "065be171bee62259110591ad3fd104063cf8021a8249eaa004b0d80c7b48b3d5",
+    "nonce": "d6dce529addb6bdf48c49aaf5ecb21d75997424371b4012322f3cabe4f9815f5"
+  },
+  "wrapper_sha256": "5887ebca8d54b9b70d5a190c5b8fbaad975464ae432f720c0e70d3a2e8b4d312"
+}

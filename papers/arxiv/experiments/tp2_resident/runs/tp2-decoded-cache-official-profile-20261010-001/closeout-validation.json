@@ -1,0 +1,12 @@
+{
+  "status": "pass",
+  "summary_sha256": "b4d63c96a9ea991140cb7e6d58b8d5340bb3ef5d55d6b1fb0dcf5b875fd528a0",
+  "manifest_sha256": "3a969f4cce53fd3f00bb6f1d94527bb90f12c4a2c6974f1bbec719fc8a4bd88b",
+  "historical_and_new_input_pins_checked": 60,
+  "snapshot_groups_checked": 5,
+  "official_stats_all_returncode_zero": true,
+  "benchmark_rankperf_off": true,
+  "formal_and_warmup_observed_closed": true,
+  "full_trace_accepted": false,
+  "gpu_workload_started": false
+}

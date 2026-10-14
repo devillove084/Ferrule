@@ -1,0 +1,19 @@
+{
+  "status": "pass",
+  "gpu_operations": 0,
+  "prepared_current_source_reference_runtime_pins_verified": true,
+  "profiling_artifacts_unchanged": true,
+  "offline_audit_pins_verified": true,
+  "archive_matches_run003": true,
+  "archive_sha256": "c355d3f29c5bf67de26974c5c691ce02a5d5044bb9feeb30845460473781a423",
+  "local_document_links_checked": 25,
+  "cpu_tests": {
+    "tp2": 134,
+    "original": 42
+  },
+  "gpu_release_receipt_sha256": "d6a61844d9b1f89df74d519b58cb6d6bc36eeca09d28a9665da780a61fc88733",
+  "audit_sha256": "bf9650a60dee76633ff93f8bd676a566af3780f60bc04a9181a5ac47b1279797",
+  "benchmark": false,
+  "fairmatch": false,
+  "exact_speedup": null
+}

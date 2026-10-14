@@ -1,0 +1,286 @@
+{
+  "status": "pass_cpu_validation_gpu_released",
+  "manifest_sha256": "807e5b5643ecce603088052e39fbee36ce15dca4a3ba319b51be120e2922d40c",
+  "validator_source_sha256": "28b05841d17878d545bbf511b284b11fddb7ce017b4e019238008ceee7f35d73",
+  "fixtures": [
+    {
+      "directory": "hello-decode0-layer00-expert021-rank0",
+      "sha256": "7b8bfbcce6312aa58fb6fee8c13cd5f489b85923a4825712eae3eb9b327ec5a0",
+      "rows": 1,
+      "rank": 0,
+      "finite": true,
+      "original_payload_exact": true,
+      "token_order": [
+        0
+      ]
+    },
+    {
+      "directory": "hello-decode0-layer00-expert021-rank1",
+      "sha256": "da03c55e56b74d5665eeadb7c8ed7e17425c4ba182d5225f06656b9181d81238",
+      "rows": 1,
+      "rank": 1,
+      "finite": true,
+      "original_payload_exact": true,
+      "token_order": [
+        0
+      ]
+    },
+    {
+      "directory": "hello-decode0-layer03-expert037-rank0",
+      "sha256": "774b26d3acdfd6b7531bdd9dad761ce97b620f34c98369e7cf9a1a2320e4c3b1",
+      "rows": 1,
+      "rank": 0,
+      "finite": true,
+      "original_payload_exact": true,
+      "token_order": [
+        0
+      ]
+    },
+    {
+      "directory": "hello-decode0-layer03-expert037-rank1",
+      "sha256": "fcbcfef9797f218f972cd3b99e120d31f02f094e12a8af258449a01e1f6bc4c4",
+      "rows": 1,
+      "rank": 1,
+      "finite": true,
+      "original_payload_exact": true,
+      "token_order": [
+        0
+      ]
+    },
+    {
+      "directory": "capital-decode0-layer00-expert072-rank0",
+      "sha256": "a87b5fd5ad9de1d8f8c282ba895e265c5a23f58eb5b3fcb3d43acd3a6183ae9e",
+      "rows": 1,
+      "rank": 0,
+      "finite": true,
+      "original_payload_exact": true,
+      "token_order": [
+        0
+      ]
+    },
+    {
+      "directory": "capital-decode0-layer00-expert072-rank1",
+      "sha256": "e34a427313156602a0b0fc3917b67112e686fb2496a336276d2993c11aa65d64",
+      "rows": 1,
+      "rank": 1,
+      "finite": true,
+      "original_payload_exact": true,
+      "token_order": [
+        0
+      ]
+    },
+    {
+      "directory": "capital-decode0-layer03-expert010-rank0",
+      "sha256": "11feb71b1ed76004c3996ba98c1466a0bf25266e7d8787315fe592eb15845522",
+      "rows": 1,
+      "rank": 0,
+      "finite": true,
+      "original_payload_exact": true,
+      "token_order": [
+        0
+      ]
+    },
+    {
+      "directory": "capital-decode0-layer03-expert010-rank1",
+      "sha256": "77e390f471b96cf0556330c347db5af76059dae8a00e02c44a3014e8567a00d3",
+      "rows": 1,
+      "rank": 1,
+      "finite": true,
+      "original_payload_exact": true,
+      "token_order": [
+        0
+      ]
+    },
+    {
+      "directory": "capital-prefill-layer09-expert095-rank0",
+      "sha256": "bb5038c0898533ff85a292315e98fb0a560cf5c1cb66f05a96c601f64639d534",
+      "rows": 5,
+      "rank": 0,
+      "finite": true,
+      "original_payload_exact": true,
+      "token_order": [
+        1,
+        2,
+        4,
+        3,
+        0
+      ]
+    },
+    {
+      "directory": "capital-prefill-layer09-expert095-rank1",
+      "sha256": "e121e43b9ff026c82c3a68323126ce06fff5185b899e1e041512507ac307a17d",
+      "rows": 5,
+      "rank": 1,
+      "finite": true,
+      "original_payload_exact": true,
+      "token_order": [
+        1,
+        2,
+        4,
+        3,
+        0
+      ]
+    }
+  ],
+  "exact_controls": 66,
+  "actual_native_expert_calls": 10,
+  "actual_packed_gate_up_calls": 112,
+  "actual_down_calls": 112,
+  "source_pins_verified": true,
+  "old_preparations_unchanged": true,
+  "fixture_ready": true,
+  "owned_births_absent": [
+    {
+      "role": "child",
+      "identity": {
+        "pid": 221004,
+        "birth_ticks": 101570108,
+        "ppid": 220998,
+        "pgrp": 220998,
+        "session": 220998
+      },
+      "owned_birth_absent": true
+    },
+    {
+      "role": "worker",
+      "identity": {
+        "pid": 220998,
+        "birth_ticks": 101570097,
+        "ppid": 220997,
+        "pgrp": 220998,
+        "session": 220998
+      },
+      "owned_birth_absent": true
+    },
+    {
+      "role": "helper",
+      "identity": {
+        "pid": 220997,
+        "birth_ticks": 101570094,
+        "ppid": 220960,
+        "pgrp": 220997,
+        "session": 220997
+      },
+      "owned_birth_absent": true
+    },
+    {
+      "role": "coordinator",
+      "identity": {
+        "pid": 220960,
+        "birth_ticks": 101569872,
+        "ppid": 96249,
+        "pgrp": 220960,
+        "session": 220960
+      },
+      "owned_birth_absent": true
+    }
+  ],
+  "shared_lock_available_then_released": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/GPU-b980f22b-58a3-fc88-21c1-ae86053d8535.lock",
+    "device": 64785,
+    "inode": 58519119,
+    "coordinator_pid": 221098,
+    "mode": "local_nonblocking_flock",
+    "global_reservation": false
+  },
+  "final_idle": [
+    {
+      "index": 0,
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "NVIDIA GeForce RTX 3090",
+      "driver": "575.57.08",
+      "pci_bus_id": "00000000:69:00.0",
+      "total_bytes": 25769803776,
+      "gpu_bytes": 0,
+      "utilization": 0,
+      "apps": [],
+      "monotonic": 8652073.240896285
+    },
+    {
+      "index": 1,
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "NVIDIA GeForce RTX 3090",
+      "driver": "575.57.08",
+      "pci_bus_id": "00000000:6A:00.0",
+      "total_bytes": 25769803776,
+      "gpu_bytes": 0,
+      "utilization": 0,
+      "apps": [],
+      "monotonic": 8652073.442129433
+    },
+    {
+      "index": 2,
+      "uuid": "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6",
+      "name": "NVIDIA GeForce RTX 3090",
+      "driver": "575.57.08",
+      "pci_bus_id": "00000000:6D:00.0",
+      "total_bytes": 25769803776,
+      "gpu_bytes": 0,
+      "utilization": 0,
+      "apps": [],
+      "monotonic": 8652073.643559335
+    },
+    {
+      "index": 3,
+      "uuid": "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011",
+      "name": "NVIDIA GeForce RTX 3090",
+      "driver": "575.57.08",
+      "pci_bus_id": "00000000:6E:00.0",
+      "total_bytes": 25769803776,
+      "gpu_bytes": 0,
+      "utilization": 0,
+      "apps": [],
+      "monotonic": 8652073.847206945
+    },
+    {
+      "index": 4,
+      "uuid": "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86",
+      "name": "NVIDIA GeForce RTX 3090",
+      "driver": "575.57.08",
+      "pci_bus_id": "00000000:CE:00.0",
+      "total_bytes": 25769803776,
+      "gpu_bytes": 0,
+      "utilization": 0,
+      "apps": [],
+      "monotonic": 8652074.05177949
+    },
+    {
+      "index": 5,
+      "uuid": "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685",
+      "name": "NVIDIA GeForce RTX 3090",
+      "driver": "575.57.08",
+      "pci_bus_id": "00000000:CF:00.0",
+      "total_bytes": 25769803776,
+      "gpu_bytes": 0,
+      "utilization": 0,
+      "apps": [],
+      "monotonic": 8652074.318295846
+    },
+    {
+      "index": 6,
+      "uuid": "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d",
+      "name": "NVIDIA GeForce RTX 3090",
+      "driver": "575.57.08",
+      "pci_bus_id": "00000000:D2:00.0",
+      "total_bytes": 25769803776,
+      "gpu_bytes": 0,
+      "utilization": 0,
+      "apps": [],
+      "monotonic": 8652074.529186683
+    },
+    {
+      "index": 7,
+      "uuid": "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f",
+      "name": "NVIDIA GeForce RTX 3090",
+      "driver": "575.57.08",
+      "pci_bus_id": "00000000:D3:00.0",
+      "total_bytes": 25769803776,
+      "gpu_bytes": 0,
+      "utilization": 0,
+      "apps": [],
+      "monotonic": 8652074.748785328
+    }
+  ],
+  "backend_candidate_executed": false,
+  "claim": "Independent HF CUDA fixtures ready; backend numeric equivalence is a separate validator gate"
+}

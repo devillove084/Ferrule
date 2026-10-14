@@ -1,0 +1,978 @@
+{
+  "schema": "ferrule.paper.tp2-oracle.cuda-small-gate.v1",
+  "status": "pass",
+  "metrics": {
+    "fp8.row.rank0": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 256,
+      "atol": 0,
+      "rtol": 0
+    },
+    "fp8.row.rank1": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 256,
+      "atol": 0,
+      "rtol": 0
+    },
+    "fp8.row.reduce": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 256,
+      "atol": 0,
+      "rtol": 0
+    },
+    "local_shared_route_then_reduce": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 2,
+      "atol": 0,
+      "rtol": 0
+    },
+    "tp1.native.1.prefill.logits": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 32,
+      "atol": 0,
+      "rtol": 0
+    },
+    "tp1.native.1.prefill.conv_states.0": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 128,
+      "atol": 0,
+      "rtol": 0
+    },
+    "tp1.native.1.prefill.recurrent_states.0": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 64,
+      "atol": 0,
+      "rtol": 0
+    },
+    "tp1.native.1.prefill.key_cache.1": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 16,
+      "atol": 0,
+      "rtol": 0
+    },
+    "tp1.native.1.prefill.value_cache.1": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 16,
+      "atol": 0,
+      "rtol": 0
+    },
+    "tp1.native.1.decode.0.logits": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 32,
+      "atol": 0,
+      "rtol": 0
+    },
+    "tp1.native.1.decode.0.conv_states.0": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 128,
+      "atol": 0,
+      "rtol": 0
+    },
+    "tp1.native.1.decode.0.recurrent_states.0": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 64,
+      "atol": 0,
+      "rtol": 0
+    },
+    "tp1.native.1.decode.0.key_cache.1": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 32,
+      "atol": 0,
+      "rtol": 0
+    },
+    "tp1.native.1.decode.0.value_cache.1": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 32,
+      "atol": 0,
+      "rtol": 0
+    },
+    "tp1.native.5.prefill.logits": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 160,
+      "atol": 0,
+      "rtol": 0
+    },
+    "tp1.native.5.prefill.conv_states.0": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 128,
+      "atol": 0,
+      "rtol": 0
+    },
+    "tp1.native.5.prefill.recurrent_states.0": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 64,
+      "atol": 0,
+      "rtol": 0
+    },
+    "tp1.native.5.prefill.key_cache.1": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 80,
+      "atol": 0,
+      "rtol": 0
+    },
+    "tp1.native.5.prefill.value_cache.1": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 80,
+      "atol": 0,
+      "rtol": 0
+    },
+    "tp1.native.5.decode.0.logits": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 32,
+      "atol": 0,
+      "rtol": 0
+    },
+    "tp1.native.5.decode.0.conv_states.0": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 128,
+      "atol": 0,
+      "rtol": 0
+    },
+    "tp1.native.5.decode.0.recurrent_states.0": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 64,
+      "atol": 0,
+      "rtol": 0
+    },
+    "tp1.native.5.decode.0.key_cache.1": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 96,
+      "atol": 0,
+      "rtol": 0
+    },
+    "tp1.native.5.decode.0.value_cache.1": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 96,
+      "atol": 0,
+      "rtol": 0
+    },
+    "tp2.1.prefill.attention.0": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 16,
+      "atol": 0,
+      "rtol": 0
+    },
+    "tp2.1.prefill.moe.0": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 16,
+      "atol": 0,
+      "rtol": 0
+    },
+    "tp2.1.prefill.attention.1": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 16,
+      "atol": 0,
+      "rtol": 0
+    },
+    "tp2.1.prefill.moe.1": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 16,
+      "atol": 0,
+      "rtol": 0
+    },
+    "tp2.1.prefill.state": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 64,
+      "atol": 0,
+      "rtol": 0
+    },
+    "tp2.1.decode.0.attention.0": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 16,
+      "atol": 0,
+      "rtol": 0
+    },
+    "tp2.1.decode.0.moe.0": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 16,
+      "atol": 0,
+      "rtol": 0
+    },
+    "tp2.1.decode.0.attention.1": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 16,
+      "atol": 0,
+      "rtol": 0
+    },
+    "tp2.1.decode.0.moe.1": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 16,
+      "atol": 0,
+      "rtol": 0
+    },
+    "tp2.1.decode.0.state": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 64,
+      "atol": 0,
+      "rtol": 0
+    },
+    "tp2.5.prefill.attention.0": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 80,
+      "atol": 0,
+      "rtol": 0
+    },
+    "tp2.5.prefill.moe.0": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 80,
+      "atol": 0,
+      "rtol": 0
+    },
+    "tp2.5.prefill.attention.1": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 80,
+      "atol": 0,
+      "rtol": 0
+    },
+    "tp2.5.prefill.moe.1": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 80,
+      "atol": 0,
+      "rtol": 0
+    },
+    "tp2.5.prefill.state": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 64,
+      "atol": 0,
+      "rtol": 0
+    },
+    "tp2.5.decode.0.attention.0": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 16,
+      "atol": 0,
+      "rtol": 0
+    },
+    "tp2.5.decode.0.moe.0": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 16,
+      "atol": 0,
+      "rtol": 0
+    },
+    "tp2.5.decode.0.attention.1": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 16,
+      "atol": 0,
+      "rtol": 0
+    },
+    "tp2.5.decode.0.moe.1": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 16,
+      "atol": 0,
+      "rtol": 0
+    },
+    "tp2.5.decode.0.state": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 64,
+      "atol": 0,
+      "rtol": 0
+    },
+    "independent_cuda_fixture.prefill": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 16,
+      "atol": 0,
+      "rtol": 0
+    },
+    "moe.gate_up_down_local.rank0.prefill": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 16,
+      "atol": 0.00025,
+      "rtol": 0.012
+    },
+    "moe.ascending_raw_tie_ids.rank0.prefill": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 16,
+      "atol": 0,
+      "rtol": 0
+    },
+    "moe.routing_f32.rank0.prefill": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 16,
+      "atol": 0,
+      "rtol": 0
+    },
+    "moe.gate_up_down_local.rank1.prefill": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 16,
+      "atol": 0.00025,
+      "rtol": 0.012
+    },
+    "moe.ascending_raw_tie_ids.rank1.prefill": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 16,
+      "atol": 0,
+      "rtol": 0
+    },
+    "moe.routing_f32.rank1.prefill": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 16,
+      "atol": 0,
+      "rtol": 0
+    },
+    "moe.late_add_reduce.prefill": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 16,
+      "atol": 0.00025,
+      "rtol": 0.012
+    },
+    "head.ragged.rank0.prefill": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 12,
+      "atol": 0.00025,
+      "rtol": 0.012
+    },
+    "head.ragged.rank1.prefill": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 10,
+      "atol": 0.00025,
+      "rtol": 0.012
+    },
+    "head.padded_ordered_gather.prefill": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 22,
+      "atol": 0.00025,
+      "rtol": 0.012
+    },
+    "independent_cuda_fixture.fresh_one": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 8,
+      "atol": 0,
+      "rtol": 0
+    },
+    "moe.gate_up_down_local.rank0.fresh_one": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 8,
+      "atol": 0.00025,
+      "rtol": 0.012
+    },
+    "moe.ascending_raw_tie_ids.rank0.fresh_one": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 8,
+      "atol": 0,
+      "rtol": 0
+    },
+    "moe.routing_f32.rank0.fresh_one": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 8,
+      "atol": 0,
+      "rtol": 0
+    },
+    "moe.gate_up_down_local.rank1.fresh_one": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 8,
+      "atol": 0.00025,
+      "rtol": 0.012
+    },
+    "moe.ascending_raw_tie_ids.rank1.fresh_one": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 8,
+      "atol": 0,
+      "rtol": 0
+    },
+    "moe.routing_f32.rank1.fresh_one": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 8,
+      "atol": 0,
+      "rtol": 0
+    },
+    "moe.late_add_reduce.fresh_one": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 8,
+      "atol": 0.00025,
+      "rtol": 0.012
+    },
+    "head.ragged.rank0.fresh_one": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 6,
+      "atol": 0.00025,
+      "rtol": 0.012
+    },
+    "head.ragged.rank1.fresh_one": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 5,
+      "atol": 0.00025,
+      "rtol": 0.012
+    },
+    "head.padded_ordered_gather.fresh_one": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 11,
+      "atol": 0.00025,
+      "rtol": 0.012
+    },
+    "independent_cuda_fixture.cached_one": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 8,
+      "atol": 0,
+      "rtol": 0
+    },
+    "moe.gate_up_down_local.rank0.cached_one": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 8,
+      "atol": 0.00025,
+      "rtol": 0.012
+    },
+    "moe.ascending_raw_tie_ids.rank0.cached_one": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 8,
+      "atol": 0,
+      "rtol": 0
+    },
+    "moe.routing_f32.rank0.cached_one": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 8,
+      "atol": 0,
+      "rtol": 0
+    },
+    "moe.gate_up_down_local.rank1.cached_one": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 8,
+      "atol": 0.00025,
+      "rtol": 0.012
+    },
+    "moe.ascending_raw_tie_ids.rank1.cached_one": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 8,
+      "atol": 0,
+      "rtol": 0
+    },
+    "moe.routing_f32.rank1.cached_one": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 8,
+      "atol": 0,
+      "rtol": 0
+    },
+    "moe.late_add_reduce.cached_one": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 8,
+      "atol": 0.00025,
+      "rtol": 0.012
+    },
+    "head.ragged.rank0.cached_one": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 6,
+      "atol": 0.00025,
+      "rtol": 0.012
+    },
+    "head.ragged.rank1.cached_one": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 5,
+      "atol": 0.00025,
+      "rtol": 0.012
+    },
+    "head.padded_ordered_gather.cached_one": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 11,
+      "atol": 0.00025,
+      "rtol": 0.012
+    },
+    "gdn.cuda_f32_state.rank0.prefill": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 12,
+      "atol": 0,
+      "rtol": 0
+    },
+    "gdn.conv_bf16.rank0.prefill": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 30,
+      "atol": 0,
+      "rtol": 0
+    },
+    "gdn.cuda_f32_state.rank1.prefill": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 12,
+      "atol": 0,
+      "rtol": 0
+    },
+    "gdn.conv_bf16.rank1.prefill": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 30,
+      "atol": 0,
+      "rtol": 0
+    },
+    "gdn.cuda_f32_state.rank0.fresh_one": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 12,
+      "atol": 0,
+      "rtol": 0
+    },
+    "gdn.conv_bf16.rank0.fresh_one": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 30,
+      "atol": 0,
+      "rtol": 0
+    },
+    "gdn.cuda_f32_state.rank1.fresh_one": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 12,
+      "atol": 0,
+      "rtol": 0
+    },
+    "gdn.conv_bf16.rank1.fresh_one": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 30,
+      "atol": 0,
+      "rtol": 0
+    },
+    "gdn.cuda_f32_state.rank0.cached_one": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 12,
+      "atol": 0,
+      "rtol": 0
+    },
+    "gdn.conv_bf16.rank0.cached_one": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 30,
+      "atol": 0,
+      "rtol": 0
+    },
+    "gdn.cuda_f32_state.rank1.cached_one": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 12,
+      "atol": 0,
+      "rtol": 0
+    },
+    "gdn.conv_bf16.rank1.cached_one": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 30,
+      "atol": 0,
+      "rtol": 0
+    }
+  },
+  "fixtures": {
+    "hybrid_rank_mixed_oracle.json": "5a671d220bd4cecfee92a1614f637c0d59bb5feeff543240fd377bdb81a051af",
+    "hybrid_mixed_gdn_oracle.py": "39ed35183ffe3693d4988b25fc17daf2176e44ecca06bdfc081f26bdf8354fc9",
+    "hybrid_mixed_gdn_oracle.json": "98884445fb90c34747980f2c6a30161532b7a7ae59f7fe7cd218b8a3577cf2b7",
+    "hybrid_mixed_gdn_cuda_oracle.json": "2baf60d8663ca330385d1fe3848e241a4c273706317396b7167b3b8f627c2a6c",
+    "hybrid_mixed_moe_cuda_oracle.py": "feeb06173ba2c353a38a5a6cef09bac785f2a5ed509f754e2bdf0b2ea10250b4",
+    "hybrid_mixed_moe_cuda_oracle.json": "5825d2005f4a127dfa2458898631aef04a2eed7432933b1e5f7e7a2beaeefe38",
+    "hybrid_mixed_boundary_oracle.json": "6a9a7b2906783d3a5fdc72f8d65acff326e71ca1f2819b2e71fe9412cdb2a91b",
+    "../fixtures/hybrid_cpu/oracle.json": "fd03595dbabb39c67401f43bda6b055ba5d1ec9b34623b2198a57e2004dc65a5"
+  },
+  "device": "cuda:0",
+  "production_imports": false,
+  "limits": "small synthetic weights only; runs before full checkpoint reads",
+  "unresolved_sites": [
+    "CUDA GEMM/softmax/norm/SiLU/sigmoid/reduction implementation drift versus production",
+    "HF GDN chunk prefill versus production recurrence/chunk policy, exp/softplus/L2 normalization and exact F32 state updates",
+    "HF eager per-expert accumulation versus vLLM fused MoE (different contract; no bit-exact claim)"
+  ],
+  "cpu_cuda_state_drift": {
+    "prefill.rank0": {
+      "max_abs": 4.656612873077393e-10,
+      "mean_abs": 8.185452315956354e-11,
+      "rmse": 1.9034893392081138e-10,
+      "exact": false,
+      "failures": 0,
+      "elements": 12,
+      "atol": 0.00025,
+      "rtol": 0.012
+    },
+    "prefill.rank1": {
+      "max_abs": 2.3283064365386963e-10,
+      "mean_abs": 4.18367562815547e-11,
+      "rmse": 8.277234614837177e-11,
+      "exact": false,
+      "failures": 0,
+      "elements": 12,
+      "atol": 0.00025,
+      "rtol": 0.012
+    },
+    "fresh_one.rank0": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 12,
+      "atol": 0.00025,
+      "rtol": 0.012
+    },
+    "fresh_one.rank1": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 12,
+      "atol": 0.00025,
+      "rtol": 0.012
+    },
+    "cached_one.rank0": {
+      "max_abs": 4.656612873077393e-10,
+      "mean_abs": 4.001776687800884e-11,
+      "rmse": 1.344904558986481e-10,
+      "exact": false,
+      "failures": 0,
+      "elements": 12,
+      "atol": 0.00025,
+      "rtol": 0.012
+    },
+    "cached_one.rank1": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rmse": 0.0,
+      "exact": true,
+      "failures": 0,
+      "elements": 12,
+      "atol": 0.00025,
+      "rtol": 0.012
+    }
+  },
+  "checks": 89,
+  "scope": "independent fixture/CUDA small gates only; no Ferrule/full40 or performance PASS"
+}

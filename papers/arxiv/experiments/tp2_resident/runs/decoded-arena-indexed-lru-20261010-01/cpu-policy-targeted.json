@@ -1,0 +1,27 @@
+{
+  "returncode": 0,
+  "argv": [
+    "/home/admin/wxw403883/anaconda3/bin/python3.12",
+    "-S",
+    "-B",
+    "-m",
+    "unittest",
+    "test_decoded_cache_gate",
+    "test_decoded_cache_release.CacheSnapshots",
+    "test_decoded_cache_release.ArenaSnapshots"
+  ],
+  "gpu_hidden": true,
+  "test_count": [
+    "41"
+  ],
+  "failing_cases": [],
+  "diagnostic_lines": [],
+  "stdout": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-indexed-lru-20261010-01/cpu-policy-targeted.stdout",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "stderr": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-indexed-lru-20261010-01/cpu-policy-targeted.stderr",
+    "sha256": "9feb129b54821186ddeb6b1824523081f008058b0ff305b5b53b775ec58f22be"
+  }
+}

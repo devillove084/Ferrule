@@ -1,0 +1,24 @@
+{
+  "header": {
+    "schema": "ferrule-kvset-trace",
+    "schema_version": 1,
+    "semantics_version": 1,
+    "page_size": 2,
+    "recency_model": "publish_recency_snapshot_v1",
+    "window_mode": "warm_history",
+    "namespaces": [{"id": "n", "namespace": {
+      "model": "model-v1", "adapter": "none", "position": "rope-origin-0",
+      "layout": "gqa-f32", "backend": "cpu-reference", "plan": "causal-v1", "run_scope": "test-run"
+    }}]
+  },
+  "events": [
+    {"seq":0,"type":"demand","request":{"id":"writer","generation":0},"namespace_id":"n","prompt_tokens":[1,2,3,4],"reuse_limit":"all_prompt_tokens"},
+    {"seq":1,"type":"publish","request":{"id":"writer","generation":0},"namespace_id":"n","pages":[{"tokens":[1,2],"valid_count":2},{"tokens":[3],"valid_count":1}]},
+    {"seq":2,"type":"demand","request":{"id":"r1","generation":0},"namespace_id":"n","prompt_tokens":[1,2,3,9],"reuse_limit":"before_last_prompt_token"},
+    {"seq":3,"type":"publish","request":{"id":"writer","generation":0},"namespace_id":"n","pages":[{"tokens":[1,2],"valid_count":2},{"tokens":[3,4],"valid_count":2}]},
+    {"seq":4,"type":"demand","request":{"id":"r2","generation":0},"namespace_id":"n","prompt_tokens":[1,2,3,9],"reuse_limit":"before_last_prompt_token"},
+    {"seq":5,"type":"outcome","request":{"id":"writer","generation":0},"status":"success","actual":null},
+    {"seq":6,"type":"outcome","request":{"id":"r1","generation":0},"status":"failed","actual":null},
+    {"seq":7,"type":"outcome","request":{"id":"r2","generation":0},"status":"cancelled","actual":null}
+  ]
+}

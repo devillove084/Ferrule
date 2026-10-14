@@ -1,0 +1,468 @@
+"""Serving bootstrap, not a second supervisor: called by paired.py's hooks.
+
+Model/runtime quality comes from test binaries. Two bounded fresh HTTP server
+lifecycles establish separate release-serving evidence; no same-binary HTTP
+receipt is required to START smoke. All GPU work remains explicitly authorized.
+"""
+import json
+from pathlib import Path
+import signal
+import sys
+import time
+import urllib.request
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+import pair_contract as contract
+
+baseline, shared = contract.baseline, contract.shared
+ct, http = baseline.ct, baseline.http
+ROOT = ct.ROOT
+QUALITY_ROOT = ROOT/'target/validation/tp2-mixed-lifecycle-release-gates'
+CLOSURE = QUALITY_ROOT/'greedy4-02-closure.json'
+SUMMARY = QUALITY_ROOT/'acceptance-summary.json'
+ORACLE = ROOT/'papers/arxiv/experiments/tp2_mixed/oracle'
+PROFILE = 'cuda-qwen35-mixed-bf16-tp2-local-shards-serial'
+PROTOCOL = 'tp2-serving-smoke-c1'
+SLOTS = ('S1', 'S2')
+PHASES = ('hello2', 'canary8', 'reuse', 'cancel', 'post_cancel')
+SCHEMA = 'ferrule.paper.tp2-serving-smoke.v1'
+QUALITY_SCHEMA = 'ferrule.paper.tp2-test-quality.v1'
+
+
+def numerical_sources(sources):
+    """Transfer only unchanged numerical/runtime production inputs, not tests/docs."""
+    prefixes = [str(ROOT/'crates'/('ferrule-'+crate)/part)+'/'
+                for crate in ('backend','model','runtime','common') for part in ('src','native')]
+    return {p:h for p,h in sources.items() if any(p.startswith(prefix) for prefix in prefixes)}
+
+
+def audit_quality():
+    """CPU receipt audit with precise inputs; never validate old blanket paper pins."""
+    pins = {}
+    def read(path):
+        path = Path(path)
+        pins[str(path)] = ct.sha(path)
+        return ct.load(path)
+    closure, summary = read(CLOSURE), read(SUMMARY)
+    final = read(QUALITY_ROOT/'greedy4-02-final-release.json')
+    ct.require(final['closure_sha256'] == ct.sha(CLOSURE) and final['summary_after_sha256'] == ct.sha(SUMMARY),
+               'Closure/summary release hash differs')
+    ct.require(closure['supervisor_passed'] is True and closure['comparison_passed'] is True
+        and closure['echild'] is True and closure['quarantine'] is False
+        and closure['old_supervisor_passed'] is False and closure['old_receipts_unchanged'] is True,
+        'Fresh greedy closure incomplete; do not promote old failed supervisor')
+    ct.require((summary['total_calls'],summary['total_metrics'],summary['total_failures']) == (33,35937,0),
+               'Lifecycle summary scope differs')
+    full_audit = read(HERE/'full-boundary-audit.json')
+    # Recheck the exact underlying numerical artifacts, not neighboring paper docs.
+    for path, digest in full_audit['artifact_pins'].items():
+        absolute = ROOT/path
+        ct.require(ct.sha(absolute) == digest, 'Full-boundary artifact changed: '+path)
+        pins[str(absolute)] = digest
+    cases = full_audit['cases']
+    ct.require(set(cases) == {'hello','capital'} and all(
+        c['fields'] == 2178 and c['all_exact'] is True for c in cases.values()), 'Full-boundary scope incomplete')
+    rows, calls, metrics = [], 0, 0
+    test_sources = None
+    for original in summary['rows']:
+        run_name = 'greedy4-02' if original['recipe'] == 'greedy4' else original['run']
+        comparison_path = Path(closure['comparison']['path']) if original['recipe'] == 'greedy4' else ROOT/original['comparison']
+        comparison = read(comparison_path)
+        if original['recipe'] == 'greedy4':
+            ct.require(ct.sha(comparison_path) == closure['comparison']['sha256'], 'Greedy comparator changed')
+        directory = QUALITY_ROOT/run_name
+        prepared = read(directory/'prepared.json')
+        supervisor = read(directory/'supervisor.json')
+        result = read(directory/'result.json')
+        release = read(directory/'release.json')
+        authentication = read(directory/'authentication.json')
+        exit_receipt = read(directory/'test-exit.json')
+        ct.require(ct.successful_process(supervisor) and result['passed'] is True
+            and result['all_eight_idle'] is True and release['gpu_owner_released'] is True,
+            'Test quality lacks successful authenticated lifecycle: '+run_name)
+        ct.require(authentication['launch_id'] == supervisor['handshake']['launch_id'], 'Quality launch binding differs')
+        for name in ('before.json','after.json'):
+            ct.require(read(directory/name)['status'] == 'verified', 'Quality idle missing')
+        for path, digest in [(Path(prepared['binary']),prepared['binary_sha256']),
+                             (directory/'test.log',exit_receipt['log_sha256'])]:
+            ct.require(ct.sha(path) == digest, 'Quality executable/log changed')
+            pins[str(path)] = digest
+        ct.require(comparison['passed'] is True and comparison['status'] == 'pass', 'Comparator failed')
+        count = 0
+        for call in comparison['calls'].values():
+            values = call['metrics'].values()
+            ct.require(len(call['metrics']) == 1089 and all(
+                m['exact'] is True and m['failures'] == 0 and m['max_abs'] == 0 and m['rmse'] == 0
+                for m in values), 'Lifecycle numerical fields not exact')
+            count += len(call['metrics'])
+        canonical = comparison_path.parent/(comparison_path.name.replace('-comparison-01.json','-canonical-01'))
+        manifest = read(canonical/'manifest.json')
+        ct.require(ct.sha(canonical/'manifest.json') == comparison['actual_manifest_sha256'], 'Candidate manifest differs')
+        raw = read(canonical/'raw-source.json')
+        for name, item in raw['files'].items():
+            path = directory/name
+            ct.require(path.stat().st_size == item['bytes'] and ct.sha(path) == item['sha256'], 'Raw quality payload changed')
+            pins[str(path)] = item['sha256']
+        reference = ORACLE/prepared['reference_dir']/'manifest.json'
+        read(reference)
+        ct.require(ct.sha(reference) == comparison['reference_manifest_sha256'], 'Reference manifest differs')
+        selected_sources = numerical_sources(prepared['sources'])
+        ct.require(selected_sources, 'Numerical source coverage empty')
+        if test_sources is None:
+            test_sources = selected_sources
+        ct.require(test_sources == selected_sources, 'Quality recipes use different numerical sources')
+        n = len(comparison['calls']);calls += n;metrics += count
+        rows.append(dict(run=run_name,calls=n,metrics=count,test_binary_sha256=prepared['binary_sha256'],
+                         launch_id=authentication['launch_id']))
+    ct.require((calls,metrics) == (33,35937), 'Audited lifecycle totals differ')
+    return dict(schema=QUALITY_SCHEMA, status='pass', kind='authenticated_test_binary_not_serving',
+        profile=PROFILE, calls=calls, metrics=metrics, rows=rows, artifact_pins=pins,
+        numerical_source_pins=test_sources, full_boundary_cases=cases,
+        fresh_greedy_closes_provenance=True, old_greedy_supervisor_still_failed=True,
+        fairmatch=False, exact_speedup=None,
+        caveats=['test binary is not public serving binary', 'HF-eager TP2 is not Marlin arithmetic',
+                 'no serving HTTP logits observation; payload comparisons were not recomputed'])
+
+
+def checked_document(link):
+    ct.require(isinstance(link,dict) and contract._sha(link.get('sha256')) and link.get('path'), 'Pinned receipt link missing')
+    ct.require(ct.sha(link['path']) == link['sha256'], 'Receipt changed: '+link['path'])
+    return ct.load(link['path'])
+
+
+CATALOG_SCHEMA = 'ferrule.mixed-tp2-public-release-handoff.v1'
+BUILD_FILES = ('handoff.json', 'build-state.json', 'build-inputs.json',
+    'source-pins-before.json', 'source-pins-after.json', 'build-messages.jsonl',
+    'build-verbose.log', 'dynamic-libraries.txt', 'serve-help.txt', 'build_release.py')
+
+
+def release_sources(sources):
+    """Actual crate/build inputs, not tests or nested generated target inventories."""
+    result = {}
+    for name, digest in sources.items():
+        path = Path(name)
+        path = path if path.is_absolute() else ROOT/path
+        parts = path.relative_to(ROOT).parts
+        if (parts in [('Cargo.toml',), ('Cargo.lock',), ('rust-toolchain.toml',)]
+                or parts[0] == '.cargo'
+                or (parts[0] == 'crates' and len(parts) >= 3 and
+                    (parts[2] in ('src', 'native') or
+                     (len(parts) == 3 and path.suffix in ('.rs', '.toml'))))):
+            result[str(path)] = digest
+    return result
+
+
+def current_release_sources():
+    paths = [ROOT/name for name in ('Cargo.toml','Cargo.lock','rust-toolchain.toml')]
+    paths += list((ROOT/'.cargo').rglob('*.toml'))
+    for crate in (ROOT/'crates').iterdir():
+        if not crate.is_dir():
+            continue
+        paths += list(crate.glob('*.rs')) + list(crate.glob('*.toml'))
+        for part in ('src','native'):
+            paths += [p for p in (crate/part).rglob('*') if p.is_file() and
+                p.suffix in ('.rs','.cu','.cuh','.cpp','.c','.h','.toml','.json','.ptx')]
+    return ct.inventory(paths)
+
+
+def catalog_build(link, quality):
+    """Read catalog's real build records; no invented authenticated build custody."""
+    handoff = checked_document(link)
+    ct.require(handoff.get('schema') == CATALOG_SCHEMA, 'Wrong catalog handoff schema')
+    directory = Path(link['path']).resolve().parent
+    pins = ct.inventory([directory/name for name in BUILD_FILES])
+    state = ct.load(directory/'build-state.json')
+    ct.require(handoff['build'] == state and state.get('status') == 'complete'
+        and state.get('returncode') == 0 and state.get('source_pins_unchanged') is True
+        and state.get('changed_sources') == [] and state.get('gpu_visible_devices') == ''
+        and state.get('server_started') is False and handoff.get('server_started') is False
+        and handoff.get('gpu_workload_started') is False
+        and handoff.get('artifact_verified_after_build') is True, 'Catalog build incomplete')
+    for name, key in [('build-inputs.json','build_inputs_sha256'),
+            ('build-verbose.log','build_verbose_sha256'),
+            ('source-pins-before.json','source_pins_before_sha256'),
+            ('source-pins-after.json','source_pins_after_sha256')]:
+        ct.require(pins[str(directory/name)] == state[key], 'Catalog build artifact changed: '+name)
+    before, after = (ct.load(directory/name) for name in ('source-pins-before.json','source-pins-after.json'))
+    ct.require(before == after and len(before) == handoff['source_files'], 'Catalog source manifests differ')
+    sources = release_sources(before)
+    ct.require(sources == current_release_sources(), 'Catalog production/build source coverage differs')
+    inputs = ct.load(directory/'build-inputs.json')
+    ct.require(inputs == handoff['toolchain'] and inputs['cwd'] == str(ROOT)
+        and inputs['source_pins_sha256'] == state['source_pins_before_sha256']
+        and inputs['argv'] == ['cargo','build','--locked','--release','-p','ferrule-cli',
+            '--no-default-features','--features','cuda','--bin','ferrule','--target-dir',
+            'target/catalog-tp2-cuda','--message-format=json-render-diagnostics','-vv'],
+        'Unaudited catalog build command/inputs')
+    rows, non_json_lines = [], 0
+    # Cargo -vv includes build-script stdout in this file. Keep/hash all raw
+    # lines; only Cargo JSON objects can supply executable/completion evidence.
+    for line in (directory/'build-messages.jsonl').read_text().splitlines():
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            non_json_lines += 1
+            continue
+        if isinstance(row, dict):
+            rows.append(row)
+    artifact = ct.release_artifact(rows)
+    ct.require(any(row.get('reason') == 'build-finished' and row.get('success') is True for row in rows),
+               'Cargo build-finished success missing')
+    ct.require(len(state['artifacts']) == 1, 'Ambiguous catalog executable')
+    binary = state['artifacts'][0]
+    executable = Path(artifact['executable'])
+    ct.require(str(executable) == binary['path'] and str(executable.resolve()) == binary['resolved_path']
+        and executable.stat().st_size == binary['bytes'] and ct.sha(executable) == binary['sha256']
+        and artifact['features'] == binary['features'] and artifact['profile'] == binary['profile'],
+        'Catalog executable/profile mismatch')
+    required_quality = {str((ROOT/'target/validation/tp2-mixed-claim-gates/native-whole-capture-full40-02/result.json')),
+                        str(SUMMARY), str(CLOSURE)}
+    quality_pins = {str(ROOT/p):h for p,h in handoff['quality_receipt_sha256'].items()}
+    ct.require(set(quality_pins) == required_quality and all(
+        quality['artifact_pins'].get(p) == h for p,h in quality_pins.items()), 'Catalog quality receipt binding differs')
+    ct.check_pins(quality_pins)
+    ct.require(handoff['numerical_backend_model_runtime_sources_unchanged_from_greedy4_02'] is True
+        and numerical_sources(sources) == quality['numerical_source_pins'], 'Catalog numerical sources changed')
+    runtime = {}
+    for path, item in handoff['dynamic_library_pins'].items():
+        lib = Path(path)
+        ct.require(str(lib.resolve()) == item['resolved'] and lib.stat().st_size == item['bytes']
+            and ct.sha(lib) == item['sha256'], 'Catalog dynamic library changed: '+path)
+        runtime[path] = item['sha256']
+    ct.require(runtime and 'not found' not in (directory/'dynamic-libraries.txt').read_text(),
+               'Unresolved catalog dynamic libraries')
+    return dict(binary=binary, source_pins=sources, runtime_pins=runtime, evidence_pins=pins,
+        owner_argv=handoff['owner_argv'], owner_environment_requirements=handoff['owner_environment_requirements'],
+        build_custody='unavailable: catalog completion/log hashes, not an authenticated build supervisor',
+        excluded_manifest_entries=len(before)-len(sources), cargo_non_json_lines=non_json_lines,
+        source_policy='live production/build inputs only; full historical manifests remain hash-bound',
+        quality_source_differences=handoff['quality_source_differences'])
+
+
+def validate_release(m):
+    """Bootstrap requirements: quality/test-source transfer + real release build.
+
+    Does NOT look for serving_quality, serving_lifecycle, or a smoke receipt.
+    Composition/catalog changes are recorded but are not accepted as numerical
+    proof. The forthcoming HTTP smoke qualifies their serving integration.
+    """
+    quality = checked_document(m.get('test_quality'))
+    ct.require(quality.get('schema') == QUALITY_SCHEMA and quality.get('status') == 'pass'
+        and quality.get('kind') == 'authenticated_test_binary_not_serving'
+        and (quality.get('calls'),quality.get('metrics')) == (33,35937), 'Test numerical quality missing')
+    ct.require(contract._pins(quality.get('artifact_pins')), 'Quality artifact pins missing')
+    ct.check_pins(quality['artifact_pins'])
+    selected = numerical_sources(m['source_pins'])
+    ct.require(selected and selected == quality['numerical_source_pins'],
+               'Release numerical/model/runtime sources differ from tested sources; requalification required')
+    build = checked_document(m.get('build_receipt'))
+    if build.get('schema') == CATALOG_SCHEMA:
+        evidence = catalog_build(m['build_receipt'], quality)
+        ct.require(m.get('build_evidence_pins') == evidence['evidence_pins'], 'Catalog evidence inventory changed')
+        ct.require(m['source_pins'] == evidence['source_pins']
+            and m['binary']['sha256'] == evidence['binary']['sha256']
+            and m['runtime_pins'] == evidence['runtime_pins'], 'Catalog release identity mismatch')
+        custody = evidence['build_custody']
+    else:
+        ct.require(build.get('status') == 'pass' and ct.successful_process(build.get('supervisor',{})),
+                   'Release build must have authenticated successful completion')
+        artifact = ct.release_artifact([build['artifact']])
+        ct.require(build['sources_before'] == build['sources_after'] == m['source_pins']
+            and build['binary_sha256'] == m['binary']['sha256']
+            and ct.sha(artifact['executable']) == m['binary']['sha256'], 'Build/release source or executable mismatch')
+        ct.require(contract._pins(build.get('runtime_pins')) and all(
+            m['runtime_pins'].get(p) == h for p,h in build['runtime_pins'].items()), 'Release runtime inventory mismatch')
+        custody = 'authenticated build supervisor'
+    ct.require(m['binary']['sha256'] not in {row['test_binary_sha256'] for row in quality['rows']},
+               'A test binary cannot be relabeled as public serving')
+    return dict(test_quality_sha256=m['test_quality']['sha256'],build_receipt_sha256=m['build_receipt']['sha256'],
+        serving_binary_sha256=m['binary']['sha256'], serving_observation='pending', build_custody=custody,
+        source_transfer='unchanged backend/model/runtime/common; catalog integration requires HTTP smoke')
+
+
+def smoke_spec(spec):
+    result = json.loads(json.dumps(spec))
+    result['environment']['FERRULE_LOG'] = 'info,ferrule_request=debug'
+    return result
+
+
+def cleanup_snapshot(spec, seconds=15):
+    """Public /admission is host/request accounting, NOT device quiescence."""
+    deadline = time.monotonic()+seconds
+    attempts = []
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), http.NoRedirect())
+    url = spec['url'].split('/v1/',1)[0]+'/admission'
+    while time.monotonic() < deadline:
+        try:
+            with opener.open(url, timeout=min(3,max(.01,deadline-time.monotonic()))) as response:
+                data = response.read(1 << 20)
+                ct.require(len(data) < 1 << 20 and response.status == 200, 'Invalid admission response')
+                row = http.strict_json(data.decode())
+            runtime = row.get('runtime',{})
+            runtime_clean = (runtime.get('status') == 'unsupported' or (runtime.get('status') == 'available'
+                and runtime.get('closed') is False and all(runtime.get(k,{}).get('held') == 0
+                for k in ('waiting_requests','request_identities','session_identities'))))
+            clean = row.get('closed') is False and all(row.get(k,{}).get('held') == 0 for k in ('requests','prompt_bytes')) and runtime_clean
+            attempts.append(dict(snapshot=row,clean=clean))
+            if clean:
+                return dict(status='pass', attempts=attempts, device_quiescence='not inferred',
+                            runtime_cleanup='observed' if runtime.get('status') == 'available' else 'unavailable')
+        except (OSError,ValueError) as error:
+            if 'Same-lifecycle total request budget' in str(error):
+                raise
+            attempts.append(dict(error=str(error)))
+        time.sleep(.1)
+    return dict(status='fail', attempts=attempts, device_quiescence='unknown')
+
+
+def terminal_evidence(path, request_id, seconds=15):
+    deadline = time.monotonic()+seconds
+    while time.monotonic() < deadline:
+        with path.open('rb') as stream:
+            raw = stream.read(16 << 20)
+            ct.require(not stream.read(1), 'Smoke log exceeds bounded parser size')
+        for line in raw.decode(errors='replace').splitlines():
+            try:
+                event = json.loads(line).get('fields',{})
+            except ValueError:
+                continue
+            if event.get('event') == 'request_worker_terminal' and event.get('request_id') == request_id:
+                passed = (event.get('status') == 'cancelled' and event.get('cancellation_submitted') is True
+                    and event.get('cancellation_failed') is False and event.get('requires_restore_or_shutdown') is False)
+                return dict(status='pass' if passed else 'fail', worker_terminal=event)
+        time.sleep(.1)
+    return dict(status='fail', error='Matching worker cancellation terminal not observed')
+
+
+def cancel_request(directory, prepared):
+    """Reuse bounded HTTP parser; intentional close is not treated as success."""
+    class Disconnect(Exception):
+        pass
+    spec = prepared['spec'];events=[];observed=http.Stream();request_id=None;closed=False
+    remaining, interval = signal.getitimer(signal.ITIMER_REAL)
+    previous_handler = signal.getsignal(signal.SIGALRM)
+    started = time.monotonic()
+    def emit(event):
+        nonlocal request_id,closed
+        events.append(event)
+        if event['kind'] != 'event':
+            return
+        if event['data'] != '[DONE]':
+            value = http.strict_json(event['data'])
+            identity = value.get('id','')
+            if identity.startswith('cmpl-ferrule-'):
+                request_id = int(identity.rsplit('-',1)[1])
+        observed.event(event['data'],event['event'],event['at'])
+        if observed.content and observed.finish_reason is None:
+            closed = True
+            raise Disconnect('Intentional smoke client disconnect after first content')
+    try:
+        http.http_request(dict(url=spec['url'], timeout=min(120,remaining or 120),
+            payload=http.make_payload(spec['model'],'The capital of Japan is',64,1)),emit)
+    finally:
+        # Existing helper clears/replaces its alarm; restore the outer handler/budget.
+        signal.signal(signal.SIGALRM,previous_handler)
+        if remaining:
+            signal.setitimer(signal.ITIMER_REAL,max(.001,remaining-(time.monotonic()-started)),interval)
+    evidence = terminal_evidence(directory.parent/'server.log',request_id) if closed and request_id is not None else dict(status='fail',error='No cancellable content/request ID')
+    cleanup = cleanup_snapshot(spec)
+    result = dict(status='pass' if closed and evidence['status']=='pass' and cleanup['status']=='pass' else 'fail',
+        request_id=request_id, intentional_disconnect=closed, events=events,
+        terminal=evidence, cleanup=cleanup, actual_output_tokens=None,
+        note='partial output usage is unknown, not zero; disconnect alone is not cancellation or GPU quiescence')
+    ct.write(directory/'cancel.json',result)
+    return result
+
+
+def request_block(directory, prepared, stage):
+    import paired
+    if stage == 'cancel':
+        return cancel_request(directory,prepared)
+    mapped = 'canary8' if stage in ('reuse','post_cancel') else stage
+    gate = paired.request_block(directory,prepared,mapped)
+    cleanup = cleanup_snapshot(prepared['spec'])
+    ct.write(directory/'request-cleanup.json',cleanup)
+    gate['cleanup'] = cleanup
+    if cleanup['status'] != 'pass':
+        gate['status'] = 'fail'
+    return gate
+
+
+def validate_smoke(m):
+    """Downstream pair admission only; bootstrap never calls this function."""
+    receipt = checked_document(m.get('serving_smoke'))
+    ct.require(receipt.get('schema') == SCHEMA and receipt.get('status') == 'pass'
+        and receipt.get('binary_sha256') == m['binary']['sha256']
+        and receipt.get('source_pins') == m['source_pins']
+        and receipt.get('base_spec_digest') == ct.digest(m['spec'])
+        and receipt.get('test_quality_sha256') == m['test_quality']['sha256'], 'Serving smoke binding differs')
+    ct.require(contract._pins(receipt.get('artifact_pins')), 'Smoke artifact pins missing')
+    ct.check_pins(receipt['artifact_pins'])
+    ct.require(len(receipt.get('lifecycles',[])) == 2, 'Two fresh serving owners required')
+    identities=[]
+    for row in receipt['lifecycles']:
+        ct.require(row.get('status') == 'complete' and row.get('normal_shutdown') is True
+            and row.get('cancellation_verified') is True and row.get('reuse_verified') is True,
+            'Smoke lifecycle incomplete')
+        path = Path(row['directory'])
+        required = [path/'prepared.json', path/'execution.json', path/'lock-release.json']
+        required += [path/'session'/name for name in ('case.json','supervisor.json','server.log','before.json','after.json','requests.json')]
+        required += [path/'session'/phase/'gate.json' for phase in PHASES]
+        required += [path/'session'/phase/'http.json' for phase in PHASES if phase != 'cancel']
+        required += [path/'session/cancel/cancel.json']
+        ct.require(all(receipt['artifact_pins'].get(str(f.resolve())) == ct.sha(f) for f in required),
+                   'Mandatory smoke lifecycle artifacts not pinned')
+        binding = ct.load(path/'prepared.json')
+        manifest_path = Path(binding['pair_directory'])/'prepared.json'
+        ct.require(ct.sha(manifest_path) == binding['pair_sha256'], 'Smoke preparation changed')
+        prepared = ct.load(manifest_path)
+        prior = prepared['admission']['engines']['ferrule']
+        ct.require(prior['binary'] == m['binary'] and prior['source_pins'] == m['source_pins']
+            and prior['spec'] == m['spec'] and prepared['purpose'] == 'serving_smoke', 'Wrong smoke release/profile')
+        ct.require(row == assess_lifecycle(path), 'Smoke summary differs from lifecycle evidence')
+        identity = row['server_identity'];identities.append((identity['pid'],identity['birth_ticks']))
+    ct.require(len(set(identities)) == 2, 'Serving owner was not rebuilt')
+    return receipt
+
+
+def assess_lifecycle(path):
+    import paired
+    assessed = paired.assess_slot(path,'ferrule')
+    case = ct.load(path/'session/case.json')
+    shutdown = case.get('shutdown',{})
+    ct.require(shutdown.get('returncode') == 0 and shutdown.get('timed_out') is False,
+               'Serving owner did not shut down normally')
+    for phase in PHASES:
+        gate = ct.load(path/'session'/phase/'gate.json')
+        ct.require(gate['status'] == 'pass', 'Smoke phase failed')
+    cancel = ct.load(path/'session/cancel/cancel.json')
+    terminal = cancel.get('terminal',{}).get('worker_terminal',{})
+    ct.require(cancel.get('intentional_disconnect') is True
+        and terminal.get('request_id') == cancel.get('request_id')
+        and terminal.get('status') == 'cancelled' and terminal.get('cancellation_submitted') is True
+        and terminal.get('cancellation_failed') is False and terminal.get('requires_restore_or_shutdown') is False
+        and cancel.get('cleanup',{}).get('status') == 'pass', 'Cancel/cleanup not proven by matching worker terminal')
+    return dict(directory=str(path.resolve()),status='complete',launch_id=assessed['launch_id'],
+        server_identity=case['server_identity'],normal_shutdown=True,cancellation_verified=True,
+        reuse_verified=True,runtime=assessed['runtime'])
+
+
+def finish(directory, prepared):
+    """Called only after the reused supervisor assessed both slots successfully."""
+    m = prepared['admission']['engines']['ferrule'];rows=[];pins=ct.inventory([directory/'prepared.json'])
+    for slot in SLOTS:
+        path = directory/'runs'/slot
+        rows.append(assess_lifecycle(path))
+        pins.update(ct.inventory([p for p in path.rglob('*') if p.is_file()]))
+    ct.require(rows[0]['launch_id'] != rows[1]['launch_id'], 'Supervisor not rebuilt')
+    ct.require((rows[0]['server_identity']['pid'],rows[0]['server_identity']['birth_ticks']) !=
+        (rows[1]['server_identity']['pid'],rows[1]['server_identity']['birth_ticks']), 'Server owner not rebuilt')
+    result = dict(schema=SCHEMA,status='pass',binary_sha256=m['binary']['sha256'],
+        source_pins=m['source_pins'],base_spec_digest=ct.digest(m['spec']),
+        test_quality_sha256=m['test_quality']['sha256'],lifecycles=rows,artifact_pins=pins,
+        diagnostic_logging='info,ferrule_request=debug; only declared difference from paired info logging',
+        claims='same release serving visible canaries/reuse/cancel/normal shutdown/rebuild; NOT HTTP logits or device-state observation',
+        fairmatch=False,exact_speedup=None)
+    ct.write(directory/'serving-smoke.json',result)
+    return result

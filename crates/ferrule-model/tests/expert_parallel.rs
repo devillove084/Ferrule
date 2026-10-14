@@ -24,6 +24,46 @@ use ferrule_model::transformer::{
     StandardDecoderOperators, StateDictBinder, StateDictMaterializer, StateDictSchema,
 };
 
+#[test]
+fn cuda_owner_bucket_export_schedule_source_contract() {
+    // A source guard, not a replacement for the CUDA numerical/custody tests.
+    let source = include_str!("../src/transformer/standard/cuda/expert.rs");
+    let worker = source
+        .split("impl ExpertWorker for CudaExpertWorker")
+        .nth(1)
+        .unwrap()
+        .split("#[cfg(test)]\nmod bucket_tests")
+        .next()
+        .unwrap();
+    assert_eq!(worker.matches(".synchronous(").count(), 1);
+    assert_eq!(worker.matches(".boundary.download(").count(), 1);
+    assert_eq!(worker.matches(".boundary.upload(").count(), 1);
+    assert!(!worker.contains(".bind_rows("));
+    assert!(!worker.contains("HostRows::new("));
+    assert!(
+        worker.find("preflight_expert_admission").unwrap() < worker.find(".synchronous(").unwrap()
+    );
+    let pack = worker.find("copy_f32_range").unwrap();
+    assert!(worker.find("let consume =").unwrap() < pack);
+    assert!(pack < worker.find("this.swiglu_consume(").unwrap());
+    assert!(
+        worker
+            .find("this.route_hold.truncate(packed_holds)")
+            .unwrap()
+            < worker.find(".boundary.download(").unwrap()
+    );
+    assert_eq!(worker.matches("this.ops.copy_f32_range(").count(), 1);
+    assert!(!worker.contains("for (row, &slot) in slots.iter().enumerate()"));
+    assert!(
+        worker
+            .contains("restore_owner_bucket_results(tokens, &groups, &values, shape, self.owner)")
+    );
+    assert!(
+        worker.contains("groups.values().flatten().zip(values.chunks_exact(shape.width()))")
+            || worker.contains(".zip(values.chunks_exact(shape.width()))")
+    );
+}
+
 #[cfg(feature = "cuda")]
 #[path = "expert_parallel/bounded_cuda.rs"]
 mod bounded_cuda;

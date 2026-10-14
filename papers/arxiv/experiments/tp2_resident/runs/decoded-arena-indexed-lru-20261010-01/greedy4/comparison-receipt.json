@@ -1,0 +1,10 @@
+{
+  "all_exact": true,
+  "report": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-indexed-lru-20261010-01/greedy4-comparison.json",
+    "sha256": "04507d5e21aea80c6ed228e9adfbaefea27a1efb8f733e14b857a2cf8e62d0d7"
+  },
+  "raw_sha256": "8701dacc0c38625a9153b7d178499097b367d011a11c4525f75b0542e68e824c",
+  "reference_sha256": "4fafda33e51d7cec3d82beb59aac73eb12dc6b9904dc0a74535ea35e9d68df81",
+  "public_e2e_accepted": false
+}

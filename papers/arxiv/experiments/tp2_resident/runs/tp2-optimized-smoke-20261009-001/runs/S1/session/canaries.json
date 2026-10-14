@@ -1,0 +1,50 @@
+[
+  {
+    "id": "qa",
+    "prompt": "The capital of Japan is",
+    "input_tokens": 5,
+    "reference_ids": [
+      25358,
+      13,
+      198,
+      760,
+      6511,
+      314,
+      6124,
+      369
+    ],
+    "reference_text": " Tokyo.\nThe capital of Japan is"
+  },
+  {
+    "id": "arithmetic",
+    "prompt": "7 + 8 =",
+    "input_tokens": 5,
+    "reference_ids": [
+      907,
+      271,
+      22,
+      478,
+      220,
+      23,
+      283,
+      220
+    ],
+    "reference_text": " ?\n\n7 + 8 = "
+  },
+  {
+    "id": "chinese",
+    "prompt": "\u4e2d\u56fd\u7684\u9996\u90fd\u662f",
+    "input_tokens": 3,
+    "reference_ids": [
+      98116,
+      3709,
+      98116,
+      108820,
+      102357,
+      95983,
+      1710,
+      97486
+    ],
+    "reference_text": "\u5317\u4eac\uff0c\u5317\u4eac\u662f\u4e2d\u56fd\u7684\u9996\u90fd\u3002\u90a3\u4e48"
+  }
+]

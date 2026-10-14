@@ -1,0 +1,38 @@
+
+running 1 test
+test transformer::standard::cuda::hybrid_rank::mixed::decoded_gpu_tests::route_batch::raw_partial_legacy_vs_batch_exact_after_source_retirement ... ROUTE_BATCH_COUNTER lane=0 M=1 cached=false E=2 R=2 h2d_new=1 h2d_old=4 kernels_new=18 kernels_old=19
+ROUTE_BATCH_COUNTER lane=0 M=1 cached=false E=2 R=2 h2d_new=1 h2d_old=4 kernels_new=18 kernels_old=19
+ROUTE_BATCH_COUNTER lane=0 M=1 cached=true E=2 R=2 h2d_new=1 h2d_old=4 kernels_new=14 kernels_old=15
+ROUTE_BATCH_COUNTER lane=0 M=1 cached=true E=2 R=2 h2d_new=1 h2d_old=4 kernels_new=8 kernels_old=9
+ROUTE_BATCH_COUNTER lane=0 M=5 cached=false E=2 R=10 h2d_new=1 h2d_old=4 kernels_new=18 kernels_old=19
+ROUTE_BATCH_COUNTER lane=0 M=5 cached=false E=2 R=10 h2d_new=1 h2d_old=4 kernels_new=18 kernels_old=19
+ROUTE_BATCH_COUNTER lane=0 M=5 cached=true E=2 R=10 h2d_new=1 h2d_old=4 kernels_new=14 kernels_old=15
+ROUTE_BATCH_COUNTER lane=0 M=5 cached=true E=2 R=10 h2d_new=1 h2d_old=4 kernels_new=8 kernels_old=9
+ROUTE_BATCH_COUNTER lane=0 M=5 cached=false E=2 R=5 h2d_new=1 h2d_old=4 kernels_new=18 kernels_old=19
+ROUTE_BATCH_COUNTER lane=0 M=5 cached=false E=2 R=5 h2d_new=1 h2d_old=4 kernels_new=18 kernels_old=19
+ROUTE_BATCH_COUNTER lane=0 M=5 cached=true E=2 R=5 h2d_new=1 h2d_old=4 kernels_new=14 kernels_old=15
+ROUTE_BATCH_COUNTER lane=0 M=5 cached=true E=2 R=5 h2d_new=1 h2d_old=4 kernels_new=8 kernels_old=9
+ROUTE_BATCH_COUNTER lane=0 M=1 cached=false E=1 R=1 h2d_new=1 h2d_old=3 kernels_new=10 kernels_old=10
+ROUTE_BATCH_COUNTER lane=0 M=1 cached=false E=1 R=1 h2d_new=1 h2d_old=3 kernels_new=10 kernels_old=10
+ROUTE_BATCH_COUNTER lane=0 M=1 cached=true E=1 R=1 h2d_new=1 h2d_old=3 kernels_new=8 kernels_old=8
+ROUTE_BATCH_COUNTER lane=0 M=1 cached=true E=1 R=1 h2d_new=1 h2d_old=3 kernels_new=5 kernels_old=5
+ROUTE_BATCH_COUNTER lane=1 M=1 cached=false E=2 R=2 h2d_new=1 h2d_old=4 kernels_new=18 kernels_old=19
+ROUTE_BATCH_COUNTER lane=1 M=1 cached=false E=2 R=2 h2d_new=1 h2d_old=4 kernels_new=18 kernels_old=19
+ROUTE_BATCH_COUNTER lane=1 M=1 cached=true E=2 R=2 h2d_new=1 h2d_old=4 kernels_new=14 kernels_old=15
+ROUTE_BATCH_COUNTER lane=1 M=1 cached=true E=2 R=2 h2d_new=1 h2d_old=4 kernels_new=8 kernels_old=9
+ROUTE_BATCH_COUNTER lane=1 M=5 cached=false E=2 R=10 h2d_new=1 h2d_old=4 kernels_new=18 kernels_old=19
+ROUTE_BATCH_COUNTER lane=1 M=5 cached=false E=2 R=10 h2d_new=1 h2d_old=4 kernels_new=18 kernels_old=19
+ROUTE_BATCH_COUNTER lane=1 M=5 cached=true E=2 R=10 h2d_new=1 h2d_old=4 kernels_new=14 kernels_old=15
+ROUTE_BATCH_COUNTER lane=1 M=5 cached=true E=2 R=10 h2d_new=1 h2d_old=4 kernels_new=8 kernels_old=9
+ROUTE_BATCH_COUNTER lane=1 M=5 cached=false E=2 R=5 h2d_new=1 h2d_old=4 kernels_new=18 kernels_old=19
+ROUTE_BATCH_COUNTER lane=1 M=5 cached=false E=2 R=5 h2d_new=1 h2d_old=4 kernels_new=18 kernels_old=19
+ROUTE_BATCH_COUNTER lane=1 M=5 cached=true E=2 R=5 h2d_new=1 h2d_old=4 kernels_new=14 kernels_old=15
+ROUTE_BATCH_COUNTER lane=1 M=5 cached=true E=2 R=5 h2d_new=1 h2d_old=4 kernels_new=8 kernels_old=9
+ROUTE_BATCH_COUNTER lane=1 M=1 cached=false E=1 R=1 h2d_new=1 h2d_old=3 kernels_new=10 kernels_old=10
+ROUTE_BATCH_COUNTER lane=1 M=1 cached=false E=1 R=1 h2d_new=1 h2d_old=3 kernels_new=10 kernels_old=10
+ROUTE_BATCH_COUNTER lane=1 M=1 cached=true E=1 R=1 h2d_new=1 h2d_old=3 kernels_new=8 kernels_old=8
+ROUTE_BATCH_COUNTER lane=1 M=1 cached=true E=1 R=1 h2d_new=1 h2d_old=3 kernels_new=5 kernels_old=5
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 769 filtered out; finished in 1.52s
+

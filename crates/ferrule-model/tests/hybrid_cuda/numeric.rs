@@ -9,6 +9,10 @@ mod external;
 mod f32_profile;
 #[path = "../numeric_standard_cuda.rs"]
 mod fixture;
+#[path = "segment_external.rs"]
+mod segment_external;
+#[path = "numeric_w8a16.rs"]
+mod w8a16_profile;
 
 fn spec() -> DecoderModelSpec {
     routed_spec(2, 12)
@@ -223,7 +227,12 @@ fn bucket_admission_exact_cap_and_minus_one_across_rows_topk_storage_and_precisi
                     );
                     assert_eq!(
                         exact.workspace_bytes_upper_bound,
-                        (32 * 32 + 2 * 32) * rows * 4 + 4096
+                        (32 * 32 + 2 * 32) * rows * 4
+                            + 2 * [10, 2, 2, 4, 10, 4, 4, 4]
+                                .into_iter()
+                                .map(|width| (rows * width * 4).max(256).next_power_of_two())
+                                .sum::<usize>()
+                            + 4096
                     );
                 }
             }
@@ -702,6 +711,11 @@ fn hybrid_numeric_f32_tiny_moe_top2_cache1_full_runner_matches_torch() {
 
 fn tiny_numeric_runner(precision: NumericFp8Precision) {
     let f = fixture::Fixture::with_precision(precision);
+    let numeric_scratch = if precision == NumericFp8Precision::W8A16Bf16F32Accumulate {
+        0
+    } else {
+        4096
+    };
     let r = resources(&f);
     let opts = options(&r)
         .with_hybrid_cuda_numeric_fp8_precision(
@@ -709,7 +723,7 @@ fn tiny_numeric_runner(precision: NumericFp8Precision) {
                 max_experts: 1,
                 max_bytes: 8192,
             },
-            4096,
+            numeric_scratch,
             precision,
         )
         .unwrap();
@@ -725,6 +739,10 @@ fn tiny_numeric_runner(precision: NumericFp8Precision) {
     )
     .unwrap();
     let mut runner = GpuRunner::hybrid_cuda(r, tokenizer(&f), opts, device.clone()).unwrap();
+    assert_eq!(
+        runner.forward_executor().module().numeric_fp8_precision(),
+        Some(precision)
+    );
     let mut held_states = Vec::new();
     for _ in 0..5 {
         held_states.push(runner.create_sequence_state().unwrap());
@@ -828,7 +846,7 @@ fn tiny_numeric_runner(precision: NumericFp8Precision) {
             .unwrap();
         assert_eq!(stats.resident_experts, 1);
         assert_eq!(stats.resident_bytes, 294);
-        assert_eq!(stats.scratch_bytes, 4096);
+        assert_eq!(stats.scratch_bytes, numeric_scratch);
         assert_eq!(stats.pending_upload_bytes, 0);
         assert!(stats.peak_bytes <= 8192);
         assert!(!stats.quarantined);
@@ -847,7 +865,12 @@ fn tiny_numeric_runner(precision: NumericFp8Precision) {
     let stats = module.expert_cache_stats().unwrap();
     assert!(stats.evictions > 30 && stats.uploads > 30);
     let workspace = module.numeric_workspace_usage().unwrap();
-    assert!(workspace.1 <= 4096 && workspace.3 > workspace.2);
+    assert_eq!(workspace.0, numeric_scratch);
+    assert!(workspace.1 <= numeric_scratch && workspace.3 > workspace.2);
+    if precision == NumericFp8Precision::W8A16Bf16F32Accumulate {
+        assert_eq!(workspace.1, 0, "no global numeric operand tiles");
+        assert!(workspace.4 > 0, "the fused profile must actually submit");
+    }
     eprintln!("tiny full hybrid: {stats:?}, workspace={workspace:?}");
     runner
         .try_release_sequence_state(states.pop().unwrap())
@@ -1184,8 +1207,10 @@ impl Oracle {
             .read_slice(&slice)
             .unwrap()
             .bytes
-            .chunks_exact(4)
-            .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|b| f32::from_le_bytes(*b))
             .collect()
     }
 }
@@ -1504,8 +1529,10 @@ fn numeric_qkv_same_operands_rounding_and_accumulation_probe() {
     let read = |path: &Path| {
         std::fs::read(path)
             .unwrap()
-            .chunks_exact(4)
-            .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|b| f32::from_le_bytes(*b))
             .collect::<Vec<_>>()
     };
     let x = read(&dir.join(input["file"].as_str().unwrap()));
@@ -1603,8 +1630,10 @@ fn numeric_qkv_same_operands_rounding_and_accumulation_probe() {
     ops.record_compute_event().unwrap().synchronize().unwrap();
     let packed = root.to_host_vec(&stream).unwrap();
     let packed: Vec<u16> = packed
-        .chunks_exact(2)
-        .map(|b| u16::from_le_bytes(b.try_into().unwrap()))
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|b| u16::from_le_bytes(*b))
         .collect();
     assert_eq!(&packed[..k], &xb, "actual GPU activation BF16 bits");
     assert_eq!(

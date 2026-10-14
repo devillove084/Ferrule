@@ -1,0 +1,7 @@
+{
+  "returncode": 0,
+  "one_test_passed": true,
+  "selector": "decoded_cache::full40_cache_unobserved_fused_logits_two_cases_two_phases",
+  "binary_sha256": "5ee4f22f67251babc99618b0d3e2500325716e79b2617c6c33586e2af9dcbbcf",
+  "log_sha256": "c26d8b096ecd31a369028ba396b39aedfc233b1f07a6067b149b12f46eaeb420"
+}

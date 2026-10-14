@@ -1,6 +1,6 @@
 #![cfg(feature = "cuda")]
 
-use ferrule_backend::cuda::context::CudaOperators;
+use ferrule_backend::cuda::operator_owner::CudaOperators;
 use ferrule_backend::cuda::standard::{
     PagedF32GqaBuffers, PagedF32GqaLayout, PagedF32GqaMetadata, SelectedSoftmaxTopKLayout,
     SplitHalfRopeLayout,
@@ -694,8 +694,8 @@ fn standard_router_combine_and_owner_rejection() {
 }
 
 #[test]
-#[ignore = "requires native CUDA; shared-score cap, COW history and nonstandard heads"]
-fn standard_f32_gqa_shared_scores_history_and_fallback() {
+#[ignore = "requires native CUDA; tiled shared scores, COW history and nonstandard heads"]
+fn standard_f32_gqa_tiled_scores_and_history() {
     let op = CudaOperators::new_on_device(0).unwrap();
     for (context, head_dim, q_heads, kv_heads, rows) in [
         (1usize, 3, 3, 1, 1),
@@ -704,8 +704,12 @@ fn standard_f32_gqa_shared_scores_history_and_fallback() {
         (1024, 256, 16, 2, 1),
         (2048, 33, 6, 2, 1),
         (2049, 256, 16, 2, 1),
-        (2049, 33, 3, 3, 4), // Mixed cooperative/fallback rows in one launch.
-        (18, 257, 5, 1, 4),  // Prefill crosses a COW page boundary.
+        (2049, 33, 3, 3, 4), // Mixed one/two-tile rows in one launch.
+        (4096, 33, 6, 2, 1),
+        (4106, 33, 6, 2, 16), // Chunked append across tile/page boundaries.
+        (8192, 33, 6, 2, 1),
+        (2049, 513, 5, 1, 1), // Multiple output dimensions per thread.
+        (18, 257, 5, 1, 4),   // Prefill crosses a COW page boundary.
     ] {
         let pages = context.div_ceil(16);
         let l = PagedF32GqaLayout {

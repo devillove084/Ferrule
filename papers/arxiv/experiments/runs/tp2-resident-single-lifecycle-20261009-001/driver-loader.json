@@ -1,0 +1,13 @@
+{
+  "version": "NVRM version: NVIDIA UNIX x86_64 Kernel Module  575.57.08  Sat May 24 07:21:16 UTC 2025\nGCC version:  gcc version 6.5.1 20181026 (Alibaba 6.5.1-1) (GCC) \n",
+  "libraries": [
+    "\tlibnvidia-ml.so.1 (libc6,x86-64) => /lib64/libnvidia-ml.so.1",
+    "\tlibnccl.so.2 (libc6,x86-64) => /usr/local/cuda/targets/x86_64-linux/lib/libnccl.so.2",
+    "\tlibnccl.so (libc6,x86-64) => /usr/local/cuda/targets/x86_64-linux/lib/libnccl.so",
+    "\tlibcudart.so.13 (libc6,x86-64) => /usr/local/cuda/targets/x86_64-linux/lib/libcudart.so.13",
+    "\tlibcudart.so (libc6,x86-64) => /usr/local/cuda/targets/x86_64-linux/lib/libcudart.so",
+    "\tlibcuda.so.1 (libc6,x86-64) => /lib64/libcuda.so.1",
+    "\tlibcuda.so (libc6,x86-64) => /lib64/libcuda.so"
+  ],
+  "note": "Host cache has CUDA13 default too; server env -i has no LD_LIBRARY_PATH; actual mappings sampled during the single launch"
+}

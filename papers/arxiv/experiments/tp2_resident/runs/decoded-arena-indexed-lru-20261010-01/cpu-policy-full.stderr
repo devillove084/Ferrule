@@ -1,0 +1,58 @@
+.....................................................E......FF..................................................................................................................................................................................................................
+======================================================================
+ERROR: test_actual_final_handoff_cpu_audit_preserves_pending_smoke_and_gaps (test_decoded_cache_release.ArenaRelease.test_actual_final_handoff_cpu_audit_preserves_pending_smoke_and_gaps)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/test_decoded_cache_release.py", line 128, in test_actual_final_handoff_cpu_audit_preserves_pending_smoke_and_gaps
+    evidence = release.audit(dict(path=str(d.ARENA_RELEASE/'handoff.json'),sha256=d.ARENA_HANDOFF_SHA))
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/optimized_release.py", line 32, in audit
+    return decoded_cache_release.audit(link)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/decoded_cache_release.py", line 548, in audit
+    return arena_audit(link)
+           ^^^^^^^^^^^^^^^^^
+  File "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/decoded_cache_release.py", line 465, in arena_audit
+    pin_links(e, receipts)
+  File "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/decoded_cache_release.py", line 293, in pin_links
+    for item in value.values(): pin_links(e, item)
+                                ^^^^^^^^^^^^^^^^^^
+  File "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/decoded_cache_release.py", line 295, in pin_links
+    for item in value: pin_links(e, item)
+                       ^^^^^^^^^^^^^^^^^^
+  File "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/decoded_cache_release.py", line 292, in pin_links
+    e.pin(value['path'], value['sha256'])
+  File "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/decoded_cache_release.py", line 43, in pin
+    ct.require(expected is None or digest == expected, 'Cache release evidence changed: '+str(path))
+  File "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/contract.py", line 46, in require
+    raise ValueError(reason)
+ValueError: Cache release evidence changed: /home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-model/src/transformer/standard/expert_cache.rs
+
+======================================================================
+FAIL: test_tool_inventory_and_library_drift_are_not_skipped (test_decoded_cache_release.ArenaRelease.test_tool_inventory_and_library_drift_are_not_skipped) (kind='tools')
+----------------------------------------------------------------------
+ValueError: Required arena gate contract changed: fresh build/CPU preparation required
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/test_decoded_cache_release.py", line 214, in test_tool_inventory_and_library_drift_are_not_skipped
+    with self.assertRaisesRegex(ValueError,kind+' drift'):d.arena_quality(e,qualification)
+AssertionError: "tools drift" does not match "Required arena gate contract changed: fresh build/CPU preparation required"
+
+======================================================================
+FAIL: test_tool_inventory_and_library_drift_are_not_skipped (test_decoded_cache_release.ArenaRelease.test_tool_inventory_and_library_drift_are_not_skipped) (kind='library')
+----------------------------------------------------------------------
+ValueError: Required arena gate contract changed: fresh build/CPU preparation required
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/test_decoded_cache_release.py", line 214, in test_tool_inventory_and_library_drift_are_not_skipped
+    with self.assertRaisesRegex(ValueError,kind+' drift'):d.arena_quality(e,qualification)
+AssertionError: "library drift" does not match "Required arena gate contract changed: fresh build/CPU preparation required"
+
+----------------------------------------------------------------------
+Ran 271 tests in 37.093s
+
+FAILED (failures=2, errors=1)

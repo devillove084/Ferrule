@@ -34,7 +34,7 @@ _use-cuda := `if [ "${FERRULE_NO_CUDA:-}" = "1" ]; then echo 0; elif command -v 
 # ── Build ──────────────────────────────────────────────────────────────
 
 build:
-    @if [ "{{ _use-cuda }}" = "1" ]; then just build-cuda; else echo "→ CPU release build"; cargo build --locked --release; fi
+    @if [ "{{ _use-cuda }}" = "1" ]; then just build-cuda; else echo "→ Host-tools build (inference requires --features cuda)"; cargo build --locked --release; fi
 
 build-cuda arch='': cutlass-setup
     @arch="{{ arch }}"; test -n "$arch" || arch="{{ _cuda-arch }}"; test "{{ _has-nvcc }}" = "1" || { echo "error: nvcc not found"; exit 1; }; test "{{ _has-gpu }}" = "1" || { echo "error: no NVIDIA GPU detected"; exit 1; }; test -n "$arch" || { echo "error: could not detect CUDA architecture; set FERRULE_CUDA_ARCH"; exit 1; }; echo "→ CUDA release build (arch: $arch)"; FERRULE_CUDA_ARCH="$arch" cargo build --locked --release --features cuda
@@ -81,14 +81,30 @@ cuda-info:
 # ── Test ───────────────────────────────────────────────────────────────
 
 # Local convenience only: optional CUDA may remain UNVERIFIED. CI uses ci-cpu.
-test: test-nextest test-docs test-cuda
+test: test-nextest test-docs test-reference test-cuda
 
-# Required CPU lane: every non-ignored workspace target plus doctests. Do not
-# exclude model tests to hide missing fixtures; hermetic failures must stay red.
-ci-cpu:
+# Default-feature contract lane; opt-in targets also run in ci-cpu-reference.
+# Missing hermetic fixtures fail in both lanes.
+ci-cpu: architecture
     @command -v cargo-nextest >/dev/null 2>&1 || { echo "error: required cargo-nextest missing (JUnit cannot be produced)"; exit 1; }
     FERRULE_NO_CUDA=1 CUDA_VISIBLE_DEVICES="" CARGO_TARGET_DIR=target cargo nextest run --locked --workspace --all-targets --profile ci --no-tests fail
     FERRULE_NO_CUDA=1 CUDA_VISIBLE_DEVICES="" CARGO_TARGET_DIR=target cargo test --locked --workspace --doc
+
+# Keep the source boundary check in the normal lint gate; it uses only Python
+# stdlib and does not try to parse every cfg or build a dependency graph.
+architecture:
+    @if [ -x /opt/conda310/bin/python ]; then /opt/conda310/bin/python scripts/check_feature_boundaries.py; else python3 scripts/check_feature_boundaries.py; fi
+    @if [ -x /opt/conda310/bin/python ]; then CUDA_VISIBLE_DEVICES='' NVIDIA_VISIBLE_DEVICES=void /opt/conda310/bin/python -B -m unittest discover -s scripts/tests -p test_automation_contracts.py; else CUDA_VISIBLE_DEVICES='' NVIDIA_VISIBLE_DEVICES=void python3 -B -m unittest discover -s scripts/tests -p test_automation_contracts.py; fi
+
+# Only inspect nextest's compiled test list; never run a GPU test body here.
+check-gpu-membership profile listing:
+    @if [ -x /opt/conda310/bin/python ]; then CUDA_VISIBLE_DEVICES='' NVIDIA_VISIBLE_DEVICES=void /opt/conda310/bin/python -B scripts/check_nextest_membership.py --profile '{{ profile }}' --nextest-json '{{ listing }}'; else CUDA_VISIBLE_DEVICES='' NVIDIA_VISIBLE_DEVICES=void python3 -B scripts/check_nextest_membership.py --profile '{{ profile }}' --nextest-json '{{ listing }}'; fi
+
+# Reference targets are never enabled through self/dev dependencies.
+ci-cpu-reference: architecture
+    @command -v cargo-nextest >/dev/null 2>&1 || { echo "error: cargo-nextest missing"; exit 1; }
+    FERRULE_NO_CUDA=1 CUDA_VISIBLE_DEVICES="" CARGO_TARGET_DIR=target cargo nextest run --locked --workspace --all-targets --features ferrule-cli/cpu-reference --profile cpu-reference --no-tests fail
+    FERRULE_NO_CUDA=1 CUDA_VISIBLE_DEVICES="" CARGO_TARGET_DIR=target cargo test --locked --workspace --features ferrule-cli/cpu-reference --doc
 
 # Compile AND link all workspace CUDA targets, including both native providers.
 # CUDA stubs may be supplied through LIBRARY_PATH on a GPU-less devel image;
@@ -102,12 +118,33 @@ ci-cuda-compile arch='sm_86':
     case "${FERRULE_NO_CUDA:-0}" in 0) ;; *) echo 'error: CUDA compile lane requires FERRULE_NO_CUDA unset or 0'; exit 1;; esac
     case "$1" in sm_[0-9][0-9]|sm_[0-9][0-9][0-9]) ;; *) echo 'error: expected explicit sm_XX or sm_XXX'; exit 1;; esac
     command -v nvcc >/dev/null || { echo 'error: nvcc missing'; exit 1; }
+    just architecture
     just cutlass-setup
     export FERRULE_CUDA_ARCH="$1" FERRULE_NO_CUDA=0 CUDA_VISIBLE_DEVICES=""
     export CARGO_TARGET_DIR="target/validation/cuda-compile/$1"
     cargo check --locked --workspace --features cuda --all-targets
     cargo test --locked --workspace --features cuda --all-targets --no-run
-    echo 'VERIFIED_COMPILE_ONLY: feature/native/CUTLASS all-targets check and link; GPU execution UNVERIFIED' > target/validation/ci/cuda-compile/status.txt
+    cargo test --locked --workspace --features cuda,ferrule-cli/cpu-reference --all-targets --no-run
+    # This is compile/link coverage for the explicitly opt-in model provider;
+    # --no-run must remain here because the target requires a real GPU to run.
+    cargo test --locked -p ferrule-model --features cuda-test-support --test cuda_materialization_registry --no-run
+    # Audited file/symbol filters select only compile_fail/no_run contracts.
+    # --no-run is not supported by rustdoc; never run all CUDA doctests instead.
+    # Listing first also prevents a renamed symbol from silently passing zero tests.
+    pure_docs() {
+        local package="$1" filter="$2" listing
+        listing=$(cargo test --locked -p "$package" --features cuda --doc "$filter" -- --list)
+        printf '%s\n' "$listing"
+        grep -Eq '^[1-9][0-9]* tests?, 0 benchmarks$' <<< "$listing" || { echo "error: no pure doctests selected for $package / $filter"; return 1; }
+        cargo test --locked -p "$package" --features cuda --doc "$filter"
+    }
+    pure_docs ferrule-backend 'crates/ferrule-backend/src/cuda/operators/linear.rs'
+    pure_docs ferrule-backend 'cuda::operators::standard_bf16'
+    pure_docs ferrule-model 'decoder::hybrid_cuda::HybridCudaPreparationClaim'
+    pure_docs ferrule-model 'decoder::hybrid_cuda::CudaHybridSequenceState'
+    pure_docs ferrule-model 'transformer::standard::cuda::segment::CudaHybridDecoderSegment'
+    pure_docs ferrule-model 'transformer::standard::numeric_precision::NumericFp8Precision'
+    echo 'VERIFIED_COMPILE_ONLY: feature/native/CUTLASS/model target and pure type doctests; GPU execution UNVERIFIED' > target/validation/ci/cuda-compile/status.txt
 
 # A successful probe is only a prerequisite, never evidence of GPU tests passing.
 # Numeric visible-device ordinals are intentional: no implicit selection of a
@@ -152,6 +189,8 @@ ci-gpu-smoke arch='sm_86':
     just ci-gpu-preflight "$1" 1
     command -v cargo-nextest >/dev/null || { echo 'error: required cargo-nextest missing'; exit 1; }
     just cutlass-setup
+    FERRULE_NO_CUDA=0 FERRULE_CUDA_ARCH="$1" CARGO_TARGET_DIR=target CUDA_VISIBLE_DEVICES='' NVIDIA_VISIBLE_DEVICES=void cargo nextest list --locked -p ferrule-backend --features cuda --profile gpu-smoke --run-ignored all --message-format json > target/validation/ci/gpu-smoke/test-list.json
+    just check-gpu-membership gpu-smoke target/validation/ci/gpu-smoke/test-list.json
     FERRULE_NO_CUDA=0 FERRULE_CUDA_ARCH="$1" CARGO_TARGET_DIR=target cargo nextest run --locked -p ferrule-backend --features cuda --profile gpu-smoke --run-ignored all --no-tests fail
     echo 'VERIFIED: selected required GPU smoke tests passed' > target/validation/ci/gpu-smoke/status.txt
 
@@ -171,11 +210,17 @@ ci-gpu-nightly arch='sm_86':
     just ci-gpu-nightly-preflight "$1"
     command -v cargo-nextest >/dev/null || { echo 'error: cargo-nextest missing'; exit 1; }
     just cutlass-setup
+    FERRULE_NO_CUDA=0 FERRULE_CUDA_ARCH="$1" CARGO_TARGET_DIR=target CUDA_VISIBLE_DEVICES='' NVIDIA_VISIBLE_DEVICES=void cargo nextest list --locked --workspace --features cuda --profile gpu-nightly --run-ignored only --message-format json > target/validation/ci/gpu-nightly/test-list.json
+    just check-gpu-membership gpu-nightly target/validation/ci/gpu-nightly/test-list.json
     FERRULE_NO_CUDA=0 FERRULE_CUDA_ARCH="$1" CARGO_TARGET_DIR=target cargo nextest run --locked --workspace --features cuda --profile gpu-nightly --run-ignored only --no-tests fail
     echo 'VERIFIED: selected nightly GPU tests passed (not all ignored tests)' > target/validation/ci/gpu-nightly/status.txt
 
 test-nextest:
     @if command -v cargo-nextest >/dev/null 2>&1; then cargo nextest run --locked --workspace; else cargo test --locked --workspace --all-targets; fi
+
+test-reference:
+    @if command -v cargo-nextest >/dev/null 2>&1; then cargo nextest run --locked --workspace --all-targets --features ferrule-cli/cpu-reference; else cargo test --locked --workspace --all-targets --features ferrule-cli/cpu-reference; fi
+    cargo test --locked --workspace --features ferrule-cli/cpu-reference --doc
 
 test-docs:
     cargo test --locked --workspace --doc
@@ -214,6 +259,7 @@ fmt-fix:
 
 clippy:
     cargo clippy --locked --workspace --all-targets -- -D warnings
+    cargo clippy --locked --workspace --all-targets --features ferrule-cli/cpu-reference -- -D warnings
 
 clippy-cuda: cutlass-setup
     @test "{{ _has-nvcc }}" = "1" || { echo "error: nvcc not found"; exit 1; }; arch="{{ _cuda-arch }}"; test -n "$arch" || { echo "error: could not detect CUDA architecture; set FERRULE_CUDA_ARCH"; exit 1; }; FERRULE_CUDA_ARCH="$arch" cargo clippy --locked -p ferrule-cli --all-targets --features cuda -- -D warnings
@@ -235,6 +281,7 @@ coverage:
     rm -rf target/coverage
     mkdir -p target/coverage
     FERRULE_NO_CUDA=1 CUDA_VISIBLE_DEVICES="" CARGO_TARGET_DIR=target cargo llvm-cov nextest --locked --workspace --all-targets --profile ci --no-report
+    FERRULE_NO_CUDA=1 CUDA_VISIBLE_DEVICES="" CARGO_TARGET_DIR=target cargo llvm-cov nextest --locked --workspace --all-targets --features ferrule-cli/cpu-reference --profile cpu-reference --no-report --no-clean
     CARGO_TARGET_DIR=target cargo llvm-cov report --lcov --output-path target/coverage/lcov.info
     CARGO_TARGET_DIR=target cargo llvm-cov report --html --output-dir target/coverage
     CARGO_TARGET_DIR=target cargo llvm-cov report --summary-only --output-path target/coverage/summary.txt --fail-under-lines 60
@@ -248,7 +295,7 @@ miri:
 docs:
     RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --no-deps
 
-lint: fmt clippy docs
+lint: architecture fmt clippy docs
     @echo "=== Lint passed ==="
 
 # ── Run ────────────────────────────────────────────────────────────────
@@ -257,8 +304,8 @@ run-cuda *args='': cutlass-setup
     @test "{{ _use-cuda }}" = "1" || { echo "error: CUDA run requires nvcc and an NVIDIA GPU"; exit 1; }; arch="{{ _cuda-arch }}"; echo "→ CUDA release build (arch: $arch)"; FERRULE_CUDA_ARCH="$arch" cargo build --locked --release -p ferrule-cli --features cuda
     ./target/release/ferrule {{ args }}
 
-chat model quant='q4' *args='':
-    just run-cuda chat {{ model }} -q {{ quant }} {{ args }}
+chat model *args='':
+    just run-cuda chat {{ model }} --backend cuda {{ args }}
 
 bench-interactive model *args='':
     just run-cuda bench-interactive {{ model }} {{ args }}
@@ -278,18 +325,9 @@ cuda:
 inspect-weightpack path:
     cargo run -p ferrule-cli -- inspect-weightpack {{ path }}
 
-expert-stream-smoke model layer='0' expert='0' *args='':
-    cargo run -p ferrule-cli -- expert-stream-smoke {{ model }} --layer {{ layer }} --expert {{ expert }} {{ args }}
-
-dsv4-cuda-generate prompt='Hello' tokens='4' chunk='4096' *args='':
-    just run-cuda deepseek-v4-generate models/DeepSeek-V4-Flash-0731 --prompt "{{ prompt }}" --max-tokens {{ tokens }} --output-head-chunk-rows {{ chunk }} {{ args }}
-
-dsv4-cuda-generate-json prompt='Hello' tokens='4' chunk='4096' output='target/dsv4-generate.json' *args='':
-    @mkdir -p target
-    just run-cuda deepseek-v4-generate models/DeepSeek-V4-Flash-0731 --prompt "{{ prompt }}" --max-tokens {{ tokens }} --output-head-chunk-rows {{ chunk }} --json {{ args }} | tee {{ output }}
-
-dsv4-cuda-moe-profile prompt='Hello' tokens='4' chunk='4096' output='target/dsv4-moe-profile.json' *args='': cutlass-setup
-    @test "{{ _use-cuda }}" = "1" || { echo "error: CUDA run requires nvcc and an NVIDIA GPU"; exit 1; }; mkdir -p target; arch="{{ _cuda-arch }}"; FERRULE_CUDA_ARCH="$arch" cargo build --locked --release -p ferrule-cli --features cuda; FERRULE_CUDA_MOE_TIMING=1 ./target/release/ferrule deepseek-v4-generate models/DeepSeek-V4-Flash-0731 --prompt "{{ prompt }}" --max-tokens {{ tokens }} --output-head-chunk-rows {{ chunk }} --json {{ args }} | tee {{ output }}
+# Removed inspection/generation CLI recipes have no equivalent legacy JSON or
+# MoE timing contract. Use dsv4-serve for HTTP or dsv4-runtime-driver-bench for
+# the maintained interactive benchmark; migrate consumers explicitly.
 
 dsv4-storage-platform-check output='target/bench/storage-platform-check.txt':
     @command -v gdscheck >/dev/null 2>&1 || { echo "error: gdscheck not found"; exit 1; }
@@ -297,7 +335,7 @@ dsv4-storage-platform-check output='target/bench/storage-platform-check.txt':
     @bash -o pipefail -c '{ uname -a; echo; nvidia-smi; echo; gdscheck -p; } 2>&1 | tee "{{ output }}"'
 
 dsv4-chat tokens='64' *args='':
-    @tokens="{{ tokens }}"; tokens="${tokens#tokens=}"; case "$tokens" in ''|*[!0-9]*) echo "error: dsv4-chat tokens must be an integer"; exit 2;; esac; just run-cuda chat models/DeepSeek-V4-Flash-0731 -q cuda -n "$tokens" --chat-template deepseek-v4 --temp 0 {{ args }}
+    @tokens="{{ tokens }}"; tokens="${tokens#tokens=}"; case "$tokens" in ''|*[!0-9]*) echo "error: dsv4-chat tokens must be an integer"; exit 2;; esac; just run-cuda chat models/DeepSeek-V4-Flash-0731 --backend cuda -n "$tokens" --chat-template deepseek-v4 --temp 0 {{ args }}
 
 info model:
     cargo run --release -p ferrule-cli -- info {{ model }}

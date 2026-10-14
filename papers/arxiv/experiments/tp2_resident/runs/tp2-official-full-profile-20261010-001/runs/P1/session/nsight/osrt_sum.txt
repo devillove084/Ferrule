@@ -1,0 +1,27 @@
+
+NOTICE: Existing SQLite export found: /home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-official-full-profile-20261010-001/runs/P1/session/nsight/nsys.sqlite
+        It is assumed file was previously exported from: /home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-official-full-profile-20261010-001/runs/P1/session/nsight/nsys.nsys-rep
+        Consider using --force-export=true if needed.
+
+Processing [/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-official-full-profile-20261010-001/runs/P1/session/nsight/nsys.sqlite] with [/home/admin/luhuanbing.lhb/Ferrule/target/vendor/nsight-systems-cli-2025.3.1/opt/nvidia/nsight-systems-cli/2025.3.1/target-linux-x64/reports/osrt_sum.py]... 
+Time (%),Total Time (ns),Num Calls,Avg (ns),Med (ns),Min (ns),Max (ns),StdDev (ns),Name
+21.7,9001050657,18,500058369.8,500059444.0,500045530,500061717,4100.2,pthread_cond_timedwait
+20.1,8348948972,32761,254844.1,103045.0,52863,100066732,3902009.2,clock_nanosleep
+19.3,8008903034,80,100111287.9,100112963.5,100017939,100120596,12408.3,poll
+12.2,5070742039,5397,939548.3,5700.0,1001,1147691104,19571330.0,futex
+10.5,4371850729,40,109296268.2,48073.0,1413,1147729176,196598618.6,epoll_wait
+9.6,4000060501,1,4000060501.0,4000060501.0,4000060501,4000060501,0.0,sem_timedwait
+6.6,2721696147,19,143247165.6,129398037.0,547406,419339993,77747002.5,sem_wait
+0.0,1705537,57,29921.7,18757.0,7533,208862,30120.2,pthread_rwlock_wrlock
+0.0,763370,2,381685.0,381685.0,330653,432717,72170.1,ioctl
+0.0,716009,158,4531.7,1211.5,1001,194106,15996.4,pthread_mutex_lock
+0.0,568346,40,14208.6,12775.0,6730,56473,7586.2,pthread_rwlock_rdlock
+0.0,297490,17,17499.4,16253.0,10821,28086,4391.3,writev
+0.0,149305,27,5529.8,5638.0,1323,8877,2130.8,write
+0.0,99449,44,2260.2,1849.0,1043,6375,1146.1,waitpid
+0.0,12592,2,6296.0,6296.0,6228,6364,96.2,shutdown
+0.0,8255,2,4127.5,4127.5,2317,5938,2560.4,accept4
+0.0,5986,3,1995.3,1522.0,1145,3319,1161.7,epoll_ctl
+0.0,5421,2,2710.5,2710.5,2390,3031,453.3,close
+0.0,2209,1,2209.0,2209.0,2209,2209,0.0,recv
+

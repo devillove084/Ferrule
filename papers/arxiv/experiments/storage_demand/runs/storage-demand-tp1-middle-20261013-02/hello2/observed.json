@@ -1,0 +1,157 @@
+{
+  "name": "hello2",
+  "status": "pass",
+  "actual": {
+    "index": 0,
+    "repetition": 0,
+    "population": "measured",
+    "prompt_id": "hello2",
+    "prompt_sha256": "185f8db32271fe25f561a6fc938b2e264306ec304eda518007d1764826381969",
+    "expected_input_tokens": 1,
+    "status": "success",
+    "error": null,
+    "sent_at": 8836713.951757489,
+    "client_dispatch_at": 8836713.951524155,
+    "http_status": 200,
+    "headers_at": 8836713.977502413,
+    "request_payload": {
+      "model": "qwen35-storage-demand-paper",
+      "prompt": "Hello",
+      "temperature": 0,
+      "seed": 1,
+      "n": 1,
+      "max_tokens": 2,
+      "stream": true,
+      "stream_options": {
+        "include_usage": true
+      }
+    },
+    "after_deadline_events": [],
+    "sent_unix": 1791893770.9152386,
+    "content_type": "text/event-stream",
+    "ended_at": 8836723.137403483,
+    "deadline_at": 8836833.951362196,
+    "text": ", I",
+    "raw_sse_events": [
+      {
+        "at": 8836718.21718916,
+        "event": "",
+        "data": "{\"id\":\"cmpl-ferrule-1\",\"object\":\"text_completion\",\"created\":1791893770,\"model\":\"qwen35-storage-demand-paper\",\"choices\":[{\"text\":\",\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}"
+      },
+      {
+        "at": 8836721.330803018,
+        "event": "",
+        "data": "{\"id\":\"cmpl-ferrule-1\",\"object\":\"text_completion\",\"created\":1791893770,\"model\":\"qwen35-storage-demand-paper\",\"choices\":[{\"text\":\" I\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}"
+      },
+      {
+        "at": 8836723.137168003,
+        "event": "",
+        "data": "{\"id\":\"cmpl-ferrule-1\",\"object\":\"text_completion\",\"created\":1791893770,\"model\":\"qwen35-storage-demand-paper\",\"choices\":[{\"text\":\"\",\"index\":0,\"logprobs\":null,\"finish_reason\":\"length\"}]}"
+      },
+      {
+        "at": 8836723.137280444,
+        "event": "",
+        "data": "{\"id\":\"cmpl-ferrule-1\",\"object\":\"text_completion\",\"created\":1791893770,\"model\":\"qwen35-storage-demand-paper\",\"choices\":[],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":2,\"total_tokens\":3}}"
+      },
+      {
+        "at": 8836723.137326706,
+        "event": "",
+        "data": "[DONE]"
+      }
+    ],
+    "content_event_times": [
+      8836718.21718916,
+      8836721.330803018
+    ],
+    "content_event_itl_seconds": [
+      3.113613858819008
+    ],
+    "content_events": 2,
+    "usage": {
+      "prompt_tokens": 1,
+      "completion_tokens": 2,
+      "total_tokens": 3
+    },
+    "actual_output_tokens": 2,
+    "actual_input_tokens": 1,
+    "finish_reason": "length",
+    "finish_at": 8836723.137168003,
+    "usage_at": 8836723.137280444,
+    "done_at": 8836723.137326706,
+    "ttft_seconds": 4.265431670472026,
+    "request_e2e_seconds": 9.185645993798971,
+    "mean_tpot_usage_proxy_seconds": 3.113613858819008,
+    "token_itl_seconds": null,
+    "exact_token_tpot_seconds": null,
+    "reasoning_observed": false,
+    "output_token_ids": null,
+    "partial_token_count": 2,
+    "input_length_matches": true,
+    "output_length_matches": true,
+    "length_matched_success": true,
+    "client_observed_at": 8836723.137550378,
+    "right_censored": false
+  },
+  "generated_controls": {
+    "model": "qwen35-storage-demand-paper",
+    "prompt": "Hello",
+    "temperature": 0,
+    "seed": 1,
+    "n": 1,
+    "max_tokens": 2,
+    "stream": true,
+    "stream_options": {
+      "include_usage": true
+    }
+  },
+  "reference": null,
+  "observed_token_ids": null,
+  "exact_token_pass": null,
+  "full_current_math_pass": false,
+  "quality_scope": "actual visible greedy text and usage versus frozen HF generation8; not observed IDs/logits",
+  "anchor": {
+    "name": "hello2",
+    "local_request_id": "storage_demand_tp1_middle_four_requests_v1/hello2",
+    "before_monotonic": 8836713.862890393,
+    "before_unix_ns": 1791893770826371578,
+    "log_start_byte": 8251,
+    "after_monotonic": 8836723.153318463,
+    "after_unix_ns": 1791893780116800110,
+    "log_end_byte": 12865,
+    "http_sent_monotonic": 8836713.951757489,
+    "http_ended_monotonic": 8836723.137403483
+  },
+  "counters": {
+    "invocations": 3,
+    "valid": true,
+    "deltas": {
+      "checkpoint_read_calls": 5760,
+      "checkpoint_read_bytes": 3020267520,
+      "checkpoint_source_checks": 5760,
+      "checkpoint_path_metadata_calls": 5760,
+      "checkpoint_handle_metadata_calls": 5760,
+      "h2d_copies": 7533,
+      "h2d_bytes": 3020281452,
+      "artifact_uploads": 2880,
+      "artifact_upload_bytes": 3020267520,
+      "expert_hits": 0,
+      "expert_uploads": 960,
+      "expert_evictions": 896
+    },
+    "last_gauges": {
+      "expert_resident_entries": 64,
+      "expert_resident_bytes": 201351168,
+      "expert_pending_upload_bytes": 0,
+      "expert_scratch_bytes": 8388608,
+      "expert_owner_peak_bytes": 211742720,
+      "expert_unknown_quarantine_bytes": 0
+    },
+    "expert_cache_miss_counter": null,
+    "io_credits": null,
+    "physical_nas_bytes": null,
+    "proc_read_bytes": null,
+    "nfs_shared_mount_bytes": null,
+    "scope": "logical checkpoint reader and facade deltas; not physical NAS/device-kernel counts"
+  },
+  "invocation_mapping": "serialized named request/log-byte interval; transaction is NOT request ID"
+}

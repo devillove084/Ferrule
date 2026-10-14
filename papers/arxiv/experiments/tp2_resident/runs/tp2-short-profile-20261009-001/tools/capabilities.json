@@ -1,0 +1,128 @@
+{
+  "tools": {
+    "nsys": "/usr/local/bin/nsys",
+    "nvprof": null,
+    "perf": null,
+    "ncu": null
+  },
+  "nsys_resolved": "/opt/nvidia/nsight-systems/2026.1.3/target-linux-x64/nsys",
+  "commands": [
+    {
+      "name": "version",
+      "argv": [
+        "/usr/local/bin/nsys",
+        "--version"
+      ],
+      "returncode": 0
+    },
+    {
+      "name": "status",
+      "argv": [
+        "/usr/local/bin/nsys",
+        "status",
+        "-e"
+      ],
+      "returncode": 0
+    },
+    {
+      "name": "profile-help",
+      "argv": [
+        "/usr/local/bin/nsys",
+        "profile",
+        "--help"
+      ],
+      "returncode": 0
+    },
+    {
+      "name": "start-help",
+      "argv": [
+        "/usr/local/bin/nsys",
+        "start",
+        "--help"
+      ],
+      "returncode": 0
+    },
+    {
+      "name": "stop-help",
+      "argv": [
+        "/usr/local/bin/nsys",
+        "stop",
+        "--help"
+      ],
+      "returncode": 0
+    },
+    {
+      "name": "stats-help",
+      "argv": [
+        "/usr/local/bin/nsys",
+        "stats",
+        "--help"
+      ],
+      "returncode": 0
+    },
+    {
+      "name": "reports",
+      "argv": [
+        "/usr/local/bin/nsys",
+        "stats",
+        "--help-reports"
+      ],
+      "returncode": 1
+    },
+    {
+      "name": "sessions-before",
+      "argv": [
+        "/usr/local/bin/nsys",
+        "sessions",
+        "list"
+      ],
+      "returncode": 0
+    },
+    {
+      "name": "probe-start",
+      "argv": [
+        "/usr/local/bin/nsys",
+        "start",
+        "--session=tp2CpuProbe20261009"
+      ],
+      "returncode": 0,
+      "stdout": "",
+      "stderr": "",
+      "parent_poll": null,
+      "unix": 1791539976.615715
+    },
+    {
+      "name": "probe-stop",
+      "argv": [
+        "/usr/local/bin/nsys",
+        "stop",
+        "--session=tp2CpuProbe20261009"
+      ],
+      "returncode": 0,
+      "stdout": "Generating '/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-short-profile-20261009-001/tools/nsys-report-1b74.qdstrm'\n\n[1/1] [0%                          ] cpu-probe.nsys-rep\n[1/1] [0%                          ] cpu-probe.nsys-rep\n[1/1] [==========48%               ] cpu-probe.nsys-rep\n[1/1] [=======================96%  ] cpu-probe.nsys-rep\n[1/1] [========================98% ] cpu-probe.nsys-rep\n[1/1] [========================100%] cpu-probe.nsys-rep\n[1/1] [========================100%] cpu-probe.nsys-rep\nGenerated:\n\t/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-short-profile-20261009-001/tools/cpu-probe.nsys-rep\n",
+      "stderr": "",
+      "parent_poll": null,
+      "unix": 1791539979.0014663
+    },
+    {
+      "name": "probe-launch",
+      "argv": [
+        "/usr/local/bin/nsys",
+        "profile",
+        "--session-new=tp2CpuProbe20261009",
+        "--start-later=true",
+        "--trace=osrt",
+        "--sample=none",
+        "--cpuctxsw=none",
+        "--kill=none",
+        "--wait=primary",
+        "--duration=10",
+        "--force-overwrite=false",
+        "--output=/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-short-profile-20261009-001/tools/cpu-probe",
+        "/bin/sleep",
+        "12"
+      ],
+      "returncode": 0
+    }
+  ]
+}

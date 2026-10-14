@@ -28,7 +28,7 @@ impl ExpertStreamingReader {
             transport,
             completion_hub,
             io_uring: Some(Arc::new(reader)),
-            pinned_source_files: Arc::new(Mutex::new(HashMap::new())),
+            pinned_source_files: cuda_pinned::PinnedSourceFiles::default(),
         })
     }
 }

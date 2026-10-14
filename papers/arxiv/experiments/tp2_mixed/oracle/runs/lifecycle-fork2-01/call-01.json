@@ -1,0 +1,8881 @@
+{
+  "id": "call-01",
+  "calls": [
+    {
+      "stage": "call",
+      "input_token_ids": [
+        11
+      ],
+      "position_start": 1,
+      "sequence_length_after": 2,
+      "next_token_id": 353
+    }
+  ],
+  "tensors": {
+    "call.input_ids": {
+      "shape": [
+        1,
+        1
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.position_ids": {
+      "shape": [
+        1,
+        1
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.cache_position": {
+      "shape": [
+        1
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.attention_mask": {
+      "shape": [
+        1,
+        2
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.logits": {
+      "shape": [
+        1,
+        1,
+        248320
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.embedding": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.final_norm": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.logits": {
+      "shape": [
+        1,
+        1,
+        124160
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.logits": {
+      "shape": [
+        1,
+        1,
+        124160
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.00.hidden": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.00.attention": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.00.moe": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.00.attention_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.00.moe_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.00.routed_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.00.shared_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.00.shared_gate_logit": {
+      "shape": [
+        1,
+        1
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.00.raw_router_logits": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.00.router_probabilities": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.layers.00.routing_weights": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.layers.00.native_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.0.layers.00.selected_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.1.layers.00.attention_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.00.moe_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.00.routed_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.00.shared_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.00.shared_gate_logit": {
+      "shape": [
+        1,
+        1
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.00.raw_router_logits": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.00.router_probabilities": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.layers.00.routing_weights": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.layers.00.native_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.1.layers.00.selected_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.cache.conv_states.00": {
+      "shape": [
+        1,
+        8192,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.cache.recurrent_states.00": {
+      "shape": [
+        1,
+        32,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.cache.conv_states.00": {
+      "shape": [
+        1,
+        4096,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.cache.recurrent_states.00": {
+      "shape": [
+        1,
+        16,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.cache.conv_states.00": {
+      "shape": [
+        1,
+        4096,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.cache.recurrent_states.00": {
+      "shape": [
+        1,
+        16,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.layers.01.hidden": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.01.attention": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.01.moe": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.01.attention_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.01.moe_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.01.routed_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.01.shared_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.01.shared_gate_logit": {
+      "shape": [
+        1,
+        1
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.01.raw_router_logits": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.01.router_probabilities": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.layers.01.routing_weights": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.layers.01.native_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.0.layers.01.selected_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.1.layers.01.attention_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.01.moe_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.01.routed_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.01.shared_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.01.shared_gate_logit": {
+      "shape": [
+        1,
+        1
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.01.raw_router_logits": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.01.router_probabilities": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.layers.01.routing_weights": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.layers.01.native_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.1.layers.01.selected_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.cache.conv_states.01": {
+      "shape": [
+        1,
+        8192,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.cache.recurrent_states.01": {
+      "shape": [
+        1,
+        32,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.cache.conv_states.01": {
+      "shape": [
+        1,
+        4096,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.cache.recurrent_states.01": {
+      "shape": [
+        1,
+        16,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.cache.conv_states.01": {
+      "shape": [
+        1,
+        4096,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.cache.recurrent_states.01": {
+      "shape": [
+        1,
+        16,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.layers.02.hidden": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.02.attention": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.02.moe": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.02.attention_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.02.moe_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.02.routed_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.02.shared_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.02.shared_gate_logit": {
+      "shape": [
+        1,
+        1
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.02.raw_router_logits": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.02.router_probabilities": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.layers.02.routing_weights": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.layers.02.native_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.0.layers.02.selected_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.1.layers.02.attention_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.02.moe_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.02.routed_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.02.shared_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.02.shared_gate_logit": {
+      "shape": [
+        1,
+        1
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.02.raw_router_logits": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.02.router_probabilities": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.layers.02.routing_weights": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.layers.02.native_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.1.layers.02.selected_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.cache.conv_states.02": {
+      "shape": [
+        1,
+        8192,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.cache.recurrent_states.02": {
+      "shape": [
+        1,
+        32,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.cache.conv_states.02": {
+      "shape": [
+        1,
+        4096,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.cache.recurrent_states.02": {
+      "shape": [
+        1,
+        16,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.cache.conv_states.02": {
+      "shape": [
+        1,
+        4096,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.cache.recurrent_states.02": {
+      "shape": [
+        1,
+        16,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.layers.03.hidden": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.03.attention": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.03.moe": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.03.attention_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.03.moe_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.03.routed_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.03.shared_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.03.shared_gate_logit": {
+      "shape": [
+        1,
+        1
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.03.raw_router_logits": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.03.router_probabilities": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.layers.03.routing_weights": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.layers.03.native_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.0.layers.03.selected_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.1.layers.03.attention_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.03.moe_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.03.routed_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.03.shared_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.03.shared_gate_logit": {
+      "shape": [
+        1,
+        1
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.03.raw_router_logits": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.03.router_probabilities": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.layers.03.routing_weights": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.layers.03.native_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.1.layers.03.selected_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.cache.key_cache.03": {
+      "shape": [
+        1,
+        2,
+        2,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.cache.value_cache.03": {
+      "shape": [
+        1,
+        2,
+        2,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.cache.key_cache.03": {
+      "shape": [
+        1,
+        1,
+        2,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.cache.value_cache.03": {
+      "shape": [
+        1,
+        1,
+        2,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.cache.key_cache.03": {
+      "shape": [
+        1,
+        1,
+        2,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.cache.value_cache.03": {
+      "shape": [
+        1,
+        1,
+        2,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.04.hidden": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.04.attention": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.04.moe": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.04.attention_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.04.moe_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.04.routed_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.04.shared_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.04.shared_gate_logit": {
+      "shape": [
+        1,
+        1
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.04.raw_router_logits": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.04.router_probabilities": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.layers.04.routing_weights": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.layers.04.native_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.0.layers.04.selected_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.1.layers.04.attention_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.04.moe_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.04.routed_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.04.shared_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.04.shared_gate_logit": {
+      "shape": [
+        1,
+        1
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.04.raw_router_logits": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.04.router_probabilities": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.layers.04.routing_weights": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.layers.04.native_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.1.layers.04.selected_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.cache.conv_states.04": {
+      "shape": [
+        1,
+        8192,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.cache.recurrent_states.04": {
+      "shape": [
+        1,
+        32,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.cache.conv_states.04": {
+      "shape": [
+        1,
+        4096,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.cache.recurrent_states.04": {
+      "shape": [
+        1,
+        16,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.cache.conv_states.04": {
+      "shape": [
+        1,
+        4096,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.cache.recurrent_states.04": {
+      "shape": [
+        1,
+        16,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.layers.05.hidden": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.05.attention": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.05.moe": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.05.attention_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.05.moe_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.05.routed_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.05.shared_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.05.shared_gate_logit": {
+      "shape": [
+        1,
+        1
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.05.raw_router_logits": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.05.router_probabilities": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.layers.05.routing_weights": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.layers.05.native_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.0.layers.05.selected_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.1.layers.05.attention_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.05.moe_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.05.routed_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.05.shared_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.05.shared_gate_logit": {
+      "shape": [
+        1,
+        1
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.05.raw_router_logits": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.05.router_probabilities": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.layers.05.routing_weights": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.layers.05.native_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.1.layers.05.selected_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.cache.conv_states.05": {
+      "shape": [
+        1,
+        8192,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.cache.recurrent_states.05": {
+      "shape": [
+        1,
+        32,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.cache.conv_states.05": {
+      "shape": [
+        1,
+        4096,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.cache.recurrent_states.05": {
+      "shape": [
+        1,
+        16,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.cache.conv_states.05": {
+      "shape": [
+        1,
+        4096,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.cache.recurrent_states.05": {
+      "shape": [
+        1,
+        16,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.layers.06.hidden": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.06.attention": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.06.moe": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.06.attention_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.06.moe_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.06.routed_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.06.shared_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.06.shared_gate_logit": {
+      "shape": [
+        1,
+        1
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.06.raw_router_logits": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.06.router_probabilities": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.layers.06.routing_weights": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.layers.06.native_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.0.layers.06.selected_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.1.layers.06.attention_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.06.moe_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.06.routed_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.06.shared_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.06.shared_gate_logit": {
+      "shape": [
+        1,
+        1
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.06.raw_router_logits": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.06.router_probabilities": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.layers.06.routing_weights": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.layers.06.native_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.1.layers.06.selected_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.cache.conv_states.06": {
+      "shape": [
+        1,
+        8192,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.cache.recurrent_states.06": {
+      "shape": [
+        1,
+        32,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.cache.conv_states.06": {
+      "shape": [
+        1,
+        4096,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.cache.recurrent_states.06": {
+      "shape": [
+        1,
+        16,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.cache.conv_states.06": {
+      "shape": [
+        1,
+        4096,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.cache.recurrent_states.06": {
+      "shape": [
+        1,
+        16,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.layers.07.hidden": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.07.attention": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.07.moe": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.07.attention_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.07.moe_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.07.routed_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.07.shared_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.07.shared_gate_logit": {
+      "shape": [
+        1,
+        1
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.07.raw_router_logits": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.07.router_probabilities": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.layers.07.routing_weights": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.layers.07.native_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.0.layers.07.selected_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.1.layers.07.attention_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.07.moe_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.07.routed_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.07.shared_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.07.shared_gate_logit": {
+      "shape": [
+        1,
+        1
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.07.raw_router_logits": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.07.router_probabilities": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.layers.07.routing_weights": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.layers.07.native_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.1.layers.07.selected_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.cache.key_cache.07": {
+      "shape": [
+        1,
+        2,
+        2,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.cache.value_cache.07": {
+      "shape": [
+        1,
+        2,
+        2,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.cache.key_cache.07": {
+      "shape": [
+        1,
+        1,
+        2,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.cache.value_cache.07": {
+      "shape": [
+        1,
+        1,
+        2,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.cache.key_cache.07": {
+      "shape": [
+        1,
+        1,
+        2,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.cache.value_cache.07": {
+      "shape": [
+        1,
+        1,
+        2,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.08.hidden": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.08.attention": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.08.moe": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.08.attention_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.08.moe_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.08.routed_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.08.shared_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.08.shared_gate_logit": {
+      "shape": [
+        1,
+        1
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.08.raw_router_logits": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.08.router_probabilities": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.layers.08.routing_weights": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.layers.08.native_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.0.layers.08.selected_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.1.layers.08.attention_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.08.moe_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.08.routed_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.08.shared_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.08.shared_gate_logit": {
+      "shape": [
+        1,
+        1
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.08.raw_router_logits": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.08.router_probabilities": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.layers.08.routing_weights": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.layers.08.native_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.1.layers.08.selected_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.cache.conv_states.08": {
+      "shape": [
+        1,
+        8192,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.cache.recurrent_states.08": {
+      "shape": [
+        1,
+        32,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.cache.conv_states.08": {
+      "shape": [
+        1,
+        4096,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.cache.recurrent_states.08": {
+      "shape": [
+        1,
+        16,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.cache.conv_states.08": {
+      "shape": [
+        1,
+        4096,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.cache.recurrent_states.08": {
+      "shape": [
+        1,
+        16,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.layers.09.hidden": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.09.attention": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.09.moe": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.09.attention_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.09.moe_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.09.routed_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.09.shared_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.09.shared_gate_logit": {
+      "shape": [
+        1,
+        1
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.09.raw_router_logits": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.09.router_probabilities": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.layers.09.routing_weights": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.layers.09.native_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.0.layers.09.selected_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.1.layers.09.attention_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.09.moe_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.09.routed_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.09.shared_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.09.shared_gate_logit": {
+      "shape": [
+        1,
+        1
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.09.raw_router_logits": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.09.router_probabilities": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.layers.09.routing_weights": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.layers.09.native_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.1.layers.09.selected_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.cache.conv_states.09": {
+      "shape": [
+        1,
+        8192,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.cache.recurrent_states.09": {
+      "shape": [
+        1,
+        32,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.cache.conv_states.09": {
+      "shape": [
+        1,
+        4096,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.cache.recurrent_states.09": {
+      "shape": [
+        1,
+        16,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.cache.conv_states.09": {
+      "shape": [
+        1,
+        4096,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.cache.recurrent_states.09": {
+      "shape": [
+        1,
+        16,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.layers.10.hidden": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.10.attention": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.10.moe": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.10.attention_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.10.moe_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.10.routed_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.10.shared_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.10.shared_gate_logit": {
+      "shape": [
+        1,
+        1
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.10.raw_router_logits": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.10.router_probabilities": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.layers.10.routing_weights": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.layers.10.native_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.0.layers.10.selected_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.1.layers.10.attention_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.10.moe_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.10.routed_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.10.shared_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.10.shared_gate_logit": {
+      "shape": [
+        1,
+        1
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.10.raw_router_logits": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.10.router_probabilities": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.layers.10.routing_weights": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.layers.10.native_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.1.layers.10.selected_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.cache.conv_states.10": {
+      "shape": [
+        1,
+        8192,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.cache.recurrent_states.10": {
+      "shape": [
+        1,
+        32,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.cache.conv_states.10": {
+      "shape": [
+        1,
+        4096,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.cache.recurrent_states.10": {
+      "shape": [
+        1,
+        16,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.cache.conv_states.10": {
+      "shape": [
+        1,
+        4096,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.cache.recurrent_states.10": {
+      "shape": [
+        1,
+        16,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.layers.11.hidden": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.11.attention": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.11.moe": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.11.attention_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.11.moe_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.11.routed_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.11.shared_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.11.shared_gate_logit": {
+      "shape": [
+        1,
+        1
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.11.raw_router_logits": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.11.router_probabilities": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.layers.11.routing_weights": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.layers.11.native_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.0.layers.11.selected_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.1.layers.11.attention_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.11.moe_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.11.routed_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.11.shared_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.11.shared_gate_logit": {
+      "shape": [
+        1,
+        1
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.11.raw_router_logits": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.11.router_probabilities": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.layers.11.routing_weights": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.layers.11.native_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.1.layers.11.selected_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.cache.key_cache.11": {
+      "shape": [
+        1,
+        2,
+        2,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.cache.value_cache.11": {
+      "shape": [
+        1,
+        2,
+        2,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.cache.key_cache.11": {
+      "shape": [
+        1,
+        1,
+        2,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.cache.value_cache.11": {
+      "shape": [
+        1,
+        1,
+        2,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.cache.key_cache.11": {
+      "shape": [
+        1,
+        1,
+        2,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.cache.value_cache.11": {
+      "shape": [
+        1,
+        1,
+        2,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.12.hidden": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.12.attention": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.12.moe": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.12.attention_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.12.moe_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.12.routed_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.12.shared_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.12.shared_gate_logit": {
+      "shape": [
+        1,
+        1
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.12.raw_router_logits": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.12.router_probabilities": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.layers.12.routing_weights": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.layers.12.native_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.0.layers.12.selected_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.1.layers.12.attention_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.12.moe_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.12.routed_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.12.shared_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.12.shared_gate_logit": {
+      "shape": [
+        1,
+        1
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.12.raw_router_logits": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.12.router_probabilities": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.layers.12.routing_weights": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.layers.12.native_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.1.layers.12.selected_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.cache.conv_states.12": {
+      "shape": [
+        1,
+        8192,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.cache.recurrent_states.12": {
+      "shape": [
+        1,
+        32,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.cache.conv_states.12": {
+      "shape": [
+        1,
+        4096,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.cache.recurrent_states.12": {
+      "shape": [
+        1,
+        16,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.cache.conv_states.12": {
+      "shape": [
+        1,
+        4096,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.cache.recurrent_states.12": {
+      "shape": [
+        1,
+        16,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.layers.13.hidden": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.13.attention": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.13.moe": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.13.attention_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.13.moe_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.13.routed_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.13.shared_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.13.shared_gate_logit": {
+      "shape": [
+        1,
+        1
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.13.raw_router_logits": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.13.router_probabilities": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.layers.13.routing_weights": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.layers.13.native_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.0.layers.13.selected_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.1.layers.13.attention_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.13.moe_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.13.routed_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.13.shared_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.13.shared_gate_logit": {
+      "shape": [
+        1,
+        1
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.13.raw_router_logits": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.13.router_probabilities": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.layers.13.routing_weights": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.layers.13.native_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.1.layers.13.selected_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.cache.conv_states.13": {
+      "shape": [
+        1,
+        8192,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.cache.recurrent_states.13": {
+      "shape": [
+        1,
+        32,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.cache.conv_states.13": {
+      "shape": [
+        1,
+        4096,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.cache.recurrent_states.13": {
+      "shape": [
+        1,
+        16,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.cache.conv_states.13": {
+      "shape": [
+        1,
+        4096,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.cache.recurrent_states.13": {
+      "shape": [
+        1,
+        16,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.layers.14.hidden": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.14.attention": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.14.moe": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.14.attention_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.14.moe_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.14.routed_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.14.shared_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.14.shared_gate_logit": {
+      "shape": [
+        1,
+        1
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.14.raw_router_logits": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.14.router_probabilities": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.layers.14.routing_weights": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.layers.14.native_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.0.layers.14.selected_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.1.layers.14.attention_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.14.moe_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.14.routed_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.14.shared_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.14.shared_gate_logit": {
+      "shape": [
+        1,
+        1
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.14.raw_router_logits": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.14.router_probabilities": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.layers.14.routing_weights": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.layers.14.native_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.1.layers.14.selected_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.cache.conv_states.14": {
+      "shape": [
+        1,
+        8192,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.cache.recurrent_states.14": {
+      "shape": [
+        1,
+        32,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.cache.conv_states.14": {
+      "shape": [
+        1,
+        4096,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.cache.recurrent_states.14": {
+      "shape": [
+        1,
+        16,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.cache.conv_states.14": {
+      "shape": [
+        1,
+        4096,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.cache.recurrent_states.14": {
+      "shape": [
+        1,
+        16,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.layers.15.hidden": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.15.attention": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.15.moe": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.15.attention_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.15.moe_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.15.routed_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.15.shared_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.15.shared_gate_logit": {
+      "shape": [
+        1,
+        1
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.15.raw_router_logits": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.15.router_probabilities": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.layers.15.routing_weights": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.layers.15.native_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.0.layers.15.selected_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.1.layers.15.attention_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.15.moe_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.15.routed_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.15.shared_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.15.shared_gate_logit": {
+      "shape": [
+        1,
+        1
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.15.raw_router_logits": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.15.router_probabilities": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.layers.15.routing_weights": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.layers.15.native_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.1.layers.15.selected_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.cache.key_cache.15": {
+      "shape": [
+        1,
+        2,
+        2,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.cache.value_cache.15": {
+      "shape": [
+        1,
+        2,
+        2,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.cache.key_cache.15": {
+      "shape": [
+        1,
+        1,
+        2,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.cache.value_cache.15": {
+      "shape": [
+        1,
+        1,
+        2,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.cache.key_cache.15": {
+      "shape": [
+        1,
+        1,
+        2,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.cache.value_cache.15": {
+      "shape": [
+        1,
+        1,
+        2,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.16.hidden": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.16.attention": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.16.moe": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.16.attention_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.16.moe_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.16.routed_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.16.shared_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.16.shared_gate_logit": {
+      "shape": [
+        1,
+        1
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.16.raw_router_logits": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.16.router_probabilities": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.layers.16.routing_weights": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.layers.16.native_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.0.layers.16.selected_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.1.layers.16.attention_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.16.moe_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.16.routed_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.16.shared_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.16.shared_gate_logit": {
+      "shape": [
+        1,
+        1
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.16.raw_router_logits": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.16.router_probabilities": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.layers.16.routing_weights": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.layers.16.native_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.1.layers.16.selected_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.cache.conv_states.16": {
+      "shape": [
+        1,
+        8192,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.cache.recurrent_states.16": {
+      "shape": [
+        1,
+        32,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.cache.conv_states.16": {
+      "shape": [
+        1,
+        4096,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.cache.recurrent_states.16": {
+      "shape": [
+        1,
+        16,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.cache.conv_states.16": {
+      "shape": [
+        1,
+        4096,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.cache.recurrent_states.16": {
+      "shape": [
+        1,
+        16,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.layers.17.hidden": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.17.attention": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.17.moe": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.17.attention_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.17.moe_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.17.routed_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.17.shared_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.17.shared_gate_logit": {
+      "shape": [
+        1,
+        1
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.17.raw_router_logits": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.17.router_probabilities": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.layers.17.routing_weights": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.layers.17.native_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.0.layers.17.selected_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.1.layers.17.attention_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.17.moe_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.17.routed_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.17.shared_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.17.shared_gate_logit": {
+      "shape": [
+        1,
+        1
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.17.raw_router_logits": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.17.router_probabilities": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.layers.17.routing_weights": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.layers.17.native_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.1.layers.17.selected_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.cache.conv_states.17": {
+      "shape": [
+        1,
+        8192,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.cache.recurrent_states.17": {
+      "shape": [
+        1,
+        32,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.cache.conv_states.17": {
+      "shape": [
+        1,
+        4096,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.cache.recurrent_states.17": {
+      "shape": [
+        1,
+        16,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.cache.conv_states.17": {
+      "shape": [
+        1,
+        4096,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.cache.recurrent_states.17": {
+      "shape": [
+        1,
+        16,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.layers.18.hidden": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.18.attention": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.18.moe": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.18.attention_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.18.moe_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.18.routed_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.18.shared_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.18.shared_gate_logit": {
+      "shape": [
+        1,
+        1
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.18.raw_router_logits": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.18.router_probabilities": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.layers.18.routing_weights": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.layers.18.native_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.0.layers.18.selected_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.1.layers.18.attention_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.18.moe_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.18.routed_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.18.shared_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.18.shared_gate_logit": {
+      "shape": [
+        1,
+        1
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.18.raw_router_logits": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.18.router_probabilities": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.layers.18.routing_weights": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.layers.18.native_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.1.layers.18.selected_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.cache.conv_states.18": {
+      "shape": [
+        1,
+        8192,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.cache.recurrent_states.18": {
+      "shape": [
+        1,
+        32,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.cache.conv_states.18": {
+      "shape": [
+        1,
+        4096,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.cache.recurrent_states.18": {
+      "shape": [
+        1,
+        16,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.cache.conv_states.18": {
+      "shape": [
+        1,
+        4096,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.cache.recurrent_states.18": {
+      "shape": [
+        1,
+        16,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.layers.19.hidden": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.19.attention": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.19.moe": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.19.attention_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.19.moe_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.19.routed_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.19.shared_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.19.shared_gate_logit": {
+      "shape": [
+        1,
+        1
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.19.raw_router_logits": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.19.router_probabilities": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.layers.19.routing_weights": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.layers.19.native_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.0.layers.19.selected_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.1.layers.19.attention_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.19.moe_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.19.routed_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.19.shared_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.19.shared_gate_logit": {
+      "shape": [
+        1,
+        1
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.19.raw_router_logits": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.19.router_probabilities": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.layers.19.routing_weights": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.layers.19.native_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.1.layers.19.selected_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.cache.key_cache.19": {
+      "shape": [
+        1,
+        2,
+        2,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.cache.value_cache.19": {
+      "shape": [
+        1,
+        2,
+        2,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.cache.key_cache.19": {
+      "shape": [
+        1,
+        1,
+        2,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.cache.value_cache.19": {
+      "shape": [
+        1,
+        1,
+        2,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.cache.key_cache.19": {
+      "shape": [
+        1,
+        1,
+        2,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.cache.value_cache.19": {
+      "shape": [
+        1,
+        1,
+        2,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.20.hidden": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.20.attention": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.20.moe": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.20.attention_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.20.moe_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.20.routed_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.20.shared_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.20.shared_gate_logit": {
+      "shape": [
+        1,
+        1
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.20.raw_router_logits": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.20.router_probabilities": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.layers.20.routing_weights": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.layers.20.native_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.0.layers.20.selected_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.1.layers.20.attention_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.20.moe_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.20.routed_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.20.shared_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.20.shared_gate_logit": {
+      "shape": [
+        1,
+        1
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.20.raw_router_logits": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.20.router_probabilities": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.layers.20.routing_weights": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.layers.20.native_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.1.layers.20.selected_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.cache.conv_states.20": {
+      "shape": [
+        1,
+        8192,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.cache.recurrent_states.20": {
+      "shape": [
+        1,
+        32,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.cache.conv_states.20": {
+      "shape": [
+        1,
+        4096,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.cache.recurrent_states.20": {
+      "shape": [
+        1,
+        16,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.cache.conv_states.20": {
+      "shape": [
+        1,
+        4096,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.cache.recurrent_states.20": {
+      "shape": [
+        1,
+        16,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.layers.21.hidden": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.21.attention": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.21.moe": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.21.attention_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.21.moe_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.21.routed_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.21.shared_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.21.shared_gate_logit": {
+      "shape": [
+        1,
+        1
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.21.raw_router_logits": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.21.router_probabilities": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.layers.21.routing_weights": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.layers.21.native_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.0.layers.21.selected_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.1.layers.21.attention_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.21.moe_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.21.routed_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.21.shared_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.21.shared_gate_logit": {
+      "shape": [
+        1,
+        1
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.21.raw_router_logits": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.21.router_probabilities": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.layers.21.routing_weights": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.layers.21.native_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.1.layers.21.selected_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.cache.conv_states.21": {
+      "shape": [
+        1,
+        8192,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.cache.recurrent_states.21": {
+      "shape": [
+        1,
+        32,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.cache.conv_states.21": {
+      "shape": [
+        1,
+        4096,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.cache.recurrent_states.21": {
+      "shape": [
+        1,
+        16,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.cache.conv_states.21": {
+      "shape": [
+        1,
+        4096,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.cache.recurrent_states.21": {
+      "shape": [
+        1,
+        16,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.layers.22.hidden": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.22.attention": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.22.moe": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.22.attention_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.22.moe_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.22.routed_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.22.shared_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.22.shared_gate_logit": {
+      "shape": [
+        1,
+        1
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.22.raw_router_logits": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.22.router_probabilities": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.layers.22.routing_weights": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.layers.22.native_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.0.layers.22.selected_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.1.layers.22.attention_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.22.moe_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.22.routed_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.22.shared_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.22.shared_gate_logit": {
+      "shape": [
+        1,
+        1
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.22.raw_router_logits": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.22.router_probabilities": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.layers.22.routing_weights": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.layers.22.native_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.1.layers.22.selected_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.cache.conv_states.22": {
+      "shape": [
+        1,
+        8192,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.cache.recurrent_states.22": {
+      "shape": [
+        1,
+        32,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.cache.conv_states.22": {
+      "shape": [
+        1,
+        4096,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.cache.recurrent_states.22": {
+      "shape": [
+        1,
+        16,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.cache.conv_states.22": {
+      "shape": [
+        1,
+        4096,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.cache.recurrent_states.22": {
+      "shape": [
+        1,
+        16,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.layers.23.hidden": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.23.attention": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.23.moe": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.23.attention_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.23.moe_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.23.routed_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.23.shared_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.23.shared_gate_logit": {
+      "shape": [
+        1,
+        1
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.23.raw_router_logits": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.23.router_probabilities": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.layers.23.routing_weights": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.layers.23.native_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.0.layers.23.selected_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.1.layers.23.attention_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.23.moe_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.23.routed_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.23.shared_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.23.shared_gate_logit": {
+      "shape": [
+        1,
+        1
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.23.raw_router_logits": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.23.router_probabilities": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.layers.23.routing_weights": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.layers.23.native_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.1.layers.23.selected_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.cache.key_cache.23": {
+      "shape": [
+        1,
+        2,
+        2,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.cache.value_cache.23": {
+      "shape": [
+        1,
+        2,
+        2,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.cache.key_cache.23": {
+      "shape": [
+        1,
+        1,
+        2,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.cache.value_cache.23": {
+      "shape": [
+        1,
+        1,
+        2,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.cache.key_cache.23": {
+      "shape": [
+        1,
+        1,
+        2,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.cache.value_cache.23": {
+      "shape": [
+        1,
+        1,
+        2,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.24.hidden": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.24.attention": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.24.moe": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.24.attention_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.24.moe_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.24.routed_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.24.shared_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.24.shared_gate_logit": {
+      "shape": [
+        1,
+        1
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.24.raw_router_logits": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.24.router_probabilities": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.layers.24.routing_weights": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.layers.24.native_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.0.layers.24.selected_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.1.layers.24.attention_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.24.moe_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.24.routed_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.24.shared_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.24.shared_gate_logit": {
+      "shape": [
+        1,
+        1
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.24.raw_router_logits": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.24.router_probabilities": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.layers.24.routing_weights": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.layers.24.native_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.1.layers.24.selected_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.cache.conv_states.24": {
+      "shape": [
+        1,
+        8192,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.cache.recurrent_states.24": {
+      "shape": [
+        1,
+        32,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.cache.conv_states.24": {
+      "shape": [
+        1,
+        4096,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.cache.recurrent_states.24": {
+      "shape": [
+        1,
+        16,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.cache.conv_states.24": {
+      "shape": [
+        1,
+        4096,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.cache.recurrent_states.24": {
+      "shape": [
+        1,
+        16,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.layers.25.hidden": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.25.attention": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.25.moe": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.25.attention_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.25.moe_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.25.routed_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.25.shared_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.25.shared_gate_logit": {
+      "shape": [
+        1,
+        1
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.25.raw_router_logits": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.25.router_probabilities": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.layers.25.routing_weights": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.layers.25.native_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.0.layers.25.selected_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.1.layers.25.attention_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.25.moe_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.25.routed_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.25.shared_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.25.shared_gate_logit": {
+      "shape": [
+        1,
+        1
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.25.raw_router_logits": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.25.router_probabilities": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.layers.25.routing_weights": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.layers.25.native_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.1.layers.25.selected_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.cache.conv_states.25": {
+      "shape": [
+        1,
+        8192,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.cache.recurrent_states.25": {
+      "shape": [
+        1,
+        32,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.cache.conv_states.25": {
+      "shape": [
+        1,
+        4096,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.cache.recurrent_states.25": {
+      "shape": [
+        1,
+        16,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.cache.conv_states.25": {
+      "shape": [
+        1,
+        4096,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.cache.recurrent_states.25": {
+      "shape": [
+        1,
+        16,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.layers.26.hidden": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.26.attention": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.26.moe": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.26.attention_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.26.moe_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.26.routed_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.26.shared_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.26.shared_gate_logit": {
+      "shape": [
+        1,
+        1
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.26.raw_router_logits": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.26.router_probabilities": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.layers.26.routing_weights": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.layers.26.native_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.0.layers.26.selected_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.1.layers.26.attention_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.26.moe_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.26.routed_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.26.shared_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.26.shared_gate_logit": {
+      "shape": [
+        1,
+        1
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.26.raw_router_logits": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.26.router_probabilities": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.layers.26.routing_weights": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.layers.26.native_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.1.layers.26.selected_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.cache.conv_states.26": {
+      "shape": [
+        1,
+        8192,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.cache.recurrent_states.26": {
+      "shape": [
+        1,
+        32,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.cache.conv_states.26": {
+      "shape": [
+        1,
+        4096,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.cache.recurrent_states.26": {
+      "shape": [
+        1,
+        16,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.cache.conv_states.26": {
+      "shape": [
+        1,
+        4096,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.cache.recurrent_states.26": {
+      "shape": [
+        1,
+        16,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.layers.27.hidden": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.27.attention": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.27.moe": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.27.attention_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.27.moe_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.27.routed_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.27.shared_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.27.shared_gate_logit": {
+      "shape": [
+        1,
+        1
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.27.raw_router_logits": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.27.router_probabilities": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.layers.27.routing_weights": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.layers.27.native_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.0.layers.27.selected_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.1.layers.27.attention_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.27.moe_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.27.routed_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.27.shared_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.27.shared_gate_logit": {
+      "shape": [
+        1,
+        1
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.27.raw_router_logits": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.27.router_probabilities": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.layers.27.routing_weights": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.layers.27.native_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.1.layers.27.selected_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.cache.key_cache.27": {
+      "shape": [
+        1,
+        2,
+        2,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.cache.value_cache.27": {
+      "shape": [
+        1,
+        2,
+        2,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.cache.key_cache.27": {
+      "shape": [
+        1,
+        1,
+        2,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.cache.value_cache.27": {
+      "shape": [
+        1,
+        1,
+        2,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.cache.key_cache.27": {
+      "shape": [
+        1,
+        1,
+        2,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.cache.value_cache.27": {
+      "shape": [
+        1,
+        1,
+        2,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.28.hidden": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.28.attention": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.28.moe": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.28.attention_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.28.moe_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.28.routed_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.28.shared_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.28.shared_gate_logit": {
+      "shape": [
+        1,
+        1
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.28.raw_router_logits": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.28.router_probabilities": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.layers.28.routing_weights": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.layers.28.native_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.0.layers.28.selected_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.1.layers.28.attention_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.28.moe_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.28.routed_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.28.shared_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.28.shared_gate_logit": {
+      "shape": [
+        1,
+        1
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.28.raw_router_logits": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.28.router_probabilities": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.layers.28.routing_weights": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.layers.28.native_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.1.layers.28.selected_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.cache.conv_states.28": {
+      "shape": [
+        1,
+        8192,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.cache.recurrent_states.28": {
+      "shape": [
+        1,
+        32,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.cache.conv_states.28": {
+      "shape": [
+        1,
+        4096,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.cache.recurrent_states.28": {
+      "shape": [
+        1,
+        16,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.cache.conv_states.28": {
+      "shape": [
+        1,
+        4096,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.cache.recurrent_states.28": {
+      "shape": [
+        1,
+        16,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.layers.29.hidden": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.29.attention": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.29.moe": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.29.attention_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.29.moe_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.29.routed_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.29.shared_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.29.shared_gate_logit": {
+      "shape": [
+        1,
+        1
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.29.raw_router_logits": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.29.router_probabilities": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.layers.29.routing_weights": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.layers.29.native_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.0.layers.29.selected_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.1.layers.29.attention_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.29.moe_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.29.routed_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.29.shared_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.29.shared_gate_logit": {
+      "shape": [
+        1,
+        1
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.29.raw_router_logits": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.29.router_probabilities": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.layers.29.routing_weights": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.layers.29.native_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.1.layers.29.selected_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.cache.conv_states.29": {
+      "shape": [
+        1,
+        8192,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.cache.recurrent_states.29": {
+      "shape": [
+        1,
+        32,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.cache.conv_states.29": {
+      "shape": [
+        1,
+        4096,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.cache.recurrent_states.29": {
+      "shape": [
+        1,
+        16,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.cache.conv_states.29": {
+      "shape": [
+        1,
+        4096,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.cache.recurrent_states.29": {
+      "shape": [
+        1,
+        16,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.layers.30.hidden": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.30.attention": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.30.moe": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.30.attention_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.30.moe_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.30.routed_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.30.shared_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.30.shared_gate_logit": {
+      "shape": [
+        1,
+        1
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.30.raw_router_logits": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.30.router_probabilities": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.layers.30.routing_weights": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.layers.30.native_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.0.layers.30.selected_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.1.layers.30.attention_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.30.moe_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.30.routed_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.30.shared_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.30.shared_gate_logit": {
+      "shape": [
+        1,
+        1
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.30.raw_router_logits": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.30.router_probabilities": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.layers.30.routing_weights": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.layers.30.native_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.1.layers.30.selected_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.cache.conv_states.30": {
+      "shape": [
+        1,
+        8192,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.cache.recurrent_states.30": {
+      "shape": [
+        1,
+        32,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.cache.conv_states.30": {
+      "shape": [
+        1,
+        4096,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.cache.recurrent_states.30": {
+      "shape": [
+        1,
+        16,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.cache.conv_states.30": {
+      "shape": [
+        1,
+        4096,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.cache.recurrent_states.30": {
+      "shape": [
+        1,
+        16,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.layers.31.hidden": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.31.attention": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.31.moe": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.31.attention_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.31.moe_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.31.routed_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.31.shared_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.31.shared_gate_logit": {
+      "shape": [
+        1,
+        1
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.31.raw_router_logits": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.31.router_probabilities": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.layers.31.routing_weights": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.layers.31.native_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.0.layers.31.selected_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.1.layers.31.attention_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.31.moe_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.31.routed_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.31.shared_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.31.shared_gate_logit": {
+      "shape": [
+        1,
+        1
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.31.raw_router_logits": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.31.router_probabilities": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.layers.31.routing_weights": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.layers.31.native_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.1.layers.31.selected_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.cache.key_cache.31": {
+      "shape": [
+        1,
+        2,
+        2,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.cache.value_cache.31": {
+      "shape": [
+        1,
+        2,
+        2,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.cache.key_cache.31": {
+      "shape": [
+        1,
+        1,
+        2,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.cache.value_cache.31": {
+      "shape": [
+        1,
+        1,
+        2,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.cache.key_cache.31": {
+      "shape": [
+        1,
+        1,
+        2,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.cache.value_cache.31": {
+      "shape": [
+        1,
+        1,
+        2,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.32.hidden": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.32.attention": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.32.moe": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.32.attention_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.32.moe_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.32.routed_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.32.shared_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.32.shared_gate_logit": {
+      "shape": [
+        1,
+        1
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.32.raw_router_logits": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.32.router_probabilities": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.layers.32.routing_weights": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.layers.32.native_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.0.layers.32.selected_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.1.layers.32.attention_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.32.moe_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.32.routed_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.32.shared_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.32.shared_gate_logit": {
+      "shape": [
+        1,
+        1
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.32.raw_router_logits": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.32.router_probabilities": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.layers.32.routing_weights": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.layers.32.native_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.1.layers.32.selected_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.cache.conv_states.32": {
+      "shape": [
+        1,
+        8192,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.cache.recurrent_states.32": {
+      "shape": [
+        1,
+        32,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.cache.conv_states.32": {
+      "shape": [
+        1,
+        4096,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.cache.recurrent_states.32": {
+      "shape": [
+        1,
+        16,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.cache.conv_states.32": {
+      "shape": [
+        1,
+        4096,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.cache.recurrent_states.32": {
+      "shape": [
+        1,
+        16,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.layers.33.hidden": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.33.attention": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.33.moe": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.33.attention_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.33.moe_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.33.routed_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.33.shared_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.33.shared_gate_logit": {
+      "shape": [
+        1,
+        1
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.33.raw_router_logits": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.33.router_probabilities": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.layers.33.routing_weights": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.layers.33.native_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.0.layers.33.selected_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.1.layers.33.attention_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.33.moe_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.33.routed_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.33.shared_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.33.shared_gate_logit": {
+      "shape": [
+        1,
+        1
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.33.raw_router_logits": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.33.router_probabilities": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.layers.33.routing_weights": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.layers.33.native_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.1.layers.33.selected_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.cache.conv_states.33": {
+      "shape": [
+        1,
+        8192,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.cache.recurrent_states.33": {
+      "shape": [
+        1,
+        32,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.cache.conv_states.33": {
+      "shape": [
+        1,
+        4096,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.cache.recurrent_states.33": {
+      "shape": [
+        1,
+        16,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.cache.conv_states.33": {
+      "shape": [
+        1,
+        4096,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.cache.recurrent_states.33": {
+      "shape": [
+        1,
+        16,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.layers.34.hidden": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.34.attention": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.34.moe": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.34.attention_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.34.moe_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.34.routed_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.34.shared_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.34.shared_gate_logit": {
+      "shape": [
+        1,
+        1
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.34.raw_router_logits": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.34.router_probabilities": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.layers.34.routing_weights": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.layers.34.native_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.0.layers.34.selected_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.1.layers.34.attention_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.34.moe_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.34.routed_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.34.shared_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.34.shared_gate_logit": {
+      "shape": [
+        1,
+        1
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.34.raw_router_logits": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.34.router_probabilities": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.layers.34.routing_weights": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.layers.34.native_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.1.layers.34.selected_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.cache.conv_states.34": {
+      "shape": [
+        1,
+        8192,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.cache.recurrent_states.34": {
+      "shape": [
+        1,
+        32,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.cache.conv_states.34": {
+      "shape": [
+        1,
+        4096,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.cache.recurrent_states.34": {
+      "shape": [
+        1,
+        16,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.cache.conv_states.34": {
+      "shape": [
+        1,
+        4096,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.cache.recurrent_states.34": {
+      "shape": [
+        1,
+        16,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.layers.35.hidden": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.35.attention": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.35.moe": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.35.attention_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.35.moe_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.35.routed_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.35.shared_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.35.shared_gate_logit": {
+      "shape": [
+        1,
+        1
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.35.raw_router_logits": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.35.router_probabilities": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.layers.35.routing_weights": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.layers.35.native_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.0.layers.35.selected_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.1.layers.35.attention_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.35.moe_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.35.routed_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.35.shared_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.35.shared_gate_logit": {
+      "shape": [
+        1,
+        1
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.35.raw_router_logits": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.35.router_probabilities": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.layers.35.routing_weights": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.layers.35.native_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.1.layers.35.selected_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.cache.key_cache.35": {
+      "shape": [
+        1,
+        2,
+        2,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.cache.value_cache.35": {
+      "shape": [
+        1,
+        2,
+        2,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.cache.key_cache.35": {
+      "shape": [
+        1,
+        1,
+        2,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.cache.value_cache.35": {
+      "shape": [
+        1,
+        1,
+        2,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.cache.key_cache.35": {
+      "shape": [
+        1,
+        1,
+        2,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.cache.value_cache.35": {
+      "shape": [
+        1,
+        1,
+        2,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.36.hidden": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.36.attention": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.36.moe": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.36.attention_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.36.moe_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.36.routed_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.36.shared_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.36.shared_gate_logit": {
+      "shape": [
+        1,
+        1
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.36.raw_router_logits": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.36.router_probabilities": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.layers.36.routing_weights": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.layers.36.native_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.0.layers.36.selected_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.1.layers.36.attention_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.36.moe_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.36.routed_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.36.shared_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.36.shared_gate_logit": {
+      "shape": [
+        1,
+        1
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.36.raw_router_logits": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.36.router_probabilities": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.layers.36.routing_weights": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.layers.36.native_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.1.layers.36.selected_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.cache.conv_states.36": {
+      "shape": [
+        1,
+        8192,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.cache.recurrent_states.36": {
+      "shape": [
+        1,
+        32,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.cache.conv_states.36": {
+      "shape": [
+        1,
+        4096,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.cache.recurrent_states.36": {
+      "shape": [
+        1,
+        16,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.cache.conv_states.36": {
+      "shape": [
+        1,
+        4096,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.cache.recurrent_states.36": {
+      "shape": [
+        1,
+        16,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.layers.37.hidden": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.37.attention": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.37.moe": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.37.attention_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.37.moe_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.37.routed_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.37.shared_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.37.shared_gate_logit": {
+      "shape": [
+        1,
+        1
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.37.raw_router_logits": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.37.router_probabilities": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.layers.37.routing_weights": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.layers.37.native_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.0.layers.37.selected_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.1.layers.37.attention_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.37.moe_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.37.routed_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.37.shared_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.37.shared_gate_logit": {
+      "shape": [
+        1,
+        1
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.37.raw_router_logits": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.37.router_probabilities": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.layers.37.routing_weights": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.layers.37.native_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.1.layers.37.selected_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.cache.conv_states.37": {
+      "shape": [
+        1,
+        8192,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.cache.recurrent_states.37": {
+      "shape": [
+        1,
+        32,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.cache.conv_states.37": {
+      "shape": [
+        1,
+        4096,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.cache.recurrent_states.37": {
+      "shape": [
+        1,
+        16,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.cache.conv_states.37": {
+      "shape": [
+        1,
+        4096,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.cache.recurrent_states.37": {
+      "shape": [
+        1,
+        16,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.layers.38.hidden": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.38.attention": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.38.moe": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.38.attention_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.38.moe_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.38.routed_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.38.shared_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.38.shared_gate_logit": {
+      "shape": [
+        1,
+        1
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.38.raw_router_logits": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.38.router_probabilities": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.layers.38.routing_weights": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.layers.38.native_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.0.layers.38.selected_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.1.layers.38.attention_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.38.moe_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.38.routed_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.38.shared_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.38.shared_gate_logit": {
+      "shape": [
+        1,
+        1
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.38.raw_router_logits": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.38.router_probabilities": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.layers.38.routing_weights": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.layers.38.native_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.1.layers.38.selected_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.cache.conv_states.38": {
+      "shape": [
+        1,
+        8192,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.cache.recurrent_states.38": {
+      "shape": [
+        1,
+        32,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.cache.conv_states.38": {
+      "shape": [
+        1,
+        4096,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.cache.recurrent_states.38": {
+      "shape": [
+        1,
+        16,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.cache.conv_states.38": {
+      "shape": [
+        1,
+        4096,
+        4
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.cache.recurrent_states.38": {
+      "shape": [
+        1,
+        16,
+        128,
+        128
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.layers.39.hidden": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.39.attention": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.layers.39.moe": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.39.attention_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.39.moe_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.39.routed_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.39.shared_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.39.shared_gate_logit": {
+      "shape": [
+        1,
+        1
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.39.raw_router_logits": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.layers.39.router_probabilities": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.layers.39.routing_weights": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.0.layers.39.native_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.0.layers.39.selected_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.1.layers.39.attention_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.39.moe_partial": {
+      "shape": [
+        1,
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.39.routed_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.39.shared_partial": {
+      "shape": [
+        1,
+        2048
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.39.shared_gate_logit": {
+      "shape": [
+        1,
+        1
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.39.raw_router_logits": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.layers.39.router_probabilities": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.layers.39.routing_weights": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.float32"
+    },
+    "call.rank.1.layers.39.native_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.rank.1.layers.39.selected_expert_ids": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "torch.int64"
+    },
+    "call.cache.key_cache.39": {
+      "shape": [
+        1,
+        2,
+        2,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.cache.value_cache.39": {
+      "shape": [
+        1,
+        2,
+        2,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.cache.key_cache.39": {
+      "shape": [
+        1,
+        1,
+        2,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.0.cache.value_cache.39": {
+      "shape": [
+        1,
+        1,
+        2,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.cache.key_cache.39": {
+      "shape": [
+        1,
+        1,
+        2,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    },
+    "call.rank.1.cache.value_cache.39": {
+      "shape": [
+        1,
+        1,
+        2,
+        256
+      ],
+      "dtype": "torch.bfloat16"
+    }
+  },
+  "capture_bytes": 132782792,
+  "unsharded_drift": {
+    "status": "not_supplied",
+    "acceptance": "unchanged"
+  },
+  "file": "call-01.safetensors",
+  "sha256": "0b0b4b021f69ca1fac2eb30194bab338aba5c86e6b98997033c0d00e9c61f741",
+  "bytes": 132908088
+}

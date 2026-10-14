@@ -1,0 +1,19 @@
+{
+  "protocol": "tp2-serving-smoke-c1",
+  "purpose": "serving_smoke",
+  "status": "incomplete",
+  "sole_gpu_owner_granted": true,
+  "owner_note": "User renewed sole GPU owner authorization; eight-card idle/no-compute/all-lock preflight passed; optimized 4d40c347 same-binary S1/S2 smoke; stop on failure; no foreign signals",
+  "fairmatch": false,
+  "exact_speedup": null,
+  "slots": [
+    {
+      "id": "S1",
+      "status": "dispatched_unknown"
+    },
+    {
+      "id": "S2",
+      "status": "not_run"
+    }
+  ]
+}

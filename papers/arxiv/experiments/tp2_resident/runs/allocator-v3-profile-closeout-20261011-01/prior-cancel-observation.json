@@ -1,0 +1,10 @@
+{
+  "toolphase": "before-profile launch terminal invocation",
+  "tool_result": "cancel",
+  "cancel_source": "unknown",
+  "cuda_failure_evidence": false,
+  "observed_launch_artifacts": false,
+  "observed_profile_processes": false,
+  "process_start_at_cancel": "not_proven; subsequent checks find no launch/session or running collector/model",
+  "automatic_retry": false
+}

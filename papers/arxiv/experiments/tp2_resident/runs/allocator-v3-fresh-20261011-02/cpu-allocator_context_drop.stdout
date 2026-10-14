@@ -1,0 +1,19 @@
+
+running 14 tests
+test tests::context_drop_active_capture_preserves_capture_quarantine ... ok
+test tests::context_drop_binding_failure_keeps_unfenced_resources ... ok
+test tests::context_drop_concurrent_retirement_requires_a_new_complete_drain ... ok
+test tests::context_drop_failed_shutdown_unknown_is_not_washed_by_later_success ... ok
+test tests::context_drop_primary_release_failure_is_reported_without_retry ... ok
+test tests::context_drop_query_error_with_valid_existing_fallback_can_release ... ok
+test tests::context_drop_query_failed_and_failed_fallback_is_terminal ... ok
+test tests::context_drop_query_failure_is_logged_even_when_stream_owner_keeps_context_alive ... ok
+test tests::context_drop_quiescent_orders_sync_free_then_primary_release ... ok
+test tests::context_drop_record_fallback_failure_logs_before_stream_owner_quarantine ... ok
+test tests::context_drop_shutdown_sync_failure_retains_without_unwinding ... ok
+test tests::context_drop_trim_failure_does_not_release_primary_context ... ok
+test tests::context_drop_unknown_arising_during_drain_defeats_successful_sync ... ok
+test tests::context_drop_unknown_before_keeps_both_primary_retain_and_event_ledger ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 22 filtered out; finished in 0.00s
+

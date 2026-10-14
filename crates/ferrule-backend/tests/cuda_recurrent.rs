@@ -3,7 +3,7 @@
 #[path = "support/recurrent_reference.rs"]
 mod reference;
 
-use ferrule_backend::cuda::context::{CudaF32Buffer, CudaOperators};
+use ferrule_backend::cuda::operator_owner::{CudaF32Buffer, CudaOperators};
 use ferrule_backend::cuda::operators::recurrent::*;
 use ferrule_backend::cuda::standard::SplitHalfRopeLayout;
 

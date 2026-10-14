@@ -1,0 +1,191 @@
+{
+  "schema": "ferrule.paper.indexed-lru-handoff.v1",
+  "acceptance_summary": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-indexed-lru-20261010-01/acceptance-summary.json",
+    "sha256": "396710eeb5366b6a2aa607168e4cb33de01aea098790cb0e94f0d87e03b65165"
+  },
+  "prepared": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-indexed-lru-20261010-01/prepared.json",
+    "sha256": "06ccf0e77d492ff8fe4951b86dc58d81ff87d2d1e064c542242a2faf50cdd506"
+  },
+  "source_digest": "561a7b47a538b7c96d72ca3c4790b05f472643e876219847fdf7a962bd84faa9",
+  "required_production_sources": {
+    "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-model/src/transformer/standard/expert_cache.rs": "cbb6b8cf01119ca649f3446ecf5a189fcd0e3d0886d449b1aa0a9989428be229",
+    "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-model/src/transformer/standard/mixed_decoded.rs": "bfb5faa7f7098b067df7e2e463a281e43547d1c95314d2aa6289aa2c9f28859f"
+  },
+  "source_changes_since_uninitialized_arena": {
+    "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-model/src/transformer/standard/expert_cache.rs": {
+      "before": "3ed4c6b40b233ab418a2aa7189ffba7d6528b773be51e6407fe81c685ccf0c7e",
+      "after": "cbb6b8cf01119ca649f3446ecf5a189fcd0e3d0886d449b1aa0a9989428be229"
+    },
+    "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-model/src/transformer/standard/mixed_decoded.rs": {
+      "before": "cb4e403845a0e0621c73912a0ed72de51686b421265b93d2b94f370edcddf8fb",
+      "after": "bfb5faa7f7098b067df7e2e463a281e43547d1c95314d2aa6289aa2c9f28859f"
+    },
+    "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-model/tests/unit/transformer/grouped_expert_cache.rs": {
+      "before": null,
+      "after": "e971f2d296d8e729a64eb7a56ed210dd72b05061bcbf7a719968e5e92d34b6f5"
+    },
+    "/home/admin/luhuanbing.lhb/Ferrule/crates/ferrule-model/tests/unit/transformer/mixed_decoded_custody.rs": {
+      "before": "eacc039e704945158f43d8be4916232c669161dd05520cbd6549b3d0f91e952d",
+      "after": "c12340f71aeae92f9c46fdc2d603ffc47f6054424a80ff36ee1eb9ecb9009d46"
+    }
+  },
+  "unchanged_snapshot_quota_and_allocation_pins": {
+    "crates/ferrule-model/src/transformer/standard/decoded_snapshot.rs": "05ec9a4dfb5562c6597ab9af487fea48eda7c78c756bfeec461f0a38a292e3d1",
+    "crates/ferrule-model/src/transformer/hybrid_parallel/mixed_decoded_arena.rs": "9a082ee34b24525beb3206710e488400e36e3b1209dabfe022ba9480245f8d9a",
+    "crates/ferrule-model/src/transformer/standard/cuda/hybrid_rank/mixed.rs": "54ea3983d776675f90179f9b2d85528f70063b49fd66c9a4af5594f96530d09a"
+  },
+  "binaries": {
+    "backend": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-indexed-lru-20261010-01/binary-backend/staged/ferrule",
+      "sha256": "a6f5fb2bade4f085fcfc9c91c2745a5adaa4393fddd9fb76e8e64b219e503b0b"
+    },
+    "backend-slice": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-indexed-lru-20261010-01/binary-backend-slice/staged/ferrule",
+      "sha256": "f84751452f20b9ee83493a2afffadf6fd9921ac1cd7fa9e3b6dff26840df5b3c"
+    },
+    "backend-arena": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-indexed-lru-20261010-01/binary-backend-arena/staged/ferrule",
+      "sha256": "7f9223912fd20ead8bce37bd0f73b92ca13e9e52d3d61e9f68bd529974841da1"
+    },
+    "model": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-indexed-lru-20261010-01/binary-model/staged/ferrule",
+      "sha256": "b0a1f243076045b1503ec21f6f004383e6c58686e6a24c9ca85ec76df854a366"
+    },
+    "model-handoff": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-indexed-lru-20261010-01/binary-model-handoff/staged/ferrule",
+      "sha256": "c4ba0b5c8b04e85bbd8d20d3ff3178fb72ed9faf5d9cd3b8c891f800461ed426"
+    },
+    "runtime": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-indexed-lru-20261010-01/binary-runtime/staged/ferrule",
+      "sha256": "89ad595a4d940d39e3931efd9526dc7401a9cc44d10bcc886c9723d2d2991699"
+    },
+    "composition": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-indexed-lru-20261010-01/binary-composition/staged/ferrule",
+      "sha256": "653c5bbb11a76db0b1ef8ee955554b3b20a34c8c53af8fe2f8eeba3d3d953515"
+    }
+  },
+  "cuda_check": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-indexed-lru-20261010-01/cuda-check.json",
+    "sha256": "5c6d62a3b708c5caee0cf8c9b80ed9a6aba99e09428b899b36464c8bea3b2f55"
+  },
+  "strict_cuda_clippy": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-indexed-lru-20261010-01/cuda-clippy.json",
+    "sha256": "716e73b26c4d10d526223917bc0b64e2c8a44d31c80fa2854b412da33beb9dca"
+  },
+  "fresh_cpu_selectors": 38,
+  "cpu_benchmark": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-indexed-lru-20261010-01/cpu-indexed-lru-benchmark.json",
+    "sha256": "4ea4b8a18cf32a9cd33e252a5866cbeb23d5d3ccb916ac19ae279f32b0970994"
+  },
+  "cpu_benchmark_scope": "CPU microbenchmark only; exact victims/stats/final entries asserted; timing not an acceptance threshold or E2E evidence",
+  "cpu_policy": {
+    "cpu-policy-targeted": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-indexed-lru-20261010-01/cpu-policy-targeted.json",
+      "sha256": "a0a955f90ae3a3c03243e9b6a29aaa85ae7583f3897f6b42c174f5699f6a07d7"
+    },
+    "cpu-policy-full": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-indexed-lru-20261010-01/cpu-policy-full.json",
+      "sha256": "295271e7b0dc6c2a953ef827ea7a0eec36eba7207fdbf0dfc33fe2d757b6935f"
+    }
+  },
+  "full_paper_suite_status": "historical_release_binding_regressions_retained; inspect linked failures, not silently waived",
+  "fresh_gpu_gates": 23,
+  "prior_gpu_passes_inherited": false,
+  "exact_counts": {
+    "full40": {
+      "calls": 4,
+      "metrics": 4356
+    },
+    "greedy4": {
+      "calls": 10,
+      "metrics": 10890
+    },
+    "fork2": {
+      "calls": 6,
+      "metrics": 6534
+    },
+    "canary2": {
+      "calls": 5,
+      "metrics": 5445
+    },
+    "recreate1": {
+      "calls": 4,
+      "metrics": 4356
+    },
+    "cold-owner1-01": {
+      "calls": 4,
+      "metrics": 4356
+    },
+    "cold-owner1-02": {
+      "calls": 4,
+      "metrics": 4356
+    }
+  },
+  "cache_snapshot_rows": 32,
+  "actual_snapshots": {
+    "full40": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-indexed-lru-20261010-01/full40/cache-snapshots.json",
+      "sha256": "396bfa37309e1f9b4987804bca69b300cff26de4610a0f8d20f34776e36e7650"
+    },
+    "greedy4": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-indexed-lru-20261010-01/greedy4/cache-snapshots.json",
+      "sha256": "2cbaa7fec436f313e2d90544589c223ab8166dd6229b1c298b9df4dca88ab1dd"
+    },
+    "fork2": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-indexed-lru-20261010-01/fork2/cache-snapshots.json",
+      "sha256": "871e457bcdcbb38d4e22080bec02f43efc3b21804bf3138eb9ab7a3ae38a6ce2"
+    },
+    "canary2": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-indexed-lru-20261010-01/canary2/cache-snapshots.json",
+      "sha256": "17a66714b5ac8d4716f92225a0333bc3b32c11c57814cc4d07cc9822c7c7ca23"
+    },
+    "recreate1": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-indexed-lru-20261010-01/recreate1/cache-snapshots.json",
+      "sha256": "26b30adbd519367a8fc2a5955704c08ce633c4479c3658f77e17df9a7c29253a"
+    },
+    "cold-owner1-01": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-indexed-lru-20261010-01/cold-owner1-01/cache-snapshots.json",
+      "sha256": "396bfa37309e1f9b4987804bca69b300cff26de4610a0f8d20f34776e36e7650"
+    },
+    "cold-owner1-02": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-indexed-lru-20261010-01/cold-owner1-02/cache-snapshots.json",
+      "sha256": "d7930369a08ead428a76c84e357b7740d49379ee625407a2b3539af22e3b6514"
+    }
+  },
+  "whole_device_sampled_peak_bytes": {
+    "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 22660775936,
+    "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 22660775936
+  },
+  "root_current_peak_driver_growth_bytes_per_owner": 3221225472,
+  "full_device_ceiling_bytes": 23622320128,
+  "profiled_activity": null,
+  "runtime_libraries": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-indexed-lru-20261010-01/runtime-library-pins.json",
+    "sha256": "9013ae13944004e06c113a102b15ab53682bef3f6fbbbb3265efc186ef10acd5"
+  },
+  "final_idle": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-indexed-lru-20261010-01/final-idle.json",
+    "sha256": "1ecc7ff1d78a55bdde07da021677c46723416cca7e2a89912b5a4402bbdacea7"
+  },
+  "final_release": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-indexed-lru-20261010-01/final-locks-released.json",
+    "sha256": "30c14b1382e57e61a69e50ed79b7b5b4b6c0f59d63bea7b300566822f41eb3a2"
+  },
+  "historical_serving_binaries_preserved": {
+    "target/validation/tp2-mixed-optimized-release-20261009/ferrule-optimized": "4d40c34738d36a1c78f62c0e400dd732da40e34c316ce4bd3c356dc4d29b3173",
+    "target/validation/tp2-mixed-decoded-cache-public-release-20261010-03/ferrule-cacheon": "dadf831eb2af477108efd402171c40f7544a2600d14b8e5e7ab8a456d2625e5a"
+  },
+  "release_built": false,
+  "public_e2e_accepted": false,
+  "performance_accepted": false,
+  "builder_requirements": [
+    "Verify handoff, source/build/tool/runtime/test-binary pins and the two requested production SHAs.",
+    "Build a new serving release; the previous unindexed arena release/admission is not qualification for current sources.",
+    "Retain the exact TP2 checkpoint/geometry/quotas and 3 GiB dedicated uninitialized root within 22 GiB per card.",
+    "Bind current 23-gate acceptance and new CPU guards/benchmark; do not rewrite historical receipts or weaken source/tool/library drift checks.",
+    "Snapshot schema/API unchanged: actual ready/shutdown partitions and full driver growth, null unprofiled activity.",
+    "CPU benchmark is not E2E speedup; public A/B, smoke and profiling remain separate work."
+  ]
+}

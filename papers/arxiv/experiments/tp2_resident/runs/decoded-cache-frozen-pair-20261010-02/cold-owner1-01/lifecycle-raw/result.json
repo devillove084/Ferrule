@@ -1,0 +1,134 @@
+{
+  "canonical_candidate_complete": false,
+  "events": [
+    {
+      "case": "hello",
+      "epoch": 0,
+      "frontier": 0,
+      "op": "create",
+      "runtime_session": 1,
+      "session": "hello"
+    },
+    {
+      "call": {
+        "input_token_ids": [
+          9419
+        ],
+        "next_token_id": 11,
+        "position_start": 0,
+        "sequence_length_after": 1,
+        "stage": "call"
+      },
+      "epoch": 0,
+      "id": "call-00",
+      "input": {
+        "ids": [
+          9419
+        ],
+        "kind": "tokens"
+      },
+      "op": "call",
+      "runtime_session": 1,
+      "session": "hello",
+      "transaction": 1,
+      "untouched_sessions": []
+    },
+    {
+      "call": {
+        "input_token_ids": [
+          11
+        ],
+        "next_token_id": 353,
+        "position_start": 1,
+        "sequence_length_after": 2,
+        "stage": "call"
+      },
+      "epoch": 0,
+      "id": "call-01",
+      "input": {
+        "kind": "greedy"
+      },
+      "op": "call",
+      "runtime_session": 1,
+      "session": "hello",
+      "transaction": 2,
+      "untouched_sessions": []
+    },
+    {
+      "epoch": 0,
+      "op": "drop",
+      "session": "hello"
+    },
+    {
+      "case": "capital",
+      "epoch": 0,
+      "frontier": 0,
+      "op": "create",
+      "runtime_session": 2,
+      "session": "capital"
+    },
+    {
+      "call": {
+        "input_token_ids": [
+          760,
+          6511,
+          314,
+          9338,
+          369
+        ],
+        "next_token_id": 11751,
+        "position_start": 0,
+        "sequence_length_after": 5,
+        "stage": "call"
+      },
+      "epoch": 0,
+      "id": "call-02",
+      "input": {
+        "ids": [
+          760,
+          6511,
+          314,
+          9338,
+          369
+        ],
+        "kind": "tokens"
+      },
+      "op": "call",
+      "runtime_session": 2,
+      "session": "capital",
+      "transaction": 3,
+      "untouched_sessions": []
+    },
+    {
+      "call": {
+        "input_token_ids": [
+          11751
+        ],
+        "next_token_id": 13,
+        "position_start": 5,
+        "sequence_length_after": 6,
+        "stage": "call"
+      },
+      "epoch": 0,
+      "id": "call-03",
+      "input": {
+        "kind": "greedy"
+      },
+      "op": "call",
+      "runtime_session": 2,
+      "session": "capital",
+      "transaction": 4,
+      "untouched_sessions": []
+    },
+    {
+      "epoch": 0,
+      "op": "drop",
+      "session": "capital"
+    }
+  ],
+  "independent_quality": "CPU lifecycle bridge and comparator required",
+  "schema": "ferrule.mixed-lifecycle-raw.v1",
+  "shutdown_ok": true,
+  "status": "captured",
+  "writer_complete": true
+}

@@ -1,0 +1,13 @@
+
+thread 'tests::failed_or_panicking_shutdown_keeps_all_blocks_and_reserved_bytes' (145907) panicked at crates/ferrule-backend/tests/allocator_retirement/runtime.rs:151:9:
+mock sync panic
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'tests::panic_in_record_query_or_sync_never_loses_the_batch' (145910) panicked at crates/ferrule-backend/tests/allocator_retirement/runtime.rs:132:17:
+mock record panic
+
+thread 'tests::panic_in_record_query_or_sync_never_loses_the_batch' (145910) panicked at crates/ferrule-backend/tests/allocator_retirement/runtime.rs:185:9:
+mock query panic
+
+thread 'tests::panic_in_record_query_or_sync_never_loses_the_batch' (145910) panicked at crates/ferrule-backend/tests/allocator_retirement/runtime.rs:151:9:
+mock sync panic

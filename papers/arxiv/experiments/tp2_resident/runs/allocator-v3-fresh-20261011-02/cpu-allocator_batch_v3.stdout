@@ -1,0 +1,15 @@
+
+running 10 tests
+test tests::v3_byte_pressure_defers_only_growth_not_standard_reuse ... ok
+test tests::v3_capture_quarantine_is_not_wait_progress_growth_pressure ... ok
+test tests::v3_count_pressure_reuses_safe_extents_including_admitted_22_gib ... ok
+test tests::v3_failed_stream_teardown_ticket_is_terminal_not_empty_coverage ... ok
+test tests::v3_multiple_blocks_still_record_per_registration_not_per_block ... ok
+test tests::v3_registration_during_weak_gone_window_must_not_prune_ticket_or_reuse ... ok
+test tests::v3_temporary_capture_preserves_complete_proof_until_publication ... ok
+test tests::v3_temporary_capture_preserves_recorded_fences ... ok
+test tests::v3_unknown_during_query_remains_terminal_unlike_capture ... ok
+test tests::v3_weak_gone_before_stream_sync_completion_defers_empty_fences ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 22 filtered out; finished in 0.01s
+

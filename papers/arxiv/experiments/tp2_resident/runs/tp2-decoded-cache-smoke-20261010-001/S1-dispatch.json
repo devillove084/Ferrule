@@ -1,0 +1,19 @@
+{
+  "protocol": "tp2-serving-smoke-c1",
+  "purpose": "serving_smoke",
+  "status": "incomplete",
+  "sole_gpu_owner_granted": true,
+  "owner_note": "User grants this agent sole GPU ownership for final -03 dadf831 cache-on S1/S2 then no-trace F1/V1/V2/F2 then official Nsight 2025.3.1; workspace4096 cache3GiB device22GiB, exact ordered GPU0/1 UUIDs, bounded supervisor, no foreign signals, stop on numerical/budget/Unknown",
+  "fairmatch": false,
+  "exact_speedup": null,
+  "slots": [
+    {
+      "id": "S1",
+      "status": "dispatched_unknown"
+    },
+    {
+      "id": "S2",
+      "status": "not_run"
+    }
+  ]
+}

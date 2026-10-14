@@ -20,8 +20,8 @@ use crate::cuda::ffi::core::{
     MOE_SWIGLU_CLAMPED_F32, MOE_SWIGLU_STANDARD_F32, MOE_WEIGHTED_COMBINE_F32, MoeArgs,
     NORM_AFFINE_F32, NormArgs, TRANSFORMER_PAGED_F32_APPEND_CAUSAL_GQA, TransformerArgs,
 };
+use crate::cuda::operators::linear::{F32GemmLayout, f32_gemm_bytes};
 pub use crate::cuda::operators::{SelectedSoftmaxTopKLayout, SplitHalfRopeLayout};
-use crate::cuda::providers::cutlass::{F32GemmLayout, f32_gemm_bytes};
 use crate::cuda::runtime::DeviceCopy;
 use ferrule_common::{Error, Result};
 
@@ -312,6 +312,10 @@ impl CudaOperators {
         if !epsilon.is_finite() || epsilon <= 0.0 {
             return Err(invalid("RMS epsilon must be finite and positive"));
         }
+        Self::f32_inplace_or_disjoint(input, output)?;
+        // Equal extents imply one row for weight/output. Broadcast weights
+        // overlap a strict subrange of multi-row output and are rejected.
+        Self::f32_inplace_or_disjoint(weight, output)?;
         let args = NormArgs {
             kind: NORM_AFFINE_F32,
             rows: count(rows)?,
@@ -352,6 +356,7 @@ impl CudaOperators {
                 "F32 RoPE requires valid row positions and no BF16 boundary",
             ));
         }
+        Self::f32_no_alias(&[cosine, sine], &[values])?;
         let positions = self.upload_i32_buffer(positions)?;
         self.split_half_rope_rows_indexed_from_device(
             values, cosine, sine, &positions, layout, false,
@@ -386,6 +391,14 @@ impl CudaOperators {
         if residual.is_empty() {
             return Err(invalid("empty residual"));
         }
+        Self::f32_inplace_or_disjoint(residual, output)?;
+        // Copying residual first would destroy an aliased update. The all-same
+        // case is safe: the copy is a no-op followed by elementwise SAXPY.
+        if super::f32_range(residual)? != super::f32_range(output)? {
+            Self::f32_no_alias(&[update], &[output])?;
+        } else {
+            Self::f32_inplace_or_disjoint(update, output)?;
+        }
         self.copy_f32_range(residual, 0, output, 0, residual.len())?;
         self.residual_add_f32_in_place(update, output)
     }
@@ -416,6 +429,8 @@ impl CudaOperators {
         if gate.is_empty() {
             return Err(invalid("empty SwiGLU"));
         }
+        Self::f32_inplace_or_disjoint(gate, output)?;
+        Self::f32_inplace_or_disjoint(up, output)?;
         let args = MoeArgs {
             kind: MOE_SWIGLU_STANDARD_F32,
             n: count(gate.len())?,
@@ -446,6 +461,8 @@ impl CudaOperators {
         if !limit.is_finite() || limit < 0.0 {
             return Err(invalid("SwiGLU limit must be finite and nonnegative"));
         }
+        Self::f32_inplace_or_disjoint(gate, output)?;
+        Self::f32_inplace_or_disjoint(up, output)?;
         let args = MoeArgs {
             kind: MOE_SWIGLU_CLAMPED_F32,
             n: count(gate.len())?,
@@ -477,6 +494,7 @@ impl CudaOperators {
         self.standard_buffer(output, product(&[output_rows, width])?)?;
         count(values.len())?;
         count(output.len())?;
+        Self::f32_no_alias(&[values, weights], &[output])?;
         let args = MoeArgs {
             kind: MOE_WEIGHTED_COMBINE_F32,
             batch_columns: count(route_rows.len())?,
@@ -535,6 +553,10 @@ impl CudaOperators {
         self.standard_buffer(append_value, layout.append_elements()?)?;
         self.standard_buffer(key_cache, layout.cache_elements()?)?;
         self.standard_buffer(value_cache, layout.cache_elements()?)?;
+        Self::f32_no_alias(
+            &[query, append_key, append_value],
+            &[key_cache, value_cache, output],
+        )?;
         let slots = self.upload_i32_buffer(metadata.block_slots)?;
         let offsets = self.upload_i32_buffer(metadata.block_offsets)?;
         let sequences = self.upload_i32_buffer(metadata.row_sequence_ids)?;

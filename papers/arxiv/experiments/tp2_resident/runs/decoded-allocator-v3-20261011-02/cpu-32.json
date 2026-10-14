@@ -1,0 +1,77 @@
+{
+  "argv": [
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-allocator-v3-20261011-02/binary-composition/staged/ferrule",
+    "decoded_cache::native_default_off_and_cache_report_claim_share_exact_grant",
+    "--exact",
+    "--nocapture",
+    "--test-threads=1"
+  ],
+  "supervisor": {
+    "returncode": 0,
+    "timed_out": false,
+    "wall_seconds": 0.14273111149668694,
+    "stdout": "",
+    "stderr": "",
+    "cleanup_errors": [],
+    "cleanup_scope": "isolated_subreaper_direct_children",
+    "descendant_custody": "proven_drained",
+    "gpu_quiescence": "unverified",
+    "custody": {
+      "status": "proven_drained",
+      "method": "linux-subreaper-waitid",
+      "containment_verified": true,
+      "launch_id": "f7e72c5374814c15b0b712abc0f444cb",
+      "helper_identity": {
+        "pid": 154012,
+        "birth_ticks": 97258244,
+        "ppid": 148436,
+        "pgrp": 154012,
+        "session": 154012
+      },
+      "root_identity": {
+        "pid": 154013,
+        "birth_ticks": 97258247,
+        "ppid": 154012,
+        "pgrp": 154012,
+        "session": 154012
+      },
+      "boot_id": "4dd3497d-570c-4693-a876-5c26e06ab360",
+      "entries": [
+        {
+          "identity": {
+            "pid": 154013,
+            "birth_ticks": 97258247,
+            "ppid": 154012,
+            "pgrp": 154012,
+            "session": 154012
+          },
+          "role": "root",
+          "signals": [],
+          "reaped": true,
+          "exit_code": 0,
+          "first_observed_at": 8608702.82457526,
+          "reaped_at": 8608702.895624122
+        }
+      ],
+      "errors": [],
+      "reporting_errors": [],
+      "echild": true
+    },
+    "handshake": {
+      "kind": "ready",
+      "protocol": 1,
+      "launch_id": "f7e72c5374814c15b0b712abc0f444cb",
+      "helper_identity": {
+        "pid": 154012,
+        "birth_ticks": 97258244,
+        "ppid": 148436,
+        "pgrp": 154012,
+        "session": 154012
+      },
+      "containment_verified": true,
+      "method": "linux-subreaper-waitid"
+    },
+    "stdout_truncated": false,
+    "stderr_truncated": false
+  }
+}

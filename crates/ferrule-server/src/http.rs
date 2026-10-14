@@ -149,10 +149,10 @@ async fn admission(State(state): State<ServerState>) -> Json<serde_json::Value> 
 async fn admitted_json<T: serde::de::DeserializeOwned>(
     worker: &ModelWorkerHandle,
     request: Request,
-) -> Result<(T, ServerAdmissionPermit), Response> {
+) -> Result<(T, ServerAdmissionPermit), PublicError> {
     let permit = worker
         .try_acquire_admission(0)
-        .map_err(|error| public_admission_error(&error).response())?;
+        .map_err(|error| public_admission_error(&error))?;
     let content_type = request
         .headers()
         .get(header::CONTENT_TYPE)
@@ -169,8 +169,7 @@ async fn admitted_json<T: serde::de::DeserializeOwned>(
             "invalid_request_error",
             "invalid_content_type",
             Some("body"),
-        )
-        .response());
+        ));
     }
     let limit = worker.max_body_bytes();
     let content_length = request
@@ -179,7 +178,7 @@ async fn admitted_json<T: serde::de::DeserializeOwned>(
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.parse::<u64>().ok());
     if content_length.is_some_and(|length| length > limit as u64) {
-        return Err(body_too_large().response());
+        return Err(body_too_large());
     }
     // Chunked bodies do not announce their size: reserve their bounded ingress
     // window before polling, rather than reading uncharged data first.
@@ -192,12 +191,11 @@ async fn admitted_json<T: serde::de::DeserializeOwned>(
             resource: ServerAdmissionResource::PromptBytes,
             limit: snapshot.prompt_bytes_limit,
             held: snapshot.held_prompt_bytes,
-        })
-        .response());
+        }));
     }
     permit
         .reconcile_prompt_bytes(reserved)
-        .map_err(|error| public_admission_error(&error).response())?;
+        .map_err(|error| public_admission_error(&error))?;
     let mut stream = request.into_body().into_data_stream();
     let mut bytes = Vec::new();
     while let Some(chunk) = std::future::poll_fn(|cx| Pin::new(&mut stream).poll_next(cx)).await {
@@ -210,27 +208,24 @@ async fn admitted_json<T: serde::de::DeserializeOwned>(
                 "invalid_body",
                 Some("body"),
             )
-            .response()
         })?;
         let length = bytes
             .len()
             .checked_add(chunk.len())
             .filter(|length| *length <= limit)
-            .ok_or_else(|| body_too_large().response())?;
+            .ok_or_else(body_too_large)?;
         permit
             .reconcile_prompt_bytes(reserved.max(length))
-            .map_err(|error| public_admission_error(&error).response())?;
+            .map_err(|error| public_admission_error(&error))?;
         bytes.extend_from_slice(&chunk);
     }
     let wire_bytes = bytes.len();
     // Parsing owns decoded strings while the wire buffer is still live. Charge
     // both byte representations before making that copy, not after allocation.
-    let parsing_bytes = wire_bytes
-        .checked_mul(2)
-        .ok_or_else(|| body_too_large().response())?;
+    let parsing_bytes = wire_bytes.checked_mul(2).ok_or_else(body_too_large)?;
     permit
         .reconcile_prompt_bytes(parsing_bytes)
-        .map_err(|error| public_admission_error(&error).response())?;
+        .map_err(|error| public_admission_error(&error))?;
     let Json(value) = Json::<T>::from_bytes(&bytes).map_err(json_rejection)?;
     drop(bytes);
     permit
@@ -264,7 +259,7 @@ async fn chat_completions(State(state): State<ServerState>, request: Request) ->
     let (request, permit) =
         match admitted_json::<ChatCompletionRequest>(&state.worker, request).await {
             Ok(admitted) => admitted,
-            Err(response) => return response,
+            Err(error) => return error.response(),
         };
     let validated = match request.validate(&state.registration.id, state.registration.chat_template)
     {
@@ -350,7 +345,7 @@ async fn tokenize(State(state): State<ServerState>, request: Request) -> Respons
 
     let (request, permit) = match admitted_json::<TokenizeRequest>(&state.worker, request).await {
         Ok(admitted) => admitted,
-        Err(response) => return response,
+        Err(error) => return error.response(),
     };
     let prompt = match request.validate(&state.registration.id) {
         Ok(prompt) => prompt,
@@ -463,7 +458,7 @@ async fn chat_non_streaming_response(
                     token_events,
                     request_started_at,
                 );
-                tracing::error!(%error, "generation failed");
+                crate::worker::trace_execution_failure(&error, "generation failed");
                 return public_execution_error(&error).response();
             }
         }
@@ -495,7 +490,7 @@ async fn completions(State(state): State<ServerState>, request: Request) -> Resp
     let request_started_at = Instant::now();
     let (request, permit) = match admitted_json::<CompletionRequest>(&state.worker, request).await {
         Ok(admitted) => admitted,
-        Err(response) => return response,
+        Err(error) => return error.response(),
     };
     let validated = match request.validate(&state.registration.id) {
         Ok(validated) => validated,
@@ -649,7 +644,7 @@ async fn completion_non_streaming_response(
                     token_events,
                     request_started_at,
                 );
-                tracing::error!(%error, "generation failed");
+                crate::worker::trace_execution_failure(&error, "generation failed");
                 return public_execution_error(&error).response();
             }
         }
@@ -938,7 +933,7 @@ impl OpenAiEventStream {
             }
             WorkerEvent::Failed { error } => {
                 self.trace_terminal("failed", "model_execution_failed");
-                tracing::error!(%error, "streaming generation failed");
+                crate::worker::trace_execution_failure(&error, "streaming generation failed");
                 self.push_public_error(public_execution_error(&error));
             }
         }
@@ -1090,6 +1085,8 @@ fn public_admission_error(error: &ServerAdmissionError) -> PublicError {
 
 fn public_runtime_error(error: &ferrule_runtime::Error) -> PublicError {
     use ferrule_runtime::{Error, RuntimeAdmissionError as Admission};
+    // Cleanup diagnostics cannot change the original request's public policy.
+    let error = error.primary();
     let mut source: Option<&(dyn std::error::Error + 'static)> = Some(error);
     while let Some(cause) = source {
         if let Some(error) = cause.downcast_ref::<ServerAdmissionError>() {
@@ -1224,16 +1221,21 @@ fn public_validation_error(
     }
 }
 
-fn json_rejection(rejection: JsonRejection) -> Response {
-    tracing::debug!(%rejection, "invalid JSON request");
-    PublicError::new(
+fn json_rejection(_: JsonRejection) -> PublicError {
+    let error = PublicError::new(
         StatusCode::BAD_REQUEST,
         "request body is not valid JSON for this endpoint",
         "invalid_request_error",
         "invalid_json",
         Some("body"),
-    )
-    .response()
+    );
+    // Serde rejection text can contain user-supplied values, even for integer fields.
+    tracing::debug!(
+        reason = error.code,
+        status = error.status.as_u16(),
+        "invalid JSON request"
+    );
+    error
 }
 
 fn api_error(status: StatusCode, message: &'static str, kind: &'static str) -> Response {
@@ -1257,6 +1259,10 @@ fn unix_timestamp() -> u64 {
         .unwrap_or_default()
         .as_secs()
 }
+
+#[cfg(test)]
+#[path = "../tests/unit/http_logging.rs"]
+mod logging_tests;
 
 #[cfg(test)]
 mod pr13_tests {

@@ -2,7 +2,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use ferrule_common::ServingConfigError;
 use ferrule_model::ChatTemplate;
-use ferrule_runtime::RuntimeAdmissionOptions;
+use ferrule_runtime::{KvExecutionPolicy, RuntimeAdmissionOptions};
 
 #[derive(Debug, Clone)]
 pub struct ModelRegistration {
@@ -28,6 +28,13 @@ impl ModelRegistration {
 
 #[derive(Debug, Clone)]
 pub struct WorkerConfig {
+    /// Startup override with a preserving default: Resident leaves the factory's
+    /// policy untouched, without calling configure_kv_execution. Composition
+    /// factories that install/validate policy must leave this at its default to
+    /// avoid configuring the same owner twice. For raw engines, non-Resident
+    /// requests are checked before background work/Ready; unsupported engines
+    /// reject. This field does not attest to a factory's active policy.
+    pub kv_execution_policy: KvExecutionPolicy,
     /// Commands waiting to be accepted by the single model owner.
     pub command_queue_capacity: usize,
     /// Token and terminal events buffered independently for each request.
@@ -55,6 +62,7 @@ pub struct WorkerConfig {
 impl Default for WorkerConfig {
     fn default() -> Self {
         Self {
+            kv_execution_policy: KvExecutionPolicy::Resident,
             command_queue_capacity: 256,
             event_queue_capacity: 32,
             max_commands_per_tick: 64,

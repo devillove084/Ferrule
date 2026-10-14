@@ -1,0 +1,8 @@
+START single lifecycle; no retry
+{"status": "complete", "launch_id": "757eecf83d3941a4ad2bbe6ebda32c49", "server_starts": 1, "authenticated_drained": true, "after": "verified"}
+START single lifecycle; no retry
+{"status": "complete", "launch_id": "3dec24a54cf348f7a98ea630cefdb953", "server_starts": 1, "authenticated_drained": true, "after": "verified"}
+START single lifecycle; no retry
+{"status": "complete", "launch_id": "9b6529970c9548079586f4e9286c42af", "server_starts": 1, "authenticated_drained": true, "after": "verified"}
+START single lifecycle; no retry
+{"status": "complete", "launch_id": "8c1faee65e364fceab25a370c5000a05", "server_starts": 1, "authenticated_drained": true, "after": "verified"}

@@ -1,0 +1,14 @@
+{
+  "actual_greedy": 198,
+  "atol": 0.00025,
+  "case": "call-07",
+  "compared": 248320,
+  "expected_greedy": 198,
+  "failures": 0,
+  "finite_compared": 248320,
+  "max_abs_finite": 0.0,
+  "nonfinite": 0,
+  "rmse_finite": 0.0,
+  "rtol": 0.012,
+  "stage": "call"
+}

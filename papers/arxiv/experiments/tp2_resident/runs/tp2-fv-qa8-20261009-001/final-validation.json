@@ -1,0 +1,50 @@
+{
+  "unix": 1791539434.0855052,
+  "status": "pass",
+  "tests": [
+    {
+      "argv": [
+        "/home/admin/wxw403883/anaconda3/bin/python3.12",
+        "-S",
+        "-B",
+        "-m",
+        "unittest",
+        "papers/arxiv/experiments/test_experiments.py"
+      ],
+      "returncode": 0,
+      "stdout": "",
+      "stderr": ".BLOCKED: Explicit --sole-gpu-owner-granted and --owner-note required; no GPU query/launch\nBLOCKED: Explicit --sole-gpu-owner-granted and --owner-note required; no GPU query/launch\n.BLOCKED: Build requires explicit --execute-build; default plan is CPU-only\n........BLOCKED: Explicit --sole-gpu-owner-granted and --owner-note required; no GPU query/launch\nBLOCKED: Explicit identity mode must match config\n................................\n----------------------------------------------------------------------\nRan 42 tests in 1.360s\n\nOK\n"
+    },
+    {
+      "argv": [
+        "/home/admin/wxw403883/anaconda3/bin/python3.12",
+        "-S",
+        "-B",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "papers/arxiv/experiments/tp2_resident",
+        "-p",
+        "test_*.py"
+      ],
+      "returncode": 0,
+      "stdout": "{\"stage\": \"hello2\", \"gate\": {\"status\": \"pass\"}}\n{\"stage\": \"canary8\", \"gate\": {\"status\": \"fail\"}}\n{\"stage\": \"hello2\", \"gate\": {\"status\": \"pass\"}}\n{\"stage\": \"canary8\", \"gate\": {\"status\": \"fail\"}}\nSTART single lifecycle; no retry\n{\"status\": \"complete\", \"launch_id\": \"fixture\", \"server_starts\": 1, \"authenticated_drained\": true, \"after\": \"verified\"}\n",
+      "stderr": "..............................................................................\n----------------------------------------------------------------------\nRan 78 tests in 6.567s\n\nOK\n"
+    }
+  ],
+  "summary_sha256": "be0bd38d70387260160243736ca233adfbd1fb594eeebbb45282db8271d281e7",
+  "summary_artifact_pins_rechecked": 235,
+  "quality_artifact_pins_rechecked": 352,
+  "smoke_and_pair_admission_revalidated": true,
+  "e2_checkboxes_unchecked": 5,
+  "fairmatch": false,
+  "exact_speedup": null,
+  "docs": {
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/PAPER_COMPLETION_CHECKLIST.md": "ad493c9a106c1b7690820693d1e714b3bc5ed7414a32f1e9fb8fc4b5dc8a51cb",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/CURRENT.md": "7a7dc556760107048fb7242b3e7087625eb375c397a9a7acc83e9c03b936f5f1",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/RESULTS-serving-pilot.md": "3ada9686bf2850418fa1987776b37defe6003ad474645bef047655859d2301f3",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/RESULTS-single-lifecycle.md": "e9c97e4c94f0238240043c85cb0d5fa78b46a47b83101787c1b3335321761469"
+  },
+  "live_gpu_state": "Final owner release receipt already verified; no server or GPU query in CPU final validation"
+}

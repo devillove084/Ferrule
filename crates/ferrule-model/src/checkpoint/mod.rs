@@ -9,6 +9,7 @@ pub(crate) mod hash;
 pub mod index;
 pub mod inventory;
 pub mod numeric_fp8;
+pub mod read_pipeline;
 mod read_plan;
 pub mod read_session;
 mod source;
@@ -29,6 +30,12 @@ pub use inventory::{
     HfSafetensorsShardSummary, HfSafetensorsTensorInfo, HfSharedExpertTensorInfo, TensorRoleCount,
 };
 pub use numeric_fp8::{NumericFp8Artifact, NumericFp8Encoding, NumericFp8Read, NumericFp8Source};
+pub use read_pipeline::{
+    CheckpointReadPipeline, DEFAULT_READ_WORKER_STACK_BYTES, ReadBudgetSnapshot, ReadCancelStatus,
+    ReadCancellation, ReadCompletion, ReadJoinHandoff, ReadOutcome, ReadPipelineError,
+    ReadPipelineLimits, ReadPipelineOptions, ReadPoll, ReadReceipt, ReadShutdown, ReadStage,
+    ReadTicket, ReadUnknownOperation, ReadUnknownReason, ReadWorkerStackSnapshot,
+};
 pub use read_plan::{CheckpointPositionedReader, CheckpointReadExtent, CheckpointReadPlan};
 pub use read_session::{CheckpointReadCounters, DEFAULT_MAX_OPEN_SHARDS, VerifiedReadSession};
 pub use source::{
@@ -41,3 +48,11 @@ pub use tensor::{
     CheckpointTensorSlice,
 };
 pub use weight::{ActivationQuantization, LinearExecutionPolicy, LinearWeight, LinearWeightFormat};
+
+#[cfg(test)]
+#[path = "tests/read_plan_shared_path.rs"]
+mod read_plan_shared_path_tests;
+
+#[cfg(all(test, unix))]
+#[path = "../../tests/checkpoint_read_pipeline/metadata_support.rs"]
+pub(crate) mod metadata_test_support;

@@ -1,0 +1,30 @@
+{
+  "argv": [
+    "/home/admin/luhuanbing.lhb/Ferrule/target/validation/tp2-mixed-optimized-release-20261009/ferrule-optimized",
+    "serve",
+    "--help"
+  ],
+  "environment": {
+    "PATH": "/home/admin/wxw403883/anaconda3/envs/tao/bin:/root/.cargo/bin:/usr/bin:/bin",
+    "HOME": "/root",
+    "CUDA_VISIBLE_DEVICES": "",
+    "NVIDIA_VISIBLE_DEVICES": "none",
+    "PYTHONDONTWRITEBYTECODE": "1",
+    "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
+    "HF_HUB_OFFLINE": "1",
+    "TRANSFORMERS_OFFLINE": "1",
+    "CUDA_HOME": "/home/admin/wxw403883/anaconda3/envs/tao",
+    "NVCC": "/home/admin/wxw403883/anaconda3/envs/tao/bin/nvcc",
+    "LD_LIBRARY_PATH": "/home/admin/wxw403883/anaconda3/envs/tao/lib:/usr/lib64",
+    "CUBLAS_WORKSPACE_CONFIG": ":0:0",
+    "FERRULE_LOG": "info",
+    "FERRULE_LOG_FORMAT": "json"
+  },
+  "returncode": 0,
+  "timeout_seconds": 20,
+  "binary_sha256": "4d40c34738d36a1c78f62c0e400dd732da40e34c316ce4bd3c356dc4d29b3173",
+  "stdout_sha256": "faed2cd73672d687a9da2efbc6664d364144c6f37db3a98b261fd578a17fe914",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "gpu_visibility": "hidden",
+  "gpu_workload_started": false
+}

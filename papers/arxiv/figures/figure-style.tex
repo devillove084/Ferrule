@@ -1,0 +1,33 @@
+% Shared Latin Modern / monochrome paper style. Render at paper text width.
+\definecolor{FerruleInk}{gray}{0.18}
+\definecolor{FerruleMuted}{gray}{0.45}
+\tikzset{
+  ferrule/box/.style={
+    draw=FerruleInk, rounded corners=1pt, semithick,
+    align=center, text=FerruleInk, font=\sffamily\footnotesize,
+    execute at begin node={\hyphenpenalty=10000\exhyphenpenalty=10000},
+    inner sep=4pt, minimum height=0.82cm, fill=white
+  },
+  ferrule/state/.style={
+    ferrule/box, text width=5.7cm, minimum height=1.0cm
+  },
+  ferrule/unknown/.style={ferrule/box, fill=gray!16, dashed},
+  ferrule/section/.style={
+    text=FerruleInk, font=\sffamily\footnotesize\bfseries, anchor=west
+  },
+  ferrule/label/.style={
+    text=FerruleInk, font=\sffamily\footnotesize,
+    execute at begin node={\hyphenpenalty=10000\exhyphenpenalty=10000},
+    align=center, fill=white, inner sep=2pt
+  },
+  ferrule/note/.style={
+    text=FerruleInk, font=\sffamily\footnotesize,
+    execute at begin node={\hyphenpenalty=10000\exhyphenpenalty=10000},
+    align=left
+  },
+  ferrule/arrow/.style={draw=FerruleInk, -{Latex[length=2mm]}, semithick},
+  ferrule/control/.style={draw=FerruleMuted, dashed, -{Latex[length=2mm]}, semithick},
+  ferrule/group/.style={draw=FerruleMuted, rounded corners=2pt, thin},
+  ferrule/rule/.style={draw=FerruleMuted, thin},
+  ferrule/lifeline/.style={draw=FerruleMuted, densely dotted, thin}
+}

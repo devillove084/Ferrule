@@ -1,0 +1,7 @@
+{
+  "returncode": 0,
+  "one_test_passed": true,
+  "selector": "real_hf_pair_swiglu_cold_and_resident_every_word",
+  "binary_sha256": "90c175c2e78ca356fd2f08f706b4e7e6182c857fdad2462364b1f56776fe8a0a",
+  "log_sha256": "40b07cad2db5121b3dde741b902c526bc8c9c28d4ae908fa49e68ce50147851f"
+}

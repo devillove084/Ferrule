@@ -2,7 +2,7 @@
 
 use ferrule_common::Result;
 
-pub use crate::cuda::context::{
+pub use crate::cuda::operator_owner::{
     CombinedRingWindowLens, CudaBf16Buffer, CudaF32Buffer, CudaI32Buffer, CudaI32HostDownload,
     CudaI32HostMirror, CudaOperators, cuda_sparse_attention_sink_f32,
 };
@@ -80,3 +80,6 @@ impl CudaOperators {
         self.check_paged_bf16_transformer_status(status)
     }
 }
+
+pub mod prepared_bf16;
+pub use prepared_bf16::CudaPreparedBf16Attention;

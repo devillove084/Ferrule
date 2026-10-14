@@ -1,0 +1,949 @@
+{
+  "attempts": [
+    {
+      "additive_deltas": {
+        "artifact_upload_bytes": null,
+        "artifact_uploads": null,
+        "checkpoint_handle_metadata_calls": null,
+        "checkpoint_path_metadata_calls": null,
+        "checkpoint_read_bytes": null,
+        "checkpoint_read_calls": null,
+        "checkpoint_source_checks": null,
+        "expert_evictions": null,
+        "expert_hits": null,
+        "expert_uploads": null,
+        "h2d_bytes": null,
+        "h2d_copies": null
+      },
+      "debug_logging": "info,ferrule_performance=debug",
+      "declared_config": {
+        "backend": "cuda",
+        "ctx_size": "128",
+        "cuda_device_budget_mb": "7168",
+        "cuda_expert_device_bytes": "335544320",
+        "cuda_expert_device_entries": "64",
+        "cuda_expert_scratch_mb": "8",
+        "cuda_workspace_mb": "2048",
+        "engine": "resident",
+        "expert_prewarm": "lazy",
+        "model_profile": "qwen35-mixed-bf16"
+      },
+      "denominator": {
+        "dispatched": 0,
+        "failed_dispatched": 0,
+        "invocations": 0,
+        "not_run": 4,
+        "planned": 4,
+        "success": 0,
+        "successful_output_tokens": 0
+      },
+      "failure_error": "AttributeError: 'types.SimpleNamespace' object has no attribute 'DEVNULL'",
+      "failure_stage": "before_server_launch",
+      "last_invocation_gauges": {
+        "expert_owner_peak_bytes": null,
+        "expert_pending_upload_bytes": null,
+        "expert_resident_bytes": null,
+        "expert_resident_entries": null,
+        "expert_scratch_bytes": null,
+        "expert_unknown_quarantine_bytes": null
+      },
+      "n": 1,
+      "observed_gauge_maxima": {
+        "expert_owner_peak_bytes": null,
+        "expert_pending_upload_bytes": null,
+        "expert_resident_bytes": null,
+        "expert_resident_entries": null,
+        "expert_scratch_bytes": null,
+        "expert_unknown_quarantine_bytes": null
+      },
+      "observer_effect": "ferrule_performance DEBUG overhead unmeasured; not a fast-performance baseline",
+      "per_request_delta_sum": {
+        "artifact_upload_bytes": null,
+        "artifact_uploads": null,
+        "checkpoint_handle_metadata_calls": null,
+        "checkpoint_path_metadata_calls": null,
+        "checkpoint_read_bytes": null,
+        "checkpoint_read_calls": null,
+        "checkpoint_source_checks": null,
+        "expert_evictions": null,
+        "expert_hits": null,
+        "expert_uploads": null,
+        "h2d_bytes": null,
+        "h2d_copies": null
+      },
+      "phase_sampled_memory": null,
+      "quality": {
+        "exact_token_pass": null,
+        "full_current_math_pass": false,
+        "http_only_success_requests": 0,
+        "reference_comparison_requests": 0,
+        "reference_quality_passed_requests": 0,
+        "token_ids_exposed": false
+      },
+      "ready_device_bytes": null,
+      "requests": [],
+      "run": "storage-demand-tp1-middle-20261013-01",
+      "sampled_memory": {
+        "complete_host_samples": 0,
+        "component_sample_counts": {
+          "anonymous_bytes": 0,
+          "private_dirty_bytes": 0,
+          "pss_anon_bytes": 0,
+          "pss_file_bytes": 0
+        },
+        "gpu_peak_bytes": {
+          "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": null
+        },
+        "gpu_samples": 0,
+        "sample_count": 0,
+        "tree_anonymous_peak_bytes": null,
+        "tree_private_dirty_peak_bytes": null,
+        "tree_pss_anon_peak_bytes": null,
+        "tree_pss_file_peak_bytes": null,
+        "tree_pss_peak_bytes": null,
+        "tree_rss_peak_bytes": null
+      },
+      "shutdown": {
+        "all_eight_post_idle": true,
+        "authenticated_drained": true,
+        "custody_status": "proven_drained",
+        "evidence": {
+          "basis": "Process exit is supervision evidence only; resource verification requires explicit final owner ledger credits, fence quiescence, pending, Unknown/quarantine and current source-completion observations",
+          "custody_unknown_observed": null,
+          "fence_quiescent_observed": null,
+          "ledger_credits_outstanding_observed": null,
+          "normal_exit_observed": null,
+          "pending_operations_observed": null,
+          "pending_requests_observed": null,
+          "process_exit_success": null,
+          "quarantine_observed": null,
+          "resource_contract_complete": "unknown",
+          "resource_evidence_coverage": {
+            "failed_fields": [],
+            "invalid_fields": [],
+            "missing_fields": [
+              "pending_requests_observed",
+              "pending_operations_observed",
+              "custody_unknown_observed",
+              "quarantine_observed",
+              "ledger_credits_outstanding_observed",
+              "fence_quiescent_observed",
+              "source_completion_observed"
+            ],
+            "required_fields": [
+              "pending_requests_observed",
+              "pending_operations_observed",
+              "custody_unknown_observed",
+              "quarantine_observed",
+              "ledger_credits_outstanding_observed",
+              "fence_quiescent_observed",
+              "source_completion_observed"
+            ]
+          },
+          "source_completion_observed": null
+        },
+        "post_idle_status": "verified",
+        "prelaunch_idle_status": "verified",
+        "resource_contract_complete": "unknown",
+        "supervisor_returncode": 1
+      },
+      "source_directory": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-01",
+      "status": "failed",
+      "timing": {
+        "case_wall_seconds": 0.05517653748393059,
+        "first_send_to_last_client_terminal_seconds": null,
+        "request_e2e_sum_seconds": null,
+        "startup_seconds": null,
+        "summed_http_fixed_work_windows_seconds": null,
+        "supervisor_wall_seconds": 2.814309136942029
+      },
+      "unobserved": {
+        "PssAnon": null,
+        "expert_cache_misses": null,
+        "io_credits": null,
+        "nfs_shared_mount_bytes": null,
+        "observed_generated_token_ids": null,
+        "owned_process_gpu_peak_bytes": null,
+        "page_cache_state": null,
+        "physical_host_cap_bytes": null,
+        "physical_nas_bytes": null,
+        "proc_read_bytes": null,
+        "startup_io_counters": null
+      }
+    },
+    {
+      "additive_deltas": {
+        "artifact_upload_bytes": 36240064128,
+        "artifact_uploads": 34557,
+        "checkpoint_handle_metadata_calls": 69114,
+        "checkpoint_path_metadata_calls": 69114,
+        "checkpoint_read_bytes": 36240064128,
+        "checkpoint_read_calls": 69114,
+        "checkpoint_source_checks": 69114,
+        "expert_evictions": 11455,
+        "expert_hits": 0,
+        "expert_uploads": 11519,
+        "h2d_bytes": 36240248688,
+        "h2d_copies": 88763
+      },
+      "debug_logging": "info,ferrule_performance=debug",
+      "declared_config": {
+        "backend": "cuda",
+        "ctx_size": "128",
+        "cuda_device_budget_mb": "7168",
+        "cuda_expert_device_bytes": "335544320",
+        "cuda_expert_device_entries": "64",
+        "cuda_expert_scratch_mb": "8",
+        "cuda_workspace_mb": "2048",
+        "engine": "resident",
+        "expert_prewarm": "lazy",
+        "model_profile": "qwen35-mixed-bf16"
+      },
+      "denominator": {
+        "dispatched": 4,
+        "failed_dispatched": 0,
+        "invocations": 30,
+        "not_run": 0,
+        "planned": 4,
+        "success": 4,
+        "successful_output_tokens": 26
+      },
+      "failure_error": null,
+      "failure_stage": null,
+      "last_invocation_gauges": {
+        "expert_owner_peak_bytes": 219754496,
+        "expert_pending_upload_bytes": 0,
+        "expert_resident_bytes": 201351168,
+        "expert_resident_entries": 64,
+        "expert_scratch_bytes": 8388608,
+        "expert_unknown_quarantine_bytes": 0
+      },
+      "n": 1,
+      "observed_gauge_maxima": {
+        "expert_owner_peak_bytes": 219754496,
+        "expert_pending_upload_bytes": 0,
+        "expert_resident_bytes": 201351168,
+        "expert_resident_entries": 64,
+        "expert_scratch_bytes": 8388608,
+        "expert_unknown_quarantine_bytes": 0
+      },
+      "observer_effect": "ferrule_performance DEBUG overhead unmeasured; not a fast-performance baseline",
+      "per_request_delta_sum": {
+        "artifact_upload_bytes": 36240064128,
+        "artifact_uploads": 34557,
+        "checkpoint_handle_metadata_calls": 69114,
+        "checkpoint_path_metadata_calls": 69114,
+        "checkpoint_read_bytes": 36240064128,
+        "checkpoint_read_calls": 69114,
+        "checkpoint_source_checks": 69114,
+        "expert_evictions": 11455,
+        "expert_hits": 0,
+        "expert_uploads": 11519,
+        "h2d_bytes": 36240248688,
+        "h2d_copies": 88763
+      },
+      "phase_sampled_memory": {
+        "after_first_request": {
+          "complete_host_samples": 19,
+          "component_sample_counts": {
+            "anonymous_bytes": 19,
+            "private_dirty_bytes": 19,
+            "pss_anon_bytes": 0,
+            "pss_file_bytes": 0
+          },
+          "gpu_peak_bytes": {
+            "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 4325376000
+          },
+          "gpu_samples": 19,
+          "sample_count": 19,
+          "tree_anonymous_peak_bytes": 6812921856,
+          "tree_private_dirty_peak_bytes": 6834331648,
+          "tree_pss_anon_peak_bytes": null,
+          "tree_pss_file_peak_bytes": null,
+          "tree_pss_peak_bytes": 6979462144,
+          "tree_rss_peak_bytes": 6982508544
+        },
+        "first_request": {
+          "complete_host_samples": 4,
+          "component_sample_counts": {
+            "anonymous_bytes": 4,
+            "private_dirty_bytes": 4,
+            "pss_anon_bytes": 0,
+            "pss_file_bytes": 0
+          },
+          "gpu_peak_bytes": {
+            "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 4325376000
+          },
+          "gpu_samples": 4,
+          "sample_count": 4,
+          "tree_anonymous_peak_bytes": 6808907776,
+          "tree_private_dirty_peak_bytes": 6830223360,
+          "tree_pss_anon_peak_bytes": null,
+          "tree_pss_file_peak_bytes": null,
+          "tree_pss_peak_bytes": 6975266816,
+          "tree_rss_peak_bytes": 6978363392
+        },
+        "ready_before_first": {
+          "complete_host_samples": 0,
+          "component_sample_counts": {
+            "anonymous_bytes": 0,
+            "private_dirty_bytes": 0,
+            "pss_anon_bytes": 0,
+            "pss_file_bytes": 0
+          },
+          "gpu_peak_bytes": {
+            "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": null
+          },
+          "gpu_samples": 0,
+          "sample_count": 0,
+          "tree_anonymous_peak_bytes": null,
+          "tree_private_dirty_peak_bytes": null,
+          "tree_pss_anon_peak_bytes": null,
+          "tree_pss_file_peak_bytes": null,
+          "tree_pss_peak_bytes": null,
+          "tree_rss_peak_bytes": null
+        },
+        "startup": {
+          "complete_host_samples": 9,
+          "component_sample_counts": {
+            "anonymous_bytes": 9,
+            "private_dirty_bytes": 9,
+            "pss_anon_bytes": 0,
+            "pss_file_bytes": 0
+          },
+          "gpu_peak_bytes": {
+            "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 2905604096
+          },
+          "gpu_samples": 9,
+          "sample_count": 9,
+          "tree_anonymous_peak_bytes": 7818027008,
+          "tree_private_dirty_peak_bytes": 7839330304,
+          "tree_pss_anon_peak_bytes": null,
+          "tree_pss_file_peak_bytes": null,
+          "tree_pss_peak_bytes": 7980569600,
+          "tree_rss_peak_bytes": 7983616000
+        }
+      },
+      "quality": {
+        "exact_token_pass": null,
+        "full_current_math_pass": false,
+        "http_only_success_requests": 1,
+        "reference_comparison_requests": 3,
+        "reference_quality_passed_requests": 3,
+        "token_ids_exposed": false
+      },
+      "ready_device_bytes": 3989831680,
+      "requests": [
+        {
+          "additive_deltas": {
+            "artifact_upload_bytes": 3020267520,
+            "artifact_uploads": 2880,
+            "checkpoint_handle_metadata_calls": 5760,
+            "checkpoint_path_metadata_calls": 5760,
+            "checkpoint_read_bytes": 3020267520,
+            "checkpoint_read_calls": 5760,
+            "checkpoint_source_checks": 5760,
+            "expert_evictions": 896,
+            "expert_hits": 0,
+            "expert_uploads": 960,
+            "h2d_bytes": 3020281452,
+            "h2d_copies": 7533
+          },
+          "exact_token_pass": null,
+          "input_tokens": 1,
+          "invocations": 3,
+          "last_invocation_gauges": {
+            "expert_owner_peak_bytes": 211742720,
+            "expert_pending_upload_bytes": 0,
+            "expert_resident_bytes": 201351168,
+            "expert_resident_entries": 64,
+            "expert_scratch_bytes": 8388608,
+            "expert_unknown_quarantine_bytes": 0
+          },
+          "log_byte_interval": [
+            8251,
+            12865
+          ],
+          "mean_tpot_usage_proxy_seconds": 3.113613858819008,
+          "name": "hello2",
+          "observed_gauge_maxima": {
+            "expert_owner_peak_bytes": 211742720,
+            "expert_pending_upload_bytes": 0,
+            "expert_resident_bytes": 201351168,
+            "expert_resident_entries": 64,
+            "expert_scratch_bytes": 8388608,
+            "expert_unknown_quarantine_bytes": 0
+          },
+          "observed_generated_token_ids": null,
+          "output_tokens": 2,
+          "quality_scope": "HTTP completion and usage checks only; no reference comparison",
+          "reference_comparison_performed": false,
+          "reference_ids_are_observed_generated_ids": false,
+          "reference_output_usage_match": null,
+          "reference_quality_passed": null,
+          "reference_text_match": null,
+          "request_e2e_seconds": 9.185645993798971,
+          "source_log_lines": [
+            13,
+            14,
+            15
+          ],
+          "status": "success",
+          "ttft_seconds": 4.265431670472026,
+          "visible_text_usage_receipt_status": "pass"
+        },
+        {
+          "additive_deltas": {
+            "artifact_upload_bytes": 11571399936,
+            "artifact_uploads": 11034,
+            "checkpoint_handle_metadata_calls": 22068,
+            "checkpoint_path_metadata_calls": 22068,
+            "checkpoint_read_bytes": 11571399936,
+            "checkpoint_read_calls": 22068,
+            "checkpoint_source_checks": 22068,
+            "expert_evictions": 3678,
+            "expert_hits": 0,
+            "expert_uploads": 3678,
+            "h2d_bytes": 11571459828,
+            "h2d_copies": 28185
+          },
+          "exact_token_pass": null,
+          "input_tokens": 5,
+          "invocations": 9,
+          "last_invocation_gauges": {
+            "expert_owner_peak_bytes": 219754496,
+            "expert_pending_upload_bytes": 0,
+            "expert_resident_bytes": 201351168,
+            "expert_resident_entries": 64,
+            "expert_scratch_bytes": 8388608,
+            "expert_unknown_quarantine_bytes": 0
+          },
+          "log_byte_interval": [
+            12865,
+            26714
+          ],
+          "mean_tpot_usage_proxy_seconds": 1.2853108490152019,
+          "name": "canary-qa",
+          "observed_gauge_maxima": {
+            "expert_owner_peak_bytes": 219754496,
+            "expert_pending_upload_bytes": 0,
+            "expert_resident_bytes": 201351168,
+            "expert_resident_entries": 64,
+            "expert_scratch_bytes": 8388608,
+            "expert_unknown_quarantine_bytes": 0
+          },
+          "observed_generated_token_ids": null,
+          "output_tokens": 8,
+          "quality_scope": "Visible text and eight-output-token usage checks against frozen HF generation8 only; no exact generated IDs or numeric acceptance",
+          "reference_comparison_performed": true,
+          "reference_ids_are_observed_generated_ids": false,
+          "reference_output_usage_match": true,
+          "reference_quality_passed": true,
+          "reference_text_match": true,
+          "request_e2e_seconds": 18.309471419081092,
+          "source_log_lines": [
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24
+          ],
+          "status": "success",
+          "ttft_seconds": 8.331854369491339,
+          "visible_text_usage_receipt_status": "pass"
+        },
+        {
+          "additive_deltas": {
+            "artifact_upload_bytes": 11162405376,
+            "artifact_uploads": 10644,
+            "checkpoint_handle_metadata_calls": 21288,
+            "checkpoint_path_metadata_calls": 21288,
+            "checkpoint_read_bytes": 11162405376,
+            "checkpoint_read_calls": 21288,
+            "checkpoint_source_checks": 21288,
+            "expert_evictions": 3548,
+            "expert_hits": 0,
+            "expert_uploads": 3548,
+            "h2d_bytes": 11162465268,
+            "h2d_copies": 27275
+          },
+          "exact_token_pass": null,
+          "input_tokens": 5,
+          "invocations": 9,
+          "last_invocation_gauges": {
+            "expert_owner_peak_bytes": 219754496,
+            "expert_pending_upload_bytes": 0,
+            "expert_resident_bytes": 201351168,
+            "expert_resident_entries": 64,
+            "expert_scratch_bytes": 8388608,
+            "expert_unknown_quarantine_bytes": 0
+          },
+          "log_byte_interval": [
+            26714,
+            40567
+          ],
+          "mean_tpot_usage_proxy_seconds": 1.072392565597381,
+          "name": "canary-arithmetic",
+          "observed_gauge_maxima": {
+            "expert_owner_peak_bytes": 219754496,
+            "expert_pending_upload_bytes": 0,
+            "expert_resident_bytes": 201351168,
+            "expert_resident_entries": 64,
+            "expert_scratch_bytes": 8388608,
+            "expert_unknown_quarantine_bytes": 0
+          },
+          "observed_generated_token_ids": null,
+          "output_tokens": 8,
+          "quality_scope": "Visible text and eight-output-token usage checks against frozen HF generation8 only; no exact generated IDs or numeric acceptance",
+          "reference_comparison_performed": true,
+          "reference_ids_are_observed_generated_ids": false,
+          "reference_output_usage_match": true,
+          "reference_quality_passed": true,
+          "reference_text_match": true,
+          "request_e2e_seconds": 14.110093329101801,
+          "source_log_lines": [
+            25,
+            26,
+            27,
+            28,
+            29,
+            30,
+            31,
+            32,
+            33
+          ],
+          "status": "success",
+          "ttft_seconds": 5.307776233181357,
+          "visible_text_usage_receipt_status": "pass"
+        },
+        {
+          "additive_deltas": {
+            "artifact_upload_bytes": 10485991296,
+            "artifact_uploads": 9999,
+            "checkpoint_handle_metadata_calls": 19998,
+            "checkpoint_path_metadata_calls": 19998,
+            "checkpoint_read_bytes": 10485991296,
+            "checkpoint_read_calls": 19998,
+            "checkpoint_source_checks": 19998,
+            "expert_evictions": 3333,
+            "expert_hits": 0,
+            "expert_uploads": 3333,
+            "h2d_bytes": 10486042140,
+            "h2d_copies": 25770
+          },
+          "exact_token_pass": null,
+          "input_tokens": 3,
+          "invocations": 9,
+          "last_invocation_gauges": {
+            "expert_owner_peak_bytes": 219754496,
+            "expert_pending_upload_bytes": 0,
+            "expert_resident_bytes": 201351168,
+            "expert_resident_entries": 64,
+            "expert_scratch_bytes": 8388608,
+            "expert_unknown_quarantine_bytes": 0
+          },
+          "log_byte_interval": [
+            40567,
+            54414
+          ],
+          "mean_tpot_usage_proxy_seconds": 0.8844132324946778,
+          "name": "canary-chinese",
+          "observed_gauge_maxima": {
+            "expert_owner_peak_bytes": 219754496,
+            "expert_pending_upload_bytes": 0,
+            "expert_resident_bytes": 201351168,
+            "expert_resident_entries": 64,
+            "expert_scratch_bytes": 8388608,
+            "expert_unknown_quarantine_bytes": 0
+          },
+          "observed_generated_token_ids": null,
+          "output_tokens": 8,
+          "quality_scope": "Visible text and eight-output-token usage checks against frozen HF generation8 only; no exact generated IDs or numeric acceptance",
+          "reference_comparison_performed": true,
+          "reference_ids_are_observed_generated_ids": false,
+          "reference_output_usage_match": true,
+          "reference_quality_passed": true,
+          "reference_text_match": true,
+          "request_e2e_seconds": 9.932093098759651,
+          "source_log_lines": [
+            34,
+            35,
+            36,
+            37,
+            38,
+            39,
+            40,
+            41,
+            42
+          ],
+          "status": "success",
+          "ttft_seconds": 2.604780962690711,
+          "visible_text_usage_receipt_status": "pass"
+        }
+      ],
+      "run": "storage-demand-tp1-middle-20261013-02",
+      "sampled_memory": {
+        "complete_host_samples": 32,
+        "component_sample_counts": {
+          "anonymous_bytes": 32,
+          "private_dirty_bytes": 32,
+          "pss_anon_bytes": 0,
+          "pss_file_bytes": 0
+        },
+        "gpu_peak_bytes": {
+          "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 4325376000
+        },
+        "gpu_samples": 32,
+        "sample_count": 32,
+        "tree_anonymous_peak_bytes": 7818027008,
+        "tree_private_dirty_peak_bytes": 7839330304,
+        "tree_pss_anon_peak_bytes": null,
+        "tree_pss_file_peak_bytes": null,
+        "tree_pss_peak_bytes": 7980569600,
+        "tree_rss_peak_bytes": 7983616000
+      },
+      "shutdown": {
+        "all_eight_post_idle": true,
+        "authenticated_drained": true,
+        "custody_status": "proven_drained",
+        "evidence": {
+          "basis": "Process exit is supervision evidence only; resource verification requires explicit final owner ledger credits, fence quiescence, pending, Unknown/quarantine and current source-completion observations",
+          "custody_unknown_observed": null,
+          "fence_quiescent_observed": null,
+          "ledger_credits_outstanding_observed": null,
+          "normal_exit_observed": true,
+          "pending_operations_observed": null,
+          "pending_requests_observed": null,
+          "process_exit_success": true,
+          "quarantine_observed": null,
+          "resource_contract_complete": "unknown",
+          "resource_evidence_coverage": {
+            "failed_fields": [],
+            "invalid_fields": [],
+            "missing_fields": [
+              "pending_requests_observed",
+              "pending_operations_observed",
+              "custody_unknown_observed",
+              "quarantine_observed",
+              "ledger_credits_outstanding_observed",
+              "fence_quiescent_observed",
+              "source_completion_observed"
+            ],
+            "required_fields": [
+              "pending_requests_observed",
+              "pending_operations_observed",
+              "custody_unknown_observed",
+              "quarantine_observed",
+              "ledger_credits_outstanding_observed",
+              "fence_quiescent_observed",
+              "source_completion_observed"
+            ]
+          },
+          "source_completion_observed": null
+        },
+        "post_idle_status": "verified",
+        "prelaunch_idle_status": "verified",
+        "resource_contract_complete": "unknown",
+        "supervisor_returncode": 0
+      },
+      "source_directory": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02",
+      "status": "complete",
+      "timing": {
+        "case_wall_seconds": 73.16217643581331,
+        "first_send_to_last_client_terminal_seconds": 51.850900242105126,
+        "request_e2e_sum_seconds": 51.537303840741515,
+        "startup_seconds": 18.49747348576784,
+        "summed_http_fixed_work_windows_seconds": 51.53842626325786,
+        "supervisor_wall_seconds": 75.87395730614662
+      },
+      "unobserved": {
+        "PssAnon": null,
+        "expert_cache_misses": null,
+        "io_credits": null,
+        "nfs_shared_mount_bytes": null,
+        "observed_generated_token_ids": null,
+        "owned_process_gpu_peak_bytes": null,
+        "page_cache_state": null,
+        "physical_host_cap_bytes": null,
+        "physical_nas_bytes": null,
+        "proc_read_bytes": null,
+        "startup_io_counters": null
+      }
+    }
+  ],
+  "caveats": [
+    "One successful instrumented run (n=1), not independent repetitions; no statistics or confidence intervals.",
+    "ferrule_performance DEBUG overhead is unmeasured; these latencies are not a fast baseline or comparable vLLM throughput.",
+    "Read calls/bytes are logical checkpoint-reader/syscall counters; physical NAS/NFS IO and OS page-cache state are unknown.",
+    "H2D/artifact counters are facade activity, not physical bus traffic or device-kernel timing. Startup IO is not covered by invocation sums.",
+    "Expert uploads are not cache misses. Misses and IO credits are unobserved, not inferred from hits/uploads.",
+    "SSE text/usage matches are not generated-token-ID or logits evidence; frozen reference IDs are never observed generated IDs.",
+    "TTFT is send-to-first-nonempty-SSE content; E2E is send-to-EOF; TPOT is the recorded content-event/usage proxy, not exact token time.",
+    "Cache occupancy/scratch/owner-peak fields are gauges: last invocation and observed maxima, never additive deltas or a final ledger.",
+    "Memory values are independent sampled component maxima, not an additive decomposition, exact peak, hard cap, or continuous coverage.",
+    "Anonymous is resident anonymous memory, not PssAnon. PssAnon/PssFile and physical host cap are unobserved.",
+    "GPU memory is selected-device aggregate telemetry; owned-process attribution and absence of foreign interference remain unproven.",
+    "After-first-request samples include later canaries, not steady state. Shutdown resource_contract_complete is unknown despite exit/custody/idle evidence."
+  ],
+  "consistency": {
+    "checks": [
+      "bound input hashes",
+      "receipt artifact/log hashes",
+      "case/report/observed/HTTP equality",
+      "invocations.json vs raw anchored log",
+      "invocation vs request vs run delta sums",
+      "last gauges (not sums)",
+      "SSE text/usage and latency",
+      "raw sampled memory and phases"
+    ],
+    "divergences": [],
+    "input_hashes_checked": 41,
+    "receipt_pins_checked": 39,
+    "status": "pass"
+  },
+  "counter_semantics": {
+    "additive": [
+      "checkpoint_read_calls",
+      "checkpoint_read_bytes",
+      "checkpoint_source_checks",
+      "checkpoint_path_metadata_calls",
+      "checkpoint_handle_metadata_calls",
+      "h2d_copies",
+      "h2d_bytes",
+      "artifact_uploads",
+      "artifact_upload_bytes",
+      "expert_hits",
+      "expert_uploads",
+      "expert_evictions"
+    ],
+    "gauge_policy": "last invocation and observed maxima; never sum",
+    "gauges": [
+      "expert_resident_entries",
+      "expert_resident_bytes",
+      "expert_pending_upload_bytes",
+      "expert_scratch_bytes",
+      "expert_owner_peak_bytes",
+      "expert_unknown_quarantine_bytes"
+    ],
+    "mapping": "serialized request/log-byte interval; transaction is not request ID"
+  },
+  "inputs": [
+    {
+      "bound_sha256": "3c2bd642756c89eefb40a77c82d66cda42ca4d6a3584092b8d2f1620932ab368",
+      "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-01/baseline.json",
+      "sha256": "3c2bd642756c89eefb40a77c82d66cda42ca4d6a3584092b8d2f1620932ab368"
+    },
+    {
+      "bound_sha256": "8b41a2470fbdb6fb78d605913335e169afeb2e41a2de7d3524b904db800be070",
+      "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-01/case.json",
+      "sha256": "8b41a2470fbdb6fb78d605913335e169afeb2e41a2de7d3524b904db800be070"
+    },
+    {
+      "bound_sha256": "202ac899d510a49166be65da3fe728e181b9e52b277dd9577b04a49dc9d56fa7",
+      "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-01/custody.json",
+      "sha256": "202ac899d510a49166be65da3fe728e181b9e52b277dd9577b04a49dc9d56fa7"
+    },
+    {
+      "bound_sha256": "d108cb5ae0a42634371b39a5b9304d6d3d44ebe1de112ad2672950749977dda3",
+      "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-01/post-idle.json",
+      "sha256": "d108cb5ae0a42634371b39a5b9304d6d3d44ebe1de112ad2672950749977dda3"
+    },
+    {
+      "bound_sha256": "be3c8bf2d7d04ef44723b7c52b2c8a9a6131dffe8e58abceb3e3b382b4fc25b5",
+      "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-01/prelaunch.json",
+      "sha256": "be3c8bf2d7d04ef44723b7c52b2c8a9a6131dffe8e58abceb3e3b382b4fc25b5"
+    },
+    {
+      "bound_sha256": "762adbe3baab7883c3f488adca86e57a53919f7c8bdfc109f92fb82baf02c288",
+      "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-01/registration.json",
+      "sha256": "762adbe3baab7883c3f488adca86e57a53919f7c8bdfc109f92fb82baf02c288"
+    },
+    {
+      "bound_sha256": "581f2d5eaa83a209aec950ad7bb308100721e279d550acdd845a0b1bacbf10f1",
+      "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-01/report.json",
+      "sha256": "581f2d5eaa83a209aec950ad7bb308100721e279d550acdd845a0b1bacbf10f1"
+    },
+    {
+      "bound_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-01/server.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "bound_sha256": "1c896f22e38fa324325d681396693584f3a62f8adb2ef168d8d69f78848e0527",
+      "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-01/supervisor.json",
+      "sha256": "1c896f22e38fa324325d681396693584f3a62f8adb2ef168d8d69f78848e0527"
+    },
+    {
+      "bound_sha256": "3c2bd642756c89eefb40a77c82d66cda42ca4d6a3584092b8d2f1620932ab368",
+      "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/baseline.json",
+      "sha256": "3c2bd642756c89eefb40a77c82d66cda42ca4d6a3584092b8d2f1620932ab368"
+    },
+    {
+      "bound_sha256": "891d6effb322b99c08d94ef741c2befe236446c4719f8eb2b108d2bdb2ff0d5f",
+      "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/canary-arithmetic/generated-controls.json",
+      "sha256": "891d6effb322b99c08d94ef741c2befe236446c4719f8eb2b108d2bdb2ff0d5f"
+    },
+    {
+      "bound_sha256": "e699a0dec9ed5ea79dc1088a8e1dc775b978b01cdc174b0e5fa489057f9dd715",
+      "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/canary-arithmetic/http.json",
+      "sha256": "e699a0dec9ed5ea79dc1088a8e1dc775b978b01cdc174b0e5fa489057f9dd715"
+    },
+    {
+      "bound_sha256": "2ac02f64ed1352d365c65abacc27337a390f26f42225998b1d6e773d758261c7",
+      "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/canary-arithmetic/invocations.json",
+      "sha256": "2ac02f64ed1352d365c65abacc27337a390f26f42225998b1d6e773d758261c7"
+    },
+    {
+      "bound_sha256": "c04340df3ca24db4f5a914c712a8cd645314b2815c5c6847c6e8d5cf25886c7a",
+      "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/canary-arithmetic/observed.json",
+      "sha256": "c04340df3ca24db4f5a914c712a8cd645314b2815c5c6847c6e8d5cf25886c7a"
+    },
+    {
+      "bound_sha256": "0e775b44fa912e1b69760570d81d8c8b9e8b11e817ce43adef00a292b7258f46",
+      "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/canary-arithmetic/prompts.json",
+      "sha256": "0e775b44fa912e1b69760570d81d8c8b9e8b11e817ce43adef00a292b7258f46"
+    },
+    {
+      "bound_sha256": "a617afe01b34d6dd5271e75e2685c7e6b135b58eebcda92dd947c225a7b234d6",
+      "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/canary-chinese/generated-controls.json",
+      "sha256": "a617afe01b34d6dd5271e75e2685c7e6b135b58eebcda92dd947c225a7b234d6"
+    },
+    {
+      "bound_sha256": "125093da155f71d1bc79dcbfd0d810cf2d65f778c6ab1fbc93d822c15d2406ba",
+      "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/canary-chinese/http.json",
+      "sha256": "125093da155f71d1bc79dcbfd0d810cf2d65f778c6ab1fbc93d822c15d2406ba"
+    },
+    {
+      "bound_sha256": "8403e162fe56f79cd4a1150c71daffa1ffcd8f9f679d92924dc7f593bf014a80",
+      "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/canary-chinese/invocations.json",
+      "sha256": "8403e162fe56f79cd4a1150c71daffa1ffcd8f9f679d92924dc7f593bf014a80"
+    },
+    {
+      "bound_sha256": "608774e1779777b3c32cb2b551da1bf910939a0682737d6c694f281f6930059f",
+      "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/canary-chinese/observed.json",
+      "sha256": "608774e1779777b3c32cb2b551da1bf910939a0682737d6c694f281f6930059f"
+    },
+    {
+      "bound_sha256": "c1f3d605dbe86516c9c6148be86fcc0bf3f4d9e1086c6593797a7925836e84d3",
+      "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/canary-chinese/prompts.json",
+      "sha256": "c1f3d605dbe86516c9c6148be86fcc0bf3f4d9e1086c6593797a7925836e84d3"
+    },
+    {
+      "bound_sha256": "f86cd633caf68a58b0a27c249e2f3927b069f6036e9436c11631410b1af933a2",
+      "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/canary-qa/generated-controls.json",
+      "sha256": "f86cd633caf68a58b0a27c249e2f3927b069f6036e9436c11631410b1af933a2"
+    },
+    {
+      "bound_sha256": "aa931fa589629d85c852a9e111c993573994fd75199de66418571c864f72589f",
+      "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/canary-qa/http.json",
+      "sha256": "aa931fa589629d85c852a9e111c993573994fd75199de66418571c864f72589f"
+    },
+    {
+      "bound_sha256": "49afde43e4709d9ebafac95d84acf01361c95abb49608a5dbb5cfb0e289668f3",
+      "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/canary-qa/invocations.json",
+      "sha256": "49afde43e4709d9ebafac95d84acf01361c95abb49608a5dbb5cfb0e289668f3"
+    },
+    {
+      "bound_sha256": "688e055fac0f5a10167d6768abf199b902f5f4d8288a77a9ddcda343e4bda1a7",
+      "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/canary-qa/observed.json",
+      "sha256": "688e055fac0f5a10167d6768abf199b902f5f4d8288a77a9ddcda343e4bda1a7"
+    },
+    {
+      "bound_sha256": "b53ff4cfeede55331bae244c61f823c2162018cdb6dc534904788528d3b1645f",
+      "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/canary-qa/prompts.json",
+      "sha256": "b53ff4cfeede55331bae244c61f823c2162018cdb6dc534904788528d3b1645f"
+    },
+    {
+      "bound_sha256": "cec50b599498dede2998aad4f73c1c2f1bb300ab812574f66c10bf1071a7fcb2",
+      "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/case.json",
+      "sha256": "cec50b599498dede2998aad4f73c1c2f1bb300ab812574f66c10bf1071a7fcb2"
+    },
+    {
+      "bound_sha256": "92be2863ac83410287b7ae6c3f2ce42ee4674370c16c237cfe0836346dbc210f",
+      "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/custody.json",
+      "sha256": "92be2863ac83410287b7ae6c3f2ce42ee4674370c16c237cfe0836346dbc210f"
+    },
+    {
+      "bound_sha256": "2cd95112669d9e91f8f2f6535ce4ae2a52438df3125d8e464f8785d87f422399",
+      "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/hello2/generated-controls.json",
+      "sha256": "2cd95112669d9e91f8f2f6535ce4ae2a52438df3125d8e464f8785d87f422399"
+    },
+    {
+      "bound_sha256": "1a11f397db51772a432593b0e26d39d96eb203a4fa09e67a36e0879b9c1c088e",
+      "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/hello2/http.json",
+      "sha256": "1a11f397db51772a432593b0e26d39d96eb203a4fa09e67a36e0879b9c1c088e"
+    },
+    {
+      "bound_sha256": "274023d5df3dc3c64de630fd78551216b24952b534462a7bacf6f0c94ce24cd8",
+      "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/hello2/invocations.json",
+      "sha256": "274023d5df3dc3c64de630fd78551216b24952b534462a7bacf6f0c94ce24cd8"
+    },
+    {
+      "bound_sha256": "f397dceea6e079480bc62bad92b269564ae88701a6b2c61928af2889f4c5d02c",
+      "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/hello2/observed.json",
+      "sha256": "f397dceea6e079480bc62bad92b269564ae88701a6b2c61928af2889f4c5d02c"
+    },
+    {
+      "bound_sha256": "2c85f070c770acdde693be8a4529a3734f5bce2f2ff470acec5a1748b47e7bac",
+      "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/hello2/prompts.json",
+      "sha256": "2c85f070c770acdde693be8a4529a3734f5bce2f2ff470acec5a1748b47e7bac"
+    },
+    {
+      "bound_sha256": "7b99b56382d7ca6582bb9a085109e2f0d6f9bdf6a6307fec38d28b6707749748",
+      "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/post-idle.json",
+      "sha256": "7b99b56382d7ca6582bb9a085109e2f0d6f9bdf6a6307fec38d28b6707749748"
+    },
+    {
+      "bound_sha256": "7c3c46d1a93cb0376297edfdf23911c4525d8500453d28789a604195de475178",
+      "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/prelaunch.json",
+      "sha256": "7c3c46d1a93cb0376297edfdf23911c4525d8500453d28789a604195de475178"
+    },
+    {
+      "bound_sha256": "433205d954ec415e46a2f552384ac9a340bc6225fe78c88d97480cec36003503",
+      "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/profile-server.json",
+      "sha256": "433205d954ec415e46a2f552384ac9a340bc6225fe78c88d97480cec36003503"
+    },
+    {
+      "bound_sha256": "677402df817b284c5924a3ed308a7a1505f7eacef5880dc3bd59df3cd419de08",
+      "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/ready.json",
+      "sha256": "677402df817b284c5924a3ed308a7a1505f7eacef5880dc3bd59df3cd419de08"
+    },
+    {
+      "bound_sha256": "22a574f13d24e7148e365c4c96bdc2913eb63a6e7bd9206f9120b25070e1d8b0",
+      "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/registration.json",
+      "sha256": "22a574f13d24e7148e365c4c96bdc2913eb63a6e7bd9206f9120b25070e1d8b0"
+    },
+    {
+      "bound_sha256": "509448c31afa76ed7c955aeee7a34b618e797c7639fbba2043f193b42ca57297",
+      "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/report.json",
+      "sha256": "509448c31afa76ed7c955aeee7a34b618e797c7639fbba2043f193b42ca57297"
+    },
+    {
+      "bound_sha256": "5a9d6e8335e0661a7194f5cfc02405d5d2244094b263ca403fa21f468a8e1cc8",
+      "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/samples.jsonl",
+      "sha256": "5a9d6e8335e0661a7194f5cfc02405d5d2244094b263ca403fa21f468a8e1cc8"
+    },
+    {
+      "bound_sha256": "2ff930f024ae14b847a4982a3790fedda70a2e49b4550bb32ecabd0d74a7fe9f",
+      "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/server.log",
+      "sha256": "2ff930f024ae14b847a4982a3790fedda70a2e49b4550bb32ecabd0d74a7fe9f"
+    },
+    {
+      "bound_sha256": "b73b1553b05aac91d3c5ec9c37bdcc0e69d39be6dc72dcd3bbfe1df4dbc813c5",
+      "path": "papers/arxiv/experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/supervisor.json",
+      "sha256": "b73b1553b05aac91d3c5ec9c37bdcc0e69d39be6dc72dcd3bbfe1df4dbc813c5"
+    }
+  ],
+  "provenance": {
+    "generator_path": "papers/arxiv/experiments/storage_demand/analysis/summarize.py",
+    "generator_sha256": "a1eb8dfb4e71175ead15e90e9b048d4b9879dd6fe62a2b0565e45acae4235c15",
+    "input_manifest_path": "papers/arxiv/experiments/storage_demand/analysis/inputs.json",
+    "input_manifest_sha256": "82d1dc579d0cb894134bc45ef7c18d677bfa1711b9e5baf1cda5216b962d185b",
+    "time_policy": "no analysis timestamp; timings come only from bound receipts"
+  },
+  "schema": "storage_demand_fixed_receipts_analysis.v1"
+}

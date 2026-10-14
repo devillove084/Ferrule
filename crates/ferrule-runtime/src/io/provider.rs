@@ -1,5 +1,6 @@
 //! Materialization-provider boundary and deterministic fake implementation.
 
+use ferrule_common::host_kv::{HostKvError, HostKvPlan, HostKvResult};
 use ferrule_common::io_protocol::{ProviderFault, ProviderProgress};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -147,10 +148,22 @@ impl ExecutionPromotion {
 
 /// Runtime/provider command interface. Command acceptance never changes owner
 /// state by itself; custody return is proved by completion, not by a fault observation.
-/// A submitted-stage command error certifies that no outstanding stage references
-/// remain. Partial submission must instead retain its owner, return acceptance,
-/// and report a Pending/Unknown fault through `next_progress`.
+/// For checkpoint commands, a submitted-stage command error certifies that no
+/// outstanding stage references remain. Partial submission must instead retain
+/// its owner, return acceptance, and report a Pending/Unknown fault through
+/// `next_progress`. HostKV has a separate trust boundary described below.
 pub trait RuntimeMaterializationProvider: std::fmt::Debug + Send {
+    /// Memory-source submission, never a fabricated checkpoint read. `Ok` only
+    /// accepts the command, not completion. This safe trait cannot certify that
+    /// an error leaves no physical references: the safe HostKV adapter retains
+    /// custody as Unknown on every error. Only an audited integration calling
+    /// `ReservedHostKvPlacement::submit_trusted` may attest the stronger contract
+    /// that every non-Unknown error leaves no work or references for this plan.
+    /// Partial/ambiguous submission must return `HostKvError::Unknown`.
+    fn submit_host_kv_plan(&mut self, _plan: &HostKvPlan) -> HostKvResult<()> {
+        Err(HostKvError::ProviderUnsupported)
+    }
+
     /// Exact provider-owned preparation fixed before registry admission.
     fn preparation(
         &self,
@@ -219,7 +232,9 @@ pub trait RuntimeMaterializationProvider: std::fmt::Debug + Send {
     fn next_progress(&mut self) -> ProviderProgress;
 
     /// Compatibility polling preserves faults instead of turning them into Idle.
-    fn next_completion(&mut self) -> std::result::Result<Option<CompletionEvent>, ProviderFault> {
+    fn next_completion(
+        &mut self,
+    ) -> std::result::Result<Option<CompletionEvent>, Box<ProviderFault>> {
         self.next_progress().into_completion()
     }
 }
@@ -372,6 +387,12 @@ impl SharedMaterializationProvider {
 }
 
 impl RuntimeMaterializationProvider for SharedMaterializationProvider {
+    fn submit_host_kv_plan(&mut self, _plan: &HostKvPlan) -> HostKvResult<()> {
+        // The model-owned MaterializationProvider has no host-KV protocol.
+        // Do not redirect memory sources into its checkpoint command path.
+        Err(HostKvError::ProviderUnsupported)
+    }
+
     fn preparation(
         &self,
         key: MaterializationKey,
@@ -532,6 +553,10 @@ impl<T> RuntimeMaterializationProvider for Box<T>
 where
     T: RuntimeMaterializationProvider + ?Sized,
 {
+    fn submit_host_kv_plan(&mut self, plan: &HostKvPlan) -> HostKvResult<()> {
+        (**self).submit_host_kv_plan(plan)
+    }
+
     fn preparation(
         &self,
         key: MaterializationKey,
@@ -702,3 +727,7 @@ impl RuntimeMaterializationProvider for UnavailableMaterializationProvider {
         ProviderProgress::Idle
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/io/host_kv_provider.rs"]
+mod host_kv_tests;

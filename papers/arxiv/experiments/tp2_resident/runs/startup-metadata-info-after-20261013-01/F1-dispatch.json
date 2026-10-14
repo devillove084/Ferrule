@@ -1,0 +1,15 @@
+{
+  "protocol": "tp2-resident-fv-qa8-descriptive",
+  "purpose": "fused_after",
+  "status": "incomplete",
+  "sole_gpu_owner_granted": true,
+  "owner_note": "20261013 sole GPU owner: one ordinary info F1 exact current startup_metadata TP2; 3warm5measure; rankperf off; no V/Nsight/storage TP1",
+  "fairmatch": false,
+  "exact_speedup": null,
+  "slots": [
+    {
+      "id": "F1",
+      "status": "dispatched_unknown"
+    }
+  ]
+}

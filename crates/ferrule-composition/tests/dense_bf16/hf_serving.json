@@ -1,0 +1,60 @@
+{
+  "schema": "ferrule.public-dense-bf16-hf.v1",
+  "torch": "2.13.0+cu129",
+  "transformers": "5.5.3",
+  "device": "cpu",
+  "inverse_frequency_dtype": "float32",
+  "turns": [
+    {
+      "prompt": [
+        1,
+        2,
+        3
+      ],
+      "reset": true,
+      "generated": [
+        0,
+        6
+      ],
+      "logits": [
+        1.6640625,
+        1.703125
+      ],
+      "retained_position": 5
+    },
+    {
+      "prompt": [
+        4,
+        5
+      ],
+      "reset": false,
+      "generated": [
+        6,
+        4
+      ],
+      "logits": [
+        1.296875,
+        1.625
+      ],
+      "retained_position": 9
+    },
+    {
+      "prompt": [
+        1,
+        2,
+        3,
+        7
+      ],
+      "reset": true,
+      "generated": [
+        13,
+        6
+      ],
+      "logits": [
+        1.6953125,
+        1.5625
+      ],
+      "retained_position": 6
+    }
+  ]
+}

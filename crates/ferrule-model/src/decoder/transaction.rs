@@ -218,11 +218,12 @@ where
         }
         Ok(())
     }
-    pub fn execute(
+    fn execute_scoped(
         &mut self,
         backend: &mut D::KvBackend,
         exec: &mut D::ForwardExecutor,
         control: &DecoderControlPlane,
+        invocation: Option<&super::DecoderInvocationScope<'_>>,
     ) -> Result<DecoderTransactionProgress> {
         let state = self.take_state();
         if !matches!(state, DecoderTransactionState::Prepared) {
@@ -232,6 +233,12 @@ where
                 "decoder transaction {} cannot execute from phase {phase:?}",
                 self.transaction.get()
             )));
+        }
+        if let Some(scope) = invocation
+            && let Err(error) = scope.begin(self.transaction, &self.batch)
+        {
+            self.restore_state(DecoderTransactionState::Prepared);
+            return Err(error);
         }
         let continuation_id = match control.continuations().allocate() {
             Ok(id) => id,
@@ -271,11 +278,40 @@ where
                 };
             }
         };
-        let mut ctx = self.take_forward_context(control, Some(continuation_id), false);
+        let mut ctx = self
+            .take_forward_context(control, Some(continuation_id), false)
+            .with_invocation(invocation);
         let progress = exec.start_forward(&mut ctx, &self.batch, &mut self.working_states, &mut kv);
         drop(kv);
         self.restore_forward_context(ctx);
+        let progress = if invocation.is_some() {
+            progress.map(DecoderForwardProgress::require_synchronous)
+        } else {
+            progress
+        };
         match progress {
+            Ok(DecoderForwardProgress::Complete {
+                logits,
+                terminal_guard,
+            }) => {
+                if let Some(scope) = invocation
+                    && let Err(error) = scope.finish()
+                {
+                    let leave = self.leave_kv(backend);
+                    self.restore_state(DecoderTransactionState::FailedQuiescent(Some(
+                        terminal_guard,
+                    )));
+                    return match leave {
+                        Ok(()) => Err(error),
+                        Err(leave_error) => Err(combined_error(
+                            "decoder invocation finish and KV leave both failed",
+                            error,
+                            leave_error,
+                        )),
+                    };
+                }
+                self.finish_forward_complete(logits, terminal_guard, backend)
+            }
             Ok(progress) => self.finish_forward_start(progress, continuation_id, backend),
             Err(error) => {
                 let leave = self.leave_kv(backend);
@@ -851,12 +887,12 @@ where
         self.working_states.clear();
         self.held_resume_leases.clear();
     }
-    fn take_forward_context(
+    fn take_forward_context<'a>(
         &mut self,
         control: &DecoderControlPlane,
         continuation_id: Option<ContinuationId>,
         has_current_resume_lease: bool,
-    ) -> DecoderTransactionContext {
+    ) -> DecoderTransactionContext<'a> {
         DecoderTransactionContext::with_services(
             self.transaction,
             control.clone(),
@@ -1047,12 +1083,22 @@ where
         backend: &mut D::KvBackend,
         exec: &mut D::ForwardExecutor,
     ) -> Result<DecoderTransactionProgress> {
+        self.execute_batch_scoped(transaction, (states, batch), backend, exec, None)
+    }
+    pub fn execute_batch_scoped(
+        &mut self,
+        transaction: ExecutionTransactionId,
+        sources: (&[D::SequenceState], &ExecutionBatch),
+        backend: &mut D::KvBackend,
+        exec: &mut D::ForwardExecutor,
+        invocation: Option<&super::DecoderInvocationScope<'_>>,
+    ) -> Result<DecoderTransactionProgress> {
         let shell = self.shell(transaction)?;
-        shell.batch().validate_source_batch(batch)?;
-        shell.validate_sources(states)?;
+        shell.batch().validate_source_batch(sources.1)?;
+        shell.validate_sources(sources.0)?;
         let control = self.control.clone();
         self.shell_mut(transaction)?
-            .execute(backend, exec, &control)
+            .execute_scoped(backend, exec, &control, invocation)
     }
     #[allow(clippy::too_many_arguments)]
     pub fn resume_batch(

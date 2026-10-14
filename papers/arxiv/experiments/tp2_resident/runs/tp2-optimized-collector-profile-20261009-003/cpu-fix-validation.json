@@ -1,0 +1,12 @@
+{
+  "tp2_tests": 133,
+  "original_tests": 42,
+  "all_pass": true,
+  "actual_failure_sample": "c702e535e8389779323204c057be0e7506b8758083b128cfbd7c40c94532ac54",
+  "fix": "Selected utilization after reaped child remains pending under existing bounded cleanup, exact two idle B1 samples still required; foreign/nonselected/unknown fail",
+  "source_pins": {
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/instrumentation_live.py": "2c8beb51cedb53dcfc79b771a8f9e6116a0fb41a153f0e01bfbfe3a814ba9c0d",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/instrumentation_scope.py": "1c315e32add3cccbd56e9f1ac15ae8de0437ca6620562c9aceb4f37f90d30ff7",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/test_instrumentation_scope.py": "7f15b7f39d0ce58561a1596533c7c412096378e252840870b34007f955d5dad9"
+  }
+}

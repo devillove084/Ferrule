@@ -9,7 +9,7 @@ family forward, run vLLM, install dependencies, use NCCL, or initialize CUDA.
 Use the existing environment, not PATH Python:
 
 ```sh
-/opt/conda310/bin/python -B scripts/test_qwen35_fp8_reference.py
+/opt/conda310/bin/python -B scripts/tests/test_qwen35_fp8_reference.py
 /opt/conda310/bin/python -B scripts/qwen35_fp8_reference.py --tiny-only
 /opt/conda310/bin/python -B scripts/qwen35_fp8_reference.py --timeout 900 --capital --cache-states
 /opt/conda310/bin/python -B scripts/qwen35_fp8_reference.py --precision f32 --timeout 900 --capital --cache-states --output target/validation/qwen35-fp8-reference-full40-f32-v1

@@ -1,0 +1,7 @@
+{
+  "returncode": 0,
+  "one_test_passed": true,
+  "selector": "cuda::providers::bf16_gemmex::pair_swiglu_tests::pair_swiglu_bf16_edges_m1_m2_m5_exact",
+  "binary_sha256": "71aefda9fc154928712f7cebfbb1f374a2e6b9b57730c1f3b5cc178bae9cade4",
+  "log_sha256": "88aec7ed324c822db74ea68179e31ded1daee7b94b395ec1c0f7c2d241210bee"
+}

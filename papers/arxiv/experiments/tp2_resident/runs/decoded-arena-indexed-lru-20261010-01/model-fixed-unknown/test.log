@@ -1,0 +1,10 @@
+
+running 1 test
+test transformer::standard::cuda::hybrid_rank::mixed::decoded_gpu_tests::decoded_fixed_pin_unknown_and_panic_never_publish_arena ... 
+thread 'transformer::standard::cuda::hybrid_rank::mixed::decoded_gpu_tests::decoded_fixed_pin_unknown_and_panic_never_publish_arena' (107306) panicked at crates/ferrule-model/src/transformer/standard/cuda/hybrid_rank/../../../../../tests/unit/transformer/mixed_decoded_gpu.rs:33:14:
+injected decoded submission unwind
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 759 filtered out; finished in 0.75s
+

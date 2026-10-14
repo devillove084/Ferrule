@@ -1,0 +1,6 @@
+{
+  "stage": "supplemental_receipt_binding",
+  "gpu_executed": false,
+  "error": "CLOSEOUT uses project-relative artifact paths; contract.check_pins requires absolute paths",
+  "fix": "Resolve pinned relative paths under ROOT; no digest or source change"
+}

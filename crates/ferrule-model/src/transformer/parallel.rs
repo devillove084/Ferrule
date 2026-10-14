@@ -103,6 +103,51 @@ impl TensorParallelLinearPlan {
         Ok(start..end)
     }
 
+    /// Bit-preserving BF16 column payload; pad only transport, never GEMM geometry.
+    pub fn pack_column_bf16(
+        &self,
+        rank: ParallelRankId,
+        words: &[u16],
+        rows: usize,
+    ) -> Result<Vec<u16>> {
+        let range = self.rank_range(rank)?;
+        if self.partition != TensorParallelLinearPartition::Column
+            || rows == 0
+            || words.len() != checked_elements(rows, range.len())?
+        {
+            return Err(invalid("BF16 column payload shape/partition mismatch"));
+        }
+        let stride = self.out_features.div_ceil(self.ranks);
+        let mut packed = vec![0; checked_elements(rows, stride)?];
+        for row in 0..rows {
+            packed[row * stride..row * stride + range.len()]
+                .copy_from_slice(&words[row * range.len()..(row + 1) * range.len()]);
+        }
+        Ok(packed)
+    }
+    pub fn unpack_column_bf16(&self, words: &[u16], rows: usize) -> Result<Vec<u16>> {
+        let stride = self.out_features.div_ceil(self.ranks);
+        let count = checked_elements(rows, stride)?;
+        if self.partition != TensorParallelLinearPartition::Column
+            || rows == 0
+            || words.len() != checked_elements(count, self.ranks)?
+        {
+            return Err(invalid(
+                "BF16 gathered column payload shape/partition mismatch",
+            ));
+        }
+        let mut output = vec![0; checked_elements(rows, self.out_features)?];
+        for lane in 0..self.ranks {
+            let range = self.rank_range(ParallelRankId::new(lane as u32))?;
+            for row in 0..rows {
+                let start = lane * count + row * stride;
+                output[row * self.out_features + range.start..row * self.out_features + range.end]
+                    .copy_from_slice(&words[start..start + range.len()]);
+            }
+        }
+        Ok(output)
+    }
+
     /// Local weight shape `(out_features, in_features)`.
     pub fn local_shape(&self, rank: ParallelRankId) -> Result<(usize, usize)> {
         let width = self.rank_range(rank)?.len();
@@ -826,7 +871,10 @@ fn dense_element_bytes(dtype: &CheckpointDType) -> Result<usize> {
 }
 
 impl TensorParallelLinearPlan {
-    fn matrix_range(&self, rank: ParallelRankId) -> Result<(Range<usize>, Range<usize>)> {
+    pub(crate) fn matrix_range(
+        &self,
+        rank: ParallelRankId,
+    ) -> Result<(Range<usize>, Range<usize>)> {
         let range = self.rank_range(rank)?;
         Ok(match self.partition {
             TensorParallelLinearPartition::Column => (range, 0..self.in_features),
@@ -1203,8 +1251,10 @@ impl CpuLocalWeight {
             CheckpointDType::F32 => CpuLocalStorage::F32(
                 shard
                     .bytes
-                    .chunks_exact(4)
-                    .map(|b| f32::from_le_bytes(b.try_into().expect("validated F32 bytes")))
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .map(|b| f32::from_le_bytes(*b))
                     .collect(),
             ),
             _ => return Err(invalid("unsupported CPU local storage")),

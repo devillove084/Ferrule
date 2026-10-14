@@ -1,0 +1,37 @@
+{
+  "schema": "ferrule.paper.storage-demand.prepared.v1",
+  "status": "CPU_PREPARED_EXECUTION_BLOCKED",
+  "case_id": "storage-demand-tp1-mixed-middle-20261013-01",
+  "case": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/case-middle.json",
+  "case_sha256": "c0c6c548bafe002dc75615f81eebe86fe8f5a55c90cc0c44d6ab9ab18b203086",
+  "artifact_pins": {
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/cpu-checks.json": "3581d749e2ab1899cd456f5455cbfae8ee7b79b4815b56cb958c45ae337b1372",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/requests.json": "7de71d3361c2284dc079c9ebdcbf90cb6169aa0a1c22670b5fd9311171d2fa2c",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/cpu-help.json": "9f2798b03586dfba46fbe4708fbe521dfed57f63063c781f703872c832bcfd40",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/pins.json": "63979e66c1b6642be9d8d996ccba99767adae20f39d987f19527a0482f3975d8",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/case-middle.json": "c0c6c548bafe002dc75615f81eebe86fe8f5a55c90cc0c44d6ab9ab18b203086",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/canaries.json": "72c398c0446b4b247fd703ba1c6574f41b6d205fac818572e4824e1b7b9b6ff7",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/README.md": "f5c3bc860558ded729aeeec100c902124e76e39cdd246108736ce65638ab8341",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/checkpoint-metadata.json": "245bbe37b18bb79fded1be883b1a6c63d570dfd42e70bb302ef834b3caf95854"
+  },
+  "upstream_pins_document": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/pins.json",
+  "upstream_pin_count": 702,
+  "gpu_authorization": false,
+  "canary_scope": "three existing HF generation8 prefixes; current actual history unobserved",
+  "request_counts": {
+    "initial": 4,
+    "extension": 8,
+    "full": 12,
+    "ceiling": 10
+  },
+  "blocked": [
+    "No GPU authorization in CPU preparation",
+    "Four initial requests are bounded; full QA schedule needs 12, exceeding ceiling10",
+    "Actual generated-token history needs an audited existing output/trace source",
+    "Current TP1 capacity/source-bound CUDA admission and canaries are not executed",
+    "Historical full40/fresh-quality pins are not current-binary math PASS",
+    "Coordinator must seal a TP1-specific worker binding without bypassing custody"
+  ],
+  "tool_budget_note": "Requested <=10 tool-call budget was not met; loader/interpreter/command-transport recovery exceeded it. No GPU query, lock or run occurred.",
+  "digest": "aa6d2141e048d9d179e78617a88e23a0e3af0e5114913aa46f4fc181faf45bbc"
+}

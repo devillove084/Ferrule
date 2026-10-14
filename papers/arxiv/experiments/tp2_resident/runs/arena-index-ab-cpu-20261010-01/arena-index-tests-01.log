@@ -1,0 +1,18 @@
+test_actual_frozen_arena_is_closed_source_not_current_tree (test_arena_index_ab.ArenaIndexAB.test_actual_frozen_arena_is_closed_source_not_current_tree) ... ok
+test_after_requires_reviewed_release_and_actual_smoke (test_arena_index_ab.ArenaIndexAB.test_after_requires_reviewed_release_and_actual_smoke) ... ok
+test_crossed_cycles_and_exact_contract (test_arena_index_ab.ArenaIndexAB.test_crossed_cycles_and_exact_contract) ... ok
+test_delta_must_be_in_after_builder_evidence (test_arena_index_ab.ArenaIndexAB.test_delta_must_be_in_after_builder_evidence) ... ok
+test_exact_two_file_delta_and_native_cc_inventory_not_exempt (test_arena_index_ab.ArenaIndexAB.test_exact_two_file_delta_and_native_cc_inventory_not_exempt) ... ok
+test_existing_lifecycle_and_slot_metadata_are_reused (test_arena_index_ab.ArenaIndexAB.test_existing_lifecycle_and_slot_metadata_are_reused) ... ok
+test_frozen_metadata_is_unchanged_and_not_cacheoff (test_arena_index_ab.ArenaIndexAB.test_frozen_metadata_is_unchanged_and_not_cacheoff) ... ok
+test_missing_final_hash_or_smoke_cannot_write_admission (test_arena_index_ab.ArenaIndexAB.test_missing_final_hash_or_smoke_cannot_write_admission) ... ok
+test_named_fresh_23_gates_not_count_or_inheritance (test_arena_index_ab.ArenaIndexAB.test_named_fresh_23_gates_not_count_or_inheritance) ... ok
+test_no_profiler_extra_engine_or_relabelled_baseline (test_arena_index_ab.ArenaIndexAB.test_no_profiler_extra_engine_or_relabelled_baseline) ... ok
+test_plan_has_no_candidate_or_launch_authority (test_arena_index_ab.ArenaIndexAB.test_plan_has_no_candidate_or_launch_authority) ... ok
+test_prepare_two_cycles_uses_existing_receipts_with_correct_order (test_arena_index_ab.ArenaIndexAB.test_prepare_two_cycles_uses_existing_receipts_with_correct_order) ... ok
+test_scope_and_debug_drift_blocked (test_arena_index_ab.ArenaIndexAB.test_scope_and_debug_drift_blocked) ... ok
+
+----------------------------------------------------------------------
+Ran 13 tests in 9.223s
+
+OK

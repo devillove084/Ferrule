@@ -11,6 +11,7 @@ use std::marker::PhantomData;
 
 use std::ops::{Deref, DerefMut};
 use std::ptr::NonNull;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
 
 use super::allocator::{CudaAllocatorMetrics, CudaDeviceAllocator, CudaDeviceBlock};
@@ -26,8 +27,15 @@ type CuGraph = *mut c_void;
 type CuGraphExec = *mut c_void;
 type CuResult = c_int;
 
+#[cfg(test)]
+thread_local! { pub(crate) static OWNED_DOWNLOAD_RETAINED_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+
 const CUDA_SUCCESS: CuResult = 0;
 const CUDA_ERROR_NOT_READY: CuResult = 600;
+fn completion_is_unknown(code: CuResult) -> bool {
+    code != CUDA_SUCCESS && code != CUDA_ERROR_NOT_READY
+}
+
 const CU_STREAM_NON_BLOCKING: c_uint = 1;
 const CU_EVENT_DEFAULT: c_uint = 0;
 const CU_EVENT_DISABLE_TIMING: c_uint = 2;
@@ -257,6 +265,10 @@ impl CaptureState {
         self.depth != 0 || self.unknown
     }
 
+    pub(crate) fn completion_unknown(&self) -> bool {
+        self.unknown
+    }
+
     fn end_result(&mut self, code: CuResult, has_graph: bool) {
         // EndCapture terminates an invalidated sequence too (901). All other
         // failures, including context-binding failure, lack termination proof.
@@ -277,13 +289,35 @@ pub(crate) enum GraphFault {
     Instantiate = 2,
     Launch = 3,
     Upload = 4,
+    DownloadCopy = 5,
+    DownloadSynchronize = 6,
+    Destroy = 7,
+    ExecDestroy = 8,
+    StreamSynchronize = 9,
+    EventSynchronize = 10,
+    EventQuery = 11,
+    EventNotReady = 12,
+    AllocatorSynchronize = 13,
+    PrimaryRelease = 14,
 }
 
 #[cfg(test)]
 #[derive(Default)]
 struct GraphTestHooks {
     faults: std::sync::atomic::AtomicUsize,
-    calls: [std::sync::atomic::AtomicUsize; 5],
+    calls: [std::sync::atomic::AtomicUsize; 15],
+}
+
+const STREAM_COMPLETION_PENDING: u8 = 0;
+const STREAM_COMPLETION_COMPLETE: u8 = 1;
+const STREAM_COMPLETION_UNKNOWN: u8 = 2;
+
+// This ticket outlives Weak::upgrade failure, including the interval before
+// CudaStream::drop starts. It owns neither a stream nor a context, so no
+// context -> allocator/registry -> stream -> context strong cycle is created.
+struct RegisteredCudaStream {
+    owner: Weak<CudaStream>,
+    completion: Arc<AtomicU8>,
 }
 
 pub struct CudaContext {
@@ -291,10 +325,10 @@ pub struct CudaContext {
     context: CuContext,
     ordinal: usize,
     allocator: Arc<CudaDeviceAllocator>,
-    streams: Mutex<Vec<Weak<CudaStream>>>,
+    streams: Mutex<Vec<RegisteredCudaStream>>,
     capture_depth: Mutex<CaptureState>,
     #[cfg(test)]
-    graph_test_hooks: GraphTestHooks,
+    graph_test_hooks: Arc<GraphTestHooks>,
 }
 
 impl fmt::Debug for CudaContext {
@@ -339,7 +373,7 @@ impl CudaContext {
             streams: Mutex::new(Vec::new()),
             capture_depth: Mutex::new(CaptureState::default()),
             #[cfg(test)]
-            graph_test_hooks: GraphTestHooks::default(),
+            graph_test_hooks: Arc::default(),
         });
         this.bind_to_thread()?;
         Ok(this)
@@ -395,6 +429,7 @@ impl CudaContext {
             raw: std::ptr::null_mut(),
             context: Arc::clone(self),
             owned: false,
+            retirement_completion: Arc::new(AtomicU8::new(STREAM_COMPLETION_PENDING)),
         });
         self.register_stream(&stream);
         stream
@@ -410,6 +445,7 @@ impl CudaContext {
             raw,
             context: Arc::clone(self),
             owned: true,
+            retirement_completion: Arc::new(AtomicU8::new(STREAM_COMPLETION_PENDING)),
         });
         self.register_stream(&stream);
         Ok(stream)
@@ -428,6 +464,7 @@ impl CudaContext {
             raw,
             context: Arc::clone(self),
             owned: true,
+            retirement_completion: Arc::new(AtomicU8::new(STREAM_COMPLETION_PENDING)),
         });
         self.register_stream(&stream);
         Ok(stream)
@@ -438,18 +475,51 @@ impl CudaContext {
             .streams
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        streams.retain(|candidate| candidate.strong_count() != 0);
-        streams.push(Arc::downgrade(stream));
+        streams.retain(|candidate| {
+            candidate.completion.load(Ordering::Acquire) != STREAM_COMPLETION_COMPLETE
+        });
+        streams.push(RegisteredCudaStream {
+            owner: Arc::downgrade(stream),
+            completion: Arc::clone(&stream.retirement_completion),
+        });
     }
 
-    pub(crate) fn record_retirement_events(&self) -> Result<Vec<CudaRetirementEvent>, ()> {
-        let streams = self
-            .streams
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .iter()
-            .filter_map(Weak::upgrade)
-            .collect::<Vec<_>>();
+    /// None means a registered stream's last Arc is gone but its teardown
+    /// completion is not yet proven. This is pending, not an empty fence set or
+    /// a driver error: the allocator must retry without a synchronization.
+    pub(crate) fn record_retirement_events(&self) -> Result<Option<Vec<CudaRetirementEvent>>, ()> {
+        let (streams, pending_teardown, unknown) = {
+            let mut registered = self
+                .streams
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            registered.retain(|entry| {
+                entry.completion.load(Ordering::Acquire) != STREAM_COMPLETION_COMPLETE
+            });
+            let mut streams = Vec::with_capacity(registered.len());
+            let mut pending = false;
+            let mut unknown = false;
+            for entry in registered.iter() {
+                if let Some(stream) = entry.owner.upgrade() {
+                    streams.push(stream);
+                } else {
+                    match entry.completion.load(Ordering::Acquire) {
+                        STREAM_COMPLETION_COMPLETE => {}
+                        STREAM_COMPLETION_UNKNOWN => unknown = true,
+                        _ => pending = true,
+                    }
+                }
+            }
+            (streams, pending, unknown)
+        };
+        // Any temporary stream custody is released outside the registry lock.
+        if unknown {
+            self.mark_graph_unknown();
+            return Err(());
+        }
+        if pending_teardown {
+            return Ok(None);
+        }
         let mut events = Vec::with_capacity(streams.len());
         for stream in streams {
             self.bind_to_thread().map_err(|_| ())?;
@@ -467,15 +537,20 @@ impl CudaContext {
                 context: self.context,
             });
         }
-        Ok(events)
+        Ok(Some(events))
     }
 
     pub(crate) fn synchronize_registered_streams(&self) -> CudaResult<()> {
         self.check_graph_ready()?;
         self.bind_to_thread()?;
-        check("cuCtxSynchronizeAllocatorRetirement", unsafe {
-            cuCtxSynchronize()
-        })
+        let code = unsafe { cuCtxSynchronize() };
+        #[cfg(test)]
+        let code = if code == CUDA_SUCCESS && self.graph_fault(GraphFault::AllocatorSynchronize) {
+            999
+        } else {
+            code
+        };
+        self.completion_result("cuCtxSynchronizeAllocatorRetirement", code)
     }
 
     pub(crate) fn is_capturing(&self) -> bool {
@@ -494,6 +569,15 @@ impl CudaContext {
 
     pub(crate) fn mark_graph_unknown(&self) {
         self.capture_state().unknown = true;
+    }
+
+    /// Apply only to a driver completion result, after owner/capture/binding
+    /// preflight. Pending work is not failure; failed completion is terminal.
+    fn completion_result(&self, operation: &'static str, code: CuResult) -> CudaResult<()> {
+        if completion_is_unknown(code) {
+            self.mark_graph_unknown();
+        }
+        check(operation, code)
     }
 
     pub(crate) fn check_graph_ready(&self) -> CudaResult<()> {
@@ -518,7 +602,7 @@ impl CudaContext {
     }
 
     #[cfg(test)]
-    fn graph_fault(&self, fault: GraphFault) -> bool {
+    pub(crate) fn graph_fault(&self, fault: GraphFault) -> bool {
         use std::sync::atomic::Ordering::SeqCst;
         self.graph_test_hooks.calls[fault as usize].fetch_add(1, SeqCst);
         let bit = 1 << fault as usize;
@@ -578,15 +662,37 @@ pub(crate) fn driver_free(ptr: DevicePtr) -> CudaResult<()> {
 
 impl Drop for CudaContext {
     fn drop(&mut self) {
-        if self.graph_completion_unknown() {
-            // Do not release a primary-context retain with unknown graph custody.
-            return;
-        }
-        self.allocator.shutdown_with_context(self, true);
-        let _ = self.bind_to_thread();
-        let _ = check("cuDevicePrimaryCtxRelease", unsafe {
-            cu_device_primary_ctx_release(self.device)
-        });
+        let completion = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.check_graph_ready()?;
+            self.allocator.shutdown_with_context(self, true)?;
+            self.check_graph_ready()?;
+            self.bind_to_thread()?;
+            #[cfg(test)]
+            let _ = self.graph_fault(GraphFault::PrimaryRelease);
+            check("cuDevicePrimaryCtxRelease", unsafe {
+                cu_device_primary_ctx_release(self.device)
+            })
+        }));
+        let error = match completion {
+            Ok(Ok(())) => return,
+            Ok(Err(error)) => error,
+            Err(_) => CudaError::internal("panic during final CUDA allocator/context teardown"),
+        };
+        self.mark_graph_unknown();
+        let retained = self.allocator.retain_after_context_failure();
+        tracing::error!(
+            target: "ferrule_backend::cuda::runtime",
+            ordinal = self.ordinal,
+            device = self.device,
+            error = %error,
+            shutdown_retained = retained.shutdown_retained,
+            reserved_bytes = retained.reserved_bytes,
+            pending_blocks = retained.pending_retirement_blocks,
+            pending_bytes = retained.pending_retirement_bytes,
+            unfenced_bytes = retained.pending_unfenced_bytes,
+            capture_bytes = retained.capture_retirement_bytes,
+            "CUDA context teardown quarantined; allocator ledger and primary-context retain are not retried/reclaimed; restart the worker to recover, investigate the completion/driver error"
+        );
     }
 }
 
@@ -595,6 +701,7 @@ pub struct CudaStream {
     raw: CuStream,
     context: Arc<CudaContext>,
     owned: bool,
+    retirement_completion: Arc<AtomicU8>,
 }
 
 unsafe impl Send for CudaStream {}
@@ -612,9 +719,15 @@ impl CudaStream {
     pub fn synchronize(&self) -> CudaResult<()> {
         self.context.check_graph_ready()?;
         self.context.bind_to_thread()?;
-        check("cuStreamSynchronize", unsafe {
-            cuStreamSynchronize(self.raw)
-        })
+        let code = unsafe { cuStreamSynchronize(self.raw) };
+        #[cfg(test)]
+        let code =
+            if code == CUDA_SUCCESS && self.context.graph_fault(GraphFault::StreamSynchronize) {
+                999
+            } else {
+                code
+            };
+        self.context.completion_result("cuStreamSynchronize", code)
     }
 
     pub fn fork(&self) -> CudaResult<Arc<Self>> {
@@ -680,7 +793,7 @@ impl CudaStream {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .iter()
-            .filter_map(Weak::upgrade)
+            .filter_map(|entry| entry.owner.upgrade())
             .find(|stream| std::ptr::eq(stream.as_ref(), self))
             .ok_or_else(|| CudaError::internal("CUDA stream owner is unavailable"))
     }
@@ -741,10 +854,27 @@ impl CudaStream {
 impl Drop for CudaStream {
     fn drop(&mut self) {
         if self.context.graph_completion_unknown() {
+            self.retirement_completion
+                .store(STREAM_COMPLETION_UNKNOWN, Ordering::Release);
             std::mem::forget(Arc::clone(&self.context));
             return;
         }
-        let _ = self.synchronize();
+        match self.synchronize() {
+            Ok(()) => self
+                .retirement_completion
+                .store(STREAM_COMPLETION_COMPLETE, Ordering::Release),
+            Err(error) => {
+                self.context.mark_graph_unknown();
+                self.retirement_completion
+                    .store(STREAM_COMPLETION_UNKNOWN, Ordering::Release);
+                tracing::error!(
+                    target: "ferrule_backend::cuda::runtime",
+                    ordinal = self.context.ordinal(),
+                    error = %error,
+                    "CUDA stream teardown completion Unknown; retirement coverage retained; restart worker and investigate driver failure"
+                );
+            }
+        }
         if self.owned && !self.raw.is_null() {
             let _ = check("cuStreamDestroy", unsafe { cuStreamDestroy_v2(self.raw) });
         }
@@ -826,18 +956,38 @@ impl CudaEvent {
     }
 
     pub fn synchronize(&self) -> CudaResult<()> {
+        self.context.check_graph_ready()?;
         self.context.bind_to_thread()?;
-        check("cuEventSynchronize", unsafe {
-            cuEventSynchronize(self.raw)
-        })
+        let code = unsafe { cuEventSynchronize(self.raw) };
+        #[cfg(test)]
+        let code = if code == CUDA_SUCCESS && self.context.graph_fault(GraphFault::EventSynchronize)
+        {
+            999
+        } else {
+            code
+        };
+        self.context.completion_result("cuEventSynchronize", code)
     }
 
     pub fn query(&self) -> CudaResult<bool> {
+        self.context.check_graph_ready()?;
         self.context.bind_to_thread()?;
-        match unsafe { cuEventQuery(self.raw) } {
+        let code = unsafe { cuEventQuery(self.raw) };
+        #[cfg(test)]
+        let code = if self.context.graph_fault(GraphFault::EventNotReady) {
+            CUDA_ERROR_NOT_READY
+        } else if self.context.graph_fault(GraphFault::EventQuery) {
+            999
+        } else {
+            code
+        };
+        match code {
             CUDA_SUCCESS => Ok(true),
             CUDA_ERROR_NOT_READY => Ok(false),
-            code => Err(CudaError::from_code("cuEventQuery", code)),
+            code => {
+                self.context.completion_result("cuEventQuery", code)?;
+                Ok(true)
+            }
         }
     }
 
@@ -973,6 +1123,22 @@ impl<T: DeviceCopy> DeviceBuffer<T> {
             })?;
         }
         Ok(buffer)
+    }
+
+    /// Private allocation-only entry point. The caller must install custody
+    /// before submitting initialization; no kernel or DMA is launched here.
+    pub(crate) fn uninitialized_dedicated(stream: &CudaStream, len: usize) -> CudaResult<Self> {
+        let bytes = allocation_bytes::<T>(len)?;
+        let block = stream
+            .context
+            .allocator
+            .allocate_dedicated(bytes, std::mem::align_of::<T>())?;
+        Ok(Self {
+            ptr: block.ptr(),
+            len,
+            allocation: Arc::new(DeviceAllocation::Allocator(block)),
+            _element: PhantomData,
+        })
     }
 
     ///
@@ -1140,30 +1306,63 @@ impl<T: DeviceCopy> DeviceBuffer<T> {
         })
     }
 
+    /// Synchronous owned download boundary. Once DMA is attempted, either copy
+    /// or fence failure is terminal Unknown. Retain destination AND source lease:
+    /// returning an error must never free memory still referenced by DMA.
     pub fn to_host_vec(&self, stream: &CudaStream) -> CudaResult<Vec<T>> {
         self.check_context(&stream.context, "to_host_vec")?;
+        stream.context.check_graph_ready()?;
+        stream.context.bind_to_thread()?;
+        let source = self.slice(0, self.len)?;
+        let owner = stream.owner()?;
         let mut values = vec![T::default(); self.len];
-        self.copy_to_host(stream, &mut values)?;
+        let result = (|| {
+            #[cfg(test)]
+            if stream.context.graph_fault(GraphFault::DownloadCopy) {
+                return Err(CudaError::internal("injected owned download DMA failure"));
+            }
+            if self.num_bytes() != 0 {
+                check("cuMemcpyDtoHAsync", unsafe {
+                    cuMemcpyDtoHAsync_v2(
+                        values.as_mut_ptr().cast(),
+                        self.ptr,
+                        self.num_bytes(),
+                        stream.raw,
+                    )
+                })?;
+            }
+            stream.synchronize()?;
+            #[cfg(test)]
+            if stream.context.graph_fault(GraphFault::DownloadSynchronize) {
+                return Err(CudaError::internal(
+                    "injected owned download completion failure",
+                ));
+            }
+            Ok(())
+        })();
+        if let Err(error) = result {
+            stream.context.mark_graph_unknown();
+            #[cfg(test)]
+            OWNED_DOWNLOAD_RETAINED_BYTES.with(|n| n.set(n.get() + values.len() * size_of::<T>()));
+            std::mem::forget(values);
+            std::mem::forget(source);
+            std::mem::forget(owner);
+            return Err(error);
+        }
         Ok(values)
     }
 
+    /// Borrowed destinations are never exposed to asynchronous DMA. Download
+    /// into the shared owned boundary first and publish only after completion.
     pub fn copy_to_host(&self, stream: &CudaStream, values: &mut [T]) -> CudaResult<()> {
         self.check_context(&stream.context, "copy_to_host")?;
-        stream.context.bind_to_thread()?;
+        stream.context.check_graph_ready()?;
         if values.len() != self.len {
             return Err(CudaError::from_code("device-to-host length mismatch", 1));
         }
-        if self.num_bytes() != 0 {
-            check("cuMemcpyDtoHAsync", unsafe {
-                cuMemcpyDtoHAsync_v2(
-                    values.as_mut_ptr().cast(),
-                    self.ptr,
-                    self.num_bytes(),
-                    stream.raw,
-                )
-            })?;
-        }
-        stream.synchronize()
+        let owned = self.to_host_vec(stream)?;
+        values.copy_from_slice(&owned);
+        Ok(())
     }
 
     ///
@@ -1353,16 +1552,22 @@ impl CudaGraph {
 
 impl Drop for CudaGraph {
     fn drop(&mut self) {
-        if !self.raw.is_null() {
-            if self.owner.context.graph_completion_unknown()
-                || self.owner.context.bind_to_thread().is_err()
-            {
-                // Preserve native custody and context lifetime without claiming a
-                // process exit or unrelated sync proved graph retirement.
-                std::mem::forget(Arc::clone(&self.owner));
-                return;
-            }
-            let _ = check("cuGraphDestroy", unsafe { cuGraphDestroy(self.raw) });
+        if self.raw.is_null() {
+            return;
+        }
+        let context = &self.owner.context;
+        if context.graph_completion_unknown() || context.bind_to_thread().is_err() {
+            context.mark_graph_unknown();
+            std::mem::forget(Arc::clone(&self.owner));
+            return;
+        }
+        #[cfg(test)]
+        let injected = context.graph_fault(GraphFault::Destroy);
+        #[cfg(not(test))]
+        let injected = false;
+        if injected || check("cuGraphDestroy", unsafe { cuGraphDestroy(self.raw) }).is_err() {
+            context.mark_graph_unknown();
+            std::mem::forget(Arc::clone(&self.owner));
         }
     }
 }
@@ -1425,16 +1630,27 @@ impl CudaGraphExec {
 
 impl Drop for CudaGraphExec {
     fn drop(&mut self) {
-        if !self.raw.is_null() {
-            if self.owner.context.graph_completion_unknown()
-                || self.owner.context.bind_to_thread().is_err()
-            {
-                std::mem::forget(Arc::clone(&self.owner));
-                return;
-            }
-            let _ = check("cuGraphExecDestroy", unsafe {
+        if self.raw.is_null() {
+            return;
+        }
+        let context = &self.owner.context;
+        if context.graph_completion_unknown() || context.bind_to_thread().is_err() {
+            context.mark_graph_unknown();
+            std::mem::forget(Arc::clone(&self.owner));
+            return;
+        }
+        #[cfg(test)]
+        let injected = context.graph_fault(GraphFault::ExecDestroy);
+        #[cfg(not(test))]
+        let injected = false;
+        if injected
+            || check("cuGraphExecDestroy", unsafe {
                 cuGraphExecDestroy(self.raw)
-            });
+            })
+            .is_err()
+        {
+            context.mark_graph_unknown();
+            std::mem::forget(Arc::clone(&self.owner));
         }
     }
 }
@@ -1848,3 +2064,11 @@ mod capture_state_tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/numeric_bf16_gemv/bf16_gemmex_completion_cpu.rs"]
+mod gemmex_completion_tests;
+
+#[cfg(test)]
+#[path = "../../tests/allocator_context_drop/gpu.rs"]
+mod context_drop_gpu_tests;

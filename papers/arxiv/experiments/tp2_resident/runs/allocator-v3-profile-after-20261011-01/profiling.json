@@ -1,0 +1,101 @@
+{
+  "schema": "ferrule.paper.tp2-profile.v1",
+  "status": "captured_requires_offline_coverage_audit",
+  "protocol": "tp2-serving-profile-c1",
+  "release_binary_sha256": "7e1c23a88143cb6455e3c6e10bfe43a567fc97b5fd45745800eae3a1e39a0e73",
+  "capture_scope": "two QA8 diagnostic requests; startup excluded; no full numerical capture",
+  "summary_commands": {
+    "cuda_api_sum": {
+      "returncode": 0,
+      "output": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/session/nsight/cuda_api_sum.txt"
+    },
+    "cuda_gpu_kern_sum": {
+      "returncode": 0,
+      "output": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/session/nsight/cuda_gpu_kern_sum.txt"
+    },
+    "cuda_gpu_mem_time_sum": {
+      "returncode": 0,
+      "output": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/session/nsight/cuda_gpu_mem_time_sum.txt"
+    },
+    "cuda_gpu_mem_size_sum": {
+      "returncode": 0,
+      "output": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/session/nsight/cuda_gpu_mem_size_sum.txt"
+    },
+    "osrt_sum": {
+      "returncode": 0,
+      "output": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/session/nsight/osrt_sum.txt"
+    },
+    "nvtx_sum": {
+      "returncode": 0,
+      "output": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/session/nsight/nvtx_sum.txt"
+    }
+  },
+  "artifact_pins": {
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/P1-assessment.json": "27c492eed519eeae338c9cc4b14783c7a81f357cf81c26e38e3e8c9768ea6070",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/P1-dispatch.json": "8627674c0fa38785d36425d8b5016dc8f165d9b838fb35ce2ba5c24e40d9369d",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/authorized-probe-grant.json": "196ed351a4cb2f3de031752f996f220eed3702ed617d7f5979548f106d950e24",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/launch.json": "f6e69435edfb1d429e4c2ce8eef7180bfe033a6f3c92f18d04e71bb0675c2f12",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/prepared.json": "b27764bc3ab9b1e98ab974cbd731a9637c68fee2f5d89049698da1f2f358e349",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/probe-grant.json": "196ed351a4cb2f3de031752f996f220eed3702ed617d7f5979548f106d950e24",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/canaries.json": "854238c428d68832a2806538f300bac32f53a0c8d47ff2e85bcfba5e5ace6fea",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/execution.json": "c2e07122faa8f35f4e19faa5d7f0ac0307bd692d84675b5edb70fdbc99d5200f",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/lock-release.json": "39ae688106ea715f00f8c7694b2a52e2819bb6f666208c5b1c0cb4e273e3df79",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/prepared.json": "fcf994502577129c15317899c2d131cb788c5537ea026f2e3dd87ccf76fd01d6",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/probe-lock-release.json": "aff4f68d7b05f833122c36031f0e48aebe3c19cdf8e0cceb05f9b27350a7313e",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/session/after.json": "0f689e16fdcdeae2b5a9ec5a292d441d5cf62d63194e42b6434507ce182f6c30",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/session/baseline.json": "3c2bd642756c89eefb40a77c82d66cda42ca4d6a3584092b8d2f1620932ab368",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/session/before.json": "088dab8425a6a481bb9633cf88231808a0362195a1c46249827cebdfe5dead7a",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/session/canaries.json": "854238c428d68832a2806538f300bac32f53a0c8d47ff2e85bcfba5e5ace6fea",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/session/canary8/gate.json": "716594411f4a5411fe48ebfde37f1e8ab596d15fb762ebd9bbf958b3b063069c",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/session/canary8/http.json": "205fc538167ee06adcbef2c9d521c0af04571a557ee69b89309773323e5db177",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/session/canary8/metadata.json": "7178738cf801f94c30c23b50b6661b0b295079b8f7e16b0516cf7e76738cc731",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/session/canary8/pair-metadata.json": "00b3a1e10506a78db454d2259f3b41ad7f0532baf7f177983040a8d00c22465d",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/session/canary8/prompts.json": "42db4c2cc82a5130a3272a91e13738b309b8bfdaf3f796425e9a021d77f73af6",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/session/case.json": "b45424515b768e0699a9dd0a3b4fdaabab53051b107cee01cad64aec58f8eb57",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/session/collector-after-model.json": "0407bc66d5dd94bdf74303671c45603bea6cd9fb457d7b6a8a41ba508d0f4dac",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/session/collector-baseline.json": "6cebf4ee28869326fc8d8e62161e88dc311c173cfd747e1459e3d1a3068f212e",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/session/collector-manifest.json": "065be171bee62259110591ad3fd104063cf8021a8249eaa004b0d80c7b48b3d5",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/session/collector-model-ended.json": "8cf4bf5b681a052001499ac833461fa9d9de5712a6905a93e030c049f54d6af1",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/session/collector-release.json": "25488bf615935161382289ddf7b6c6c73f6b1897e370a565eef2c1029a905175",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/session/collector-samples.jsonl": "af44919f87f9ac788405332e59436cfb2e60bb84732b9bcd49d02e265361d9a6",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/session/collector-target-ready.json": "80b5f0a8911bd2ac919ecd51d4e3c7df2169f000bbd0f90a0654553a86629885",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/session/custody.json": "9dd6ff29e932ce84f811a18b6a1051f9af922bd1d9147799881177dc33fcde0f",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/session/hello2/gate.json": "8282aa7ce44a5de1d883c1b6727d5eae1a6446ea112f5804e5977d7faade9344",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/session/hello2/http.json": "094ba879f077fd8c9019f40a73d5b1a9d8c352cca50af81e902120f67d6ec40a",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/session/hello2/metadata.json": "7178738cf801f94c30c23b50b6661b0b295079b8f7e16b0516cf7e76738cc731",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/session/hello2/pair-metadata.json": "00b3a1e10506a78db454d2259f3b41ad7f0532baf7f177983040a8d00c22465d",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/session/model-release.json": "dc110a7cf1bd51f499aa09096a68ed6379b18d8c78e4271448ed2a3c67edf25b",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/session/nsight/cuda_api_sum.txt": "a8bdf074271aecb4189b03f8c577346d65ef789924c397198fc193870b08008a",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/session/nsight/cuda_gpu_kern_sum.txt": "cf249f8cf3a3923c8906d6caa89ecb9c28c5b0f12ca409b8c4efc07bdca97c00",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/session/nsight/cuda_gpu_mem_size_sum.txt": "d798c38579885fc3c2cedba258e714859c50d289fcdcb7ce5a5144ea7cf01900",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/session/nsight/cuda_gpu_mem_time_sum.txt": "d43cf41315666ca53d1a6ec2f2a1119960ad3e6de4d12ab6b4f2be6158ae630f",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/session/nsight/nsys.nsys-rep": "21ad1b8e7fe5958bfb92fa5cf3834016e428398df4a86463fc5b873a7a886c4f",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/session/nsight/nsys.sqlite": "efe99aee5f384ca6b0210bcb943223daf88e8b820f7ffbf5dd5231b2d4ecc245",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/session/nsight/nvtx_sum.txt": "6daa3bb80750c139fbddab1a0f53e7489a2c2e2b359791a3d259f949c2e9b761",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/session/nsight/osrt_sum.txt": "3d688dfdef46ead62dadaa5db34f738f0e811f1dd57b9ef0d46a0383193b056a",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/session/nsys-tmp/nvidia/nsight_systems/NSys-SessionManager.lock-4026532468-2025.3.1": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/session/nsys-tmp/nvidia/nsight_systems/telemetry-0/telemetry.lock": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/session/prelaunch.json": "d8a60738e36af82f068ac3083657e85ff52d19f37828e2abf3e6c63095b08ce5",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/session/probe-locks.json": "b115507d8b18f28a7f6267bcd06fe700ecd2fac5d97d1590ddcd35a9fc67b4d4",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/session/profile/gate.json": "b549ed0d1fad13405c40209eca9d569b83bb598de5459c75ff5830953ec8f3a4",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/session/profile/measured.json": "47dde74f1fb16a6315702f2d45e4003b5de48a2b2bc425e2118dbc3650f157c4",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/session/profile/metadata.json": "7178738cf801f94c30c23b50b6661b0b295079b8f7e16b0516cf7e76738cc731",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/session/profile/model-identity.json": "b9d5ed214445bc1461697263393d67e14a26aa7eb7277bd3f78ebf091bb748bd",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/session/profile/profile-window.json": "b549ed0d1fad13405c40209eca9d569b83bb598de5459c75ff5830953ec8f3a4",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/session/profile/start.json": "54b9869b947bdfbe9e92fcf59db2c60a313cd60b422dda0b5ee565a5accf74b4",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/session/profile/stop.json": "9ec6b85aeb3c2ef587d89be1f70cf72d68b94a521ce9658793341eb2e21c4ec6",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/session/profile/warmup.json": "2612ed2e0b912225caf46d2fcc03b8bfcee6d08767d4928a5dd9d0853cf8c73c",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/session/profile-server.json": "5887ebca8d54b9b70d5a190c5b8fbaad975464ae432f720c0e70d3a2e8b4d312",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/session/profile-stop": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/session/requests.json": "93d8fd77d99ce1b1e13304a2468457bad008623d740c05a38ee8ddb3e3c56e00",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/session/samples.jsonl": "1177254e7c6a55ae078ef4077bfd14bcfc4378c7e5167e7b19ae21745ab6bfab",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/session/server.log": "097533a091388b446c3e92a7f759093ea8070a2aadd68b6ecb35394665b683cb",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/session/supervisor.json": "d9b0ef4682f2224b235d496f45a8dfa81d0d756b515a3b70b2c5cfdcb8b303aa",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/session/worker-launch.json": "07a9c1a40b6a8e126abb147b6f4d92acafe6b61bd5ce3caed2e374d149776029",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/topology.json": "ef2c30a474eb84b709762d9df80e6c853451640671cd142f0a4cc1f44009a50b"
+  },
+  "fairmatch": false,
+  "exact_speedup": null,
+  "benchmark": false,
+  "caveat": "Synchronization durations include GPU work; sums across threads/devices overlap"
+}

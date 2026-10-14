@@ -1,0 +1,665 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:ferrule:paper:m7:v3",
+  "title": "M7 artifacts; semantic inventory, custody and unique-engine validation also required",
+  "$defs": {
+    "sha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "pins": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {
+        "pattern": "^/"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/sha"
+      }
+    },
+    "inventories": {
+      "type": "object",
+      "required": [
+        "compiler",
+        "rust_toolchain",
+        "cutlass_tree",
+        "cuda_headers",
+        "cuda_shared",
+        "cpu_python"
+      ],
+      "additionalProperties": {
+        "$ref": "#/$defs/pins"
+      }
+    },
+    "binding": {
+      "type": "object",
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha"
+        }
+      }
+    },
+    "quality": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "status",
+        "binary_sha256",
+        "model_identity_sha256",
+        "protocol_sha256",
+        "checks",
+        "independent_reference",
+        "artifact_pins"
+      ],
+      "properties": {
+        "schema": {
+          "const": "ferrule.paper.m7.release-quality.v1"
+        },
+        "status": {
+          "const": "pass"
+        },
+        "binary_sha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "model_identity_sha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "protocol_sha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "independent_reference": {
+          "const": true
+        },
+        "checks": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "raw_hello_greedy",
+            "reset_repeat",
+            "cold_repeat"
+          ],
+          "properties": {
+            "raw_hello_greedy": {
+              "const": true
+            },
+            "reset_repeat": {
+              "const": true
+            },
+            "cold_repeat": {
+              "const": true
+            }
+          }
+        },
+        "artifact_pins": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/pins"
+            }
+          ],
+          "minProperties": 2
+        }
+      }
+    },
+    "case": {
+      "type": "object",
+      "required": [
+        "engine",
+        "supervisor",
+        "after",
+        "observation",
+        "eligible_observation",
+        "exact_speedup"
+      ],
+      "properties": {
+        "engine": {
+          "enum": [
+            "ferrule",
+            "vllm"
+          ]
+        },
+        "supervisor": {
+          "type": "object"
+        },
+        "after": {
+          "type": "object",
+          "required": [
+            "status"
+          ],
+          "properties": {
+            "status": {
+              "enum": [
+                "verified",
+                "blocked",
+                "unverified"
+              ]
+            }
+          }
+        },
+        "observation": {
+          "type": "object",
+          "required": [
+            "status"
+          ]
+        },
+        "eligible_observation": {
+          "type": "boolean"
+        },
+        "exact_speedup": {
+          "type": "null"
+        }
+      }
+    }
+  },
+  "oneOf": [
+    {
+      "type": "object",
+      "required": [
+        "schema",
+        "status",
+        "config",
+        "config_sha256",
+        "protocol_sha256",
+        "model_identity",
+        "quality_history",
+        "cli_audit",
+        "build",
+        "exact_speedup"
+      ],
+      "properties": {
+        "schema": {
+          "const": "ferrule.paper.m7.plan.v1"
+        },
+        "status": {
+          "const": "cpu_only_not_executed"
+        },
+        "config_sha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "protocol_sha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "exact_speedup": {
+          "type": "null"
+        },
+        "hard_memory_partition": {
+          "const": false
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "schema",
+        "status",
+        "argv",
+        "environment",
+        "supervisor",
+        "sources_before",
+        "sources_after",
+        "pins",
+        "inventories",
+        "inventory_status",
+        "lto"
+      ],
+      "properties": {
+        "schema": {
+          "const": "ferrule.paper.m7.build.v1"
+        },
+        "status": {
+          "enum": [
+            "pass",
+            "failed"
+          ]
+        },
+        "sources_before": {
+          "$ref": "#/$defs/pins"
+        },
+        "sources_after": {
+          "$ref": "#/$defs/pins"
+        },
+        "pins": {
+          "$ref": "#/$defs/pins"
+        },
+        "inventories": {
+          "$ref": "#/$defs/inventories"
+        },
+        "binary_sha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "staged_binary": {
+          "type": "string",
+          "pattern": "^/"
+        },
+        "environment": {
+          "type": "object",
+          "required": [
+            "CUDA_VISIBLE_DEVICES",
+            "CARGO_PROFILE_RELEASE_OPT_LEVEL",
+            "CARGO_PROFILE_RELEASE_LTO"
+          ],
+          "properties": {
+            "CUDA_VISIBLE_DEVICES": {
+              "const": ""
+            },
+            "CARGO_PROFILE_RELEASE_OPT_LEVEL": {
+              "const": "3"
+            },
+            "CARGO_PROFILE_RELEASE_LTO": {
+              "const": "fat"
+            }
+          }
+        }
+      },
+      "if": {
+        "properties": {
+          "status": {
+            "const": "pass"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "artifact",
+          "binary_sha256",
+          "staged_binary"
+        ],
+        "properties": {
+          "inventory_status": {
+            "const": "complete_declared_build_inputs"
+          }
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "schema",
+        "model",
+        "protocol",
+        "resources",
+        "limits",
+        "ferrule_flags",
+        "vllm_flags",
+        "workloads"
+      ],
+      "properties": {
+        "schema": {
+          "enum": [
+            "ferrule.paper.m7.config.v1",
+            "ferrule.paper.m7.config.v2"
+          ]
+        },
+        "protocol": {
+          "type": "object",
+          "required": [
+            "seed",
+            "context",
+            "tp",
+            "pp",
+            "ep",
+            "concurrency",
+            "eos"
+          ],
+          "properties": {
+            "seed": {
+              "const": 1
+            },
+            "context": {
+              "const": 128
+            },
+            "tp": {
+              "const": 1
+            },
+            "pp": {
+              "const": 1
+            },
+            "ep": {
+              "const": 1
+            },
+            "concurrency": {
+              "const": 1
+            },
+            "eos": {
+              "const": "natural"
+            }
+          }
+        },
+        "resources": {
+          "type": "object",
+          "required": [
+            "hard_memory_partition",
+            "gpu_target_bytes",
+            "host_target_bytes"
+          ],
+          "properties": {
+            "hard_memory_partition": {
+              "const": false
+            },
+            "gpu_target_bytes": {
+              "const": 7516192768
+            },
+            "host_target_bytes": {
+              "const": 68719476736
+            }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "schema": {
+                "const": "ferrule.paper.m7.config.v2"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "protocol": {
+                "required": [
+                  "identity_mode",
+                  "protocol_id"
+                ],
+                "properties": {
+                  "identity_mode": {
+                    "const": "device_exclusive_local_custody"
+                  },
+                  "protocol_id": {
+                    "const": "m7-device-exclusive-local-custody-v2"
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "type": "object",
+      "required": [
+        "schema",
+        "status",
+        "config",
+        "config_sha256",
+        "protocol_sha256",
+        "model_identity",
+        "model_identity_sha256",
+        "quality_history",
+        "cli_audit",
+        "binary",
+        "binary_sha256",
+        "build_receipt",
+        "build_receipt_sha256",
+        "manifest_sha256",
+        "workflow_pins",
+        "source_pins",
+        "runtime_pins",
+        "inventories",
+        "inventory_status",
+        "vllm_staged",
+        "vllm_binary_sha256",
+        "release_quality",
+        "exact_speedup"
+      ],
+      "properties": {
+        "schema": {
+          "const": "ferrule.paper.m7.prepared.v1"
+        },
+        "status": {
+          "const": "prepared_cpu_only"
+        },
+        "binary": {
+          "type": "string",
+          "pattern": "^/"
+        },
+        "vllm_staged": {
+          "type": "string",
+          "pattern": "^/"
+        },
+        "build_receipt": {
+          "type": "string",
+          "pattern": "^/"
+        },
+        "binary_sha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "vllm_binary_sha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "config_sha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "protocol_sha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "model_identity_sha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "manifest_sha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "build_receipt_sha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "workflow_pins": {
+          "$ref": "#/$defs/pins"
+        },
+        "source_pins": {
+          "$ref": "#/$defs/pins"
+        },
+        "runtime_pins": {
+          "$ref": "#/$defs/pins"
+        },
+        "inventories": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/inventories"
+            }
+          ],
+          "required": [
+            "runtime_python_shared",
+            "jit_tools"
+          ]
+        },
+        "inventory_status": {
+          "const": "complete_declared_runtime_inputs"
+        },
+        "release_quality": {
+          "const": "not_yet_bound"
+        },
+        "exact_speedup": {
+          "type": "null"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "schema",
+        "status",
+        "mode",
+        "manifest_sha256",
+        "gpu_uuid",
+        "cases",
+        "artifact_pins",
+        "exact_speedup",
+        "fairmatch",
+        "fairness_blockers",
+        "release_quality",
+        "feasibility",
+        "observer_effect",
+        "owner_lock"
+      ],
+      "properties": {
+        "schema": {
+          "enum": [
+            "ferrule.paper.m7.execution.v1",
+            "ferrule.paper.m7.execution.v2"
+          ]
+        },
+        "status": {
+          "enum": [
+            "complete",
+            "incomplete"
+          ]
+        },
+        "mode": {
+          "enum": [
+            "feasibility",
+            "run"
+          ]
+        },
+        "manifest_sha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "gpu_uuid": {
+          "type": "string",
+          "pattern": "^GPU-[0-9a-fA-F-]{36}$"
+        },
+        "exact_speedup": {
+          "type": "null"
+        },
+        "fairmatch": {
+          "const": false
+        },
+        "artifact_pins": {
+          "$ref": "#/$defs/pins"
+        },
+        "cases": {
+          "type": "array",
+          "maxItems": 2,
+          "items": {
+            "$ref": "#/$defs/case"
+          }
+        },
+        "fairness_blockers": {
+          "type": "array",
+          "minItems": 1
+        },
+        "observer_effect": {
+          "enum": [
+            "baseline_ferrule_log_info_only",
+            "diagnostic_ferrule_performance_debug_not_baseline"
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "complete"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "cases": {
+                "minItems": 2,
+                "maxItems": 2,
+                "allOf": [
+                  {
+                    "contains": {
+                      "properties": {
+                        "engine": {
+                          "const": "ferrule"
+                        }
+                      }
+                    },
+                    "minContains": 1,
+                    "maxContains": 1
+                  },
+                  {
+                    "contains": {
+                      "properties": {
+                        "engine": {
+                          "const": "vllm"
+                        }
+                      }
+                    },
+                    "minContains": 1,
+                    "maxContains": 1
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "run"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "release_quality": {
+                "$ref": "#/$defs/binding"
+              },
+              "feasibility": {
+                "$ref": "#/$defs/binding"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "schema": {
+                "const": "ferrule.paper.m7.execution.v2"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "identity_mode",
+              "protocol_id",
+              "sole_gpu_owner_granted",
+              "performance_basis",
+              "owned_gpu_attribution",
+              "owned_process_gpu_peak_bytes",
+              "absence_of_foreign_interference_proven"
+            ],
+            "properties": {
+              "identity_mode": {
+                "const": "device_exclusive_local_custody"
+              },
+              "protocol_id": {
+                "const": "m7-device-exclusive-local-custody-v2"
+              },
+              "sole_gpu_owner_granted": {
+                "const": true
+              },
+              "performance_basis": {
+                "const": "exclusive_operator_allocation_assumption"
+              },
+              "owned_gpu_attribution": {
+                "const": "unknown"
+              },
+              "owned_process_gpu_peak_bytes": {
+                "type": "null"
+              },
+              "absence_of_foreign_interference_proven": {
+                "const": false
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "$ref": "#/$defs/quality"
+    }
+  ]
+}

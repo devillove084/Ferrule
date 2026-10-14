@@ -1,0 +1,3649 @@
+{
+  "label": "after",
+  "binary_sha256": "7e1c23a88143cb6455e3c6e10bfe43a567fc97b5fd45745800eae3a1e39a0e73",
+  "window": {
+    "start_ns": 2555379178,
+    "end_ns": 5045421016,
+    "actual_input_tokens": 5,
+    "actual_output_tokens": 8,
+    "clock_delta_disagreement_ns": 342,
+    "scope": "Client HTTP start/end anchors; includes transport/terminal response, not pure prefill/decode"
+  },
+  "model_pid": 188424,
+  "http": {
+    "text": " Tokyo.\nThe capital of Japan is",
+    "actual_input_tokens": 5,
+    "actual_output_tokens": 8,
+    "start_clock": {
+      "monotonic_ns": 8644407629082270,
+      "unix_ns": 1791701464592563636
+    },
+    "end_clock": {
+      "monotonic_ns": 8644410119123766,
+      "unix_ns": 1791701467082605474
+    },
+    "ttft_seconds": 1.3693664520978928,
+    "request_e2e_seconds": 2.490027854219079
+  },
+  "request_scope": "Profile-only whole HTTP request including prefill; not benchmark or pure decode tokens",
+  "groups": {
+    "decode_weights": {
+      "count": 14980,
+      "duration_ns": 101633891
+    },
+    "pack_bf16_activation": {
+      "count": 0,
+      "duration_ns": 0
+    },
+    "gemm_gemv_named": {
+      "count": 24682,
+      "duration_ns": 134938894
+    },
+    "misc": {
+      "count": 46730,
+      "duration_ns": 200467996
+    }
+  },
+  "baseline_compatible_groups": {
+    "other": {
+      "count": 39366,
+      "duration_ns": 188497127
+    },
+    "matrix_math_named_kernels_not_GemmEx_API": {
+      "count": 24682,
+      "duration_ns": 134938894
+    },
+    "gemmex_split_pair_helper_not_GemmEx_API": {
+      "count": 7364,
+      "duration_ns": 11970869
+    },
+    "decode_weights": {
+      "count": 14980,
+      "duration_ns": 101633891
+    }
+  },
+  "per_uuid_groups": {
+    "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": {
+      "misc": {
+        "count": 23365,
+        "duration_ns": 100016920
+      },
+      "gemm_gemv_named": {
+        "count": 12341,
+        "duration_ns": 67373387
+      },
+      "decode_weights": {
+        "count": 7490,
+        "duration_ns": 50652083
+      }
+    },
+    "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": {
+      "misc": {
+        "count": 23365,
+        "duration_ns": 100451076
+      },
+      "gemm_gemv_named": {
+        "count": 12341,
+        "duration_ns": 67565507
+      },
+      "decode_weights": {
+        "count": 7490,
+        "duration_ns": 50981808
+      }
+    }
+  },
+  "kernels": {
+    "ferrule::cuda::core::bf16_boundary_kernel(ferrule::cuda::core::Bf16BoundaryArgs)": {
+      "count": 29688,
+      "duration_ns": 47612877
+    },
+    "ferrule::cuda::core::bf16_offset_norm_tree(ferrule::cuda::core::Bf16BoundaryArgs, float)": {
+      "count": 1818,
+      "duration_ns": 7892140
+    },
+    "ampere_bf16_s16816gemm_bf16_64x64_ldg8_f2f_stages_64x5_tn": {
+      "count": 82,
+      "duration_ns": 3451466
+    },
+    "void cutlass::Kernel2<cutlass_80_wmma_tensorop_bf16_s161616gemm_bf16_32x32_128x2_tn_align8>(T1::Params)": {
+      "count": 318,
+      "duration_ns": 3450598
+    },
+    "void cutlass::Kernel2<cutlass_80_wmma_tensorop_bf16_s161616gemm_bf16_16x16_128x2_tn_align8>(T1::Params)": {
+      "count": 120,
+      "duration_ns": 1976359
+    },
+    "ferrule::cuda::core::hf_bf16::conv(FerruleCoreBf16ConvArgs)": {
+      "count": 540,
+      "duration_ns": 1652353
+    },
+    "ferrule::cuda::core::bf16_chunk::prepare(FerruleCoreBf16ChunkArgs, ferrule::cuda::core::bf16_chunk::Workspace, unsigned int, float)": {
+      "count": 60,
+      "duration_ns": 11732044
+    },
+    "ferrule::cuda::core::bf16_chunk::prefix(ferrule::cuda::core::bf16_chunk::Workspace, unsigned int)": {
+      "count": 60,
+      "duration_ns": 116576
+    },
+    "ferrule::cuda::core::bf16_chunk::decay_and_initial_exponents(ferrule::cuda::core::bf16_chunk::Workspace, unsigned int)": {
+      "count": 60,
+      "duration_ns": 170720
+    },
+    "ferrule::cuda::core::bf16_chunk::matmul(const float *, const float *, float *, unsigned int, unsigned int, unsigned int, bool, bool, unsigned int)": {
+      "count": 480,
+      "duration_ns": 6239367
+    },
+    "ferrule::cuda::core::bf16_chunk::mask_matrix(ferrule::cuda::core::bf16_chunk::Workspace, bool)": {
+      "count": 60,
+      "duration_ns": 104639
+    },
+    "ferrule::cuda::core::bf16_chunk::triangular(ferrule::cuda::core::bf16_chunk::Workspace)": {
+      "count": 60,
+      "duration_ns": 1579331
+    },
+    "ferrule::cuda::core::bf16_chunk::attention_delta_and_end_keys(ferrule::cuda::core::bf16_chunk::Workspace, unsigned int)": {
+      "count": 60,
+      "duration_ns": 194111
+    },
+    "ferrule::cuda::core::bf16_chunk::output_and_state(FerruleCoreBf16ChunkArgs, ferrule::cuda::core::bf16_chunk::Workspace, unsigned int)": {
+      "count": 60,
+      "duration_ns": 226976
+    },
+    "ferrule::cuda::core::hf_bf16::gated_norm_tree(FerruleCoreBf16GatedNormArgs, float)": {
+      "count": 540,
+      "duration_ns": 2173508
+    },
+    "ferrule::cuda::core::rows_f32_to_bf16_rne_kernel(FerruleCoreRowsArgs)": {
+      "count": 1800,
+      "duration_ns": 3087076
+    },
+    "void cutlass::Kernel2<cutlass_80_wmma_tensorop_s161616gemm_bf16_16x16_64x1_tn_align8>(T1::Params)": {
+      "count": 280,
+      "duration_ns": 1206721
+    },
+    "void cublasLt::splitKreduce_kernel<(int)32, (int)16, int, float, __nv_bfloat16, float, __nv_bfloat16, (bool)1, (bool)0, (bool)0>(cublasLt::cublasSplitKParams<T6>, const T4 *, const T5 *, T5 *, const T6 *, const T6 *, const T7 *, const T4 *, T7 *, void *, long, T6 *, int *)": {
+      "count": 876,
+      "duration_ns": 1485344
+    },
+    "void ferrule::cuda::core::full_router_kernel<(int)8, (bool)0, (bool)0>(FerruleCoreRouterArgs, float *)": {
+      "count": 720,
+      "duration_ns": 32681442
+    },
+    "void dot_kernel<float, (int)128, (int)0, cublasDotParams<cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<float>>>(T4)": {
+      "count": 1680,
+      "duration_ns": 3652102
+    },
+    "void reduce_1Block_kernel<float, (int)128, (int)7, cublasGemvTensorStridedBatched<float>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>>(const T1 *, T1, T4, int, const T1 *, T1, T5, T6, cublasPointerMode_t, cublasLtEpilogue_t, cublasGemvTensorStridedBatched<const biasType<T6::value_type, T1>::type>)": {
+      "count": 1680,
+      "duration_ns": 2798242
+    },
+    "ferrule::cuda::core::data_kernel(FerruleCoreDataArgs)": {
+      "count": 1080,
+      "duration_ns": 1978433
+    },
+    "void cutlass::Kernel2<cutlass_80_tensorop_s16816gemm_bf16_64x64_32x6_tn_align8>(T1::Params)": {
+      "count": 596,
+      "duration_ns": 3284900
+    },
+    "ferrule::cuda::cutlass::bf16_gemmex::split_pair(const unsigned short *, unsigned short *, unsigned short *, unsigned long, unsigned int)": {
+      "count": 7364,
+      "duration_ns": 11970869
+    },
+    "void cutlass::Kernel2<cutlass_80_wmma_tensorop_bf16_s161616gemm_bf16_32x32_64x1_tn_align8>(T1::Params)": {
+      "count": 498,
+      "duration_ns": 2222178
+    },
+    "std::enable_if<!T7, void>::type internal::gemvx::kernel<int, int, __nv_bfloat16, __nv_bfloat16, __nv_bfloat16, float, (bool)0, (bool)1, (bool)1, (bool)0, (int)7, (bool)0, cublasGemvParamsEx<int, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>, float>>(T13)": {
+      "count": 17536,
+      "duration_ns": 82834237
+    },
+    "ferrule::cuda::cutlass::numeric_fp8::decode_weights(FerruleCutlassNumericFp8Args, unsigned int, unsigned int, unsigned long)": {
+      "count": 14980,
+      "duration_ns": 101633891
+    },
+    "ferrule::cuda::core::moe_kernel(FerruleCoreMoeArgs)": {
+      "count": 720,
+      "duration_ns": 3096547
+    },
+    "ferrule::cuda::core::eager_attention::validate_group(FerruleCoreTransformerArgs, FerruleBf16AttentionGroup)": {
+      "count": 180,
+      "duration_ns": 25620093
+    },
+    "ferrule::cuda::core::eager_attention::append(FerruleCoreTransformerArgs)": {
+      "count": 180,
+      "duration_ns": 943332
+    },
+    "ferrule::cuda::core::eager_attention::pack(FerruleCoreTransformerArgs, FerruleBf16AttentionGroup, unsigned short *)": {
+      "count": 180,
+      "duration_ns": 366847
+    },
+    "ferrule::cuda::core::eager_attention::gather(FerruleCoreTransformerArgs, FerruleBf16AttentionGroup, unsigned short *, unsigned short *)": {
+      "count": 180,
+      "duration_ns": 971552
+    },
+    "void cutlass::Kernel2<cutlass_75_wmma_tensorop_bf16_s161616gemm_bf16_32x32_32x1_tn_align1>(T1::Params)": {
+      "count": 20,
+      "duration_ns": 101377
+    },
+    "ferrule::cuda::core::eager_attention::softmax(FerruleCoreTransformerArgs, FerruleBf16AttentionGroup, const unsigned short *, unsigned short *)": {
+      "count": 180,
+      "duration_ns": 476448
+    },
+    "void cutlass::Kernel2<cutlass_75_wmma_tensorop_bf16_s161616gemm_bf16_32x32_32x1_nn_align1>(T1::Params)": {
+      "count": 20,
+      "duration_ns": 52896
+    },
+    "ferrule::cuda::core::eager_attention::scatter(FerruleCoreTransformerArgs, FerruleBf16AttentionGroup, const unsigned short *)": {
+      "count": 180,
+      "duration_ns": 352065
+    },
+    "ampere_bf16_s16816gemm_bf16_64x64_sliced1x2_ldg8_f2f_stages_64x5_tn": {
+      "count": 640,
+      "duration_ns": 18405406
+    },
+    "ferrule::cuda::core::hf_bf16::delta(FerruleCoreBf16DeltaArgs)": {
+      "count": 480,
+      "duration_ns": 39228650
+    },
+    "std::enable_if<!T7, void>::type internal::gemvx::kernel<int, int, __nv_bfloat16, __nv_bfloat16, __nv_bfloat16, float, (bool)0, (bool)1, (bool)1, (bool)0, (int)6, (bool)0, cublasGemvParamsEx<int, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>, float>>(T13)": {
+      "count": 80,
+      "duration_ns": 193249
+    },
+    "std::enable_if<!T7, void>::type internal::gemvx::kernel<int, int, __nv_bfloat16, __nv_bfloat16, __nv_bfloat16, float, (bool)0, (bool)1, (bool)0, (bool)0, (int)6, (bool)0, cublasGemvParamsEx<int, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>, float>>(T13)": {
+      "count": 160,
+      "duration_ns": 371841
+    },
+    "void gemv2T_kernel_val<int, int, __nv_bfloat16, __nv_bfloat16, __nv_bfloat16, float, (int)128, (int)16, (int)4, (int)4, (bool)0, (bool)0, cublasGemvParamsEx<int, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>, float>>(T13, T6, T6)": {
+      "count": 96,
+      "duration_ns": 9451978
+    }
+  },
+  "top_kernel_counts": [
+    [
+      "ferrule::cuda::core::bf16_boundary_kernel(ferrule::cuda::core::Bf16BoundaryArgs)",
+      {
+        "count": 29688,
+        "duration_ns": 47612877
+      }
+    ],
+    [
+      "std::enable_if<!T7, void>::type internal::gemvx::kernel<int, int, __nv_bfloat16, __nv_bfloat16, __nv_bfloat16, float, (bool)0, (bool)1, (bool)1, (bool)0, (int)7, (bool)0, cublasGemvParamsEx<int, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>, float>>(T13)",
+      {
+        "count": 17536,
+        "duration_ns": 82834237
+      }
+    ],
+    [
+      "ferrule::cuda::cutlass::numeric_fp8::decode_weights(FerruleCutlassNumericFp8Args, unsigned int, unsigned int, unsigned long)",
+      {
+        "count": 14980,
+        "duration_ns": 101633891
+      }
+    ],
+    [
+      "ferrule::cuda::cutlass::bf16_gemmex::split_pair(const unsigned short *, unsigned short *, unsigned short *, unsigned long, unsigned int)",
+      {
+        "count": 7364,
+        "duration_ns": 11970869
+      }
+    ],
+    [
+      "ferrule::cuda::core::bf16_offset_norm_tree(ferrule::cuda::core::Bf16BoundaryArgs, float)",
+      {
+        "count": 1818,
+        "duration_ns": 7892140
+      }
+    ],
+    [
+      "ferrule::cuda::core::rows_f32_to_bf16_rne_kernel(FerruleCoreRowsArgs)",
+      {
+        "count": 1800,
+        "duration_ns": 3087076
+      }
+    ],
+    [
+      "void dot_kernel<float, (int)128, (int)0, cublasDotParams<cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<float>>>(T4)",
+      {
+        "count": 1680,
+        "duration_ns": 3652102
+      }
+    ],
+    [
+      "void reduce_1Block_kernel<float, (int)128, (int)7, cublasGemvTensorStridedBatched<float>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>>(const T1 *, T1, T4, int, const T1 *, T1, T5, T6, cublasPointerMode_t, cublasLtEpilogue_t, cublasGemvTensorStridedBatched<const biasType<T6::value_type, T1>::type>)",
+      {
+        "count": 1680,
+        "duration_ns": 2798242
+      }
+    ],
+    [
+      "ferrule::cuda::core::data_kernel(FerruleCoreDataArgs)",
+      {
+        "count": 1080,
+        "duration_ns": 1978433
+      }
+    ],
+    [
+      "void cublasLt::splitKreduce_kernel<(int)32, (int)16, int, float, __nv_bfloat16, float, __nv_bfloat16, (bool)1, (bool)0, (bool)0>(cublasLt::cublasSplitKParams<T6>, const T4 *, const T5 *, T5 *, const T6 *, const T6 *, const T7 *, const T4 *, T7 *, void *, long, T6 *, int *)",
+      {
+        "count": 876,
+        "duration_ns": 1485344
+      }
+    ],
+    [
+      "void ferrule::cuda::core::full_router_kernel<(int)8, (bool)0, (bool)0>(FerruleCoreRouterArgs, float *)",
+      {
+        "count": 720,
+        "duration_ns": 32681442
+      }
+    ],
+    [
+      "ferrule::cuda::core::moe_kernel(FerruleCoreMoeArgs)",
+      {
+        "count": 720,
+        "duration_ns": 3096547
+      }
+    ],
+    [
+      "ampere_bf16_s16816gemm_bf16_64x64_sliced1x2_ldg8_f2f_stages_64x5_tn",
+      {
+        "count": 640,
+        "duration_ns": 18405406
+      }
+    ],
+    [
+      "void cutlass::Kernel2<cutlass_80_tensorop_s16816gemm_bf16_64x64_32x6_tn_align8>(T1::Params)",
+      {
+        "count": 596,
+        "duration_ns": 3284900
+      }
+    ],
+    [
+      "ferrule::cuda::core::hf_bf16::conv(FerruleCoreBf16ConvArgs)",
+      {
+        "count": 540,
+        "duration_ns": 1652353
+      }
+    ],
+    [
+      "ferrule::cuda::core::hf_bf16::gated_norm_tree(FerruleCoreBf16GatedNormArgs, float)",
+      {
+        "count": 540,
+        "duration_ns": 2173508
+      }
+    ],
+    [
+      "void cutlass::Kernel2<cutlass_80_wmma_tensorop_bf16_s161616gemm_bf16_32x32_64x1_tn_align8>(T1::Params)",
+      {
+        "count": 498,
+        "duration_ns": 2222178
+      }
+    ],
+    [
+      "ferrule::cuda::core::bf16_chunk::matmul(const float *, const float *, float *, unsigned int, unsigned int, unsigned int, bool, bool, unsigned int)",
+      {
+        "count": 480,
+        "duration_ns": 6239367
+      }
+    ],
+    [
+      "ferrule::cuda::core::hf_bf16::delta(FerruleCoreBf16DeltaArgs)",
+      {
+        "count": 480,
+        "duration_ns": 39228650
+      }
+    ],
+    [
+      "void cutlass::Kernel2<cutlass_80_wmma_tensorop_bf16_s161616gemm_bf16_32x32_128x2_tn_align8>(T1::Params)",
+      {
+        "count": 318,
+        "duration_ns": 3450598
+      }
+    ]
+  ],
+  "top_kernel_durations": [
+    [
+      "ferrule::cuda::cutlass::numeric_fp8::decode_weights(FerruleCutlassNumericFp8Args, unsigned int, unsigned int, unsigned long)",
+      {
+        "count": 14980,
+        "duration_ns": 101633891
+      }
+    ],
+    [
+      "std::enable_if<!T7, void>::type internal::gemvx::kernel<int, int, __nv_bfloat16, __nv_bfloat16, __nv_bfloat16, float, (bool)0, (bool)1, (bool)1, (bool)0, (int)7, (bool)0, cublasGemvParamsEx<int, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>, float>>(T13)",
+      {
+        "count": 17536,
+        "duration_ns": 82834237
+      }
+    ],
+    [
+      "ferrule::cuda::core::bf16_boundary_kernel(ferrule::cuda::core::Bf16BoundaryArgs)",
+      {
+        "count": 29688,
+        "duration_ns": 47612877
+      }
+    ],
+    [
+      "ferrule::cuda::core::hf_bf16::delta(FerruleCoreBf16DeltaArgs)",
+      {
+        "count": 480,
+        "duration_ns": 39228650
+      }
+    ],
+    [
+      "void ferrule::cuda::core::full_router_kernel<(int)8, (bool)0, (bool)0>(FerruleCoreRouterArgs, float *)",
+      {
+        "count": 720,
+        "duration_ns": 32681442
+      }
+    ],
+    [
+      "ferrule::cuda::core::eager_attention::validate_group(FerruleCoreTransformerArgs, FerruleBf16AttentionGroup)",
+      {
+        "count": 180,
+        "duration_ns": 25620093
+      }
+    ],
+    [
+      "ampere_bf16_s16816gemm_bf16_64x64_sliced1x2_ldg8_f2f_stages_64x5_tn",
+      {
+        "count": 640,
+        "duration_ns": 18405406
+      }
+    ],
+    [
+      "ferrule::cuda::cutlass::bf16_gemmex::split_pair(const unsigned short *, unsigned short *, unsigned short *, unsigned long, unsigned int)",
+      {
+        "count": 7364,
+        "duration_ns": 11970869
+      }
+    ],
+    [
+      "ferrule::cuda::core::bf16_chunk::prepare(FerruleCoreBf16ChunkArgs, ferrule::cuda::core::bf16_chunk::Workspace, unsigned int, float)",
+      {
+        "count": 60,
+        "duration_ns": 11732044
+      }
+    ],
+    [
+      "void gemv2T_kernel_val<int, int, __nv_bfloat16, __nv_bfloat16, __nv_bfloat16, float, (int)128, (int)16, (int)4, (int)4, (bool)0, (bool)0, cublasGemvParamsEx<int, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>, float>>(T13, T6, T6)",
+      {
+        "count": 96,
+        "duration_ns": 9451978
+      }
+    ],
+    [
+      "ferrule::cuda::core::bf16_offset_norm_tree(ferrule::cuda::core::Bf16BoundaryArgs, float)",
+      {
+        "count": 1818,
+        "duration_ns": 7892140
+      }
+    ],
+    [
+      "ferrule::cuda::core::bf16_chunk::matmul(const float *, const float *, float *, unsigned int, unsigned int, unsigned int, bool, bool, unsigned int)",
+      {
+        "count": 480,
+        "duration_ns": 6239367
+      }
+    ],
+    [
+      "void dot_kernel<float, (int)128, (int)0, cublasDotParams<cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<float>>>(T4)",
+      {
+        "count": 1680,
+        "duration_ns": 3652102
+      }
+    ],
+    [
+      "ampere_bf16_s16816gemm_bf16_64x64_ldg8_f2f_stages_64x5_tn",
+      {
+        "count": 82,
+        "duration_ns": 3451466
+      }
+    ],
+    [
+      "void cutlass::Kernel2<cutlass_80_wmma_tensorop_bf16_s161616gemm_bf16_32x32_128x2_tn_align8>(T1::Params)",
+      {
+        "count": 318,
+        "duration_ns": 3450598
+      }
+    ],
+    [
+      "void cutlass::Kernel2<cutlass_80_tensorop_s16816gemm_bf16_64x64_32x6_tn_align8>(T1::Params)",
+      {
+        "count": 596,
+        "duration_ns": 3284900
+      }
+    ],
+    [
+      "ferrule::cuda::core::moe_kernel(FerruleCoreMoeArgs)",
+      {
+        "count": 720,
+        "duration_ns": 3096547
+      }
+    ],
+    [
+      "ferrule::cuda::core::rows_f32_to_bf16_rne_kernel(FerruleCoreRowsArgs)",
+      {
+        "count": 1800,
+        "duration_ns": 3087076
+      }
+    ],
+    [
+      "void reduce_1Block_kernel<float, (int)128, (int)7, cublasGemvTensorStridedBatched<float>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>>(const T1 *, T1, T4, int, const T1 *, T1, T5, T6, cublasPointerMode_t, cublasLtEpilogue_t, cublasGemvTensorStridedBatched<const biasType<T6::value_type, T1>::type>)",
+      {
+        "count": 1680,
+        "duration_ns": 2798242
+      }
+    ],
+    [
+      "void cutlass::Kernel2<cutlass_80_wmma_tensorop_bf16_s161616gemm_bf16_32x32_64x1_tn_align8>(T1::Params)",
+      {
+        "count": 498,
+        "duration_ns": 2222178
+      }
+    ]
+  ],
+  "launch_signatures": [
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "ampere_bf16_s16816gemm_bf16_64x64_ldg8_f2f_stages_64x5_tn",
+      "launch_dims": [
+        64,
+        1,
+        1,
+        128,
+        1,
+        1
+      ],
+      "count": 40
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "ampere_bf16_s16816gemm_bf16_64x64_ldg8_f2f_stages_64x5_tn",
+      "launch_dims": [
+        1940,
+        1,
+        1,
+        128,
+        1,
+        1
+      ],
+      "count": 1
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "ampere_bf16_s16816gemm_bf16_64x64_sliced1x2_ldg8_f2f_stages_64x5_tn",
+      "launch_dims": [
+        64,
+        1,
+        1,
+        128,
+        1,
+        1
+      ],
+      "count": 320
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "ferrule::cuda::core::bf16_boundary_kernel(ferrule::cuda::core::Bf16BoundaryArgs)",
+      "launch_dims": [
+        1,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 4644
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "ferrule::cuda::core::bf16_boundary_kernel(ferrule::cuda::core::Bf16BoundaryArgs)",
+      "launch_dims": [
+        2,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 171
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "ferrule::cuda::core::bf16_boundary_kernel(ferrule::cuda::core::Bf16BoundaryArgs)",
+      "launch_dims": [
+        3,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 78
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "ferrule::cuda::core::bf16_boundary_kernel(ferrule::cuda::core::Bf16BoundaryArgs)",
+      "launch_dims": [
+        4,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 45
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "ferrule::cuda::core::bf16_boundary_kernel(ferrule::cuda::core::Bf16BoundaryArgs)",
+      "launch_dims": [
+        5,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 94
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "ferrule::cuda::core::bf16_boundary_kernel(ferrule::cuda::core::Bf16BoundaryArgs)",
+      "launch_dims": [
+        8,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 8376
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "ferrule::cuda::core::bf16_boundary_kernel(ferrule::cuda::core::Bf16BoundaryArgs)",
+      "launch_dims": [
+        16,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 662
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "ferrule::cuda::core::bf16_boundary_kernel(ferrule::cuda::core::Bf16BoundaryArgs)",
+      "launch_dims": [
+        24,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 156
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "ferrule::cuda::core::bf16_boundary_kernel(ferrule::cuda::core::Bf16BoundaryArgs)",
+      "launch_dims": [
+        32,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 90
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "ferrule::cuda::core::bf16_boundary_kernel(ferrule::cuda::core::Bf16BoundaryArgs)",
+      "launch_dims": [
+        40,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 209
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "ferrule::cuda::core::bf16_boundary_kernel(ferrule::cuda::core::Bf16BoundaryArgs)",
+      "launch_dims": [
+        64,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 270
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "ferrule::cuda::core::bf16_boundary_kernel(ferrule::cuda::core::Bf16BoundaryArgs)",
+      "launch_dims": [
+        80,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 40
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "ferrule::cuda::core::bf16_boundary_kernel(ferrule::cuda::core::Bf16BoundaryArgs)",
+      "launch_dims": [
+        970,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 8
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "ferrule::cuda::core::bf16_boundary_kernel(ferrule::cuda::core::Bf16BoundaryArgs)",
+      "launch_dims": [
+        4850,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 1
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "ferrule::cuda::core::bf16_chunk::attention_delta_and_end_keys(ferrule::cuda::core::bf16_chunk::Workspace, unsigned int)",
+      "launch_dims": [
+        512,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 30
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "ferrule::cuda::core::bf16_chunk::decay_and_initial_exponents(ferrule::cuda::core::bf16_chunk::Workspace, unsigned int)",
+      "launch_dims": [
+        512,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 30
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "ferrule::cuda::core::bf16_chunk::mask_matrix(ferrule::cuda::core::bf16_chunk::Workspace, bool)",
+      "launch_dims": [
+        256,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 30
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "ferrule::cuda::core::bf16_chunk::matmul(const float *, const float *, float *, unsigned int, unsigned int, unsigned int, bool, bool, unsigned int)",
+      "launch_dims": [
+        4,
+        4,
+        16,
+        16,
+        16,
+        1
+      ],
+      "count": 60
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "ferrule::cuda::core::bf16_chunk::matmul(const float *, const float *, float *, unsigned int, unsigned int, unsigned int, bool, bool, unsigned int)",
+      "launch_dims": [
+        8,
+        4,
+        16,
+        16,
+        16,
+        1
+      ],
+      "count": 150
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "ferrule::cuda::core::bf16_chunk::matmul(const float *, const float *, float *, unsigned int, unsigned int, unsigned int, bool, bool, unsigned int)",
+      "launch_dims": [
+        8,
+        8,
+        16,
+        16,
+        16,
+        1
+      ],
+      "count": 30
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "ferrule::cuda::core::bf16_chunk::output_and_state(FerruleCoreBf16ChunkArgs, ferrule::cuda::core::bf16_chunk::Workspace, unsigned int)",
+      "launch_dims": [
+        1024,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 30
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "ferrule::cuda::core::bf16_chunk::prefix(ferrule::cuda::core::bf16_chunk::Workspace, unsigned int)",
+      "launch_dims": [
+        16,
+        1,
+        1,
+        64,
+        1,
+        1
+      ],
+      "count": 30
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "ferrule::cuda::core::bf16_chunk::prepare(FerruleCoreBf16ChunkArgs, ferrule::cuda::core::bf16_chunk::Workspace, unsigned int, float)",
+      "launch_dims": [
+        4,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 30
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "ferrule::cuda::core::bf16_chunk::triangular(ferrule::cuda::core::bf16_chunk::Workspace)",
+      "launch_dims": [
+        16,
+        1,
+        1,
+        64,
+        1,
+        1
+      ],
+      "count": 30
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "ferrule::cuda::core::bf16_offset_norm_tree(ferrule::cuda::core::Bf16BoundaryArgs, float)",
+      "launch_dims": [
+        1,
+        1,
+        1,
+        64,
+        1,
+        1
+      ],
+      "count": 80
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "ferrule::cuda::core::bf16_offset_norm_tree(ferrule::cuda::core::Bf16BoundaryArgs, float)",
+      "launch_dims": [
+        1,
+        1,
+        1,
+        64,
+        8,
+        1
+      ],
+      "count": 80
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "ferrule::cuda::core::bf16_offset_norm_tree(ferrule::cuda::core::Bf16BoundaryArgs, float)",
+      "launch_dims": [
+        1,
+        1,
+        1,
+        512,
+        1,
+        1
+      ],
+      "count": 648
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "ferrule::cuda::core::bf16_offset_norm_tree(ferrule::cuda::core::Bf16BoundaryArgs, float)",
+      "launch_dims": [
+        2,
+        1,
+        1,
+        64,
+        4,
+        1
+      ],
+      "count": 10
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "ferrule::cuda::core::bf16_offset_norm_tree(ferrule::cuda::core::Bf16BoundaryArgs, float)",
+      "launch_dims": [
+        2,
+        1,
+        1,
+        128,
+        4,
+        1
+      ],
+      "count": 81
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "ferrule::cuda::core::bf16_offset_norm_tree(ferrule::cuda::core::Bf16BoundaryArgs, float)",
+      "launch_dims": [
+        3,
+        1,
+        1,
+        32,
+        16,
+        1
+      ],
+      "count": 10
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "ferrule::cuda::core::data_kernel(FerruleCoreDataArgs)",
+      "launch_dims": [
+        8,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 480
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "ferrule::cuda::core::data_kernel(FerruleCoreDataArgs)",
+      "launch_dims": [
+        40,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 60
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "ferrule::cuda::core::eager_attention::append(FerruleCoreTransformerArgs)",
+      "launch_dims": [
+        1,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 80
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "ferrule::cuda::core::eager_attention::append(FerruleCoreTransformerArgs)",
+      "launch_dims": [
+        5,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 10
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "ferrule::cuda::core::eager_attention::gather(FerruleCoreTransformerArgs, FerruleBf16AttentionGroup, unsigned short *, unsigned short *)",
+      "launch_dims": [
+        40,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 10
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "ferrule::cuda::core::eager_attention::gather(FerruleCoreTransformerArgs, FerruleBf16AttentionGroup, unsigned short *, unsigned short *)",
+      "launch_dims": [
+        48,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 10
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "ferrule::cuda::core::eager_attention::gather(FerruleCoreTransformerArgs, FerruleBf16AttentionGroup, unsigned short *, unsigned short *)",
+      "launch_dims": [
+        56,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 10
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "ferrule::cuda::core::eager_attention::gather(FerruleCoreTransformerArgs, FerruleBf16AttentionGroup, unsigned short *, unsigned short *)",
+      "launch_dims": [
+        64,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 10
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "ferrule::cuda::core::eager_attention::gather(FerruleCoreTransformerArgs, FerruleBf16AttentionGroup, unsigned short *, unsigned short *)",
+      "launch_dims": [
+        72,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 10
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "ferrule::cuda::core::eager_attention::gather(FerruleCoreTransformerArgs, FerruleBf16AttentionGroup, unsigned short *, unsigned short *)",
+      "launch_dims": [
+        80,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 10
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "ferrule::cuda::core::eager_attention::gather(FerruleCoreTransformerArgs, FerruleBf16AttentionGroup, unsigned short *, unsigned short *)",
+      "launch_dims": [
+        88,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 10
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "ferrule::cuda::core::eager_attention::gather(FerruleCoreTransformerArgs, FerruleBf16AttentionGroup, unsigned short *, unsigned short *)",
+      "launch_dims": [
+        96,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 10
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "ferrule::cuda::core::eager_attention::gather(FerruleCoreTransformerArgs, FerruleBf16AttentionGroup, unsigned short *, unsigned short *)",
+      "launch_dims": [
+        104,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 10
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "ferrule::cuda::core::eager_attention::pack(FerruleCoreTransformerArgs, FerruleBf16AttentionGroup, unsigned short *)",
+      "launch_dims": [
+        8,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 80
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "ferrule::cuda::core::eager_attention::pack(FerruleCoreTransformerArgs, FerruleBf16AttentionGroup, unsigned short *)",
+      "launch_dims": [
+        40,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 10
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "ferrule::cuda::core::eager_attention::scatter(FerruleCoreTransformerArgs, FerruleBf16AttentionGroup, const unsigned short *)",
+      "launch_dims": [
+        8,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 80
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "ferrule::cuda::core::eager_attention::scatter(FerruleCoreTransformerArgs, FerruleBf16AttentionGroup, const unsigned short *)",
+      "launch_dims": [
+        40,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 10
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "ferrule::cuda::core::eager_attention::softmax(FerruleCoreTransformerArgs, FerruleBf16AttentionGroup, const unsigned short *, unsigned short *)",
+      "launch_dims": [
+        8,
+        1,
+        1,
+        32,
+        1,
+        1
+      ],
+      "count": 80
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "ferrule::cuda::core::eager_attention::softmax(FerruleCoreTransformerArgs, FerruleBf16AttentionGroup, const unsigned short *, unsigned short *)",
+      "launch_dims": [
+        40,
+        1,
+        1,
+        32,
+        1,
+        1
+      ],
+      "count": 10
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "ferrule::cuda::core::eager_attention::validate_group(FerruleCoreTransformerArgs, FerruleBf16AttentionGroup)",
+      "launch_dims": [
+        1,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 90
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "ferrule::cuda::core::hf_bf16::conv(FerruleCoreBf16ConvArgs)",
+      "launch_dims": [
+        16,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 270
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "ferrule::cuda::core::hf_bf16::delta(FerruleCoreBf16DeltaArgs)",
+      "launch_dims": [
+        8,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 240
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "ferrule::cuda::core::hf_bf16::gated_norm_tree(FerruleCoreBf16GatedNormArgs, float)",
+      "launch_dims": [
+        1,
+        1,
+        1,
+        32,
+        16,
+        1
+      ],
+      "count": 240
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "ferrule::cuda::core::hf_bf16::gated_norm_tree(FerruleCoreBf16GatedNormArgs, float)",
+      "launch_dims": [
+        5,
+        1,
+        1,
+        32,
+        16,
+        1
+      ],
+      "count": 30
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "ferrule::cuda::core::moe_kernel(FerruleCoreMoeArgs)",
+      "launch_dims": [
+        8,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 320
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "ferrule::cuda::core::moe_kernel(FerruleCoreMoeArgs)",
+      "launch_dims": [
+        40,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 40
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "ferrule::cuda::core::rows_f32_to_bf16_rne_kernel(FerruleCoreRowsArgs)",
+      "launch_dims": [
+        8,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 480
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "ferrule::cuda::core::rows_f32_to_bf16_rne_kernel(FerruleCoreRowsArgs)",
+      "launch_dims": [
+        40,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 60
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "ferrule::cuda::core::rows_f32_to_bf16_rne_kernel(FerruleCoreRowsArgs)",
+      "launch_dims": [
+        64,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 320
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "ferrule::cuda::core::rows_f32_to_bf16_rne_kernel(FerruleCoreRowsArgs)",
+      "launch_dims": [
+        320,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 40
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "ferrule::cuda::cutlass::bf16_gemmex::split_pair(const unsigned short *, unsigned short *, unsigned short *, unsigned long, unsigned int)",
+      "launch_dims": [
+        1,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 3384
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "ferrule::cuda::cutlass::bf16_gemmex::split_pair(const unsigned short *, unsigned short *, unsigned short *, unsigned long, unsigned int)",
+      "launch_dims": [
+        2,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 171
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "ferrule::cuda::cutlass::bf16_gemmex::split_pair(const unsigned short *, unsigned short *, unsigned short *, unsigned long, unsigned int)",
+      "launch_dims": [
+        3,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 78
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "ferrule::cuda::cutlass::bf16_gemmex::split_pair(const unsigned short *, unsigned short *, unsigned short *, unsigned long, unsigned int)",
+      "launch_dims": [
+        4,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 45
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "ferrule::cuda::cutlass::bf16_gemmex::split_pair(const unsigned short *, unsigned short *, unsigned short *, unsigned long, unsigned int)",
+      "launch_dims": [
+        5,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 4
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "ferrule::cuda::cutlass::numeric_fp8::decode_weights(FerruleCutlassNumericFp8Args, unsigned int, unsigned int, unsigned long)",
+      "launch_dims": [
+        2048,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 7490
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "std::enable_if<!T7, void>::type internal::gemvx::kernel<int, int, __nv_bfloat16, __nv_bfloat16, __nv_bfloat16, float, (bool)0, (bool)1, (bool)0, (bool)0, (int)6, (bool)0, cublasGemvParamsEx<int, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>, float>>(T13)",
+      "launch_dims": [
+        8,
+        1,
+        8,
+        32,
+        2,
+        1
+      ],
+      "count": 30
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "std::enable_if<!T7, void>::type internal::gemvx::kernel<int, int, __nv_bfloat16, __nv_bfloat16, __nv_bfloat16, float, (bool)0, (bool)1, (bool)0, (bool)0, (int)6, (bool)0, cublasGemvParamsEx<int, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>, float>>(T13)",
+      "launch_dims": [
+        16,
+        1,
+        8,
+        16,
+        4,
+        1
+      ],
+      "count": 50
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "std::enable_if<!T7, void>::type internal::gemvx::kernel<int, int, __nv_bfloat16, __nv_bfloat16, __nv_bfloat16, float, (bool)0, (bool)1, (bool)1, (bool)0, (int)6, (bool)0, cublasGemvParamsEx<int, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>, float>>(T13)",
+      "launch_dims": [
+        2,
+        1,
+        8,
+        16,
+        4,
+        1
+      ],
+      "count": 20
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "std::enable_if<!T7, void>::type internal::gemvx::kernel<int, int, __nv_bfloat16, __nv_bfloat16, __nv_bfloat16, float, (bool)0, (bool)1, (bool)1, (bool)0, (int)6, (bool)0, cublasGemvParamsEx<int, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>, float>>(T13)",
+      "launch_dims": [
+        3,
+        1,
+        8,
+        16,
+        4,
+        1
+      ],
+      "count": 20
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "std::enable_if<!T7, void>::type internal::gemvx::kernel<int, int, __nv_bfloat16, __nv_bfloat16, __nv_bfloat16, float, (bool)0, (bool)1, (bool)1, (bool)0, (int)7, (bool)0, cublasGemvParamsEx<int, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>, float>>(T13)",
+      "launch_dims": [
+        64,
+        1,
+        1,
+        32,
+        4,
+        1
+      ],
+      "count": 1120
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "std::enable_if<!T7, void>::type internal::gemvx::kernel<int, int, __nv_bfloat16, __nv_bfloat16, __nv_bfloat16, float, (bool)0, (bool)1, (bool)1, (bool)0, (int)7, (bool)0, cublasGemvParamsEx<int, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>, float>>(T13)",
+      "launch_dims": [
+        128,
+        1,
+        1,
+        32,
+        4,
+        1
+      ],
+      "count": 3384
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "std::enable_if<!T7, void>::type internal::gemvx::kernel<int, int, __nv_bfloat16, __nv_bfloat16, __nv_bfloat16, float, (bool)0, (bool)1, (bool)1, (bool)0, (int)7, (bool)0, cublasGemvParamsEx<int, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>, float>>(T13)",
+      "launch_dims": [
+        256,
+        1,
+        1,
+        16,
+        8,
+        1
+      ],
+      "count": 4264
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "void cublasLt::splitKreduce_kernel<(int)32, (int)16, int, float, __nv_bfloat16, float, __nv_bfloat16, (bool)1, (bool)0, (bool)0>(cublasLt::cublasSplitKParams<T6>, const T4 *, const T5 *, T5 *, const T6 *, const T6 *, const T7 *, const T4 *, T7 *, void *, long, T6 *, int *)",
+      "launch_dims": [
+        8,
+        1,
+        1,
+        32,
+        16,
+        1
+      ],
+      "count": 140
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "void cublasLt::splitKreduce_kernel<(int)32, (int)16, int, float, __nv_bfloat16, float, __nv_bfloat16, (bool)1, (bool)0, (bool)0>(cublasLt::cublasSplitKParams<T6>, const T4 *, const T5 *, T5 *, const T6 *, const T6 *, const T7 *, const T4 *, T7 *, void *, long, T6 *, int *)",
+      "launch_dims": [
+        16,
+        1,
+        1,
+        32,
+        16,
+        1
+      ],
+      "count": 298
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "void cutlass::Kernel2<cutlass_75_wmma_tensorop_bf16_s161616gemm_bf16_32x32_32x1_nn_align1>(T1::Params)",
+      "launch_dims": [
+        8,
+        1,
+        8,
+        128,
+        1,
+        1
+      ],
+      "count": 10
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "void cutlass::Kernel2<cutlass_75_wmma_tensorop_bf16_s161616gemm_bf16_32x32_32x1_tn_align1>(T1::Params)",
+      "launch_dims": [
+        1,
+        1,
+        8,
+        128,
+        1,
+        1
+      ],
+      "count": 10
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "void cutlass::Kernel2<cutlass_80_tensorop_s16816gemm_bf16_64x64_32x6_tn_align8>(T1::Params)",
+      "launch_dims": [
+        8,
+        1,
+        8,
+        128,
+        1,
+        1
+      ],
+      "count": 298
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "void cutlass::Kernel2<cutlass_80_wmma_tensorop_bf16_s161616gemm_bf16_16x16_128x2_tn_align8>(T1::Params)",
+      "launch_dims": [
+        1,
+        1,
+        1,
+        32,
+        1,
+        1
+      ],
+      "count": 60
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "void cutlass::Kernel2<cutlass_80_wmma_tensorop_bf16_s161616gemm_bf16_32x32_128x2_tn_align8>(T1::Params)",
+      "launch_dims": [
+        8,
+        8,
+        1,
+        128,
+        1,
+        1
+      ],
+      "count": 159
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "void cutlass::Kernel2<cutlass_80_wmma_tensorop_bf16_s161616gemm_bf16_32x32_64x1_tn_align8>(T1::Params)",
+      "launch_dims": [
+        8,
+        8,
+        1,
+        128,
+        1,
+        1
+      ],
+      "count": 249
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "void cutlass::Kernel2<cutlass_80_wmma_tensorop_s161616gemm_bf16_16x16_64x1_tn_align8>(T1::Params)",
+      "launch_dims": [
+        8,
+        2,
+        16,
+        32,
+        1,
+        1
+      ],
+      "count": 140
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "void dot_kernel<float, (int)128, (int)0, cublasDotParams<cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<float>>>(T4)",
+      "launch_dims": [
+        10,
+        1,
+        5,
+        128,
+        1,
+        1
+      ],
+      "count": 40
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "void dot_kernel<float, (int)128, (int)0, cublasDotParams<cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<float>>>(T4)",
+      "launch_dims": [
+        18,
+        1,
+        16,
+        128,
+        1,
+        1
+      ],
+      "count": 480
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "void dot_kernel<float, (int)128, (int)0, cublasDotParams<cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<float>>>(T4)",
+      "launch_dims": [
+        32,
+        1,
+        1,
+        128,
+        1,
+        1
+      ],
+      "count": 320
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "void ferrule::cuda::core::full_router_kernel<(int)8, (bool)0, (bool)0>(FerruleCoreRouterArgs, float *)",
+      "launch_dims": [
+        1,
+        1,
+        1,
+        32,
+        1,
+        1
+      ],
+      "count": 320
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "void ferrule::cuda::core::full_router_kernel<(int)8, (bool)0, (bool)0>(FerruleCoreRouterArgs, float *)",
+      "launch_dims": [
+        5,
+        1,
+        1,
+        32,
+        1,
+        1
+      ],
+      "count": 40
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "void gemv2T_kernel_val<int, int, __nv_bfloat16, __nv_bfloat16, __nv_bfloat16, float, (int)128, (int)16, (int)4, (int)4, (bool)0, (bool)0, cublasGemvParamsEx<int, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>, float>>(T13, T6, T6)",
+      "launch_dims": [
+        1,
+        1,
+        8,
+        128,
+        1,
+        1
+      ],
+      "count": 10
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "void gemv2T_kernel_val<int, int, __nv_bfloat16, __nv_bfloat16, __nv_bfloat16, float, (int)128, (int)16, (int)4, (int)4, (bool)0, (bool)0, cublasGemvParamsEx<int, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>, float>>(T13, T6, T6)",
+      "launch_dims": [
+        2,
+        1,
+        8,
+        128,
+        1,
+        1
+      ],
+      "count": 30
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "void gemv2T_kernel_val<int, int, __nv_bfloat16, __nv_bfloat16, __nv_bfloat16, float, (int)128, (int)16, (int)4, (int)4, (bool)0, (bool)0, cublasGemvParamsEx<int, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>, float>>(T13, T6, T6)",
+      "launch_dims": [
+        15520,
+        1,
+        1,
+        128,
+        1,
+        1
+      ],
+      "count": 8
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "void reduce_1Block_kernel<float, (int)128, (int)7, cublasGemvTensorStridedBatched<float>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>>(const T1 *, T1, T4, int, const T1 *, T1, T5, T6, cublasPointerMode_t, cublasLtEpilogue_t, cublasGemvTensorStridedBatched<const biasType<T6::value_type, T1>::type>)",
+      "launch_dims": [
+        1,
+        1,
+        1,
+        128,
+        1,
+        1
+      ],
+      "count": 320
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "void reduce_1Block_kernel<float, (int)128, (int)7, cublasGemvTensorStridedBatched<float>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>>(const T1 *, T1, T4, int, const T1 *, T1, T5, T6, cublasPointerMode_t, cublasLtEpilogue_t, cublasGemvTensorStridedBatched<const biasType<T6::value_type, T1>::type>)",
+      "launch_dims": [
+        1,
+        1,
+        5,
+        128,
+        1,
+        1
+      ],
+      "count": 40
+    },
+    {
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "name": "void reduce_1Block_kernel<float, (int)128, (int)7, cublasGemvTensorStridedBatched<float>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>>(const T1 *, T1, T4, int, const T1 *, T1, T5, T6, cublasPointerMode_t, cublasLtEpilogue_t, cublasGemvTensorStridedBatched<const biasType<T6::value_type, T1>::type>)",
+      "launch_dims": [
+        1,
+        1,
+        16,
+        128,
+        1,
+        1
+      ],
+      "count": 480
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "ampere_bf16_s16816gemm_bf16_64x64_ldg8_f2f_stages_64x5_tn",
+      "launch_dims": [
+        64,
+        1,
+        1,
+        128,
+        1,
+        1
+      ],
+      "count": 40
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "ampere_bf16_s16816gemm_bf16_64x64_ldg8_f2f_stages_64x5_tn",
+      "launch_dims": [
+        1940,
+        1,
+        1,
+        128,
+        1,
+        1
+      ],
+      "count": 1
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "ampere_bf16_s16816gemm_bf16_64x64_sliced1x2_ldg8_f2f_stages_64x5_tn",
+      "launch_dims": [
+        64,
+        1,
+        1,
+        128,
+        1,
+        1
+      ],
+      "count": 320
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "ferrule::cuda::core::bf16_boundary_kernel(ferrule::cuda::core::Bf16BoundaryArgs)",
+      "launch_dims": [
+        1,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 4644
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "ferrule::cuda::core::bf16_boundary_kernel(ferrule::cuda::core::Bf16BoundaryArgs)",
+      "launch_dims": [
+        2,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 171
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "ferrule::cuda::core::bf16_boundary_kernel(ferrule::cuda::core::Bf16BoundaryArgs)",
+      "launch_dims": [
+        3,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 78
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "ferrule::cuda::core::bf16_boundary_kernel(ferrule::cuda::core::Bf16BoundaryArgs)",
+      "launch_dims": [
+        4,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 45
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "ferrule::cuda::core::bf16_boundary_kernel(ferrule::cuda::core::Bf16BoundaryArgs)",
+      "launch_dims": [
+        5,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 94
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "ferrule::cuda::core::bf16_boundary_kernel(ferrule::cuda::core::Bf16BoundaryArgs)",
+      "launch_dims": [
+        8,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 8376
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "ferrule::cuda::core::bf16_boundary_kernel(ferrule::cuda::core::Bf16BoundaryArgs)",
+      "launch_dims": [
+        16,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 662
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "ferrule::cuda::core::bf16_boundary_kernel(ferrule::cuda::core::Bf16BoundaryArgs)",
+      "launch_dims": [
+        24,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 156
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "ferrule::cuda::core::bf16_boundary_kernel(ferrule::cuda::core::Bf16BoundaryArgs)",
+      "launch_dims": [
+        32,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 90
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "ferrule::cuda::core::bf16_boundary_kernel(ferrule::cuda::core::Bf16BoundaryArgs)",
+      "launch_dims": [
+        40,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 209
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "ferrule::cuda::core::bf16_boundary_kernel(ferrule::cuda::core::Bf16BoundaryArgs)",
+      "launch_dims": [
+        64,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 270
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "ferrule::cuda::core::bf16_boundary_kernel(ferrule::cuda::core::Bf16BoundaryArgs)",
+      "launch_dims": [
+        80,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 40
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "ferrule::cuda::core::bf16_boundary_kernel(ferrule::cuda::core::Bf16BoundaryArgs)",
+      "launch_dims": [
+        970,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 8
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "ferrule::cuda::core::bf16_boundary_kernel(ferrule::cuda::core::Bf16BoundaryArgs)",
+      "launch_dims": [
+        4850,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 1
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "ferrule::cuda::core::bf16_chunk::attention_delta_and_end_keys(ferrule::cuda::core::bf16_chunk::Workspace, unsigned int)",
+      "launch_dims": [
+        512,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 30
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "ferrule::cuda::core::bf16_chunk::decay_and_initial_exponents(ferrule::cuda::core::bf16_chunk::Workspace, unsigned int)",
+      "launch_dims": [
+        512,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 30
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "ferrule::cuda::core::bf16_chunk::mask_matrix(ferrule::cuda::core::bf16_chunk::Workspace, bool)",
+      "launch_dims": [
+        256,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 30
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "ferrule::cuda::core::bf16_chunk::matmul(const float *, const float *, float *, unsigned int, unsigned int, unsigned int, bool, bool, unsigned int)",
+      "launch_dims": [
+        4,
+        4,
+        16,
+        16,
+        16,
+        1
+      ],
+      "count": 60
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "ferrule::cuda::core::bf16_chunk::matmul(const float *, const float *, float *, unsigned int, unsigned int, unsigned int, bool, bool, unsigned int)",
+      "launch_dims": [
+        8,
+        4,
+        16,
+        16,
+        16,
+        1
+      ],
+      "count": 150
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "ferrule::cuda::core::bf16_chunk::matmul(const float *, const float *, float *, unsigned int, unsigned int, unsigned int, bool, bool, unsigned int)",
+      "launch_dims": [
+        8,
+        8,
+        16,
+        16,
+        16,
+        1
+      ],
+      "count": 30
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "ferrule::cuda::core::bf16_chunk::output_and_state(FerruleCoreBf16ChunkArgs, ferrule::cuda::core::bf16_chunk::Workspace, unsigned int)",
+      "launch_dims": [
+        1024,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 30
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "ferrule::cuda::core::bf16_chunk::prefix(ferrule::cuda::core::bf16_chunk::Workspace, unsigned int)",
+      "launch_dims": [
+        16,
+        1,
+        1,
+        64,
+        1,
+        1
+      ],
+      "count": 30
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "ferrule::cuda::core::bf16_chunk::prepare(FerruleCoreBf16ChunkArgs, ferrule::cuda::core::bf16_chunk::Workspace, unsigned int, float)",
+      "launch_dims": [
+        4,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 30
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "ferrule::cuda::core::bf16_chunk::triangular(ferrule::cuda::core::bf16_chunk::Workspace)",
+      "launch_dims": [
+        16,
+        1,
+        1,
+        64,
+        1,
+        1
+      ],
+      "count": 30
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "ferrule::cuda::core::bf16_offset_norm_tree(ferrule::cuda::core::Bf16BoundaryArgs, float)",
+      "launch_dims": [
+        1,
+        1,
+        1,
+        64,
+        1,
+        1
+      ],
+      "count": 80
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "ferrule::cuda::core::bf16_offset_norm_tree(ferrule::cuda::core::Bf16BoundaryArgs, float)",
+      "launch_dims": [
+        1,
+        1,
+        1,
+        64,
+        8,
+        1
+      ],
+      "count": 80
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "ferrule::cuda::core::bf16_offset_norm_tree(ferrule::cuda::core::Bf16BoundaryArgs, float)",
+      "launch_dims": [
+        1,
+        1,
+        1,
+        512,
+        1,
+        1
+      ],
+      "count": 648
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "ferrule::cuda::core::bf16_offset_norm_tree(ferrule::cuda::core::Bf16BoundaryArgs, float)",
+      "launch_dims": [
+        2,
+        1,
+        1,
+        64,
+        4,
+        1
+      ],
+      "count": 10
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "ferrule::cuda::core::bf16_offset_norm_tree(ferrule::cuda::core::Bf16BoundaryArgs, float)",
+      "launch_dims": [
+        2,
+        1,
+        1,
+        128,
+        4,
+        1
+      ],
+      "count": 81
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "ferrule::cuda::core::bf16_offset_norm_tree(ferrule::cuda::core::Bf16BoundaryArgs, float)",
+      "launch_dims": [
+        3,
+        1,
+        1,
+        32,
+        16,
+        1
+      ],
+      "count": 10
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "ferrule::cuda::core::data_kernel(FerruleCoreDataArgs)",
+      "launch_dims": [
+        8,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 480
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "ferrule::cuda::core::data_kernel(FerruleCoreDataArgs)",
+      "launch_dims": [
+        40,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 60
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "ferrule::cuda::core::eager_attention::append(FerruleCoreTransformerArgs)",
+      "launch_dims": [
+        1,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 80
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "ferrule::cuda::core::eager_attention::append(FerruleCoreTransformerArgs)",
+      "launch_dims": [
+        5,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 10
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "ferrule::cuda::core::eager_attention::gather(FerruleCoreTransformerArgs, FerruleBf16AttentionGroup, unsigned short *, unsigned short *)",
+      "launch_dims": [
+        40,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 10
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "ferrule::cuda::core::eager_attention::gather(FerruleCoreTransformerArgs, FerruleBf16AttentionGroup, unsigned short *, unsigned short *)",
+      "launch_dims": [
+        48,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 10
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "ferrule::cuda::core::eager_attention::gather(FerruleCoreTransformerArgs, FerruleBf16AttentionGroup, unsigned short *, unsigned short *)",
+      "launch_dims": [
+        56,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 10
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "ferrule::cuda::core::eager_attention::gather(FerruleCoreTransformerArgs, FerruleBf16AttentionGroup, unsigned short *, unsigned short *)",
+      "launch_dims": [
+        64,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 10
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "ferrule::cuda::core::eager_attention::gather(FerruleCoreTransformerArgs, FerruleBf16AttentionGroup, unsigned short *, unsigned short *)",
+      "launch_dims": [
+        72,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 10
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "ferrule::cuda::core::eager_attention::gather(FerruleCoreTransformerArgs, FerruleBf16AttentionGroup, unsigned short *, unsigned short *)",
+      "launch_dims": [
+        80,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 10
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "ferrule::cuda::core::eager_attention::gather(FerruleCoreTransformerArgs, FerruleBf16AttentionGroup, unsigned short *, unsigned short *)",
+      "launch_dims": [
+        88,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 10
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "ferrule::cuda::core::eager_attention::gather(FerruleCoreTransformerArgs, FerruleBf16AttentionGroup, unsigned short *, unsigned short *)",
+      "launch_dims": [
+        96,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 10
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "ferrule::cuda::core::eager_attention::gather(FerruleCoreTransformerArgs, FerruleBf16AttentionGroup, unsigned short *, unsigned short *)",
+      "launch_dims": [
+        104,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 10
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "ferrule::cuda::core::eager_attention::pack(FerruleCoreTransformerArgs, FerruleBf16AttentionGroup, unsigned short *)",
+      "launch_dims": [
+        8,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 80
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "ferrule::cuda::core::eager_attention::pack(FerruleCoreTransformerArgs, FerruleBf16AttentionGroup, unsigned short *)",
+      "launch_dims": [
+        40,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 10
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "ferrule::cuda::core::eager_attention::scatter(FerruleCoreTransformerArgs, FerruleBf16AttentionGroup, const unsigned short *)",
+      "launch_dims": [
+        8,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 80
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "ferrule::cuda::core::eager_attention::scatter(FerruleCoreTransformerArgs, FerruleBf16AttentionGroup, const unsigned short *)",
+      "launch_dims": [
+        40,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 10
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "ferrule::cuda::core::eager_attention::softmax(FerruleCoreTransformerArgs, FerruleBf16AttentionGroup, const unsigned short *, unsigned short *)",
+      "launch_dims": [
+        8,
+        1,
+        1,
+        32,
+        1,
+        1
+      ],
+      "count": 80
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "ferrule::cuda::core::eager_attention::softmax(FerruleCoreTransformerArgs, FerruleBf16AttentionGroup, const unsigned short *, unsigned short *)",
+      "launch_dims": [
+        40,
+        1,
+        1,
+        32,
+        1,
+        1
+      ],
+      "count": 10
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "ferrule::cuda::core::eager_attention::validate_group(FerruleCoreTransformerArgs, FerruleBf16AttentionGroup)",
+      "launch_dims": [
+        1,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 90
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "ferrule::cuda::core::hf_bf16::conv(FerruleCoreBf16ConvArgs)",
+      "launch_dims": [
+        16,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 270
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "ferrule::cuda::core::hf_bf16::delta(FerruleCoreBf16DeltaArgs)",
+      "launch_dims": [
+        8,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 240
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "ferrule::cuda::core::hf_bf16::gated_norm_tree(FerruleCoreBf16GatedNormArgs, float)",
+      "launch_dims": [
+        1,
+        1,
+        1,
+        32,
+        16,
+        1
+      ],
+      "count": 240
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "ferrule::cuda::core::hf_bf16::gated_norm_tree(FerruleCoreBf16GatedNormArgs, float)",
+      "launch_dims": [
+        5,
+        1,
+        1,
+        32,
+        16,
+        1
+      ],
+      "count": 30
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "ferrule::cuda::core::moe_kernel(FerruleCoreMoeArgs)",
+      "launch_dims": [
+        8,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 320
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "ferrule::cuda::core::moe_kernel(FerruleCoreMoeArgs)",
+      "launch_dims": [
+        40,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 40
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "ferrule::cuda::core::rows_f32_to_bf16_rne_kernel(FerruleCoreRowsArgs)",
+      "launch_dims": [
+        8,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 480
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "ferrule::cuda::core::rows_f32_to_bf16_rne_kernel(FerruleCoreRowsArgs)",
+      "launch_dims": [
+        40,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 60
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "ferrule::cuda::core::rows_f32_to_bf16_rne_kernel(FerruleCoreRowsArgs)",
+      "launch_dims": [
+        64,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 320
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "ferrule::cuda::core::rows_f32_to_bf16_rne_kernel(FerruleCoreRowsArgs)",
+      "launch_dims": [
+        320,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 40
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "ferrule::cuda::cutlass::bf16_gemmex::split_pair(const unsigned short *, unsigned short *, unsigned short *, unsigned long, unsigned int)",
+      "launch_dims": [
+        1,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 3384
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "ferrule::cuda::cutlass::bf16_gemmex::split_pair(const unsigned short *, unsigned short *, unsigned short *, unsigned long, unsigned int)",
+      "launch_dims": [
+        2,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 171
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "ferrule::cuda::cutlass::bf16_gemmex::split_pair(const unsigned short *, unsigned short *, unsigned short *, unsigned long, unsigned int)",
+      "launch_dims": [
+        3,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 78
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "ferrule::cuda::cutlass::bf16_gemmex::split_pair(const unsigned short *, unsigned short *, unsigned short *, unsigned long, unsigned int)",
+      "launch_dims": [
+        4,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 45
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "ferrule::cuda::cutlass::bf16_gemmex::split_pair(const unsigned short *, unsigned short *, unsigned short *, unsigned long, unsigned int)",
+      "launch_dims": [
+        5,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 4
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "ferrule::cuda::cutlass::numeric_fp8::decode_weights(FerruleCutlassNumericFp8Args, unsigned int, unsigned int, unsigned long)",
+      "launch_dims": [
+        2048,
+        1,
+        1,
+        256,
+        1,
+        1
+      ],
+      "count": 7490
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "std::enable_if<!T7, void>::type internal::gemvx::kernel<int, int, __nv_bfloat16, __nv_bfloat16, __nv_bfloat16, float, (bool)0, (bool)1, (bool)0, (bool)0, (int)6, (bool)0, cublasGemvParamsEx<int, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>, float>>(T13)",
+      "launch_dims": [
+        8,
+        1,
+        8,
+        32,
+        2,
+        1
+      ],
+      "count": 30
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "std::enable_if<!T7, void>::type internal::gemvx::kernel<int, int, __nv_bfloat16, __nv_bfloat16, __nv_bfloat16, float, (bool)0, (bool)1, (bool)0, (bool)0, (int)6, (bool)0, cublasGemvParamsEx<int, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>, float>>(T13)",
+      "launch_dims": [
+        16,
+        1,
+        8,
+        16,
+        4,
+        1
+      ],
+      "count": 50
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "std::enable_if<!T7, void>::type internal::gemvx::kernel<int, int, __nv_bfloat16, __nv_bfloat16, __nv_bfloat16, float, (bool)0, (bool)1, (bool)1, (bool)0, (int)6, (bool)0, cublasGemvParamsEx<int, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>, float>>(T13)",
+      "launch_dims": [
+        2,
+        1,
+        8,
+        16,
+        4,
+        1
+      ],
+      "count": 20
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "std::enable_if<!T7, void>::type internal::gemvx::kernel<int, int, __nv_bfloat16, __nv_bfloat16, __nv_bfloat16, float, (bool)0, (bool)1, (bool)1, (bool)0, (int)6, (bool)0, cublasGemvParamsEx<int, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>, float>>(T13)",
+      "launch_dims": [
+        3,
+        1,
+        8,
+        16,
+        4,
+        1
+      ],
+      "count": 20
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "std::enable_if<!T7, void>::type internal::gemvx::kernel<int, int, __nv_bfloat16, __nv_bfloat16, __nv_bfloat16, float, (bool)0, (bool)1, (bool)1, (bool)0, (int)7, (bool)0, cublasGemvParamsEx<int, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>, float>>(T13)",
+      "launch_dims": [
+        64,
+        1,
+        1,
+        32,
+        4,
+        1
+      ],
+      "count": 1120
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "std::enable_if<!T7, void>::type internal::gemvx::kernel<int, int, __nv_bfloat16, __nv_bfloat16, __nv_bfloat16, float, (bool)0, (bool)1, (bool)1, (bool)0, (int)7, (bool)0, cublasGemvParamsEx<int, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>, float>>(T13)",
+      "launch_dims": [
+        128,
+        1,
+        1,
+        32,
+        4,
+        1
+      ],
+      "count": 3384
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "std::enable_if<!T7, void>::type internal::gemvx::kernel<int, int, __nv_bfloat16, __nv_bfloat16, __nv_bfloat16, float, (bool)0, (bool)1, (bool)1, (bool)0, (int)7, (bool)0, cublasGemvParamsEx<int, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>, float>>(T13)",
+      "launch_dims": [
+        256,
+        1,
+        1,
+        16,
+        8,
+        1
+      ],
+      "count": 4264
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "void cublasLt::splitKreduce_kernel<(int)32, (int)16, int, float, __nv_bfloat16, float, __nv_bfloat16, (bool)1, (bool)0, (bool)0>(cublasLt::cublasSplitKParams<T6>, const T4 *, const T5 *, T5 *, const T6 *, const T6 *, const T7 *, const T4 *, T7 *, void *, long, T6 *, int *)",
+      "launch_dims": [
+        8,
+        1,
+        1,
+        32,
+        16,
+        1
+      ],
+      "count": 140
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "void cublasLt::splitKreduce_kernel<(int)32, (int)16, int, float, __nv_bfloat16, float, __nv_bfloat16, (bool)1, (bool)0, (bool)0>(cublasLt::cublasSplitKParams<T6>, const T4 *, const T5 *, T5 *, const T6 *, const T6 *, const T7 *, const T4 *, T7 *, void *, long, T6 *, int *)",
+      "launch_dims": [
+        16,
+        1,
+        1,
+        32,
+        16,
+        1
+      ],
+      "count": 298
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "void cutlass::Kernel2<cutlass_75_wmma_tensorop_bf16_s161616gemm_bf16_32x32_32x1_nn_align1>(T1::Params)",
+      "launch_dims": [
+        8,
+        1,
+        8,
+        128,
+        1,
+        1
+      ],
+      "count": 10
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "void cutlass::Kernel2<cutlass_75_wmma_tensorop_bf16_s161616gemm_bf16_32x32_32x1_tn_align1>(T1::Params)",
+      "launch_dims": [
+        1,
+        1,
+        8,
+        128,
+        1,
+        1
+      ],
+      "count": 10
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "void cutlass::Kernel2<cutlass_80_tensorop_s16816gemm_bf16_64x64_32x6_tn_align8>(T1::Params)",
+      "launch_dims": [
+        8,
+        1,
+        8,
+        128,
+        1,
+        1
+      ],
+      "count": 298
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "void cutlass::Kernel2<cutlass_80_wmma_tensorop_bf16_s161616gemm_bf16_16x16_128x2_tn_align8>(T1::Params)",
+      "launch_dims": [
+        1,
+        1,
+        1,
+        32,
+        1,
+        1
+      ],
+      "count": 60
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "void cutlass::Kernel2<cutlass_80_wmma_tensorop_bf16_s161616gemm_bf16_32x32_128x2_tn_align8>(T1::Params)",
+      "launch_dims": [
+        8,
+        8,
+        1,
+        128,
+        1,
+        1
+      ],
+      "count": 159
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "void cutlass::Kernel2<cutlass_80_wmma_tensorop_bf16_s161616gemm_bf16_32x32_64x1_tn_align8>(T1::Params)",
+      "launch_dims": [
+        8,
+        8,
+        1,
+        128,
+        1,
+        1
+      ],
+      "count": 249
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "void cutlass::Kernel2<cutlass_80_wmma_tensorop_s161616gemm_bf16_16x16_64x1_tn_align8>(T1::Params)",
+      "launch_dims": [
+        8,
+        2,
+        16,
+        32,
+        1,
+        1
+      ],
+      "count": 140
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "void dot_kernel<float, (int)128, (int)0, cublasDotParams<cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<float>>>(T4)",
+      "launch_dims": [
+        10,
+        1,
+        5,
+        128,
+        1,
+        1
+      ],
+      "count": 40
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "void dot_kernel<float, (int)128, (int)0, cublasDotParams<cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<float>>>(T4)",
+      "launch_dims": [
+        18,
+        1,
+        16,
+        128,
+        1,
+        1
+      ],
+      "count": 480
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "void dot_kernel<float, (int)128, (int)0, cublasDotParams<cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<float>>>(T4)",
+      "launch_dims": [
+        32,
+        1,
+        1,
+        128,
+        1,
+        1
+      ],
+      "count": 320
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "void ferrule::cuda::core::full_router_kernel<(int)8, (bool)0, (bool)0>(FerruleCoreRouterArgs, float *)",
+      "launch_dims": [
+        1,
+        1,
+        1,
+        32,
+        1,
+        1
+      ],
+      "count": 320
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "void ferrule::cuda::core::full_router_kernel<(int)8, (bool)0, (bool)0>(FerruleCoreRouterArgs, float *)",
+      "launch_dims": [
+        5,
+        1,
+        1,
+        32,
+        1,
+        1
+      ],
+      "count": 40
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "void gemv2T_kernel_val<int, int, __nv_bfloat16, __nv_bfloat16, __nv_bfloat16, float, (int)128, (int)16, (int)4, (int)4, (bool)0, (bool)0, cublasGemvParamsEx<int, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>, float>>(T13, T6, T6)",
+      "launch_dims": [
+        1,
+        1,
+        8,
+        128,
+        1,
+        1
+      ],
+      "count": 10
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "void gemv2T_kernel_val<int, int, __nv_bfloat16, __nv_bfloat16, __nv_bfloat16, float, (int)128, (int)16, (int)4, (int)4, (bool)0, (bool)0, cublasGemvParamsEx<int, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>, float>>(T13, T6, T6)",
+      "launch_dims": [
+        2,
+        1,
+        8,
+        128,
+        1,
+        1
+      ],
+      "count": 30
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "void gemv2T_kernel_val<int, int, __nv_bfloat16, __nv_bfloat16, __nv_bfloat16, float, (int)128, (int)16, (int)4, (int)4, (bool)0, (bool)0, cublasGemvParamsEx<int, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>, float>>(T13, T6, T6)",
+      "launch_dims": [
+        15520,
+        1,
+        1,
+        128,
+        1,
+        1
+      ],
+      "count": 8
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "void reduce_1Block_kernel<float, (int)128, (int)7, cublasGemvTensorStridedBatched<float>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>>(const T1 *, T1, T4, int, const T1 *, T1, T5, T6, cublasPointerMode_t, cublasLtEpilogue_t, cublasGemvTensorStridedBatched<const biasType<T6::value_type, T1>::type>)",
+      "launch_dims": [
+        1,
+        1,
+        1,
+        128,
+        1,
+        1
+      ],
+      "count": 320
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "void reduce_1Block_kernel<float, (int)128, (int)7, cublasGemvTensorStridedBatched<float>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>>(const T1 *, T1, T4, int, const T1 *, T1, T5, T6, cublasPointerMode_t, cublasLtEpilogue_t, cublasGemvTensorStridedBatched<const biasType<T6::value_type, T1>::type>)",
+      "launch_dims": [
+        1,
+        1,
+        5,
+        128,
+        1,
+        1
+      ],
+      "count": 40
+    },
+    {
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "name": "void reduce_1Block_kernel<float, (int)128, (int)7, cublasGemvTensorStridedBatched<float>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>>(const T1 *, T1, T4, int, const T1 *, T1, T5, T6, cublasPointerMode_t, cublasLtEpilogue_t, cublasGemvTensorStridedBatched<const biasType<T6::value_type, T1>::type>)",
+      "launch_dims": [
+        1,
+        1,
+        16,
+        128,
+        1,
+        1
+      ],
+      "count": 480
+    }
+  ],
+  "launch_signature_digest": "6c4ab5b48e96d67879b22f41f347b23d49735f3d4fb0af77d39f76ba5d1de250",
+  "launches_per_output_token": 10799.0,
+  "launch_normalization_caveat": "Includes 5-token prefill plus request work; not kernels per pure decode step",
+  "all_api_by_name": {
+    "cuEventCreate": {
+      "count": 75218,
+      "duration_ns": 56967622,
+      "returns": {
+        "0": 75218
+      }
+    },
+    "cuEventRecord": {
+      "count": 75218,
+      "duration_ns": 26743367,
+      "returns": {
+        "0": 75218
+      }
+    },
+    "cuCtxSetCurrent": {
+      "count": 116540,
+      "duration_ns": 10275478,
+      "returns": {
+        "0": 116540
+      }
+    },
+    "cuEventQuery": {
+      "count": 62270,
+      "duration_ns": 29618923,
+      "returns": {
+        "0": 58200,
+        "600": 4070
+      }
+    },
+    "cuEventDestroy_v2": {
+      "count": 75218,
+      "duration_ns": 21207263,
+      "returns": {
+        "0": 75218
+      }
+    },
+    "cuMemsetD8Async": {
+      "count": 70116,
+      "duration_ns": 224769598,
+      "returns": {
+        "0": 70116
+      }
+    },
+    "cuEventSynchronize": {
+      "count": 17054,
+      "duration_ns": 136971928,
+      "returns": {
+        "0": 17054
+      }
+    },
+    "cuMemcpyHtoDAsync_v2": {
+      "count": 14244,
+      "duration_ns": 75744246,
+      "returns": {
+        "0": 14244
+      }
+    },
+    "cuStreamSynchronize": {
+      "count": 67866,
+      "duration_ns": 82363410,
+      "returns": {
+        "0": 67866
+      }
+    },
+    "cudaLaunchKernel_v7000": {
+      "count": 84540,
+      "duration_ns": 399498489,
+      "returns": {
+        "0": 84540
+      }
+    },
+    "cuMemcpyDtoDAsync_v2": {
+      "count": 8716,
+      "duration_ns": 62865074,
+      "returns": {
+        "0": 8716
+      }
+    },
+    "cudaMemsetAsync_v3020": {
+      "count": 18,
+      "duration_ns": 61040,
+      "returns": {
+        "0": 18
+      }
+    },
+    "cuKernelGetFunction": {
+      "count": 1852,
+      "duration_ns": 1274162,
+      "returns": {
+        "0": 1852
+      }
+    },
+    "cuLaunchKernel": {
+      "count": 1852,
+      "duration_ns": 8065258,
+      "returns": {
+        "0": 1852
+      }
+    },
+    "cuMemcpyDtoHAsync_v2": {
+      "count": 3324,
+      "duration_ns": 1585431687,
+      "returns": {
+        "0": 3324
+      }
+    },
+    "cudaStreamIsCapturing_v10000": {
+      "count": 180,
+      "duration_ns": 186719,
+      "returns": {
+        "0": 180
+      }
+    },
+    "cuStreamWaitEvent": {
+      "count": 408,
+      "duration_ns": 224783,
+      "returns": {
+        "0": 408
+      }
+    }
+  },
+  "api_table_model_rows": {
+    "CUPTI_ACTIVITY_KIND_RUNTIME": 674634,
+    "CUPTI_ACTIVITY_KIND_DRIVER": null
+  },
+  "api_layers_by_name": {
+    "driver_named": 589896,
+    "runtime_named": 84738
+  },
+  "api_storage_note": "2025.3 exports cu* driver and cuda* runtime calls together in RUNTIME; absent DRIVER table is null, not zero driver calls",
+  "per_uuid_observed_activity_coverage": {
+    "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": {
+      "window_ns": 2490041838,
+      "observed_union_ns": 258355027,
+      "no_exported_interval_ns": 2231686811,
+      "no_exported_fraction": 0.8962447043831558,
+      "gap_count": 91406,
+      "largest_gap_ns": 757462995
+    },
+    "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": {
+      "window_ns": 2490041838,
+      "observed_union_ns": 259713427,
+      "no_exported_interval_ns": 2230328411,
+      "no_exported_fraction": 0.8956991713807501,
+      "gap_count": 91406,
+      "largest_gap_ns": 757316543
+    }
+  },
+  "both_uuid_observed_activity_union": {
+    "window_ns": 2490041838,
+    "observed_union_ns": 418556644,
+    "no_exported_interval_ns": 2071485194,
+    "no_exported_fraction": 0.8319077866032225,
+    "gap_count": 147478,
+    "largest_gap_ns": 757313819
+  },
+  "gap_caveat": "Complement of exported kernel/copy/set intervals only. Not proven GPU idle, CPU cost, CPU collective wait, or wall gain; trace can lose paired rows.",
+  "launch_thread_exported_intervals": [
+    {
+      "globalTid": 284636207047241,
+      "launches": 43196,
+      "cuda_api_coverage": {
+        "window_ns": 2490041838,
+        "observed_union_ns": 1348700192,
+        "no_exported_interval_ns": 1141341646,
+        "no_exported_fraction": 0.4583624373623878,
+        "gap_count": 337220,
+        "largest_gap_ns": 21070546
+      },
+      "launch_interval_coverage": {
+        "window_ns": 2490041838,
+        "observed_union_ns": 199553401,
+        "no_exported_interval_ns": 2290488437,
+        "no_exported_fraction": 0.9198594184424302,
+        "gap_count": 43197,
+        "largest_gap_ns": 763319653
+      },
+      "interpretation": "Uncovered time on a launch-emitting thread is not CPU idle: includes non-CUDA work, waiting, scheduling, logging and missing trace."
+    },
+    {
+      "globalTid": 284636207047242,
+      "launches": 43196,
+      "cuda_api_coverage": {
+        "window_ns": 2490041838,
+        "observed_union_ns": 1373568855,
+        "no_exported_interval_ns": 1116472983,
+        "no_exported_fraction": 0.4483751903127661,
+        "gap_count": 337416,
+        "largest_gap_ns": 21723606
+      },
+      "launch_interval_coverage": {
+        "window_ns": 2490041838,
+        "observed_union_ns": 208010346,
+        "no_exported_interval_ns": 2282031492,
+        "no_exported_fraction": 0.9164631120547462,
+        "gap_count": 43197,
+        "largest_gap_ns": 765632620
+      },
+      "interpretation": "Uncovered time on a launch-emitting thread is not CPU idle: includes non-CUDA work, waiting, scheduling, logging and missing trace."
+    }
+  ],
+  "host_idle_ns": null,
+  "cpu_collective_wait_ns": null,
+  "formal_closure": {
+    "status": "observed_correlation_closed",
+    "observed_correlation_closed": true,
+    "full_trace_accepted": false,
+    "paired_api_activity_loss_excluded": false,
+    "request_window_ns": [
+      2555379178,
+      5045421016
+    ],
+    "counts": {
+      "kernel_observed": 86392,
+      "memcpy_observed": 26284,
+      "memset_observed": 70134,
+      "runtime_api_rows": 674634,
+      "memset_successful_api": 70134,
+      "memcpy_successful_api": 26284,
+      "kernel_successful_api": 86392,
+      "launch_runtime": 84540,
+      "launch_driver": 1852,
+      "kernel_activity_to_api_unique": 86392,
+      "memcpy_activity_to_api_unique": 26284,
+      "memset_activity_to_api_unique": 70134,
+      "memset_api_to_activity_unique": 70134,
+      "memcpy_api_to_activity_unique": 26284,
+      "kernel_api_to_activity_unique": 86392
+    },
+    "issues": [],
+    "same_thread_runtime_overlaps": 0,
+    "overlap_examples": [],
+    "matching_policy": "Full-export (PID, correlation ID), unique successful API, correct activity kind, same request window",
+    "limitation": "Exported-row closure only; simultaneous API/activity loss remains possible. Not a complete-report claim."
+  },
+  "warmup_closure": {
+    "status": "observed_correlation_not_closed",
+    "issue_counts": {
+      "activity_to_api:missing_api_in_full_export:memcpy": 20,
+      "activity_to_api:missing_api_in_full_export:memset": 53,
+      "api_to_activity:missing_activity_in_full_export:kernel": 4
+    }
+  },
+  "full_trace_accepted": false,
+  "diagnostics": [
+    {
+      "timestamp": -379221382587,
+      "timestampType": 1,
+      "source": 2,
+      "severity": 1,
+      "text": "Process was launched by the profiler, see /home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/runs/P1/session/nsys-tmp/nvidia/nsight_systems/quadd_session_10188392/streams/pid_188403_stdout.log and stderr.log for program output",
+      "globalPid": 284635854536704
+    },
+    {
+      "timestamp": -379207061572,
+      "timestampType": 1,
+      "source": 1,
+      "severity": 1,
+      "text": "Common injection library initialized successfully.",
+      "globalPid": 284635854536704
+    },
+    {
+      "timestamp": -379203523351,
+      "timestampType": 1,
+      "source": 1,
+      "severity": 1,
+      "text": "OS runtime libraries injection initialized successfully.",
+      "globalPid": 284635854536704
+    },
+    {
+      "timestamp": -374153277005,
+      "timestampType": 1,
+      "source": 1,
+      "severity": 1,
+      "text": "Common injection library initialized successfully.",
+      "globalPid": 284636206858240
+    },
+    {
+      "timestamp": -374143269518,
+      "timestampType": 1,
+      "source": 1,
+      "severity": 1,
+      "text": "OS runtime libraries injection initialized successfully.",
+      "globalPid": 284636206858240
+    },
+    {
+      "timestamp": -119141014545,
+      "timestampType": 1,
+      "source": 1,
+      "severity": 1,
+      "text": "Buffers holding CUDA trace data will be flushed on CudaProfilerStop() call. See --flush-on-cudaprofilerstop to control this behavior.",
+      "globalPid": 284636206858240
+    },
+    {
+      "timestamp": -119130604292,
+      "timestampType": 1,
+      "source": 1,
+      "severity": 1,
+      "text": "Loaded CUPTI library: /home/admin/luhuanbing.lhb/Ferrule/target/vendor/nsight-systems-cli-2025.3.1/opt/nvidia/nsight-systems-cli/2025.3.1/target-linux-x64/libcupti.so.12.9",
+      "globalPid": 284636206858240
+    },
+    {
+      "timestamp": -118852873273,
+      "timestampType": 1,
+      "source": 1,
+      "severity": 1,
+      "text": "Enabling trace for device graph launch",
+      "globalPid": 284636206858240
+    },
+    {
+      "timestamp": -118852858981,
+      "timestampType": 1,
+      "source": 1,
+      "severity": 1,
+      "text": "CUDA injection initialized successfully.",
+      "globalPid": 284636206858240
+    },
+    {
+      "timestamp": -19531055277,
+      "timestampType": 1,
+      "source": 1,
+      "severity": 1,
+      "text": "NVTX injection initialized successfully.",
+      "globalPid": 284636206858240
+    },
+    {
+      "timestamp": 0,
+      "timestampType": 1,
+      "source": 3,
+      "severity": 1,
+      "text": "Profiling has started.",
+      "globalPid": -144115188075855872
+    },
+    {
+      "timestamp": 2119976609,
+      "timestampType": 2,
+      "source": 3,
+      "severity": 2,
+      "text": "Scheduling information is absent. The thread activity is deduced based on OS runtime libraries traces. This is inaccurate and does not take into account asynchronous interrupts and exception faults.",
+      "globalPid": -144115188075855872
+    },
+    {
+      "timestamp": 2120031257,
+      "timestampType": 2,
+      "source": 3,
+      "severity": 2,
+      "text": "Not all NVTX events might have been collected.",
+      "globalPid": 284636206858240
+    },
+    {
+      "timestamp": 2120034455,
+      "timestampType": 2,
+      "source": 3,
+      "severity": 1,
+      "text": "Number of NVTX events collected: \t1.",
+      "globalPid": 284636206858240
+    },
+    {
+      "timestamp": 2120036760,
+      "timestampType": 2,
+      "source": 3,
+      "severity": 2,
+      "text": "Not all NVTX events might have been collected.",
+      "globalPid": 284635854536704
+    },
+    {
+      "timestamp": 2120037230,
+      "timestampType": 2,
+      "source": 3,
+      "severity": 2,
+      "text": "No NVTX events collected. Does the process use NVTX?",
+      "globalPid": 284635854536704
+    },
+    {
+      "timestamp": 2120039282,
+      "timestampType": 2,
+      "source": 3,
+      "severity": 2,
+      "text": "Not all CUDA events might have been collected.",
+      "globalPid": 284636206858240
+    },
+    {
+      "timestamp": 2120040045,
+      "timestampType": 2,
+      "source": 3,
+      "severity": 1,
+      "text": "Number of CUDA events collected: \t1711883.",
+      "globalPid": 284636206858240
+    },
+    {
+      "timestamp": 2120040664,
+      "timestampType": 2,
+      "source": 3,
+      "severity": 2,
+      "text": "CUDA profiling might have not been started correctly.",
+      "globalPid": 284635854536704
+    },
+    {
+      "timestamp": 2120041283,
+      "timestampType": 2,
+      "source": 3,
+      "severity": 2,
+      "text": "No CUDA events collected. Does the process use CUDA?",
+      "globalPid": 284635854536704
+    },
+    {
+      "timestamp": 2120042779,
+      "timestampType": 2,
+      "source": 3,
+      "severity": 2,
+      "text": "Not all OS runtime libraries events might have been collected.",
+      "globalPid": 284636206858240
+    },
+    {
+      "timestamp": 2120043388,
+      "timestampType": 2,
+      "source": 3,
+      "severity": 1,
+      "text": "Number of OS runtime libraries events collected: \t37243.",
+      "globalPid": 284636206858240
+    },
+    {
+      "timestamp": 2120043938,
+      "timestampType": 2,
+      "source": 3,
+      "severity": 2,
+      "text": "Not all OS runtime libraries events might have been collected.",
+      "globalPid": 284635854536704
+    },
+    {
+      "timestamp": 2120044328,
+      "timestampType": 2,
+      "source": 3,
+      "severity": 1,
+      "text": "Number of OS runtime libraries events collected: \t93.",
+      "globalPid": 284635854536704
+    },
+    {
+      "timestamp": 5171081050,
+      "timestampType": 1,
+      "source": 3,
+      "severity": 1,
+      "text": "Profiling has stopped.",
+      "globalPid": -144115188075855872
+    },
+    {
+      "timestamp": 5249492115,
+      "timestampType": 1,
+      "source": 1,
+      "severity": 1,
+      "text": "Number of CUPTI events produced: \t2006410, CUPTI buffers: 50.",
+      "globalPid": 284636206858240
+    }
+  ],
+  "api_event_sync_launch_counts": {
+    "events": {
+      "runtime": {
+        "create": {
+          "count": 0,
+          "duration_ns": 0,
+          "returns": {},
+          "names": {}
+        },
+        "record": {
+          "count": 0,
+          "duration_ns": 0,
+          "returns": {},
+          "names": {}
+        },
+        "query": {
+          "count": 0,
+          "duration_ns": 0,
+          "returns": {},
+          "names": {}
+        },
+        "destroy": {
+          "count": 0,
+          "duration_ns": 0,
+          "returns": {},
+          "names": {}
+        }
+      },
+      "driver": {
+        "create": {
+          "count": 75218,
+          "duration_ns": 56967622,
+          "returns": {
+            "0": 75218
+          },
+          "names": {
+            "cuEventCreate": 75218
+          }
+        },
+        "record": {
+          "count": 75218,
+          "duration_ns": 26743367,
+          "returns": {
+            "0": 75218
+          },
+          "names": {
+            "cuEventRecord": 75218
+          }
+        },
+        "query": {
+          "count": 62270,
+          "duration_ns": 29618923,
+          "returns": {
+            "0": 58200,
+            "600": 4070
+          },
+          "names": {
+            "cuEventQuery": 62270
+          }
+        },
+        "destroy": {
+          "count": 75218,
+          "duration_ns": 21207263,
+          "returns": {
+            "0": 75218
+          },
+          "names": {
+            "cuEventDestroy_v2": 75218
+          }
+        }
+      }
+    },
+    "synchronization": {
+      "cuEventSynchronize": {
+        "count": 17054,
+        "duration_ns": 136971928
+      },
+      "cuStreamSynchronize": {
+        "count": 67866,
+        "duration_ns": 82363410
+      },
+      "cuStreamWaitEvent": {
+        "count": 408,
+        "duration_ns": 224783
+      }
+    },
+    "launches": {
+      "cudaLaunchKernel_v7000": {
+        "count": 84540,
+        "duration_ns": 399498489
+      },
+      "cuLaunchKernel": {
+        "count": 1852,
+        "duration_ns": 8065258
+      }
+    },
+    "boundary_crossing_calls": []
+  },
+  "copies": {
+    "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": {
+      "kernels": 43196,
+      "kernel_duration_ns": 218042390,
+      "memcpy": {
+        "H2D": {
+          "count": 7122,
+          "bytes": 10940972,
+          "duration_ns": 4081132
+        },
+        "D2D": {
+          "count": 4358,
+          "bytes": 321699840,
+          "duration_ns": 6250931
+        },
+        "D2H": {
+          "count": 1662,
+          "bytes": 20433956,
+          "duration_ns": 3224582
+        }
+      },
+      "memsets": 35067
+    },
+    "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": {
+      "kernels": 43196,
+      "kernel_duration_ns": 218998391,
+      "memcpy": {
+        "H2D": {
+          "count": 7122,
+          "bytes": 10940972,
+          "duration_ns": 4106943
+        },
+        "D2D": {
+          "count": 4358,
+          "bytes": 321699840,
+          "duration_ns": 6304697
+        },
+        "D2H": {
+          "count": 1662,
+          "bytes": 20433956,
+          "duration_ns": 3204571
+        }
+      },
+      "memsets": 35067
+    }
+  },
+  "official_audit": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/retirement-profile-audit.json",
+    "sha256": "5b28eed5fe8095a288b3927cf4ae445da50ef1e75b801a7b6037818a0f8174bf"
+  }
+}

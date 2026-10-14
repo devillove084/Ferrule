@@ -1,0 +1,16 @@
+{
+  "protocol": "tp2-serving-profile-c1",
+  "purpose": "profiling",
+  "status": "stopped",
+  "sole_gpu_owner_granted": true,
+  "owner_note": "Sole GPU owner; fresh profile after CPU import isolation fix; same release 4d40c347; all_eight_instrumentation_probe only; fixed B0/B1/16MiB/1MiB gates; model GPU0/1; no foreign signals",
+  "fairmatch": false,
+  "exact_speedup": null,
+  "slots": [
+    {
+      "id": "P1",
+      "status": "failed"
+    }
+  ],
+  "error": "ValueError: Case failed; preserve failure and all remaining not_run slots"
+}

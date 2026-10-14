@@ -608,11 +608,7 @@ where
                     return Ok(ResidentDriverStep::Blocked);
                 }
                 Err(error) => {
-                    self.speculative_transactions.insert(
-                        transaction,
-                        PendingSpeculativeDriverCohort::Ending(Box::new(pending)),
-                    );
-                    return Err(error);
+                    return self.retain_speculative_ending_error(pending, error);
                 }
                 Ok(TransactionEndProgress::Complete) => {
                     pending.ending = pending.ending.backend_completed(
@@ -664,6 +660,9 @@ where
                 &mut newly_retired,
             )
         };
+        if !newly_retired.is_empty() {
+            self.trace_speculative_end(&pending.actions, transaction, true);
+        }
         if let SpeculativeEnding::BackendCommittedPendingPublish { retirements, .. } =
             &mut pending.ending
         {
@@ -752,6 +751,7 @@ where
         R: ResidentModelRunner,
     {
         let transaction = pending.transaction;
+        self.trace_speculative_end(&pending.actions, transaction, false);
         let mut newly_retired = Vec::new();
         let progress_result = {
             let SpeculativeEnding::BackendAbortedPendingCleanup { progress, .. } =
@@ -862,9 +862,20 @@ where
 
     pub(super) fn retain_speculative_ending_error<T>(
         &mut self,
-        pending: PendingSpeculativeEndingDriverCohort<R::SequenceState>,
+        mut pending: PendingSpeculativeEndingDriverCohort<R::SequenceState>,
         error: Error,
     ) -> Result<T> {
+        let error = match &mut pending.ending {
+            SpeculativeEnding::Abort {
+                failure: Some((primary, _)),
+                ..
+            }
+            | SpeculativeEnding::BackendAbortedPendingCleanup {
+                failure: Some((primary, _)),
+                ..
+            } => primary.retain_cleanup("speculative transaction abort", error),
+            _ => error,
+        };
         self.speculative_transactions.insert(
             pending.transaction,
             PendingSpeculativeDriverCohort::Ending(Box::new(pending)),
@@ -1177,17 +1188,16 @@ where
         pending: &mut PendingNativeProposalCohort<R::SequenceState>,
     ) {
         for slot in &pending.slots {
-            if let NativeProposalSlotStatus::Waiting(waiting) = &slot.status {
-                if !self.continuations.contains(waiting.continuation()) {
-                    if let Err(error) = self.register_pending_progress(
-                        waiting,
-                        crate::scheduling::ResourceDemand::required(
-                            ExecutionPhase::SpeculativeProposal,
-                        ),
-                    ) {
-                        pending.abort_cause.get_or_insert(error);
-                    }
-                }
+            if let NativeProposalSlotStatus::Waiting(waiting) = &slot.status
+                && !self.continuations.contains(waiting.continuation())
+                && let Err(error) = self.register_pending_progress(
+                    waiting,
+                    crate::scheduling::ResourceDemand::required(
+                        ExecutionPhase::SpeculativeProposal,
+                    ),
+                )
+            {
+                pending.abort_cause.get_or_insert(error);
             }
         }
     }
@@ -1584,6 +1594,7 @@ where
                 unreachable!("verification preparation cannot activate backend ownership")
             }
         };
+        self.trace_speculative_input(&actions, verification.batch(), transaction);
         let demand =
             crate::scheduling::ResourceDemand::required(ExecutionPhase::SpeculativeVerification);
         if let Err(error) =

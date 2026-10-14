@@ -1,0 +1,21 @@
+{
+  "scope": "all_eight_instrumentation_probe",
+  "granted": true,
+  "note": "User explicit sole GPU owner authorization 2026-10-11: exactly one short Nsight 2025.3.1 collector-first profile each of frozen BEFORE9ef and AFTER7e1c; all eight instrumentation locks, B0 stable B1 model UUID0/1 cleanup B0, 16MiB cap and 1MiB relative tolerance; info/rankperf off; no foreign signals, no smoke rerun or benchmark",
+  "gpu_uuids": [
+    "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f",
+    "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6",
+    "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d",
+    "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+    "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86",
+    "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+    "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011",
+    "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685"
+  ],
+  "model_gpu_uuids": [
+    "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+    "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9"
+  ],
+  "run_id": "allocator-v3-profile-after-20261011-01",
+  "prepared_sha256": "b27764bc3ab9b1e98ab974cbd731a9637c68fee2f5d89049698da1f2f358e349"
+}

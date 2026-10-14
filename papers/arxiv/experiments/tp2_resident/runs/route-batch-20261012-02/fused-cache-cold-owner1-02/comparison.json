@@ -1,0 +1,85 @@
+{
+  "schema": "ferrule.paper.routed-fusion-unobserved-logits.v1",
+  "gate": "fused-cache-cold-owner1-02",
+  "oracle_manifest_sha256": "a67492ddb2a5a3d4a4f40abc1ca92c672f74605238d2f06ea62827f17cda3d54",
+  "calls": [
+    {
+      "case": "call-00",
+      "stage": "call",
+      "input_token_ids": [
+        9419
+      ],
+      "actual": {
+        "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/route-batch-20261012-02/fused-cache-cold-owner1-02/call-00.call.actual.f32le",
+        "sha256": "9bf6dff82a46e7b6aca7dc72d4112248f13d4c89c39260e42d37e27921765786"
+      },
+      "compared": 248320,
+      "failures": 0,
+      "nonfinite": 0,
+      "max_abs": 0.0,
+      "rmse": 0.0,
+      "greedy": 11,
+      "all_exact": true
+    },
+    {
+      "case": "call-01",
+      "stage": "call",
+      "input_token_ids": [
+        11
+      ],
+      "actual": {
+        "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/route-batch-20261012-02/fused-cache-cold-owner1-02/call-01.call.actual.f32le",
+        "sha256": "a247ba2a4f8c24e51a5d7bef9f37cd12e897155e4fed96d0a2ca91b041cb92f3"
+      },
+      "compared": 248320,
+      "failures": 0,
+      "nonfinite": 0,
+      "max_abs": 0.0,
+      "rmse": 0.0,
+      "greedy": 353,
+      "all_exact": true
+    },
+    {
+      "case": "call-02",
+      "stage": "call",
+      "input_token_ids": [
+        760,
+        6511,
+        314,
+        9338,
+        369
+      ],
+      "actual": {
+        "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/route-batch-20261012-02/fused-cache-cold-owner1-02/call-02.call.actual.f32le",
+        "sha256": "46438456e938ee9011ee954034f7e55734488213637827f763dccc1279d4459a"
+      },
+      "compared": 1241600,
+      "failures": 0,
+      "nonfinite": 0,
+      "max_abs": 0.0,
+      "rmse": 0.0,
+      "greedy": 11751,
+      "all_exact": true
+    },
+    {
+      "case": "call-03",
+      "stage": "call",
+      "input_token_ids": [
+        11751
+      ],
+      "actual": {
+        "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/route-batch-20261012-02/fused-cache-cold-owner1-02/call-03.call.actual.f32le",
+        "sha256": "d911572d21929d9519f302b6634fd505f190f49ab1880a3edfa074ab9bf2d6a9"
+      },
+      "compared": 248320,
+      "failures": 0,
+      "nonfinite": 0,
+      "max_abs": 0.0,
+      "rmse": 0.0,
+      "greedy": 13,
+      "all_exact": true
+    }
+  ],
+  "passed": true,
+  "internal_tensor_comparison": false
+}

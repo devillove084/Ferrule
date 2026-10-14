@@ -1,0 +1,12 @@
+
+NOTICE: Existing SQLite export found: /home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-collector-profile-20261009-002/runs/P1/session/nsight/nsys.sqlite
+        It is assumed file was previously exported from: /home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-collector-profile-20261009-002/runs/P1/session/nsight/nsys.nsys-rep
+        Consider using --force-export=true if needed.
+
+Processing [/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-optimized-collector-profile-20261009-002/runs/P1/session/nsight/nsys.sqlite] with [/opt/nvidia/nsight-systems/2026.1.3/target-linux-x64/reports/cuda_gpu_mem_time_sum.py]... 
+Time (%),Total Time (ns),Count,Avg (ns),Med (ns),Min (ns),Max (ns),StdDev (ns),Operation
+66.4,108136298,139869,773.1,672.0,448,4512,356.9,[CUDA memset]
+15.3,24990872,17361,1439.5,1280.0,1248,4224,610.8,[CUDA memcpy Device-to-Device]
+10.3,16755885,28412,589.7,480.0,448,189791,2235.3,[CUDA memcpy Host-to-Device]
+8.0,12993104,6645,1955.3,1568.0,1376,87808,2313.2,[CUDA memcpy Device-to-Host]
+

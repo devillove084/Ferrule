@@ -1,0 +1,16 @@
+{
+  "selector": "cuda::providers::bf16_gemmex::mixed_decode_reuse_tests::mixed_decode_pair_rejections",
+  "binary_sha256": "a6f5fb2bade4f085fcfc9c91c2745a5adaa4393fddd9fb76e8e64b219e503b0b",
+  "source_digest": "561a7b47a538b7c96d72ca3c4790b05f472643e876219847fdf7a962bd84faa9",
+  "assertions_passed": true,
+  "cache_values": "source-pinned model assertions; no raw per-step counters exported",
+  "assertion_contract": null,
+  "gpu_memory": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-indexed-lru-20261010-01/backend-preflight/resources.json",
+    "sha256": "2b629511825435ee582d84fdc262bbd587b7a1c44e4dc68988baab74dd56f85b"
+  },
+  "log": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-indexed-lru-20261010-01/backend-preflight/test.log",
+    "sha256": "91d5ce1eb770d68846a51106568f796f912623a6ee1b159d92913a94de7cc22e"
+  }
+}

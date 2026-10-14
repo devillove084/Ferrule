@@ -131,6 +131,15 @@ __global__ void data_kernel(FerruleCoreDataArgs args) {
     pointer<float>(args.output1)[index] = const_pointer<float>(args.input0)[source + args.width];
     return;
   }
+  if (args.kind == FERRULE_CORE_DATA_SIGMOID_GATE_BF16) {
+    const uint64_t gate_index = (args.flags & FERRULE_CORE_GATE_ROW_BROADCAST)
+                                    ? index / args.width : index;
+    const float gate = bf16_value(const_pointer<uint16_t>(args.input1)[gate_index]);
+    const float activated = bf16_round(1.0f / (1.0f + expf(-gate)));
+    const float input = bf16_value(const_pointer<uint16_t>(args.input0)[index]);
+    pointer<uint16_t>(args.output0)[index] = bf16_rne(__fmul_rn(input, activated));
+    return;
+  }
   if (args.kind == FERRULE_CORE_DATA_SIGMOID_GATE ||
       args.kind == FERRULE_CORE_DATA_SILU_GATE) {
     const uint64_t gate_index = (args.flags & FERRULE_CORE_GATE_ROW_BROADCAST)

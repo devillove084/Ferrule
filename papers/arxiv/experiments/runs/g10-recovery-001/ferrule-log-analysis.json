@@ -1,0 +1,1864 @@
+{
+  "schema": "ferrule.paper.performance-analysis.v1",
+  "source": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/g10-exclusive-001/feasibility-ferrule/server.log",
+  "instrumentation": "not_observed",
+  "diagnostics": {
+    "non_json_lines": 9,
+    "other_events": 3
+  },
+  "aggregate_identity_valid": true,
+  "invocations": [],
+  "worker_requests": [],
+  "request_events": [],
+  "invocation_summary": {
+    "invocations": 0,
+    "rows": {
+      "observations": 0,
+      "known": 0,
+      "unknown": 0,
+      "total": null,
+      "observed_sum": null
+    },
+    "metrics": {
+      "host_invocation_us": {
+        "observations": 0,
+        "known": 0,
+        "unknown": 0,
+        "total": null,
+        "observed_sum": null,
+        "per_row": null
+      },
+      "facade_kernel_launches": {
+        "observations": 0,
+        "known": 0,
+        "unknown": 0,
+        "total": null,
+        "observed_sum": null,
+        "per_row": null
+      },
+      "h2d_copies": {
+        "observations": 0,
+        "known": 0,
+        "unknown": 0,
+        "total": null,
+        "observed_sum": null,
+        "per_row": null
+      },
+      "h2d_bytes": {
+        "observations": 0,
+        "known": 0,
+        "unknown": 0,
+        "total": null,
+        "observed_sum": null,
+        "per_row": null
+      },
+      "d2h_copies": {
+        "observations": 0,
+        "known": 0,
+        "unknown": 0,
+        "total": null,
+        "observed_sum": null,
+        "per_row": null
+      },
+      "d2h_bytes": {
+        "observations": 0,
+        "known": 0,
+        "unknown": 0,
+        "total": null,
+        "observed_sum": null,
+        "per_row": null
+      },
+      "artifact_uploads": {
+        "observations": 0,
+        "known": 0,
+        "unknown": 0,
+        "total": null,
+        "observed_sum": null,
+        "per_row": null
+      },
+      "artifact_upload_bytes": {
+        "observations": 0,
+        "known": 0,
+        "unknown": 0,
+        "total": null,
+        "observed_sum": null,
+        "per_row": null
+      },
+      "allocation_attempts": {
+        "observations": 0,
+        "known": 0,
+        "unknown": 0,
+        "total": null,
+        "observed_sum": null,
+        "per_row": null
+      },
+      "allocation_bytes": {
+        "observations": 0,
+        "known": 0,
+        "unknown": 0,
+        "total": null,
+        "observed_sum": null,
+        "per_row": null
+      },
+      "facade_stream_syncs": {
+        "observations": 0,
+        "known": 0,
+        "unknown": 0,
+        "total": null,
+        "observed_sum": null,
+        "per_row": null
+      },
+      "facade_stream_sync_failures": {
+        "observations": 0,
+        "known": 0,
+        "unknown": 0,
+        "total": null,
+        "observed_sum": null,
+        "per_row": null
+      },
+      "expert_hits": {
+        "observations": 0,
+        "known": 0,
+        "unknown": 0,
+        "total": null,
+        "observed_sum": null,
+        "per_row": null
+      },
+      "expert_uploads": {
+        "observations": 0,
+        "known": 0,
+        "unknown": 0,
+        "total": null,
+        "observed_sum": null,
+        "per_row": null
+      },
+      "expert_evictions": {
+        "observations": 0,
+        "known": 0,
+        "unknown": 0,
+        "total": null,
+        "observed_sum": null,
+        "per_row": null
+      },
+      "checkpoint_read_calls": {
+        "observations": 0,
+        "known": 0,
+        "unknown": 0,
+        "total": null,
+        "observed_sum": null,
+        "per_row": null
+      },
+      "checkpoint_read_bytes": {
+        "observations": 0,
+        "known": 0,
+        "unknown": 0,
+        "total": null,
+        "observed_sum": null,
+        "per_row": null
+      },
+      "checkpoint_source_checks": {
+        "observations": 0,
+        "known": 0,
+        "unknown": 0,
+        "total": null,
+        "observed_sum": null,
+        "per_row": null
+      },
+      "checkpoint_path_metadata_calls": {
+        "observations": 0,
+        "known": 0,
+        "unknown": 0,
+        "total": null,
+        "observed_sum": null,
+        "per_row": null
+      },
+      "checkpoint_handle_metadata_calls": {
+        "observations": 0,
+        "known": 0,
+        "unknown": 0,
+        "total": null,
+        "observed_sum": null,
+        "per_row": null
+      },
+      "consumer_event_record_sync_calls": {
+        "observations": 0,
+        "known": 0,
+        "unknown": 0,
+        "total": null,
+        "observed_sum": null,
+        "per_row": null
+      },
+      "consumer_event_record_sync_failures": {
+        "observations": 0,
+        "known": 0,
+        "unknown": 0,
+        "total": null,
+        "observed_sum": null,
+        "per_row": null
+      },
+      "consumer_event_record_sync_host_us": {
+        "observations": 0,
+        "known": 0,
+        "unknown": 0,
+        "total": null,
+        "observed_sum": null,
+        "per_row": null
+      },
+      "semantic_compute_sync_calls": {
+        "observations": 0,
+        "known": 0,
+        "unknown": 0,
+        "total": null,
+        "observed_sum": null,
+        "per_row": null
+      },
+      "semantic_compute_sync_failures": {
+        "observations": 0,
+        "known": 0,
+        "unknown": 0,
+        "total": null,
+        "observed_sum": null,
+        "per_row": null
+      },
+      "semantic_compute_sync_host_us": {
+        "observations": 0,
+        "known": 0,
+        "unknown": 0,
+        "total": null,
+        "observed_sum": null,
+        "per_row": null
+      },
+      "semantic_upload_sync_calls": {
+        "observations": 0,
+        "known": 0,
+        "unknown": 0,
+        "total": null,
+        "observed_sum": null,
+        "per_row": null
+      },
+      "semantic_upload_sync_failures": {
+        "observations": 0,
+        "known": 0,
+        "unknown": 0,
+        "total": null,
+        "observed_sum": null,
+        "per_row": null
+      },
+      "semantic_upload_sync_host_us": {
+        "observations": 0,
+        "known": 0,
+        "unknown": 0,
+        "total": null,
+        "observed_sum": null,
+        "per_row": null
+      },
+      "allocation_host_us": {
+        "observations": 0,
+        "known": 0,
+        "unknown": 0,
+        "total": null,
+        "observed_sum": null,
+        "per_row": null
+      }
+    },
+    "gauges": {
+      "expert_resident_entries": {
+        "observations": 0,
+        "known": 0,
+        "unknown": 0,
+        "max": null,
+        "last": null,
+        "observed_max": null
+      },
+      "expert_resident_bytes": {
+        "observations": 0,
+        "known": 0,
+        "unknown": 0,
+        "max": null,
+        "last": null,
+        "observed_max": null
+      },
+      "expert_pending_upload_bytes": {
+        "observations": 0,
+        "known": 0,
+        "unknown": 0,
+        "max": null,
+        "last": null,
+        "observed_max": null
+      },
+      "expert_scratch_bytes": {
+        "observations": 0,
+        "known": 0,
+        "unknown": 0,
+        "max": null,
+        "last": null,
+        "observed_max": null
+      },
+      "expert_owner_peak_bytes": {
+        "observations": 0,
+        "known": 0,
+        "unknown": 0,
+        "max": null,
+        "last": null,
+        "observed_max": null
+      },
+      "expert_unknown_quarantine_bytes": {
+        "observations": 0,
+        "known": 0,
+        "unknown": 0,
+        "max": null,
+        "last": null,
+        "observed_max": null
+      }
+    },
+    "status_counts": {}
+  },
+  "phases": {
+    "prefill": {
+      "invocations": 0,
+      "rows": {
+        "observations": 0,
+        "known": 0,
+        "unknown": 0,
+        "total": null,
+        "observed_sum": null
+      },
+      "metrics": {
+        "host_invocation_us": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "facade_kernel_launches": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "h2d_copies": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "h2d_bytes": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "d2h_copies": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "d2h_bytes": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "artifact_uploads": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "artifact_upload_bytes": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "allocation_attempts": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "allocation_bytes": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "facade_stream_syncs": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "facade_stream_sync_failures": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "expert_hits": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "expert_uploads": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "expert_evictions": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "checkpoint_read_calls": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "checkpoint_read_bytes": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "checkpoint_source_checks": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "checkpoint_path_metadata_calls": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "checkpoint_handle_metadata_calls": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "consumer_event_record_sync_calls": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "consumer_event_record_sync_failures": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "consumer_event_record_sync_host_us": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "semantic_compute_sync_calls": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "semantic_compute_sync_failures": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "semantic_compute_sync_host_us": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "semantic_upload_sync_calls": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "semantic_upload_sync_failures": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "semantic_upload_sync_host_us": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "allocation_host_us": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        }
+      },
+      "gauges": {
+        "expert_resident_entries": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "max": null,
+          "last": null,
+          "observed_max": null
+        },
+        "expert_resident_bytes": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "max": null,
+          "last": null,
+          "observed_max": null
+        },
+        "expert_pending_upload_bytes": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "max": null,
+          "last": null,
+          "observed_max": null
+        },
+        "expert_scratch_bytes": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "max": null,
+          "last": null,
+          "observed_max": null
+        },
+        "expert_owner_peak_bytes": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "max": null,
+          "last": null,
+          "observed_max": null
+        },
+        "expert_unknown_quarantine_bytes": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "max": null,
+          "last": null,
+          "observed_max": null
+        }
+      },
+      "status_counts": {}
+    },
+    "decode": {
+      "invocations": 0,
+      "rows": {
+        "observations": 0,
+        "known": 0,
+        "unknown": 0,
+        "total": null,
+        "observed_sum": null
+      },
+      "metrics": {
+        "host_invocation_us": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "facade_kernel_launches": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "h2d_copies": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "h2d_bytes": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "d2h_copies": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "d2h_bytes": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "artifact_uploads": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "artifact_upload_bytes": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "allocation_attempts": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "allocation_bytes": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "facade_stream_syncs": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "facade_stream_sync_failures": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "expert_hits": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "expert_uploads": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "expert_evictions": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "checkpoint_read_calls": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "checkpoint_read_bytes": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "checkpoint_source_checks": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "checkpoint_path_metadata_calls": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "checkpoint_handle_metadata_calls": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "consumer_event_record_sync_calls": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "consumer_event_record_sync_failures": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "consumer_event_record_sync_host_us": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "semantic_compute_sync_calls": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "semantic_compute_sync_failures": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "semantic_compute_sync_host_us": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "semantic_upload_sync_calls": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "semantic_upload_sync_failures": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "semantic_upload_sync_host_us": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "allocation_host_us": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        }
+      },
+      "gauges": {
+        "expert_resident_entries": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "max": null,
+          "last": null,
+          "observed_max": null
+        },
+        "expert_resident_bytes": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "max": null,
+          "last": null,
+          "observed_max": null
+        },
+        "expert_pending_upload_bytes": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "max": null,
+          "last": null,
+          "observed_max": null
+        },
+        "expert_scratch_bytes": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "max": null,
+          "last": null,
+          "observed_max": null
+        },
+        "expert_owner_peak_bytes": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "max": null,
+          "last": null,
+          "observed_max": null
+        },
+        "expert_unknown_quarantine_bytes": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "max": null,
+          "last": null,
+          "observed_max": null
+        }
+      },
+      "status_counts": {}
+    },
+    "mixed": {
+      "invocations": 0,
+      "rows": {
+        "observations": 0,
+        "known": 0,
+        "unknown": 0,
+        "total": null,
+        "observed_sum": null
+      },
+      "metrics": {
+        "host_invocation_us": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "facade_kernel_launches": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "h2d_copies": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "h2d_bytes": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "d2h_copies": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "d2h_bytes": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "artifact_uploads": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "artifact_upload_bytes": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "allocation_attempts": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "allocation_bytes": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "facade_stream_syncs": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "facade_stream_sync_failures": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "expert_hits": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "expert_uploads": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "expert_evictions": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "checkpoint_read_calls": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "checkpoint_read_bytes": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "checkpoint_source_checks": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "checkpoint_path_metadata_calls": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "checkpoint_handle_metadata_calls": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "consumer_event_record_sync_calls": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "consumer_event_record_sync_failures": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "consumer_event_record_sync_host_us": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "semantic_compute_sync_calls": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "semantic_compute_sync_failures": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "semantic_compute_sync_host_us": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "semantic_upload_sync_calls": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "semantic_upload_sync_failures": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "semantic_upload_sync_host_us": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "allocation_host_us": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        }
+      },
+      "gauges": {
+        "expert_resident_entries": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "max": null,
+          "last": null,
+          "observed_max": null
+        },
+        "expert_resident_bytes": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "max": null,
+          "last": null,
+          "observed_max": null
+        },
+        "expert_pending_upload_bytes": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "max": null,
+          "last": null,
+          "observed_max": null
+        },
+        "expert_scratch_bytes": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "max": null,
+          "last": null,
+          "observed_max": null
+        },
+        "expert_owner_peak_bytes": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "max": null,
+          "last": null,
+          "observed_max": null
+        },
+        "expert_unknown_quarantine_bytes": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "max": null,
+          "last": null,
+          "observed_max": null
+        }
+      },
+      "status_counts": {}
+    },
+    "unknown": {
+      "invocations": 0,
+      "rows": {
+        "observations": 0,
+        "known": 0,
+        "unknown": 0,
+        "total": null,
+        "observed_sum": null
+      },
+      "metrics": {
+        "host_invocation_us": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "facade_kernel_launches": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "h2d_copies": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "h2d_bytes": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "d2h_copies": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "d2h_bytes": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "artifact_uploads": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "artifact_upload_bytes": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "allocation_attempts": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "allocation_bytes": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "facade_stream_syncs": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "facade_stream_sync_failures": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "expert_hits": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "expert_uploads": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "expert_evictions": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "checkpoint_read_calls": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "checkpoint_read_bytes": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "checkpoint_source_checks": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "checkpoint_path_metadata_calls": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "checkpoint_handle_metadata_calls": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "consumer_event_record_sync_calls": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "consumer_event_record_sync_failures": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "consumer_event_record_sync_host_us": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "semantic_compute_sync_calls": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "semantic_compute_sync_failures": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "semantic_compute_sync_host_us": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "semantic_upload_sync_calls": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "semantic_upload_sync_failures": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "semantic_upload_sync_host_us": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        },
+        "allocation_host_us": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "total": null,
+          "observed_sum": null,
+          "per_row": null
+        }
+      },
+      "gauges": {
+        "expert_resident_entries": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "max": null,
+          "last": null,
+          "observed_max": null
+        },
+        "expert_resident_bytes": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "max": null,
+          "last": null,
+          "observed_max": null
+        },
+        "expert_pending_upload_bytes": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "max": null,
+          "last": null,
+          "observed_max": null
+        },
+        "expert_scratch_bytes": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "max": null,
+          "last": null,
+          "observed_max": null
+        },
+        "expert_owner_peak_bytes": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "max": null,
+          "last": null,
+          "observed_max": null
+        },
+        "expert_unknown_quarantine_bytes": {
+          "observations": 0,
+          "known": 0,
+          "unknown": 0,
+          "max": null,
+          "last": null,
+          "observed_max": null
+        }
+      },
+      "status_counts": {}
+    }
+  },
+  "completed_invocation_summary": {
+    "invocations": 0,
+    "rows": {
+      "observations": 0,
+      "known": 0,
+      "unknown": 0,
+      "total": null,
+      "observed_sum": null
+    },
+    "metrics": {
+      "host_invocation_us": {
+        "observations": 0,
+        "known": 0,
+        "unknown": 0,
+        "total": null,
+        "observed_sum": null,
+        "per_row": null
+      },
+      "facade_kernel_launches": {
+        "observations": 0,
+        "known": 0,
+        "unknown": 0,
+        "total": null,
+        "observed_sum": null,
+        "per_row": null
+      },
+      "h2d_copies": {
+        "observations": 0,
+        "known": 0,
+        "unknown": 0,
+        "total": null,
+        "observed_sum": null,
+        "per_row": null
+      },
+      "h2d_bytes": {
+        "observations": 0,
+        "known": 0,
+        "unknown": 0,
+        "total": null,
+        "observed_sum": null,
+        "per_row": null
+      },
+      "d2h_copies": {
+        "observations": 0,
+        "known": 0,
+        "unknown": 0,
+        "total": null,
+        "observed_sum": null,
+        "per_row": null
+      },
+      "d2h_bytes": {
+        "observations": 0,
+        "known": 0,
+        "unknown": 0,
+        "total": null,
+        "observed_sum": null,
+        "per_row": null
+      },
+      "artifact_uploads": {
+        "observations": 0,
+        "known": 0,
+        "unknown": 0,
+        "total": null,
+        "observed_sum": null,
+        "per_row": null
+      },
+      "artifact_upload_bytes": {
+        "observations": 0,
+        "known": 0,
+        "unknown": 0,
+        "total": null,
+        "observed_sum": null,
+        "per_row": null
+      },
+      "allocation_attempts": {
+        "observations": 0,
+        "known": 0,
+        "unknown": 0,
+        "total": null,
+        "observed_sum": null,
+        "per_row": null
+      },
+      "allocation_bytes": {
+        "observations": 0,
+        "known": 0,
+        "unknown": 0,
+        "total": null,
+        "observed_sum": null,
+        "per_row": null
+      },
+      "facade_stream_syncs": {
+        "observations": 0,
+        "known": 0,
+        "unknown": 0,
+        "total": null,
+        "observed_sum": null,
+        "per_row": null
+      },
+      "facade_stream_sync_failures": {
+        "observations": 0,
+        "known": 0,
+        "unknown": 0,
+        "total": null,
+        "observed_sum": null,
+        "per_row": null
+      },
+      "expert_hits": {
+        "observations": 0,
+        "known": 0,
+        "unknown": 0,
+        "total": null,
+        "observed_sum": null,
+        "per_row": null
+      },
+      "expert_uploads": {
+        "observations": 0,
+        "known": 0,
+        "unknown": 0,
+        "total": null,
+        "observed_sum": null,
+        "per_row": null
+      },
+      "expert_evictions": {
+        "observations": 0,
+        "known": 0,
+        "unknown": 0,
+        "total": null,
+        "observed_sum": null,
+        "per_row": null
+      },
+      "checkpoint_read_calls": {
+        "observations": 0,
+        "known": 0,
+        "unknown": 0,
+        "total": null,
+        "observed_sum": null,
+        "per_row": null
+      },
+      "checkpoint_read_bytes": {
+        "observations": 0,
+        "known": 0,
+        "unknown": 0,
+        "total": null,
+        "observed_sum": null,
+        "per_row": null
+      },
+      "checkpoint_source_checks": {
+        "observations": 0,
+        "known": 0,
+        "unknown": 0,
+        "total": null,
+        "observed_sum": null,
+        "per_row": null
+      },
+      "checkpoint_path_metadata_calls": {
+        "observations": 0,
+        "known": 0,
+        "unknown": 0,
+        "total": null,
+        "observed_sum": null,
+        "per_row": null
+      },
+      "checkpoint_handle_metadata_calls": {
+        "observations": 0,
+        "known": 0,
+        "unknown": 0,
+        "total": null,
+        "observed_sum": null,
+        "per_row": null
+      },
+      "consumer_event_record_sync_calls": {
+        "observations": 0,
+        "known": 0,
+        "unknown": 0,
+        "total": null,
+        "observed_sum": null,
+        "per_row": null
+      },
+      "consumer_event_record_sync_failures": {
+        "observations": 0,
+        "known": 0,
+        "unknown": 0,
+        "total": null,
+        "observed_sum": null,
+        "per_row": null
+      },
+      "consumer_event_record_sync_host_us": {
+        "observations": 0,
+        "known": 0,
+        "unknown": 0,
+        "total": null,
+        "observed_sum": null,
+        "per_row": null
+      },
+      "semantic_compute_sync_calls": {
+        "observations": 0,
+        "known": 0,
+        "unknown": 0,
+        "total": null,
+        "observed_sum": null,
+        "per_row": null
+      },
+      "semantic_compute_sync_failures": {
+        "observations": 0,
+        "known": 0,
+        "unknown": 0,
+        "total": null,
+        "observed_sum": null,
+        "per_row": null
+      },
+      "semantic_compute_sync_host_us": {
+        "observations": 0,
+        "known": 0,
+        "unknown": 0,
+        "total": null,
+        "observed_sum": null,
+        "per_row": null
+      },
+      "semantic_upload_sync_calls": {
+        "observations": 0,
+        "known": 0,
+        "unknown": 0,
+        "total": null,
+        "observed_sum": null,
+        "per_row": null
+      },
+      "semantic_upload_sync_failures": {
+        "observations": 0,
+        "known": 0,
+        "unknown": 0,
+        "total": null,
+        "observed_sum": null,
+        "per_row": null
+      },
+      "semantic_upload_sync_host_us": {
+        "observations": 0,
+        "known": 0,
+        "unknown": 0,
+        "total": null,
+        "observed_sum": null,
+        "per_row": null
+      },
+      "allocation_host_us": {
+        "observations": 0,
+        "known": 0,
+        "unknown": 0,
+        "total": null,
+        "observed_sum": null,
+        "per_row": null
+      }
+    },
+    "gauges": {
+      "expert_resident_entries": {
+        "observations": 0,
+        "known": 0,
+        "unknown": 0,
+        "max": null,
+        "last": null,
+        "observed_max": null
+      },
+      "expert_resident_bytes": {
+        "observations": 0,
+        "known": 0,
+        "unknown": 0,
+        "max": null,
+        "last": null,
+        "observed_max": null
+      },
+      "expert_pending_upload_bytes": {
+        "observations": 0,
+        "known": 0,
+        "unknown": 0,
+        "max": null,
+        "last": null,
+        "observed_max": null
+      },
+      "expert_scratch_bytes": {
+        "observations": 0,
+        "known": 0,
+        "unknown": 0,
+        "max": null,
+        "last": null,
+        "observed_max": null
+      },
+      "expert_owner_peak_bytes": {
+        "observations": 0,
+        "known": 0,
+        "unknown": 0,
+        "max": null,
+        "last": null,
+        "observed_max": null
+      },
+      "expert_unknown_quarantine_bytes": {
+        "observations": 0,
+        "known": 0,
+        "unknown": 0,
+        "max": null,
+        "last": null,
+        "observed_max": null
+      }
+    },
+    "status_counts": {}
+  },
+  "first_observed_prefill": null,
+  "request_cost_attribution": null,
+  "shared_cost_scope": "one transaction/batch invocation; no request-level allocation",
+  "caveats": [
+    "One source must contain one server lifetime; IDs are not global across restarts.",
+    "Invocation costs are shared batch totals, never copied to each request.",
+    "Counters are facade deltas, not native kernel counts; read bytes are not physical disk bytes.",
+    "Proof timers are host wall time around existing calls, not device-kernel timings.",
+    "Allocation counters/bytes are available; allocation duration is not measured.",
+    "Cache owner peak is a cumulative gauge, not an invocation peak or summed byte cost.",
+    "Worker successful channel-emission intervals differ from client-visible SSE TPOT proxies.",
+    "Missing counters, NaN, malformed values and reset deltas remain unknown; observed_sum is partial.",
+    "Log absence does not prove zero work, disabled instrumentation, or complete capture."
+  ],
+  "client": {
+    "scope": "client_SSE_not_worker_emission",
+    "requests": [
+      {
+        "run_index": 0,
+        "request_index": 0,
+        "status": "success",
+        "actual_input_tokens": 1,
+        "actual_output_tokens": 2,
+        "ttft_seconds": 0.6268567871302366,
+        "request_e2e_seconds": 1.7686595972627401,
+        "mean_tpot_usage_proxy_seconds": 0.5800707284361124,
+        "exact_token_tpot_seconds": null
+      }
+    ],
+    "joined_to_worker_requests": false
+  }
+}

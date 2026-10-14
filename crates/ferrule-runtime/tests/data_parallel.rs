@@ -531,9 +531,9 @@ fn shutdown_joins_every_owner_despite_errors_panics_and_undrained_completions() 
 }
 
 #[test]
-fn initialization_error_or_panic_joins_previously_created_workers() {
+fn initialization_error_or_panic_joins_all_started_workers() {
     for factory_failure in 0..3 {
-        let (dropped, drops) = mpsc::sync_channel(1);
+        let (dropped, drops) = mpsc::sync_channel(2);
         let result = Pool::new(config(3, 1, 1), move |rank_id| {
             if rank_id == rank(1) {
                 match factory_failure {
@@ -543,7 +543,6 @@ fn initialization_error_or_panic_joins_previously_created_workers() {
                     _ => unreachable!(),
                 }
             }
-            assert_eq!(rank_id, rank(0), "must stop creating after failure");
             let mut worker = LocalWorker::new(rank_id, dropped.clone());
             worker.fail_shutdown = true;
             Ok(worker)
@@ -552,7 +551,7 @@ fn initialization_error_or_panic_joins_previously_created_workers() {
             Err(BuildError::Owners(failures)) => failures,
             _ => panic!("construction must fail"),
         };
-        assert_eq!(failures.len(), 2);
+        assert_eq!(failures.len(), 3);
         assert_eq!(failures[0].rank, rank(1));
         assert_eq!(failures[0].transaction, None);
         match factory_failure {
@@ -572,7 +571,17 @@ fn initialization_error_or_panic_joins_previously_created_workers() {
             failures[1].kind,
             OwnerFailureKind::Shutdown("shutdown failed")
         ));
-        assert_eq!(drops.try_recv().unwrap().rank, rank(0));
+        assert_eq!(failures[2].rank, rank(2));
+        assert!(matches!(
+            failures[2].kind,
+            OwnerFailureKind::Shutdown("shutdown failed")
+        ));
+        let mut dropped = vec![
+            drops.try_recv().unwrap().rank,
+            drops.try_recv().unwrap().rank,
+        ];
+        dropped.sort_by_key(|rank| rank.get());
+        assert_eq!(dropped, vec![rank(0), rank(2)]);
     }
 }
 
@@ -902,5 +911,198 @@ fn default_unknown_and_hook_panic_quarantine_without_drop_or_replay() {
         pool.shutdown().unwrap();
         drop(pool);
         assert!(drops.try_recv().is_err(), "quarantine reclaimed a worker");
+    }
+}
+
+mod startup {
+    use super::*;
+    use std::cell::RefCell;
+    use std::sync::{Arc, Mutex};
+
+    thread_local! {
+        // Unlike a factory-local guard, this survives until actual thread exit.
+        static OWNER_LIFETIME: RefCell<Option<Arc<()>>> = const { RefCell::new(None) };
+    }
+
+    #[test]
+    fn owners_enter_concurrently_and_publish_only_after_all_ready() {
+        for first in [0, 1] {
+            let (entered, entries) = mpsc::sync_channel(2);
+            let (initialized, initialization) = mpsc::sync_channel(2);
+            let (dropped, drops) = mpsc::sync_channel(2);
+            let (release, gates): (Vec<_>, Vec<_>) =
+                (0..2).map(|_| mpsc::sync_channel::<()>(1)).unzip();
+            let gates = Arc::new(Mutex::new(gates.into_iter().map(Some).collect::<Vec<_>>()));
+            let lifetime = Arc::new(());
+            let owners = Arc::clone(&lifetime);
+            let host = thread::current().id();
+            let mut pool = thread::scope(|scope| {
+                let build = scope.spawn(move || {
+                    Pool::new(config(2, 2, 2), move |rank| {
+                        let index = rank.get() as usize;
+                        OWNER_LIFETIME.with_borrow_mut(|guard| *guard = Some(Arc::clone(&owners)));
+                        let gate = gates.lock().unwrap()[index].take().unwrap();
+                        let worker = LocalWorker::new(rank, dropped.clone());
+                        entered.send((index, worker.owner)).unwrap();
+                        gate.recv_timeout(LIMIT).expect("startup gate not released");
+                        initialized.send(index).unwrap();
+                        Ok(worker)
+                    })
+                    .unwrap()
+                });
+                // Both owners must enter before either is released. A serial
+                // spawn/recv implementation times out instead of hanging a Barrier.
+                let a = entries.recv_timeout(LIMIT).unwrap();
+                let b = entries.recv_timeout(LIMIT).unwrap();
+                assert_ne!(a.0, b.0);
+                assert_ne!(a.1, b.1);
+                assert_ne!(a.1, host);
+                assert_ne!(b.1, host);
+                release[first].send(()).unwrap();
+                assert_eq!(initialization.recv_timeout(LIMIT).unwrap(), first);
+                assert!(!build.is_finished(), "partial readiness published a pool");
+                release[1 - first].send(()).unwrap();
+                assert_eq!(initialization.recv_timeout(LIMIT).unwrap(), 1 - first);
+                let pool = build.join().unwrap();
+                (pool, [a, b])
+            });
+            let identities = pool.1;
+            let pool = &mut pool.0;
+            // Ready arrival order must not change routing or owner identity.
+            for index in 0..2 {
+                let session = SessionId(index as u64 + 1);
+                assert_eq!(pool.route_session(session).unwrap(), rank(index));
+                pool.try_submit(session, tx(index as u64 + 1), input(index as u64))
+                    .unwrap();
+            }
+            for _ in 0..2 {
+                let done = completion(pool);
+                let index = done.rank.get();
+                let reply = success(done, index as u64 + 1, index);
+                let expected = identities
+                    .iter()
+                    .find(|(i, _)| *i == index as usize)
+                    .unwrap();
+                assert_eq!(reply.owner, expected.1);
+            }
+            pool.shutdown().unwrap();
+            assert!(pool.shutdown_ready());
+            assert_eq!(Arc::strong_count(&lifetime), 1, "owner thread leaked");
+            let mut exited = [drops.try_recv().unwrap(), drops.try_recv().unwrap()];
+            exited.sort_by_key(|drop| drop.rank.get());
+            for (index, drop) in exited.iter().enumerate() {
+                assert_eq!(drop.rank, rank(index as u32));
+                assert_eq!(drop.executed, 1);
+                assert_eq!(
+                    drop.owner,
+                    identities.iter().find(|(i, _)| *i == index).unwrap().1
+                );
+            }
+            assert!(matches!(
+                drops.try_recv(),
+                Err(mpsc::TryRecvError::Disconnected)
+            ));
+        }
+    }
+
+    struct ShutdownWitness {
+        worker: LocalWorker,
+        stopped: SyncSender<()>,
+    }
+
+    impl ReplicaWorker<Input> for ShutdownWitness {
+        type Output = Reply;
+        type Error = &'static str;
+
+        fn execute(&mut self, request: WorkRequest<Input>) -> Result<Reply, Self::Error> {
+            self.worker.execute(request)
+        }
+
+        fn shutdown(&mut self) -> Result<(), Self::Error> {
+            self.stopped.send(()).unwrap();
+            self.worker.shutdown()
+        }
+    }
+
+    #[test]
+    fn failure_shuts_ready_peer_before_waiting_for_other_initializers_and_joins_all() {
+        for failure in 0..3 {
+            let (stopped, after_ready) = mpsc::sync_channel(1);
+            let after_ready = Arc::new(Mutex::new(after_ready));
+            let (dropped, drops) = mpsc::sync_channel(1);
+            let (entered, entries) = mpsc::sync_channel(3);
+            let lifetime = Arc::new(());
+            let owners = Arc::clone(&lifetime);
+            let result = Pool::new(config(3, 1, 3), move |id| {
+                OWNER_LIFETIME.with_borrow_mut(|guard| *guard = Some(Arc::clone(&owners)));
+                entered.send(id).unwrap();
+                match id.get() {
+                    0 => {
+                        // Receipt from shutdown proves rank 1 passed Ready, not
+                        // merely that its factory was entered. Rank 2 must close
+                        // all inputs even while rank 0 has not acknowledged init.
+                        after_ready
+                            .lock()
+                            .unwrap()
+                            .recv_timeout(LIMIT)
+                            .expect("ready peer was not shut down on startup failure");
+                        match failure {
+                            0 => Err("late initialization failure"),
+                            1 => panic!("late initialization panic"),
+                            2 => std::panic::panic_any(PanicQuiescence::Unknown),
+                            _ => unreachable!(),
+                        }
+                    }
+                    1 => {
+                        let mut worker = LocalWorker::new(id, dropped.clone());
+                        worker.fail_shutdown = true;
+                        Ok(ShutdownWitness { worker, stopped })
+                    }
+                    2 => Err("early initialization failure"),
+                    _ => unreachable!(),
+                }
+            });
+            let Err(BuildError::Owners(failures)) = result else {
+                panic!("startup must fail without publishing a pool")
+            };
+            assert_eq!(failures.len(), 3);
+            // Deterministic rank order despite the causal reverse failure order.
+            assert_eq!(
+                failures.iter().map(|f| f.rank).collect::<Vec<_>>(),
+                vec![rank(0), rank(2), rank(1)]
+            );
+            assert!(failures.iter().all(|f| f.transaction.is_none()));
+            match failure {
+                0 => assert!(matches!(
+                    failures[0].kind,
+                    OwnerFailureKind::Initialization("late initialization failure")
+                )),
+                1 => assert!(matches!(failures[0].kind, OwnerFailureKind::Panicked)),
+                2 => assert!(matches!(
+                    failures[0].kind,
+                    OwnerFailureKind::QuiescenceUnknown
+                )),
+                _ => unreachable!(),
+            }
+            assert!(matches!(
+                failures[1].kind,
+                OwnerFailureKind::Initialization("early initialization failure")
+            ));
+            assert!(matches!(
+                failures[2].kind,
+                OwnerFailureKind::Shutdown("shutdown failed")
+            ));
+            assert_eq!(Arc::strong_count(&lifetime), 1, "owner thread leaked");
+            let drop = drops.try_recv().expect("ready peer resource leaked");
+            assert_eq!(drop.rank, rank(1));
+            assert_eq!(drop.executed, 0);
+            assert!(matches!(
+                drops.try_recv(),
+                Err(mpsc::TryRecvError::Disconnected)
+            ));
+            let mut started = entries.try_iter().collect::<Vec<_>>();
+            started.sort_by_key(|id| id.get());
+            assert_eq!(started, vec![rank(0), rank(1), rank(2)]);
+        }
     }
 }

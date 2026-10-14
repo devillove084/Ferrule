@@ -1,0 +1,23 @@
+{
+  "schema": "ferrule.paper.m7.interpretation-notes.v1",
+  "assessment_sha256": "61e78f63e7ba2b933cafad3e7b2ff35a901c25c2c76357ab3cef085442c22b38",
+  "primary_result": "M7 infeasible for frozen vLLM candidate; Ferrule Hello2 completed",
+  "corrections_do_not_rewrite_execution": true,
+  "original_vllm_status": "runtime_contradiction from broad historical fallback parser",
+  "corrected_primary_failure": "Sampled GPU target exceeded",
+  "gdn_fallback": "Triton GDN decode selected because fused CUDA op is not built; not evidence of leaving Marlin/UVA",
+  "sampling_scope": "vLLM sampling ended at first resource violation about 104.681s after launch; reported high-water is only the sampled prefix, not full-lifetime maximum",
+  "post_breach": "Direct-root SIGTERM was sent, but API initialization continued until Ready at 228.186s; later logs include near-device-capacity allocator OOM warnings. Original wait_ready did not abort on monitor failure.",
+  "cleanup_fix": "Current paper StartupGuard aborts readiness on monitor failure; CPU regression passed, not GPU-retested after infeasibility",
+  "pinning": "Unknown; should_pin_memory and UVAOffloader selection are not measurements of pinned physical bytes or proof against functional_call fallback",
+  "file_prefetch": "Installed vLLM automatically prefetched NFS checkpoint files into OS page cache; this is not a switch to the parameter PrefetchOffloader backend; unmapped page cache is excluded from monitored PSS",
+  "cache_state": "Both cases fresh processes; OS/JIT cache uncontrolled, earlier pair may warm caches; no repeated-trial speedup inference",
+  "performance_basis": "exclusive_operator_allocation_assumption",
+  "fairmatch": false,
+  "exact_speedup": null,
+  "quality": "Historical authoritative full40/fresh quality PASS remains valid historical evidence; this new release still needs independent reset/cold basic-quality acceptance before Hello32",
+  "tests_passed": 42,
+  "current_prepared": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/m7-prepared-exclusive-003/prepared.json",
+  "current_prepared_sha256": "8e36dd6dae7123d0778a064f2e1de91d62d69830cbb5062760be20fc528e7580",
+  "final_release_sha256": "3c0a5b05faf8eb658d299318affd4c62a999322c9b519df65dd6e888c3896807"
+}

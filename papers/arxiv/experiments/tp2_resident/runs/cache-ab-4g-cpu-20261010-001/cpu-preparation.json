@@ -1,0 +1,41 @@
+{
+  "status": "CPU_ready_waiting_actual_arena_release_and_GPU_authorization",
+  "candidate_binary": null,
+  "execute_allowed": false,
+  "gpu_queries": 0,
+  "gpu_locks": 0,
+  "servers_started": 0,
+  "profilers_started": 0,
+  "legacy_receipts_modified": false,
+  "production_modified": false,
+  "tests_passed": 228,
+  "source_pins": {
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/cache_ab.py": "6248942d43f1dda010db1753905a07fc82476493d5912c1738e31a9459c23d8f",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/paired.py": "1b7c5ab3a40daf32134058ed20ce2b875c295091b9cb3328d881a3167d42abbd",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/test_cache_ab.py": "60b248f35a5410a05e931b2e671fbd51259eb3f0b07528bfeaeb35bb6b9bbd35"
+  },
+  "output_pins": {
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/cache-ab-4g-cpu-20261010-001/PREPARATION.md": "de542796bf6a3e0938951142572f81f60e60a24d6a3590c3f6822682b0df41a1",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/cache-ab-4g-cpu-20261010-001/cacheoff4g-metadata.json": "b3a1e9d336f3e2c21f24317a75a3e50bd183caa8c2280b78621904b334680431",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/cache-ab-4g-cpu-20261010-001/cli-help.json": "3504e554228dc01286eb4708acdfced8bc55bbc623ff631d8bc84c92d56706e7",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/cache-ab-4g-cpu-20261010-001/cli-help.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/cache-ab-4g-cpu-20261010-001/cli-help.stdout": "5bb4b4ec3e44b0c0db39e2ce2eaa0d3e38a9d5fa8a138e66853239d8d191b7ac",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/cache-ab-4g-cpu-20261010-001/cpu-tests.json": "9744fe5134da87ab167fba148f7e987d5c037372b202949236239888255e9bd8",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/cache-ab-4g-cpu-20261010-001/cpu-tests.log": "428490b440b4db900d248acd1f4a5483bb680e7cc272a14d9d1b95491fac190b",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/cache-ab-4g-cpu-20261010-001/frozen-cacheoff-audit.json": "af80cc86b9d80ec606021b735e08caa95f9da0d50dadd6c7317e9a1b3c8b0c94",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/cache-ab-4g-cpu-20261010-001/plan.json": "84339c43dbc09158088eb7d3a3b394a370ec82e1ef219e35aaa01d9184e2502c",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/cache-ab-4g-cpu-20261010-001/serve-help.json": "962e7032d1e1826f53f14f8e9ea75eed7e13e2d87325e06adba3459b59fe1956",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/cache-ab-4g-cpu-20261010-001/serve-help.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/cache-ab-4g-cpu-20261010-001/serve-help.stdout": "faed2cd73672d687a9da2efbc6664d364144c6f37db3a98b261fd578a17fe914",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/cache-ab-4g-cpu-20261010-001/workspace4096-preflight-02.json": "bd9de3edc3ee5142401b071d3ccf58f0cf69dd845eafcdee70371e4ac7f24ebc",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/cache-ab-4g-cpu-20261010-001/workspace4096-preflight-02.stderr": "75274f5b200498df3910138cecab80bab2a1a77721ada348fe4cf447aea10768",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/cache-ab-4g-cpu-20261010-001/workspace4096-preflight-02.stdout": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/cache-ab-4g-cpu-20261010-001/workspace4096-preflight.stderr": "75274f5b200498df3910138cecab80bab2a1a77721ada348fe4cf447aea10768",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/cache-ab-4g-cpu-20261010-001/workspace4096-preflight.stdout": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "frozen_binary_sha256": "4d40c34738d36a1c78f62c0e400dd732da40e34c316ce4bd3c356dc4d29b3173",
+  "full_model_resource_admission_proven": false,
+  "fairmatch": false,
+  "isolated_cache_effect": false,
+  "exact_speedup": null
+}

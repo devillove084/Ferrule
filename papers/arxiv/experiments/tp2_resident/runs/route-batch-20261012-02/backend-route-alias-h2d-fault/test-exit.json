@@ -1,0 +1,7 @@
+{
+  "returncode": 0,
+  "one_test_passed": true,
+  "selector": "cuda::operators::standard_bf16::tests::packed_routes_gpu_reject_invalid_owners_aliases_and_after_h2d_fault",
+  "binary_sha256": "2636ee8fb65102fb69421e5926655d68e98ec34ada23462ac19448a9a2b36308",
+  "log_sha256": "6734c785b16922fd574016b2a0a3bfb5d7792ef4693e07dec9fa9d6de9279f0a"
+}

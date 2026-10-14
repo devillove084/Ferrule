@@ -1,0 +1,10 @@
+.BLOCKED: Explicit --sole-gpu-owner-granted and --owner-note required; no GPU query/launch
+BLOCKED: Explicit --sole-gpu-owner-granted and --owner-note required; no GPU query/launch
+.BLOCKED: Build requires explicit --execute-build; default plan is CPU-only
+........BLOCKED: Explicit --sole-gpu-owner-granted and --owner-note required; no GPU query/launch
+BLOCKED: Explicit identity mode must match config
+................................
+----------------------------------------------------------------------
+Ran 42 tests in 1.501s
+
+OK

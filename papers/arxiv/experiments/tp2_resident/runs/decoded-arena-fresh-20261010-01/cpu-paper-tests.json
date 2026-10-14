@@ -1,0 +1,12 @@
+{
+  "returncode": 0,
+  "gpu_hidden": true,
+  "stdout": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-fresh-20261010-01/cpu-paper-tests.stdout",
+    "sha256": "72cffcbbe3569bacb285e2c222e8637f108c6cd9e69acb35057ad8776fdb8ebe"
+  },
+  "stderr": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-fresh-20261010-01/cpu-paper-tests.stderr",
+    "sha256": "3cabc9a866adefb443e1a8da4be43efdf03728dde8588a9607b24439bdc7e9b5"
+  }
+}

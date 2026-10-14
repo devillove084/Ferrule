@@ -1,0 +1,19 @@
+NVIDIA Nsight Systems version 2026.1.3.425-261338342291v0
+
+General Check
+- Platform: Linux
+- Timestamp counter supported: Yes
+
+CPU Profiling Environment Check
+- Root privilege: enabled
+- Linux Kernel Paranoid Level: -1
+- Linux Distribution: alinux
+- Linux Kernel Version (4.19.91-009.ali4000.alios7.x86_64): OK
+- Linux perf_event_open syscall available: OK
+- Sampling trigger event available: OK
+- Intel(c) Last Branch Record support: Available
+- CPU Profiling Environment (process-tree): OK
+- CPU Profiling Environment (system-wide): OK
+
+See the product documentation at https://docs.nvidia.com/nsight-systems for more information,
+including information on how to set the Linux Kernel Paranoid Level.

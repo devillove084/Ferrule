@@ -1,0 +1,123 @@
+{
+  "schema": "ferrule.paper.arena-handoff.v1",
+  "acceptance_summary": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-fresh-20261010-03/acceptance-summary.json",
+    "sha256": "37fa9f13aae0a3436ebf0805522d39d1a95d92117f38440f79b104d8d522d431"
+  },
+  "prepared": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-fresh-20261010-03/prepared.json",
+    "sha256": "b5c4f014bac9cc85bc75e10f334d449cc05580745dbe0a0b833072a5ecb5b3da"
+  },
+  "backend_reuse": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-fresh-20261010-03/backend-reuse.json",
+    "sha256": "a35dd347ea01e623dd864a62f8afb229307db497f1846d400f2929bd31f2209f"
+  },
+  "model_binary": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-fresh-20261010-03/binary-model/staged/ferrule",
+    "sha256": "ca7957146344c694aa41c2f3d697f7b789ff8b15bc19657507f5467c00066897"
+  },
+  "composition_binary": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-fresh-20261010-03/binary-composition/staged/ferrule",
+    "sha256": "1a605fe1bb7705324d09f6a4ee5b8cb7419a981c31400b7ee0f3831b030e7acd"
+  },
+  "source_digest": "855083f4c57ec875311f6145492653e0861bf077f39c430ac098abc2f32fdfeb",
+  "fresh_gpu_gates": 15,
+  "reused_backend_gates": [
+    "backend-exact",
+    "backend-preflight",
+    "backend-typed-view"
+  ],
+  "exact_counts": {
+    "full40": {
+      "calls": 4,
+      "metrics": 4356
+    },
+    "greedy4": {
+      "calls": 10,
+      "metrics": 10890
+    },
+    "fork2": {
+      "calls": 6,
+      "metrics": 6534
+    },
+    "canary2": {
+      "calls": 5,
+      "metrics": 5445
+    },
+    "recreate1": {
+      "calls": 4,
+      "metrics": 4356
+    },
+    "cold-owner1-01": {
+      "calls": 4,
+      "metrics": 4356
+    },
+    "cold-owner1-02": {
+      "calls": 4,
+      "metrics": 4356
+    }
+  },
+  "whole_device_sampled_peak_bytes": {
+    "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 22660775936,
+    "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 22660775936
+  },
+  "cache_snapshot_rows": 32,
+  "cache_physical_root_bytes_per_owner": 3221225472,
+  "ready_pin_bytes_per_owner": 1405091840,
+  "ready_free_slots_bytes_per_owner": 1816133632,
+  "actual_snapshots": {
+    "full40": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-fresh-20261010-03/full40/cache-snapshots.json",
+      "sha256": "caacd82d8b732a0b9455278194a1015c21bbdb21cbf346f2c297eef1e8e7373e"
+    },
+    "greedy4": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-fresh-20261010-03/greedy4/cache-snapshots.json",
+      "sha256": "00937f9c84b31d7062e867f6f4b9bb11f7487e3ece7e2b606979a020652e03ed"
+    },
+    "fork2": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-fresh-20261010-03/fork2/cache-snapshots.json",
+      "sha256": "b289b0633aa0a30eff88690d9b4bf0ed3f6b9a6f99f8a2482bd01287e3ac8cd2"
+    },
+    "canary2": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-fresh-20261010-03/canary2/cache-snapshots.json",
+      "sha256": "c5584e7916c9a22626be014e06a1b70ce4ff6ad5a5edba2c6b88539a907c954d"
+    },
+    "recreate1": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-fresh-20261010-03/recreate1/cache-snapshots.json",
+      "sha256": "9cf9ca239f566b451bad319e1debffff77c729b2fcabcf24950c9c121fad3972"
+    },
+    "cold-owner1-01": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-fresh-20261010-03/cold-owner1-01/cache-snapshots.json",
+      "sha256": "bcc56d77a3ea2235ab069e03a01109fa5006d64e987faa8d37d4fd887ad9ce76"
+    },
+    "cold-owner1-02": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-fresh-20261010-03/cold-owner1-02/cache-snapshots.json",
+      "sha256": "bcc56d77a3ea2235ab069e03a01109fa5006d64e987faa8d37d4fd887ad9ce76"
+    }
+  },
+  "model_hot_fit": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-fresh-20261010-03/model-arena-fit/small-receipt.json",
+    "sha256": "035b5737074451bf3614d5bbfdf1f0b839e317757edcd655eae21dca868f5c36"
+  },
+  "hot_fit_scope": "Source-pinned GPU assertions, not raw per-step telemetry; not a full-model no-eviction or speedup claim",
+  "final_idle": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-fresh-20261010-03/final-idle.json",
+    "sha256": "e1e6663af5b95cfca56a915e846fe8100b255f1434c95814c7ecfadb517e2b40"
+  },
+  "final_release": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-fresh-20261010-03/final-locks-released.json",
+    "sha256": "fe274bc73420c51e152a0e4840ae1da1d5bff61be0ac2ad01041e42b48da704a"
+  },
+  "cpu_policy": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-fresh-20261010-03/cpu-paper-tests.json",
+    "sha256": "d6e3ae9689781901cad49c07227a75ece4f49aa54db75d5d205b338849a948c8"
+  },
+  "historical_serving_binaries_preserved": {
+    "target/validation/tp2-mixed-optimized-release-20261009/ferrule-optimized": "4d40c34738d36a1c78f62c0e400dd732da40e34c316ce4bd3c356dc4d29b3173",
+    "target/validation/tp2-mixed-decoded-cache-public-release-20261010-03/ferrule-cacheon": "dadf831eb2af477108efd402171c40f7544a2600d14b8e5e7ab8a456d2625e5a"
+  },
+  "release_built": false,
+  "public_e2e_accepted": false,
+  "performance_accepted": false,
+  "release_followup": "Fresh serving release/build/source review required; old dadf admission and hard-coded historical quality adapter do not qualify this arena release"
+}

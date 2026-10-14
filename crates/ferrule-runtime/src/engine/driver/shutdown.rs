@@ -100,15 +100,53 @@ where
         R: ResidentModelRunner,
         F: FnMut(&ResidentTokenEvent) -> Result<()>,
     {
-        if let Some(report) = self.physical_shutdown_report {
-            return Ok(ResidentShutdownProgress::Complete(report));
-        }
-        match (ShutdownCoordinator { driver: self }).progress(on_token)? {
-            None => Ok(ResidentShutdownProgress::Pending),
-            Some(proof) => proof
-                .close_physical()
-                .map(ResidentShutdownProgress::Complete),
-        }
+        self.resource_shutdown_attempts = self
+            .resource_shutdown_attempts
+            .checked_add(1)
+            .expect("resource shutdown attempt identity exhausted");
+        let before = self.resource_observability_snapshot();
+        self.observability.physical_resources = before.model;
+        self.observability
+            .resources
+            .observe(&before.runtime)
+            .expect("driver resource observation scope is stable");
+        let result = (|| {
+            if let Some(report) = self.physical_shutdown_report {
+                return Ok(ResidentShutdownProgress::Complete(report));
+            }
+            match (ShutdownCoordinator { driver: self }).progress(on_token)? {
+                None => Ok(ResidentShutdownProgress::Pending),
+                Some(proof) => proof
+                    .close_physical()
+                    .map(ResidentShutdownProgress::Complete),
+            }
+        })();
+        self.observability.physical_resources = self.model_resource_observability_snapshot();
+        let observation = self.resource_observability_snapshot();
+        // Retain samples only at this existing lifecycle hook. Ordinary reads
+        // never mutate evidence or clear custody lost during an earlier attempt.
+        self.observability
+            .resources
+            .observe(&observation.runtime)
+            .expect("driver resource observation scope is stable");
+
+        let summary = super::super::ResidentResourceShutdownSummary::new(
+            self.resource_shutdown_attempts,
+            &result,
+            observation,
+        );
+        summary.log();
+        self.last_resource_shutdown_summary = Some(summary);
+        result
+    }
+
+    /// Read the last bounded shutdown-attempt report. This returns the actual
+    /// lifecycle result/measurements captured by its original owner, not a new
+    /// observation and not a post-Drop release assertion.
+    pub fn resource_shutdown_summary(
+        &self,
+    ) -> Option<&super::super::ResidentResourceShutdownSummary> {
+        self.last_resource_shutdown_summary.as_ref()
     }
 
     pub fn physical_shutdown_complete(&self) -> bool {
@@ -232,8 +270,10 @@ where
             }
             let schedule = self.sessions.suspend_into_cleanup(session_id);
             self.prefix.unmark_cached_session(&session_id);
-            self.scheduler
-                .cancel_suspended(schedule, &mut self.slot_pool)?;
+            if let sessions::SuspendedSessionSchedule::Active(schedule) = schedule {
+                self.scheduler
+                    .cancel_suspended(*schedule, &mut self.slot_pool)?;
+            }
             self.progress_sequence_cleanup(session_id)?;
         }
 
@@ -347,7 +387,33 @@ struct LogicalDrain<'a, R: MultiSessionRunner, C: SequenceSlotPool> {
 
 impl<R: ResidentModelRunner, C: SequenceSlotPool> LogicalDrain<'_, R, C> {
     fn close_physical(self) -> Result<ResidentDriverShutdownReport> {
-        self.driver.executor.shutdown_physical()?;
+        if let Err(error) = self.driver.executor.shutdown_physical() {
+            // This boundary cannot distinguish rejected close from lost custody.
+            // Preserve the error/retry behavior, but never erase its ambiguity.
+            self.driver
+                .observability
+                .resources
+                .record_quiescence(ferrule_common::io_protocol::QuiescenceEvidence::Unknown);
+            self.driver.observability.physical_resources =
+                self.driver.model_resource_observability_snapshot();
+            if self
+                .driver
+                .observability
+                .physical_resources
+                .scope
+                .value()
+                .is_some()
+            {
+                self.driver
+                    .observability
+                    .physical_resources
+                    .record_close(false);
+            }
+            return Err(error);
+        }
+        // Close success is only a lifecycle observation. The live runner may
+        // still retain storage; physical release evidence belongs to its owner.
+        self.driver.observability.resources.record_closed();
         self.driver.physical_shutdown_report = Some(self.report);
         Ok(self.report)
     }

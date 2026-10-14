@@ -1,0 +1,6 @@
+{
+  "returncode": 0,
+  "one_test_passed": true,
+  "selector": "bf16_slice_gpu_shared_pointer_no_work_parent_drop",
+  "binary_sha256": "f84751452f20b9ee83493a2afffadf6fd9921ac1cd7fa9e3b6dff26840df5b3c"
+}

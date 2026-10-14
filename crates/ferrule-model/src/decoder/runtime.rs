@@ -1,18 +1,14 @@
+use super::sequence::{DecoderSequence, DecoderSequenceLifecycle};
 use super::{
     DecoderCancelProgress, DecoderKvBackend, DecoderLogits, DecoderWait,
     GenericDecoderObservabilitySnapshot, PackedDecoderBatch,
 };
-use crate::execution::{
-    ResolvedStage, SequenceStateCore, SequenceTopologyId, StageMaterializationRequest,
-    WorkspaceClaim,
-};
+use crate::execution::{ResolvedStage, StageMaterializationRequest, WorkspaceClaim};
 use crate::materialization::{
     MaterializationPlacement, MaterializationProvider, MaterializationRequest,
     MaterializationResolver, resolve_stage_resources,
 };
-use crate::runner::{
-    ModelCompletionReactor, NativeProposal, NativeProposalSource, SequenceStateReleaseError,
-};
+use crate::runner::{ModelCompletionReactor, NativeProposal, NativeProposalSource};
 use ferrule_common::execution::{ExecutionBatch, ExecutionTransactionId};
 use ferrule_common::expert_residency::{ExpertResidencyControl, ExpertResidencyRequirements};
 use ferrule_common::{
@@ -21,57 +17,6 @@ use ferrule_common::{
 use std::fmt::Debug;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
-/// Public identity/core projection required by the model-neutral transaction shell.
-///
-/// Model sequence attachments do not need to be `Clone`. Their fallible working-copy,
-/// fork, reset, and release behavior is supplied separately by
-/// [`DecoderSequenceLifecycle`].
-pub trait DecoderSequence {
-    fn topology_id(&self) -> SequenceTopologyId;
-    fn core(&self) -> &SequenceStateCore;
-    fn core_mut(&mut self) -> &mut SequenceStateCore;
-}
-/// Context supplied when a committed sequence is checked out into a transaction.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct DecoderSequenceCheckout {
-    transaction: ExecutionTransactionId,
-    sequence_index: usize,
-    source_index: usize,
-}
-impl DecoderSequenceCheckout {
-    pub const fn new(
-        transaction: ExecutionTransactionId,
-        sequence_index: usize,
-        source_index: usize,
-    ) -> Self {
-        Self {
-            transaction,
-            sequence_index,
-            source_index,
-        }
-    }
-    pub const fn transaction(self) -> ExecutionTransactionId {
-        self.transaction
-    }
-    pub const fn sequence_index(self) -> usize {
-        self.sequence_index
-    }
-    pub const fn source_index(self) -> usize {
-        self.source_index
-    }
-}
-/// Complete fallible lifecycle for model-owned sequence state.
-///
-/// The transaction shell never clones sequence state. A model may deep-copy,
-/// checkpoint, borrow from a pool, or otherwise construct a working topology in
-/// `checkout`. Failed release returns the exact original state to its caller.
-pub trait DecoderSequenceLifecycle<S> {
-    fn create(&mut self) -> Result<S>;
-    fn checkout(&mut self, request: DecoderSequenceCheckout, source: &S) -> Result<S>;
-    fn logical_fork(&mut self, source: &S, expected_position: usize) -> Result<S>;
-    fn reset(&mut self, state: &mut S) -> Result<()>;
-    fn try_release(&mut self, state: S) -> std::result::Result<(), SequenceStateReleaseError<S>>;
-}
 #[derive(Debug, Clone)]
 pub struct DecoderContinuationAllocator {
     next: Arc<AtomicU64>,
@@ -235,7 +180,8 @@ impl MaterializationResolver for DecoderResolverHandle {
 /// Per-operation forward/proposal context. Resolver and residency-lease custody
 /// stay in the generic decoder; model code receives only narrow resolution and
 /// immutable current-resume access.
-pub struct DecoderTransactionContext {
+pub struct DecoderTransactionContext<'a> {
+    invocation: Option<&'a super::DecoderInvocationScope<'a>>,
     transaction: ExecutionTransactionId,
     continuation_id: Option<ContinuationId>,
     control: DecoderControlPlane,
@@ -243,7 +189,7 @@ pub struct DecoderTransactionContext {
     leases: Vec<ResidencyLeaseSet>,
     has_current_resume_lease: bool,
 }
-impl std::fmt::Debug for DecoderTransactionContext {
+impl std::fmt::Debug for DecoderTransactionContext<'_> {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("DecoderTransactionContext")
@@ -255,7 +201,7 @@ impl std::fmt::Debug for DecoderTransactionContext {
             .finish()
     }
 }
-impl DecoderTransactionContext {
+impl<'a> DecoderTransactionContext<'a> {
     pub fn new(
         transaction: ExecutionTransactionId,
         control: DecoderControlPlane,
@@ -280,6 +226,7 @@ impl DecoderTransactionContext {
     ) -> Self {
         debug_assert!(!has_current_resume_lease || !leases.is_empty());
         Self {
+            invocation: None,
             transaction,
             continuation_id,
             control,
@@ -287,6 +234,16 @@ impl DecoderTransactionContext {
             leases,
             has_current_resume_lease,
         }
+    }
+    pub(crate) fn with_invocation(
+        mut self,
+        invocation: Option<&'a super::DecoderInvocationScope<'a>>,
+    ) -> Self {
+        self.invocation = invocation;
+        self
+    }
+    pub fn invocation(&self) -> Option<&super::DecoderInvocationScope<'_>> {
+        self.invocation
     }
     pub const fn transaction(&self) -> ExecutionTransactionId {
         self.transaction
@@ -377,6 +334,27 @@ pub enum DecoderForwardProgress<C, G> {
     },
     FailedQuiescent(Error),
 }
+impl<C, G> DecoderForwardProgress<C, G> {
+    /// A borrowed synchronous scope cannot publish a resume edge. Keep the exact
+    /// continuation for normal transaction abort; never drop its physical roots.
+    pub(crate) fn require_synchronous(self) -> Self {
+        match self {
+            Self::Waiting { continuation, .. } => Self::FailedActive {
+                continuation,
+                error: Error::Execution {
+                    message:
+                        "synchronous decoder invocation cannot escape into waiting; abort required"
+                            .into(),
+                },
+            },
+            progress => progress,
+        }
+    }
+}
+#[cfg(test)]
+#[path = "../../tests/unit/host_kv/sync_scope.rs"]
+mod host_kv_sync_scope;
+
 /// Resume progress while continuation custody stays in the transaction shell.
 #[derive(Debug)]
 pub enum DecoderForwardResumeProgress<G> {
@@ -392,6 +370,15 @@ pub enum DecoderForwardResumeProgress<G> {
 pub trait DecoderForwardExecutor<S, KvView> {
     type Continuation;
     type TerminalGuard: DecoderTerminalGuard;
+
+    /// Borrow existing physical ledgers only; this must never poll or drain work.
+    fn physical_resource_snapshot(
+        &self,
+        _default_state: &S,
+    ) -> crate::resource_observability::PhysicalResourceObservation {
+        Default::default()
+    }
+
     fn start_forward(
         &mut self,
         context: &mut DecoderTransactionContext,

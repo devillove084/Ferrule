@@ -1,0 +1,16 @@
+{
+  "passed": true,
+  "gate": {
+    "name": "model-routed_fusion_after_down_failure_does_not_replay",
+    "binary": "model",
+    "selector": "transformer::standard::cuda::hybrid_rank::mixed::decoded_gpu_tests::routed_fusion::routed_fusion_after_down_failure_does_not_replay",
+    "evidence": "source_pinned_model_small",
+    "devices": 2,
+    "reference": null,
+    "cache_bytes": null,
+    "observer": null
+  },
+  "proven_drained": true,
+  "all_eight_idle": true,
+  "performance_claim": false
+}

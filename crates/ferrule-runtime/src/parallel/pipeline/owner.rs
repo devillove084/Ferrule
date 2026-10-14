@@ -7,8 +7,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use ferrule_common::execution::{ExecutionBatch, KvPageId, KvReservationView, StateSlot};
 use ferrule_model::decoder::{
     DecoderKvBackend, DecoderKvCapacity, DecoderKvPageSnapshot, DecoderKvPrepare,
-    DecoderKvSequenceCustody, GenericDecoderSequenceState, KvCommitParticipant, KvEndProgress,
-    KvPrepareQuiescenceUnknown, PackedDecoderBatch,
+    DecoderKvSequenceCustody, DecoderSequence, DecoderSequenceCheckout, DecoderSequenceLifecycle,
+    KvCommitParticipant, KvEndProgress, KvPrepareQuiescenceUnknown, PackedDecoderBatch,
 };
 use ferrule_model::transformer::SegmentInput;
 
@@ -18,7 +18,7 @@ use super::transport::{
 use super::{
     BoxedPipelineStageWorker, CpuPipelineStageProgram, PipelineExecutionContext,
     PipelinePreparedProjection, PipelineRank, PipelineStage, PipelineStageBoot,
-    PipelineStageDescription, PipelineStageProgram, Result, StageWorkerDispatch, error,
+    PipelineStageDescription, PipelineStateProgram, Result, StageWorkerDispatch, error,
 };
 use crate::SessionId;
 use crate::parallel::data::{PanicQuiescence, ReplicaWorker, WorkRequest};
@@ -26,11 +26,14 @@ use crate::parallel::expert::ExpertOwnerStats;
 
 // One bounded owner operation journal, not a decision authority. It binds ACK
 // retries to the original physical handle and prevents transport redispatch.
-struct Active<T> {
+struct Active<T, S> {
     key: WireKey,
     physical: Option<T>,
     entered: bool,
-    working: GenericDecoderSequenceState,
+    working: Option<S>,
+    displaced: Option<S>,
+    step: ferrule_model::execution::SequenceStepBinding,
+    rollback_complete: bool,
     packed: PackedDecoderBatch,
     execute_dispatched: bool,
     executed: bool,
@@ -45,12 +48,19 @@ struct Active<T> {
 
 /// One owner journal for every device/transport. Construct and dispatch on the
 /// owner thread or process child; physical tokens never leave this value.
-pub struct PipelineStageWorker<B: DecoderKvBackend, P = CpuPipelineStageProgram> {
+pub struct PipelineStageWorker<
+    B: DecoderKvBackend,
+    P: PipelineStateProgram = CpuPipelineStageProgram,
+> {
     rank: PipelineRank,
     stage: PipelineStage<B, P>,
-    sessions: BTreeMap<SessionId, GenericDecoderSequenceState>,
-    active: Option<Active<B::Transaction>>,
+    sessions: BTreeMap<SessionId, P::SequenceState>,
+    lifecycle: P::Lifecycle,
+    release_pending: Option<(SessionId, Vec<KvPageId>, P::SequenceState)>,
+    active: Option<Active<B::Transaction, P::SequenceState>>,
     executions: usize,
+    #[cfg(feature = "cuda")]
+    last_trace_publication: Option<WireKey>,
 }
 
 #[derive(Debug, Clone)]
@@ -67,12 +77,13 @@ pub struct PipelineOwnerStats {
 
 impl<B, P> PipelineStageWorker<B, P>
 where
-    B: DecoderKvBackend<SequenceState = GenericDecoderSequenceState>
+    B: DecoderKvBackend<SequenceState = P::SequenceState>
+        + 'static
         + KvCommitParticipant<
-            SequenceState = GenericDecoderSequenceState,
+            SequenceState = P::SequenceState,
             Transaction = <B as DecoderKvBackend>::Transaction,
         >,
-    P: PipelineStageProgram<KvView = B::KvView>,
+    P: PipelineStateProgram<KvView = <B as DecoderKvBackend>::KvView>,
 {
     /// Shared thread/process stage bootstrap. Reject mismatched boot metadata on
     /// the owner and explicitly shut down the returned program and backend.
@@ -96,12 +107,26 @@ where
                 stage.shutdown(),
             ));
         }
+        let lifecycle = match stage.program.new_lifecycle() {
+            Ok(lifecycle) => lifecycle,
+            Err(source) => {
+                return Err(ferrule_common::Error::with_cleanup(
+                    "pipeline lifecycle startup",
+                    source,
+                    stage.shutdown(),
+                ));
+            }
+        };
         Ok(Self {
+            lifecycle,
+            release_pending: None,
             rank: boot.rank,
             stage,
             sessions: BTreeMap::new(),
             active: None,
             executions: 0,
+            #[cfg(feature = "cuda")]
+            last_trace_publication: None,
         })
     }
 
@@ -113,7 +138,9 @@ where
     /// device-quiescence test: ordinary errors retain the worker for rollback;
     /// unknown quiescence requires transport quarantine, not a fabricated ACK.
     pub fn has_active_custody(&self) -> bool {
-        self.active.is_some() || self.stage.backend.capacity().active_transactions != 0
+        self.active.is_some()
+            || self.release_pending.is_some()
+            || self.stage.backend.capacity().active_transactions != 0
     }
 
     pub fn boxed(self) -> BoxedPipelineStageWorker
@@ -130,7 +157,7 @@ where
         if self
             .active
             .as_ref()
-            .is_some_and(|active| active.physical.is_none())
+            .is_some_and(|active| active.physical.is_none() && !active.rollback_complete)
         {
             return Err(KvPrepareQuiescenceUnknown::wrap(
                 key.binding.transaction(),
@@ -190,17 +217,23 @@ where
                 status: self.stage.backend.page_status(page),
             })
             .collect::<Vec<_>>();
-        let mut working = source.transaction_working_copy()?;
-        let step = working.core().begin_step()?;
-        working.core_mut().commit_step(step, packed.len())?;
+        let step = source.core().begin_step()?;
         let transaction = key.binding.transaction();
+        let working = self
+            .lifecycle
+            .checkout(DecoderSequenceCheckout::new(transaction, 0, 0), source)?;
+        let checkout_valid =
+            working.core() == source.core() && working.topology_id() == source.topology_id();
         // Prepare may submit device work and then fail before issuing a handle.
         // Journal custody first; absence of a handle is not a rollback fence.
         self.active = Some(Active {
             key,
             physical: None,
             entered: false,
-            working,
+            working: Some(working),
+            displaced: None,
+            step,
+            rollback_complete: false,
             packed: packed.clone(),
             execute_dispatched: false,
             executed: false,
@@ -211,6 +244,15 @@ where
             retired: None,
             aborted: None,
         });
+        if !checkout_valid {
+            self.active.as_mut().unwrap().rollback_complete = true;
+            let cleanup = self.release_working();
+            return Err(ferrule_common::Error::with_cleanup(
+                "pipeline checkout identity",
+                error("checkout changed source core/topology"),
+                cleanup,
+            ));
+        }
         match self.stage.backend.prepare(DecoderKvPrepare {
             transaction,
             sequences: &custody,
@@ -231,8 +273,13 @@ where
                     return Err(KvPrepareQuiescenceUnknown::wrap(transaction, source));
                 }
                 // Rejected before work, or cleanup positively proved quiescent.
-                self.active = None;
-                return Err(source);
+                self.active.as_mut().unwrap().rollback_complete = true;
+                let cleanup = self.release_working();
+                return Err(ferrule_common::Error::with_cleanup(
+                    "pipeline prepare",
+                    source,
+                    cleanup,
+                ));
             }
         }
         Ok(Reply::Prepared {
@@ -248,7 +295,8 @@ where
     ) -> Result<Reply> {
         self.check(&key)?;
         let active = self.active.as_mut().expect("stored owner custody");
-        if active.execute_dispatched
+        if active.rollback_complete
+            || active.execute_dispatched
             || active.aborted.is_some()
             || active.install_generation.is_some()
         {
@@ -267,10 +315,7 @@ where
         self.stage
             .description
             .validate_input(&input, packed.len())?;
-        let state = self
-            .sessions
-            .get_mut(&active.key.session)
-            .expect("checked owner session");
+        let state = active.working.as_mut().expect("working custody");
         self.stage.backend.enter(
             active.physical.as_mut().expect("stored physical custody"),
             packed,
@@ -284,9 +329,10 @@ where
                 .active_view(active.physical.as_mut().expect("stored physical custody"))?;
             let transaction = active.key.binding.transaction();
             let sequence_ids = [active.key.session.0];
-            self.stage.program.execute(
+            self.stage.program.execute_state(
                 packed,
                 input,
+                std::slice::from_mut(state),
                 &mut view,
                 PipelineExecutionContext {
                     transaction,
@@ -304,17 +350,44 @@ where
                 },
             )
         };
-        self.stage
+        let leave = self
+            .stage
             .backend
-            .leave(active.physical.as_mut().expect("stored physical custody"))?;
-        active.entered = false;
-        let output = result?;
+            .leave(active.physical.as_mut().expect("stored physical custody"));
+        if leave.is_ok() {
+            active.entered = false;
+        }
+        let output = match result {
+            Ok(output) => {
+                leave?;
+                output
+            }
+            Err(source) => {
+                return Err(ferrule_common::Error::with_cleanup(
+                    "pipeline execute",
+                    source,
+                    leave,
+                ));
+            }
+        };
         if cancellation.load(Ordering::Acquire) {
             return Err(error("pipeline cancelled during stage execution"));
         }
         self.stage
             .description
             .validate_output(&output, packed.len())?;
+        let state = active.working.as_mut().expect("working custody");
+        let source = self
+            .sessions
+            .get(&active.key.session)
+            .expect("source custody");
+        if state.core() != source.core() || state.topology_id() != source.topology_id() {
+            return Err(error("program changed working core/topology"));
+        }
+        self.stage
+            .program
+            .validate_frontier(packed, std::slice::from_ref(state))?;
+        state.core_mut().commit_step(active.step, packed.len())?;
         active.executed = true;
         self.executions = self.executions.saturating_add(1);
         Ok(Reply::Executed { output })
@@ -322,6 +395,35 @@ where
 
     pub fn dispatch(&mut self, command: Command) -> Result<Reply> {
         match command {
+            #[cfg(feature = "cuda")]
+            Command::TraceCommitted(request) => {
+                if self.last_trace_publication.as_ref() != Some(&request.key)
+                    || request.key.rank != self.rank
+                    || self.has_active_custody()
+                {
+                    return Err(error(
+                        "committed trace before publication/retirement or wrong identity",
+                    ));
+                }
+                let state = self
+                    .sessions
+                    .get(&request.key.session)
+                    .ok_or_else(|| error("trace session missing"))?;
+                if state.core().generation() != request.source.generation
+                    || state.core().position() != request.source.committed_tokens
+                {
+                    return Err(error("committed trace source generation/frontier differs"));
+                }
+                if !self.stage.program.poll_quiescence()? {
+                    return Err(error("trace owner not quiescent"));
+                }
+                self.stage.program.trace_committed(
+                    &mut self.stage.backend,
+                    request.key.binding.transaction(),
+                    &request.source,
+                )?;
+                Ok(Reply::Ack(KvEndProgress::Complete))
+            }
             Command::Describe => Ok(Reply::Description(self.stage.description.clone())),
             Command::Stats => Ok(Reply::Stats(PipelineOwnerStats {
                 rank: self.rank,
@@ -346,33 +448,47 @@ where
                     return Err(error("owner session capacity or lifetime conflict"));
                 }
                 let state = match source {
-                    Some(source) => self
-                        .sessions
-                        .get(&source)
-                        .ok_or_else(|| error("unknown fork source"))?
-                        .logical_fork()?,
-                    None => GenericDecoderSequenceState::new((), ()),
+                    Some(source) => {
+                        let source = self
+                            .sessions
+                            .get(&source)
+                            .ok_or_else(|| error("unknown fork source"))?;
+                        self.lifecycle
+                            .logical_fork(source, source.core().position())?
+                    }
+                    None => self.lifecycle.create()?,
                 };
                 let generation = state.core().generation();
                 self.sessions.insert(session, state);
                 Ok(Reply::Generation(generation))
             }
             Command::Release { session, pages } => {
-                if self.has_active_custody() {
+                if self.active.is_some() || self.stage.backend.capacity().active_transactions != 0 {
                     return Err(error("cannot release an owner with active custody"));
                 }
-                if !self.sessions.contains_key(&session) {
-                    return Err(error("unknown owner session"));
+                if let Some((pending_session, pending_pages, _)) = &self.release_pending {
+                    if *pending_session != session || *pending_pages != pages {
+                        return Err(error("release retry differs from pending custody"));
+                    }
+                } else {
+                    if !self.sessions.contains_key(&session) {
+                        return Err(error("unknown owner session"));
+                    }
+                    if pages.len() > self.stage.description.config.max_pages
+                        || pages.iter().collect::<BTreeSet<_>>().len() != pages.len()
+                    {
+                        return Err(error("invalid pipeline release pages"));
+                    }
+                    self.stage.backend.release(&pages)?;
+                    let state = self.sessions.remove(&session).expect("checked session");
+                    self.release_pending = Some((session, pages, state));
                 }
-                if pages.len() > self.stage.description.config.max_pages
-                    || pages.iter().collect::<BTreeSet<_>>().len() != pages.len()
-                {
-                    return Err(error("invalid pipeline release pages"));
+                let (session, pages, state) = self.release_pending.take().unwrap();
+                if let Err(failure) = self.lifecycle.try_release(state) {
+                    let (source, state) = failure.into_parts();
+                    self.release_pending = Some((session, pages, state));
+                    return Err(source);
                 }
-                self.stage.backend.release(&pages)?;
-                self.sessions
-                    .remove(&session)
-                    .ok_or_else(|| error("unknown owner session"))?;
                 Ok(Reply::Ack(KvEndProgress::Complete))
             }
             Command::Prepare {
@@ -416,7 +532,45 @@ where
         }
     }
 
+    fn release_working(&mut self) -> Result<()> {
+        let active = self.active.as_mut().expect("cleanup custody");
+        release_state(&mut self.lifecycle, &mut active.working)?;
+        self.active = None;
+        Ok(())
+    }
+
     fn commit_command(&mut self, command: Command) -> Result<Reply> {
+        if matches!(
+            command,
+            Command::Rollback(_) | Command::Abort { .. } | Command::Ready(_)
+        ) && !self.stage.program.poll_quiescence()?
+        {
+            return Ok(Reply::Ack(KvEndProgress::Pending));
+        }
+        if matches!(command, Command::Rollback(_)) {
+            let active = self.active.as_mut().expect("checked active owner custody");
+            if active.install_generation.is_some() {
+                return Err(error("cannot rollback after physical install"));
+            }
+            if !active.rollback_complete {
+                if active.entered {
+                    self.stage
+                        .backend
+                        .leave(active.physical.as_mut().expect("physical custody"))?;
+                    active.entered = false;
+                }
+                let progress = self.stage.backend.rollback(&mut active.physical)?;
+                if progress != KvEndProgress::Complete {
+                    return Ok(Reply::Ack(progress));
+                }
+                if active.physical.is_some() {
+                    return Err(error("rollback retained physical custody"));
+                }
+                active.rollback_complete = true;
+            }
+            self.release_working()?;
+            return Ok(Reply::Ack(KvEndProgress::Complete));
+        }
         let active = self.active.as_mut().expect("checked active owner custody");
         let backend = &mut self.stage.backend;
         let physical = active
@@ -475,7 +629,7 @@ where
                 if active.install_generation.is_some() {
                     return Err(error("cannot abort after physical install"));
                 }
-                if let Some(completed_generation) = active.aborted {
+                let progress = if let Some(completed_generation) = active.aborted {
                     if completed_generation != generation {
                         return Err(error("abort retry does not match the completed generation"));
                     }
@@ -486,22 +640,9 @@ where
                         active.aborted = Some(generation);
                     }
                     progress
-                }
-            }
-            Command::Rollback(_) => {
-                if active.install_generation.is_some() {
-                    return Err(error("cannot rollback after physical install"));
-                }
-                if active.entered {
-                    backend.leave(physical)?;
-                    active.entered = false;
-                }
-                let progress = backend.rollback(&mut active.physical)?;
+                };
                 if progress == KvEndProgress::Complete {
-                    if active.physical.is_some() {
-                        return Err(error("rollback retained physical custody"));
-                    }
-                    self.active = None;
+                    release_state(&mut self.lifecycle, &mut active.working)?;
                 }
                 progress
             }
@@ -510,10 +651,12 @@ where
                     return Err(error("invalid owner publication"));
                 }
                 backend.publish_committed(physical);
-                *self
-                    .sessions
-                    .get_mut(&key.session)
-                    .expect("owner source remains allocated") = active.working.clone();
+                active.displaced = Some(std::mem::replace(
+                    self.sessions
+                        .get_mut(&key.session)
+                        .expect("owner source remains allocated"),
+                    active.working.take().expect("working custody"),
+                ));
                 active.published = true;
                 KvEndProgress::Complete
             }
@@ -527,31 +670,42 @@ where
                 if active.install_generation != Some(generation) || !active.published {
                     return Err(error("retirement before publication"));
                 }
-                if let Some((completed_generation, completed_pages)) = &active.retired {
-                    if *completed_generation != generation || completed_pages != &pages {
-                        return Err(error(
-                            "retirement retry does not match the completed generation or pages",
-                        ));
-                    }
-                    KvEndProgress::Complete
-                } else {
-                    let progress = backend.retire_prepared(physical, generation, &pages)?;
-                    if progress == KvEndProgress::Complete {
-                        active.retired = Some((generation, pages));
-                    }
-                    progress
+                let progress =
+                    if let Some((completed_generation, completed_pages)) = &active.retired {
+                        if *completed_generation != generation || completed_pages != &pages {
+                            return Err(error(
+                                "retirement retry does not match the completed generation or pages",
+                            ));
+                        }
+                        KvEndProgress::Complete
+                    } else {
+                        let progress = backend.retire_prepared(physical, generation, &pages)?;
+                        if progress == KvEndProgress::Complete {
+                            active.retired = Some((generation, pages));
+                        }
+                        progress
+                    };
+                if progress == KvEndProgress::Complete {
+                    release_state(&mut self.lifecycle, &mut active.displaced)?;
                 }
+                progress
             }
             Command::Finish(_) => {
                 if active.aborted.is_none() && active.retired.is_none() {
                     return Err(error("owner custody is unfinished"));
                 }
+                release_state(&mut self.lifecycle, &mut active.working)?;
+                release_state(&mut self.lifecycle, &mut active.displaced)?;
                 backend.finish_prepared(
                     active
                         .physical
                         .take()
                         .ok_or_else(|| error("owner finish handle absent"))?,
                 );
+                #[cfg(feature = "cuda")]
+                if active.published {
+                    self.last_trace_publication = Some(active.key.clone());
+                }
                 self.active = None;
                 KvEndProgress::Complete
             }
@@ -563,12 +717,13 @@ where
 
 impl<B, P> ReplicaWorker<Command> for PipelineStageWorker<B, P>
 where
-    B: DecoderKvBackend<SequenceState = GenericDecoderSequenceState>
+    B: DecoderKvBackend<SequenceState = P::SequenceState>
+        + 'static
         + KvCommitParticipant<
-            SequenceState = GenericDecoderSequenceState,
+            SequenceState = P::SequenceState,
             Transaction = <B as DecoderKvBackend>::Transaction,
         >,
-    P: PipelineStageProgram<KvView = B::KvView>,
+    P: PipelineStateProgram<KvView = <B as DecoderKvBackend>::KvView>,
 {
     type Output = Reply;
     type Error = ferrule_common::Error;
@@ -590,18 +745,26 @@ where
         if self.has_active_custody() {
             std::panic::panic_any(PanicQuiescence::Unknown);
         }
+        while let Some((id, state)) = self.sessions.pop_first() {
+            if let Err(failure) = self.lifecycle.try_release(state) {
+                let (_, state) = failure.into_parts();
+                self.sessions.insert(id, state);
+                std::panic::panic_any(PanicQuiescence::Unknown);
+            }
+        }
         self.stage.shutdown()
     }
 }
 
 impl<B, P> StageWorkerDispatch for PipelineStageWorker<B, P>
 where
-    B: DecoderKvBackend<SequenceState = GenericDecoderSequenceState>
+    B: DecoderKvBackend<SequenceState = P::SequenceState>
+        + 'static
         + KvCommitParticipant<
-            SequenceState = GenericDecoderSequenceState,
+            SequenceState = P::SequenceState,
             Transaction = <B as DecoderKvBackend>::Transaction,
         >,
-    P: PipelineStageProgram<KvView = B::KvView>,
+    P: PipelineStateProgram<KvView = <B as DecoderKvBackend>::KvView>,
 {
     fn dispatch(&mut self, command: Command) -> Result<Reply> {
         self.dispatch(command)
@@ -612,4 +775,21 @@ where
     fn has_active_custody(&self) -> bool {
         self.has_active_custody()
     }
+    fn has_hybrid_state(&self) -> bool {
+        self.stage.program.hybrid_schema().is_some()
+    }
+}
+
+fn release_state<S, L: DecoderSequenceLifecycle<S>>(
+    lifecycle: &mut L,
+    state: &mut Option<S>,
+) -> Result<()> {
+    if let Some(owned) = state.take()
+        && let Err(failure) = lifecycle.try_release(owned)
+    {
+        let (source, owned) = failure.into_parts();
+        *state = Some(owned);
+        return Err(source);
+    }
+    Ok(())
 }

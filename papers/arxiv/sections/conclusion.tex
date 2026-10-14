@@ -1,0 +1,73 @@
+\section{Limitations and Remaining Evidence Gates}
+\label{sec:limitations}
+
+\paragraph{Capacity and physical attribution.}
+The core beyond-physical-memory claim is not established. Configured budgets
+cover selected ledgers, not a total process/machine working set. Sampled
+device/PSS/RSS maxima can miss transients and cannot provide complete
+allocation attribution. Physical host capacity, file-cache residency, swap,
+co-tenants, and the complete compact-residency alternative require separate
+measurement. A shared pool counts once, while required physical copies count
+at their actual locations. Discrete CUDA records do not validate shared or
+unified-memory deployment.
+
+\paragraph{Logical demand and quality.}
+TP1 \texttt{-02} demonstrates application-level logical demand during four
+HTTP successes in one DEBUG exploratory run. Its 36,240,064,128 reader bytes
+are not physical NAS/network or block-device traffic; uploads are not cache
+misses or bus measurements. Only three visible-text/usage reference canaries
+passed; Hello2 was HTTP/usage only, generated IDs were absent, and complete
+numerical/task quality is unestablished. DEBUG/observer cost is unmeasured.
+Separate TP2 numerical test receipts cannot qualify TP1 or the resident
+vLLM comparison, and the strict W8A16 failure is not waived by argmax matches.
+
+\paragraph{Safety, integration, and progress.}
+The invariants and algorithms specify intended behavior at named boundaries,
+not universal integration or formal verification. The general registry is
+provider-installed and distinct from prepared-KV and specialized host-KV
+paths. OS page cache is outside hard-credit control. Final TP1 resource
+closure is unknown and GPU quiescence remains unverified despite descendant
+drain and idle checks. Unknown physical-owner custody can permanently reduce
+available capacity; no general reset/replay, device-reset recovery, bounded
+recovery time, or availability guarantee is provided. The journal is in-memory,
+not durable ACID or arbitrary cross-rank atomic commit. Current Mixed
+collectives default to host participation; neither typed device permits nor
+NCCL plugin initialization proves a default device reduction or payload route.
+
+The safe blocking reference is not implemented, and no physical-overlap
+trace closes RQ3. Provider blocking, synchronization, cyclic resource waits,
+and stalled progress remain possible. Asynchronous submission is not
+system-wide nonblocking execution or lock freedom. The intended modality scope
+extends beyond text, but other modalities and their quality oracles remain
+future implementation work.
+
+\paragraph{Comparisons and reproducibility.}
+The two resident TP2 crossblocks show tradeoffs, not a fair, causal, or
+statistically confirmed speedup: arithmetic and budgets differ, and the
+number of independent blocks is small. Startup-metadata observations use
+uncontrolled caches and unpaired historical context. Local artifacts require
+portable archival, source/binary/model identities, and deterministic tables
+and plots before publication. Closing a quality, traffic, or custody gate
+in one profile does not close it in another.
+
+\section{Conclusion}
+\label{sec:conclusion}
+
+\system{} connects storage-backed inference to an explicit execution contract:
+freeze a source-bound plan, admit covered claims, materialize exact
+generations, publish only validated bindings, and retain custody until the
+relevant physical references end. The physical/accounting distinction makes
+capacity measurable; the normal walkthrough and structured algorithms make
+readiness, publication, and reuse separate testable transitions.
+
+The current result is narrower than that target. One TP1 DEBUG run records
+four HTTP successes, three limited reference canaries, repeated
+materialization counters, and sampled memory. Physical storage traffic,
+complete TP1 numerical quality, capacity necessity, a same-contract scheduling
+comparison, and final custody closure remain open. Separate TP2 numerical and
+resident timing evidence is useful context but does not fill these gates.
+The paper's next evidentiary step is a profile-bound complete-output capacity
+study with attributed working sets, aligned physical I/O, safe blocking/async
+controls, and integrated fault-ledger observations. Until then, the design is
+not a demonstrated beyond-memory result or a general performance/quality
+claim.

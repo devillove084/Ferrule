@@ -566,7 +566,9 @@ pub trait MaterializationProvider: std::fmt::Debug + Send {
     fn next_progress(&mut self) -> ProviderProgress;
 
     /// Compatibility polling preserves faults instead of turning them into Idle.
-    fn next_completion(&mut self) -> std::result::Result<Option<CompletionEvent>, ProviderFault> {
+    fn next_completion(
+        &mut self,
+    ) -> std::result::Result<Option<CompletionEvent>, Box<ProviderFault>> {
         self.next_progress().into_completion()
     }
 }

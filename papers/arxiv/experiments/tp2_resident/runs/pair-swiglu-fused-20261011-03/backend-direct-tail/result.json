@@ -1,0 +1,16 @@
+{
+  "passed": true,
+  "gate": {
+    "name": "backend-direct-tail",
+    "binary": "backend-tail",
+    "selector": "pair_swiglu_direct_tail::gpu::direct_tail_words_old_literal_vs_fused_m1_m2_m5",
+    "evidence": "independent_literal_tail_words_not_hf",
+    "devices": 1,
+    "reference": null,
+    "cache_bytes": null,
+    "observer": null
+  },
+  "proven_drained": true,
+  "all_eight_idle": true,
+  "performance_claim": false
+}

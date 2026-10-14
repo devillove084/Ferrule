@@ -1,0 +1,77 @@
+{
+  "argv": [
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-allocator-v3-20261011-03/binary-backend/staged/ferrule",
+    "cuda::allocator::dedicated_kv_tests::dedicated_kv_segment_never_lends_free_extent_to_weights_or_scratch",
+    "--exact",
+    "--nocapture",
+    "--test-threads=1"
+  ],
+  "supervisor": {
+    "returncode": 0,
+    "timed_out": false,
+    "wall_seconds": 0.14250068739056587,
+    "stdout": "",
+    "stderr": "",
+    "cleanup_errors": [],
+    "cleanup_scope": "isolated_subreaper_direct_children",
+    "descendant_custody": "proven_drained",
+    "gpu_quiescence": "unverified",
+    "custody": {
+      "status": "proven_drained",
+      "method": "linux-subreaper-waitid",
+      "containment_verified": true,
+      "launch_id": "cf61201bbe24408a810f43fd9e4b5c4c",
+      "helper_identity": {
+        "pid": 158302,
+        "birth_ticks": 97391971,
+        "ppid": 157844,
+        "pgrp": 158302,
+        "session": 158302
+      },
+      "root_identity": {
+        "pid": 158303,
+        "birth_ticks": 97391974,
+        "ppid": 158302,
+        "pgrp": 158302,
+        "session": 158302
+      },
+      "boot_id": "4dd3497d-570c-4693-a876-5c26e06ab360",
+      "entries": [
+        {
+          "identity": {
+            "pid": 158303,
+            "birth_ticks": 97391974,
+            "ppid": 158302,
+            "pgrp": 158302,
+            "session": 158302
+          },
+          "role": "root",
+          "signals": [],
+          "reaped": true,
+          "exit_code": 0,
+          "first_observed_at": 8610040.09135656,
+          "reaped_at": 8610040.16239414
+        }
+      ],
+      "errors": [],
+      "reporting_errors": [],
+      "echild": true
+    },
+    "handshake": {
+      "kind": "ready",
+      "protocol": 1,
+      "launch_id": "cf61201bbe24408a810f43fd9e4b5c4c",
+      "helper_identity": {
+        "pid": 158302,
+        "birth_ticks": 97391971,
+        "ppid": 157844,
+        "pgrp": 158302,
+        "session": 158302
+      },
+      "containment_verified": true,
+      "method": "linux-subreaper-waitid"
+    },
+    "stdout_truncated": false,
+    "stderr_truncated": false
+  }
+}

@@ -85,7 +85,7 @@ pub struct HybridMlaExplicitSelectionBuffers<'a> {
     pub status: &'a mut DeviceBuffer<i32>,
 }
 
-use crate::cuda::context::{CudaF32Buffer, CudaI32Buffer};
+use crate::cuda::operator_owner::{CudaF32Buffer, CudaI32Buffer};
 use crate::cuda::operators::OperatorWorkspaceRequirements;
 use ferrule_common::{Error, Result};
 
@@ -114,41 +114,11 @@ pub use crate::cuda::providers::cutlass::{
 /// fn access(workspace: &CudaHybridMlaAttentionWorkspace) { let _ = &workspace.scores; }
 /// ```
 pub struct CudaHybridMlaAttentionWorkspace {
-    #[cfg_attr(
-        not(feature = "cuda"),
-        allow(dead_code, reason = "keeps native CUTLASS query scratch alive")
-    )]
     pub(crate) query_bf16: DeviceBuffer<u16>,
-    #[cfg_attr(
-        not(feature = "cuda"),
-        allow(dead_code, reason = "keeps native CUTLASS KV scratch alive")
-    )]
     pub(crate) gathered_kv_bf16: DeviceBuffer<u16>,
-    #[cfg_attr(
-        not(feature = "cuda"),
-        allow(dead_code, reason = "keeps native CUTLASS score scratch alive")
-    )]
     pub(crate) scores: CudaF32Buffer,
-    #[cfg_attr(
-        not(feature = "cuda"),
-        allow(dead_code, reason = "keeps native CUTLASS probability scratch alive")
-    )]
     pub(crate) probabilities_bf16: DeviceBuffer<u16>,
-    #[cfg_attr(
-        not(feature = "cuda"),
-        allow(
-            dead_code,
-            reason = "keeps native CUTLASS online-softmax rescale scratch alive"
-        )
-    )]
     pub(crate) online_rescales: CudaF32Buffer,
-    #[cfg_attr(
-        not(feature = "cuda"),
-        allow(
-            dead_code,
-            reason = "keeps native CUTLASS softmax denominator scratch alive"
-        )
-    )]
     pub(crate) denominators: CudaF32Buffer,
     pub(crate) status: CudaI32Buffer,
 }
@@ -198,7 +168,7 @@ impl CudaHybridMlaAttentionWorkspace {
 
 /// Backend-private storage remains inaccessible through semantic and legacy paths.
 /// ```compile_fail,E0616
-/// use ferrule_backend::cuda::context::CudaHybridMlaExplicitSelectionWorkspace;
+/// use ferrule_backend::cuda::operator_owner::CudaHybridMlaExplicitSelectionWorkspace;
 /// fn access(workspace: &CudaHybridMlaExplicitSelectionWorkspace) { let _ = &workspace.storage; }
 /// ```
 pub struct CudaHybridMlaExplicitSelectionWorkspace {

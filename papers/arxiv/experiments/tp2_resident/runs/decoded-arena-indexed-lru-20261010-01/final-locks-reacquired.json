@@ -1,0 +1,23 @@
+{
+  "locks": {
+    "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/GPU-63f1bd01-ddf9-a742-ee48-9389892493d9.lock",
+      "fd": 3,
+      "device": 64785,
+      "inode": 58519247,
+      "coordinator_pid": 118447,
+      "mode": "local_nonblocking_flock",
+      "global_reservation": false
+    },
+    "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/GPU-b980f22b-58a3-fc88-21c1-ae86053d8535.lock",
+      "fd": 4,
+      "device": 64785,
+      "inode": 58519119,
+      "coordinator_pid": 118447,
+      "mode": "local_nonblocking_flock",
+      "global_reservation": false
+    }
+  },
+  "all_eight_idle": true
+}

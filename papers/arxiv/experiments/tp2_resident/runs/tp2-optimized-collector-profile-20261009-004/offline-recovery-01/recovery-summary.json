@@ -1,0 +1,155 @@
+{
+  "schema": "ferrule.paper.offline-nsys-recovery.v1",
+  "status": "not_recovered_with_installed_tools",
+  "gpu_operations": false,
+  "model_started": false,
+  "raw_overwritten": false,
+  "raw_artifacts": {
+    "qdstrm": "../runs/P1/session/nsight/nsys.qdstrm",
+    "nsys_rep": "../runs/P1/session/nsight/nsys.nsys-rep",
+    "sqlite": "../runs/P1/session/nsight/nsys.sqlite",
+    "raw_hashes": "raw-before.json",
+    "raw_hashes_rechecked": true
+  },
+  "capture": {
+    "cli": "/opt/nvidia/nsight-systems/2026.1.3/target-linux-x64/nsys",
+    "cli_version": "2026.1.3.425-261338342291v0",
+    "argv_trace": "cuda-sw,nvtx,osrt",
+    "argv_scope": "--cuda-trace-scope=process-tree --cuda-trace-all-apis=true --gpu-metrics-devices=none --gpu-video-devices=none --gpuctxsw=false --sample=none --cpuctxsw=none",
+    "capture_metadata": {
+      "capture_event_types": [
+        "OSRuntime",
+        "NvtxEvents",
+        "Cuda"
+      ],
+      "cuda_trace_scope": "ProcessTree",
+      "cuda_skip_some_api_calls": false,
+      "cuda_memory_usage": false,
+      "start_trigger": "Manual",
+      "stop_trigger": "Delayed",
+      "loaded_cupti": "/opt/nvidia/nsight-systems/2026.1.3/target-linux-x64/libcupti.so.12.9"
+    }
+  },
+  "host_and_device_metadata": {
+    "driver_version": "575.57.08",
+    "cuda_driver_version": "12090",
+    "devices": "NVIDIA GeForce RTX 3090, GA102, Ampere, 8 devices, 24 GiB class",
+    "gsp_firmware": "575.57.08",
+    "target_environment_recorded": true,
+    "physical_uuid_metadata": "TARGET_INFO_GPU id0=b980f22b-58a3-fc88-21c1-ae86053d8535, id1=63f1bd01-ddf9-a742-ee48-9389892493d9; TARGET_INFO_CUDA_DEVICE has only pid156039/cudaId0/gpuId0/uuid c04e0db8-5e50-416a-aee3-54edcf219a4f. Difference observed; cause not established; no UUID substitution performed."
+  },
+  "importers": [
+    {
+      "path": "/opt/nvidia/nsight-systems/2026.1.3/host-linux-x64/QdstrmImporter",
+      "version": "2026.1.3.425-261338342291v0",
+      "result": "exit_3",
+      "fresh_output": "clean-same.nsys-rep",
+      "fresh_export": "clean-same.sqlite",
+      "evidence": "clean-same-import.stderr",
+      "detail": "TargetProfilingFailed during report processing; NumTpcs and StringStorage diagnostics are present",
+      "receipt": "clean-same-import.receipt.json"
+    },
+    {
+      "path": "/opt/nvidia/nsight-compute/2026.1.1/host/linux-desktop-glibc_2_11_3-x64/QdstrmImporter",
+      "version": "NVIDIA Nsight Systems 37634170",
+      "result": "exit_0_but_incomplete",
+      "fresh_output": "reimport-2026.1.1.nsys-rep",
+      "fresh_export": "older-reimport.sqlite",
+      "evidence": "reimport-2026.1.1.log",
+      "detail": "Report generated, but export contains only 22 tables and no CUDA runtime, memcpy, synchronization or kernel tables",
+      "compatibility": "Not a matching supported importer; diagnostic-only attempt. Return code is not proof of format compatibility."
+    }
+  ],
+  "event_counts": {
+    "original_fresh_export": {
+      "CUPTI_ACTIVITY_KIND_KERNEL": 0,
+      "CUPTI_ACTIVITY_KIND_MEMCPY": 83,
+      "CUPTI_ACTIVITY_KIND_RUNTIME": 179104,
+      "CUPTI_ACTIVITY_KIND_CUDA_EVENT": 11742,
+      "CUPTI_ACTIVITY_KIND_SYNCHRONIZATION": 29505,
+      "TARGET_INFO_GPU": 8,
+      "DIAGNOSTIC_EVENT": 457
+    },
+    "same_version_reimport_export": {
+      "CUPTI_ACTIVITY_KIND_KERNEL": 0,
+      "CUPTI_ACTIVITY_KIND_MEMCPY": 83,
+      "CUPTI_ACTIVITY_KIND_RUNTIME": 179104,
+      "CUPTI_ACTIVITY_KIND_CUDA_EVENT": 11742,
+      "CUPTI_ACTIVITY_KIND_SYNCHRONIZATION": 29505,
+      "TARGET_INFO_GPU": 8,
+      "DIAGNOSTIC_EVENT": 457
+    },
+    "older_version_reimport_export": {
+      "CUPTI_ACTIVITY_KIND_KERNEL": "missing",
+      "CUPTI_ACTIVITY_KIND_MEMCPY": "missing",
+      "CUPTI_ACTIVITY_KIND_RUNTIME": "missing",
+      "TARGET_INFO_GPU": 8,
+      "DIAGNOSTIC_EVENT": 17
+    },
+    "clean_same_version_export": {
+      "CUPTI_ACTIVITY_KIND_KERNEL": 0,
+      "CUPTI_ACTIVITY_KIND_MEMCPY": 83,
+      "CUPTI_ACTIVITY_KIND_RUNTIME": 179104,
+      "CUPTI_ACTIVITY_KIND_CUDA_EVENT": 11742,
+      "CUPTI_ACTIVITY_KIND_SYNCHRONIZATION": 29505,
+      "TARGET_INFO_GPU": 8,
+      "DIAGNOSTIC_EVENT": 457
+    }
+  },
+  "diagnostics_observed_not_interpreted": {
+    "num_tpcs_not_initialized": true,
+    "string_storage_bucket_error_count": 428,
+    "legacy_software_trace_message": true,
+    "loaded_cupti_message": true,
+    "cuda_events_produced": 7197127,
+    "nvtx_events": "none reported",
+    "kernel_data": "no rows in export"
+  },
+  "trace_semantics": {
+    "cuda": "Installed help says this selects the hardware event system where available and may fall back to cuda-sw.",
+    "cuda_sw": "Installed help and imported diagnostic identify this as the legacy/software CUDA trace.",
+    "what_run004_contains": "CUPTI runtime/API, memcpy, CUDA event and synchronization records; no exported kernel activity rows.",
+    "filter_test": "Full report export with --lazy=false, no time/NVTX filter, preserved the same zero-kernel/83-memcpy/179104-runtime counts.",
+    "conclusion": "Unfiltered exports and a matching-version reimport reproduce empty kernel activity. Stats/time/NVTX filters and SQLite lazy table creation do not explain this outcome. Existing evidence cannot distinguish missing/malformed producer records from an importer defect or establish whether another future importer could recover them."
+  },
+  "compatibility": {
+    "same_cli_importer": "matching 2026.1.3 version, still fails during processing",
+    "older_importer": "not a valid recovery; exit 0 but silently/incompletely lacks CUDA event tables",
+    "toolkit_wrapper": "unusable: /usr/local/cuda-13.2/bin/nsys reports Nsight Systems 2025.6.3 is not installed",
+    "library_pins": {
+      "paths": 78,
+      "matching_capture_pins": 63,
+      "unrecorded_in_capture_pins": 15,
+      "mismatches": [],
+      "qualification": "Current ldd resolution is not a complete historical process maps record; clean matching importer reproduces failure."
+    },
+    "minimum_action_supported_by_evidence": "No known-good minimum version or capture configuration can be established from these files. Installed guide requires CLI and QdstrmImporter versions to match for qdstrm conversion; that necessary condition is met by 2026.1.3 but is not sufficient here. 2026.1.1 is not a supported match. Next step is vendor/offline format investigation of existing raw data, not a model restart."
+  },
+  "artifacts": [
+    "original-metadata-diagnostics.json",
+    "raw-before.json",
+    "tool-library-pins.json",
+    "clean-same-import.stderr",
+    "same-reimport.sqlite",
+    "original-fresh.sqlite",
+    "older-reimport.sqlite",
+    "cuda-trace-doc.txt",
+    "profile-help.txt"
+  ],
+  "fairmatch": false,
+  "exact_speedup": null,
+  "e2": "incomplete",
+  "procedural_notes": [
+    "Initial same-version import returned 3 and created reimport-2026.1.3.nsys-rep; a redundant invocation was rejected because output existed and its shared log was overwritten. The separately logged clean-same import is authoritative and retains exit 3 and full diagnostics. Raw inputs were never overwritten."
+  ],
+  "raw_sha256_unchanged": {
+    "nsys.qdstrm": true,
+    "nsys.nsys-rep": true,
+    "nsys.sqlite": true
+  },
+  "cause_boundary": {
+    "proven": "Matching-version offline importer returns 3 while processing the unchanged raw stream; reports GetNumTpcs uninitialized and StringStorage missing bucket. Clean environment reproduces original event counts and failures.",
+    "unknown": "Which producer record or reader assumption is responsible; whether NumTpcs triggers later StringStorage errors; underlying driver/collector defect; known-good replacement release.",
+    "not_evidence": "The CUDA13.3 build-source pathname in an exception does not identify the runtime CUPTI: the recorded loaded library is libcupti.so.12.9."
+  }
+}

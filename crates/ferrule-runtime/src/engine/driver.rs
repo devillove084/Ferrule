@@ -50,6 +50,7 @@ use crate::speculation::{
 
 mod admission;
 mod continuations;
+mod kv_execution;
 mod kv_lifecycle;
 mod output;
 mod prefix;
@@ -57,6 +58,7 @@ mod resident;
 mod sessions;
 mod shutdown;
 mod speculative;
+mod trace;
 
 use admission::{AdmissionSessions, RuntimeRequestIdentity};
 use continuations::ContinuationRegistry;
@@ -72,11 +74,12 @@ use speculative::{
     PendingSpeculativeVerificationDriverCohort, PreparedSpeculativeAction, SpeculativeEnding,
     record_speculative_cohort_metrics, record_speculative_sequence_metrics,
 };
+use trace::TraceObserver;
 
 use super::observability::{
     ResidentDriverObservability, ResidentPrefixCacheStats, ResidentTopKDriverStats,
 };
-use super::{InferenceRequestCleanup, NativeMultiSessionExecutor, RequestCleanupOwner};
+use super::{InferenceRequestCleanup, RequestCleanupOwner, RunnerMultiSessionExecutor};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ResidentTopKDriverConfig {
@@ -295,7 +298,7 @@ pub struct ResidentDriverShutdownReport {
 }
 
 struct ResidentRuntimeParts<R: MultiSessionRunner> {
-    executor: NativeMultiSessionExecutor<R>,
+    executor: RunnerMultiSessionExecutor<R>,
     completion_hub: ferrule_common::CompletionHub,
     registry: LoadRegistry<Box<dyn RuntimeMaterializationProvider>>,
     resolver: RuntimeMaterializationResolver,
@@ -409,14 +412,16 @@ where
     request_identities: HashMap<RequestId, RuntimeRequestIdentity>,
     next_admission_session: Option<u64>,
     admission_closed: bool,
+    admission_started: bool,
     slot_pool: C,
-    executor: NativeMultiSessionExecutor<R>,
+    executor: RunnerMultiSessionExecutor<R>,
     sessions: SessionCustody<R::SequenceState>,
     /// Default top-k used for batch lowering.
     top_k: NonZeroU32,
     page_manager: Option<KvPageManager>,
     kv: KvLifecycleState,
     prefix: PrefixLifecycleState<R::SequenceState>,
+    trace: TraceObserver,
     next_page_slot: u32,
     config: ResidentTopKDriverConfig,
     observability: ResidentDriverObservability,
@@ -439,6 +444,8 @@ where
     output: OutputArbiter,
     shutting_down: bool,
     physical_shutdown_report: Option<ResidentDriverShutdownReport>,
+    resource_shutdown_attempts: u64,
+    last_resource_shutdown_summary: Option<super::ResidentResourceShutdownSummary>,
     #[cfg(test)]
     stage_faults: VecDeque<&'static str>,
     #[cfg(test)]
@@ -627,7 +634,7 @@ where
         };
 
         Ok(ResidentRuntimeParts {
-            executor: NativeMultiSessionExecutor::new(runner),
+            executor: RunnerMultiSessionExecutor::new(runner),
             completion_hub,
             registry,
             resolver,
@@ -658,6 +665,7 @@ where
             request_identities: HashMap::new(),
             next_admission_session: Some(1),
             admission_closed: false,
+            admission_started: false,
             slot_pool,
             executor,
             sessions: SessionCustody::default(),
@@ -665,6 +673,7 @@ where
             page_manager: None,
             kv: KvLifecycleState::default(),
             prefix,
+            trace: TraceObserver::default(),
             next_page_slot: 0,
             config,
             observability: ResidentDriverObservability::default(),
@@ -685,6 +694,8 @@ where
             output: OutputArbiter::default(),
             shutting_down: false,
             physical_shutdown_report: None,
+            resource_shutdown_attempts: 0,
+            last_resource_shutdown_summary: None,
             #[cfg(test)]
             stage_faults: VecDeque::new(),
             #[cfg(test)]
@@ -702,12 +713,12 @@ where
     }
 
     #[cfg(test)]
-    pub(crate) fn executor(&self) -> &NativeMultiSessionExecutor<R> {
+    pub(crate) fn executor(&self) -> &RunnerMultiSessionExecutor<R> {
         &self.executor
     }
 
     #[cfg(test)]
-    pub(crate) fn executor_mut(&mut self) -> &mut NativeMultiSessionExecutor<R> {
+    pub(crate) fn executor_mut(&mut self) -> &mut RunnerMultiSessionExecutor<R> {
         &mut self.executor
     }
 
@@ -732,6 +743,25 @@ where
         R: ResidentModelRunner,
     {
         self.executor.runner().observability_snapshot()
+    }
+
+    /// Observe existing owners only: no progress, synchronization, or release.
+    pub fn model_resource_observability_snapshot(
+        &self,
+    ) -> ferrule_model::resource_observability::PhysicalResourceObservation
+    where
+        R: ResidentModelRunner,
+    {
+        self.observability
+            .physical_resources
+            .snapshot_or_unknown(&self.executor.runner().physical_resource_snapshot())
+    }
+
+    pub fn resource_observability_snapshot(&self) -> super::ResidentResourceObservability
+    where
+        R: ResidentModelRunner,
+    {
+        super::observability::snapshot_resources(self, &self.observability.resources)
     }
 
     pub(crate) fn completion_hub(&self) -> ferrule_common::CompletionHub {
@@ -999,6 +1029,7 @@ where
             if let Some(session_id) = self.scheduler.active_session_for_request(request_id) {
                 self.output
                     .accept_scheduled_cancellation(request_id, session_id);
+                self.trace.cancellation(request_id.0);
             } else {
                 return self
                     .scheduler
@@ -1077,8 +1108,13 @@ where
         request_id: RequestId,
         session_id: SessionId,
     ) -> Result<()> {
+        let accepted = self.output.cancellation_accepted(Some(request_id));
         self.output
-            .accept_transaction_cancellation(transaction, request_id, session_id)
+            .accept_transaction_cancellation(transaction, request_id, session_id)?;
+        if !accepted {
+            self.trace.cancellation(request_id.0);
+        }
+        Ok(())
     }
 
     fn retry_pending_request_cancellations(&mut self) -> Result<()> {
@@ -1208,8 +1244,7 @@ where
                     return Ok(ResidentCancelProgress::Pending);
                 }
                 Err(error) => {
-                    self.resident_transactions.insert(transaction, pending);
-                    return Err(error);
+                    return self.retain_resident_ending_error(pending, error);
                 }
                 Ok(TransactionEndProgress::Complete) => {
                     pending.phase = pending.phase.backend_completed(self.runtime_now_ns());
@@ -1434,14 +1469,19 @@ where
             }
         };
         let charge = snapshot.page_count();
+        self.trace
+            .snapshot_captured(snapshot.id(), snapshot.committed_tokens(), charge);
         let payload = ResidentPrefixPayload {
             model_state: cached_model,
             snapshot,
         };
-        match self
-            .prefix
-            .insert_and_queue_cleanup(namespace, &tokens, payload, charge)
-        {
+        match self.prefix.insert_and_queue_cleanup(
+            namespace,
+            &tokens,
+            payload,
+            charge,
+            &mut self.trace,
+        ) {
             Ok(()) => self.progress_prefix_cleanups(),
             Err(kind) => {
                 let cleanup = self.progress_prefix_cleanups();
@@ -1568,16 +1608,39 @@ where
             self.prepare_resident_transaction(action, scheduled)?;
         let transaction = pending.transaction;
         let resource_demand = Self::action_demand(&pending.action);
-        let progress = self.executor.execute_prepared_batch(
-            transaction,
-            &mut pending.states,
-            pending.scheduled.execution(),
-        );
+        let progress = match &pending.kv {
+            Some(PendingResidentKv::Reserved(reservations)) => self.executor.execute_scoped_batch(
+                pending.execution_mode,
+                transaction,
+                &mut pending.states,
+                pending.scheduled.execution(),
+                self.page_manager.as_ref(),
+                reservations,
+            ),
+            _ => Err(Error::Invariant {
+                message: "execution lost live KV reservations".into(),
+            }),
+        };
         if let Err(error) = self.record_runnable_work_span(execution_started_ns) {
             return self.abort_failed_resident(pending, error, "model execution observation");
         }
         match progress {
             Ok(MultiSessionBatchProgress::Complete(output)) => {
+                use super::KvExecutionMode;
+                match pending.execution_mode {
+                    KvExecutionMode::ResidentWarming => {
+                        self.observability.stats.kv_execution.resident_warming += 1
+                    }
+                    KvExecutionMode::HostKvDecode => {
+                        self.observability.stats.kv_execution.host_kv_decode += 1
+                    }
+                    KvExecutionMode::Resident => {}
+                }
+                tracing::debug!(
+                    transaction = transaction.get(),
+                    kv_execution_mode = pending.execution_mode.as_str(),
+                    "KV forward completed; publication still owned by transaction"
+                );
                 self.finish_resident_transaction(pending, output, on_token)
             }
             Ok(MultiSessionBatchProgress::Waiting(progress)) => {
@@ -1898,6 +1961,7 @@ where
         self.check_warmup()?;
         self.update_hard_resource_observability();
         let proposal_enabled = self.config.enable_native_proposals
+            && !self.executor.host_kv_enabled()
             && self.prefix.capacity() == 0
             && self.executor.runner().native_proposal_source()?.is_some();
 
@@ -2318,7 +2382,16 @@ fn action_rows(action: &SchedulerAction) -> usize {
 }
 
 #[cfg(test)]
+#[path = "../../tests/unit/engine"]
 mod tests {
+    #[path = "driver_errors.rs"]
+    mod error_tests;
+    #[path = "driver_kv_execution.rs"]
+    mod kv_execution_tests;
+    #[path = "driver_trace.rs"]
+    mod kv_trace_tests;
+    #[path = "../../resource_closure/mod.rs"]
+    mod resource_closure_tests;
     use std::collections::{HashMap, VecDeque};
 
     use ferrule_common::execution::{
@@ -2432,7 +2505,10 @@ mod tests {
                     ResidentShutdownProgress::Pending
                 );
                 assert_eq!(driver.completion_hub().epoch(), wake_epoch);
-                assert_eq!(driver.load_registry.provider_faults(), &[fault.clone()]);
+                assert_eq!(
+                    driver.load_registry.provider_faults(),
+                    std::slice::from_ref(&fault)
+                );
                 assert!(matches!(
                     driver.shutdown(&mut |_| Ok(()), 512),
                     Err(Error::Registry { source }) if matches!(
@@ -2763,6 +2839,8 @@ mod tests {
         released_sequence_states: usize,
         release_failures_remaining: usize,
         kv_release_failures_remaining: usize,
+        kv_release_error: Option<ModelError>,
+        prepare_error: Option<ModelError>,
         released_kv_pages: Vec<ferrule_common::execution::KvPageId>,
         native_proposals: VecDeque<NativeProposal>,
         native_proposal_enabled: bool,
@@ -2856,6 +2934,8 @@ mod tests {
                 released_sequence_states: 0,
                 release_failures_remaining: 0,
                 kv_release_failures_remaining: 0,
+                kv_release_error: None,
+                prepare_error: None,
                 released_kv_pages: Vec::new(),
                 native_proposals: VecDeque::new(),
                 native_proposal_enabled: false,
@@ -3633,6 +3713,9 @@ mod tests {
             pages: &[ferrule_common::execution::KvPageId],
         ) -> ModelResult<()> {
             self.ensure_packed_topology_quiescent("release KV pages")?;
+            if let Some(error) = self.kv_release_error.take() {
+                return Err(error);
+            }
             if self.kv_release_failures_remaining > 0 {
                 self.kv_release_failures_remaining -= 1;
                 return Err(ModelError::Execution {
@@ -3679,6 +3762,9 @@ mod tests {
             _kv_reservations: &[KvReservationView],
         ) -> ModelResult<()> {
             self.prepared_batches += 1;
+            if let Some(error) = self.prepare_error.take() {
+                return Err(error);
+            }
             Ok(())
         }
 
@@ -11475,7 +11561,7 @@ mod tests {
             SessionId(2)
         );
         let before = driver.admission_snapshot();
-        assert!(matches!(driver.retain_session(SessionId(3)), Err(_)));
+        assert!(driver.retain_session(SessionId(3)).is_err());
         assert!(matches!(
             driver.set_admission_options(RuntimeAdmissionOptions {
                 max_session_identities: 1,
@@ -13195,6 +13281,7 @@ mod tests {
                     snapshot,
                 },
                 snapshot.page_count(),
+                &mut driver.trace,
             )
             .unwrap();
         assert_eq!(driver.prefix.len(), 1);

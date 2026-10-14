@@ -1,0 +1,777 @@
+{
+  "schema": "ferrule.paper.tp2-final-owner-release.v1",
+  "status": "verified",
+  "authorization_note": "User-authorized final verification after completed smoke/no-trace pair/official profile; reacquire all eight existing UUID locks nonblocking, verify true original idle, release all; no process signals or GPU workload.",
+  "all_eight_idle": true,
+  "all_eight_locks_reacquired": true,
+  "locks_released": true,
+  "locks": {
+    "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f.lock",
+      "device": 64785,
+      "inode": 58516170,
+      "coordinator_pid": 20003,
+      "mode": "local_nonblocking_flock",
+      "global_reservation": false
+    },
+    "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/GPU-0bc01d70-2ade-0714-8959-b25ae75469b6.lock",
+      "device": 64785,
+      "inode": 58518656,
+      "coordinator_pid": 20003,
+      "mode": "local_nonblocking_flock",
+      "global_reservation": false
+    },
+    "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d.lock",
+      "device": 64785,
+      "inode": 58519156,
+      "coordinator_pid": 20003,
+      "mode": "local_nonblocking_flock",
+      "global_reservation": false
+    },
+    "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/GPU-63f1bd01-ddf9-a742-ee48-9389892493d9.lock",
+      "device": 64785,
+      "inode": 58519247,
+      "coordinator_pid": 20003,
+      "mode": "local_nonblocking_flock",
+      "global_reservation": false
+    },
+    "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86.lock",
+      "device": 64785,
+      "inode": 58519167,
+      "coordinator_pid": 20003,
+      "mode": "local_nonblocking_flock",
+      "global_reservation": false
+    },
+    "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/GPU-b980f22b-58a3-fc88-21c1-ae86053d8535.lock",
+      "device": 64785,
+      "inode": 58519119,
+      "coordinator_pid": 20003,
+      "mode": "local_nonblocking_flock",
+      "global_reservation": false
+    },
+    "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011.lock",
+      "device": 64785,
+      "inode": 58519444,
+      "coordinator_pid": 20003,
+      "mode": "local_nonblocking_flock",
+      "global_reservation": false
+    },
+    "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685.lock",
+      "device": 64785,
+      "inode": 58519446,
+      "coordinator_pid": 20003,
+      "mode": "local_nonblocking_flock",
+      "global_reservation": false
+    }
+  },
+  "idle": {
+    "status": "verified",
+    "observations": [
+      {
+        "index": 0,
+        "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+        "total_bytes": 25769803776,
+        "gpu_bytes": 0,
+        "utilization": 0,
+        "devices": [
+          {
+            "index": 0,
+            "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 0,
+            "utilization": 0
+          },
+          {
+            "index": 1,
+            "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 0,
+            "utilization": 0
+          },
+          {
+            "index": 2,
+            "uuid": "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 0,
+            "utilization": 0
+          },
+          {
+            "index": 3,
+            "uuid": "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 0,
+            "utilization": 0
+          },
+          {
+            "index": 4,
+            "uuid": "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 0,
+            "utilization": 0
+          },
+          {
+            "index": 5,
+            "uuid": "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 0,
+            "utilization": 0
+          },
+          {
+            "index": 6,
+            "uuid": "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 0,
+            "utilization": 0
+          },
+          {
+            "index": 7,
+            "uuid": "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 0,
+            "utilization": 0
+          }
+        ],
+        "apps": [],
+        "monotonic": 8565467.278621394,
+        "diagnostic_retry": false,
+        "missing_attempts": [],
+        "baseline_delta_check": {
+          "per_uuid": {
+            "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": {
+              "index": 0,
+              "selected": true,
+              "baseline_bytes": 0,
+              "observed_bytes": 0,
+              "delta_bytes": 0,
+              "positive_delta_bytes": 0,
+              "utilization": 0,
+              "tolerance_bytes": null
+            },
+            "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": {
+              "index": 1,
+              "selected": true,
+              "baseline_bytes": 0,
+              "observed_bytes": 0,
+              "delta_bytes": 0,
+              "positive_delta_bytes": 0,
+              "utilization": 0,
+              "tolerance_bytes": null
+            },
+            "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6": {
+              "index": 2,
+              "selected": false,
+              "baseline_bytes": 0,
+              "observed_bytes": 0,
+              "delta_bytes": 0,
+              "positive_delta_bytes": 0,
+              "utilization": 0,
+              "tolerance_bytes": 1048576
+            },
+            "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011": {
+              "index": 3,
+              "selected": false,
+              "baseline_bytes": 0,
+              "observed_bytes": 0,
+              "delta_bytes": 0,
+              "positive_delta_bytes": 0,
+              "utilization": 0,
+              "tolerance_bytes": 1048576
+            },
+            "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86": {
+              "index": 4,
+              "selected": false,
+              "baseline_bytes": 0,
+              "observed_bytes": 0,
+              "delta_bytes": 0,
+              "positive_delta_bytes": 0,
+              "utilization": 0,
+              "tolerance_bytes": 1048576
+            },
+            "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685": {
+              "index": 5,
+              "selected": false,
+              "baseline_bytes": 0,
+              "observed_bytes": 0,
+              "delta_bytes": 0,
+              "positive_delta_bytes": 0,
+              "utilization": 0,
+              "tolerance_bytes": 1048576
+            },
+            "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d": {
+              "index": 6,
+              "selected": false,
+              "baseline_bytes": 0,
+              "observed_bytes": 0,
+              "delta_bytes": 0,
+              "positive_delta_bytes": 0,
+              "utilization": 0,
+              "tolerance_bytes": 1048576
+            },
+            "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f": {
+              "index": 7,
+              "selected": false,
+              "baseline_bytes": 0,
+              "observed_bytes": 0,
+              "delta_bytes": 0,
+              "positive_delta_bytes": 0,
+              "utilization": 0,
+              "tolerance_bytes": 1048576
+            }
+          },
+          "violations": [],
+          "policy": "Nonselected memory rejects only for positive delta > 1 MiB; PID/utilization retained without foreign signals; pre/post idle still require no apps or utilization"
+        }
+      },
+      {
+        "index": 0,
+        "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+        "total_bytes": 25769803776,
+        "gpu_bytes": 0,
+        "utilization": 0,
+        "devices": [
+          {
+            "index": 0,
+            "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 0,
+            "utilization": 0
+          },
+          {
+            "index": 1,
+            "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 0,
+            "utilization": 0
+          },
+          {
+            "index": 2,
+            "uuid": "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 0,
+            "utilization": 0
+          },
+          {
+            "index": 3,
+            "uuid": "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 0,
+            "utilization": 0
+          },
+          {
+            "index": 4,
+            "uuid": "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 0,
+            "utilization": 0
+          },
+          {
+            "index": 5,
+            "uuid": "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 0,
+            "utilization": 0
+          },
+          {
+            "index": 6,
+            "uuid": "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 0,
+            "utilization": 0
+          },
+          {
+            "index": 7,
+            "uuid": "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f",
+            "total_bytes": 25769803776,
+            "gpu_bytes": 0,
+            "utilization": 0
+          }
+        ],
+        "apps": [],
+        "monotonic": 8565467.75877943,
+        "diagnostic_retry": false,
+        "missing_attempts": [],
+        "baseline_delta_check": {
+          "per_uuid": {
+            "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": {
+              "index": 0,
+              "selected": true,
+              "baseline_bytes": 0,
+              "observed_bytes": 0,
+              "delta_bytes": 0,
+              "positive_delta_bytes": 0,
+              "utilization": 0,
+              "tolerance_bytes": null
+            },
+            "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": {
+              "index": 1,
+              "selected": true,
+              "baseline_bytes": 0,
+              "observed_bytes": 0,
+              "delta_bytes": 0,
+              "positive_delta_bytes": 0,
+              "utilization": 0,
+              "tolerance_bytes": null
+            },
+            "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6": {
+              "index": 2,
+              "selected": false,
+              "baseline_bytes": 0,
+              "observed_bytes": 0,
+              "delta_bytes": 0,
+              "positive_delta_bytes": 0,
+              "utilization": 0,
+              "tolerance_bytes": 1048576
+            },
+            "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011": {
+              "index": 3,
+              "selected": false,
+              "baseline_bytes": 0,
+              "observed_bytes": 0,
+              "delta_bytes": 0,
+              "positive_delta_bytes": 0,
+              "utilization": 0,
+              "tolerance_bytes": 1048576
+            },
+            "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86": {
+              "index": 4,
+              "selected": false,
+              "baseline_bytes": 0,
+              "observed_bytes": 0,
+              "delta_bytes": 0,
+              "positive_delta_bytes": 0,
+              "utilization": 0,
+              "tolerance_bytes": 1048576
+            },
+            "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685": {
+              "index": 5,
+              "selected": false,
+              "baseline_bytes": 0,
+              "observed_bytes": 0,
+              "delta_bytes": 0,
+              "positive_delta_bytes": 0,
+              "utilization": 0,
+              "tolerance_bytes": 1048576
+            },
+            "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d": {
+              "index": 6,
+              "selected": false,
+              "baseline_bytes": 0,
+              "observed_bytes": 0,
+              "delta_bytes": 0,
+              "positive_delta_bytes": 0,
+              "utilization": 0,
+              "tolerance_bytes": 1048576
+            },
+            "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f": {
+              "index": 7,
+              "selected": false,
+              "baseline_bytes": 0,
+              "observed_bytes": 0,
+              "delta_bytes": 0,
+              "positive_delta_bytes": 0,
+              "utilization": 0,
+              "tolerance_bytes": 1048576
+            }
+          },
+          "violations": [],
+          "policy": "Nonselected memory rejects only for positive delta > 1 MiB; PID/utilization retained without foreign signals; pre/post idle still require no apps or utilization"
+        }
+      }
+    ],
+    "baseline": {
+      "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": {
+        "index": 0,
+        "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+        "total_bytes": 25769803776,
+        "gpu_bytes": 0,
+        "utilization": 0
+      },
+      "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": {
+        "index": 1,
+        "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+        "total_bytes": 25769803776,
+        "gpu_bytes": 0,
+        "utilization": 0
+      },
+      "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6": {
+        "index": 2,
+        "uuid": "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6",
+        "total_bytes": 25769803776,
+        "gpu_bytes": 0,
+        "utilization": 0
+      },
+      "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011": {
+        "index": 3,
+        "uuid": "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011",
+        "total_bytes": 25769803776,
+        "gpu_bytes": 0,
+        "utilization": 0
+      },
+      "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86": {
+        "index": 4,
+        "uuid": "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86",
+        "total_bytes": 25769803776,
+        "gpu_bytes": 0,
+        "utilization": 0
+      },
+      "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685": {
+        "index": 5,
+        "uuid": "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685",
+        "total_bytes": 25769803776,
+        "gpu_bytes": 0,
+        "utilization": 0
+      },
+      "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d": {
+        "index": 6,
+        "uuid": "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d",
+        "total_bytes": 25769803776,
+        "gpu_bytes": 0,
+        "utilization": 0
+      },
+      "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f": {
+        "index": 7,
+        "uuid": "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f",
+        "total_bytes": 25769803776,
+        "gpu_bytes": 0,
+        "utilization": 0
+      }
+    },
+    "anchor": null,
+    "scope": "all eight GPUs; selected zero; stable nonselected baseline-relative memory",
+    "nonselected_delta_tolerance_bytes": 1048576,
+    "missing_query_attempts": []
+  },
+  "supervisors": [
+    {
+      "run": "tp2-decoded-cache-smoke-20261010-001",
+      "slot": "S1",
+      "launch_id": "8d5a776a23d0418c9d1336ff0faef0e0",
+      "echild": true,
+      "supervisor_sha256": "2546bf10c86af109f8275a5010fac6a255ea16ed1ffd6dc744e8588fb3bfc10d"
+    },
+    {
+      "run": "tp2-decoded-cache-smoke-20261010-001",
+      "slot": "S2",
+      "launch_id": "c3de46e51d10451cb37945119505f260",
+      "echild": true,
+      "supervisor_sha256": "4efb6b56a6d26643fa82ec8dfde4a1afd7704e61ff5c14327fcaa0ab070d7c0e"
+    },
+    {
+      "run": "tp2-decoded-cache-fv-20261010-001",
+      "slot": "F1",
+      "launch_id": "605f94250910403db9798f900885a732",
+      "echild": true,
+      "supervisor_sha256": "8f24ca14bda1e9635162213f04fd5c65b14499d78ba88d0f99871b07665ce11d"
+    },
+    {
+      "run": "tp2-decoded-cache-fv-20261010-001",
+      "slot": "V1",
+      "launch_id": "cef87f82ddf14a33848da4016467de5b",
+      "echild": true,
+      "supervisor_sha256": "aa8007e52bb7be70c7b7054e64d88317b735851ab71077033d5e22ddb16699d9"
+    },
+    {
+      "run": "tp2-decoded-cache-fv-20261010-001",
+      "slot": "V2",
+      "launch_id": "e6ba877811d34cdfbc56ad36dd46e3cc",
+      "echild": true,
+      "supervisor_sha256": "8ea4740afd4fb34cd91cab4380a2023f18174b9dfeba1e924a2678b227b39585"
+    },
+    {
+      "run": "tp2-decoded-cache-fv-20261010-001",
+      "slot": "F2",
+      "launch_id": "0b50330ed51c415d9c0becf3d53010a3",
+      "echild": true,
+      "supervisor_sha256": "86970ea4ab191ad3308f985d55019d346577096341d2e2276024753fdcaa5720"
+    },
+    {
+      "run": "tp2-decoded-cache-official-profile-20261010-001",
+      "slot": "P1",
+      "launch_id": "f68eb6831cb84cc29b618df39085f44a",
+      "echild": true,
+      "supervisor_sha256": "cacd8a5f55124f12ce63485e21cf572fc3f8455e126543aef3febda7a4b5862d"
+    }
+  ],
+  "recorded_identities": [
+    {
+      "recorded": {
+        "pid": 11775,
+        "birth_ticks": 92641146,
+        "ppid": 11761,
+        "pgrp": 11775,
+        "session": 11775
+      },
+      "current": null,
+      "recorded_identity_absent": true
+    },
+    {
+      "recorded": {
+        "pid": 11776,
+        "birth_ticks": 92641150,
+        "ppid": 11775,
+        "pgrp": 11775,
+        "session": 11775
+      },
+      "current": null,
+      "recorded_identity_absent": true
+    },
+    {
+      "recorded": {
+        "pid": 12602,
+        "birth_ticks": 92681480,
+        "ppid": 11761,
+        "pgrp": 12602,
+        "session": 12602
+      },
+      "current": null,
+      "recorded_identity_absent": true
+    },
+    {
+      "recorded": {
+        "pid": 12603,
+        "birth_ticks": 92681483,
+        "ppid": 12602,
+        "pgrp": 12602,
+        "session": 12602
+      },
+      "current": null,
+      "recorded_identity_absent": true
+    },
+    {
+      "recorded": {
+        "pid": 13456,
+        "birth_ticks": 92738226,
+        "ppid": 13442,
+        "pgrp": 13456,
+        "session": 13456
+      },
+      "current": null,
+      "recorded_identity_absent": true
+    },
+    {
+      "recorded": {
+        "pid": 13457,
+        "birth_ticks": 92738229,
+        "ppid": 13456,
+        "pgrp": 13456,
+        "session": 13456
+      },
+      "current": null,
+      "recorded_identity_absent": true
+    },
+    {
+      "recorded": {
+        "pid": 14270,
+        "birth_ticks": 92782881,
+        "ppid": 13442,
+        "pgrp": 14270,
+        "session": 14270
+      },
+      "current": null,
+      "recorded_identity_absent": true
+    },
+    {
+      "recorded": {
+        "pid": 14271,
+        "birth_ticks": 92782884,
+        "ppid": 14270,
+        "pgrp": 14270,
+        "session": 14270
+      },
+      "current": null,
+      "recorded_identity_absent": true
+    },
+    {
+      "recorded": {
+        "pid": 14927,
+        "birth_ticks": 92788347,
+        "ppid": 14270,
+        "pgrp": 14271,
+        "session": 14271
+      },
+      "current": null,
+      "recorded_identity_absent": true
+    },
+    {
+      "recorded": {
+        "pid": 14928,
+        "birth_ticks": 92788347,
+        "ppid": 14270,
+        "pgrp": 14271,
+        "session": 14271
+      },
+      "current": null,
+      "recorded_identity_absent": true
+    },
+    {
+      "recorded": {
+        "pid": 14647,
+        "birth_ticks": 92787717,
+        "ppid": 14270,
+        "pgrp": 14271,
+        "session": 14271
+      },
+      "current": null,
+      "recorded_identity_absent": true
+    },
+    {
+      "recorded": {
+        "pid": 16156,
+        "birth_ticks": 92797982,
+        "ppid": 13442,
+        "pgrp": 16156,
+        "session": 16156
+      },
+      "current": null,
+      "recorded_identity_absent": true
+    },
+    {
+      "recorded": {
+        "pid": 16157,
+        "birth_ticks": 92797986,
+        "ppid": 16156,
+        "pgrp": 16156,
+        "session": 16156
+      },
+      "current": null,
+      "recorded_identity_absent": true
+    },
+    {
+      "recorded": {
+        "pid": 16809,
+        "birth_ticks": 92803167,
+        "ppid": 16156,
+        "pgrp": 16157,
+        "session": 16157
+      },
+      "current": null,
+      "recorded_identity_absent": true
+    },
+    {
+      "recorded": {
+        "pid": 16810,
+        "birth_ticks": 92803167,
+        "ppid": 16156,
+        "pgrp": 16157,
+        "session": 16157
+      },
+      "current": null,
+      "recorded_identity_absent": true
+    },
+    {
+      "recorded": {
+        "pid": 16529,
+        "birth_ticks": 92802539,
+        "ppid": 16156,
+        "pgrp": 16157,
+        "session": 16157
+      },
+      "current": null,
+      "recorded_identity_absent": true
+    },
+    {
+      "recorded": {
+        "pid": 18030,
+        "birth_ticks": 92812517,
+        "ppid": 13442,
+        "pgrp": 18030,
+        "session": 18030
+      },
+      "current": null,
+      "recorded_identity_absent": true
+    },
+    {
+      "recorded": {
+        "pid": 18031,
+        "birth_ticks": 92812521,
+        "ppid": 18030,
+        "pgrp": 18030,
+        "session": 18030
+      },
+      "current": null,
+      "recorded_identity_absent": true
+    },
+    {
+      "recorded": {
+        "pid": 18859,
+        "birth_ticks": 92860293,
+        "ppid": 18845,
+        "pgrp": 18859,
+        "session": 18859
+      },
+      "current": null,
+      "recorded_identity_absent": true
+    },
+    {
+      "recorded": {
+        "pid": 18860,
+        "birth_ticks": 92860296,
+        "ppid": 18859,
+        "pgrp": 18859,
+        "session": 18859
+      },
+      "current": null,
+      "recorded_identity_absent": true
+    },
+    {
+      "recorded": {
+        "pid": 18878,
+        "birth_ticks": 92861522,
+        "ppid": 18859,
+        "pgrp": 18878,
+        "session": 18878
+      },
+      "current": null,
+      "recorded_identity_absent": true
+    },
+    {
+      "recorded": {
+        "pid": 18890,
+        "birth_ticks": 92861688,
+        "ppid": 18859,
+        "pgrp": 18860,
+        "session": 18860
+      },
+      "current": null,
+      "recorded_identity_absent": true
+    },
+    {
+      "recorded": {
+        "pid": 18888,
+        "birth_ticks": 92861688,
+        "ppid": 18859,
+        "pgrp": 18860,
+        "session": 18860
+      },
+      "current": null,
+      "recorded_identity_absent": true
+    },
+    {
+      "recorded": {
+        "pid": 18910,
+        "birth_ticks": 92862196,
+        "ppid": 18889,
+        "state": "S"
+      },
+      "current": null,
+      "recorded_identity_absent": true
+    }
+  ],
+  "all_recorded_identities_absent": true,
+  "selected_uuid_order": [
+    "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+    "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9"
+  ],
+  "foreign_signals": false,
+  "production_source_pins_revalidated": true,
+  "smoke_and_pair_pass": true,
+  "profile_lifecycle_pass": true,
+  "full_trace_accepted": false
+}

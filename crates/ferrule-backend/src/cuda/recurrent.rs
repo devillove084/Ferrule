@@ -16,49 +16,11 @@ use crate::cuda::ffi::core::{
     ConvArgs, DATA_GATE_ROW_BROADCAST, DATA_QUERY_GATE_SPLIT, DATA_SIGMOID_GATE, DATA_SILU_GATE,
     DataArgs, DeltaArgs, NORM_OFFSET_AFFINE_F32, NormArgs,
 };
-use ferrule_common::{Error, Result};
+use ferrule_common::Result;
 
-fn invalid(message: impl Into<String>) -> Error {
-    Error::Internal {
-        message: format!("recurrent F32 CUDA: {}", message.into()),
-    }
-}
+use crate::cuda_plan::recurrent::{elements, invalid};
 
-fn elements(dims: &[usize]) -> Result<usize> {
-    dims.iter().try_fold(1usize, |n, &d| {
-        let n = n.checked_mul(d).ok_or_else(|| invalid("shape overflow"))?;
-        if d == 0 || n > i32::MAX as usize {
-            return Err(invalid(
-                "dimensions and element counts must be in 1..=i32::MAX",
-            ));
-        }
-        Ok(n)
-    })
-}
-
-/// Packed input/output `[rows, channels]`, weight/history `[channels, kernel_size]`.
-/// History contains the last K **raw** inputs, oldest first; the oldest slot is
-/// shifted out before each convolution. Kernel weights use PyTorch cross-correlation
-/// order (last weight multiplies the current input). Bias is optional `[channels]`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct CausalConv1dLayout {
-    pub rows: usize,
-    pub channels: usize,
-    pub kernel_size: usize,
-}
-impl CausalConv1dLayout {
-    pub fn validate(self) -> Result<()> {
-        self.row_elements()?;
-        self.history_elements()?;
-        Ok(())
-    }
-    pub fn row_elements(self) -> Result<usize> {
-        elements(&[self.rows, self.channels])
-    }
-    pub fn history_elements(self) -> Result<usize> {
-        elements(&[self.channels, self.kernel_size])
-    }
-}
+pub use crate::cuda_plan::{CausalConv1dLayout, F32RowsLayout, GatedDeltaNetLayout};
 
 pub struct CausalConv1dBuffers<'a> {
     pub input: &'a CudaF32Buffer,
@@ -66,53 +28,6 @@ pub struct CausalConv1dBuffers<'a> {
     pub bias: Option<&'a CudaF32Buffer>,
     pub history: &'a mut CudaF32Buffer,
     pub output: &'a mut CudaF32Buffer,
-}
-
-/// Packed post-convolution QKV `[rows, 2*key_heads*key_dim + value_heads*value_dim]`:
-/// each row is all Q heads, then all K heads, then all V heads (not head-interleaved).
-/// a/b are raw projection logits `[rows,value_heads]`, A_log/dt_bias `[value_heads]`.
-/// S is `[value_heads,key_dim,value_dim]`, output `[rows,value_heads,value_dim]`.
-/// Q/K head h is repeated contiguously `value_heads/key_heads` times.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct GatedDeltaNetLayout {
-    pub rows: usize,
-    pub key_heads: usize,
-    pub value_heads: usize,
-    pub key_dim: usize,
-    pub value_dim: usize,
-}
-impl GatedDeltaNetLayout {
-    pub fn validate(self) -> Result<()> {
-        self.qkv_elements()?;
-        self.gate_elements()?;
-        self.state_elements()?;
-        self.output_elements()?;
-        if !self.value_heads.is_multiple_of(self.key_heads) {
-            return Err(invalid(
-                "value_heads must be an integer multiple of key_heads",
-            ));
-        }
-        Ok(())
-    }
-    pub fn qkv_width(self) -> Result<usize> {
-        let qk = elements(&[2, self.key_heads, self.key_dim])?;
-        let v = elements(&[self.value_heads, self.value_dim])?;
-        elements(&[qk
-            .checked_add(v)
-            .ok_or_else(|| invalid("QKV width overflow"))?])
-    }
-    pub fn qkv_elements(self) -> Result<usize> {
-        elements(&[self.rows, self.qkv_width()?])
-    }
-    pub fn gate_elements(self) -> Result<usize> {
-        elements(&[self.rows, self.value_heads])
-    }
-    pub fn state_elements(self) -> Result<usize> {
-        elements(&[self.value_heads, self.key_dim, self.value_dim])
-    }
-    pub fn output_elements(self) -> Result<usize> {
-        elements(&[self.rows, self.value_heads, self.value_dim])
-    }
 }
 
 pub struct GatedDeltaNetBuffers<'a> {
@@ -142,21 +57,6 @@ impl QueryGateLayout {
     }
     pub fn output_elements(self) -> Result<usize> {
         elements(&[self.rows, self.heads, self.head_dim])
-    }
-}
-
-/// Packed `[rows,width]`. For per-head norm use rows=tokens*heads, width=head_dim.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct F32RowsLayout {
-    pub rows: usize,
-    pub width: usize,
-}
-impl F32RowsLayout {
-    pub fn validate(self) -> Result<()> {
-        self.elements().map(|_| ())
-    }
-    pub fn elements(self) -> Result<usize> {
-        elements(&[self.rows, self.width])
     }
 }
 
@@ -221,28 +121,7 @@ impl CudaOperators {
     // Reads may alias each other, but every write range must be disjoint from
     // reads and other writes. This also protects future typed allocation views.
     fn recurrent_no_alias(reads: &[&CudaF32Buffer], writes: &[&CudaF32Buffer]) -> Result<()> {
-        let range = |b: &CudaF32Buffer| -> Result<(u64, u64)> {
-            let start = b.buffer.cu_deviceptr();
-            let bytes = (b.len() as u64)
-                .checked_mul(4)
-                .ok_or_else(|| invalid("byte overflow"))?;
-            Ok((
-                start,
-                start
-                    .checked_add(bytes)
-                    .ok_or_else(|| invalid("address overflow"))?,
-            ))
-        };
-        for (i, write) in writes.iter().enumerate() {
-            let (start, end) = range(write)?;
-            for other in reads.iter().chain(writes[..i].iter()) {
-                let (other_start, other_end) = range(other)?;
-                if start < other_end && other_start < end {
-                    return Err(invalid("overlapping writable buffer ranges"));
-                }
-            }
-        }
-        Ok(())
+        Self::f32_no_alias(reads, writes)
     }
 
     /// Causal depthwise cross-correlation + SiLU, updating raw history in row order.

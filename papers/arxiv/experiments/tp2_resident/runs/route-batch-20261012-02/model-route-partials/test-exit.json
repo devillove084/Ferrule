@@ -1,0 +1,7 @@
+{
+  "returncode": 0,
+  "one_test_passed": true,
+  "selector": "transformer::standard::cuda::hybrid_rank::mixed::decoded_gpu_tests::route_batch::raw_partial_legacy_vs_batch_exact_after_source_retirement",
+  "binary_sha256": "aeb5274b8779555e9946ccaed3057c74a99386259fd98c60d41d2d7cd5162977",
+  "log_sha256": "dc40a41318f095c3a3515fbfb7a9eb6c8ed361ea1e2cb9d5d04cd60a5ba4dc59"
+}

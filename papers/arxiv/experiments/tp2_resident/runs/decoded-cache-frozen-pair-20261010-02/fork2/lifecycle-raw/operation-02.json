@@ -1,0 +1,10 @@
+{
+  "epoch": 0,
+  "frontier": 1,
+  "op": "fork",
+  "runtime_session": 2,
+  "runtime_source_session": 1,
+  "session": "left",
+  "source": "parent",
+  "state_binding": "source preceding publication; validate branch before-state on its next call"
+}

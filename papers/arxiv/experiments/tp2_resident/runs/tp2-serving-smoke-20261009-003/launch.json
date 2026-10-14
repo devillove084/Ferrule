@@ -1,0 +1,19 @@
+{
+  "protocol": "tp2-serving-smoke-c1",
+  "purpose": "serving_smoke",
+  "status": "incomplete",
+  "sole_gpu_owner_granted": true,
+  "owner_note": "User renewed sole GPU ownership on 2026-10-09 for pinned release serving smoke then gated F1V1 V2F2; only physical GPU0/1; no foreign signals; fail stop and authenticated drain",
+  "fairmatch": false,
+  "exact_speedup": null,
+  "slots": [
+    {
+      "id": "S1",
+      "status": "not_run"
+    },
+    {
+      "id": "S2",
+      "status": "not_run"
+    }
+  ]
+}

@@ -1,0 +1,395 @@
+{
+  "status": "complete",
+  "started_monotonic": 8640948.36404627,
+  "fairmatch": false,
+  "exact_speedup": null,
+  "launch_monotonic": 8640949.078968342,
+  "server_pid": 181045,
+  "server_identity": {
+    "pid": 181045,
+    "birth_ticks": 100482877,
+    "ppid": 181036,
+    "state": "R"
+  },
+  "startup_seconds": 366.17958841472864,
+  "request_gate": {
+    "status": "complete",
+    "phases": [
+      {
+        "stage": "hello2",
+        "gate": {
+          "status": "pass",
+          "engine": "ferrule",
+          "checks": [
+            {
+              "index": 0,
+              "passed": true,
+              "actual_input_tokens": 1,
+              "actual_output_tokens": 2
+            }
+          ],
+          "first_qa_requests": 0,
+          "warmup_requests": 0,
+          "measured_requests": 1,
+          "http_receipt_sha256": "08d60e92fe80dd87f6581abeff957a7e90bbed0a2220565dc9c411a9a0a515b0",
+          "coverage": "visible text/usage only; separate pinned numerical acceptance, not arithmetic parity",
+          "fairmatch": false,
+          "exact_speedup": null
+        }
+      },
+      {
+        "stage": "canary8",
+        "gate": {
+          "status": "pass",
+          "engine": "ferrule",
+          "checks": [
+            {
+              "index": 0,
+              "passed": true,
+              "actual_input_tokens": 5,
+              "actual_output_tokens": 8
+            },
+            {
+              "index": 1,
+              "passed": true,
+              "actual_input_tokens": 5,
+              "actual_output_tokens": 8
+            },
+            {
+              "index": 2,
+              "passed": true,
+              "actual_input_tokens": 3,
+              "actual_output_tokens": 8
+            }
+          ],
+          "first_qa_requests": 0,
+          "warmup_requests": 0,
+          "measured_requests": 3,
+          "http_receipt_sha256": "bcd1187cb7f1b430da4a93ff21870b3c91648e5bf75d5c8ea3df9efb2cae65f8",
+          "coverage": "visible text/usage only; separate pinned numerical acceptance, not arithmetic parity",
+          "fairmatch": false,
+          "exact_speedup": null
+        }
+      },
+      {
+        "stage": "qa8-V1",
+        "gate": {
+          "status": "pass",
+          "engine": "ferrule",
+          "checks": [
+            {
+              "index": 0,
+              "passed": true,
+              "actual_input_tokens": 5,
+              "actual_output_tokens": 8
+            },
+            {
+              "index": 1,
+              "passed": true,
+              "actual_input_tokens": 5,
+              "actual_output_tokens": 8
+            },
+            {
+              "index": 2,
+              "passed": true,
+              "actual_input_tokens": 5,
+              "actual_output_tokens": 8
+            },
+            {
+              "index": 3,
+              "passed": true,
+              "actual_input_tokens": 5,
+              "actual_output_tokens": 8
+            },
+            {
+              "index": 4,
+              "passed": true,
+              "actual_input_tokens": 5,
+              "actual_output_tokens": 8
+            },
+            {
+              "index": 5,
+              "passed": true,
+              "actual_input_tokens": 5,
+              "actual_output_tokens": 8
+            },
+            {
+              "index": 6,
+              "passed": true,
+              "actual_input_tokens": 5,
+              "actual_output_tokens": 8
+            },
+            {
+              "index": 7,
+              "passed": true,
+              "actual_input_tokens": 5,
+              "actual_output_tokens": 8
+            }
+          ],
+          "first_qa_requests": 1,
+          "warmup_requests": 2,
+          "measured_requests": 5,
+          "http_receipt_sha256": "5e96a04b00a2636445d20f90c7b11cf4181057a661925d2e4896410a43c0546d",
+          "coverage": "visible text/usage only; separate pinned numerical acceptance, not arithmetic parity",
+          "fairmatch": false,
+          "exact_speedup": null
+        }
+      }
+    ],
+    "same_server": true
+  },
+  "resources": {
+    "status": "observed_within_targets",
+    "errors": [],
+    "memory_components": {
+      "sample_count": 162,
+      "complete_host_samples": 162,
+      "gpu_samples": 162,
+      "gpu_peak_bytes": {
+        "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 22593667072,
+        "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 22593667072
+      },
+      "tree_pss_peak_bytes": 65180753920,
+      "tree_rss_peak_bytes": 65182871552,
+      "tree_anonymous_peak_bytes": 64938778624,
+      "tree_pss_anon_peak_bytes": null,
+      "tree_pss_file_peak_bytes": null,
+      "tree_private_dirty_peak_bytes": 64981372928,
+      "component_sample_counts": {
+        "anonymous_bytes": 162,
+        "pss_anon_bytes": 0,
+        "pss_file_bytes": 0,
+        "private_dirty_bytes": 162
+      },
+      "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+      "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+    },
+    "phase_memory": {
+      "bounds": {
+        "ready_monotonic": 8641315.258556757,
+        "first_sent_monotonic": 8641315.684531115,
+        "first_terminal_monotonic": 8641316.205537563
+      },
+      "phases": {
+        "startup": {
+          "sample_count": 156,
+          "complete_host_samples": 156,
+          "gpu_samples": 156,
+          "gpu_peak_bytes": {
+            "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 22526558208,
+            "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 22526558208
+          },
+          "tree_pss_peak_bytes": 65180753920,
+          "tree_rss_peak_bytes": 65182871552,
+          "tree_anonymous_peak_bytes": 64938778624,
+          "tree_pss_anon_peak_bytes": null,
+          "tree_pss_file_peak_bytes": null,
+          "tree_private_dirty_peak_bytes": 64981372928,
+          "component_sample_counts": {
+            "anonymous_bytes": 156,
+            "pss_anon_bytes": 0,
+            "pss_file_bytes": 0,
+            "private_dirty_bytes": 156
+          },
+          "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+          "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+        },
+        "ready_before_first": {
+          "sample_count": 0,
+          "complete_host_samples": 0,
+          "gpu_samples": 0,
+          "gpu_peak_bytes": {
+            "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": null,
+            "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": null
+          },
+          "tree_pss_peak_bytes": null,
+          "tree_rss_peak_bytes": null,
+          "tree_anonymous_peak_bytes": null,
+          "tree_pss_anon_peak_bytes": null,
+          "tree_pss_file_peak_bytes": null,
+          "tree_private_dirty_peak_bytes": null,
+          "component_sample_counts": {
+            "anonymous_bytes": 0,
+            "pss_anon_bytes": 0,
+            "pss_file_bytes": 0,
+            "private_dirty_bytes": 0
+          },
+          "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+          "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+        },
+        "first_request": {
+          "sample_count": 0,
+          "complete_host_samples": 0,
+          "gpu_samples": 0,
+          "gpu_peak_bytes": {
+            "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": null,
+            "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": null
+          },
+          "tree_pss_peak_bytes": null,
+          "tree_rss_peak_bytes": null,
+          "tree_anonymous_peak_bytes": null,
+          "tree_pss_anon_peak_bytes": null,
+          "tree_pss_file_peak_bytes": null,
+          "tree_private_dirty_peak_bytes": null,
+          "component_sample_counts": {
+            "anonymous_bytes": 0,
+            "pss_anon_bytes": 0,
+            "pss_file_bytes": 0,
+            "private_dirty_bytes": 0
+          },
+          "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+          "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+        },
+        "after_first_request": {
+          "sample_count": 6,
+          "complete_host_samples": 6,
+          "gpu_samples": 6,
+          "gpu_peak_bytes": {
+            "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 22593667072,
+            "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 22593667072
+          },
+          "tree_pss_peak_bytes": 64562217984,
+          "tree_rss_peak_bytes": 64564371456,
+          "tree_anonymous_peak_bytes": 64317263872,
+          "tree_pss_anon_peak_bytes": null,
+          "tree_pss_file_peak_bytes": null,
+          "tree_private_dirty_peak_bytes": 64360103936,
+          "component_sample_counts": {
+            "anonymous_bytes": 6,
+            "pss_anon_bytes": 0,
+            "pss_file_bytes": 0,
+            "private_dirty_bytes": 6
+          },
+          "peak_semantics": "independent component maxima, not an additive decomposition of PSS peak",
+          "anonymous_semantics": "Anonymous is resident anonymous memory, not proportional PSS; Pss_Anon/Pss_File may omit shmem"
+        }
+      },
+      "unassigned_or_boundary_samples": 0,
+      "steady_state_claim": false,
+      "policy": "after first request includes later canaries/warmup/requests; not a steady-state proof"
+    },
+    "phase_metadata_error": null,
+    "gpu_peak_bytes": {
+      "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 22593667072,
+      "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 22593667072
+    },
+    "tree_pss_peak_bytes": 65180753920,
+    "tree_rss_peak_bytes": 65182871552,
+    "complete_host_samples": 162,
+    "incomplete_host_samples": 0,
+    "gpu_samples": 162,
+    "missing_gpu_attempts": 0,
+    "baseline": {
+      "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": {
+        "index": 0,
+        "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+        "total_bytes": 25769803776,
+        "gpu_bytes": 0,
+        "utilization": 0
+      },
+      "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": {
+        "index": 1,
+        "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+        "total_bytes": 25769803776,
+        "gpu_bytes": 0,
+        "utilization": 0
+      },
+      "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6": {
+        "index": 2,
+        "uuid": "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6",
+        "total_bytes": 25769803776,
+        "gpu_bytes": 0,
+        "utilization": 0
+      },
+      "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011": {
+        "index": 3,
+        "uuid": "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011",
+        "total_bytes": 25769803776,
+        "gpu_bytes": 0,
+        "utilization": 0
+      },
+      "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86": {
+        "index": 4,
+        "uuid": "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86",
+        "total_bytes": 25769803776,
+        "gpu_bytes": 0,
+        "utilization": 0
+      },
+      "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685": {
+        "index": 5,
+        "uuid": "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685",
+        "total_bytes": 25769803776,
+        "gpu_bytes": 0,
+        "utilization": 0
+      },
+      "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d": {
+        "index": 6,
+        "uuid": "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d",
+        "total_bytes": 25769803776,
+        "gpu_bytes": 0,
+        "utilization": 0
+      },
+      "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f": {
+        "index": 7,
+        "uuid": "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f",
+        "total_bytes": 25769803776,
+        "gpu_bytes": 0,
+        "utilization": 0
+      }
+    },
+    "delta_high_water_bytes": {
+      "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 22593667072,
+      "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 22593667072,
+      "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6": 0,
+      "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011": 0,
+      "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86": 0,
+      "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685": 0,
+      "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d": 0,
+      "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f": 0
+    },
+    "final_process_diagnostics": [
+      {
+        "identity": {
+          "pid": 181045,
+          "birth_ticks": 100482877,
+          "ppid": 181036,
+          "state": "S"
+        },
+        "command": "/proc/self/fd/4 serve /mnt/nas1/hf/Qwen3.5-35B-A3B-FP8 --backend cuda --engine pipeline --model-profile qwen35-mixed-bf16 --tensor-parallel 2 --pipeline-parallel 1 --expert-parallel 1 --rank-backend thread --devices 0,1 --rank-restarts 0 --kv-execution-policy resident --ctx-size 128 --max-active-sequences 2 --max-batch-tokens 8 --prefill-chunk-size 8 --cuda-device-budget-mb 22528 --kv-cache-mb 16 --max-tensor-mb 2048 --cuda-workspace-mb 4096 --host 127.0.0.1 --port 18367 --served-model-name qwen35-ferrule-tp2-resident-paper ",
+        "environment": {
+          "HOME": "/root",
+          "PATH": "/home/admin/wxw403883/anaconda3/envs/tao/bin:/root/.cargo/bin:/usr/bin:/bin",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "CUDA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+          "NVIDIA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+          "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
+          "HF_HUB_OFFLINE": "1",
+          "TRANSFORMERS_OFFLINE": "1",
+          "CUDA_HOME": "/home/admin/wxw403883/anaconda3/envs/tao",
+          "NVCC": "/home/admin/wxw403883/anaconda3/envs/tao/bin/nvcc",
+          "LD_LIBRARY_PATH": "/home/admin/wxw403883/anaconda3/envs/tao/lib:/usr/lib64",
+          "CUBLAS_WORKSPACE_CONFIG": ":0:0",
+          "FERRULE_LOG": "info",
+          "FERRULE_LOG_FORMAT": "json"
+        },
+        "libraries": [
+          "/home/admin/wxw403883/anaconda3/envs/tao/lib/libcudart.so.12.4.99",
+          "/usr/lib64/libcuda.so.575.57.08"
+        ]
+      }
+    ],
+    "owned_gpu_attribution": "unknown",
+    "owned_process_gpu_peak_bytes": null,
+    "exact_peaks": false,
+    "hard_memory_partition": false,
+    "continuous_coverage": false
+  },
+  "shutdown": {
+    "status": "root_exited_descendants_unknown",
+    "seconds": 6.371470391750336,
+    "timed_out": false,
+    "gpu_quiescence": "unverified; no GPU probe",
+    "returncode": 0
+  },
+  "wall_seconds": 392.56089872308075
+}

@@ -12,7 +12,7 @@
 //! transaction history or tombstones accumulate. Reconfiguration requires an
 //! explicit `new` with a new epoch; callers must retire the old group themselves.
 //!
-//! Limits describe physical host f32 storage, NOT DistributedTransaction credits.
+//! Limits describe physical typed host storage, NOT DistributedTransaction credits.
 //! The outer transaction owns `communicate_all`/communication accounting. CPU
 //! readiness is not transaction completion: callers must upload each result and
 //! synchronize the GPU work before completing its outer communication operation.
@@ -33,9 +33,93 @@ use ferrule_common::{ParallelGroupId, ParallelRankId, ParallelTopologyId};
 pub enum HostCollectiveKind {
     AllReduceSumF32,
     AllGatherF32,
+    /// Two already-rounded BF16 inputs, F32 scalar addition, one BF16 RNE output.
+    /// TP2 only: no claim about multi-hop NCCL reduction rounding for larger groups.
+    AllReduceSumBf16,
+    /// Unrounded F32 partials summed in member order, then one BF16 RNE output.
+    /// Explicit numerical candidate, NOT interchangeable with BF16 partials.
+    AllReduceSumF32ToBf16,
+    AllGatherBf16,
+}
+impl HostCollectiveKind {
+    fn input_bf16(self) -> bool {
+        matches!(self, Self::AllReduceSumBf16 | Self::AllGatherBf16)
+    }
+    fn output_bf16(self) -> bool {
+        self.input_bf16() || self == Self::AllReduceSumF32ToBf16
+    }
+    fn gather(self) -> bool {
+        matches!(self, Self::AllGatherF32 | Self::AllGatherBf16)
+    }
 }
 
-/// `count` is the number of input f32 elements from EACH member.
+/// Owned host values after DMA completion, not a device tensor or execution permit.
+/// BF16 payloads retain their actual two-byte representation; no F32 mirror.
+#[derive(Debug, PartialEq)]
+pub enum CollectivePayload {
+    F32(Vec<f32>),
+    Bf16(Vec<u16>),
+}
+impl CollectivePayload {
+    pub fn len(&self) -> usize {
+        match self {
+            Self::F32(v) => v.len(),
+            Self::Bf16(v) => v.len(),
+        }
+    }
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+    fn capacity(&self) -> usize {
+        match self {
+            Self::F32(v) => v.capacity(),
+            Self::Bf16(v) => v.capacity(),
+        }
+    }
+    pub fn owned_bytes(&self) -> usize {
+        self.capacity() * if self.is_bf16() { 2 } else { 4 }
+    }
+    fn is_bf16(&self) -> bool {
+        matches!(self, Self::Bf16(_))
+    }
+    fn zeros(bf16: bool, n: usize) -> Self {
+        if bf16 {
+            Self::Bf16(vec![0; n])
+        } else {
+            Self::F32(vec![0.0; n])
+        }
+    }
+    fn scalar(&self, i: usize) -> f32 {
+        match self {
+            Self::F32(v) => v[i],
+            Self::Bf16(v) => f32::from_bits(u32::from(v[i]) << 16),
+        }
+    }
+}
+
+fn bf16_rne(value: f32) -> u16 {
+    let bits = value.to_bits();
+    if value.is_nan() {
+        return ((bits >> 16) as u16) | 0x0040;
+    }
+    (bits.wrapping_add(0x7fff + ((bits >> 16) & 1)) >> 16) as u16
+}
+
+#[derive(Debug, PartialEq)]
+pub enum TypedCollectivePoll {
+    Pending,
+    Ready {
+        descriptor: HostCollectiveDescriptor,
+        payload: CollectivePayload,
+    },
+}
+#[derive(Debug)]
+pub struct TypedCollectiveSubmitError {
+    pub error: HostCollectiveError,
+    pub payload: CollectivePayload,
+}
+
+/// `count` is the number of typed input elements from EACH member.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HostCollectiveDescriptor {
     pub epoch: ParallelTopologyId,
@@ -51,7 +135,7 @@ pub struct HostCollectiveLimits {
     pub max_ranks: usize,
     /// Bounds both payload length and Vec capacity, including unused capacity.
     pub max_elements_per_rank: usize,
-    /// Bounds all service-owned input and output f32 buffer capacities combined.
+    /// Bounds all service-owned input and output buffer capacities combined.
     /// Bounded member/slot metadata and allocator bookkeeping are not included.
     pub max_host_bytes: usize,
 }
@@ -87,6 +171,8 @@ pub enum HostCollectivePoll {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HostCollectiveError {
     InvalidLimits,
+    PayloadTypeMismatch,
+    UnsupportedDegree,
     EmptyMembers,
     TooManyRanks,
     DuplicateMember(ParallelRankId),
@@ -131,8 +217,8 @@ impl std::error::Error for HostCollectiveSubmitError {}
 
 #[derive(Debug)]
 struct RankBuffers {
-    input: Option<Vec<f32>>,
-    output: Option<Vec<f32>>,
+    input: Option<CollectivePayload>,
+    output: Option<CollectivePayload>,
 }
 
 #[derive(Debug)]
@@ -231,13 +317,8 @@ impl HostCollectiveGroup {
             op.ranks
                 .iter()
                 .map(|rank| {
-                    rank.input
-                        .as_ref()
-                        .map_or(0, |v| v.capacity() * size_of::<f32>())
-                        + rank
-                            .output
-                            .as_ref()
-                            .map_or(0, |v| v.capacity() * size_of::<f32>())
+                    rank.input.as_ref().map_or(0, |v| v.owned_bytes())
+                        + rank.output.as_ref().map_or(0, |v| v.owned_bytes())
                 })
                 .sum()
         })
@@ -259,16 +340,34 @@ impl HostCollectiveGroup {
             return Err(HostCollectiveError::CountLimit);
         }
         let ranks = self.members.len();
-        let max_input_bytes = allocation_bytes::<f32>(self.limits.max_elements_per_rank)?
+        if !matches!(
+            kind,
+            HostCollectiveKind::AllReduceSumF32 | HostCollectiveKind::AllGatherF32
+        ) && ranks != 2
+        {
+            return Err(HostCollectiveError::UnsupportedDegree);
+        }
+        let input_bytes = if kind.input_bf16() {
+            allocation_bytes::<u16>(self.limits.max_elements_per_rank)?
+        } else {
+            allocation_bytes::<f32>(self.limits.max_elements_per_rank)?
+        };
+        let max_input_bytes = input_bytes
             .checked_mul(ranks)
             .ok_or(HostCollectiveError::ArithmeticOverflow)?;
-        let output_elements_per_rank = match kind {
-            HostCollectiveKind::AllReduceSumF32 => count,
-            HostCollectiveKind::AllGatherF32 => count
+        let output_elements_per_rank = if kind.gather() {
+            count
                 .checked_mul(ranks)
-                .ok_or(HostCollectiveError::ArithmeticOverflow)?,
+                .ok_or(HostCollectiveError::ArithmeticOverflow)?
+        } else {
+            count
         };
-        let output_bytes = allocation_bytes::<f32>(output_elements_per_rank)?
+        let per_output_bytes = if kind.output_bf16() {
+            allocation_bytes::<u16>(output_elements_per_rank)?
+        } else {
+            allocation_bytes::<f32>(output_elements_per_rank)?
+        };
+        let output_bytes = per_output_bytes
             .checked_mul(ranks)
             .ok_or(HostCollectiveError::ArithmeticOverflow)?;
         let peak_bytes = max_input_bytes
@@ -297,9 +396,33 @@ impl HostCollectiveGroup {
         descriptor: HostCollectiveDescriptor,
         payload: Vec<f32>,
     ) -> Result<HostCollectiveStatus, HostCollectiveSubmitError> {
+        if descriptor.kind.input_bf16() || descriptor.kind.output_bf16() {
+            return Err(HostCollectiveSubmitError {
+                error: HostCollectiveError::PayloadTypeMismatch,
+                payload,
+            });
+        }
+        self.submit_typed(rank, descriptor, CollectivePayload::F32(payload))
+            .map_err(|e| {
+                let CollectivePayload::F32(payload) = e.payload else {
+                    unreachable!("F32 input retained")
+                };
+                HostCollectiveSubmitError {
+                    error: e.error,
+                    payload,
+                }
+            })
+    }
+
+    pub fn submit_typed(
+        &mut self,
+        rank: ParallelRankId,
+        descriptor: HostCollectiveDescriptor,
+        payload: CollectivePayload,
+    ) -> Result<HostCollectiveStatus, TypedCollectiveSubmitError> {
         let (index, memory) = match self.validate_submission(rank, descriptor, &payload) {
             Ok(validated) => validated,
-            Err(error) => return Err(HostCollectiveSubmitError { error, payload }),
+            Err(error) => return Err(TypedCollectiveSubmitError { error, payload }),
         };
         if self.operation.is_none() {
             // All size/capacity/identity checks precede these allocations. Fixed
@@ -308,7 +431,10 @@ impl HostCollectiveGroup {
             for _ in &self.members {
                 ranks.push(RankBuffers {
                     input: None,
-                    output: Some(vec![0.0; memory.output_elements_per_rank]),
+                    output: Some(CollectivePayload::zeros(
+                        descriptor.kind.output_bf16(),
+                        memory.output_elements_per_rank,
+                    )),
                 });
             }
             self.operation = Some(Operation {
@@ -339,13 +465,37 @@ impl HostCollectiveGroup {
         &mut self,
         rank: ParallelRankId,
     ) -> Result<HostCollectivePoll, HostCollectiveError> {
+        if self
+            .operation
+            .as_ref()
+            .is_some_and(|op| op.descriptor.kind.output_bf16())
+        {
+            return Err(HostCollectiveError::PayloadTypeMismatch);
+        }
+        match self.take_typed_result(rank)? {
+            TypedCollectivePoll::Pending => Ok(HostCollectivePoll::Pending),
+            TypedCollectivePoll::Ready {
+                descriptor,
+                payload: CollectivePayload::F32(values),
+            } => Ok(HostCollectivePoll::Ready(HostCollectiveResult {
+                descriptor,
+                values,
+            })),
+            _ => unreachable!("F32 output checked before taking"),
+        }
+    }
+
+    pub fn take_typed_result(
+        &mut self,
+        rank: ParallelRankId,
+    ) -> Result<TypedCollectivePoll, HostCollectiveError> {
         let index = self.rank_index(rank)?;
         let op = self
             .operation
             .as_mut()
             .ok_or(HostCollectiveError::NoOperation)?;
         if op.submitted != self.members.len() {
-            return Ok(HostCollectivePoll::Pending);
+            return Ok(TypedCollectivePoll::Pending);
         }
         let values = op.ranks[index]
             .output
@@ -356,10 +506,10 @@ impl HostCollectiveGroup {
         if op.remaining == 0 {
             self.operation = None;
         }
-        Ok(HostCollectivePoll::Ready(HostCollectiveResult {
+        Ok(TypedCollectivePoll::Ready {
             descriptor,
-            values,
-        }))
+            payload: values,
+        })
     }
 
     /// Full identity matching prevents a delayed abort from clearing a newer op.
@@ -391,7 +541,7 @@ impl HostCollectiveGroup {
         &self,
         rank: ParallelRankId,
         descriptor: HostCollectiveDescriptor,
-        payload: &Vec<f32>,
+        payload: &CollectivePayload,
     ) -> Result<(usize, HostCollectiveMemory), HostCollectiveError> {
         let index = self.rank_index(rank)?;
         if descriptor.epoch != self.epoch {
@@ -417,13 +567,16 @@ impl HostCollectiveGroup {
             if op.submitted == self.members.len() || op.ranks[index].input.is_some() {
                 return Err(HostCollectiveError::DuplicateSubmission(rank));
             }
-        } else if let Some(watermark) = self.watermark {
-            if descriptor.sequence <= watermark {
-                return Err(HostCollectiveError::StaleSequence {
-                    watermark,
-                    received: descriptor.sequence,
-                });
-            }
+        } else if let Some(watermark) = self.watermark
+            && descriptor.sequence <= watermark
+        {
+            return Err(HostCollectiveError::StaleSequence {
+                watermark,
+                received: descriptor.sequence,
+            });
+        }
+        if payload.is_bf16() != descriptor.kind.input_bf16() {
+            return Err(HostCollectiveError::PayloadTypeMismatch);
         }
         if payload.len() != descriptor.count {
             return Err(HostCollectiveError::CountMismatch {
@@ -443,34 +596,49 @@ impl HostCollectiveGroup {
 
 impl Operation {
     fn compute(&mut self) {
-        match self.descriptor.kind {
-            HostCollectiveKind::AllReduceSumF32 => {
-                let (first, rest) = self.ranks.split_first_mut().expect("nonempty members");
-                let output = first.output.as_mut().expect("output reserved");
-                output.copy_from_slice(first.input.as_ref().expect("all inputs submitted"));
-                for rank in rest.iter() {
-                    for (sum, value) in output.iter_mut().zip(rank.input.as_ref().unwrap()) {
-                        *sum += *value;
+        if self.descriptor.kind.gather() {
+            // Copy bits directly, without widening BF16 or allocating scratch.
+            for destination in 0..self.ranks.len() {
+                let mut output = self.ranks[destination].output.take().unwrap();
+                let mut offset = 0;
+                for source in &self.ranks {
+                    let input = source.input.as_ref().expect("all inputs submitted");
+                    let end = offset + input.len();
+                    match (&mut output, input) {
+                        (CollectivePayload::F32(out), CollectivePayload::F32(input)) => {
+                            out[offset..end].copy_from_slice(input)
+                        }
+                        (CollectivePayload::Bf16(out), CollectivePayload::Bf16(input)) => {
+                            out[offset..end].copy_from_slice(input)
+                        }
+                        _ => unreachable!("admitted payload type"),
                     }
+                    offset = end;
                 }
-                for rank in rest {
-                    rank.output.as_mut().unwrap().copy_from_slice(output);
+                self.ranks[destination].output = Some(output);
+            }
+        } else {
+            let (first, rest) = self.ranks.split_first_mut().expect("nonempty members");
+            let output = first.output.as_mut().expect("output reserved");
+            for i in 0..self.descriptor.count {
+                let mut sum = first.input.as_ref().unwrap().scalar(i);
+                for rank in rest.iter() {
+                    sum += rank.input.as_ref().unwrap().scalar(i);
+                }
+                match output {
+                    CollectivePayload::F32(v) => v[i] = sum,
+                    CollectivePayload::Bf16(v) => v[i] = bf16_rne(sum),
                 }
             }
-            HostCollectiveKind::AllGatherF32 => {
-                // Assemble directly into each final output: no concatenation scratch
-                // buffer and no duplicate rank inputs. Count zero is a valid rendezvous.
-                for destination in 0..self.ranks.len() {
-                    let mut output = self.ranks[destination].output.take().unwrap();
-                    let mut offset = 0;
-                    for source in &self.ranks {
-                        let input = source.input.as_ref().expect("all inputs submitted");
-                        // count * ranks was checked before allocation.
-                        let end = offset + input.len();
-                        output[offset..end].copy_from_slice(input);
-                        offset = end;
+            for rank in rest {
+                match (rank.output.as_mut().unwrap(), &*output) {
+                    (CollectivePayload::F32(dst), CollectivePayload::F32(src)) => {
+                        dst.copy_from_slice(src)
                     }
-                    self.ranks[destination].output = Some(output);
+                    (CollectivePayload::Bf16(dst), CollectivePayload::Bf16(src)) => {
+                        dst.copy_from_slice(src)
+                    }
+                    _ => unreachable!("admitted output type"),
                 }
             }
         }

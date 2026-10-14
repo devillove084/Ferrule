@@ -1,0 +1,33 @@
+test_esrch_resampled_with_evidence_not_zero (test_sampling_v2.Sampling.test_esrch_resampled_with_evidence_not_zero) ... ok
+test_missing_live_root_never_zero_or_retry (test_sampling_v2.Sampling.test_missing_live_root_never_zero_or_retry) ... ok
+test_non_esrch_errors_not_swallowed (test_sampling_v2.Sampling.test_non_esrch_errors_not_swallowed) ... ok
+test_persistent_esrch_fails_with_bounded_attempts (test_sampling_v2.Sampling.test_persistent_esrch_fails_with_bounded_attempts) ... ok
+test_root_identity_reuse_fails (test_sampling_v2.Sampling.test_root_identity_reuse_fails) ... ok
+test_v2_inference_flags_unchanged (test_sampling_v2.Sampling.test_v2_inference_flags_unchanged) ... ok
+test_idle_records_baseline_and_after_relative_to_anchor (test_sampling_v3.BaselineDelta.test_idle_records_baseline_and_after_relative_to_anchor) ... ok
+test_incomplete_or_remapped_baseline_rejected (test_sampling_v3.BaselineDelta.test_incomplete_or_remapped_baseline_rejected) ... ok
+test_inference_transport_and_canary_references_unchanged (test_sampling_v3.BaselineDelta.test_inference_transport_and_canary_references_unchanged) ... ok
+test_negative_delta_and_selected_peak_are_retained (test_sampling_v3.BaselineDelta.test_negative_delta_and_selected_peak_are_retained) ... ok
+test_nonselected_pid_is_evidence_not_a_foreign_signal (test_sampling_v3.BaselineDelta.test_nonselected_pid_is_evidence_not_a_foreign_signal) ... ok
+test_positive_delta_above_tolerance_blocks_without_signal (test_sampling_v3.BaselineDelta.test_positive_delta_above_tolerance_blocks_without_signal) ... ok
+test_stable_nonzero_baseline_is_not_zeroed (test_sampling_v3.BaselineDelta.test_stable_nonzero_baseline_is_not_zeroed) ... ok
+test_stable_one_mib_residue_is_recorded_and_allowed (test_sampling_v3.BaselineDelta.test_stable_one_mib_residue_is_recorded_and_allowed) ... ok
+test_tolerance_cannot_silently_increase (test_sampling_v3.BaselineDelta.test_tolerance_cannot_silently_increase) ... ok
+test_exhaustion_fails_closed_with_all_attempts (test_sampling_v4.NVMLTimeouts.test_exhaustion_fails_closed_with_all_attempts) ... ok
+test_inference_transport_reference_unchanged (test_sampling_v4.NVMLTimeouts.test_inference_transport_reference_unchanged) ... ok
+test_one_retry_is_recorded_not_zero (test_sampling_v4.NVMLTimeouts.test_one_retry_is_recorded_not_zero) ... ok
+test_other_errors_never_retried (test_sampling_v4.NVMLTimeouts.test_other_errors_never_retried) ... ok
+test_canary_mismatch_retained_and_failed (test_tp2.TP2Contracts.test_canary_mismatch_retained_and_failed) ... ok
+test_declared_no_offload_no_ep (test_tp2.TP2Contracts.test_declared_no_offload_no_ep) ... ok
+test_environment_no_inherited_cuda124 (test_tp2.TP2Contracts.test_environment_no_inherited_cuda124) ... ok
+test_installed_source_audit_and_frozen_reference (test_tp2.TP2Contracts.test_installed_source_audit_and_frozen_reference) ... ok
+test_invalid_lock_sets_rejected_before_acquisition (test_tp2.TP2Contracts.test_invalid_lock_sets_rejected_before_acquisition) ... ok
+test_offload_logs_are_contradictions_not_fallback_acceptance (test_tp2.TP2Contracts.test_offload_logs_are_contradictions_not_fallback_acceptance) ... ok
+test_reject_offload_and_ep_and_topology_overrides (test_tp2.TP2Contracts.test_reject_offload_and_ep_and_topology_overrides) ... ok
+test_second_lock_failure_atomically_releases_first (test_tp2.TP2Contracts.test_second_lock_failure_atomically_releases_first) ... ok
+test_sorted_locks_and_bound_coordinator (test_tp2.TP2Contracts.test_sorted_locks_and_bound_coordinator) ... ok
+
+----------------------------------------------------------------------
+Ran 28 tests in 1.174s
+
+OK

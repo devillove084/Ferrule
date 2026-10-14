@@ -9,6 +9,9 @@
 using namespace ferrule::cuda::core;
 #include "gqa_legacy.cuh"
 
+static_assert(kTransformerGqaSharedTokens == 2048,
+              "regressions must cross the original 2048-token boundary");
+
 static void require(bool ok, const char *message) {
   if (!ok) {
     std::fprintf(stderr, "%s\n", message);
@@ -77,14 +80,42 @@ __global__ void project(FerruleCoreTransformerArgs a, float *logits) {
 }
 static void launch(FerruleCoreTransformerArgs a, bool cooperative) {
   if (cooperative)
-    transformer_causal_gqa_cooperative_f32_kernel<<<a.rows * a.q_heads,
-                                                    kBlock>>>(a);
+    launch_transformer_causal_gqa_f32(a);
   else
     gqa_legacy_oracle_kernel<float>
         <<<blocks_for(static_cast<uint64_t>(a.rows) * a.q_heads * a.head_dim),
            kBlock>>>(a);
   check(cudaPeekAtLastError());
 }
+// Inspect the production launch helper without executing a huge-grid kernel.
+static void check_launch_path(FerruleCoreTransformerArgs a, bool cooperative) {
+  cudaStream_t capture;
+  check(cudaStreamCreateWithFlags(&capture, cudaStreamNonBlocking));
+  a.stream = reinterpret_cast<uint64_t>(capture);
+  check(cudaStreamBeginCapture(capture, cudaStreamCaptureModeThreadLocal));
+  launch_transformer_causal_gqa_f32(a);
+  check(cudaPeekAtLastError());
+  cudaGraph_t graph;
+  check(cudaStreamEndCapture(capture, &graph));
+  size_t count = 0;
+  check(cudaGraphGetNodes(graph, nullptr, &count));
+  require(count == 1, "GQA launch must be a single allocation-free kernel");
+  cudaGraphNode_t node;
+  check(cudaGraphGetNodes(graph, &node, &count));
+  cudaGraphNodeType type;
+  check(cudaGraphNodeGetType(node, &type));
+  require(type == cudaGraphNodeTypeKernel, "expected GQA kernel node");
+  cudaKernelNodeParams params{};
+  check(cudaGraphKernelNodeGetParams(node, &params));
+  const void *expected = cooperative
+      ? reinterpret_cast<const void *>(transformer_causal_gqa_cooperative_f32_kernel)
+      : reinterpret_cast<const void *>(transformer_causal_gqa_kernel<float>);
+  require(params.func == expected, "production GQA selected the wrong kernel");
+  require(params.sharedMemBytes == 0, "unexpected dynamic shared scratch");
+  check(cudaGraphDestroy(graph));
+  check(cudaStreamDestroy(capture));
+}
+
 static float milliseconds(FerruleCoreTransformerArgs a, bool cooperative) {
   for (int i = 0; i < 5; ++i)
     launch(a, cooperative);
@@ -153,7 +184,7 @@ static void run(uint32_t ctx, uint32_t dim, uint32_t qh, uint32_t kvh,
   auto hv = fixed_input(a.value_cache_bytes / 4, 733);
   if (pattern == 1)
     std::fill(hq.begin(), hq.end(), 0.0f); // Score ties.
-  if (pattern == 2) {
+  if (pattern == 2 || pattern == 3) {
     std::fill(hq.begin(), hq.end(), 1.0f);
     for (uint32_t s = 0; s < a.sequences; ++s) {
       for (uint32_t t = 0; t < ctx; ++t) {
@@ -163,12 +194,13 @@ static void run(uint32_t ctx, uint32_t dim, uint32_t qh, uint32_t kvh,
         for (uint32_t h = 0; h < kvh; ++h)
           for (uint32_t d = 0; d < dim; ++d)
             hk[(base + h * a.key_head_stride_bytes) / 4 + d] =
-                static_cast<int>(t % 17) - 8.0f;
+                static_cast<int>(t % 17) - 8.0f +
+                (pattern == 3 ? 32.0f * (t / 2048) : 0.0f);
       }
     }
   }
   Device<float> q(hq), k(hk), v(hv),
-      out(std::vector<float>(a.output_bytes / 4, -777.25f)),
+      out(std::vector<float>(a.output_bytes / 4 + 8, -777.25f)),
       logits(std::vector<float>(a.rows * 37));
   Device<int32_t> slots(hs), offsets(ho), seq(hseq), pos(hp), len(hl),
       status({0});
@@ -189,6 +221,7 @@ static void run(uint32_t ctx, uint32_t dim, uint32_t qh, uint32_t kvh,
   a.row_kv_lens_i32 = len.address();
   a.row_kv_lens_count = len.count;
   require(valid_transformer(&a, true), "native layout rejected fixture");
+  check_launch_path(a, true);
   launch(a, false);
   const auto expected = out.download();
   project<<<a.rows, 37>>>(a, logits.data);
@@ -201,13 +234,101 @@ static void run(uint32_t ctx, uint32_t dim, uint32_t qh, uint32_t kvh,
   require(status.download()[0] == 0, "valid fixture reported metadata error");
   bitwise(k.download(), hk);
   bitwise(v.download(), hv);
-  if (ctx == 1) {
+  if (ctx == 1 || ctx == 2049) {
     len.upload(std::vector<int32_t>(len.count, 0));
+    out.upload(std::vector<float>(out.count, -777.25f));
     launch(a, false);
     const auto empty_expected = out.download();
+    out.upload(std::vector<float>(out.count, -777.25f));
     launch(a, true);
     bitwise(out.download(), empty_expected);
+    for (uint32_t r = 0; r < a.rows; ++r)
+      for (uint32_t h = 0; h < qh; ++h)
+        for (uint32_t d = 0; d < dim; ++d)
+          require(empty_expected[(r * a.output_row_stride_bytes +
+                                  h * a.output_head_stride_bytes) / 4 + d] == 0.0f,
+                  "empty visible interval must produce zero");
     len.upload(hl);
+  }
+  if (ctx == 2049 && dim == 3 && !ragged) {
+    const auto compare = [&]() {
+      out.upload(std::vector<float>(out.count, -777.25f));
+      launch(a, false);
+      const auto reference = out.download();
+      out.upload(std::vector<float>(out.count, -777.25f));
+      launch(a, true);
+      bitwise(out.download(), reference);
+      require(status.download()[0] == 0,
+              "nonfinite inputs are arithmetic, not metadata failures");
+      return reference;
+    };
+    // Inject in the first token and on both sides of the tile boundary. Do
+    // not replace the legacy policy with generic nonfinite rejection/zeroing.
+    for (uint32_t token : {0u, 2047u, 2048u}) {
+      const uint64_t key_base = hs[token / 16] * a.key_slot_stride_bytes +
+          a.layer_index * a.key_layer_stride_bytes +
+          (token % 16) * a.key_token_stride_bytes;
+      const uint64_t value_base = hs[token / 16] * a.value_slot_stride_bytes +
+          a.layer_index * a.value_layer_stride_bytes +
+          (token % 16) * a.value_token_stride_bytes;
+      for (float special : {NAN, INFINITY, -INFINITY}) {
+        auto keys = hk;
+        keys[key_base / 4] = special;
+        k.upload(keys);
+        compare();
+        k.upload(hk);
+        auto values = hv;
+        values[value_base / 4] = special;
+        v.upload(values);
+        compare();
+        v.upload(hv);
+      }
+    }
+    for (float special : {NAN, INFINITY, -INFINITY}) {
+      auto queries = hq;
+      queries[0] = special;
+      q.upload(queries);
+      compare();
+      q.upload(hq);
+    }
+    // Equal infinite scores use weight=1, not exp(Inf-Inf). A later NaN
+    // poisons the denominator, for which the frozen contract returns zero.
+    q.upload(std::vector<float>(q.count, 1.0f));
+    for (float special : {INFINITY, -INFINITY}) {
+      k.upload(std::vector<float>(k.count, special));
+      const auto equal_inf = compare();
+      require(std::isfinite(equal_inf[0]), "infinite score ties must stay finite");
+    }
+    k.upload(std::vector<float>(k.count, NAN));
+    require(compare()[0] == 0.0f, "NaN denominator must retain legacy zero output");
+    q.upload(hq);
+    k.upload(hk);
+
+    // A poisoned future tile must not be read, whether bounded by causal
+    // position or by KV length. Compare against the unpoisoned same interval.
+    for (bool causal : {true, false}) {
+      if (causal) pos.upload({2047});
+      else len.upload({2048});
+      const auto masked = compare();
+      auto keys = hk;
+      auto values = hv;
+      const uint64_t slot = hs[2048 / 16];
+      for (uint32_t h = 0; h < kvh; ++h) {
+        keys[(slot * a.key_slot_stride_bytes +
+              a.layer_index * a.key_layer_stride_bytes +
+              h * a.key_head_stride_bytes) / 4] = NAN;
+        values[(slot * a.value_slot_stride_bytes +
+                a.layer_index * a.value_layer_stride_bytes +
+                h * a.value_head_stride_bytes) / 4] = NAN;
+      }
+      k.upload(keys);
+      v.upload(values);
+      bitwise(compare(), masked);
+      k.upload(hk);
+      v.upload(hv);
+      pos.upload(hp);
+      len.upload(hl);
+    }
   }
   if (benchmark) {
     std::vector<float> old_ms, new_ms;
@@ -229,7 +350,7 @@ static void run(uint32_t ctx, uint32_t dim, uint32_t qh, uint32_t kvh,
   }
   if (ragged) {
     // Divergent score failures must not deadlock the cooperative barrier.
-    for (int fault = 0; fault < 4; ++fault) {
+    for (int fault = 0; fault < (ctx > 2048 ? 5 : 4); ++fault) {
       auto bad = a;
       if (fault == 0) {
         auto invalid = hs;
@@ -245,6 +366,11 @@ static void run(uint32_t ctx, uint32_t dim, uint32_t qh, uint32_t kvh,
         invalid[0] = -1;
         seq.upload(invalid);
       }
+      if (fault == 4) {
+        auto invalid = hs;
+        invalid[2048 / 16] = -1; // Failure in a later tile, after valid replay.
+        slots.upload(invalid);
+      }
       status.upload({0});
       launch(bad, false);
       const auto old_status = status.download();
@@ -259,32 +385,49 @@ static void run(uint32_t ctx, uint32_t dim, uint32_t qh, uint32_t kvh,
   }
 }
 int main(int argc, char **argv) {
+  if (argc == 2 && std::strcmp(argv[1], "--compile-only") == 0)
+    return 0; // Deliberately before any CUDA runtime/device operation.
   check(cudaSetDevice(0));
+  cudaFuncAttributes attributes{};
+  check(cudaFuncGetAttributes(&attributes,
+                             transformer_causal_gqa_cooperative_f32_kernel));
+  require(attributes.sharedSizeBytes <= 11 * 1024,
+          "GQA scratch must remain fixed at about 10 KiB per block");
+  FerruleCoreTransformerArgs huge{};
+  huge.rows = INT32_MAX;
+  huge.q_heads = 2;
+  huge.head_dim = 1;
+  check_launch_path(huge, false); // Capture only; invalid pointers are never run.
   cudaDeviceProp device;
   check(cudaGetDeviceProperties(&device, 0));
   std::printf("GPU=%s sm%d%d shared_cap=%u\n", device.name, device.major,
               device.minor, kTransformerGqaSharedTokens);
   if (argc == 2 && std::strcmp(argv[1], "--bench") == 0) {
-    for (uint32_t ctx : {23u, 55u, 128u, 1024u})
+    for (uint32_t ctx : {2048u, 2049u, 4096u, 4106u, 8192u})
       run(ctx, 256, 16, 2, false, false, 0, true);
     return 0;
   }
   if (argc == 2 && std::strcmp(argv[1], "--sanitize") == 0) {
     run(64, 33, 6, 2, true, true);
     run(16, 257, 5, 1, true, true);
-    run(kTransformerGqaSharedTokens + 2, 3, 3, 3, true, true);
+    run(2049, 513, 3, 1, true, true, 3);
+    run(4106, 33, 3, 3, true, true, 3);
     std::puts("sanitizer fixtures: bitwise PASS");
     return 0;
   }
-  for (uint32_t ctx : {1u, 16u, 64u, 1024u, kTransformerGqaSharedTokens,
-                       kTransformerGqaSharedTokens + 1})
+  for (uint32_t ctx : {1u, 16u, 64u, 1024u, 2048u, 2049u})
     for (uint32_t dim : {3u, 31u, 33u, 128u, 256u, 257u})
       run(ctx, dim, 6, 2);
   run(64, 513, 5, 1, true, true);
   run(65, 129, 9, 3, true, true);
-  run(kTransformerGqaSharedTokens + 2, 33, 3, 3, true,
-      true); // Mixed shared/fallback.
+  run(2050, 33, 3, 3, true, true); // Mixed one/two-tile rows.
   run(64, 256, 16, 2, true, false, 1);
   run(64, 256, 16, 2, true, false, 2);
-  std::puts("41 fixtures: old/new attention and projected logits bitwise PASS");
+  for (uint32_t ctx : {4096u, 4106u, 8192u}) {
+    run(ctx, 33, 6, 2, true, true);
+    run(ctx, 33, 6, 2, true, true, 3); // New maxima in every tile.
+  }
+  run(2049, 513, 5, 1, true, true, 3);
+  run(4106, 33, 6, 2, true, true, 1); // Ties across tiles.
+  std::puts("49 fixtures plus semantic subcases: attention/logits bitwise PASS");
 }

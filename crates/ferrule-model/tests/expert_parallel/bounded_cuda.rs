@@ -273,3 +273,53 @@ fn bounded_cuda_admission_identity_failures_and_recovery() {
     assert_eq!(too_small.resident_parameter_bytes(), 0);
     assert_eq!(too_small.expert_cache_stats().unwrap().charged_bytes(), 0);
 }
+
+#[test]
+#[ignore = "requires CUDA; same-owner multi-chunk worker output versus distinct CPU experts"]
+fn same_owner_worker_multichunk_matches_cpu_in_original_token_order() {
+    use ferrule_model::transformer::CudaExpertWorker;
+    let fixture = PreparedFixture::new();
+    let placement = ExpertPlacement::new([(LAYER, 0, rank(2)), (LAYER, 1, rank(2))]).unwrap();
+    let tokens = (0..16390)
+        .map(|i| ExpertToken {
+            transaction: transaction(21),
+            sequence: (i / 11) as u64,
+            source_rank: rank((i % 3 + 4) as u32),
+            source_row: 16389 - i,
+            route_slot: i % 2,
+            expert: ExpertId::new(LAYER, (i + 1) % 2),
+            weight: if i % 2 == 0 { 0.0 } else { 0.75 },
+            payload: vec![(i % 31) as f32 * 0.013 - 0.12, (i % 17) as f32 * -0.01],
+        })
+        .collect::<Vec<_>>();
+    assert!(tokens.len() / 2 * 2 * 4 > 64 * 1024);
+    let mut provider = LocalProvider::new(&fixture, &[0, 1]);
+    let expected = CpuReferenceExpertWorker::new(rank(2), &placement, &mut provider)
+        .compute(&tokens)
+        .unwrap()
+        .into_iter()
+        .map(|r| (r.source_row, r))
+        .collect::<BTreeMap<_, _>>();
+    for cache in [ExpertCachePolicy::KeepAll, policy(1, 16 * 1024 * 1024)] {
+        let mut owner = cuda(&fixture, cache);
+        let mut provider = LocalProvider::new(&fixture, &[0, 1]);
+        let actual = CudaExpertWorker::new(rank(2), &placement, &mut provider, &mut owner)
+            .compute(&tokens)
+            .unwrap();
+        assert_eq!(actual.len(), tokens.len());
+        for (actual, token) in actual.iter().zip(&tokens) {
+            assert_eq!(
+                *actual,
+                ExpertResult::from_token(token, rank(2), actual.output.clone())
+            );
+            close(&actual.output, &expected[&token.source_row].output);
+        }
+        if let Some(stats) = owner.expert_cache_stats() {
+            assert_eq!(stats.uploads, 2);
+            assert_eq!(stats.evictions, 1);
+            assert_eq!(stats.resident_experts, 1);
+            assert_eq!(stats.scratch_bytes, 0);
+        }
+        assert!(!owner.needs_quarantine());
+    }
+}

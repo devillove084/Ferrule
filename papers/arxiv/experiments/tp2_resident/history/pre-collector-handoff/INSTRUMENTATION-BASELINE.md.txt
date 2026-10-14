@@ -1,0 +1,137 @@
+# Collector-first instrumentation scope (CPU-only design)
+
+No collector, model, GPU query, UUID lock, Nsight probe or production change was
+performed for this update. Another runtime owner is using the GPUs. This is not
+an extension of the previous grant and makes no assertion about current GPU idle.
+
+## What the installed Nsight documentation actually says
+
+The saved 2026.1.3 `profile --help` and installed `UserGuide/index.html` support:
+
+- `--gpu-metrics-devices=none` (already the default)
+- `--gpu-video-devices=none` (already the default)
+- `--gpuctxsw=false` (already the default)
+- `--cuda-trace-scope=process-tree`
+
+The maintained profiling command now declares those settings explicitly. This
+is **not evidence that NVML/CUDA enumeration is disabled**. No documented
+no-enumeration switch was found. Device metrics `none`, CUDA visibility, and
+application-scope traces do not imply the profiler never discovers other cards.
+The previous 2/4 MiB nonselected deltas therefore remain unexplained observations,
+not proof that all-card metrics were enabled or that Ferrule used eight GPUs.
+
+The installed guide documents named interactive `nsys start --session-new=...`
+then `nsys launch --session=...`, and launch-before-start workflows. Thus a
+collector-first architecture is possible in principle. Whether device discovery
+finishes before the selected model or trace window starts must be measured;
+CLI docs and the old CPU-only sleep probe do not prove that condition.
+
+## Proposed bounded probe, with a distinct eight-GPU grant
+
+`instrumentation_scope.py` implements CPU-testable policy/lock helpers, **not a
+second runner or a launch authorization**. It requires a new grant named
+`all_eight_instrumentation_probe`, with all eight actual physical UUIDs and an
+operator note. An existing two-GPU grant cannot substitute. UUID discovery must
+be reverified live under the next authorized owner; no UUIDs are guessed here.
+
+1. Acquire all eight UUID locks in sorted order using the existing
+   `ct.exclusive_owner_lock` through `ExitStack`; any acquisition failure releases
+   already acquired locks. Never signal the holder. Retain all eight through
+   final collector drain; the model visibility stays the original ordered two.
+2. Under the existing authenticated subreaper, record the original all-eight
+   zero-memory/no-compute-PID/zero-utilization baseline **B0** before collector
+   initialization. Lock cooperation is an operational exclusivity assumption,
+   not proof against a noncooperating foreign process or host-NVML PID mapping.
+3. Start only the collector plus a gated non-CUDA target; do not start/import
+   the model yet. Bind root PID/start-time/launch ID and retain live descendant
+   authentication. No detached global session may escape that custody.
+4. Within **60 s**, require at least **three identical per-card memory samples
+   spanning >=4 s**, complete UUID/index mapping, no compute PIDs (including
+   unknown/unmapped PIDs) and zero utilization. Predeclare an instrumentation-only
+   ceiling of **16 MiB/card**. This is a proposed bounded probe allowance, **not**
+   a measured value or a replacement for the model's 1 MiB delta tolerance.
+   Instability, missing samples, new PIDs or ceiling overflow blocks model launch.
+5. Freeze **B1** exactly once, recording B0, B1 and B1-B0 separately. Recheck live
+   locks/custody, then open the model gate only with selected UUID0/1 visibility.
+   Do not choose a maximum/median to hide instability, import an earlier run's
+   B1, reacquire between phases, or change B1 after model start.
+6. Model-phase nonselected positive deltas remain **<=1 MiB relative to B1**;
+   nonselected utilization or compute PIDs stop the owned run without foreign
+   signals. Selected cards retain the **absolute 22 GiB/card** ceiling; do not
+   subtract profiler allocation to make the model fit. Host accounting includes
+   the collector tree and remains observational, not a physical partition.
+7. Ready/Hello/canaries precede capture. Trace one warm QA8 and one diagnostic
+   measured QA8; stop capture and export. Startup stays outside request traces.
+   If model launch or trace start causes another nonselected allocation spike,
+   **fail, preserve it, no adaptive rebaseline**.
+8. After authenticated model drain, prove return to the frozen collector anchor.
+   Drain the collector through the same custodian, prove return to original B0
+   on all eight, and only then finish release. On failure, cleanup remains the
+   authenticated owner/custodian's responsibility; unknown drain is not success.
+
+The tests cover separate grant, sorted locks/partial rollback, stable/unstable
+baseline, unknown PID, deadline, ceiling, immutable baseline, two-card model
+visibility, root identity, unchanged 1 MiB delta rule and original-baseline return.
+`BaselineScope` validates metadata/state transitions only; the sealed worker must
+supply actual live authentication and drain receipts, never caller pass flags.
+
+### Explicit remaining integration and next authorization
+
+**Not live-wired yet:** an authenticated pre-model gate target and collector
+baseline handoff into the existing worker. The current `profiling` purpose still
+uses its original two-UUID ownership and does not silently select the new probe
+scope. Before execution, wire the narrow gate hook (reuse existing wrapper/server
+request/drain code), verify its bounded cancellation/error paths, and pin the
+resulting source/command. Existing startup900/request120/all-requests440/
+teardown120/supervisor1600/ceiling1700 budgets stay; fit the <=60 s collector
+probe inside the supervisor budget rather than extending it indefinitely.
+
+Next GPU authorization must explicitly distinguish the eight-card instrumentation
+probe from the two-card model workload. First measure collector-only stability;
+only after it passes admit the selected server. Report CUDA activity for both
+owners, captured clock boundaries, scope and runtime injections. The plan alone
+cannot promise a successful trace; it removes the previous implicit-baseline
+assumption and makes the prerequisite measurable without weakening foreign safety.
+
+## Observer memory decomposition and phases
+
+The existing observer now parses `Anonymous`, `Pss_Anon`, `Pss_File`, and
+`Private_Dirty` from `smaps_rollup` in addition to old RSS/PSS/locked/pinned fields.
+Optional fields absent on older kernels are **null**, not zero; aggregate PSS
+coverage remains valid when an optional breakdown is unavailable. Per-component
+process/sample coverage is retained. A vanished descendant still makes whole-tree
+memory incomplete, not root-custody loss. `status` cannot override rollup values.
+
+`Anonymous` is resident anonymous memory, not proportional anonymous PSS;
+`Pss_Anon + Pss_File` may omit shared-memory PSS. Independent component peaks do
+not add up to the total PSS peak. Do not reinterpret file-backed PSS as anonymous
+weight duplication or infer residency/offload solely from these counters.
+
+Each sample records its start and end. The maintained paired/smoke/profile adapter
+marks readiness using the existing readiness helper. `hello2/http.json` supplies
+actual first HTTP send/EOF timestamps. New additive `phase_memory` separates:
+
+- startup (before Ready)
+- Ready-to-first-request
+- first request
+- after first successful request
+
+Only wholly contained samples belong to a phase; straddling/missing timestamps
+stay unassigned/raw. Empty windows and unsupported component coverage are null.
+`after_first_request` includes later canaries/warmups, so it is an explicit
+**post-first observational window, not proof of steady state**. Original lifetime
+peak keys remain unchanged, and old receipt files are not rewritten. Older
+callers without a Ready marker retain lifetime/post-first evidence but no invented
+startup peak. The old consumed adapters are archived under
+`history/pre-instrumentation-baseline/` before these edits.
+
+## Optimized release follow-up
+
+The ongoing runtime optimization's binary/source/quality results are separate.
+A new optimized release still needs matching source/build/numerical admission and
+same-release serving smoke, then a **fresh no-trace paired pilot**. Do not borrow
+the old release's serving receipt or use profiler durations as benchmark results.
+E2 remains incomplete; `fairmatch=false`, `exact_speedup=null`.
+
+CPU plan and pinned local documentation:
+[plan.json](plans/instrumentation-baseline-20261009/plan.json).

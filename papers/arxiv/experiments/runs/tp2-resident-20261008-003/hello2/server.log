@@ -1,0 +1,135 @@
+(APIServer pid=149458) INFO 10-09 00:01:26 [api_utils.py:333] 
+(APIServer pid=149458) INFO 10-09 00:01:26 [api_utils.py:333]        █     █     █▄   ▄█
+(APIServer pid=149458) INFO 10-09 00:01:26 [api_utils.py:333]  ▄▄ ▄█ █     █     █ ▀▄▀ █  version 0.28.0
+(APIServer pid=149458) INFO 10-09 00:01:26 [api_utils.py:333]   █▄█▀ █     █     █     █  model   /mnt/nas1/hf/Qwen3.5-35B-A3B-FP8
+(APIServer pid=149458) INFO 10-09 00:01:26 [api_utils.py:333]    ▀▀  ▀▀▀▀▀ ▀▀▀▀▀ ▀     ▀
+(APIServer pid=149458) INFO 10-09 00:01:26 [api_utils.py:333] 
+(APIServer pid=149458) INFO 10-09 00:01:26 [api_utils.py:272] non-default args: {'model_tag': '/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8', 'host': '127.0.0.1', 'port': 18367, 'model': '/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8', 'dtype': 'bfloat16', 'seed': 1, 'max_model_len': 128, 'enforce_eager': True, 'served_model_name': ['qwen35-vllm-tp2-resident-paper'], 'generation_config': 'vllm', 'tensor_parallel_size': 2, 'gpu_memory_utilization': 0.8, 'enable_prefix_caching': False, 'mamba_cache_dtype': 'bfloat16', 'mamba_ssm_cache_dtype': 'float32', 'language_model_only': True, 'max_num_batched_tokens': 8, 'max_num_seqs': 2, 'enable_chunked_prefill': True, 'moe_backend': 'marlin', 'linear_backend': 'marlin'}
+(APIServer pid=149458) INFO 10-09 00:01:27 [model.py:672] Resolved architecture: Qwen3_5MoeForConditionalGeneration
+(APIServer pid=149458) INFO 10-09 00:01:27 [model.py:1965] Using max model len 128
+(APIServer pid=149458) Traceback (most recent call last):
+(APIServer pid=149458)   File "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runs/tp2-resident-20261008-003/staged/ferrule", line 10, in <module>
+(APIServer pid=149458)     sys.exit(main())
+(APIServer pid=149458)              ^^^^^^
+(APIServer pid=149458)   File "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/vllm/entrypoints/cli/main.py", line 97, in main
+(APIServer pid=149458)     args.dispatch_function(args)
+(APIServer pid=149458)   File "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/vllm/entrypoints/cli/serve.py", line 152, in cmd
+(APIServer pid=149458)     uvloop.run(run_server(args))
+(APIServer pid=149458)   File "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/uvloop/__init__.py", line 96, in run
+(APIServer pid=149458)     return __asyncio.run(
+(APIServer pid=149458)            ^^^^^^^^^^^^^^
+(APIServer pid=149458)   File "/home/admin/wxw403883/anaconda3/lib/python3.12/asyncio/runners.py", line 194, in run
+(APIServer pid=149458)     return runner.run(main)
+(APIServer pid=149458)            ^^^^^^^^^^^^^^^^
+(APIServer pid=149458)   File "/home/admin/wxw403883/anaconda3/lib/python3.12/asyncio/runners.py", line 118, in run
+(APIServer pid=149458)     return self._loop.run_until_complete(task)
+(APIServer pid=149458)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=149458)   File "uvloop/loop.pyx", line 1512, in uvloop.loop.Loop.run_until_complete
+(APIServer pid=149458)   File "uvloop/loop.pyx", line 1505, in uvloop.loop.Loop.run_until_complete
+(APIServer pid=149458)   File "uvloop/loop.pyx", line 1379, in uvloop.loop.Loop.run_forever
+(APIServer pid=149458)   File "uvloop/loop.pyx", line 557, in uvloop.loop.Loop._run
+(APIServer pid=149458)   File "uvloop/loop.pyx", line 476, in uvloop.loop.Loop._on_idle
+(APIServer pid=149458)   File "uvloop/cbhandles.pyx", line 83, in uvloop.loop.Handle._run
+(APIServer pid=149458)   File "uvloop/cbhandles.pyx", line 61, in uvloop.loop.Handle._run
+(APIServer pid=149458)   File "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/uvloop/__init__.py", line 48, in wrapper
+(APIServer pid=149458)     return await main
+(APIServer pid=149458)            ^^^^^^^^^^
+(APIServer pid=149458)   File "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/vllm/entrypoints/openai/api_server.py", line 739, in run_server
+(APIServer pid=149458)     await run_server_worker(listen_address, sock, args, **uvicorn_kwargs)
+(APIServer pid=149458)   File "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/vllm/entrypoints/openai/api_server.py", line 753, in run_server_worker
+(APIServer pid=149458)     async with build_async_engine_client(
+(APIServer pid=149458)   File "/home/admin/wxw403883/anaconda3/lib/python3.12/contextlib.py", line 210, in __aenter__
+(APIServer pid=149458)     return await anext(self.gen)
+(APIServer pid=149458)            ^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=149458)   File "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/vllm/entrypoints/openai/api_server.py", line 127, in build_async_engine_client
+(APIServer pid=149458)     async with build_async_engine_client_from_engine_args(
+(APIServer pid=149458)   File "/home/admin/wxw403883/anaconda3/lib/python3.12/contextlib.py", line 210, in __aenter__
+(APIServer pid=149458)     return await anext(self.gen)
+(APIServer pid=149458)            ^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=149458)   File "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/vllm/entrypoints/openai/api_server.py", line 151, in build_async_engine_client_from_engine_args
+(APIServer pid=149458)     vllm_config = engine_args.create_engine_config(usage_context=usage_context)
+(APIServer pid=149458)                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=149458)   File "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/vllm/engine/arg_utils.py", line 1969, in create_engine_config
+(APIServer pid=149458)     model_config = self.create_model_config()
+(APIServer pid=149458)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=149458)   File "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/vllm/engine/arg_utils.py", line 1727, in create_model_config
+(APIServer pid=149458)     return ModelConfig(
+(APIServer pid=149458)            ^^^^^^^^^^^^
+(APIServer pid=149458)   File "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/pydantic/_internal/_dataclasses.py", line 121, in __init__
+(APIServer pid=149458)     s.__pydantic_validator__.validate_python(ArgsKwargs(args, kwargs), self_instance=s)
+(APIServer pid=149458)   File "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/vllm/config/model.py", line 833, in __post_init__
+(APIServer pid=149458)     self.model_arch_config = self.get_model_arch_config()
+(APIServer pid=149458)                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=149458)   File "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/vllm/config/model.py", line 892, in get_model_arch_config
+(APIServer pid=149458)     supports_multimodal=self._supports_multimodal_for_mm_prefix()
+(APIServer pid=149458)                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=149458)   File "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/vllm/config/model.py", line 872, in _supports_multimodal_for_mm_prefix
+(APIServer pid=149458)     supports_mm = MULTIMODAL_REGISTRY.supports_multimodal_inputs(self)
+(APIServer pid=149458)                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=149458)   File "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/vllm/multimodal/registry.py", line 115, in supports_multimodal_inputs
+(APIServer pid=149458)     info = self._create_processing_info(model_config, tokenizer=None)
+(APIServer pid=149458)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=149458)   File "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/vllm/multimodal/registry.py", line 210, in _create_processing_info
+(APIServer pid=149458)     model_cls = self._get_model_cls(model_config)
+(APIServer pid=149458)                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=149458)   File "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/vllm/multimodal/registry.py", line 187, in _get_model_cls
+(APIServer pid=149458)     model_cls, _ = get_model_architecture(model_config)
+(APIServer pid=149458)                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=149458)   File "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/vllm/model_executor/model_loader/utils.py", line 247, in get_model_architecture
+(APIServer pid=149458)     model_cls_and_arch = _get_model_architecture(model_config)
+(APIServer pid=149458)                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=149458)   File "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/vllm/model_executor/model_loader/utils.py", line 203, in _get_model_architecture
+(APIServer pid=149458)     model_cls, arch = model_config.registry.resolve_model_cls(
+(APIServer pid=149458)                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=149458)   File "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/vllm/model_executor/models/registry.py", line 1360, in resolve_model_cls
+(APIServer pid=149458)     model_cls = self._try_load_model_cls(normalized_arch)
+(APIServer pid=149458)                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=149458)   File "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/vllm/model_executor/models/registry.py", line 1167, in _try_load_model_cls
+(APIServer pid=149458)     return _try_load_model_cls(model_arch, self.models[model_arch])
+(APIServer pid=149458)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=149458)   File "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/vllm/model_executor/models/registry.py", line 1058, in _try_load_model_cls
+(APIServer pid=149458)     return model.load_model_cls()
+(APIServer pid=149458)            ^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=149458)   File "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/vllm/model_executor/models/registry.py", line 1045, in load_model_cls
+(APIServer pid=149458)     mod = importlib.import_module(self.module_name)
+(APIServer pid=149458)           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=149458)   File "/home/admin/wxw403883/anaconda3/lib/python3.12/importlib/__init__.py", line 90, in import_module
+(APIServer pid=149458)     return _bootstrap._gcd_import(name[level:], package, level)
+(APIServer pid=149458)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=149458)   File "<frozen importlib._bootstrap>", line 1387, in _gcd_import
+(APIServer pid=149458)   File "<frozen importlib._bootstrap>", line 1360, in _find_and_load
+(APIServer pid=149458)   File "<frozen importlib._bootstrap>", line 1331, in _find_and_load_unlocked
+(APIServer pid=149458)   File "<frozen importlib._bootstrap>", line 935, in _load_unlocked
+(APIServer pid=149458)   File "<frozen importlib._bootstrap_external>", line 995, in exec_module
+(APIServer pid=149458)   File "<frozen importlib._bootstrap>", line 488, in _call_with_frames_removed
+(APIServer pid=149458)   File "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/vllm/model_executor/models/qwen3_5.py", line 41, in <module>
+(APIServer pid=149458)     from vllm.model_executor.layers.mamba.gdn.qwen_gdn_linear_attn import (
+(APIServer pid=149458)   File "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/vllm/model_executor/layers/mamba/gdn/qwen_gdn_linear_attn.py", line 50, in <module>
+(APIServer pid=149458)     from vllm.third_party.flash_linear_attention.ops import (
+(APIServer pid=149458)   File "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/vllm/third_party/flash_linear_attention/ops/__init__.py", line 9, in <module>
+(APIServer pid=149458)     from .chunk import chunk_gated_delta_rule
+(APIServer pid=149458)   File "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/vllm/third_party/flash_linear_attention/ops/chunk.py", line 13, in <module>
+(APIServer pid=149458)     from .chunk_delta_h import chunk_gated_delta_rule_fwd_h
+(APIServer pid=149458)   File "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/vllm/third_party/flash_linear_attention/ops/chunk_delta_h.py", line 15, in <module>
+(APIServer pid=149458)     from .index import prepare_chunk_indices, prepare_chunk_offsets
+(APIServer pid=149458)   File "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/vllm/third_party/flash_linear_attention/ops/index.py", line 15, in <module>
+(APIServer pid=149458)     from .utils import tensor_cache
+(APIServer pid=149458)   File "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/vllm/third_party/flash_linear_attention/ops/utils.py", line 145, in <module>
+(APIServer pid=149458)     device_platform = _check_platform()
+(APIServer pid=149458)                       ^^^^^^^^^^^^^^^^^
+(APIServer pid=149458)   File "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/vllm/third_party/flash_linear_attention/ops/utils.py", line 130, in _check_platform
+(APIServer pid=149458)     device = get_available_device()
+(APIServer pid=149458)              ^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=149458)   File "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/vllm/third_party/flash_linear_attention/ops/utils.py", line 123, in get_available_device
+(APIServer pid=149458)     return triton.runtime.driver.active.get_current_target().backend
+(APIServer pid=149458)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=149458)   File "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/triton/backends/nvidia/driver.py", line 341, in get_current_target
+(APIServer pid=149458)     device = self.get_current_device()
+(APIServer pid=149458)              ^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=149458)   File "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/cuda/__init__.py", line 1205, in current_device
+(APIServer pid=149458)     _lazy_init()
+(APIServer pid=149458)   File "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/torch/cuda/__init__.py", line 529, in _lazy_init
+(APIServer pid=149458)     torch._C._cuda_init()
+(APIServer pid=149458)   File "/home/admin/luhuanbing.lhb/Ferrule/target/vendor/vllm028-py312/lib/python3.12/site-packages/vllm/entrypoints/openai/api_server.py", line 734, in _interrupt_init
+(APIServer pid=149458)     raise KeyboardInterrupt("terminated")
+(APIServer pid=149458) KeyboardInterrupt: terminated

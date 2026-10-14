@@ -1,0 +1,10 @@
+{
+  "all_exact": true,
+  "report": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/decoded-arena-uninitialized-20261010-01/full40-comparison.json",
+    "sha256": "ef2f67ea6dc0ae5fec0d050d9f57a87a5ceb9f8b91ca1ca24dd2ed7e6c17cf06"
+  },
+  "raw_sha256": "a5102cdce0eb4ae3f59933132d1fcc20fe5d48eeb43a00527e93ec1c5e295e92",
+  "reference_sha256": "fb96ba4dd134761af30b4025b4cce86f96136cb01f05b5b4fca3e74587caa71d",
+  "public_e2e_accepted": false
+}

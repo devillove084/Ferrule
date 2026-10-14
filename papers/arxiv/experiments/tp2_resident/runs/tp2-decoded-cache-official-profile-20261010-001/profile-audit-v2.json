@@ -1,0 +1,3220 @@
+{
+  "schema": "ferrule.paper.nsight-full-profile-audit.v2",
+  "status": "rejected_incomplete_trace",
+  "full_trace_accepted": false,
+  "benchmark": false,
+  "model_starts": 1,
+  "reverse_missing_correlations": [],
+  "completeness_caveat": "Even unique bidirectional closure of all exported request rows cannot exclude paired API/activity loss; it does not establish complete collection.",
+  "warning_interpretation": {
+    "source": "Independent audit identifies the generic libAnalysis TraceSummaryVerifier completeness check",
+    "scope": "Not restricted to CUDA-event dependency records; retain the incomplete-collection warning",
+    "cause": "Unproven. Early-window missing rows do not establish capture-boundary causation or buffer overflow.",
+    "explicit_cupti_drop_diagnostic": "Not observed; absence is not proof that no data was lost"
+  },
+  "failures": [
+    "Not all CUDA events might have been collected.",
+    "No exact request prefill/decode markers; no cublasGemmEx API ranges exported"
+  ],
+  "model_pid": 18910,
+  "session_utc_epoch_ns": 1791622183323295694,
+  "totals": {
+    "kernel": 187164,
+    "memcpy": 52568,
+    "memset": 140268,
+    "runtime_api": 3722287
+  },
+  "gpu_mapping": [
+    {
+      "pid": 18910,
+      "cudaId": 2,
+      "gpuId": 2,
+      "uuid": "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6"
+    },
+    {
+      "pid": 18910,
+      "cudaId": 3,
+      "gpuId": 3,
+      "uuid": "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011"
+    },
+    {
+      "pid": 18910,
+      "cudaId": 4,
+      "gpuId": 4,
+      "uuid": "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86"
+    },
+    {
+      "pid": 18910,
+      "cudaId": 5,
+      "gpuId": 5,
+      "uuid": "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685"
+    },
+    {
+      "pid": 18910,
+      "cudaId": 6,
+      "gpuId": 6,
+      "uuid": "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d"
+    },
+    {
+      "pid": 18910,
+      "cudaId": 1,
+      "gpuId": 1,
+      "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9"
+    },
+    {
+      "pid": 18910,
+      "cudaId": 7,
+      "gpuId": 7,
+      "uuid": "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f"
+    },
+    {
+      "pid": 18910,
+      "cudaId": 0,
+      "gpuId": 0,
+      "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535"
+    }
+  ],
+  "requests": {
+    "warmup": {
+      "request_id": 5,
+      "start_ns": 740412306,
+      "first_emission_proxy_ns": 1435449306,
+      "end_ns": 2741809306,
+      "first_emission_vs_client_receive_ns": 154781,
+      "marker_events": {
+        "request_admitted": {
+          "timestamp": "2026-10-10T08:49:44.063708Z",
+          "level": "DEBUG",
+          "fields": {
+            "message": "production request admitted",
+            "event": "request_admitted",
+            "request_id": 5,
+            "session_id": 5,
+            "worker_queue_us": 24,
+            "tokenization_us": 76,
+            "worker_admission_us": 3210,
+            "prompt_tokens": 5,
+            "max_new_tokens": 8
+          },
+          "target": "ferrule_request"
+        },
+        "request_http_admitted": {
+          "timestamp": "2026-10-10T08:49:44.063763Z",
+          "level": "DEBUG",
+          "fields": {
+            "message": "production HTTP request admitted",
+            "event": "request_http_admitted",
+            "request_id": 5,
+            "session_id": 5,
+            "endpoint": "completions",
+            "stream": true,
+            "http_admission_us": 3308
+          },
+          "target": "ferrule_request"
+        },
+        "request_worker_terminal": {
+          "timestamp": "2026-10-10T08:49:46.065105Z",
+          "level": "DEBUG",
+          "fields": {
+            "message": "production request reached worker terminal state",
+            "event": "request_worker_terminal",
+            "request_id": 5,
+            "session_id": 5,
+            "status": "finished",
+            "finish_reason": "max_tokens",
+            "worker_request_us": 2004632,
+            "generated_tokens": "Some(8)",
+            "emitted_token_events": 8,
+            "emission_timing_enabled": true,
+            "worker_first_emission_elapsed_us": 698272,
+            "worker_last_emission_elapsed_us": 2004616,
+            "worker_emission_interval_count": 7,
+            "worker_emission_interval_sum_us": 1306344,
+            "worker_emission_interval_min_us": 185141,
+            "worker_emission_interval_max_us": 189240,
+            "cancellation_requested": false,
+            "cancellation_submitted": false,
+            "cancellation_failed": false,
+            "requires_restore_or_shutdown": false,
+            "tokens_reconcile": "Some(true)"
+          },
+          "target": "ferrule_request"
+        },
+        "request_http_terminal": {
+          "timestamp": "2026-10-10T08:49:46.065129Z",
+          "level": "DEBUG",
+          "fields": {
+            "message": "production HTTP request reached response terminal state",
+            "event": "request_http_terminal",
+            "request_id": 5,
+            "session_id": 5,
+            "endpoint": "completions",
+            "stream": true,
+            "status": "finished",
+            "finish_reason": "max_tokens",
+            "token_events": 8,
+            "http_response_enqueue_us": 2004676
+          },
+          "target": "ferrule_request"
+        }
+      },
+      "phase_status": "exact prefill/decode unavailable; before_first_emission and after_first_emission are explicit proxies only",
+      "window_ns": 2001397000,
+      "bounds_method": "server request ID + UTC markers minus official TARGET_INFO_SESSION_START_TIME.utcEpochNs; log resolution 1us",
+      "kernels": {
+        "ferrule::cuda::core::bf16_boundary_kernel(ferrule::cuda::core::Bf16BoundaryArgs)": {
+          "count": 29688,
+          "sum_ns": 47562330,
+          "bytes": 0,
+          "max_ns": 11008
+        },
+        "ferrule::cuda::core::bf16_offset_norm_tree(ferrule::cuda::core::Bf16BoundaryArgs, float)": {
+          "count": 1818,
+          "sum_ns": 7889957,
+          "bytes": 0,
+          "max_ns": 8640
+        },
+        "ampere_bf16_s16816gemm_bf16_64x64_ldg8_f2f_stages_64x5_tn": {
+          "count": 82,
+          "sum_ns": 3452577,
+          "bytes": 0,
+          "max_ns": 598751
+        },
+        "void cutlass::Kernel2<cutlass_80_wmma_tensorop_bf16_s161616gemm_bf16_32x32_128x2_tn_align8>(T1::Params)": {
+          "count": 318,
+          "sum_ns": 3443072,
+          "bytes": 0,
+          "max_ns": 19616
+        },
+        "void cutlass::Kernel2<cutlass_80_wmma_tensorop_bf16_s161616gemm_bf16_16x16_128x2_tn_align8>(T1::Params)": {
+          "count": 120,
+          "sum_ns": 1976515,
+          "bytes": 0,
+          "max_ns": 17056
+        },
+        "ferrule::cuda::core::hf_bf16::conv(FerruleCoreBf16ConvArgs)": {
+          "count": 540,
+          "sum_ns": 1659426,
+          "bytes": 0,
+          "max_ns": 6208
+        },
+        "ferrule::cuda::core::bf16_chunk::prepare(FerruleCoreBf16ChunkArgs, ferrule::cuda::core::bf16_chunk::Workspace, unsigned int, float)": {
+          "count": 60,
+          "sum_ns": 11727624,
+          "bytes": 0,
+          "max_ns": 195647
+        },
+        "ferrule::cuda::core::bf16_chunk::prefix(ferrule::cuda::core::bf16_chunk::Workspace, unsigned int)": {
+          "count": 60,
+          "sum_ns": 116802,
+          "bytes": 0,
+          "max_ns": 1984
+        },
+        "ferrule::cuda::core::bf16_chunk::decay_and_initial_exponents(ferrule::cuda::core::bf16_chunk::Workspace, unsigned int)": {
+          "count": 60,
+          "sum_ns": 171584,
+          "bytes": 0,
+          "max_ns": 2912
+        },
+        "ferrule::cuda::core::bf16_chunk::matmul(const float *, const float *, float *, unsigned int, unsigned int, unsigned int, bool, bool, unsigned int)": {
+          "count": 480,
+          "sum_ns": 6244424,
+          "bytes": 0,
+          "max_ns": 18145
+        },
+        "ferrule::cuda::core::bf16_chunk::mask_matrix(ferrule::cuda::core::bf16_chunk::Workspace, bool)": {
+          "count": 60,
+          "sum_ns": 103744,
+          "bytes": 0,
+          "max_ns": 1760
+        },
+        "ferrule::cuda::core::bf16_chunk::triangular(ferrule::cuda::core::bf16_chunk::Workspace)": {
+          "count": 60,
+          "sum_ns": 1578688,
+          "bytes": 0,
+          "max_ns": 26337
+        },
+        "ferrule::cuda::core::bf16_chunk::attention_delta_and_end_keys(ferrule::cuda::core::bf16_chunk::Workspace, unsigned int)": {
+          "count": 60,
+          "sum_ns": 195072,
+          "bytes": 0,
+          "max_ns": 3392
+        },
+        "ferrule::cuda::core::bf16_chunk::output_and_state(FerruleCoreBf16ChunkArgs, ferrule::cuda::core::bf16_chunk::Workspace, unsigned int)": {
+          "count": 60,
+          "sum_ns": 226369,
+          "bytes": 0,
+          "max_ns": 3872
+        },
+        "ferrule::cuda::core::hf_bf16::gated_norm_tree(FerruleCoreBf16GatedNormArgs, float)": {
+          "count": 540,
+          "sum_ns": 2177124,
+          "bytes": 0,
+          "max_ns": 4288
+        },
+        "ferrule::cuda::core::rows_f32_to_bf16_rne_kernel(FerruleCoreRowsArgs)": {
+          "count": 1800,
+          "sum_ns": 3113540,
+          "bytes": 0,
+          "max_ns": 2752
+        },
+        "void cutlass::Kernel2<cutlass_80_wmma_tensorop_s161616gemm_bf16_16x16_64x1_tn_align8>(T1::Params)": {
+          "count": 280,
+          "sum_ns": 1207429,
+          "bytes": 0,
+          "max_ns": 4704
+        },
+        "void cublasLt::splitKreduce_kernel<(int)32, (int)16, int, float, __nv_bfloat16, float, __nv_bfloat16, (bool)1, (bool)0, (bool)0>(cublasLt::cublasSplitKParams<T6>, const T4 *, const T5 *, T5 *, const T6 *, const T6 *, const T7 *, const T4 *, T7 *, void *, long, T6 *, int *)": {
+          "count": 876,
+          "sum_ns": 1485153,
+          "bytes": 0,
+          "max_ns": 1920
+        },
+        "void ferrule::cuda::core::full_router_kernel<(int)8, (bool)0, (bool)0>(FerruleCoreRouterArgs, float *)": {
+          "count": 720,
+          "sum_ns": 32681349,
+          "bytes": 0,
+          "max_ns": 52320
+        },
+        "void dot_kernel<float, (int)128, (int)0, cublasDotParams<cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<float>>>(T4)": {
+          "count": 1680,
+          "sum_ns": 3650374,
+          "bytes": 0,
+          "max_ns": 2656
+        },
+        "void reduce_1Block_kernel<float, (int)128, (int)7, cublasGemvTensorStridedBatched<float>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>>(const T1 *, T1, T4, int, const T1 *, T1, T5, T6, cublasPointerMode_t, cublasLtEpilogue_t, cublasGemvTensorStridedBatched<const biasType<T6::value_type, T1>::type>)": {
+          "count": 1680,
+          "sum_ns": 2788516,
+          "bytes": 0,
+          "max_ns": 1760
+        },
+        "ferrule::cuda::core::data_kernel(FerruleCoreDataArgs)": {
+          "count": 1080,
+          "sum_ns": 1974658,
+          "bytes": 0,
+          "max_ns": 2016
+        },
+        "ferrule::cuda::cutlass::numeric_fp8::decode_weights(FerruleCutlassNumericFp8Args, unsigned int, unsigned int, unsigned long)": {
+          "count": 22092,
+          "sum_ns": 149794450,
+          "bytes": 0,
+          "max_ns": 7200
+        },
+        "void cutlass::Kernel2<cutlass_80_tensorop_s16816gemm_bf16_64x64_32x6_tn_align8>(T1::Params)": {
+          "count": 596,
+          "sum_ns": 3206624,
+          "bytes": 0,
+          "max_ns": 5792
+        },
+        "ferrule::cuda::cutlass::bf16_gemmex::split_pair(const unsigned short *, unsigned short *, unsigned short *, unsigned long, unsigned int)": {
+          "count": 7364,
+          "sum_ns": 11965678,
+          "bytes": 0,
+          "max_ns": 1696
+        },
+        "void cutlass::Kernel2<cutlass_80_wmma_tensorop_bf16_s161616gemm_bf16_32x32_64x1_tn_align8>(T1::Params)": {
+          "count": 498,
+          "sum_ns": 2170757,
+          "bytes": 0,
+          "max_ns": 4576
+        },
+        "std::enable_if<!T7, void>::type internal::gemvx::kernel<int, int, __nv_bfloat16, __nv_bfloat16, __nv_bfloat16, float, (bool)0, (bool)1, (bool)1, (bool)0, (int)7, (bool)0, cublasGemvParamsEx<int, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>, float>>(T13)": {
+          "count": 17536,
+          "sum_ns": 80229794,
+          "bytes": 0,
+          "max_ns": 15040
+        },
+        "ferrule::cuda::core::moe_kernel(FerruleCoreMoeArgs)": {
+          "count": 720,
+          "sum_ns": 3089860,
+          "bytes": 0,
+          "max_ns": 5696
+        },
+        "ferrule::cuda::cutlass::numeric_fp8::pack_bf16_activation(FerruleCutlassNumericFp8Args)": {
+          "count": 78,
+          "sum_ns": 123648,
+          "bytes": 0,
+          "max_ns": 1600
+        },
+        "ferrule::cuda::core::eager_attention::validate_group(FerruleCoreTransformerArgs, FerruleBf16AttentionGroup)": {
+          "count": 180,
+          "sum_ns": 25712758,
+          "bytes": 0,
+          "max_ns": 153536
+        },
+        "ferrule::cuda::core::eager_attention::append(FerruleCoreTransformerArgs)": {
+          "count": 180,
+          "sum_ns": 942305,
+          "bytes": 0,
+          "max_ns": 5664
+        },
+        "ferrule::cuda::core::eager_attention::pack(FerruleCoreTransformerArgs, FerruleBf16AttentionGroup, unsigned short *)": {
+          "count": 180,
+          "sum_ns": 367008,
+          "bytes": 0,
+          "max_ns": 2080
+        },
+        "ferrule::cuda::core::eager_attention::gather(FerruleCoreTransformerArgs, FerruleBf16AttentionGroup, unsigned short *, unsigned short *)": {
+          "count": 180,
+          "sum_ns": 970850,
+          "bytes": 0,
+          "max_ns": 6592
+        },
+        "void cutlass::Kernel2<cutlass_75_wmma_tensorop_bf16_s161616gemm_bf16_32x32_32x1_tn_align1>(T1::Params)": {
+          "count": 20,
+          "sum_ns": 101024,
+          "bytes": 0,
+          "max_ns": 5088
+        },
+        "ferrule::cuda::core::eager_attention::softmax(FerruleCoreTransformerArgs, FerruleBf16AttentionGroup, const unsigned short *, unsigned short *)": {
+          "count": 180,
+          "sum_ns": 479711,
+          "bytes": 0,
+          "max_ns": 2752
+        },
+        "void cutlass::Kernel2<cutlass_75_wmma_tensorop_bf16_s161616gemm_bf16_32x32_32x1_nn_align1>(T1::Params)": {
+          "count": 20,
+          "sum_ns": 52962,
+          "bytes": 0,
+          "max_ns": 2656
+        },
+        "ferrule::cuda::core::eager_attention::scatter(FerruleCoreTransformerArgs, FerruleBf16AttentionGroup, const unsigned short *)": {
+          "count": 180,
+          "sum_ns": 351967,
+          "bytes": 0,
+          "max_ns": 1984
+        },
+        "ampere_bf16_s16816gemm_bf16_64x64_sliced1x2_ldg8_f2f_stages_64x5_tn": {
+          "count": 640,
+          "sum_ns": 18446232,
+          "bytes": 0,
+          "max_ns": 30240
+        },
+        "ferrule::cuda::core::hf_bf16::delta(FerruleCoreBf16DeltaArgs)": {
+          "count": 480,
+          "sum_ns": 39494576,
+          "bytes": 0,
+          "max_ns": 83904
+        },
+        "std::enable_if<!T7, void>::type internal::gemvx::kernel<int, int, __nv_bfloat16, __nv_bfloat16, __nv_bfloat16, float, (bool)0, (bool)1, (bool)1, (bool)0, (int)6, (bool)0, cublasGemvParamsEx<int, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>, float>>(T13)": {
+          "count": 80,
+          "sum_ns": 193408,
+          "bytes": 0,
+          "max_ns": 2432
+        },
+        "std::enable_if<!T7, void>::type internal::gemvx::kernel<int, int, __nv_bfloat16, __nv_bfloat16, __nv_bfloat16, float, (bool)0, (bool)1, (bool)0, (bool)0, (int)6, (bool)0, cublasGemvParamsEx<int, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>, float>>(T13)": {
+          "count": 160,
+          "sum_ns": 372447,
+          "bytes": 0,
+          "max_ns": 2432
+        },
+        "void gemv2T_kernel_val<int, int, __nv_bfloat16, __nv_bfloat16, __nv_bfloat16, float, (int)128, (int)16, (int)4, (int)4, (bool)0, (bool)0, cublasGemvParamsEx<int, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>, float>>(T13, T6, T6)": {
+          "count": 96,
+          "sum_ns": 9451178,
+          "bytes": 0,
+          "max_ns": 580898
+        }
+      },
+      "kernel_categories": {
+        "other": {
+          "count": 39366,
+          "sum_ns": 188831726,
+          "bytes": 0,
+          "max_ns": 195647
+        },
+        "matrix_math_named_kernels_not_GemmEx_API": {
+          "count": 24682,
+          "sum_ns": 132228062,
+          "bytes": 0,
+          "max_ns": 598751
+        },
+        "decode_weights": {
+          "count": 22092,
+          "sum_ns": 149794450,
+          "bytes": 0,
+          "max_ns": 7200
+        },
+        "gemmex_split_pair_helper_not_GemmEx_API": {
+          "count": 7364,
+          "sum_ns": 11965678,
+          "bytes": 0,
+          "max_ns": 1696
+        },
+        "pack_bf16_activation": {
+          "count": 78,
+          "sum_ns": 123648,
+          "bytes": 0,
+          "max_ns": 1600
+        }
+      },
+      "memcpy": {
+        "H2D": {
+          "count": 14244,
+          "sum_ns": 8360205,
+          "bytes": 21881944,
+          "max_ns": 158976
+        },
+        "D2D": {
+          "count": 8716,
+          "sum_ns": 12550953,
+          "bytes": 643399680,
+          "max_ns": 4192
+        },
+        "D2H": {
+          "count": 3324,
+          "sum_ns": 6498789,
+          "bytes": 40867912,
+          "max_ns": 94976
+        }
+      },
+      "apis": {
+        "cuEventCreate": {
+          "count": 270580,
+          "sum_ns": 232986191,
+          "bytes": 0,
+          "max_ns": 56227
+        },
+        "cuEventRecord": {
+          "count": 270580,
+          "sum_ns": 84576832,
+          "bytes": 0,
+          "max_ns": 10702
+        },
+        "cuEventSynchronize": {
+          "count": 17050,
+          "sum_ns": 107123677,
+          "bytes": 0,
+          "max_ns": 598232
+        },
+        "cuEventDestroy_v2": {
+          "count": 269848,
+          "sum_ns": 103616204,
+          "bytes": 0,
+          "max_ns": 55545
+        },
+        "cuMemsetD8Async": {
+          "count": 69996,
+          "sum_ns": 214904840,
+          "bytes": 0,
+          "max_ns": 277257
+        },
+        "cuMemcpyHtoDAsync_v2": {
+          "count": 14244,
+          "sum_ns": 71345218,
+          "bytes": 0,
+          "max_ns": 187608
+        },
+        "cuStreamSynchronize": {
+          "count": 67866,
+          "sum_ns": 82724661,
+          "bytes": 0,
+          "max_ns": 81502
+        },
+        "cudaLaunchKernel_v7000": {
+          "count": 91730,
+          "sum_ns": 391543401,
+          "bytes": 0,
+          "max_ns": 62840
+        },
+        "cuMemcpyDtoDAsync_v2": {
+          "count": 8716,
+          "sum_ns": 59655080,
+          "bytes": 0,
+          "max_ns": 19389
+        },
+        "cuCtxSetCurrent": {
+          "count": 509422,
+          "sum_ns": 43230467,
+          "bytes": 0,
+          "max_ns": 8743
+        },
+        "cuEventQuery": {
+          "count": 260635,
+          "sum_ns": 124218223,
+          "bytes": 0,
+          "max_ns": 10778
+        },
+        "cudaMemsetAsync_v3020": {
+          "count": 18,
+          "sum_ns": 61134,
+          "bytes": 0,
+          "max_ns": 4702
+        },
+        "cuKernelGetFunction": {
+          "count": 1852,
+          "sum_ns": 1241301,
+          "bytes": 0,
+          "max_ns": 14006
+        },
+        "cuLaunchKernel": {
+          "count": 1852,
+          "sum_ns": 7637431,
+          "bytes": 0,
+          "max_ns": 23871
+        },
+        "cuMemcpyDtoHAsync_v2": {
+          "count": 3324,
+          "sum_ns": 70399604,
+          "bytes": 0,
+          "max_ns": 517111
+        },
+        "cudaStreamIsCapturing_v10000": {
+          "count": 180,
+          "sum_ns": 190140,
+          "bytes": 0,
+          "max_ns": 1960
+        },
+        "cuStreamWaitEvent": {
+          "count": 408,
+          "sum_ns": 218164,
+          "bytes": 0,
+          "max_ns": 2001
+        }
+      },
+      "osrt": {
+        "19264:ferrule-model-w:write": {
+          "count": 1,
+          "sum_ns": 6189,
+          "bytes": 0,
+          "max_ns": 6189
+        },
+        "19264:ferrule-model-w:futex": {
+          "count": 179,
+          "sum_ns": 349879,
+          "bytes": 0,
+          "max_ns": 8136
+        },
+        "19264:ferrule-model-w:clock_nanosleep": {
+          "count": 18921,
+          "sum_ns": 1939965021,
+          "bytes": 0,
+          "max_ns": 121783
+        },
+        "19264:ferrule-model-w:epoll_wait": {
+          "count": 9,
+          "sum_ns": 14711,
+          "bytes": 0,
+          "max_ns": 2235
+        },
+        "19502:dp-owner-1:futex": {
+          "count": 1424,
+          "sum_ns": 67659607,
+          "bytes": 0,
+          "max_ns": 2977698
+        },
+        "19502:dp-owner-1:pthread_mutex_lock": {
+          "count": 39,
+          "sum_ns": 399501,
+          "bytes": 0,
+          "max_ns": 228126
+        },
+        "19502:dp-owner-1:write": {
+          "count": 369,
+          "sum_ns": 2091227,
+          "bytes": 0,
+          "max_ns": 10485
+        },
+        "19502:dp-owner-1:pthread_rwlock_wrlock": {
+          "count": 29,
+          "sum_ns": 598395,
+          "bytes": 0,
+          "max_ns": 51070
+        },
+        "19512:dp-owner-1:pthread_cond_timedwait": {
+          "count": 3,
+          "sum_ns": 1500178043,
+          "bytes": 0,
+          "max_ns": 500059941
+        },
+        "19510:dp-owner-0:pthread_cond_timedwait": {
+          "count": 3,
+          "sum_ns": 1500181849,
+          "bytes": 0,
+          "max_ns": 500061066
+        },
+        "19505:CUPTI worker thread:pthread_rwlock_rdlock": {
+          "count": 20,
+          "sum_ns": 163049,
+          "bytes": 0,
+          "max_ns": 14162
+        },
+        "19505:CUPTI worker thread:sem_wait": {
+          "count": 11,
+          "sum_ns": 1420183368,
+          "bytes": 0,
+          "max_ns": 176490377
+        },
+        "19513:cuda-EvtHandlr:poll": {
+          "count": 19,
+          "sum_ns": 1902088878,
+          "bytes": 0,
+          "max_ns": 100120319
+        },
+        "19501:dp-owner-0:futex": {
+          "count": 1422,
+          "sum_ns": 88978135,
+          "bytes": 0,
+          "max_ns": 3453474
+        },
+        "19501:dp-owner-0:write": {
+          "count": 369,
+          "sum_ns": 1799460,
+          "bytes": 0,
+          "max_ns": 13186
+        },
+        "19501:dp-owner-0:pthread_mutex_lock": {
+          "count": 43,
+          "sum_ns": 418829,
+          "bytes": 0,
+          "max_ns": 265757
+        },
+        "19511:cuda-EvtHandlr:poll": {
+          "count": 19,
+          "sum_ns": 1902191013,
+          "bytes": 0,
+          "max_ns": 100123434
+        },
+        "19153:ferrule-http:futex": {
+          "count": 16,
+          "sum_ns": 2000791957,
+          "bytes": 0,
+          "max_ns": 694920228
+        },
+        "19153:ferrule-http:write": {
+          "count": 1,
+          "sum_ns": 6891,
+          "bytes": 0,
+          "max_ns": 6891
+        },
+        "19153:ferrule-http:writev": {
+          "count": 8,
+          "sum_ns": 166478,
+          "bytes": 0,
+          "max_ns": 26133
+        },
+        "19262:ferrule-http:futex": {
+          "count": 7,
+          "sum_ns": 1816103833,
+          "bytes": 0,
+          "max_ns": 695015825
+        }
+      },
+      "per_uuid": {
+        "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": {
+          "kernel_count": 46791,
+          "kernel_ns": 240839171,
+          "memcpy": {
+            "H2D": {
+              "count": 7122,
+              "sum_ns": 4136212,
+              "bytes": 10940972,
+              "max_ns": 147169
+            },
+            "D2D": {
+              "count": 4358,
+              "sum_ns": 6252056,
+              "bytes": 321699840,
+              "max_ns": 4096
+            },
+            "D2H": {
+              "count": 1662,
+              "sum_ns": 3258281,
+              "bytes": 20433956,
+              "max_ns": 94976
+            }
+          },
+          "memset_count": 35007,
+          "owner_launch_tids": {
+            "19501": 46791
+          },
+          "observed_gpu_active_union_ns": 281248658,
+          "observed_gpu_gaps": {
+            "count": 94939,
+            "sum_ns": 1716588520,
+            "p50_ns": 5216,
+            "p95_ns": 62592,
+            "max_ns": 4233614
+          },
+          "observed_launch_interarrival": {
+            "count": 46790,
+            "sum_ns": 1997057085,
+            "p50_ns": 13389,
+            "p95_ns": 190802,
+            "max_ns": 6451225
+          },
+          "observed_launch_api_to_kernel_start": {
+            "count": 46791,
+            "sum_ns": 342874219,
+            "p50_ns": 2029,
+            "p95_ns": 5450,
+            "max_ns": 290946
+          },
+          "gap_caveat": "Observed intervals only; missing GPU events inflate gaps; gaps are NOT proven CPU/collective wait"
+        },
+        "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": {
+          "kernel_count": 46791,
+          "kernel_ns": 242104393,
+          "memcpy": {
+            "H2D": {
+              "count": 7122,
+              "sum_ns": 4223993,
+              "bytes": 10940972,
+              "max_ns": 158976
+            },
+            "D2D": {
+              "count": 4358,
+              "sum_ns": 6298897,
+              "bytes": 321699840,
+              "max_ns": 4192
+            },
+            "D2H": {
+              "count": 1662,
+              "sum_ns": 3240508,
+              "bytes": 20433956,
+              "max_ns": 94080
+            }
+          },
+          "memset_count": 35007,
+          "owner_launch_tids": {
+            "19502": 46791
+          },
+          "observed_gpu_active_union_ns": 283078002,
+          "observed_gpu_gaps": {
+            "count": 94939,
+            "sum_ns": 1712862675,
+            "p50_ns": 5216,
+            "p95_ns": 57791,
+            "max_ns": 7136280
+          },
+          "observed_launch_interarrival": {
+            "count": 46790,
+            "sum_ns": 1995131514,
+            "p50_ns": 13691,
+            "p95_ns": 185582,
+            "max_ns": 8567560
+          },
+          "observed_launch_api_to_kernel_start": {
+            "count": 46791,
+            "sum_ns": 338879257,
+            "p50_ns": 1974,
+            "p95_ns": 5492,
+            "max_ns": 286695
+          },
+          "gap_caveat": "Observed intervals only; missing GPU events inflate gaps; gaps are NOT proven CPU/collective wait"
+        }
+      },
+      "phases": {
+        "before_first_emission_proxy": {
+          "kernels": {
+            "ferrule::cuda::core::bf16_boundary_kernel(ferrule::cuda::core::Bf16BoundaryArgs)": {
+              "count": 10340,
+              "sum_ns": 16645426,
+              "bytes": 0,
+              "max_ns": 11008
+            },
+            "ferrule::cuda::core::bf16_offset_norm_tree(ferrule::cuda::core::Bf16BoundaryArgs, float)": {
+              "count": 404,
+              "sum_ns": 2294914,
+              "bytes": 0,
+              "max_ns": 8640
+            },
+            "ampere_bf16_s16816gemm_bf16_64x64_ldg8_f2f_stages_64x5_tn": {
+              "count": 82,
+              "sum_ns": 3452577,
+              "bytes": 0,
+              "max_ns": 598751
+            },
+            "void cutlass::Kernel2<cutlass_80_wmma_tensorop_bf16_s161616gemm_bf16_32x32_128x2_tn_align8>(T1::Params)": {
+              "count": 318,
+              "sum_ns": 3443072,
+              "bytes": 0,
+              "max_ns": 19616
+            },
+            "void cutlass::Kernel2<cutlass_80_wmma_tensorop_bf16_s161616gemm_bf16_16x16_128x2_tn_align8>(T1::Params)": {
+              "count": 120,
+              "sum_ns": 1976515,
+              "bytes": 0,
+              "max_ns": 17056
+            },
+            "ferrule::cuda::core::hf_bf16::conv(FerruleCoreBf16ConvArgs)": {
+              "count": 120,
+              "sum_ns": 493825,
+              "bytes": 0,
+              "max_ns": 6208
+            },
+            "ferrule::cuda::core::bf16_chunk::prepare(FerruleCoreBf16ChunkArgs, ferrule::cuda::core::bf16_chunk::Workspace, unsigned int, float)": {
+              "count": 60,
+              "sum_ns": 11727624,
+              "bytes": 0,
+              "max_ns": 195647
+            },
+            "ferrule::cuda::core::bf16_chunk::prefix(ferrule::cuda::core::bf16_chunk::Workspace, unsigned int)": {
+              "count": 60,
+              "sum_ns": 116802,
+              "bytes": 0,
+              "max_ns": 1984
+            },
+            "ferrule::cuda::core::bf16_chunk::decay_and_initial_exponents(ferrule::cuda::core::bf16_chunk::Workspace, unsigned int)": {
+              "count": 60,
+              "sum_ns": 171584,
+              "bytes": 0,
+              "max_ns": 2912
+            },
+            "ferrule::cuda::core::bf16_chunk::matmul(const float *, const float *, float *, unsigned int, unsigned int, unsigned int, bool, bool, unsigned int)": {
+              "count": 480,
+              "sum_ns": 6244424,
+              "bytes": 0,
+              "max_ns": 18145
+            },
+            "ferrule::cuda::core::bf16_chunk::mask_matrix(ferrule::cuda::core::bf16_chunk::Workspace, bool)": {
+              "count": 60,
+              "sum_ns": 103744,
+              "bytes": 0,
+              "max_ns": 1760
+            },
+            "ferrule::cuda::core::bf16_chunk::triangular(ferrule::cuda::core::bf16_chunk::Workspace)": {
+              "count": 60,
+              "sum_ns": 1578688,
+              "bytes": 0,
+              "max_ns": 26337
+            },
+            "ferrule::cuda::core::bf16_chunk::attention_delta_and_end_keys(ferrule::cuda::core::bf16_chunk::Workspace, unsigned int)": {
+              "count": 60,
+              "sum_ns": 195072,
+              "bytes": 0,
+              "max_ns": 3392
+            },
+            "ferrule::cuda::core::bf16_chunk::output_and_state(FerruleCoreBf16ChunkArgs, ferrule::cuda::core::bf16_chunk::Workspace, unsigned int)": {
+              "count": 60,
+              "sum_ns": 226369,
+              "bytes": 0,
+              "max_ns": 3872
+            },
+            "ferrule::cuda::core::hf_bf16::gated_norm_tree(FerruleCoreBf16GatedNormArgs, float)": {
+              "count": 120,
+              "sum_ns": 488930,
+              "bytes": 0,
+              "max_ns": 4256
+            },
+            "ferrule::cuda::core::rows_f32_to_bf16_rne_kernel(FerruleCoreRowsArgs)": {
+              "count": 400,
+              "sum_ns": 731745,
+              "bytes": 0,
+              "max_ns": 2752
+            },
+            "void cutlass::Kernel2<cutlass_80_wmma_tensorop_s161616gemm_bf16_16x16_64x1_tn_align8>(T1::Params)": {
+              "count": 280,
+              "sum_ns": 1207429,
+              "bytes": 0,
+              "max_ns": 4704
+            },
+            "void cublasLt::splitKreduce_kernel<(int)32, (int)16, int, float, __nv_bfloat16, float, __nv_bfloat16, (bool)1, (bool)0, (bool)0>(cublasLt::cublasSplitKParams<T6>, const T4 *, const T5 *, T5 *, const T6 *, const T6 *, const T7 *, const T4 *, T7 *, void *, long, T6 *, int *)": {
+              "count": 876,
+              "sum_ns": 1485153,
+              "bytes": 0,
+              "max_ns": 1920
+            },
+            "void ferrule::cuda::core::full_router_kernel<(int)8, (bool)0, (bool)0>(FerruleCoreRouterArgs, float *)": {
+              "count": 160,
+              "sum_ns": 7390728,
+              "bytes": 0,
+              "max_ns": 52320
+            },
+            "void dot_kernel<float, (int)128, (int)0, cublasDotParams<cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<float>>>(T4)": {
+              "count": 280,
+              "sum_ns": 596512,
+              "bytes": 0,
+              "max_ns": 2592
+            },
+            "void reduce_1Block_kernel<float, (int)128, (int)7, cublasGemvTensorStridedBatched<float>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>>(const T1 *, T1, T4, int, const T1 *, T1, T5, T6, cublasPointerMode_t, cublasLtEpilogue_t, cublasGemvTensorStridedBatched<const biasType<T6::value_type, T1>::type>)": {
+              "count": 280,
+              "sum_ns": 468513,
+              "bytes": 0,
+              "max_ns": 1760
+            },
+            "ferrule::cuda::core::data_kernel(FerruleCoreDataArgs)": {
+              "count": 240,
+              "sum_ns": 443233,
+              "bytes": 0,
+              "max_ns": 2016
+            },
+            "ferrule::cuda::cutlass::numeric_fp8::decode_weights(FerruleCutlassNumericFp8Args, unsigned int, unsigned int, unsigned long)": {
+              "count": 8652,
+              "sum_ns": 58701956,
+              "bytes": 0,
+              "max_ns": 7168
+            },
+            "void cutlass::Kernel2<cutlass_80_tensorop_s16816gemm_bf16_64x64_32x6_tn_align8>(T1::Params)": {
+              "count": 596,
+              "sum_ns": 3206624,
+              "bytes": 0,
+              "max_ns": 5792
+            },
+            "ferrule::cuda::cutlass::bf16_gemmex::split_pair(const unsigned short *, unsigned short *, unsigned short *, unsigned long, unsigned int)": {
+              "count": 2884,
+              "sum_ns": 4677156,
+              "bytes": 0,
+              "max_ns": 1696
+            },
+            "void cutlass::Kernel2<cutlass_80_wmma_tensorop_bf16_s161616gemm_bf16_32x32_64x1_tn_align8>(T1::Params)": {
+              "count": 498,
+              "sum_ns": 2170757,
+              "bytes": 0,
+              "max_ns": 4576
+            },
+            "std::enable_if<!T7, void>::type internal::gemvx::kernel<int, int, __nv_bfloat16, __nv_bfloat16, __nv_bfloat16, float, (bool)0, (bool)1, (bool)1, (bool)0, (int)7, (bool)0, cublasGemvParamsEx<int, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>, float>>(T13)": {
+              "count": 5076,
+              "sum_ns": 21640446,
+              "bytes": 0,
+              "max_ns": 14752
+            },
+            "ferrule::cuda::core::moe_kernel(FerruleCoreMoeArgs)": {
+              "count": 160,
+              "sum_ns": 776544,
+              "bytes": 0,
+              "max_ns": 5696
+            },
+            "ferrule::cuda::cutlass::numeric_fp8::pack_bf16_activation(FerruleCutlassNumericFp8Args)": {
+              "count": 30,
+              "sum_ns": 47552,
+              "bytes": 0,
+              "max_ns": 1600
+            },
+            "ferrule::cuda::core::eager_attention::validate_group(FerruleCoreTransformerArgs, FerruleBf16AttentionGroup)": {
+              "count": 40,
+              "sum_ns": 5901315,
+              "bytes": 0,
+              "max_ns": 153536
+            },
+            "ferrule::cuda::core::eager_attention::append(FerruleCoreTransformerArgs)": {
+              "count": 40,
+              "sum_ns": 208928,
+              "bytes": 0,
+              "max_ns": 5664
+            },
+            "ferrule::cuda::core::eager_attention::pack(FerruleCoreTransformerArgs, FerruleBf16AttentionGroup, unsigned short *)": {
+              "count": 40,
+              "sum_ns": 81440,
+              "bytes": 0,
+              "max_ns": 2080
+            },
+            "ferrule::cuda::core::eager_attention::gather(FerruleCoreTransformerArgs, FerruleBf16AttentionGroup, unsigned short *, unsigned short *)": {
+              "count": 40,
+              "sum_ns": 202655,
+              "bytes": 0,
+              "max_ns": 5600
+            },
+            "void cutlass::Kernel2<cutlass_75_wmma_tensorop_bf16_s161616gemm_bf16_32x32_32x1_tn_align1>(T1::Params)": {
+              "count": 20,
+              "sum_ns": 101024,
+              "bytes": 0,
+              "max_ns": 5088
+            },
+            "ferrule::cuda::core::eager_attention::softmax(FerruleCoreTransformerArgs, FerruleBf16AttentionGroup, const unsigned short *, unsigned short *)": {
+              "count": 40,
+              "sum_ns": 107199,
+              "bytes": 0,
+              "max_ns": 2752
+            },
+            "void cutlass::Kernel2<cutlass_75_wmma_tensorop_bf16_s161616gemm_bf16_32x32_32x1_nn_align1>(T1::Params)": {
+              "count": 20,
+              "sum_ns": 52962,
+              "bytes": 0,
+              "max_ns": 2656
+            },
+            "ferrule::cuda::core::eager_attention::scatter(FerruleCoreTransformerArgs, FerruleBf16AttentionGroup, const unsigned short *)": {
+              "count": 40,
+              "sum_ns": 78016,
+              "bytes": 0,
+              "max_ns": 1984
+            },
+            "ampere_bf16_s16816gemm_bf16_64x64_sliced1x2_ldg8_f2f_stages_64x5_tn": {
+              "count": 80,
+              "sum_ns": 2306658,
+              "bytes": 0,
+              "max_ns": 29920
+            },
+            "ferrule::cuda::core::hf_bf16::delta(FerruleCoreBf16DeltaArgs)": {
+              "count": 60,
+              "sum_ns": 4935618,
+              "bytes": 0,
+              "max_ns": 83360
+            },
+            "std::enable_if<!T7, void>::type internal::gemvx::kernel<int, int, __nv_bfloat16, __nv_bfloat16, __nv_bfloat16, float, (bool)0, (bool)1, (bool)1, (bool)0, (int)6, (bool)0, cublasGemvParamsEx<int, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>, float>>(T13)": {
+              "count": 20,
+              "sum_ns": 48256,
+              "bytes": 0,
+              "max_ns": 2432
+            },
+            "std::enable_if<!T7, void>::type internal::gemvx::kernel<int, int, __nv_bfloat16, __nv_bfloat16, __nv_bfloat16, float, (bool)0, (bool)1, (bool)0, (bool)0, (int)6, (bool)0, cublasGemvParamsEx<int, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>, float>>(T13)": {
+              "count": 20,
+              "sum_ns": 45439,
+              "bytes": 0,
+              "max_ns": 2304
+            },
+            "void gemv2T_kernel_val<int, int, __nv_bfloat16, __nv_bfloat16, __nv_bfloat16, float, (int)128, (int)16, (int)4, (int)4, (bool)0, (bool)0, cublasGemvParamsEx<int, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>, float>>(T13, T6, T6)": {
+              "count": 2,
+              "sum_ns": 1160289,
+              "bytes": 0,
+              "max_ns": 580482
+            }
+          },
+          "memcpy": {
+            "H2D": {
+              "count": 4416,
+              "sum_ns": 3010217,
+              "bytes": 10274768,
+              "max_ns": 158976
+            },
+            "D2D": {
+              "count": 3368,
+              "sum_ns": 4620260,
+              "bytes": 160563200,
+              "max_ns": 4096
+            },
+            "D2H": {
+              "count": 832,
+              "sum_ns": 2019714,
+              "bytes": 18862096,
+              "max_ns": 94976
+            }
+          },
+          "apis": {
+            "cuEventCreate": {
+              "count": 86340,
+              "sum_ns": 78731657,
+              "bytes": 0,
+              "max_ns": 56227
+            },
+            "cuEventRecord": {
+              "count": 86340,
+              "sum_ns": 26838983,
+              "bytes": 0,
+              "max_ns": 8769
+            },
+            "cuEventSynchronize": {
+              "count": 3788,
+              "sum_ns": 37344907,
+              "bytes": 0,
+              "max_ns": 598232
+            },
+            "cuEventDestroy_v2": {
+              "count": 85968,
+              "sum_ns": 37313063,
+              "bytes": 0,
+              "max_ns": 9882
+            },
+            "cuMemsetD8Async": {
+              "count": 23040,
+              "sum_ns": 74436051,
+              "bytes": 0,
+              "max_ns": 277257
+            },
+            "cuMemcpyHtoDAsync_v2": {
+              "count": 4416,
+              "sum_ns": 23845913,
+              "bytes": 0,
+              "max_ns": 187608
+            },
+            "cuStreamSynchronize": {
+              "count": 16332,
+              "sum_ns": 24047824,
+              "bytes": 0,
+              "max_ns": 81502
+            },
+            "cudaLaunchKernel_v7000": {
+              "count": 31426,
+              "sum_ns": 133056920,
+              "bytes": 0,
+              "max_ns": 24882
+            },
+            "cuMemcpyDtoDAsync_v2": {
+              "count": 3368,
+              "sum_ns": 23042053,
+              "bytes": 0,
+              "max_ns": 16485
+            },
+            "cuCtxSetCurrent": {
+              "count": 164655,
+              "sum_ns": 13791252,
+              "bytes": 0,
+              "max_ns": 6969
+            },
+            "cuEventQuery": {
+              "count": 84311,
+              "sum_ns": 41712850,
+              "bytes": 0,
+              "max_ns": 10778
+            },
+            "cudaMemsetAsync_v3020": {
+              "count": 4,
+              "sum_ns": 16325,
+              "bytes": 0,
+              "max_ns": 4702
+            },
+            "cuKernelGetFunction": {
+              "count": 1852,
+              "sum_ns": 1241301,
+              "bytes": 0,
+              "max_ns": 14006
+            },
+            "cuLaunchKernel": {
+              "count": 1852,
+              "sum_ns": 7637431,
+              "bytes": 0,
+              "max_ns": 23871
+            },
+            "cuMemcpyDtoHAsync_v2": {
+              "count": 832,
+              "sum_ns": 17285958,
+              "bytes": 0,
+              "max_ns": 517111
+            },
+            "cudaStreamIsCapturing_v10000": {
+              "count": 40,
+              "sum_ns": 51775,
+              "bytes": 0,
+              "max_ns": 1960
+            },
+            "cuStreamWaitEvent": {
+              "count": 184,
+              "sum_ns": 97020,
+              "bytes": 0,
+              "max_ns": 1846
+            }
+          }
+        },
+        "after_first_emission_proxy": {
+          "kernels": {
+            "ferrule::cuda::core::bf16_boundary_kernel(ferrule::cuda::core::Bf16BoundaryArgs)": {
+              "count": 19348,
+              "sum_ns": 30916904,
+              "bytes": 0,
+              "max_ns": 3232
+            },
+            "ferrule::cuda::core::bf16_offset_norm_tree(ferrule::cuda::core::Bf16BoundaryArgs, float)": {
+              "count": 1414,
+              "sum_ns": 5595043,
+              "bytes": 0,
+              "max_ns": 4288
+            },
+            "ampere_bf16_s16816gemm_bf16_64x64_sliced1x2_ldg8_f2f_stages_64x5_tn": {
+              "count": 560,
+              "sum_ns": 16139574,
+              "bytes": 0,
+              "max_ns": 30240
+            },
+            "std::enable_if<!T7, void>::type internal::gemvx::kernel<int, int, __nv_bfloat16, __nv_bfloat16, __nv_bfloat16, float, (bool)0, (bool)1, (bool)1, (bool)0, (int)7, (bool)0, cublasGemvParamsEx<int, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>, float>>(T13)": {
+              "count": 12460,
+              "sum_ns": 58589348,
+              "bytes": 0,
+              "max_ns": 15040
+            },
+            "void dot_kernel<float, (int)128, (int)0, cublasDotParams<cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<float>>>(T4)": {
+              "count": 1400,
+              "sum_ns": 3053862,
+              "bytes": 0,
+              "max_ns": 2656
+            },
+            "void reduce_1Block_kernel<float, (int)128, (int)7, cublasGemvTensorStridedBatched<float>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>>(const T1 *, T1, T4, int, const T1 *, T1, T5, T6, cublasPointerMode_t, cublasLtEpilogue_t, cublasGemvTensorStridedBatched<const biasType<T6::value_type, T1>::type>)": {
+              "count": 1400,
+              "sum_ns": 2320003,
+              "bytes": 0,
+              "max_ns": 1760
+            },
+            "ferrule::cuda::core::hf_bf16::conv(FerruleCoreBf16ConvArgs)": {
+              "count": 420,
+              "sum_ns": 1165601,
+              "bytes": 0,
+              "max_ns": 3008
+            },
+            "ferrule::cuda::core::hf_bf16::delta(FerruleCoreBf16DeltaArgs)": {
+              "count": 420,
+              "sum_ns": 34558958,
+              "bytes": 0,
+              "max_ns": 83904
+            },
+            "ferrule::cuda::core::hf_bf16::gated_norm_tree(FerruleCoreBf16GatedNormArgs, float)": {
+              "count": 420,
+              "sum_ns": 1688194,
+              "bytes": 0,
+              "max_ns": 4288
+            },
+            "ferrule::cuda::core::rows_f32_to_bf16_rne_kernel(FerruleCoreRowsArgs)": {
+              "count": 1400,
+              "sum_ns": 2381795,
+              "bytes": 0,
+              "max_ns": 2112
+            },
+            "void ferrule::cuda::core::full_router_kernel<(int)8, (bool)0, (bool)0>(FerruleCoreRouterArgs, float *)": {
+              "count": 560,
+              "sum_ns": 25290621,
+              "bytes": 0,
+              "max_ns": 51296
+            },
+            "ferrule::cuda::core::data_kernel(FerruleCoreDataArgs)": {
+              "count": 840,
+              "sum_ns": 1531425,
+              "bytes": 0,
+              "max_ns": 1984
+            },
+            "ferrule::cuda::cutlass::numeric_fp8::decode_weights(FerruleCutlassNumericFp8Args, unsigned int, unsigned int, unsigned long)": {
+              "count": 13440,
+              "sum_ns": 91092494,
+              "bytes": 0,
+              "max_ns": 7200
+            },
+            "ferrule::cuda::cutlass::bf16_gemmex::split_pair(const unsigned short *, unsigned short *, unsigned short *, unsigned long, unsigned int)": {
+              "count": 4480,
+              "sum_ns": 7288522,
+              "bytes": 0,
+              "max_ns": 1696
+            },
+            "ferrule::cuda::core::moe_kernel(FerruleCoreMoeArgs)": {
+              "count": 560,
+              "sum_ns": 2313316,
+              "bytes": 0,
+              "max_ns": 4288
+            },
+            "ferrule::cuda::cutlass::numeric_fp8::pack_bf16_activation(FerruleCutlassNumericFp8Args)": {
+              "count": 48,
+              "sum_ns": 76096,
+              "bytes": 0,
+              "max_ns": 1600
+            },
+            "ferrule::cuda::core::eager_attention::validate_group(FerruleCoreTransformerArgs, FerruleBf16AttentionGroup)": {
+              "count": 140,
+              "sum_ns": 19811443,
+              "bytes": 0,
+              "max_ns": 141984
+            },
+            "ferrule::cuda::core::eager_attention::append(FerruleCoreTransformerArgs)": {
+              "count": 140,
+              "sum_ns": 733377,
+              "bytes": 0,
+              "max_ns": 5632
+            },
+            "ferrule::cuda::core::eager_attention::pack(FerruleCoreTransformerArgs, FerruleBf16AttentionGroup, unsigned short *)": {
+              "count": 140,
+              "sum_ns": 285568,
+              "bytes": 0,
+              "max_ns": 2080
+            },
+            "ferrule::cuda::core::eager_attention::gather(FerruleCoreTransformerArgs, FerruleBf16AttentionGroup, unsigned short *, unsigned short *)": {
+              "count": 140,
+              "sum_ns": 768195,
+              "bytes": 0,
+              "max_ns": 6592
+            },
+            "void gemv2T_kernel_val<int, int, __nv_bfloat16, __nv_bfloat16, __nv_bfloat16, float, (int)128, (int)16, (int)4, (int)4, (bool)0, (bool)0, cublasGemvParamsEx<int, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>, float>>(T13, T6, T6)": {
+              "count": 94,
+              "sum_ns": 8290889,
+              "bytes": 0,
+              "max_ns": 580898
+            },
+            "ferrule::cuda::core::eager_attention::softmax(FerruleCoreTransformerArgs, FerruleBf16AttentionGroup, const unsigned short *, unsigned short *)": {
+              "count": 140,
+              "sum_ns": 372512,
+              "bytes": 0,
+              "max_ns": 2752
+            },
+            "std::enable_if<!T7, void>::type internal::gemvx::kernel<int, int, __nv_bfloat16, __nv_bfloat16, __nv_bfloat16, float, (bool)0, (bool)1, (bool)0, (bool)0, (int)6, (bool)0, cublasGemvParamsEx<int, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>, float>>(T13)": {
+              "count": 140,
+              "sum_ns": 327008,
+              "bytes": 0,
+              "max_ns": 2432
+            },
+            "ferrule::cuda::core::eager_attention::scatter(FerruleCoreTransformerArgs, FerruleBf16AttentionGroup, const unsigned short *)": {
+              "count": 140,
+              "sum_ns": 273951,
+              "bytes": 0,
+              "max_ns": 1984
+            },
+            "std::enable_if<!T7, void>::type internal::gemvx::kernel<int, int, __nv_bfloat16, __nv_bfloat16, __nv_bfloat16, float, (bool)0, (bool)1, (bool)1, (bool)0, (int)6, (bool)0, cublasGemvParamsEx<int, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>, float>>(T13)": {
+              "count": 60,
+              "sum_ns": 145152,
+              "bytes": 0,
+              "max_ns": 2432
+            }
+          },
+          "memcpy": {
+            "H2D": {
+              "count": 9828,
+              "sum_ns": 5349988,
+              "bytes": 11607176,
+              "max_ns": 41984
+            },
+            "D2D": {
+              "count": 5348,
+              "sum_ns": 7930693,
+              "bytes": 482836480,
+              "max_ns": 4192
+            },
+            "D2H": {
+              "count": 2492,
+              "sum_ns": 4479075,
+              "bytes": 22005816,
+              "max_ns": 11808
+            }
+          },
+          "apis": {
+            "cuEventCreate": {
+              "count": 184240,
+              "sum_ns": 154254534,
+              "bytes": 0,
+              "max_ns": 51705
+            },
+            "cuEventRecord": {
+              "count": 184240,
+              "sum_ns": 57737849,
+              "bytes": 0,
+              "max_ns": 10702
+            },
+            "cuEventSynchronize": {
+              "count": 13262,
+              "sum_ns": 69778770,
+              "bytes": 0,
+              "max_ns": 581268
+            },
+            "cuEventDestroy_v2": {
+              "count": 183880,
+              "sum_ns": 66303141,
+              "bytes": 0,
+              "max_ns": 55545
+            },
+            "cuCtxSetCurrent": {
+              "count": 344767,
+              "sum_ns": 29439215,
+              "bytes": 0,
+              "max_ns": 8743
+            },
+            "cuEventQuery": {
+              "count": 176324,
+              "sum_ns": 82505373,
+              "bytes": 0,
+              "max_ns": 9403
+            },
+            "cuMemsetD8Async": {
+              "count": 46956,
+              "sum_ns": 140468789,
+              "bytes": 0,
+              "max_ns": 18279
+            },
+            "cuMemcpyHtoDAsync_v2": {
+              "count": 9828,
+              "sum_ns": 47499305,
+              "bytes": 0,
+              "max_ns": 42184
+            },
+            "cuStreamSynchronize": {
+              "count": 51534,
+              "sum_ns": 58676837,
+              "bytes": 0,
+              "max_ns": 45127
+            },
+            "cudaLaunchKernel_v7000": {
+              "count": 60304,
+              "sum_ns": 258486481,
+              "bytes": 0,
+              "max_ns": 62840
+            },
+            "cuMemcpyDtoDAsync_v2": {
+              "count": 5348,
+              "sum_ns": 36613027,
+              "bytes": 0,
+              "max_ns": 19389
+            },
+            "cudaMemsetAsync_v3020": {
+              "count": 14,
+              "sum_ns": 44809,
+              "bytes": 0,
+              "max_ns": 3836
+            },
+            "cuMemcpyDtoHAsync_v2": {
+              "count": 2492,
+              "sum_ns": 53113646,
+              "bytes": 0,
+              "max_ns": 147763
+            },
+            "cudaStreamIsCapturing_v10000": {
+              "count": 140,
+              "sum_ns": 138365,
+              "bytes": 0,
+              "max_ns": 1740
+            },
+            "cuStreamWaitEvent": {
+              "count": 224,
+              "sum_ns": 121144,
+              "bytes": 0,
+              "max_ns": 2001
+            }
+          }
+        }
+      },
+      "observed_activity_correlation": {
+        "kernel_observed": 93582,
+        "kernel_correlated": 93582,
+        "memcpy_observed": 26284,
+        "memcpy_correlated": 26284,
+        "memset_observed": 70014,
+        "memset_correlated": 70014
+      },
+      "kernel_sum_ns": 482943564,
+      "sync_api_host_duration_including_gpu_wait": {
+        "cuEventSynchronize": {
+          "count": 17050,
+          "sum_ns": 107123677,
+          "bytes": 0,
+          "max_ns": 598232
+        },
+        "cuStreamSynchronize": {
+          "count": 67866,
+          "sum_ns": 82724661,
+          "bytes": 0,
+          "max_ns": 81502
+        },
+        "cuStreamWaitEvent": {
+          "count": 408,
+          "sum_ns": 218164,
+          "bytes": 0,
+          "max_ns": 2001
+        }
+      },
+      "phase_pure_prefill": null,
+      "phase_pure_decode": null,
+      "bidirectional_correlation": {
+        "status": "observed_correlation_closed",
+        "observed_correlation_closed": true,
+        "full_trace_accepted": false,
+        "paired_api_activity_loss_excluded": false,
+        "request_window_ns": [
+          740412306,
+          2741809306
+        ],
+        "counts": {
+          "kernel_observed": 93582,
+          "memcpy_observed": 26284,
+          "memset_observed": 70014,
+          "runtime_api_rows": 1858301,
+          "memset_successful_api": 70014,
+          "memcpy_successful_api": 26284,
+          "kernel_successful_api": 93582,
+          "launch_runtime": 91730,
+          "launch_driver": 1852,
+          "kernel_activity_to_api_unique": 93582,
+          "memcpy_activity_to_api_unique": 26284,
+          "memset_activity_to_api_unique": 70014,
+          "memset_api_to_activity_unique": 70014,
+          "memcpy_api_to_activity_unique": 26284,
+          "kernel_api_to_activity_unique": 93582
+        },
+        "issues": [],
+        "same_thread_runtime_overlaps": 0,
+        "overlap_examples": [],
+        "matching_policy": "Full-export (PID, correlation ID), unique successful API, correct activity kind, same request window",
+        "limitation": "Exported-row closure only; simultaneous API/activity loss remains possible. Not a complete-report claim."
+      },
+      "correlation_status": "observed_correlation_closed"
+    },
+    "measured": {
+      "request_id": 6,
+      "start_ns": 3035275306,
+      "first_emission_proxy_ns": 4251514306,
+      "end_ns": 5624168306,
+      "first_emission_vs_client_receive_ns": 169911,
+      "marker_events": {
+        "request_admitted": {
+          "timestamp": "2026-10-10T08:49:46.358571Z",
+          "level": "DEBUG",
+          "fields": {
+            "message": "production request admitted",
+            "event": "request_admitted",
+            "request_id": 6,
+            "session_id": 6,
+            "worker_queue_us": 34,
+            "tokenization_us": 85,
+            "worker_admission_us": 3787,
+            "prompt_tokens": 5,
+            "max_new_tokens": 8
+          },
+          "target": "ferrule_request"
+        },
+        "request_http_admitted": {
+          "timestamp": "2026-10-10T08:49:46.358607Z",
+          "level": "DEBUG",
+          "fields": {
+            "message": "production HTTP request admitted",
+            "event": "request_http_admitted",
+            "request_id": 6,
+            "session_id": 6,
+            "endpoint": "completions",
+            "stream": true,
+            "http_admission_us": 3874
+          },
+          "target": "ferrule_request"
+        },
+        "request_worker_terminal": {
+          "timestamp": "2026-10-10T08:49:48.947464Z",
+          "level": "DEBUG",
+          "fields": {
+            "message": "production request reached worker terminal state",
+            "event": "request_worker_terminal",
+            "request_id": 6,
+            "session_id": 6,
+            "status": "finished",
+            "finish_reason": "max_tokens",
+            "worker_request_us": 2592714,
+            "generated_tokens": "Some(8)",
+            "emitted_token_events": 8,
+            "emission_timing_enabled": true,
+            "worker_first_emission_elapsed_us": 1220060,
+            "worker_last_emission_elapsed_us": 2592699,
+            "worker_emission_interval_count": 7,
+            "worker_emission_interval_sum_us": 1372639,
+            "worker_emission_interval_min_us": 186031,
+            "worker_emission_interval_max_us": 229569,
+            "cancellation_requested": false,
+            "cancellation_submitted": false,
+            "cancellation_failed": false,
+            "requires_restore_or_shutdown": false,
+            "tokens_reconcile": "Some(true)"
+          },
+          "target": "ferrule_request"
+        },
+        "request_http_terminal": {
+          "timestamp": "2026-10-10T08:49:48.947488Z",
+          "level": "DEBUG",
+          "fields": {
+            "message": "production HTTP request reached response terminal state",
+            "event": "request_http_terminal",
+            "request_id": 6,
+            "session_id": 6,
+            "endpoint": "completions",
+            "stream": true,
+            "status": "finished",
+            "finish_reason": "max_tokens",
+            "token_events": 8,
+            "http_response_enqueue_us": 2592755
+          },
+          "target": "ferrule_request"
+        }
+      },
+      "phase_status": "exact prefill/decode unavailable; before_first_emission and after_first_emission are explicit proxies only",
+      "window_ns": 2588893000,
+      "bounds_method": "server request ID + UTC markers minus official TARGET_INFO_SESSION_START_TIME.utcEpochNs; log resolution 1us",
+      "kernels": {
+        "ferrule::cuda::core::bf16_boundary_kernel(ferrule::cuda::core::Bf16BoundaryArgs)": {
+          "count": 29688,
+          "sum_ns": 47588827,
+          "bytes": 0,
+          "max_ns": 10720
+        },
+        "ferrule::cuda::core::bf16_offset_norm_tree(ferrule::cuda::core::Bf16BoundaryArgs, float)": {
+          "count": 1818,
+          "sum_ns": 7896330,
+          "bytes": 0,
+          "max_ns": 8672
+        },
+        "ampere_bf16_s16816gemm_bf16_64x64_ldg8_f2f_stages_64x5_tn": {
+          "count": 82,
+          "sum_ns": 3453862,
+          "bytes": 0,
+          "max_ns": 599298
+        },
+        "void cutlass::Kernel2<cutlass_80_wmma_tensorop_bf16_s161616gemm_bf16_32x32_128x2_tn_align8>(T1::Params)": {
+          "count": 318,
+          "sum_ns": 3445443,
+          "bytes": 0,
+          "max_ns": 19712
+        },
+        "void cutlass::Kernel2<cutlass_80_wmma_tensorop_bf16_s161616gemm_bf16_16x16_128x2_tn_align8>(T1::Params)": {
+          "count": 120,
+          "sum_ns": 1978881,
+          "bytes": 0,
+          "max_ns": 17120
+        },
+        "ferrule::cuda::core::hf_bf16::conv(FerruleCoreBf16ConvArgs)": {
+          "count": 540,
+          "sum_ns": 1659554,
+          "bytes": 0,
+          "max_ns": 6208
+        },
+        "ferrule::cuda::core::bf16_chunk::prepare(FerruleCoreBf16ChunkArgs, ferrule::cuda::core::bf16_chunk::Workspace, unsigned int, float)": {
+          "count": 60,
+          "sum_ns": 11727790,
+          "bytes": 0,
+          "max_ns": 195616
+        },
+        "ferrule::cuda::core::bf16_chunk::prefix(ferrule::cuda::core::bf16_chunk::Workspace, unsigned int)": {
+          "count": 60,
+          "sum_ns": 116736,
+          "bytes": 0,
+          "max_ns": 1984
+        },
+        "ferrule::cuda::core::bf16_chunk::decay_and_initial_exponents(ferrule::cuda::core::bf16_chunk::Workspace, unsigned int)": {
+          "count": 60,
+          "sum_ns": 171584,
+          "bytes": 0,
+          "max_ns": 2912
+        },
+        "ferrule::cuda::core::bf16_chunk::matmul(const float *, const float *, float *, unsigned int, unsigned int, unsigned int, bool, bool, unsigned int)": {
+          "count": 480,
+          "sum_ns": 6254242,
+          "bytes": 0,
+          "max_ns": 18336
+        },
+        "ferrule::cuda::core::bf16_chunk::mask_matrix(ferrule::cuda::core::bf16_chunk::Workspace, bool)": {
+          "count": 60,
+          "sum_ns": 103904,
+          "bytes": 0,
+          "max_ns": 1760
+        },
+        "ferrule::cuda::core::bf16_chunk::triangular(ferrule::cuda::core::bf16_chunk::Workspace)": {
+          "count": 60,
+          "sum_ns": 1578721,
+          "bytes": 0,
+          "max_ns": 26337
+        },
+        "ferrule::cuda::core::bf16_chunk::attention_delta_and_end_keys(ferrule::cuda::core::bf16_chunk::Workspace, unsigned int)": {
+          "count": 60,
+          "sum_ns": 196161,
+          "bytes": 0,
+          "max_ns": 3424
+        },
+        "ferrule::cuda::core::bf16_chunk::output_and_state(FerruleCoreBf16ChunkArgs, ferrule::cuda::core::bf16_chunk::Workspace, unsigned int)": {
+          "count": 60,
+          "sum_ns": 226209,
+          "bytes": 0,
+          "max_ns": 3872
+        },
+        "ferrule::cuda::core::hf_bf16::gated_norm_tree(FerruleCoreBf16GatedNormArgs, float)": {
+          "count": 540,
+          "sum_ns": 2177733,
+          "bytes": 0,
+          "max_ns": 4288
+        },
+        "ferrule::cuda::core::rows_f32_to_bf16_rne_kernel(FerruleCoreRowsArgs)": {
+          "count": 1800,
+          "sum_ns": 3113954,
+          "bytes": 0,
+          "max_ns": 2688
+        },
+        "void cutlass::Kernel2<cutlass_80_wmma_tensorop_s161616gemm_bf16_16x16_64x1_tn_align8>(T1::Params)": {
+          "count": 280,
+          "sum_ns": 1208033,
+          "bytes": 0,
+          "max_ns": 4704
+        },
+        "void cublasLt::splitKreduce_kernel<(int)32, (int)16, int, float, __nv_bfloat16, float, __nv_bfloat16, (bool)1, (bool)0, (bool)0>(cublasLt::cublasSplitKParams<T6>, const T4 *, const T5 *, T5 *, const T6 *, const T6 *, const T7 *, const T4 *, T7 *, void *, long, T6 *, int *)": {
+          "count": 876,
+          "sum_ns": 1484705,
+          "bytes": 0,
+          "max_ns": 1920
+        },
+        "void ferrule::cuda::core::full_router_kernel<(int)8, (bool)0, (bool)0>(FerruleCoreRouterArgs, float *)": {
+          "count": 720,
+          "sum_ns": 32682000,
+          "bytes": 0,
+          "max_ns": 52320
+        },
+        "void dot_kernel<float, (int)128, (int)0, cublasDotParams<cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<float>>>(T4)": {
+          "count": 1680,
+          "sum_ns": 3654878,
+          "bytes": 0,
+          "max_ns": 2656
+        },
+        "void reduce_1Block_kernel<float, (int)128, (int)7, cublasGemvTensorStridedBatched<float>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>>(const T1 *, T1, T4, int, const T1 *, T1, T5, T6, cublasPointerMode_t, cublasLtEpilogue_t, cublasGemvTensorStridedBatched<const biasType<T6::value_type, T1>::type>)": {
+          "count": 1680,
+          "sum_ns": 2790853,
+          "bytes": 0,
+          "max_ns": 1760
+        },
+        "ferrule::cuda::core::data_kernel(FerruleCoreDataArgs)": {
+          "count": 1080,
+          "sum_ns": 1974753,
+          "bytes": 0,
+          "max_ns": 2016
+        },
+        "ferrule::cuda::cutlass::numeric_fp8::decode_weights(FerruleCutlassNumericFp8Args, unsigned int, unsigned int, unsigned long)": {
+          "count": 22092,
+          "sum_ns": 149980197,
+          "bytes": 0,
+          "max_ns": 7200
+        },
+        "void cutlass::Kernel2<cutlass_80_tensorop_s16816gemm_bf16_64x64_32x6_tn_align8>(T1::Params)": {
+          "count": 596,
+          "sum_ns": 3206693,
+          "bytes": 0,
+          "max_ns": 5760
+        },
+        "ferrule::cuda::cutlass::bf16_gemmex::split_pair(const unsigned short *, unsigned short *, unsigned short *, unsigned long, unsigned int)": {
+          "count": 7364,
+          "sum_ns": 11971047,
+          "bytes": 0,
+          "max_ns": 1696
+        },
+        "void cutlass::Kernel2<cutlass_80_wmma_tensorop_bf16_s161616gemm_bf16_32x32_64x1_tn_align8>(T1::Params)": {
+          "count": 498,
+          "sum_ns": 2171041,
+          "bytes": 0,
+          "max_ns": 4576
+        },
+        "std::enable_if<!T7, void>::type internal::gemvx::kernel<int, int, __nv_bfloat16, __nv_bfloat16, __nv_bfloat16, float, (bool)0, (bool)1, (bool)1, (bool)0, (int)7, (bool)0, cublasGemvParamsEx<int, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>, float>>(T13)": {
+          "count": 17536,
+          "sum_ns": 80306655,
+          "bytes": 0,
+          "max_ns": 15008
+        },
+        "ferrule::cuda::cutlass::numeric_fp8::pack_bf16_activation(FerruleCutlassNumericFp8Args)": {
+          "count": 78,
+          "sum_ns": 123969,
+          "bytes": 0,
+          "max_ns": 1632
+        },
+        "ferrule::cuda::core::moe_kernel(FerruleCoreMoeArgs)": {
+          "count": 720,
+          "sum_ns": 3093094,
+          "bytes": 0,
+          "max_ns": 5728
+        },
+        "ferrule::cuda::core::eager_attention::validate_group(FerruleCoreTransformerArgs, FerruleBf16AttentionGroup)": {
+          "count": 180,
+          "sum_ns": 25718783,
+          "bytes": 0,
+          "max_ns": 153567
+        },
+        "ferrule::cuda::core::eager_attention::append(FerruleCoreTransformerArgs)": {
+          "count": 180,
+          "sum_ns": 941730,
+          "bytes": 0,
+          "max_ns": 5632
+        },
+        "ferrule::cuda::core::eager_attention::pack(FerruleCoreTransformerArgs, FerruleBf16AttentionGroup, unsigned short *)": {
+          "count": 180,
+          "sum_ns": 367616,
+          "bytes": 0,
+          "max_ns": 2080
+        },
+        "ferrule::cuda::core::eager_attention::gather(FerruleCoreTransformerArgs, FerruleBf16AttentionGroup, unsigned short *, unsigned short *)": {
+          "count": 180,
+          "sum_ns": 971905,
+          "bytes": 0,
+          "max_ns": 6592
+        },
+        "void cutlass::Kernel2<cutlass_75_wmma_tensorop_bf16_s161616gemm_bf16_32x32_32x1_tn_align1>(T1::Params)": {
+          "count": 20,
+          "sum_ns": 100993,
+          "bytes": 0,
+          "max_ns": 5088
+        },
+        "ferrule::cuda::core::eager_attention::softmax(FerruleCoreTransformerArgs, FerruleBf16AttentionGroup, const unsigned short *, unsigned short *)": {
+          "count": 180,
+          "sum_ns": 479715,
+          "bytes": 0,
+          "max_ns": 2752
+        },
+        "void cutlass::Kernel2<cutlass_75_wmma_tensorop_bf16_s161616gemm_bf16_32x32_32x1_nn_align1>(T1::Params)": {
+          "count": 20,
+          "sum_ns": 52896,
+          "bytes": 0,
+          "max_ns": 2656
+        },
+        "ferrule::cuda::core::eager_attention::scatter(FerruleCoreTransformerArgs, FerruleBf16AttentionGroup, const unsigned short *)": {
+          "count": 180,
+          "sum_ns": 352224,
+          "bytes": 0,
+          "max_ns": 1984
+        },
+        "ampere_bf16_s16816gemm_bf16_64x64_sliced1x2_ldg8_f2f_stages_64x5_tn": {
+          "count": 640,
+          "sum_ns": 18427418,
+          "bytes": 0,
+          "max_ns": 30176
+        },
+        "ferrule::cuda::core::hf_bf16::delta(FerruleCoreBf16DeltaArgs)": {
+          "count": 480,
+          "sum_ns": 39501334,
+          "bytes": 0,
+          "max_ns": 83744
+        },
+        "std::enable_if<!T7, void>::type internal::gemvx::kernel<int, int, __nv_bfloat16, __nv_bfloat16, __nv_bfloat16, float, (bool)0, (bool)1, (bool)1, (bool)0, (int)6, (bool)0, cublasGemvParamsEx<int, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>, float>>(T13)": {
+          "count": 80,
+          "sum_ns": 193664,
+          "bytes": 0,
+          "max_ns": 2464
+        },
+        "std::enable_if<!T7, void>::type internal::gemvx::kernel<int, int, __nv_bfloat16, __nv_bfloat16, __nv_bfloat16, float, (bool)0, (bool)1, (bool)0, (bool)0, (int)6, (bool)0, cublasGemvParamsEx<int, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>, float>>(T13)": {
+          "count": 160,
+          "sum_ns": 372800,
+          "bytes": 0,
+          "max_ns": 2432
+        },
+        "void gemv2T_kernel_val<int, int, __nv_bfloat16, __nv_bfloat16, __nv_bfloat16, float, (int)128, (int)16, (int)4, (int)4, (bool)0, (bool)0, cublasGemvParamsEx<int, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>, float>>(T13, T6, T6)": {
+          "count": 96,
+          "sum_ns": 9450409,
+          "bytes": 0,
+          "max_ns": 580415
+        }
+      },
+      "kernel_categories": {
+        "other": {
+          "count": 39366,
+          "sum_ns": 188894899,
+          "bytes": 0,
+          "max_ns": 195616
+        },
+        "matrix_math_named_kernels_not_GemmEx_API": {
+          "count": 24682,
+          "sum_ns": 132299224,
+          "bytes": 0,
+          "max_ns": 599298
+        },
+        "decode_weights": {
+          "count": 22092,
+          "sum_ns": 149980197,
+          "bytes": 0,
+          "max_ns": 7200
+        },
+        "gemmex_split_pair_helper_not_GemmEx_API": {
+          "count": 7364,
+          "sum_ns": 11971047,
+          "bytes": 0,
+          "max_ns": 1696
+        },
+        "pack_bf16_activation": {
+          "count": 78,
+          "sum_ns": 123969,
+          "bytes": 0,
+          "max_ns": 1632
+        }
+      },
+      "memcpy": {
+        "H2D": {
+          "count": 14244,
+          "sum_ns": 8313030,
+          "bytes": 21881944,
+          "max_ns": 137023
+        },
+        "D2D": {
+          "count": 8716,
+          "sum_ns": 12557008,
+          "bytes": 643399680,
+          "max_ns": 4192
+        },
+        "D2H": {
+          "count": 3324,
+          "sum_ns": 6495014,
+          "bytes": 40867912,
+          "max_ns": 74464
+        }
+      },
+      "apis": {
+        "cuEventCreate": {
+          "count": 270580,
+          "sum_ns": 238297814,
+          "bytes": 0,
+          "max_ns": 50844
+        },
+        "cuEventRecord": {
+          "count": 270580,
+          "sum_ns": 85895608,
+          "bytes": 0,
+          "max_ns": 13695
+        },
+        "cuEventSynchronize": {
+          "count": 17050,
+          "sum_ns": 103968645,
+          "bytes": 0,
+          "max_ns": 598690
+        },
+        "cuEventDestroy_v2": {
+          "count": 269848,
+          "sum_ns": 104634466,
+          "bytes": 0,
+          "max_ns": 397378
+        },
+        "cuMemsetD8Async": {
+          "count": 69996,
+          "sum_ns": 219257884,
+          "bytes": 0,
+          "max_ns": 56768
+        },
+        "cuMemcpyHtoDAsync_v2": {
+          "count": 14244,
+          "sum_ns": 73557021,
+          "bytes": 0,
+          "max_ns": 161687
+        },
+        "cuStreamSynchronize": {
+          "count": 67866,
+          "sum_ns": 83300323,
+          "bytes": 0,
+          "max_ns": 59297
+        },
+        "cudaLaunchKernel_v7000": {
+          "count": 91730,
+          "sum_ns": 402672942,
+          "bytes": 0,
+          "max_ns": 34769
+        },
+        "cuMemcpyDtoDAsync_v2": {
+          "count": 8716,
+          "sum_ns": 61038196,
+          "bytes": 0,
+          "max_ns": 19967
+        },
+        "cuCtxSetCurrent": {
+          "count": 509228,
+          "sum_ns": 43560581,
+          "bytes": 0,
+          "max_ns": 33568
+        },
+        "cuEventQuery": {
+          "count": 260386,
+          "sum_ns": 123737183,
+          "bytes": 0,
+          "max_ns": 13350
+        },
+        "cudaMemsetAsync_v3020": {
+          "count": 18,
+          "sum_ns": 60762,
+          "bytes": 0,
+          "max_ns": 4752
+        },
+        "cuKernelGetFunction": {
+          "count": 1852,
+          "sum_ns": 1234011,
+          "bytes": 0,
+          "max_ns": 5346
+        },
+        "cuLaunchKernel": {
+          "count": 1852,
+          "sum_ns": 7758154,
+          "bytes": 0,
+          "max_ns": 23423
+        },
+        "cuMemcpyDtoHAsync_v2": {
+          "count": 3324,
+          "sum_ns": 70710708,
+          "bytes": 0,
+          "max_ns": 498507
+        },
+        "cudaStreamIsCapturing_v10000": {
+          "count": 180,
+          "sum_ns": 221617,
+          "bytes": 0,
+          "max_ns": 9045
+        },
+        "cuStreamWaitEvent": {
+          "count": 408,
+          "sum_ns": 218332,
+          "bytes": 0,
+          "max_ns": 2012
+        }
+      },
+      "osrt": {
+        "19264:ferrule-model-w:write": {
+          "count": 2,
+          "sum_ns": 9389,
+          "bytes": 0,
+          "max_ns": 5970
+        },
+        "19264:ferrule-model-w:futex": {
+          "count": 178,
+          "sum_ns": 353224,
+          "bytes": 0,
+          "max_ns": 5928
+        },
+        "19264:ferrule-model-w:clock_nanosleep": {
+          "count": 19299,
+          "sum_ns": 1979301954,
+          "bytes": 0,
+          "max_ns": 1355167
+        },
+        "19264:ferrule-model-w:epoll_wait": {
+          "count": 9,
+          "sum_ns": 14979,
+          "bytes": 0,
+          "max_ns": 2042
+        },
+        "19502:dp-owner-1:futex": {
+          "count": 1377,
+          "sum_ns": 142685497,
+          "bytes": 0,
+          "max_ns": 3415120
+        },
+        "19502:dp-owner-1:pthread_mutex_lock": {
+          "count": 60,
+          "sum_ns": 265336,
+          "bytes": 0,
+          "max_ns": 21273
+        },
+        "19502:dp-owner-1:write": {
+          "count": 369,
+          "sum_ns": 2138602,
+          "bytes": 0,
+          "max_ns": 14482
+        },
+        "19502:dp-owner-1:pthread_rwlock_wrlock": {
+          "count": 33,
+          "sum_ns": 652504,
+          "bytes": 0,
+          "max_ns": 50561
+        },
+        "19512:dp-owner-1:pthread_cond_timedwait": {
+          "count": 4,
+          "sum_ns": 2000243235,
+          "bytes": 0,
+          "max_ns": 500061855
+        },
+        "19510:dp-owner-0:pthread_cond_timedwait": {
+          "count": 4,
+          "sum_ns": 2000242786,
+          "bytes": 0,
+          "max_ns": 500061326
+        },
+        "19505:CUPTI worker thread:sem_wait": {
+          "count": 11,
+          "sum_ns": 1765753592,
+          "bytes": 0,
+          "max_ns": 622810013
+        },
+        "19505:CUPTI worker thread:pthread_rwlock_rdlock": {
+          "count": 26,
+          "sum_ns": 208793,
+          "bytes": 0,
+          "max_ns": 17576
+        },
+        "19513:cuda-EvtHandlr:poll": {
+          "count": 21,
+          "sum_ns": 2102368439,
+          "bytes": 0,
+          "max_ns": 100124574
+        },
+        "19501:dp-owner-0:futex": {
+          "count": 1367,
+          "sum_ns": 596735388,
+          "bytes": 0,
+          "max_ns": 500120954
+        },
+        "19501:dp-owner-0:write": {
+          "count": 369,
+          "sum_ns": 2010061,
+          "bytes": 0,
+          "max_ns": 22244
+        },
+        "19501:dp-owner-0:pthread_mutex_lock": {
+          "count": 58,
+          "sum_ns": 223669,
+          "bytes": 0,
+          "max_ns": 17369
+        },
+        "19501:dp-owner-0:pthread_rwlock_wrlock": {
+          "count": 4,
+          "sum_ns": 481558,
+          "bytes": 0,
+          "max_ns": 390111
+        },
+        "19509:dp-owner-0:ioctl": {
+          "count": 2,
+          "sum_ns": 90174,
+          "bytes": 0,
+          "max_ns": 62917
+        },
+        "19511:cuda-EvtHandlr:poll": {
+          "count": 21,
+          "sum_ns": 2102483270,
+          "bytes": 0,
+          "max_ns": 100122320
+        },
+        "19153:ferrule-http:futex": {
+          "count": 9,
+          "sum_ns": 2588337116,
+          "bytes": 0,
+          "max_ns": 1216167990
+        },
+        "19153:ferrule-http:write": {
+          "count": 9,
+          "sum_ns": 47893,
+          "bytes": 0,
+          "max_ns": 8410
+        },
+        "19153:ferrule-http:writev": {
+          "count": 8,
+          "sum_ns": 149780,
+          "bytes": 0,
+          "max_ns": 23478
+        },
+        "19262:ferrule-http:epoll_wait": {
+          "count": 9,
+          "sum_ns": 2402690511,
+          "bytes": 0,
+          "max_ns": 1076775357
+        }
+      },
+      "per_uuid": {
+        "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": {
+          "kernel_count": 46791,
+          "kernel_ns": 241166674,
+          "memcpy": {
+            "H2D": {
+              "count": 7122,
+              "sum_ns": 4119182,
+              "bytes": 10940972,
+              "max_ns": 125888
+            },
+            "D2D": {
+              "count": 4358,
+              "sum_ns": 6258805,
+              "bytes": 321699840,
+              "max_ns": 4160
+            },
+            "D2H": {
+              "count": 1662,
+              "sum_ns": 3254952,
+              "bytes": 20433956,
+              "max_ns": 73472
+            }
+          },
+          "memset_count": 35007,
+          "owner_launch_tids": {
+            "19501": 46791
+          },
+          "observed_gpu_active_union_ns": 281634918,
+          "observed_gpu_gaps": {
+            "count": 94939,
+            "sum_ns": 2303683477,
+            "p50_ns": 5472,
+            "p95_ns": 65248,
+            "max_ns": 500366326
+          },
+          "observed_launch_interarrival": {
+            "count": 46790,
+            "sum_ns": 2584554764,
+            "p50_ns": 13999,
+            "p95_ns": 197138,
+            "max_ns": 500534555
+          },
+          "observed_launch_api_to_kernel_start": {
+            "count": 46791,
+            "sum_ns": 335569760,
+            "p50_ns": 1995,
+            "p95_ns": 5476,
+            "max_ns": 287545
+          },
+          "gap_caveat": "Observed intervals only; missing GPU events inflate gaps; gaps are NOT proven CPU/collective wait"
+        },
+        "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": {
+          "kernel_count": 46791,
+          "kernel_ns": 242102662,
+          "memcpy": {
+            "H2D": {
+              "count": 7122,
+              "sum_ns": 4193848,
+              "bytes": 10940972,
+              "max_ns": 137023
+            },
+            "D2D": {
+              "count": 4358,
+              "sum_ns": 6298203,
+              "bytes": 321699840,
+              "max_ns": 4192
+            },
+            "D2H": {
+              "count": 1662,
+              "sum_ns": 3240062,
+              "bytes": 20433956,
+              "max_ns": 74464
+            }
+          },
+          "memset_count": 35007,
+          "owner_launch_tids": {
+            "19502": 46791
+          },
+          "observed_gpu_active_union_ns": 283049944,
+          "observed_gpu_gaps": {
+            "count": 94939,
+            "sum_ns": 2300102427,
+            "p50_ns": 5344,
+            "p95_ns": 61472,
+            "max_ns": 500278065
+          },
+          "observed_launch_interarrival": {
+            "count": 46790,
+            "sum_ns": 2582344792,
+            "p50_ns": 13918,
+            "p95_ns": 191546,
+            "max_ns": 500464796
+          },
+          "observed_launch_api_to_kernel_start": {
+            "count": 46791,
+            "sum_ns": 334161780,
+            "p50_ns": 1962,
+            "p95_ns": 5424,
+            "max_ns": 286260
+          },
+          "gap_caveat": "Observed intervals only; missing GPU events inflate gaps; gaps are NOT proven CPU/collective wait"
+        }
+      },
+      "phases": {
+        "before_first_emission_proxy": {
+          "kernels": {
+            "ferrule::cuda::core::bf16_boundary_kernel(ferrule::cuda::core::Bf16BoundaryArgs)": {
+              "count": 10340,
+              "sum_ns": 16646326,
+              "bytes": 0,
+              "max_ns": 10720
+            },
+            "ferrule::cuda::core::bf16_offset_norm_tree(ferrule::cuda::core::Bf16BoundaryArgs, float)": {
+              "count": 404,
+              "sum_ns": 2294562,
+              "bytes": 0,
+              "max_ns": 8672
+            },
+            "ampere_bf16_s16816gemm_bf16_64x64_ldg8_f2f_stages_64x5_tn": {
+              "count": 82,
+              "sum_ns": 3453862,
+              "bytes": 0,
+              "max_ns": 599298
+            },
+            "void cutlass::Kernel2<cutlass_80_wmma_tensorop_bf16_s161616gemm_bf16_32x32_128x2_tn_align8>(T1::Params)": {
+              "count": 318,
+              "sum_ns": 3445443,
+              "bytes": 0,
+              "max_ns": 19712
+            },
+            "void cutlass::Kernel2<cutlass_80_wmma_tensorop_bf16_s161616gemm_bf16_16x16_128x2_tn_align8>(T1::Params)": {
+              "count": 120,
+              "sum_ns": 1978881,
+              "bytes": 0,
+              "max_ns": 17120
+            },
+            "ferrule::cuda::core::hf_bf16::conv(FerruleCoreBf16ConvArgs)": {
+              "count": 120,
+              "sum_ns": 493952,
+              "bytes": 0,
+              "max_ns": 6208
+            },
+            "ferrule::cuda::core::bf16_chunk::prepare(FerruleCoreBf16ChunkArgs, ferrule::cuda::core::bf16_chunk::Workspace, unsigned int, float)": {
+              "count": 60,
+              "sum_ns": 11727790,
+              "bytes": 0,
+              "max_ns": 195616
+            },
+            "ferrule::cuda::core::bf16_chunk::prefix(ferrule::cuda::core::bf16_chunk::Workspace, unsigned int)": {
+              "count": 60,
+              "sum_ns": 116736,
+              "bytes": 0,
+              "max_ns": 1984
+            },
+            "ferrule::cuda::core::bf16_chunk::decay_and_initial_exponents(ferrule::cuda::core::bf16_chunk::Workspace, unsigned int)": {
+              "count": 60,
+              "sum_ns": 171584,
+              "bytes": 0,
+              "max_ns": 2912
+            },
+            "ferrule::cuda::core::bf16_chunk::matmul(const float *, const float *, float *, unsigned int, unsigned int, unsigned int, bool, bool, unsigned int)": {
+              "count": 480,
+              "sum_ns": 6254242,
+              "bytes": 0,
+              "max_ns": 18336
+            },
+            "ferrule::cuda::core::bf16_chunk::mask_matrix(ferrule::cuda::core::bf16_chunk::Workspace, bool)": {
+              "count": 60,
+              "sum_ns": 103904,
+              "bytes": 0,
+              "max_ns": 1760
+            },
+            "ferrule::cuda::core::bf16_chunk::triangular(ferrule::cuda::core::bf16_chunk::Workspace)": {
+              "count": 60,
+              "sum_ns": 1578721,
+              "bytes": 0,
+              "max_ns": 26337
+            },
+            "ferrule::cuda::core::bf16_chunk::attention_delta_and_end_keys(ferrule::cuda::core::bf16_chunk::Workspace, unsigned int)": {
+              "count": 60,
+              "sum_ns": 196161,
+              "bytes": 0,
+              "max_ns": 3424
+            },
+            "ferrule::cuda::core::bf16_chunk::output_and_state(FerruleCoreBf16ChunkArgs, ferrule::cuda::core::bf16_chunk::Workspace, unsigned int)": {
+              "count": 60,
+              "sum_ns": 226209,
+              "bytes": 0,
+              "max_ns": 3872
+            },
+            "ferrule::cuda::core::hf_bf16::gated_norm_tree(FerruleCoreBf16GatedNormArgs, float)": {
+              "count": 120,
+              "sum_ns": 488704,
+              "bytes": 0,
+              "max_ns": 4288
+            },
+            "ferrule::cuda::core::rows_f32_to_bf16_rne_kernel(FerruleCoreRowsArgs)": {
+              "count": 400,
+              "sum_ns": 729154,
+              "bytes": 0,
+              "max_ns": 2688
+            },
+            "void cutlass::Kernel2<cutlass_80_wmma_tensorop_s161616gemm_bf16_16x16_64x1_tn_align8>(T1::Params)": {
+              "count": 280,
+              "sum_ns": 1208033,
+              "bytes": 0,
+              "max_ns": 4704
+            },
+            "void cublasLt::splitKreduce_kernel<(int)32, (int)16, int, float, __nv_bfloat16, float, __nv_bfloat16, (bool)1, (bool)0, (bool)0>(cublasLt::cublasSplitKParams<T6>, const T4 *, const T5 *, T5 *, const T6 *, const T6 *, const T7 *, const T4 *, T7 *, void *, long, T6 *, int *)": {
+              "count": 876,
+              "sum_ns": 1484705,
+              "bytes": 0,
+              "max_ns": 1920
+            },
+            "void ferrule::cuda::core::full_router_kernel<(int)8, (bool)0, (bool)0>(FerruleCoreRouterArgs, float *)": {
+              "count": 160,
+              "sum_ns": 7390630,
+              "bytes": 0,
+              "max_ns": 52320
+            },
+            "void dot_kernel<float, (int)128, (int)0, cublasDotParams<cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<float>>>(T4)": {
+              "count": 280,
+              "sum_ns": 596962,
+              "bytes": 0,
+              "max_ns": 2560
+            },
+            "void reduce_1Block_kernel<float, (int)128, (int)7, cublasGemvTensorStridedBatched<float>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>>(const T1 *, T1, T4, int, const T1 *, T1, T5, T6, cublasPointerMode_t, cublasLtEpilogue_t, cublasGemvTensorStridedBatched<const biasType<T6::value_type, T1>::type>)": {
+              "count": 280,
+              "sum_ns": 468863,
+              "bytes": 0,
+              "max_ns": 1728
+            },
+            "ferrule::cuda::core::data_kernel(FerruleCoreDataArgs)": {
+              "count": 240,
+              "sum_ns": 442304,
+              "bytes": 0,
+              "max_ns": 2016
+            },
+            "ferrule::cuda::cutlass::numeric_fp8::decode_weights(FerruleCutlassNumericFp8Args, unsigned int, unsigned int, unsigned long)": {
+              "count": 8652,
+              "sum_ns": 58709892,
+              "bytes": 0,
+              "max_ns": 7200
+            },
+            "void cutlass::Kernel2<cutlass_80_tensorop_s16816gemm_bf16_64x64_32x6_tn_align8>(T1::Params)": {
+              "count": 596,
+              "sum_ns": 3206693,
+              "bytes": 0,
+              "max_ns": 5760
+            },
+            "ferrule::cuda::cutlass::bf16_gemmex::split_pair(const unsigned short *, unsigned short *, unsigned short *, unsigned long, unsigned int)": {
+              "count": 2884,
+              "sum_ns": 4676671,
+              "bytes": 0,
+              "max_ns": 1696
+            },
+            "void cutlass::Kernel2<cutlass_80_wmma_tensorop_bf16_s161616gemm_bf16_32x32_64x1_tn_align8>(T1::Params)": {
+              "count": 498,
+              "sum_ns": 2171041,
+              "bytes": 0,
+              "max_ns": 4576
+            },
+            "std::enable_if<!T7, void>::type internal::gemvx::kernel<int, int, __nv_bfloat16, __nv_bfloat16, __nv_bfloat16, float, (bool)0, (bool)1, (bool)1, (bool)0, (int)7, (bool)0, cublasGemvParamsEx<int, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>, float>>(T13)": {
+              "count": 5076,
+              "sum_ns": 21640018,
+              "bytes": 0,
+              "max_ns": 15008
+            },
+            "ferrule::cuda::cutlass::numeric_fp8::pack_bf16_activation(FerruleCutlassNumericFp8Args)": {
+              "count": 32,
+              "sum_ns": 50785,
+              "bytes": 0,
+              "max_ns": 1632
+            },
+            "ferrule::cuda::core::moe_kernel(FerruleCoreMoeArgs)": {
+              "count": 160,
+              "sum_ns": 776962,
+              "bytes": 0,
+              "max_ns": 5728
+            },
+            "ferrule::cuda::core::eager_attention::validate_group(FerruleCoreTransformerArgs, FerruleBf16AttentionGroup)": {
+              "count": 40,
+              "sum_ns": 5901221,
+              "bytes": 0,
+              "max_ns": 153567
+            },
+            "ferrule::cuda::core::eager_attention::append(FerruleCoreTransformerArgs)": {
+              "count": 40,
+              "sum_ns": 208896,
+              "bytes": 0,
+              "max_ns": 5632
+            },
+            "ferrule::cuda::core::eager_attention::pack(FerruleCoreTransformerArgs, FerruleBf16AttentionGroup, unsigned short *)": {
+              "count": 40,
+              "sum_ns": 81632,
+              "bytes": 0,
+              "max_ns": 2080
+            },
+            "ferrule::cuda::core::eager_attention::gather(FerruleCoreTransformerArgs, FerruleBf16AttentionGroup, unsigned short *, unsigned short *)": {
+              "count": 40,
+              "sum_ns": 202656,
+              "bytes": 0,
+              "max_ns": 5536
+            },
+            "void cutlass::Kernel2<cutlass_75_wmma_tensorop_bf16_s161616gemm_bf16_32x32_32x1_tn_align1>(T1::Params)": {
+              "count": 20,
+              "sum_ns": 100993,
+              "bytes": 0,
+              "max_ns": 5088
+            },
+            "ferrule::cuda::core::eager_attention::softmax(FerruleCoreTransformerArgs, FerruleBf16AttentionGroup, const unsigned short *, unsigned short *)": {
+              "count": 40,
+              "sum_ns": 107040,
+              "bytes": 0,
+              "max_ns": 2752
+            },
+            "void cutlass::Kernel2<cutlass_75_wmma_tensorop_bf16_s161616gemm_bf16_32x32_32x1_nn_align1>(T1::Params)": {
+              "count": 20,
+              "sum_ns": 52896,
+              "bytes": 0,
+              "max_ns": 2656
+            },
+            "ferrule::cuda::core::eager_attention::scatter(FerruleCoreTransformerArgs, FerruleBf16AttentionGroup, const unsigned short *)": {
+              "count": 40,
+              "sum_ns": 78208,
+              "bytes": 0,
+              "max_ns": 1984
+            },
+            "ampere_bf16_s16816gemm_bf16_64x64_sliced1x2_ldg8_f2f_stages_64x5_tn": {
+              "count": 80,
+              "sum_ns": 2300898,
+              "bytes": 0,
+              "max_ns": 30176
+            },
+            "ferrule::cuda::core::hf_bf16::delta(FerruleCoreBf16DeltaArgs)": {
+              "count": 60,
+              "sum_ns": 4930531,
+              "bytes": 0,
+              "max_ns": 83424
+            },
+            "std::enable_if<!T7, void>::type internal::gemvx::kernel<int, int, __nv_bfloat16, __nv_bfloat16, __nv_bfloat16, float, (bool)0, (bool)1, (bool)1, (bool)0, (int)6, (bool)0, cublasGemvParamsEx<int, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>, float>>(T13)": {
+              "count": 20,
+              "sum_ns": 48384,
+              "bytes": 0,
+              "max_ns": 2432
+            },
+            "std::enable_if<!T7, void>::type internal::gemvx::kernel<int, int, __nv_bfloat16, __nv_bfloat16, __nv_bfloat16, float, (bool)0, (bool)1, (bool)0, (bool)0, (int)6, (bool)0, cublasGemvParamsEx<int, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>, float>>(T13)": {
+              "count": 20,
+              "sum_ns": 45280,
+              "bytes": 0,
+              "max_ns": 2272
+            },
+            "void gemv2T_kernel_val<int, int, __nv_bfloat16, __nv_bfloat16, __nv_bfloat16, float, (int)128, (int)16, (int)4, (int)4, (bool)0, (bool)0, cublasGemvParamsEx<int, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>, float>>(T13, T6, T6)": {
+              "count": 2,
+              "sum_ns": 1158945,
+              "bytes": 0,
+              "max_ns": 579650
+            }
+          },
+          "memcpy": {
+            "H2D": {
+              "count": 4416,
+              "sum_ns": 2955873,
+              "bytes": 10274768,
+              "max_ns": 137023
+            },
+            "D2D": {
+              "count": 3368,
+              "sum_ns": 4622598,
+              "bytes": 160563200,
+              "max_ns": 4160
+            },
+            "D2H": {
+              "count": 832,
+              "sum_ns": 1999587,
+              "bytes": 18862096,
+              "max_ns": 74464
+            }
+          },
+          "apis": {
+            "cuEventCreate": {
+              "count": 86340,
+              "sum_ns": 74946891,
+              "bytes": 0,
+              "max_ns": 19133
+            },
+            "cuEventRecord": {
+              "count": 86340,
+              "sum_ns": 26975279,
+              "bytes": 0,
+              "max_ns": 9437
+            },
+            "cuEventSynchronize": {
+              "count": 3788,
+              "sum_ns": 37300103,
+              "bytes": 0,
+              "max_ns": 598690
+            },
+            "cuEventDestroy_v2": {
+              "count": 85968,
+              "sum_ns": 34055348,
+              "bytes": 0,
+              "max_ns": 397378
+            },
+            "cuMemsetD8Async": {
+              "count": 23040,
+              "sum_ns": 74524318,
+              "bytes": 0,
+              "max_ns": 56768
+            },
+            "cuMemcpyHtoDAsync_v2": {
+              "count": 4416,
+              "sum_ns": 24073399,
+              "bytes": 0,
+              "max_ns": 161687
+            },
+            "cuStreamSynchronize": {
+              "count": 16332,
+              "sum_ns": 23990477,
+              "bytes": 0,
+              "max_ns": 59297
+            },
+            "cudaLaunchKernel_v7000": {
+              "count": 31428,
+              "sum_ns": 134451135,
+              "bytes": 0,
+              "max_ns": 29345
+            },
+            "cuMemcpyDtoDAsync_v2": {
+              "count": 3368,
+              "sum_ns": 23302659,
+              "bytes": 0,
+              "max_ns": 19265
+            },
+            "cuCtxSetCurrent": {
+              "count": 164677,
+              "sum_ns": 13972322,
+              "bytes": 0,
+              "max_ns": 8855
+            },
+            "cuEventQuery": {
+              "count": 84277,
+              "sum_ns": 41090396,
+              "bytes": 0,
+              "max_ns": 10180
+            },
+            "cudaMemsetAsync_v3020": {
+              "count": 4,
+              "sum_ns": 16150,
+              "bytes": 0,
+              "max_ns": 4752
+            },
+            "cuKernelGetFunction": {
+              "count": 1852,
+              "sum_ns": 1234011,
+              "bytes": 0,
+              "max_ns": 5346
+            },
+            "cuLaunchKernel": {
+              "count": 1852,
+              "sum_ns": 7758154,
+              "bytes": 0,
+              "max_ns": 23423
+            },
+            "cuMemcpyDtoHAsync_v2": {
+              "count": 832,
+              "sum_ns": 17242382,
+              "bytes": 0,
+              "max_ns": 498507
+            },
+            "cudaStreamIsCapturing_v10000": {
+              "count": 40,
+              "sum_ns": 60303,
+              "bytes": 0,
+              "max_ns": 9045
+            },
+            "cuStreamWaitEvent": {
+              "count": 184,
+              "sum_ns": 92987,
+              "bytes": 0,
+              "max_ns": 1771
+            }
+          }
+        },
+        "after_first_emission_proxy": {
+          "kernels": {
+            "ferrule::cuda::core::bf16_boundary_kernel(ferrule::cuda::core::Bf16BoundaryArgs)": {
+              "count": 19348,
+              "sum_ns": 30942501,
+              "bytes": 0,
+              "max_ns": 3264
+            },
+            "ferrule::cuda::core::bf16_offset_norm_tree(ferrule::cuda::core::Bf16BoundaryArgs, float)": {
+              "count": 1414,
+              "sum_ns": 5601768,
+              "bytes": 0,
+              "max_ns": 4288
+            },
+            "ampere_bf16_s16816gemm_bf16_64x64_sliced1x2_ldg8_f2f_stages_64x5_tn": {
+              "count": 560,
+              "sum_ns": 16126520,
+              "bytes": 0,
+              "max_ns": 30048
+            },
+            "std::enable_if<!T7, void>::type internal::gemvx::kernel<int, int, __nv_bfloat16, __nv_bfloat16, __nv_bfloat16, float, (bool)0, (bool)1, (bool)1, (bool)0, (int)7, (bool)0, cublasGemvParamsEx<int, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>, float>>(T13)": {
+              "count": 12460,
+              "sum_ns": 58666637,
+              "bytes": 0,
+              "max_ns": 14849
+            },
+            "void dot_kernel<float, (int)128, (int)0, cublasDotParams<cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<float>>>(T4)": {
+              "count": 1400,
+              "sum_ns": 3057916,
+              "bytes": 0,
+              "max_ns": 2656
+            },
+            "void reduce_1Block_kernel<float, (int)128, (int)7, cublasGemvTensorStridedBatched<float>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>>(const T1 *, T1, T4, int, const T1 *, T1, T5, T6, cublasPointerMode_t, cublasLtEpilogue_t, cublasGemvTensorStridedBatched<const biasType<T6::value_type, T1>::type>)": {
+              "count": 1400,
+              "sum_ns": 2321990,
+              "bytes": 0,
+              "max_ns": 1760
+            },
+            "ferrule::cuda::core::hf_bf16::conv(FerruleCoreBf16ConvArgs)": {
+              "count": 420,
+              "sum_ns": 1165602,
+              "bytes": 0,
+              "max_ns": 3040
+            },
+            "ferrule::cuda::core::hf_bf16::delta(FerruleCoreBf16DeltaArgs)": {
+              "count": 420,
+              "sum_ns": 34570803,
+              "bytes": 0,
+              "max_ns": 83744
+            },
+            "ferrule::cuda::core::hf_bf16::gated_norm_tree(FerruleCoreBf16GatedNormArgs, float)": {
+              "count": 420,
+              "sum_ns": 1689029,
+              "bytes": 0,
+              "max_ns": 4256
+            },
+            "ferrule::cuda::core::rows_f32_to_bf16_rne_kernel(FerruleCoreRowsArgs)": {
+              "count": 1400,
+              "sum_ns": 2384800,
+              "bytes": 0,
+              "max_ns": 2112
+            },
+            "void ferrule::cuda::core::full_router_kernel<(int)8, (bool)0, (bool)0>(FerruleCoreRouterArgs, float *)": {
+              "count": 560,
+              "sum_ns": 25291370,
+              "bytes": 0,
+              "max_ns": 51328
+            },
+            "ferrule::cuda::core::data_kernel(FerruleCoreDataArgs)": {
+              "count": 840,
+              "sum_ns": 1532449,
+              "bytes": 0,
+              "max_ns": 2016
+            },
+            "ferrule::cuda::cutlass::numeric_fp8::decode_weights(FerruleCutlassNumericFp8Args, unsigned int, unsigned int, unsigned long)": {
+              "count": 13440,
+              "sum_ns": 91270305,
+              "bytes": 0,
+              "max_ns": 7200
+            },
+            "ferrule::cuda::cutlass::bf16_gemmex::split_pair(const unsigned short *, unsigned short *, unsigned short *, unsigned long, unsigned int)": {
+              "count": 4480,
+              "sum_ns": 7294376,
+              "bytes": 0,
+              "max_ns": 1696
+            },
+            "ferrule::cuda::core::moe_kernel(FerruleCoreMoeArgs)": {
+              "count": 560,
+              "sum_ns": 2316132,
+              "bytes": 0,
+              "max_ns": 4320
+            },
+            "ferrule::cuda::core::eager_attention::validate_group(FerruleCoreTransformerArgs, FerruleBf16AttentionGroup)": {
+              "count": 140,
+              "sum_ns": 19817562,
+              "bytes": 0,
+              "max_ns": 141984
+            },
+            "ferrule::cuda::core::eager_attention::append(FerruleCoreTransformerArgs)": {
+              "count": 140,
+              "sum_ns": 732834,
+              "bytes": 0,
+              "max_ns": 5632
+            },
+            "ferrule::cuda::core::eager_attention::pack(FerruleCoreTransformerArgs, FerruleBf16AttentionGroup, unsigned short *)": {
+              "count": 140,
+              "sum_ns": 285984,
+              "bytes": 0,
+              "max_ns": 2080
+            },
+            "ferrule::cuda::core::eager_attention::gather(FerruleCoreTransformerArgs, FerruleBf16AttentionGroup, unsigned short *, unsigned short *)": {
+              "count": 140,
+              "sum_ns": 769249,
+              "bytes": 0,
+              "max_ns": 6592
+            },
+            "void gemv2T_kernel_val<int, int, __nv_bfloat16, __nv_bfloat16, __nv_bfloat16, float, (int)128, (int)16, (int)4, (int)4, (bool)0, (bool)0, cublasGemvParamsEx<int, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>, float>>(T13, T6, T6)": {
+              "count": 94,
+              "sum_ns": 8291464,
+              "bytes": 0,
+              "max_ns": 580415
+            },
+            "ferrule::cuda::core::eager_attention::softmax(FerruleCoreTransformerArgs, FerruleBf16AttentionGroup, const unsigned short *, unsigned short *)": {
+              "count": 140,
+              "sum_ns": 372675,
+              "bytes": 0,
+              "max_ns": 2720
+            },
+            "std::enable_if<!T7, void>::type internal::gemvx::kernel<int, int, __nv_bfloat16, __nv_bfloat16, __nv_bfloat16, float, (bool)0, (bool)1, (bool)0, (bool)0, (int)6, (bool)0, cublasGemvParamsEx<int, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>, float>>(T13)": {
+              "count": 140,
+              "sum_ns": 327520,
+              "bytes": 0,
+              "max_ns": 2432
+            },
+            "ferrule::cuda::core::eager_attention::scatter(FerruleCoreTransformerArgs, FerruleBf16AttentionGroup, const unsigned short *)": {
+              "count": 140,
+              "sum_ns": 274016,
+              "bytes": 0,
+              "max_ns": 1984
+            },
+            "ferrule::cuda::cutlass::numeric_fp8::pack_bf16_activation(FerruleCutlassNumericFp8Args)": {
+              "count": 46,
+              "sum_ns": 73184,
+              "bytes": 0,
+              "max_ns": 1632
+            },
+            "std::enable_if<!T7, void>::type internal::gemvx::kernel<int, int, __nv_bfloat16, __nv_bfloat16, __nv_bfloat16, float, (bool)0, (bool)1, (bool)1, (bool)0, (int)6, (bool)0, cublasGemvParamsEx<int, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<const __nv_bfloat16>, cublasGemvTensorStridedBatched<__nv_bfloat16>, float>>(T13)": {
+              "count": 60,
+              "sum_ns": 145280,
+              "bytes": 0,
+              "max_ns": 2464
+            }
+          },
+          "memcpy": {
+            "H2D": {
+              "count": 9828,
+              "sum_ns": 5357157,
+              "bytes": 11607176,
+              "max_ns": 41952
+            },
+            "D2D": {
+              "count": 5348,
+              "sum_ns": 7934410,
+              "bytes": 482836480,
+              "max_ns": 4192
+            },
+            "D2H": {
+              "count": 2492,
+              "sum_ns": 4495427,
+              "bytes": 22005816,
+              "max_ns": 12064
+            }
+          },
+          "apis": {
+            "cuEventCreate": {
+              "count": 184240,
+              "sum_ns": 163350923,
+              "bytes": 0,
+              "max_ns": 50844
+            },
+            "cuEventRecord": {
+              "count": 184240,
+              "sum_ns": 58920329,
+              "bytes": 0,
+              "max_ns": 13695
+            },
+            "cuEventSynchronize": {
+              "count": 13262,
+              "sum_ns": 66668542,
+              "bytes": 0,
+              "max_ns": 581004
+            },
+            "cuEventDestroy_v2": {
+              "count": 183880,
+              "sum_ns": 70579118,
+              "bytes": 0,
+              "max_ns": 53874
+            },
+            "cuCtxSetCurrent": {
+              "count": 344551,
+              "sum_ns": 29588259,
+              "bytes": 0,
+              "max_ns": 33568
+            },
+            "cuEventQuery": {
+              "count": 176109,
+              "sum_ns": 82646787,
+              "bytes": 0,
+              "max_ns": 13350
+            },
+            "cuMemsetD8Async": {
+              "count": 46956,
+              "sum_ns": 144733566,
+              "bytes": 0,
+              "max_ns": 19947
+            },
+            "cuMemcpyHtoDAsync_v2": {
+              "count": 9828,
+              "sum_ns": 49483622,
+              "bytes": 0,
+              "max_ns": 40824
+            },
+            "cuStreamSynchronize": {
+              "count": 51534,
+              "sum_ns": 59309846,
+              "bytes": 0,
+              "max_ns": 45207
+            },
+            "cudaLaunchKernel_v7000": {
+              "count": 60302,
+              "sum_ns": 268221807,
+              "bytes": 0,
+              "max_ns": 34769
+            },
+            "cuMemcpyDtoDAsync_v2": {
+              "count": 5348,
+              "sum_ns": 37735537,
+              "bytes": 0,
+              "max_ns": 19967
+            },
+            "cudaMemsetAsync_v3020": {
+              "count": 14,
+              "sum_ns": 44612,
+              "bytes": 0,
+              "max_ns": 4166
+            },
+            "cuMemcpyDtoHAsync_v2": {
+              "count": 2492,
+              "sum_ns": 53468326,
+              "bytes": 0,
+              "max_ns": 139649
+            },
+            "cudaStreamIsCapturing_v10000": {
+              "count": 140,
+              "sum_ns": 161314,
+              "bytes": 0,
+              "max_ns": 1911
+            },
+            "cuStreamWaitEvent": {
+              "count": 224,
+              "sum_ns": 125345,
+              "bytes": 0,
+              "max_ns": 2012
+            }
+          }
+        }
+      },
+      "observed_activity_correlation": {
+        "kernel_observed": 93582,
+        "kernel_correlated": 93582,
+        "memcpy_observed": 26284,
+        "memcpy_correlated": 26284,
+        "memset_observed": 70014,
+        "memset_correlated": 70014
+      },
+      "kernel_sum_ns": 483269336,
+      "sync_api_host_duration_including_gpu_wait": {
+        "cuEventSynchronize": {
+          "count": 17050,
+          "sum_ns": 103968645,
+          "bytes": 0,
+          "max_ns": 598690
+        },
+        "cuStreamSynchronize": {
+          "count": 67866,
+          "sum_ns": 83300323,
+          "bytes": 0,
+          "max_ns": 59297
+        },
+        "cuStreamWaitEvent": {
+          "count": 408,
+          "sum_ns": 218332,
+          "bytes": 0,
+          "max_ns": 2012
+        }
+      },
+      "phase_pure_prefill": null,
+      "phase_pure_decode": null,
+      "bidirectional_correlation": {
+        "status": "observed_correlation_closed",
+        "observed_correlation_closed": true,
+        "full_trace_accepted": false,
+        "paired_api_activity_loss_excluded": false,
+        "request_window_ns": [
+          3035275306,
+          5624168306
+        ],
+        "counts": {
+          "kernel_observed": 93582,
+          "memcpy_observed": 26284,
+          "memset_observed": 70014,
+          "runtime_api_rows": 1857858,
+          "memset_successful_api": 70014,
+          "memcpy_successful_api": 26284,
+          "kernel_successful_api": 93582,
+          "launch_runtime": 91730,
+          "launch_driver": 1852,
+          "kernel_activity_to_api_unique": 93582,
+          "memcpy_activity_to_api_unique": 26284,
+          "memset_activity_to_api_unique": 70014,
+          "memset_api_to_activity_unique": 70014,
+          "memcpy_api_to_activity_unique": 26284,
+          "kernel_api_to_activity_unique": 93582
+        },
+        "issues": [],
+        "same_thread_runtime_overlaps": 0,
+        "overlap_examples": [],
+        "matching_policy": "Full-export (PID, correlation ID), unique successful API, correct activity kind, same request window",
+        "limitation": "Exported-row closure only; simultaneous API/activity loss remains possible. Not a complete-report claim."
+      },
+      "correlation_status": "observed_correlation_closed"
+    }
+  },
+  "diagnostics": [
+    {
+      "timestamp": -389075986968,
+      "timestampType": 1,
+      "source": 2,
+      "severity": 1,
+      "text": "Process was launched by the profiler, see /home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/runs/P1/session/nsys-tmp/nvidia/nsight_systems/quadd_session_1018878/streams/pid_18889_stdout.log and stderr.log for program output",
+      "globalPid": 281791881543680
+    },
+    {
+      "timestamp": -389059764724,
+      "timestampType": 1,
+      "source": 1,
+      "severity": 1,
+      "text": "Common injection library initialized successfully.",
+      "globalPid": 281791881543680
+    },
+    {
+      "timestamp": -389056016134,
+      "timestampType": 1,
+      "source": 1,
+      "severity": 1,
+      "text": "OS runtime libraries injection initialized successfully.",
+      "globalPid": 281791881543680
+    },
+    {
+      "timestamp": -383992600453,
+      "timestampType": 1,
+      "source": 1,
+      "severity": 1,
+      "text": "Common injection library initialized successfully.",
+      "globalPid": 281792233865216
+    },
+    {
+      "timestamp": -383982424876,
+      "timestampType": 1,
+      "source": 1,
+      "severity": 1,
+      "text": "OS runtime libraries injection initialized successfully.",
+      "globalPid": 281792233865216
+    },
+    {
+      "timestamp": -120197763176,
+      "timestampType": 1,
+      "source": 1,
+      "severity": 1,
+      "text": "Buffers holding CUDA trace data will be flushed on CudaProfilerStop() call. See --flush-on-cudaprofilerstop to control this behavior.",
+      "globalPid": 281792233865216
+    },
+    {
+      "timestamp": -120187332175,
+      "timestampType": 1,
+      "source": 1,
+      "severity": 1,
+      "text": "Loaded CUPTI library: /home/admin/luhuanbing.lhb/Ferrule/target/vendor/nsight-systems-cli-2025.3.1/opt/nvidia/nsight-systems-cli/2025.3.1/target-linux-x64/libcupti.so.12.9",
+      "globalPid": 281792233865216
+    },
+    {
+      "timestamp": -119977804608,
+      "timestampType": 1,
+      "source": 1,
+      "severity": 1,
+      "text": "Enabling trace for device graph launch",
+      "globalPid": 281792233865216
+    },
+    {
+      "timestamp": -119977792753,
+      "timestampType": 1,
+      "source": 1,
+      "severity": 1,
+      "text": "CUDA injection initialized successfully.",
+      "globalPid": 281792233865216
+    },
+    {
+      "timestamp": -21275471285,
+      "timestampType": 1,
+      "source": 1,
+      "severity": 1,
+      "text": "NVTX injection initialized successfully.",
+      "globalPid": 281792233865216
+    },
+    {
+      "timestamp": 0,
+      "timestampType": 1,
+      "source": 3,
+      "severity": 1,
+      "text": "Profiling has started.",
+      "globalPid": -144115188075855872
+    },
+    {
+      "timestamp": 4974329123,
+      "timestampType": 2,
+      "source": 3,
+      "severity": 2,
+      "text": "Scheduling information is absent. The thread activity is deduced based on OS runtime libraries traces. This is inaccurate and does not take into account asynchronous interrupts and exception faults.",
+      "globalPid": -144115188075855872
+    },
+    {
+      "timestamp": 4974376815,
+      "timestampType": 2,
+      "source": 3,
+      "severity": 2,
+      "text": "Not all NVTX events might have been collected.",
+      "globalPid": 281791881543680
+    },
+    {
+      "timestamp": 4974379293,
+      "timestampType": 2,
+      "source": 3,
+      "severity": 2,
+      "text": "No NVTX events collected. Does the process use NVTX?",
+      "globalPid": 281791881543680
+    },
+    {
+      "timestamp": 4974380134,
+      "timestampType": 2,
+      "source": 3,
+      "severity": 2,
+      "text": "Not all NVTX events might have been collected.",
+      "globalPid": 281792233865216
+    },
+    {
+      "timestamp": 4974381901,
+      "timestampType": 2,
+      "source": 3,
+      "severity": 1,
+      "text": "Number of NVTX events collected: \t1.",
+      "globalPid": 281792233865216
+    },
+    {
+      "timestamp": 4974386067,
+      "timestampType": 2,
+      "source": 3,
+      "severity": 2,
+      "text": "CUDA profiling might have not been started correctly.",
+      "globalPid": 281791881543680
+    },
+    {
+      "timestamp": 4974386690,
+      "timestampType": 2,
+      "source": 3,
+      "severity": 2,
+      "text": "No CUDA events collected. Does the process use CUDA?",
+      "globalPid": 281791881543680
+    },
+    {
+      "timestamp": 4974387215,
+      "timestampType": 2,
+      "source": 3,
+      "severity": 2,
+      "text": "Not all CUDA events might have been collected.",
+      "globalPid": 281792233865216
+    },
+    {
+      "timestamp": 4974387686,
+      "timestampType": 2,
+      "source": 3,
+      "severity": 1,
+      "text": "Number of CUDA events collected: \t4102287.",
+      "globalPid": 281792233865216
+    },
+    {
+      "timestamp": 4974388874,
+      "timestampType": 2,
+      "source": 3,
+      "severity": 2,
+      "text": "Not all OS runtime libraries events might have been collected.",
+      "globalPid": 281791881543680
+    },
+    {
+      "timestamp": 4974389524,
+      "timestampType": 2,
+      "source": 3,
+      "severity": 1,
+      "text": "Number of OS runtime libraries events collected: \t113.",
+      "globalPid": 281791881543680
+    },
+    {
+      "timestamp": 4974390154,
+      "timestampType": 2,
+      "source": 3,
+      "severity": 2,
+      "text": "Not all OS runtime libraries events might have been collected.",
+      "globalPid": 281792233865216
+    },
+    {
+      "timestamp": 4974390632,
+      "timestampType": 2,
+      "source": 3,
+      "severity": 1,
+      "text": "Number of OS runtime libraries events collected: \t46315.",
+      "globalPid": 281792233865216
+    },
+    {
+      "timestamp": 5789314009,
+      "timestampType": 1,
+      "source": 3,
+      "severity": 1,
+      "text": "Profiling has stopped.",
+      "globalPid": -144115188075855872
+    },
+    {
+      "timestamp": 6434542963,
+      "timestampType": 1,
+      "source": 1,
+      "severity": 1,
+      "text": "Number of CUPTI events produced: \t4795568, CUPTI buffers: 50.",
+      "globalPid": 281792233865216
+    }
+  ],
+  "missing_correlations": [],
+  "nonzero_api_returns": [
+    {
+      "api": "cuEventQuery",
+      "return_value": "600",
+      "count": 15353
+    }
+  ],
+  "cuEventQuery_600": "CUDA_ERROR_NOT_READY polling, not execution failure",
+  "gemmex_api_sum": null,
+  "gemmex_reason": "Only cuBLAS NVTX domain-create metadata exists; no cuBLAS API ranges. Matrix-named kernel sums are NOT GemmEx API timing.",
+  "cpu_collective_wait_ns": null,
+  "cpu_collective_reason": "Owner-thread OSRT waits and launch gaps are visible, but no collective marker/callsite attribution; CUDA host API durations include GPU work and overlap across threads.",
+  "release": {
+    "local_contexts_closed": true,
+    "probe_gpu_uuids": [
+      "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f",
+      "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6",
+      "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d",
+      "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+      "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86",
+      "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011",
+      "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685"
+    ],
+    "model_gpu_uuids": [
+      "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+      "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9"
+    ],
+    "authenticated_drained": true,
+    "original_b0_verified": true
+  },
+  "raw_sha256": {
+    "runs/P1/session/nsight/nsys.sqlite": "f5b0ff1b721b0023ac0bb8598eba940d0513e12c27f7a2769fc407ca357c871f",
+    "runs/P1/session/nsight/nsys.nsys-rep": "4365b51ae20906c66af7ee339d74bc9cc98df814ce0f7557d60429b312115dbc",
+    "runs/P1/session/server.log": "7acf2b698524bb4d848217ff7d10cc3741d6e7aa7ffdef588834797355ca4668"
+  }
+}

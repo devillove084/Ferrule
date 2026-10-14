@@ -1,0 +1,109 @@
+{
+  "before": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-before-20261011-01/retirement-profile-audit.json",
+    "sha256": "bf2defdf12437fe1ca185af65f5683d811952f34679e315b81736181266b5bfa"
+  },
+  "after": {
+    "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/allocator-v3-profile-after-20261011-01/retirement-profile-audit.json",
+    "sha256": "5b28eed5fe8095a288b3927cf4ae445da50ef1e75b801a7b6037818a0f8174bf"
+  },
+  "actual_text_tokens_match": true,
+  "kernel_name_launch_shape_count_per_uuid_exact_match": true,
+  "kernel_launch_signatures_digest": "6c4ab5b48e96d67879b22f41f347b23d49735f3d4fb0af77d39f76ba5d1de250",
+  "pure_tensor_shapes_from_trace": null,
+  "tensor_shape_caveat": "Launch dimensions are observed; tensor arguments/pointers and pure prefill/decode phase identities are not exported",
+  "historical_public_profiles": [
+    {
+      "run": "tp2-official-full-profile-20261010-001",
+      "report": {
+        "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-official-full-profile-20261010-001/profile-audit-v2.json",
+        "sha256": "55b2f32b676704e47ccdde9adf13af527b6fbb3a79b03d40ff1eb6a88d2bc2dd"
+      },
+      "status": "rejected_incomplete_trace",
+      "full_trace_accepted": false,
+      "formal_observed_closed": true,
+      "kernel_launches": 117232,
+      "launches_per_8_output_tokens": 14654.0,
+      "groups": {
+        "other": {
+          "count": 39366,
+          "sum_ns": 188995256,
+          "bytes": 0,
+          "max_ns": 195617
+        },
+        "pack_bf16_activation": {
+          "count": 19228,
+          "sum_ns": 30012786,
+          "bytes": 0,
+          "max_ns": 2176
+        },
+        "decode_weights": {
+          "count": 26592,
+          "sum_ns": 270507218,
+          "bytes": 0,
+          "max_ns": 79456
+        },
+        "matrix_math_named_kernels_not_GemmEx_API": {
+          "count": 24682,
+          "sum_ns": 129516601,
+          "bytes": 0,
+          "max_ns": 599490
+        },
+        "gemmex_split_pair_helper_not_GemmEx_API": {
+          "count": 7364,
+          "sum_ns": 11964532,
+          "bytes": 0,
+          "max_ns": 1696
+        }
+      },
+      "comparison_scope": "Historical public profile; source/cache geometry/logging and server-marker window differ. Descriptive kernel counts, no allocator-only causal or wall timing comparison."
+    },
+    {
+      "run": "tp2-decoded-cache-official-profile-20261010-001",
+      "report": {
+        "path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-decoded-cache-official-profile-20261010-001/profile-audit-v2.json",
+        "sha256": "cd4f5ae5b3fa582c3a608d783408e40b2c93c50e539385cd04490d91335ff06c"
+      },
+      "status": "rejected_incomplete_trace",
+      "full_trace_accepted": false,
+      "formal_observed_closed": true,
+      "kernel_launches": 93582,
+      "launches_per_8_output_tokens": 11697.75,
+      "groups": {
+        "other": {
+          "count": 39366,
+          "sum_ns": 188894899,
+          "bytes": 0,
+          "max_ns": 195616
+        },
+        "matrix_math_named_kernels_not_GemmEx_API": {
+          "count": 24682,
+          "sum_ns": 132299224,
+          "bytes": 0,
+          "max_ns": 599298
+        },
+        "decode_weights": {
+          "count": 22092,
+          "sum_ns": 149980197,
+          "bytes": 0,
+          "max_ns": 7200
+        },
+        "gemmex_split_pair_helper_not_GemmEx_API": {
+          "count": 7364,
+          "sum_ns": 11971047,
+          "bytes": 0,
+          "max_ns": 1696
+        },
+        "pack_bf16_activation": {
+          "count": 78,
+          "sum_ns": 123969,
+          "bytes": 0,
+          "max_ns": 1632
+        }
+      },
+      "comparison_scope": "Historical public profile; source/cache geometry/logging and server-marker window differ. Descriptive kernel counts, no allocator-only causal or wall timing comparison."
+    }
+  ],
+  "full_trace_accepted": false,
+  "benchmark": false
+}

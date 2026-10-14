@@ -1,0 +1,7 @@
+[
+  {
+    "id": "canary-arithmetic",
+    "prompt": "7 + 8 =",
+    "input_tokens": 5
+  }
+]

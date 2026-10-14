@@ -9,12 +9,11 @@ use std::time::Duration;
 
 use ferrule_common::execution::ExecutionTransactionId;
 use ferrule_common::{ParallelRankId, Result};
-use ferrule_model::TensorRole;
 use ferrule_model::moe::ExpertId;
 use ferrule_model::transformer::{
     BoundDecoderResources, CpuReferenceExpertWorker, ExpertAvailability, ExpertProvider,
-    ExpertResult, ExpertToken, ExpertTokenBucket, ExpertWorker, FeedForward, PreparedLinear,
-    PreparedSwiGlu, StateDictMaterializer,
+    ExpertResult, ExpertToken, ExpertTokenBucket, ExpertWorker, PreparedSwiGlu,
+    StateDictMaterializer,
 };
 use serde::{Deserialize, Serialize};
 
@@ -125,44 +124,11 @@ fn prepare(
     owner: ParallelRankId,
     max: u64,
 ) -> Result<LocalExperts> {
-    group.validate_resources(resources)?;
+    let catalog = group.catalog(resources)?;
     let materializer = StateDictMaterializer::new(max)?;
-    let mut experts = BTreeMap::new();
-    for layer in group.layers.clone() {
-        let FeedForward::Moe(moe) = resources.spec().layers()[layer].feed_forward() else {
-            continue;
-        };
-        for expert in 0..moe.router_spec().num_experts() {
-            if group.placement.owner(layer, expert) != Some(owner) {
-                continue;
-            }
-            let linear = |role: TensorRole, shape: [usize; 2]| {
-                let binding =
-                    resources
-                        .experts()
-                        .require_shape(layer, expert, role.clone(), &shape)?;
-                PreparedLinear::from_parameter(
-                    materializer.expert_parameter(layer, expert, binding)?,
-                    role,
-                )
-            };
-            experts.insert(
-                ExpertId::new(layer, expert),
-                Arc::new(PreparedSwiGlu::new(
-                    linear(
-                        TensorRole::RoutedExpertGate,
-                        moe.expert().gate().weight_shape(),
-                    )?,
-                    linear(TensorRole::RoutedExpertUp, moe.expert().up().weight_shape())?,
-                    linear(
-                        TensorRole::RoutedExpertDown,
-                        moe.expert().down().weight_shape(),
-                    )?,
-                    moe.expert().activation_limit(),
-                )?),
-            );
-        }
-    }
+    let experts = catalog.prepare_selected(&materializer, |id| {
+        group.placement.owner(id.layer, id.expert) == Some(owner)
+    })?;
     Ok(LocalExperts(experts))
 }
 
@@ -177,7 +143,10 @@ pub struct ExpertChild {
     cuda: Option<ferrule_model::transformer::CudaStandardDecoderOperators>,
 }
 impl ExpertChild {
-    pub fn initialize(boot: ProcessBoot) -> std::result::Result<Self, ProcessHandlerError> {
+    pub fn initialize(
+        boot: ProcessBoot,
+        bind: impl FnOnce(&DecoderBoot) -> Result<BoundDecoderResources>,
+    ) -> std::result::Result<Self, ProcessHandlerError> {
         let config: ExpertBoot = serde_json::from_value(boot.config).map_err(startup)?;
         config.expert_boot.stage_boot().map_err(startup)?;
         let placement = config
@@ -197,7 +166,11 @@ impl ExpertChild {
         let group = placement
             .decode(config.expert_boot.segment.layers.clone())
             .map_err(startup)?;
-        let resources = config.expert_boot.load_resources().map_err(startup)?;
+        let resources = bind(&config.expert_boot).map_err(startup)?;
+        config
+            .expert_boot
+            .validate_resources(&resources)
+            .map_err(startup)?;
         let experts = prepare(
             &resources,
             &group,
@@ -606,3 +579,7 @@ impl ferrule_model::transformer::expert_parallel::ExpertResultExecutor for Proce
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../../../tests/unit/parallel/expert_semantics.rs"]
+mod semantic_tests;

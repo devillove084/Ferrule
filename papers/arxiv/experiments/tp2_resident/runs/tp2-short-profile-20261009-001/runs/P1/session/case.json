@@ -1,0 +1,146 @@
+{
+  "status": "failed",
+  "started_monotonic": 8484279.20577969,
+  "fairmatch": false,
+  "exact_speedup": null,
+  "launch_monotonic": 8484279.908136278,
+  "server_pid": 197658,
+  "server_identity": {
+    "pid": 197658,
+    "birth_ticks": 84815960,
+    "ppid": 197649,
+    "state": "R"
+  },
+  "error": "ValueError: Resource monitor failed during startup",
+  "startup_failure_seconds": 3.1789296939969063,
+  "resources": {
+    "status": "blocked",
+    "errors": [
+      "ValueError: ['Nonselected positive memory delta exceeds 1 MiB: GPU-0bc01d70-2ade-0714-8959-b25ae75469b6', 'Nonselected positive memory delta exceeds 1 MiB: GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011', 'Nonselected positive memory delta exceeds 1 MiB: GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86']"
+    ],
+    "gpu_peak_bytes": {
+      "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 4194304,
+      "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 4194304
+    },
+    "tree_pss_peak_bytes": 66874368,
+    "tree_rss_peak_bytes": 79679488,
+    "complete_host_samples": 2,
+    "incomplete_host_samples": 0,
+    "gpu_samples": 2,
+    "missing_gpu_attempts": 0,
+    "baseline": {
+      "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": {
+        "index": 0,
+        "uuid": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+        "total_bytes": 25769803776,
+        "gpu_bytes": 0,
+        "utilization": 0
+      },
+      "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": {
+        "index": 1,
+        "uuid": "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+        "total_bytes": 25769803776,
+        "gpu_bytes": 0,
+        "utilization": 0
+      },
+      "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6": {
+        "index": 2,
+        "uuid": "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6",
+        "total_bytes": 25769803776,
+        "gpu_bytes": 0,
+        "utilization": 0
+      },
+      "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011": {
+        "index": 3,
+        "uuid": "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011",
+        "total_bytes": 25769803776,
+        "gpu_bytes": 0,
+        "utilization": 0
+      },
+      "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86": {
+        "index": 4,
+        "uuid": "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86",
+        "total_bytes": 25769803776,
+        "gpu_bytes": 0,
+        "utilization": 0
+      },
+      "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685": {
+        "index": 5,
+        "uuid": "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685",
+        "total_bytes": 25769803776,
+        "gpu_bytes": 0,
+        "utilization": 0
+      },
+      "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d": {
+        "index": 6,
+        "uuid": "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d",
+        "total_bytes": 25769803776,
+        "gpu_bytes": 0,
+        "utilization": 0
+      },
+      "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f": {
+        "index": 7,
+        "uuid": "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f",
+        "total_bytes": 25769803776,
+        "gpu_bytes": 0,
+        "utilization": 0
+      }
+    },
+    "delta_high_water_bytes": {
+      "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535": 4194304,
+      "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9": 4194304,
+      "GPU-0bc01d70-2ade-0714-8959-b25ae75469b6": 4194304,
+      "GPU-dc825838-7c6c-2683-71e7-9ee0ac61b011": 4194304,
+      "GPU-6c86e874-0ba8-b45a-a604-bca3b934bb86": 2097152,
+      "GPU-ff61a997-b3fc-fd3d-800d-63bad94fd685": 1048576,
+      "GPU-2cdfe4c5-38b1-ef88-fbdd-f6848ddbae9d": 1048576,
+      "GPU-0ac006a6-932d-f77d-9abd-ea242dd3ba4f": 1048576
+    },
+    "final_process_diagnostics": [
+      {
+        "identity": {
+          "pid": 197658,
+          "birth_ticks": 84815960,
+          "ppid": 197649,
+          "state": "R"
+        },
+        "command": "/opt/nvidia/nsight-systems/2026.1.3/target-linux-x64/nsys profile --session-new=FerruleProfile_tp2-short-profile-20261009-001 --start-later=true --trace=cuda,nvtx,osrt --cuda-trace-all-apis=true --sample=none --cpuctxsw=none --trace-fork-before-exec=false --kill=none --wait=primary --stop-on-exit=true --duration=240 --cuda-flush-interval=0 --force-overwrite=false --output=/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-short-profile-20261009-001/runs/P1/session/nsight/nsys /home/admin/wxw403883/anaconda3/bin/python3.12 -S -B /home/admin/luhuanbing.lhb/Ferrule/scripts/_profile_capture.py --directory /home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-short-profile-20261009-001/runs/P1/session --lifetime-seconds 1450 --shutdown-seconds 45 -- /home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/admission/staged/ferrule serve /mnt/nas1/hf/Qwen3.5-35B-A3B-FP8 --backend cuda --engine pipeline --model-profile qwen35-mixed-bf16 --tensor-parallel 2 --pipeline-parallel 1 --expert-parallel 1 --rank-backend thread --devices 0,1 --rank-restarts 0 --kv-execution-policy resident --ctx-size 128 --max-active-sequences 2 --max-batch-tokens 8 --prefill-chunk-size 8 --cuda-device-budget-mb 22528 --kv-cache-mb 16 --max-tensor-mb 2048 --cuda-workspace-mb 1024 --host 127.0.0.1 --port 18367 --served-model-name qwen35-ferrule-tp2-resident-paper ",
+        "environment": {
+          "CUBLAS_WORKSPACE_CONFIG": ":0:0",
+          "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
+          "CUDA_HOME": "/home/admin/wxw403883/anaconda3/envs/tao",
+          "CUDA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+          "FERRULE_LOG": "info",
+          "FERRULE_LOG_FORMAT": "json",
+          "HF_HUB_OFFLINE": "1",
+          "HOME": "/root",
+          "LD_LIBRARY_PATH": "/home/admin/wxw403883/anaconda3/envs/tao/lib:/usr/lib64",
+          "NVCC": "/home/admin/wxw403883/anaconda3/envs/tao/bin/nvcc",
+          "NVIDIA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+          "PATH": "/home/admin/wxw403883/anaconda3/envs/tao/bin:/root/.cargo/bin:/usr/bin:/bin",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "TRANSFORMERS_OFFLINE": "1",
+          "TMPDIR": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/runs/tp2-short-profile-20261009-001/runs/P1/session/nsys-tmp"
+        },
+        "libraries": [
+          "/usr/lib64/libcuda.so.575.57.08",
+          "/usr/lib64/libnvidia-cfg.so.575.57.08",
+          "/usr/lib64/libnvidia-ml.so.575.57.08"
+        ]
+      }
+    ],
+    "owned_gpu_attribution": "unknown",
+    "owned_process_gpu_peak_bytes": null,
+    "exact_peaks": false,
+    "hard_memory_partition": false,
+    "continuous_coverage": false
+  },
+  "shutdown": {
+    "status": "profiler_exited_descendants_unknown",
+    "returncode": 0,
+    "seconds": 0.8644546717405319,
+    "timed_out": false,
+    "gpu_quiescence": "unverified; no GPU probe"
+  },
+  "wall_seconds": 4.7458356730639935
+}

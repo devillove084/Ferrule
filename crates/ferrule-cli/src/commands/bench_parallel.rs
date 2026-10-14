@@ -16,7 +16,7 @@ pub(crate) fn cmd_bench_parallel(args: BenchParallelArgs) -> anyhow::Result<()> 
 }
 
 #[cfg(any(feature = "cuda", test))]
-mod benchmark {
+pub(crate) mod benchmark {
     #[cfg(test)]
     use std::mem::size_of;
     use std::path::PathBuf;
@@ -40,12 +40,12 @@ mod benchmark {
 
     #[derive(Debug, Deserialize)]
     #[serde(deny_unknown_fields)]
-    struct Fixture {
-        rows: usize,
-        in_features: usize,
-        out_features: usize,
-        weight: Vec<f32>,
-        input: Vec<f32>,
+    pub(crate) struct Fixture {
+        pub(crate) rows: usize,
+        pub(crate) in_features: usize,
+        pub(crate) out_features: usize,
+        pub(crate) weight: Vec<f32>,
+        pub(crate) input: Vec<f32>,
     }
 
     #[derive(Debug, Clone, Copy, Serialize)]
@@ -63,6 +63,8 @@ mod benchmark {
         output_len: usize,
         #[cfg(unix)]
         process: Option<crate::commands::rank_worker::process::Metadata>,
+        #[cfg(unix)]
+        remote: Option<crate::commands::network_rank::implementation::Manifest>,
     }
 
     fn validate(args: &BenchParallelArgs, fixture: &Fixture) -> Result<Validated> {
@@ -163,10 +165,31 @@ mod benchmark {
             max_host_bytes: bytes::<f32>(peak_elements)?,
         };
         bytes::<usize>(args.ranks)?;
-        let devices = args
+        #[cfg(unix)]
+        let remote = args
+            .remote_manifest
+            .as_deref()
+            .map(|path| {
+                let mut manifest =
+                    crate::commands::network_rank::implementation::Manifest::load(path)?;
+                manifest.validate(args, fixture)?;
+                Ok::<_, anyhow::Error>(manifest)
+            })
+            .transpose()?;
+        #[cfg(not(unix))]
+        ensure!(args.remote_manifest.is_none(), "network ranks require Unix");
+        let mut devices = args
             .devices
             .clone()
             .unwrap_or_else(|| (0..args.ranks).collect());
+        #[cfg(unix)]
+        if let Some(manifest) = &remote {
+            devices = manifest
+                .ranks
+                .iter()
+                .map(|r| r.binding.target.device as usize)
+                .collect();
+        }
         ensure!(
             devices.len() == args.ranks,
             "--devices must contain exactly ranks={} ordinals",
@@ -175,7 +198,7 @@ mod benchmark {
         let mut unique = devices.clone();
         unique.sort_unstable();
         ensure!(
-            !unique.windows(2).any(|pair| pair[0] == pair[1]),
+            args.remote_manifest.is_some() || !unique.windows(2).any(|pair| pair[0] == pair[1]),
             "--devices must contain distinct CUDA ordinals"
         );
         ensure!(
@@ -192,6 +215,8 @@ mod benchmark {
             devices,
             collective_limits,
             output_len,
+            #[cfg(unix)]
+            remote,
             #[cfg(unix)]
             process: if args.rank_backend == RankBackend::Process {
                 Some(crate::commands::rank_worker::process::metadata(
@@ -409,7 +434,7 @@ mod benchmark {
         schema_version: u32,
         implementation: &'static str,
         transport: &'static str,
-        rank_backend: RankBackend,
+        rank_backend: &'static str,
         rank_timeout_ms: u64,
         rank_timeout_scope: &'static str,
         rank_restarts: usize,
@@ -418,6 +443,9 @@ mod benchmark {
         #[cfg(unix)]
         #[serde(skip_serializing_if = "Option::is_none")]
         process: Option<crate::commands::rank_worker::process::Metadata>,
+        #[cfg(unix)]
+        #[serde(skip_serializing_if = "Option::is_none")]
+        network: Option<Vec<ferrule_runtime::parallel::network::NetworkBinding>>,
         mode: Mode,
         ranks: usize,
         devices: Vec<usize>,
@@ -461,19 +489,50 @@ mod benchmark {
         Ok(Report {
             schema_version: 1,
             implementation: "ferrule",
-            transport: "host-staged",
-            rank_backend: args.rank_backend,
+            transport: if args.remote_manifest.is_some() {
+                "host-staged-mtls"
+            } else {
+                "host-staged"
+            },
+            rank_backend: if args.remote_manifest.is_some() {
+                "network"
+            } else if args.rank_backend == RankBackend::Process {
+                "process"
+            } else {
+                "thread"
+            },
             rank_timeout_ms: args.rank_timeout_ms,
-            rank_timeout_scope: if args.rank_backend == RankBackend::Process {
+            rank_timeout_scope: if args.remote_manifest.is_some() {
+                "per_owner_mtls_startup_command_shutdown_absolute_deadline"
+            } else if args.rank_backend == RankBackend::Process {
                 "per_owner_startup_command_shutdown_ipc"
             } else {
                 "not_enforced_for_threads"
             },
             rank_restarts: args.rank_restarts,
-            execution_epoch: crate::commands::rank_worker::EXECUTION_EPOCH,
+            execution_epoch: {
+                #[cfg(unix)]
+                {
+                    validated
+                        .remote
+                        .as_ref()
+                        .map_or(crate::commands::rank_worker::EXECUTION_EPOCH, |m| {
+                            m.ranks[0].binding.identity.epoch.get()
+                        })
+                }
+                #[cfg(not(unix))]
+                {
+                    crate::commands::rank_worker::EXECUTION_EPOCH
+                }
+            },
             restarts_attempted: 0,
             #[cfg(unix)]
             process: validated.process.clone(),
+            #[cfg(unix)]
+            network: validated
+                .remote
+                .as_ref()
+                .map(|m| m.ranks.iter().map(|r| r.binding.clone()).collect()),
             mode: args.mode,
             ranks: args.ranks,
             devices: validated.devices.clone(),
@@ -488,7 +547,7 @@ mod benchmark {
             warmup: args.warmup,
             iterations: args.iterations,
             timing,
-            timing_description: "Instant wall time from host submission through all required synchronized host results and transaction publication; includes orchestration/polling, input sharding, H2D/D2H copies, per-call allocation, TP host-staged collective/Apply roundtrip and (process backend) bounded JSON IPC encoding/decoding/validation. Excludes fixture loading, owner/weight initialization, warmup, output verification, shutdown and report serialization. Not kernel-only or CUDA-event timing.",
+            timing_description: "Instant wall time from host submission through all required synchronized host results and transaction publication; includes orchestration/polling, input sharding, H2D/D2H copies, per-call allocation, TP host-staged collective/Apply roundtrip and bounded JSON IPC/mTLS encoding/decoding/validation for process/network ranks. Excludes fixture loading, owner/weight initialization, warmup, output verification, shutdown and report serialization. Not kernel-only or CUDA-event timing.",
             percentile_method: "linear interpolation at (n - 1) * p",
             throughput: Throughput {
                 scope: "host_to_host",
@@ -659,12 +718,33 @@ mod benchmark {
                 in_features: validated.shape.in_features,
                 out_features: validated.shape.out_features,
             };
+            #[cfg(unix)]
+            let remote = validated
+                .remote
+                .as_ref()
+                .map(|m| {
+                    m.prepare(&Fixture {
+                        rows: spec_base.rows,
+                        in_features: spec_base.in_features,
+                        out_features: spec_base.out_features,
+                        weight: weight.to_vec(),
+                        input: input.to_vec(),
+                    })
+                })
+                .transpose()?;
             let backend = args.rank_backend;
             let timeout_ms = args.rank_timeout_ms;
             let mut pool = DpPool::new(pool_config(args.ranks), move |rank: ParallelRankId| {
                 let mut spec = spec_base;
                 spec.rank = rank.get();
                 spec.device = devices[rank.get() as usize];
+                #[cfg(unix)]
+                if let Some(remote) = &remote {
+                    return remote[rank.get() as usize]
+                        .connect()
+                        .map(Box::new)
+                        .map(RankWorker::Network);
+                }
                 RankWorker::new(backend, timeout_ms, spec, &weight)
             })
             .map_err(runtime_error)?;
@@ -709,6 +789,20 @@ mod benchmark {
                 in_features: validated.shape.in_features,
                 out_features: validated.shape.out_features,
             };
+            #[cfg(unix)]
+            let remote = validated
+                .remote
+                .as_ref()
+                .map(|m| {
+                    m.prepare(&Fixture {
+                        rows: spec_base.rows,
+                        in_features: spec_base.in_features,
+                        out_features: spec_base.out_features,
+                        weight: weight.to_vec(),
+                        input: input.to_vec(),
+                    })
+                })
+                .transpose()?;
             let backend = args.rank_backend;
             let timeout_ms = args.rank_timeout_ms;
             let mut executor = TensorParallelExecutor::<RankWorker>::new(
@@ -720,6 +814,13 @@ mod benchmark {
                     let mut spec = spec_base;
                     spec.rank = rank.local.get();
                     spec.device = devices[rank.local.get() as usize];
+                    #[cfg(unix)]
+                    if let Some(remote) = &remote {
+                        return remote[rank.local.get() as usize]
+                            .connect()
+                            .map(Box::new)
+                            .map(RankWorker::Network);
+                    }
                     RankWorker::new(backend, timeout_ms, spec, &weight)
                 },
                 ParallelGroupId::new(1),
@@ -761,8 +862,16 @@ mod benchmark {
         pub(crate) fn run(args: BenchParallelArgs) -> Result<()> {
             let file = File::open(&args.fixture)
                 .with_context(|| format!("open fixture {}", args.fixture.display()))?;
-            let fixture: Fixture =
-                serde_json::from_reader(BufReader::new(file)).context("parse fixture JSON")?;
+            use std::io::Read;
+            let mut bytes = Vec::new();
+            BufReader::new(file)
+                .take((64 << 20) + 1)
+                .read_to_end(&mut bytes)?;
+            ensure!(
+                bytes.len() <= 64 << 20,
+                "linear fixture exceeds 64 MiB byte limit"
+            );
+            let fixture: Fixture = serde_json::from_slice(&bytes).context("parse fixture JSON")?;
             let validated = validate(&args, &fixture)?;
 
             eprintln!(

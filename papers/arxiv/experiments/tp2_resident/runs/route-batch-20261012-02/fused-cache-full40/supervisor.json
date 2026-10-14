@@ -1,0 +1,68 @@
+{
+  "returncode": 0,
+  "timed_out": false,
+  "wall_seconds": 341.87967152521014,
+  "stdout": "",
+  "stderr": "",
+  "cleanup_errors": [],
+  "cleanup_scope": "isolated_subreaper_direct_children",
+  "descendant_custody": "proven_drained",
+  "gpu_quiescence": "unverified",
+  "custody": {
+    "status": "proven_drained",
+    "method": "linux-subreaper-waitid",
+    "containment_verified": true,
+    "launch_id": "9ea7001406674e7081916d2686a44ae9",
+    "helper_identity": {
+      "pid": 251307,
+      "birth_ticks": 104907788,
+      "ppid": 251273,
+      "pgrp": 251307,
+      "session": 251307
+    },
+    "root_identity": {
+      "pid": 251308,
+      "birth_ticks": 104907791,
+      "ppid": 251307,
+      "pgrp": 251307,
+      "session": 251307
+    },
+    "boot_id": "4dd3497d-570c-4693-a876-5c26e06ab360",
+    "entries": [
+      {
+        "identity": {
+          "pid": 251308,
+          "birth_ticks": 104907791,
+          "ppid": 251307,
+          "pgrp": 251307,
+          "session": 251307
+        },
+        "role": "root",
+        "signals": [],
+        "reaped": true,
+        "exit_code": 0,
+        "first_observed_at": 8685198.265398718,
+        "reaped_at": 8685540.058886096
+      }
+    ],
+    "errors": [],
+    "reporting_errors": [],
+    "echild": true
+  },
+  "handshake": {
+    "kind": "ready",
+    "protocol": 1,
+    "launch_id": "9ea7001406674e7081916d2686a44ae9",
+    "helper_identity": {
+      "pid": 251307,
+      "birth_ticks": 104907788,
+      "ppid": 251273,
+      "pgrp": 251307,
+      "session": 251307
+    },
+    "containment_verified": true,
+    "method": "linux-subreaper-waitid"
+  },
+  "stdout_truncated": false,
+  "stderr_truncated": false
+}

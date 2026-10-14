@@ -9,11 +9,11 @@ use std::io;
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 
-/// Filesystem identity captured when an checkpoint catalog is built.
+/// Bounded metadata identity captured when a checkpoint catalog is built.
 ///
 /// Length and modification time are the stable cross-platform fallback. Unix
-/// device/inode coordinates additionally distinguish replacements that preserve
-/// those fallback fields.
+/// device/inode and ctime coordinates also detect same-inode rewrites with
+/// restored mtime. This is not payload hashing or a filesystem coherence guarantee.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) struct CheckpointFileIdentity {
     length: u64,
@@ -21,6 +21,7 @@ pub(crate) struct CheckpointFileIdentity {
     modified_nanos: u32,
     device: Option<u64>,
     inode: Option<u64>,
+    change_time: Option<(i64, u32)>,
 }
 
 impl CheckpointFileIdentity {
@@ -31,12 +32,29 @@ impl CheckpointFileIdentity {
         #[cfg(not(unix))]
         let (device, inode) = (None, None);
 
+        #[cfg(unix)]
+        let change_time = Some((
+            metadata.ctime(),
+            u32::try_from(metadata.ctime_nsec())
+                .ok()
+                .filter(|nanos| *nanos < 1_000_000_000)
+                .ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "checkpoint change nanoseconds are outside the timestamp domain",
+                    )
+                })?,
+        ));
+        #[cfg(not(unix))]
+        let change_time = None;
+
         Ok(Self {
             length: metadata.len(),
             modified_seconds,
             modified_nanos,
             device,
             inode,
+            change_time,
         })
     }
 
@@ -45,6 +63,7 @@ impl CheckpointFileIdentity {
     }
 
     pub(crate) fn update_hash(self, hasher: &mut Sha256) {
+        hasher.update(b"ferrule-checkpoint-file-metadata-v2");
         hasher.update(&self.length.to_be_bytes());
         hasher.update(&self.modified_seconds.to_be_bytes());
         hasher.update(&self.modified_nanos.to_be_bytes());
@@ -55,6 +74,14 @@ impl CheckpointFileIdentity {
                 hasher.update(&inode.to_be_bytes());
             }
             _ => hasher.update(&[0]),
+        }
+        match self.change_time {
+            Some((seconds, nanos)) => {
+                hasher.update(&[1]);
+                hasher.update(&seconds.to_be_bytes());
+                hasher.update(&nanos.to_be_bytes());
+            }
+            None => hasher.update(&[0]),
         }
     }
 
@@ -72,6 +99,7 @@ impl CheckpointFileIdentity {
             modified_nanos,
             device,
             inode,
+            change_time: None,
         }
     }
 }
@@ -355,3 +383,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/checkpoint_read_pipeline/hash.rs"]
+mod metadata_tests;

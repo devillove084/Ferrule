@@ -1,6 +1,6 @@
 #![cfg(feature = "cuda")]
 
-use ferrule_backend::cuda::context::{CudaF32Buffer, CudaOperators};
+use ferrule_backend::cuda::operator_owner::{CudaF32Buffer, CudaOperators};
 use ferrule_backend::cuda::operators::recurrent::*;
 
 fn buffers(

@@ -1,0 +1,19 @@
+{
+  "timestamp_unix": 1791695215.8740523,
+  "sole_gpu_owner_granted": true,
+  "owner_note": "User explicit sole GPU owner authorization 2026-10-11: fixed 7e1c S1/S2 then two crossed 9ef/7e1c cycles only; no profile, no foreign kill",
+  "scope": [
+    "same_binary_S1_S2",
+    "crossed_cycle_1_BEFORE_AFTER",
+    "crossed_cycle_2_AFTER_BEFORE"
+  ],
+  "profile_authorized": false,
+  "no_foreign_kill": true,
+  "prepared_sha256": "63531f55af6c103dea43d94901711ad44b3f635adcc75713499a6a8557636a27",
+  "selected_uuids": [
+    "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+    "GPU-63f1bd01-ddf9-a742-ee48-9389892493d9"
+  ],
+  "cuda_visible_devices": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535,GPU-63f1bd01-ddf9-a742-ee48-9389892493d9",
+  "no_prior_launch_artifacts": true
+}

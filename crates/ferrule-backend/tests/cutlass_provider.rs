@@ -717,7 +717,7 @@ fn cuda_hybrid_mla_attention_matches_full_block_reference() {
         let mut output = vec![0.0f32; ROWS * HEADS * DIM];
         for row in 0..ROWS {
             let visible_block = block_rows_visible(row);
-            for head in 0..HEADS {
+            for (head, sink_value) in sink[..HEADS].iter().enumerate() {
                 let q_base = (row * HEADS + head) * DIM;
                 let mut scores = Vec::with_capacity(context_tokens + visible_block);
                 for token in 0..context_tokens + visible_block {
@@ -769,7 +769,7 @@ fn cuda_hybrid_mla_attention_matches_full_block_reference() {
                     }
                     running_maximum = next_maximum;
                 }
-                denominator += (sink[head] - running_maximum).exp();
+                denominator += (*sink_value - running_maximum).exp();
                 for dim in 0..DIM {
                     output[q_base + dim] = bf16_boundary(accumulator[dim] / denominator);
                 }
@@ -1383,9 +1383,11 @@ fn explicit_selection_attention_sink() -> Vec<f32> {
         .collect()
 }
 
+type ExplicitSelectionStressInputs = (Vec<f32>, Vec<f32>, Vec<i32>, Vec<f32>, Vec<f32>, Vec<i32>);
+
 fn hybrid_mla_explicit_selection_contiguous_stress_inputs(
     selected_width: usize,
-) -> (Vec<f32>, Vec<f32>, Vec<i32>, Vec<f32>, Vec<f32>, Vec<i32>) {
+) -> ExplicitSelectionStressInputs {
     const ROWS: usize = 1;
     const KV_LEN: usize = 97;
 
@@ -1414,8 +1416,8 @@ fn hybrid_mla_explicit_selection_contiguous_stress_inputs(
         .collect::<Vec<_>>();
     let (gathered, valid) =
         explicit_selection_contiguous_gather(&values, &selected_indices, ROWS, selected_width);
-    assert!(valid.iter().any(|&entry| entry == 0));
-    assert!(valid.iter().any(|&entry| entry == 1));
+    assert!(valid.contains(&0));
+    assert!(valid.contains(&1));
     (
         query,
         values,
@@ -1754,57 +1756,59 @@ fn cuda_hybrid_mla_explicit_selection_latency() {
                     .expect("allocate benchmark status");
                 let start = context.new_event(true).expect("create CUDA start event");
                 let end = context.new_event(true).expect("create CUDA end event");
-                let mut buffers = hybrid::HybridMlaExplicitSelectionBuffers {
-                    query: &query,
-                    first_plane: &values,
-                    second_plane: None,
-                    block_slots: None,
-                    block_offsets: None,
-                    sequence_kv_lens: None,
-                    second_sequence_kv_lens: None,
-                    row_sequence_ids: None,
-                    row_kv_lens: None,
-                    row_second_kv_lens: None,
-                    selected_indices: &selected_indices,
-                    selectors: None,
-                    attention_sink: &attention_sink,
-                    workspace: &mut workspace,
-                    output: &mut output,
-                    status: &mut status,
-                };
+                let total_ms = {
+                    let mut buffers = hybrid::HybridMlaExplicitSelectionBuffers {
+                        query: &query,
+                        first_plane: &values,
+                        second_plane: None,
+                        block_slots: None,
+                        block_offsets: None,
+                        sequence_kv_lens: None,
+                        second_sequence_kv_lens: None,
+                        row_sequence_ids: None,
+                        row_kv_lens: None,
+                        row_second_kv_lens: None,
+                        selected_indices: &selected_indices,
+                        selectors: None,
+                        attention_sink: &attention_sink,
+                        workspace: &mut workspace,
+                        output: &mut output,
+                        status: &mut status,
+                    };
 
-                for warmup in 0..warmup_iterations {
-                    hybrid::hybrid_mla_explicit_selection_launch(&stream, &mut buffers, layout)
-                        .unwrap_or_else(|error| {
-                            panic!(
-                                "warmup explicit-selection launch {warmup}/{warmup_iterations} \
+                    for warmup in 0..warmup_iterations {
+                        hybrid::hybrid_mla_explicit_selection_launch(&stream, &mut buffers, layout)
+                            .unwrap_or_else(|error| {
+                                panic!(
+                                    "warmup explicit-selection launch {warmup}/{warmup_iterations} \
                                  rows={rows} selected_width={selected_width}: {error}"
-                            )
-                        });
-                }
-                stream
-                    .synchronize()
-                    .expect("synchronize CUDA explicit-selection warmup");
+                                )
+                            });
+                    }
+                    stream
+                        .synchronize()
+                        .expect("synchronize CUDA explicit-selection warmup");
 
-                start.record(&stream).expect("record CUDA start event");
-                for iteration in 0..timed_iterations {
-                    hybrid::hybrid_mla_explicit_selection_launch(&stream, &mut buffers, layout)
+                    start.record(&stream).expect("record CUDA start event");
+                    for iteration in 0..timed_iterations {
+                        hybrid::hybrid_mla_explicit_selection_launch(&stream, &mut buffers, layout)
                         .unwrap_or_else(|error| {
                             panic!(
                                 "timed explicit-selection launch {iteration}/{timed_iterations} \
                                  rows={rows} selected_width={selected_width}: {error}"
                             )
                         });
-                }
-                end.record(&stream).expect("record CUDA end event");
-                end.synchronize().expect("synchronize CUDA end event");
-                let total_ms = f64::from(
-                    start
-                        .elapsed(&end)
-                        .expect("measure CUDA explicit-selection events"),
-                );
-                assert!(total_ms > 0.0, "CUDA event interval must be positive");
-                drop(buffers);
+                    }
+                    end.record(&stream).expect("record CUDA end event");
+                    end.synchronize().expect("synchronize CUDA end event");
+                    let total_ms = f64::from(
+                        start
+                            .elapsed(&end)
+                            .expect("measure CUDA explicit-selection events"),
+                    );
+                    assert!(total_ms > 0.0, "CUDA event interval must be positive");
+                    total_ms
+                };
 
                 let label = format!(
                     "hybrid MLA explicit selection latency rows={rows} \
@@ -2135,12 +2139,12 @@ fn cuda_hybrid_mla_explicit_selection_multi_row_paged_workspace_stress() {
         Some(&dual_selectors),
         dual_gather_layout,
     );
-    assert!(paged_valid.iter().any(|&valid| valid == 0));
-    assert!(paged_valid.iter().any(|&valid| valid == 1));
-    assert!(dual_valid.iter().any(|&valid| valid == 0));
-    assert!(dual_valid.iter().any(|&valid| valid == 1));
-    assert!(dual_selectors.iter().any(|&selector| selector == 0));
-    assert!(dual_selectors.iter().any(|&selector| selector == 1));
+    assert!(paged_valid.contains(&0));
+    assert!(paged_valid.contains(&1));
+    assert!(dual_valid.contains(&0));
+    assert!(dual_valid.contains(&1));
+    assert!(dual_selectors.contains(&0));
+    assert!(dual_selectors.contains(&1));
 
     let paged_query_host = explicit_selection_query(PAGED_ROWS);
     let dual_query_host = explicit_selection_query(DUAL_ROWS);
@@ -2317,29 +2321,30 @@ fn cuda_hybrid_mla_explicit_selection_multi_row_paged_workspace_stress() {
         let mut oracle_output_view = oracle_output
             .slice(0, output_values)
             .unwrap_or_else(|error| panic!("{label}: oracle output view: {error}"));
-        let mut buffers = hybrid::HybridMlaExplicitSelectionBuffers {
-            query,
-            #[cfg(ferrule_cuda_test_oracle)]
-            oracle_output: &mut oracle_output_view,
-            first_plane: &first_plane,
-            second_plane,
-            block_slots: Some(&block_slots),
-            block_offsets: Some(&block_offsets),
-            sequence_kv_lens: Some(&sequence_kv_lens),
-            second_sequence_kv_lens,
-            row_sequence_ids: Some(row_sequence_ids),
-            row_kv_lens: Some(row_kv_lens),
-            row_second_kv_lens,
-            selected_indices,
-            selectors,
-            attention_sink: &attention_sink,
-            workspace: &mut workspace,
-            output: &mut output_view,
-            status: &mut status,
-        };
-        hybrid::hybrid_mla_explicit_selection_launch(&stream, &mut buffers, layout)
-            .unwrap_or_else(|error| panic!("{label}: launch failed: {error}"));
-        drop(buffers);
+        {
+            let mut buffers = hybrid::HybridMlaExplicitSelectionBuffers {
+                query,
+                #[cfg(ferrule_cuda_test_oracle)]
+                oracle_output: &mut oracle_output_view,
+                first_plane: &first_plane,
+                second_plane,
+                block_slots: Some(&block_slots),
+                block_offsets: Some(&block_offsets),
+                sequence_kv_lens: Some(&sequence_kv_lens),
+                second_sequence_kv_lens,
+                row_sequence_ids: Some(row_sequence_ids),
+                row_kv_lens: Some(row_kv_lens),
+                row_second_kv_lens,
+                selected_indices,
+                selectors,
+                attention_sink: &attention_sink,
+                workspace: &mut workspace,
+                output: &mut output_view,
+                status: &mut status,
+            };
+            hybrid::hybrid_mla_explicit_selection_launch(&stream, &mut buffers, layout)
+                .unwrap_or_else(|error| panic!("{label}: launch failed: {error}"));
+        }
 
         assert_eq!(
             status
@@ -2859,7 +2864,7 @@ fn cuda_bf16_compressor_is_one_launch_and_numerically_exact() {
     const N1: usize = 16;
     const N2: usize = 32;
     let activation =
-        DeviceBuffer::from_host(&stream, &vec![1.0f32; ROWS * K]).expect("upload BF16 activation");
+        DeviceBuffer::from_host(&stream, &[1.0f32; ROWS * K]).expect("upload BF16 activation");
     let one_bf16 = 0x3f80u16.to_ne_bytes();
     let projection1_weight = DeviceBuffer::from_host(&stream, &one_bf16.repeat(N1 * K))
         .expect("upload projection1 weight");
@@ -2913,7 +2918,7 @@ fn cuda_fp8_query_a_kv_is_one_launch_and_numerically_exact() {
     let activation =
         DeviceBuffer::from_host(&stream, &vec![0x38u8; ROWS * K]).expect("upload FP8 activation");
     let activation_scales =
-        DeviceBuffer::from_host(&stream, &vec![127u8; ROWS]).expect("upload activation scales");
+        DeviceBuffer::from_host(&stream, &[127u8; ROWS]).expect("upload activation scales");
     let query_a_weight =
         DeviceBuffer::from_host(&stream, &vec![0x38u8; N1 * K]).expect("upload QueryA weight");
     let query_a_scales = DeviceBuffer::from_host(&stream, &[127u8]).expect("upload QueryA scales");

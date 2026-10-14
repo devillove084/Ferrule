@@ -1,0 +1,83 @@
+{
+  "argv": [
+    "/home/admin/wxw403883/anaconda3/bin/python3.12",
+    "-S",
+    "-B",
+    "-m",
+    "unittest",
+    "discover",
+    "-s",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident",
+    "-p",
+    "test_decoded_cache_gate.py",
+    "-v"
+  ],
+  "supervisor": {
+    "returncode": 0,
+    "timed_out": false,
+    "wall_seconds": 0.3423541598021984,
+    "stdout": "",
+    "stderr": "",
+    "cleanup_errors": [],
+    "cleanup_scope": "isolated_subreaper_direct_children",
+    "descendant_custody": "proven_drained",
+    "gpu_quiescence": "unverified",
+    "custody": {
+      "status": "proven_drained",
+      "method": "linux-subreaper-waitid",
+      "containment_verified": true,
+      "launch_id": "13351c5ceeee4291a9ddb5ebf18e14ac",
+      "helper_identity": {
+        "pid": 148690,
+        "birth_ticks": 97195463,
+        "ppid": 148436,
+        "pgrp": 148690,
+        "session": 148690
+      },
+      "root_identity": {
+        "pid": 148691,
+        "birth_ticks": 97195466,
+        "ppid": 148690,
+        "pgrp": 148690,
+        "session": 148690
+      },
+      "boot_id": "4dd3497d-570c-4693-a876-5c26e06ab360",
+      "entries": [
+        {
+          "identity": {
+            "pid": 148691,
+            "birth_ticks": 97195466,
+            "ppid": 148690,
+            "pgrp": 148690,
+            "session": 148690
+          },
+          "role": "root",
+          "signals": [],
+          "reaped": true,
+          "exit_code": 0,
+          "first_observed_at": 8608075.015031848,
+          "reaped_at": 8608075.318079721
+        }
+      ],
+      "errors": [],
+      "reporting_errors": [],
+      "echild": true
+    },
+    "handshake": {
+      "kind": "ready",
+      "protocol": 1,
+      "launch_id": "13351c5ceeee4291a9ddb5ebf18e14ac",
+      "helper_identity": {
+        "pid": 148690,
+        "birth_ticks": 97195463,
+        "ppid": 148436,
+        "pgrp": 148690,
+        "session": 148690
+      },
+      "containment_verified": true,
+      "method": "linux-subreaper-waitid"
+    },
+    "stdout_truncated": false,
+    "stderr_truncated": false
+  }
+}

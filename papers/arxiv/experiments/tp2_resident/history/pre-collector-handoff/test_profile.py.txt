@@ -1,0 +1,86 @@
+"""CPU fixtures only: no GPU, profiler or server launched."""
+import json
+from pathlib import Path
+import signal
+import sys
+import tempfile
+import unittest
+from unittest import mock
+
+sys.path.insert(0,str(Path(__file__).resolve().parent))
+import paired as p
+pre = p.pre_serving
+
+
+class ProfileHooks(unittest.TestCase):
+    def test_same_sealed_process_loop_one_slot_quality_before_capture(self):
+        m = p.lifecycle(Path('/not-created'),'ferrule','fixture','profiling')
+        self.assertEqual(m.run.__code__.co_code,p.baseline.run.__code__.co_code)
+        self.assertEqual(m.worker.__code__.co_code,p.baseline.worker.__code__.co_code)
+        self.assertEqual(m.requests.__code__.co_code,p.baseline.requests.__code__.co_code)
+        self.assertIs(m.base.supervisor,p.base.supervisor)
+        self.assertEqual(m.PROTOCOL['phases'],['hello2','canary8','profile'])
+        self.assertEqual(m.PROTOCOL['all_requests_seconds'],440)
+        self.assertEqual(p.experiment_slots('profiling'),('P1',))
+        self.assertIs(m.shared.request_block,pre.profile_request_block)
+
+    def test_profiler_targets_exact_binary_uses_existing_graceful_wrapper(self):
+        with tempfile.TemporaryDirectory(dir=p.HERE) as name:
+            case=Path(name)
+            target=['/immutable/release','serve','/model','--tensor-parallel','2']
+            argv=pre.profile_server_argv(target,case)
+            self.assertEqual(argv[-len(target):],target)
+            self.assertIn(str(p.ct.ROOT/'scripts/_profile_capture.py'),argv)
+            for flag in ('--start-later=true','--kill=none','--trace=cuda,nvtx,osrt',
+                         '--sample=none','--cpuctxsw=none','--duration=240'):
+                self.assertIn(flag,argv)
+            self.assertNotIn('--gpu-metrics-devices=all',argv)
+            for flag in pre.instrumentation_scope.SCOPE_FLAGS:
+                self.assertIn(flag,argv)
+            self.assertNotIn('FERRULE_MIXED_CAPTURE', ' '.join(argv))
+
+    def test_raw_frozen_qa8_and_outer_alarm_restored(self):
+        ref=p.shared.references()[0][0]
+        with tempfile.TemporaryDirectory(dir=p.HERE) as name:
+            def request(config,emit):
+                self.assertEqual(config['payload']['prompt'],ref['prompt'])
+                self.assertEqual(config['payload']['max_tokens'],8)
+                emit(dict(kind='end',status='success'))
+            stream=mock.Mock()
+            stream.metrics.return_value=dict(text=ref['reference_text'],actual_input_tokens=5,actual_output_tokens=8)
+            before=signal.getsignal(signal.SIGALRM)
+            with mock.patch.object(pre.http,'http_request',side_effect=request),mock.patch.object(pre.http,'Stream',return_value=stream):
+                row=pre.profile_http_one(Path(name),{'spec':{'url':'http://127.0.0.1','model':'same'}},'warmup')
+            self.assertTrue(row['passed'])
+            self.assertEqual(signal.getsignal(signal.SIGALRM),before)
+            self.assertIn('unix_ns',row['start_clock'])
+
+    def test_warm_failure_stops_measured_and_always_stops_collection(self):
+        with tempfile.TemporaryDirectory(dir=p.HERE) as name:
+            d=Path(name)/'profile';d.mkdir()
+            p.ct.write(d.parent/'profile-server.json',{'pid':123})
+            controls=[]
+            with mock.patch.object(p.baseline.observer,'proc_identity',return_value={'pid':123}), \
+                    mock.patch.object(pre,'profiler_control',side_effect=lambda d,p,a:controls.append(a) or {'returncode':0}), \
+                    mock.patch.object(pre,'profile_http_one',return_value={'passed':False}) as request:
+                with self.assertRaisesRegex(ValueError,'canary failed'):
+                    pre.profile_request_block(d,{},'profile')
+            self.assertEqual(controls,['start','stop'])
+            request.assert_called_once()
+            self.assertEqual(p.ct.load(d/'profile-window.json')['status'],'incomplete')
+
+    def test_readiness_marker_uses_existing_wait_and_notifies_observer(self):
+        guard=mock.Mock()
+        with mock.patch.object(p.baseline.http,'wait_ready',return_value=123.5) as ready:
+            self.assertEqual(p.readiness_marker({'engine':'ferrule'},guard,900),123.5)
+        ready.assert_called_once_with({'engine':'ferrule'},guard,900)
+        guard.monitor.mark_ready.assert_called_once_with(123.5)
+
+    def test_missing_owner_cannot_launch_profiler(self):
+        with mock.patch.object(p,'strict_gate'),mock.patch.object(p,'validate_pair') as validate:
+            with self.assertRaisesRegex(ValueError,'sole-owner'):
+                p.run('not-launched',purpose='profiling')
+            validate.assert_not_called()
+
+
+if __name__=='__main__':unittest.main()

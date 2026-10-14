@@ -1,0 +1,8 @@
+{
+  "case": "capital",
+  "epoch": 0,
+  "frontier": 0,
+  "op": "create",
+  "runtime_session": 2,
+  "session": "canary"
+}

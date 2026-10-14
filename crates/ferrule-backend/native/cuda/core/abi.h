@@ -1,6 +1,7 @@
 #ifndef FERRULE_CUDA_ABI_CORE_PROVIDER_H_
 #define FERRULE_CUDA_ABI_CORE_PROVIDER_H_
 
+#include "core/recurrent_bf16_abi.h"
 #include <stddef.h>
 #include <stdint.h>
 
@@ -114,11 +115,14 @@ typedef enum FerruleCoreDataKind {
   FERRULE_CORE_DATA_QUERY_GATE_SPLIT = 13,
   FERRULE_CORE_DATA_SIGMOID_GATE = 14,
   FERRULE_CORE_DATA_SILU_GATE = 15,
+  /* BF16 input/logits/output; sigmoid is rounded before multiplication. */
+  FERRULE_CORE_DATA_SIGMOID_GATE_BF16 = 16,
 } FerruleCoreDataKind;
 
-/* SIGMOID_GATE/SILU_GATE only: flags=0 means elementwise. Row broadcast
- * requires count=rows*width and gate input1 has exactly rows F32 logits.
- * The typed caller validates buffer lengths/owners and disjoint write ranges.
+/* SIGMOID_GATE/SILU_GATE/SIGMOID_GATE_BF16: flags=0 means elementwise.
+ * Row broadcast requires count=rows*width and input1 has exactly rows logits.
+ * SIGMOID_GATE_BF16 uses BF16 storage for both inputs and output; other gates
+ * use F32. The typed caller checks exact lengths/owners and disjoint writes.
  */
 typedef enum FerruleCoreGateFlags {
   FERRULE_CORE_GATE_ROW_BROADCAST = 1,
@@ -282,6 +286,7 @@ typedef enum FerruleCoreRouterKind {
   FERRULE_CORE_VOCAB_TOPK_F32_INDEX = 3,
   FERRULE_CORE_VOCAB_TOPK_I32_INDEX = 4,
   FERRULE_CORE_ROUTER_SELECTED_SOFTMAX_TOPK = 5,
+  FERRULE_CORE_ROUTER_FULL_SOFTMAX_TOPK = 6,
 } FerruleCoreRouterKind;
 
 typedef struct FerruleCoreRouterArgs {
@@ -300,6 +305,8 @@ typedef struct FerruleCoreRouterArgs {
   uint64_t hash_table;
   uint64_t indices;
   uint64_t weights;
+  /* Optional full-softmax probability output, rows * columns F32. */
+  uint64_t probabilities;
   uint64_t stream;
 } FerruleCoreRouterArgs;
 
@@ -468,6 +475,8 @@ typedef enum FerruleCoreMoeKind {
   FERRULE_CORE_MOE_SWIGLU_STANDARD_F32 = 11,
   FERRULE_CORE_MOE_WEIGHTED_COMBINE_F32 = 12,
   FERRULE_CORE_MOE_SWIGLU_CLAMPED_F32 = 13,
+  /* BF16 route projections/output, F32 weights; round contribution and each add. */
+  FERRULE_CORE_MOE_WEIGHTED_COMBINE_BF16 = 14,
 } FerruleCoreMoeKind;
 
 typedef struct FerruleCoreMoeArgs {
@@ -628,6 +637,25 @@ typedef struct FerruleCoreTransformerArgs {
   uint64_t stream;
 } FerruleCoreTransformerArgs;
 
+typedef struct FerruleCoreStreamingGqaArgs {
+  uint32_t rows;
+  uint32_t q_heads;
+  uint32_t kv_heads;
+  uint32_t head_dim;
+  uint32_t tokens;
+  float softmax_scale;
+  uint64_t query;
+  uint64_t key;
+  uint64_t value;
+  uint64_t partial;
+  uint64_t query_start;
+  uint64_t kv_start;
+  uint64_t window;
+  uint64_t stream;
+} FerruleCoreStreamingGqaArgs;
+
+int32_t ferrule_core_streaming_gqa_launch(const FerruleCoreStreamingGqaArgs *args);
+
 int32_t ferrule_core_linear_launch(const FerruleCoreLinearArgs *args);
 int32_t ferrule_core_dual_linear_launch(const FerruleCoreDualLinearArgs *args);
 int32_t
@@ -686,7 +714,7 @@ static_assert(offsetof(FerruleCoreRopeArgs, inverse) == 32,
               "FerruleCoreRopeArgs inverse offset mismatch");
 static_assert(offsetof(FerruleCoreRopeArgs, restore_bf16_boundary) == 36,
               "FerruleCoreRopeArgs BF16 boundary offset mismatch");
-FERRULE_CORE_ASSERT_LAYOUT(FerruleCoreRouterArgs, 96, kind, logits, 40, 88);
+FERRULE_CORE_ASSERT_LAYOUT(FerruleCoreRouterArgs, 104, kind, logits, 40, 96);
 FERRULE_CORE_ASSERT_LAYOUT(FerruleCoreCompressorArgs, 96, kind, kv_input, 40,
                            88);
 FERRULE_CORE_ASSERT_LAYOUT(FerruleCoreIndexerArgs, 200, rows, query, 80, 192);
@@ -728,6 +756,8 @@ static_assert(offsetof(FerruleCoreTransformerArgs, output_f32) == 320,
               "FerruleCoreTransformerArgs output offset mismatch");
 static_assert(offsetof(FerruleCoreTransformerArgs, status_i32) == 352,
               "FerruleCoreTransformerArgs status offset mismatch");
+
+FERRULE_CORE_ASSERT_LAYOUT(FerruleCoreStreamingGqaArgs, 88, rows, query, 24, 80);
 
 #undef FERRULE_CORE_ASSERT_LAYOUT
 #endif

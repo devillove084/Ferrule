@@ -1,0 +1,16 @@
+% Representative ordering, not a trace asserting fully asynchronous overlap.
+\begin{figure}[tbp]
+  \centering
+  \includegraphics[width=\linewidth]{figures/transaction-lifecycle.pdf}
+  \caption{Conceptual successful lifecycle for a selected prepared-KV owner.
+  Control, provider, execution and retained custody are separate lanes. The
+  provisional in-memory journal exists before backend preparation can submit
+  work, even without a returned handle. Candidate readiness is later validation,
+  not journal creation; exact generation-matched installation ACKs precede
+  publication on this path. Producer completion establishes readiness, not
+  consumer retirement. Claim release still requires the relevant final fences
+  and scoped quiescence. Cancel, failure and timeout are not fences; cancellation
+  cannot undo irreversible publication. The ordering establishes neither
+  hardware overlap, durable ACID, nor a universal or cross-rank commit protocol.}
+  \label{fig:transaction-lifecycle}
+\end{figure}

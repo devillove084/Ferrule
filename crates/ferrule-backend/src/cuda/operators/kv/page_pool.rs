@@ -1,8 +1,10 @@
 //! Model-independent, multi-plane physical KV page storage.
 //!
-//! Every plane owns one fixed-capacity device buffer. Runtime page IDs map to
-//! fixed-size slot ranges inside those buffers. Reservations remain invisible
-//! until commit, so allocation or copy failures preserve the previous view.
+//! The default owns one fixed-capacity device buffer per plane. The transactional
+//! owner can opt into independently allocated page/plane chunks with bounded
+//! Entry staging. Runtime page mappings and slot epochs remain authoritative.
+
+mod chunked;
 
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
@@ -12,7 +14,7 @@ use ferrule_common::execution::{
 };
 use ferrule_common::{Error, Result};
 
-use crate::cuda::context::{CudaBf16Buffer, CudaF32Buffer, CudaI32Buffer, CudaOperators};
+use crate::cuda::operator_owner::{CudaBf16Buffer, CudaF32Buffer, CudaI32Buffer, CudaOperators};
 use crate::cuda::runtime;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -555,15 +557,20 @@ impl CudaKvPlaneStorage {
     }
 }
 
-/// Fixed-capacity CUDA KV page pool with one contiguous typed buffer per plane.
+/// Fixed logical-capacity CUDA KV storage. Public low-level construction uses
+/// contiguous planes; the transactional wrapper also supports private chunks.
 pub struct CudaKvPagePool {
     planes: Box<[KvPlaneDescriptor]>,
     layout: PageLayout,
     plane_storage: Vec<CudaKvPlaneStorage>,
+    chunks: Option<Vec<Vec<CudaF32Buffer>>>,
+    staging_page_limit: usize,
+    chunk_dma: Option<chunked::ChunkHostTransfer>,
     metadata: MetadataState,
     pending: HashMap<u64, PendingReservation>,
     snapshots: HashMap<KvPageId, StoredKvHostSnapshot>,
     next_token: u64,
+    slot_epochs: Vec<u64>,
 }
 
 impl CudaKvPagePool {
@@ -596,10 +603,14 @@ impl CudaKvPagePool {
             planes: planes.to_vec().into_boxed_slice(),
             layout,
             plane_storage,
+            chunks: None,
+            staging_page_limit: 0,
+            chunk_dma: None,
             metadata: MetadataState::with_slots(max_slots),
             pending: HashMap::new(),
             snapshots: HashMap::new(),
             next_token: 1,
+            slot_epochs: vec![0; max_slots],
         })
     }
 
@@ -673,6 +684,10 @@ impl CudaKvPagePool {
 
     pub fn plane_storage_bytes(&self, plane: usize) -> Option<usize> {
         Some(self.typed_plane_storage(plane)?.byte_len())
+    }
+
+    pub(super) fn slot_epoch(&self, slot: u32) -> Option<u64> {
+        self.slot_epochs.get(slot as usize).copied()
     }
 
     pub fn physical_slot(&self, page: KvPageId) -> Option<u32> {
@@ -1303,7 +1318,10 @@ impl CudaKvPagePool {
             resident_pages,
             pending_pages,
             free_slots,
-            allocated_bytes: allocated_slots.saturating_mul(self.layout.bytes_per_slot),
+            allocated_bytes: self.chunks.as_ref().map_or_else(
+                || allocated_slots.saturating_mul(self.layout.bytes_per_slot),
+                |chunks| chunks.iter().flatten().map(|b| b.len() * 4).sum(),
+            ),
             resident_bytes: resident_pages.saturating_mul(self.layout.bytes_per_slot),
             utilization: resident_pages as f64 / allocated_slots as f64,
             external_fragmentation,
@@ -1318,8 +1336,17 @@ impl CudaKvPagePool {
                 "CUDA transaction exceeds free physical slots (including shadows)",
             ));
         }
+        for &slot in self.metadata.free_slots.iter().rev().take(count) {
+            self.slot_epochs[slot as usize]
+                .checked_add(1)
+                .ok_or_else(|| pool_error("physical slot epoch exhausted"))?;
+        }
         Ok((0..count)
-            .map(|_| self.metadata.free_slots.pop().expect("checked capacity"))
+            .map(|_| {
+                let slot = self.metadata.free_slots.pop().expect("checked capacity");
+                self.slot_epochs[slot as usize] += 1;
+                slot
+            })
             .collect())
     }
 
@@ -1328,6 +1355,13 @@ impl CudaKvPagePool {
         context: &CudaOperators,
         slot: u32,
     ) -> Result<()> {
+        if self.chunks.is_some() {
+            self.ensure_chunk(context, slot)?;
+            for buffer in &mut self.chunks.as_mut().expect("chunked")[slot as usize] {
+                context.zero_f32_buffer_in_place(buffer)?;
+            }
+            return Ok(());
+        }
         for (plane, storage) in self.plane_storage.iter_mut().enumerate() {
             let range = self.layout.slot_range(slot, plane).expect("reserved slot");
             context.zero_f32_range(
@@ -1351,7 +1385,12 @@ impl CudaKvPagePool {
     }
 
     pub(super) fn recycle_transaction_slots(&mut self, slots: impl IntoIterator<Item = u32>) {
-        self.metadata.free_slots.extend(slots);
+        for slot in slots {
+            if let Some(chunks) = &mut self.chunks {
+                chunks[slot as usize].clear();
+            }
+            self.metadata.free_slots.push(slot);
+        }
     }
 
     pub(super) fn f32_transaction_planes(
@@ -1368,11 +1407,7 @@ impl CudaKvPagePool {
     }
 
     fn allocate_slot(&mut self, context: &CudaOperators) -> Result<u32> {
-        let slot = self
-            .metadata
-            .free_slots
-            .pop()
-            .ok_or_else(|| pool_error("physical KV page pool is exhausted"))?;
+        let slot = self.take_transaction_slots(1)?[0];
         for (plane, storage) in self.plane_storage.iter_mut().enumerate() {
             let range = self
                 .layout
@@ -1407,6 +1442,21 @@ impl CudaKvPagePool {
         destination: u32,
     ) -> Result<()> {
         if source == destination {
+            return Ok(());
+        }
+        if self.chunks.is_some() {
+            self.ensure_chunk(context, destination)?;
+            let (source, destination) = distinct_pair_mut(
+                self.chunks.as_mut().expect("chunked"),
+                source as usize,
+                destination as usize,
+            )?;
+            if source.len() != self.planes.len() {
+                return Err(pool_error("source chunk is incomplete"));
+            }
+            for (source, destination) in source.iter().zip(destination) {
+                context.copy_f32_range(source, 0, destination, 0, source.len())?;
+            }
             return Ok(());
         }
         for (plane, storage) in self.plane_storage.iter_mut().enumerate() {

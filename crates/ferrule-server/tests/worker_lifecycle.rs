@@ -368,3 +368,33 @@ async fn shutdown_preempts_a_waiting_background_worker() {
         .unwrap()
         .unwrap();
 }
+
+#[test]
+fn host_kv_worker_rejects_unsupported_engine_before_background_execution() {
+    use ferrule_runtime::{HostKvDecodeConfig, KvExecutionPolicy};
+    let steps = Arc::new(AtomicUsize::new(0));
+    let engine_steps = Arc::clone(&steps);
+    let result = spawn_model_worker_with(
+        move || {
+            Ok::<Box<dyn InferenceEngine>, Infallible>(Box::new(BackgroundEngine {
+                completion_hub: CompletionHub::new(),
+                ready: Arc::new(AtomicBool::new(false)),
+                phase: Arc::new(AtomicUsize::new(0)),
+                step_calls: engine_steps,
+            }))
+        },
+        WorkerConfig {
+            kv_execution_policy: KvExecutionPolicy::HostKvDecode(HostKvDecodeConfig::default()),
+            ..Default::default()
+        },
+    );
+    let Err(ferrule_common::WorkerStartError::Startup { source }) = result else {
+        panic!("unsupported engine must not become Ready");
+    };
+    assert!(
+        source
+            .to_string()
+            .contains("HostKV decode is not installed")
+    );
+    assert_eq!(steps.load(Ordering::Acquire), 0);
+}
