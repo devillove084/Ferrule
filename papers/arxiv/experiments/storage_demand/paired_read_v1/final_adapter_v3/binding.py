@@ -17,7 +17,7 @@ from runnerhelpers.evidence_v2 import ct, require
 from runnerhelpers.build_receipts_v1 import immutable
 
 ADAPTER = 'ferrule.storage-demand.final-layout-reviewed-cli.v3'
-OUT = HERE / 'bindings-final-v3-20261015-02'
+OUT = HERE / 'bindings-final-v3-20261015-03'
 BINDING_PATH = OUT / 'actual-binding-v3.json'
 REVIEW_PATH = OUT / 'actual-build-review-v3.json'
 EXECUTION_PATH = OUT / 'execution-sealed-v3.json'
@@ -178,7 +178,18 @@ def execution_value():
 
 
 _base.review, _base.binding_value, _base.execution_value = review, binding_value, execution_value
-validate_binding, validate_execution = _base.validate_binding, _base.validate_execution
+_validate_binding, _validate_execution = _base.validate_binding, _base.validate_execution
+
+
+def validate_binding(path=None):
+    return _validate_binding(BINDING_PATH if path is None else path)
+
+
+def validate_execution(path=None):
+    return _validate_execution(EXECUTION_PATH if path is None else path)
+
+
+_base.validate_binding, _base.validate_execution = validate_binding, validate_execution
 raw_options, case_for_mode = original.raw_options, original.case_for_mode
 def seal_to(path, value):
     path = Path(path)

@@ -77,6 +77,14 @@ class PolicyTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     b.seal_to(root / 'other.json', {})
 
+    def test_inherited_default_paths_are_rebound_explicitly(self):
+        with patch.object(b, '_validate_binding', return_value={}) as validate:
+            b._base.validate_binding()
+            validate.assert_called_once_with(b.BINDING_PATH)
+        with patch.object(b, '_validate_execution', return_value={}) as validate:
+            b._base.validate_execution()
+            validate.assert_called_once_with(b.EXECUTION_PATH)
+
     def test_new_globals_do_not_relabel_historical_binding(self):
         self.assertNotEqual(b.ADAPTER, old.ADAPTER)
         self.assertNotEqual(b.BINDING_PATH, old.BINDING_PATH)
