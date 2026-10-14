@@ -1,26 +1,26 @@
 \section{Introduction}
 \label{sec:introduction}
 
-A model can exceed an execution device's memory without exceeding the
-machine's usable physical residency, and a model can also exceed that
-aggregate residency. These are different problems. In the first case, a
-host-resident or compact representation may be sufficient; in the second,
-backing storage may be necessary for a complete request. A checkpoint's file
-size, an expanded tensor's size, and a running request's working set therefore
-cannot be used interchangeably. The working set includes active weights,
-expansion buffers, activations, model state, staging, in-flight transfers,
-allocator and driver reserves, metadata, and resident file-backed pages.
+Storage-backed weight residency lets an inference owner repeatedly
+materialize selected weights into a bounded execution cache. The immediate
+problem is to bound those copies and reuse their capacity safely, whether or
+not the complete compact checkpoint could fit in host memory. Exceeding a
+device's memory, exceeding aggregate physical residency, and choosing a
+controlled cache budget are different conditions. A checkpoint's file size,
+an expanded tensor's size, and a request's working set are not interchangeable.
+The working set also includes activations, model state, staging, outstanding
+transfers, allocator/driver reserves, metadata, and resident file-backed pages.
 
-\system{} studies the second problem: storage-backed inference under bounded
-physical memory and bounded runtime ledgers. Its central execution path is
-\emph{plan, admit, materialize, publish, execute, retire}. The design is
-intended to make a request feasible when only a bounded subset of the
-execution representation can be resident at once. It is not enough to submit
-an asynchronous read or to evict a cache entry: the producer must return
-custody, the consumer must receive the exact generation it requested, and
-retirement must wait for physical quiescence. These contracts make resource
-reuse safe; they do not by themselves demonstrate that storage is necessary,
-that devices overlap, or that a request has acceptable model quality.
+\system{} studies bounded storage-backed residency through
+\emph{plan, admit, materialize, publish, execute, retire}. A source-bound plan
+fixes what is read; admission bounds covered claims; completion validates the
+requested generation; custody prevents premature reuse. Its concrete
+next-expert pipeline separates the read window from owner compute submission.
+A safe blocking control waits on the same worker immediately, whereas
+lookahead submits the next selected read after current upload and before
+current compute submission. The whole forward remains synchronous. These
+contracts make scheduling and resource reuse testable; they do not themselves
+prove storage necessity, hardware overlap, model quality, or a speedup.
 
 \paragraph{Research questions.}
 We organize the paper around four questions, each with a concrete observable:
@@ -29,13 +29,13 @@ We organize the paper around four questions, each with a concrete observable:
   with bounded repeated materialization while the measured working set stays
   within declared per-domain limits? A successful configured-budget run is
   not, by itself, evidence that the model exceeds physical memory.
-  \item[RQ2 -- request I/O.] Which logical reads become physical network or
-  backing-block reads during a request, after separating startup, application
-  counters, OS page-cache hits, and storage-cache effects?
+  \item[RQ2 -- request I/O.] What request-time demand is visible at the
+  logical-reader and NFS-client levels, and what attribution or backing-store
+  traffic remains unknown after separating startup and cache effects?
   \item[RQ3 -- safe scheduling.] Under the same representation, quality
-  contract, and budgets, what differs between a correct blocking reference and
-  the proposed ready-dependent path in waiting, progress, and measured
-  storage/transfer/compute overlap?
+  contract, and budgets, what differs between the implemented safe blocking
+  and bounded lookahead schedules in demand waiting, speculative work, and
+  correlated read/transfer/kernel activity?
   \item[RQ4 -- custody and failure.] Do exact identities, credits, and
   custody prevent stale publication and premature reuse, while retaining
   capacity when completion is Unknown and releasing it only after evidence of
@@ -51,14 +51,14 @@ This manuscript makes four scoped contributions:
   \item a normal-path contract that connects source-bound planning and
   stage-local admission to generation-qualified completion, publication, and
   retirement;
-  \item standard structured pseudocode for the success and terminal-custody
-  paths, exposing the preconditions and observations needed to test them; and
+  \item structured success/terminal-custody algorithms and an implemented
+  bounded next-expert schedule with an identical-budget blocking control; and
   \item an evidence-oriented evaluation layout that ties each RQ to tables,
   traces, memory peaks, and plots rather than promoting design intent to a
   result.
 \end{enumerate}
 
-The current evidence is deliberately narrower than the target. TP1 attempt
+The historical serving evidence is deliberately narrow. TP1 attempt
 \texttt{-02} is one DEBUG-instrumented exploratory run ($n=1$): four HTTP
 requests completed, the three limited visible-text/eight-output-token-usage
 canaries passed, and Hello2 passed HTTP and usage checks only. It records
@@ -75,10 +75,14 @@ binary and descriptive resident comparisons. They are not interchangeable
 with TP1: the TP2 test binary is not a public serving binary, the arithmetic
 and topology contracts are profile-specific, and the two resident comparison
 blocks are not a fair speedup proof. In particular, the vLLM supplement is
-not evidence of storage necessity or a matched total working-set budget. The
-same-contract safe-blocking reference for RQ3 is not implemented. Multimodal,
-unified-memory, general-registry, ACID, and default NCCL/device-collective
-claims are outside the demonstrated evidence.
+not evidence of storage necessity or a matched total working-set budget. Both opt-in schedules now have same-cut real-GPU factory qualification:
+nine exact-once gates pass on \texttt{033519c}. This closes their selected
+numerical/provider gate, not CLI/HTTP, a capacity frontier, paired performance,
+or physical release. Historical failures and wrapper outcomes remain separate
+(Appendix~\ref{sec:historical-chronology}); no old PASS is borrowed. Multimodal, unified-memory, universal-registry, ACID, and default
+NCCL/device-collective claims are outside the demonstrated evidence. Storage
+inference and prefetch are prior art; no first-system or state-of-the-art
+performance claim is made.
 
 The rest of the paper follows the execution argument. Section~\ref{sec:scope}
 defines representations, physical and accounting domains, quality, and

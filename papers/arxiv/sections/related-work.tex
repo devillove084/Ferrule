@@ -44,8 +44,10 @@ work, progress ownership, bounded queues, and completion-driven physical
 lifetime. An asynchronous API does not prove event-driven progress, and
 worker offload does not prove nonblocking execution. Measured
 storage/transfer/compute overlap requires correlated provider or hardware
-traces. The safe blocking reference needed for this comparison is not yet
-implemented in the TP1 path.
+traces. The current opt-in blocking and next-expert lookahead schedules
+share the same worker and bounds and pass selected same-cut GPU factory
+qualification. The matched performance study and physical overlap remain
+empirical questions, not results of the numerical gates.
 
 \paragraph{Positioning.}
 \system{} contributes a profile-scoped contract connecting source-bound plans,

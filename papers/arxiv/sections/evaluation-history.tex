@@ -1,0 +1,73 @@
+\section{Qualification History and Stopped CLI Study}
+\label{sec:historical-chronology}
+Table~\ref{tab:tp1-quality-chronology} separates historical test numerics
+from wrapper acceptance, not forecasts for enabled CLI serving. Full40
+covers Hello/Capital prefill and one decode; fresh adds bounded history,
+feedback, reset and fork. Fixed $\mathrm{atol}=0.00025$,
+$\mathrm{rtol}=0.012$ is not bit-exactness or broad task quality.
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabularx}{\linewidth}{@{}lrrX@{}}
+\toprule
+Record & Metrics & Logit elements & Numerical / wrapper outcome \\
+\midrule
+Middle quality \texttt{-01} & 0 & 0 & \texttt{cuInit (3)} before inference; fresh/cold unissued \\
+Full40 \texttt{-02} & 804 & 1,986,560 & Numerical PASS; original strict post-idle wrapper FAIL \\
+Retained fresh \texttt{-03} & 5,427 & 9,187,840 & Numerical PASS; original strict post-idle wrapper FAIL \\
+Cold owner \texttt{-04} & 1,809 & 3,228,160 & Numerical and wrapper PASS under stable-idle v2; different source cut \\
+Frozen CLI quality \texttt{-01} & 0 & 0 & \texttt{cuInit (3)} before inference; retained fresh unissued \\
+\bottomrule
+\end{tabularx}
+\caption{Later 2026-10-14 TP1 test-gate chronology. Middle quality
+\texttt{-01} and frozen CLI quality \texttt{-01} are distinct from the
+2026-10-13 prelaunch \texttt{DEVNULL} wrapper failure. Numerical PASS does
+not override a rejected wrapper.}
+\label{tab:tp1-quality-chronology}
+\end{table}
+
+The strict full40/fresh wrappers rejected first post-idle samples of 1\%/6\%
+GPU0 utilization (zero MiB, no compute applications); later idle does not
+repair them. Cold \texttt{-04} accepts authenticated drain/stable-idle v2
+on the 3,533-input \texttt{5662b7d2\ldots} cut, not
+\texttt{fbf0c225\ldots}. Its old primary records
+\texttt{same\_source\_cut=false} and wrapper rejection; these passes cannot
+be pooled. Frozen CLI quality fails at \texttt{cuInit (3)} with zero metrics,
+logits and token checks, not numerical mismatch. The later nine-gate
+\texttt{033519c} factory PASS changes none of these outcomes. Idle is not
+a GPU fence or final resource ledger.
+
+\paragraph{Enabled CLI pilot: permanently stopped.}
+\label{sec:paired-startup-failure}
+On 2026-10-15, P1-blocking exits before Ready with:
+\begin{quote}
+\small\ttfamily
+invalid runtime request: experimental qwen35-mixed-bf16 serving:\\
+prepared source profile changed
+\end{quote}
+The stopped \texttt{cmd\_serve} called \texttt{mixed\_tp2\_cache\_requirements}
+unconditionally; the non-TP2 accessor rejected enabled TP1's prepared-source
+payload before CUDA owner startup, not at \texttt{cuInit}. The source-plan
+query fix is now committed at \texttt{86c58a0}; this failure is unchanged.
+One lifecycle is attempted, zero complete, nine unissued; HTTP issued,
+terminal, success, failed and censored counts are all zero, with all
+120 requests/50 measured QA slots unissued. All five incomplete pairs stay;
+quality metrics, request latencies, goodput, contrasts and intervals are
+unobserved/null, not zero. Ready maps, positive reads and the final owner
+ledger are unobserved/unknown despite authenticated \texttt{ECHILD}, absent
+owners, idle and released/reprobed locks. Shutdown-only shared NFS deltas
+are not request-attributable NAS traffic; physical release remains unproved.
+
+Frozen \path{paired-final.json} and \path{closeout.json} are relative to
+\path{papers/arxiv}, under:
+\begin{quote}
+\small
+\path{experiments/storage_demand/paired_read_v1/}\\
+\path{artifacts-current-20261015-01/}
+\end{quote}
+No retry/replacement is allowed.
+Independent V3 fixes cohort target/deferrals to 1/0, not CLI defaults 4/3.
+CPU and hidden-CUDA workspace checks pass for the fix, not new CLI/HTTP
+qualification. New same-cut GPU gates and serving binding remain required;
+V3 does not resume this study or borrow the old factory PASS.

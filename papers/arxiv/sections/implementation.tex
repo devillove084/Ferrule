@@ -41,6 +41,67 @@ fence, KV/initial-state creation, and the final claim fence are checked before
 claim consumption. Eligible raw execution bindings may then be replaced by
 runtime descriptors; surviving shared source aliases are not thereby freed.
 
+\subsection{Implemented bounded expert-read path}
+\label{sec:implemented-read-path}
+The opt-in checkpoint pipeline is a real positioned-read worker, not a task
+that reports completion without performing I/O. Its immutable plan preserves
+ordered extents and original filesystem snapshots. Unix physical-source
+identity version 2 includes device/inode, length, mtime, and ctime coordinates;
+ctime strengthens change detection but is not payload authentication. The
+worker verifies the source before/after reading, and the consumer rechecks it
+before constructing the canonical three compressed artifacts. No CUDA
+handle, cache lease, or runtime continuation enters that worker.
+
+The integration has three local anchors: checkpoint \path{read_pipeline.rs}
+implements tickets, reads, completion custody and join; transformer
+\path{expert_reads.rs} selects gate/up/down plans and accounts payload aliases;
+transformer \path{standard/cuda.rs} separates the read window from compute
+submission. CLI options flow through a prepared, source-bound admission plan
+and lower into the existing numeric BF16 factory/materializer. The selected
+path remains PP1/TP1/EP1, resident KV and lazy experts; enabling host staging
+does not enable unsupported topology or a different forward API.
+
+Both \emph{blocking} and \emph{lookahead} explicitly enable the same pipeline;
+the default disabled CLI path has no worker-read evidence and is not the control.
+Blocking submits required demand and waits immediately. Lookahead carries
+one next ticket across the current owner compute call, then waits/takes it
+only when that exact expert is demanded. After current upload, temporary
+host artifacts leave the compute path: compute borrows resident GPU handles
+and immutable binding metadata. A next-residency probe is read-only and
+occurs after current admission/upload; it neither pins the next expert nor
+changes completed-only LRU order, routes, or kernel mathematics. Submission
+and source errors from speculation are deferred to the matching demand;
+abandoned work is canceled/drained and counted as wasted read activity.
+
+The study configuration fixes $H=64$ MiB, $M=8$ MiB, and $S=2$ MiB, with
+one worker, queue depth one, and two read-operation slots in both arms.
+These host charges are separate from the 64-entry, 320 MiB device cache
+charge and its 8 MiB scratch component. Metadata and requested stack are
+\emph{inside} the host ceiling; actual OS/TLS/allocator overhead requires
+additional unmeasured headroom. Packed completion and prepared payload quota
+stay live through their actual aliases, including escaped weight/scale
+\texttt{Arc}s. Weak liveness witnesses do not add a payload copy, but retained
+allocation backing and allocator RSS are distinct from quota
+(Section~\ref{sec:bounded-lookahead}).
+
+Passive snapshots expose requested/effective mode, worker/read evidence,
+operation, image, layer and expert identity, demand waits, completed and wasted bytes,
+charged payload/metadata/stack, join status, and retained Unknown. Reading a
+snapshot does not repair poison, join a worker, or refund custody. A
+scope-ended status is not a final physical-resource closure certificate.
+Cancellation/drain/join proves only named host obligations, never GPU
+quiescence or healing of a poisoned GPU owner. Whole forwards still block
+on their existing consumer proofs. These mechanisms and CPU test fixtures
+exist. The frozen \texttt{033519c} factory/profile passes the nine GPU
+gates in Table~\ref{tab:enabled-quality}; the enabled CLI pilot stopped
+pre-Ready. Its source-plan query fix is committed at \texttt{86c58a0},
+but new CLI/HTTP qualification is pending
+(Appendix~\ref{sec:paired-startup-failure}). Passive resource snapshots
+leave allocator state unobserved because its getter can poll retirement
+fences; separately reported allocator high-water is not cost-free passive
+telemetry or physical release evidence.
+
+\subsection{Other lifecycle integration boundaries}
 \paragraph{General materialization path.}
 The registry is installed only when a runner transfers a physical
 materialization provider to the resident engine. It merges compatible exact

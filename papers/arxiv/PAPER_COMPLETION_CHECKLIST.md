@@ -2,7 +2,7 @@
 
 本清单用于逐项补齐论文，不是已经完成工作的报告。当前工作标题：
 
-> **Ferrule: Storage-Backed Inference Beyond Memory Capacity**
+> **Ferrule: Bounded Storage-Backed Weight Residency**
 
 作者：**Lu Huanbing**；个人名义（Independent Researcher）；联系邮箱：**luhuanbing084@gmail.com**。
 
@@ -24,27 +24,36 @@
 - `[x]` 只表示该项明确完成；`[ ]` 可能部分已有材料，不代表完全没有实现。
 - 记录状态使用：待定义 / 待核对 / 已有局部证据 / 待实验 / 已验收。每次勾选须附冻结产物及验收结果。
 
-### Submission-core checklist (2026-10-14)
+### Submission-core checklist (2026-10-15)
 
 **当前范围：RQ1–RQ4，非 vLLM alignment/大矩阵/无条件 E2 胜出。** 旧 P0/P1 为证据索引，非全部组合/图号投稿 gate；仅选定真实 profile，unknown/failed/unexecuted 保留。
 
-- [ ] **RQ1 / E0 — 容量与完整质量。**冻结模型/表示/scales/metadata、路径、负载、oracle 与分域预算；完整 prefill + 多步 decode，计量 state/KV、staging、workspace、page cache、峰值及物化/安全复用。controlled-budget 与 physical-capacity 分报；紧凑权重可驻留 host 不证明磁盘必要性。**现状：**-02 四请求/采样峰值 actual；当前 StorageMiddle64 full40 初始化失败、fresh/cold 未发出（见下），完整质量、物理容量与 backing necessity open。
-- [ ] **RQ2 / E3 — 真实请求 I/O 与缓存可见性。**同 run 对齐 logical read、应用/OS/NAS cache、物理 network/block bytes/latency、驱逐与计算。缺测标 unknown，cache 不可控标 uncontrolled；网络读非 NAS 后端盘读，fresh process 非 storage-cold。**现状：**-02 logical demand actual；physical NAS/network/block unknown、page cache uncontrolled。V2 passive NFS-client helper 仅 CPU 准备，尚无新 physical measurements/归因。
-- [ ] **RQ3 / E1 + E4 — 同合同安全 blocking/async。**同 weights、完整质量、缓存条件及固定预算，保留 generation/fence/custody，仅改变等待/调度方式；给真实路径和 operation-ID/时钟 trace，分别报告等待、进展及测到的重叠/串行化。无收益或失败也保留，其他机制消融先列 follow-up。 **-02 缺口：**同合同 safe-blocking reference 未实现，无 blocking/async 或 overlap 结论。
-- [ ] **RQ4 / E5 — 真实集成的故障守恒。**实际 profile 验证 stale generation、cancel/publish、cleanup failure、credits/custody、quiescence/Unknown；可证明完成才回收，Unknown 保留 owner/identity/bytes、降容与恢复条件。**现状：**model-neutral resource observability 与 server actual-token enqueue/terminal trace 已实现、CPU-tested（[ledger](EVIDENCE_LEDGER.md#当前四-rq-与本轮证据2026-10-14)），无新 GPU serving evidence。-02 drain/ECHILD/observational post-idle PASS，但 `resource_contract_complete=unknown`、raw `gpu_quiescence=unverified`；fixture/退出/idle 不证明 final ledger/fence/source completion，final resource closure open。
-- [ ] **核心数据与复现。**冻结 source/dirty snapshot、binary/model/tokenizer/client/oracle、argv/env、单位/采样边界；raw/质量阈值及 planned/dispatched/terminal/failed/canceled/timed-out/unknown/not-run 分母可重建核心图表。负结果、W8A16 FAIL、blocked/历史 raw 保留。
-- [ ] **重复与统计计划。**四 RQ 独立重复及 trial/block、顺序、STOP、contrasts/不确定性方法仍须验收；同进程窗口非重复，不擅设 n=3。**[Pilot V2](experiments/storage_demand/newversionedprotocol/protocol.json)：**ceiling 12 = 4 initial + 1 excluded QA + 2 warmups + 5 measured QA；固定 L1–L5，60 planned requests / 25 measured QA slots，CPU-only、candidate unbound/unexecuted（[CPU receipt](experiments/storage_demand/newversionedprotocol/validation-cpu.json)）。非 physical measurements、统计 PASS 或 storage-cold；旧 n=2 仅描述，≥5 paired blocks 仅性能升主 claim 时恢复且不保证功效。
-- [ ] **稿件与 artifact。**cohesive paper 按 problem/合同 → 机制/算法 → 实现 → RQ1–RQ4 → related work/限制组织；图表见第 1 节。文献/claims/profile、图表身份、归档/恢复、作者声明/最终视觉验收 open；metadata 非 crash durability，generic protocol 非全路径 registry。
+- [ ] **RQ1 / E0 — bounded residency 与完整质量。**冻结同 cut 的模型/表示、源绑定路径、完整 prefill + 多步 decode、oracle 和分域预算；测 materialization/安全复用、state/KV、staging、workspace、page cache 与采样归因。软件账本不等于 RSS/机器物理 cap；physical insufficiency/necessity 仅恢复该强 claim 时另验。**现状：**历史 real `-02` 四请求/采样 actual；后续 full40/fresh 数值 PASS 但 wrapper rejected；cold `-04` accepted on different cut，不能拼 current qualification。冻结 CLI `-01` 初始化失败、0 metrics；current `033519c`/1,484-source factory qualification 已实际9/9 PASS；RQ1质量子门禁关闭，capacity frontier/CLI HTTP仍open。
+- [ ] **RQ2 / E3 — 分层 request-I/O 可见性。**同 run 对齐 logical reads、read timing、可用 shared NFS-client mountstats，并保留 attribution/cache/reset/missing 限制；NAS physical network/block unknown 不填 0。**现状：**历史 `-02` HTTP logical与current9 factory verified reads actual，serving/test scope分开；passive NFS helper CPU-prepared，无新 aligned client/physical measurements。可按 logical/client scoped report 闭环，不强求证明 physical disk necessity；若主张 backing-disk bytes/necessity 再补 server 归因。
+- [ ] **RQ3 / E1 + E4 — 同合同 blocking/lookahead 资格与配对。**两 arm 真实 worker 已实现/CPU fixtures 覆盖，均explicit opt-in，current factory mechanism/numerics qualified，不是“safe blocking 未实现”。固定 source/weights/arithmetic/quality/cache/safety，host64 MiB（metadata8 + requested stack2 included），device64 entries/320 MiB charge（scratch8 included），1 worker/depth1/two slots。current upload 后、compute submission 前 submit next；forward 同步。实际9/9 same-cut factory qualification已通过；paired无HTTP timing/GPU overlap；只有failed startup的shared NFS shutdown样本，不是RQ3性能PASS。
+- [ ] **RQ4 / E5 — 集成故障与 custody。**验证 stale generation、cancel/publish、cleanup failure、credit/alias quota、quiescence/Unknown。Passive poison observations 不退款/修复/伪 Closed；host drain/join 不 heal GPU Unknown。weak witnesses 不新增 payload copy，但 last strong Arc drop 后 allocation backing/allocator RSS 仍可能保留，quota 与 RSS 分报。历史 `-02` drain/ECHILD/idle actual，final resource contract unknown、GPU quiescence unverified；集成故障/final closure pending。
+- [ ] **核心身份与复现。**冻结 source/dirty snapshot、binary/model/tokenizer/client/oracle、argv/env、raw/阈值、sampling/clock、所有 failed/canceled/timed-out/unknown/unissued 分母；historical failures 不抹除，不跨 cut 借 PASS。
+- [ ] **RQ3 stopped study / independent corrective V3。**实际registered顺序B–L/B–L/L–B/L–B/B–L（3:2），10 lifecycles/120 requests/50 QA；[closeout](experiments/storage_demand/paired_read_v1/artifacts-current-20261015-01/closeout.json)：P1-blocking在Ready前`prepared source profile changed`，TP1 enabled prepared payload被unconditional TP2 accessor拒绝，不是cuInit。1 attempted/0 complete/9 unissued，HTTP issued0、120/50全unissued、all5pairs retained、quality/latency/goodput/aggregate/CI均null/unobserved；resource ledger unknown，无retry/replacement。[V3](experiments/storage_demand/paired_read_v1/PLAN_V3.md)独立CPU-only，显式cohort1/0而非CLI4/3；source-plan query fix已committed86c58a0，owner报告CPU/hidden-CUDA CudaWorkspace checks PASS（本文未重跑），新cut九gate及candidate/Ready/HTTP/runtime绑定仍pending，旧PASS不资格未来cut。7200s绝对/650s lifecycle/100s reserve、STOP/no-retry、all5-or-null；不resume/repair旧分母，不称power/significance。独立baseline5/60/25仍unexecuted，experiments/seals不改。
+- [ ] **稿件与 artifact。**Algorithm 3/实现/三层 RQ2/paired RQ3 已连贯接入，既有四 real `-02` plots 不动且不是 current pipeline stats。当前36页（含历史appendix）构建/局部视觉验证已记录；九gate portable receipt archive已committed17b16fa；external binary/model/source payload与其他历史archive、最终投稿/作者声明/文献完整审计仍pending。metadata 非 crash durability，general protocol 非 universal registry。
 
 **当前局部数据：**[TP2 crossblocks 原报告](experiments/tp2_resident/runs/route-batch-vllm-crossblocks-20261012-01/crossblocks-results.md) 为补充性 resident E2 观察：F 14.317/14.804 vs V 10.376/10.330 tok/s，TTFT/启动/GPU/PSS 有取舍；无 bit-exact、fairmatch、统计胜出或 E0/disk-necessity 结论。vLLM 实测是 `0.28.0+cu129`，由 `target/vendor/vllm028-py312` 的冻结身份支持；0.18 源码不能冒充该部署兼容性。
 
 - [x] **局部 startup 核对（scoped，2026-10-13；非本次 GPU 测量）。**[REPORT](../../target/validation/startup-metadata-owner-20261013-01/REPORT.md)、[RESULTS/raw pins](../../target/validation/startup-metadata-owner-20261013-01/RESULTS.json)、[source pins](../../target/validation/startup-metadata-owner-20261013-01/executed-source-pins.json)逐字段/hash 核对。36e6 combined prepared-admission + Arc-path：S1 startup/PSS 222.079 s/42.716 GiB，S2 139.855/44.416，F1 140.052/43.573；仅 F1 measured 5 请求、40-out/2.877869 s = 13.899 tok/s，TTFT mean/p50/p95 192.944/187.513/209.700 ms。S1/S2 visible canary/reuse/cancel/source-bound PASS，非 fresh 14M 数值验收。旧 e674 ordinary F1 351.114 s/60.149 GiB/14.227 tok/s（[manifest](experiments/tp2_resident/runs/route-batch-info-after-20261012-01/routebatch-performance.json)），与 crossblocks 不同 series；不混均值/称 paired causal before-after，不选最好 startup 作稳定常数。page cache uncontrolled，PSS 非 heap-live；五阶段 proc 读取在 measured 外但有成本，receipt persistence 未独立测量，非零开销/OS free。只勾局部核对，四 RQ/E0/E3 未验收；portable 归档仍待，本次不搬 raw。
-- [ ] **Storage middle（历史 logical-demand actual；当前质量 blocked，核心未验收）。**[四请求入口](experiments/storage_demand/run_middle.py)/[原 CPU preparation](experiments/storage_demand/prepared.json)保留；早期 CPU validation canceled、planned/unexecuted 无读计数，仅属 -01/-02 前状态，不覆盖随后 actual observations。
+- [ ] **Storage middle（历史 logical-demand actual；current factory qualification9/9 PASS，capacity/performance/physical release未验收）。**[四请求入口](experiments/storage_demand/run_middle.py)/[原 CPU preparation](experiments/storage_demand/prepared.json)保留；早期 CPU validation canceled、planned/unexecuted 无读计数，仅属 -01/-02 前状态，不覆盖随后 actual observations。
   - **历史 -01：**[失败 report](experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-01/report.json)保留一次获授权、server launch 前的 harness `AttributeError`（缺少 `subprocess.DEVNULL`）；planned=4、dispatched=0、not-run=4，无 request/read/quality data，不是 model/OOM failure。authenticated drain/post-idle 通过；resource contract 与 GPU quiescence 未验证，physical I/O unknown。
   - **随后 -02（n=1、DEBUG instrumented）：**[report](experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/report.json)、[case](experiments/storage_demand/runs/storage-demand-tp1-middle-20261013-02/case.json)及[独立 closure](../../target/validation/storage-demand-middle-gpu-20261013-02/closure.json)：planned=4、dispatched=4、terminal=4、success=4、failed=0、not-run=0；Hello2 + QA/Arithmetic/Chinese 三 canary，3/3 visible-text/eight-output-token-usage PASS。Hello2 PASS 仅为 HTTP+usage（`reference=null`）；仅三 canary 与 frozen reference 比较。QA 仅为 canary，不是 extended QA workload；generated IDs 未暴露，无 exact-token/full numeric-quality 验收。
   - **逻辑计数与 bounded reuse 观察：**30 invocations，69,114 reads/36,240,064,128 bytes；88,763 facade H2D copies/36,240,248,688 bytes；expert hits=0、uploads=11,519、evictions=11,455、artifact uploads=34,557。startup reads 不在 invocation 计数内。末次 gauges 为 64 entries/201,351,168 bytes、scratch 8,388,608 bytes、owner peak 219,754,496 bytes；invocation pending-upload/quarantine=0 不等于 final ledger closure。
   - **观测边界：**startup 18.497 s、四个分别计时的 HTTP windows 合计 51.538 s（不含 startup/请求间 owner overhead）、supervisor 75.874 s；四请求逻辑 GiB/expert uploads/evictions/TTFT/E2E 见[稿件表](sections/evaluation.tex)。GPU0 sampled peak 4,125 MiB、tree PSS/RSS 7,610.864/7,613.770 MiB，32 complete host/32 GPU samples；非连续峰值或 hard cap，owned GPU attribution unknown。DEBUG overhead 未测，不作 comparative performance/steady-state 结论。RQ1–RQ4 缺口保留，均不勾完成。
-  - **当前 2026-10-14 StorageMiddle64（非历史 wrapper -01）：**exact full40/retained-fresh/cold-owner selectors 各选中 1 ignored test（[selection proof](../../target/validation/storage-middle64-current-quality-20261014-01/exact-ignored-selection-proof.json)）；config-match CPU checks/构建已通过：64 experts、320 MiB cache charge 含 8 MiB scratch、context128/maxdecode2。首次 full40 在 inference 前 `cuInit` / `CUDA_ERROR_NOT_INITIALIZED (3)` 失败；3 scheduled / 1 dispatched / 1 failed / 0 passed / 2 unissued / 0 retries，0 metrics/logits/token checks（[FINAL](../../target/validation/storage-middle64-current-quality-20261014-01/FINAL.json)）。fresh-quality/cold-owner 未发出，诊断 ongoing；test executable 非当前 serving CLI，同源码/质量闭包未建立，旧 PASS 不借用。
+  - **历史 middle quality `-01`：**[FINAL](../../target/validation/storage-middle64-current-quality-20261014-01/FINAL.json)记录 full40 `cuInit (3)` 前失败，3 scheduled/1 dispatched/1 failed/0 passed/2 unissued/0 retries，0 metrics/logits；不是 TP1 DEVNULL wrapper，也不是 numerical mismatch。
+  - **full40 `-02` 数值 PASS / strict wrapper FAIL：**[FINAL](../../target/validation/storage-middle64-current-quality-20261014-02/FINAL.json)，804 metrics/1,986,560 logits/4 token checks，0 numerical failures；首 post-idle GPU0 0 MiB/1%/无 compute apps 被原 strict gate 拒绝，后续 idle 不修复原失败。
+  - **retained fresh `-03` 数值 PASS / strict wrapper FAIL：**[FINAL](../../target/validation/storage-middle64-current-quality-20261014-03/FINAL.json)，5,427 metrics/9,187,840 logits，27 common-history+27 feedback+9 reset predictions；首 post-idle 0 MiB/6%/无 apps 拒绝，原失败保留。
+  - **cold `-04` 局部 accepted：**[FINAL](../../target/validation/storage-middle64-current-quality-20261014-04/FINAL.json)，1,809 metrics/3,228,160 logits、authenticated drain + 新 stable-idle v2 PASS；immutable 3,533 inputs，cut `5662b7d2…`。旧 primary fresh 同 config/reference 但 `same_source_cut=false`（旧 `fbf0c225…`）、wrapper rejected，不能拼 all-three/same-serving qualification；idle 非 fence。
+  - **冻结 CLI quality `-01` 失败：**[FINAL](../../target/validation/storage-observability-cli-quality-20261014-01/FINAL.json)，同3,533-input cut 的 test/CLI source relation 但 executable 不同；full40 `cuInit (3)` 前失败，0 metrics/logits/token checks，retained fresh unissued、无 HTTP pilot，quality not accepted。
+  - **current enabled-cut实际qualification：**[SUMMARY](../../target/validation/expert-read-current-quality-20261014-02/SUMMARY.md)/[FINAL](../../target/validation/expert-read-current-quality-20261014-02/FINAL.json)/[audit](../../target/validation/expert-read-current-quality-20261014-02/receipt-audit.json)，`033519c3def098ce417e4b6ff0f141a9f30bddb1`、1,484 frozen sources，all9 exact once PASS、0 probes/warmups/retries/captures/unissued；不是本agent执行GPU。两arm各full40 804 metrics/1,986,560 vocab/2,560 ordered IDs；fresh5,427/9,187,840 common-history/64 fingerprints；ordinary27/9,187,840 common-history、全部64 fingerprints match own-schedule diagnostic primary（routes/states false/unobserved/null，不填0）；cold1,809/3,228,160 common-history/28 fingerprints bound own current primary。constructor4cells/128finite values，32/cell、6verified reads/cell。
+  - **streams/reads/资源边界：**fresh/ordinary每schedule common与free-feedback各27/9,187,840，reset9/3,228,160，fork1/248,320；cold common/free/reset各9/3,228,160，fork1/248,320。不加总streams/observer metrics/schedules当更大独立quality denominator。verified reads每schedule full2089、fresh/ordinary各25116、cold11354；sampled operation counts非实际总reads。host logical high-water16,777,984 <=64MiB（metadata8/requested stack2 included），allocator reserved high-water4,106,223,616 <=7GiB但getter可poll fences；immutable snapshots allocator unobserved。不是连续RSS/physical峰值、无开销或release proof。
+  - **runtime/cleanup范围：**actual PID/birth CUDA12.4.99映射、SM86编译、NVTX compiled/profilingOFF；all9 natural exit/authenticated ECHILD/owners absent、all8 stable-idle v2/final3 zero samples、local locks released/reprobed。physical release仍unobserved；distinct CLI/constructor/composition common source/native/runtime不证明数学binary/CLI HTTP/machineidentity等价。curated [qualification_v1](experiments/storage_demand/qualification_v1/README.md)已committed17b16fa，完整249files/5,642,720 bytes（5.38MiB），其中240records/5,343,269stored bytes；37offline tests PASS；copy非new run，external payloads不重验，本文不写receipts。
+
+- [x] **选定factory/profile numerical/provider子门禁（本轮只读核对）：**上方current9/9 receipts与report hashes实读匹配；constructor+两schedule四种gate均一次通过。仅勾此子项，RQ1/E0全项、RQ3 performance、RQ4 physical release与CLI HTTP不勾。
 
 **Broad scope parked：**[第 12 节](#parked-broad-scope)保留 6P/全矩阵、vLLM 全胜/≥5 paired blocks、全消融及模态/统一内存扩展；非无条件 gate。提升主张先恢复资格/预注册，不事后挑点；核心质量/I/O/重复/安全/失败分母不降级。
 
@@ -52,12 +61,13 @@
 
 - [x] 建立标准 `article` LaTeX 模板、分章节源码和 Makefile。
 - [x] 确认作者姓名、个人身份及邮箱并写入作者栏。
-- [x] 建立被 Git 忽略的 `papers/arxiv/` 工作目录。
-- [x] 将标题与正文主线校正为存储支撑的超内存容量推理；消除 LLM/GPU-only 的标题限定。
+- [x] 建立本地 `papers/arxiv/` 工作目录（历史被忽略，当前稿件与PDF已跟踪）。
+- [x] 将标题/摘要/结论校正为 bounded storage-backed weight residency；physical necessity 与 SOTA 为更强 conditional claims，不暗示已验证。
 - [x] 上一版模板实际编译成功：`make -C papers/arxiv`，两轮 pdfLaTeX，9 页，183734 bytes，无最终残留警告。这是上版记录，不是当前修改后 PDF 的页数承诺。
-- [x] **稿件形态/构建局部核对（2026-10-14）：**7 幅彩色图（3 mechanism + 4 data）、标准 `algorithm`/`algorithmic` 与数学/数据图已接入；[现有构建记录](README.md#current-plot-integration-validation)/[日志](build/main.log)：`make -C papers/arxiv` PASS，30 页/725591 bytes，无 LaTeX/package warning、undefined reference/citation、overfull/underfull/oversized float 或 duplicate label。本次只读核对、未重建，不替代科学门禁。10-02 历史/命令见 [ledger](EVIDENCE_LEDGER.md#构建与环境记录区分上版和新版)。
-- [ ] **最终投稿视觉验收。**[现有记录](README.md#current-plot-integration-validation)已有局部 Ghostscript/text-width 审读；本次未渲染/人工审读 PDF，最终版本标题、作者、公式、图表、引用仍须独立核对。
-- [ ] 制作可恢复备份：目录被忽略意味着普通 Git 提交不会保存论文。
+- [x] **本轮资格更新后的稿件构建/局部视觉核对（2026-10-15）：**[README记录](README.md#current-plot-integration-validation)/[日志](build/main.log)，`make -C papers/arxiv` PASS，36页/757784 bytes（35 main/reference+1 appendix），SHA256 `d0aa956a5793b344fd4ab18452e1a66afaa3696c12b6860ebb3a9c19dfb06989`；zero warnings、undefined refs/citations、overfull/underfull/oversized floats/duplicate labels。3 algorithms+7既有图，新current qualification表/host-charge数学/历史appendix；Ghostscript完整36页color110dpi/gray72dpi，color全页contact-sheet与Algorithm3 p15/current Table6 p22/AppendixA p36 full-page、图页gray审读无clipping/obscured text/occlusion/incomplete algorithm；版本/source hashes见`build/recovery-final-review.json`。9report hashes及ordinary64/cold28 own-primary指纹直比PASS，29protected assets及340 archive/paired receipts hashes unchanged、narrow whitespace/compiled label checks PASS；Git/index/diff核对交main，本recovery无Git命令。只读收据/CPU build，未运行GPU/HTTP/NFS/overlap，未stage/commit；旧34页为pre-update历史。
+- [ ] **最终投稿视觉验收。**本轮 local PDF/render 审读已完成，但独立最终版本/作者声明/公开artifact复现验收仍 pending，不把 local build 当科学通过。
+- [x] **九gate portable receipts局部归档：**[qualification_v1](experiments/storage_demand/qualification_v1/README.md)已committed17b16fa，完整249files/5.38MiB，read-only checker/37 tests PASS（outputs仅build）；不含external executables/model/full-source payload，非CLI复现或新GPU验收。
+- [ ] **其余备份/恢复：**paper源/PDF已跟踪，新增evaluation-history须显式纳入；其余历史target证据与external payload恢复/clean-environment reproduction仍open。
 
 已有可复用材料需分别处理；2026-10-08 仅按 [CURRENT_ACCEPTANCE](../../docs/CURRENT_ACCEPTANCE.md) 和 [ledger](EVIDENCE_LEDGER.md) 同步 2026-10-07 冻结收据，非本次重跑：
 
@@ -73,7 +83,7 @@
 | 早期 staged subset 并发/2K/部分 8K 归档 | 有小规模已完成记录及中断记录 | 不是完整矩阵，不是当前优化版本的普遍验收 |
 | 多模态、统一内存、全异步 | 设计范围；逐路径实现/测量状态待建立 | 不因标题通用就升级为已实现、已验证能力 |
 
-**目前没有在本轮审查中建立完整、冻结且质量合格的“模型超过去重驻留容量、请求期由磁盘供数”的证据链。**这不等于断言功能不存在，而是这条论文主张还需专项验收。
+**当前同-cut factory numerical/provider qualification已实际9/9 PASS；capacity frontier、CLI/HTTP、request-I/O attribution、paired performance/overlap与physical release仍未闭环。**更强 physical-memory insufficiency/disk necessity 另需专项验收，非本 scoped paper 无条件 gate。
 
 ## 2. 第一批：把问题和实现路径固定下来
 
@@ -141,7 +151,7 @@
 
 ### 架构文字与伪代码
 
-- [ ] **D1 / P0：正常超容量执行 walkthrough。**从输入到完整输出，解释反复读入/复用内存为何可行；不能只有 cancellation 故事。
+- [ ] **D1 / P0：正常有界驻留执行 walkthrough。**从输入到完整输出，解释反复读入/复用内存为何可行；不能只有 cancellation 故事。
 - [ ] **D2 / P0：容量规划。**最小可运行 working set、不可驱逐状态、staging/转换临时副本、并行 owner 分配、KV 与权重竞争。
 - [ ] **D3 / P0：提交/发布偏序。**明确调用方可见、下一次计算可用、旧存储可复用分别发生在哪里。
 - [ ] **D4 / P0：精确性合同。**精确身份、generation、exactly-one terminal 与数值 bitwise/tolerance/token/task quality 分开。
@@ -154,7 +164,7 @@
 
 ## 5. 实验：E0 为主，其余解释它是否正确、值得及代价
 
-### E0 — 明确容量口径的推理可行性（P0，第一主实验）
+### E0 — 有界驻留与质量可行性（P0；更强 physical-capacity claim 条件恢复）
 
 - [ ] 冻结模型、表示、执行路径、质量合同和 source/binary/client/oracle 身份。
 - [ ] 至少覆盖所声明预算边界附近及超预算的点，标明 controlled-budget；若主张真实物理超容量，另补物理边界证据。样本点事先定义，不按成功结果删选。
@@ -165,7 +175,7 @@
 - [ ] 记录成功、OOM、timeout、cancel、quality-fail、不可行配置，不将失败当缺测静默忽略。
 - [ ] 同时报告完成时间和吞吐/延迟，不把“跑起来”扩大成“性能有竞争力”。
 
-**验收：**声明的预算/容量口径、完整执行、数值/任务质量与请求期物理 I/O 在同一冻结 profile/run 中闭环；失败点和适用边界齐全，不能拼接不同配置的局部通过。controlled-budget PASS 不升级为 host RAM 不足或 disk necessity；更强的物理超容量/磁盘必要性主张另须证明紧凑权重驻留不可行。
+**验收：**声明的预算/容量口径、完整执行、数值/任务质量与已声明层次的请求 I/O 在同一冻结 profile/run 中闭环；失败点和适用边界齐全，不能拼接不同配置的局部通过。controlled-budget PASS 不升级为 host RAM 不足或 disk necessity；更强的物理超容量/磁盘必要性主张另须证明紧凑权重驻留不可行。
 
 ### E1 — 安全对照与设计动机（P0）
 
@@ -195,7 +205,7 @@
 
 失败启动尝试仍保留：baseline-delta runs 003/004 分别因 observer `nvidia-smi` timeout 与 worker 的 `CUDA driver initialization failed` 未到 readiness，未发请求；不得重写为 canary 结果或从分母删除。observer/PID 限制也保留：`owned_gpu_attribution=unknown`，server/worker PID 只是本地身份、不是 host-NVML 映射；另有一个 leaf `/proc/15844/smaps_rollup` 消失的 incomplete host sample，PSS 保持 unknown。早期 001/002 的 Hello2 与未发请求的 canary startup abort 分别保留，不因后续成功改成 PASS。原始证据见 [成功结果](experiments/tp2_resident/RESULTS-single-lifecycle.md)、[机器可读收据](experiments/runs/tp2-resident-single-lifecycle-20261009-001/RESULTS.json)、[001/002 历史](experiments/tp2_resident/RESULTS.md)、[003/004 历史](experiments/tp2_resident/RESULTS-baseline-delta.md)；M7/G10 与历史 target 不改写。
 
-### E3 — 缓存、物理 I/O 与容量控制（P0）
+### E3 — 缓存、分层 I/O 与容量控制（P0；NAS backing 测量按 claim 恢复）
 
 - [ ] **E3.1 / P0：**逐层记录逻辑读取、应用/OS/NAS cache、请求期物理网络与块设备读取，以及转换/传输量。**验收：**bytes、latency、带宽、读放大和重复物化均有采样来源；网络流量与 NAS 后端块读分别归因，逻辑 miss、mmap fault 或网络读不能独自证明后备磁盘读；缺测标 unknown。
 - [ ] **E3.2 / P0：**冻结缓存预算并设计冷/暖及预算敏感性实验，记录 OS/NAS 缓存控制权限。**验收：**fresh process 不等于 cold cache；无法控制则标 uncontrolled，不清理共享主机/他人缓存，不把预热搬到计时外后声称免费。
@@ -205,7 +215,7 @@
 
 ### E4 — safe blocking / async（core）；其他安全消融（follow-up）
 
-- [ ] **E4.1 / P1：**建立受控 safe-blocking 对照，显式等待完成后再发布/复用，保留相同容量、缓存和质量合同。**验收：**只改变调度/等待方式；若实际读取策略也变化，单列混杂因素而非归因于 async。
+- [ ] **E4.1 / P1：**验收已实现的受控 safe-blocking 对照，显式等待完成后再发布/复用，保留相同容量、缓存和质量合同。**验收：**只改变调度/等待方式；若实际读取策略也变化，单列混杂因素而非归因于 async。
 - [ ] **E4.2 / P1：**比较 blocking 与 async 的 critical path、等待、真实 overlap、吞吐及尾延迟。**验收：**带时钟和 operation ID 的 trace 可复算；异步 API 返回快不作为重叠证据。
 - [ ] **E4.3 / P1：**按已实现开关逐项评估预取深度、队列、缓存预算、转换/传输策略。**验收：**一次改变一项且重新过质量与容量门禁；不存在的开关记待实现，不虚构消融。
 - [ ] **E4.4 / P1：**核对所有对照的 safety contract。**验收：**不关闭 generation、fence、容量约束或 custody 获得“加速”；unsafe fixture 仅用于隔离风险，不参与性能排名。
@@ -262,7 +272,7 @@
 
 - [ ] **M1 / P1：ORCID、资助与致谢。**向作者逐项确认。**验收：**只有确认值进入论文；“无资助”“无致谢”也需确认，不能编造机构、项目或致谢对象。
 - [ ] **M2 / P1：利益冲突与许可。**确认利益冲突声明、论文/artifact 许可及第三方模型/数据限制。**验收：**声明获作者确认且与实际分发范围一致，不擅选许可或默认无冲突。
-- [ ] **M3 / P0：标题—摘要—结论审计。**围绕 storage-backed inference beyond memory capacity，异步与事务作为实现手段。**验收：**每句已支持/更快/更安全都有匹配 profile 证据；区分实测、设计和限制，不扩大模态/内存架构范围。
+- [ ] **M3 / P0：标题—摘要—结论审计。**围绕 bounded storage-backed weight residency，read lookahead/custody 作为实现手段；physical necessity/SOTA 为条件主张。**验收：**每句已支持/更快/更安全都有匹配 profile 证据；区分实测、设计和限制，不扩大模态/内存架构范围。
 
 ## 10. 执行波次与停止条件
 

@@ -28,7 +28,7 @@
   \end{figure*}%
 }
 
-\title{Ferrule: Storage-Backed Inference Beyond Memory Capacity}
+\title{Ferrule: Bounded Storage-Backed Weight Residency}
 \author{Lu Huanbing\\Independent Researcher\\\texttt{luhuanbing084@gmail.com}}
 \date{Working draft --- not a submission}
 
@@ -36,33 +36,34 @@
 \maketitle
 
 \begin{abstract}
-Storage-backed inference requires more than a small weight cache: the live
-working set must fit, nonresident data must become ready before consumption,
-and asynchronous physical references must end before capacity is reused.
-\system{} targets this problem with source-bound resource plans, staged
-admission, generation-qualified completion, and explicit custody through
-publication and retirement. We connect these contracts to a normal execution
-walkthrough, structured lifecycle algorithms, implementation boundaries, and
-four evaluation questions: capacity, request I/O, safe scheduling, and failure
-custody. The available TP1 observation is one DEBUG-instrumented exploratory
-run: four HTTP requests succeed, three limited visible-text/usage reference
-canaries pass, and 30 decoder invocations record 36,240,064,128 logical
-checkpoint-reader bytes. Hello2 has HTTP/usage checks only. Physical storage
-traffic, complete numerical quality, and the final resource contract remain
-unverified. Separate TP2 numerical receipts and two descriptive resident vLLM
-comparison blocks do not close those TP1 gates or establish a fair speedup.
-The same-contract safe blocking reference is not implemented. Thus the draft
-provides a design and a scoped logical-demand observation, not a demonstration
-of inference beyond physical memory capacity, measured overlap, universal
-quality, or completed multimodal support.
+Storage-backed inference needs bounded materialization and safe reuse, not
+merely a small device cache. \system{} connects source-bound plans,
+stage-local admission, exact completion identities, and physical custody to
+bounded weight residency. Its next-expert pipeline and safe blocking control
+use one positioned-read worker, a depth-one queue, identical host/device
+limits, and the existing synchronous forward. Lookahead moves the next
+selected read ahead of current compute submission; GPU overlap requires
+correlated kernel activity, not host spans. Nine exact-once GPU qualification
+gates pass on one frozen source cut, covering constructor/provider cells and
+both schedules' full40, retained-fresh, ordinary and cold-owner factory paths.
+Each full40 gate compares 1,986,560 vocabulary values; each ordinary run
+matches all 64 actual output fingerprints of its same-schedule diagnostic
+primary, without observing routes or states. Observed logical host charge and
+allocator-accounting high-water remain within the declared limits, not
+certified physical peaks or release proofs. Separately, one historical DEBUG
+run records four HTTP successes, three limited canaries and 36,240,064,128
+logical reader bytes; it is not current CLI quality or scheduling evidence.
+We separate factory qualification, bounded accounting, I/O observability and
+physical custody. Capacity-frontier, CLI/HTTP, paired performance and GPU
+overlap qualification remain open; physical-memory necessity, nonblocking
+forward and performance leadership are not claimed.
 \end{abstract}
 
 \input{sections/introduction}
 \input{sections/scope}
 % design.tex progresses from a normal walkthrough to invariants to algorithms.
 \input{sections/design}
-% Keep the lifecycle algorithms ahead of the implementation mapping.
-\clearpage
+% The final bounded-scheduling algorithm is placed inline before implementation.
 \input{sections/implementation}
 \input{sections/evaluation}
 \input{sections/related-work}
@@ -71,4 +72,8 @@ quality, or completed multimodal support.
 
 \bibliographystyle{plain}
 \bibliography{references}
+
+\clearpage
+\appendix
+\input{sections/evaluation-history}
 \end{document}

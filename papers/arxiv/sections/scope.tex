@@ -98,9 +98,10 @@ RQ1 uses Table~\ref{tab:tp1-memory}; the storage-demand figures in
 Section~\ref{sec:rq2} diagnose cache and transfer counters without turning
 sample maxima into certified physical bounds.
 
-The storage-necessity gate additionally asks whether \emph{all compact
-weights and metadata} can remain resident with online expansion under the
-quality contract. Failure to fit expanded weights is insufficient if that
+The stronger, optional storage-necessity claim additionally asks whether
+\emph{all compact weights and metadata} can remain resident with online
+expansion under the quality contract. It is not a prerequisite for the
+bounded-residency mechanism studied here. Failure to fit expanded weights is insufficient if that
 compact alternative fits. A low configured cache budget is likewise not
 physical host-memory insufficiency. Storage necessity is scoped to evaluated
 representations, not a proof against every possible compression scheme.

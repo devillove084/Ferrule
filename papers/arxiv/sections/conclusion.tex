@@ -1,73 +1,89 @@
 \section{Limitations and Remaining Evidence Gates}
 \label{sec:limitations}
 
-\paragraph{Capacity and physical attribution.}
-The core beyond-physical-memory claim is not established. Configured budgets
-cover selected ledgers, not a total process/machine working set. Sampled
-device/PSS/RSS maxima can miss transients and cannot provide complete
-allocation attribution. Physical host capacity, file-cache residency, swap,
-co-tenants, and the complete compact-residency alternative require separate
-measurement. A shared pool counts once, while required physical copies count
-at their actual locations. Discrete CUDA records do not validate shared or
-unified-memory deployment.
+\paragraph{Bounded accounting and physical attribution.}
+Configured budgets cover selected ledgers, not the complete process/machine
+working set. Packed/prepared payload quota, metadata allowance and requested
+worker stack are bounded on the implemented path, but OS/TLS/allocator
+headroom and weak-reference-retained allocation backing are not physical RSS
+bounds. Device/PSS/RSS samples can miss transients and lack complete
+allocation attribution. Physical-memory insufficiency and storage necessity
+are not claims of this scoped paper; they would additionally require
+compact-residency, page-cache/swap, co-tenant and per-pool evidence. Shared
+physical pools count once, and discrete CUDA records do not qualify
+shared/unified-memory deployment.
 
-\paragraph{Logical demand and quality.}
-TP1 \texttt{-02} demonstrates application-level logical demand during four
-HTTP successes in one DEBUG exploratory run. Its 36,240,064,128 reader bytes
-are not physical NAS/network or block-device traffic; uploads are not cache
-misses or bus measurements. Only three visible-text/usage reference canaries
-passed; Hello2 was HTTP/usage only, generated IDs were absent, and complete
-numerical/task quality is unestablished. DEBUG/observer cost is unmeasured.
-Separate TP2 numerical test receipts cannot qualify TP1 or the resident
-vLLM comparison, and the strict W8A16 failure is not waived by argmax matches.
+\paragraph{Logical demand and same-cut quality.}
+Historical TP1 \texttt{-02} records repeated application-level demand during
+four HTTP successes in one DEBUG run. Its 36,240,064,128 reader bytes are not
+physical NAS or backing-block traffic, and its plots are not current read-
+pipeline statistics. Three visible-text/usage reference canaries passed;
+Hello2 was HTTP/usage only, generated IDs were absent, and complete numerical
+quality was not observed. Current \texttt{033519c} factory qualification
+now passes all nine GPU gates, including both schedules' diagnostic,
+ordinary-fingerprint and current-primary cold checks. Ordinary routes/states
+remain unobserved, and stream denominators are not pooled. Historical
+initialization and strict-wrapper failures remain failures in
+Appendix~\ref{sec:historical-chronology}. Neither factory results nor common
+CLI source/runtime provenance establish CLI/HTTP numerical equivalence.
+Observer/allocator-getter cost is unmeasured, TP2 does not fill TP1 gates,
+and argmax matches do not waive W8A16 strict failure.
 
-\paragraph{Safety, integration, and progress.}
-The invariants and algorithms specify intended behavior at named boundaries,
-not universal integration or formal verification. The general registry is
-provider-installed and distinct from prepared-KV and specialized host-KV
-paths. OS page cache is outside hard-credit control. Final TP1 resource
-closure is unknown and GPU quiescence remains unverified despite descendant
-drain and idle checks. Unknown physical-owner custody can permanently reduce
-available capacity; no general reset/replay, device-reset recovery, bounded
-recovery time, or availability guarantee is provided. The journal is in-memory,
-not durable ACID or arbitrary cross-rank atomic commit. Current Mixed
-collectives default to host participation; neither typed device permits nor
-NCCL plugin initialization proves a default device reduction or payload route.
+\paragraph{Scheduling, integration, and progress.}
+Both opt-in blocking and bounded lookahead are implemented, with the same
+read worker and host/device budgets. Whole forwards remain synchronous;
+blocking syscalls, consumer waits, locks and synchronization remain possible.
+The read window is split from owner compute submission, not from every
+consumer completion. Nsight-correlated kernel/copy evidence and a completed
+same-cut paired study are still needed for GPU overlap or a scheduling
+benefit. Host-span intersections and a worker thread establish neither.
+The stopped five-block study supplies no estimates; corrective V3 remains
+unqualified, not a retry or a power guarantee.
+The nine gates provide one qualified factory/accounting point, not repeated
+performance data or a capacity frontier. Logical host high-water is not RSS;
+allocator high-water may be observed through a fence-polling getter, while
+passive snapshots leave allocator state unobserved.
 
-The safe blocking reference is not implemented, and no physical-overlap
-trace closes RQ3. Provider blocking, synchronization, cyclic resource waits,
-and stalled progress remain possible. Asynchronous submission is not
-system-wide nonblocking execution or lock freedom. The intended modality scope
-extends beyond text, but other modalities and their quality oracles remain
-future implementation work.
+The lifecycle algorithms describe named boundaries, not formal verification
+or universal registry integration. The prepared-KV, HostKV and specialized
+expert paths have distinct owners. Passive observations neither heal poison
+nor discharge custody. Host cancel/drain/join cannot prove GPU quiescence;
+Unknown may permanently reduce available capacity. Final historical TP1
+resource closure remains unknown despite process drain and idle observations.
+No general reset/replay, device-reset recovery, bounded recovery time,
+availability, durable ACID or arbitrary cross-rank atomicity is provided.
+Mixed collectives retain their scoped host-default boundary. Other modalities
+and shared/unified memory need independent implementation and quality gates.
 
 \paragraph{Comparisons and reproducibility.}
-The two resident TP2 crossblocks show tradeoffs, not a fair, causal, or
-statistically confirmed speedup: arithmetic and budgets differ, and the
-number of independent blocks is small. Startup-metadata observations use
-uncontrolled caches and unpaired historical context. Local artifacts require
-portable archival, source/binary/model identities, and deterministic tables
-and plots before publication. Closing a quality, traffic, or custody gate
-in one profile does not close it in another.
+The two resident TP2 crossblocks are descriptive tradeoffs, not a fair,
+causal or statistically confirmed speedup. Arithmetic and total budgets
+differ; startup observations have uncontrolled caches and unpaired context.
+No state-of-the-art or first-storage-inference claim is made. Submission
+requires portable source/binary/model/oracle identities, complete failure
+records, deterministic tables/plots and final archival/visual checks. A
+scoped logical/NFS-client report may retain unknown NAS backing traffic
+without claiming storage necessity; it may not invent that missing evidence.
 
 \section{Conclusion}
 \label{sec:conclusion}
 
-\system{} connects storage-backed inference to an explicit execution contract:
-freeze a source-bound plan, admit covered claims, materialize exact
-generations, publish only validated bindings, and retain custody until the
-relevant physical references end. The physical/accounting distinction makes
-capacity measurable; the normal walkthrough and structured algorithms make
-readiness, publication, and reuse separate testable transitions.
+\system{} connects bounded storage-backed weight residency to source-bound
+planning, covered admission, exact completion, authorized publication, and
+custody through physical retirement. The concrete next-expert pipeline
+provides a same-worker blocking control and one bounded lookahead read after
+current upload and before compute submission. Its three-artifact plans,
+alias-aware host quota and sticky Unknown handling make the scheduling
+boundary and safe reuse conditions explicit without changing the synchronous
+forward.
 
-The current result is narrower than that target. One TP1 DEBUG run records
-four HTTP successes, three limited reference canaries, repeated
-materialization counters, and sampled memory. Physical storage traffic,
-complete TP1 numerical quality, capacity necessity, a same-contract scheduling
-comparison, and final custody closure remain open. Separate TP2 numerical and
-resident timing evidence is useful context but does not fill these gates.
-The paper's next evidentiary step is a profile-bound complete-output capacity
-study with attributed working sets, aligned physical I/O, safe blocking/async
-controls, and integrated fault-ledger observations. Until then, the design is
-not a demonstrated beyond-memory result or a general performance/quality
-claim.
+The frozen \texttt{033519c} factory/profile now passes all nine exact-once
+GPU qualification gates for constructor/provider and both schedules' full40,
+fresh, ordinary and cold-owner paths. Ordinary fingerprints match their own
+schedule's diagnostic primary; streams and unobserved route/state fields keep
+their distinct scope. This is a qualified numerical/provider and accounting
+point, not CLI/HTTP equivalence, a capacity frontier or physical release.
+Aligned client I/O, integrated fault/custody evidence and the five-pair RQ3
+performance study remain open after the pre-Ready CLI failure. GPU overlap requires correlated activity,
+not host submission spans; physical-memory necessity, general nonblocking
+execution and performance leadership require stronger separate evidence.

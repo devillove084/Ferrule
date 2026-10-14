@@ -43,6 +43,15 @@ obtains resume admission before executing. A compatible resident hit skips
 materialization; a compatible in-flight load can be joined only on paths that
 implement sharing.
 
+\paragraph{Bounded next-expert scheduling.}
+On the concrete routed-expert path, the owner first uploads the current
+expert and retires its temporary host payload aliases. It can then submit one
+read for the next selected, nonresident expert before submitting current
+compute. A read-only residency hint neither pins that next expert nor changes
+cache replacement order. Blocking uses the same worker and waits at demand
+instead. This split is a scheduling candidate, not a measured GPU overlap or
+an asynchronous forward API (Algorithm~\ref{alg:bounded-lookahead}).
+
 \paragraph{End and retire.}
 Consumer completion returns only the custody discharged by its adapter.
 Ending/publication and post-ending cleanup are separate phases. Prepared-KV
@@ -161,7 +170,7 @@ RQ1 checks bounded completion, RQ2 checks the load demand, RQ3 checks progress
 and physical intervals, and RQ4 checks these invariants under faults. A process
 exit or idle sample does not independently prove any final owner ledger.
 
-\section{Lifecycle Algorithms}
+\section{Lifecycle and Bounded Scheduling Algorithms}
 \label{sec:algorithms}
 
 The pseudocode names protocol roles and abstract result classes, not new
@@ -431,3 +440,110 @@ boundary and fresh admission; logical shutdown, a new generation, or an
 unrelated later fence is insufficient. Cleanup success is not successful
 inference, and scoped bookkeeping closure does not flush live caches or prove
 system-wide quiescence.
+
+
+\subsection{Bounded next-expert lookahead}
+\label{sec:bounded-lookahead}
+Algorithm~\ref{alg:bounded-lookahead} is the synchronous expert owner's
+schedule, not assumed general-registry use. Immutable plans select canonical
+gate/up/down artifacts; tickets bind exact operations, generations and extents.
+Matching demand validates source and binding before consuming a completion.
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabularx}{\linewidth}{@{}lX@{}}
+\toprule
+Symbol & Host-staging accounting meaning (bytes) \\
+\midrule
+$H$ & Combined configured host staging ceiling \\
+$P_{\max}$ & Largest selected expert's packed compressed weights and scales \\
+$M,S$ & Charged metadata allowance and requested worker-stack reservation \\
+\bottomrule
+\end{tabularx}
+\caption{Scheduling byte bounds; $P_{\max}$ is distinct from resource plan $P$.}
+\label{tab:lookahead-symbols}
+\end{table}
+
+Before spawning the worker, both modes require
+\begin{equation}
+  2P_{\max}+M+S\leq H.
+  \label{eq:host-read-bound}
+\end{equation}
+This covers packed/prepared coexistence, not two permanent expert copies.
+For admitted host scope, the owner additionally maintains
+\begin{equation}
+ C_{\mathrm{host}}(t)=B_{\mathrm{packed}}(t)+B_{\mathrm{artifact}}(t)
+                     +M(t)+S(t)\leq H.
+ \label{eq:host-logical-charge}
+\end{equation}
+$B_{\mathrm{packed}}$ includes queued, in-flight and held-completion quota;
+$B_{\mathrm{artifact}}$ retains the artifact reservation while any exact
+weight/scale payload alias survives. Aliases do not add copies or earn a
+refund; independent copies need their own charge. $M(t)$ and $S(t)$ are the
+metadata and requested-stack reservations of live/retained host scope.
+Unknown is already retained in these charges, not added twice. One worker has
+queue depth one and two charged slots. The measured owner-transition
+high-water tests this logical contract, not continuous RSS: OS stack rounding,
+guards, TLS, weak-reference backing and allocator headroom remain distinct.
+
+\begin{algorithm}[H]
+\caption{One bounded next-expert read window in a synchronous forward}
+\label{alg:bounded-lookahead}
+\fontsize{9}{9.5}\selectfont
+\begin{algorithmic}[1]
+\REQUIRE ordered selected buckets $\mathcal B$, source-bound plans,
+         mode $m\in\{\mathsf{Blocking},\mathsf{Lookahead}\}$, limits $H,M,S$
+\ENSURE unchanged bucket order and device proofs; residual custody retained
+\STATE \textbf{Preflight:} validate canonical three-artifact plans and
+       Equation~\ref{eq:host-read-bound}; start the same bounded worker in both modes
+\STATE \textbf{State:} at most one next ticket $\tau$; exact deferred error;
+       packed/prepared payload charges and allocation-alias witnesses
+\FOR{current bucket $b$ in $\mathcal B$}
+  \STATE owner admits/pins current device residency and scratch; validate source
+  \IF{current expert is not physically resident}
+    \STATE drain any unrelated speculation using its original identity
+    \STATE honor only $b$'s deferred error before any new dispatch
+    \IF{no exact carried ticket for $b$}
+      \STATE $\tau\gets\operatorname{SubmitExact}(b)$ under shared read-slot/byte limits
+    \ENDIF
+    \STATE \textbf{Demand:} await original $\tau$ (immediately after blocking submission)
+    \IF{worker custody is Unknown}
+      \STATE retain original identity/charge/poison; do not take or fabricate completion
+      \RETURN with residual custody reachable
+    \ENDIF
+    \STATE take completion once; validate ticket, plan, image/layer/expert and source
+    \IF{non-success or mismatched evidence}
+      \STATE preserve primary error and residual custody; select terminal cleanup
+      \RETURN without fabricated completion or publication
+    \ENDIF
+    \STATE reserve prepared-payload quota while packed bytes remain charged
+    \STATE construct exact gate/up/down artifacts without reread; track all payload aliases
+    \STATE upload current expert using existing owner admission and CUDA proofs
+  \ENDIF
+  \STATE \textbf{Read window:} drain speculation made redundant by a current resident hit
+  \STATE release current host charge only after alias retirement
+  \STATE inspect next selected bucket with read-only residency hint; no next pin/LRU mutation
+  \IF{$m=\mathsf{Lookahead}$ and next is nonresident and host custody permits}
+    \STATE try to submit that one next read before current compute submission
+    \STATE retain speculative submission/read errors for that exact later demand
+  \ENDIF
+  \STATE \textbf{Compute:} owner submits current compute from resident device handles
+  \STATE consume output under current lease; preserve existing fences and retirement
+\ENDFOR
+\STATE \textbf{Scope end/error:} cancel unused reads, drain and join original worker custody
+\STATE retain Unknown/poison and alias-held quota; host join never heals GPU Unknown
+\end{algorithmic}
+\end{algorithm}
+
+Speculative errors wait for the matching demand, not the current bucket.
+Unused reads are canceled/drained and counted; lookahead may read more bytes
+than blocking. Hints do not pin a later hit, and alias/budget checks never
+refund live custody. OS reads are not interruptible by cancellation; host
+join proves no GPU quiescence. Whole forwards remain synchronous.
+
+Weak witnesses track exact weight/scale allocations without adding payload
+copies. Strong aliases retain quota. After their last retirement, weak
+backing/control allocations and allocator-retained memory may still exist:
+quota release is not RSS reduction. Passive observations preserve Unknown
+and poison without refund, recovery or fabricated Closed status.

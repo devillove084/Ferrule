@@ -1,124 +1,234 @@
 # Ferrule arXiv 论文工作区
 
-这是**本地、未提交、被 Git 忽略的英文论文初稿**，不是已经完成实验或可直接投稿的论文。建立于 2026-10-02。
+这是**本地、未投稿的英文论文工作稿**，不是已经完成实验或可直接投稿的论文。建立于 2026-10-02。
 
-## Current manuscript argument and integrated figures (2026-10-14)
+## Current manuscript: bounded residency and qualified factory profile (2026-10-15)
 
-The TeX manuscript is now organized as a progressive argument, not a list of
-independent mechanisms. This writing pass changes manuscript content only;
-figures, experiments, receipts, checklist, and bibliography are not edited.
-No GPU query, server launch, or numerical rerun is part of this pass.
+The current title is **Ferrule: Bounded Storage-Backed Weight Residency**.
+The argument is problem/contracts → normal path/invariants → lifecycle
+Algorithms 1–2 and bounded next-expert Algorithm 3 → implementation → RQ1–RQ4
+→ prior work/limitations. The paper no longer requires or implies a
+beyond-total-physical-memory necessity result to support its scoped residency
+mechanism. External performance leadership/SOTA is conditional on future
+matched qualification and comparison; no first-system, SOTA, speedup or
+nonblocking-forward claim is made.
 
-| Order | Manuscript file | Argument and evidence link |
+### Implemented mechanism versus evidence
+
+- Both **blocking** and **lookahead** explicitly enable the real positioned-read
+  worker; the legacy disabled path is not the RQ3 control. One worker, queue
+  depth one, two charged read slots, source identity v2 including Unix ctime,
+  immutable ordered plans and canonical gate/up/down weight/scale artifacts.
+- The owner releases current host payload aliases after upload and submits one
+  next-expert read **before current compute submission**. Whole forwards and
+  existing CUDA consumer proofs remain synchronous. Speculative errors wait for
+  the matching demand; abandoned I/O is drained and counted, not silently erased.
+- Both study arms fix **64 MiB host / 8 MiB metadata / 2 MiB requested stack**;
+  metadata and stack are included in host quota. Device cache remains **64
+  entries / 320 MiB charge including 8 MiB scratch**. `2 P_max + M + S <= H`
+  covers packed/prepared coexistence, not total RSS. OS/TLS/allocator overhead
+  and retained weak-reference backing memory remain distinct and unmeasured.
+- Quota follows exact weight/scale allocation aliases. Passive observations do
+  not refund custody, heal poison or fabricate Closed. Host cancel/drain/join
+  proves no GPU quiescence. CLI options lower through prepared source-bound
+  admission into the existing factory/materializer.
+- **Current factory qualification: actual 9/9 GPU PASS**, exact once on
+  `033519c3def098ce417e4b6ff0f141a9f30bddb1`, 1,484 frozen source members.
+  The producer [SUMMARY](../../target/validation/expert-read-current-quality-20261014-02/SUMMARY.md),
+  [FINAL](../../target/validation/expert-read-current-quality-20261014-02/FINAL.json)
+  and [receipt audit](../../target/validation/expert-read-current-quality-20261014-02/receipt-audit.json)
+  replace the earlier RUNNING handoff, without rewriting any old failure.
+  Selected factory/provider numerical qualification closes; CLI/HTTP, capacity
+  frontier, physical release, paired performance and GPU overlap remain open.
+- Actual runtime mappings record CUDA12.4.99 with SM86 compiled code and NVTX
+  compiled, **profiling OFF**. No probes/warmups/retries/captures; all nine issued
+  once and passed, natural exit/authenticated ECHILD, recorded owners absent,
+  stable-idle v2/all-eight zeros and local locks released/reprobed. These are
+  process/idle observations, **not a CUDA physical-release certificate**.
+
+### Current numerical qualification (both schedules, separate denominators)
+
+| Phase | Gates | Main metrics per gate | Common-history vocabulary values per gate | Scope |
+|---|---:|---:|---:|---|
+| Full40 | 2 | 804 | 1,986,560 | 2,560 ordered route IDs per schedule; diagnostic states |
+| Retained fresh | 2 | 5,427 | 9,187,840 | 64 actual fingerprints per schedule, all four named streams |
+| Ordinary | 2 | 27 | 9,187,840 | All 64 fingerprints match own-schedule diagnostic primary; routes/states unobserved/null |
+| Cold owner | 2 | 1,809 | 3,228,160 | All 28 fingerprints match own current primary/config/oracle |
+| Constructor | 1 | — | 128 total, not common history | Four boundary/schedule cells ×32 finite vocab values, six verified reads each; tiny provider scope |
+
+Per fresh/ordinary schedule: common-history **27/9,187,840**, free feedback
+**27/9,187,840**, reset **9/3,228,160**, fork **1/248,320** (calls/values).
+Per cold schedule: common-history/free-feedback/reset **each 9/3,228,160**;
+fork **1/248,320**. Fingerprints are not additional logit values. Never sum
+these streams or mix ordinary's 27 output metrics with diagnostic route/state
+metrics as a larger independent-quality denominator. Original tolerance is
+`0.00025 + 0.012*abs(reference)`, with exact IDs where observed, not universal
+bit-exactness or broad task quality.
+
+Verified worker reads per schedule: **2,089 full40; 25,116 fresh; 25,116 ordinary;
+11,354 cold**, distinct from sampled operations or physical NAS bytes.
+Composition reports **16,777,984 logical host-charge bytes** within 64 MiB:
+`2*3,146,112 + 8,388,608 + 2,097,152`. Alias-held payload quota is retained;
+weak backing/allocator memory and RSS are distinct. Reported allocator reserved
+high-water **4,106,223,616 bytes** is within the 7 GiB policy, but its getter can
+poll retirement fences; passive snapshots leave allocator unobserved. These
+source-qualified point observations are not continuous physical peaks, a
+statistical guarantee, overhead-free observation or final physical release.
+
+CLI/constructor/composition are different executables. Common immutable
+source/native/runtime pins do not prove mathematical CLI numerical equivalence,
+HTTP acceptance or machine-identity equivalence. The portable paper receipt
+archive is [qualification_v1](experiments/storage_demand/qualification_v1/README.md),
+committed at `17b16fa059c3508788e081081d70452639a4e19f`; the complete archive has
+**249 files / 5,642,720 bytes (5.38 MiB)**, including 240 manifest-bound records
+occupying **5,343,269 stored bytes**. Its checker and all 37 offline tests pass.
+Executables, model/oracle payloads and the full source archive remain external
+hash-pinned inputs, not copied or rehashed by the offline checker. Curation is
+not a new run or CLI qualifier; this writing stage does not edit the archive.
+
+### Receipt chronology (do not combine passes)
+
+| Historical record | Actual numerical outcome | Wrapper / source boundary |
 |---|---|---|
-| 1 | `sections/introduction.tex` | Problem, RQ1–RQ4, scoped contributions |
-| 2 | `sections/scope.tex` | One symbol table; physical `d/B_d`, accounting `a/b_a`; representations, working sets, quality/completion contracts |
-| 3–5 | `sections/design.tex` | Normal walkthrough → intended invariants → typed `algorithm`/`algorithmic` pseudocode |
-| 6 | `sections/implementation.tex` | Contract-to-code mapping and profile integration limits |
-| 7 | `sections/evaluation.tex` | Setup → RQ1 capacity → RQ2 request I/O → RQ3 scheduling → RQ4 custody → separate resident supplement |
-| 8 | `sections/related-work.tex`, `sections/conclusion.tex` | Prior work → limitations → conclusion |
+| Middle quality `-01` | `cuInit (3)`, 0 metrics/logits; fresh/cold unissued | Different from TP1 `DEVNULL` prelaunch `-01` |
+| Full40 `-02` | PASS: 804 metrics / 1,986,560 logits | Original strict post-idle wrapper rejected |
+| Retained fresh `-03` | PASS: 5,427 metrics / 9,187,840 logits | Original strict post-idle wrapper rejected |
+| Cold owner `-04` | PASS: 1,809 metrics / 3,228,160 logits | Accepted new stable-idle v2; 3,533-input cut `5662b7d2…`; `same_source_cut=false` versus old primary |
+| Frozen CLI quality `-01` | `cuInit (3)`, 0 metrics/logits/token checks | Retained fresh unissued; not same executable/HTTP quality |
 
-Configured limits, reported samples, and continuous physical peaks are different
-quantities. The credit partition is an **intended invariant**, not independently
-measured conservation. TP1 `-02` remains `n=1` DEBUG exploration: four HTTP
-successes, three limited reference canaries plus Hello2 HTTP/usage only, logical
-bytes not physical I/O, no generated IDs/full numerical quality, final resource
-contract unknown. RQ3's same-contract safe-blocking reference is not implemented.
-TP2 test numerical evidence and resident vLLM timings remain separate; the latter
-retain `fairmatch=false` / `exact_speedup=null` and are not fair speedup evidence.
+The first strict wrappers and raw utilization samples remain failed; later idle
+does not reclassify them. Old cold acceptance does not qualify old full40/fresh
+on its cut. The new nine-gate result uses its own current source/config/primary
+relations and does not borrow these historical passes.
+Exact artifact paths and limitations are in [EVIDENCE_LEDGER.md](EVIDENCE_LEDGER.md).
 
-The later 2026-10-14 current StorageMiddle64 full40 gate stopped before
-inference at `cuInit`, `CUDA_ERROR_NOT_INITIALIZED (3)`: zero observed numerical
-metrics/logits, not a numerical mismatch. Fresh-quality/cold-owner were unissued,
-with no retry. The receipt is `target/validation/storage-middle64-current-quality-20261014-01/FINAL.json`,
-not the older TP1 `-01` `DEVNULL` wrapper failure. Owner initialization remains
-under investigation; quality/serving/resource gates are not complete.
+### RQ3 plan and RQ2 scopes
+
+The registered order is **B–L, B–L, L–B, L–B, B–L**, fixed 3:2 balance;
+ten planned lifecycles ×12 requests gives **120 requests /50 measured QA slots**.
+The actual [paired closeout](experiments/storage_demand/paired_read_v1/artifacts-current-20261015-01/closeout.json)
+is **permanently stopped, no retry**: P1-blocking failed before Ready with
+`experimental qwen35-mixed-bf16 serving: prepared source profile changed`.
+The stopped `cmd_serve` unconditionally invoked the TP2 cache accessor on
+enabled TP1's prepared-source payload; this was not `cuInit` or numerical mismatch. One
+lifecycle was attempted, zero completed, nine unissued; **0 HTTP issued,
+120 requests and 50 QA slots unissued**, all five incomplete pairs retained.
+No quality metrics, latency, goodput, aggregate, interval or significance result
+exists; null is not zero. Ready maps/read ledger/final owner closure remain
+unobserved/unknown despite authenticated process drain and idle/lock receipts.
+The default disabled/no-worker-read CLI path is not either enabled arm, and the
+historical DEBUG `-02` figures are not enabled-pipeline measurements.
+
+[Corrective V3](experiments/storage_demand/paired_read_v1/PLAN_V3.md) is a separate
+CPU-only preregistration with explicit **cohort target1 /max-deferrals0** in
+both arms, not stopped CLI defaults4/3 or a production-default change.
+The **source-plan query fix is committed at `86c58a0`**. Its owner reports
+CPU and hidden-CUDA `CudaWorkspace` checks passed; local source inspection
+confirms catalog-selected serving-resource queries, not the old unconditional
+TP2 accessor. These are not a new CLI/HTTP qualification. New candidate/binary,
+nine same-cut gates and V3 Ready/HTTP/runtime binding remain pending.
+V3 is neither a resume nor denominator repair; old `033519c` PASS is only its
+configuration/oracle reference. The prospective envelope is 7200 s absolute,
+650 s/lifecycle +100 s final reserve, STOP/no retry, all-five-pairs-or-null.
+Five blocks do not guarantee power, interval coverage or a performance victory.
+The independent baseline pilot remains **5 lifecycles /60 requests /25 QA**,
+unexecuted; neither its seals nor the stopped study is edited here.
+
+RQ2 separates historical HTTP logical demand, current factory owner-lifetime
+read observations, shared NFS-client mountstats, and unknown NAS backing traffic.
+The stopped pilot has shutdown-only shared-client snapshots/deltas, **no
+Ready/startup-to-Ready or HTTP request windows**; those are not zero request I/O
+or server-attributed NAS bytes. Fresh owners are not storage-cold; missing/reset
+counters stay unknown, not zero.
 
 ### Current plot-integration validation
 
-- `make -C papers/arxiv`: **PASS**; `build/main.pdf` is **30 pages,
-  725,591 bytes** after the current-gate chronology and algorithm/contract
-  audit. The converged log has
-  no LaTeX/package warnings, undefined references/citations, overfull/underfull
-  boxes, oversized floats, or duplicate labels. All four experiment PDFs are
-  actual included assets.
-- Read-only `summarize.py --check`: **PASS**, 41 sealed input hashes,
-  39 receipt pins, zero divergences. Read-only `plot_storage_demand.py --check`:
-  **PASS**, all four PDFs/PNGs and their contact sheet/data/guide/manifest,
-  30 anchored invocations, later entry-balance residuals zero. Neither check
-  rewrote inputs, artifacts, or manifests.
-- Inline checks matched the 184,560-byte `H-L` aggregate, implied/unmeasured
-  initial entries, per-request invocation counts, the cache-charged peak governed
-  by its 320 MiB accounting ceiling, the unknown total physical-owner peak/ceiling,
-  and separate TP2 receipt selections: **33 / 35,937** from
-  `model-runtime-quality.json`, versus **37 / 40,293** in the distinct
-  `production-opts-01` optimized-release summary. No new/anticipated GPU PASS
-  or serving/numerical equivalence result was written.
-- Ghostscript 9.54.0 rendered the full paper to build-only PNGs and extracted
-  text. The revised audit was checked at paper text width, including the
-  expanded algorithms and experiment plots. No diagram connector/text or
-  caption occlusion, clipping, oversized float, or incomplete algorithm was
-  observed.
-  The shared palette has named nodes/swatches; solid dependencies and dashed
-  evidence/Unknown encoding remain distinguishable without relying on color.
-- Source writes are limited to `main.tex`, manuscript sections, and this README;
-  normal paper build/review outputs are under `build/`. No production, figure
-  source/PDF, experiment, raw receipt, plot manifest, checklist, or bibliography
-  was edited. No GPU query, server, or numerical rerun was performed.
+This writing stage changes only `main.tex`, the eight manuscript sections,
+this README, the checklist and the evidence ledger. Existing figure sources,
+all experiment code/configuration/raw receipts and the bibliography are untouched.
+Build/review outputs are confined to `build/`; no GPU query, lock, server launch,
+experiment execution or Git commit is part of this pass.
 
-### Protocol audit revisions
+- `make -C papers/arxiv`: **PASS**, finite 120 s limits, no build timeout.
+  Latest `build/main.pdf`: **36 pages / 757,784 bytes** (35 main/reference
+  pages + one historical appendix page); SHA256
+  `d0aa956a5793b344fd4ab18452e1a66afaa3696c12b6860ebb3a9c19dfb06989`.
+  Version snapshot: **2026-10-15 recovered factory9 / stopped CLI V2**;
+  factory cut `033519c`, archive `17b16fa`, source-plan query fix `86c58a0`
+  (new CLI/HTTP qualification pending). Source/PDF hashes and validation scope
+  are recorded in `build/recovery-final-review.json`.
+  The pre-update 34-page/748,066-byte build is historical, not the latest PDF.
+- Converged log: **zero** LaTeX/package warnings, undefined references/citations,
+  overfull/underfull boxes, oversized floats or duplicate labels. Three standard
+  algorithms, all seven existing figure assets, complete new qualification table,
+  charge equations and the historical appendix are included.
+- Ghostscript rendered all **36 pages in color (110 dpi) and grayscale (72 dpi)**.
+  Color contact-sheet review covered title/abstract, all algorithms, current
+  qualification/RQ scopes, figures/captions, conclusion/references and appendix.
+  Full-page checks covered **Algorithm 3 (p.15), current qualification Table 6
+  (p.22), and Appendix A (p.36)**; figure pages 8/10/19/25–28 were also checked
+  in grayscale. No clipping, obscured text, caption occlusion or incomplete
+  algorithm was observed. The long appendix receipt path now has explicit
+  quote/line breaks. Local review is not scientific closure.
+- **Read-only producer cross-check PASS:** all nine typed report hashes match
+  the audit; reports complete/passed with authenticated ECHILD. Direct comparison
+  verifies all 64 ordinary and 28 cold actual fingerprints against each own-schedule
+  primary. Ordinary route/state observations remain false/null; per-stream
+  denominators are separate. These are receipt checks, not GPU reruns.
+- Narrow source/doc whitespace, compiled label/reference and stale-current-language
+  checks: **PASS**. All **29 protected figure/Makefile/bibliography assets** and
+  **340 snapshotted archive/paired-receipt files** retain hashes. No Rust/GPU tests,
+  HTTP/NFS/NVTX profiling or plot checker was run by this update. Git/index/diff
+  verification, staging and commit are left to the main agent; this recovery
+  ran no Git command.
+- Portable archive checker and **37/37 CPU-only offline tests: PASS**, rerun
+  read-only in this recovery; outputs are in `build/recovery-final-archive-*`.
+  They verify historical receipt consistency, not current GPU or CLI acceptance.
 
-- Capacity inequality is necessary, not sufficient: intrinsic rejection,
-  temporary occupancy waits, canonical/authority checks, and policy-specific
-  execution reserves are distinct.
-- Publication is explicitly Ready / Blocked / Rejected. Ready resolves exact
-  waiters after resident-grant transfer. Rejection keeps the journal and custody
-  for cleanup. Identity-mismatched events are rejected;
-  matching validated `CompletionOutcome::Stale` enters terminal cleanup.
-- Read custody return precedes explicit read-slot/storage-read credit release;
-  pinned host charge remains live through upload or proven cleanup.
-- Cleanup snapshots `Omega` after owner-accepted demand detachment, preserves
-  shared ownership/ACK-handoffs, and visits at most `k` items per pass while
-  persistent records retain unvisited/unresolved obligations and a rotating
-  cursor for wake/revisit. New work cannot overtake the unvisited cohort;
-  examination fairness is a requirement, not measured starvation freedom.
-- Pending/Idle requires a positively known original pollable obligation;
-  otherwise Unknown custody is retained. Secondary cleanup errors preserve
-  primary outcome, phase, exact arguments, and custody without irreversible
-  ending redispatch; partial returns/releases are not applied twice.
-- Exact-stage cancellation markers prevent accepted cancellation redispatch.
-  Provider acceptance is not quiescence. Unknown never resets: a late exact
-  registry completion may close its named stage without clearing owner poison.
-- `cache.peak_bytes` (raw key `expert_owner_peak_bytes`) is resident + pending
-  + scratch charged-byte high-water, governed by
-  `ExpertCacheLimits.max_bytes` = 320 MiB, not physical-owner memory.
-  Independent physical-owner peak/ceiling remain unobserved.
-  No implementation verification or nonblocking/progress guarantee was added.
+### Exact handoff file list (no commit made)
 
-### Integrated experiment figures
+```text
+papers/arxiv/main.tex
+papers/arxiv/sections/introduction.tex
+papers/arxiv/sections/scope.tex
+papers/arxiv/sections/design.tex
+papers/arxiv/sections/implementation.tex
+papers/arxiv/sections/evaluation.tex
+papers/arxiv/sections/related-work.tex
+papers/arxiv/sections/conclusion.tex
+papers/arxiv/sections/evaluation-history.tex
+papers/arxiv/README.md
+papers/arxiv/PAPER_COMPLETION_CHECKLIST.md
+papers/arxiv/EVIDENCE_LEDGER.md
+papers/arxiv/build/main.pdf
+```
 
-The final manuscript directly includes the four generated storage-demand PDFs.
-Captions and plotting semantics are tied to `experiments/storage_demand/analysis/output/PLOTS.md`:
+The first twelve are authored sources/documents; the last is the already-tracked
+rebuilt PDF. Other `build/` logs/renders/check manifests are local review outputs,
+not additional source or experiment changes. New `sections/evaluation-history.tex` follows
+the repository ignore rule and must be included explicitly in the main agent’s
+file-specific commit; this writing stage does not stage it.
 
-| Asset relative to `papers/arxiv` | LaTeX label | Equation / evidence boundary |
-|---|---|---|
-| `figures/storage-demand-logical-transfer.pdf` | `fig:storage-demand-logical-transfer` | `eq:request-io`; `L` versus `H` and their difference are application counters, not disk or bus traffic |
-| `figures/storage-demand-cache-reconciliation.pdf` | `fig:storage-demand-cache-reconciliation` | `eq:entry-reconciliation`, `eq:cache-charge`; initial zero is implied, gauges are not a complete ledger |
-| `figures/storage-demand-invocation-timeline.pdf` | `fig:storage-demand-invocation-timeline` | 30 log-order invocation boundaries; occupancy is sampled at boundaries, uploads are not cache misses |
-| `figures/storage-demand-timing.pdf` | `fig:storage-demand-timing` | Startup and request bars have separate origins; `n=1` DEBUG, no CI or kernel timing |
+### Integrated historical figures
 
-The existing three colored mechanism diagrams remain at their same PDF paths and
-labels. Their captions retain the shared planning/storage/execution/publication/
-Unknown palette, labeled swatches, dashed evidence gates, and profile-scoped
-non-claims; no figure source or PDF was changed in this manuscript pass.
-Building is CPU-only via `make -C papers/arxiv`; the installed `algorithm` and
-`algorithmic` packages are used, not `algpseudocode`.
+All four existing data PDFs remain frozen **TP1 real `-02`, n=1 DEBUG** assets;
+they are not regenerated or relabeled as current-pipeline measurements.
+
+| Asset under `figures/` | Manuscript equation / evidence scope |
+|---|---|
+| `storage-demand-logical-transfer.pdf` | `eq:request-io`: application reader/facade bytes, not disk/bus traffic |
+| `storage-demand-cache-reconciliation.pdf` | `eq:entry-reconciliation`, `eq:cache-charge`: boundary counts and configured cache-charge high-water, not total physical-owner memory |
+| `storage-demand-invocation-timeline.pdf` | 30 log-order invocation boundaries, not elapsed/kernel time |
+| `storage-demand-timing.pdf` | `eq:timing-origins`: startup/request origins; no comparative statistics |
+
+Three existing mechanism PDFs remain conceptual and profile-scoped. Standard
+`algorithm`/`algorithmic` is retained. CPU-only build: `make -C papers/arxiv`.
 
 ---
 
 ## 目录与版本控制
 
-仓库根 `.gitignore` 已有 `/papers/`，覆盖本目录，因此没有重复修改忽略规则。普通 `git status` 和提交不会保护这些文件；切换机器、清理 ignored 文件或删除工作区前，应另行备份。不要对本目录执行 `git clean -fdx`，也不要为了保存论文而把整个 dirty 工作区强制加入 Git。
+该目录历史上被忽略；本次只读 index 核对确认稿件、说明文件和 `build/main.pdf` 在跟踪列表中。提交须使用本轮精确文件清单，不加入整个工作区；`target/` 证据及额外 build/review 文件仍需另行归档，不能仅依赖 Git。不要执行 `git clean -fdx`。
 
 ```text
 papers/arxiv/
@@ -135,29 +245,32 @@ papers/arxiv/
     ├── implementation.tex
     ├── evaluation.tex
     ├── related-work.tex
-    └── conclusion.tex
+    ├── conclusion.tex
+    └── evaluation-history.tex # 新增，须显式纳入提交
 ```
 
 PDF 构建后位于 `build/main.pdf`。现有彩色概念图与四幅实测收据派生图位于 `figures/`；实际 include 路径、label 与范围见上方说明。所有结果表均保留其冻结收据范围，不把 placeholder 当作结果。
 
 ## 核心目标、标题、作者与设计范围
 
-核心目标是 **storage-backed inference when the model exceeds deduplicated usable physical residency capacity**：当模型超过部署可用、去重后的物理驻留内存容量时，利用 backing storage 支撑按需推理。容量定义不预设离散 GPU+host；离散 GPU 与主机内存只是一个实例，统一内存或共享物理池必须按实际物理归属计数，不能重复相加。
+核心目标是 **bounded storage-backed weight residency**：在声明的账本预算下，
+通过源绑定物化、有限驻留复用与 custody 安全完成合格推理。软件预算与真实物理
+容量分报；当前不以模型超过 host+device 总物理内存或硬盘必要性作为标题/结论。
+更强 necessity 主张另需紧凑权重不可驻留、物理 I/O 与分域归因证据。
 
-1. **目标：** 验证模型超过去重物理驻留容量时的推理可行性，明确权重表示、物理池、去重规则、存储访问及数值验收。
-2. **手段：** 用精确的事务性质资源管理连接 admission、按需物化、continuation、KV publication 与 retirement，在纳入账本的资源域内实施准入，区分 logical terminal、physical quiescence 与 retained custody。事务 custody 是安全重用容量的机制，不是独立主问题。
-3. **设计范围：** 后续覆盖全模态路径和全异步执行；当前不能声称已验证全模态，也不能声称全链路无阻塞。异步提交/完成不等于已证明实际执行 overlap，二者必须分别建立证据。
-4. **评价：** 论文以 E0 容量实验为第一主实验；当前工程执行先争取 vLLM 同等或更好性能，E2 升 P0，再补齐容量与机制清单。两条验收不互相替代；机制评价覆盖安全重用、I/O、延迟、吞吐、实际 overlap 及正常路径开销。事务性质不等于跨崩溃持久事务，协议精确性也不等于数值 exactness 或性能保证。
+标题：**Ferrule: Bounded Storage-Backed Weight Residency**。
+作者：**Lu Huanbing**；单位：**Independent Researcher**；邮箱：
+**luhuanbing084@gmail.com**。ORCID/资助未提供，不猜测。
 
-确定标题为：
+通用模态/统一内存为 future scope；当前路径是单 owner 文本/CUDA。
+真实读 worker 与两种调度已实现，current factory GPU qualification 9/9 PASS；forward仍同步，CLI/HTTP与performance/overlap pending。
+四 RQ 为核心；vLLM/SOTA 仅 conditional secondary，非无条件投稿门禁。
+事务 custody 非持久 ACID、数值 exactness、恢复/活性或性能保证。
 
-> **Ferrule: Storage-Backed Inference Beyond Memory Capacity**
-
-作者：**Lu Huanbing**；单位：**Independent Researcher**；联系邮箱：**luhuanbing084@gmail.com**。ORCID 与资助信息未提供，不推测、不填写为“无”。
-
-历史建议保留在 `../../docs/temp_ferrule_refactor.md` 的论文讨论（约 13558–13858 行）和恢复摘要（约 14568–14616 行）。当前目标以本文为准；证据与缺口见 [EVIDENCE_LEDGER.md](EVIDENCE_LEDGER.md)，测量合同见 [性能协议](../../docs/PERFORMANCE_EVALUATION.md)。历史标题和术语不替代上述通用容量目标。
-
-标题、作者、正文主线与 [PAPER_COMPLETION_CHECKLIST.md](PAPER_COMPLETION_CHECKLIST.md) 工作清单已同步；当前容量、多模态、统一内存和全异步范围仍须逐 profile 验收。
+历史讨论与 stronger beyond-capacity 计划见旧 ledger/checklist 条目；不把
+历史目标、旧 PASS 或旧构建覆盖当前范围。当前证据见
+[EVIDENCE_LEDGER.md](EVIDENCE_LEDGER.md)，执行计划见
+[PAPER_COMPLETION_CHECKLIST.md](PAPER_COMPLETION_CHECKLIST.md)。
 
 ## 已经写入什么
 
@@ -169,7 +282,7 @@ PDF 构建后位于 `build/main.pdf`。现有彩色概念图与四幅实测收�
 
 初稿中的资源公式是**抽象记账条件**，不是形式化验证结论；当前实验章节区分实际冻结的 logical-demand/图表观察与尚未完成的证据门禁。候选贡献尚未通过主文献比较确立 novelty。没有捏造作者、引用、实验数据、置信区间或性能优势。
 
-## 容量定义与最新证据边界
+## 更强容量主张的条件与历史证据边界
 
 **核心容量 claim 当前尚未建立完整证据，完整的磁盘必要性证据也未确认。** 不能借用全驻留 EP8、host-only 运行，或全部紧凑权重仍可驻留某个内存池的 offload 结果来证明这一目标。
 
@@ -181,7 +294,7 @@ PDF 构建后位于 `build/main.pdf`。现有彩色概念图与四幅实测收�
 - **去重的可用物理驻留容量：** 按实际物理 pool 归属报告可用于驻留的容量，同一物理池或共享页只计一次；占用独立物理存储的副本仍各计其实际占用。离散 GPU 与 host 只是一个实例。统一地址或 managed-memory API 本身不证明底层只有一个物理池，必须核对实际拓扑、迁移及驻留情况。
 - **总工作集：** 实际驻留权重加 KV、activations、workspace、staging、在途及 retained buffers、metadata、固定分配和相关 OS page cache；不能只用账本占用代表部署总内存。
 
-首要实验必须绑定表示与算术合同，报告物理内存池、去重规则和实际施加预算、逐池高水位、cache/swap 条件、请求期物理存储读取，以及对应模态的端到端推理完成与数值/质量验收（当前语言解码实例包括 prefill 和多步 decode）。离散 GPU+host 只是一个配置实例，不是通用定义；人为限额与真实物理容量不足应分别表述。仅总工作集因 KV/并发超限、仅出现非驻留请求或仅成功加载模型，都不足以建立模型超过可用物理驻留容量的核心 claim。
+若恢复 physical-memory necessity 主张，其实验必须绑定表示与算术合同，报告物理内存池、去重规则和实际施加预算、逐池高水位、cache/swap 条件、请求期物理存储读取，以及对应模态的端到端推理完成与数值/质量验收（当前语言解码实例包括 prefill 和多步 decode）。离散 GPU+host 只是一个配置实例，不是通用定义；人为限额与真实物理容量不足应分别表述。仅总工作集因 KV/并发超限、仅出现非驻留请求或仅成功加载模型，都不足以建立模型超过可用物理驻留容量的核心 claim。
 
 不要直接将旧会话中的测试/吞吐抄入论文。2026-10-08 按 [CURRENT_ACCEPTANCE](../../docs/CURRENT_ACCEPTANCE.md)（2026-10-07）及其冻结收据同步；[性能协议](../../docs/PERFORMANCE_EVALUATION.md) 保留测量方法和历史限制。当前实际 CUDA 解码证据保留其设备、模态和 profile 局限：
 
@@ -195,9 +308,9 @@ PDF 构建后位于 `build/main.pdf`。现有彩色概念图与四幅实测收�
 
 详细路径与当前事实见 [EVIDENCE_LEDGER.md](EVIDENCE_LEDGER.md)。历史计划与新评估冲突时，先追踪原始 artifact 和版本，不通过选择更好看的结果消除冲突。
 
-## 此前运行计划（2026-10-08；已由下方 TP2 收据更新）
+## 历史运行计划（2026-10-08；非当前执行顺序）
 
-先做 vLLM 性能工程，再补齐论文清单；E2 升 P0，E0 仍是未完成的 primary paper claim。具体阶段、预注册判定和条目映射见 [checklist 第 0 节](PAPER_COMPLETION_CHECKLIST.md)。论文专用 runner 入口为 [experiments/README.md](experiments/README.md)（现有 runner 与收据说明）；本次只改这三份 Markdown，不创建或修改 experiments，不在根 `scripts/` 新增论文专用脚本。
+先做 vLLM 性能工程，再补齐论文清单；E2 升 P0，E0 的 bounded-residency/quality 部分仍未完成；physical necessity 是另行条件主张。具体阶段、预注册判定和条目映射见 [checklist 第 0 节](PAPER_COMPLETION_CHECKLIST.md)。论文专用 runner 入口为 [experiments/README.md](experiments/README.md)（现有 runner 与收据说明）；本次只改这三份 Markdown，不创建或修改 experiments，不在根 `scripts/` 新增论文专用脚本。
 
 首个单 GPU TP1 Mixed/vLLM 比较是 **boundary-aligned system-level 候选，不是 arithmetic-equivalent runtime 对比**；双方 effective dtype、F32 SSM/BF16 conv/KV、质量、实际工作量和资源均需核实。soft 7 GiB 策略与 observed usage/峰值不能写成 hard cap，旧 Ready 观察不能冒充峰值；本次无新实测。完整紧凑权重能放进 host RAM 时，不证明论文 storage necessity。
 
@@ -261,9 +374,8 @@ make -C papers/arxiv clean
 
 ## 后续补齐顺序
 
-1. **先执行 E2 vLLM 性能工程计划，再补齐 E0 容量证据：** 先建立有资格的 system-level baseline、描述性 pilot 与确认协议，再按 checklist 完成容量及机制验收。E0 仍须固定模型/表示/物理池，闭环磁盘必要性、请求期读取、峰值与合格推理；性能结果不替代它。
-2. 标题、作者、摘要、问题定义、实验排序与 [PAPER_COMPLETION_CHECKLIST.md](PAPER_COMPLETION_CHECKLIST.md) 工作清单已对齐核心目标；当前容量、多模态、统一内存和全异步范围仍须逐 profile 验收。
-3. 整理分别冻结的 F32 和 bounded Mixed profile 可公开证据，与 W8A16 strict FAIL 及旧失败分开；数值验收必须对应容量实验的具体模态、设备、profile 和 snapshot，不能跨配置借用。
-4. 建立逐模态、设备和 profile 的证据矩阵、相关工作矩阵与最小公平 baseline，区分统一/共享物理池、离散设备、host-resident 与真正超过可用物理驻留容量的 storage-backed 推理。
-5. 分别验证异步提交/完成、实际执行 overlap 和事务 custody 对安全重用容量的作用；补独立重复、并发/尾延迟、资源高水位、安全消融、组合故障及正常路径开销，用实际数据替换方案并保留负结果。
-6. 新版 TeX 修改后另行重编译并记录对应版本，不将上版成功结果移用为新版验证。
+1. current `033519c` factory已9/9通过且portable receipts已归档；paired原study永久stopped。由独立production owner修复TP1/TP2 accessor，corrective V3需新cut九gate与candidate/CLI/HTTP/Ready绑定，不借旧PASS。
+2. RQ1 selected factory quality subgate closed、capacity frontier仍open；继续RQ2 logical/NFS-client visibility与RQ4 integrated faults/custody，physical release/overhead/attribution unknown诚实保留。
+3. RQ3 corrective V3已CPU预声明cohort1/0与finite wall/STOP/no-retry/uncertainty，但binding/execution pending；不resume旧study。GPU overlap另需相关联kernel/copy活动，whole forward仍同步。
+4. 现有 baseline5 lifecycles 保留独立/unexecuted；vLLM/SOTA、physical necessity、大矩阵/其他模态/统一内存为 conditional follow-up，非无条件 gate。
+5. 归档冻结 source/binary/model/oracle/raw/plots、作者声明与相关文献完整审计；最后独立投稿/视觉验收。当前 build/read-only checks 不等于科学 PASS。
