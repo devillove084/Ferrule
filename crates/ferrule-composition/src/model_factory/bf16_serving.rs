@@ -580,6 +580,10 @@ impl ResidentModelBuildPlan {
         .map(Some)
     }
 }
+#[cfg(test)]
+#[path = "../../tests/unit/engine/model_factory/expert_read_reporting.rs"]
+pub(super) mod expert_read_reporting;
+
 #[cfg(all(test, feature = "cuda"))]
 type NumericBf16RunnerObserver = Box<
     dyn FnOnce(

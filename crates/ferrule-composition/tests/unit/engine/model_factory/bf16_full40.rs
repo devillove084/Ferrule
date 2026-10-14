@@ -22,6 +22,41 @@ use ferrule_model::transformer::{
 };
 
 type Runner = GenericDecoderRunner<HybridCudaDecoder>;
+use crate::model_factory::bf16_serving::expert_read_reporting::{
+    self, PredictionReports, ReadQualityLog,
+};
+use ferrule_model::runner::ResidentModelRunner;
+type ReadLog = Option<Rc<RefCell<ReadQualityLog>>>;
+
+fn observe_operation<T>(
+    runner: &mut Runner,
+    reads: &ReadLog,
+    label: &str,
+    operation: &str,
+    execute: impl FnOnce(&mut Runner) -> T,
+) -> T {
+    let Some(log) = reads else {
+        return execute(runner);
+    };
+    let before = runner.physical_resource_snapshot();
+    let index = log.borrow_mut().begin(label, operation, before.clone());
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| execute(runner)));
+    log.borrow_mut()
+        .finish(index, &before, runner.physical_resource_snapshot());
+    match result {
+        Ok(value) => value,
+        Err(panic) => std::panic::resume_unwind(panic),
+    }
+}
+
+fn attach_read_reports(
+    report: &mut Value,
+    reads: &ReadLog,
+    predictions: Option<&PredictionReports>,
+) {
+    let reads = reads.as_ref().map(|log| log.borrow());
+    expert_read_reporting::attach(report, reads.as_deref(), predictions);
+}
 
 // The real source-header plan is 6,846,743,296 bytes INCLUDING the existing
 // allocator margin. The former 6400 MiB cap rejected it before any GPU work.
@@ -649,6 +684,7 @@ fn check_state(
     case: &str,
     stage: &str,
     report: &mut StrictReport,
+    reads: &ReadLog,
 ) {
     assert!(
         state.kv_state().layers().is_empty(),
@@ -659,7 +695,14 @@ fn check_state(
         if let Some(value) = value {
             gdn += 1;
             assert_eq!(value.position(), state.core().position());
-            let (conv, ssm) = value.diagnostic_snapshot().unwrap();
+            let (conv, ssm) = observe_operation(
+                runner,
+                reads,
+                &format!("{case}/{stage}/gdn_snapshot/{layer}"),
+                "diagnostic_state_snapshot",
+                |_| value.diagnostic_snapshot(),
+            )
+            .unwrap();
             typed(&conv);
             for (field, actual) in [("conv_states", conv), ("recurrent_states", ssm)] {
                 let key = format!("{stage}.cache.{field}.{layer:02}");
@@ -678,7 +721,14 @@ fn check_state(
     let mut planes = vec![Vec::<f32>::new(); 20];
     for (logical, &page) in pages.iter().enumerate() {
         runner.preempt_kv_pages(&[page]).unwrap();
-        let snapshot = runner.backend().pool().typed_host_snapshot(page).unwrap();
+        let snapshot = observe_operation(
+            runner,
+            reads,
+            &format!("{case}/{stage}/kv_snapshot/{logical}"),
+            "diagnostic_kv_snapshot",
+            |runner| runner.backend().pool().typed_host_snapshot(page),
+        )
+        .unwrap();
         assert_eq!(snapshot.planes.len(), descriptors.len());
         let valid = (state.core().position() - logical * page_tokens).min(page_tokens);
         for (i, (plane, descriptor)) in snapshot.planes.iter().zip(&descriptors).enumerate() {
@@ -854,6 +904,9 @@ fn full40_run(
     capture_case: Option<&str>,
 ) {
     let capture_only = capture_case.is_some();
+    let reads = test_config
+        .expert_read_pipeline()
+        .map(|read| Rc::new(RefCell::new(ReadQualityLog::new(read, true))));
     let limits = test_config.capacity(precision);
     let config_manifest = test_config.manifest(precision);
     let execution_profile = precision.hybrid_backend_name();
@@ -918,16 +971,14 @@ fn full40_run(
         .create_new(true)
         .open(report_dir.join("full40-bf16-profile.json"))
         .unwrap();
-    serde_json::to_writer_pretty(
-        &mut output,
-        &json!({"schema":"ferrule.numeric-bf16-full40-profile-gate.v1",
+    let mut initial = json!({"schema":"ferrule.numeric-bf16-full40-profile-gate.v1",
         "status":"reference verified; factory preparation pending","passed":false,"complete":false,
         "profile":execution_profile,"reference_profile":BF16_PROFILE,"reference_manifest_sha256":pin,
         "test_config":config_manifest,"effective_config":null,"observer_mode":"diagnostic_routes_and_states",
         "ordinary_no_observer_claim":false,"concurrent_scheduler_claim":false,
-        "greedy_tie_policy":"lower_token_id","next_token_checks":[]}),
-    )
-    .unwrap();
+        "greedy_tie_policy":"lower_token_id","next_token_checks":[]});
+    attach_read_reports(&mut initial, &reads, None);
+    serde_json::to_writer_pretty(&mut output, &initial).unwrap();
     output.sync_all().unwrap();
     let plan = prepare_full40_with_config(&model, precision, test_config);
     let effective_config = full40_effective_config(&plan, test_config, precision);
@@ -949,22 +1000,21 @@ fn full40_run(
     let progress_file = Rc::new(RefCell::new(output.try_clone().unwrap()));
     let progress_report = Rc::clone(&report);
     let progress_pin = pin.clone();
+    let progress_reads = reads.clone();
     let persist = Rc::new(move |status: &str| {
         let r = progress_report.borrow();
         let mut file = progress_file.borrow_mut();
         file.seek(std::io::SeekFrom::Start(0)).unwrap();
         file.set_len(0).unwrap();
-        serde_json::to_writer_pretty(
-            &mut *file,
-            &json!({"schema":"ferrule.numeric-bf16-full40-profile-gate.v1",
+        let mut data = json!({"schema":"ferrule.numeric-bf16-full40-profile-gate.v1",
             "status":status,"passed":false,"complete":false,"profile":execution_profile,"reference_profile":BF16_PROFILE,
             "reference_manifest_sha256":progress_pin,"logits_compared":r.logits,
             "test_config":progress_config,"effective_config":progress_effective,
             "observer_mode":"diagnostic_routes_and_states","ordinary_no_observer_claim":false,
             "concurrent_scheduler_claim":false,"greedy_tie_policy":"lower_token_id",
-            "next_token_checks":*progress_tokens.borrow(),"failures":r.failures,"metrics":r.metrics}),
-        )
-        .unwrap();
+            "next_token_checks":*progress_tokens.borrow(),"failures":r.failures,"metrics":r.metrics});
+        attach_read_reports(&mut data, &progress_reads, None);
+        serde_json::to_writer_pretty(&mut *file, &data).unwrap();
         file.sync_all().unwrap();
     });
     persist("prepared; computation not started");
@@ -986,6 +1036,7 @@ fn full40_run(
         diagnostic_path.is_some() || std::env::var_os(CAPTURE_PHASES_ENV).is_none(),
         "capture phases require FERRULE_NUMERIC_BF16_FIRST_TRACE_DIR"
     );
+    let call_reads = reads.clone();
     crate::model_factory::bf16_serving::NUMERIC_BF16_TEST_RUNNER.with(|slot| {
         assert!(slot.borrow().is_none());
         *slot.borrow_mut() = Some(Box::new(move |runner| {
@@ -1079,14 +1130,14 @@ fn full40_run(
                         && let Some(path) = &state_capture_path {
                         for (layer, state) in states[0].kv_state().bf16_layers().unwrap().iter().enumerate().filter(|(layer, _)| capture_layers.contains(layer)) {
                             let Some(state) = state.as_ref() else { continue };
-                            let (conv, ssm) = state.diagnostic_snapshot().unwrap();
+                            let (conv, ssm) = observe_operation(runner, &call_reads, &format!("{capture_phase}/before_gdn_snapshot/{layer}"), "diagnostic_state_snapshot", |_| state.diagnostic_snapshot()).unwrap();
                             for (field, values) in [("conv", conv), ("ssm", ssm)] {
                                 std::fs::write(path.join(&capture_phase).join(format!("before-{layer}-{field}.f32")),
                                     values.iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<_>>()).unwrap();
                             }
                         }
                     }
-                    let logits = crate::model_factory::qwen35::full_logits_step(
+                    let logits = observe_operation(runner, &call_reads, &format!("{case}/{stage}"), "prediction", |runner| crate::model_factory::qwen35::full_logits_step(
                         runner,
                         &mut states,
                         &mut pages,
@@ -1097,7 +1148,7 @@ fn full40_run(
                             ForwardPhase::Decode
                         },
                         transaction,
-                    );
+                    ));
                     assert_eq!(
                         oracle.report["calls"][i]["sequence_length_after"],
                         states[0].core().position()
@@ -1155,6 +1206,7 @@ fn full40_run(
                         case,
                         stage,
                         &mut report,
+                        &call_reads,
                     );
                     drop(report);
                     progress(&format!("{case}/{stage}: logits/routes/GDN/KV complete"));
@@ -1216,9 +1268,10 @@ fn full40_run(
             4
         }
     );
-    let passed =
-        report.failures.is_empty() && token_checks.iter().all(|call| call["equal"] == true);
-    let summary = json!({"schema":"ferrule.numeric-bf16-full40-profile-gate.v1", "passed":passed && !capture_only,
+    let passed = report.failures.is_empty()
+        && token_checks.iter().all(|call| call["equal"] == true)
+        && reads.as_ref().is_none_or(|log| log.borrow().passed());
+    let mut summary = json!({"schema":"ferrule.numeric-bf16-full40-profile-gate.v1", "passed":passed && !capture_only,
         "diagnostic_capture_only":capture_only,"test_config":config_manifest,"effective_config":effective_config,
         "observer_mode":"diagnostic_routes_and_states","ordinary_no_observer_claim":false,
         "concurrent_scheduler_claim":false,"greedy_tie_policy":"lower_token_id","next_token_checks":*token_checks,
@@ -1229,6 +1282,14 @@ fn full40_run(
         "scope":if capture_only {"selected full-image phases and bounded-layer observer; numerical metrics retained without acceptance assertion"} else {"hello/capital full40 prefill and reference-token cached decode; all logits, ordered routes, weights, raw router logits, actual BF16 KV/conv and F32 SSM"},
         "failures":report.failures,"metrics":report.metrics,"actual_peak_reserved_bytes":metrics.peak_reserved_bytes,
         "device_budget_bytes":limits.device_bytes,"state_bytes_after_shutdown":0,"quarantine":false});
+    attach_read_reports(&mut summary, &reads, None);
+    if reads.is_some() {
+        summary["diagnostic_denominators"] = json!({"prediction_calls":token_checks.len(),"logit_values_compared":report.logits,
+            "ordered_route_ids_compared":report.metrics.iter().filter(|m|m["label"].as_str().is_some_and(|label|label.ends_with("ordered_routes"))).map(|m|m["elements"].as_u64().unwrap()).sum::<u64>(),
+            "state_metric_elements_compared":report.metrics.iter().filter(|m|m["label"].as_str().is_some_and(|label|label.contains(".cache."))).map(|m|m["elements"].as_u64().unwrap()).sum::<u64>(),
+            "ordinary_no_observer_prediction_calls":0});
+    }
+
     output.seek(std::io::SeekFrom::Start(0)).unwrap();
     output.set_len(0).unwrap();
     writeln!(

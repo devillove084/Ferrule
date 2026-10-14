@@ -126,6 +126,51 @@ fn unsupported_nonnumeric_and_cpu_constructors_never_ignore_the_enabled_option()
     );
 }
 
+fn assert_full_logits(
+    output: &ferrule_common::execution::ExecutionOutput,
+    expected_rows: usize,
+    vocabulary: usize,
+) -> usize {
+    use ferrule_common::execution::LogitsOutput;
+    assert!(expected_rows > 0 && vocabulary > 0);
+    assert_eq!(output.logits.len(), expected_rows);
+    for (index, row) in output.logits.iter().enumerate() {
+        assert_eq!(row.input_row, index as u32);
+        let LogitsOutput::Full(values) = &row.logits else {
+            panic!("constructor requires full vocabulary logits")
+        };
+        assert_eq!(values.len(), vocabulary);
+        assert!(values.iter().all(|value| value.is_finite()));
+    }
+    expected_rows * vocabulary
+}
+
+#[test]
+fn constructor_full_logits_report_rejects_empty_rows_vocabulary_and_nonfinite() {
+    use ferrule_common::execution::{ExecutionOutput, LogitsOutput, LogitsRow};
+    let output = ExecutionOutput::new(vec![LogitsRow::new(0, LogitsOutput::Full(vec![1.; 32]))]);
+    assert_eq!(assert_full_logits(&output, 1, 32), 32);
+    for bad in [
+        ExecutionOutput::default(),
+        ExecutionOutput::new(vec![LogitsRow::new(0, LogitsOutput::Full(vec![]))]),
+        ExecutionOutput::new(vec![LogitsRow::new(
+            0,
+            LogitsOutput::Full(vec![f32::NAN; 32]),
+        )]),
+    ] {
+        assert!(std::panic::catch_unwind(|| assert_full_logits(&bad, 1, 32)).is_err());
+    }
+}
+
+#[cfg(feature = "cuda")]
+fn persist_constructor_report(file: &mut std::fs::File, report: &serde_json::Value) {
+    use std::io::{Seek, Write};
+    file.seek(std::io::SeekFrom::Start(0)).unwrap();
+    file.set_len(0).unwrap();
+    file.write_all(&serde_json::to_vec_pretty(report).unwrap())
+        .unwrap();
+}
+
 #[cfg(feature = "cuda")]
 #[test]
 #[ignore = "requires exclusive real GPU ownership; compile-check with GPUs hidden"]
@@ -137,6 +182,15 @@ fn normal_cuda_constructor_reaches_configured_provider_for_both_model_boundaries
         TransactionEndProgress,
     };
     use ferrule_model::tokenizer::TokenizerHandle;
+    let path = std::env::var_os("FERRULE_EXPERT_READ_CONSTRUCTOR_REPORT")
+        .expect("explicit new report file path; no default or overwrite");
+    let mut report_file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .unwrap();
+    let mut report = serde_json::json!({"schema":"ferrule.expert-read-constructor-quality.v1","complete":false,"passed":false,"expected_cells":4,"cells":[],"observer_mode":"ordinary_no_diagnostic_observer","diagnostic_trace_installed":false,"read_only_resource_snapshots":true,"gpu_overlap_claim":false,"expected_logit_rows_per_cell":1,"expected_vocabulary":32,"quality_scope":"tiny actual constructor/provider evidence and nonempty finite shape; not full-model oracle acceptance","ordinary_no_observer_claim":true,"route_checks":null,"state_oracle_checks":null});
+    persist_constructor_report(&mut report_file, &report);
     for bf16 in [false, true] {
         for schedule in [ExpertReadSchedule::Blocking, ExpertReadSchedule::Lookahead] {
             let f = fixture::Fixture::numeric();
@@ -197,25 +251,56 @@ fn normal_cuda_constructor_reaches_configured_provider_for_both_model_boundaries
                 execution_generation: generation,
                 cow_replacement: None,
             }];
+            let before = runner.physical_resource_snapshot();
+            let cell_index = report["cells"].as_array().unwrap().len();
+            report["cells"].as_array_mut().unwrap().push(serde_json::json!({"model_boundary":if bf16 {"Bf16ModelF32Accumulate"}else{"W8A16Bf16F32Accumulate"},"requested":read,"configured":configured,"before_prediction":before,"after_prediction":null,"delta":null,"passed":false}));
+            persist_constructor_report(&mut report_file, &report);
             let tx = ExecutionTransactionId::new(1).unwrap();
-            runner
-                .prepare_multi_session_batch(
-                    tx,
-                    std::slice::from_mut(&mut state),
-                    &batch,
-                    &reservations,
-                )
-                .unwrap();
-            let MultiSessionBatchProgress::Complete(output) = runner
-                .execute_multi_session_batch_progress(tx, std::slice::from_mut(&mut state), &batch)
-                .unwrap()
-            else {
+            let executed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                runner
+                    .prepare_multi_session_batch(
+                        tx,
+                        std::slice::from_mut(&mut state),
+                        &batch,
+                        &reservations,
+                    )
+                    .unwrap();
+                runner
+                    .execute_multi_session_batch_progress(
+                        tx,
+                        std::slice::from_mut(&mut state),
+                        &batch,
+                    )
+                    .unwrap()
+            }));
+            let after = runner.physical_resource_snapshot();
+            report["cells"][cell_index]["after_prediction"] = serde_json::json!(after);
+            report["cells"][cell_index]["delta"] = serde_json::json!(
+                before
+                    .expert_read_pipeline
+                    .value()
+                    .zip(after.expert_read_pipeline.value())
+                    .and_then(|(a, b)| b.stats.checked_delta(a.stats))
+            );
+            persist_constructor_report(&mut report_file, &report);
+            let MultiSessionBatchProgress::Complete(output) = (match executed {
+                Ok(output) => output,
+                Err(panic) => std::panic::resume_unwind(panic),
+            }) else {
                 panic!("synchronous numeric forward unexpectedly waits")
             };
-            assert!(output.logits.into_iter().all(|row| match row.logits {
-                LogitsOutput::Full(values) => values.into_iter().all(f32::is_finite),
-                _ => false,
-            }));
+            let compared = assert_full_logits(&output, 1, f.resources.spec().vocab_size());
+            assert_eq!(f.resources.spec().vocab_size(), 32);
+            report["cells"][cell_index]["logit_values_checked"] = serde_json::json!(compared);
+            let LogitsOutput::Full(values) = &output.logits[0].logits else {
+                unreachable!()
+            };
+            let greedy =
+                values.iter().enumerate().fold(
+                    0,
+                    |best, (i, value)| if *value > values[best] { i } else { best },
+                );
+            report["cells"][cell_index]["greedy_lower_id_token"] = serde_json::json!(greedy);
             let stats = runner
                 .forward_executor()
                 .module()
@@ -254,6 +339,27 @@ fn normal_cuda_constructor_reaches_configured_provider_for_both_model_boundaries
                 physical.release,
                 ferrule_model::resource_observability::ResourceEvidence::Unobserved
             );
+            assert!(before.scope.value().is_some());
+            assert!(before.prepared_plan_id.value().is_some());
+            assert!(before.image_generation.value().is_some());
+            assert!(report["cells"][cell_index]["delta"].is_object());
+            assert_eq!(before.scope, after.scope);
+            assert_eq!(before.prepared_plan_id, after.prepared_plan_id);
+            assert_eq!(before.image_generation, after.image_generation);
+            report["cells"][cell_index]["observed"] = serde_json::json!(observed);
+            report["cells"][cell_index]["charged_limits_satisfied"] = serde_json::json!(
+                stats.peak_host_charged_bytes <= read.max_host_bytes
+                    && stats.peak_payload_bytes <= payload_limit
+            );
+            report["cells"][cell_index]["positive_worker_read"] = serde_json::json!(
+                observed.worker_read_observed
+                    && stats.submitted_reads > 0
+                    && stats.completed_reads > 0
+                    && stats.verified_reads > 0
+                    && stats.proved_read_bytes > 0
+            );
+            report["cells"][cell_index]["same_owner"] = serde_json::json!(true);
+            persist_constructor_report(&mut report_file, &report);
             assert_eq!(stats.submitted_reads, 6);
             assert_eq!(stats.unknown_bytes, 0);
             assert!(stats.peak_host_charged_bytes <= read.max_host_bytes);
@@ -287,6 +393,30 @@ fn normal_cuda_constructor_reaches_configured_provider_for_both_model_boundaries
             drop(runner);
             assert_eq!(device.live_state_bytes(), 0);
             assert!(!device.needs_quarantine());
+            report["cells"][cell_index]["state_bytes_after_shutdown"] =
+                serde_json::json!(device.live_state_bytes());
+            report["cells"][cell_index]["quarantine"] =
+                serde_json::json!(device.needs_quarantine());
+            report["cells"][cell_index]["passed"] = serde_json::json!(true);
+            persist_constructor_report(&mut report_file, &report);
         }
     }
+    assert_eq!(report["cells"].as_array().unwrap().len(), 4);
+    let compared = report["cells"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|cell| cell["logit_values_checked"].as_u64().unwrap())
+        .sum::<u64>();
+    assert_eq!(compared, 128);
+    report["total_logit_values_checked"] = serde_json::json!(compared);
+    report["complete"] = serde_json::json!(true);
+    report["passed"] = serde_json::json!(
+        report["cells"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|cell| cell["passed"] == true)
+    );
+    persist_constructor_report(&mut report_file, &report);
 }
