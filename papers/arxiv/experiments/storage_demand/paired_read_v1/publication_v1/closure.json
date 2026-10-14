@@ -1,0 +1,55 @@
+{
+  "authentication_scope": "Recorded outcome projection; original private authentication is not replayed",
+  "data": {
+    "actual_ready_runtime_maps": "unobserved; exited before Ready",
+    "capture": {
+      "descendant_custody": "outer_subreaper_required",
+      "ended_monotonic": 8949320.975752153,
+      "ended_unix_ns": 1792006377939234202,
+      "pid": 20858,
+      "returncode": 1,
+      "schema": "ferrule.profile-server.v1",
+      "started_monotonic": 8949317.970231393,
+      "started_unix_ns": 1792006374933712724
+    },
+    "cleanup_error": "ProtocolError: normal capture/server shutdown missing",
+    "cli_ready": false,
+    "error": "ProtocolError: Server exited before Ready",
+    "nvtx_process_observation": "unobserved; exited before Ready/maps gate",
+    "nvtx_runtime_spec": "0",
+    "owner_resource_ledger": "unknown",
+    "physical_release_certificate": false,
+    "read_ledger": {
+      "can_continue": false,
+      "final_read_ledger": null,
+      "resource_contract": "unknown",
+      "stop_reason": "actual owner shutdown summary omitted; read/resource contract unknown"
+    },
+    "resource_contract_complete": "unverified",
+    "shutdown_summary_present": false,
+    "status": "cleanup_unverified",
+    "universal_final_release_verified": false
+  },
+  "omitted_fields": [
+    "Capture/process environments",
+    "Raw process mappings/observer records",
+    "Private authentication and host paths"
+  ],
+  "original_sources": [
+    {
+      "original_sha256": "f9b0e272991689b52f8f20fc927e3c236dee5fbe5ef9dd5d7b3a2d294b21d005",
+      "path": "artifacts-current-20261015-01/P1-blocking/lifecycle.json"
+    },
+    {
+      "original_sha256": "9f22b030675cf597ddb733efd20efd416a103f46ccc834c9bb8449e6570241b0",
+      "path": "artifacts-current-20261015-01/P1-blocking/read-ledger-assessment.json"
+    },
+    {
+      "original_sha256": "c09d5195385d49c18695505c368ba52539fb3a7e21cb5af79f1821c6b61f30d7",
+      "path": "artifacts-current-20261015-01/closeout.json"
+    }
+  ],
+  "redacted_projection": true,
+  "replaces_original_receipt": false,
+  "schema": "ferrule.storage-demand.redacted-publication-projection.v1"
+}

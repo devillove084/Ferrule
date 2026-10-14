@@ -1,0 +1,799 @@
+{
+  "authentication_scope": "Recorded outcome projection; original private authentication is not replayed",
+  "data": {
+    "actual_completed_lifecycles": 0,
+    "actual_http_token_id_join": [],
+    "actual_issued_lifecycles": 1,
+    "binding_sha256": "667194fa06618fbf40fbd731c9eb63c26be87636e0fc798c6fb491d5896fb144",
+    "client_e2e_seconds": null,
+    "client_ttft_seconds": null,
+    "denominators": {
+      "censored": 0,
+      "failed": 0,
+      "issued": 0,
+      "scheduled": 120,
+      "successful": 0,
+      "terminal": 0,
+      "unissued": 120
+    },
+    "ended": {
+      "monotonic": 8949350.040428493,
+      "unix_ns": 1792006407003910071
+    },
+    "execution_sha256": "8a067626babe5c8b0a2a8543c727d6253b682d270ef14d89116fbc63365ec80c",
+    "extra_pilot_lifecycles": 0,
+    "http_requests": 0,
+    "lifecycles": [
+      {
+        "assessment": {
+          "can_continue": false,
+          "stop_reasons": [
+            "worker failed/timed out",
+            "ProtocolError: Server exited before Ready",
+            "owner close missing/pending/unknown",
+            "actual owner shutdown summary omitted; read/resource contract unknown"
+          ]
+        },
+        "block": "P1",
+        "mode": "blocking",
+        "status": null,
+        "stop_reason": null,
+        "summary": {
+          "by_phase": {
+            "initial": {
+              "censored": 0,
+              "failed": 0,
+              "success": 0,
+              "unissued": 4
+            },
+            "qa_excluded_first": {
+              "censored": 0,
+              "failed": 0,
+              "success": 0,
+              "unissued": 1
+            },
+            "qa_measured": {
+              "censored": 0,
+              "failed": 0,
+              "success": 0,
+              "unissued": 5
+            },
+            "qa_warmup": {
+              "censored": 0,
+              "failed": 0,
+              "success": 0,
+              "unissued": 2
+            }
+          },
+          "censored": 0,
+          "conservation": true,
+          "counts": {
+            "censored": 0,
+            "failed": 0,
+            "success": 0,
+            "unissued": 12
+          },
+          "denominator_policy": "No failed/censored/unissued slot is removed or relabeled",
+          "failed": 0,
+          "issued": 0,
+          "measured_qa": {
+            "eligible_success": 0,
+            "request_only_eligible_success": 0,
+            "scheduled": 5,
+            "success": 0
+          },
+          "reasons": {
+            "not dispatched": 12
+          },
+          "scheduled": 12,
+          "successful": 0,
+          "terminal": 0,
+          "unissued": 12
+        },
+        "trial": "P1-blocking"
+      },
+      {
+        "assessment": null,
+        "block": "P1",
+        "mode": "lookahead",
+        "status": "unissued_or_incomplete",
+        "stop_reason": "prior STOP/incomplete attempt/finite envelope; no replacement",
+        "summary": {
+          "by_phase": {
+            "initial": {
+              "censored": 0,
+              "failed": 0,
+              "success": 0,
+              "unissued": 4
+            },
+            "qa_excluded_first": {
+              "censored": 0,
+              "failed": 0,
+              "success": 0,
+              "unissued": 1
+            },
+            "qa_measured": {
+              "censored": 0,
+              "failed": 0,
+              "success": 0,
+              "unissued": 5
+            },
+            "qa_warmup": {
+              "censored": 0,
+              "failed": 0,
+              "success": 0,
+              "unissued": 2
+            }
+          },
+          "censored": 0,
+          "conservation": true,
+          "counts": {
+            "censored": 0,
+            "failed": 0,
+            "success": 0,
+            "unissued": 12
+          },
+          "denominator_policy": "No failed/censored/unissued slot is removed or relabeled",
+          "failed": 0,
+          "issued": 0,
+          "measured_qa": {
+            "eligible_success": 0,
+            "request_only_eligible_success": 0,
+            "scheduled": 5,
+            "success": 0
+          },
+          "reasons": {
+            "not dispatched": 12
+          },
+          "scheduled": 12,
+          "successful": 0,
+          "terminal": 0,
+          "unissued": 12
+        },
+        "trial": "P1-lookahead"
+      },
+      {
+        "assessment": null,
+        "block": "P2",
+        "mode": "blocking",
+        "status": "unissued_or_incomplete",
+        "stop_reason": "prior STOP/incomplete attempt/finite envelope; no replacement",
+        "summary": {
+          "by_phase": {
+            "initial": {
+              "censored": 0,
+              "failed": 0,
+              "success": 0,
+              "unissued": 4
+            },
+            "qa_excluded_first": {
+              "censored": 0,
+              "failed": 0,
+              "success": 0,
+              "unissued": 1
+            },
+            "qa_measured": {
+              "censored": 0,
+              "failed": 0,
+              "success": 0,
+              "unissued": 5
+            },
+            "qa_warmup": {
+              "censored": 0,
+              "failed": 0,
+              "success": 0,
+              "unissued": 2
+            }
+          },
+          "censored": 0,
+          "conservation": true,
+          "counts": {
+            "censored": 0,
+            "failed": 0,
+            "success": 0,
+            "unissued": 12
+          },
+          "denominator_policy": "No failed/censored/unissued slot is removed or relabeled",
+          "failed": 0,
+          "issued": 0,
+          "measured_qa": {
+            "eligible_success": 0,
+            "request_only_eligible_success": 0,
+            "scheduled": 5,
+            "success": 0
+          },
+          "reasons": {
+            "not dispatched": 12
+          },
+          "scheduled": 12,
+          "successful": 0,
+          "terminal": 0,
+          "unissued": 12
+        },
+        "trial": "P2-blocking"
+      },
+      {
+        "assessment": null,
+        "block": "P2",
+        "mode": "lookahead",
+        "status": "unissued_or_incomplete",
+        "stop_reason": "prior STOP/incomplete attempt/finite envelope; no replacement",
+        "summary": {
+          "by_phase": {
+            "initial": {
+              "censored": 0,
+              "failed": 0,
+              "success": 0,
+              "unissued": 4
+            },
+            "qa_excluded_first": {
+              "censored": 0,
+              "failed": 0,
+              "success": 0,
+              "unissued": 1
+            },
+            "qa_measured": {
+              "censored": 0,
+              "failed": 0,
+              "success": 0,
+              "unissued": 5
+            },
+            "qa_warmup": {
+              "censored": 0,
+              "failed": 0,
+              "success": 0,
+              "unissued": 2
+            }
+          },
+          "censored": 0,
+          "conservation": true,
+          "counts": {
+            "censored": 0,
+            "failed": 0,
+            "success": 0,
+            "unissued": 12
+          },
+          "denominator_policy": "No failed/censored/unissued slot is removed or relabeled",
+          "failed": 0,
+          "issued": 0,
+          "measured_qa": {
+            "eligible_success": 0,
+            "request_only_eligible_success": 0,
+            "scheduled": 5,
+            "success": 0
+          },
+          "reasons": {
+            "not dispatched": 12
+          },
+          "scheduled": 12,
+          "successful": 0,
+          "terminal": 0,
+          "unissued": 12
+        },
+        "trial": "P2-lookahead"
+      },
+      {
+        "assessment": null,
+        "block": "P3",
+        "mode": "lookahead",
+        "status": "unissued_or_incomplete",
+        "stop_reason": "prior STOP/incomplete attempt/finite envelope; no replacement",
+        "summary": {
+          "by_phase": {
+            "initial": {
+              "censored": 0,
+              "failed": 0,
+              "success": 0,
+              "unissued": 4
+            },
+            "qa_excluded_first": {
+              "censored": 0,
+              "failed": 0,
+              "success": 0,
+              "unissued": 1
+            },
+            "qa_measured": {
+              "censored": 0,
+              "failed": 0,
+              "success": 0,
+              "unissued": 5
+            },
+            "qa_warmup": {
+              "censored": 0,
+              "failed": 0,
+              "success": 0,
+              "unissued": 2
+            }
+          },
+          "censored": 0,
+          "conservation": true,
+          "counts": {
+            "censored": 0,
+            "failed": 0,
+            "success": 0,
+            "unissued": 12
+          },
+          "denominator_policy": "No failed/censored/unissued slot is removed or relabeled",
+          "failed": 0,
+          "issued": 0,
+          "measured_qa": {
+            "eligible_success": 0,
+            "request_only_eligible_success": 0,
+            "scheduled": 5,
+            "success": 0
+          },
+          "reasons": {
+            "not dispatched": 12
+          },
+          "scheduled": 12,
+          "successful": 0,
+          "terminal": 0,
+          "unissued": 12
+        },
+        "trial": "P3-lookahead"
+      },
+      {
+        "assessment": null,
+        "block": "P3",
+        "mode": "blocking",
+        "status": "unissued_or_incomplete",
+        "stop_reason": "prior STOP/incomplete attempt/finite envelope; no replacement",
+        "summary": {
+          "by_phase": {
+            "initial": {
+              "censored": 0,
+              "failed": 0,
+              "success": 0,
+              "unissued": 4
+            },
+            "qa_excluded_first": {
+              "censored": 0,
+              "failed": 0,
+              "success": 0,
+              "unissued": 1
+            },
+            "qa_measured": {
+              "censored": 0,
+              "failed": 0,
+              "success": 0,
+              "unissued": 5
+            },
+            "qa_warmup": {
+              "censored": 0,
+              "failed": 0,
+              "success": 0,
+              "unissued": 2
+            }
+          },
+          "censored": 0,
+          "conservation": true,
+          "counts": {
+            "censored": 0,
+            "failed": 0,
+            "success": 0,
+            "unissued": 12
+          },
+          "denominator_policy": "No failed/censored/unissued slot is removed or relabeled",
+          "failed": 0,
+          "issued": 0,
+          "measured_qa": {
+            "eligible_success": 0,
+            "request_only_eligible_success": 0,
+            "scheduled": 5,
+            "success": 0
+          },
+          "reasons": {
+            "not dispatched": 12
+          },
+          "scheduled": 12,
+          "successful": 0,
+          "terminal": 0,
+          "unissued": 12
+        },
+        "trial": "P3-blocking"
+      },
+      {
+        "assessment": null,
+        "block": "P4",
+        "mode": "lookahead",
+        "status": "unissued_or_incomplete",
+        "stop_reason": "prior STOP/incomplete attempt/finite envelope; no replacement",
+        "summary": {
+          "by_phase": {
+            "initial": {
+              "censored": 0,
+              "failed": 0,
+              "success": 0,
+              "unissued": 4
+            },
+            "qa_excluded_first": {
+              "censored": 0,
+              "failed": 0,
+              "success": 0,
+              "unissued": 1
+            },
+            "qa_measured": {
+              "censored": 0,
+              "failed": 0,
+              "success": 0,
+              "unissued": 5
+            },
+            "qa_warmup": {
+              "censored": 0,
+              "failed": 0,
+              "success": 0,
+              "unissued": 2
+            }
+          },
+          "censored": 0,
+          "conservation": true,
+          "counts": {
+            "censored": 0,
+            "failed": 0,
+            "success": 0,
+            "unissued": 12
+          },
+          "denominator_policy": "No failed/censored/unissued slot is removed or relabeled",
+          "failed": 0,
+          "issued": 0,
+          "measured_qa": {
+            "eligible_success": 0,
+            "request_only_eligible_success": 0,
+            "scheduled": 5,
+            "success": 0
+          },
+          "reasons": {
+            "not dispatched": 12
+          },
+          "scheduled": 12,
+          "successful": 0,
+          "terminal": 0,
+          "unissued": 12
+        },
+        "trial": "P4-lookahead"
+      },
+      {
+        "assessment": null,
+        "block": "P4",
+        "mode": "blocking",
+        "status": "unissued_or_incomplete",
+        "stop_reason": "prior STOP/incomplete attempt/finite envelope; no replacement",
+        "summary": {
+          "by_phase": {
+            "initial": {
+              "censored": 0,
+              "failed": 0,
+              "success": 0,
+              "unissued": 4
+            },
+            "qa_excluded_first": {
+              "censored": 0,
+              "failed": 0,
+              "success": 0,
+              "unissued": 1
+            },
+            "qa_measured": {
+              "censored": 0,
+              "failed": 0,
+              "success": 0,
+              "unissued": 5
+            },
+            "qa_warmup": {
+              "censored": 0,
+              "failed": 0,
+              "success": 0,
+              "unissued": 2
+            }
+          },
+          "censored": 0,
+          "conservation": true,
+          "counts": {
+            "censored": 0,
+            "failed": 0,
+            "success": 0,
+            "unissued": 12
+          },
+          "denominator_policy": "No failed/censored/unissued slot is removed or relabeled",
+          "failed": 0,
+          "issued": 0,
+          "measured_qa": {
+            "eligible_success": 0,
+            "request_only_eligible_success": 0,
+            "scheduled": 5,
+            "success": 0
+          },
+          "reasons": {
+            "not dispatched": 12
+          },
+          "scheduled": 12,
+          "successful": 0,
+          "terminal": 0,
+          "unissued": 12
+        },
+        "trial": "P4-blocking"
+      },
+      {
+        "assessment": null,
+        "block": "P5",
+        "mode": "blocking",
+        "status": "unissued_or_incomplete",
+        "stop_reason": "prior STOP/incomplete attempt/finite envelope; no replacement",
+        "summary": {
+          "by_phase": {
+            "initial": {
+              "censored": 0,
+              "failed": 0,
+              "success": 0,
+              "unissued": 4
+            },
+            "qa_excluded_first": {
+              "censored": 0,
+              "failed": 0,
+              "success": 0,
+              "unissued": 1
+            },
+            "qa_measured": {
+              "censored": 0,
+              "failed": 0,
+              "success": 0,
+              "unissued": 5
+            },
+            "qa_warmup": {
+              "censored": 0,
+              "failed": 0,
+              "success": 0,
+              "unissued": 2
+            }
+          },
+          "censored": 0,
+          "conservation": true,
+          "counts": {
+            "censored": 0,
+            "failed": 0,
+            "success": 0,
+            "unissued": 12
+          },
+          "denominator_policy": "No failed/censored/unissued slot is removed or relabeled",
+          "failed": 0,
+          "issued": 0,
+          "measured_qa": {
+            "eligible_success": 0,
+            "request_only_eligible_success": 0,
+            "scheduled": 5,
+            "success": 0
+          },
+          "reasons": {
+            "not dispatched": 12
+          },
+          "scheduled": 12,
+          "successful": 0,
+          "terminal": 0,
+          "unissued": 12
+        },
+        "trial": "P5-blocking"
+      },
+      {
+        "assessment": null,
+        "block": "P5",
+        "mode": "lookahead",
+        "status": "unissued_or_incomplete",
+        "stop_reason": "prior STOP/incomplete attempt/finite envelope; no replacement",
+        "summary": {
+          "by_phase": {
+            "initial": {
+              "censored": 0,
+              "failed": 0,
+              "success": 0,
+              "unissued": 4
+            },
+            "qa_excluded_first": {
+              "censored": 0,
+              "failed": 0,
+              "success": 0,
+              "unissued": 1
+            },
+            "qa_measured": {
+              "censored": 0,
+              "failed": 0,
+              "success": 0,
+              "unissued": 5
+            },
+            "qa_warmup": {
+              "censored": 0,
+              "failed": 0,
+              "success": 0,
+              "unissued": 2
+            }
+          },
+          "censored": 0,
+          "conservation": true,
+          "counts": {
+            "censored": 0,
+            "failed": 0,
+            "success": 0,
+            "unissued": 12
+          },
+          "denominator_policy": "No failed/censored/unissued slot is removed or relabeled",
+          "failed": 0,
+          "issued": 0,
+          "measured_qa": {
+            "eligible_success": 0,
+            "request_only_eligible_success": 0,
+            "scheduled": 5,
+            "success": 0
+          },
+          "reasons": {
+            "not dispatched": 12
+          },
+          "scheduled": 12,
+          "successful": 0,
+          "terminal": 0,
+          "unissued": 12
+        },
+        "trial": "P5-lookahead"
+      }
+    ],
+    "measured_qa": {
+      "eligible_success": 0,
+      "scheduled": 50,
+      "success": 0
+    },
+    "order": [
+      {
+        "block": "P1",
+        "modes": [
+          "blocking",
+          "lookahead"
+        ]
+      },
+      {
+        "block": "P2",
+        "modes": [
+          "blocking",
+          "lookahead"
+        ]
+      },
+      {
+        "block": "P3",
+        "modes": [
+          "lookahead",
+          "blocking"
+        ]
+      },
+      {
+        "block": "P4",
+        "modes": [
+          "lookahead",
+          "blocking"
+        ]
+      },
+      {
+        "block": "P5",
+        "modes": [
+          "blocking",
+          "lookahead"
+        ]
+      }
+    ],
+    "paired_aggregate": null,
+    "paired_blocks": [
+      {
+        "arms": {
+          "blocking": null,
+          "lookahead": null
+        },
+        "block": "P1",
+        "execution_order": [
+          "blocking",
+          "lookahead"
+        ],
+        "failure_pair_retained": true,
+        "log_ratios": null,
+        "qualified": false
+      },
+      {
+        "arms": {
+          "blocking": null,
+          "lookahead": null
+        },
+        "block": "P2",
+        "execution_order": [
+          "blocking",
+          "lookahead"
+        ],
+        "failure_pair_retained": true,
+        "log_ratios": null,
+        "qualified": false
+      },
+      {
+        "arms": {
+          "blocking": null,
+          "lookahead": null
+        },
+        "block": "P3",
+        "execution_order": [
+          "lookahead",
+          "blocking"
+        ],
+        "failure_pair_retained": true,
+        "log_ratios": null,
+        "qualified": false
+      },
+      {
+        "arms": {
+          "blocking": null,
+          "lookahead": null
+        },
+        "block": "P4",
+        "execution_order": [
+          "lookahead",
+          "blocking"
+        ],
+        "failure_pair_retained": true,
+        "log_ratios": null,
+        "qualified": false
+      },
+      {
+        "arms": {
+          "blocking": null,
+          "lookahead": null
+        },
+        "block": "P5",
+        "execution_order": [
+          "blocking",
+          "lookahead"
+        ],
+        "failure_pair_retained": true,
+        "log_ratios": null,
+        "qualified": false
+      }
+    ],
+    "permanent_stop": {
+      "reason": "ProtocolError: worker failed/timed out; ProtocolError: Server exited before Ready; owner close missing/pending/unknown; actual owner shutdown summary omitted; read/resource contract unknown",
+      "recorded": {
+        "monotonic": 8949323.776729736,
+        "unix_ns": 1792006380740210747
+      },
+      "remaining_slots": "retain unissued/censored denominators",
+      "retries_permitted": false,
+      "status": "permanent_stop"
+    },
+    "pilot_deadline": 8956507.347797519,
+    "pipeline_host_credit": null,
+    "pipeline_positive_worker_read": null,
+    "pipeline_wasted_bytes": null,
+    "profile_lifecycles": 0,
+    "qualified_goodput_tokens_per_second": null,
+    "replacements": 0,
+    "retries": 0,
+    "scheduled_blocks": 5,
+    "scheduled_measured_qa": 50,
+    "scheduled_requests": 120,
+    "scheduled_starts": 10,
+    "schema": "ferrule.storage-demand.paired-read-actual.v2",
+    "scientific_acceptance": false,
+    "started": {
+      "monotonic": 8949307.34780093,
+      "unix_ns": 1792006364311282453
+    },
+    "status": "stopped"
+  },
+  "omitted_fields": [
+    "Nested raw lifecycle/observer environments",
+    "physical UUIDs, private paths, launch material",
+    "raw artifact inventories"
+  ],
+  "original_sources": [
+    {
+      "original_sha256": "9e10b95dc7f8df55cae024459952c0664b55a21287f6947f609eca6893fa8d67",
+      "path": "artifacts-current-20261015-01/paired-final.json"
+    },
+    {
+      "original_sha256": "c09d5195385d49c18695505c368ba52539fb3a7e21cb5af79f1821c6b61f30d7",
+      "path": "artifacts-current-20261015-01/closeout.json"
+    }
+  ],
+  "redacted_projection": true,
+  "replaces_original_receipt": false,
+  "schema": "ferrule.storage-demand.redacted-publication-projection.v1"
+}

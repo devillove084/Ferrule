@@ -1,0 +1,144 @@
+{
+  "schema": "ferrule.storage-demand.paired-read-cpu-prepared.v1",
+  "status": "cpu_prepared_candidate_unbound_not_authorized",
+  "protocol_sha256": "d8cd2add47d854aafa96bf7b86f820f04af50c44f28aa5e333feb719729493be",
+  "cases_sha256": "ea704f17de9cb57aab64869f848d5b6d6411aeb895925d5ab3011be37b7232aa",
+  "order": [
+    {
+      "block": "P1",
+      "modes": [
+        "blocking",
+        "lookahead"
+      ]
+    },
+    {
+      "block": "P2",
+      "modes": [
+        "blocking",
+        "lookahead"
+      ]
+    },
+    {
+      "block": "P3",
+      "modes": [
+        "lookahead",
+        "blocking"
+      ]
+    },
+    {
+      "block": "P4",
+      "modes": [
+        "lookahead",
+        "blocking"
+      ]
+    },
+    {
+      "block": "P5",
+      "modes": [
+        "blocking",
+        "lookahead"
+      ]
+    }
+  ],
+  "trial_order": [
+    "P1-blocking",
+    "P1-lookahead",
+    "P2-blocking",
+    "P2-lookahead",
+    "P3-lookahead",
+    "P3-blocking",
+    "P4-lookahead",
+    "P4-blocking",
+    "P5-blocking",
+    "P5-lookahead"
+  ],
+  "limits": {
+    "startup_seconds": 120,
+    "request_seconds": 60,
+    "all_requests_seconds": 300,
+    "worker_bookkeeping_seconds": 40,
+    "target_lifetime_seconds": 460,
+    "shutdown_seconds": 30,
+    "worker_preidle_seconds": 20,
+    "worker_finalization_seconds": 20,
+    "supervisor_seconds": 530,
+    "supervisor_call_overhead_seconds": 28,
+    "coordinator_preidle_seconds": 20,
+    "coordinator_postidle_seconds": 20,
+    "coordinator_finalization_seconds": 32,
+    "outer_lifecycle_seconds": 650,
+    "pilot_seconds": 7200,
+    "study_cleanup_reserve_seconds": 100
+  },
+  "scheduled_blocks": 5,
+  "scheduled_starts": 10,
+  "scheduled_requests": 120,
+  "scheduled_measured_qa": 50,
+  "artifact_pins": {
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/cli_audit.py": "5a84aebec98de43a997b7a92d88a25eab6a1749a79c32870e68e2dafdc54cbbf",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/contract.py": "05da87fb7f5d795a843b25674fc062c6d4e8d7b8be32f50613a3174e78d1fbe4",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/launch_guard.py": "b4ec4dc1b1e7e61fe322847e4a07ce2c3b2ed43d8d3e9bc3bd6602979ad00b9f",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/m7-device-exclusive.json": "fecd0176ec7720d58d784730d501567793bd6c44132df36df4383c8159d1edcd",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/m7.json": "bdd1386191f5fb7c75e59e1fa5514dd2a107aa2f67172f0820a062e97159a066",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/runner.py": "0aae631cf46bb99f567527d8dbe20b0a56e61c57ca7267858e1eb3e4cc67e16c",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/checkpoint-metadata.json": "245bbe37b18bb79fded1be883b1a6c63d570dfd42e70bb302ef834b3caf95854",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/newversionedprotocol/case-v2.json": "218e5584216f54ef85868ef264044cda8a9558574e9a48af8c7dddcbea29e154",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/newversionedprotocol/protocol.py": "ca06cef4772602ef9299496baec8627b64c70bbdb5fdf76a319063afeaadd662",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/newversionedprotocol/requests-v2.json": "0ccca80f3cd840c5f3062a1dd33acada056f167081c68630fec7c6c2cc268529",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/newversionedprotocol/run_pilot.py": "6181fd636db6bb006dd438b0566d1b1ed6f1f6c48a024cc53935416cdbcee504",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/README.md": "cf8665b65ae586c78d19c0c707c76e03514caf4a5253995cf991e49ae579e4d2",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/__init__.py": "b8a364621ac89ed4924ae5d51c9f7ffcbb638c273c65b464b689b05b7cd4d567",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/analysis.py": "7a67db3948e5f3b0c8c39f64e194eee3ad9441643bd57528673f7261196aba19",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/build_adapter.py": "648b02fddfb4cacc64c9cec0bdfcf98f99b0d7d011257c61d12833f3efa707a2",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/cases.json": "ea704f17de9cb57aab64869f848d5b6d6411aeb895925d5ab3011be37b7232aa",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/oracles.json": "8881cdddbfdd3684fd51b598128aa392521d8f2349440560f37c0e40e9f510eb",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/order.json": "89b4c03bf00a2bbdcdc45422881dab9db932eca92d9bf5988425b6958fdb10e1",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/profile_audit.py": "86bf49a7376e042c81f0f4765682bd579c238266f3d9025af34f60bbed578df4",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/protocol.json": "d8cd2add47d854aafa96bf7b86f820f04af50c44f28aa5e333feb719729493be",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/protocol.py": "8ada5fea3f43d7e19c2e500d1de80deaced01c7602f4a5cee080c498f815a091",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/quality.py": "ec28e5ca25bfef6b3ed27d14fa0d42872363aa2380bf9d7f689bdd55f30b51d5",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/requests.json": "0ccca80f3cd840c5f3062a1dd33acada056f167081c68630fec7c6c2cc268529",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/run_paired.py": "dc7207bdef82aae16f1bba4aba0e9ac40bd7f570d72b2ec62cb5e7c8f3fe03e0",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/source-cut.json": "4876621eaf7063067864315726ccbb0201ba81ce4ac91667784a0fc0855fab76",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/test_paired_read_v1.py": "bb39873c54c1e8175fe34f3cddede59a360f88374bb961853f1f53bb68e4eefc",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/test_quality_v1.py": "fe5c7f91304674bcfc1380a5288eda301a0d0c5fab27e761d27f8d0d1093a9cc",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/runnerhelpers/__init__.py": "624416cd71528cb7ffea742a6784eb88c8887c387360a2fe6c559642c0439bb3",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/runnerhelpers/build_receipts_v1.py": "82c17c57b5a4a37eb8804e12b41978694b7d70edeea9c21a3d91837e02ffeb1f",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/runnerhelpers/closure_v2.py": "7d88af59413eaa2f1712d564da89d1af8482619bf0813e1aecd5c29426b018c7",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/runnerhelpers/evidence_v2.py": "47d2db11a14fa09a3afd3a5508731727013ac889e3e62aa09d65dfd996ce09f8",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/runnerhelpers/execution_v2.py": "5c08319a12afa06fa635cc319233f506c690bcffbe1c8e2def091f9c6faac2d4",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/runnerhelpers/mountstats_v2.py": "86843ffff77716afc1b0c25ea16cfca0ce7f1b59ae4fdf0128fa2a44733a48a5",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/runnerhelpers/quality_reports_v1.py": "1e5797ce3cf0f0e5351ecc51da346ba6d78e76695b92886255801dcf39977340",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/runnerhelpers/trace_v2.py": "e0e45ad10a32f56c859b11c48602f6a0aed52ab16f9ccf1225bbca70a8d0a45a",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/tests/test_build_receipts_v1.py": "76d96f4b187e6184f4429fb97b8b877ec99642a0519b257c47392aa4a3f2a136",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/tests/test_execution_v2.py": "b6234ca390b3db62511d366d0703f6801cc77306cd9acb1c8d420cd8268fbb87",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/tests/test_protocol_v2.py": "25bd0d3f052def3bec2de117ab761aed5dcffe3cf2ea5e0d2bf52be180b170e0",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/telemetry.py": "766a2e62730e3b56efd553d013554b18520c4883f6e5a3ee7ddeef4211091900",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/observer.py": "b03b8d22dbe8a1722558e7301dadfc36496174c3e677fc65bfdd339a14d7dd7b",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/sampling_v2.py": "5cf4245642db39420f1e9592433129b11e215f2073edb1271b44858b6461dfc6",
+    "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/tp2_resident/sampling_v4.py": "dcef3594941c3f9fdf214782434af934d7ab082dd2b7f8bd05472d3e9bbb5249",
+    "/home/admin/luhuanbing.lhb/Ferrule/scripts/_owned_subreaper.py": "19ef9006089cde1abdca87177e01d26b925dcf996bfebaf6e3dc51ea71a77ff0",
+    "/home/admin/luhuanbing.lhb/Ferrule/scripts/_profile_capture.py": "701872050b139ba5db49f59d5b76551656f453493ed9a8627584abae393159c2",
+    "/home/admin/luhuanbing.lhb/Ferrule/scripts/bench_ferrule_vllm.py": "0abc2a72eac5abe4430dd79d07ddcf7a457fccd921be9c55144e913c2f7617fd",
+    "/home/admin/luhuanbing.lhb/Ferrule/scripts/gpu_idle_window_v2.py": "db2dceff8f2a1eb090a03be597d512d7e53cbd3ade2c7804bd512add505e823f",
+    "/home/admin/luhuanbing.lhb/Ferrule/scripts/test_vllm_qwen35.py": "1c330dac0727d54254a1c1648adcb9a4b747a2303fe183c2ba38f9ccd83ec2a1",
+    "/home/admin/wxw403883/anaconda3/bin/python3.12": "ab69351532e9128b35988453c0e929320ef5b325ae1ecf102db3dcd9a5c45293",
+    "/usr/bin/env": "578d685b5990ee1ed0aad69ddd66ccd29a6eb676f534e267487787731684306f"
+  },
+  "source_digest": "f0f7111d89580580f825263646e06dee568d0b4c8c76dad20d780277968bc671",
+  "candidate_binary": null,
+  "sealed_final_candidate": false,
+  "gpu_authorized": false,
+  "gpu_queries": 0,
+  "gpu_locks": 0,
+  "gpu_runs": 0,
+  "tensor_payload_bytes_read": 0,
+  "quality_pending": [
+    "actual same-cut constructor, each-mode full40/fresh/ordinary/cold with producer custody",
+    "actual single CLI cuda,nvtx-profile build/help/runtime source and native dependency bindings",
+    "renewed sole-owner grant, literal ordered eight UUIDs and physical selected UUID"
+  ],
+  "profile_launch_entry": false,
+  "interpretation": "CPU seal is preregistration, not candidate PASS or GPU authorization",
+  "digest": "4ef4f63d1b7811cd0f73f92830f3719703d5deee5fa73425c2f0a1dab3ceae66"
+}

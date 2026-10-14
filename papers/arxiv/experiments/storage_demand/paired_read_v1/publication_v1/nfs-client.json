@@ -1,0 +1,199 @@
+{
+  "authentication_scope": "Recorded outcome projection; original private authentication is not replayed",
+  "data": {
+    "http_request_windows": [],
+    "negative_deltas_clamped": false,
+    "physical_nas_backend_bytes": null,
+    "ready_startup_window": null,
+    "samples": [
+      {
+        "acquisition_begin": {
+          "monotonic": 8949317.890256787,
+          "unix_ns": 1792006374853738435
+        },
+        "acquisition_end": {
+          "monotonic": 8949317.890616115,
+          "unix_ns": 1792006374854096870
+        },
+        "acquisition_status": "captured",
+        "captured_monotonic": 8949317.890616115,
+        "captured_unix_ns": 1792006374854096870,
+        "label": "prelaunch",
+        "owned_server_physical_bytes": null,
+        "physical_nas_backend_bytes": null,
+        "selected_mount": {
+          "age_seconds": 5477569,
+          "counters": {
+            "directreadbytes": 753531355384,
+            "directwritebytes": 0,
+            "normalreadbytes": 23922462237925,
+            "normalwritebytes": 282630716,
+            "read_rpc_0": 23411744,
+            "read_rpc_1": 23411744,
+            "read_rpc_2": 0,
+            "read_rpc_3": 3925878240,
+            "read_rpc_4": 10304694361364,
+            "read_rpc_5": 290833563,
+            "read_rpc_6": 488226978,
+            "read_rpc_7": 779235763,
+            "readpages": 2336872673,
+            "serverreadbytes": 10303276657896,
+            "serverwritebytes": 288980483,
+            "writepages": 76939
+          },
+          "errors": [],
+          "fstype": "nfs4",
+          "redacted_identity_sha256": "80b0e5ded41fe553debeddd261d232aec40a544bda5767a7fab745a85798d41f",
+          "statvers": "1.1"
+        },
+        "shared_client_traffic": true
+      },
+      {
+        "acquisition_begin": {
+          "monotonic": 8949321.019217193,
+          "unix_ns": 1792006377982698737
+        },
+        "acquisition_end": {
+          "monotonic": 8949321.019597389,
+          "unix_ns": 1792006377983078174
+        },
+        "acquisition_status": "captured",
+        "captured_monotonic": 8949321.019597389,
+        "captured_unix_ns": 1792006377983078174,
+        "label": "shutdown-pre",
+        "owned_server_physical_bytes": null,
+        "physical_nas_backend_bytes": null,
+        "selected_mount": {
+          "age_seconds": 5477572,
+          "counters": {
+            "directreadbytes": 753531355384,
+            "directwritebytes": 0,
+            "normalreadbytes": 23922496306761,
+            "normalwritebytes": 282630716,
+            "read_rpc_0": 23411744,
+            "read_rpc_1": 23411744,
+            "read_rpc_2": 0,
+            "read_rpc_3": 3925878240,
+            "read_rpc_4": 10304694361364,
+            "read_rpc_5": 290833563,
+            "read_rpc_6": 488226978,
+            "read_rpc_7": 779235763,
+            "readpages": 2336872673,
+            "serverreadbytes": 10303276657896,
+            "serverwritebytes": 288980483,
+            "writepages": 76939
+          },
+          "errors": [],
+          "fstype": "nfs4",
+          "redacted_identity_sha256": "80b0e5ded41fe553debeddd261d232aec40a544bda5767a7fab745a85798d41f",
+          "statvers": "1.1"
+        },
+        "shared_client_traffic": true
+      },
+      {
+        "acquisition_begin": {
+          "monotonic": 8949321.023246145,
+          "unix_ns": 1792006377986727031
+        },
+        "acquisition_end": {
+          "monotonic": 8949321.023465678,
+          "unix_ns": 1792006377986946364
+        },
+        "acquisition_status": "captured",
+        "captured_monotonic": 8949321.023465678,
+        "captured_unix_ns": 1792006377986946364,
+        "label": "shutdown-post",
+        "owned_server_physical_bytes": null,
+        "physical_nas_backend_bytes": null,
+        "selected_mount": {
+          "age_seconds": 5477572,
+          "counters": {
+            "directreadbytes": 753531355384,
+            "directwritebytes": 0,
+            "normalreadbytes": 23922496306761,
+            "normalwritebytes": 282630716,
+            "read_rpc_0": 23411744,
+            "read_rpc_1": 23411744,
+            "read_rpc_2": 0,
+            "read_rpc_3": 3925878240,
+            "read_rpc_4": 10304694361364,
+            "read_rpc_5": 290833563,
+            "read_rpc_6": 488226978,
+            "read_rpc_7": 779235763,
+            "readpages": 2336872673,
+            "serverreadbytes": 10303276657896,
+            "serverwritebytes": 288980483,
+            "writepages": 76939
+          },
+          "errors": [],
+          "fstype": "nfs4",
+          "redacted_identity_sha256": "80b0e5ded41fe553debeddd261d232aec40a544bda5767a7fab745a85798d41f",
+          "statvers": "1.1"
+        },
+        "shared_client_traffic": true
+      }
+    ],
+    "scope": "Shared NFS client counters only; not server-attributable NAS disk/network IO",
+    "shared_client_traffic": true,
+    "shutdown_window": {
+      "after_window": {
+        "monotonic": 8949321.023465678,
+        "unix_ns": 1792006377986946364
+      },
+      "before_window": {
+        "monotonic": 8949321.019217193,
+        "unix_ns": 1792006377982698737
+      },
+      "deltas": {
+        "directreadbytes": 0,
+        "directwritebytes": 0,
+        "normalreadbytes": 0,
+        "normalwritebytes": 0,
+        "read_rpc_0": 0,
+        "read_rpc_1": 0,
+        "read_rpc_2": 0,
+        "read_rpc_3": 0,
+        "read_rpc_4": 0,
+        "read_rpc_5": 0,
+        "read_rpc_6": 0,
+        "read_rpc_7": 0,
+        "readpages": 0,
+        "serverreadbytes": 0,
+        "serverwritebytes": 0,
+        "writepages": 0
+      },
+      "owned_server_physical_bytes": null,
+      "physical_nas_backend_bytes": null,
+      "reasons": [],
+      "scope": "client mount counters; all shared traffic, not server-attributable physical NAS disk IO",
+      "shared_client_traffic": true,
+      "status": "shared_client_delta"
+    }
+  },
+  "omitted_fields": [
+    "Raw mountstats/mount lines",
+    "Export/server device and mountpoint paths",
+    "Mount namespace/boot/reader identities"
+  ],
+  "original_sources": [
+    {
+      "original_sha256": "b400037875256e9d23dd53f49014bb6fb40eda63d34b40be49419fcebb296fa5",
+      "path": "artifacts-current-20261015-01/P1-blocking/prelaunch-mountstats.json"
+    },
+    {
+      "original_sha256": "88556d89a6fddc27eafc801c77f533d19c04ca1264260a39d0cea57c8608328c",
+      "path": "artifacts-current-20261015-01/P1-blocking/shutdown-pre-mountstats.json"
+    },
+    {
+      "original_sha256": "04d5b7d153e68627798cd3c42d03ab16a884862b7bf61b4c70cdac67f019244b",
+      "path": "artifacts-current-20261015-01/P1-blocking/shutdown-post-mountstats.json"
+    },
+    {
+      "original_sha256": "f9b0e272991689b52f8f20fc927e3c236dee5fbe5ef9dd5d7b3a2d294b21d005",
+      "path": "artifacts-current-20261015-01/P1-blocking/lifecycle.json"
+    }
+  ],
+  "redacted_projection": true,
+  "replaces_original_receipt": false,
+  "schema": "ferrule.storage-demand.redacted-publication-projection.v1"
+}

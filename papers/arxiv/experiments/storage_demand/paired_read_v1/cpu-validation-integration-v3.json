@@ -1,0 +1,81 @@
+{
+  "schema": "ferrule.storage-demand.paired-read-integration-cpu-validation.v3",
+  "status": "integration_tests_passed_historical_live_source_checks_fail_closed",
+  "protocol_id": "storage-middle64-paired-read-corrective-20261015-v3",
+  "validation_scope": "CPU-only mock integration and local ordinary-file evidence inspection, not candidate quality or serving acceptance",
+  "integration_tests": {
+    "command": "/home/admin/wxw403883/anaconda3/bin/python3.12 -S -B -m unittest discover -s papers/arxiv/experiments/storage_demand/paired_read_v1 -p test_run_v3.py -v",
+    "tests": 15,
+    "failures": 0,
+    "errors": 0,
+    "returncode": 0,
+    "actual_maintained_coordinator_payload_tested": true,
+    "both_arms_actual_server_spec_cohorts": [
+      1,
+      0
+    ],
+    "requests_per_arm": 12,
+    "failed_finalization_retains_five_pairs_120_requests_50_measured": true,
+    "mock_receipts_are_not_candidate_pass": true
+  },
+  "cpu_entry_checks": {
+    "plan_v3.py check": "passed",
+    "run_v3.py plan": "passed"
+  },
+  "broader_historical_suite": {
+    "command": "/home/admin/wxw403883/anaconda3/bin/python3.12 -S -B -m unittest discover -s papers/arxiv/experiments/storage_demand/paired_read_v1 -p test_*.py -v",
+    "tests_at_broad_run": 66,
+    "passed": 62,
+    "failures": 1,
+    "errors": 3,
+    "returncode": 1,
+    "affected_tests": [
+      "test_paired_read_v1.DesignTests.test_cpu_plan_has_no_candidate_or_side_effects",
+      "test_paired_read_v1.DesignTests.test_fixed_seed_order_and_complete_denominators",
+      "test_paired_read_v1.DesignTests.test_source_hash_and_seal_are_fail_closed",
+      "test_plan_v3.ProspectiveV3Tests.test_v2_still_valid_and_append_only_expected_semantic_failure"
+    ],
+    "reason": "Historical V1/V2 validation pins live old033519c source. Corrected live serve.rs now differs, so old admission correctly fails closed; one assertion expected a later inventory error instead of the earlier stale-pin error.",
+    "historical_receipts_or_tests_rewritten": false,
+    "historical_receipt_hash_integrity_still_valid": true
+  },
+  "observed_build_identity": {
+    "qualification_directory": "target/validation/fixesmetadataCLIcurrent-quality-20261015-01",
+    "commit": "86c58a017d7c4b53490f536a3b1a133f2f7848cc",
+    "source_digest": "10183d246a1278248273e7d3055d1690cb56854cbff30f9f0662f18813dc8188",
+    "archive_sha256": "e0d160996147820fcc64cfb29070b265b2297a6d9265a21de541ed77e8f2fa65",
+    "cli_sha256": "7cc8e0ff6e84f27090494b8e9e27dc3a388d1d2f3fc34ae39dae416e1e607a01",
+    "source_members": 1484,
+    "final_nine_gate_pass_received": false,
+    "immutable_final_evidence_manifest_received": false,
+    "exact_tree_blocker": "Three unarchived frozen-source/scripts/__pycache__/*.cpython-310.pyc files; build owner must clean its own generated files before strict source review",
+    "candidate_acceptance": "pending; identity and configuration alone confer no PASS"
+  },
+  "candidate_binding_created": false,
+  "execution_seal_created": false,
+  "actual_v3_lifecycles": 0,
+  "gpu_queries": 0,
+  "gpu_locks": 0,
+  "gpu_runs": 0,
+  "server_runs": 0,
+  "http_requests": 0,
+  "nas_queries": 0,
+  "git_operations": 0,
+  "preserved_original_files": 76,
+  "historical_68_and_prospective_eight_unchanged": true,
+  "publication_validation": {
+    "command": "/home/admin/wxw403883/anaconda3/bin/python3.12 -S -B -m unittest discover -s papers/arxiv/experiments/storage_demand/paired_read_v1/publication_v1 -p test_publication.py -v",
+    "tests": 8,
+    "failures": 0,
+    "errors": 0,
+    "returncode": 0,
+    "workspace_and_copied_publication_only_checks": "passed",
+    "stdout_stage_generator_requires_explicit_format": "passed",
+    "symlink_traversal_private_json_env_and_denominator_checks": "passed",
+    "preserved_original_files_verified": 76,
+    "literal_stage_paths": 60,
+    "budget_limit_bytes": 10485760,
+    "user_maximum_bytes": 20971520,
+    "raw_startup_only_verbatim_other_receipts_redacted_projections": true
+  }
+}

@@ -1,0 +1,61 @@
+{
+  "authentication_scope": "Recorded outcome projection; original private authentication is not replayed",
+  "data": {
+    "cleanup_errors": [],
+    "cleanup_scope": "isolated_subreaper_direct_children",
+    "custody": {
+      "containment_verified": true,
+      "echild": true,
+      "entries": [
+        {
+          "exit_code": 1,
+          "first_observed_at": 8949313.508845545,
+          "identity": {
+            "birth_ticks": 131319315,
+            "pid": 20843,
+            "ppid": 20842
+          },
+          "reaped": true,
+          "reaped_at": 8949321.048298666,
+          "role": "root",
+          "signals": []
+        }
+      ],
+      "errors": [],
+      "helper_identity": {
+        "birth_ticks": 131319312,
+        "pid": 20842,
+        "ppid": 20760
+      },
+      "method": "linux-subreaper-waitid",
+      "reporting_errors": [],
+      "root_identity": {
+        "birth_ticks": 131319315,
+        "pid": 20843,
+        "ppid": 20842
+      },
+      "status": "proven_drained"
+    },
+    "descendant_custody": "proven_drained",
+    "gpu_quiescence": "unverified",
+    "returncode": 1,
+    "stderr_truncated": false,
+    "stdout_truncated": false,
+    "timed_out": false,
+    "wall_seconds": 7.603352844715118
+  },
+  "omitted_fields": [
+    "Raw stdout/stderr channels",
+    "Handshake/launch identifiers and authentication material",
+    "boot ID"
+  ],
+  "original_sources": [
+    {
+      "original_sha256": "61026c3bc0be3322a14448747ae0032284afbf6f04c9d2c76c3f83f385ab5755",
+      "path": "artifacts-current-20261015-01/P1-blocking/supervisor.json"
+    }
+  ],
+  "redacted_projection": true,
+  "replaces_original_receipt": false,
+  "schema": "ferrule.storage-demand.redacted-publication-projection.v1"
+}

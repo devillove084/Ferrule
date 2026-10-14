@@ -1,0 +1,19 @@
+{
+  "schema": "ferrule.storage-demand.actual-paired-cpu-validation.v2",
+  "status": "passed",
+  "tests_run": 157,
+  "dedicated_tests": 41,
+  "maintained_regression_tests": 116,
+  "failures": 0,
+  "errors": 0,
+  "log_path": "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/cpu-tests-v2.log",
+  "log_sha256": "48af73f7568cda08e76a49d7d20d1ed44925f44464bf66dd8de8bc36fab6daad",
+  "original_cpu_seal_sha256": "464e0b982e48732f278ccd33d1b296c306d8c2dd4a2737faf82ea92fc8340e8d",
+  "actual_execution_seal_sha256": "8a067626babe5c8b0a2a8543c727d6253b682d270ef14d89116fbc63365ec80c",
+  "binding_sha256": "667194fa06618fbf40fbd731c9eb63c26be87636e0fc798c6fb491d5896fb144",
+  "cpu_validation_gpu_queries": 0,
+  "cpu_validation_gpu_workloads": 0,
+  "cpu_validation_server_runs": 0,
+  "actual_run_status": "permanently_stopped_on_first_planned_arm",
+  "scientific_acceptance": false
+}

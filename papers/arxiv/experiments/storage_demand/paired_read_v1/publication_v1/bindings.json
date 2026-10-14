@@ -1,0 +1,101 @@
+{
+  "authentication_scope": "Recorded outcome projection; original private authentication is not replayed",
+  "data": {
+    "v1": {
+      "cases_sha256": "ea704f17de9cb57aab64869f848d5b6d6411aeb895925d5ab3011be37b7232aa",
+      "cpu_seal_sha256": "464e0b982e48732f278ccd33d1b296c306d8c2dd4a2737faf82ea92fc8340e8d",
+      "oracles_sha256": "8881cdddbfdd3684fd51b598128aa392521d8f2349440560f37c0e40e9f510eb",
+      "order_sha256": "89b4c03bf00a2bbdcdc45422881dab9db932eca92d9bf5988425b6958fdb10e1",
+      "protocol_id": "storage-middle64-paired-read-20261015-v1",
+      "protocol_sha256": "d8cd2add47d854aafa96bf7b86f820f04af50c44f28aa5e333feb719729493be",
+      "quality_tolerances": {
+        "actual_generated_ids": "exact",
+        "atol": 0.00025,
+        "ordinary_vs_diagnostic_logits": "exact F32-LE SHA256 plus shapes and greedy IDs",
+        "return_text": "exact",
+        "rtol": 0.012
+      },
+      "requests_sha256": "0ccca80f3cd840c5f3062a1dd33acada056f167081c68630fec7c6c2cc268529"
+    },
+    "v2": {
+      "adapter": "ferrule.storage-demand.current-qualification-cli-review.v2",
+      "binding_sha256": "667194fa06618fbf40fbd731c9eb63c26be87636e0fc798c6fb491d5896fb144",
+      "build_custody": "unobserved; actual bounded subprocess command receipts, not authenticated CPU build proof",
+      "build_review_sha256": "cdc7a1856c3fe8c45e63855f88f153cf31acb9bb5951ae8cd581762fa9212f2d",
+      "cases_sha256": "ea704f17de9cb57aab64869f848d5b6d6411aeb895925d5ab3011be37b7232aa",
+      "cli_binary_sha256": "de5159951fe724e97e35c0fc86367642d33735994328eee1a5e604cf9d2b037b",
+      "cli_qualification": "pending first planned serving lifecycle; separate test binaries are not mathematical CLI equivalence",
+      "cli_serving_accepted": false,
+      "execution_sha256": "8a067626babe5c8b0a2a8543c727d6253b682d270ef14d89116fbc63365ec80c",
+      "old_adapter_acceptance_transferred": false,
+      "protocol_sha256": "d8cd2add47d854aafa96bf7b86f820f04af50c44f28aa5e333feb719729493be",
+      "schema": "ferrule.storage-demand.actual-current-candidate-binding.v2",
+      "separate_quality_gate_reports": 9,
+      "source_archive_sha256": "ac072e0d1bac7efcc85b7f26ce68723f412b0e22b5ee868104b1f6073dd2a82f",
+      "source_digest": "a4dceb084e21b80f6b45ff7ac980c6fa80ac8f17e902fd28c65f3d5bc7bb0efa",
+      "source_members": 1484,
+      "source_native_runtime_relation": "actual same committed source/target/native/runtime bundle",
+      "status": "current_nine_gate_bound_cli_serving_pending"
+    },
+    "v3": {
+      "actual_lifecycles": 0,
+      "candidate_binary": null,
+      "candidate_prerequisites": [
+        "Separate production fix removes TP1 prepared-read versus TP2 cache-accessor clash; this scope does not modify production",
+        "New immutable CLI built from the corrected source cut, not de515995 or declared transfer of old adapter PASS",
+        "Explicit versioned read-only build/source archive/compiler/dependency/native/runtime review for the new CLI; exact-help semantic lowering checks all scheduler fields and case budgets",
+        "Fresh actual same-cut constructor plus BOTH modes full40/retained-fresh/ordinary-no-observer/cold-owner GPU gates with actual producer custody; previous033519c ninePASS reports are references only",
+        "New protocol-v3/cases-v3-bound candidate receipts and reviewed execution registration; namespace-only identity match does not imply quality PASS",
+        "First future planned arm must establish exact CLI Ready/mapped libraries, NVTX OFF, actual worker-enqueue plus HTTP text/ID/usage joins and owner ledger; no extra warmprobe",
+        "Separately renewed GPU-owner authorization and maintained all-eight local UUID locks/idle/authenticated subreaper; not authorized by this CPU plan"
+      ],
+      "candidate_source_cut": null,
+      "cases_sha256": "b7a8ca3dcb166d6e93eb60f82212e7095e9117462322cea7eee6d91e261ef595",
+      "corrective_flags": [
+        "--decode-cohort-target",
+        "1",
+        "--decode-cohort-max-deferrals",
+        "0"
+      ],
+      "cpu_seal_sha256": "8b897452fe995df2e99e38c6cfc6e52684711919a63bdbbcaf071752b41313fc",
+      "gpu_authorized": false,
+      "protocol_id": "storage-middle64-paired-read-corrective-20261015-v3",
+      "protocol_sha256": "1ba4f3f4f5091eebd465e9702514bbcd8ff9aa0db7024ad62c0e312b15cde7b2",
+      "replacement_or_resume": false
+    }
+  },
+  "omitted_fields": [
+    "Huge external source/dependency/runtime pin path inventories",
+    "CLI/native/archive/map bytes",
+    "Private raw producer/launch channels; old PASS cannot promote new V3"
+  ],
+  "original_sources": [
+    {
+      "original_sha256": "667194fa06618fbf40fbd731c9eb63c26be87636e0fc798c6fb491d5896fb144",
+      "path": "actual-binding-v2.json"
+    },
+    {
+      "original_sha256": "cdc7a1856c3fe8c45e63855f88f153cf31acb9bb5951ae8cd581762fa9212f2d",
+      "path": "actual-build-review-v2.json"
+    },
+    {
+      "original_sha256": "8a067626babe5c8b0a2a8543c727d6253b682d270ef14d89116fbc63365ec80c",
+      "path": "execution-sealed-v2.json"
+    },
+    {
+      "original_sha256": "d8cd2add47d854aafa96bf7b86f820f04af50c44f28aa5e333feb719729493be",
+      "path": "protocol.json"
+    },
+    {
+      "original_sha256": "1ba4f3f4f5091eebd465e9702514bbcd8ff9aa0db7024ad62c0e312b15cde7b2",
+      "path": "protocol-v3.json"
+    },
+    {
+      "original_sha256": "8b897452fe995df2e99e38c6cfc6e52684711919a63bdbbcaf071752b41313fc",
+      "path": "cpu-sealed-v3.json"
+    }
+  ],
+  "redacted_projection": true,
+  "replaces_original_receipt": false,
+  "schema": "ferrule.storage-demand.redacted-publication-projection.v1"
+}

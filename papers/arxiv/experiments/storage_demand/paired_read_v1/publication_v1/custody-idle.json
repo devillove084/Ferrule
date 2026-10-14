@@ -1,0 +1,396 @@
+{
+  "authentication_scope": "Recorded outcome projection; original private authentication is not replayed",
+  "data": {
+    "final_lock_release": {
+      "all_eight_local_locks_released": true,
+      "authenticated_echild": true,
+      "context_exited": true,
+      "owner_resource_ledger": "unknown; shutdown summary absent",
+      "physical_release_certificate": false,
+      "recorded_owners_absent": true,
+      "study_permanently_stopped": true
+    },
+    "final_lock_reprobe": {
+      "all_eight_nonblocking_reacquired": true,
+      "context_exits_after_receipt": true,
+      "not_a_resume": true,
+      "recorded_owners_absent": true,
+      "workloads": 0
+    },
+    "observations": {
+      "coordinator-post-idle": {
+        "accepted_sample_indices": [
+          0,
+          1,
+          2
+        ],
+        "all_eight_idle": true,
+        "authenticated_echild": true,
+        "consecutive_idle": 3,
+        "deadline_seconds": 15,
+        "elapsed_seconds": 2.6904071886092424,
+        "interval_seconds": 1,
+        "mode": "post_authenticated_echild",
+        "no_compute_apps_required": true,
+        "physical_owner_release": "unverified",
+        "recorded_owners_absent": true,
+        "required_consecutive": 3,
+        "samples": [
+          {
+            "classification": "idle",
+            "compute_application_count": 0,
+            "consecutive_idle": 1,
+            "gpu_rows": [
+              {
+                "index": 0,
+                "memory_used_mib": 0,
+                "utilization_percent": 0
+              },
+              {
+                "index": 1,
+                "memory_used_mib": 0,
+                "utilization_percent": 0
+              },
+              {
+                "index": 2,
+                "memory_used_mib": 0,
+                "utilization_percent": 0
+              },
+              {
+                "index": 3,
+                "memory_used_mib": 0,
+                "utilization_percent": 0
+              },
+              {
+                "index": 4,
+                "memory_used_mib": 0,
+                "utilization_percent": 0
+              },
+              {
+                "index": 5,
+                "memory_used_mib": 0,
+                "utilization_percent": 0
+              },
+              {
+                "index": 6,
+                "memory_used_mib": 0,
+                "utilization_percent": 0
+              },
+              {
+                "index": 7,
+                "memory_used_mib": 0,
+                "utilization_percent": 0
+              }
+            ],
+            "monotonic_finished": 8949321.308900287,
+            "monotonic_started": 8949321.082687955,
+            "recorded_unix_ns": 1792006378046170082
+          },
+          {
+            "classification": "idle",
+            "compute_application_count": 0,
+            "consecutive_idle": 2,
+            "gpu_rows": [
+              {
+                "index": 0,
+                "memory_used_mib": 0,
+                "utilization_percent": 0
+              },
+              {
+                "index": 1,
+                "memory_used_mib": 0,
+                "utilization_percent": 0
+              },
+              {
+                "index": 2,
+                "memory_used_mib": 0,
+                "utilization_percent": 0
+              },
+              {
+                "index": 3,
+                "memory_used_mib": 0,
+                "utilization_percent": 0
+              },
+              {
+                "index": 4,
+                "memory_used_mib": 0,
+                "utilization_percent": 0
+              },
+              {
+                "index": 5,
+                "memory_used_mib": 0,
+                "utilization_percent": 0
+              },
+              {
+                "index": 6,
+                "memory_used_mib": 0,
+                "utilization_percent": 0
+              },
+              {
+                "index": 7,
+                "memory_used_mib": 0,
+                "utilization_percent": 0
+              }
+            ],
+            "monotonic_finished": 8949322.53711219,
+            "monotonic_started": 8949322.309165625,
+            "recorded_unix_ns": 1792006379272649444
+          },
+          {
+            "classification": "idle",
+            "compute_application_count": 0,
+            "consecutive_idle": 3,
+            "gpu_rows": [
+              {
+                "index": 0,
+                "memory_used_mib": 0,
+                "utilization_percent": 0
+              },
+              {
+                "index": 1,
+                "memory_used_mib": 0,
+                "utilization_percent": 0
+              },
+              {
+                "index": 2,
+                "memory_used_mib": 0,
+                "utilization_percent": 0
+              },
+              {
+                "index": 3,
+                "memory_used_mib": 0,
+                "utilization_percent": 0
+              },
+              {
+                "index": 4,
+                "memory_used_mib": 0,
+                "utilization_percent": 0
+              },
+              {
+                "index": 5,
+                "memory_used_mib": 0,
+                "utilization_percent": 0
+              },
+              {
+                "index": 6,
+                "memory_used_mib": 0,
+                "utilization_percent": 0
+              },
+              {
+                "index": 7,
+                "memory_used_mib": 0,
+                "utilization_percent": 0
+              }
+            ],
+            "monotonic_finished": 8949323.772981446,
+            "monotonic_started": 8949323.537369274,
+            "recorded_unix_ns": 1792006380500852997
+          }
+        ],
+        "schema": "ferrule.gpu-idle-window.v2",
+        "status": "verified",
+        "zero_memory_mib": 0,
+        "zero_utilization_percent": 0
+      },
+      "final-all-eight-idle": {
+        "accepted_sample_indices": [
+          0,
+          1,
+          2
+        ],
+        "all_eight_idle": true,
+        "authenticated_echild": true,
+        "consecutive_idle": 3,
+        "deadline_seconds": 15,
+        "elapsed_seconds": 2.6752076987177134,
+        "interval_seconds": 1,
+        "mode": "post_authenticated_echild",
+        "no_compute_apps_required": true,
+        "physical_owner_release": "unverified",
+        "recorded_owners_absent": true,
+        "required_consecutive": 3,
+        "samples": [
+          {
+            "classification": "idle",
+            "compute_application_count": 0,
+            "consecutive_idle": 1,
+            "gpu_rows": [
+              {
+                "index": 0,
+                "memory_used_mib": 0,
+                "utilization_percent": 0
+              },
+              {
+                "index": 1,
+                "memory_used_mib": 0,
+                "utilization_percent": 0
+              },
+              {
+                "index": 2,
+                "memory_used_mib": 0,
+                "utilization_percent": 0
+              },
+              {
+                "index": 3,
+                "memory_used_mib": 0,
+                "utilization_percent": 0
+              },
+              {
+                "index": 4,
+                "memory_used_mib": 0,
+                "utilization_percent": 0
+              },
+              {
+                "index": 5,
+                "memory_used_mib": 0,
+                "utilization_percent": 0
+              },
+              {
+                "index": 6,
+                "memory_used_mib": 0,
+                "utilization_percent": 0
+              },
+              {
+                "index": 7,
+                "memory_used_mib": 0,
+                "utilization_percent": 0
+              }
+            ],
+            "monotonic_finished": 8949394.297741577,
+            "monotonic_started": 8949394.065032989,
+            "recorded_unix_ns": 1792006451028515064
+          },
+          {
+            "classification": "idle",
+            "compute_application_count": 0,
+            "consecutive_idle": 2,
+            "gpu_rows": [
+              {
+                "index": 0,
+                "memory_used_mib": 0,
+                "utilization_percent": 0
+              },
+              {
+                "index": 1,
+                "memory_used_mib": 0,
+                "utilization_percent": 0
+              },
+              {
+                "index": 2,
+                "memory_used_mib": 0,
+                "utilization_percent": 0
+              },
+              {
+                "index": 3,
+                "memory_used_mib": 0,
+                "utilization_percent": 0
+              },
+              {
+                "index": 4,
+                "memory_used_mib": 0,
+                "utilization_percent": 0
+              },
+              {
+                "index": 5,
+                "memory_used_mib": 0,
+                "utilization_percent": 0
+              },
+              {
+                "index": 6,
+                "memory_used_mib": 0,
+                "utilization_percent": 0
+              },
+              {
+                "index": 7,
+                "memory_used_mib": 0,
+                "utilization_percent": 0
+              }
+            ],
+            "monotonic_finished": 8949395.518553946,
+            "monotonic_started": 8949395.298151258,
+            "recorded_unix_ns": 1792006452261636017
+          },
+          {
+            "classification": "idle",
+            "compute_application_count": 0,
+            "consecutive_idle": 3,
+            "gpu_rows": [
+              {
+                "index": 0,
+                "memory_used_mib": 0,
+                "utilization_percent": 0
+              },
+              {
+                "index": 1,
+                "memory_used_mib": 0,
+                "utilization_percent": 0
+              },
+              {
+                "index": 2,
+                "memory_used_mib": 0,
+                "utilization_percent": 0
+              },
+              {
+                "index": 3,
+                "memory_used_mib": 0,
+                "utilization_percent": 0
+              },
+              {
+                "index": 4,
+                "memory_used_mib": 0,
+                "utilization_percent": 0
+              },
+              {
+                "index": 5,
+                "memory_used_mib": 0,
+                "utilization_percent": 0
+              },
+              {
+                "index": 6,
+                "memory_used_mib": 0,
+                "utilization_percent": 0
+              },
+              {
+                "index": 7,
+                "memory_used_mib": 0,
+                "utilization_percent": 0
+              }
+            ],
+            "monotonic_finished": 8949396.740109837,
+            "monotonic_started": 8949396.518812222,
+            "recorded_unix_ns": 1792006453482296241
+          }
+        ],
+        "schema": "ferrule.gpu-idle-window.v2",
+        "status": "verified",
+        "zero_memory_mib": 0,
+        "zero_utilization_percent": 0
+      }
+    }
+  },
+  "omitted_fields": [
+    "Physical GPU UUIDs and raw telemetry strings",
+    "Raw flock FDs/device/inode and coordinator identifiers"
+  ],
+  "original_sources": [
+    {
+      "original_sha256": "e2779c63f9d851fc8b3a21b93bb4099215798f8911fdad8ebc4ae77bd056b6e7",
+      "path": "artifacts-current-20261015-01/P1-blocking/coordinator-post-idle.json"
+    },
+    {
+      "original_sha256": "42a8cd00619318cc17c8dae5a42b38ec835a8e9f8b0ef40486d6451e441aeadc",
+      "path": "artifacts-current-20261015-01/final-all-eight-idle.json"
+    },
+    {
+      "original_sha256": "cc6229215be28c75c9bccb976ce165ec54e233d2d172087fce6578f051d7ff0d",
+      "path": "artifacts-current-20261015-01/final-lock-release.json"
+    },
+    {
+      "original_sha256": "45a45d24ffb7e2816cc281559a45c73ad1156d4322098d2c65bd91816d4b30e0",
+      "path": "artifacts-current-20261015-01/final-lock-reprobe.json"
+    }
+  ],
+  "redacted_projection": true,
+  "replaces_original_receipt": false,
+  "schema": "ferrule.storage-demand.redacted-publication-projection.v1"
+}

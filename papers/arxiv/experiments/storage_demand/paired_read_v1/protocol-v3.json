@@ -1,0 +1,249 @@
+{
+  "block_count": 5,
+  "fresh_server_lifecycles": 10,
+  "order_seed": 20261015,
+  "order_algorithm": "Sort P1..P5 by SHA256('20261015:' + block); first three are blocking-first, other two lookahead-first; execute blocks P1..P5",
+  "modes": [
+    "blocking",
+    "lookahead"
+  ],
+  "option_difference": "--expert-read-schedule value only",
+  "request_phases": {
+    "initial": 4,
+    "qa_excluded_first": 1,
+    "qa_warmup": 2,
+    "qa_measured": 5
+  },
+  "requests_per_lifecycle": 12,
+  "scheduled_requests": 120,
+  "scheduled_measured_qa": 50,
+  "generation_tokens": 8,
+  "retry_count": 0,
+  "replacement_count": 0,
+  "limits": {
+    "startup_seconds": 120,
+    "request_seconds": 60,
+    "all_requests_seconds": 300,
+    "worker_bookkeeping_seconds": 40,
+    "target_lifetime_seconds": 460,
+    "shutdown_seconds": 30,
+    "worker_preidle_seconds": 20,
+    "worker_finalization_seconds": 20,
+    "supervisor_seconds": 530,
+    "supervisor_call_overhead_seconds": 28,
+    "coordinator_preidle_seconds": 20,
+    "coordinator_postidle_seconds": 20,
+    "coordinator_finalization_seconds": 32,
+    "outer_lifecycle_seconds": 650,
+    "pilot_seconds": 7200,
+    "study_cleanup_reserve_seconds": 100
+  },
+  "primary_estimand": "Median across the five block-level log ratios log(lookahead/blocking), each arm represented by its median of five measured-QA client E2E seconds; report exp(median) and 1-exp(median). TTFT and quality-qualified goodput use the same block pairing as prespecified secondary outcomes.",
+  "goodput": "Per-arm sum of actual completion_tokens from measured eligible QA / sum of actual client request_e2e_seconds for all five measured QA slots. Only complete quality/custody-qualified arms get a number; partial/failed/unissued arms remain null, not zero latency or silently excluded.",
+  "interval": "Exact enumerated paired-block bootstrap, resample five block log ratios with replacement (5^5=3125), nearest-rank 2.5%/97.5% percentiles, exp endpoints. Only if all five pairs qualify; otherwise no aggregate estimate or interval. Exploratory descriptive n=5, not coverage-guaranteed confidence or significance.",
+  "failure_policy": "STOP new admission on any gate, timeout, stale hash, unknown or pending custody, failed text/usage/actual-ID/trace/counter/NFS gate or post-idle. Never drop/replace a pair. Retain five paired blocks, ten lifecycles, 120 requests and 50 measured QA, including censored and unissued slots. Cancellation retains maintained subreaper cleanup authority.",
+  "quality_tolerances": {
+    "atol": 0.00025,
+    "rtol": 0.012,
+    "actual_generated_ids": "exact",
+    "return_text": "exact",
+    "ordinary_vs_diagnostic_logits": "exact F32-LE SHA256 plus shapes and greedy IDs"
+  },
+  "custody": {
+    "nonselected_delta_tolerance_bytes": 1048576,
+    "sample_interval_seconds": 2,
+    "physical_host_cap_bytes": null,
+    "physical_nas_backend_bytes": null,
+    "no_cache_dropping": true,
+    "no_foreign_signals": true
+  },
+  "claim_limits": [
+    "Exploratory paired instrumented TP1/PP1/EP1 serial repeated-QA study, not SOTA/significance/power/general throughput",
+    "No 8k/context sweep/pp/tp expansion",
+    "Fresh servers are not cold storage or independent NFS/page-cache samples",
+    "NFS observations are shared client deltas, not NAS disk bytes",
+    "Logical host reservations exclude OS/TLS/allocator headroom; sampled PSS/device memory are not hard partitions or exact peaks",
+    "NVTX OFF does not remove DEBUG/TRACE, sampler or compiled instrumentation overhead",
+    "Owner-local quiescent close may retain residency; universal final resource release remains unverified"
+  ],
+  "schema": "ferrule.storage-demand.paired-read-preregistration.v3",
+  "id": "storage-middle64-paired-read-corrective-20261015-v3",
+  "status": "prospective_cpu_only_candidate_unbound_not_authorized",
+  "candidate_binary": null,
+  "candidate_source_cut": null,
+  "candidate_quality": null,
+  "actual_lifecycles": 0,
+  "gpu_queries": 0,
+  "gpu_locks": 0,
+  "gpu_runs": 0,
+  "server_runs": 0,
+  "nas_queries": 0,
+  "launch_entry": false,
+  "bind_entry": false,
+  "profiling_captures": 0,
+  "corrective_flags": [
+    "--decode-cohort-target",
+    "1",
+    "--decode-cohort-max-deferrals",
+    "0"
+  ],
+  "expected_scheduler": {
+    "prefill_chunk_size": 8,
+    "max_active_sequences": 2,
+    "max_decode_batch": 2,
+    "decode_cohort_target": 1,
+    "decode_cohort_max_deferrals": 0,
+    "max_batch_tokens": 8,
+    "prefill_reserve_tokens": 1,
+    "allow_mixed_batches": true,
+    "prefix_cache_capacity_pages": 0
+  },
+  "public_cli_defaults": {
+    "decode_cohort_target": 4,
+    "decode_cohort_max_deferrals": 3
+  },
+  "public_default_policy": "CLI public cohort4/3 unchanged; explicit1/0 is this study case only",
+  "order": [
+    {
+      "block": "P1",
+      "modes": [
+        "blocking",
+        "lookahead"
+      ]
+    },
+    {
+      "block": "P2",
+      "modes": [
+        "blocking",
+        "lookahead"
+      ]
+    },
+    {
+      "block": "P3",
+      "modes": [
+        "lookahead",
+        "blocking"
+      ]
+    },
+    {
+      "block": "P4",
+      "modes": [
+        "lookahead",
+        "blocking"
+      ]
+    },
+    {
+      "block": "P5",
+      "modes": [
+        "blocking",
+        "lookahead"
+      ]
+    }
+  ],
+  "cases_sha256": "b7a8ca3dcb166d6e93eb60f82212e7095e9117462322cea7eee6d91e261ef595",
+  "reference_bindings": {
+    "requests.json": "0ccca80f3cd840c5f3062a1dd33acada056f167081c68630fec7c6c2cc268529",
+    "oracles.json": "8881cdddbfdd3684fd51b598128aa392521d8f2349440560f37c0e40e9f510eb",
+    "order.json": "89b4c03bf00a2bbdcdc45422881dab9db932eca92d9bf5988425b6958fdb10e1"
+  },
+  "historical_preservation": {
+    "artifact_pins": {
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/requests.json": "0ccca80f3cd840c5f3062a1dd33acada056f167081c68630fec7c6c2cc268529",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/profile_audit.py": "86bf49a7376e042c81f0f4765682bd579c238266f3d9025af34f60bbed578df4",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/execution-sealed-v2.json": "8a067626babe5c8b0a2a8543c727d6253b682d270ef14d89116fbc63365ec80c",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/test_quality_v1.py": "fe5c7f91304674bcfc1380a5288eda301a0d0c5fab27e761d27f8d0d1093a9cc",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/cpu-sealed.json": "464e0b982e48732f278ccd33d1b296c306d8c2dd4a2737faf82ea92fc8340e8d",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/protocol.py": "8ada5fea3f43d7e19c2e500d1de80deaced01c7602f4a5cee080c498f815a091",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/actual-build-review-v2.json": "cdc7a1856c3fe8c45e63855f88f153cf31acb9bb5951ae8cd581762fa9212f2d",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/test_actual_v2.py": "9157f9bfc9904c6a118d07428040195e521ac38359a27e950e59c1770183908f",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/cpu-validation.json": "b5d70d6830b866c5e0e701e6c21a5832383de10b5a8d3de6c90b1d77917d9eb4",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/order.json": "89b4c03bf00a2bbdcdc45422881dab9db932eca92d9bf5988425b6958fdb10e1",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/EXECUTION_V2.md": "87678c16d3eb54516015cdcab987b4d03903a669f4388c8c10bcb67aca0f5c2a",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/build_adapter.py": "648b02fddfb4cacc64c9cec0bdfcf98f99b0d7d011257c61d12833f3efa707a2",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/run_actual_v2.py": "786c23ed3a82fc00a3333414bcdc14376c59121b7b58ae00ffbcecc1c56d8d55",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/test_paired_read_v1.py": "bb39873c54c1e8175fe34f3cddede59a360f88374bb961853f1f53bb68e4eefc",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/current_binding_v2.py": "c27857f438bf6085550982739f0b5bcde617d1192526f1dc71d0e476d7c39a2e",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/README.md": "cf8665b65ae586c78d19c0c707c76e03514caf4a5253995cf991e49ae579e4d2",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/actual-binding-v2.json": "667194fa06618fbf40fbd731c9eb63c26be87636e0fc798c6fb491d5896fb144",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/test_stopped_closeout_v2.py": "f3195e72598886c65bd8350cc8f20b7342e8986d317707b82d499bf1d4de3892",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/RESULT_V2.md": "a8514ce129744ba87f11bad5704b080ae5b3edcf827c8e9aedc106e2504a9319",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/analysis.py": "7a67db3948e5f3b0c8c39f64e194eee3ad9441643bd57528673f7261196aba19",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/cpu-validation-v2.json": "3846c310898514f40d150d745cd4dcea2cc275ee602e28a4db2202633d979975",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/cpu-tests-v2.log": "48af73f7568cda08e76a49d7d20d1ed44925f44464bf66dd8de8bc36fab6daad",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/cases.json": "ea704f17de9cb57aab64869f848d5b6d6411aeb895925d5ab3011be37b7232aa",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/source-cut.json": "4876621eaf7063067864315726ccbb0201ba81ce4ac91667784a0fc0855fab76",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/quality.py": "ec28e5ca25bfef6b3ed27d14fa0d42872363aa2380bf9d7f689bdd55f30b51d5",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/protocol.json": "d8cd2add47d854aafa96bf7b86f820f04af50c44f28aa5e333feb719729493be",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/stage-manifest.json": "4e4747e50813a8adcf38a4371bc2070cbb7984ebeb2f4a6ee57241168d55dfb9",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/actual-stage-manifest-v2.json": "fb2550e3688ec57220eaf1c262b686eb584016674d335257814a10adab4f635b",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/cpu-tests.log": "28b3b7a02215ef10b6afc59a9e7730a5b566a6be1c32ebf4b425979621586d6a",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/oracles.json": "8881cdddbfdd3684fd51b598128aa392521d8f2349440560f37c0e40e9f510eb",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/__init__.py": "b8a364621ac89ed4924ae5d51c9f7ffcbb638c273c65b464b689b05b7cd4d567",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/run_paired.py": "dc7207bdef82aae16f1bba4aba0e9ac40bd7f570d72b2ec62cb5e7c8f3fe03e0",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/admission-20261015-01/locks-held.json": "ca23f2ed38156e207bedf8c00e1d73e45d5287e2d7d506edcd14c3f5562eb3cd",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/admission-20261015-01/locks-released.json": "ebfa23c155ef6cace9727baa86b01361830852d6f8666f6a7dedecd859ea8427",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/admission-20261015-01/recorded-owner-precheck.json": "700dbf102ec2c9e1af86eda0e0d7cdcca04eac9ec4c438824e711163f27c3f75",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/admission-20261015-01/strict-all-eight-idle.json": "3cb2b83654e02c201190083cd255d5a72a69810c49c9c206b5fc5a451ea3d21d",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/artifacts-current-20261015-01/final-lock-reprobe.json": "45a45d24ffb7e2816cc281559a45c73ad1156d4322098d2c65bd91816d4b30e0",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/artifacts-current-20261015-01/study-coordinator.lock": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/artifacts-current-20261015-01/final-lock-release.json": "cc6229215be28c75c9bccb976ce165ec54e233d2d172087fce6578f051d7ff0d",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/artifacts-current-20261015-01/registration.json": "01adc0567ca7d82952adfba59d0dfae4cb10af27628601d42c3d9c5c22cf5114",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/artifacts-current-20261015-01/final-all-eight-idle.json": "42a8cd00619318cc17c8dae5a42b38ec835a8e9f8b0ef40486d6451e441aeadc",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/artifacts-current-20261015-01/study-stop.json": "0dbeaab261e483cd900bb3053871e4accccf25be6afc4842da68d6ad3e26636e",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/artifacts-current-20261015-01/closeout.json": "c09d5195385d49c18695505c368ba52539fb3a7e21cb5af79f1821c6b61f30d7",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/artifacts-current-20261015-01/paired-final.json": "9e10b95dc7f8df55cae024459952c0664b55a21287f6947f609eca6893fa8d67",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/artifacts-current-20261015-01/P1-blocking/prelaunch-mountstats.json": "b400037875256e9d23dd53f49014bb6fb40eda63d34b40be49419fcebb296fa5",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/artifacts-current-20261015-01/P1-blocking/launch.json": "a4a411bab0744952e9eeb3ade116202b0e1b8b17a68aa5f49392c1e157694795",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/artifacts-current-20261015-01/P1-blocking/coordinator-pre-idle.json": "14488362e14a5cd136ec845b278b2b5eac336181a8735383ea8ebf13df695c7a",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/artifacts-current-20261015-01/P1-blocking/profile-stop": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/artifacts-current-20261015-01/P1-blocking/assessment.json": "1e012566febde013ec189d4b256bd09624792657d4e4de726c15298e0240391e",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/artifacts-current-20261015-01/P1-blocking/shutdown-pre-mountstats.txt": "3945b936befa6d913b46d6f58473a5ba7abf736507490c461d1031df6a9dbe5f",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/artifacts-current-20261015-01/P1-blocking/shutdown-post-mountstats.json": "04d5b7d153e68627798cd3c42d03ab16a884862b7bf61b4c70cdac67f019244b",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/artifacts-current-20261015-01/P1-blocking/custody.json": "1d8c22e071f21dd4dd2475576ded33b49f649f05206556ba5736b0c8184b46c4",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/artifacts-current-20261015-01/P1-blocking/prelaunch-mountstats.txt": "c2b48b7c70bb3fe3cc3f425b26be24c1374c005661e4ce7091fe7a1628ebaf9e",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/artifacts-current-20261015-01/P1-blocking/locks-held.json": "97177d347fbb639f734971c09ea0c5cea97ea1f351b69c12934fdcf1e034cfab",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/artifacts-current-20261015-01/P1-blocking/locks-released.json": "f80b2d5a2a17c549b4e1d8ba22def02b04608cd3e19d1719c1147431428303ca",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/artifacts-current-20261015-01/P1-blocking/worker-launch.json": "8d6972ecb25cf4ecd742851d45ffc2455001d1b18aa307d8a09af53f604f4a9a",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/artifacts-current-20261015-01/P1-blocking/shutdown-pre-mountstats.json": "88556d89a6fddc27eafc801c77f533d19c04ca1264260a39d0cea57c8608328c",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/artifacts-current-20261015-01/P1-blocking/server.log": "e83c87b518bcdfa540a6c756c1c3198b5ee6a378cbd8f3d95ed66c154299c0aa",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/artifacts-current-20261015-01/P1-blocking/lifecycle.json": "f9b0e272991689b52f8f20fc927e3c236dee5fbe5ef9dd5d7b3a2d294b21d005",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/artifacts-current-20261015-01/P1-blocking/read-ledger-assessment.json": "9f22b030675cf597ddb733efd20efd416a103f46ccc834c9bb8449e6570241b0",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/artifacts-current-20261015-01/P1-blocking/coordinator-post-idle.json": "e2779c63f9d851fc8b3a21b93bb4099215798f8911fdad8ebc4ae77bd056b6e7",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/artifacts-current-20261015-01/P1-blocking/samples.jsonl": "a8e82d9a276d37bc7af0e46e4c51bde2996f97bfd60559fcfb8f7dd74b4a77f6",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/artifacts-current-20261015-01/P1-blocking/worker-pre-idle.json": "9827edfaf07903775a1375b5f5cb11e4c0f234cd227dd305c2b3e9f5c0a5bdbf",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/artifacts-current-20261015-01/P1-blocking/profile-server.json": "44639e67bb768eb66cb298193ae43aa86778619274630d03a87ae8b83deff304",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/artifacts-current-20261015-01/P1-blocking/supervisor.json": "61026c3bc0be3322a14448747ae0032284afbf6f04c9d2c76c3f83f385ab5755",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/artifacts-current-20261015-01/P1-blocking/attempt.json": "8a1028efe223fdac2a8f34756876af7b7d0beffe793a24e8a74d598499377efd",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/artifacts-current-20261015-01/P1-blocking/shutdown-post-mountstats.txt": "3945b936befa6d913b46d6f58473a5ba7abf736507490c461d1031df6a9dbe5f",
+      "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/artifacts-current-20261015-01/P1-blocking/baseline.json": "3c2bd642756c89eefb40a77c82d66cda42ca4d6a3584092b8d2f1620932ab368"
+    },
+    "inventory_digest": "ae68d1666d62886d7e252dc6964a26adbfeda578cdcee28a3581e1e67864df6f",
+    "files": 68,
+    "no_existing_file_rewritten": true
+  },
+  "historical_study": {
+    "id": "storage-middle64-paired-read-20261015-v1",
+    "run": "artifacts-current-20261015-01",
+    "status": "permanently_stopped",
+    "replacement_or_resume": false,
+    "failed_denominators_stay_separate": true,
+    "previous_attempted_lifecycles": 1,
+    "previous_completed_lifecycles": 0,
+    "previous_unissued_requests": 120,
+    "previous_scheduled_measured_qa": 50,
+    "timing_outcomes_observed": false,
+    "reason": "Independent corrective preregistration after deterministic pre-worker accessor failure; same declared seed/order reused, not selected or adapted from latency data; no old failed pair is replaced"
+  },
+  "candidate_prerequisites": [
+    "Separate production fix removes TP1 prepared-read versus TP2 cache-accessor clash; this scope does not modify production",
+    "New immutable CLI built from the corrected source cut, not de515995 or declared transfer of old adapter PASS",
+    "Explicit versioned read-only build/source archive/compiler/dependency/native/runtime review for the new CLI; exact-help semantic lowering checks all scheduler fields and case budgets",
+    "Fresh actual same-cut constructor plus BOTH modes full40/retained-fresh/ordinary-no-observer/cold-owner GPU gates with actual producer custody; previous033519c ninePASS reports are references only",
+    "New protocol-v3/cases-v3-bound candidate receipts and reviewed execution registration; namespace-only identity match does not imply quality PASS",
+    "First future planned arm must establish exact CLI Ready/mapped libraries, NVTX OFF, actual worker-enqueue plus HTTP text/ID/usage joins and owner ledger; no extra warmprobe",
+    "Separately renewed GPU-owner authorization and maintained all-eight local UUID locks/idle/authenticated subreaper; not authorized by this CPU plan"
+  ],
+  "new_qualification_reports": null,
+  "new_cli_ready_receipt": null,
+  "interpretation": "CPU-only separate V3 design, not execution or GPU quality; no binary copied or committed"
+}

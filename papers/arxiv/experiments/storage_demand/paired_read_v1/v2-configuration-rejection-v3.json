@@ -1,0 +1,63 @@
+{
+  "schema": "ferrule.storage-demand.v2-configuration-rejection.v3",
+  "status": "expected_semantic_rejection_historical_integrity_preserved",
+  "v2_binding_digest_valid": true,
+  "v2_execution_digest_and_workflow_pins_valid": true,
+  "v2_cases_sha256": "ea704f17de9cb57aab64869f848d5b6d6411aeb895925d5ab3011be37b7232aa",
+  "v2_execution_sha256": "8a067626babe5c8b0a2a8543c727d6253b682d270ef14d89116fbc63365ec80c",
+  "v2_binding_sha256": "667194fa06618fbf40fbd731c9eb63c26be87636e0fc798c6fb491d5896fb144",
+  "reports": {
+    "blocking": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/gates/04-blocking-fresh/quality.json",
+      "sha256": "0b3ad18b6ade1a63b35db0a86bb5473350617e63533ff23fba8e1da9a16a6160"
+    },
+    "lookahead": {
+      "path": "/home/admin/luhuanbing.lhb/Ferrule/target/validation/expert-read-current-quality-20261014-02/gates/05-lookahead-fresh/quality.json",
+      "sha256": "8063e1c747aff46da1493f4151f2053a3f860d230ffac153eff79af8c448228f"
+    }
+  },
+  "differences": {
+    "blocking": {
+      "cli.decode_cohort_target": {
+        "actual": 4,
+        "expected": 1
+      },
+      "cli.decode_cohort_max_deferrals": {
+        "actual": 3,
+        "expected": 0
+      }
+    },
+    "lookahead": {
+      "cli.decode_cohort_target": {
+        "actual": 4,
+        "expected": 1
+      },
+      "cli.decode_cohort_max_deferrals": {
+        "actual": 3,
+        "expected": 0
+      }
+    }
+  },
+  "public_cli_defaults": {
+    "decode_cohort_target": 4,
+    "decode_cohort_max_deferrals": 3
+  },
+  "qualified_scheduler": {
+    "prefill_chunk_size": 8,
+    "max_active_sequences": 2,
+    "max_decode_batch": 2,
+    "decode_cohort_target": 1,
+    "decode_cohort_max_deferrals": 0,
+    "max_batch_tokens": 8,
+    "prefill_reserve_tokens": 1,
+    "allow_mixed_batches": true,
+    "prefix_cache_capacity_pages": 0
+  },
+  "v3_candidate_qualified": false,
+  "v2_failure_reclassified": false,
+  "old_files_changed": false,
+  "gpu_queries": 0,
+  "gpu_runs": 0,
+  "server_runs": 0,
+  "interpretation": "V2 immutable receipts remain valid history; their implicit CLI cohort4/3 does not match qualified1/0 and cannot pass V3"
+}
