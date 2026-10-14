@@ -6,7 +6,6 @@ import argparse
 import copy
 import json
 from pathlib import Path
-import re
 import sys
 
 sys.dont_write_bytecode = True
@@ -17,9 +16,15 @@ from runnerhelpers.evidence_v2 import (
     PHASE_COUNTS, build_schedule, ct, integer, require, validate_deadlines, validate_schedule,
 )
 
+from runnerhelpers.build_receipts_v1 import ADAPTER, review_cli_build, validate_candidate_build
+from runnerhelpers.quality_reports_v1 import validate_producer_final, validate_quality_reports
+
 PROTOCOL_PATH = HERE / 'protocol.json'
 CASE_PATH = HERE / 'case-v2.json'
 PREPARED_PATH = HERE / 'prepared-cpu.json'
+WORKFLOW_SCHEMA = 'ferrule.storage-demand.cpu-workflow-review.v1'
+REVIEWED_REPLACEMENTS = (HERE / 'protocol.py', STORAGE / 'tests/test_protocol_v2.py')
+REVIEW_DOCS = (HERE / 'BUILD_RECEIPTS_V1.md', HERE / 'PAIRED_READ_PROTOCOL_DRAFT_V1.md')
 METADATA_LOG = ct.ROOT / 'target/validation/bf16-storage-middle64-preparation-20261014-01/cpu-storage-middle-metadata.log'
 IMPORTS = (
     'papers/arxiv/experiments/contract.py', 'papers/arxiv/experiments/runner.py',
@@ -161,10 +166,51 @@ def seal_cpu():
     return prepared
 
 
+def baseline_preparation():
+    """Review only the named implementation replacement; preserve every other pin."""
+    original = ct.load(PREPARED_PATH)
+    require(original.get('schema') == 'ferrule.paper.storage-demand.cpu-prepared.v2'
+            and original.get('digest') == ct.digest({k: v for k, v in original.items() if k != 'digest'}),
+            'original CPU preparation digest/schema mismatch')
+    require(original.get('status') == 'cpu_prepared_candidate_unbound_not_authorized'
+            and original.get('candidate_binary') is None and original.get('sealed_final_candidate') is False
+            and original.get('gpu_queries') == original.get('gpu_locks') == original.get('gpu_runs') == 0,
+            'original CPU-only qualification state changed')
+    replaced = {str(p) for p in REVIEWED_REPLACEMENTS}
+    ct.check_pins({p: h for p, h in original['artifact_pins'].items() if p not in replaced})
+    ct.check_pins(original['reference_pins'])
+    require(original['protocol_sha256'] == ct.sha(PROTOCOL_PATH), 'frozen protocol changed')
+    validate_protocol(ct.load(PROTOCOL_PATH))
+    validate_schedule(ct.load(HERE / 'requests-v2.json')['schedule'])
+    return original
+
+
+def workflow_review():
+    """Explicit CPU-only revision: same frozen protocol, newly reviewed helper pins."""
+    original = baseline_preparation()
+    pins = ct.inventory([ct.absolute(p) for p in original['artifact_pins']])
+    pins.update(ct.inventory([PREPARED_PATH, *REVIEW_DOCS,
+        *sorted((STORAGE / 'runnerhelpers').glob('*.py')), *sorted(HERE.glob('*.py')),
+        *sorted((STORAGE / 'tests').glob('*.py'))]))
+    replacements = {str(p): dict(previous=original['artifact_pins'][str(p)], current=ct.sha(p))
+                    for p in REVIEWED_REPLACEMENTS}
+    return dict(schema=WORKFLOW_SCHEMA, status='cpu_prepared_candidate_unbound_not_authorized',
+        adapter_version=ADAPTER, original_prepared_path=str(PREPARED_PATH),
+        original_prepared_sha256=ct.sha(PREPARED_PATH), protocol_sha256=ct.sha(PROTOCOL_PATH),
+        reviewed_replacements=replacements, artifact_pins=pins, reference_pins=original['reference_pins'],
+        candidate_binary=None, candidate_quality='pending', sealed_final_candidate=False,
+        gpu_queries=0, gpu_locks=0, gpu_runs=0, tensor_payload_bytes_read=0, no_launch_entry=True)
+
+
 def validate_prepared(path=PREPARED_PATH):
     prepared = ct.load(path)
     require(prepared.get('digest') == ct.digest({key: value for key, value in prepared.items() if key != 'digest'}),
             'CPU preparation digest mismatch')
+    if prepared.get('schema') == WORKFLOW_SCHEMA:
+        require({k: v for k, v in prepared.items() if k != 'digest'} == workflow_review(),
+                'reviewed CPU workflow changed; explicit new seal required')
+        return prepared
+    require(prepared.get('schema') == 'ferrule.paper.storage-demand.cpu-prepared.v2', 'unknown CPU preparation schema')
     require(prepared['status'] == 'cpu_prepared_candidate_unbound_not_authorized'
             and prepared.get('candidate_binary') is None and prepared.get('sealed_final_candidate') is False,
             'invalid CPU-only qualification state')
@@ -176,33 +222,18 @@ def validate_prepared(path=PREPARED_PATH):
     return prepared
 
 
-def validate_quality_reports(reports, case):
-    """Validate actual existing Rust result schemas; no boolean-only quality gate."""
-    require(set(reports) == {'full40', 'fresh', 'cold'}, 'all three current quality gates required')
-    for label, report in reports.items():
-        schema = ('ferrule.numeric-bf16-full40-profile-gate.v1' if label == 'full40'
-                  else 'ferrule.bf16-fresh-quality-result.v1')
-        require(report.get('schema') == schema and report.get('passed') is True
-                and report.get('complete') is True, 'quality failed/pending/unknown: ' + label)
-        require(report.get('test_config') == case['quality_test_config'], 'same StorageMiddle64 config missing: ' + label)
-        require(report.get('effective_config', {}).get('assertions_passed') is True,
-                'effective factory assertions missing: ' + label)
-        require(report.get('failures') == [] and report.get('quarantine') is False,
-                'quality failures/quarantine missing or nonempty: ' + label)
-        require(report.get('ordinary_no_observer_claim') is False and report.get('concurrent_scheduler_claim') is False,
-                'unknown quality claim scope: ' + label)
-        if label != 'full40':
-            require(report.get('cold_owner_restart') is (label == 'cold'), 'fresh/cold owner order mismatch')
-            cases = report.get('cases')
-            require(isinstance(cases, list) and len(cases) == (1 if label == 'cold' else 3), 'fresh/cold case coverage')
-            require(all(row.get('free_greedy_equal') is True and row.get('top1_failures') == [] for row in cases),
-                    'actual fresh generated IDs failed/unknown')
-        else:
-            require(report.get('diagnostic_capture_only') is False and report.get('status') == 'passed', 'partial full40 is not PASS')
-    require(reports['fresh'].get('oracle_manifest_sha256') == reports['cold'].get('oracle_manifest_sha256')
-            and re.fullmatch(r'[0-9a-f]{64}', reports['fresh'].get('oracle_manifest_sha256') or ''), 'fresh/cold reference mismatch')
-    require(re.fullmatch(r'[0-9a-f]{64}', reports['full40'].get('reference_manifest_sha256') or ''), 'full40 reference pin missing')
-    return dict(status='pass_same_StorageMiddle64', performance_acceptance=False)
+def review_build(path, case=None):
+    """Read an explicitly selected build descriptor without binding or writing."""
+    value = ct.load(path)
+    require(value.get('schema') == 'ferrule.storage-demand.cpu-build-review-input.v1', 'unknown CPU build review input')
+    facts = review_cli_build(value, ct.load(ct.absolute(value['build_receipt'])),
+                             ct.load(CASE_PATH) if case is None else case)
+    return dict(schema='ferrule.storage-demand.cpu-build-review.v1',
+                status='build_evidence_reviewed_quality_pending_not_authorized',
+                build_adapter=facts['adapter'], raw_schema=facts['raw_schema'],
+                binary_sha256=facts['binary_sha256'], source_digest=facts['source_digest'],
+                coverage=facts['coverage'], quality_approved=False, sealed_final_candidate=False,
+                gpu_authorized=False, gpu_queries=0, gpu_locks=0, gpu_runs=0, no_launch_entry=True)
 
 
 def prepare_candidate(candidate, case=None):
@@ -217,22 +248,27 @@ def prepare_candidate(candidate, case=None):
         require(str(ct.absolute(candidate.get(key, ''))) in candidate['artifact_pins'], 'candidate required artifact unpinned: ' + key)
     build = ct.load(ct.absolute(candidate['build_receipt']))
     config = ct.load(HERE / 'new-baseline-build-requirements.json')['build_config']
-    binary = ct.validate_build(build, config)
+    facts = validate_candidate_build(candidate, build, config, case)
+    binary = facts['binary']
     require(binary == str(ct.absolute(candidate['binary']).resolve())
-            and candidate.get('binary_sha256') == build['binary_sha256'], 'CLI build/binary relation mismatch')
+            and candidate.get('binary_sha256') == facts['binary_sha256'], 'CLI build/binary relation mismatch')
     runtime = ct.load(ct.absolute(candidate['runtime_pin_manifest']))
     ct.check_pins(runtime['pins'])
     require(runtime.get('unknown_nccl_enabled') is False, 'unknown NCCL build binding')
-    archive = ct.load(ct.absolute(candidate['source_archive_manifest']))
-    require(archive == build['sources_before'] == build['sources_after'], 'compiled source archive/build relation differs')
-    help_receipt = ct.load(ct.absolute(candidate['serve_help_receipt']))
-    require(help_receipt.get('binary_sha256') == build['binary_sha256']
-            and help_receipt.get('status') == 'pass' and help_receipt.get('gpu_hidden') is True
-            and help_receipt.get('argv_flags') == case['argv_after_binary'][2:], 'exact-binary CPU serve-help flag receipt missing')
+    if facts['adapter'] != ADAPTER:
+        archive = ct.load(ct.absolute(candidate['source_archive_manifest']))
+        require(archive == facts['sources'] == build['sources_after'], 'compiled source archive/build relation differs')
+        help_receipt = ct.load(ct.absolute(candidate['serve_help_receipt']))
+        require(help_receipt.get('binary_sha256') == facts['binary_sha256']
+                and help_receipt.get('status') == 'pass' and help_receipt.get('gpu_hidden') is True
+                and help_receipt.get('argv_flags') == case['argv_after_binary'][2:], 'exact-binary CPU serve-help flag receipt missing')
+    else:
+        require(all(runtime['pins'].get(p) == h for p, h in facts['runtime_pins'].items()),
+                'run runtime pins omit CPU-resolved libraries')
     relation = ct.load(ct.absolute(candidate['quality_source_relation']))
     require(relation.get('status') == 'verified_same_compiled_production_sources'
-            and relation.get('cli_binary_sha256') == build['binary_sha256']
-            and relation.get('production_source_digest') == ct.digest(build['sources_before'])
+            and relation.get('cli_binary_sha256') == facts['binary_sha256']
+            and relation.get('production_source_digest') == facts['source_digest']
             and relation.get('independent_reference') is True, 'test-to-CLI source/independent reference relation unverified')
     reports = {label: ct.load(ct.absolute(candidate[label])) for label in ('full40', 'fresh', 'cold')}
     validate_quality_reports(reports, case)
@@ -240,11 +276,33 @@ def prepare_candidate(candidate, case=None):
         require(relation.get('report_sha256', {}).get(label) == ct.sha(ct.absolute(candidate[label])), 'raw quality report relation missing')
     require(relation.get('cold_primary_report_sha256') == ct.sha(ct.absolute(candidate['fresh'])), 'cold primary receipt relation missing')
     for label in ('full40', 'fresh', 'cold'):
-        for group in ('supervisor_receipts', 'test_source_manifests', 'test_executables'):
+        for group in ('supervisor_receipts', 'test_source_manifests', 'test_executables', 'authenticated_launches', 'producer_finals'):
             path = relation.get(group, {}).get(label)
             require(isinstance(path, str) and str(ct.absolute(path)) in candidate['artifact_pins'], 'missing pinned quality producer relation: ' + group + '/' + label)
-        require(ct.successful_process(ct.load(ct.absolute(relation['supervisor_receipts'][label]))), 'quality process custody/failure: ' + label)
-        require(ct.load(ct.absolute(relation['test_source_manifests'][label])) == build['sources_before'], 'quality executable compiled-source manifest mismatch: ' + label)
+        custody = ct.load(ct.absolute(relation['supervisor_receipts'][label]))
+        require(ct.successful_process(custody), 'quality process custody/failure: ' + label)
+        manifest = ct.load(ct.absolute(relation['test_source_manifests'][label]))
+        test_sources = manifest.get('original_source_pins', manifest)
+        require(test_sources == facts['sources'], 'quality executable compiled-source manifest mismatch: ' + label)
+        executable = str(ct.absolute(relation['test_executables'][label]))
+        launch = ct.load(ct.absolute(relation['authenticated_launches'][label]))
+        identity = launch.get('identity', {})
+        require(all(isinstance(identity.get(role), dict)
+                    and all(integer(identity[role].get(key), 1) for key in ('pid', 'birth_ticks', 'ppid'))
+                    for role in ('helper', 'worker')), 'quality producer PID/birth/parent identity missing: ' + label)
+        launch_argv = launch.get('argv')
+        require(isinstance(launch_argv, list) and launch_argv, 'quality producer argv missing: ' + label)
+        require(launch.get('binary_sha256') == ct.sha(executable)
+                and launch_argv[0] == executable
+                and launch.get('exec_preserves_authenticated_root_pid_birth') is True
+                and launch.get('all_eight_uuid_locks_validated') is True
+                and identity.get('launch_id') == custody.get('handshake', {}).get('launch_id')
+                and identity.get('helper') == custody.get('handshake', {}).get('helper_identity')
+                and identity.get('worker') == custody.get('custody', {}).get('root_identity'),
+                'quality actual producer executable/custody relation missing: ' + label)
+        final = ct.load(ct.absolute(relation['producer_finals'][label]))
+        validate_producer_final(final, label, str(ct.absolute(candidate[label])), ct.sha(ct.absolute(candidate[label])),
+                                executable, ct.sha(executable), facts['source_digest'], launch_argv)
     reference_paths = relation.get('reference_manifests', {})
     for label, reference_key in (('full40', 'reference_manifest_sha256'), ('fresh', 'oracle_manifest_sha256'), ('cold', 'oracle_manifest_sha256')):
         path = reference_paths.get(label)
@@ -254,13 +312,16 @@ def prepare_candidate(candidate, case=None):
                 status='quality_passed_cpu_prepared_not_authorized', candidate=candidate,
                 protocol_sha256=ct.sha(PROTOCOL_PATH), case_sha256=ct.sha(CASE_PATH),
                 sealed_final_candidate=True, gpu_authorized=False, gpu_runs_by_this_helper=0,
+                build_adapter=facts['adapter'], build_evidence_coverage=facts['coverage'],
                 no_launch_entry=True)
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('mode', choices=('plan', 'seal-cpu', 'check', 'bind-candidate'))
+    parser.add_argument('mode', choices=('plan', 'seal-cpu', 'seal-workflow', 'check', 'review-build', 'bind-candidate'))
     parser.add_argument('--candidate', type=Path)
+    parser.add_argument('--build-review', type=Path)
+    parser.add_argument('--cpu-prepared', type=Path, default=PREPARED_PATH)
     parser.add_argument('--output', type=Path)
     args = parser.parse_args(argv)
     ct.require_cpu_python()
@@ -268,15 +329,27 @@ def main(argv=None):
         value = dict(validation=validate_protocol(load_protocol()), build=build_requirements(), no_launch_entry=True)
     elif args.mode == 'seal-cpu':
         value = seal_cpu()
+    elif args.mode == 'seal-workflow':
+        require(args.output is not None and args.output.parent.resolve() == HERE.resolve()
+                and not args.output.exists(), 'exclusive new workflow output inside newversionedprotocol required')
+        value = workflow_review()
+        value['digest'] = ct.digest(value)
+        ct.write(args.output, value)
     elif args.mode == 'check':
-        value = validate_prepared()
+        value = validate_prepared(args.cpu_prepared)
+    elif args.mode == 'review-build':
+        require(args.build_review is not None and args.output is None, 'read-only review requires --build-review and no --output')
+        value = review_build(args.build_review)
     else:
         require(args.candidate is not None and args.output is not None, 'candidate and exclusive new output required')
         require(args.output.parent.resolve() == HERE.resolve(), 'final candidate output must stay in newversionedprotocol')
-        validate_prepared()
+        validate_prepared(args.cpu_prepared)
         value = prepare_candidate(ct.load(args.candidate))
         value['digest'] = ct.digest(value)
         ct.write(args.output, value)
+    if args.mode == 'review-build':
+        print(json.dumps(value, sort_keys=True))
+        return 0
     print(json.dumps(dict(status=value.get('status', 'planned'), no_launch_entry=True,
                           candidate_bound=value.get('sealed_final_candidate', False)), sort_keys=True))
     return 0

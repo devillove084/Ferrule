@@ -396,17 +396,8 @@ class QualificationAndCustodyTests(NoGPU):
 
     def test_quality_requires_exact_raw_schema_config_and_qualifier(self):
         case = dict(quality_test_config=dict(name='storage-middle64'))
-        reports = {}
-        for label in ('full40', 'fresh', 'cold'):
-            reports[label] = dict(
-                schema='ferrule.numeric-bf16-full40-profile-gate.v1' if label == 'full40' else 'ferrule.bf16-fresh-quality-result.v1',
-                passed=True, complete=True, test_config=case['quality_test_config'],
-                effective_config=dict(assertions_passed=True), failures=[], quarantine=False,
-                ordinary_no_observer_claim=False, concurrent_scheduler_claim=False,
-                diagnostic_capture_only=False, status='passed', cold_owner_restart=label == 'cold',
-                cases=[dict(free_greedy_equal=True, top1_failures=[])] * (1 if label == 'cold' else 3),
-                oracle_manifest_sha256='a' * 64, reference_manifest_sha256='b' * 64,
-            )
+        from test_build_receipts_v1 import quality_reports
+        reports = quality_reports(case['quality_test_config'])
         self.assertEqual(protocol.validate_quality_reports(reports, case)['status'], 'pass_same_StorageMiddle64')
         for label, field, value in [('full40', 'passed', None), ('fresh', 'complete', 'true'),
                                     ('cold', 'test_config', None), ('fresh', 'quarantine', None),

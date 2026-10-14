@@ -31,28 +31,36 @@ DEFAULT_EXECUTION = HERE / 'execution-prepared-20261014-01.json'
 EXECUTION_SCHEMA = 'ferrule.storage-demand.execution-prepared.v2'
 
 
-def execution_paths():
+def execution_paths(cpu_prepared=protocol.PREPARED_PATH):
     paths = [ct.ROOT / p for p in protocol.IMPORTS]
     paths += [ct.ROOT / 'scripts/gpu_idle_window_v2.py', ct.ROOT / 'scripts/run_pinned_jobs.py',
               Path(sys.executable), Path('/usr/bin/env'), Path('/usr/bin/nvidia-smi'),
-              protocol.PREPARED_PATH, protocol.CASE_PATH, protocol.PROTOCOL_PATH,
-              HERE / 'requests-v2.json', HERE / 'new-baseline-build-requirements.json', HERE / 'EXECUTION.md']
+              protocol.PREPARED_PATH, Path(cpu_prepared), protocol.CASE_PATH, protocol.PROTOCOL_PATH,
+              HERE / 'requests-v2.json', HERE / 'new-baseline-build-requirements.json', HERE / 'EXECUTION.md',
+              *protocol.REVIEW_DOCS]
     paths += list((STORAGE / 'runnerhelpers').glob('*.py')) + list(HERE.glob('*.py'))
     paths += list((STORAGE / 'tests').glob('*.py'))
     return paths
 
 
-def plan():
-    protocol.validate_prepared()
-    return dict(schema=EXECUTION_SCHEMA, status='cpu_prepared_candidate_unbound_not_authorized',
+def plan(cpu_prepared=protocol.PREPARED_PATH):
+    preparation_error = None
+    try:
+        protocol.validate_prepared(cpu_prepared)
+    except ValueError as error:
+        preparation_error = str(error)
+    status = ('cpu_plan_workflow_unsealed_candidate_unbound_not_authorized' if preparation_error
+              else 'cpu_prepared_candidate_unbound_not_authorized')
+    return dict(schema=EXECUTION_SCHEMA, status=status, preparation_error=preparation_error,
         protocol_sha256=ct.sha(protocol.PROTOCOL_PATH), case_sha256=ct.sha(protocol.CASE_PATH),
         schedule_sha256=ct.sha(HERE / 'requests-v2.json'),
         historical_prepared_sha256=ct.sha(protocol.PREPARED_PATH),
+        cpu_prepared_path=str(Path(cpu_prepared).resolve()), cpu_prepared_sha256=ct.sha(cpu_prepared),
         trial_order=protocol.load_protocol()['trial_order'], limits=protocol.load_protocol()['limits'],
         starts=5, scheduled_requests=60, scheduled_measured_qa=25, retries=0,
         worker_entry=str(ENTRY), request_ceiling=12, candidate_binary=None,
         gpu_authorized=False, gpu_queries=0, gpu_locks=0, gpu_runs=0,
-        artifact_pins=ct.inventory(execution_paths()),
+        artifact_pins=ct.inventory(execution_paths(cpu_prepared)),
         prerequisites=['Owner-supplied new final-candidate receipt, validated current build/full40/fresh/cold/source relation',
                        'Explicit renewed sole-owner grant, literal selected physical UUID and exact ordered eight-UUID inventory',
                        'Pinned runtime libraries covering actual Ready/after-request loaded mappings, passive readable NFS mountstats',
@@ -65,9 +73,12 @@ def validate_execution(path):
     require(value.get('schema') == EXECUTION_SCHEMA and value.get('status') == 'cpu_prepared_candidate_unbound_not_authorized',
             'execution preparation missing/unknown')
     require(value.get('digest') == ct.digest({k: v for k, v in value.items() if k != 'digest'}), 'execution seal digest changed')
-    protocol.validate_prepared()
+    cpu_prepared = value.get('cpu_prepared_path', str(protocol.PREPARED_PATH))
+    protocol.validate_prepared(cpu_prepared)
+    if 'cpu_prepared_path' in value:
+        require(value.get('cpu_prepared_sha256') == ct.sha(cpu_prepared), 'CPU preparation selection changed')
     ct.check_pins(value['artifact_pins'])
-    require(value['artifact_pins'] == ct.inventory(execution_paths()), 'execution workflow inventory changed; new seal required')
+    require(value['artifact_pins'] == ct.inventory(execution_paths(cpu_prepared)), 'execution workflow inventory changed; new seal required')
     require(value['protocol_sha256'] == ct.sha(protocol.PROTOCOL_PATH)
             and value['case_sha256'] == ct.sha(protocol.CASE_PATH)
             and value['schedule_sha256'] == ct.sha(HERE / 'requests-v2.json'), 'fixed protocol/case/schedule changed')
@@ -416,6 +427,7 @@ def main(argv=None):
     parser.add_argument('mode', choices=('plan', 'check', 'seal-execution', 'run'), nargs='?', default='plan')
     parser.add_argument('--execution-prepared', type=Path, default=DEFAULT_EXECUTION)
     parser.add_argument('--candidate', type=Path)
+    parser.add_argument('--cpu-prepared', type=Path, default=protocol.PREPARED_PATH)
     parser.add_argument('--output', type=Path)
     parser.add_argument('--gpu-uuid')
     parser.add_argument('--eight-uuids', nargs=8)
@@ -423,10 +435,11 @@ def main(argv=None):
     parser.add_argument('--owner-note')
     args = parser.parse_args(argv)
     if args.mode == 'plan':
-        value = plan()
+        value = plan(args.cpu_prepared)
     elif args.mode == 'seal-execution':
         require(args.output is not None and args.output.parent.resolve() == HERE, 'exclusive new seal inside newversionedprotocol required')
-        value = plan()
+        value = plan(args.cpu_prepared)
+        require(value['preparation_error'] is None, 'CPU workflow seal stale; reviewed new protocol seal required first')
         value['digest'] = ct.digest(value)
         ct.write(args.output, value)
     elif args.mode == 'check':
@@ -437,6 +450,7 @@ def main(argv=None):
         require(args.candidate is not None and args.output is not None, 'run requires owner-supplied bound candidate and exclusive output')
         value = run(args)
     print(json.dumps(dict(status=value['status'], candidate_bound=False if args.candidate is None else args.mode != 'plan',
+                          preparation_error=value.get('preparation_error'),
                           gpu_runs=0 if args.mode != 'run' else 'see pilot-final.json'), sort_keys=True))
     return 0 if args.mode != 'run' or value['status'] == 'complete' else 1
 

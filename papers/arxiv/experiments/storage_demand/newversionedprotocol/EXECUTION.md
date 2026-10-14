@@ -147,3 +147,19 @@ is supplied until real artifact paths and owner authorization are available.
 No-GPU end-to-end tests mock qualification and hardware boundaries, exercise
 actual maintained HTTP `main`/Stream and actual `run_target` with mocked
 `Popen`/`DEVNULL`, and never create an acceptable candidate seal.
+
+## Explicit CPU builder adapter and revised workflow registration
+
+See [BUILD_RECEIPTS_V1.md](BUILD_RECEIPTS_V1.md) for the reviewed
+`ferrule.cuda-only-cli-release-build.v1` adapter, exact descriptor/API fields,
+CPU build versus GPU producer/run coverage, strict same-cut all-three qualification,
+and owner-requested **new-name** `seal-workflow`/`--cpu-prepared` selection.
+The original requirements JSON describes the unchanged legacy M7 builder; it is
+not rewritten to impersonate this independent CPU builder receipt.
+
+Existing preparation/execution seals intentionally fail `check` after these
+helper changes. Planning exposes that blocker without authorizing or writing a
+seal. No stale pin is ignored by candidate binding, execution check or run.
+The current `a9fc…` CLI remains quality-pending and unbound.
+[PAIRED_READ_PROTOCOL_DRAFT_V1.md](PAIRED_READ_PROTOCOL_DRAFT_V1.md) is a separate
+future-version design draft, not an amendment to the fixed five-cycle baseline.
