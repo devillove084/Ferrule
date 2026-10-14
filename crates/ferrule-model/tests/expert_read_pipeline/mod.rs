@@ -12,7 +12,7 @@ use crate::transformer::{
     StateDictBinder, StateDictMaterializer, StateDictSchema,
 };
 use std::path::PathBuf;
-use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 pub(crate) const IMAGE: u64 = 71;
 const EXPERT_BYTES: u64 = 18;
@@ -151,7 +151,7 @@ impl Drop for Fixture {
     }
 }
 
-fn options(schedule: ExpertReadSchedule) -> ExpertReadPipelineOptions {
+pub(crate) fn options(schedule: ExpertReadSchedule) -> ExpertReadPipelineOptions {
     ExpertReadPipelineOptions {
         schedule,
         max_host_bytes: 2 * EXPERT_BYTES + METADATA + STACK as u64,

@@ -197,3 +197,96 @@ fn private_provider_preflight_rejects_foreign_bindings_before_read_or_host_spawn
     assert!(provider.expert(1, 0).is_err());
     assert!(provider.expert(0, 1).is_err());
 }
+
+#[test]
+fn decoder_constructor_options_reach_the_real_materializer_and_private_provider() {
+    use crate::decoder::GenericDecoderOptions;
+    use crate::execution::ExecutionPrecisionPolicy;
+    use crate::spec::{ModelFamily, WeightSource};
+    use ferrule_common::execution::{ExecutionCapabilities, KvBindingMode, LogitsRowPolicy};
+    let f = Fixture::new(2);
+    let semantics = f
+        .metadata
+        .iter()
+        .map(ExpertSemantics::read_test_fixture)
+        .collect::<Vec<_>>();
+    let base = GenericDecoderOptions::new(
+        ModelFamily::Unknown("expert-read-constructor".into()),
+        WeightSource::Safetensors,
+        ExecutionCapabilities {
+            max_batch_tokens: 1,
+            max_sequences: 1,
+            max_prefill_query_tokens_per_sequence: 1,
+            max_decode_query_tokens_per_sequence: 1,
+            max_top_k: None,
+            supports_prefill: true,
+            supports_decode: true,
+            supports_mixed: false,
+            full_logits_width: None,
+            kv_binding_mode: KvBindingMode::Paged,
+            logits_row_policy: LogitsRowPolicy::Any,
+        },
+        1,
+        8,
+        128,
+        ExecutionPrecisionPolicy::f32(),
+    );
+    assert_eq!(base.expert_read_pipeline_options(), None);
+    assert_eq!(
+        base.state_dict_materializer()
+            .unwrap()
+            .expert_read_pipeline_options(),
+        None
+    );
+    for schedule in [ExpertReadSchedule::Blocking, ExpertReadSchedule::Lookahead] {
+        let read = crate::transformer::expert_reads::tests::options(schedule);
+        let options = base
+            .clone()
+            .with_hybrid_cuda_numeric_fp8_precision(
+                ExpertCacheLimits {
+                    max_experts: 1,
+                    max_bytes: 128,
+                },
+                0,
+                NumericFp8Precision::W8A16Bf16F32Accumulate,
+            )
+            .unwrap()
+            .with_expert_read_pipeline(read)
+            .unwrap();
+        assert_eq!(options.expert_read_pipeline_options(), Some(read));
+        assert!(options.clone().with_expert_read_pipeline(read).is_err());
+        // This is the same construction seam called by the normal CUDA module
+        // and segment, not a separately manually configured test materializer.
+        let materializer = options.state_dict_materializer().unwrap();
+        assert_eq!(materializer.expert_read_pipeline_options(), Some(read));
+        assert_eq!(materializer.checkpoint_read_counters().bytes_read, 0);
+        let mut provider = StateDictExpertProvider {
+            layer: 0,
+            bindings: &semantics,
+            materializer: &materializer,
+            reads: None,
+        };
+        provider
+            .preflight_expert_reads(IMAGE, &[&f.metadata[0], &f.metadata[1]])
+            .unwrap();
+        let ExpertAvailability::Ready(value) = provider.expert(0, 0).unwrap() else {
+            panic!()
+        };
+        assert_eq!(materializer.checkpoint_read_counters().bytes_read, 18);
+        drop(value);
+        provider.lookahead_expert_read(&f.metadata[0], Some(&f.metadata[1]), false);
+        let ExpertAvailability::Ready(value) = provider.expert(0, 1).unwrap() else {
+            panic!()
+        };
+        drop(value);
+        drop(provider);
+        let stats = materializer.expert_read_pipeline_stats();
+        assert_eq!(stats.submitted_reads, 2);
+        assert_eq!(
+            stats.speculative_reads,
+            u64::from(schedule == ExpertReadSchedule::Lookahead)
+        );
+        assert_eq!(stats.unknown_bytes, 0);
+        assert!(stats.peak_host_charged_bytes <= read.max_host_bytes);
+    }
+}

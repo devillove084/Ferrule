@@ -50,6 +50,7 @@ pub struct GenericDecoderOptions {
     max_parameter_bytes: u64,
     active_layers: Option<usize>,
     precision: ExecutionPrecisionPolicy,
+    expert_read_pipeline: Option<crate::transformer::ExpertReadPipelineOptions>,
     hybrid_numeric_fp8: Option<(
         crate::transformer::ExpertCacheLimits,
         usize,
@@ -76,9 +77,40 @@ impl GenericDecoderOptions {
             max_parameter_bytes,
             active_layers: None,
             precision,
+            expert_read_pipeline: None,
             hybrid_numeric_fp8: None,
         }
     }
+    /// Opt in to bounded host reads on the existing local CUDA numeric expert
+    /// path. Resource/source admission is checked before image preparation;
+    /// CPU, external experts and full host prewarm do not silently ignore it.
+    pub fn with_expert_read_pipeline(
+        mut self,
+        options: crate::transformer::ExpertReadPipelineOptions,
+    ) -> Result<Self> {
+        options.validate()?;
+        if self.expert_read_pipeline.is_some() {
+            return Err(runner_error("expert read pipeline is already configured"));
+        }
+        self.expert_read_pipeline = Some(options);
+        Ok(self)
+    }
+
+    pub fn expert_read_pipeline_options(
+        &self,
+    ) -> Option<crate::transformer::ExpertReadPipelineOptions> {
+        self.expert_read_pipeline
+    }
+
+    #[cfg(any(feature = "cuda", test))]
+    pub(crate) fn state_dict_materializer(&self) -> Result<StateDictMaterializer> {
+        let mut materializer = StateDictMaterializer::new(self.max_parameter_bytes)?;
+        if let Some(options) = self.expert_read_pipeline {
+            materializer.configure_expert_read_pipeline(options)?;
+        }
+        Ok(materializer)
+    }
+
     /// Explicit hybrid numeric FP8 execution using the legacy BF16-RNE
     /// arithmetic profile. The newer F32 profile is opt-in below.
     pub fn with_hybrid_cuda_numeric_fp8(
@@ -258,6 +290,18 @@ impl GenericDecoderOptions {
     }
     pub(crate) fn validate(&self, resources: &BoundDecoderResources) -> Result<()> {
         let spec = resources.spec();
+        if let Some(read) = self.expert_read_pipeline {
+            if self.hybrid_numeric_fp8.is_none() || resources.host_experts().is_some() {
+                return Err(runner_error(
+                    "expert read pipeline requires local numeric CUDA experts without full host prewarm",
+                ));
+            }
+            read.validate_resources(
+                resources,
+                self.capabilities.max_batch_tokens,
+                self.max_parameter_bytes,
+            )?;
+        }
         if self.page_size == 0 {
             return Err(runner_error("decoder KV page size must be non-zero"));
         }
@@ -432,7 +476,7 @@ where
         completion_reactors: Vec<ModelCompletionReactor>,
     ) -> Result<Self> {
         options.validate(&resources)?;
-        if options.hybrid_numeric_fp8.is_some() {
+        if options.hybrid_numeric_fp8.is_some() || options.expert_read_pipeline.is_some() {
             return Err(Error::ModelSource {
                 source: Box::new(crate::transformer::UnsupportedOperator::new(
                     "standard_cpu_profile",
@@ -504,6 +548,7 @@ impl GenericDecoderRunner<HybridCpuDecoder> {
     ) -> Result<Self> {
         options.validate(&resources)?;
         if options.hybrid_numeric_fp8.is_some()
+            || options.expert_read_pipeline.is_some()
             || options.precision != ExecutionPrecisionPolicy::f32()
         {
             return Err(Error::ModelSource {

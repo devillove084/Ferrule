@@ -4,18 +4,17 @@
 
 use std::collections::BTreeMap;
 use std::ops::Range;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{Arc, Mutex};
+
+use ferrule_common::numeric_fp8::NumericFp8PayloadLiveness;
 
 use ferrule_common::{Error, Result, SourceGeneration};
 
 use crate::checkpoint::read_pipeline::{
-    CheckpointReadPipeline, ReadCompletion, ReadOutcome, ReadPipelineError, ReadPipelineLimits,
-    ReadPipelineOptions, ReadTicket,
+    CheckpointReadPipeline, ReadCompletion, ReadJoinHandoff, ReadOutcome, ReadPipelineError,
+    ReadPipelineLimits, ReadPipelineOptions, ReadTicket,
 };
-use crate::checkpoint::{
-    CheckpointReadPlan, CheckpointTensorReader, NumericFp8Artifact, NumericFp8Read,
-};
+use crate::checkpoint::{CheckpointReadPlan, CheckpointTensorReader, NumericFp8Read};
 use crate::nn::ParameterResidency;
 
 use super::{BoundParameter, ExpertMetadata, PreparedSwiGlu};
@@ -61,36 +60,98 @@ fn pipeline_error(source: ReadPipelineError) -> Error {
     }
 }
 
+#[derive(Debug, Default)]
+pub(crate) struct ExpertReadAdmissionState {
+    active: bool,
+    quarantined: bool,
+    payloads: Vec<NumericFp8PayloadLiveness>,
+    join: Option<ReadJoinHandoff>,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct ExpertReadAdmission(Arc<ReadAdmissionInner>);
 
 #[derive(Debug)]
 struct ReadAdmissionInner {
-    active: Arc<AtomicBool>,
-    quarantined: AtomicBool,
+    state: Arc<Mutex<ExpertReadAdmissionState>>,
 }
 
 impl ExpertReadAdmission {
-    pub fn take(active: &Arc<AtomicBool>) -> Result<Self> {
-        active
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .map_err(|_| invalid("another expert read sequence is live or quarantined"))?;
-        Ok(Self(Arc::new(ReadAdmissionInner {
-            active: Arc::clone(active),
-            quarantined: AtomicBool::new(false),
-        })))
+    pub fn take(state: &Arc<Mutex<ExpertReadAdmissionState>>) -> Result<Self> {
+        let join = {
+            let mut state = state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if state.active || state.quarantined {
+                return Err(invalid(
+                    "another expert read sequence is live or quarantined",
+                ));
+            }
+            state.active = true;
+            state.join.clone()
+        };
+        let admission = Self(Arc::new(ReadAdmissionInner {
+            state: Arc::clone(state),
+        }));
+        // No admission lock is held across join callbacks. A worker-side caller
+        // gets Pending, never a self-join or a premature stack/payload refund.
+        if let Some(join) = join {
+            let shutdown = join.join();
+            if shutdown.join_failed || !shutdown.unknown.is_empty() {
+                admission.quarantine();
+                return Err(invalid("expert read worker custody is unknown"));
+            }
+            if shutdown.join_pending {
+                return Err(invalid("expert read worker join is still pending"));
+            }
+            state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .join = None;
+        }
+        {
+            let mut state = state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            state.payloads.retain(NumericFp8PayloadLiveness::is_live);
+            if !state.payloads.is_empty() {
+                return Err(invalid("prepared host payload aliases are still live"));
+            }
+        }
+        Ok(admission)
     }
 
     fn quarantine(&self) {
-        self.0.quarantined.store(true, Ordering::Release);
+        self.0
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .quarantined = true;
+    }
+
+    fn retain_payloads(&self, payloads: &[NumericFp8PayloadLiveness]) {
+        self.0
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .payloads = payloads.to_vec();
+    }
+
+    fn retain_join(&self, join: ReadJoinHandoff) {
+        self.0
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .join = Some(join);
     }
 }
 
 impl Drop for ReadAdmissionInner {
     fn drop(&mut self) {
-        if !self.quarantined.load(Ordering::Acquire) {
-            self.active.store(false, Ordering::Release);
-        }
+        self.state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .active = false;
     }
 }
 
@@ -122,6 +183,9 @@ impl std::error::Error for FailedRead {
 
 impl ExpertReadPipelineOptions {
     pub fn validate(self) -> Result<()> {
+        if self.max_host_bytes > isize::MAX as u64 {
+            return Err(invalid("host staging budget exceeds address space"));
+        }
         if self.max_metadata_bytes == 0
             || self.worker_stack_bytes == 0
             || self.worker_stack_bytes > isize::MAX as usize
@@ -135,6 +199,89 @@ impl ExpertReadPipelineOptions {
         if self.max_host_bytes <= overhead {
             return Err(invalid(
                 "host bound must leave room beyond metadata and stack",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Source/shape-only constructor admission. No payload reads, worker or
+    /// CUDA owner are created; the selected scope rechecks the same plan bounds.
+    pub(crate) fn validate_resources(
+        self,
+        resources: &super::BoundDecoderResources,
+        max_batch_tokens: usize,
+        max_parameter_bytes: u64,
+    ) -> Result<()> {
+        use super::FeedForward;
+        use crate::support::TensorRole;
+        let payload_bound = self.payload_bound()?;
+        let reader = CheckpointTensorReader::new(max_parameter_bytes);
+        let mut bindings = BTreeMap::<(usize, usize), Vec<&BoundParameter>>::new();
+        for parameter in resources.state_dict().parameters() {
+            if let ParameterResidency::Expert { layer, expert } = *parameter.residency() {
+                bindings.entry((layer, expert)).or_default().push(parameter);
+            }
+        }
+        let mut routed = false;
+        for layer in resources.spec().layers() {
+            let FeedForward::Moe(moe) = layer.feed_forward() else {
+                continue;
+            };
+            routed = true;
+            let selected = max_batch_tokens
+                .checked_mul(moe.router_spec().experts_per_token())
+                .ok_or_else(|| invalid("route capacity overflows"))?
+                .min(moe.router_spec().num_experts());
+            let mut metadata = Vec::new();
+            for expert in 0..moe.router_spec().num_experts() {
+                let parameters = bindings
+                    .remove(&(layer.index(), expert))
+                    .ok_or_else(|| invalid("incomplete expert source catalog"))?;
+                if parameters.len() != 3 {
+                    return Err(invalid("requires exactly gate/up/down expert projections"));
+                }
+                let parameters = [
+                    TensorRole::RoutedExpertGate,
+                    TensorRole::RoutedExpertUp,
+                    TensorRole::RoutedExpertDown,
+                ]
+                .map(|role| {
+                    parameters
+                        .iter()
+                        .find(|p| p.role() == &role)
+                        .map(|p| (*p).clone())
+                        .ok_or_else(|| invalid("missing expert projection role"))
+                });
+                let [gate, up, down] = parameters;
+                let expert_metadata =
+                    ExpertMetadata::new(layer.index(), expert, [gate?, up?, down?], None)?;
+                let plan = ExpertReadPlan::new(1, &expert_metadata, &reader)?;
+                if plan
+                    .packed
+                    .storage_bytes()
+                    .checked_mul(2)
+                    .is_none_or(|n| n > payload_bound)
+                {
+                    return Err(invalid("two whole expert payloads exceed host budget"));
+                }
+                metadata.push(plan.metadata_bytes);
+            }
+            metadata.sort_unstable_by(|a, b| b.cmp(a));
+            let worst = metadata
+                .into_iter()
+                .take(selected)
+                .try_fold(4096u64, |total, bytes| {
+                    total
+                        .checked_add(bytes)
+                        .ok_or_else(|| invalid("selected metadata overflows"))
+                })?;
+            if worst > self.max_metadata_bytes {
+                return Err(invalid("selected metadata exceeds host budget"));
+            }
+        }
+        if !routed || !bindings.is_empty() {
+            return Err(invalid(
+                "source must contain only canonical routed numeric experts",
             ));
         }
         Ok(())
@@ -335,9 +482,10 @@ pub(crate) struct ExpertReadSequence {
     options: ExpertReadPipelineOptions,
     plans: BTreeMap<(usize, usize), Arc<ExpertReadPlan>>,
     pipeline: CheckpointReadPipeline,
+    join: ReadJoinHandoff,
     pending: Option<PendingRead>,
     current: Option<CurrentExpertRead>,
-    artifacts: Vec<Weak<NumericFp8Artifact>>,
+    artifacts: Vec<NumericFp8PayloadLiveness>,
     artifact_bytes: u64,
     deferred: Option<((usize, usize), Error)>,
     stats: ExpertReadPipelineStats,
@@ -408,6 +556,7 @@ impl ExpertReadSequence {
         Self {
             options,
             plans,
+            join: pipeline.join_handoff(),
             pipeline,
             pending: None,
             current: None,
@@ -445,7 +594,7 @@ impl ExpertReadSequence {
         if self
             .artifacts
             .iter()
-            .any(|parameter| parameter.strong_count() != 0)
+            .any(NumericFp8PayloadLiveness::is_live)
         {
             return Err(invalid("current prepared host payload is still live"));
         }
@@ -598,8 +747,14 @@ impl ExpertReadSequence {
         }
         self.artifacts = [expert.gate(), expert.up(), expert.down()]
             .into_iter()
-            .map(|linear| linear.weak_numeric_artifact())
-            .collect::<Result<_>>()?;
+            .map(|linear| {
+                linear
+                    .numeric_fp8()
+                    .expect("validated numeric artifact")
+                    .validated_payload()
+                    .allocation_liveness()
+            })
+            .collect();
         self.observe_peak()
     }
 }
@@ -607,17 +762,29 @@ impl ExpertReadSequence {
 impl Drop for ExpertReadSequence {
     fn drop(&mut self) {
         // Joining proves only host-read custody, never CUDA consumer completion.
-        if let Err(error) = self.discard_pending() {
-            tracing::warn!(%error, "expert read cleanup retained unproved host custody");
+        let mut shutdown = self.pipeline.shutdown();
+        if shutdown.join_pending {
+            shutdown = self.join.join();
         }
-        let shutdown = self.pipeline.shutdown();
-        drop(self.pipeline.drain());
+        if shutdown.join_pending {
+            if let Some(admission) = &self.admission {
+                admission.retain_join(self.join.clone());
+            }
+        } else {
+            if let Err(error) = self.discard_pending() {
+                tracing::warn!(%error, "expert read cleanup retained unproved host custody");
+            }
+            drop(self.pipeline.drain());
+        }
         self.stats.unknown_bytes = self.pipeline.budget().unknown_bytes;
+        if let Some(admission) = &self.admission {
+            admission.retain_payloads(&self.artifacts);
+        }
         let host_payload_live = self
             .artifacts
             .iter()
-            .any(|parameter| parameter.strong_count() != 0);
-        if shutdown.join_failed || !shutdown.unknown.is_empty() || host_payload_live {
+            .any(NumericFp8PayloadLiveness::is_live);
+        if shutdown.join_failed || !shutdown.unknown.is_empty() {
             if let Some(admission) = &self.admission {
                 // Keep this materializer's admission closed. A later successful
                 // host drain cannot prove an earlier unknown operation.

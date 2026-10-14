@@ -64,6 +64,11 @@ impl CudaHybridDecoderSegment {
         plan: &LayerSegmentPlan,
         options: &GenericDecoderOptions,
     ) -> Result<()> {
+        if options.expert_read_pipeline_options().is_some() {
+            return Err(super::cuda_error(
+                "expert read pipeline requires local routed experts, not external CUDA segments",
+            ));
+        }
         options.validate_hybrid_cuda(resources)?;
         if plan.total_layers() != resources.spec().layers().len()
             || options
@@ -186,12 +191,18 @@ impl CudaHybridDecoderSegment {
             );
             let authority = claim.as_ref().expect("admitted segment");
             authority.begin_image(&device).map_err(prepare)?;
-            let segment = HybridDecoderSegment::prepare(
+            let materializer = match options {
+                Some(options) => options.state_dict_materializer(),
+                None => crate::transformer::StateDictMaterializer::new(max_parameter_bytes),
+            }
+            .map_err(prepare)?;
+            let segment = HybridDecoderSegment::prepare_with_materializer(
                 resources,
                 plan,
                 precision,
                 max_positions,
-                max_parameter_bytes,
+                materializer,
+                None,
             )?;
             let mut operators =
                 match options.and_then(GenericDecoderOptions::hybrid_cuda_numeric_fp8_config) {

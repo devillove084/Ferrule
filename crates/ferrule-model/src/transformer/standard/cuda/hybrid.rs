@@ -71,6 +71,11 @@ impl CudaHybridModule {
         if let Some(experts) = &mut experts {
             experts.owner = Some(device.clone());
         }
+        if experts.is_some() && options.expert_read_pipeline_options().is_some() {
+            return Err(unsupported(
+                "expert read pipeline requires local routed experts",
+            ));
+        }
         let estimate = if experts.is_some() {
             crate::decoder::HybridCudaMemoryEstimate::for_resources_with_routed_experts
         } else {
@@ -92,6 +97,11 @@ impl CudaHybridModule {
     ) -> Result<Self> {
         if let Some(experts) = &mut experts {
             experts.owner = Some(device.clone());
+        }
+        if experts.is_some() && options.expert_read_pipeline_options().is_some() {
+            return Err(unsupported(
+                "expert read pipeline requires local routed experts",
+            ));
         }
         let estimate = if experts.is_some() {
             crate::decoder::HybridCudaMemoryEstimate::for_resources_with_routed_experts
@@ -121,7 +131,7 @@ impl CudaHybridModule {
             0..active_layers,
         )?;
         device.ensure_ready()?;
-        let materializer = Arc::new(StateDictMaterializer::new(options.max_parameter_bytes())?);
+        let materializer = Arc::new(options.state_dict_materializer()?);
         let embedding = super::super::prepare_embedding(&resources, &materializer)?;
         let output = super::super::prepare_output(&resources, &materializer)?;
         let mut layers = Vec::new();
@@ -224,6 +234,17 @@ impl CudaHybridModule {
     pub fn resident_parameter_bytes(&self) -> usize {
         self.operators.resident_parameter_bytes()
     }
+    pub fn expert_read_pipeline_options(
+        &self,
+    ) -> Option<crate::transformer::ExpertReadPipelineOptions> {
+        self.materializer.expert_read_pipeline_options()
+    }
+
+    /// Closed host-read scopes only; not evidence of CUDA overlap/completion.
+    pub fn expert_read_pipeline_stats(&self) -> crate::transformer::ExpertReadPipelineStats {
+        self.materializer.expert_read_pipeline_stats()
+    }
+
     pub fn expert_cache_stats(&self) -> Option<ExpertCacheStats> {
         self.operators.expert_cache_stats()
     }

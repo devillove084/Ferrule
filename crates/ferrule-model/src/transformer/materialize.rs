@@ -574,15 +574,6 @@ impl PreparedLinear {
         &self.parameter
     }
 
-    pub(crate) fn weak_numeric_artifact(&self) -> Result<std::sync::Weak<NumericFp8Artifact>> {
-        match &self.storage {
-            PreparedLinearStorage::NumericFp8(artifact) => Ok(Arc::downgrade(artifact)),
-            _ => Err(model_error(
-                "expert read pipeline requires numeric FP8 artifacts",
-            )),
-        }
-    }
-
     pub fn weight(&self) -> Result<&LinearWeight> {
         match &self.storage {
             #[cfg(feature = "cpu-reference")]
@@ -861,7 +852,7 @@ pub struct StateDictMaterializer {
     tensor_reads: Mutex<Vec<TensorParallelPreparationRead>>,
     host_experts: OnceLock<Arc<super::host_experts::HostExpertCache>>,
     expert_read_options: Option<super::ExpertReadPipelineOptions>,
-    expert_read_active: Arc<std::sync::atomic::AtomicBool>,
+    expert_read_active: Arc<Mutex<super::expert_reads::ExpertReadAdmissionState>>,
     expert_read_stats: Arc<Mutex<super::ExpertReadPipelineStats>>,
 }
 
@@ -882,7 +873,9 @@ impl StateDictMaterializer {
             tensor_reads: Mutex::new(Vec::new()),
             host_experts: OnceLock::new(),
             expert_read_options: None,
-            expert_read_active: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            expert_read_active: Arc::new(Mutex::new(
+                super::expert_reads::ExpertReadAdmissionState::default(),
+            )),
             expert_read_stats: Arc::new(Mutex::new(super::ExpertReadPipelineStats::default())),
         })
     }

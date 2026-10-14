@@ -1136,6 +1136,13 @@ impl GenericDecoderRunner<HybridCudaDecoder> {
         if let Some(experts) = &mut experts {
             experts.owner = Some(device.clone());
         }
+        if options.expert_read_pipeline_options().is_some()
+            && (experts.is_some() || idle_reclaim.is_some())
+        {
+            return Err(unsupported(
+                "expert read pipeline requires local routed experts and resident KV",
+            ));
+        }
         options.validate_hybrid_cuda(&resources)?;
         let bf16 =
             options.precision() == crate::execution::ExecutionPrecisionPolicy::bf16_compatibility();

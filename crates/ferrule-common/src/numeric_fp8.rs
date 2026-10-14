@@ -1,7 +1,7 @@
 //! CPU-only, source-independent validation of packed numeric E4M3FN storage.
 //! This is not E8M0, a source freshness guard, or a device-owner capability.
 
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 use crate::{Error, Result};
 
@@ -187,6 +187,21 @@ pub struct ImmutableValidatedNumericFp8Payload {
     weight: Arc<[u8]>,
     scales: Arc<[u8]>,
 }
+/// Read-only liveness of the exact underlying weight and scale allocations.
+/// This does not retain bytes, expose an alias, prove source freshness, or prove
+/// GPU completion. Any by-value payload clone or original input `Arc` keeps the
+/// corresponding allocation live.
+#[derive(Debug, Clone)]
+pub struct NumericFp8PayloadLiveness {
+    weight: Weak<[u8]>,
+    scales: Weak<[u8]>,
+}
+impl NumericFp8PayloadLiveness {
+    pub fn is_live(&self) -> bool {
+        self.weight.strong_count() != 0 || self.scales.strong_count() != 0
+    }
+}
+
 impl ImmutableValidatedNumericFp8Payload {
     /// Pass existing `Arc<[u8]>` values to avoid copying payload bytes. Vec and
     /// slice inputs are also accepted via `Into<Arc<[u8]>>`.
@@ -203,6 +218,13 @@ impl ImmutableValidatedNumericFp8Payload {
             weight,
             scales,
         })
+    }
+    /// Tracks allocation aliases without extending their lifetime.
+    pub fn allocation_liveness(&self) -> NumericFp8PayloadLiveness {
+        NumericFp8PayloadLiveness {
+            weight: Arc::downgrade(&self.weight),
+            scales: Arc::downgrade(&self.scales),
+        }
     }
     pub const fn layout(&self) -> NumericFp8Layout {
         self.layout
