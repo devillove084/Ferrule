@@ -47,6 +47,9 @@ pub struct ResourceSummaryCoverage {
 
 /// Versioned, owner-local report at the end of one explicit shutdown attempt.
 /// Complete means the lifecycle close returned success, NOT post-Drop release.
+/// Version 1 forwards the typed physical snapshot and its coverage, including
+/// additive model fields such as `expert_read_pipeline`; it is not a separate
+/// field allowlist. Consumers must tolerate additional observation fields.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ResidentResourceShutdownSummary {
     pub schema_version: u32,
@@ -55,6 +58,9 @@ pub struct ResidentResourceShutdownSummary {
     pub error: Option<String>,
     pub runtime: ResourceObservationSnapshot,
     pub broker_domains: Vec<ResourceEvidence<BrokerDomainObservation>>,
+    /// Independent owner-local views, not a total to add to runtime residency or
+    /// broker credits. Cache/workspace subsets and host read reservations retain
+    /// the physical owner's evidence, identities and units without aggregation.
     pub physical: PhysicalResourceObservation,
     pub coverage: ResourceSummaryCoverage,
 }

@@ -1,13 +1,17 @@
 use ferrule_model as model;
 
-#[path = "../../../ferrule-model/tests/resource_observability/fixture.rs"]
+#[path = "fixture.rs"]
 mod fixture;
 
 use ferrule_runtime::FixedSequenceSlotPool;
 use ferrule_runtime::engine::{ResidentResourceShutdownSummary, ResidentTopKDriver};
-use fixture::{Control, runner};
+use fixture::{Control, runner, runner_with_plan};
 use model::ResidentModelRunner;
 use model::resource_observability::*;
+use model::transformer::{
+    ExpertReadHostCharge, ExpertReadHostReceipt, ExpertReadIdentity, ExpertReadPipelineObservation,
+    ExpertReadPipelineOptions, ExpertReadPipelineStats, ExpertReadSchedule, TransformerModule,
+};
 use std::rc::Rc;
 
 #[test]
@@ -313,10 +317,488 @@ fn parsed(summary: &ResidentResourceShutdownSummary) -> serde_json::Value {
     serde_json::from_str(&summary.to_json().unwrap()).unwrap()
 }
 
+fn pipeline_observation(status: &'static str) -> ExpertReadPipelineObservation {
+    let current = ExpertReadIdentity {
+        image_generation: 47,
+        layer: 3,
+        expert: 7,
+        operation: 501,
+    };
+    ExpertReadPipelineObservation {
+        enabled: true,
+        requested_mode: Some(ExpertReadSchedule::Lookahead),
+        effective_mode: Some(ExpertReadSchedule::Lookahead),
+        status,
+        limits: Some(ExpertReadPipelineOptions {
+            schedule: ExpertReadSchedule::Lookahead,
+            max_host_bytes: 8192,
+            max_metadata_bytes: 128,
+            worker_stack_bytes: 4096,
+        }),
+        current_charge: if status == "closed" {
+            ExpertReadHostCharge::default()
+        } else {
+            ExpertReadHostCharge {
+                packed_bytes: 80,
+                artifact_bytes: 160,
+                metadata_bytes: 24,
+                requested_stack_bytes: 4096,
+                payload_bytes: 240,
+                host_charged_bytes: 4360,
+                unknown_packed_bytes: if status == "quarantined" { 80 } else { 0 },
+                unknown_stack_bytes: if status == "quarantined" { 4096 } else { 0 },
+                reserved_read_slots: 2,
+                unknown_read_slots: usize::from(status == "quarantined"),
+            }
+        },
+        stats: ExpertReadPipelineStats {
+            sequences_started: 2,
+            submitted_reads: 3,
+            speculative_reads: 1,
+            unknown_reads: 1,
+            unknown_bytes: 80,
+            peak_host_charged_bytes: 4400,
+            ..Default::default()
+        },
+        current_read: (status == "active").then_some(current),
+        pending_read: (status == "active" || status == "join_pending_at_scope_end").then_some(
+            ExpertReadIdentity {
+                expert: 8,
+                operation: 502,
+                ..current
+            },
+        ),
+        last_receipt: Some(ExpertReadHostReceipt {
+            identity: ExpertReadIdentity {
+                layer: 2,
+                expert: 9,
+                operation: 499,
+                ..current
+            },
+            outcome: "unknown",
+            requested_bytes: 80,
+            io_bytes: None,
+            cancellation_requested: true,
+            submitted_ns: 3,
+            worker_started_ns: None,
+            io_started_ns: None,
+            io_finished_ns: None,
+            source_verified_ns: None,
+            completed_ns: None,
+            taken_ns: None,
+        }),
+        ..Default::default()
+    }
+}
+
+fn assert_coverage<T>(
+    coverage: &EvidenceCoverage,
+    field: &'static str,
+    evidence: &ResourceEvidence<T>,
+) {
+    for (fields, expected) in [
+        (
+            &coverage.unobserved,
+            matches!(evidence, ResourceEvidence::Unobserved),
+        ),
+        (
+            &coverage.observed,
+            matches!(evidence, ResourceEvidence::Observed(_)),
+        ),
+        (
+            &coverage.verified,
+            matches!(evidence, ResourceEvidence::Verified(_)),
+        ),
+        (
+            &coverage.unknown,
+            matches!(evidence, ResourceEvidence::Unknown),
+        ),
+    ] {
+        assert_eq!(
+            fields.iter().filter(|name| **name == field).count(),
+            usize::from(expected)
+        );
+    }
+}
+
+#[test]
+fn generic_pipeline_and_state_evidence_roundtrip_without_observation_progress() {
+    let mut configured = pipeline_observation("configured");
+    configured.effective_mode = None;
+    configured.current_charge = Default::default();
+    configured.stats = Default::default();
+    configured.last_receipt = None;
+    let mut blocking = configured;
+    blocking.requested_mode = Some(ExpertReadSchedule::Blocking);
+    blocking.limits.as_mut().unwrap().schedule = ExpertReadSchedule::Blocking;
+    let cases = [
+        ResourceEvidence::Unobserved,
+        ResourceEvidence::Unknown,
+        ResourceEvidence::Observed(ExpertReadPipelineObservation::default()),
+        ResourceEvidence::Observed(configured),
+        ResourceEvidence::Observed(blocking),
+        ResourceEvidence::Observed(pipeline_observation("active")),
+        ResourceEvidence::Observed(pipeline_observation("join_pending_at_scope_end")),
+        ResourceEvidence::Observed(pipeline_observation("closed")),
+        ResourceEvidence::Observed(pipeline_observation("closed_retained")),
+        ResourceEvidence::Observed(pipeline_observation("quarantined")),
+    ];
+    for pipeline in cases {
+        for state_bytes in [
+            ResourceEvidence::Unobserved,
+            ResourceEvidence::Observed(0),
+            ResourceEvidence::Observed(24),
+            ResourceEvidence::Unknown,
+        ] {
+            let control = Rc::new(Control::default());
+            control.pipeline.set(pipeline);
+            control.state_resident_bytes.set(Some(state_bytes));
+            control.omit_quiescence_proof.set(true);
+            let runner = runner(control.clone());
+            let module = runner
+                .forward_executor()
+                .module()
+                .physical_resource_snapshot(runner.default_state());
+            assert_eq!(module.expert_read_pipeline, pipeline);
+            let physical = runner.physical_resource_snapshot();
+            assert_eq!(physical.expert_read_pipeline, module.expert_read_pipeline);
+            let mut driver = ResidentTopKDriver::new(runner, FixedSequenceSlotPool::new(1));
+            let before = driver.resource_observability_snapshot();
+            assert_eq!(before.model, physical);
+            assert_eq!(
+                before.model.default_state.value().unwrap().resident_bytes,
+                state_bytes
+            );
+            let runtime_ledger = driver.observability.resources.snapshot();
+            let physical_ledger = driver.observability.physical_resources.clone();
+            let registry_stats = driver.load_registry().stats();
+            let reads = control.reads.get();
+            for _ in 0..3 {
+                assert_eq!(driver.resource_observability_snapshot(), before);
+                assert_eq!(driver.observability.resources.snapshot(), runtime_ledger);
+                assert_eq!(driver.observability.physical_resources, physical_ledger);
+                assert_eq!(driver.load_registry().stats(), registry_stats);
+            }
+            assert_eq!(control.reads.get(), reads + 3);
+            assert_eq!(control.pipeline.get(), pipeline);
+            assert_eq!(control.shutdown_calls.get(), 0);
+            assert_eq!(
+                driver
+                    .executor
+                    .runner()
+                    .forward_executor()
+                    .arena_stats()
+                    .installs,
+                0
+            );
+            assert!(driver.resource_shutdown_summary().is_none());
+            assert!(!driver.physical_shutdown_complete());
+            driver.shutdown_and_close_progress(&mut |_| Ok(())).unwrap();
+            let summary = driver.resource_shutdown_summary().unwrap();
+            assert_eq!(summary.physical.expert_read_pipeline, pipeline);
+            assert_eq!(summary.physical.default_state, before.model.default_state);
+            assert_eq!(summary.physical.scope, before.model.scope);
+            assert_eq!(summary.runtime.scope, before.runtime.scope);
+            assert_eq!(summary.physical.quiescence, ResourceEvidence::Unobserved);
+            assert_eq!(summary.physical.release, ResourceEvidence::Unobserved);
+            assert_eq!(summary.coverage.physical, summary.physical.coverage());
+            assert_coverage(
+                &summary.coverage.physical,
+                "expert_read_pipeline",
+                &pipeline,
+            );
+            assert_coverage(
+                &summary.coverage.physical,
+                "default_state.resident_bytes",
+                &state_bytes,
+            );
+            let json = parsed(summary);
+            assert_eq!(json["schema_version"], 1);
+            assert_eq!(
+                json["physical"],
+                serde_json::to_value(&summary.physical).unwrap()
+            );
+            assert_eq!(
+                json["physical"]["expert_read_pipeline"],
+                serde_json::to_value(pipeline).unwrap()
+            );
+            assert_eq!(
+                json["coverage"]["physical"],
+                serde_json::to_value(&summary.coverage.physical).unwrap()
+            );
+            assert_eq!(
+                json["physical"]["default_state"]["value"]["resident_bytes"],
+                serde_json::to_value(state_bytes).unwrap()
+            );
+            if pipeline.value().is_none() {
+                assert!(
+                    json["physical"]["expert_read_pipeline"]
+                        .get("value")
+                        .is_none()
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn resource_snapshots_neither_poll_provider_progress_nor_drain_queued_completions() {
+    use ferrule_common::{CancellationReason, CompletionOutcome};
+    let (mut driver, handle, scope) = super::driver_at_read();
+    handle.push_outcome(
+        scope.operation,
+        scope.key,
+        scope.stage,
+        CompletionOutcome::Cancelled(CancellationReason::OwnerShutdown),
+    );
+    let before = driver.resource_observability_snapshot();
+    let commands = handle.commands();
+    let stats = driver.load_registry().stats();
+    for _ in 0..3 {
+        assert_eq!(driver.resource_observability_snapshot(), before);
+        assert_eq!(driver.load_registry.pending_completions(), 0);
+        assert_eq!(driver.load_registry().stats(), stats);
+        assert_eq!(handle.commands(), commands);
+    }
+    // Only explicit progress transfers the provider's ready completion; reading
+    // the subsequent queued-completion gauge must not process it either.
+    assert_eq!(driver.load_registry.collect_provider_completions(1), 1);
+    for _ in 0..3 {
+        assert_eq!(driver.resource_observability_snapshot(), before);
+        assert_eq!(driver.load_registry.pending_completions(), 1);
+        assert_eq!(driver.load_registry().stats(), stats);
+        assert_eq!(handle.commands(), commands);
+        assert!(driver.load_registry.retirement(scope.operation).is_none());
+    }
+    assert_eq!(driver.executor.runner().physical_shutdown_calls, 0);
+}
+
+#[test]
+fn active_zero_host_charge_does_not_verify_quiescence_or_release() {
+    let control = Rc::new(Control::default());
+    let active = ExpertReadPipelineObservation {
+        current_charge: Default::default(),
+        current_read: None,
+        pending_read: None,
+        last_receipt: None,
+        ..pipeline_observation("active")
+    };
+    control.pipeline.set(ResourceEvidence::Observed(active));
+    control.omit_quiescence_proof.set(true);
+    let mut driver =
+        ResidentTopKDriver::new(runner(control.clone()), FixedSequenceSlotPool::new(1));
+    let before = driver.resource_observability_snapshot();
+    assert_eq!(
+        before.model.close,
+        ResourceEvidence::Observed(ResourceClosure::Open)
+    );
+    assert_eq!(before.model.quiescence, ResourceEvidence::Unobserved);
+    assert_eq!(before.model.release, ResourceEvidence::Unobserved);
+    driver.shutdown_and_close_progress(&mut |_| Ok(())).unwrap();
+    let summary = driver.resource_shutdown_summary().unwrap();
+    assert_eq!(
+        summary.physical.expert_read_pipeline,
+        ResourceEvidence::Observed(active)
+    );
+    assert_eq!(summary.physical.quiescence, ResourceEvidence::Unobserved);
+    assert_eq!(summary.physical.release, ResourceEvidence::Unobserved);
+    assert_eq!(
+        summary.physical.close,
+        ResourceEvidence::Observed(ResourceClosure::Closed)
+    );
+    assert!(!summary.coverage.physical.verified.contains(&"close"));
+    assert!(
+        !summary
+            .coverage
+            .physical
+            .verified
+            .contains(&"expert_read_pipeline")
+    );
+    let json = parsed(summary);
+    assert_eq!(
+        json["physical"]["expert_read_pipeline"]["value"]["status"],
+        "active"
+    );
+    assert_eq!(
+        json["physical"]["expert_read_pipeline"]["value"]["current_charge"]["host_charged_bytes"],
+        0
+    );
+    assert_eq!(
+        json["physical"]["release"],
+        serde_json::json!({"state": "unobserved"})
+    );
+}
+
+#[test]
+fn pipeline_and_nested_state_unknown_remain_sticky_after_close_and_retry() {
+    let control = Rc::new(Control::default());
+    control.pipeline.set(ResourceEvidence::Unknown);
+    control
+        .state_resident_bytes
+        .set(Some(ResourceEvidence::Unknown));
+    control.failures.set(1);
+    let mut driver =
+        ResidentTopKDriver::new(runner(control.clone()), FixedSequenceSlotPool::new(1));
+    assert!(driver.shutdown_and_close_progress(&mut |_| Ok(())).is_err());
+    let before = driver.resource_observability_snapshot();
+    control
+        .pipeline
+        .set(ResourceEvidence::Observed(pipeline_observation("closed")));
+    control
+        .state_resident_bytes
+        .set(Some(ResourceEvidence::Observed(0)));
+    driver.shutdown_and_close_progress(&mut |_| Ok(())).unwrap();
+    for _ in 0..3 {
+        let after = driver.resource_observability_snapshot();
+        assert_eq!(after.model.scope, before.model.scope);
+        assert_eq!(after.model.expert_read_pipeline, ResourceEvidence::Unknown);
+        assert_eq!(
+            after.model.default_state.value().unwrap().resident_bytes,
+            ResourceEvidence::Unknown
+        );
+        assert_eq!(after.model.close, ResourceEvidence::Unknown);
+        assert_eq!(after.model.release, ResourceEvidence::Unknown);
+    }
+    let summary = driver.resource_shutdown_summary().unwrap();
+    assert_eq!(summary.attempt, 2);
+    let json = parsed(summary);
+    assert_eq!(json["outcome"], "complete");
+    assert_eq!(
+        json["physical"]["expert_read_pipeline"],
+        serde_json::json!({"state": "unknown"})
+    );
+    assert_coverage(
+        &summary.coverage.physical,
+        "expert_read_pipeline",
+        &ResourceEvidence::<ExpertReadPipelineObservation>::Unknown,
+    );
+    assert_coverage(
+        &summary.coverage.physical,
+        "default_state.resident_bytes",
+        &ResourceEvidence::<usize>::Unknown,
+    );
+}
+
+#[test]
+fn runtime_summary_retains_standalone_scopes_and_exact_pipeline_identities() {
+    let control = Rc::new(Control::default());
+    let mut pipeline = pipeline_observation("active");
+    // Read source generations and receipt operation IDs are not runtime-owner
+    // generations or prepared-plan IDs, even if they happen to share a number.
+    pipeline.current_read.as_mut().unwrap().image_generation = 97;
+    control.pipeline.set(ResourceEvidence::Observed(pipeline));
+    control.omit_quiescence_proof.set(true);
+    let mut first = ResidentTopKDriver::new(
+        runner_with_plan(control.clone(), 41),
+        FixedSequenceSlotPool::new(1),
+    );
+    let second = ResidentTopKDriver::new(
+        runner_with_plan(control.clone(), 42),
+        FixedSequenceSlotPool::new(1),
+    );
+    let a = first.resource_observability_snapshot();
+    let b = second.resource_observability_snapshot();
+    assert_ne!(a.runtime.scope.owner, b.runtime.scope.owner);
+    assert_ne!(
+        a.model.scope.value().unwrap().owner,
+        b.model.scope.value().unwrap().owner
+    );
+    assert_ne!(a.runtime.scope.owner, a.model.scope.value().unwrap().owner);
+    assert_eq!(a.runtime.scope.generation.get(), 1);
+    assert_eq!(a.model.scope.value().unwrap().generation.get(), 41);
+    assert_eq!(b.model.scope.value().unwrap().generation.get(), 42);
+    assert_eq!(a.model.expert_read_pipeline, b.model.expert_read_pipeline);
+    first.shutdown_and_close_progress(&mut |_| Ok(())).unwrap();
+    let summary = first.resource_shutdown_summary().unwrap();
+    let json = parsed(summary);
+    assert_eq!(
+        json["runtime"]["scope"],
+        serde_json::to_value(a.runtime.scope).unwrap()
+    );
+    assert_eq!(
+        json["physical"]["scope"]["value"],
+        serde_json::to_value(a.model.scope.value().unwrap()).unwrap()
+    );
+    assert_eq!(
+        json["physical"]["expert_read_pipeline"]["value"]["current_read"]["image_generation"],
+        97
+    );
+    assert_eq!(
+        json["physical"]["expert_read_pipeline"]["value"]["last_receipt"]["identity"]["operation"],
+        499
+    );
+}
+
+#[test]
+fn overlapping_broker_cache_and_workspace_views_are_not_summed() {
+    use crate::scheduling::{ExecutionPhase, PhysicalResourceClaim, ResourceDemand, ResourceKind};
+    let mut driver = ResidentTopKDriver::new(
+        runner(Rc::new(Control::default())),
+        FixedSequenceSlotPool::new(1),
+    );
+    driver
+        .load_registry
+        .resources_mut()
+        .reconfigure_limit(ResourceKind::ResidentBytes, 64, 0)
+        .unwrap();
+    let mut grant = driver
+        .load_registry
+        .acquire_hard_resources(
+            123,
+            ResourceDemand::required(ExecutionPhase::Decode),
+            [PhysicalResourceClaim::new(ResourceKind::ResidentBytes, 64)],
+        )
+        .unwrap();
+    let snapshot = driver.resource_observability_snapshot();
+    let result = Ok(crate::engine::ResidentShutdownProgress::Pending);
+    let summary = ResidentResourceShutdownSummary::new(1, &result, snapshot.clone());
+    let json = parsed(&summary);
+    assert_eq!(summary.runtime.scope, snapshot.runtime.scope);
+    assert_eq!(summary.physical.scope, snapshot.model.scope);
+    assert_ne!(
+        summary.runtime.scope.owner,
+        summary.physical.scope.value().unwrap().owner
+    );
+    assert_eq!(json["physical"]["resident_parameter_bytes"]["value"], 64);
+    assert_eq!(
+        json["physical"]["expert_cache"]["value"]["resident_bytes"],
+        64
+    );
+    assert_eq!(
+        json["physical"]["expert_cache"]["value"]["charged_bytes"],
+        112
+    );
+    assert_eq!(
+        json["physical"]["numeric_workspace"]["value"]["reserved_bytes"],
+        16
+    );
+    assert_eq!(
+        json["physical"]["expert_cache"]["value"]["scratch_bytes"],
+        16
+    );
+    let resident_domain = summary
+        .broker_domains
+        .iter()
+        .filter_map(ResourceEvidence::value)
+        .find(|domain| domain.kind == "ResidentBytes")
+        .unwrap();
+    assert_eq!(resident_domain.in_use, 64);
+    assert_eq!(json["runtime"]["resident_bytes"]["value"], 0);
+    assert!(json.get("total_bytes").is_none());
+    assert!(json["physical"].get("total_bytes").is_none());
+    assert!(!grant.is_released());
+    driver
+        .load_registry
+        .release_hard_resources(&mut grant)
+        .unwrap();
+}
+
 #[test]
 fn every_shutdown_attempt_emits_the_versioned_log_and_retains_unknown_after_retry() {
     let control = Rc::new(Control::default());
     control.failures.set(1);
+    let pipeline = pipeline_observation("quarantined");
+    control.pipeline.set(ResourceEvidence::Observed(pipeline));
     let captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     // Keep two scoped dispatches alive: tracing's single-dispatch fast path
     // otherwise registers a shared callsite against a parallel thread's default.
@@ -352,6 +834,33 @@ fn every_shutdown_attempt_emits_the_versioned_log_and_retains_unknown_after_retr
         assert_eq!(summary["attempt"], i + 1);
         assert_eq!(summary["schema_version"], 1);
         assert_eq!(summary["physical"]["release"]["state"], "unknown");
+        assert_eq!(
+            summary["physical"]["expert_read_pipeline"],
+            serde_json::to_value(ResourceEvidence::Observed(pipeline)).unwrap()
+        );
+        assert!(
+            summary["coverage"]["physical"]["observed"]
+                .as_array()
+                .unwrap()
+                .contains(&serde_json::json!("expert_read_pipeline"))
+        );
+        let receipt = &summary["physical"]["expert_read_pipeline"]["value"]["last_receipt"];
+        assert_eq!(receipt["submitted_ns"], 3);
+        for field in [
+            "worker_started_ns",
+            "io_started_ns",
+            "io_finished_ns",
+            "source_verified_ns",
+            "completed_ns",
+            "taken_ns",
+            "io_bytes",
+        ] {
+            assert_eq!(
+                receipt.get(field),
+                Some(&serde_json::Value::Null),
+                "{field}"
+            );
+        }
     }
     let second: serde_json::Value =
         serde_json::from_str(events[1].get("summary_json").unwrap()).unwrap();

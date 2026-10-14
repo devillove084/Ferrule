@@ -317,6 +317,8 @@ where
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResidentResourceObservability {
     /// Actual model-owner forwarding; unsupported runners leave fields unobserved.
+    /// May overlap runtime registry residency; these are independent scopes, not
+    /// additive charges. Host read reservations are not physical allocator bytes.
     pub model: PhysicalResourceObservation,
     /// Runtime registry residency, pending operations, credits, and retirements.
     /// Residency, pending physical operations, credits, and retired operations
