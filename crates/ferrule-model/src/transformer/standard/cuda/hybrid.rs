@@ -240,9 +240,15 @@ impl CudaHybridModule {
         self.materializer.expert_read_pipeline_options()
     }
 
-    /// Closed host-read scopes only; not evidence of CUDA overlap/completion.
+    /// Owner-observed host counters; not evidence of CUDA overlap/completion.
     pub fn expert_read_pipeline_stats(&self) -> crate::transformer::ExpertReadPipelineStats {
         self.materializer.expert_read_pipeline_stats()
+    }
+
+    pub fn expert_read_pipeline_observation(
+        &self,
+    ) -> crate::transformer::ExpertReadPipelineObservation {
+        self.materializer.expert_read_pipeline_observation()
     }
 
     pub fn expert_cache_stats(&self) -> Option<ExpertCacheStats> {
@@ -466,6 +472,9 @@ impl TransformerModule for CudaHybridModule {
             }),
             resident_parameter_bytes: ResourceEvidence::Observed(self.resident_parameter_bytes()),
             live_model_state_bytes: ResourceEvidence::Observed(self.device.live_state_bytes()),
+            expert_read_pipeline: ResourceEvidence::Observed(
+                self.expert_read_pipeline_observation(),
+            ),
             expert_cache: self
                 .expert_cache_stats()
                 .map(|stats| ResourceEvidence::Observed(ExpertCacheObservation::from(stats)))

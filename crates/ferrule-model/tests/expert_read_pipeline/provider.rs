@@ -259,6 +259,10 @@ fn decoder_constructor_options_reach_the_real_materializer_and_private_provider(
         // and segment, not a separately manually configured test materializer.
         let materializer = options.state_dict_materializer().unwrap();
         assert_eq!(materializer.expert_read_pipeline_options(), Some(read));
+        let configured = materializer.expert_read_pipeline_observation();
+        assert_eq!(configured.requested_mode, Some(schedule));
+        assert_eq!(configured.effective_mode, None);
+        assert!(!configured.worker_read_observed);
         assert_eq!(materializer.checkpoint_read_counters().bytes_read, 0);
         let mut provider = StateDictExpertProvider {
             layer: 0,
@@ -281,6 +285,19 @@ fn decoder_constructor_options_reach_the_real_materializer_and_private_provider(
         drop(value);
         drop(provider);
         let stats = materializer.expert_read_pipeline_stats();
+        let observed = materializer.expert_read_pipeline_observation();
+        assert!(observed.enabled && observed.worker_read_observed);
+        assert_eq!(observed.requested_mode, Some(schedule));
+        assert_eq!(observed.effective_mode, Some(schedule));
+        assert_eq!(observed.current_charge.host_charged_bytes, 0);
+        assert_eq!(stats.completed_reads, 2);
+        assert_eq!(stats.verified_reads, 2);
+        assert_eq!(stats.reader_interval_calls, 12);
+        assert_eq!(stats.reader_interval_bytes, 36);
+        assert_eq!(
+            stats.prefetched_reads_taken,
+            u64::from(schedule == ExpertReadSchedule::Lookahead)
+        );
         assert_eq!(stats.submitted_reads, 2);
         assert_eq!(
             stats.speculative_reads,

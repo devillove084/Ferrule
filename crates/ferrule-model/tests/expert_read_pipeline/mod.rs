@@ -2,6 +2,7 @@
 //! artifact constructor; owner windows below are not GPU overlap evidence.
 
 mod lifecycle;
+mod observation;
 
 use super::*;
 use crate::checkpoint::{CheckpointDType, CheckpointReadCounters, CheckpointTensorSlice};

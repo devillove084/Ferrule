@@ -9,7 +9,9 @@ pub(crate) mod cuda;
 pub mod expert_parallel;
 pub(crate) mod expert_reads;
 pub use expert_reads::{
-    ExpertReadPipelineError, ExpertReadPipelineOptions, ExpertReadPipelineStats, ExpertReadSchedule,
+    ExpertReadHostCharge, ExpertReadHostReceipt, ExpertReadIdentity, ExpertReadPipelineError,
+    ExpertReadPipelineObservation, ExpertReadPipelineOptions, ExpertReadPipelineStats,
+    ExpertReadSchedule,
 };
 mod forward;
 pub mod host_experts;

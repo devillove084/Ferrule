@@ -133,7 +133,8 @@ fn normal_cuda_constructor_reaches_configured_provider_for_both_model_boundaries
     use ferrule_common::execution::*;
     use ferrule_model::decoder::*;
     use ferrule_model::runner::{
-        MultiSessionBatchProgress, MultiSessionRunner, TransactionEndIntent, TransactionEndProgress,
+        MultiSessionBatchProgress, MultiSessionRunner, ResidentModelRunner, TransactionEndIntent,
+        TransactionEndProgress,
     };
     use ferrule_model::tokenizer::TokenizerHandle;
     for bf16 in [false, true] {
@@ -163,6 +164,11 @@ fn normal_cuda_constructor_reaches_configured_provider_for_both_model_boundaries
             let module = runner.forward_executor().module();
             assert_eq!(module.expert_read_pipeline_options(), Some(read));
             assert_eq!(module.expert_read_pipeline_stats().submitted_reads, 0);
+            let configured = module.expert_read_pipeline_observation();
+            assert!(configured.enabled);
+            assert_eq!(configured.requested_mode, Some(schedule));
+            assert_eq!(configured.effective_mode, None);
+            assert!(!configured.worker_read_observed);
             assert_eq!(module.expert_cache_stats().unwrap().resident_experts, 0);
             let mut state = runner.create_sequence_state().unwrap();
             let generation = state.core().generation();
@@ -214,6 +220,40 @@ fn normal_cuda_constructor_reaches_configured_provider_for_both_model_boundaries
                 .forward_executor()
                 .module()
                 .expert_read_pipeline_stats();
+            let observed = runner
+                .forward_executor()
+                .module()
+                .expert_read_pipeline_observation();
+            assert!(observed.enabled && observed.worker_read_observed);
+            assert_eq!(observed.requested_mode, Some(schedule));
+            assert_eq!(observed.effective_mode, Some(schedule));
+            assert!(stats.completed_reads > 0 && stats.verified_reads > 0);
+            assert!(stats.reader_interval_calls > 0 && stats.reader_interval_bytes > 0);
+            assert!(stats.proved_read_bytes > 0);
+            assert_eq!(
+                stats.failed_reads + stats.cancelled_reads + stats.unknown_reads,
+                0
+            );
+            assert_eq!(observed.current_charge.host_charged_bytes, 0);
+            let payload_limit =
+                read.max_host_bytes - read.max_metadata_bytes - read.worker_stack_bytes as u64;
+            assert!(stats.peak_packed_bytes > 0 && stats.peak_packed_bytes <= payload_limit / 2);
+            assert!(
+                stats.peak_artifact_bytes > 0 && stats.peak_artifact_bytes <= payload_limit / 2
+            );
+            assert!(stats.peak_payload_bytes <= payload_limit);
+            assert_eq!(stats.peak_metadata_bytes, read.max_metadata_bytes);
+            assert_eq!(
+                stats.peak_requested_stack_bytes,
+                read.worker_stack_bytes as u64
+            );
+            let physical = runner.physical_resource_snapshot();
+            assert_eq!(physical.expert_read_pipeline.value(), Some(&observed));
+            assert_eq!(runner.physical_resource_snapshot(), physical);
+            assert_eq!(
+                physical.release,
+                ferrule_model::resource_observability::ResourceEvidence::Unobserved
+            );
             assert_eq!(stats.submitted_reads, 6);
             assert_eq!(stats.unknown_bytes, 0);
             assert!(stats.peak_host_charged_bytes <= read.max_host_bytes);

@@ -252,8 +252,11 @@ impl ExpertProvider for StateDictExpertProvider<'_> {
             .ok_or_else(|| model_error(format!("missing expert {layer}:{expert}")))?;
         let prepared = if let Some(reads) = &mut self.reads {
             let prepared =
-                bindings.prepare_from_read(self.materializer, reads.demand(layer, expert)?)?;
-            reads.track_artifacts(&prepared)?;
+                bindings.prepare_from_read(self.materializer, reads.demand(layer, expert)?);
+            let prepared = prepared.inspect_err(|_| reads.record_materialization_failure())?;
+            reads
+                .track_artifacts(&prepared)
+                .inspect_err(|_| reads.record_materialization_failure())?;
             prepared
         } else {
             bindings.prepare(self.materializer)?

@@ -1,4 +1,4 @@
-//! One Mixed decoder invocation; no request-level allocation of shared batch cost.
+//! One numeric decoder invocation; no request-level allocation of shared batch cost.
 use super::super::super::performance::{CounterSnapshot, ProofTiming, micros};
 use super::*;
 use std::time::Instant;
@@ -11,6 +11,7 @@ pub(super) struct InvocationTrace {
     prefill_rows: usize,
     decode_rows: usize,
     before: CounterSnapshot,
+    expert_reads_before: crate::transformer::ExpertReadPipelineStats,
 }
 
 impl CudaHybridModule {
@@ -49,8 +50,9 @@ impl CudaHybridModule {
         transaction: ExecutionTransactionId,
         batch: &PackedDecoderBatch,
     ) {
-        if self.numeric_fp8_precision()
+        if (self.numeric_fp8_precision()
             != Some(crate::transformer::NumericFp8Precision::Bf16ModelMixedF32Accumulate)
+            && self.expert_read_pipeline_options().is_none())
             || !tracing::enabled!(target: "ferrule_performance", tracing::Level::DEBUG)
         {
             return;
@@ -81,6 +83,7 @@ impl CudaHybridModule {
             prefill_rows,
             decode_rows,
             before,
+            expert_reads_before: self.expert_read_pipeline_stats(),
         });
         self.operators.performance_proofs = Some(ProofTiming::default());
     }
@@ -92,18 +95,37 @@ impl CudaHybridModule {
         let host_invocation_us = micros(invocation.started.elapsed());
         let proofs = self.operators.performance_proofs.take().unwrap_or_default();
         let quarantined = self.device.needs_quarantine() || self.operators.needs_quarantine();
+        let event = if self.numeric_fp8_precision()
+            == Some(crate::transformer::NumericFp8Precision::Bf16ModelMixedF32Accumulate)
+        {
+            "mixed_decoder_invocation"
+        } else {
+            "expert_read_decoder_invocation"
+        };
+        let expert_reads = self.expert_read_pipeline_observation();
+        let expert_read_delta = expert_reads
+            .stats
+            .checked_delta(invocation.expert_reads_before);
+        // One bounded serialized diagnostic per invocation, never per expert.
+        // The gauges/peaks remain owner-lifetime; only counters are differenced.
+        let expert_read_json = serde_json::to_string(&expert_reads).ok();
+        let expert_read_delta_json =
+            expert_read_delta.and_then(|delta| serde_json::to_string(&delta).ok());
         let Some((after, cache)) = self.performance_snapshot() else {
-            tracing::debug!(target: "ferrule_performance", event = "mixed_decoder_invocation",
+            tracing::debug!(target: "ferrule_performance", event,
                 transaction = invocation.transaction.get(), status, quarantined,
                 host_invocation_us, counters_available = false,
-                "Mixed decoder invocation lost its bounded cache observation");
+                expert_read_pipeline = expert_read_json.as_deref(),
+                expert_read_pipeline_delta = expert_read_delta_json.as_deref(),
+                expert_read_counter_reset_detected = expert_read_delta.is_none(),
+                "Numeric decoder invocation lost its bounded cache observation");
             return;
         };
         let delta = after.delta(invocation.before);
         // These are facade counters, not native kernel counts. The high-water
         // cache gauge is owner-lifetime, not a per-invocation peak or a delta.
         tracing::debug!(target: "ferrule_performance",
-            event = "mixed_decoder_invocation",
+            event,
             transaction = invocation.transaction.get(),
             device = self.device.operators().device_ordinal(),
             status, quarantined, host_invocation_us,
@@ -111,6 +133,10 @@ impl CudaHybridModule {
             rows = invocation.rows, sequences = invocation.sequences,
             prefill_rows = invocation.prefill_rows, decode_rows = invocation.decode_rows,
             counters_available = true, counter_reset_detected = !delta.valid(),
+            expert_read_pipeline = expert_read_json.as_deref(),
+            expert_read_pipeline_delta = expert_read_delta_json.as_deref(),
+            expert_read_counter_reset_detected = expert_read_delta.is_none(),
+            expert_read_peak_scope = "owner_lifetime_not_invocation_delta",
             facade_kernel_launches = delta.kernel_launches,
             h2d_copies = delta.h2d_copies, h2d_bytes = delta.h2d_bytes,
             d2h_copies = delta.d2h_copies, d2h_bytes = delta.d2h_bytes,
@@ -133,7 +159,7 @@ impl CudaHybridModule {
             semantic_upload_sync_calls = proofs.upload_sync.calls,
             semantic_upload_sync_failures = proofs.upload_sync.failures,
             semantic_upload_sync_host_us = micros(proofs.upload_sync.elapsed),
-            "Mixed owner-local decoder invocation summary"
+            "Numeric owner-local decoder invocation summary"
         );
     }
 }

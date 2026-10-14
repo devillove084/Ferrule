@@ -150,6 +150,8 @@ pub struct PhysicalResourceObservation {
     /// All state copies charged to the physical owner, including default state.
     pub live_model_state_bytes: ResourceEvidence<usize>,
     pub expert_cache: ResourceEvidence<ExpertCacheObservation>,
+    /// Host read custody only; never RSS, GPU consumer completion or owner release.
+    pub expert_read_pipeline: ResourceEvidence<crate::transformer::ExpertReadPipelineObservation>,
     pub numeric_workspace: ResourceEvidence<WorkspaceObservation>,
     /// Image-owned chunk workspace; excluded from numeric/cache scratch.
     pub recurrent_chunk_workspace_bytes: ResourceEvidence<usize>,
@@ -252,6 +254,7 @@ impl PhysicalResourceObservation {
             resident_parameter_bytes,
             live_model_state_bytes,
             expert_cache,
+            expert_read_pipeline,
             numeric_workspace,
             recurrent_chunk_workspace_bytes,
             other_workspace_bytes,
@@ -331,6 +334,7 @@ impl PhysicalResourceObservation {
             resident_parameter_bytes,
             live_model_state_bytes,
             expert_cache,
+            expert_read_pipeline,
             numeric_workspace,
             recurrent_chunk_workspace_bytes,
             other_workspace_bytes,

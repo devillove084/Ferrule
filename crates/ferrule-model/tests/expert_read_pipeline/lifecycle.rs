@@ -257,6 +257,18 @@ fn worker_side_sequence_drop_hands_off_join_before_materializer_admission_reopen
     assert!(pending.unknown.is_empty());
     assert_eq!(pending.budget.reserved_bytes, EXPERT_BYTES);
     assert_eq!(pending.budget.worker_stack.reserved_bytes, STACK);
+    let observed = materializer.expert_read_pipeline_observation();
+    assert_eq!(observed.status, "join_pending_at_scope_end");
+    assert_eq!(observed.stats.sequences_finished, 1);
+    assert_eq!(observed.stats.join_pending_sequences, 1);
+    assert_eq!(observed.stats.unobserved_terminal_reads, 1);
+    assert_eq!(observed.stats.completed_reads, 0);
+    let pending_identity = observed.pending_read.unwrap();
+    assert_eq!(pending_identity.image_generation, IMAGE);
+    assert_eq!((pending_identity.layer, pending_identity.expert), (0, 0));
+    assert_eq!(observed.current_charge.packed_bytes, EXPERT_BYTES);
+    assert_eq!(observed.current_charge.requested_stack_bytes, STACK as u64);
+    assert_eq!(materializer.expert_read_pipeline_observation(), observed);
     released.send(()).unwrap();
     // Admission itself performs the authorized off-worker join of its retained
     // handoff; no direct join/refund is needed from this test's supervisor.

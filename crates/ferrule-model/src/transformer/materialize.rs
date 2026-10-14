@@ -853,7 +853,7 @@ pub struct StateDictMaterializer {
     host_experts: OnceLock<Arc<super::host_experts::HostExpertCache>>,
     expert_read_options: Option<super::ExpertReadPipelineOptions>,
     expert_read_active: Arc<Mutex<super::expert_reads::ExpertReadAdmissionState>>,
-    expert_read_stats: Arc<Mutex<super::ExpertReadPipelineStats>>,
+    expert_read_stats: Arc<Mutex<super::expert_reads::ExpertReadObservationState>>,
 }
 
 impl StateDictMaterializer {
@@ -876,7 +876,9 @@ impl StateDictMaterializer {
             expert_read_active: Arc::new(Mutex::new(
                 super::expert_reads::ExpertReadAdmissionState::default(),
             )),
-            expert_read_stats: Arc::new(Mutex::new(super::ExpertReadPipelineStats::default())),
+            expert_read_stats: Arc::new(Mutex::new(
+                super::expert_reads::ExpertReadObservationState::default(),
+            )),
         })
     }
 
@@ -909,6 +911,14 @@ impl StateDictMaterializer {
             return Err(model_error("expert read pipeline is already configured"));
         }
         self.expert_read_options = Some(options);
+        let mut state = self
+            .expert_read_stats
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        state.observation.enabled = true;
+        state.observation.requested_mode = Some(options.schedule);
+        state.observation.limits = Some(options);
+        state.observation.status = "configured";
         Ok(())
     }
 
@@ -916,13 +926,23 @@ impl StateDictMaterializer {
         self.expert_read_options
     }
 
-    /// Totals from closed read scopes. This does not poll workers or imply GPU
-    /// execution/completion; active scopes report when their host cleanup ends.
+    /// Owner-observed host counters, including active scope transitions. Never
+    /// polls a worker, synchronizes CUDA, or establishes consumer completion.
     pub fn expert_read_pipeline_stats(&self) -> super::ExpertReadPipelineStats {
-        *self
-            .expert_read_stats
+        self.expert_read_stats
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .unwrap_or_else(|p| p.into_inner())
+            .observation
+            .stats
+    }
+
+    /// Read-only custody gauges and bounded last identity/receipt. Sampling
+    /// neither drains/joins nor releases even aliases whose liveness has ended.
+    pub fn expert_read_pipeline_observation(&self) -> super::ExpertReadPipelineObservation {
+        self.expert_read_stats
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .snapshot()
     }
 
     pub(crate) fn expert_read_sequence(
@@ -941,7 +961,7 @@ impl StateDictMaterializer {
                     self.reader.clone(),
                 )?;
                 sequence.admission = Some(admission);
-                sequence.stats_sink = Some(Arc::clone(&self.expert_read_stats));
+                sequence.attach_observation(Arc::clone(&self.expert_read_stats));
                 Ok(sequence)
             })
             .transpose()
