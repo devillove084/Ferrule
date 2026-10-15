@@ -16,7 +16,7 @@ MIB = 1 << 20
 POINTS = (("small", 8, 64 * MIB), ("middle", 64, 320 * MIB), ("big", 128, 640 * MIB))
 PREPARATION = HERE / "plan_v2"
 PLAN_PATH = PREPARATION / "plan.json"
-BINDING_PATH = PREPARATION / "bindings.json"
+from binding_roles import BINDING_PATH
 LIMITS = dict(startup_seconds=60, request_seconds=15, all_requests_seconds=120,
               worker_bookkeeping_seconds=15, target_lifetime_seconds=195,
               shutdown_seconds=20, worker_preidle_seconds=10, worker_finalization_seconds=4,
@@ -61,17 +61,8 @@ def sha(path):
 
 
 def check_bindings():
-    binding = load(BINDING_PATH)
-    require(binding["schema"] == "ferrule.storage-demand.pressure-fault-inputs.v2", "binding schema")
-    unsigned = {key: value for key, value in binding.items() if key != "digest"}
-    require(binding.get("digest") == hashlib.sha256(
-        json.dumps(unsigned, sort_keys=True, allow_nan=False).encode()).hexdigest(), "input seal digest changed")
-    for name, pin in binding["files"].items():
-        path = Path(name)
-        require(not path.is_absolute() and ".." not in path.parts, "unsafe binding path")
-        require("profile_overlap_v1" not in path.parts, "profiling-agent source must not be bound")
-        require(sha(ROOT / path) == pin, "changed bound input: " + name)
-    return binding
+    from binding_roles import check_bindings as check_roles
+    return check_roles(BINDING_PATH)
 
 
 def validate_design(value):

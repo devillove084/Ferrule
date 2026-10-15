@@ -170,7 +170,7 @@ class EvidenceTests(unittest.TestCase):
                 e.positive_payload_entries(*args)
 
     def test_new_sources_have_no_execution_or_gpu_imports(self):
-        allowed = {"__future__", "argparse", "copy", "hashlib", "json", "pathlib", "math", "evidence"}
+        allowed = {"__future__", "argparse", "copy", "hashlib", "json", "pathlib", "math", "evidence", "binding_roles"}
         for filename in ("prepare.py", "evidence.py"):
             tree = ast.parse((Path(__file__).parent / filename).read_text())
             for node in ast.walk(tree):

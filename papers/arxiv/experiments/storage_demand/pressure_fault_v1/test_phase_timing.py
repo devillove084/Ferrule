@@ -39,8 +39,10 @@ class DeadlineTests(owned.fixtures.CPUOnly):
     def test_new_study_rejects_historical_directory_and_identity(self):
         with self.assertRaisesRegex(ValueError, 'historical resume'):
             a.directory_check(a.p.HERE / 'artifacts-go-20261015-01')
-        self.assertEqual(a.directory_check(a.p.HERE / 'artifacts-go-v2-20261015-01').name,
-                         'artifacts-go-v2-20261015-01')
+        with self.assertRaisesRegex(ValueError, 'historical resume'):
+            a.directory_check(a.p.HERE / 'artifacts-go-v2-20261015-01')
+        self.assertEqual(a.directory_check(a.p.HERE / 'artifacts-go-v2-20261015-02').name,
+                         'artifacts-go-v2-20261015-02')
         with self.assertRaises(ValueError):
             a.p.validate_design(a.p.load(a.p.HERE / 'plan.json'))
         self.assertNotEqual(a.BINDING_PATH, a.p.HERE / 'bindings.json')

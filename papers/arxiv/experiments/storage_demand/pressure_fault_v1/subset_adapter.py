@@ -23,6 +23,7 @@ from types import SimpleNamespace
 
 from phase_timing import Timings, deadline_cap
 import prepare as p
+import binding_roles as roles
 from evidence import NAMES, POINT_IDS, counter_totals, denominator_summary, integer
 
 sys.dont_write_bytecode = True
@@ -92,7 +93,7 @@ def validate_execution(path=BINDING_PATH):
     require(Path(path) == BINDING_PATH, 'only the owned pressure seal is accepted')
     value = p.check_bindings()
     require(value.get('budget_variant') == seal_design(), 'pressure budget variant seal stale')
-    pins = {str(p.ROOT / name): pin for name, pin in value['files'].items()}
+    pins = roles.execution_pins(value)
     tools = value.get('workflow_tools', {})
     require(set(tools) == set(WORKFLOW_TOOLS), 'exact maintained CPU/launch/telemetry tools required')
     ct.check_pins(tools)
@@ -128,7 +129,8 @@ not relabeled as a new-point numerical gate; no source tree/receipt is recapture
     immutable(candidate['binary'])
     require(ct.sha(candidate['binary']) == identity['cli_binary_sha256'], 'compiled CLI bytes changed')
     runtime = ct.load(candidate['runtime_pin_manifest'])
-    require(runtime['pins'] and runtime['per_role']['cli'], 'runtime reference inventory empty')
+    require(len(runtime['pins']) == 12 and runtime['per_role']['cli'] == runtime['pins'],
+            'exact twelve CLI runtime pins required')
     ct.check_pins(runtime['pins'])
     manifest = prior_evidence.load('evidence-manifest.json')
     inventory, source = prior_evidence.source_inventory(identity, manifest)
@@ -208,9 +210,11 @@ def _specialize(function, before, after, **bindings):
 def _specializations(function, replacements, **bindings):
     """Exact expressions in a pinned private globals copy; never shared edits."""
     path = Path(inspect.getsourcefile(function)).resolve()
-    pins = p.load(BINDING_PATH)['files']
+    value = p.load(BINDING_PATH)
+    pins = value['files']
     name = str(path.relative_to(p.ROOT))
-    require(name in pins and p.sha(path) == pins[name], 'maintained specialization source changed')
+    require(value['roles'].get(name) == 'host_control' and name in pins
+            and p.sha(path) == pins[name], 'maintained specialization source changed')
     source = textwrap.dedent(inspect.getsource(function))
     for before, after in replacements:
         require(source.count(before) == 1, 'maintained expression changed: ' + before)
@@ -455,7 +459,7 @@ def private_worker(payload):
         requests = source[request_start:request_end]
         new_requests = requests.replace("runtime = ct.load(candidate['candidate']['runtime_pin_manifest'])['pins']",
             "runtime = timings.call('runtime_metadata', ct.load, candidate['candidate']['runtime_pin_manifest'])['pins']")
-        new_requests = new_requests.replace("ct.check_pins(payload['adapter_pins'])", "timings.call('workflow_pins', ct.check_pins, payload['adapter_pins'])")
+        new_requests = new_requests.replace("ct.check_pins(payload['adapter_pins'])", "timings.call('workflow_pins', ct.check_pins, payload['adapter_pins'])\n            timings.call('source_custody_checks', check_source_model)")
         new_requests = new_requests.replace("ct.check_pins(candidate['candidate']['artifact_pins'])", "timings.call('candidate_pins', ct.check_pins, candidate['candidate']['artifact_pins'])")
         check_start = new_requests.index('            ex.observer.verify_root(root)')
         check_end = new_requests.index("            timings.call('workflow_pins'", check_start)
@@ -487,7 +491,8 @@ def private_worker(payload):
                          "sample('requests-post')", "sample_after('shutdown-pre')", "sample_after('shutdown-post')"))
         private = _specializations(pilot.worker, replacements, ex=facade, HERE=p.HERE,
             worker_contract=worker_contract, timed_contract=timed_contract, idle=idle,
-            PilotMonitor=monitor, caps=caps, timings=timings, deadline_cap=deadline_cap)
+            PilotMonitor=monitor, caps=caps, timings=timings, deadline_cap=deadline_cap,
+            check_source_model=roles.check_source_model)
         try:
             yield private
         finally:
@@ -548,7 +553,10 @@ def review_build(candidate):
     policy = mapped.maps.role_policy(candidate['candidate']['binary'],
         candidate['candidate']['binary_sha256'], runtime, 'cli')
     require(len(policy['required']) == 12, 'CLI must require all twelve role/dependency libraries')
+    value = p.load(BINDING_PATH)
+    _, relations = roles.validate_entries(value['files'], value['roles'], p.ROOT, source)
     return dict(build_review=build, runtime_role_policy=policy, candidate_identity=identity,
+                input_role_schema=roles.ROLE_SCHEMA, compiled_source_relations=relations,
                 prior_middle_numerical_gates=9, new_point_full_numerical_verified=False)
 
 
@@ -568,8 +576,8 @@ def unseal(path, schema):
 def directory_check(directory):
     directory = Path(directory)
     require(directory.parent.resolve() == p.HERE and not directory.is_symlink()
-            and directory.name == 'artifacts-go-v2-20261015-01',
-            'new v2 artifacts-go-v2-20261015-01 only; historical resume forbidden')
+            and directory.name == 'artifacts-go-v2-20261015-02',
+            'new v2 artifacts-go-v2-20261015-02 only; historical resume forbidden')
     return directory.resolve()
 
 
@@ -579,8 +587,8 @@ def committed_sources():
     commit = git('rev-parse', 'HEAD').decode().strip()
     require(commit == git('rev-parse', '@{upstream}').decode().strip(), 'source commit must already be pushed')
     require(not git('diff', '--cached', '--name-only').strip(), 'index must be empty before GPU ownership')
-    names = (p.HERE / 'STAGE_FILES.txt').read_text().splitlines()
-    require(len(names) == 19 and names == sorted(set(names)) and all(name.startswith(str(p.HERE.relative_to(p.ROOT)) + '/')
+    names = roles.role_root()['committed_sources']
+    require(len(names) == 22 and names == sorted(set(names)) and all(name.startswith(str(p.HERE.relative_to(p.ROOT)) + '/')
         and '..' not in Path(name).parts and 'artifacts-go-' not in name for name in names),
         'exact sorted owned-source whitelist required; no raw artifacts')
     for name in names:
@@ -591,8 +599,12 @@ def committed_sources():
 def start(directory, granted, profiling_paused):
     require(granted is True and profiling_paused is True, 'explicit GO and profiling-owner paused handoff required')
     directory = directory_check(directory)
-    require(not directory.exists() and all(path.name == 'artifacts-go-20261015-01'
-        for path in p.HERE.glob('artifacts-go-*')), 'one new v2 study only; no retry/replacement/resume')
+    spec = roles.role_root()
+    require(not directory.exists() and {path.name for path in p.HERE.glob('artifacts-go-*')}
+            == set(spec['retired_studies']), 'one role-revised study only; no retry/replacement/resume')
+    blocked = p.HERE / 'artifacts-go-v2-20261015-01'
+    require(not (blocked / 'registration.json').exists() and not (blocked / 'GO.json').exists(),
+            'predecessor must remain blocked before registration')
     execution, candidate = validate_execution(), validate_candidate()
     build = review_build(candidate)
     committed = committed_sources()
@@ -606,6 +618,10 @@ def start(directory, granted, profiling_paused):
         scope=design()['pressure']['quality']['scope_decision'], no_other_gpu_work=True,
         retries=0, replacements=0, profiling_captures=0)
     sealed_write(directory / 'GO.json', authorization)
+    sealed_write(directory / 'input-roles.json', dict(schema=roles.SCHEMA,
+        binding_sha256=ct.sha(BINDING_PATH), role_root_sha256=ct.sha(roles.ROLE_PATH),
+        predecessor_pins=spec['predecessor_pins'], retired_studies=spec['retired_studies'],
+        compiled_source_relations=build['compiled_source_relations']))
     sealed_write(directory / 'candidate-review.json', dict(schema='ferrule.storage-demand.pressure-build-review.v2', **build))
     cases = dict(schema='ferrule.storage-demand.pressure-case-registration.v2',
         candidate_identity=candidate['candidate_identity'], case_variants=[dict(
