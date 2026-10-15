@@ -41,6 +41,20 @@ pub struct ExpertCacheStats {
     pub uploads: u64,
     pub hits: u64,
     pub evictions: u64,
+    /// Diagnostic collection is selected once, at owner creation, by the
+    /// ferrule_performance DEBUG filter. No per-key history is retained.
+    pub diagnostics_enabled: bool,
+    /// Sticky: counters are no longer exact; deltas must be absent, not zero.
+    pub counters_overflowed: bool,
+    /// Successful new upload leases, not proved uploads or classified cold misses.
+    pub misses: u64,
+    /// Pressure at each actual eviction; entry and byte pressure may overlap.
+    pub entry_limit_evictions: u64,
+    pub byte_limit_evictions: u64,
+    /// Subset of byte_limit_evictions caused by growing scratch, not admission.
+    pub scratch_limit_evictions: u64,
+    /// Budget failures with no completed victim. Pending is not a miss/hit proof.
+    pub admission_stalls: u64,
     pub quarantined: bool,
     /// Subset of charged bytes deliberately retained after unknown completion;
     /// not an additional charge on top of resident/pending/scratch.
@@ -50,6 +64,14 @@ pub struct ExpertCacheStats {
 impl ExpertCacheStats {
     pub fn charged_bytes(self) -> usize {
         self.resident_bytes + self.pending_upload_bytes + self.scratch_bytes
+    }
+}
+
+fn increment(counter: &mut u64, overflowed: &mut bool) {
+    if let Some(next) = counter.checked_add(1) {
+        *counter = next;
+    } else {
+        *overflowed = true;
     }
 }
 
@@ -142,7 +164,10 @@ impl<K: Ord + Clone, G: Ord + Clone> Cache<K, G> {
             entries: BTreeMap::new(),
             groups,
             clock: 0,
-            stats: ExpertCacheStats::default(),
+            stats: ExpertCacheStats {
+                diagnostics_enabled: tracing::enabled!(target: "ferrule_performance", tracing::Level::DEBUG),
+                ..Default::default()
+            },
         })
     }
 
@@ -186,8 +211,36 @@ impl<K: Ord + Clone, G: Ord + Clone> Cache<K, G> {
         while self.stats.charged_bytes() > self.limits.max_bytes - extra
             || (slot && self.entries.len() >= self.limits.max_experts)
         {
+            let entry_pressure = slot && self.entries.len() >= self.limits.max_experts;
+            let byte_pressure = self.stats.charged_bytes() > self.limits.max_bytes - extra;
             if !self.evict_one_completed(&mut evict)? {
+                if self.stats.diagnostics_enabled {
+                    increment(
+                        &mut self.stats.admission_stalls,
+                        &mut self.stats.counters_overflowed,
+                    );
+                }
                 return Err(error("budget exhausted; no completed expert to evict"));
+            }
+            if self.stats.diagnostics_enabled {
+                if entry_pressure {
+                    increment(
+                        &mut self.stats.entry_limit_evictions,
+                        &mut self.stats.counters_overflowed,
+                    );
+                }
+                if byte_pressure {
+                    increment(
+                        &mut self.stats.byte_limit_evictions,
+                        &mut self.stats.counters_overflowed,
+                    );
+                    if !slot {
+                        increment(
+                            &mut self.stats.scratch_limit_evictions,
+                            &mut self.stats.counters_overflowed,
+                        );
+                    }
+                }
             }
         }
         Ok(())
@@ -245,7 +298,10 @@ impl<K: Ord + Clone, G: Ord + Clone> Cache<K, G> {
         Self::remove_completed(&mut self.groups, &key, &entry);
         self.stats.resident_bytes -= entry.bytes;
         self.stats.resident_experts -= 1;
-        self.stats.evictions += 1;
+        increment(
+            &mut self.stats.evictions,
+            &mut self.stats.counters_overflowed,
+        );
     }
 
     fn remove_completed(
@@ -285,25 +341,16 @@ impl<K: Ord + Clone, G: Ord + Clone> Cache<K, G> {
     /// Reserve the entire expert before the first upload. Hits are also pinned.
     pub fn acquire(&mut self, key: K, bytes: usize, evict: impl FnMut(&K)) -> Result<Lease<K>> {
         self.healthy()?;
-        let epoch = self.tick()?;
-        if let Some(entry) = self.entries.get_mut(&key) {
+        // Validate identity/registration before allocating an epoch or changing
+        // diagnostics. Rejected uses cannot perturb the next valid lease.
+        let group = if let Some(entry) = self.entries.get(&key) {
             if entry.bytes != bytes || entry.state != State::Idle {
                 return Err(error("changed binding or overlapping expert use"));
             }
-            Self::remove_completed(&mut self.groups, &key, entry);
-            entry.state = State::Consuming;
-            entry.epoch = epoch;
-            self.stats.hits += 1;
+            None
         } else {
-            // Reject an intrinsically oversized operation without destroying useful entries.
-            if bytes
-                .checked_add(self.stats.scratch_bytes)
-                .is_none_or(|n| n > self.limits.max_bytes)
-            {
-                return Err(error("expert plus scratch exceeds byte limit"));
-            }
-            let group = self
-                .groups
+            self.preflight(bytes, self.stats.scratch_bytes)?;
+            self.groups
                 .as_ref()
                 .map(|groups| {
                     groups
@@ -312,7 +359,15 @@ impl<K: Ord + Clone, G: Ord + Clone> Cache<K, G> {
                         .cloned()
                         .ok_or_else(|| error("unregistered group key"))
                 })
-                .transpose()?;
+                .transpose()?
+        };
+        let epoch = self.tick()?;
+        if let Some(entry) = self.entries.get_mut(&key) {
+            Self::remove_completed(&mut self.groups, &key, entry);
+            entry.state = State::Consuming;
+            entry.epoch = epoch;
+            increment(&mut self.stats.hits, &mut self.stats.counters_overflowed);
+        } else {
             self.make_room(bytes, true, evict)?;
             self.entries.insert(
                 key.clone(),
@@ -324,6 +379,9 @@ impl<K: Ord + Clone, G: Ord + Clone> Cache<K, G> {
                 },
             );
             self.stats.pending_upload_bytes += bytes;
+            if self.stats.diagnostics_enabled {
+                increment(&mut self.stats.misses, &mut self.stats.counters_overflowed);
+            }
             self.peak();
         }
         Ok(Lease { key, epoch })
@@ -345,7 +403,7 @@ impl<K: Ord + Clone, G: Ord + Clone> Cache<K, G> {
             if installed {
                 self.stats.resident_bytes += entry.bytes;
                 self.stats.resident_experts += 1;
-                self.stats.uploads += 1;
+                increment(&mut self.stats.uploads, &mut self.stats.counters_overflowed);
             }
         } else if !installed {
             self.stats.resident_bytes -= entry.bytes;
@@ -499,3 +557,7 @@ mod w8a16_tests {
 #[cfg(test)]
 #[path = "../../../tests/unit/transformer/grouped_expert_cache.rs"]
 mod grouped_tests;
+
+#[cfg(test)]
+#[path = "../../../tests/unit/transformer/expert_cache_diagnostics.rs"]
+mod diagnostic_tests;

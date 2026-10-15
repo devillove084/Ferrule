@@ -34,11 +34,17 @@ pub(super) struct ProofTiming {
 macro_rules! counters {
     ($($field:ident),+ $(,)?) => {
         #[derive(Clone, Copy, Default)]
-        pub(super) struct CounterSnapshot { $(pub $field: u64,)+ }
+        pub(super) struct CounterSnapshot {
+            $(pub $field: u64,)+
+            pub counters_overflowed: bool,
+        }
         pub(super) struct CounterDelta { $(pub $field: Option<u64>,)+ }
         impl CounterSnapshot {
             pub fn delta(self, before: Self) -> CounterDelta {
-                CounterDelta { $($field: self.$field.checked_sub(before.$field),)+ }
+                CounterDelta {
+                    $($field: self.$field.checked_sub(before.$field)
+                        .filter(|_| !self.counters_overflowed && !before.counters_overflowed),)+
+                }
             }
         }
         impl CounterDelta {
@@ -62,6 +68,11 @@ counters!(
     expert_hits,
     expert_uploads,
     expert_evictions,
+    expert_misses,
+    expert_entry_limit_evictions,
+    expert_byte_limit_evictions,
+    expert_scratch_limit_evictions,
+    expert_admission_stalls,
     read_calls,
     read_bytes,
     source_checks,
@@ -92,6 +103,24 @@ mod tests {
         let unchanged = before.delta(before);
         assert!(unchanged.valid());
         assert_eq!(unchanged.expert_hits, Some(0));
+    }
+
+    #[test]
+    fn overflow_is_missing_even_when_both_snapshots_are_unchanged() {
+        let before = CounterSnapshot {
+            expert_hits: u64::MAX,
+            ..Default::default()
+        };
+        let after = CounterSnapshot {
+            counters_overflowed: true,
+            ..before
+        };
+        for old in [before, after] {
+            let delta = after.delta(old);
+            assert!(!delta.valid());
+            assert_eq!(delta.expert_hits, None);
+            assert_eq!(delta.expert_misses, None);
+        }
     }
 
     #[test]

@@ -81,6 +81,8 @@ impl TransformerModule for ReportingModule {
                 uploads: 1,
                 hits: 0,
                 evictions: 0,
+                counters_overflowed: false,
+                diagnostics: ResourceEvidence::Unobserved,
             }),
             numeric_workspace: ResourceEvidence::Observed(WorkspaceObservation {
                 image_generation: 47,

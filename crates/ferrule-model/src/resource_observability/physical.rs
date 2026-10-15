@@ -37,6 +37,21 @@ pub struct DefaultStateObservation {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct ExpertCacheDiagnosticsObservation {
+    pub misses: u64,
+    pub entry_limit_evictions: u64,
+    pub byte_limit_evictions: u64,
+    pub scratch_limit_evictions: u64,
+    pub admission_stalls: u64,
+    pub cold_misses: ResourceEvidence<u64>,
+    pub evicted_misses: ResourceEvidence<u64>,
+    pub evicted_selected: ResourceEvidence<u64>,
+    pub evicted_future_hint: ResourceEvidence<u64>,
+    /// No history allocation, payload retention, or completion sampling.
+    pub history_bytes: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct ExpertCacheObservation {
     pub resident_entries: usize,
     pub resident_bytes: usize,
@@ -51,6 +66,8 @@ pub struct ExpertCacheObservation {
     pub uploads: u64,
     pub hits: u64,
     pub evictions: u64,
+    pub counters_overflowed: bool,
+    pub diagnostics: ResourceEvidence<ExpertCacheDiagnosticsObservation>,
 }
 
 impl From<crate::transformer::ExpertCacheStats> for ExpertCacheObservation {
@@ -67,6 +84,25 @@ impl From<crate::transformer::ExpertCacheStats> for ExpertCacheObservation {
             uploads: s.uploads,
             hits: s.hits,
             evictions: s.evictions,
+            counters_overflowed: s.counters_overflowed,
+            diagnostics: if !s.diagnostics_enabled {
+                ResourceEvidence::Unobserved
+            } else if s.counters_overflowed {
+                ResourceEvidence::Unknown
+            } else {
+                ResourceEvidence::Observed(ExpertCacheDiagnosticsObservation {
+                    misses: s.misses,
+                    entry_limit_evictions: s.entry_limit_evictions,
+                    byte_limit_evictions: s.byte_limit_evictions,
+                    scratch_limit_evictions: s.scratch_limit_evictions,
+                    admission_stalls: s.admission_stalls,
+                    cold_misses: ResourceEvidence::Unobserved,
+                    evicted_misses: ResourceEvidence::Unobserved,
+                    evicted_selected: ResourceEvidence::Unobserved,
+                    evicted_future_hint: ResourceEvidence::Unobserved,
+                    history_bytes: 0,
+                })
+            },
         }
     }
 }
