@@ -396,11 +396,13 @@ fn run(kind: FaultKind) {
         assert_eq!(read_delta.join_failed_sequences, 0);
         assert_eq!(read_delta.unobserved_terminal_reads, 0);
         let host = module.expert_read_pipeline_observation();
-        assert_eq!(
-            host.current_charge.host_charged_bytes, 0,
-            "host worker and payloads independently retired"
-        );
-        assert!(host.current_read.is_none() && host.pending_read.is_none());
+        let read_options = module.expert_read_pipeline_options().unwrap();
+        contract::worker_contract::assert_idle_retained(&host, read_options);
+        assert_eq!(host.current_charge.host_charged_bytes, 1280 << 10);
+        assert!(host.stats.worker_reuses > 0);
+        assert_eq!(read_delta.workers_created, 0);
+        assert_eq!(read_delta.workers_joined, 0);
+        assert_eq!(read_delta.worker_reuses, read_delta.sequences_started);
         if schedule == ExpertReadSchedule::Lookahead {
             assert!(submission.reads.pending_read.is_some());
             assert!(read_delta.cancelled_reads > 0);
@@ -411,7 +413,12 @@ fn run(kind: FaultKind) {
         }
         report
             .record(json!({"record": "host_cleanup_receipt", "schedule": name,
-            "action": "existing_read_sequence_drop_shutdown_cancel_wait_take_join",
+            "action": "wait_take_release_payload_keep_worker",
+            "stage": "sequence_finished_materializer_alive",
+            "charge_basis": "logical_host_reservation_not_physical_rss",
+            "worker_lifetime": host,
+            "owner_drop_observed": false,
+            "offworker_join_observed": false,
             "submitted_delta": read_delta.submitted_reads,
             "completed_delta": read_delta.completed_reads,
             "cancelled_delta": read_delta.cancelled_reads,
@@ -592,10 +599,35 @@ fn run(kind: FaultKind) {
             "read_statistics_delta": read_delta, "faults_observed": 1,
             "committed_frontier_before": core.position(), "committed_frontier_after": states[0].core().position(),
             "committed_state_content_check": if kind == FaultKind::Clean { "GDN_and_KV_bitwise_unchanged" } else { "unobserved_post_Unknown_no_device_read_or_release_authority" },
-            "result": if kind == FaultKind::Clean { "clean_abort_transients_released_retry_succeeded" } else { "typed_Unknown_sticky_host_clean_device_custody_retained" },
+            "result": if kind == FaultKind::Clean { "clean_abort_transients_released_retry_succeeded" } else { "typed_Unknown_sticky_host_payloads_released_worker_idle_device_custody_retained" },
             "after_cleanup": after_cleanup
         });
         if kind == FaultKind::Clean {
+            let before_witness = runner
+                .forward_executor()
+                .module()
+                .expert_read_pipeline_observation();
+            contract::worker_contract::assert_idle_retained(&before_witness, read_options);
+            action(
+                &mut report,
+                "test_only_empty_sequence_checkout_capture_existing_join_witness_no_reads",
+            );
+            let witness = runner
+                .forward_executor()
+                .module()
+                .test_read_owner_release_witness();
+            let idle_before_drop = witness.snapshot();
+            contract::worker_contract::assert_idle_retained(&idle_before_drop, read_options);
+            report
+                .record(
+                    json!({"record": "host_final_owner_witness_capture", "schedule": name,
+                "physical_action": "empty_sequence_checkout_keep_same_worker",
+                "before": before_witness, "after": idle_before_drop,
+                "delta": idle_before_drop.stats.checked_delta(before_witness.stats).unwrap(),
+                "adds_sequences": 1, "adds_worker_reuses": 1, "adds_workers_created": 0,
+                "adds_submitted_reads": 0, "adds_workers_joined": 0}),
+                )
+                .unwrap();
             action(
                 &mut report,
                 "release_committed_page_and_explicit_state_then_shutdown_image",
@@ -610,8 +642,33 @@ fn run(kind: FaultKind) {
                 512,
                 "default state lives until runner Drop"
             );
+            assert_eq!(
+                witness.snapshot(),
+                idle_before_drop,
+                "shutdown is not materializer Drop"
+            );
             let ops = device.operators().clone();
+            action(
+                &mut report,
+                "drop_final_runner_materializer_owner_offworker_then_observe_existing_join_witness",
+            );
             drop(runner);
+            let host_after_drop = witness.after_owner_drop();
+            contract::worker_contract::assert_final_joined(&host_after_drop, &idle_before_drop);
+            assert_eq!(
+                witness.after_owner_drop(),
+                host_after_drop,
+                "passive witness is stable"
+            );
+            report
+                .record(
+                    json!({"record": "host_final_owner_release", "schedule": name,
+                "stage": "final_materializer_owner_dropped_worker_joined",
+                "owner_drop_observed": true, "offworker_join_observed": true,
+                "host": host_after_drop, "device_release_authority": false,
+                "charge_basis": "logical_host_reservation_not_physical_rss"}),
+                )
+                .unwrap();
             drop(device);
             action(
                 &mut report,
@@ -623,7 +680,16 @@ fn run(kind: FaultKind) {
             report.record(json!({"record": "clean_final_owner_release", "allocator_requested_baseline": allocator_baseline,
                 "allocator_requested_after_drop_trim": reclaimed, "scope": "this_fixture_owner_not_device_wide_free_memory"})).unwrap();
         } else {
+            let host_retained = runner
+                .forward_executor()
+                .module()
+                .expert_read_pipeline_observation();
+            contract::worker_contract::assert_idle_retained(&host_retained, read_options);
+            assert_eq!(host_retained.stats, host.stats);
             report.record(json!({"record": "unknown_retention", "action": "retain_runner_states_device_until_process_exit",
+                "host_stage": "payloads_released_worker_idle_retained_with_materializer",
+                "host": host_retained, "host_after_final_owner_drop": null,
+                "host_final_join_witness": null,
                 "forced_allocator_zero": false, "owner_release": "unobserved_not_authorized"})).unwrap();
             std::mem::forget(runner);
             std::mem::forget(states);

@@ -105,7 +105,69 @@ impl CudaStandardDecoderOperators {
     }
 }
 
+// This witness owns only the existing observation/handoff, not the
+// materializer or any device resource. Reading it never joins or refunds.
+pub(crate) struct ReadOwnerReleaseWitness {
+    owner: std::sync::Weak<crate::transformer::StateDictMaterializer>,
+    observation:
+        Arc<std::sync::Mutex<crate::transformer::expert_reads::ExpertReadObservationState>>,
+    handoff: crate::checkpoint::read_pipeline::ReadJoinHandoff,
+}
+impl ReadOwnerReleaseWitness {
+    fn capture(materializer: &Arc<crate::transformer::StateDictMaterializer>, image: u64) -> Self {
+        let before = materializer.expert_read_pipeline_observation();
+        assert_eq!(before.status, "idle_retained");
+        assert!(before.worker_alive && !before.worker_unknown && !before.worker_join_pending);
+        let sequence = materializer
+            .expert_read_sequence(image, &[])
+            .unwrap()
+            .unwrap();
+        let witness = ReadOwnerReleaseWitness {
+            owner: Arc::downgrade(materializer),
+            observation: sequence.stats_sink.as_ref().unwrap().clone(),
+            handoff: sequence.observation_test_handoff(),
+        };
+        drop(sequence);
+        let mut expected = before.stats;
+        expected.worker_reuses += 1;
+        expected.sequences_started += 1;
+        expected.sequences_finished += 1;
+        let after = witness.snapshot();
+        assert_eq!(after.stats, expected);
+        assert_eq!(after.current_charge, before.current_charge);
+        assert!(after.worker_alive && !after.worker_join_pending && !after.worker_unknown);
+        witness
+    }
+
+    pub(crate) fn snapshot(&self) -> ExpertReadPipelineObservation {
+        let view = self.observation.lock().unwrap().clone();
+        view.snapshot()
+    }
+
+    pub(crate) fn after_owner_drop(&self) -> ExpertReadPipelineObservation {
+        assert!(
+            self.owner.upgrade().is_none(),
+            "actual final materializer owner must be gone"
+        );
+        let worker = self.handoff.observe_worker();
+        assert!(worker.joined && !worker.alive && !worker.join_pending);
+        assert!(!worker.join_failed && !worker.poisoned && !worker.custody_unknown);
+        let budget = self.handoff.observe_budget();
+        assert!(!budget.ledger_poisoned);
+        assert_eq!(budget.budget.requested_host_reservation_bytes(), 0);
+        assert_eq!(budget.budget.reserved_slots, 0);
+        self.snapshot()
+    }
+}
+
 impl CudaHybridModule {
+    /// Explicit test action, NOT a passive sampler: obtain the existing
+    /// worker's handoff via one empty sequence. Account for its reuse and
+    /// sequence counters; it creates no worker and submits no checkpoint IO.
+    pub(crate) fn test_read_owner_release_witness(&self) -> ReadOwnerReleaseWitness {
+        ReadOwnerReleaseWitness::capture(&self.materializer, self.operators.image_generation())
+    }
+
     pub(crate) fn test_fault_owner_observation(&self) -> OwnerObservation {
         self.operators.test_owner_observation()
     }
@@ -199,5 +261,58 @@ impl CudaHybridModule {
                 ))
             },
         );
+    }
+}
+
+#[test]
+fn cpu_only_read_release_witness_requires_final_materializer_drop() {
+    use crate::transformer::ExpertReadSchedule;
+    use crate::transformer::expert_reads::tests::{Fixture, IMAGE};
+    for schedule in [ExpertReadSchedule::Blocking, ExpertReadSchedule::Lookahead] {
+        let fixture = Fixture::new(1);
+        let materializer = Arc::new(fixture.materializer(schedule));
+        for _ in 0..2 {
+            let mut sequence = materializer
+                .expert_read_sequence(IMAGE, &[&fixture.metadata[0]])
+                .unwrap()
+                .unwrap();
+            sequence.demand(0, 0).unwrap();
+            drop(sequence);
+        }
+        let witness = ReadOwnerReleaseWitness::capture(&materializer, IMAGE);
+        let idle = witness.snapshot();
+        assert_eq!(idle.status, "idle_retained");
+        assert_eq!(idle.current_charge.host_charged_bytes, 1280 << 10);
+        assert_eq!(
+            (
+                idle.stats.workers_created,
+                idle.stats.worker_reuses,
+                idle.stats.workers_joined
+            ),
+            (1, 2, 0)
+        );
+        assert_eq!(
+            idle.stats.submitted_reads, 2,
+            "empty witness checkout submits no IO"
+        );
+        let final_owner = Arc::clone(&materializer);
+        drop(materializer);
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| witness.after_owner_drop()))
+                .is_err()
+        );
+        assert_eq!(
+            witness.snapshot(),
+            idle,
+            "observer must not join a live owner's worker"
+        );
+        drop(final_owner);
+        let ended = witness.after_owner_drop();
+        assert_eq!(ended.status, "closed");
+        assert_eq!(ended.current_charge, Default::default());
+        assert_eq!(ended.stats.workers_joined, 1);
+        assert_eq!(ended.stats.workers_created, 1);
+        assert_eq!(ended.stats.worker_reuses, 2);
+        assert_eq!(witness.after_owner_drop(), ended);
     }
 }

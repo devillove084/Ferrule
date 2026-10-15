@@ -1,5 +1,9 @@
 //! Component-only evidence contracts. CPU tests exercise reporting/accounting,
 //! never produce an observed CUDA outcome.
+use super::model;
+#[path = "../support/expert_read_worker_contract.rs"]
+pub mod worker_contract;
+
 use super::model::{
     ModelFamily, WeightSource,
     decoder::GenericDecoderOptions,
@@ -16,6 +20,8 @@ use std::{collections::BTreeSet, fs::File, io::Write, path::Path};
 pub const REPORT_ENV: &str = "FERRULE_COMPONENT_FAULT_REPORT_DIR";
 pub const CACHE_BYTES: usize = 64 << 10;
 pub const HOST_BYTES: u64 = 2 << 20;
+pub const HOST_METADATA_BYTES: u64 = 256 << 10;
+pub const HOST_STACK_BYTES: usize = 1 << 20;
 pub const PRECISION: NumericFp8Precision = NumericFp8Precision::Bf16ModelMixedF32Accumulate;
 
 pub fn options(
@@ -46,8 +52,8 @@ pub fn options(
     .with_expert_read_pipeline(ExpertReadPipelineOptions {
         schedule,
         max_host_bytes: HOST_BYTES,
-        max_metadata_bytes: 256 << 10,
-        worker_stack_bytes: 256 << 10,
+        max_metadata_bytes: HOST_METADATA_BYTES,
+        worker_stack_bytes: HOST_STACK_BYTES,
     })
     .unwrap()
 }
@@ -113,7 +119,19 @@ pub fn host_ledger_valid(charge: ExpertReadHostCharge, budget: u64) -> bool {
 }
 
 pub fn header(kind: FaultKind) -> Value {
-    json!({
+    let lifecycle = json!({
+        "host_lifecycle_contract_revision": 2,
+        "host_charge_basis": "logical_host_reservation_not_physical_rss",
+        "worker_counter_scope": "full_owner_lifetime_created_reuses_joined_not_submitted_reads",
+        "host_stages": {
+            "sequence_end": "wait_take_release_payload_keep_worker",
+            "idle_payload_artifact_read_slots": 0,
+            "idle_metadata_plus_requested_stack_bytes": HOST_METADATA_BYTES + HOST_STACK_BYTES as u64,
+            "final_owner_drop": "zero_total_only_after_materializer_drop_and_observed_offworker_join",
+            "device_Unknown": "retain_device_runner_and_states; healthy_host_worker_may_remain_idle_until_owner_drop_is_proved"
+        }
+    });
+    let mut header = json!({
         "schema": "ferrule.component-pressure-fault.v1",
         "record": "header",
         "case": kind.name(),
@@ -132,8 +150,8 @@ pub fn header(kind: FaultKind) -> Value {
             "history_dtype": "BF16", "ssm_dtype": "F32", "kv_dtype": "BF16",
             "weights": "tiny_deterministic_numeric_FP8_with_BF16_scales_not_SOTA",
             "cache_entries": 1, "cache_bytes": CACHE_BYTES,
-            "host_bytes": HOST_BYTES, "host_metadata_bytes": 256 << 10,
-            "host_worker_stack_bytes": 256 << 10, "numeric_scratch_reservation": 4096,
+            "host_bytes": HOST_BYTES, "host_metadata_bytes": HOST_METADATA_BYTES,
+            "host_worker_stack_bytes": HOST_STACK_BYTES, "numeric_scratch_reservation": 4096,
             "schedules": ["blocking", "lookahead"],
             "prime_tokens": [1], "fault_continuation_tokens": [2, 3],
             "fault_boundary": "layer_1_first_routed_down_output_before_consumer_proof",
@@ -143,7 +161,12 @@ pub fn header(kind: FaultKind) -> Value {
             "timing_or_overlap_claim": false,
             "input_privacy": "checked_in_known_seed_fixture_only_no_user_prompt_or_weights_export"
         }
-    })
+    });
+    header
+        .as_object_mut()
+        .unwrap()
+        .extend(lifecycle.as_object().unwrap().clone());
+    header
 }
 
 /// Append-only, create-new JSONL. An interrupted run has no seal. Constructing
@@ -313,6 +336,85 @@ mod tests {
             },
             84
         ));
+    }
+
+    #[test]
+    fn retained_worker_stage_requires_exact_charge_and_full_owner_counts() {
+        use super::model::transformer::{ExpertReadPipelineObservation, ExpertReadPipelineStats};
+        for schedule in [ExpertReadSchedule::Blocking, ExpertReadSchedule::Lookahead] {
+            let read = ExpertReadPipelineOptions {
+                schedule,
+                max_host_bytes: HOST_BYTES,
+                max_metadata_bytes: HOST_METADATA_BYTES,
+                worker_stack_bytes: HOST_STACK_BYTES,
+            };
+            let idle = ExpertReadPipelineObservation {
+                enabled: true,
+                requested_mode: Some(schedule),
+                effective_mode: Some(schedule),
+                limits: Some(read),
+                status: "idle_retained",
+                worker_alive: true,
+                worker_read_observed: true,
+                current_charge: ExpertReadHostCharge {
+                    metadata_bytes: HOST_METADATA_BYTES,
+                    requested_stack_bytes: HOST_STACK_BYTES as u64,
+                    host_charged_bytes: 1280 << 10,
+                    ..Default::default()
+                },
+                stats: ExpertReadPipelineStats {
+                    sequences_started: 2,
+                    sequences_finished: 2,
+                    workers_created: 1,
+                    worker_reuses: 1,
+                    submitted_reads: 6,
+                    completed_reads: 6,
+                    verified_reads: 6,
+                    worker_started_reads: 6,
+                    io_started_reads: 6,
+                    proved_read_bytes: 6 * 128,
+                    peak_metadata_bytes: HOST_METADATA_BYTES,
+                    peak_requested_stack_bytes: HOST_STACK_BYTES as u64,
+                    peak_host_charged_bytes: 1280 << 10,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            worker_contract::assert_idle_retained(&idle, read);
+            for field in [
+                "zero_total",
+                "payload",
+                "slot",
+                "unknown",
+                "join",
+                "worker_per_read",
+            ] {
+                let mut bad = idle;
+                match field {
+                    "zero_total" => bad.current_charge = Default::default(),
+                    "payload" => {
+                        bad.current_charge.artifact_bytes = 1;
+                        bad.current_charge.payload_bytes = 1;
+                        bad.current_charge.host_charged_bytes += 1;
+                    }
+                    "slot" => bad.current_charge.reserved_read_slots = 1,
+                    "unknown" => bad.worker_unknown = true,
+                    "join" => bad.stats.workers_joined = 1,
+                    "worker_per_read" => bad.stats.workers_created = 6,
+                    _ => unreachable!(),
+                }
+                assert!(
+                    std::panic::catch_unwind(|| worker_contract::assert_idle_retained(&bad, read))
+                        .is_err(),
+                    "{field}"
+                );
+            }
+            assert_eq!(
+                header(FaultKind::Unknown)["host_stages"]["idle_metadata_plus_requested_stack_bytes"],
+                1280 << 10
+            );
+            assert_eq!(header(FaultKind::Unknown)["gpu_execution"], "unobserved");
+        }
     }
 
     #[test]

@@ -45,17 +45,132 @@ fn bounded(value: &ExpertReadPipelineObservation, requested: ExpertReadPipelineO
         && s.peak_metadata_bytes <= requested.max_metadata_bytes
         && s.peak_requested_stack_bytes <= requested.worker_stack_bytes as u64
         && s.peak_host_charged_bytes <= requested.max_host_bytes
+        && c.packed_bytes <= s.peak_packed_bytes
+        && c.artifact_bytes <= s.peak_artifact_bytes
+        && c.payload_bytes <= s.peak_payload_bytes
+        && c.metadata_bytes <= s.peak_metadata_bytes
+        && c.requested_stack_bytes <= s.peak_requested_stack_bytes
+        && c.host_charged_bytes <= s.peak_host_charged_bytes
+        && (s.workers_created == 0
+            || (s.peak_metadata_bytes == requested.max_metadata_bytes
+                && s.peak_requested_stack_bytes == requested.worker_stack_bytes as u64
+                && s.peak_host_charged_bytes
+                    >= requested.max_metadata_bytes + requested.worker_stack_bytes as u64))
+}
+
+// This is an endpoint contract, not a worker driver. Keep the producer's
+// statuses explicit: newly introduced statuses must not silently qualify.
+#[derive(Clone, Copy)]
+enum SettledWorkerStatus {
+    Configured,
+    IdleRetained,
+    Closed,
+}
+impl SettledWorkerStatus {
+    fn parse(status: &str) -> Result<Self, &'static str> {
+        match status {
+            "configured" => Ok(Self::Configured),
+            "idle_retained" => Ok(Self::IdleRetained),
+            "closed" => Ok(Self::Closed),
+            // The materializer getter sets worker_unknown even when every
+            // unknown-byte gauge is zero after observation-lock poisoning.
+            "unknown_observation_poisoned" => Err("observation_ledger_poisoned"),
+            // Budget, join or admission-lock poison; retained bytes may be zero.
+            "unknown_ledger_poisoned" => Err("worker_or_admission_ledger_poisoned"),
+            // Admission quarantine, lost worker custody, unknown slots/stack.
+            "quarantined" => Err("quarantined_custody"),
+            "join_pending_at_scope_end" => Err("worker_join_pending"),
+            "active" => Err("read_scope_still_active"),
+            "closed_retained" => Err("payload_custody_still_retained"),
+            "disabled" => Err("pipeline_disabled"),
+            _ => Err("unsupported_worker_status"),
+        }
+    }
+}
+
+fn worker_snapshot(value: &ExpertReadPipelineObservation) -> Result<(), &'static str> {
+    use ferrule_model::transformer::{ExpertReadHostCharge, ExpertReadPipelineStats};
+    let status = SettledWorkerStatus::parse(value.status)?;
+    // Also covers join failure / custody loss without an unknown byte or ticket.
+    if value.worker_unknown {
+        return Err("worker_unknown");
+    }
+    if value.worker_join_pending {
+        return Err("worker_join_pending");
+    }
+    let s = value.stats;
+    if s.workers_created.checked_sub(s.workers_joined) != Some(u64::from(value.worker_alive))
+        || s.workers_created.checked_add(s.worker_reuses) != Some(s.sequences_started)
+        || s.sequences_started != s.sequences_finished
+        || s.join_failed_sequences != 0
+    {
+        return Err("inconsistent_worker_lifetime");
+    }
+    if value.current_read.is_some() || value.pending_read.is_some() {
+        return Err("read_identity_still_retained");
+    }
+    if s.submitted_reads != s.completed_reads
+        || s.verified_reads
+            .checked_add(s.cancelled_reads)
+            .and_then(|n| n.checked_add(s.failed_reads))
+            != Some(s.completed_reads)
+        || s.worker_started_reads > s.submitted_reads
+        || s.io_started_reads > s.worker_started_reads
+        || s.verified_reads > s.io_started_reads
+        || value.worker_read_observed != (s.io_started_reads != 0 && s.proved_read_bytes != 0)
+    {
+        return Err("inconsistent_read_lifetime");
+    }
+    let expected_charge = match status {
+        SettledWorkerStatus::Configured => {
+            if value.effective_mode.is_some()
+                || value.last_receipt.is_some()
+                || s != ExpertReadPipelineStats::default()
+            {
+                return Err("configured_but_already_executed");
+            }
+            ExpertReadHostCharge::default()
+        }
+        SettledWorkerStatus::IdleRetained | SettledWorkerStatus::Closed => {
+            if s.workers_created == 0 || value.effective_mode != value.requested_mode {
+                return Err("missing_effective_worker_lifetime");
+            }
+            let idle = matches!(status, SettledWorkerStatus::IdleRetained);
+            if value.worker_alive != idle {
+                return Err("worker_status_liveness_mismatch");
+            }
+            if idle {
+                let limits = value.limits.ok_or("missing_worker_limits")?;
+                ExpertReadHostCharge {
+                    metadata_bytes: limits.max_metadata_bytes,
+                    requested_stack_bytes: limits.worker_stack_bytes as u64,
+                    host_charged_bytes: limits
+                        .max_metadata_bytes
+                        .checked_add(limits.worker_stack_bytes as u64)
+                        .ok_or("worker_charge_overflow")?,
+                    ..Default::default()
+                }
+            } else {
+                ExpertReadHostCharge::default()
+            }
+        }
+    };
+    if value.current_charge != expected_charge {
+        return Err("worker_stage_charge_mismatch");
+    }
+    Ok(())
 }
 
 fn unambiguous(value: &ExpertReadPipelineObservation) -> bool {
-    value.stats.unknown_reads == 0
+    !value.worker_unknown
+        && value.stats.unknown_reads == 0
         && value.stats.unknown_bytes == 0
         && value.stats.unobserved_terminal_reads == 0
         && value.stats.unobserved_reader_intervals == 0
         && value.current_charge.unknown_packed_bytes == 0
         && value.current_charge.unknown_stack_bytes == 0
         && value.current_charge.unknown_read_slots == 0
-        && value.status != "quarantined"
+        && worker_snapshot(value).is_ok()
 }
 
 fn snapshot_json(value: &PhysicalResourceObservation) -> Value {
@@ -143,6 +258,8 @@ impl ReadQualityLog {
                 "configuration_matches":value.map(|o|configuration_matches(o,requested)),
                 "within_charged_limits":value.map(|o|bounded(o,requested)),
                 "unambiguous":value.map(unambiguous),
+                "worker_snapshot_valid":value.map(|o| worker_snapshot(o).is_ok()),
+                "worker_snapshot_rejection":value.and_then(|o| worker_snapshot(o).err()),
             })
         };
         record["configuration_pair"] =
@@ -171,7 +288,11 @@ impl ReadQualityLog {
     }
 
     pub(crate) fn json(&self) -> Value {
-        json!({"schema":"ferrule.expert-read-quality-evidence.v1","interval_validation_revision":2,
+        json!({"schema":"ferrule.expert-read-quality-evidence.v1","interval_validation_revision":3,
+            "worker_snapshot_contract_revision":1,
+            "worker_snapshot_contract":"typed current producer fields required; both observed endpoints; only configured (unexecuted), idle_retained (one unjoined live worker, exact metadata plus requested stack), or closed (joined, no charge); no payloads/read slots at endpoints; created/reuses/joins are monotonic full-owner-lifetime counters, not read counts; missing endpoint evidence is null",
+            "worker_unknown_contract":"worker_unknown is independently disqualifying, including zero-byte join failure/custody loss; unknown_observation_poisoned means observation-lock poison; unknown_ledger_poisoned means budget/join/admission-lock poison; quarantined means admission quarantine, custody loss or unknown slots/stack; unsupported statuses fail closed",
+            "cold_report_finish_contract":"finishing a report is not materializer Drop; an idle worker retains logical metadata/stack, not measured physical RSS",
             "interval_validation_contract":"aggregate configuration_matches, within_charged_limits and unambiguous require both observed endpoints; configuration_pair records each endpoint; missing evidence is null; initial effective_mode may be null",
             "requested":self.requested,
             "observation_scope":observer_fields(self.diagnostic),"passed":self.passed(),
@@ -434,19 +555,8 @@ mod tests {
         for schedule in [ExpertReadSchedule::Blocking, ExpertReadSchedule::Lookahead] {
             let read = options(schedule);
             let before = sample(read);
-            let mut after = before.clone();
-            let mut observed = *before.expert_read_pipeline.value().unwrap();
-            observed.effective_mode = Some(schedule);
-            observed.worker_read_observed = true;
-            observed.stats = ExpertReadPipelineStats {
-                submitted_reads: 1,
-                completed_reads: 1,
-                verified_reads: 1,
-                io_started_reads: 1,
-                proved_read_bytes: 128,
-                ..Default::default()
-            };
-            after.expert_read_pipeline = ResourceEvidence::Observed(observed);
+            let mut after = positive_after(&before, schedule);
+            let observed = *after.expert_read_pipeline.value().unwrap();
             let mut log = ReadQualityLog::new(read, true);
             let i = log.begin("call", "prediction", before.clone());
             log.finish(i, &before, after.clone());
@@ -483,16 +593,38 @@ mod tests {
         before: &PhysicalResourceObservation,
         schedule: ExpertReadSchedule,
     ) -> PhysicalResourceObservation {
+        use ferrule_model::transformer::ExpertReadHostCharge;
         let mut after = before.clone();
+        let read = before.expert_read_pipeline.value().unwrap().limits.unwrap();
+        let idle_charge = read.max_metadata_bytes + read.worker_stack_bytes as u64;
         after.expert_read_pipeline = ResourceEvidence::Observed(ExpertReadPipelineObservation {
             effective_mode: Some(schedule),
+            status: "idle_retained",
             worker_read_observed: true,
+            worker_alive: true,
+            current_charge: ExpertReadHostCharge {
+                metadata_bytes: read.max_metadata_bytes,
+                requested_stack_bytes: read.worker_stack_bytes as u64,
+                host_charged_bytes: idle_charge,
+                ..Default::default()
+            },
             stats: ExpertReadPipelineStats {
-                submitted_reads: 1,
-                completed_reads: 1,
-                verified_reads: 1,
-                io_started_reads: 1,
-                proved_read_bytes: 128,
+                sequences_started: 2,
+                sequences_finished: 2,
+                workers_created: 1,
+                worker_reuses: 1,
+                submitted_reads: 6,
+                completed_reads: 6,
+                verified_reads: 6,
+                worker_started_reads: 6,
+                io_started_reads: 6,
+                proved_read_bytes: 6 * 128,
+                peak_metadata_bytes: read.max_metadata_bytes,
+                peak_requested_stack_bytes: read.worker_stack_bytes as u64,
+                peak_host_charged_bytes: idle_charge + 256,
+                peak_packed_bytes: 128,
+                peak_artifact_bytes: 128,
+                peak_payload_bytes: 256,
                 ..Default::default()
             },
             ..*before.expert_read_pipeline.value().unwrap()
@@ -711,7 +843,7 @@ mod tests {
             reset.expert_read_pipeline =
                 ResourceEvidence::Observed(ExpertReadPipelineObservation {
                     stats: ExpertReadPipelineStats {
-                        submitted_reads: 2,
+                        submitted_reads: 7,
                         ..Default::default()
                     },
                     ..*before.expert_read_pipeline.value().unwrap()
@@ -738,7 +870,8 @@ mod tests {
             log.finish(i, &before, after.clone());
             let report = log.json();
             assert_eq!(report["schema"], "ferrule.expert-read-quality-evidence.v1");
-            assert_eq!(report["interval_validation_revision"], 2);
+            assert_eq!(report["interval_validation_revision"], 3);
+            assert_eq!(report["worker_snapshot_contract_revision"], 1);
             assert_eq!(report["passed"], true);
             assert!(
                 report["interval_validation_contract"]
@@ -795,6 +928,383 @@ mod tests {
                 assert!(log.calls[i][field].is_null());
                 assert!(log.calls[i]["configuration_pair"]["before"][field].is_null());
                 assert_eq!(log.calls[i]["configuration_pair"]["after"][field], true);
+            }
+        }
+    }
+
+    fn record_pair(
+        log: &mut ReadQualityLog,
+        before: &PhysicalResourceObservation,
+        after: &PhysicalResourceObservation,
+    ) -> usize {
+        let i = log.begin("worker lifecycle", "snapshot", before.clone());
+        log.finish(i, before, after.clone());
+        i
+    }
+
+    #[test]
+    fn read_quality_zero_byte_observation_poison_rejects_even_after_positive_reads() {
+        for schedule in [ExpertReadSchedule::Blocking, ExpertReadSchedule::Lookahead] {
+            let read = options(schedule);
+            let configured = sample(read);
+            let idle = positive_after(&configured, schedule);
+            let mut closed = idle.clone();
+            let mut value = *idle.expert_read_pipeline.value().unwrap();
+            value.status = "closed";
+            value.worker_alive = false;
+            value.stats.workers_joined = 1;
+            value.current_charge = Default::default();
+            closed.expert_read_pipeline = ResourceEvidence::Observed(value);
+            assert!(unambiguous(&value));
+            // Exact getter mapping, not an invented unknown byte: snapshot()
+            // retains positive read counts, then the getter marks lock poison.
+            value.status = "unknown_observation_poisoned";
+            value.worker_unknown = true;
+            let mut poisoned = closed.clone();
+            poisoned.expert_read_pipeline = ResourceEvidence::Observed(value);
+            assert_eq!(value.current_charge, Default::default());
+            assert_eq!(value.stats.unknown_reads, 0);
+            assert_eq!(value.stats.unknown_bytes, 0);
+            assert!(value.worker_read_observed && value.stats.proved_read_bytes > 0);
+            for before_poisoned in [false, true] {
+                let mut log = ReadQualityLog::new(read, false);
+                record_pair(&mut log, &configured, &idle);
+                assert!(log.passed());
+                let (before, after) = if before_poisoned {
+                    (&poisoned, &closed)
+                } else {
+                    (&closed, &poisoned)
+                };
+                let i = record_pair(&mut log, before, after);
+                assert_eq!(log.calls[i]["evidence_complete"], true);
+                assert_eq!(log.calls[i]["delta"]["submitted_reads"], 0);
+                assert_eq!(log.calls[i]["unambiguous"], false);
+                let endpoint = if before_poisoned { "before" } else { "after" };
+                assert_eq!(
+                    log.calls[i]["configuration_pair"][endpoint]["worker_snapshot_rejection"],
+                    "observation_ledger_poisoned"
+                );
+                assert!(!log.passed());
+            }
+        }
+    }
+
+    #[test]
+    fn read_quality_idle_and_final_join_are_distinct_exact_charge_stages_both_budgets() {
+        for schedule in [ExpertReadSchedule::Blocking, ExpertReadSchedule::Lookahead] {
+            for read in [
+                options(schedule),
+                ExpertReadPipelineOptions {
+                    schedule,
+                    max_host_bytes: 2 << 20,
+                    max_metadata_bytes: 256 << 10,
+                    worker_stack_bytes: 1 << 20,
+                },
+            ] {
+                let configured = sample(read);
+                let idle = positive_after(&configured, schedule);
+                let value = *idle.expert_read_pipeline.value().unwrap();
+                assert_eq!(value.stats.submitted_reads, 6);
+                assert_eq!(
+                    (
+                        value.stats.workers_created,
+                        value.stats.worker_reuses,
+                        value.stats.workers_joined
+                    ),
+                    (1, 1, 0)
+                );
+                assert_eq!(
+                    value.current_charge.host_charged_bytes,
+                    if read.max_host_bytes == 2 << 20 {
+                        1280 << 10
+                    } else {
+                        10 << 20
+                    }
+                );
+                let mut log = ReadQualityLog::new(read, false);
+                record_pair(&mut log, &configured, &idle);
+                record_pair(&mut log, &idle, &idle);
+                assert!(log.passed(), "report finish does not drop its owner");
+                let mut closed = idle.clone();
+                closed.expert_read_pipeline =
+                    ResourceEvidence::Observed(ExpertReadPipelineObservation {
+                        status: "closed",
+                        worker_alive: false,
+                        current_charge: Default::default(),
+                        stats: ExpertReadPipelineStats {
+                            workers_joined: 1,
+                            ..value.stats
+                        },
+                        ..value
+                    });
+                let i = record_pair(&mut log, &idle, &closed);
+                assert_eq!(log.calls[i]["delta"]["workers_joined"], 1);
+                assert_eq!(log.calls[i]["delta"]["workers_created"], 0);
+                assert_eq!(log.calls[i]["delta"]["worker_reuses"], 0);
+                assert!(log.passed());
+                assert_eq!(
+                    log.json()["charge_basis"],
+                    "logical_host_reservation_not_physical_rss"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn read_quality_status_allowlist_and_typed_unknown_flags_fail_closed_at_both_ends() {
+        for schedule in [ExpertReadSchedule::Blocking, ExpertReadSchedule::Lookahead] {
+            let read = options(schedule);
+            let configured = sample(read);
+            let idle = positive_after(&configured, schedule);
+            for (status, unknown, pending, reason) in [
+                (
+                    "unknown_observation_poisoned",
+                    true,
+                    false,
+                    "observation_ledger_poisoned",
+                ),
+                (
+                    "unknown_ledger_poisoned",
+                    true,
+                    false,
+                    "worker_or_admission_ledger_poisoned",
+                ),
+                ("quarantined", true, false, "quarantined_custody"),
+                (
+                    "join_pending_at_scope_end",
+                    false,
+                    true,
+                    "worker_join_pending",
+                ),
+                ("active", false, false, "read_scope_still_active"),
+                (
+                    "closed_retained",
+                    false,
+                    false,
+                    "payload_custody_still_retained",
+                ),
+                ("disabled", false, false, "pipeline_disabled"),
+                ("future_status", false, false, "unsupported_worker_status"),
+                (
+                    "unknown_future_reason",
+                    false,
+                    false,
+                    "unsupported_worker_status",
+                ),
+                ("idle_retained", true, false, "worker_unknown"),
+                ("idle_retained", false, true, "worker_join_pending"),
+            ] {
+                let mut bad = idle.clone();
+                bad.expert_read_pipeline =
+                    ResourceEvidence::Observed(ExpertReadPipelineObservation {
+                        status,
+                        worker_unknown: unknown,
+                        worker_join_pending: pending,
+                        ..*idle.expert_read_pipeline.value().unwrap()
+                    });
+                for before_bad in [false, true] {
+                    let mut log = ReadQualityLog::new(read, false);
+                    record_pair(&mut log, &configured, &idle);
+                    let (before, after) = if before_bad {
+                        (&bad, &idle)
+                    } else {
+                        (&idle, &bad)
+                    };
+                    let i = record_pair(&mut log, before, after);
+                    let endpoint = if before_bad { "before" } else { "after" };
+                    assert_eq!(
+                        log.calls[i]["configuration_pair"][endpoint]["worker_snapshot_rejection"],
+                        reason
+                    );
+                    assert_eq!(log.calls[i]["unambiguous"], false);
+                    assert!(!log.passed(), "{schedule:?}/{status}/{before_bad}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn read_quality_impossible_worker_counts_and_payload_aliases_never_qualify() {
+        use ferrule_model::transformer::ExpertReadIdentity;
+        for schedule in [ExpertReadSchedule::Blocking, ExpertReadSchedule::Lookahead] {
+            let read = options(schedule);
+            let configured = sample(read);
+            let idle = positive_after(&configured, schedule);
+            for field in [
+                "created",
+                "joined",
+                "alive",
+                "reuse",
+                "finished",
+                "join_failed",
+                "payload",
+                "slot",
+                "metadata",
+                "stack",
+                "total",
+                "current",
+                "pending",
+                "configured_after_reads",
+                "closed_alive",
+                "read_started",
+                "terminal_count",
+            ] {
+                let mut value = *idle.expert_read_pipeline.value().unwrap();
+                let identity = Some(ExpertReadIdentity {
+                    image_generation: 1,
+                    layer: 0,
+                    expert: 0,
+                    operation: 1,
+                });
+                match field {
+                    "created" => value.stats.workers_created = 2,
+                    "joined" => value.stats.workers_joined = 2,
+                    "alive" => value.worker_alive = false,
+                    "reuse" => value.stats.worker_reuses = 6,
+                    "finished" => value.stats.sequences_finished = 1,
+                    "join_failed" => value.stats.join_failed_sequences = 1,
+                    "payload" => {
+                        value.current_charge.artifact_bytes = 128;
+                        value.current_charge.payload_bytes = 128;
+                        value.current_charge.host_charged_bytes += 128;
+                    }
+                    "slot" => value.current_charge.reserved_read_slots = 1,
+                    "metadata" => {
+                        value.current_charge.metadata_bytes -= 1;
+                        value.current_charge.host_charged_bytes -= 1;
+                    }
+                    "stack" => {
+                        value.current_charge.requested_stack_bytes -= 1;
+                        value.current_charge.host_charged_bytes -= 1;
+                    }
+                    "total" => value.current_charge.host_charged_bytes -= 1,
+                    "current" => value.current_read = identity,
+                    "pending" => value.pending_read = identity,
+                    "configured_after_reads" => value.status = "configured",
+                    "closed_alive" => value.status = "closed",
+                    "read_started" => value.stats.worker_started_reads = 0,
+                    "terminal_count" => value.stats.completed_reads = 5,
+                    _ => unreachable!(),
+                }
+                let mut bad = idle.clone();
+                bad.expert_read_pipeline = ResourceEvidence::Observed(value);
+                for before_bad in [false, true] {
+                    let mut log = ReadQualityLog::new(read, false);
+                    record_pair(&mut log, &configured, &idle);
+                    let (before, after) = if before_bad {
+                        (&bad, &idle)
+                    } else {
+                        (&idle, &bad)
+                    };
+                    let i = record_pair(&mut log, before, after);
+                    assert_eq!(log.calls[i]["unambiguous"], false, "{schedule:?}/{field}");
+                    assert!(!log.passed(), "{schedule:?}/{field}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn read_quality_retained_idle_budget_failures_are_checked_at_both_endpoints() {
+        for schedule in [ExpertReadSchedule::Blocking, ExpertReadSchedule::Lookahead] {
+            let read = options(schedule);
+            let configured = sample(read);
+            let idle = positive_after(&configured, schedule);
+            let payload =
+                read.max_host_bytes - read.max_metadata_bytes - read.worker_stack_bytes as u64;
+            for field in [
+                "peak_packed",
+                "peak_artifact",
+                "peak_payload",
+                "peak_metadata",
+                "peak_stack",
+                "peak_host",
+                "missing_peak_metadata",
+                "missing_peak_stack",
+                "missing_peak_host",
+            ] {
+                let mut value = *idle.expert_read_pipeline.value().unwrap();
+                match field {
+                    "peak_packed" => value.stats.peak_packed_bytes = payload / 2 + 1,
+                    "peak_artifact" => value.stats.peak_artifact_bytes = payload / 2 + 1,
+                    "peak_payload" => value.stats.peak_payload_bytes = payload + 1,
+                    "peak_metadata" => {
+                        value.stats.peak_metadata_bytes = read.max_metadata_bytes + 1
+                    }
+                    "peak_stack" => {
+                        value.stats.peak_requested_stack_bytes = read.worker_stack_bytes as u64 + 1
+                    }
+                    "peak_host" => value.stats.peak_host_charged_bytes = read.max_host_bytes + 1,
+                    "missing_peak_metadata" => value.stats.peak_metadata_bytes = 0,
+                    "missing_peak_stack" => value.stats.peak_requested_stack_bytes = 0,
+                    "missing_peak_host" => value.stats.peak_host_charged_bytes = 0,
+                    _ => unreachable!(),
+                }
+                let mut bad = idle.clone();
+                bad.expert_read_pipeline = ResourceEvidence::Observed(value);
+                for before_bad in [false, true] {
+                    let mut log = ReadQualityLog::new(read, false);
+                    record_pair(&mut log, &configured, &idle);
+                    let (before, after) = if before_bad {
+                        (&bad, &idle)
+                    } else {
+                        (&idle, &bad)
+                    };
+                    let i = record_pair(&mut log, before, after);
+                    let endpoint = if before_bad { "before" } else { "after" };
+                    assert_eq!(log.calls[i]["unambiguous"], true, "{field}");
+                    assert_eq!(
+                        log.calls[i]["configuration_pair"][endpoint]["within_charged_limits"],
+                        false
+                    );
+                    assert_eq!(log.calls[i]["within_charged_limits"], false);
+                    assert!(!log.passed());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn read_quality_worker_counter_resets_and_missing_endpoints_are_never_defaulted() {
+        for schedule in [ExpertReadSchedule::Blocking, ExpertReadSchedule::Lookahead] {
+            let read = options(schedule);
+            let configured = sample(read);
+            let idle = positive_after(&configured, schedule);
+            for counter in ["workers_created", "worker_reuses", "workers_joined"] {
+                let mut value = *idle.expert_read_pipeline.value().unwrap();
+                match counter {
+                    "workers_created" => value.stats.workers_created += 1,
+                    "worker_reuses" => value.stats.worker_reuses += 1,
+                    "workers_joined" => value.stats.workers_joined += 1,
+                    _ => unreachable!(),
+                }
+                let mut before = idle.clone();
+                before.expert_read_pipeline = ResourceEvidence::Observed(value);
+                let mut log = ReadQualityLog::new(read, false);
+                let i = record_pair(&mut log, &before, &idle);
+                assert!(log.calls[i]["delta"].is_null(), "{counter}");
+                assert!(log.calls[i]["positive_worker_read"].is_null());
+                assert!(!log.passed());
+            }
+            for missing in [ResourceEvidence::Unknown, ResourceEvidence::Unobserved] {
+                let mut absent = idle.clone();
+                absent.expert_read_pipeline = missing;
+                for before_absent in [false, true] {
+                    let mut log = ReadQualityLog::new(read, false);
+                    let (before, after) = if before_absent {
+                        (&absent, &idle)
+                    } else {
+                        (&idle, &absent)
+                    };
+                    let i = record_pair(&mut log, before, after);
+                    let endpoint = if before_absent { "before" } else { "after" };
+                    assert!(
+                        log.calls[i]["configuration_pair"][endpoint]["worker_snapshot_valid"]
+                            .is_null()
+                    );
+                    assert!(log.calls[i]["delta"].is_null());
+                    assert!(!log.passed());
+                }
             }
         }
     }

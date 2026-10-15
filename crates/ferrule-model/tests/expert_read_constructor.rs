@@ -3,6 +3,12 @@
 #[path = "hybrid_bf16/fixture.rs"]
 mod fixture;
 
+#[cfg(feature = "cuda")]
+use ferrule_model as model;
+#[cfg(feature = "cuda")]
+#[path = "support/expert_read_worker_contract.rs"]
+mod worker_contract;
+
 use ferrule_model::decoder::{GenericDecoderOptions, HybridMemoryPlan};
 use ferrule_model::execution::ExecutionPrecisionPolicy;
 use ferrule_model::transformer::{
@@ -189,7 +195,7 @@ fn normal_cuda_constructor_reaches_configured_provider_for_both_model_boundaries
         .create_new(true)
         .open(path)
         .unwrap();
-    let mut report = serde_json::json!({"schema":"ferrule.expert-read-constructor-quality.v1","complete":false,"passed":false,"expected_cells":4,"cells":[],"observer_mode":"ordinary_no_diagnostic_observer","diagnostic_trace_installed":false,"read_only_resource_snapshots":true,"gpu_overlap_claim":false,"expected_logit_rows_per_cell":1,"expected_vocabulary":32,"quality_scope":"tiny actual constructor/provider evidence and nonempty finite shape; not full-model oracle acceptance","ordinary_no_observer_claim":true,"route_checks":null,"state_oracle_checks":null});
+    let mut report = serde_json::json!({"schema":"ferrule.expert-read-constructor-quality.v1","host_lifecycle_contract_revision":2,"host_charge_basis":"logical_host_reservation_not_physical_rss","host_stage_contract":"prediction and shutdown retain one idle worker with exact metadata and requested stack; payloads and read slots are zero; only final materializer Drop plus observed off-worker join can prove zero total host charge","worker_counter_scope":"full_owner_lifetime_created_reuses_joined_not_submitted_reads","complete":false,"passed":false,"expected_cells":4,"cells":[],"observer_mode":"ordinary_no_diagnostic_observer","diagnostic_trace_installed":false,"read_only_resource_snapshots":true,"gpu_overlap_claim":false,"expected_logit_rows_per_cell":1,"expected_vocabulary":32,"quality_scope":"tiny actual constructor/provider evidence and nonempty finite shape; not full-model oracle acceptance","ordinary_no_observer_claim":true,"route_checks":null,"state_oracle_checks":null});
     persist_constructor_report(&mut report_file, &report);
     for bf16 in [false, true] {
         for schedule in [ExpertReadSchedule::Blocking, ExpertReadSchedule::Lookahead] {
@@ -319,7 +325,12 @@ fn normal_cuda_constructor_reaches_configured_provider_for_both_model_boundaries
                 stats.failed_reads + stats.cancelled_reads + stats.unknown_reads,
                 0
             );
-            assert_eq!(observed.current_charge.host_charged_bytes, 0);
+            worker_contract::assert_idle_retained(&observed, read);
+            assert_eq!(observed.stats.sequences_started, 2);
+            assert_eq!(observed.stats.worker_reuses, 1);
+            assert_eq!(observed.current_charge.host_charged_bytes, 1280 << 10);
+            report["cells"][cell_index]["host_after_prediction_stage"] =
+                serde_json::json!("payloads_released_worker_idle_retained");
             let payload_limit =
                 read.max_host_bytes - read.max_metadata_bytes - read.worker_stack_bytes as u64;
             assert!(stats.peak_packed_bytes > 0 && stats.peak_packed_bytes <= payload_limit / 2);
@@ -390,7 +401,21 @@ fn normal_cuda_constructor_reaches_configured_provider_for_both_model_boundaries
             }
             runner.try_release_sequence_state(state).unwrap();
             runner.shutdown().unwrap();
+            let shutdown_host = runner
+                .forward_executor()
+                .module()
+                .expert_read_pipeline_observation();
+            worker_contract::assert_idle_retained(&shutdown_host, read);
+            assert_eq!(shutdown_host.stats, observed.stats);
+            report["cells"][cell_index]["host_after_shutdown_before_owner_drop"] =
+                serde_json::json!(shutdown_host);
             drop(runner);
+            // This public integration API exposes copied observations only. Do
+            // not turn device-state release into a fabricated host join receipt.
+            report["cells"][cell_index]["host_after_final_owner_drop"] = serde_json::Value::Null;
+            report["cells"][cell_index]["host_final_join_witness"] = serde_json::json!(
+                "unobserved_public_constructor_api_has_no_retained_worker_witness"
+            );
             assert_eq!(device.live_state_bytes(), 0);
             assert!(!device.needs_quarantine());
             report["cells"][cell_index]["state_bytes_after_shutdown"] =
