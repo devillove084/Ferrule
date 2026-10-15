@@ -46,18 +46,19 @@ worker offload does not prove nonblocking execution. Measured
 storage/transfer/compute overlap requires correlated provider or hardware
 traces. The current opt-in blocking and next-expert lookahead schedules
 share the same worker and bounds and pass selected same-cut GPU factory
-qualification. The matched performance study and physical overlap remain
-empirical questions, not results of the numerical gates.
+qualification. The five-block study measures lower waiting and client latency
+under that shared contract; physical overlap remains unobserved. Neither
+result establishes performance leadership over other systems.
 
 \paragraph{Positioning.}
 \system{} contributes a profile-scoped contract connecting source-bound plans,
 stage-local admission, exact generations, physical custody, publication, and
 retirement. This is a protocol and measurement position, not a claim that
 prior systems lack equivalent mechanisms; their custody and failure semantics
-were not exhaustively audited here. The concrete difference remains an
-empirical question: whether a selected integrated profile can complete a
-quality-accepted workload under declared per-domain working-set limits, what
-physical traffic it causes, and whether its safety contracts survive faults.
+were not exhaustively audited here. The evaluated profile completes a
+quality-checked serving workload under declared logical limits with lower
+observed wait. Complete physical working-set attribution, backend traffic
+and integrated fault behavior remain separate empirical questions.
 Registry coverage, OS-cache hard caps, durable ACID, cross-rank atomicity,
 NCCL/device-collective defaults, multimodal integration, and performance
 leadership are not implied by the design.

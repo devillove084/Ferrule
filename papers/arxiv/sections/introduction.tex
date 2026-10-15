@@ -2,94 +2,80 @@
 \label{sec:introduction}
 
 Storage-backed weight residency lets an inference owner repeatedly
-materialize selected weights into a bounded execution cache. The immediate
-problem is to bound those copies and reuse their capacity safely, whether or
-not the complete compact checkpoint could fit in host memory. Exceeding a
-device's memory, exceeding aggregate physical residency, and choosing a
-controlled cache budget are different conditions. A checkpoint's file size,
-an expanded tensor's size, and a request's working set are not interchangeable.
-The working set also includes activations, model state, staging, outstanding
-transfers, allocator/driver reserves, metadata, and resident file-backed pages.
+materialize selected weights into a bounded execution cache. The problem is
+to bound those copies and reuse their capacity safely, whether or not the
+complete compact checkpoint could fit in host memory. Exceeding device
+memory, exceeding aggregate physical residency, and choosing a controlled
+cache budget are different conditions. Checkpoint file size, expanded weight
+size and the request working set are not interchangeable: the latter also
+includes activations, model state, staging, outstanding transfers,
+allocator/driver reserves, metadata and resident file-backed pages.
 
-\system{} studies bounded storage-backed residency through
-\emph{plan, admit, materialize, publish, execute, retire}. A source-bound plan
-fixes what is read; admission bounds covered claims; completion validates the
-requested generation; custody prevents premature reuse. Its concrete
-next-expert pipeline separates the read window from owner compute submission.
-A safe blocking control waits on the same worker immediately, whereas
-lookahead submits the next selected read after current upload and before
-current compute submission. The whole forward remains synchronous. These
-contracts make scheduling and resource reuse testable; they do not themselves
-prove storage necessity, hardware overlap, model quality, or a speedup.
+\system{} follows \emph{plan, admit, materialize, publish, execute, retire}.
+A source-bound plan fixes what is read; admission bounds covered claims;
+completion validates the requested generation; custody prevents reuse while
+physical references remain. Its concrete next-expert pipeline separates the
+read window from owner compute submission. A safe blocking control waits on
+the same worker immediately; lookahead submits one next selected read after
+current upload and before current compute submission. The whole forward
+remains synchronous. The question is whether this bounded scheduling change
+reduces waiting while preserving quality, logical work and resource limits,
+not whether a worker thread alone establishes hardware overlap.
 
 \paragraph{Research questions.}
-We organize the paper around four questions, each with a concrete observable:
 \begin{description}
-  \item[RQ1 -- capacity.] Can a complete, quality-accepted request finish
-  with bounded repeated materialization while the measured working set stays
-  within declared per-domain limits? A successful configured-budget run is
-  not, by itself, evidence that the model exceeds physical memory.
-  \item[RQ2 -- request I/O.] What request-time demand is visible at the
-  logical-reader and NFS-client levels, and what attribution or backing-store
-  traffic remains unknown after separating startup and cache effects?
-  \item[RQ3 -- safe scheduling.] Under the same representation, quality
-  contract, and budgets, what differs between the implemented safe blocking
-  and bounded lookahead schedules in demand waiting, speculative work, and
-  correlated read/transfer/kernel activity?
-  \item[RQ4 -- custody and failure.] Do exact identities, credits, and
-  custody prevent stale publication and premature reuse, while retaining
-  capacity when completion is Unknown and releasing it only after evidence of
-  quiescence?
+  \item[RQ1 -- bounded completion.] Can a quality-accepted request finish
+  with repeated materialization under declared accounting limits, and what
+  physical memory is actually observed? A configured-budget point is not a
+  capacity frontier or evidence that compact weights exceed physical memory.
+  \item[RQ2 -- request I/O.] What demand is visible at the logical-reader
+  and NFS-client levels after separating startup and request windows, and
+  which attribution and backing-store quantities remain unknown?
+  \item[RQ3 -- safe scheduling.] Under identical representation, quality,
+  safety and budgets, how do blocking and bounded lookahead differ in host
+  demand wait, speculative work and client outcomes? Correlated device overlap
+  is a separate measurement question.
+  \item[RQ4 -- custody and failure.] What closure is observed, and which
+  fault cases still need to test stale publication, premature reuse and
+  retained Unknown capacity?
 \end{description}
 
-\paragraph{Contributions and boundaries.}
-This manuscript makes four scoped contributions:
-\begin{enumerate}
-  \item a resource model that separates disjoint physical domains, configured
-  accounting domains, representations, and the measured time-varying working
-  set;
-  \item a normal-path contract that connects source-bound planning and
-  stage-local admission to generation-qualified completion, publication, and
-  retirement;
-  \item structured success/terminal-custody algorithms and an implemented
-  bounded next-expert schedule with an identical-budget blocking control; and
-  \item an evidence-oriented evaluation layout that ties each RQ to tables,
-  traces, memory peaks, and plots rather than promoting design intent to a
-  result.
-\end{enumerate}
+\paragraph{Contributions and results.}
+The paper contributes a resource model separating physical pools from
+accounting domains; a source-bound materialization contract with exact
+completion and custody; and structured normal, terminal and bounded-lookahead
+algorithms with explicit integration limits. Its evaluation connects these
+contracts to a completed, source-pinned serving experiment rather than to
+implementation intent alone.
 
-The historical serving evidence is deliberately narrow. TP1 attempt
-\texttt{-02} is one DEBUG-instrumented exploratory run ($n=1$): four HTTP
-requests completed, the three limited visible-text/eight-output-token-usage
-canaries passed, and Hello2 passed HTTP and usage checks only. It records
-30 decoder invocations and 36,240,064,128 logical checkpoint-reader bytes;
-these are logical bytes, not physical NAS/network or block-device reads.
-Generated IDs, full numerical quality, process-owned GPU attribution, and a
-complete resource contract are absent or unknown. Attempt \texttt{-01} failed
-before server launch and supplied no request or read result. Consequently,
-TP1 does not establish RQ1 capacity, storage necessity, RQ3 scheduling, or
-RQ4 custody closure.
+On the current serving source cut, nine exact-once factory gates pass for
+constructor/provider and both schedules' full40, retained-fresh, ordinary
+and cold-owner paths. A separate preregistered HTTP study then completes
+five paired blocks, ten fresh lifecycles and all 120 requests, including
+50 measured QA requests. It joins 900 actual worker token IDs to HTTP
+terminal evidence, keeping eight-token oracle checks and two-token smoke
+checks distinct. Every lifecycle records the same logical work, zero wasted
+read bytes and a logical host high-water below its 64 MiB limit. With the
+paired block as the analysis unit, lookahead has 8.18\% lower client E2E,
+11.24\% lower TTFT and 10.91\% higher qualified serial-window goodput.
+All five blocks show lower host demand waiting. These descriptive results
+support bounded residency with measured wait reduction at this point, not
+statistical coverage, general server throughput or a causal overlap claim.
 
-Separate TP2 receipts include numerical/lifecycle observations for a test
-binary and descriptive resident comparisons. They are not interchangeable
-with TP1: the TP2 test binary is not a public serving binary, the arithmetic
-and topology contracts are profile-specific, and the two resident comparison
-blocks are not a fair speedup proof. In particular, the vLLM supplement is
-not evidence of storage necessity or a matched total working-set budget. Both opt-in schedules now have same-cut real-GPU factory qualification:
-nine exact-once gates pass on \texttt{033519c}. This closes their selected
-numerical/provider gate, not CLI/HTTP, a capacity frontier, paired performance,
-or physical release. Historical failures and wrapper outcomes remain separate
-(Appendix~\ref{sec:historical-chronology}); no old PASS is borrowed. Multimodal, unified-memory, universal-registry, ACID, and default
-NCCL/device-collective claims are outside the demonstrated evidence. Storage
-inference and prefetch are prior art; no first-system or state-of-the-art
-performance claim is made.
+The evidence has deliberate boundaries. Device samples are not certified
+physical peaks; shared NFS counters are not NAS backend traffic; process
+drain and known owner-local closure are not post-drop physical release.
+Integrated fault injection remains pending. Earlier qualification cuts,
+two stopped studies and four historical DEBUG plots are retained separately,
+not borrowed as successful repetitions. The resident vLLM supplement has
+unmatched arithmetic and total budgets and is not a SOTA comparison.
+Storage inference and prefetch are prior art; no first-system, physical-memory
+necessity, universal registry, multimodal or nonblocking-forward claim is made.
 
-The rest of the paper follows the execution argument. Section~\ref{sec:scope}
-defines representations, physical and accounting domains, quality, and
-failure contracts. Sections~\ref{sec:normal-profile}, \ref{sec:invariants},
-and~\ref{sec:algorithms} follow a normal profile, state its invariants, and
-give structured algorithms. Section~\ref{sec:implementation}
-identifies the code paths and their limits. Section~\ref{sec:evaluation}
-starts with the frozen setup and then reports RQ1--RQ4 in order. Sections~\ref{sec:related}, \ref{sec:limitations}, and~\ref{sec:conclusion}
-place the design in prior work, collect the remaining evidence gates, and
-conclude.
+Section~\ref{sec:scope} defines the resource and execution contracts.
+Sections~\ref{sec:normal-profile}--\ref{sec:algorithms} give the normal path,
+invariants and algorithms; Section~\ref{sec:implementation} maps their
+implementation boundaries. Section~\ref{sec:evaluation} proceeds from current
+factory quality to serving quality/budgets, equal work/I/O, paired outcomes
+and fault-contract limits. Related work and limitations follow, with
+historical evidence in Appendix~\ref{sec:historical-chronology}.

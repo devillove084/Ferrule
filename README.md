@@ -191,6 +191,18 @@ Local checkpoint tests are intentionally separate from small hermetic tests.
 See [Computation](docs/COMPUTATION.md) for numerical boundary tests and their
 limits.
 
+## Bounded-residency study
+
+The [working manuscript](papers/arxiv/README.md) reports a source-pinned
+Qwen3.5-35B-A3B paired read-scheduling study: five blocks, ten fresh server
+lifecycles and 120/120 successful HTTP requests. Under identical logical
+budgets and observed reader work, lookahead shows lower host demand waiting,
+8.18% lower paired client E2E and 11.24% lower TTFT. These are descriptive
+five-block results, not GPU-overlap proof, a physical-memory capacity frontier,
+production acceptance or a SOTA comparison. The
+[portable results](papers/arxiv/experiments/storage_demand/paired_read_v1/publication_results_v1/README.md)
+can be checked offline without a GPU or model; historical failures remain separate.
+
 ## Documentation
 
 | Document | Purpose |
@@ -200,6 +212,7 @@ limits.
 | [Architecture](docs/ARCHITECTURE.md) | Runtime ownership, transactions, materialization, scheduling, providers, serving, and cleanup |
 | [Computation](docs/COMPUTATION.md) | DeepSeek-V4 numerical precision, indexing, quantization, and parity contracts |
 | [Throughput](docs/THROUGHPUT.md) | Metric definitions, rooflines, I/O budgets, overlap, and reproducibility |
+| [Bounded-residency manuscript](papers/arxiv/README.md) | Current paired scheduling results, portable evidence, historical failures, and claim limits |
 | [Roadmap](docs/ROADMAP.md) | Unfinished work only |
 | [Automation maintenance](scripts/automation_maintenance.md) | Retired recipes, current chat arguments, GPU test membership and pinned-job workflows |
 

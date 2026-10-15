@@ -18,14 +18,14 @@
 \newcommand{\draftnote}[1]{\par\smallskip\noindent\textcolor{red!60!black}{\textbf{Draft note:} #1}\par\smallskip}
 \renewcommand{\algorithmicrequire}{\textbf{Inputs:}}
 \renewcommand{\algorithmicensure}{\textbf{Outputs:}}
-% These four experiment PDFs are generated paper assets and are included
-% directly; no missing-asset fallback is part of the final manuscript.
+% Generated experiment PDFs are included directly, with historical plots
+% kept in the appendix rather than substituted for current measurements.
 \newcommand{\paperplot}[3]{%
-  \begin{figure*}[t]
+  \begin{figure}[!htbp]
     \centering
     \includegraphics[width=\textwidth]{#1}
     \caption{#2}\label{#3}
-  \end{figure*}%
+  \end{figure}%
 }
 
 \title{Ferrule: Bounded Storage-Backed Weight Residency}
@@ -38,25 +38,24 @@
 \begin{abstract}
 Storage-backed inference needs bounded materialization and safe reuse, not
 merely a small device cache. \system{} connects source-bound plans,
-stage-local admission, exact completion identities, and physical custody to
-bounded weight residency. Its next-expert pipeline and safe blocking control
-use one positioned-read worker, a depth-one queue, identical host/device
-limits, and the existing synchronous forward. Lookahead moves the next
-selected read ahead of current compute submission; GPU overlap requires
-correlated kernel activity, not host spans. Nine exact-once GPU qualification
-gates pass on one frozen source cut, covering constructor/provider cells and
-both schedules' full40, retained-fresh, ordinary and cold-owner factory paths.
-Each full40 gate compares 1,986,560 vocabulary values; each ordinary run
-matches all 64 actual output fingerprints of its same-schedule diagnostic
-primary, without observing routes or states. Observed logical host charge and
-allocator-accounting high-water remain within the declared limits, not
-certified physical peaks or release proofs. Separately, one historical DEBUG
-run records four HTTP successes, three limited canaries and 36,240,064,128
-logical reader bytes; it is not current CLI quality or scheduling evidence.
-We separate factory qualification, bounded accounting, I/O observability and
-physical custody. Capacity-frontier, CLI/HTTP, paired performance and GPU
-overlap qualification remain open; physical-memory necessity, nonblocking
-forward and performance leadership are not claimed.
+stage-local admission, exact completion identities and physical custody to
+bounded weight residency. Its next-expert lookahead and safe blocking control
+use the same positioned-read worker, host/device budgets and synchronous
+forward. After nine source-qualified factory gates, a preregistered study of
+Qwen3.5-35B-A3B completes five paired blocks, ten fresh server lifecycles and
+120/120 HTTP requests. Worker-to-HTTP joins cover all 900 generated token IDs;
+110 requests match exact eight-token oracles and ten are two-token smoke
+checks. Every lifecycle records identical logical reader work, zero wasted
+read bytes and a 16,777,984-byte logical host high-water below 64 MiB.
+Device-wide samples reach 4,125 MiB against a 7 GiB policy, not a certified
+physical peak. The exponentiated median paired log ratio gives 8.18\% lower
+client E2E, 11.24\% lower TTFT and 10.91\% higher qualified serial-window
+goodput with lookahead; all five blocks show less host demand waiting.
+These are descriptive results from five blocks, not significance or
+state-of-the-art claims. Shared NFS-client counters do not establish NAS
+backend traffic, and host waits do not prove GPU overlap. Capacity frontiers,
+integrated fault testing and post-drop physical release remain open;
+physical-memory necessity and nonblocking execution are not claimed.
 \end{abstract}
 
 \input{sections/introduction}
@@ -66,6 +65,7 @@ forward and performance leadership are not claimed.
 % The final bounded-scheduling algorithm is placed inline before implementation.
 \input{sections/implementation}
 \input{sections/evaluation}
+\clearpage
 \input{sections/related-work}
 % conclusion.tex separates limitations from the conclusion.
 \input{sections/conclusion}

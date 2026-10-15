@@ -94,9 +94,9 @@ maximum can miss a transient peak; selected-device telemetry also includes
 unattributed processes, and tree PSS does not cover every machine consumer.
 Thus those proxies are not silently identified with $M_d(t)$. Independent
 component maxima must not be added into a simultaneous working-set peak.
-RQ1 uses Table~\ref{tab:tp1-memory}; the storage-demand figures in
-Section~\ref{sec:rq2} diagnose cache and transfer counters without turning
-sample maxima into certified physical bounds.
+RQ1 and Figure~\ref{f:paired-accounting} report the current logical
+host high-water and device samples separately; neither converts accounting
+or sample maxima into certified physical bounds.
 
 The stronger, optional storage-necessity claim additionally asks whether
 \emph{all compact weights and metadata} can remain resident with online

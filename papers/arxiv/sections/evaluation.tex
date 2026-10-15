@@ -1,149 +1,29 @@
-\section{Evaluation: Setup and Four Research Questions}
+\section{Evaluation: Qualified Bounded Residency and Paired Scheduling}
 \label{sec:evaluation}
 \label{sec:core-rqs}
-
-We report an exploratory historical TP1 logical-demand observation,
-current same-cut GPU factory qualification, and separate TP2 numerical and
-resident-serving records. The nine current gates are a numerical/provider
-qualification, not paired performance, CLI/HTTP, or physical release. We do not combine profiles to create
-a quality, capacity, or performance result. E0 (RQ1), E3 (RQ2), the safe
-blocking/async part of E1/E4 (RQ3), and integrated E5 (RQ4) retain their
-historical experiment identifiers. Broad serving sweeps (E2), further
-ablations (E4), and protocol overhead (E6) remain secondary evidence plans.
-
-\subsection{Setup, controls, and evidence units}
 \label{sec:eval-setup}
-Historical TP1 middle \texttt{-02} uses Qwen3.5-35B-A3B-FP8. Its single
-thread-owned CUDA runner has PP1, TP1 and EP1, the resident engine, lazy
-experts and resident KV,
-context 128, batch-token limit 8, active-sequence limit 2, and prefill chunks
-of 8. Its Mixed arithmetic uses BF16 activation/KV/convolution with F32
-accumulation/SSM; the FP8 checkpoint is not a complete arithmetic contract.
-The sealed binary is \texttt{36e6aaa5\ldots70a58c}. Table~\ref{tab:tp1-config}
-reports configured limits, not physical partitions.
 
-\begin{table}[tbp]
-\centering
-\small
-\begin{tabularx}{\linewidth}{@{}lX@{}}
-\toprule
-Configured field & Value / scope \\
-\midrule
-Device admission / workspace & 7,168 / 2,048 MiB; not a measured total working-set cap \\
-Expert cache / scratch & 64 entries; $b_{\mathrm{cache}}=335{,}544{,}320$ bytes (320 MiB, shared cache-accounting ceiling for resident, pending, and scratch); separate $b_{\mathrm{scratch}}=8$ MiB \\
-KV / maximum tensor & 16 / 1,024 MiB; distinct covered limits \\
-Host expert retention & Zero; not zero OS page-cache residency \\
-Request queue / inflight & 2 / 2; actual workload concurrency 1 \\
-Physical host limit / caches & Host cap unknown; page cache uncontrolled, not storage-cold \\
-Logging / generation & \texttt{ferrule\_performance=DEBUG}; temperature 0, seed 1 \\
-\bottomrule
-\end{tabularx}
-\caption{TP1 middle configuration. Values from the frozen case manifest;
-heterogeneous or overlapping limits cannot be added as physical memory.}
-\label{tab:tp1-config}
-\end{table}
+The primary evidence is the completed \texttt{mapfixed-20261015-01} study:
+five preregistered paired blocks, ten fresh server lifecycles and 120 serial
+HTTP requests. Both arms execute the same CLI, SHA-256
+\texttt{7cc8e0ff\ldots e607a01}, built from \texttt{86c58a0} (1,484 archived
+source members). Only \texttt{--expert-read-schedule} changes. We first
+establish factory and serving quality, then bounded accounting and equal
+logical work, before interpreting latency and waiting. Historical failures,
+the earlier disabled-pipeline plots and unmatched resident comparisons remain
+separate in Appendix~\ref{sec:historical-chronology}.
 
-The historical tables and all four data figures below retain this frozen
-\texttt{-02} identity. They use DEBUG invocation counters from the disabled read-pipeline path,
-not enabled-pipeline statistics. The current scheduling configuration adds
-the separate 64 MiB host ceiling in Section~\ref{sec:implemented-read-path};
-its implementation is not new execution data and does not update these plots.
-
-Here $b_{\mathrm{cache}}$ is a configured cache-accounting ceiling, not a
-physical-memory bound. The plot field \texttt{cache.peak\_bytes} (raw receipt
-key \texttt{expert\_owner\_peak\_bytes}) reports the lifetime high-water of
-cache-charged bytes: resident plus pending-upload reservations plus scratch. That charged peak is governed by
-the 320 MiB configured cache ceiling. It is not a complete physical-owner
-memory peak or an independent measurement of allocator retirement; a total
-physical-owner ceiling remains unknown. The configured cache flag includes
-scratch according to the sealed startup plan, while $b_{\mathrm{scratch}}$
-is a separate component limit. A shared cache byte ceiling constrains resident, pending,
-and scratch charge; it is not a separate resident-only budget.
-
-\paragraph{Attempt and request accounting.}
-The initial CPU-prepared entry was unexecuted after its final validation was
-canceled. Authorized attempt \texttt{-01} then failed before server launch
-with a harness \texttt{AttributeError} for missing \texttt{subprocess.DEVNULL}:
-planned 4, dispatched 0, not-run 4. No model/OOM, read, request-latency, or
-quality result was obtained. Authenticated drain/post-idle checks passed,
-while physical I/O and the resource contract remained unknown and GPU
-quiescence unverified. This attempt is retained, not pooled with \texttt{-02}.
-
-Attempt \texttt{-02} dispatched four serialized requests: Hello2 and the QA,
-arithmetic, and Chinese canaries. All four reached successful HTTP termination;
-failed and not-run counts were zero. They returned 26 usage output tokens in
-30 decoder invocations. Hello2 has no reference and passed HTTP/usage only.
-The other three passed their frozen visible-text/eight-output-token-usage
-checks (3/3); QA is one canary, not an extended QA workload. Generated IDs,
-logits, routes, and full current-model quality were not observed. This is one
-independent DEBUG-instrumented run ($n=1$); observer/logging overhead was not
-measured. Its request timings are exploration, not a fast baseline or
-steady-state comparison.
-
-TTFT is send-to-first-nonempty SSE content and E2E is send-to-EOF. SSE events
-and usage are not exact token timestamps; no exact-token TPOT is reported.
-Named request/time/log-byte anchors attribute serialized invocation deltas;
-a transaction ID is not a request ID. Memory samples, logical counters,
-physical traffic, and owner-ledger occupancy are distinct measurement units.
-Freeze snapshot/dirty manifest, binary, model/tokenizer, workload, state
-precision, backend, storage, topology, caches, and interval boundaries for
-any future comparison. Offered/accepted/completed/failed/rejected/canceled/
-timeout counts must remain in the denominator record.
-
-\subsection{RQ1: Factory quality qualified; capacity frontier open}
+\subsection{RQ1: Factory qualification and a serving budget point}
 \label{sec:rq1}
-Equations~\ref{eq:physical-capacity} and~\ref{eq:full-residency} define
-deduplicated physical capacity and the full-residency test for a declared
-complete weight representation;
-Equation~\ref{eq:working-set} asks whether the actual streaming working set
-fits each domain. The configured limits in Table~\ref{tab:tp1-config} answer
-neither question alone. Table~\ref{tab:tp1-memory} reports the available memory proxies without
-promoting them to continuously measured $M_d^{\mathrm{peak}}$. The
-storage-demand cache figure in RQ2 is a counter/gauge reconciliation, not a
-physical-working-set certification.
-
-\begin{table}[tbp]
-\centering
-\small
-\begin{tabularx}{\linewidth}{@{}Xrl@{}}
-\toprule
-Observable & Reported value & Scope \\
-\midrule
-Selected GPU0 sampled maximum & 4,125 MiB & 32 GPU samples \\
-Server-tree PSS sampled maximum & 7,610.864 MiB & 32 complete host samples \\
-Server-tree RSS sampled maximum & 7,613.770 MiB & Same sample population \\
-Expert resident entries / bytes & 64 / 201,351,168 & Last invocation gauge \\
-Scratch bytes & 8,388,608 & Last invocation gauge \\
-Cache charged-byte high-water & 219,754,496 & Lifetime accounting gauge \\
-Pending-upload / quarantine bytes & 0 / 0 & Invocation gauges only \\
-\bottomrule
-\end{tabularx}
-\caption{TP1 \texttt{-02} sampled memory and cache-accounting gauges.
-Sampled memory maxima are independent, not additive or certified physical
-peaks. Cache charged-byte high-water covers resident, pending, and scratch;
-its ceiling is 320 MiB, not a physical-owner bound or final ledger proof.
-GPU values are selected-device aggregate telemetry, not process attribution.}
-\label{tab:tp1-memory}
-\end{table}
-
-Host capacity, attributable page-cache residency, continuous peaks, and
-process-owned GPU occupancy remain unknown. The OS cache was uncontrolled;
-zero host expert retention does not imply zero file residency. Complete
-compact weights plus scales/metadata have not been ruled out as a feasible
-resident alternative. Nor do four successful HTTP responses constitute the
-independent complete-output quality gate. Therefore RQ1 is open: quality-qualified configured-budget feasibility
-is not established by this TP1 record. Physical-memory insufficiency and
-storage necessity are stronger, optional claims and are not established either.
-
-\paragraph{Current enabled-pipeline factory qualification.}
 \label{sec:current-quality}
-The receipt records \textbf{9/9 exact-once GPU gates PASS} on
-\texttt{033519c}, with 1,484 frozen source members. Constructor and
-composition use the same cut, not pooled historical passes. Both schedules
-retain Table~\ref{tab:tp1-config}'s composition limits and
-Section~\ref{sec:implemented-read-path}'s 64/8/2 MiB host/metadata/stack
-contract. Table~\ref{tab:enabled-quality} closes RQ1's selected factory
-numerical subgate, not the capacity frontier or full physical working set.
+\paragraph{Current factory qualification.}
+All nine exact-once GPU gates pass on the serving source cut \texttt{86c58a0}:
+one constructor gate and four composition gates per schedule
+(Table~\ref{tab:enabled-quality}). The earlier nine-gate qualification on
+\texttt{033519c} is a separate archived cut, not another nine repetitions of
+this experiment. Constructor, composition and CLI are distinct executables;
+common provenance does not establish mathematical executable equivalence.
+The HTTP observations below supply the serving evidence instead.
 
 \begin{table}[tbp]
 \centering
@@ -152,160 +32,97 @@ numerical subgate, not the capacity frontier or full physical working set.
 \toprule
 Phase & Gates & Metrics/gate & Vocab values/gate & Additional evidence \\
 \midrule
-Full40 & 2 & 804 & 1,986,560 & 2,560 ordered route IDs per schedule; diagnostic state checks \\
-Retained fresh & 2 & 5,427 & 9,187,840 & 64 actual fingerprints per schedule; diagnostic routes/states \\
-Ordinary & 2 & 27 & 9,187,840 & All 64 fingerprints match own-schedule fresh primary; routes/states unobserved \\
-Cold owner & 2 & 1,809 & 3,228,160 & All 28 fingerprints match own current fresh primary \\
-Constructor & 1 & --- & 128 total & Four boundary/schedule cells; 32 finite vocabulary values and six verified reads each \\
+Full40 & 2 & 804 & 1,986,560 & Prefill and first decode; diagnostic routes/states \\
+Retained fresh & 2 & 5,427 & 9,187,840 & 64 fingerprints per schedule across four streams \\
+Ordinary & 2 & 27 & 9,187,840 & All 64 match own-schedule diagnostic primary; routes/states unobserved \\
+Cold owner & 2 & 1,809 & 3,228,160 & All 28 match own current primary/config/oracle \\
+Constructor & 1 & --- & 128 total & Four boundary/schedule cells; 32 finite values and six verified reads each \\
 \bottomrule
 \end{tabularx}
-\caption{All nine current factory gates pass once. Each two-gate row has
-one gate per schedule, not performance repetitions. Fresh/ordinary/cold
-vocab counts are common-history only; constructor is tiny provider evidence.
-Profile-specific metric counts are not summed.}
+\caption{Current \texttt{86c58a0} factory qualification, not performance
+repetitions. Two-gate rows contain one gate per schedule. Fresh/ordinary/cold
+vocabulary counts are common-history only; constructor is tiny-provider evidence.
+The older \texttt{033519c} archive is not pooled into these denominators.}
 \label{tab:enabled-quality}
 \end{table}
 
-The tolerance remains $0.00025+0.012|\mathrm{reference}|$, with exact ordered
-route/greedy-ID checks where observed, not universal bit-exactness. Ordinary
-runs have no diagnostic route/state observer: those fields remain null, not
-zero or inferred observations. Their actual logit-word/shape/greedy
-fingerprints match the pinned diagnostic primary of the \emph{same schedule}.
-All 28 cold fingerprints match that schedule's current primary, with the
-same config/oracle, unlike the old source mismatch in
-Appendix~\ref{sec:historical-chronology}.
-The main metric counts do not mix ordinary output checks with diagnostic
-state/route metrics.
+Acceptance uses $0.00025+0.012|\mathrm{reference}|$, with exact IDs where
+observed, not universal bit-exactness. For each fresh/ordinary schedule,
+common history and free feedback each cover 27 calls/9,187,840 vocabulary
+values; reset covers 9/3,228,160 and fork 1/248,320. For each cold schedule,
+common history, feedback and reset each cover 9/3,228,160; fork covers
+1/248,320. Fingerprints are not additional logit values, and diagnostic
+route/state metrics are not added to ordinary output metrics. Ordinary
+route/state fields remain unobserved/null. Fork scope is same-history
+committed-frontier replay, not divergent KV copy-on-write or broad task quality.
 
-\paragraph{Separate prediction-stream denominators.}
-For each schedule's fresh and ordinary runs, common history and free feedback
-\emph{each} have 27 calls/9,187,840 vocabulary values; reset has
-9/3,228,160 and fork replay 1/248,320. For each cold run, common history,
-free feedback and reset \emph{each} have 9/3,228,160, and fork has 1/248,320.
-The 64 or 28 fingerprints cover these named streams, not additional logits.
-These denominators are kept separate across stream, observer mode and
-schedule; common-history values are not counted repeatedly as one larger
-independent-quality result. Fork scope is same-history committed-frontier
-replay, not divergent KV copy-on-write or broad task-quality evidence.
-
-\paragraph{Real worker and bounded-accounting observations.}
-Each schedule records 2,089 verified reads in full40, 25,116 in each
-fresh/ordinary run, and 11,354 in cold; constructor records six per cell.
-These are last-sampled owner-lifetime verified reads, not additive invocation
-deltas, sampled ticket counts, physical NAS bytes or throughput observations. The reported logical host high-water is
-16,777,984 bytes, with $P_{\max}=3,146,112$ bytes:
-\begin{equation}
-  2(3{,}146{,}112)+8{,}388{,}608+2{,}097{,}152
-   =16{,}777{,}984\leq67{,}108{,}864.
-  \label{eq:qualified-host-charge}
-\end{equation}
-This is alias-aware logical charge under
-Equations~\ref{eq:host-read-bound} and~\ref{eq:host-logical-charge}, not RSS.
-Separately, allocator reserved-byte high-water is 4,106,223,616 bytes,
-below the 7 GiB policy. Its getter can poll fences/release blocks; immutable
-snapshots leave allocator unobserved. These qualified point observations
-certify neither continuous total physical peaks, cost-free observation,
-physical release, a capacity frontier nor a statistical guarantee.
-
-Actual PID/birth mappings record CUDA 12.4.99 with SM86 compiled code and
-NVTX compiled but profiling OFF (\texttt{FERRULE\_PROFILE\_NVTX=0}). All
-nine gates ran once with no probes, warmups, retries or captures. Natural
-exit/authenticated \texttt{ECHILD}, absent owners, all-eight stable-idle v2,
-final three zero-memory/zero-utilization/no-app samples and released/reprobed
-local UUID locks close process supervision, not CUDA physical release.
-Distinct CLI/constructor/composition executables with common source/native/
-runtime provenance are not mathematical CLI/HTTP or machine-identity
-equivalence. No paired timing, NFS or GPU-overlap result is inferred.
-
-The portable receipt archive, committed at \texttt{17b16fa}, is relative to
-\path{papers/arxiv}:
-\begin{quote}
-\small\path{experiments/storage_demand/qualification_v1/}
-\end{quote}
-The archive has 249 files (5.38 MiB), including 240 manifest-bound records
-(5,343,269 stored bytes). Its offline checker and 37 tests pass without GPU,
-model, network or original local paths.
-Executables, weights and full source payloads remain external hash-pinned
-inputs, not archived or rechecked by that checker. Curation is not another
-run. Appendix~\ref{sec:historical-chronology} preserves prior failures.
-
-\paragraph{Separate TP2 numerical evidence.}
-The \texttt{native-whole-capture-full40-02} comparator reports 2,178 exact
-fields for each of Hello and Capital, covering prefill and first decode;
-max absolute error, RMSE, and field failures are zero, with matching greedy
-IDs. This is a separate full-boundary receipt from the six-row selection
-below. These are bounded captured/comparator fields, including oracle-only
-diagnostics that are not all physically observed device arrays, not a blanket
-bitwise claim over the model. The full-boundary audit freezes this scope.
-A separate multistep/lifecycle audit records the six cases in
-Table~\ref{tab:tp2-numerical}: 33 calls and 35,937 exact comparator metrics.
-This table deliberately selects the frozen
-\path{experiments/tp2_resident/model-runtime-quality.json} receipt and its
-\texttt{cuda-qwen35-mixed-bf16-tp2-local-shards-serial} profile, with test
-binary \texttt{a4977b85\ldots e1cc}. A different frozen
-\texttt{production-opts-01} acceptance summary, referenced by the optimized
-release handoff, reports 37 calls and 40,293 exact metrics across its full40
-and six-recipe selection. Its composition/model test binaries and source
-snapshot differ. That summary is not substituted for the six rows here:
-33/35,937 is the selected denominator for this table only, not a total of all
-TP2 validation. Neither count covers the current nine-gate qualification above.
-The frozen greedy4-02 closure records supervisor/drain/release PASS; the older
-greedy4-01 supervisor failure remains a failure. These authenticated test
-binaries are not public serving binaries. No serving HTTP logits were
-observed, and this writing pass did not rerun payload comparisons.
+\paragraph{Fixed serving contract.}
+The model is Qwen3.5-35B-A3B-FP8, text-only PP1/TP1/EP1, resident KV and lazy
+experts. Mixed arithmetic uses BF16 activation/KV/convolution and F32
+accumulation/SSM. Both modes retain the same nominal routing/cache policy,
+source checks, consumer proofs and synchronous forward; the disabled path is
+not the blocking control. Table~\ref{tab:paired-config} fixes the covered
+budgets. The remaining payload reservation is 54 MiB, split equally between
+packed and prepared artifacts; metadata and requested stack are inside the
+64 MiB limit, not added outside it.
 
 \begin{table}[tbp]
 \centering
 \small
-\begin{tabular}{@{}lrr@{}}
+\begin{tabularx}{\linewidth}{@{}l>{\raggedright\arraybackslash}X@{}}
 \toprule
-TP2 test record & Calls & Comparator metrics \\
+Control & Identical setting in both arms \\
 \midrule
-greedy4-02 & 10 & 10,890 \\
-fork2-03 & 6 & 6,534 \\
-canary2-01 & 5 & 5,445 \\
-recreate1-01 & 4 & 4,356 \\
-cold-owner1-01 & 4 & 4,356 \\
-cold-owner1-02 & 4 & 4,356 \\
-\midrule
-Total & 33 & 35,937 \\
+Read pipeline & One positioned-read worker, queue depth one, two charged slots \\
+Host staging & 64 MiB logical limit, including 8 MiB metadata and 2 MiB requested stack \\
+Device expert cache & 64 entries; 320 MiB charge including 8 MiB scratch \\
+Other device policies & 7 GiB admission target; 2 GiB workspace; 16 MiB KV \\
+Scheduler & Context 128, batch-token limit 8, active-sequence limit 2; cohort target/maximum deferrals 1/0 \\
+Build/observation & CUDA 12.4.99, SM86; NVTX compiled, runtime profiling OFF; identical logging \\
+Workload & Concurrency one; fixed prompts, resets, generation and request order; no cache flush \\
 \bottomrule
-\end{tabular}
-\caption[Separate TP2 test-binary numerical/lifecycle evidence]{Separate TP2 Mixed test-binary numerical/lifecycle evidence from
-\path{experiments/tp2_resident/model-runtime-quality.json}. Exactness applies
-to the frozen comparator metrics, not TP1, vLLM arithmetic, all workloads,
-or the current working tree.}
-\label{tab:tp2-numerical}
+\end{tabularx}
+\caption{Controlled-budget serving configuration. Overlapping accounting
+limits are not additive physical partitions or a total RSS/VRAM bound.
+Instrumentation overhead is unmeasured, not assumed zero. MiB and GiB are
+$2^{20}$ and $2^{30}$ bytes.}
+\label{tab:paired-config}
 \end{table}
 
-The local frozen F32 process-EP8 full-model pass also remains scoped to its
-profile/snapshot, not a thread result or a capacity result. The independent
-single-GPU W8A16 strict oracle gate failed on logits, ordered routes, and
-internal states; argmax agreement does not reverse that failure. These
-records are kept separate from TP1's three limited canaries and from the
-resident timing supplement below. Neither quality nor capacity transfers
-between profiles merely because a checkpoint is shared.
+\paragraph{Actual HTTP quality and complete denominators.}
+All ten lifecycles and all 120 requests complete successfully; failed,
+censored and unissued request counts are zero. Each lifecycle executes four
+initial requests, one excluded QA request, two QA warmups and five measured
+QA requests. Thus 50 measured QA requests are nested in ten arms and five
+blocks, not 50 independent repetitions. Of all requests, 110 match their
+exact eight-token oracle; ten two-token smoke requests have usage/length
+checks only. All 900 generated token IDs are actual worker-enqueue records,
+joined by worker/HTTP identities, emission ordinals, terminal usage and
+SSE/DONE evidence. They are not token IDs exposed by the client API or
+retokenized text. Enqueue is not client consumption; the positive terminal
+joins establish delivery for these successful requests. SSE content events
+are not token boundaries. Serving logits/routes/states were not measured.
 
-\paragraph{Experiment needed to close RQ1 (E0).}
-Freeze representation/placement and complete-output tolerances; report
-covered budgets and measured working-set components without conflating them.
-If claiming physical insufficiency, additionally report each $B_d$,
-$W_{\mathrm{full}}(r)$ and the compact-residency alternative. Measure
-physical working-set components and attribution across startup, requests,
-and cleanup, stating sampling coverage. Record full-model prefill/multistep
-decode for this text instance, repeated materialization/retirement, retained
-claims, swap, and declared cache conditions. Align request reads at the
-observable levels in RQ2; backing-disk measurements are required only for a
-backing-disk claim, not for the scoped bounded-residency result. Sweep configured
-budgets separately from physical capacity and retain failed/stalled points.
-Use a correct bounded disk-backed reference and a host-only memory-offload
-reference where feasible under the same quality/physical contract. An
-infeasible reference is infeasible, not zero time or infinite speedup.
+\paragraph{Bounded observations, not a capacity frontier.}
+Every lifecycle's logical host-reservation high-water is
+\begin{equation}
+  2(3{,}146{,}112)+8{,}388{,}608+2{,}097{,}152
+  =16{,}777{,}984<67{,}108{,}864\ \mathrm{bytes}.
+  \label{eq:qualified-host-charge}
+\end{equation}
+This tests the covered contract in Equations~\ref{eq:host-read-bound}
+and~\ref{eq:host-logical-charge}, not RSS. Every arm's selected-device sampled
+maximum is 4,125 MiB against the 7 GiB policy, with 49--54 samples per arm.
+It is not a continuous peak or exact process-owned GPU attribution. Host
+PSS, logical reservations and device maxima are neither interchangeable nor
+summable into one working-set peak (Equation~\ref{eq:working-set}). This
+closes a quality-qualified configured-budget point. A budget frontier,
+complete physical attribution and compact-residency impossibility remain
+unmeasured; physical-memory insufficiency and storage necessity are not claimed.
 
-\subsection{RQ2: Request I/O -- separate observability levels}
+\subsection{RQ2: Identical logical work and scoped client I/O}
 \label{sec:rq2}
-\label{sec:tp1-storage-middle}
-For request $q$, the additive invocation observables are
+For request $q$, anchored invocation deltas define
 \begin{equation}
 \begin{aligned}
  L_q&=\sum_{v\in\mathcal V_q}\Delta_v\mathrm{reader\_bytes},\\
@@ -314,471 +131,234 @@ For request $q$, the additive invocation observables are
 \end{aligned}
 \label{eq:request-io}
 \end{equation}
-$L_q$ is logical checkpoint-reader demand and $H_q$ is facade transfer
-activity. Their difference $\Delta_q$ compares two recorded counter layers; it is neither backing-storage traffic nor a physical bus
-measurement. In particular, $L_q,H_q,\Delta_q$ do not imply physical
-$P_q^{\mathrm{net}}$ or $P_q^{\mathrm{blk}}$. Table~\ref{tab:tp1-storage-middle}
-and Figure~\ref{fig:storage-demand-logical-transfer} apply these sums; gauge
-values in Table~\ref{tab:tp1-memory} are not summed.
+Across all 1,020 invocation records (102 per lifecycle), both modes perform
+the same observed logical work (Table~\ref{tab:paired-work}). Each pipeline
+operation can cover multiple positioned reads: 40,943 verified operations
+are distinct from 245,658 checkpoint-reader calls. Lifetime totals are
+reconciled against invocation deltas and the shutdown ledger; peak gauges
+are maxima, never summed deltas. Equal aggregate work is not a full
+route-ID signature or a cache-miss equivalence proof.
 
 \begin{table}[tbp]
 \centering
 \small
-\begin{tabularx}{\linewidth}{@{}Xrrrrr@{}}
+\begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}Xrr@{}}
 \toprule
-Request & Logical read & Uploads & Evictions & TTFT & E2E \\
- & GiB & experts & experts & s & s \\
+Per-lifecycle observable (12 requests) & Blocking & Lookahead \\
 \midrule
-Hello2 & 2.813 & 960 & 896 & 4.265 & 9.186 \\
-QA canary & 10.777 & 3,678 & 3,678 & 8.332 & 18.309 \\
-Arithmetic canary & 10.396 & 3,548 & 3,548 & 5.308 & 14.110 \\
-Chinese canary & 9.766 & 3,333 & 3,333 & 2.605 & 9.932 \\
+Submitted/verified pipeline operations & 40,943 & 40,943 \\
+Checkpoint-reader calls & 245,658 & 245,658 \\
+Logical reader bytes & 128,811,263,616 & 128,811,263,616 \\
+Facade H2D bytes & 128,811,927,312 & 128,811,927,312 \\
+Speculative reads taken & 0 & 36,863 \\
+Wasted read bytes & 0 & 0 \\
+Unknown read counts/bytes & 0 / 0 & 0 / 0 \\
 \bottomrule
 \end{tabularx}
-\caption{Four serialized TP1 \texttt{-02} requests. Logical GiB
-($1\,\mathrm{GiB}=2^{30}$ bytes) and HTTP timings are rounded to three
-decimals; expert counts are exact invocation deltas. Not physical storage,
-bus traffic, kernel timing, or comparative performance.}
-\label{tab:tp1-storage-middle}
+\caption{Every one of the five lifecycles per mode has these totals.
+H2D exceeds logical reader bytes by 663,696 bytes per lifecycle. These
+application observations are neither physical bus traffic nor NAS backend I/O.}
+\label{tab:paired-work}
 \end{table}
 
-The 30 invocations total 69,114 checkpoint-reader calls and
-36,240,064,128 logical bytes, 88,763 facade H2D copies and 36,240,248,688
-facade bytes, zero recorded expert hits, 11,519 expert uploads, 11,455
-evictions, and 34,557 artifact uploads. Thus the four-request aggregate is
-$\Delta=184{,}560$ bytes, or 180.234375 KiB; this small difference is an
-application-counter distinction, not evidence of disk traffic. Upload counts
-are not observed cache misses or measured I/O credits. These counters show
-repeated materialization activity, not the general registry's path integration
-or physical NAS/network/block-device reads. Startup reads are outside the sums.
+\paragraph{What reached the shared client.}
+The archive includes 120 request-window and 30 lifecycle-phase NFS deltas.
+For P1 blocking, the enclosing request phase records 314,825,320 bytes
+in the shared-client server-read counter (\texttt{serverreadbytes}). Its
+individual request windows sum to 312,732,264 bytes.
+The 2,093,056-byte gap lies between those windows inside the phase and is
+not attributed to requests. The other nine request phases record zero.
+Neither zero nor a positive shared-mount delta establishes request-exclusive
+network traffic, NAS cache misses or physical backing-disk reads. Fresh
+servers do not flush page/NFS caches. No storage-cold or NAS-bandwidth claim
+follows. There are also 240 PID/birth-bound request I/O snapshots (120 deltas),
+but startup/shutdown PID-I/O snapshots were not collected: those fields
+remain null, not zero or retrospectively reconstructed. Startup logical-reader
+bytes are also unobserved. Figure~\ref{f:paired-accounting} keeps these scopes
+separate. RQ2 is answered at the logical and shared-client levels, with
+physical backend traffic explicitly unknown.
 
-\paperplot{figures/storage-demand-logical-transfer.pdf}
-{Paired logical checkpoint-reader and facade H2D byte deltas for four serialized
-requests in storage-demand TP1 middle -02. GiB means $2^{30}$ bytes; the right
-panel resolves the small H2D-minus-reader differences in KiB ($2^{10}$ bytes).
-These are application counters, not physical storage I/O or physical bus
-traffic; startup I/O is outside invocation accounting
-(Equation~\ref{eq:request-io}).}
-{fig:storage-demand-logical-transfer}
+\paperplot{figures/paired-read-accounting.pdf}
+{Equal logical work and distinct memory/accounting scopes for all ten
+lifecycles. Each records 128,811,263,616 logical reader bytes and
+128,811,927,312 facade H2D bytes: equal across modes, not to each other.
+Every arm has 40,943 verified read operations, zero wasted bytes and zero
+unknown read counts/bytes. The host-reservation maximum is 16,777,984 bytes
+(16.000732 MiB) against a 64 MiB logical limit, not RSS. Separately, the
+device-wide sampled maximum is 4,125 MiB against a 7 GiB target, not a
+continuous or process-owned peak. Bars are common maxima, never sums of
+lifetime peaks or PSS plus GPU memory. P1 blocking's shared NFS request phase
+records 314,825,320 bytes; request windows sum to 312,732,264, leaving
+2,093,056 unattributed between windows. The other nine phases record zero,
+not proof of no disk traffic or cold caches. Startup/shutdown PID-I/O is
+unobserved; zero final logical charges do not prove physical release.}
+{f:paired-accounting}
 
-For the expert-entry count, let $I_j$ and $E_j$ be the recorded install/upload
-and eviction deltas for completed invocation $j$, and let $N_j$ be the entry
-gauge at that invocation boundary. The observed-boundary relation is
-\begin{equation}
- N_j=N_{j-1}+I_j-E_j,\qquad j=2,\ldots,30.
- \label{eq:entry-reconciliation}
-\end{equation}
-For the first boundary, $N_0^{\mathrm{implied}}=N_1-I_1+E_1=0$;
-this is an implied initial condition, not a measured pre-request gauge. Across
-the run, 11,519 uploads minus
-11,455 evictions equal the last observed 64 resident entries; all subsequent
-observed boundaries have zero balance residual. This is entry-count
-reconciliation, not byte conservation, continuous occupancy, or a final
-owner-ledger proof.
-
-Figures~\ref{fig:storage-demand-cache-reconciliation} and
-\ref{fig:storage-demand-invocation-timeline} show the aggregate and
-per-invocation forms of Equation~\ref{eq:entry-reconciliation}. The timeline
-contains 3/9/9/9 invocation boundaries assigned by serialized request/log-byte
-anchors, not 30 output-token or elapsed-time samples.
-
-For the cache-gauge subset, define
-\begin{equation}
-\begin{aligned}
- C_j^{\mathrm{cache}}&=X_j+Q_j+S_j,\\
- C_{\mathrm{peak}}^{\mathrm{cache}}
-   &=\max_{u\in\mathcal U_{\mathrm{owner}}}C_u^{\mathrm{cache}}
-     \leq b_{\mathrm{cache}}.
-\end{aligned}
-\label{eq:cache-charge}
-\end{equation}
-where $X_j$ is resident expert bytes, $Q_j$ pending-upload bytes, and $S_j$
-scratch bytes at invocation boundary $j$. Unknown-quarantine bytes $Z_j$ are
-an already charged retained subset of $C_j^{\mathrm{cache}}$, not an
-additional term. This subset is distinct from general-ledger retained $T_a$. These are cache-owner counter semantics, not evidence that
-all physical allocations or grants were observed. This is an observed cache
-subset, not $M_d(t)$ and not the complete $F_a+R_a+I_a+L_a+T_a$ ledger. At the
-last
-invocation, the recorded values are $X_j=201{,}351{,}168$ bytes,
-$Q_j=0$, and $S_j=8{,}388{,}608$ bytes; the reported $Z_j$ is zero.
-Equation~\ref{eq:cache-charge} adds compatible gauges at that one boundary,
-not maxima or observations across time. Figure~\ref{fig:storage-demand-cache-reconciliation}
-keeps the plotted gauges separate. $\mathcal U_{\mathrm{owner}}$ denotes
-cache charged-state update points over the owner's lifetime, not just the 30
-invocation samples. The recorded \texttt{cache.peak\_bytes} is
-$C_{\mathrm{peak}}^{\mathrm{cache}}=219{,}754{,}496$ bytes, an accounting
-high-water governed by \texttt{ExpertCacheLimits.max\_bytes}, namely
-$b_{\mathrm{cache}}=335{,}544{,}320$ bytes. This is the
-cache admission/charging contract, not independent verification of every
-allocation or the general credit partition. Neither the peak nor
-$b_{\mathrm{scratch}}$ certifies total physical-owner memory, continuous
-$M_d(t)$, or shutdown custody closure. Unknown quarantine remains an already
-charged subset and does not add another copy of the charge.
-
-\paperplot{figures/storage-demand-cache-reconciliation.pdf}
-{TP1 middle -02 entry reconciliation and cache-accounting gauges.
-Uploads minus evictions ($11{,}519-11{,}455=64$) match the last observed
-entries; initial zero is implied, not measured, and subsequent boundaries
-reconcile. Recorded \texttt{cache.peak\_bytes}, 209.574 MiB, is the
-resident-plus-pending-plus-scratch high-water, bounded by
-\texttt{ExpertCacheLimits.max\_bytes} = 320 MiB, not a physical-owner bound.
-Total physical-owner peak/ceiling are unobserved; no contradiction is implied.
-Invocation gauges and lifetime high-waters are not accumulated or a final
-ledger proof (Equations~\ref{eq:entry-reconciliation} and~\ref{eq:cache-charge}).}
-{fig:storage-demand-cache-reconciliation}
-
-\paperplot{figures/storage-demand-invocation-timeline.pdf}
-{Per-invocation expert upload/eviction deltas and resident-entry observations
-for the 30 completed invocations in storage-demand TP1 middle -02. Serialized
-request/log-byte anchors assign the 3/9/9/9 invocations to requests. The x-axis
-is log-order invocation ordinal, not elapsed time, output-token index, or
-transaction-as-request ID. Entry occupancy is observed only at invocation
-completion, not continuously; uploads are not inferred cache misses
-(Equation~\ref{eq:entry-reconciliation}).}
-{fig:storage-demand-invocation-timeline}
-
-Startup was 18.497 s. Four separate HTTP windows sum to 51.538 s, excluding
-startup and inter-request owner overhead; supervisor wall time was 75.874 s.
-The origins in Figure~\ref{fig:storage-demand-timing} are explicitly
-\begin{equation}
-\begin{aligned}
- T_{\mathrm{start}}&=t_{\mathrm{ready}}-t_{\mathrm{launch}},\\
- T_q^{\mathrm{first}}&=t_q^{\mathrm{first\ content}}-t_q^{\mathrm{send}},\qquad
- T_q^{\mathrm{end}}=t_q^{\mathrm{EOF}}-t_q^{\mathrm{send}}.
-\end{aligned}
-\label{eq:timing-origins}
-\end{equation}
-These are distinct denominators. Startup has a launch origin; each request
-bar has its own HTTP send origin, not one cumulative timeline. It therefore
-does not imply an end-to-end throughput
-rate or an I/O bottleneck share. $P_q^{\mathrm{net}}$ and
-$P_q^{\mathrm{blk}}$ remain unknown. Logical reader/syscall bytes can be
-served by cache; facade transfers are not physical bus measurements.
-
-\paperplot{figures/storage-demand-timing.pdf}
-{Launch-to-ready startup and per-request HTTP TTFT/E2E in the single successful
-DEBUG-instrumented storage-demand TP1 middle -02 run ($n=1$). TTFT is send to
-first nonempty SSE content; E2E is send to EOF. Startup has a different origin
-and is not part of the request bars. Instrumentation overhead is unmeasured;
-there are no statistics, confidence intervals, kernel timings, or comparative
-speedups (Equation~\ref{eq:timing-origins}).}
-{fig:storage-demand-timing}
-
-\paragraph{Observability levels and a scoped closure.}
-RQ2 does not require assuming that each logical byte reached the NAS disks.
-Table~\ref{tab:io-observability} fixes three non-interchangeable levels.
-
-\begin{table}[H]
-\centering
-\small
-\begin{tabularx}{\linewidth}{@{}lXX@{}}
-\toprule
-Level & Observable / current status & Attribution limit \\
-\midrule
-Logical reader & Historical HTTP \texttt{-02} counters and current factory verified reads actual & Distinct serving/test scopes; cache-served demand, not physical I/O \\
-NFS client & Shared shutdown-only delta in stopped pilot; no Ready/request window & Shared client/mount scope, foreign traffic and reset/missing counters; not server-owned network bytes \\
-NAS backing & Physical server network/block bytes and latency unknown & Client counters cannot establish server-cache misses or disk reads \\
-\bottomrule
-\end{tabularx}
-\caption{RQ2 observation hierarchy. Missing/reset fields stay unknown, not
-zero. No level certifies the unobserved level below it.}
-\label{tab:io-observability}
-\end{table}
-
-A scoped paper can close RQ2 by reporting same-run aligned logical demand,
-read timing, and available client observations with their explicit unknowns;
-it need not claim physical-storage necessity. Separate startup from request
-windows and runtime, OS/shared file, and storage-server caches. Fresh owners
-do not imply storage-cold runs. Disclose swap, uncontrolled caches, foreign
-traffic and clock/attribution limits. A physical disk-necessity or backing
-bandwidth claim would require additional attributed NAS measurements, not
-an inference from logical misses or shared-client deltas.
-
-\subsection{RQ3: Mechanism/numerics qualified; performance pending}
+\subsection{RQ3: Lower observed waiting under the same budgets}
 \label{sec:rq3}
-The safe blocking control and bounded next-expert lookahead are implemented
-on the selected routed-expert path (Algorithm~\ref{alg:bounded-lookahead}).
-Both opt in to the real worker; disabling the pipeline is not the control.
-Neither historical \texttt{-02} HTTP latency nor the resident TP2/vLLM
-supplement is a blocking/lookahead comparison. Table~\ref{tab:rq3-mapping}
-connects current code boundaries to the observations needed for E1/E4.
+\paragraph{Prespecified design and estimator.}
+The five independent analysis blocks retain order B--L, B--L, L--B, L--B,
+B--L (B: blocking; L: lookahead), a fixed 3:2 balance, with a fresh server per
+arm. The independent map-fixed generation uses the readiness-map validator
+from \texttt{7d3bee2}, not a new CLI or an adaptive execution plan. The
+7,200 s absolute envelope, 650 s lifecycle bound, 100 s final reserve and
+all-five-pairs-or-null rule were frozen before collection. No retries,
+replacement pairs, extra pilot/warmup requests, cache flushes or profiling
+timings enter the study. Recorded study elapsed time is 1,519.725 s;
+launch-to-ready probes span 12.847--13.247 s and are excluded from request
+latency. Both earlier stopped studies retain their original null aggregates
+(Appendix~\ref{sec:paired-startup-failure}).
 
-\begin{table}[H]
+For block $i$, mode $m$ and its five measured requests $j$, define client
+E2E $t_{imj}$ as send-to-EOF and TTFT $f_{imj}$ as send-to-first-nonempty SSE
+content. The arm summaries and paired estimator are
+\begin{equation}
+\begin{aligned}
+ E_{im}&=\operatorname{median}_{j=1}^{5}t_{imj},\qquad
+ F_{im}=\operatorname{median}_{j=1}^{5}f_{imj},\\
+ G_{im}&=\frac{40\ \text{qualified tokens}}{\sum_{j=1}^{5}t_{imj}},\\
+ \widehat R_X&=\exp\!\left(\operatorname{median}_{i=1}^{5}
+        \ln\frac{X_{iL}}{X_{iB}}\right),\quad X\in\{E,F,G\}.
+\end{aligned}
+\label{eq:paired-estimator}
+\end{equation}
+$G$ is qualified serial request-window goodput, not concurrent server
+throughput or startup-inclusive completion rate. It uses sums of durations,
+not an average of per-request rates. The archive enumerates all $5^5=3,125$
+ordered paired-block resamples, takes each median log ratio, and exponentiates
+nearest ranks 79 and 3047 for descriptive 2.5/97.5 percentile endpoints.
+Requests are not resampled as independent replicates. At $n=5$ these ranges
+are not coverage-guaranteed 95\% confidence intervals, significance tests or
+power guarantees; shared-client/cache conditions further limit generalization.
+
+\begin{table}[tbp]
 \centering
 \small
-\begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}X>{\raggedright\arraybackslash}X>{\raggedright\arraybackslash}X@{}}
+\begin{tabular}{@{}lrrl@{}}
 \toprule
-Implemented boundary & Observable & Paired test / evidence gate \\
+Outcome & Aggregate L/B & Relative change & Descriptive range \\
 \midrule
-Immutable exact read ticket & Operation, image/layer/expert, extent order, source-verified completion & Same-cut quality; no stale, duplicate-take or foreign-image consumption \\
-Demand wait versus next read window & Submit/start/read/verify/take times, demand-wait duration, completed/wasted bytes & Same worker/limits; compare waiting and extra speculative I/O \\
-Owner compute submission after upload & Host submission range, upload APIs, correlated kernel/copy activities & Nsight API-to-activity correlation and clock alignment; not host-span overlap \\
-Quota and host scope end & Packed/prepared/alias charge, metadata/stack, join/Unknown status & Same ceilings; no refund on cancellation, poison, or unproved join \\
-\bottomrule
-\end{tabularx}
-\caption{Code $\rightarrow$ observable $\rightarrow$ RQ3 test. Both schedules
-have qualified factory mechanisms/numerics; performance and GPU overlap
-remain pending. This is a test mapping, not a timing-results table.}
-\label{tab:rq3-mapping}
-\end{table}
-
-\paragraph{Stopped paired study and independent corrective plan.}
-The registered five-block order is B--L, B--L, L--B, L--B, B--L
-(B: blocking; L: lookahead), a fixed 3:2 order balance. Each arm plans
-4 initial requests, 1 excluded QA, 2 warmups and 5 measured QA: ten fresh
-lifecycles, 120 requests and 50 measured QA slots. P1-blocking failed before
-Ready with the prepared-source/TP2-accessor clash
-(Appendix~\ref{sec:paired-startup-failure}). The source-plan query fix is
-committed at \texttt{86c58a0}, with CPU/hidden-CUDA workspace checks passed,
-not new CLI/HTTP qualification. One lifecycle was attempted, none completed,
-and nine were unissued; all 120 requests and
-50 QA slots remain unissued. All five failed/incomplete pair rows stay in
-the analysis, with null latencies, goodput, aggregate and intervals, not
-zero-valued performance. There is no retry or replacement. The separate
-baseline pilot remains five lifecycles/60 requests/25 QA slots, unexecuted.
-
-Corrective protocol V3 is an independent CPU-only preregistration, not a
-resume or repaired result. It explicitly fixes decode-cohort target/maximum
-deferrals to 1/0 in both arms, matching the qualified scheduler rather than
-the stopped CLI's implicit 4/3 defaults. Its new candidate, same-cut nine
-numerical gates and exact-CLI Ready/HTTP/runtime binding remain unqualified;
-old \texttt{033519c} passes do not qualify the corrected cut.
-Both arms retain representation, arithmetic, ordered workload, resets,
-caches, logging, CUDA proofs and the 64/8/2 MiB host/metadata/requested-stack
-limits. Only scheduling differs. The prospective absolute wall envelope is
-7,200 s, with 650 s per lifecycle and 100 s final reserve; STOP, no retry,
-censoring and all-five-pairs-or-null analysis are fixed before collection.
-
-The primary estimand is the exponentiated median of five block log ratios
-of arm-median measured-QA E2E; TTFT and qualified serial-window goodput are
-secondary. Any prospective block-resampled interval is descriptive at
-$n=5$, not a significance test or power guarantee; no interval exists for
-the stopped study. GPU overlap additionally requires correlated Nsight CUDA
-API/kernel/copy activity, exact owner/bucket identities and aligned clocks.
-A compute host span covers submission, not execution; its intersection with
-a worker read proves neither overlap nor a causal scheduling benefit.
-Profiling/observer costs are separate, and no performance/SOTA victory,
-nonblocking forward or starvation-freedom claim follows.
-
-\subsection{RQ4: Custody and failure -- final resource contract unknown}
-\label{sec:rq4}
-The current nine-gate qualification retains physical release as unobserved
-despite authenticated drain, stable idle and lock release. Host quota zero or
-matched fingerprints cannot supply a GPU retirement fence. For historical
-TP1 \texttt{-02}, authenticated descendant drain reached \texttt{ECHILD};
-wrapper post-idle and independent all-eight-GPU observational idle checks
-passed. Nevertheless \texttt{resource\_contract\_complete=unknown} and the
-supervisor raw \texttt{gpu\_quiescence=unverified} remain unchanged. Invocation
-pending-upload/quarantine gauges of zero are not a final owner ledger.
-Process drain and idle telemetry establish neither device fences nor source
-completion nor the partition in Equation~\ref{eq:credit-conservation}.
-
-Algorithm~\ref{alg:terminal-custody} therefore specifies the required
-behavior, not the measured closure of this run. E5 must inject delayed/stale
-completion, stage-wise cancellation, primary-plus-cleanup failure, owner loss,
-and lost ACKs on the integrated path. Track exact publication/reuse, original
-versus repeated submissions, ownership transfers, retained $T_a$, named
-completion proofs, drain, and post-failure service. Reconcile grants and
-allocations before and after proven quiescence; distinguish deterministic
-protocol injection from real hardware failure. Unknown should remain charged
-and unusable without fabricated rollback or recovery. A failed/stalled
-provider also tests liveness assumptions, not just safety. Integrated fault
-conservation, eventual reclamation, and final TP1 custody closure remain open.
-
-\subsection{Supplement: resident observations, not an RQ1--RQ4 substitute}
-\label{sec:resident-supplement}
-\paragraph{Supplementary resident TP2 observations.}
-The frozen route-batch crossblocks record contains two independent blocks
-in F1--V1 and V2--F2 order, with four fresh server owners. Each slot excludes
-three QA8 requests and then measures five requests, each with five input
-and eight output tokens: 40 output tokens per measurement window.
-Table~\ref{tab:resident-crossblocks} transcribes these existing observations;
-no new measurement is introduced here.
-
-\begin{table}[t]
-\centering
-\small
-\begin{tabular}{@{}lrrrrrr@{}}
-\toprule
-Slot & Output & TTFT & E2E & Startup & GPU & PSS \\
- & tok/s & ms & ms & s & GiB/card & GiB \\
-\midrule
-F1 & 14.317 & 176.248 & 523.399 & 349.585 & 21.04 & 61.05 \\
-V1 & 10.376 & 132.676 & 694.228 & 66.239 & 19.28 & 7.71 \\
-V2 & 10.330 & 134.651 & 699.213 & 62.814 & 19.28 & 7.32 \\
-F2 & 14.804 & 171.333 & 515.106 & 366.133 & 21.04 & 60.14 \\
+Client E2E & 0.91823 & $-8.18\%$ & [0.89303, 0.94946] \\
+Client TTFT & 0.88755 & $-11.24\%$ & [0.86004, 0.94888] \\
+Qualified serial-window goodput & 1.10908 & $+10.91\%$ & [1.07393, 1.13498] \\
 \bottomrule
 \end{tabular}
-\caption{Descriptive resident TP2 crossblocks ($n=2$). TTFT and E2E are
-request means; GPU and server-tree PSS are sampled peaks, not exact peaks
-or per-owner GPU attribution. F denotes Ferrule; V denotes vLLM.}
-\label{tab:resident-crossblocks}
+\caption{Prespecified paired summaries for all five qualified blocks.
+Primary outcome is E2E; TTFT and goodput are secondary. Ranges are descriptive
+block-bootstrap endpoints, not inferential coverage or external performance rankings.}
+\label{tab:paired-results}
 \end{table}
 
-Ferrule has a higher output rate and lower mean E2E in both short windows;
-vLLM has lower mean TTFT, shorter startup, and lower sampled GPU and host
-PSS. The descriptive F/V rate ratios are 1.380 and 1.433, not statistical or
-causal speedups. The record uses a pinned checkpoint and tokenizer with
-TP2, context 128, batch 8, sequence limit 2, and concurrency 1. Ferrule's
-FP8-checkpoint/BF16 activation, KV and convolution/F32 SSM path uses
-HF-eager-qualified GemmEx/routing, whereas vLLM uses BF16/FP8 Marlin.
-These are not bit-exact or arithmetic-equivalent implementations, and the
-record retains \texttt{fairmatch=false} and \texttt{exact\_speedup=null}.
-Ferrule's 22 GiB/device admission budget, including a 4 GiB workspace with
-a 3 GiB arena, is not identical to vLLM's utilization setting of 0.8.
-The common sampled 22 GiB ceiling is not a hard physical partition or a
-matched total GPU/host working-set budget.
+As a separate accounting summary across all ten measured arm windows,
+blocking supplies 200 qualified tokens over 193.581 s (1.03316 tok/s), and
+lookahead supplies 200 over 175.393 s (1.14029 tok/s). These sums exclude
+startup and inter-request gaps; they neither replace the paired estimator
+nor turn ten lifecycles into ten independent paired replicates.
 
-The measured vLLM deployment is \texttt{0.28.0+cu129}, with
-\texttt{Torch 2.13.0+cu129}; its installed identities are frozen under
-\path{target/vendor/vllm028-py312}, not inferred from a 0.18 source checkout.
-Visible-text/usage canaries and Ferrule's separate scoped oracle records do
-not establish cross-engine internal-state parity or universal task quality.
-These resident windows neither demonstrate request-time physical disk reads
-nor establish host-memory insufficiency, storage necessity, or E0 acceptance.
-The immutable source record is
-\path{papers/arxiv/experiments/tp2_resident/runs/route-batch-vllm-crossblocks-20261012-01/crossblocks-results.md},
-with raw metrics in the adjacent \path{crossblocks-results.json} and frozen
-identities in \path{sealed-identities.json}. Historical pilots and failed
-attempts remain separate records, not pooled repetitions of this configuration.
+\paperplot{figures/paired-read-latency.pdf}
+{Client latency and qualified goodput in the sealed five-block study.
+Connected latency values are medians of five measured QA requests; goodput
+uses 40 qualified tokens divided by their summed client E2E durations.
+B (blue circles) is blocking and L (teal squares) is lookahead. Rows retain
+P1 B/L, P2 B/L, P3 L/B, P4 L/B, P5 B/L. The log-ratio panel shows blocks
+(circles B/L, triangles L/B), unity and the aggregate
+$\exp(\operatorname{median}\ln(L/B))$ as a diamond: E2E 0.91823, TTFT
+0.88755, goodput 1.10908. Gray strips and brackets are descriptive nearest-rank
+2.5/97.5 percentile ranges over all 3,125 ordered block resamples (ranks
+79 and 3047), not coverage-guaranteed confidence intervals or significance
+tests. The independent unit is the block ($n=5$), not 50 requests.
+Startup is separate. Goodput is a serial-window metric, not server throughput;
+this one instrumented study supports no power or SOTA claim.}
+{f:paired-latency}
 
+\paragraph{Waiting and client outcomes.}
+All five blocks show lower measured-QA median host demand wait and lower
+client E2E with lookahead (Figure~\ref{f:paired-read-wait}). Wait reductions
+range from 0.398 to 0.703 s per arm-median request; E2E reductions range from
+0.384 to 0.827 s. Each request wait is the sum of anchored
+\texttt{demand\_wait\_ns} invocation deltas, followed by a within-arm median.
+Equal logical work and zero wasted bytes make this a measured scheduling
+contrast rather than a smaller-workload comparison. The association is
+consistent with less waiting, but is not a causal critical-path decomposition:
+host waits cannot be added to client latency, and neither proves GPU overlap.
 
-\paragraph{Supplementary startup-metadata observations.}
-The sealed release \texttt{36e6aaa5\ldots70a58c} combines prepared admission
-and shared \texttt{Arc<Path>} checkpoint read-plan metadata. Its strict TP2
-S1/S2 smoke lifecycles and ordinary F1 completed with source-bound executable
-and mapped-library checks. S1/S2 passed visible greedy canary, reuse,
-cancellation-policy and post-cancel gates, with authenticated descendant
-drain. These are scoped serving checks, not a fresh 14-million-logit numerical
-validation or proof of device quiescence from process exit.
-Table~\ref{tab:startup-metadata} separates smoke and performance records.
+\paperplot{figures/paired-read-read-wait.pdf}
+{Read-demand wait and client-latency changes in the same five blocks.
+Request wait sums anchored per-invocation host \texttt{demand\_wait\_ns}
+deltas; each arm is the median of five measured QA waits. Connected points
+show blocking (blue circles) and lookahead (teal squares), retaining order.
+The right panel compares lookahead-minus-blocking differences of arm medians
+for wait and E2E, not medians of requestwise differences. All five blocks
+have lower observed wait and E2E with lookahead. This association is not proof
+that waiting caused the critical-path change. Host intervals are not CUDA
+timelines, are not additive to client latency and do not establish GPU overlap.
+No fitted causal coefficient or additional independent replicates are inferred.}
+{f:paired-read-wait}
 
-\begin{table}[t]
-\centering
-\small
-\begin{tabularx}{\linewidth}{@{}Xrrr@{}}
-\toprule
-Record & Startup & Peak tree PSS & Usage rate \\
- & s & GiB & tok/s \\
-\midrule
-36e6 S1 (smoke) & 222.079 & 42.716 & --- \\
-36e6 S2 (smoke) & 139.855 & 44.416 & --- \\
-36e6 F1 (ordinary) & 140.052 & 43.573 & 13.899 \\
-e674 F1 (historical ordinary) & 351.114 & 60.149 & 14.227 \\
-\bottomrule
-\end{tabularx}
-\caption{Startup and sampled PSS observations. Smoke slots have no QA8
-throughput measurement. The historical ordinary row is context, not a
-paired before/after control.}
-\label{tab:startup-metadata}
-\end{table}
+\paragraph{Overlap remains a separate gate.}
+Both timing arms compile NVTX source annotations but run with
+\texttt{FERRULE\_PROFILE\_NVTX=0}. No profiled timing is pooled here. A
+separate first capture stopped in blocking before QA on an additional
+profiler-library allowlist requirement: zero target ranges, lookahead
+unissued, four official warnings and full-trace acceptance false. A collector
+correction and independent capture remain outside this result. Physical
+kernel/read/copy overlap requires accepted correlated activities and clock
+alignment, not host-span intersections or the last read-ticket receipt.
 
-F1 excludes three QA8 requests and measures five, each with five input and
-eight output tokens: 40 usage output tokens over 2.877869 s. Its request
-TTFT mean/p50/p95 are 192.944/187.513/209.700 ms, descriptive summaries of
-five requests, not independent-trial confidence intervals. S1, S2, and F1
-are not pooled, and the best startup is not treated as a stable constant.
-The historical ordinary e674 F1 is a different series from the crossblocks
-in Table~\ref{tab:resident-crossblocks}; no fresh BEFORE or de288 control
-was run. Page-cache state is uncontrolled, not cold. Startup, sampled PSS,
-and output-rate tradeoffs therefore do not identify a causal optimization
-effect, live-heap reduction, freed OS memory, or a storage-capacity result.
+\subsection{RQ4: Observed closure and the fault-contract boundary}
+\label{sec:rq4}
+All ten serving owners are recorded known closed with retained residency;
+final logical read charges are zero. Authenticated \texttt{ECHILD}, absent
+recorded descendants, stable-idle observations and released/reprobed locks
+close process supervision. They do not prove post-drop physical release or
+universal GPU quiescence. In particular, a host worker join cannot discharge
+independent device custody, and retained residency is not a freed allocation.
 
-Five F1 proc snapshots, in first-identification, ready, post-warmup,
-post-measurement, and post-exit order, cost
-0.643/623.616/725.908/625.392/0.085 ms to read and validate. Their recorded
-bounds all lie outside the measured window; receipt writes are also outside,
-but persistence cost was not separately measured. This excludes those reads
-from the stated denominator, not observer overhead from the system. On the
-recorded Linux 4.19 deployment, \texttt{Pss\_Anon}/\texttt{Pss\_File} are
-unavailable; the post-exit snapshot is unavailable, not zero memory.
+Component fixtures cover exact source/ticket validation, alias-held quota,
+deferred speculative errors, cancellation and drain. They are not integrated
+fault injection in this HTTP study. E5 remains pending for delayed/stale
+completion, cancellation at each stage, primary-plus-cleanup failure, owner
+loss and lost ACKs. It must check publication/reuse and credit conservation
+before and after named completion evidence, retaining Unknown capacity rather
+than forcing zero. Algorithm~\ref{alg:terminal-custody} is the intended
+contract, not a measured proof of fault recovery, eventual reclamation or
+availability on every path.
 
-The source-relation proof records unchanged model mathematics, backend/native
-kernels, and runtime, while checkpoint representation differs. CPU IO-byte,
-ordering, and source-check tests support compatibility, not fresh GPU numerical
-acceptance; full-checkpoint payload hashing was not performed. Thus metadata
-representation and source-bound plans have implementation evidence, while the
-physical request-time storage frontier remains unvalidated.
-
-The local reproducibility entry \path{REPORT.md} is in:
-\begin{quote}
-\small\path{target/validation/startup-metadata-owner-20261013-01}
-\end{quote}
-Its \path{RESULTS.json} supplies the full binary hash and raw-pin manifest;
-\path{executed-source-pins.json} identifies executed Python/config revisions.
-The F1 raw HTTP and \path{proc-timeline.json} are under the repository's
-paper experiment runs directory, at:
-\begin{quote}
-\small
-\path{papers/arxiv/experiments/tp2_resident/runs}/\\
-\path{startup-metadata-info-after-20261013-01}/\\
-\path{runs/F1/session}
-\end{quote}
-Historical ordinary raw pins are in \path{routebatch-performance.json},
-under the sibling directory \path{route-batch-info-after-20261012-01}.
-These working-directory artifacts still require portable archival; they have
-not been moved or repackaged for publication.
-
-
-\subsection{Evidence gates and reproducibility}
+\subsection{Claim closure and reproducibility}
 \begin{table}[tbp]
 \centering
 \small
 \begin{tabularx}{\linewidth}{@{}l>{\raggedright\arraybackslash}X>{\raggedright\arraybackslash}X@{}}
 \toprule
-Question & Available observation & Gate still open \\
+Question & Answer at the evaluated point & Not established \\
 \midrule
-RQ1 & Nine same-cut factory gates PASS; qualified logical/allocator accounting point & Capacity frontier, physical working-set attribution and CLI/HTTP quality; necessity unclaimed \\
-RQ2 & Historical HTTP plots and factory read counts; stopped-pilot client snapshots & Aligned serving/client attribution; NAS backing remains unknown \\
-RQ3 & Same-contract mechanism/numerics qualified for both schedules & CLI pilot stopped pre-Ready; corrective V3 and correlated overlap pending \\
-RQ4 & Nine authenticated drains, stable-idle v2 and local lock release & Physical release unobserved; integrated faults/final custody ledger open \\
-TP2 supplement & Separate numerical tests; two resident crossblocks & No TP1 transfer, arithmetic parity, fair speedup, or capacity proof \\
+RQ1 & Current factory gates; actual HTTP token/terminal quality; bounded logical charge and device samples & Capacity frontier, total physical peak or necessity \\
+RQ2 & Aligned invocation/request demand, PID-I/O and shared NFS observations & Startup/shutdown PID-I/O; request-exclusive NAS backend traffic \\
+RQ3 & Five paired blocks: less host wait, 8.18\% lower E2E, 11.24\% lower TTFT, 10.91\% higher serial-window goodput & GPU overlap, causality, statistical coverage or SOTA \\
+RQ4 & Known owner-local closure/retention and process drain & Integrated E5 faults and post-drop physical release \\
 \bottomrule
 \end{tabularx}
-\caption{Observable-to-claim map. An open gate is not filled by a result from
-another representation, binary, topology, or workload.}
+\caption{Scoped answers, not an all-or-nothing qualification across profiles.}
 \label{tab:evidence}
 \end{table}
 
-The fixed TP1 reports are relative to \path{papers/arxiv}, under
-\path{experiments/storage_demand/runs/}:
-\begin{quote}
-\small
-\path{storage-demand-tp1-middle-20261013-01/}\allowbreak\path{report.json}\\
-\path{storage-demand-tp1-middle-20261013-02/}\allowbreak\path{report.json}
-\end{quote}
-The latter has adjacent \path{case.json}, \path{server.log},
-\path{samples.jsonl}, \path{supervisor.json}, \path{custody.json}, and
-\path{post-idle.json}. The independent closeout is under
-\path{../../target/validation/}:
-\begin{quote}
-\small
-\path{storage-demand-middle-gpu-20261013-02/}\allowbreak\path{closure.json}
-\end{quote}
-The deterministic offline receipt analysis is in
-\path{experiments/storage_demand/analysis/output/}; it reports source
-consistency PASS with 41 bound inputs, 39 consumed receipt pins, and zero
-divergences. That is a receipt-consistency check, not a new GPU or numerical
-acceptance result. The TP2 numerical sources are
-\path{experiments/tp2_resident/full-boundary-audit.json} and
-\path{experiments/tp2_resident/model-runtime-quality.json}. The separate
-37-call selection and its handoff are under \path{../../target/validation/}:
-\begin{quote}
-\small
-\path{tp2-mixed-production-opts-01/}\allowbreak\path{acceptance-summary.json}\\
-\path{tp2-mixed-optimized-release-20261009/}\allowbreak\path{handoff.json}
-\end{quote}
-All paths in this paragraph are relative to \path{papers/arxiv}.
+The portable \texttt{publication\_results\_v1} archive at commit
+\texttt{c624335} contains 623 files (4,451,307 bytes; 4.25 MiB) and an offline Python 3.10+
+standard-library checker with 29 tests. It reconstructs all arms, 900 token
+joins, 1,020 invocations, 150 NFS deltas, 120 PID-I/O deltas, 20 runtime-library
+projections (12/12 required pins each), all 3,125 resamples and both historical
+failure denominators. This is receipt analysis, not replay of private
+authentication or mapped-memory byte equivalence. Executables, model/oracle
+payloads and full source/native archives remain external hash-pinned inputs.
 
-Publication requires portable frozen artifacts: source plus dirty-state
-manifest, binary, model, and input-processing identities, commands and environment,
-raw results, traces/clock-correlation method, retained failures, and
-deterministic plot/table generation. Local ignored \path{target/} files and
-private transcripts are not public artifacts. Do not silently omit failed
-trials. Before confirmatory collection, freeze trial/block units, repetition
-counts, order, stopping rules, contrasts, and interval methods. Windows in one
-server are not independent repetitions. The stopped five-pair study and
-independent corrective V3 are separate from the historical external-comparison
-minimum and baseline pilot. Failed/incomplete pairs retain null estimates;
-new candidate/CLI qualification remains a gate. No statistical victory or
-universal quality threshold is inferred from these exploratory records.
+The independent \texttt{analysis\_v1} at \texttt{fc7f712} binds 840 exact
+inputs and generates the three current plots with deterministic data and
+rendering manifests; 16 tests and a read-only byte-comparison mode check
+reproduction. Both directories are under
+\begin{quote}
+\small\path{papers/arxiv/experiments/storage_demand/paired_read_v1/}
+\end{quote}
+Their READMEs and \path{analysis_v1/PLOTS.md} state commands, units and
+privacy boundaries. The earlier \texttt{qualification\_v1} archive
+(\texttt{17b16fa}, 249 files/5.38 MiB) preserves \texttt{033519c}, not the
+current CLI cut. Archival and offline checks do not constitute new GPU runs.

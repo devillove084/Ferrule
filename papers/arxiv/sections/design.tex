@@ -107,8 +107,9 @@ Returning provider custody does not necessarily decrease $U_a$: an explicit
 release or ownership transfer is separate. The broker records capacity,
 occupancy, authenticated owner, and a submitted bit, not five literal bucket
 fields. Equation~\ref{eq:credit-conservation} is an intended invariant;
-the current TP1 receipts do not independently measure its partition or final
-closure. RQ4 specifies the missing owner-ledger and fault evidence.
+the serving read ledger does not independently measure this general partition
+under faults. RQ4 separates observed owner-local closure from the missing
+integrated fault and physical-release evidence.
 
 \paragraph{I2: exact evidence before mutation.}
 A completion must match $o$, $K$, submitted stage, $g_s$, $g_x$, and
