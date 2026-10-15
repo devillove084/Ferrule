@@ -207,6 +207,11 @@ impl CheckpointTensorReader {
         })
     }
 
+    pub(crate) fn shares_owner_with(&self, other: &Self) -> bool {
+        self.max_tensor_bytes == other.max_tensor_bytes
+            && self.handles.shares_owner_with(&other.handles)
+    }
+
     pub fn max_shards(&self) -> usize {
         self.handles.max_shards()
     }

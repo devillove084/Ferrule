@@ -856,6 +856,12 @@ pub struct StateDictMaterializer {
     expert_read_stats: Arc<Mutex<super::expert_reads::ExpertReadObservationState>>,
 }
 
+impl Drop for StateDictMaterializer {
+    fn drop(&mut self) {
+        super::expert_reads::ExpertReadAdmissionState::close_owner(&self.expert_read_active);
+    }
+}
+
 impl StateDictMaterializer {
     pub fn new(max_parameter_bytes: u64) -> Result<Self> {
         if max_parameter_bytes == 0 {
@@ -929,26 +935,25 @@ impl StateDictMaterializer {
     /// Owner-observed host counters, including active scope transitions. Never
     /// polls a worker, synchronizes CUDA, or establishes consumer completion.
     pub fn expert_read_pipeline_stats(&self) -> super::ExpertReadPipelineStats {
-        self.expert_read_stats
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .observation
-            .stats
+        self.expert_read_pipeline_observation().stats
     }
 
     /// Read-only custody gauges and bounded last identity/receipt. Sampling
     /// neither drains/joins nor releases even aliases whose liveness has ended.
     pub fn expert_read_pipeline_observation(&self) -> super::ExpertReadPipelineObservation {
-        let view = {
-            self.expert_read_stats
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .clone()
+        let (view, poisoned) = match self.expert_read_stats.lock() {
+            Ok(state) => (state.clone(), false),
+            Err(error) => (error.into_inner().clone(), true),
         };
         // No observation lock may span checkpoint or admission sampling: an
         // operational checkpoint lock can recover poison via an inline waker
         // that reenters this getter. The copied handles retain the same custody.
-        view.snapshot()
+        let mut observed = view.snapshot();
+        if poisoned {
+            observed.status = "unknown_observation_poisoned";
+            observed.worker_unknown = true;
+        }
+        observed
     }
 
     pub(crate) fn expert_read_sequence(
@@ -958,15 +963,18 @@ impl StateDictMaterializer {
     ) -> Result<Option<super::expert_reads::ExpertReadSequence>> {
         self.expert_read_options
             .map(|options| {
+                if self.expert_read_stats.is_poisoned() {
+                    return Err(model_error("expert read observation ledger is poisoned"));
+                }
                 let admission =
                     super::expert_reads::ExpertReadAdmission::take(&self.expert_read_active)?;
-                let mut sequence = super::expert_reads::ExpertReadSequence::new(
+                let mut sequence = super::expert_reads::ExpertReadSequence::for_owner(
                     options,
                     image,
                     selected,
                     self.reader.clone(),
+                    admission,
                 )?;
-                sequence.admission = Some(admission);
                 sequence.attach_observation(Arc::clone(&self.expert_read_stats));
                 Ok(sequence)
             })

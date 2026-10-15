@@ -18,7 +18,8 @@ use crate::checkpoint::read_pipeline::{
     ReadPipelineLimits, ReadPipelineOptions, ReadReceipt, ReadTicket,
 };
 use crate::checkpoint::{
-    CheckpointReadCounters, CheckpointReadPlan, CheckpointTensorReader, NumericFp8Read,
+    CheckpointReadCounters, CheckpointReadPlan, CheckpointSourceFileIdentity,
+    CheckpointTensorReader, NumericFp8Read,
 };
 use crate::nn::ParameterResidency;
 
@@ -70,8 +71,37 @@ fn pipeline_error(source: ReadPipelineError) -> Error {
 pub(crate) struct ExpertReadAdmissionState {
     active: bool,
     quarantined: bool,
+    owner_closed: bool,
     payloads: Vec<NumericFp8PayloadLiveness>,
     join: Option<ReadJoinHandoff>,
+    worker: Option<CheckpointReadPipeline>,
+    identity: Option<ExpertReadOwnerIdentity>,
+}
+
+impl ExpertReadAdmissionState {
+    pub fn close_owner(state: &Mutex<Self>) {
+        let (worker, join) = {
+            let mut state = state.lock().unwrap_or_else(|p| p.into_inner());
+            state.owner_closed = true;
+            (state.worker.take(), state.join.take())
+        };
+        // The materializer, not the last temporary observer Arc, owns teardown.
+        // No admission mutex may span callbacks or the actual off-worker join.
+        drop(worker);
+        if let Some(join) = join {
+            let _ = join.join();
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ExpertReadOwnerIdentity {
+    image: u64,
+    options: ExpertReadPipelineOptions,
+    reader: CheckpointTensorReader,
+    // The provider checks selected bindings against the prepared image before
+    // admission. Remember each encountered shard without refreshing its snapshot.
+    sources: BTreeMap<std::path::PathBuf, CheckpointSourceFileIdentity>,
 }
 
 #[derive(Debug, Clone)]
@@ -85,10 +115,11 @@ struct ReadAdmissionInner {
 impl ExpertReadAdmission {
     pub fn take(state: &Arc<Mutex<ExpertReadAdmissionState>>) -> Result<Self> {
         let join = {
-            let mut state = state
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            if state.active || state.quarantined {
+            let mut state = state.lock().map_err(|poisoned| {
+                poisoned.into_inner().quarantined = true;
+                invalid("expert read owner ledger is poisoned")
+            })?;
+            if state.active || state.quarantined || state.owner_closed {
                 return Err(invalid(
                     "another expert read sequence is live or quarantined",
                 ));
@@ -103,7 +134,7 @@ impl ExpertReadAdmission {
         // gets Pending, never a self-join or a premature stack/payload refund.
         if let Some(join) = join {
             let shutdown = join.join();
-            if shutdown.join_failed || !shutdown.unknown.is_empty() {
+            if shutdown.custody_unknown || shutdown.join_failed || !shutdown.unknown.is_empty() {
                 admission.quarantine();
                 return Err(invalid("expert read worker custody is unknown"));
             }
@@ -127,6 +158,77 @@ impl ExpertReadAdmission {
         Ok(admission)
     }
 
+    fn checkout(
+        &self,
+        options: ExpertReadPipelineOptions,
+        image: u64,
+        reader: &CheckpointTensorReader,
+        plans: &BTreeMap<(usize, usize), Arc<ExpertReadPlan>>,
+    ) -> Result<Option<CheckpointReadPipeline>> {
+        if image == 0 {
+            return Err(invalid("image generation must be nonzero"));
+        }
+        let mut state = self.0.state.lock().map_err(|poisoned| {
+            poisoned.into_inner().quarantined = true;
+            invalid("expert read owner ledger is poisoned")
+        })?;
+        let identity = state
+            .identity
+            .get_or_insert_with(|| ExpertReadOwnerIdentity {
+                image,
+                options,
+                reader: reader.clone(),
+                sources: BTreeMap::new(),
+            });
+        if identity.image != image
+            || identity.options != options
+            || !identity.reader.shares_owner_with(reader)
+        {
+            return Err(invalid(
+                "expert read owner image/reader/limits/options changed",
+            ));
+        }
+        let mut sources = identity.sources.clone();
+        for source in plans.values().flat_map(|plan| plan.packed.source_files()) {
+            if let Some(previous) =
+                sources.insert(source.catalog_path().to_path_buf(), source.clone())
+                && previous != *source
+            {
+                return Err(invalid("expert read owner source snapshot changed"));
+            }
+        }
+        let metadata = plans
+            .values()
+            .map(|plan| plan.metadata_bytes)
+            .chain(sources.values().map(source_metadata_reservation))
+            .try_fold(4096u64, u64::checked_add)
+            .ok_or_else(|| invalid("owner metadata overflows"))?;
+        if metadata > options.max_metadata_bytes {
+            return Err(invalid("owner plus selected metadata exceeds host bound"));
+        }
+        identity.sources = sources;
+        Ok(state.worker.take())
+    }
+
+    fn park(&self, pipeline: CheckpointReadPipeline) {
+        let mut state = self.0.state.lock().unwrap_or_else(|poisoned| {
+            let mut state = poisoned.into_inner();
+            state.quarantined = true;
+            state
+        });
+        let displaced = if state.owner_closed {
+            Some(pipeline)
+        } else {
+            let displaced = state.worker.replace(pipeline);
+            state.quarantined |= displaced.is_some();
+            displaced
+        };
+        drop(state);
+        // Even invariant-failure cleanup must never run a join/waker under the
+        // admission mutex.
+        drop(displaced);
+    }
+
     fn quarantine(&self) {
         self.0
             .state
@@ -140,7 +242,11 @@ impl ExpertReadAdmission {
             .state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .payloads = payloads.to_vec();
+            .payloads = payloads
+            .iter()
+            .filter(|payload| payload.is_live())
+            .cloned()
+            .collect();
     }
 
     fn retain_join(&self, join: ReadJoinHandoff) {
@@ -154,10 +260,18 @@ impl ExpertReadAdmission {
 
 impl Drop for ReadAdmissionInner {
     fn drop(&mut self) {
-        self.state
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .active = false;
+        let join = {
+            let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+            state.active = false;
+            if state.owner_closed {
+                state.join.take()
+            } else {
+                None
+            }
+        };
+        if let Some(join) = join {
+            let _ = join.join();
+        }
     }
 }
 
@@ -185,6 +299,12 @@ impl std::error::Error for FailedRead {
             _ => None,
         }
     }
+}
+
+fn source_metadata_reservation(source: &CheckpointSourceFileIdentity) -> u64 {
+    // Includes the transactional map copy while admitting new shards.
+    512 + 4 * source.catalog_path().as_os_str().len() as u64
+        + 2 * source.canonical_path().as_os_str().len() as u64
 }
 
 impl ExpertReadPipelineOptions {
@@ -223,11 +343,25 @@ impl ExpertReadPipelineOptions {
         let payload_bound = self.payload_bound()?;
         let reader = CheckpointTensorReader::new(max_parameter_bytes);
         let mut bindings = BTreeMap::<(usize, usize), Vec<&BoundParameter>>::new();
+        let mut sources = BTreeMap::new();
         for parameter in resources.state_dict().parameters() {
             if let ParameterResidency::Expert { layer, expert } = *parameter.residency() {
                 bindings.entry((layer, expert)).or_default().push(parameter);
+                for part in std::iter::once(parameter.weight()).chain(parameter.scale()) {
+                    let source = part.source_identity();
+                    if let Some(previous) = sources.insert(source.catalog_path(), source)
+                        && previous != source
+                    {
+                        return Err(invalid("conflicting owner source snapshots"));
+                    }
+                }
             }
         }
+        let owner_metadata = sources
+            .values()
+            .map(|source| source_metadata_reservation(source))
+            .try_fold(4096u64, u64::checked_add)
+            .ok_or_else(|| invalid("owner metadata overflows"))?;
         let mut routed = false;
         for layer in resources.spec().layers() {
             let FeedForward::Moe(moe) = layer.feed_forward() else {
@@ -273,14 +407,15 @@ impl ExpertReadPipelineOptions {
                 metadata.push(plan.metadata_bytes);
             }
             metadata.sort_unstable_by(|a, b| b.cmp(a));
-            let worst = metadata
-                .into_iter()
-                .take(selected)
-                .try_fold(4096u64, |total, bytes| {
-                    total
-                        .checked_add(bytes)
-                        .ok_or_else(|| invalid("selected metadata overflows"))
-                })?;
+            let worst =
+                metadata
+                    .into_iter()
+                    .take(selected)
+                    .try_fold(owner_metadata, |total, bytes| {
+                        total
+                            .checked_add(bytes)
+                            .ok_or_else(|| invalid("selected metadata overflows"))
+                    })?;
             if worst > self.max_metadata_bytes {
                 return Err(invalid("selected metadata exceeds host budget"));
             }
@@ -317,6 +452,9 @@ impl ExpertReadPipelineOptions {
 pub struct ExpertReadPipelineStats {
     pub sequences_started: u64,
     pub sequences_finished: u64,
+    pub workers_created: u64,
+    pub worker_reuses: u64,
+    pub workers_joined: u64,
     pub join_pending_sequences: u64,
     pub join_failed_sequences: u64,
     pub submitted_reads: u64,
@@ -378,7 +516,7 @@ macro_rules! statistics {
     }
 }
 statistics!(
-    counters: [sequences_started, sequences_finished, join_pending_sequences,
+    counters: [sequences_started, sequences_finished, workers_created, worker_reuses, workers_joined, join_pending_sequences,
         join_failed_sequences, submitted_reads, speculative_reads, rejected_submissions,
         demanded_reads, completed_reads, verified_reads, cancelled_reads, failed_reads,
         unknown_reads, unobserved_terminal_reads, worker_started_reads, io_started_reads, prefetched_reads_taken,
@@ -446,6 +584,9 @@ pub struct ExpertReadPipelineObservation {
     pub limits: Option<ExpertReadPipelineOptions>,
     pub current_charge: ExpertReadHostCharge,
     pub stats: ExpertReadPipelineStats,
+    pub worker_alive: bool,
+    pub worker_join_pending: bool,
+    pub worker_unknown: bool,
     pub current_read: Option<ExpertReadIdentity>,
     pub pending_read: Option<ExpertReadIdentity>,
     pub last_receipt: Option<ExpertReadHostReceipt>,
@@ -465,6 +606,9 @@ impl Default for ExpertReadPipelineObservation {
             limits: None,
             current_charge: ExpertReadHostCharge::default(),
             stats: ExpertReadPipelineStats::default(),
+            worker_alive: false,
+            worker_join_pending: false,
+            worker_unknown: false,
             current_read: None,
             pending_read: None,
             last_receipt: None,
@@ -484,6 +628,7 @@ pub(crate) struct ExpertReadObservationState {
     // weak references that could retain the payload allocations themselves.
     admission_state: Option<Weak<Mutex<ExpertReadAdmissionState>>>,
     artifact_bytes: u64,
+    prior_worker_joins: u64,
     scope_open: bool,
 }
 impl ExpertReadObservationState {
@@ -491,20 +636,32 @@ impl ExpertReadObservationState {
         let mut observed = self.observation;
         if let (Some(join), Some(options)) = (&self.join, observed.limits) {
             let sample = join.observe_budget();
+            let worker = join.observe_worker();
             let budget = sample.budget;
-            let artifacts_live = self
+            observed.worker_alive = worker.alive;
+            observed.worker_join_pending = worker.join_pending;
+            observed.worker_unknown = worker.poisoned
+                || worker.join_failed
+                || worker.custody_unknown
+                || sample.ledger_poisoned
+                || budget.unknown_slots != 0
+                || budget.worker_stack.unknown_bytes != 0;
+            observed.stats.workers_joined = self.prior_worker_joins + u64::from(worker.joined);
+            let (artifacts_live, owner_poisoned, owner_quarantined) = self
                 .admission_state
                 .as_ref()
                 .and_then(Weak::upgrade)
-                .is_some_and(|state| {
-                    state
-                        .lock()
-                        .unwrap_or_else(|p| p.into_inner())
-                        .payloads
-                        .iter()
-                        .any(NumericFp8PayloadLiveness::is_live)
-                });
-            let artifact_bytes = if self.scope_open || artifacts_live {
+                .map(|state| {
+                    let (state, poisoned) = match state.lock() {
+                        Ok(state) => (state, false),
+                        Err(error) => (error.into_inner(), true),
+                    };
+                    // Weak witnesses themselves retain backing allocations;
+                    // only operational admission drops the retired witnesses.
+                    (!state.payloads.is_empty(), poisoned, state.quarantined)
+                })
+                .unwrap_or_default();
+            let artifact_bytes = if self.scope_open || artifacts_live || owner_poisoned {
                 self.artifact_bytes
             } else {
                 0
@@ -534,12 +691,25 @@ impl ExpertReadObservationState {
                 .payload_bytes
                 .saturating_add(charge.metadata_bytes)
                 .saturating_add(charge.requested_stack_bytes);
-            if observed.status == "closed" && retained {
-                observed.status = "closed_retained";
+            if !self.scope_open && worker.joined {
+                observed.status = if retained {
+                    "closed_retained"
+                } else {
+                    "closed"
+                };
             }
-            if sample.ledger_poisoned {
+            if sample.ledger_poisoned || worker.poisoned || owner_poisoned {
+                observed.worker_unknown = true;
+                observed.current_charge.unknown_packed_bytes = observed.current_charge.packed_bytes;
+                observed.current_charge.unknown_stack_bytes =
+                    observed.current_charge.requested_stack_bytes;
                 observed.status = "unknown_ledger_poisoned";
-            } else if budget.unknown_slots != 0 || budget.worker_stack.unknown_bytes != 0 {
+            } else if owner_quarantined
+                || worker.custody_unknown
+                || budget.unknown_slots != 0
+                || budget.worker_stack.unknown_bytes != 0
+            {
+                observed.worker_unknown = true;
                 observed.status = "quarantined";
             }
             if !self.scope_open && budget.reserved_slots == 0 && !sample.ledger_poisoned {
@@ -723,7 +893,7 @@ pub(crate) struct CurrentExpertRead {
 pub(crate) struct ExpertReadSequence {
     options: ExpertReadPipelineOptions,
     plans: BTreeMap<(usize, usize), Arc<ExpertReadPlan>>,
-    pipeline: CheckpointReadPipeline,
+    pipeline: Option<CheckpointReadPipeline>,
     join: ReadJoinHandoff,
     reader: CheckpointTensorReader,
     started: Instant,
@@ -746,26 +916,62 @@ impl ExpertReadSequence {
         self.join.clone()
     }
 
-    pub fn new(
+    pub fn for_owner(
         options: ExpertReadPipelineOptions,
         image: u64,
         selected: &[&ExpertMetadata],
         reader: CheckpointTensorReader,
+        admission: ExpertReadAdmission,
     ) -> Result<Self> {
         let started = Instant::now();
         let plans = Self::select(options, image, selected, &reader)?;
-        let pipeline = CheckpointReadPipeline::with_options(
-            reader.clone(),
-            options.limits()?,
-            ReadPipelineOptions {
-                worker_stack_bytes: options.worker_stack_bytes,
-                max_worker_stack_bytes: options.worker_stack_bytes,
-            },
-        )
-        .map_err(pipeline_error)?;
-        Ok(Self::from_pipeline(
-            options, plans, pipeline, reader, started,
-        ))
+        let parked = admission.checkout(options, image, &reader, &plans)?;
+        let reused = parked.is_some();
+        let pipeline = if let Some(pipeline) = parked {
+            let ready = pipeline.ready_for_sequence();
+            if let Err(error) = ready {
+                admission.quarantine();
+                admission.park(pipeline);
+                return Err(pipeline_error(error));
+            }
+            // Retaining a thread/reader is never a retained freshness proof.
+            // Sessions remain one-shot and recheck open handles pre AND post IO.
+            if plans
+                .values()
+                .any(|plan| plan.packed.validate_source_identity().is_err())
+            {
+                admission.park(pipeline);
+                return Err(invalid("stale source before expert worker reuse"));
+            }
+            pipeline
+        } else {
+            CheckpointReadPipeline::with_options(
+                reader.clone(),
+                options.limits()?,
+                ReadPipelineOptions {
+                    worker_stack_bytes: options.worker_stack_bytes,
+                    max_worker_stack_bytes: options.worker_stack_bytes,
+                },
+            )
+            .map_err(pipeline_error)?
+        };
+        let mut sequence = Self::from_pipeline(options, plans, pipeline, reader, started);
+        sequence.stats.workers_created = u64::from(!reused);
+        sequence.stats.worker_reuses = u64::from(reused);
+        sequence.admission = Some(admission);
+        Ok(sequence)
+    }
+
+    fn pipeline(&self) -> &CheckpointReadPipeline {
+        self.pipeline
+            .as_ref()
+            .expect("sequence owns worker until teardown")
+    }
+
+    fn pipeline_mut(&mut self) -> &mut CheckpointReadPipeline {
+        self.pipeline
+            .as_mut()
+            .expect("sequence owns worker until teardown")
     }
 
     fn select(
@@ -814,7 +1020,7 @@ impl ExpertReadSequence {
             options,
             plans,
             join: pipeline.join_handoff(),
-            pipeline,
+            pipeline: Some(pipeline),
             reader,
             started,
             pending: None,
@@ -824,6 +1030,7 @@ impl ExpertReadSequence {
             deferred: None,
             stats: ExpertReadPipelineStats {
                 sequences_started: 1,
+                workers_created: 1,
                 ..Default::default()
             },
             stats_base: ExpertReadPipelineStats::default(),
@@ -835,11 +1042,11 @@ impl ExpertReadSequence {
     }
 
     pub fn attach_observation(&mut self, sink: Arc<Mutex<ExpertReadObservationState>>) {
-        self.stats_base = sink
-            .lock()
+        let previous = sink.lock().unwrap_or_else(|p| p.into_inner()).clone();
+        self.stats_base = previous.snapshot().stats;
+        sink.lock()
             .unwrap_or_else(|p| p.into_inner())
-            .observation
-            .stats;
+            .prior_worker_joins = self.stats_base.workers_joined;
         self.stats_sink = Some(sink);
         self.publish("active");
         // Count requested metadata/stack even if every selected expert is a hit.
@@ -992,7 +1199,7 @@ impl ExpertReadSequence {
     }
 
     fn observe_peak(&mut self) -> Result<()> {
-        let budget = self.pipeline.budget();
+        let budget = self.pipeline().budget();
         self.stats.peak_packed_bytes = self.stats.peak_packed_bytes.max(budget.reserved_bytes);
         self.stats.peak_artifact_bytes = self.stats.peak_artifact_bytes.max(self.artifact_bytes);
         self.stats.peak_metadata_bytes = self
@@ -1045,9 +1252,11 @@ impl ExpertReadSequence {
             .get(&key)
             .ok_or_else(|| invalid("expert was not selected before compute"))?;
         let reader_before = self.reader.read_counters();
+        let image = plan.image;
+        let packed = plan.packed.clone();
         let ticket = self
-            .pipeline
-            .submit(SourceGeneration::new(plan.image), plan.packed.clone());
+            .pipeline_mut()
+            .submit(SourceGeneration::new(image), packed);
         if let Ok(ticket) = &ticket {
             self.last_submitted = Some(self.identity(key, ticket));
             self.stats.submitted_reads += 1;
@@ -1069,9 +1278,9 @@ impl ExpertReadSequence {
             return Ok(());
         };
         if let Ok(ticket) = &pending.ticket {
-            self.pipeline.cancel(ticket).map_err(pipeline_error)?;
-            self.pipeline.wait(ticket).map_err(pipeline_error)?;
-            let completion = self.pipeline.take(ticket).map_err(pipeline_error)?;
+            self.pipeline_mut().cancel(ticket).map_err(pipeline_error)?;
+            self.pipeline().wait(ticket).map_err(pipeline_error)?;
+            let completion = self.pipeline_mut().take(ticket).map_err(pipeline_error)?;
             self.record_completion(&pending, &completion, true);
             drop(completion);
         }
@@ -1150,14 +1359,14 @@ impl ExpertReadSequence {
             Err(error) => return Err(pipeline_error(error)),
         };
         let wait_started = Instant::now();
-        let wait = self.pipeline.wait(&ticket);
+        let wait = self.pipeline().wait(&ticket);
         self.stats.demand_wait_calls += 1;
         self.stats.demand_wait_ns = self
             .stats
             .demand_wait_ns
             .saturating_add(nanos(wait_started.elapsed()));
         wait.map_err(pipeline_error)?;
-        let completion = self.pipeline.take(&ticket).map_err(pipeline_error)?;
+        let completion = self.pipeline_mut().take(&ticket).map_err(pipeline_error)?;
         self.record_completion(&pending, &completion, false);
         tracing::trace!(target: "ferrule_performance", layer, expert, receipt = ?completion.receipt(),
             "expert read receipt; no GPU execution timing");
@@ -1219,8 +1428,28 @@ impl ExpertReadSequence {
 
 impl Drop for ExpertReadSequence {
     fn drop(&mut self) {
+        if self.admission.is_some() && !self.pipeline().on_worker() {
+            let drained = self.discard_pending();
+            self.current = None;
+            if drained.is_ok() && self.pipeline().finish_sequence().is_ok() {
+                if let Some(admission) = &self.admission {
+                    admission.retain_payloads(&self.artifacts);
+                }
+                self.stats.sequences_finished += 1;
+                self.stats.unobserved_terminal_reads = self
+                    .stats
+                    .submitted_reads
+                    .saturating_sub(self.stats.completed_reads);
+                self.publish("idle_retained");
+                self.admission
+                    .as_ref()
+                    .expect("owner admission")
+                    .park(self.pipeline.take().expect("owned worker"));
+                return;
+            }
+        }
         // Joining proves only host-read custody, never CUDA consumer completion.
-        let mut shutdown = self.pipeline.shutdown();
+        let mut shutdown = self.pipeline_mut().shutdown();
         if shutdown.join_pending {
             shutdown = self.join.join();
         }
@@ -1232,9 +1461,14 @@ impl Drop for ExpertReadSequence {
             if let Err(error) = self.discard_pending() {
                 tracing::warn!(%error, "expert read cleanup retained unproved host custody");
             }
-            drop(self.pipeline.drain());
+            drop(self.pipeline_mut().drain());
         }
-        self.stats.unknown_bytes = self.pipeline.budget().unknown_bytes;
+        if let Some(admission) = &self.admission
+            && !shutdown.join_pending
+        {
+            admission.quarantine();
+        }
+        self.stats.unknown_bytes = self.pipeline().budget().unknown_bytes;
         if let Some(admission) = &self.admission {
             admission.retain_payloads(&self.artifacts);
         }
@@ -1242,7 +1476,7 @@ impl Drop for ExpertReadSequence {
             .artifacts
             .iter()
             .any(NumericFp8PayloadLiveness::is_live);
-        if shutdown.join_failed || !shutdown.unknown.is_empty() {
+        if shutdown.custody_unknown || shutdown.join_failed || !shutdown.unknown.is_empty() {
             if let Some(admission) = &self.admission {
                 // Keep this materializer's admission closed. A later successful
                 // host drain cannot prove an earlier unknown operation.
@@ -1277,13 +1511,15 @@ impl Drop for ExpertReadSequence {
         }
         // The normal field teardown still owns these resources; the read-only
         // snapshot samples the retained handoff/aliases after this Drop returns.
-        self.publish(if shutdown.join_failed || !shutdown.unknown.is_empty() {
-            "quarantined"
-        } else if shutdown.join_pending {
-            "join_pending_at_scope_end"
-        } else {
-            "closed"
-        });
+        self.publish(
+            if shutdown.custody_unknown || shutdown.join_failed || !shutdown.unknown.is_empty() {
+                "quarantined"
+            } else if shutdown.join_pending {
+                "join_pending_at_scope_end"
+            } else {
+                "closed"
+            },
+        );
         tracing::trace!(target: "ferrule_performance", schedule = ?self.options.schedule,
             stats = ?self.stats, "host-only expert read sequence; GPU overlap unverified");
     }

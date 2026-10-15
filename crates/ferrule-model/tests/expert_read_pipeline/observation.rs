@@ -31,7 +31,10 @@ fn configured_mode_is_not_a_positive_worker_read_qualification() {
         drop(sequence);
         let closed = materializer.expert_read_pipeline_observation();
         assert_eq!(closed.stats.sequences_finished, 1);
-        assert_eq!(closed.current_charge.host_charged_bytes, 0);
+        assert_eq!(
+            closed.current_charge.host_charged_bytes,
+            METADATA + STACK as u64
+        );
         assert!(!closed.worker_read_observed);
     }
 }
@@ -45,12 +48,12 @@ fn receipt_identity_clock_and_all_charge_partitions_come_from_real_demand() {
         let value = prepared(&materializer, sequence.demand(0, 0).unwrap());
         sequence.track_artifacts(&value).unwrap();
         let before = materializer.checkpoint_read_counters();
-        let budget = sequence.pipeline.budget();
+        let budget = sequence.pipeline().budget();
         let observed = materializer.expert_read_pipeline_observation();
         for _ in 0..4 {
             assert_eq!(materializer.expert_read_pipeline_observation(), observed);
         }
-        assert_eq!(sequence.pipeline.budget(), budget);
+        assert_eq!(sequence.pipeline().budget(), budget);
         assert_eq!(materializer.checkpoint_read_counters(), before);
         assert!(observed.worker_read_observed);
         assert_eq!(observed.stats.submitted_reads, 1);
@@ -98,7 +101,10 @@ fn receipt_identity_clock_and_all_charge_partitions_come_from_real_demand() {
         drop(sequence);
         let closed = materializer.expert_read_pipeline_observation();
         assert_eq!(closed.current_read, None);
-        assert_eq!(closed.current_charge.host_charged_bytes, 0);
+        assert_eq!(
+            closed.current_charge.host_charged_bytes,
+            METADATA + STACK as u64
+        );
         assert!(closed.worker_read_observed);
         assert_eq!(closed.stats.sequences_finished, 1);
     }
@@ -117,9 +123,9 @@ fn closed_artifact_payload_alias_charge_is_sampled_without_refunding_or_io() {
     drop(sequence);
     let before = materializer.checkpoint_read_counters();
     let retained = materializer.expert_read_pipeline_observation();
-    assert_eq!(retained.status, "closed_retained");
+    assert_eq!(retained.status, "idle_retained");
     assert_eq!(retained.current_charge.packed_bytes, 0);
-    assert_eq!(retained.current_charge.requested_stack_bytes, 0);
+    assert_eq!(retained.current_charge.requested_stack_bytes, STACK as u64);
     assert_eq!(retained.current_charge.artifact_bytes, EXPERT_BYTES);
     assert_eq!(retained.current_charge.metadata_bytes, METADATA);
     assert_eq!(materializer.expert_read_pipeline_observation(), retained);
@@ -131,9 +137,16 @@ fn closed_artifact_payload_alias_charge_is_sampled_without_refunding_or_io() {
     drop(artifact);
     assert_eq!(materializer.expert_read_pipeline_observation(), retained);
     drop(payload);
+    // Passive sampling cannot release the Weak witnesses' backing allocations.
+    assert_eq!(materializer.expert_read_pipeline_observation(), retained);
+    drop(f.sequence(&materializer));
     let ended = materializer.expert_read_pipeline_observation();
-    assert_eq!(ended.current_charge.host_charged_bytes, 0);
-    assert_eq!(ended.stats, retained.stats);
+    assert_eq!(
+        ended.current_charge.host_charged_bytes,
+        METADATA + STACK as u64
+    );
+    assert_eq!(ended.stats.workers_created, 1);
+    assert_eq!(ended.stats.worker_reuses, 1);
     assert_eq!(materializer.checkpoint_read_counters(), before);
 }
 
@@ -144,7 +157,7 @@ fn wasted_completed_io_reports_actual_reader_interval_not_assumed_equal_schedule
     let mut sequence = f.sequence(&materializer);
     sequence.lookahead((0, 0), Some((0, 1)), false);
     let ticket = sequence.pending.as_ref().unwrap().ticket.as_ref().unwrap();
-    sequence.pipeline.wait(ticket).unwrap(); // ensure actual IO, then abandon the scope.
+    sequence.pipeline().wait(ticket).unwrap(); // ensure actual IO, then abandon the scope.
     drop(sequence);
     let observed = materializer.expert_read_pipeline_observation();
     assert!(observed.worker_read_observed);
@@ -156,7 +169,10 @@ fn wasted_completed_io_reports_actual_reader_interval_not_assumed_equal_schedule
     assert_eq!(observed.stats.prefetched_reads_taken, 0);
     assert_eq!(observed.last_receipt.unwrap().identity.expert, 1);
     assert!(observed.last_receipt.unwrap().cancellation_requested);
-    assert_eq!(observed.current_charge.host_charged_bytes, 0);
+    assert_eq!(
+        observed.current_charge.host_charged_bytes,
+        METADATA + STACK as u64
+    );
 }
 
 #[test]
@@ -183,7 +199,7 @@ fn failed_scope_finalizes_counters_but_keeps_caller_held_completion_charge() {
             .expert_read_pipeline_observation()
             .current_charge
             .host_charged_bytes,
-        0
+        METADATA + STACK as u64
     );
     assert_eq!(materializer.expert_read_pipeline_stats(), retained.stats);
 }
@@ -212,7 +228,10 @@ fn physical_json_merges_host_observation_without_certifying_release_from_zero() 
     let materializer = f.materializer(ExpertReadSchedule::Blocking);
     drop(f.sequence(&materializer));
     let observation = materializer.expert_read_pipeline_observation();
-    assert_eq!(observation.current_charge.host_charged_bytes, 0);
+    assert_eq!(
+        observation.current_charge.host_charged_bytes,
+        METADATA + STACK as u64
+    );
     let physical = PhysicalResourceObservation {
         expert_read_pipeline: ResourceEvidence::Observed(observation),
         ..Default::default()
@@ -256,7 +275,7 @@ fn real_worker_notification_panic_finalizes_unknown_without_refund_or_healing() 
     let f = Fixture::new(2);
     let materializer = f.materializer(ExpertReadSchedule::Lookahead);
     let sequence = f.sequence(&materializer);
-    let mut listener = sequence.pipeline.listen();
+    let mut listener = sequence.pipeline().listen();
     let slot = Arc::new(Mutex::new(Some(sequence)));
     let callback_slot = Arc::clone(&slot);
     let (sent, received) = mpsc::sync_channel(1);
@@ -319,7 +338,7 @@ fn abandoned_lookahead_reports_extra_io_while_kept_weights_and_worker_bounds_mat
     for schedule in [ExpertReadSchedule::Blocking, ExpertReadSchedule::Lookahead] {
         let materializer = f.materializer(schedule);
         let mut sequence = f.sequence(&materializer);
-        let worker_options = sequence.pipeline.options();
+        let worker_options = sequence.pipeline().options();
         let payload_limit = sequence.options.limits().unwrap();
         let value = prepared(&materializer, sequence.demand(0, 0).unwrap());
         sequence.track_artifacts(&value).unwrap();
@@ -328,7 +347,7 @@ fn abandoned_lookahead_reports_extra_io_while_kept_weights_and_worker_bounds_mat
         sequence.lookahead((0, 0), Some((0, 1)), false);
         if let Some(pending) = &sequence.pending {
             sequence
-                .pipeline
+                .pipeline()
                 .wait(pending.ticket.as_ref().unwrap())
                 .unwrap();
         }

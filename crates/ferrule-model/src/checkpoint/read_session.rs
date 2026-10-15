@@ -164,6 +164,12 @@ impl ShardHandlePool {
         })
     }
 
+    pub(super) fn shares_owner_with(&self, other: &Self) -> bool {
+        self.max_shards == other.max_shards
+            && Arc::ptr_eq(&self.entries, &other.entries)
+            && Arc::ptr_eq(&self.counters, &other.counters)
+    }
+
     pub(super) fn counters(&self) -> CheckpointReadCounters {
         self.counters.snapshot()
     }

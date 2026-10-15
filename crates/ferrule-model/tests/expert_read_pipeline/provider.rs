@@ -148,9 +148,12 @@ fn private_state_dict_hooks_preserve_completed_only_lru_routes_and_payloads() {
                 visited.push((expert, slots));
                 cache.complete(&lease, true).unwrap();
             }
-            drop(provider); // Real host worker joins/drains before the next scope.
+            drop(provider); // Drain this scope; keep the actual worker for the next one.
         }
         let reads = materializer.expert_read_pipeline_stats();
+        assert_eq!(reads.workers_created, 1);
+        assert_eq!(reads.worker_reuses, 4);
+        assert_eq!(reads.workers_joined, 0);
         assert_eq!(reads.wasted_reads, 0);
         assert_eq!(reads.unknown_bytes, 0);
         assert_eq!(
@@ -204,7 +207,7 @@ fn decoder_constructor_options_reach_the_real_materializer_and_private_provider(
     use crate::execution::ExecutionPrecisionPolicy;
     use crate::spec::{ModelFamily, WeightSource};
     use ferrule_common::execution::{ExecutionCapabilities, KvBindingMode, LogitsRowPolicy};
-    let f = Fixture::new(2);
+    let f = Fixture::layers(3, 2);
     let semantics = f
         .metadata
         .iter()
@@ -264,44 +267,56 @@ fn decoder_constructor_options_reach_the_real_materializer_and_private_provider(
         assert_eq!(configured.effective_mode, None);
         assert!(!configured.worker_read_observed);
         assert_eq!(materializer.checkpoint_read_counters().bytes_read, 0);
-        let mut provider = StateDictExpertProvider {
-            layer: 0,
-            bindings: &semantics,
-            materializer: &materializer,
-            reads: None,
-        };
-        provider
-            .preflight_expert_reads(IMAGE, &[&f.metadata[0], &f.metadata[1]])
-            .unwrap();
-        let ExpertAvailability::Ready(value) = provider.expert(0, 0).unwrap() else {
-            panic!()
-        };
-        assert_eq!(materializer.checkpoint_read_counters().bytes_read, 18);
-        drop(value);
-        provider.lookahead_expert_read(&f.metadata[0], Some(&f.metadata[1]), false);
-        let ExpertAvailability::Ready(value) = provider.expert(0, 1).unwrap() else {
-            panic!()
-        };
-        drop(value);
-        drop(provider);
+        for _invocation in 0..2 {
+            for layer in 0..3 {
+                let selected = &f.metadata[layer * 2..layer * 2 + 2];
+                let mut provider = StateDictExpertProvider {
+                    layer,
+                    bindings: &semantics[layer * 2..layer * 2 + 2],
+                    materializer: &materializer,
+                    reads: None,
+                };
+                provider
+                    .preflight_expert_reads(IMAGE, &[&selected[0], &selected[1]])
+                    .unwrap();
+                let ExpertAvailability::Ready(value) = provider.expert(layer, 0).unwrap() else {
+                    panic!()
+                };
+                drop(value);
+                provider.lookahead_expert_read(&selected[0], Some(&selected[1]), false);
+                let ExpertAvailability::Ready(value) = provider.expert(layer, 1).unwrap() else {
+                    panic!()
+                };
+                drop(value);
+                drop(provider);
+            }
+        }
         let stats = materializer.expert_read_pipeline_stats();
         let observed = materializer.expert_read_pipeline_observation();
         assert!(observed.enabled && observed.worker_read_observed);
         assert_eq!(observed.requested_mode, Some(schedule));
         assert_eq!(observed.effective_mode, Some(schedule));
-        assert_eq!(observed.current_charge.host_charged_bytes, 0);
-        assert_eq!(stats.completed_reads, 2);
-        assert_eq!(stats.verified_reads, 2);
-        assert_eq!(stats.reader_interval_calls, 12);
-        assert_eq!(stats.reader_interval_bytes, 36);
+        assert_eq!(
+            observed.current_charge.host_charged_bytes,
+            read.max_metadata_bytes + read.worker_stack_bytes as u64
+        );
+        assert_eq!(stats.workers_created, 1);
+        assert_eq!(stats.worker_reuses, 5);
+        assert_eq!(stats.workers_joined, 0);
+        assert_eq!(stats.sequences_started, 6);
+        assert_eq!(stats.sequences_finished, 6);
+        assert_eq!(stats.completed_reads, 12);
+        assert_eq!(stats.verified_reads, 12);
+        assert_eq!(stats.reader_interval_calls, 72);
+        assert_eq!(stats.reader_interval_bytes, 216);
         assert_eq!(
             stats.prefetched_reads_taken,
-            u64::from(schedule == ExpertReadSchedule::Lookahead)
+            6 * u64::from(schedule == ExpertReadSchedule::Lookahead)
         );
-        assert_eq!(stats.submitted_reads, 2);
+        assert_eq!(stats.submitted_reads, 12);
         assert_eq!(
             stats.speculative_reads,
-            u64::from(schedule == ExpertReadSchedule::Lookahead)
+            6 * u64::from(schedule == ExpertReadSchedule::Lookahead)
         );
         assert_eq!(stats.unknown_bytes, 0);
         assert!(stats.peak_host_charged_bytes <= read.max_host_bytes);

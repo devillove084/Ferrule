@@ -3,6 +3,7 @@
 
 mod lifecycle;
 mod observation;
+mod reuse;
 
 use super::*;
 use crate::checkpoint::{CheckpointDType, CheckpointReadCounters, CheckpointTensorSlice};
@@ -30,6 +31,10 @@ pub(crate) struct Fixture {
 
 impl Fixture {
     pub(crate) fn new(experts: usize) -> Self {
+        Self::layers(1, experts)
+    }
+
+    pub(crate) fn layers(layers: usize, experts: usize) -> Self {
         let directory = std::env::temp_dir().join(format!(
             "ferrule-expert-read-{}-{}",
             std::process::id(),
@@ -41,7 +46,9 @@ impl Fixture {
         let mut slices = Vec::new();
         let mut schema = StateDictSchema::builder();
         let mut mapper = ExactNameMapper::new();
-        for expert in 0..experts {
+        for entry in 0..layers * experts {
+            let layer = entry / experts;
+            let expert = entry % experts;
             for (projection, role) in [
                 TensorRole::RoutedExpertGate,
                 TensorRole::RoutedExpertUp,
@@ -50,16 +57,16 @@ impl Fixture {
             .into_iter()
             .enumerate()
             {
-                let name = format!("layer.0.expert.{expert}.projection.{projection}");
+                let name = format!("layer.{layer}.expert.{expert}.projection.{projection}");
                 let module = ModulePath::new(&name).unwrap();
                 schema
                     .register_with_role(
                         ParameterSpec::new(
-                            ParameterId::new((expert * 3 + projection + 1) as u64),
+                            ParameterId::new((entry * 3 + projection + 1) as u64),
                             module.clone(),
                             ParameterDType::F8E4M3,
                             vec![2, 2],
-                            ParameterResidency::expert(0, expert),
+                            ParameterResidency::expert(layer, expert),
                         )
                         .unwrap()
                         .with_required_scale(ParameterDType::Bf16, vec![1, 1])
@@ -102,12 +109,12 @@ impl Fixture {
         let bound = StateDictBinder::new(&schema.build().unwrap(), &mapper)
             .bind_slices(slices)
             .unwrap();
-        let metadata = (0..experts)
-            .map(|expert| {
+        let metadata = (0..layers * experts)
+            .map(|entry| {
                 ExpertMetadata::new(
-                    0,
-                    expert,
-                    bound.parameters()[expert * 3..expert * 3 + 3]
+                    entry / experts,
+                    entry % experts,
+                    bound.parameters()[entry * 3..entry * 3 + 3]
                         .to_vec()
                         .try_into()
                         .unwrap(),
@@ -290,9 +297,9 @@ fn both_schedules_use_identical_worker_limits_bytes_storage_and_custody() {
     for schedule in [ExpertReadSchedule::Blocking, ExpertReadSchedule::Lookahead] {
         let materializer = f.materializer(schedule);
         let mut sequence = f.sequence(&materializer);
-        assert_eq!(sequence.pipeline.options().worker_stack_bytes, STACK);
+        assert_eq!(sequence.pipeline().options().worker_stack_bytes, STACK);
         assert_eq!(
-            sequence.pipeline.budget().worker_stack.reserved_bytes,
+            sequence.pipeline().budget().worker_stack.reserved_bytes,
             STACK
         );
         assert_eq!(
@@ -303,7 +310,7 @@ fn both_schedules_use_identical_worker_limits_bytes_storage_and_custody() {
         for expert in 0..3 {
             let value = prepared(&materializer, sequence.demand(0, expert).unwrap());
             sequence.track_artifacts(&value).unwrap();
-            assert_eq!(sequence.pipeline.budget().reserved_bytes, EXPERT_BYTES);
+            assert_eq!(sequence.pipeline().budget().reserved_bytes, EXPERT_BYTES);
             assert_eq!(sequence.artifact_bytes, EXPERT_BYTES);
             assert!(sequence.stats.peak_payload_bytes <= 2 * EXPERT_BYTES);
             assert!(sequence.stats.peak_host_charged_bytes <= options(schedule).max_host_bytes);
@@ -336,7 +343,7 @@ fn both_schedules_use_identical_worker_limits_bytes_storage_and_custody() {
                 0
             }
         );
-        assert_eq!(sequence.pipeline.budget().reserved_bytes, 0);
+        assert_eq!(sequence.pipeline().budget().reserved_bytes, 0);
         outputs.push(output);
     }
     assert_eq!(outputs[0], outputs[1]);
@@ -422,7 +429,7 @@ fn materializer_admits_one_sequence_and_drop_releases_only_proved_host_scope() {
             .expert_read_sequence(IMAGE, &[&f.metadata[0]])
             .is_err()
     );
-    drop(sequence); // Actual worker cancellation/join/drain.
+    drop(sequence); // Actual cancellation/drain, then retain the same worker.
     assert!(
         materializer
             .expert_read_sequence(IMAGE, &[&f.metadata[0]])
@@ -444,7 +451,7 @@ fn live_artifact_alias_prevents_read_credit_reuse_or_unaccounted_next_read() {
     drop(value);
     sequence.lookahead((0, 0), Some((0, 1)), false);
     assert_eq!(sequence.stats.submitted_reads, 1);
-    assert_eq!(sequence.pipeline.budget().reserved_bytes, EXPERT_BYTES);
+    assert_eq!(sequence.pipeline().budget().reserved_bytes, EXPERT_BYTES);
     assert!(sequence.demand(0, 1).is_err());
     drop(alias);
     // The attempted scheduling violation is still delivered on demand, not
@@ -489,8 +496,8 @@ fn unused_speculation_is_discarded_accounted_and_does_not_change_error_order() {
         .as_ref()
         .unwrap()
         .clone();
-    sequence.pipeline.wait(&ticket).unwrap();
-    assert_eq!(sequence.pipeline.budget().reserved_bytes, EXPERT_BYTES);
+    sequence.pipeline().wait(&ticket).unwrap();
+    assert_eq!(sequence.pipeline().budget().reserved_bytes, EXPERT_BYTES);
     // This bucket became a hit; the speculative read is not promoted to cache.
     sequence.lookahead((0, 1), Some((0, 2)), false);
     assert_eq!(sequence.stats.wasted_reads, 1);
@@ -525,9 +532,9 @@ fn speculative_stale_failure_waits_for_demand_and_keeps_original_error_source() 
     );
     assert!(error.to_string().contains("stale"));
     assert_eq!(materializer.checkpoint_read_counters().bytes_read, 0);
-    assert_eq!(sequence.pipeline.budget().reserved_bytes, EXPERT_BYTES);
+    assert_eq!(sequence.pipeline().budget().reserved_bytes, EXPERT_BYTES);
     drop(error); // Failed completion charge remains until error custody drops.
-    assert_eq!(sequence.pipeline.budget().reserved_bytes, 0);
+    assert_eq!(sequence.pipeline().budget().reserved_bytes, 0);
 }
 
 #[test]
@@ -562,12 +569,12 @@ fn cancellation_retains_accepted_custody_until_actual_wait_take_drop() {
         .as_ref()
         .unwrap()
         .clone();
-    sequence.pipeline.cancel(&ticket).unwrap();
-    assert_eq!(sequence.pipeline.budget().reserved_bytes, EXPERT_BYTES);
-    sequence.pipeline.wait(&ticket).unwrap();
-    assert_eq!(sequence.pipeline.budget().reserved_bytes, EXPERT_BYTES);
+    sequence.pipeline_mut().cancel(&ticket).unwrap();
+    assert_eq!(sequence.pipeline().budget().reserved_bytes, EXPERT_BYTES);
+    sequence.pipeline().wait(&ticket).unwrap();
+    assert_eq!(sequence.pipeline().budget().reserved_bytes, EXPERT_BYTES);
     sequence.discard_pending().unwrap();
-    assert_eq!(sequence.pipeline.budget().reserved_bytes, 0);
+    assert_eq!(sequence.pipeline().budget().reserved_bytes, 0);
     assert_eq!(sequence.stats.wasted_reads, 1);
 }
 

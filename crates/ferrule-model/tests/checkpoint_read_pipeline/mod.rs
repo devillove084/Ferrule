@@ -1053,6 +1053,8 @@ fn failed_worker_spawn_proves_no_started_worker_or_accepted_operation() {
         state: Mutex::new(State {
             entries: BTreeMap::new(),
             accepting: true,
+            working: false,
+            faulted: false,
             budget: ReadBudgetSnapshot {
                 worker_stack: ReadWorkerStackSnapshot {
                     configured_bytes: 1024,
@@ -1068,6 +1070,7 @@ fn failed_worker_spawn_proves_no_started_worker_or_accepted_operation() {
         changed: Condvar::new(),
         wake: CompletionHub::new(),
         worker_id: OnceLock::new(),
+        worker_alive: AtomicBool::new(false),
         join: Mutex::new(JoinCustody::default()),
     };
     let failed = Err(std::io::Error::other("injected worker spawn failure"));
@@ -1166,3 +1169,5 @@ mod metadata;
 
 #[cfg(unix)]
 use crate::checkpoint::metadata_test_support as metadata_support;
+
+mod reuse;

@@ -13,7 +13,7 @@
 //! neither cancellation nor shutdown refunds it. There is no payload cache.
 
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, SyncSender, TrySendError};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 use std::thread::{self, JoinHandle, ThreadId};
@@ -328,6 +328,17 @@ pub struct ReadBudgetObservation {
     pub ledger_poisoned: bool,
 }
 
+/// Passive worker lifecycle facts; an exited thread still needs an actual join.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReadWorkerObservation {
+    pub alive: bool,
+    pub join_pending: bool,
+    pub joined: bool,
+    pub join_failed: bool,
+    pub poisoned: bool,
+    pub custody_unknown: bool,
+}
+
 impl ReadBudgetSnapshot {
     /// Sum of payload and requested-stack reservations without u64 overflow.
     /// This excludes unobserved OS/allocator overhead and separately staged artifacts.
@@ -345,6 +356,8 @@ pub struct ReadUnknownOperation {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReadShutdown {
+    /// Sticky loss of worker/ledger proof, including failures with no live ticket.
+    pub custody_unknown: bool,
     pub join_failed: bool,
     pub join_pending: bool,
     pub join_handoff: Option<ReadJoinHandoff>,
@@ -376,6 +389,25 @@ impl PartialEq for ReadJoinHandoff {
 impl Eq for ReadJoinHandoff {}
 
 impl ReadJoinHandoff {
+    pub fn observe_worker(&self) -> ReadWorkerObservation {
+        let custody_unknown = match self.shared.state.lock() {
+            Ok(state) => state.faulted,
+            Err(_) => true,
+        };
+        let (join, poisoned) = match self.shared.join.lock() {
+            Ok(join) => (join, false),
+            Err(error) => (error.into_inner(), true),
+        };
+        ReadWorkerObservation {
+            alive: self.shared.worker_alive.load(Ordering::Acquire),
+            join_pending: join.deferred.is_some() || join.joining,
+            joined: join.joined && !poisoned,
+            join_failed: join.failed,
+            poisoned,
+            custody_unknown,
+        }
+    }
+
     /// Join a deferred shutdown. Calling from the read worker or while another
     /// thread is joining returns `join_pending`, without waiting or refunding.
     /// Before shutdown/drop there is no deferred handle, so it is also pending.
@@ -440,10 +472,18 @@ struct State {
     entries: BTreeMap<OperationId, Entry>,
     budget: ReadBudgetSnapshot,
     accepting: bool,
+    working: bool,
+    faulted: bool,
 }
 
 impl State {
     fn quarantine_pending(&mut self, reason: ReadUnknownReason) {
+        self.faulted |= reason != ReadUnknownReason::WorkerStopped
+            || self.accepting
+            || self
+                .entries
+                .values()
+                .any(|entry| matches!(entry.phase, Phase::Queued | Phase::Reading));
         self.accepting = false;
         for entry in self.entries.values_mut() {
             if matches!(entry.phase, Phase::Queued | Phase::Reading) {
@@ -500,6 +540,7 @@ struct Shared {
     changed: Condvar,
     wake: CompletionHub,
     worker_id: OnceLock<ThreadId>,
+    worker_alive: AtomicBool,
     join: Mutex<JoinCustody>,
 }
 
@@ -660,6 +701,7 @@ impl Shared {
         };
         let state = self.lock();
         ReadShutdown {
+            custody_unknown: state.faulted,
             join_failed,
             join_pending,
             join_handoff: join_pending.then(|| ReadJoinHandoff {
@@ -736,9 +778,13 @@ impl Drop for WorkerExit {
         } else {
             ReadUnknownReason::WorkerStopped
         };
-        self.0.lock().quarantine_pending(reason);
+        let mut state = self.0.lock();
+        state.working = false;
+        state.quarantine_pending(reason);
+        drop(state);
         self.0.changed.notify_all();
         self.0.close_wake();
+        self.0.worker_alive.store(false, Ordering::Release);
     }
 }
 
@@ -838,10 +884,13 @@ impl CheckpointReadPipeline {
                     ..ReadBudgetSnapshot::default()
                 },
                 accepting: true,
+                working: false,
+                faulted: false,
             }),
             changed: Condvar::new(),
             wake: CompletionHub::new(),
             worker_id: OnceLock::new(),
+            worker_alive: AtomicBool::new(true),
             join: Mutex::new(JoinCustody::default()),
         });
         let (sender, receiver) = mpsc::sync_channel::<ReadWork>(1);
@@ -852,6 +901,7 @@ impl CheckpointReadPipeline {
             .spawn(move || {
                 let _exit = WorkerExit(Arc::clone(&worker_shared));
                 while let Ok(work) = receiver.recv() {
+                    worker_shared.lock().working = true;
                     // Capture per submission, not at worker spawn: embedded
                     // callers and scoped test subscribers retain their owner.
                     let published = tracing::dispatcher::with_default(&work.dispatch, || {
@@ -863,6 +913,8 @@ impl CheckpointReadPipeline {
                             hook.as_ref(),
                         )
                     });
+                    worker_shared.lock().working = false;
+                    worker_shared.changed.notify_all();
                     if !published {
                         break;
                     }
@@ -973,6 +1025,62 @@ impl CheckpointReadPipeline {
                 }
             }
         }
+    }
+
+    pub(crate) fn on_worker(&self) -> bool {
+        self.shared.on_worker()
+    }
+
+    /// Finish all worker-side publication/callbacks without closing the queue.
+    /// Caller-held completions keep their charges; they forbid the next sequence.
+    pub(crate) fn finish_sequence(&self) -> Result<(), ReadPipelineError> {
+        if self.on_worker() {
+            return Err(ReadPipelineError::NotReady);
+        }
+        let mut state = self.shared.lock();
+        while state.working && state.accepting {
+            state = self.shared.wait(state);
+        }
+        if !state.accepting || state.faulted {
+            return Err(ReadPipelineError::Closed);
+        }
+        if state
+            .entries
+            .values()
+            .any(|entry| !matches!(entry.phase, Phase::Taken))
+        {
+            return Err(ReadPipelineError::NotReady);
+        }
+        Ok(())
+    }
+
+    /// Reuse is operational admission, not a diagnostic snapshot. Never resets
+    /// operation identity, reader counters, limits, peaks or source snapshots.
+    pub(crate) fn ready_for_sequence(&self) -> Result<(), ReadPipelineError> {
+        self.finish_sequence()?;
+        let worker = self.join_handoff().observe_worker();
+        if !worker.alive
+            || worker.join_pending
+            || worker.joined
+            || worker.poisoned
+            || worker.custody_unknown
+            || self.worker.is_none()
+            || self.sender.is_none()
+        {
+            return Err(ReadPipelineError::Closed);
+        }
+        let state = self.shared.lock();
+        if !state.accepting || state.faulted {
+            return Err(ReadPipelineError::Closed);
+        }
+        if !state.entries.is_empty()
+            || state.budget.reserved_slots != 0
+            || state.budget.reserved_bytes != 0
+            || state.budget.worker_stack.unknown_bytes != 0
+        {
+            return Err(ReadPipelineError::NotReady);
+        }
+        Ok(())
     }
 
     /// Capture before an inline callback can destroy the pipeline on its worker.
@@ -1139,6 +1247,7 @@ fn finish_worker_start(
     spawned.map_err(|error| {
         let mut state = shared.lock();
         state.accepting = false;
+        shared.worker_alive.store(false, Ordering::Release);
         // A spawn error proves no worker started and no operation was admitted.
         state.budget.worker_stack.reserved_bytes = 0;
         drop(state);
@@ -1265,6 +1374,7 @@ fn publish(
         entry.phase = Phase::Unknown(ReadUnknownReason::CompletionIdentityMismatch);
         entry.receipt.payload_bytes = 0;
         entry.receipt.completed_at = Some(Instant::now());
+        state.faulted = true;
         state.accepting = false;
         drop(state);
         shared.notify();

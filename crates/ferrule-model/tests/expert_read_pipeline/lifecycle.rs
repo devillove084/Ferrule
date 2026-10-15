@@ -14,21 +14,22 @@ fn failed_completion_error_retains_materializer_admission_until_custody_drops() 
             .is_err()
     );
     drop(error);
-    assert!(
-        materializer
-            .expert_read_sequence(IMAGE, &[&f.metadata[0]])
-            .is_ok()
-    );
+    // Releasing the failed completion cannot refresh the immutable source image.
+    let error = materializer
+        .expert_read_sequence(IMAGE, &[&f.metadata[0]])
+        .unwrap_err();
+    assert!(error.to_string().contains("stale source"));
+    assert_eq!(materializer.expert_read_pipeline_stats().workers_created, 1);
 }
 
 #[test]
-fn owner_unwind_joins_and_drains_real_host_worker_without_cuda_claims() {
+fn owner_unwind_drains_and_reuses_real_host_worker_without_cuda_claims() {
     let f = Fixture::new(2);
     let materializer = f.materializer(ExpertReadSchedule::Lookahead);
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let mut sequence = f.sequence(&materializer);
         sequence.lookahead((0, 0), Some((0, 1)), false);
-        assert_eq!(sequence.pipeline.budget().reserved_bytes, EXPERT_BYTES);
+        assert_eq!(sequence.pipeline().budget().reserved_bytes, EXPERT_BYTES);
         panic!("controlled owner unwind after read submission");
     }));
     assert!(result.is_err());
@@ -114,25 +115,28 @@ fn every_projection_by_value_artifact_and_payload_clone_blocks_replacement_and_d
         let before = materializer.checkpoint_read_counters();
         assert!(sequence.demand(0, 1).is_err());
         assert_eq!(sequence.artifact_bytes, EXPERT_BYTES);
-        assert_eq!(sequence.pipeline.budget().reserved_bytes, EXPERT_BYTES);
+        assert_eq!(sequence.pipeline().budget().reserved_bytes, EXPERT_BYTES);
         assert_eq!(materializer.checkpoint_read_counters(), before);
         drop(artifact);
         assert!(sequence.demand(0, 1).is_err());
-        let join = sequence.pipeline.join_handoff();
+        let join = sequence.pipeline().join_handoff();
         drop(sequence);
         assert_eq!(join.budget().reserved_bytes, 0);
-        assert_eq!(join.budget().worker_stack.reserved_bytes, 0);
+        assert_eq!(join.budget().worker_stack.reserved_bytes, STACK);
         assert!(
             materializer
                 .expert_read_sequence(IMAGE, &[&f.metadata[1]])
                 .is_err()
         );
         drop(payload);
-        assert!(
-            materializer
-                .expert_read_sequence(IMAGE, &[&f.metadata[1]])
-                .is_ok()
-        );
+        let next = materializer
+            .expert_read_sequence(IMAGE, &[&f.metadata[1]])
+            .unwrap()
+            .unwrap();
+        assert_eq!(next.join, join);
+        drop(next);
+        assert_eq!(materializer.expert_read_pipeline_stats().workers_created, 1);
+        assert_eq!(materializer.expert_read_pipeline_stats().worker_reuses, 1);
     }
 }
 
@@ -211,71 +215,88 @@ fn worker_side_sequence_drop_hands_off_join_before_materializer_admission_reopen
             (self.0)();
         }
     }
-    let f = Fixture::new(1);
-    let materializer = Arc::new(f.materializer(ExpertReadSchedule::Lookahead));
-    let sequence = f.sequence(&materializer);
-    let handoff = sequence.pipeline.join_handoff();
-    let mut listener = sequence.pipeline.listen();
-    let slot = Arc::new(Mutex::new(Some(sequence)));
-    let callback_slot = Arc::clone(&slot);
-    let callback_materializer = Arc::clone(&materializer);
-    let callback_handoff = handoff.clone();
-    let (reported, report) = mpsc::sync_channel(1);
-    let (released, release) = mpsc::sync_channel(1);
-    let release = Mutex::new(release);
-    let waker = Waker::from(Arc::new(Callback(Box::new(move || {
-        let sequence = callback_slot.lock().unwrap().take();
-        if let Some(sequence) = sequence {
-            drop(sequence);
-            // A worker-side attempt cannot reopen quota by self-joining.
+    for panic_after_drop in [false, true] {
+        let f = Fixture::new(1);
+        let materializer = Arc::new(f.materializer(ExpertReadSchedule::Lookahead));
+        let sequence = f.sequence(&materializer);
+        let handoff = sequence.pipeline().join_handoff();
+        let mut listener = sequence.pipeline().listen();
+        let slot = Arc::new(Mutex::new(Some(sequence)));
+        let callback_slot = Arc::clone(&slot);
+        let callback_materializer = Arc::clone(&materializer);
+        let callback_handoff = handoff.clone();
+        let (reported, report) = mpsc::sync_channel(1);
+        let (released, release) = mpsc::sync_channel(1);
+        let release = Mutex::new(release);
+        let waker = Waker::from(Arc::new(Callback(Box::new(move || {
+            let sequence = callback_slot.lock().unwrap().take();
+            if let Some(sequence) = sequence {
+                drop(sequence);
+                // A worker-side attempt cannot reopen quota by self-joining.
+                assert!(
+                    callback_materializer
+                        .expert_read_sequence(IMAGE, &[])
+                        .is_err()
+                );
+                reported.send(callback_handoff.join()).unwrap();
+                release
+                    .lock()
+                    .unwrap()
+                    .recv_timeout(Duration::from_secs(10))
+                    .unwrap();
+                assert!(
+                    !panic_after_drop,
+                    "controlled panic after worker-side sequence Drop"
+                );
+            }
+        }))));
+        assert!(
+            Pin::new(&mut listener)
+                .poll(&mut Context::from_waker(&waker))
+                .is_pending()
+        );
+        slot.lock()
+            .unwrap()
+            .as_mut()
+            .unwrap()
+            .lookahead((0, 0), Some((0, 0)), false);
+        let pending = report.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(pending.join_pending);
+        assert!(!pending.join_failed);
+        assert!(pending.unknown.is_empty());
+        assert_eq!(pending.budget.reserved_bytes, EXPERT_BYTES);
+        assert_eq!(pending.budget.worker_stack.reserved_bytes, STACK);
+        let observed = materializer.expert_read_pipeline_observation();
+        assert_eq!(observed.status, "join_pending_at_scope_end");
+        assert_eq!(observed.stats.sequences_finished, 1);
+        assert_eq!(observed.stats.join_pending_sequences, 1);
+        assert_eq!(observed.stats.unobserved_terminal_reads, 1);
+        assert_eq!(observed.stats.completed_reads, 0);
+        let pending_identity = observed.pending_read.unwrap();
+        assert_eq!(pending_identity.image_generation, IMAGE);
+        assert_eq!((pending_identity.layer, pending_identity.expert), (0, 0));
+        assert_eq!(observed.current_charge.packed_bytes, EXPERT_BYTES);
+        assert_eq!(observed.current_charge.requested_stack_bytes, STACK as u64);
+        assert_eq!(materializer.expert_read_pipeline_observation(), observed);
+        released.send(()).unwrap();
+        // Admission itself performs the authorized off-worker join of its retained
+        // handoff; no direct join/refund is needed from this test's supervisor.
+        let next = materializer.expert_read_sequence(IMAGE, &[&f.metadata[0]]);
+        if panic_after_drop {
+            assert!(next.is_err());
+            assert!(handoff.observe_worker().custody_unknown);
+            assert_eq!(materializer.expert_read_pipeline_stats().workers_created, 1);
             assert!(
-                callback_materializer
-                    .expert_read_sequence(IMAGE, &[])
+                materializer
+                    .expert_read_sequence(IMAGE, &[&f.metadata[0]])
                     .is_err()
             );
-            reported.send(callback_handoff.join()).unwrap();
-            release
-                .lock()
-                .unwrap()
-                .recv_timeout(Duration::from_secs(10))
-                .unwrap();
+        } else {
+            drop(next.unwrap());
+            assert_eq!(materializer.expert_read_pipeline_stats().workers_created, 2);
         }
-    }))));
-    assert!(
-        Pin::new(&mut listener)
-            .poll(&mut Context::from_waker(&waker))
-            .is_pending()
-    );
-    slot.lock()
-        .unwrap()
-        .as_mut()
-        .unwrap()
-        .lookahead((0, 0), Some((0, 0)), false);
-    let pending = report.recv_timeout(Duration::from_secs(5)).unwrap();
-    assert!(pending.join_pending);
-    assert!(!pending.join_failed);
-    assert!(pending.unknown.is_empty());
-    assert_eq!(pending.budget.reserved_bytes, EXPERT_BYTES);
-    assert_eq!(pending.budget.worker_stack.reserved_bytes, STACK);
-    let observed = materializer.expert_read_pipeline_observation();
-    assert_eq!(observed.status, "join_pending_at_scope_end");
-    assert_eq!(observed.stats.sequences_finished, 1);
-    assert_eq!(observed.stats.join_pending_sequences, 1);
-    assert_eq!(observed.stats.unobserved_terminal_reads, 1);
-    assert_eq!(observed.stats.completed_reads, 0);
-    let pending_identity = observed.pending_read.unwrap();
-    assert_eq!(pending_identity.image_generation, IMAGE);
-    assert_eq!((pending_identity.layer, pending_identity.expert), (0, 0));
-    assert_eq!(observed.current_charge.packed_bytes, EXPERT_BYTES);
-    assert_eq!(observed.current_charge.requested_stack_bytes, STACK as u64);
-    assert_eq!(materializer.expert_read_pipeline_observation(), observed);
-    released.send(()).unwrap();
-    // Admission itself performs the authorized off-worker join of its retained
-    // handoff; no direct join/refund is needed from this test's supervisor.
-    let next = materializer
-        .expert_read_sequence(IMAGE, &[&f.metadata[0]])
-        .unwrap();
-    assert_eq!(handoff.budget().reserved_bytes, 0);
-    assert_eq!(handoff.budget().worker_stack.reserved_bytes, 0);
-    drop(next);
+        assert_eq!(materializer.expert_read_pipeline_stats().workers_joined, 1);
+        assert_eq!(handoff.budget().reserved_bytes, 0);
+        assert_eq!(handoff.budget().worker_stack.reserved_bytes, 0);
+    }
 }
