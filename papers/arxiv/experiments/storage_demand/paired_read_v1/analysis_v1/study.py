@@ -4,7 +4,7 @@ from derive import (ROOT, BASE, RAW, PLAN, ANALYSIS, MODES, ORDER, TRIALS, NAMES
                     METRICS, MIB, GIB, require, digest, input_paths, paired_summary)
 from receipts import arm_data
 
-SOURCES = ('derive.py', 'receipts.py', 'study.py', 'plot_paired_read.py', 'render.py')
+SOURCES = ('derive.py', 'receipts.py', 'study.py', 'plot_paired_read.py', 'render.py', 'plot_common.py')
 
 
 def source_hashes(root=ROOT):

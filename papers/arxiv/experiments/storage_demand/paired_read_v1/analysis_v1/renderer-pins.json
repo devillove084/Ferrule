@@ -1,0 +1,36 @@
+{
+  "backend": "Agg",
+  "dependencies": {
+    "contourpy": "1.2.0",
+    "cycler": "0.11.0",
+    "fonttools": "4.51.0",
+    "kiwisolver": "1.4.4",
+    "matplotlib": "3.8.4",
+    "numpy": "1.26.4",
+    "packaging": "23.2",
+    "pillow": "10.3.0",
+    "pyparsing": "3.0.9",
+    "python-dateutil": "2.9.0.post0",
+    "six": "1.16.0"
+  },
+  "font_family": "DejaVu Sans",
+  "fonts": {
+    "bold": {
+      "name": "DejaVuSans-Bold.ttf",
+      "sha256": "b184b89e3c1075f22f6b71575b6fc20d4972b3cfd3b23322ca6fd596dcaef167"
+    },
+    "normal": {
+      "name": "DejaVuSans.ttf",
+      "sha256": "3fdf69cabf06049ea70a00b5919340e2ce1e6d02b0cc3c4b44fb6801bd1e0d22"
+    }
+  },
+  "freetype": "2.12.1",
+  "matplotlib": "3.8.4",
+  "numpy": "1.26.4",
+  "pdf_fonttype": 42,
+  "pillow": "10.3.0",
+  "png_dpi": 180,
+  "python": "3.12.4",
+  "zlib_build": "1.2.13",
+  "zlib_runtime": "1.2.13"
+}

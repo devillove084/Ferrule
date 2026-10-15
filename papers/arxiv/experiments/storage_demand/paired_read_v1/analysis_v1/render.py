@@ -1,36 +1,45 @@
 """CPU-only deterministic Matplotlib/Agg rendering, with text-bound layout checks."""
 import io
 import itertools
+from importlib.metadata import version
 import json
 import math
 import sys
 import zlib
 from pathlib import Path
-from derive import ANALYSIS, FIG, MIB, GIB, MODES, digest, encode, require
+from plot_common import ANALYSIS, FIG, MIB, GIB, MODES, digest, encode, require
 
 COLORS = dict(blocking='#0072B2', lookahead='#008577', ink='#202832', gray='#68727D', grid='#D9DDE3')
 MARKERS = dict(blocking='o', lookahead='s')
 NAMES = ('latency', 'read-wait', 'accounting')
 
 
+def font_paths():
+    import matplotlib as mpl
+    directory = Path(mpl.get_data_path()) / 'fonts' / 'ttf'
+    return {'normal': directory / 'DejaVuSans.ttf', 'bold': directory / 'DejaVuSans-Bold.ttf'}
+
+
 def toolchain():
     import matplotlib as mpl
     mpl.use('Agg', force=True)
     import numpy as np
-    from matplotlib import font_manager, ft2font
+    from matplotlib import ft2font
     from PIL import __version__ as pillow_version
     fonts = {}
     for weight in ('normal', 'bold'):
-        path = Path(font_manager.findfont(font_manager.FontProperties(family='DejaVu Sans', weight=weight)))
+        path = font_paths()[weight]
         fonts[weight] = dict(name=path.name, sha256=digest(path.read_bytes()))
     return dict(python=sys.version.split()[0], zlib_build=zlib.ZLIB_VERSION, zlib_runtime=zlib.ZLIB_RUNTIME_VERSION,
                 matplotlib=mpl.__version__, numpy=np.__version__, pillow=pillow_version,
                 freetype=ft2font.__freetype_version__, font_family='DejaVu Sans', fonts=fonts,
                 backend='Agg', png_dpi=180, pdf_fonttype=42,
+                dependencies={name: version(name) for name in ('matplotlib', 'numpy', 'pillow', 'contourpy',
+                              'cycler', 'fonttools', 'kiwisolver', 'packaging', 'pyparsing', 'python-dateutil', 'six')},
                 renderer_source_sha256=digest((Path(__file__)).read_bytes()))
 
 
-def render_figures(data, renderer):
+def render_figures(data, renderer, *, creator=ANALYSIS + 'plot_paired_read.py'):
     import matplotlib as mpl
     from matplotlib import pyplot as plt
     from matplotlib.lines import Line2D
@@ -39,7 +48,8 @@ def render_figures(data, renderer):
     from PIL import Image
     from PIL.PngImagePlugin import PngInfo
 
-    hashes = dict(input_manifest_sha256=data['provenance']['input_manifest_sha256'],
+    hashes = dict(input_manifest_path=data['provenance']['input_manifest_path'],
+                  input_manifest_sha256=data['provenance']['input_manifest_sha256'],
                   generator_sha256=digest(encode(data['provenance']['source_hashes'])),
                   renderer_source_sha256=renderer['renderer_source_sha256'],
                   renderer_toolchain_sha256=digest(encode(renderer)), plot_data_sha256=digest(encode(data)))
@@ -77,6 +87,13 @@ def render_figures(data, renderer):
 
     def finish(fig, name, note):
         fig.text(.5, .025, note, ha='center', va='bottom', fontsize=7.4, linespacing=1.5)
+        # Bind each text artist to the hashed bundled fonts, not a host font lookup.
+        for artist in fig.findobj(match=Text):
+            properties = artist.get_fontproperties().copy()
+            weight = properties.get_weight()
+            bold = weight in ('bold', 'heavy', 'black') or isinstance(weight, (int, float)) and weight >= 700
+            properties.set_file(str(font_paths()['bold' if bold else 'normal']))
+            artist.set_fontproperties(properties)
         fig.canvas.draw()
         canvas = fig.canvas.get_renderer()
         width, height = fig.bbox.width, fig.bbox.height
@@ -111,13 +128,13 @@ def render_figures(data, renderer):
         for suffix in ('pdf', 'png'):
             buffer = io.BytesIO()
             meta = (dict(Title='Paired read: ' + name, Subject=metadata,
-                         Creator=ANALYSIS + 'plot_paired_read.py', CreationDate=None, ModDate=None)
-                    if suffix == 'pdf' else dict(Software=ANALYSIS + 'plot_paired_read.py', Description=metadata))
+                         Creator=creator, CreationDate=None, ModDate=None)
+                    if suffix == 'pdf' else dict(Software=creator, Description=metadata))
             fig.savefig(buffer, format=suffix, dpi=renderer['png_dpi'], metadata=meta)
             outputs[FIG + name + '.' + suffix] = buffer.getvalue()
         plt.close(fig)
 
-    with mpl.rc_context(style):
+    with mpl.rc_context({**mpl.rcParamsDefault, **style, 'backend': 'Agg'}):
         fig = plt.figure(figsize=(7.5, 5.8))
         grid = fig.add_gridspec(2, 2, left=.105, right=.97, top=.81, bottom=.23,
                                 wspace=.36, hspace=.62, width_ratios=[1.04, 1.0])
@@ -199,14 +216,14 @@ def render_figures(data, renderer):
         table.text(.77, .91, 'Lookahead', color=COLORS['lookahead'], weight='bold', transform=table.transAxes)
         sample = data['arms'][0]
         rows = [('Logical checkpoint-reader bytes', f"{sample['logical_counters']['checkpoint_read_bytes']:,}"),
-                ('Facade H2D bytes', f"{sample['logical_counters']['h2d_bytes']:,}"),
+                ('Requested host-to-device\nbytes', f"{sample['logical_counters']['h2d_bytes']:,}"),
                 ('Verified reads / recorded wasted bytes', f"{sample['pipeline_stats']['verified_reads']:,} / {sample['pipeline_stats']['wasted_read_bytes']}"),
                 ('Unknown reads / unknown bytes', f"{sample['pipeline_stats']['unknown_reads']} / {sample['pipeline_stats']['unknown_bytes']}")]
         for i, (label, value) in enumerate(rows):
-            y = .69 - i * .205
-            table.text(.02, y, label, transform=table.transAxes, fontsize=9)
-            table.text(.51, y, value, transform=table.transAxes, fontsize=9)
-            table.text(.77, y, value, transform=table.transAxes, fontsize=9)
+            y = (.74, .46, .18, -.06)[i]
+            table.text(.02, y, label, transform=table.transAxes, fontsize=9, linespacing=.95, va='center')
+            table.text(.51, y, value, transform=table.transAxes, fontsize=9, va='center')
+            table.text(.77, y, value, transform=table.transAxes, fontsize=9, va='center')
         for ax, value, limit, heading, limit_label, scope in (
             (host, sample['host_logical_peak_bytes'] / MIB, sample['host_logical_limit_bytes'] / MIB,
              '(b) Logical host\nreservation', '64 MiB limit', 'Not RSS or physical host usage'),
@@ -253,7 +270,7 @@ def render_figures(data, renderer):
         offset += image.height
     info = PngInfo()
     info.add_text('Description', metadata)
-    info.add_text('Software', ANALYSIS + 'plot_paired_read.py')
+    info.add_text('Software', creator)
     buffer = io.BytesIO()
     sheet.save(buffer, format='PNG', pnginfo=info)
     outputs[FIG + 'preview.png'] = buffer.getvalue()

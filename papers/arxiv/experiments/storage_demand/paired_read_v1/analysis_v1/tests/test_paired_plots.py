@@ -219,7 +219,7 @@ class StudyTests(unittest.TestCase):
             self.assertNotIn(needle, serialized)
         self.assertEqual(self.data['provenance']['input_manifest_sha256'], self.manifest_hash)
         self.assertEqual(self.data['provenance']['source_hashes'], S.source_hashes())
-        self.assertEqual(len(self.data['provenance']['source_hashes']), 5)
+        self.assertEqual(len(self.data['provenance']['source_hashes']), 6)
 
     def test_check_is_byte_exact_and_never_rewrites_stale_output(self):
         with tempfile.TemporaryDirectory() as temporary:

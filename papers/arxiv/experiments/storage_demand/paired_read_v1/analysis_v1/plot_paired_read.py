@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""Generate or byte-check only the new paired-read plots; offline and CPU-only."""
+"""Public rendering by default; deprecated private derivation requires --private-inputs."""
 import argparse
 import os
 import tempfile
-
-import derive as D
-import study as S
+import sys
+from pathlib import Path
 
 
 def captions(data):
+    import plot_common as D
     a = data['paired']['aggregate']
     e, t, g = (a[k] for k in D.METRICS)
     return {
@@ -41,7 +41,7 @@ def captions(data):
         'accounting': (
             'Equal logical work and distinct memory/accounting scopes for all ten lifecycles. '
             'Each lifecycle records 128,811,263,616 logical checkpoint-reader bytes and 128,811,927,312 '
-            'facade H2D bytes over its 12 requests: equal across modes, not equal to each other '
+            'requested host-to-device bytes over its 12 requests: equal across modes, not equal to each other '
             '(H2D minus reader is 663,696 bytes). Every arm records 40,943 verified reads, zero wasted '
             'read bytes, and zero unknown read counts/bytes in the read-pipeline ledger. These '
             'application counters are not physical backend I/O or bus traffic. The owner-lifetime '
@@ -62,11 +62,12 @@ def latex(text):
 
 
 def guide(data):
+    import plot_common as D
     cap = captions(data)
     aggregate = data['paired']['aggregate']
     labels = {'latency': 'f:paired-latency', 'read-wait': 'f:paired-read-wait', 'accounting': 'f:paired-accounting'}
     lines = ['# Paired-read figures: sealed mapfixed study', '',
-             'All files are new. Historical figures, manuscript, production code, raw receipts, and '
+             'Deprecated custodian reconstruction only. Historical figures, manuscript, production code, raw receipts, and '
              '`publication_results_v1` are untouched. No launch, GPU query, network access, harness '
              'import, or new dependency is used.', '', '## Exact captions and suggested LaTeX labels', '']
     for name, caption in cap.items():
@@ -123,7 +124,8 @@ def guide(data):
               '| Arm | Startup probe (s) | Device samples |', '|---|---:|---:|']
     for arm in data['arms']:
         lines.append(f"| {arm['trial']} | {arm['startup_probe_seconds']:.6f} | {arm['device_sample_count']} |")
-    lines += ['', '## Provenance, privacy, and deterministic reproduction', '',
+    lines += ['', '## Deprecated custodian-only reproduction',
+              'Public users must use `render_public.py --output-dir DIR`; the following private-input reconstruction is not needed for public figures.', '',
               f"`inputs.json` binds {data['provenance']['input_count']} exact inputs with SHA-256; "
               f"{data['provenance']['checked_original_pin_count']} selected inputs also match original study/audit/preregistration pins. "
               'The validator recomputes from all ten raw server timelines, request/HTTP copies, '
@@ -139,9 +141,9 @@ def guide(data):
               'are omitted; DejaVu Sans normal/bold are pinned by hash. Byte reproducibility is scoped '
               'to that renderer/FreeType/font environment, not promised across arbitrary installations.', '',
               'From the repository root:', '', '```sh',
-              'python3 -S -B -m unittest discover -s ' + D.ANALYSIS + 'tests -v',
-              '/home/admin/wxw403883/anaconda3/bin/python3.12 -B ' + D.ANALYSIS + 'plot_paired_read.py',
-              '/home/admin/wxw403883/anaconda3/bin/python3.12 -B ' + D.ANALYSIS + 'plot_paired_read.py --check',
+              'python3 -S -B -m unittest discover -s ' + D.ANALYSIS + 'tests -p test_paired_plots.py -v',
+              '/home/admin/wxw403883/anaconda3/bin/python3.12 -B ' + D.ANALYSIS + 'plot_paired_read.py --private-inputs --output-dir /tmp/paired-read-private',
+              '/home/admin/wxw403883/anaconda3/bin/python3.12 -B ' + D.ANALYSIS + 'plot_paired_read.py --private-inputs --output-dir /tmp/paired-read-private --check',
               '```', '',
               '`--check` rereads and validates sealed inputs, derives data, re-renders in memory, '
               'and compares every byte, including the manifest and guide. It never rewrites outputs '
@@ -163,6 +165,8 @@ def check_outputs(root, outputs):
 
 
 def generate(sources, manifest, manifest_hash):
+    import derive as D
+    import study as S
     import render as R
     data = S.build_data(sources, manifest, manifest_hash)
     renderer = R.toolchain()
@@ -177,14 +181,21 @@ def generate(sources, manifest, manifest_hash):
     outputs[D.ANALYSIS + 'layout.json'] = D.encode(layout)
     artifact_manifest = dict(schema='ferrule.paired-read.plot-manifest.v1',
         provenance=data['provenance'], renderer=renderer,
-        artifacts={path: D.digest(content) for path, content in sorted(outputs.items())},
+        artifacts={Path(path).name: D.digest(content) for path, content in sorted(outputs.items())},
         policy='No timestamp; check rederives and compares exact bytes; manifest excludes its own recursive hash')
     outputs[D.ANALYSIS + 'plot-manifest.json'] = D.encode(artifact_manifest)
     return outputs, data
 
 
 def main():
+    if '--private-inputs' not in sys.argv[1:]:
+        from render_public import main as public_main
+        return public_main()
+    import derive as D
+    print('DEPRECATED CUSTODIAN MODE: reads 840 private inputs; public users should run render_public.py', file=sys.stderr)
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--private-inputs', action='store_true', help='Deprecated custodian-only reconstruction; never required for public figures')
+    parser.add_argument('--output-dir', type=Path, required=True, help='Explicit private-render output directory, separate from public outputs')
     parser.add_argument('--check', action='store_true', help='Compare every regenerated byte; no writes or input resealing')
     args = parser.parse_args()
     try:
@@ -192,17 +203,22 @@ def main():
         with tempfile.TemporaryDirectory(prefix='.paired-read-mpl-', dir=D.HERE) as cache:
             os.environ['MPLCONFIGDIR'] = cache
             outputs, data = generate(sources, manifest, manifest_hash)
+        outputs = {Path(path).name: content for path, content in outputs.items()}
         if args.check:
-            stale = check_outputs(D.ROOT, outputs)
+            stale = check_outputs(args.output_dir, outputs)
             if stale:
                 print('STALE: ' + ', '.join(stale))
                 return 1
         else:
-            for path in outputs:
-                D.require(path.startswith(D.FIG) or path.startswith(D.ANALYSIS), 'output outside owned paths')
-                D.require((D.ROOT / path).parent.is_dir(), 'missing owned output directory')
+            D.require(args.output_dir.resolve() != D.HERE, 'private output must not replace public plot data')
+            D.require(args.output_dir.resolve() != D.ROOT / 'papers/arxiv/figures', 'private output must not replace paper figures')
+            public = D.HERE.parent / 'publication_results_v1'
+            D.require(args.output_dir.resolve() != public and public not in args.output_dir.resolve().parents,
+                      'private output must not modify frozen public archive')
+            args.output_dir.mkdir(parents=True, exist_ok=True)
             for path, content in outputs.items():
-                (D.ROOT / path).write_bytes(content)
+                D.require(not (args.output_dir / path).is_symlink(), 'refusing symlink output')
+                (args.output_dir / path).write_bytes(content)
         print(('CHECKED' if args.check else 'GENERATED') + ': 3 PDFs, 3 PNGs, contact sheet, data, guide, layout, manifest')
         print(f"PASS: {len(sources)} input hashes; 5 blocks; 120 requests; 900 actual tokens; 1020 anchored invocations")
         print('L/B ratios: ' + ', '.join(f"{k}={data['paired']['aggregate'][k]['ratio']:.8f}" for k in D.METRICS))

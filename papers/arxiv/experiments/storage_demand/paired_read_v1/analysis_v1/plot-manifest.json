@@ -1,33 +1,38 @@
 {
   "artifacts": {
-    "papers/arxiv/experiments/storage_demand/paired_read_v1/analysis_v1/PLOTS.md": "f9fc42bdc307f1b2cd3949bb9ce112233e63058cfca8e4974f315dbdc6f6aecd",
-    "papers/arxiv/experiments/storage_demand/paired_read_v1/analysis_v1/layout.json": "7749b59ade5f13a212db86994e2d0cd7f663b59fae4c65b0b4b1265fb8113a5e",
-    "papers/arxiv/experiments/storage_demand/paired_read_v1/analysis_v1/plot-data.json": "411af7262a6e01d533539b6a88ef475736431964683ed11345229a8e08d50b5f",
-    "papers/arxiv/figures/paired-read-accounting.pdf": "cfe84323d5a3a9ee57d31e44d0f4379816028315e4b33bc35595bec3054073cc",
-    "papers/arxiv/figures/paired-read-accounting.png": "130ad0bcbe44815a3caf9b653057f4d6de5a1cc0be98f8fda776059e4eaad9e3",
-    "papers/arxiv/figures/paired-read-latency.pdf": "9c7bade527a9d59a6e592576204f9b4b82eea87c3055cfb6b28a0033f86c5e7a",
-    "papers/arxiv/figures/paired-read-latency.png": "4b8f7a2fd0ba0c0e6e8e9c154495d839dcff74a9380ecc09761d61da9051f658",
-    "papers/arxiv/figures/paired-read-preview.png": "80217ef602d313bb4067c19fe97bf5fd039b776aec11a405563405a01c6b7000",
-    "papers/arxiv/figures/paired-read-read-wait.pdf": "5d796dac2c03f7727327bcc340fea23ac915d6d842ec848c46ec31b85a034d83",
-    "papers/arxiv/figures/paired-read-read-wait.png": "7c437407cb1737921169810ad65ade77a63f3acb8d434fe523d775eb015b4c0a"
+    "layout.json": "68c93748bb1f9be955f4f6c3ff1163713bb4a1509d6042c21f95fbbc82440eb5",
+    "paired-read-accounting.pdf": "1007e311740f6be097de61053f73caf2555cea6422192f7e075952677a633bdd",
+    "paired-read-accounting.png": "9c72ea7dc6e9b76ced05e24fc53be76bd2fbf490d537ef3281e0cb9e82094648",
+    "paired-read-latency.pdf": "b57eab07dc4e39667e0eb5abd638bb83c26c629a8906041de277c10ecfeed656",
+    "paired-read-latency.png": "17478bbbf53c976419b39f7b568440bfb2ce8a9c7da8659477ea2c86af3ae872",
+    "paired-read-preview.png": "7a8a923e429c14fbf8822bd6013f06603e2bfd8c4f7aef4ef2f264e605c92fef",
+    "paired-read-read-wait.pdf": "a12e797202b84197a53a46ea3bfac6e431cb74193369885b05c6a3a7140111fe",
+    "paired-read-read-wait.png": "8d500a2044e88313c0bbc22ad722480c6252f5283340b0be223cb8ee3f62c621",
+    "plot-data.json": "bd6e690f282714638e3a1c3ff805702bdb1decc16cfca68c89ab24a380a53dae"
   },
-  "policy": "No timestamp; check rederives and compares exact bytes; manifest excludes its own recursive hash",
+  "policy": "Portable basenames; manifest excludes its own recursive hash. Public measurement manifest is read-only. Check verifies actual output hashes and rederives every byte",
   "provenance": {
-    "actual_candidate_identity": {
-      "cli_binary_sha256": "7cc8e0ff6e84f27090494b8e9e27dc3a388d1d2f3fc34ae39dae416e1e607a01",
-      "commit": "86c58a017d7c4b53490f536a3b1a133f2f7848cc",
-      "source_archive_sha256": "e0d160996147820fcc64cfb29070b265b2297a6d9265a21de541ed77e8f2fa65",
-      "source_digest": "10183d246a1278248273e7d3055d1690cb56854cbff30f9f0662f18813dc8188",
-      "source_members": 1484
-    },
-    "checked_original_pin_count": 838,
-    "generator_sha256": "a8c5d14cca7ace1cb75a7e9aeb217b2afb29bbd073da57712a3641d2786d7847",
-    "input_count": 840,
-    "input_manifest_path": "papers/arxiv/experiments/storage_demand/paired_read_v1/analysis_v1/inputs.json",
-    "input_manifest_sha256": "447b067ecbe5a3a0279f0e489a4427bb4b7d11cf0314addf3075801a4ac99587",
-    "privacy_policy": "Allowlisted fields only; no environment, credentials, process maps, mount paths, or raw copies",
+    "device_sample_scope": "Checked public collector-summary maxima and counts; raw device sample streams are not in the public archive",
+    "generator_sha256": "ef06f98cf33d03d3a8e810374741ce6cc71f5893b6d2b6a6759786d0142a28e1",
+    "input_count": 623,
+    "input_manifest_path": "publication_results_v1/manifest.json",
+    "input_manifest_sha256": "14890f2d90461c0b228a804ae8c77d3ae93cdda6417bdcd1880292839fddccd0",
+    "privacy_policy": "Only public archive members; no private inputs or private derivation imports",
     "renderer": {
       "backend": "Agg",
+      "dependencies": {
+        "contourpy": "1.2.0",
+        "cycler": "0.11.0",
+        "fonttools": "4.51.0",
+        "kiwisolver": "1.4.4",
+        "matplotlib": "3.8.4",
+        "numpy": "1.26.4",
+        "packaging": "23.2",
+        "pillow": "10.3.0",
+        "pyparsing": "3.0.9",
+        "python-dateutil": "2.9.0.post0",
+        "six": "1.16.0"
+      },
       "font_family": "DejaVu Sans",
       "fonts": {
         "bold": {
@@ -46,23 +51,49 @@
       "pillow": "10.3.0",
       "png_dpi": 180,
       "python": "3.12.4",
-      "renderer_source_sha256": "8f20f0045e664cc686baf59bb30ba097fc7e9368803adfc5f952754d00963e66",
+      "renderer_source_sha256": "f5439a7163605eed3089b3815f3c2fcd24801243eb4ba8de1ea2940d403090e7",
       "zlib_build": "1.2.13",
       "zlib_runtime": "1.2.13"
     },
-    "renderer_source_sha256": "8f20f0045e664cc686baf59bb30ba097fc7e9368803adfc5f952754d00963e66",
-    "renderer_toolchain_sha256": "79926081e86f1107fb8ae81817ce0eec9a1d887001ec66a4765f7003a5bb2caf",
+    "renderer_source_sha256": "f5439a7163605eed3089b3815f3c2fcd24801243eb4ba8de1ea2940d403090e7",
+    "renderer_toolchain_sha256": "8375077a111de8b4ca3cf6ddb861ba4505fbd686da41457c4dcd4cca40b2a281",
     "source_hashes": {
-      "papers/arxiv/experiments/storage_demand/paired_read_v1/analysis_v1/derive.py": "cbab0efc86374f341e78e7dfd45deffc2bd359939c59e399215645d699e900c5",
-      "papers/arxiv/experiments/storage_demand/paired_read_v1/analysis_v1/plot_paired_read.py": "90c6f3195300bf47019e75635f6de4f070db4e78a270304d0f210dc156ea18e6",
-      "papers/arxiv/experiments/storage_demand/paired_read_v1/analysis_v1/receipts.py": "8e2d590f4d4af8c1a50d42d2be6b470d7b15ed20f6c44debdca8ba32eadcaec5",
-      "papers/arxiv/experiments/storage_demand/paired_read_v1/analysis_v1/render.py": "8f20f0045e664cc686baf59bb30ba097fc7e9368803adfc5f952754d00963e66",
-      "papers/arxiv/experiments/storage_demand/paired_read_v1/analysis_v1/study.py": "141d1e1c0b6df658452f09ffd6e1a84eab43bd91b50be571f8dbcb5076d80a57"
+      "analysis_v1/plot_common.py": "0f8045b21eee78ad9430419a466aa2ee54b850b8593fc8e1480009e5e29a568f",
+      "analysis_v1/render.py": "f5439a7163605eed3089b3815f3c2fcd24801243eb4ba8de1ea2940d403090e7",
+      "analysis_v1/render_public.py": "00c8cfa1373d0dccdce2471524dd2f71228ad0f5f2bfb4d81a635452f732675d",
+      "analysis_v1/renderer-pins.json": "5cec3527f097cac8f91eb7820a85d32bfe6a04b75a44256a6a0c389c996f5d2a",
+      "analysis_v1/requirements-render.txt": "9ea3fdbb321917b2e1951430f9ef19d960c1390cb1864a918096915c9e93cc7d",
+      "publication_results_v1/check.py": "ecb6b291bf9ccbd0558b6b5087bd74010f64d307ceb31221ddf629ac332e9a27",
+      "publication_results_v1/common.py": "802a1acb39a3f862827e68d7bd3b041ff34b877bce28c0ab3224cb7322b352c7",
+      "publication_results_v1/prespecified.py": "d217638a3e1fb5f1b2d76baa9fe5d80ce917725347bc88dc7381da00485ef08c",
+      "publication_results_v1/reconcile.py": "a5864f07a275840046454a3c3db3483d3ae38b6f976a1590c8353ee7033e247c"
     },
-    "time_policy": "No analysis timestamp; only bound recorded measurements"
+    "time_policy": "No analysis timestamp; only bound recorded measurements",
+    "verification": "check.verify: every public member, compressed and expanded hashes, original pins, full reconstruction and bootstrap enumeration",
+    "verified_public_inventory": {
+      "bytes": 4451307,
+      "distinct_original_pointers": 3605,
+      "files": 623,
+      "original_pin_sets": 11,
+      "original_raw_files": 1461,
+      "uncompressed_member_bytes": 44142418
+    }
   },
   "renderer": {
     "backend": "Agg",
+    "dependencies": {
+      "contourpy": "1.2.0",
+      "cycler": "0.11.0",
+      "fonttools": "4.51.0",
+      "kiwisolver": "1.4.4",
+      "matplotlib": "3.8.4",
+      "numpy": "1.26.4",
+      "packaging": "23.2",
+      "pillow": "10.3.0",
+      "pyparsing": "3.0.9",
+      "python-dateutil": "2.9.0.post0",
+      "six": "1.16.0"
+    },
     "font_family": "DejaVu Sans",
     "fonts": {
       "bold": {
@@ -81,9 +112,9 @@
     "pillow": "10.3.0",
     "png_dpi": 180,
     "python": "3.12.4",
-    "renderer_source_sha256": "8f20f0045e664cc686baf59bb30ba097fc7e9368803adfc5f952754d00963e66",
+    "renderer_source_sha256": "f5439a7163605eed3089b3815f3c2fcd24801243eb4ba8de1ea2940d403090e7",
     "zlib_build": "1.2.13",
     "zlib_runtime": "1.2.13"
   },
-  "schema": "ferrule.paired-read.plot-manifest.v1"
+  "schema": "ferrule.paired-read.public-plot-manifest.v1"
 }
