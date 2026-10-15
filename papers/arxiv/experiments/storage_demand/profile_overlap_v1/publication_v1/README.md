@@ -247,7 +247,7 @@ interval widths. Operation labels sit above, not on, the intervals. The two
 aggregate bars have different, explicitly labeled millisecond scales.
 
 **Suggested caption:** *Scoped overlap for two fresh profiled QA executions of
-the same frozen CLI. Top: deterministic 20-ms excerpts beginning at each arm's
+the same serving executable. Top: deterministic 20-ms excerpts beginning at each arm's
 first source-qualified worker read, showing allocation-plus-read NVTX
 envelopes, OSRT pread wall intervals, and actual expert GPU kernels identified
 through unique launch correlations. Symbols mark event starts, not minimum
@@ -260,6 +260,6 @@ and dropped-event count is unknown. Userspace wall intervals do not establish
 active I/O or physical NAS-service overlap, and these profiled executions do
 not establish ordinary-run speed confidence.*
 
-The manuscript and original profiling/production sources are intentionally
-unchanged. Any paper integration must preserve these scope and denominator
-qualifications.
+This rendering-only revision leaves the original profiling/production sources
+and measurement records unchanged; it is not a new experiment. Paper integration
+must preserve these scope and denominator qualifications.

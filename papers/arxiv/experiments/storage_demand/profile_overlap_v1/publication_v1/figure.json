@@ -1,17 +1,17 @@
 {
   "figures": {
     "read-compute-overlap.pdf": {
-      "bytes": 39996,
-      "sha256": "c8a8eb48f0e11d6dbf06c7a717b1eb2ea83eac8aec745a9c870d92bd8b36470a"
+      "bytes": 39854,
+      "sha256": "1fc54a38a9fa8c26bd6c8093bf41d8e44cb425cf388188a64fc713f845063c60"
     },
     "read-compute-overlap.png": {
-      "bytes": 278524,
-      "sha256": "2d6cbec37b077913388d4fd8f9833bde3ae71b2cd899d1358ebe4121570835f8"
+      "bytes": 279089,
+      "sha256": "1a2d8c0e7497012c5292d0c02b67710408f6edbff768016cf48bc04d148fd18c"
     }
   },
   "hashes": {
     "manifest_sha256": "3906671e772992eeff4187cfab71c3fe30eb923b924f4b1e52ac3f0be25723f4",
-    "renderer_source_sha256": "6c429531bf955cbaecbc4e9846e91f2c4543f828752f98aa8098532e8f58a827",
+    "renderer_source_sha256": "841c3a266a538384fafd8047c4dc332859e14aef10309344344d4ffcf349a8e1",
     "toolchain_sha256": "375c2bba2e1fb44aecbf8404aa918a65d91dfa169f20c76d32d7f8b900df7c93"
   },
   "layout": {
@@ -555,12 +555,12 @@
       },
       {
         "bounds": [
-          0.192361,
+          0.161736,
           0.939629,
-          0.807639,
+          0.838264,
           0.954236
         ],
-        "text": "One profiled QA per arm \u00b7 same frozen CLI \u00b7 3,678 source-verified read operations per arm"
+        "text": "One profiled QA per arm \u00b7 same serving executable \u00b7 3,678 source-verified read operations per arm"
       },
       {
         "bounds": [

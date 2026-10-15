@@ -74,7 +74,7 @@ def build_figure(data, results):
         fig.suptitle('Read–compute overlap: scoped evidence from two fresh captures',
                      x=.5, y=.975, fontsize=12.2, fontweight='bold')
         read_count = len(track_data(data['blocking'])['read'])
-        fig.text(.5, .943, f'One profiled QA per arm · same frozen CLI · {read_count:,} source-verified read operations per arm',
+        fig.text(.5, .943, f'One profiled QA per arm · same serving executable · {read_count:,} source-verified read operations per arm',
                  ha='center', fontsize=8.8)
         handles = [Line2D([], [], color=COLORS['read'], lw=5, marker='o', ms=4, label='NVTX read envelope'),
                    Line2D([], [], color=COLORS['pread'], lw=5, marker='s', ms=4, label='OSRT pread wall'),
