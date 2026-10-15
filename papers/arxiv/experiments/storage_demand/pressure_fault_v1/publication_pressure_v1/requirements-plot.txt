@@ -1,0 +1,2 @@
+# Rendering only. Curation and evidence verification use the standard library.
+matplotlib==3.8.4

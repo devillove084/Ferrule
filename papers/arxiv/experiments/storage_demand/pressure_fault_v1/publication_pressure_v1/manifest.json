@@ -1,0 +1,33 @@
+{
+  "schema": "ferrule.pressure-public-manifest.v1",
+  "study": "artifacts-go-v2-20261015-02",
+  "source_manifest_sha256": "c570b05aa5c6ffc63c588c7e78441728cf1c1db9119e83a1a9a3c813efb7a283",
+  "source_files_verified": 244,
+  "supplemental_source_sha256": {
+    "plan_v2/plan.json": "4a07a1d3518189a19fdec639d30eac0bca11b551a2a57f62305d312b15663c7f",
+    "artifacts-go-20261015-01/study-stop.json": "763073a29f2679d1f8c070ea38d2a363d60b2f5eb295cfc04ae52018c81f3d9b",
+    "plan_v2/root-analysis.json": "d11033bf973e04d955ea8694ac4af37e5f4151214835ba9d5793b35156d561bb",
+    "artifacts-go-v2-20261015-01/blocked-start.json": "6406ec7b2d628c4b3bc705b033dcbf410fd66615a18cb6c61bc9c9f771c7c150",
+    "artifacts-go-v2-20261015-01/study-stop.json": "f97a6a2399383f0c99fc70d598ba09ac6593f328010c7d557e741f7b0b8e0255"
+  },
+  "verification_scope": "All source hashes checked during curation; public projections are not original bytes or independent attestation",
+  "files": {
+    "records.jsonl.gz": {
+      "sha256": "db377629e2a48c7681b022ee4e13f228b75e9be6a7c11cb81693c037272fcb43",
+      "bytes": 115866
+    },
+    "summary.json": {
+      "sha256": "5bbba89b64d938e966e47dfe53dd5c10dd5110fb2186e2f43a444b5645c2a947",
+      "bytes": 93760
+    },
+    "history.json": {
+      "sha256": "c236e5a64c6f1841bc1d175b12d9feca965f2d7cc804274a8966e99712d85dd5",
+      "bytes": 6689
+    }
+  },
+  "records": {
+    "count": 1516,
+    "uncompressed_bytes": 1472524,
+    "uncompressed_sha256": "3822fa4630185ac4085be0a72ac353e6b9346165e71029048ada4048dbce3f14"
+  }
+}

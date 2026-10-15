@@ -1,0 +1,2626 @@
+{
+  "schema": "ferrule.pressure-public-summary.v1",
+  "status": "verified",
+  "denominators": {
+    "scheduled": 12,
+    "issued": 12,
+    "terminal": 12,
+    "successful": 12,
+    "failed": 0,
+    "censored": 0,
+    "unissued": 0
+  },
+  "generated_tokens": 78,
+  "oracle_covered_tokens": 72,
+  "exact_eight_id_canaries": 9,
+  "study_elapsed_seconds": 362.8151000626385,
+  "study": {
+    "status": "complete",
+    "study_design_id": "pressure-fault-observation-budget-20261015-v2",
+    "limits": {
+      "startup_seconds": 60,
+      "request_seconds": 15,
+      "all_requests_seconds": 120,
+      "worker_bookkeeping_seconds": 15,
+      "target_lifetime_seconds": 195,
+      "shutdown_seconds": 20,
+      "worker_preidle_seconds": 10,
+      "worker_finalization_seconds": 4,
+      "supervisor_seconds": 219,
+      "supervisor_call_overhead_seconds": 11,
+      "coordinator_preidle_seconds": 10,
+      "coordinator_postidle_seconds": 5,
+      "coordinator_finalization_seconds": 5,
+      "outer_lifecycle_seconds": 240,
+      "phase_seconds": 900,
+      "study_cleanup_reserve_seconds": 180
+    },
+    "trial_order": [
+      "small-blocking",
+      "middle-blocking",
+      "big-blocking"
+    ],
+    "denominators": {
+      "scheduled": 12,
+      "issued": 12,
+      "terminal": 12,
+      "successful": 12,
+      "failed": 0,
+      "censored": 0,
+      "unissued": 0
+    },
+    "ended": {
+      "monotonic": 8990272.909562081,
+      "unix_ns": 1792047329873044462
+    },
+    "issued_lifecycles": 3,
+    "completed_lifecycles": 3,
+    "actual_server_starts": 3,
+    "comparison_eligible": true,
+    "full_numerical_per_point": "unverified",
+    "prior_numerical_scope": "middle64_320MiB_only",
+    "repetitions_per_point": 1,
+    "retries": 0,
+    "replacements": 0,
+    "profiling_captures": 0,
+    "physical_nas_backend_bytes": null,
+    "universal_final_release_verified": false,
+    "historical_resume_permitted": false,
+    "claim_limits": [
+      "Not a capacity frontier or independent LRU/entry-vs-byte sensitivity study; two knobs vary jointly",
+      "No 320-MiB whole-model or working-set-fit claim; distinct selected expert IDs are unobserved",
+      "No physical NAS necessity, disk-byte, cold-cache, physical RSS or universal release claim",
+      "No SOTA, broad six-pillar validation, statistical significance, throughput or cross-cap full-quality equivalence",
+      "Fixed order is descriptive n=1 per point with possible time/page-cache carryover; not randomized causal inference",
+      "Source/test inspection and CPU validation are not executed GPU fault or pressure evidence"
+    ],
+    "fixed_options": {
+      "device_bytes": 7516192768,
+      "host_read_bytes": 67108864,
+      "metadata_bytes": 8388608,
+      "worker_stack_bytes": 2097152,
+      "scratch_bytes": 8388608,
+      "kv_bytes": 16777216,
+      "workspace_bytes": 2147483648,
+      "allocator_margin_bytes": 536870912,
+      "context": 128,
+      "sequences": 2,
+      "batch_tokens": 8,
+      "prefill_tokens": 8,
+      "decode_cohort_target": 1,
+      "decode_cohort_max_deferrals": 0,
+      "profile": "qwen35-mixed-bf16",
+      "numeric_precision": "Bf16ModelMixedF32Accumulate",
+      "storage_policy": "E4M3FnBf16Scales",
+      "topology": {
+        "pp": 1,
+        "tp": 1,
+        "ep": 1
+      },
+      "nvtx": "0",
+      "host_expert_retention_bytes": 0,
+      "physical_host_cap_bytes": null,
+      "physical_nas_backend_bytes": null
+    },
+    "prespecified_source_geometry": {
+      "evidence": "target/validation/cli-source-admission-20261015-01/actual-headers-v3-full-argv-final.stdout",
+      "scope": "Existing actual-header CPU receipt, not newly observed source or CUDA admission",
+      "routed_layers": 40,
+      "experts_per_layer": 256,
+      "experts_per_token": 8,
+      "max_projection_extents": 2,
+      "max_whole_expert_payload_bytes": 3146112,
+      "required_metadata_bytes": 7704576,
+      "executor_metadata_bytes": 3985408
+    },
+    "plan_source_sha256": "4a07a1d3518189a19fdec639d30eac0bca11b551a2a57f62305d312b15663c7f",
+    "started": {
+      "monotonic": 8989910.094462018,
+      "unix_ns": 1792046967057943150
+    },
+    "schedule": [
+      {
+        "index": 0,
+        "name": "hello2",
+        "phase": "initial",
+        "population": "initial_canary",
+        "measured": false,
+        "prompt": "Hello",
+        "input_tokens": 1,
+        "max_tokens": 2,
+        "reference_id": null,
+        "reference": null,
+        "payload": {
+          "model": "qwen35-storage-demand-paper",
+          "prompt": "Hello",
+          "temperature": 0,
+          "seed": 1,
+          "n": 1,
+          "max_tokens": 2,
+          "stream": true,
+          "stream_options": {
+            "include_usage": true
+          }
+        },
+        "status": "scheduled",
+        "result": null
+      },
+      {
+        "index": 1,
+        "name": "canary-qa",
+        "phase": "initial",
+        "population": "initial_canary",
+        "measured": false,
+        "prompt": "The capital of Japan is",
+        "input_tokens": 5,
+        "max_tokens": 8,
+        "reference_id": "qa",
+        "reference": {
+          "id": "qa",
+          "prompt": "The capital of Japan is",
+          "input_tokens": 5,
+          "reference_ids": [
+            25358,
+            13,
+            198,
+            760,
+            6511,
+            314,
+            6124,
+            369
+          ],
+          "reference_text": " Tokyo.\nThe capital of Japan is"
+        },
+        "payload": {
+          "model": "qwen35-storage-demand-paper",
+          "prompt": "The capital of Japan is",
+          "temperature": 0,
+          "seed": 1,
+          "n": 1,
+          "max_tokens": 8,
+          "stream": true,
+          "stream_options": {
+            "include_usage": true
+          }
+        },
+        "status": "scheduled",
+        "result": null
+      },
+      {
+        "index": 2,
+        "name": "canary-arithmetic",
+        "phase": "initial",
+        "population": "initial_canary",
+        "measured": false,
+        "prompt": "7 + 8 =",
+        "input_tokens": 5,
+        "max_tokens": 8,
+        "reference_id": "arithmetic",
+        "reference": {
+          "id": "arithmetic",
+          "prompt": "7 + 8 =",
+          "input_tokens": 5,
+          "reference_ids": [
+            907,
+            271,
+            22,
+            478,
+            220,
+            23,
+            283,
+            220
+          ],
+          "reference_text": " ?\n\n7 + 8 = "
+        },
+        "payload": {
+          "model": "qwen35-storage-demand-paper",
+          "prompt": "7 + 8 =",
+          "temperature": 0,
+          "seed": 1,
+          "n": 1,
+          "max_tokens": 8,
+          "stream": true,
+          "stream_options": {
+            "include_usage": true
+          }
+        },
+        "status": "scheduled",
+        "result": null
+      },
+      {
+        "index": 3,
+        "name": "canary-chinese",
+        "phase": "initial",
+        "population": "initial_canary",
+        "measured": false,
+        "prompt": "中国的首都是",
+        "input_tokens": 3,
+        "max_tokens": 8,
+        "reference_id": "chinese",
+        "reference": {
+          "id": "chinese",
+          "prompt": "中国的首都是",
+          "input_tokens": 3,
+          "reference_ids": [
+            98116,
+            3709,
+            98116,
+            108820,
+            102357,
+            95983,
+            1710,
+            97486
+          ],
+          "reference_text": "北京，北京是中国的首都。那么"
+        },
+        "payload": {
+          "model": "qwen35-storage-demand-paper",
+          "prompt": "中国的首都是",
+          "temperature": 0,
+          "seed": 1,
+          "n": 1,
+          "max_tokens": 8,
+          "stream": true,
+          "stream_options": {
+            "include_usage": true
+          }
+        },
+        "status": "scheduled",
+        "result": null
+      }
+    ],
+    "source_commit": "f3472c10656d255f783c1d8035fd7167bb439e4b",
+    "candidate_identity": {
+      "commit": "86c58a017d7c4b53490f536a3b1a133f2f7848cc",
+      "source_digest": "10183d246a1278248273e7d3055d1690cb56854cbff30f9f0662f18813dc8188",
+      "source_archive_sha256": "e0d160996147820fcc64cfb29070b265b2297a6d9265a21de541ed77e8f2fa65",
+      "cli_binary_sha256": "7cc8e0ff6e84f27090494b8e9e27dc3a388d1d2f3fc34ae39dae416e1e607a01",
+      "source_members": 1484
+    },
+    "compiled_source_relations": [
+      {
+        "path": "crates/ferrule-cli/tests/unit/expert_read_config.rs",
+        "role": "compiled_source",
+        "expected_sha256": "53e1e71be53f3444b804b7a22a47dcabb32d3cdf08b655a542797bb54bf490c9",
+        "current_live_sha256": "ee8b120fc7ff3356b3aa3ab88600e55141cf63e5d6a4029eb5eade6cb6e76ca4",
+        "live_matches_compiled": false,
+        "live_checkout_consumed": false,
+        "relation": "candidate archive member, not live compilation"
+      },
+      {
+        "path": "crates/ferrule-composition/tests/unit/engine/model_factory/bf16_full40.rs",
+        "role": "compiled_source",
+        "expected_sha256": "b359c893dab73d21a554a60e94c67335ba788386b48bb5dbee7af319da9b693a",
+        "current_live_sha256": "b359c893dab73d21a554a60e94c67335ba788386b48bb5dbee7af319da9b693a",
+        "live_matches_compiled": true,
+        "live_checkout_consumed": false,
+        "relation": "candidate archive member, not live compilation"
+      },
+      {
+        "path": "crates/ferrule-model/src/checkpoint/read_pipeline.rs",
+        "role": "compiled_source",
+        "expected_sha256": "bd9a3bf2e8545798ecda4f7734da2eeea724a564bd416bcdb29298cc86100493",
+        "current_live_sha256": "bd9a3bf2e8545798ecda4f7734da2eeea724a564bd416bcdb29298cc86100493",
+        "live_matches_compiled": true,
+        "live_checkout_consumed": false,
+        "relation": "candidate archive member, not live compilation"
+      },
+      {
+        "path": "crates/ferrule-model/src/transformer/expert_reads.rs",
+        "role": "compiled_source",
+        "expected_sha256": "55dc60ea16dbf714db86ef23ece46cfa77c9a1e02088d311f253f333c2cbe093",
+        "current_live_sha256": "55dc60ea16dbf714db86ef23ece46cfa77c9a1e02088d311f253f333c2cbe093",
+        "live_matches_compiled": true,
+        "live_checkout_consumed": false,
+        "relation": "candidate archive member, not live compilation"
+      },
+      {
+        "path": "crates/ferrule-model/src/transformer/forward/cuda_tests.rs",
+        "role": "compiled_source",
+        "expected_sha256": "956ec367e50608722d43e66b945ccd164b697aecd1d3847aedbae2446a5eee7a",
+        "current_live_sha256": "3b4f17f5964d66bb390a79ebe9ee9c7b5491be5a6a077a7ead8c9670f94aa724",
+        "live_matches_compiled": false,
+        "live_checkout_consumed": false,
+        "relation": "candidate archive member, not live compilation"
+      },
+      {
+        "path": "crates/ferrule-model/src/transformer/forward/tests.rs",
+        "role": "compiled_source",
+        "expected_sha256": "09f6edb51dd81a7ff0683d294cc992e25acee767d88d1b605d59e7bc809424eb",
+        "current_live_sha256": "09f6edb51dd81a7ff0683d294cc992e25acee767d88d1b605d59e7bc809424eb",
+        "live_matches_compiled": true,
+        "live_checkout_consumed": false,
+        "relation": "candidate archive member, not live compilation"
+      },
+      {
+        "path": "crates/ferrule-model/src/transformer/standard/cuda/bf16_chunk.rs",
+        "role": "compiled_source",
+        "expected_sha256": "00cf4639267c97997e1fe41991721dc1a9bbe1c18f166ae17cd57a0413b82bb0",
+        "current_live_sha256": "00cf4639267c97997e1fe41991721dc1a9bbe1c18f166ae17cd57a0413b82bb0",
+        "live_matches_compiled": true,
+        "live_checkout_consumed": false,
+        "relation": "candidate archive member, not live compilation"
+      },
+      {
+        "path": "crates/ferrule-model/src/transformer/standard/cuda/expert.rs",
+        "role": "compiled_source",
+        "expected_sha256": "8daf31de5c1eef097a40be3deeaa4717ddf721f5bcc41a3e3fd6a3b579f5eb7e",
+        "current_live_sha256": "8daf31de5c1eef097a40be3deeaa4717ddf721f5bcc41a3e3fd6a3b579f5eb7e",
+        "live_matches_compiled": true,
+        "live_checkout_consumed": false,
+        "relation": "candidate archive member, not live compilation"
+      },
+      {
+        "path": "crates/ferrule-model/tests/checkpoint_read_pipeline/mod.rs",
+        "role": "compiled_source",
+        "expected_sha256": "800cfef931515021eac99ba5b551654dd9c610f2be6cdfdf899dd2b1e4ad011c",
+        "current_live_sha256": "800cfef931515021eac99ba5b551654dd9c610f2be6cdfdf899dd2b1e4ad011c",
+        "live_matches_compiled": true,
+        "live_checkout_consumed": false,
+        "relation": "candidate archive member, not live compilation"
+      },
+      {
+        "path": "crates/ferrule-model/tests/expert_read_pipeline/lifecycle.rs",
+        "role": "compiled_source",
+        "expected_sha256": "76c6a720f2d741e66096ac0d9327c850421c56be83f0467d74df4e1d40a28ef5",
+        "current_live_sha256": "76c6a720f2d741e66096ac0d9327c850421c56be83f0467d74df4e1d40a28ef5",
+        "live_matches_compiled": true,
+        "live_checkout_consumed": false,
+        "relation": "candidate archive member, not live compilation"
+      },
+      {
+        "path": "crates/ferrule-model/tests/expert_read_pipeline/mod.rs",
+        "role": "compiled_source",
+        "expected_sha256": "6829ae94278763cd7011af42d3c118e587f3fc20d00989a08b3531c1bc1678e2",
+        "current_live_sha256": "6829ae94278763cd7011af42d3c118e587f3fc20d00989a08b3531c1bc1678e2",
+        "live_matches_compiled": true,
+        "live_checkout_consumed": false,
+        "relation": "candidate archive member, not live compilation"
+      },
+      {
+        "path": "crates/ferrule-model/tests/expert_read_pipeline/observation.rs",
+        "role": "compiled_source",
+        "expected_sha256": "5fbc32b743c0c09875aee40390781c0ec615e5353bed157327b58c8a1ef49125",
+        "current_live_sha256": "5fbc32b743c0c09875aee40390781c0ec615e5353bed157327b58c8a1ef49125",
+        "live_matches_compiled": true,
+        "live_checkout_consumed": false,
+        "relation": "candidate archive member, not live compilation"
+      },
+      {
+        "path": "crates/ferrule-model/tests/unit/transformer/bf16_chunk/lifecycle.rs",
+        "role": "compiled_source",
+        "expected_sha256": "159932afe32caeda940878de2a0a29be12b01af95b1337cb45f9220af0422e8b",
+        "current_live_sha256": "159932afe32caeda940878de2a0a29be12b01af95b1337cb45f9220af0422e8b",
+        "live_matches_compiled": true,
+        "live_checkout_consumed": false,
+        "relation": "candidate archive member, not live compilation"
+      },
+      {
+        "path": "crates/ferrule-model/tests/unit/transformer/numeric_scope.rs",
+        "role": "compiled_source",
+        "expected_sha256": "6a84a02f1d03741ed74258f465633625cc36b7f194386198a817c14ceeec02f9",
+        "current_live_sha256": "6a84a02f1d03741ed74258f465633625cc36b7f194386198a817c14ceeec02f9",
+        "live_matches_compiled": true,
+        "live_checkout_consumed": false,
+        "relation": "candidate archive member, not live compilation"
+      }
+    ],
+    "prior_middle_numerical_gates": 9,
+    "new_point_full_numerical_verified": false,
+    "role_binding_sha256": "add104c7eb611593c007391367808d1c74e78e3569c13046d76d2f0710860c41",
+    "role_root_sha256": "15d77830212af018dc1b9343e71947d1299c29a1f487b935899e498ac0785f05",
+    "additional_source_files": {
+      "registration.json": "8c6035e2011e1a47a90df970128e55d707ae9960bb4ded040e44a7f19ada5c41",
+      "candidate-review.json": "a445098b36dfc62c362bd1f543e1e4034481e4ed6caec4e9d385390f9a5a4315",
+      "input-roles.json": "067ec4b57fd1abd65a6359a41c3de9b7fbc674091840ee5572ac2a3c1e9833a9",
+      "point-scalars.json": "f19070bd61cf218c7c5607304d746531d7517a8fcf1678f5ae51c7047b04836d"
+    }
+  },
+  "points": [
+    {
+      "point": "small",
+      "requested_entries": 8,
+      "requested_cache_bytes": 67108864,
+      "source_options": {
+        "status": "actual_source_options_observed",
+        "point": "small",
+        "effective_metadata_options": {
+          "max_experts": 8,
+          "max_bytes": 67108864,
+          "scratch_bytes": 8388608,
+          "workspace_bytes": 2147483648,
+          "kv_bytes": 16777216,
+          "device_bytes": 7516192768,
+          "allocator_margin_bytes": 536870912,
+          "max_positions": 128,
+          "max_sequences": 2,
+          "max_batch_tokens": 8
+        },
+        "effective_admitted_entries": null,
+        "effective_admitted_cache_bytes": null,
+        "physical_admission": null,
+        "full_numerical_per_point": "unverified"
+      },
+      "payload_arithmetic": {
+        "max_whole_expert_payload_bytes": 3146112,
+        "byte_only_payload_bound": 18,
+        "joint_positive_payload_bound": 8,
+        "model_expert_id_count": 10240,
+        "interpretation": "Logical header-derived arithmetic, not physical admission or working-set occupancy"
+      },
+      "invocation_count": 30,
+      "invocation_counter_totals": {
+        "checkpoint_read_bytes": 36240064128,
+        "checkpoint_read_calls": 69114,
+        "checkpoint_source_checks": 46076,
+        "checkpoint_path_metadata_calls": 46076,
+        "checkpoint_handle_metadata_calls": 46076,
+        "expert_hits": 0,
+        "expert_uploads": 11519,
+        "expert_evictions": 11511,
+        "artifact_uploads": 34557,
+        "artifact_upload_bytes": 36240064128,
+        "h2d_copies": 88763,
+        "h2d_bytes": 36240248688,
+        "source_extents_read": null,
+        "expert_cache_misses": null,
+        "cache_hit_rate": null,
+        "working_set_unique_expert_ids": null,
+        "physical_nas_backend_bytes": null
+      },
+      "final_owner_cache": {
+        "resident_entries": 8,
+        "resident_bytes": 25168896,
+        "pending_upload_bytes": 0,
+        "scratch_bytes": 8388608,
+        "charged_bytes": 33557504,
+        "unknown_quarantine_bytes": 0,
+        "peak_bytes": 43572224,
+        "quarantined": false,
+        "uploads": 11519,
+        "hits": 0,
+        "evictions": 11511
+      },
+      "final_owner_read": {
+        "enabled": true,
+        "requested_mode": "blocking",
+        "effective_mode": "blocking",
+        "worker_read_observed": true,
+        "status": "closed",
+        "limits": {
+          "schedule": "blocking",
+          "max_host_bytes": 67108864,
+          "max_metadata_bytes": 8388608,
+          "worker_stack_bytes": 2097152
+        },
+        "current_charge": {
+          "packed_bytes": 0,
+          "artifact_bytes": 0,
+          "metadata_bytes": 0,
+          "requested_stack_bytes": 0,
+          "payload_bytes": 0,
+          "host_charged_bytes": 0,
+          "unknown_packed_bytes": 0,
+          "unknown_stack_bytes": 0,
+          "reserved_read_slots": 0,
+          "unknown_read_slots": 0
+        },
+        "stats": {
+          "sequences_started": 1200,
+          "sequences_finished": 1200,
+          "join_pending_sequences": 0,
+          "join_failed_sequences": 0,
+          "submitted_reads": 11519,
+          "speculative_reads": 0,
+          "rejected_submissions": 0,
+          "demanded_reads": 11519,
+          "completed_reads": 11519,
+          "verified_reads": 11519,
+          "cancelled_reads": 0,
+          "failed_reads": 0,
+          "unknown_reads": 0,
+          "unobserved_terminal_reads": 0,
+          "worker_started_reads": 11519,
+          "io_started_reads": 11519,
+          "prefetched_reads_taken": 0,
+          "resident_skips": 0,
+          "demand_failures": 0,
+          "materialization_failures": 0,
+          "wasted_reads": 0,
+          "wasted_read_bytes": 0,
+          "unproved_wasted_reads": 0,
+          "proved_read_bytes": 36240064128,
+          "reader_interval_calls": 69114,
+          "reader_interval_bytes": 36240064128,
+          "wasted_reader_interval_calls": 0,
+          "wasted_reader_interval_bytes": 0,
+          "unobserved_reader_intervals": 0,
+          "demand_wait_calls": 11519,
+          "demand_wait_ns": 9423421540,
+          "io_duration_ns": 8854762262,
+          "unknown_bytes": 0,
+          "peak_packed_bytes": 3146112,
+          "peak_artifact_bytes": 3146112,
+          "peak_metadata_bytes": 8388608,
+          "peak_requested_stack_bytes": 2097152,
+          "peak_payload_bytes": 6292224,
+          "peak_host_charged_bytes": 16777984
+        },
+        "current_read": null,
+        "pending_read": null,
+        "last_receipt": {
+          "identity": {
+            "image_generation": 1,
+            "layer": 39,
+            "expert": 207,
+            "operation": 11519
+          },
+          "outcome": "source_verified",
+          "requested_bytes": 3146112,
+          "io_bytes": 3146112,
+          "cancellation_requested": false,
+          "submitted_ns": 11939932,
+          "worker_started_ns": 11948038,
+          "io_started_ns": 11956922,
+          "io_finished_ns": 12628888,
+          "source_verified_ns": 12634985,
+          "completed_ns": 12635116,
+          "taken_ns": 12642133
+        },
+        "timing_origin": "expert_read_sequence_start_host_monotonic_ns_not_cuda",
+        "reader_counter_scope": "shared_checkpoint_reader_submit_through_take_not_ticket_certified",
+        "charge_basis": "logical_host_reservation_not_physical_rss",
+        "stats_scope": "owner_lifetime_owner_observed_transitions_peaks_not_invocation_deltas"
+      },
+      "memory_sample_bounds": {
+        "device_gpu": {
+          "sample_count": 36,
+          "missing_samples": 0,
+          "observed_min_bytes": 0,
+          "sampled_max_bytes": 4191158272,
+          "exact_lifetime_peak_bytes": null,
+          "continuous_coverage": false,
+          "interpretation": "sampled maximum is a lower bound on the lifetime peak, not a proven upper bound"
+        },
+        "tree_rss": {
+          "sample_count": 36,
+          "missing_samples": 0,
+          "observed_min_bytes": 201928704,
+          "sampled_max_bytes": 6732103680,
+          "exact_lifetime_peak_bytes": null,
+          "continuous_coverage": false,
+          "interpretation": "sampled maximum is a lower bound on the lifetime peak, not a proven upper bound"
+        },
+        "tree_pss": {
+          "sample_count": 36,
+          "missing_samples": 0,
+          "observed_min_bytes": 199410688,
+          "sampled_max_bytes": 6729111552,
+          "exact_lifetime_peak_bytes": null,
+          "continuous_coverage": false,
+          "interpretation": "sampled maximum is a lower bound on the lifetime peak, not a proven upper bound"
+        }
+      },
+      "requests": [
+        {
+          "name": "hello2",
+          "status": "success",
+          "worker_id": 1,
+          "http_ids": [
+            "cmpl-ferrule-1"
+          ],
+          "generated_ids": [
+            11,
+            353
+          ],
+          "exact_token_pass": null,
+          "usage": {
+            "prompt_tokens": 1,
+            "completion_tokens": 2,
+            "total_tokens": 3
+          },
+          "http_e2e_seconds": 2.091585248708725,
+          "client_ttft_seconds": 0.6735873110592365,
+          "quality_passed": true,
+          "metric_eligible": true,
+          "helper_window": {
+            "start": 8989946.627039112,
+            "end": 8989958.35741057
+          },
+          "helper_timings": {
+            "source_custody_checks": {
+              "count": 6,
+              "inclusive_wall_seconds": 0.004974504932761192,
+              "inclusive_thread_cpu_seconds": 0.00489531200000215
+            },
+            "workflow_pins": {
+              "count": 3,
+              "inclusive_wall_seconds": 0.2790343798696995,
+              "inclusive_thread_cpu_seconds": 0.27889226899999997
+            },
+            "candidate_pins": {
+              "count": 3,
+              "inclusive_wall_seconds": 9.252688212320209,
+              "inclusive_thread_cpu_seconds": 9.234542619999997
+            },
+            "receipt_hashes": {
+              "count": 3,
+              "inclusive_wall_seconds": 0.0004140976816415787,
+              "inclusive_thread_cpu_seconds": 0.00041411099999777434
+            },
+            "pre_admission_validation": {
+              "count": 1,
+              "inclusive_wall_seconds": 3.197404960170388,
+              "inclusive_thread_cpu_seconds": 3.1912049810000003
+            },
+            "nfs": {
+              "count": 2,
+              "inclusive_wall_seconds": 0.007808271795511246,
+              "inclusive_thread_cpu_seconds": 0.004923985999999658
+            },
+            "pid_io": {
+              "count": 2,
+              "inclusive_wall_seconds": 0.00031748227775096893,
+              "inclusive_thread_cpu_seconds": 0.00031780800000014153
+            },
+            "pre_observer": {
+              "count": 1,
+              "inclusive_wall_seconds": 0.0047360919415950775,
+              "inclusive_thread_cpu_seconds": 0.002784216000000228
+            },
+            "pre_dispatch_validation": {
+              "count": 1,
+              "inclusive_wall_seconds": 3.166830463334918,
+              "inclusive_thread_cpu_seconds": 3.1604281049999994
+            },
+            "http": {
+              "count": 1,
+              "inclusive_wall_seconds": 2.1805437076836824,
+              "inclusive_thread_cpu_seconds": 0.005686890999999861
+            },
+            "post_observer": {
+              "count": 1,
+              "inclusive_wall_seconds": 0.003707757219672203,
+              "inclusive_thread_cpu_seconds": 0.0027740730000012093
+            },
+            "post_http_validation": {
+              "count": 1,
+              "inclusive_wall_seconds": 3.1741678174585104,
+              "inclusive_thread_cpu_seconds": 3.1683460949999986
+            }
+          }
+        },
+        {
+          "name": "canary-qa",
+          "status": "success",
+          "worker_id": 2,
+          "http_ids": [
+            "cmpl-ferrule-2"
+          ],
+          "generated_ids": [
+            25358,
+            13,
+            198,
+            760,
+            6511,
+            314,
+            6124,
+            369
+          ],
+          "exact_token_pass": true,
+          "usage": {
+            "prompt_tokens": 5,
+            "completion_tokens": 8,
+            "total_tokens": 13
+          },
+          "http_e2e_seconds": 7.651030395179987,
+          "client_ttft_seconds": 2.415138540789485,
+          "quality_passed": true,
+          "metric_eligible": true,
+          "helper_window": {
+            "start": 8989958.360435188,
+            "end": 8989975.646106845
+          },
+          "helper_timings": {
+            "source_custody_checks": {
+              "count": 6,
+              "inclusive_wall_seconds": 0.005549425259232521,
+              "inclusive_thread_cpu_seconds": 0.005552992999994899
+            },
+            "workflow_pins": {
+              "count": 3,
+              "inclusive_wall_seconds": 0.28090859204530716,
+              "inclusive_thread_cpu_seconds": 0.2809082870000026
+            },
+            "candidate_pins": {
+              "count": 3,
+              "inclusive_wall_seconds": 9.24930166080594,
+              "inclusive_thread_cpu_seconds": 9.22892964
+            },
+            "receipt_hashes": {
+              "count": 3,
+              "inclusive_wall_seconds": 0.00046996399760246277,
+              "inclusive_thread_cpu_seconds": 0.0004706379999994681
+            },
+            "pre_admission_validation": {
+              "count": 1,
+              "inclusive_wall_seconds": 3.169634088873863,
+              "inclusive_thread_cpu_seconds": 3.1616430899999983
+            },
+            "nfs": {
+              "count": 2,
+              "inclusive_wall_seconds": 0.007634222507476807,
+              "inclusive_thread_cpu_seconds": 0.005011713000001805
+            },
+            "pid_io": {
+              "count": 2,
+              "inclusive_wall_seconds": 0.00031815096735954285,
+              "inclusive_thread_cpu_seconds": 0.0003189729999952817
+            },
+            "pre_observer": {
+              "count": 1,
+              "inclusive_wall_seconds": 0.004590313881635666,
+              "inclusive_thread_cpu_seconds": 0.002882644999999684
+            },
+            "pre_dispatch_validation": {
+              "count": 1,
+              "inclusive_wall_seconds": 3.180609880015254,
+              "inclusive_thread_cpu_seconds": 3.1746030800000007
+            },
+            "http": {
+              "count": 1,
+              "inclusive_wall_seconds": 7.736836578696966,
+              "inclusive_thread_cpu_seconds": 0.005309124000000054
+            },
+            "post_observer": {
+              "count": 1,
+              "inclusive_wall_seconds": 0.0038190335035324097,
+              "inclusive_thread_cpu_seconds": 0.0029023290000012025
+            },
+            "post_http_validation": {
+              "count": 1,
+              "inclusive_wall_seconds": 3.1872722692787647,
+              "inclusive_thread_cpu_seconds": 3.1808868409999995
+            }
+          }
+        },
+        {
+          "name": "canary-arithmetic",
+          "status": "success",
+          "worker_id": 3,
+          "http_ids": [
+            "cmpl-ferrule-3"
+          ],
+          "generated_ids": [
+            907,
+            271,
+            22,
+            478,
+            220,
+            23,
+            283,
+            220
+          ],
+          "exact_token_pass": true,
+          "usage": {
+            "prompt_tokens": 5,
+            "completion_tokens": 8,
+            "total_tokens": 13
+          },
+          "http_e2e_seconds": 7.432686649262905,
+          "client_ttft_seconds": 2.0635199025273323,
+          "quality_passed": true,
+          "metric_eligible": true,
+          "helper_window": {
+            "start": 8989975.650482047,
+            "end": 8989992.769573646
+          },
+          "helper_timings": {
+            "source_custody_checks": {
+              "count": 6,
+              "inclusive_wall_seconds": 0.0064065661281347275,
+              "inclusive_thread_cpu_seconds": 0.006410452999993765
+            },
+            "workflow_pins": {
+              "count": 3,
+              "inclusive_wall_seconds": 0.28038965351879597,
+              "inclusive_thread_cpu_seconds": 0.28039520000000095
+            },
+            "candidate_pins": {
+              "count": 3,
+              "inclusive_wall_seconds": 9.29833522439003,
+              "inclusive_thread_cpu_seconds": 9.280614539000002
+            },
+            "receipt_hashes": {
+              "count": 3,
+              "inclusive_wall_seconds": 0.0004259161651134491,
+              "inclusive_thread_cpu_seconds": 0.0004256170000047632
+            },
+            "pre_admission_validation": {
+              "count": 1,
+              "inclusive_wall_seconds": 3.176492489874363,
+              "inclusive_thread_cpu_seconds": 3.170707953000001
+            },
+            "nfs": {
+              "count": 2,
+              "inclusive_wall_seconds": 0.007639065384864807,
+              "inclusive_thread_cpu_seconds": 0.0050547260000008976
+            },
+            "pid_io": {
+              "count": 2,
+              "inclusive_wall_seconds": 0.00031422264873981476,
+              "inclusive_thread_cpu_seconds": 0.0003145759999974018
+            },
+            "pre_observer": {
+              "count": 1,
+              "inclusive_wall_seconds": 0.0045186057686805725,
+              "inclusive_thread_cpu_seconds": 0.0029184220000004757
+            },
+            "pre_dispatch_validation": {
+              "count": 1,
+              "inclusive_wall_seconds": 3.174668798223138,
+              "inclusive_thread_cpu_seconds": 3.168684790000004
+            },
+            "http": {
+              "count": 1,
+              "inclusive_wall_seconds": 7.5208596009761095,
+              "inclusive_thread_cpu_seconds": 0.0061343280000016875
+            },
+            "post_observer": {
+              "count": 1,
+              "inclusive_wall_seconds": 0.003854949027299881,
+              "inclusive_thread_cpu_seconds": 0.002869199999999239
+            },
+            "post_http_validation": {
+              "count": 1,
+              "inclusive_wall_seconds": 3.2357311472296715,
+              "inclusive_thread_cpu_seconds": 3.229774463999995
+            }
+          }
+        },
+        {
+          "name": "canary-chinese",
+          "status": "success",
+          "worker_id": 4,
+          "http_ids": [
+            "cmpl-ferrule-4"
+          ],
+          "generated_ids": [
+            98116,
+            3709,
+            98116,
+            108820,
+            102357,
+            95983,
+            1710,
+            97486
+          ],
+          "exact_token_pass": true,
+          "usage": {
+            "prompt_tokens": 3,
+            "completion_tokens": 8,
+            "total_tokens": 11
+          },
+          "http_e2e_seconds": 7.080051958560944,
+          "client_ttft_seconds": 1.6355386432260275,
+          "quality_passed": true,
+          "metric_eligible": true,
+          "helper_window": {
+            "start": 8989992.773977501,
+            "end": 8990009.54663168
+          },
+          "helper_timings": {
+            "source_custody_checks": {
+              "count": 6,
+              "inclusive_wall_seconds": 0.00718294270336628,
+              "inclusive_thread_cpu_seconds": 0.007186526999987564
+            },
+            "workflow_pins": {
+              "count": 3,
+              "inclusive_wall_seconds": 0.2790302839130163,
+              "inclusive_thread_cpu_seconds": 0.27898252900000386
+            },
+            "candidate_pins": {
+              "count": 3,
+              "inclusive_wall_seconds": 9.307766571640968,
+              "inclusive_thread_cpu_seconds": 9.289298302999995
+            },
+            "receipt_hashes": {
+              "count": 3,
+              "inclusive_wall_seconds": 0.00040783174335956573,
+              "inclusive_thread_cpu_seconds": 0.00040798399999886215
+            },
+            "pre_admission_validation": {
+              "count": 1,
+              "inclusive_wall_seconds": 3.198726337403059,
+              "inclusive_thread_cpu_seconds": 3.192828741999996
+            },
+            "nfs": {
+              "count": 2,
+              "inclusive_wall_seconds": 0.007774509489536285,
+              "inclusive_thread_cpu_seconds": 0.005022861999997019
+            },
+            "pid_io": {
+              "count": 2,
+              "inclusive_wall_seconds": 0.00031171366572380066,
+              "inclusive_thread_cpu_seconds": 0.00031210699999917324
+            },
+            "pre_observer": {
+              "count": 1,
+              "inclusive_wall_seconds": 0.004672892391681671,
+              "inclusive_thread_cpu_seconds": 0.0028968350000013743
+            },
+            "pre_dispatch_validation": {
+              "count": 1,
+              "inclusive_wall_seconds": 3.1972676925361156,
+              "inclusive_thread_cpu_seconds": 3.190759745000001
+            },
+            "http": {
+              "count": 1,
+              "inclusive_wall_seconds": 7.165443364530802,
+              "inclusive_thread_cpu_seconds": 0.005051678000000948
+            },
+            "post_observer": {
+              "count": 1,
+              "inclusive_wall_seconds": 0.0038345586508512497,
+              "inclusive_thread_cpu_seconds": 0.0028577309999988643
+            },
+            "post_http_validation": {
+              "count": 1,
+              "inclusive_wall_seconds": 3.1995813325047493,
+              "inclusive_thread_cpu_seconds": 3.1934622400000023
+            }
+          }
+        }
+      ],
+      "point_elapsed_seconds": 107.12612755037844,
+      "launch_to_ready_seconds": 13.65310780517757,
+      "phase_timings": {
+        "worker_contract": {
+          "count": 1,
+          "inclusive_wall_seconds": 7.51019742526114,
+          "inclusive_thread_cpu_seconds": 7.504127672
+        },
+        "checkpoint_metadata": {
+          "count": 1,
+          "inclusive_wall_seconds": 0.00010505877435207367,
+          "inclusive_thread_cpu_seconds": 0.00010520799999991226
+        },
+        "nfs": {
+          "count": 14,
+          "inclusive_wall_seconds": 0.053105760365724564,
+          "inclusive_thread_cpu_seconds": 0.03499284799999636
+        },
+        "observer_pss": {
+          "count": 36,
+          "inclusive_wall_seconds": 2.5740196015685797,
+          "inclusive_thread_cpu_seconds": 2.5735483850000005
+        },
+        "observer_diagnostics": {
+          "count": 12,
+          "inclusive_wall_seconds": 0.007200185209512711,
+          "inclusive_thread_cpu_seconds": 0.007164009000000527
+        },
+        "startup": {
+          "count": 1,
+          "inclusive_wall_seconds": 16.32996939495206,
+          "inclusive_thread_cpu_seconds": 0.12405065700000062
+        },
+        "runtime_metadata": {
+          "count": 1,
+          "inclusive_wall_seconds": 0.0001066550612449646,
+          "inclusive_thread_cpu_seconds": 0.00010661899999941937
+        },
+        "library_maps": {
+          "count": 2,
+          "inclusive_wall_seconds": 2.8950067684054375,
+          "inclusive_thread_cpu_seconds": 2.8281268749999997
+        },
+        "source_options": {
+          "count": 1,
+          "inclusive_wall_seconds": 0.0012360196560621262,
+          "inclusive_thread_cpu_seconds": 0.0012365220000010169
+        },
+        "source_custody_checks": {
+          "count": 26,
+          "inclusive_wall_seconds": 0.026745855808258057,
+          "inclusive_thread_cpu_seconds": 0.026678480999976273
+        },
+        "workflow_pins": {
+          "count": 13,
+          "inclusive_wall_seconds": 1.211514338850975,
+          "inclusive_thread_cpu_seconds": 1.2113315000000036
+        },
+        "candidate_pins": {
+          "count": 13,
+          "inclusive_wall_seconds": 40.16991791687906,
+          "inclusive_thread_cpu_seconds": 40.089716751
+        },
+        "receipt_hashes": {
+          "count": 13,
+          "inclusive_wall_seconds": 0.0018510203808546066,
+          "inclusive_thread_cpu_seconds": 0.0018515059999977268
+        },
+        "pre_admission_validation": {
+          "count": 4,
+          "inclusive_wall_seconds": 12.742257876321673,
+          "inclusive_thread_cpu_seconds": 12.716384765999996
+        },
+        "pid_io": {
+          "count": 8,
+          "inclusive_wall_seconds": 0.0012615695595741272,
+          "inclusive_thread_cpu_seconds": 0.0012634639999919983
+        },
+        "pre_observer": {
+          "count": 4,
+          "inclusive_wall_seconds": 0.018517903983592987,
+          "inclusive_thread_cpu_seconds": 0.011482118000001762
+        },
+        "pre_dispatch_validation": {
+          "count": 4,
+          "inclusive_wall_seconds": 12.719376834109426,
+          "inclusive_thread_cpu_seconds": 12.694475720000005
+        },
+        "http": {
+          "count": 4,
+          "inclusive_wall_seconds": 24.60368325188756,
+          "inclusive_thread_cpu_seconds": 0.02218202100000255
+        },
+        "post_observer": {
+          "count": 4,
+          "inclusive_wall_seconds": 0.015216298401355743,
+          "inclusive_thread_cpu_seconds": 0.011403333000000515
+        },
+        "post_http_validation": {
+          "count": 4,
+          "inclusive_wall_seconds": 12.796752566471696,
+          "inclusive_thread_cpu_seconds": 12.772469639999995
+        },
+        "token_join": {
+          "count": 4,
+          "inclusive_wall_seconds": 0.0013034157454967499,
+          "inclusive_thread_cpu_seconds": 0.001303609000000705
+        },
+        "source_counters": {
+          "count": 4,
+          "inclusive_wall_seconds": 0.0012149102985858917,
+          "inclusive_thread_cpu_seconds": 0.0012153859999948224
+        },
+        "request_phase": {
+          "count": 1,
+          "inclusive_wall_seconds": 64.44303265586495,
+          "inclusive_thread_cpu_seconds": 39.722495154
+        },
+        "bookkeeping": {
+          "count": 1,
+          "inclusive_wall_seconds": 4.584315648302436,
+          "inclusive_thread_cpu_seconds": 4.543792689
+        },
+        "observer_finish": {
+          "count": 1,
+          "inclusive_wall_seconds": 0.0008901432156562805,
+          "inclusive_thread_cpu_seconds": 0.0007968640000015625
+        },
+        "shutdown": {
+          "count": 1,
+          "inclusive_wall_seconds": 1.0294634364545345,
+          "inclusive_thread_cpu_seconds": 0.01233996500000245
+        },
+        "worker_finalization": {
+          "count": 1,
+          "inclusive_wall_seconds": 0.010431909933686256,
+          "inclusive_thread_cpu_seconds": 0.00959900999999519
+        }
+      },
+      "nfs_request_phase": {
+        "status": "shared_client_delta",
+        "deltas": {
+          "normalreadbytes": 36491264808,
+          "normalwritebytes": 0,
+          "directreadbytes": 0,
+          "directwritebytes": 0,
+          "serverreadbytes": 0,
+          "serverwritebytes": 0,
+          "readpages": 0,
+          "writepages": 0,
+          "read_rpc_0": 0,
+          "read_rpc_1": 0,
+          "read_rpc_2": 0,
+          "read_rpc_3": 0,
+          "read_rpc_4": 0,
+          "read_rpc_5": 0,
+          "read_rpc_6": 0,
+          "read_rpc_7": 0
+        },
+        "reasons": [],
+        "shared_client_traffic": true,
+        "owned_server_physical_bytes": null,
+        "physical_nas_backend_bytes": null,
+        "scope": "client mount counters; all shared traffic, not server-attributable physical NAS disk IO",
+        "before_window": {
+          "monotonic": 8989946.618243791,
+          "unix_ns": 1792047003581724582
+        },
+        "after_window": {
+          "monotonic": 8990009.558387075,
+          "unix_ns": 1792047066521867744
+        }
+      },
+      "owned_gpu_attribution": "unknown",
+      "full_numerical_per_point": "unverified",
+      "physical_owner_release": "unobserved"
+    },
+    {
+      "point": "middle",
+      "requested_entries": 64,
+      "requested_cache_bytes": 335544320,
+      "source_options": {
+        "status": "actual_source_options_observed",
+        "point": "middle",
+        "effective_metadata_options": {
+          "max_experts": 64,
+          "max_bytes": 335544320,
+          "scratch_bytes": 8388608,
+          "workspace_bytes": 2147483648,
+          "kv_bytes": 16777216,
+          "device_bytes": 7516192768,
+          "allocator_margin_bytes": 536870912,
+          "max_positions": 128,
+          "max_sequences": 2,
+          "max_batch_tokens": 8
+        },
+        "effective_admitted_entries": null,
+        "effective_admitted_cache_bytes": null,
+        "physical_admission": null,
+        "full_numerical_per_point": "unverified"
+      },
+      "payload_arithmetic": {
+        "max_whole_expert_payload_bytes": 3146112,
+        "byte_only_payload_bound": 103,
+        "joint_positive_payload_bound": 64,
+        "model_expert_id_count": 10240,
+        "interpretation": "Logical header-derived arithmetic, not physical admission or working-set occupancy"
+      },
+      "invocation_count": 30,
+      "invocation_counter_totals": {
+        "checkpoint_read_bytes": 36240064128,
+        "checkpoint_read_calls": 69114,
+        "checkpoint_source_checks": 46076,
+        "checkpoint_path_metadata_calls": 46076,
+        "checkpoint_handle_metadata_calls": 46076,
+        "expert_hits": 0,
+        "expert_uploads": 11519,
+        "expert_evictions": 11455,
+        "artifact_uploads": 34557,
+        "artifact_upload_bytes": 36240064128,
+        "h2d_copies": 88763,
+        "h2d_bytes": 36240248688,
+        "source_extents_read": null,
+        "expert_cache_misses": null,
+        "cache_hit_rate": null,
+        "working_set_unique_expert_ids": null,
+        "physical_nas_backend_bytes": null
+      },
+      "final_owner_cache": {
+        "resident_entries": 64,
+        "resident_bytes": 201351168,
+        "pending_upload_bytes": 0,
+        "scratch_bytes": 8388608,
+        "charged_bytes": 209739776,
+        "unknown_quarantine_bytes": 0,
+        "peak_bytes": 219754496,
+        "quarantined": false,
+        "uploads": 11519,
+        "hits": 0,
+        "evictions": 11455
+      },
+      "final_owner_read": {
+        "enabled": true,
+        "requested_mode": "blocking",
+        "effective_mode": "blocking",
+        "worker_read_observed": true,
+        "status": "closed",
+        "limits": {
+          "schedule": "blocking",
+          "max_host_bytes": 67108864,
+          "max_metadata_bytes": 8388608,
+          "worker_stack_bytes": 2097152
+        },
+        "current_charge": {
+          "packed_bytes": 0,
+          "artifact_bytes": 0,
+          "metadata_bytes": 0,
+          "requested_stack_bytes": 0,
+          "payload_bytes": 0,
+          "host_charged_bytes": 0,
+          "unknown_packed_bytes": 0,
+          "unknown_stack_bytes": 0,
+          "reserved_read_slots": 0,
+          "unknown_read_slots": 0
+        },
+        "stats": {
+          "sequences_started": 1200,
+          "sequences_finished": 1200,
+          "join_pending_sequences": 0,
+          "join_failed_sequences": 0,
+          "submitted_reads": 11519,
+          "speculative_reads": 0,
+          "rejected_submissions": 0,
+          "demanded_reads": 11519,
+          "completed_reads": 11519,
+          "verified_reads": 11519,
+          "cancelled_reads": 0,
+          "failed_reads": 0,
+          "unknown_reads": 0,
+          "unobserved_terminal_reads": 0,
+          "worker_started_reads": 11519,
+          "io_started_reads": 11519,
+          "prefetched_reads_taken": 0,
+          "resident_skips": 0,
+          "demand_failures": 0,
+          "materialization_failures": 0,
+          "wasted_reads": 0,
+          "wasted_read_bytes": 0,
+          "unproved_wasted_reads": 0,
+          "proved_read_bytes": 36240064128,
+          "reader_interval_calls": 69114,
+          "reader_interval_bytes": 36240064128,
+          "wasted_reader_interval_calls": 0,
+          "wasted_reader_interval_bytes": 0,
+          "unobserved_reader_intervals": 0,
+          "demand_wait_calls": 11519,
+          "demand_wait_ns": 9394006397,
+          "io_duration_ns": 8755812710,
+          "unknown_bytes": 0,
+          "peak_packed_bytes": 3146112,
+          "peak_artifact_bytes": 3146112,
+          "peak_metadata_bytes": 8388608,
+          "peak_requested_stack_bytes": 2097152,
+          "peak_payload_bytes": 6292224,
+          "peak_host_charged_bytes": 16777984
+        },
+        "current_read": null,
+        "pending_read": null,
+        "last_receipt": {
+          "identity": {
+            "image_generation": 1,
+            "layer": 39,
+            "expert": 207,
+            "operation": 11519
+          },
+          "outcome": "source_verified",
+          "requested_bytes": 3146112,
+          "io_bytes": 3146112,
+          "cancellation_requested": false,
+          "submitted_ns": 11909491,
+          "worker_started_ns": 11916734,
+          "io_started_ns": 11925456,
+          "io_finished_ns": 12600482,
+          "source_verified_ns": 12606488,
+          "completed_ns": 12606568,
+          "taken_ns": 12612786
+        },
+        "timing_origin": "expert_read_sequence_start_host_monotonic_ns_not_cuda",
+        "reader_counter_scope": "shared_checkpoint_reader_submit_through_take_not_ticket_certified",
+        "charge_basis": "logical_host_reservation_not_physical_rss",
+        "stats_scope": "owner_lifetime_owner_observed_transitions_peaks_not_invocation_deltas"
+      },
+      "memory_sample_bounds": {
+        "device_gpu": {
+          "sample_count": 36,
+          "missing_samples": 0,
+          "observed_min_bytes": 0,
+          "sampled_max_bytes": 4325376000,
+          "exact_lifetime_peak_bytes": null,
+          "continuous_coverage": false,
+          "interpretation": "sampled maximum is a lower bound on the lifetime peak, not a proven upper bound"
+        },
+        "tree_rss": {
+          "sample_count": 36,
+          "missing_samples": 0,
+          "observed_min_bytes": 202145792,
+          "sampled_max_bytes": 6731829248,
+          "exact_lifetime_peak_bytes": null,
+          "continuous_coverage": false,
+          "interpretation": "sampled maximum is a lower bound on the lifetime peak, not a proven upper bound"
+        },
+        "tree_pss": {
+          "sample_count": 36,
+          "missing_samples": 0,
+          "observed_min_bytes": 199647232,
+          "sampled_max_bytes": 6728849408,
+          "exact_lifetime_peak_bytes": null,
+          "continuous_coverage": false,
+          "interpretation": "sampled maximum is a lower bound on the lifetime peak, not a proven upper bound"
+        }
+      },
+      "requests": [
+        {
+          "name": "hello2",
+          "status": "success",
+          "worker_id": 1,
+          "http_ids": [
+            "cmpl-ferrule-1"
+          ],
+          "generated_ids": [
+            11,
+            353
+          ],
+          "exact_token_pass": null,
+          "usage": {
+            "prompt_tokens": 1,
+            "completion_tokens": 2,
+            "total_tokens": 3
+          },
+          "http_e2e_seconds": 1.9045549854636192,
+          "client_ttft_seconds": 0.6640011984854937,
+          "quality_passed": true,
+          "metric_eligible": true,
+          "helper_window": {
+            "start": 8990072.207204817,
+            "end": 8990083.760884114
+          },
+          "helper_timings": {
+            "source_custody_checks": {
+              "count": 6,
+              "inclusive_wall_seconds": 0.005230726674199104,
+              "inclusive_thread_cpu_seconds": 0.005234308000000354
+            },
+            "workflow_pins": {
+              "count": 3,
+              "inclusive_wall_seconds": 0.2801146376878023,
+              "inclusive_thread_cpu_seconds": 0.2801043570000008
+            },
+            "candidate_pins": {
+              "count": 3,
+              "inclusive_wall_seconds": 9.26315988227725,
+              "inclusive_thread_cpu_seconds": 9.245433202
+            },
+            "receipt_hashes": {
+              "count": 3,
+              "inclusive_wall_seconds": 0.00046082958579063416,
+              "inclusive_thread_cpu_seconds": 0.0004610849999995281
+            },
+            "pre_admission_validation": {
+              "count": 1,
+              "inclusive_wall_seconds": 3.172737617045641,
+              "inclusive_thread_cpu_seconds": 3.167067477
+            },
+            "nfs": {
+              "count": 2,
+              "inclusive_wall_seconds": 0.00860951654613018,
+              "inclusive_thread_cpu_seconds": 0.005658259000000498
+            },
+            "pid_io": {
+              "count": 2,
+              "inclusive_wall_seconds": 0.00031049735844135284,
+              "inclusive_thread_cpu_seconds": 0.0003108830000009277
+            },
+            "pre_observer": {
+              "count": 1,
+              "inclusive_wall_seconds": 0.004731032997369766,
+              "inclusive_thread_cpu_seconds": 0.0027887140000011357
+            },
+            "pre_dispatch_validation": {
+              "count": 1,
+              "inclusive_wall_seconds": 3.169533943757415,
+              "inclusive_thread_cpu_seconds": 3.163283226000001
+            },
+            "http": {
+              "count": 1,
+              "inclusive_wall_seconds": 1.991062069311738,
+              "inclusive_thread_cpu_seconds": 0.005492885999998975
+            },
+            "post_observer": {
+              "count": 1,
+              "inclusive_wall_seconds": 0.004536379128694534,
+              "inclusive_thread_cpu_seconds": 0.0035257089999998215
+            },
+            "post_http_validation": {
+              "count": 1,
+              "inclusive_wall_seconds": 3.208088854327798,
+              "inclusive_thread_cpu_seconds": 3.2022628640000015
+            }
+          }
+        },
+        {
+          "name": "canary-qa",
+          "status": "success",
+          "worker_id": 2,
+          "http_ids": [
+            "cmpl-ferrule-2"
+          ],
+          "generated_ids": [
+            25358,
+            13,
+            198,
+            760,
+            6511,
+            314,
+            6124,
+            369
+          ],
+          "exact_token_pass": true,
+          "usage": {
+            "prompt_tokens": 5,
+            "completion_tokens": 8,
+            "total_tokens": 13
+          },
+          "http_e2e_seconds": 7.460827235132456,
+          "client_ttft_seconds": 2.1690142191946507,
+          "quality_passed": true,
+          "metric_eligible": true,
+          "helper_window": {
+            "start": 8990083.76532969,
+            "end": 8990101.012432499
+          },
+          "helper_timings": {
+            "source_custody_checks": {
+              "count": 6,
+              "inclusive_wall_seconds": 0.005817720666527748,
+              "inclusive_thread_cpu_seconds": 0.005821501000003337
+            },
+            "workflow_pins": {
+              "count": 3,
+              "inclusive_wall_seconds": 0.29865141957998276,
+              "inclusive_thread_cpu_seconds": 0.29862384499999806
+            },
+            "candidate_pins": {
+              "count": 3,
+              "inclusive_wall_seconds": 9.357678903266788,
+              "inclusive_thread_cpu_seconds": 9.338101791
+            },
+            "receipt_hashes": {
+              "count": 3,
+              "inclusive_wall_seconds": 0.0004594717174768448,
+              "inclusive_thread_cpu_seconds": 0.00045956399999980135
+            },
+            "pre_admission_validation": {
+              "count": 1,
+              "inclusive_wall_seconds": 3.196925960481167,
+              "inclusive_thread_cpu_seconds": 3.190993084999999
+            },
+            "nfs": {
+              "count": 2,
+              "inclusive_wall_seconds": 0.007799733430147171,
+              "inclusive_thread_cpu_seconds": 0.005101327999998517
+            },
+            "pid_io": {
+              "count": 2,
+              "inclusive_wall_seconds": 0.0003377813845872879,
+              "inclusive_thread_cpu_seconds": 0.00033805300000011584
+            },
+            "pre_observer": {
+              "count": 1,
+              "inclusive_wall_seconds": 0.00468093529343605,
+              "inclusive_thread_cpu_seconds": 0.0029422439999997607
+            },
+            "pre_dispatch_validation": {
+              "count": 1,
+              "inclusive_wall_seconds": 3.267232121899724,
+              "inclusive_thread_cpu_seconds": 3.259763789000001
+            },
+            "http": {
+              "count": 1,
+              "inclusive_wall_seconds": 7.552980151027441,
+              "inclusive_thread_cpu_seconds": 0.005502651000000469
+            },
+            "post_observer": {
+              "count": 1,
+              "inclusive_wall_seconds": 0.003909183666110039,
+              "inclusive_thread_cpu_seconds": 0.0029472979999987103
+            },
+            "post_http_validation": {
+              "count": 1,
+              "inclusive_wall_seconds": 3.199779685586691,
+              "inclusive_thread_cpu_seconds": 3.193565781
+            }
+          }
+        },
+        {
+          "name": "canary-arithmetic",
+          "status": "success",
+          "worker_id": 3,
+          "http_ids": [
+            "cmpl-ferrule-3"
+          ],
+          "generated_ids": [
+            907,
+            271,
+            22,
+            478,
+            220,
+            23,
+            283,
+            220
+          ],
+          "exact_token_pass": true,
+          "usage": {
+            "prompt_tokens": 5,
+            "completion_tokens": 8,
+            "total_tokens": 13
+          },
+          "http_e2e_seconds": 7.211350589990616,
+          "client_ttft_seconds": 1.8677368108183146,
+          "quality_passed": true,
+          "metric_eligible": true,
+          "helper_window": {
+            "start": 8990101.01744157,
+            "end": 8990117.906907383
+          },
+          "helper_timings": {
+            "source_custody_checks": {
+              "count": 6,
+              "inclusive_wall_seconds": 0.006450820714235306,
+              "inclusive_thread_cpu_seconds": 0.006454153000003515
+            },
+            "workflow_pins": {
+              "count": 3,
+              "inclusive_wall_seconds": 0.2799713294953108,
+              "inclusive_thread_cpu_seconds": 0.27991941399999476
+            },
+            "candidate_pins": {
+              "count": 3,
+              "inclusive_wall_seconds": 9.289570029824972,
+              "inclusive_thread_cpu_seconds": 9.271308303999994
+            },
+            "receipt_hashes": {
+              "count": 3,
+              "inclusive_wall_seconds": 0.0004190150648355484,
+              "inclusive_thread_cpu_seconds": 0.0004194399999981613
+            },
+            "pre_admission_validation": {
+              "count": 1,
+              "inclusive_wall_seconds": 3.1629876010119915,
+              "inclusive_thread_cpu_seconds": 3.1571498889999994
+            },
+            "nfs": {
+              "count": 2,
+              "inclusive_wall_seconds": 0.007701370865106583,
+              "inclusive_thread_cpu_seconds": 0.005102159999999856
+            },
+            "pid_io": {
+              "count": 2,
+              "inclusive_wall_seconds": 0.00032045692205429077,
+              "inclusive_thread_cpu_seconds": 0.00032069399999912207
+            },
+            "pre_observer": {
+              "count": 1,
+              "inclusive_wall_seconds": 0.004631642252206802,
+              "inclusive_thread_cpu_seconds": 0.0029408139999986815
+            },
+            "pre_dispatch_validation": {
+              "count": 1,
+              "inclusive_wall_seconds": 3.1566037107259035,
+              "inclusive_thread_cpu_seconds": 3.150846994000002
+            },
+            "http": {
+              "count": 1,
+              "inclusive_wall_seconds": 7.300346897915006,
+              "inclusive_thread_cpu_seconds": 0.005770209999994336
+            },
+            "post_observer": {
+              "count": 1,
+              "inclusive_wall_seconds": 0.003833906725049019,
+              "inclusive_thread_cpu_seconds": 0.0029235419999977807
+            },
+            "post_http_validation": {
+              "count": 1,
+              "inclusive_wall_seconds": 3.2581150345504284,
+              "inclusive_thread_cpu_seconds": 3.251386564999997
+            }
+          }
+        },
+        {
+          "name": "canary-chinese",
+          "status": "success",
+          "worker_id": 4,
+          "http_ids": [
+            "cmpl-ferrule-4"
+          ],
+          "generated_ids": [
+            98116,
+            3709,
+            98116,
+            108820,
+            102357,
+            95983,
+            1710,
+            97486
+          ],
+          "exact_token_pass": true,
+          "usage": {
+            "prompt_tokens": 3,
+            "completion_tokens": 8,
+            "total_tokens": 11
+          },
+          "http_e2e_seconds": 6.8175627309829,
+          "client_ttft_seconds": 1.4818005859851837,
+          "quality_passed": true,
+          "metric_eligible": true,
+          "helper_window": {
+            "start": 8990117.911064161,
+            "end": 8990134.43607337
+          },
+          "helper_timings": {
+            "source_custody_checks": {
+              "count": 6,
+              "inclusive_wall_seconds": 0.0071999672800302505,
+              "inclusive_thread_cpu_seconds": 0.007202871000004052
+            },
+            "workflow_pins": {
+              "count": 3,
+              "inclusive_wall_seconds": 0.27974495105445385,
+              "inclusive_thread_cpu_seconds": 0.27973848100000254
+            },
+            "candidate_pins": {
+              "count": 3,
+              "inclusive_wall_seconds": 9.321214634925127,
+              "inclusive_thread_cpu_seconds": 9.303066349999995
+            },
+            "receipt_hashes": {
+              "count": 3,
+              "inclusive_wall_seconds": 0.00043049082159996033,
+              "inclusive_thread_cpu_seconds": 0.00043068400000123575
+            },
+            "pre_admission_validation": {
+              "count": 1,
+              "inclusive_wall_seconds": 3.217193778604269,
+              "inclusive_thread_cpu_seconds": 3.2112764769999984
+            },
+            "nfs": {
+              "count": 2,
+              "inclusive_wall_seconds": 0.007285915315151215,
+              "inclusive_thread_cpu_seconds": 0.004843747000002452
+            },
+            "pid_io": {
+              "count": 2,
+              "inclusive_wall_seconds": 0.0002863015979528427,
+              "inclusive_thread_cpu_seconds": 0.0002866139999966322
+            },
+            "pre_observer": {
+              "count": 1,
+              "inclusive_wall_seconds": 0.004198465496301651,
+              "inclusive_thread_cpu_seconds": 0.002801474000001747
+            },
+            "pre_dispatch_validation": {
+              "count": 1,
+              "inclusive_wall_seconds": 3.2143753692507744,
+              "inclusive_thread_cpu_seconds": 3.208131359999996
+            },
+            "http": {
+              "count": 1,
+              "inclusive_wall_seconds": 6.9043002389371395,
+              "inclusive_thread_cpu_seconds": 0.005255382000001418
+            },
+            "post_observer": {
+              "count": 1,
+              "inclusive_wall_seconds": 0.0037922747433185577,
+              "inclusive_thread_cpu_seconds": 0.0027453179999952226
+            },
+            "post_http_validation": {
+              "count": 1,
+              "inclusive_wall_seconds": 3.1782454568892717,
+              "inclusive_thread_cpu_seconds": 3.172242846000003
+            }
+          }
+        }
+      ],
+      "point_elapsed_seconds": 106.0044553168118,
+      "launch_to_ready_seconds": 13.39881786890328,
+      "phase_timings": {
+        "worker_contract": {
+          "count": 1,
+          "inclusive_wall_seconds": 7.4391223676502705,
+          "inclusive_thread_cpu_seconds": 7.4334526389999995
+        },
+        "checkpoint_metadata": {
+          "count": 1,
+          "inclusive_wall_seconds": 0.00011455640196800232,
+          "inclusive_thread_cpu_seconds": 0.00011480700000010557
+        },
+        "nfs": {
+          "count": 14,
+          "inclusive_wall_seconds": 0.055262601003050804,
+          "inclusive_thread_cpu_seconds": 0.037408976999998345
+        },
+        "observer_pss": {
+          "count": 36,
+          "inclusive_wall_seconds": 2.5193419065326452,
+          "inclusive_thread_cpu_seconds": 2.5177472740000013
+        },
+        "observer_diagnostics": {
+          "count": 12,
+          "inclusive_wall_seconds": 0.007278934121131897,
+          "inclusive_thread_cpu_seconds": 0.0072621889999997385
+        },
+        "startup": {
+          "count": 1,
+          "inclusive_wall_seconds": 16.091306114569306,
+          "inclusive_thread_cpu_seconds": 0.15637202599999966
+        },
+        "runtime_metadata": {
+          "count": 1,
+          "inclusive_wall_seconds": 0.0001394953578710556,
+          "inclusive_thread_cpu_seconds": 0.00013910499999969517
+        },
+        "library_maps": {
+          "count": 2,
+          "inclusive_wall_seconds": 2.8426322489976883,
+          "inclusive_thread_cpu_seconds": 2.7760299040000014
+        },
+        "source_options": {
+          "count": 1,
+          "inclusive_wall_seconds": 0.0012489501386880875,
+          "inclusive_thread_cpu_seconds": 0.0012495959999991868
+        },
+        "source_custody_checks": {
+          "count": 26,
+          "inclusive_wall_seconds": 0.027288619428873062,
+          "inclusive_thread_cpu_seconds": 0.02730293200001377
+        },
+        "workflow_pins": {
+          "count": 13,
+          "inclusive_wall_seconds": 1.2306287679821253,
+          "inclusive_thread_cpu_seconds": 1.230533828999997
+        },
+        "candidate_pins": {
+          "count": 13,
+          "inclusive_wall_seconds": 40.28984258323908,
+          "inclusive_thread_cpu_seconds": 40.21025414499999
+        },
+        "receipt_hashes": {
+          "count": 13,
+          "inclusive_wall_seconds": 0.0019031744450330734,
+          "inclusive_thread_cpu_seconds": 0.0019041309999980882
+        },
+        "pre_admission_validation": {
+          "count": 4,
+          "inclusive_wall_seconds": 12.749844957143068,
+          "inclusive_thread_cpu_seconds": 12.726486927999996
+        },
+        "pid_io": {
+          "count": 8,
+          "inclusive_wall_seconds": 0.0012550372630357742,
+          "inclusive_thread_cpu_seconds": 0.0012562439999967978
+        },
+        "pre_observer": {
+          "count": 4,
+          "inclusive_wall_seconds": 0.01824207603931427,
+          "inclusive_thread_cpu_seconds": 0.011473246000001325
+        },
+        "pre_dispatch_validation": {
+          "count": 4,
+          "inclusive_wall_seconds": 12.807745145633817,
+          "inclusive_thread_cpu_seconds": 12.782025369
+        },
+        "http": {
+          "count": 4,
+          "inclusive_wall_seconds": 23.748689357191324,
+          "inclusive_thread_cpu_seconds": 0.0220211289999952
+        },
+        "post_observer": {
+          "count": 4,
+          "inclusive_wall_seconds": 0.01607174426317215,
+          "inclusive_thread_cpu_seconds": 0.012141866999991535
+        },
+        "post_http_validation": {
+          "count": 4,
+          "inclusive_wall_seconds": 12.844229031354189,
+          "inclusive_thread_cpu_seconds": 12.819458056000002
+        },
+        "token_join": {
+          "count": 4,
+          "inclusive_wall_seconds": 0.0013684406876564026,
+          "inclusive_thread_cpu_seconds": 0.0013682049999914625
+        },
+        "source_counters": {
+          "count": 4,
+          "inclusive_wall_seconds": 0.0012909919023513794,
+          "inclusive_thread_cpu_seconds": 0.0012988349999893956
+        },
+        "request_phase": {
+          "count": 1,
+          "inclusive_wall_seconds": 63.70871782489121,
+          "inclusive_thread_cpu_seconds": 39.824434663999995
+        },
+        "bookkeeping": {
+          "count": 1,
+          "inclusive_wall_seconds": 4.573416858911514,
+          "inclusive_thread_cpu_seconds": 4.532814504000001
+        },
+        "observer_finish": {
+          "count": 1,
+          "inclusive_wall_seconds": 0.0009255148470401764,
+          "inclusive_thread_cpu_seconds": 0.000793051000002265
+        },
+        "shutdown": {
+          "count": 1,
+          "inclusive_wall_seconds": 1.0293819215148687,
+          "inclusive_thread_cpu_seconds": 0.012386340999995582
+        },
+        "worker_finalization": {
+          "count": 1,
+          "inclusive_wall_seconds": 0.010393114760518074,
+          "inclusive_thread_cpu_seconds": 0.00960200499999786
+        }
+      },
+      "nfs_request_phase": {
+        "status": "shared_client_delta",
+        "deltas": {
+          "normalreadbytes": 36491264808,
+          "normalwritebytes": 0,
+          "directreadbytes": 0,
+          "directwritebytes": 0,
+          "serverreadbytes": 0,
+          "serverwritebytes": 0,
+          "readpages": 0,
+          "writepages": 0,
+          "read_rpc_0": 0,
+          "read_rpc_1": 0,
+          "read_rpc_2": 0,
+          "read_rpc_3": 0,
+          "read_rpc_4": 0,
+          "read_rpc_5": 0,
+          "read_rpc_6": 0,
+          "read_rpc_7": 0
+        },
+        "reasons": [],
+        "shared_client_traffic": true,
+        "owned_server_physical_bytes": null,
+        "physical_nas_backend_bytes": null,
+        "scope": "client mount counters; all shared traffic, not server-attributable physical NAS disk IO",
+        "before_window": {
+          "monotonic": 8990072.197946599,
+          "unix_ns": 1792047129161427436
+        },
+        "after_window": {
+          "monotonic": 8990134.447803302,
+          "unix_ns": 1792047191411284048
+        }
+      },
+      "owned_gpu_attribution": "unknown",
+      "full_numerical_per_point": "unverified",
+      "physical_owner_release": "unobserved"
+    },
+    {
+      "point": "big",
+      "requested_entries": 128,
+      "requested_cache_bytes": 671088640,
+      "source_options": {
+        "status": "actual_source_options_observed",
+        "point": "big",
+        "effective_metadata_options": {
+          "max_experts": 128,
+          "max_bytes": 671088640,
+          "scratch_bytes": 8388608,
+          "workspace_bytes": 2147483648,
+          "kv_bytes": 16777216,
+          "device_bytes": 7516192768,
+          "allocator_margin_bytes": 536870912,
+          "max_positions": 128,
+          "max_sequences": 2,
+          "max_batch_tokens": 8
+        },
+        "effective_admitted_entries": null,
+        "effective_admitted_cache_bytes": null,
+        "physical_admission": null,
+        "full_numerical_per_point": "unverified"
+      },
+      "payload_arithmetic": {
+        "max_whole_expert_payload_bytes": 3146112,
+        "byte_only_payload_bound": 210,
+        "joint_positive_payload_bound": 128,
+        "model_expert_id_count": 10240,
+        "interpretation": "Logical header-derived arithmetic, not physical admission or working-set occupancy"
+      },
+      "invocation_count": 30,
+      "invocation_counter_totals": {
+        "checkpoint_read_bytes": 36240064128,
+        "checkpoint_read_calls": 69114,
+        "checkpoint_source_checks": 46076,
+        "checkpoint_path_metadata_calls": 46076,
+        "checkpoint_handle_metadata_calls": 46076,
+        "expert_hits": 0,
+        "expert_uploads": 11519,
+        "expert_evictions": 11391,
+        "artifact_uploads": 34557,
+        "artifact_upload_bytes": 36240064128,
+        "h2d_copies": 88763,
+        "h2d_bytes": 36240248688,
+        "source_extents_read": null,
+        "expert_cache_misses": null,
+        "cache_hit_rate": null,
+        "working_set_unique_expert_ids": null,
+        "physical_nas_backend_bytes": null
+      },
+      "final_owner_cache": {
+        "resident_entries": 128,
+        "resident_bytes": 402702336,
+        "pending_upload_bytes": 0,
+        "scratch_bytes": 8388608,
+        "charged_bytes": 411090944,
+        "unknown_quarantine_bytes": 0,
+        "peak_bytes": 421105664,
+        "quarantined": false,
+        "uploads": 11519,
+        "hits": 0,
+        "evictions": 11391
+      },
+      "final_owner_read": {
+        "enabled": true,
+        "requested_mode": "blocking",
+        "effective_mode": "blocking",
+        "worker_read_observed": true,
+        "status": "closed",
+        "limits": {
+          "schedule": "blocking",
+          "max_host_bytes": 67108864,
+          "max_metadata_bytes": 8388608,
+          "worker_stack_bytes": 2097152
+        },
+        "current_charge": {
+          "packed_bytes": 0,
+          "artifact_bytes": 0,
+          "metadata_bytes": 0,
+          "requested_stack_bytes": 0,
+          "payload_bytes": 0,
+          "host_charged_bytes": 0,
+          "unknown_packed_bytes": 0,
+          "unknown_stack_bytes": 0,
+          "reserved_read_slots": 0,
+          "unknown_read_slots": 0
+        },
+        "stats": {
+          "sequences_started": 1200,
+          "sequences_finished": 1200,
+          "join_pending_sequences": 0,
+          "join_failed_sequences": 0,
+          "submitted_reads": 11519,
+          "speculative_reads": 0,
+          "rejected_submissions": 0,
+          "demanded_reads": 11519,
+          "completed_reads": 11519,
+          "verified_reads": 11519,
+          "cancelled_reads": 0,
+          "failed_reads": 0,
+          "unknown_reads": 0,
+          "unobserved_terminal_reads": 0,
+          "worker_started_reads": 11519,
+          "io_started_reads": 11519,
+          "prefetched_reads_taken": 0,
+          "resident_skips": 0,
+          "demand_failures": 0,
+          "materialization_failures": 0,
+          "wasted_reads": 0,
+          "wasted_read_bytes": 0,
+          "unproved_wasted_reads": 0,
+          "proved_read_bytes": 36240064128,
+          "reader_interval_calls": 69114,
+          "reader_interval_bytes": 36240064128,
+          "wasted_reader_interval_calls": 0,
+          "wasted_reader_interval_bytes": 0,
+          "unobserved_reader_intervals": 0,
+          "demand_wait_calls": 11519,
+          "demand_wait_ns": 9384388950,
+          "io_duration_ns": 8985533412,
+          "unknown_bytes": 0,
+          "peak_packed_bytes": 3146112,
+          "peak_artifact_bytes": 3146112,
+          "peak_metadata_bytes": 8388608,
+          "peak_requested_stack_bytes": 2097152,
+          "peak_payload_bytes": 6292224,
+          "peak_host_charged_bytes": 16777984
+        },
+        "current_read": null,
+        "pending_read": null,
+        "last_receipt": {
+          "identity": {
+            "image_generation": 1,
+            "layer": 39,
+            "expert": 207,
+            "operation": 11519
+          },
+          "outcome": "source_verified",
+          "requested_bytes": 3146112,
+          "io_bytes": 3146112,
+          "cancellation_requested": false,
+          "submitted_ns": 12309655,
+          "worker_started_ns": 12316925,
+          "io_started_ns": 12326345,
+          "io_finished_ns": 13023810,
+          "source_verified_ns": 13029568,
+          "completed_ns": 13029721,
+          "taken_ns": 13036784
+        },
+        "timing_origin": "expert_read_sequence_start_host_monotonic_ns_not_cuda",
+        "reader_counter_scope": "shared_checkpoint_reader_submit_through_take_not_ticket_certified",
+        "charge_basis": "logical_host_reservation_not_physical_rss",
+        "stats_scope": "owner_lifetime_owner_observed_transitions_peaks_not_invocation_deltas"
+      },
+      "memory_sample_bounds": {
+        "device_gpu": {
+          "sample_count": 36,
+          "missing_samples": 0,
+          "observed_min_bytes": 0,
+          "sampled_max_bytes": 4526702592,
+          "exact_lifetime_peak_bytes": null,
+          "continuous_coverage": false,
+          "interpretation": "sampled maximum is a lower bound on the lifetime peak, not a proven upper bound"
+        },
+        "tree_rss": {
+          "sample_count": 36,
+          "missing_samples": 0,
+          "observed_min_bytes": 203067392,
+          "sampled_max_bytes": 6733918208,
+          "exact_lifetime_peak_bytes": null,
+          "continuous_coverage": false,
+          "interpretation": "sampled maximum is a lower bound on the lifetime peak, not a proven upper bound"
+        },
+        "tree_pss": {
+          "sample_count": 36,
+          "missing_samples": 0,
+          "observed_min_bytes": 200580096,
+          "sampled_max_bytes": 6730960896,
+          "exact_lifetime_peak_bytes": null,
+          "continuous_coverage": false,
+          "interpretation": "sampled maximum is a lower bound on the lifetime peak, not a proven upper bound"
+        }
+      },
+      "requests": [
+        {
+          "name": "hello2",
+          "status": "success",
+          "worker_id": 1,
+          "http_ids": [
+            "cmpl-ferrule-1"
+          ],
+          "generated_ids": [
+            11,
+            353
+          ],
+          "exact_token_pass": null,
+          "usage": {
+            "prompt_tokens": 1,
+            "completion_tokens": 2,
+            "total_tokens": 3
+          },
+          "http_e2e_seconds": 2.137179620563984,
+          "client_ttft_seconds": 0.7108274381607771,
+          "quality_passed": true,
+          "metric_eligible": true,
+          "helper_window": {
+            "start": 8990179.242014261,
+            "end": 8990191.143594416
+          },
+          "helper_timings": {
+            "source_custody_checks": {
+              "count": 6,
+              "inclusive_wall_seconds": 0.005790011957287788,
+              "inclusive_thread_cpu_seconds": 0.005793108999998964
+            },
+            "workflow_pins": {
+              "count": 3,
+              "inclusive_wall_seconds": 0.30838644690811634,
+              "inclusive_thread_cpu_seconds": 0.3083334690000008
+            },
+            "candidate_pins": {
+              "count": 3,
+              "inclusive_wall_seconds": 9.347463766112924,
+              "inclusive_thread_cpu_seconds": 9.328549605
+            },
+            "receipt_hashes": {
+              "count": 3,
+              "inclusive_wall_seconds": 0.0004239361733198166,
+              "inclusive_thread_cpu_seconds": 0.0004241460000002917
+            },
+            "pre_admission_validation": {
+              "count": 1,
+              "inclusive_wall_seconds": 3.2239668667316437,
+              "inclusive_thread_cpu_seconds": 3.217872474
+            },
+            "nfs": {
+              "count": 2,
+              "inclusive_wall_seconds": 0.008863070979714394,
+              "inclusive_thread_cpu_seconds": 0.006491802999999408
+            },
+            "pid_io": {
+              "count": 2,
+              "inclusive_wall_seconds": 0.00037623941898345947,
+              "inclusive_thread_cpu_seconds": 0.0003766229999992987
+            },
+            "pre_observer": {
+              "count": 1,
+              "inclusive_wall_seconds": 0.004173075780272484,
+              "inclusive_thread_cpu_seconds": 0.0027653210000000428
+            },
+            "pre_dispatch_validation": {
+              "count": 1,
+              "inclusive_wall_seconds": 3.2101247645914555,
+              "inclusive_thread_cpu_seconds": 3.203058254
+            },
+            "http": {
+              "count": 1,
+              "inclusive_wall_seconds": 2.225420631468296,
+              "inclusive_thread_cpu_seconds": 0.006646738000000596
+            },
+            "post_observer": {
+              "count": 1,
+              "inclusive_wall_seconds": 0.005444513633847237,
+              "inclusive_thread_cpu_seconds": 0.004478846999999675
+            },
+            "post_http_validation": {
+              "count": 1,
+              "inclusive_wall_seconds": 3.2293463926762342,
+              "inclusive_thread_cpu_seconds": 3.223529258000001
+            }
+          }
+        },
+        {
+          "name": "canary-qa",
+          "status": "success",
+          "worker_id": 2,
+          "http_ids": [
+            "cmpl-ferrule-2"
+          ],
+          "generated_ids": [
+            25358,
+            13,
+            198,
+            760,
+            6511,
+            314,
+            6124,
+            369
+          ],
+          "exact_token_pass": true,
+          "usage": {
+            "prompt_tokens": 5,
+            "completion_tokens": 8,
+            "total_tokens": 13
+          },
+          "http_e2e_seconds": 7.643561534583569,
+          "client_ttft_seconds": 2.3386409506201744,
+          "quality_passed": true,
+          "metric_eligible": true,
+          "helper_window": {
+            "start": 8990191.146340858,
+            "end": 8990208.397172984
+          },
+          "helper_timings": {
+            "source_custody_checks": {
+              "count": 6,
+              "inclusive_wall_seconds": 0.005553346127271652,
+              "inclusive_thread_cpu_seconds": 0.005556738000002781
+            },
+            "workflow_pins": {
+              "count": 3,
+              "inclusive_wall_seconds": 0.2778844963759184,
+              "inclusive_thread_cpu_seconds": 0.277884107000002
+            },
+            "candidate_pins": {
+              "count": 3,
+              "inclusive_wall_seconds": 9.224993353709579,
+              "inclusive_thread_cpu_seconds": 9.206253206000003
+            },
+            "receipt_hashes": {
+              "count": 3,
+              "inclusive_wall_seconds": 0.00045941025018692017,
+              "inclusive_thread_cpu_seconds": 0.0004601639999997076
+            },
+            "pre_admission_validation": {
+              "count": 1,
+              "inclusive_wall_seconds": 3.1728018186986446,
+              "inclusive_thread_cpu_seconds": 3.166392707
+            },
+            "nfs": {
+              "count": 2,
+              "inclusive_wall_seconds": 0.007446443662047386,
+              "inclusive_thread_cpu_seconds": 0.005056249999999096
+            },
+            "pid_io": {
+              "count": 2,
+              "inclusive_wall_seconds": 0.0003157351166009903,
+              "inclusive_thread_cpu_seconds": 0.00031615700000031666
+            },
+            "pre_observer": {
+              "count": 1,
+              "inclusive_wall_seconds": 0.004352958872914314,
+              "inclusive_thread_cpu_seconds": 0.0029015810000032616
+            },
+            "pre_dispatch_validation": {
+              "count": 1,
+              "inclusive_wall_seconds": 3.164419488981366,
+              "inclusive_thread_cpu_seconds": 3.1586514160000014
+            },
+            "http": {
+              "count": 1,
+              "inclusive_wall_seconds": 7.729541460052133,
+              "inclusive_thread_cpu_seconds": 0.005160940999999752
+            },
+            "post_observer": {
+              "count": 1,
+              "inclusive_wall_seconds": 0.0038643628358840942,
+              "inclusive_thread_cpu_seconds": 0.002923737999999787
+            },
+            "post_http_validation": {
+              "count": 1,
+              "inclusive_wall_seconds": 3.1728998329490423,
+              "inclusive_thread_cpu_seconds": 3.1663274559999977
+            }
+          }
+        },
+        {
+          "name": "canary-arithmetic",
+          "status": "success",
+          "worker_id": 3,
+          "http_ids": [
+            "cmpl-ferrule-3"
+          ],
+          "generated_ids": [
+            907,
+            271,
+            22,
+            478,
+            220,
+            23,
+            283,
+            220
+          ],
+          "exact_token_pass": true,
+          "usage": {
+            "prompt_tokens": 5,
+            "completion_tokens": 8,
+            "total_tokens": 13
+          },
+          "http_e2e_seconds": 7.5151845924556255,
+          "client_ttft_seconds": 2.046370016410947,
+          "quality_passed": true,
+          "metric_eligible": true,
+          "helper_window": {
+            "start": 8990208.402027786,
+            "end": 8990225.514334917
+          },
+          "helper_timings": {
+            "source_custody_checks": {
+              "count": 6,
+              "inclusive_wall_seconds": 0.006531476974487305,
+              "inclusive_thread_cpu_seconds": 0.006535723999999021
+            },
+            "workflow_pins": {
+              "count": 3,
+              "inclusive_wall_seconds": 0.27740221098065376,
+              "inclusive_thread_cpu_seconds": 0.2773914690000012
+            },
+            "candidate_pins": {
+              "count": 3,
+              "inclusive_wall_seconds": 9.212405323982239,
+              "inclusive_thread_cpu_seconds": 9.194747435000004
+            },
+            "receipt_hashes": {
+              "count": 3,
+              "inclusive_wall_seconds": 0.0004208385944366455,
+              "inclusive_thread_cpu_seconds": 0.0004207439999959206
+            },
+            "pre_admission_validation": {
+              "count": 1,
+              "inclusive_wall_seconds": 3.1678957398980856,
+              "inclusive_thread_cpu_seconds": 3.1618383309999984
+            },
+            "nfs": {
+              "count": 2,
+              "inclusive_wall_seconds": 0.007729398086667061,
+              "inclusive_thread_cpu_seconds": 0.005063026000001969
+            },
+            "pid_io": {
+              "count": 2,
+              "inclusive_wall_seconds": 0.00032396242022514343,
+              "inclusive_thread_cpu_seconds": 0.00032434300000261373
+            },
+            "pre_observer": {
+              "count": 1,
+              "inclusive_wall_seconds": 0.0045946817845106125,
+              "inclusive_thread_cpu_seconds": 0.002915258999998116
+            },
+            "pre_dispatch_validation": {
+              "count": 1,
+              "inclusive_wall_seconds": 3.16351774148643,
+              "inclusive_thread_cpu_seconds": 3.157658061000003
+            },
+            "http": {
+              "count": 1,
+              "inclusive_wall_seconds": 7.6029137801378965,
+              "inclusive_thread_cpu_seconds": 0.006585967999996001
+            },
+            "post_observer": {
+              "count": 1,
+              "inclusive_wall_seconds": 0.0038810167461633682,
+              "inclusive_thread_cpu_seconds": 0.0028921769999996627
+            },
+            "post_http_validation": {
+              "count": 1,
+              "inclusive_wall_seconds": 3.166672607883811,
+              "inclusive_thread_cpu_seconds": 3.160910287
+            }
+          }
+        },
+        {
+          "name": "canary-chinese",
+          "status": "success",
+          "worker_id": 4,
+          "http_ids": [
+            "cmpl-ferrule-4"
+          ],
+          "generated_ids": [
+            98116,
+            3709,
+            98116,
+            108820,
+            102357,
+            95983,
+            1710,
+            97486
+          ],
+          "exact_token_pass": true,
+          "usage": {
+            "prompt_tokens": 3,
+            "completion_tokens": 8,
+            "total_tokens": 11
+          },
+          "http_e2e_seconds": 6.992820899933577,
+          "client_ttft_seconds": 1.738352032378316,
+          "quality_passed": true,
+          "metric_eligible": true,
+          "helper_window": {
+            "start": 8990225.518802393,
+            "end": 8990242.158133049
+          },
+          "helper_timings": {
+            "source_custody_checks": {
+              "count": 6,
+              "inclusive_wall_seconds": 0.007794266566634178,
+              "inclusive_thread_cpu_seconds": 0.007798920000013254
+            },
+            "workflow_pins": {
+              "count": 3,
+              "inclusive_wall_seconds": 0.28075118735432625,
+              "inclusive_thread_cpu_seconds": 0.28064480199999764
+            },
+            "candidate_pins": {
+              "count": 3,
+              "inclusive_wall_seconds": 9.254829831421375,
+              "inclusive_thread_cpu_seconds": 9.236499393000003
+            },
+            "receipt_hashes": {
+              "count": 3,
+              "inclusive_wall_seconds": 0.0004249289631843567,
+              "inclusive_thread_cpu_seconds": 0.00042531100000786637
+            },
+            "pre_admission_validation": {
+              "count": 1,
+              "inclusive_wall_seconds": 3.192150855436921,
+              "inclusive_thread_cpu_seconds": 3.1853146439999946
+            },
+            "nfs": {
+              "count": 2,
+              "inclusive_wall_seconds": 0.007594572380185127,
+              "inclusive_thread_cpu_seconds": 0.005039428000003454
+            },
+            "pid_io": {
+              "count": 2,
+              "inclusive_wall_seconds": 0.0003298688679933548,
+              "inclusive_thread_cpu_seconds": 0.0003303779999939138
+            },
+            "pre_observer": {
+              "count": 1,
+              "inclusive_wall_seconds": 0.004527749493718147,
+              "inclusive_thread_cpu_seconds": 0.0029162450000015383
+            },
+            "pre_dispatch_validation": {
+              "count": 1,
+              "inclusive_wall_seconds": 3.1883933506906033,
+              "inclusive_thread_cpu_seconds": 3.1824954889999972
+            },
+            "http": {
+              "count": 1,
+              "inclusive_wall_seconds": 7.083082428202033,
+              "inclusive_thread_cpu_seconds": 0.007353310999995699
+            },
+            "post_observer": {
+              "count": 1,
+              "inclusive_wall_seconds": 0.0038271043449640274,
+              "inclusive_thread_cpu_seconds": 0.0028819970000029116
+            },
+            "post_http_validation": {
+              "count": 1,
+              "inclusive_wall_seconds": 3.1645633932203054,
+              "inclusive_thread_cpu_seconds": 3.158852091
+            }
+          }
+        }
+      ],
+      "point_elapsed_seconds": 107.05411142669618,
+      "launch_to_ready_seconds": 13.654419904574752,
+      "phase_timings": {
+        "worker_contract": {
+          "count": 1,
+          "inclusive_wall_seconds": 7.503677133470774,
+          "inclusive_thread_cpu_seconds": 7.497139941
+        },
+        "checkpoint_metadata": {
+          "count": 1,
+          "inclusive_wall_seconds": 0.00010558217763900757,
+          "inclusive_thread_cpu_seconds": 0.0001059310000002256
+        },
+        "nfs": {
+          "count": 14,
+          "inclusive_wall_seconds": 0.05359506234526634,
+          "inclusive_thread_cpu_seconds": 0.03664549100000425
+        },
+        "observer_pss": {
+          "count": 36,
+          "inclusive_wall_seconds": 2.794616201892495,
+          "inclusive_thread_cpu_seconds": 2.7927462890000005
+        },
+        "observer_diagnostics": {
+          "count": 12,
+          "inclusive_wall_seconds": 0.007393840700387955,
+          "inclusive_thread_cpu_seconds": 0.007370885999999842
+        },
+        "startup": {
+          "count": 1,
+          "inclusive_wall_seconds": 16.341512667015195,
+          "inclusive_thread_cpu_seconds": 0.12496313699999995
+        },
+        "runtime_metadata": {
+          "count": 1,
+          "inclusive_wall_seconds": 0.00010736286640167236,
+          "inclusive_thread_cpu_seconds": 0.00010726299999941347
+        },
+        "library_maps": {
+          "count": 2,
+          "inclusive_wall_seconds": 2.8712093643844128,
+          "inclusive_thread_cpu_seconds": 2.8014064639999976
+        },
+        "source_options": {
+          "count": 1,
+          "inclusive_wall_seconds": 0.0012605506926774979,
+          "inclusive_thread_cpu_seconds": 0.0012610839999993573
+        },
+        "source_custody_checks": {
+          "count": 26,
+          "inclusive_wall_seconds": 0.028319835662841797,
+          "inclusive_thread_cpu_seconds": 0.028335853000008626
+        },
+        "workflow_pins": {
+          "count": 13,
+          "inclusive_wall_seconds": 1.2366893775761127,
+          "inclusive_thread_cpu_seconds": 1.2365144589999986
+        },
+        "candidate_pins": {
+          "count": 13,
+          "inclusive_wall_seconds": 40.10403841175139,
+          "inclusive_thread_cpu_seconds": 40.024573495000006
+        },
+        "receipt_hashes": {
+          "count": 13,
+          "inclusive_wall_seconds": 0.0018648412078619003,
+          "inclusive_thread_cpu_seconds": 0.0018661780000037709
+        },
+        "pre_admission_validation": {
+          "count": 4,
+          "inclusive_wall_seconds": 12.756815280765295,
+          "inclusive_thread_cpu_seconds": 12.731418155999993
+        },
+        "pid_io": {
+          "count": 8,
+          "inclusive_wall_seconds": 0.001345805823802948,
+          "inclusive_thread_cpu_seconds": 0.001347500999996143
+        },
+        "pre_observer": {
+          "count": 4,
+          "inclusive_wall_seconds": 0.017648465931415558,
+          "inclusive_thread_cpu_seconds": 0.011498406000002959
+        },
+        "pre_dispatch_validation": {
+          "count": 4,
+          "inclusive_wall_seconds": 12.726455345749855,
+          "inclusive_thread_cpu_seconds": 12.701863220000002
+        },
+        "http": {
+          "count": 4,
+          "inclusive_wall_seconds": 24.64095829986036,
+          "inclusive_thread_cpu_seconds": 0.02574695799999205
+        },
+        "post_observer": {
+          "count": 4,
+          "inclusive_wall_seconds": 0.017016997560858727,
+          "inclusive_thread_cpu_seconds": 0.013176759000002036
+        },
+        "post_http_validation": {
+          "count": 4,
+          "inclusive_wall_seconds": 12.733482226729393,
+          "inclusive_thread_cpu_seconds": 12.709619091999999
+        },
+        "token_join": {
+          "count": 4,
+          "inclusive_wall_seconds": 0.0013024136424064636,
+          "inclusive_thread_cpu_seconds": 0.0013022359999936839
+        },
+        "source_counters": {
+          "count": 4,
+          "inclusive_wall_seconds": 0.0012169703841209412,
+          "inclusive_thread_cpu_seconds": 0.0012174440000016773
+        },
+        "request_phase": {
+          "count": 1,
+          "inclusive_wall_seconds": 64.4093402530998,
+          "inclusive_thread_cpu_seconds": 39.656763279
+        },
+        "bookkeeping": {
+          "count": 1,
+          "inclusive_wall_seconds": 4.593823062255979,
+          "inclusive_thread_cpu_seconds": 4.550531227999997
+        },
+        "observer_finish": {
+          "count": 1,
+          "inclusive_wall_seconds": 0.0009055398404598236,
+          "inclusive_thread_cpu_seconds": 0.0007902340000001118
+        },
+        "shutdown": {
+          "count": 1,
+          "inclusive_wall_seconds": 1.0798098258674145,
+          "inclusive_thread_cpu_seconds": 0.012544728999998256
+        },
+        "worker_finalization": {
+          "count": 1,
+          "inclusive_wall_seconds": 0.010427044704556465,
+          "inclusive_thread_cpu_seconds": 0.009651996000002327
+        }
+      },
+      "nfs_request_phase": {
+        "status": "shared_client_delta",
+        "deltas": {
+          "normalreadbytes": 36491264808,
+          "normalwritebytes": 0,
+          "directreadbytes": 0,
+          "directwritebytes": 0,
+          "serverreadbytes": 0,
+          "serverwritebytes": 0,
+          "readpages": 0,
+          "writepages": 0,
+          "read_rpc_0": 0,
+          "read_rpc_1": 0,
+          "read_rpc_2": 0,
+          "read_rpc_3": 0,
+          "read_rpc_4": 0,
+          "read_rpc_5": 0,
+          "read_rpc_6": 0,
+          "read_rpc_7": 0
+        },
+        "reasons": [],
+        "shared_client_traffic": true,
+        "owned_server_physical_bytes": null,
+        "physical_nas_backend_bytes": null,
+        "scope": "client mount counters; all shared traffic, not server-attributable physical NAS disk IO",
+        "before_window": {
+          "monotonic": 8990179.233172351,
+          "unix_ns": 1792047236196653142
+        },
+        "after_window": {
+          "monotonic": 8990242.17027926,
+          "unix_ns": 1792047299133759955
+        }
+      },
+      "owned_gpu_attribution": "unknown",
+      "full_numerical_per_point": "unverified",
+      "physical_owner_release": "unobserved"
+    }
+  ],
+  "historical_results_pooled": false,
+  "historical_helper_durations_seconds": null,
+  "physical_nas_backend_bytes": null,
+  "cache_hit_rate": null,
+  "actual_working_set_unique_ids": null,
+  "claim_scope": "n=1 fixed-order coupled entry/byte-budget sensitivity, blocking only; not isolated LRU, causal speedup or physical frontier"
+}
