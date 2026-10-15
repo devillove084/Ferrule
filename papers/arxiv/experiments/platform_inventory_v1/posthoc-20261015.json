@@ -1,0 +1,1144 @@
+{
+  "boot_hash_rule": "SHA256 of stripped original UUID text, UTF-8, no newline; no raw UUID published",
+  "boot_hash_unchanged_during_collection": true,
+  "boot_id_sha256": "26168601009363e17137df185a3070b224013329ce1a300831506e8e72a9d080",
+  "collection_finished": {
+    "monotonic_ns": 9016532911491332,
+    "unix_ns": 1792073589874965482,
+    "utc": "2026-10-15T14:13:09.874965482Z"
+  },
+  "collection_started": {
+    "monotonic_ns": 9016530981224189,
+    "unix_ns": 1792073587944684588,
+    "utc": "2026-10-15T14:13:07.944684588Z"
+  },
+  "collector_source_sha256": "bfca0b799188eb070ec9470fe110defe1a353e1531ed00607dfb0982fd68235e",
+  "current_inventory": {
+    "begin": {
+      "monotonic_ns": 9016532905407245,
+      "unix_ns": 1792073589868869046,
+      "utc": "2026-10-15T14:13:09.868869046Z"
+    },
+    "cgroups": {
+      "controllers": {
+        "cpu": {
+          "current_equals_visible_mount_root": true,
+          "effective_limit_claim": "not_attested; local observations only",
+          "hidden_ancestors_unobserved": true,
+          "levels": [
+            {
+              "depth_above_current": 0,
+              "fields": {
+                "cpu.cfs_period_us": {
+                  "status": "read",
+                  "value": "100000"
+                },
+                "cpu.cfs_quota_us": {
+                  "status": "read",
+                  "value": "-1"
+                }
+              },
+              "local_cpu_quota": {
+                "cpu_time_ratio": null,
+                "period_us": 100000,
+                "quota": "-1",
+                "status": "unlimited_at_read_scope"
+              }
+            }
+          ],
+          "membership_path_sha256": "c93bfec88e8f85d94c98d06ce8e81e5f65692007652187ea84c112322a7d85a7",
+          "mount_root_sha256": "c93bfec88e8f85d94c98d06ce8e81e5f65692007652187ea84c112322a7d85a7",
+          "status": "resolved_from_current_membership",
+          "version": 1
+        },
+        "cpuset": {
+          "current_equals_visible_mount_root": true,
+          "effective_limit_claim": "not_attested; local observations only",
+          "hidden_ancestors_unobserved": true,
+          "levels": [
+            {
+              "depth_above_current": 0,
+              "fields": {
+                "cpuset.cpus": {
+                  "status": "read",
+                  "value": "0-127"
+                },
+                "cpuset.effective_cpus": {
+                  "status": "read",
+                  "value": "0-127"
+                },
+                "cpuset.effective_mems": {
+                  "status": "read",
+                  "value": "0"
+                },
+                "cpuset.mems": {
+                  "status": "read",
+                  "value": "0"
+                }
+              }
+            }
+          ],
+          "membership_path_sha256": "c93bfec88e8f85d94c98d06ce8e81e5f65692007652187ea84c112322a7d85a7",
+          "mount_root_sha256": "c93bfec88e8f85d94c98d06ce8e81e5f65692007652187ea84c112322a7d85a7",
+          "status": "resolved_from_current_membership",
+          "version": 1
+        },
+        "memory": {
+          "current_equals_visible_mount_root": true,
+          "effective_limit_claim": "not_attested; local observations only",
+          "hidden_ancestors_unobserved": true,
+          "levels": [
+            {
+              "depth_above_current": 0,
+              "fields": {
+                "memory.limit_in_bytes": {
+                  "status": "read",
+                  "value": "9223372036854771712"
+                },
+                "memory.memsw.limit_in_bytes": {
+                  "status": "read",
+                  "value": "9223372036854771712"
+                },
+                "memory.stat": {
+                  "status": "read",
+                  "value": {
+                    "hierarchical_memory_limit": 9223372036854771712,
+                    "hierarchical_memsw_limit": 9223372036854771712
+                  }
+                },
+                "memory.use_hierarchy": {
+                  "status": "read",
+                  "value": "1"
+                }
+              },
+              "local_memory_limit": {
+                "finite_bytes": null,
+                "raw": "9223372036854771712",
+                "status": "unlimited_sentinel_at_read_scope",
+                "v1_unlimited_threshold_bytes": 1152921504606846976
+              }
+            }
+          ],
+          "membership_path_sha256": "c93bfec88e8f85d94c98d06ce8e81e5f65692007652187ea84c112322a7d85a7",
+          "mount_root_sha256": "c93bfec88e8f85d94c98d06ce8e81e5f65692007652187ea84c112322a7d85a7",
+          "status": "resolved_from_current_membership",
+          "version": 1
+        }
+      },
+      "membership_sha256": "167b9e1b6184da256232b6e4129d191076b97fa686fe5d15297ea6b50959f8b4",
+      "membership_unchanged_during_collection": true,
+      "mountinfo_sha256": "f03dc628907ed742bcc762a099567ab6f71551f18d5a8c485e290877550e41ac",
+      "raw_membership_and_mount_paths_published": false,
+      "resolution_sources": [
+        "/proc/self/cgroup",
+        "/proc/self/mountinfo"
+      ],
+      "scope": "Current collector only; experiment groups and hidden parents unknown."
+    },
+    "collector_affinity": {
+      "Cpus_allowed_list": {
+        "count": 128,
+        "list": "0-127"
+      },
+      "Mems_allowed_list": {
+        "count": 1,
+        "list": "0"
+      }
+    },
+    "cpu": {
+      "duplicate_identical_processor_records": 0,
+      "interpretation": "Visible proc topology, not physical-host socket/core attestation; logical count is not CPU quota or experiment affinity.",
+      "logical_processor_count": 128,
+      "model_counts": {
+        "Intel(R) Xeon(R) Platinum 8369B CPU @ 2.90GHz": 128
+      },
+      "source": "/proc/cpuinfo",
+      "topology_columns": [
+        "processor",
+        "physical_id",
+        "core_id"
+      ],
+      "topology_complete_in_visible_records": true,
+      "topology_rows": [
+        [
+          0,
+          0,
+          0
+        ],
+        [
+          1,
+          0,
+          1
+        ],
+        [
+          2,
+          0,
+          2
+        ],
+        [
+          3,
+          0,
+          3
+        ],
+        [
+          4,
+          0,
+          4
+        ],
+        [
+          5,
+          0,
+          5
+        ],
+        [
+          6,
+          0,
+          6
+        ],
+        [
+          7,
+          0,
+          7
+        ],
+        [
+          8,
+          0,
+          8
+        ],
+        [
+          9,
+          0,
+          9
+        ],
+        [
+          10,
+          0,
+          10
+        ],
+        [
+          11,
+          0,
+          11
+        ],
+        [
+          12,
+          0,
+          12
+        ],
+        [
+          13,
+          0,
+          13
+        ],
+        [
+          14,
+          0,
+          14
+        ],
+        [
+          15,
+          0,
+          15
+        ],
+        [
+          16,
+          0,
+          16
+        ],
+        [
+          17,
+          0,
+          17
+        ],
+        [
+          18,
+          0,
+          18
+        ],
+        [
+          19,
+          0,
+          19
+        ],
+        [
+          20,
+          0,
+          20
+        ],
+        [
+          21,
+          0,
+          21
+        ],
+        [
+          22,
+          0,
+          22
+        ],
+        [
+          23,
+          0,
+          23
+        ],
+        [
+          24,
+          0,
+          24
+        ],
+        [
+          25,
+          0,
+          25
+        ],
+        [
+          26,
+          0,
+          26
+        ],
+        [
+          27,
+          0,
+          27
+        ],
+        [
+          28,
+          0,
+          28
+        ],
+        [
+          29,
+          0,
+          29
+        ],
+        [
+          30,
+          0,
+          30
+        ],
+        [
+          31,
+          0,
+          31
+        ],
+        [
+          32,
+          0,
+          32
+        ],
+        [
+          33,
+          0,
+          33
+        ],
+        [
+          34,
+          0,
+          34
+        ],
+        [
+          35,
+          0,
+          35
+        ],
+        [
+          36,
+          0,
+          36
+        ],
+        [
+          37,
+          0,
+          37
+        ],
+        [
+          38,
+          0,
+          38
+        ],
+        [
+          39,
+          0,
+          39
+        ],
+        [
+          40,
+          0,
+          40
+        ],
+        [
+          41,
+          0,
+          41
+        ],
+        [
+          42,
+          0,
+          42
+        ],
+        [
+          43,
+          0,
+          43
+        ],
+        [
+          44,
+          0,
+          44
+        ],
+        [
+          45,
+          0,
+          45
+        ],
+        [
+          46,
+          0,
+          46
+        ],
+        [
+          47,
+          0,
+          47
+        ],
+        [
+          48,
+          0,
+          48
+        ],
+        [
+          49,
+          0,
+          49
+        ],
+        [
+          50,
+          0,
+          50
+        ],
+        [
+          51,
+          0,
+          51
+        ],
+        [
+          52,
+          0,
+          52
+        ],
+        [
+          53,
+          0,
+          53
+        ],
+        [
+          54,
+          0,
+          54
+        ],
+        [
+          55,
+          0,
+          55
+        ],
+        [
+          56,
+          0,
+          56
+        ],
+        [
+          57,
+          0,
+          57
+        ],
+        [
+          58,
+          0,
+          58
+        ],
+        [
+          59,
+          0,
+          59
+        ],
+        [
+          60,
+          0,
+          60
+        ],
+        [
+          61,
+          0,
+          61
+        ],
+        [
+          62,
+          0,
+          62
+        ],
+        [
+          63,
+          0,
+          63
+        ],
+        [
+          64,
+          0,
+          64
+        ],
+        [
+          65,
+          0,
+          65
+        ],
+        [
+          66,
+          0,
+          66
+        ],
+        [
+          67,
+          0,
+          67
+        ],
+        [
+          68,
+          0,
+          68
+        ],
+        [
+          69,
+          0,
+          69
+        ],
+        [
+          70,
+          0,
+          70
+        ],
+        [
+          71,
+          0,
+          71
+        ],
+        [
+          72,
+          0,
+          72
+        ],
+        [
+          73,
+          0,
+          73
+        ],
+        [
+          74,
+          0,
+          74
+        ],
+        [
+          75,
+          0,
+          75
+        ],
+        [
+          76,
+          0,
+          76
+        ],
+        [
+          77,
+          0,
+          77
+        ],
+        [
+          78,
+          0,
+          78
+        ],
+        [
+          79,
+          0,
+          79
+        ],
+        [
+          80,
+          0,
+          80
+        ],
+        [
+          81,
+          0,
+          81
+        ],
+        [
+          82,
+          0,
+          82
+        ],
+        [
+          83,
+          0,
+          83
+        ],
+        [
+          84,
+          0,
+          84
+        ],
+        [
+          85,
+          0,
+          85
+        ],
+        [
+          86,
+          0,
+          86
+        ],
+        [
+          87,
+          0,
+          87
+        ],
+        [
+          88,
+          0,
+          88
+        ],
+        [
+          89,
+          0,
+          89
+        ],
+        [
+          90,
+          0,
+          90
+        ],
+        [
+          91,
+          0,
+          91
+        ],
+        [
+          92,
+          0,
+          92
+        ],
+        [
+          93,
+          0,
+          93
+        ],
+        [
+          94,
+          0,
+          94
+        ],
+        [
+          95,
+          0,
+          95
+        ],
+        [
+          96,
+          0,
+          96
+        ],
+        [
+          97,
+          0,
+          97
+        ],
+        [
+          98,
+          0,
+          98
+        ],
+        [
+          99,
+          0,
+          99
+        ],
+        [
+          100,
+          0,
+          100
+        ],
+        [
+          101,
+          0,
+          101
+        ],
+        [
+          102,
+          0,
+          102
+        ],
+        [
+          103,
+          0,
+          103
+        ],
+        [
+          104,
+          0,
+          104
+        ],
+        [
+          105,
+          0,
+          105
+        ],
+        [
+          106,
+          0,
+          106
+        ],
+        [
+          107,
+          0,
+          107
+        ],
+        [
+          108,
+          0,
+          108
+        ],
+        [
+          109,
+          0,
+          109
+        ],
+        [
+          110,
+          0,
+          110
+        ],
+        [
+          111,
+          0,
+          111
+        ],
+        [
+          112,
+          0,
+          112
+        ],
+        [
+          113,
+          0,
+          113
+        ],
+        [
+          114,
+          0,
+          114
+        ],
+        [
+          115,
+          0,
+          115
+        ],
+        [
+          116,
+          0,
+          116
+        ],
+        [
+          117,
+          0,
+          117
+        ],
+        [
+          118,
+          0,
+          118
+        ],
+        [
+          119,
+          0,
+          119
+        ],
+        [
+          120,
+          0,
+          120
+        ],
+        [
+          121,
+          0,
+          121
+        ],
+        [
+          122,
+          0,
+          122
+        ],
+        [
+          123,
+          0,
+          123
+        ],
+        [
+          124,
+          0,
+          124
+        ],
+        [
+          125,
+          0,
+          125
+        ],
+        [
+          126,
+          0,
+          126
+        ],
+        [
+          127,
+          0,
+          127
+        ]
+      ],
+      "visible_socket_core_pair_count": 128,
+      "visible_socket_id_count": 1
+    },
+    "cpuinfo_sha256": "670eb5d75bc635bf65eb7ea4efb44a94ef84d25a5bb62e338a8c925bbe849e27",
+    "end": {
+      "monotonic_ns": 9016532911443154,
+      "unix_ns": 1792073589874909108,
+      "utc": "2026-10-15T14:13:09.874909108Z"
+    },
+    "meminfo_sha256": "8d6c5a6f68c8d0c506a0d18db0e57d48dcacef56b0734e96222aa9197782148b",
+    "memory": {
+      "GB": 810.582024192,
+      "GiB": 754.9133377075195,
+      "bytes": 810582024192,
+      "bytes_per_source_unit": 1024,
+      "interpretation": "Kernel-visible MemTotal; not DIMM-installed RAM, free memory, or a cgroup allowance.",
+      "source": "/proc/meminfo:MemTotal",
+      "source_unit": "kB",
+      "source_value": 791584008
+    },
+    "numa_nodes": [
+      {
+        "cpus": {
+          "count": 128,
+          "list": "0-127"
+        },
+        "node": "node0"
+      }
+    ],
+    "numa_source": "/sys/devices/system/node/node*/cpulist",
+    "online_cpus": {
+      "count": 128,
+      "list": "0-127"
+    },
+    "uname": {
+      "architecture": "x86_64",
+      "kernel_release": "4.19.91-009.ali4000.alios7.x86_64",
+      "sysname": "Linux"
+    }
+  },
+  "limits_of_inference": [
+    "CPU/RAM/kernel/affinity/resource-limit inventory was collected post hoc, not during study arms.",
+    "Same-boot evidence supports the study platform only assuming no relevant hotplug/reconfiguration; unchanged hardware or resource controls is not established.",
+    "Visible CPU topology is not physical-host topology; MemTotal is not installed DIMM capacity.",
+    "Current collector affinity/cgroup files do not attest experiment-time or other experiment groups.",
+    "Hidden parent cgroup limits remain unknown even when visible local limits are unlimited.",
+    "Boot hashes and provenance pins are integrity/binding evidence, not signatures or independent public access to the withheld original boot IDs.",
+    "No GPU/driver/NVML, model, network, hostname, machine ID, MAC, serial or IP probe performed."
+  ],
+  "schema": "ferrule.posthoc-platform-inventory.v1",
+  "status": "POSTHOC_INVENTORY_SAME_BOOT",
+  "study_binding": {
+    "all_original_json_boot_ids": {
+      "matches": 341,
+      "mismatches": 0,
+      "missing_or_invalid": 0,
+      "occurrences": 341,
+      "recorded_boot_id_sha256_counts": {
+        "26168601009363e17137df185a3070b224013329ce1a300831506e8e72a9d080": 341
+      },
+      "status": "same_boot"
+    },
+    "binding_status": "POSTHOC_INVENTORY_SAME_BOOT",
+    "inventory_hash_rule": "SHA256 UTF-8 compact sorted-key JSON of sorted [relative_locator, byte_length, raw_sha256] rows",
+    "original_json_files_checked_against_public_provenance": 1037,
+    "original_json_inventory_sha256": "e70b8038470a7d05c4866c0758cd97e5b53df58e8fdcf62a2980543d188dc57a",
+    "original_mount_text_files_checked": 300,
+    "original_mount_text_inventory_sha256": "667df7af7edcb950a59d45c19d916abd562a7f66f63895286116e6d755626277",
+    "other_experiment_groups_binding": "not_checked; do not extrapolate to pressure/profile/reference runs",
+    "per_arm": [
+      {
+        "arm": "P1-blocking",
+        "boot_comparison": {
+          "matches": 30,
+          "mismatches": 0,
+          "missing_or_invalid": 0,
+          "occurrences": 30,
+          "recorded_boot_id_sha256_counts": {
+            "26168601009363e17137df185a3070b224013329ce1a300831506e8e72a9d080": 30
+          },
+          "status": "same_boot"
+        },
+        "captured_utc_range": [
+          "2026-10-15T00:48:42.740259962Z",
+          "2026-10-15T00:50:45.126378017Z"
+        ],
+        "phase_snapshots": 30
+      },
+      {
+        "arm": "P1-lookahead",
+        "boot_comparison": {
+          "matches": 30,
+          "mismatches": 0,
+          "missing_or_invalid": 0,
+          "occurrences": 30,
+          "recorded_boot_id_sha256_counts": {
+            "26168601009363e17137df185a3070b224013329ce1a300831506e8e72a9d080": 30
+          },
+          "status": "same_boot"
+        },
+        "captured_utc_range": [
+          "2026-10-15T00:51:17.970912725Z",
+          "2026-10-15T00:53:13.346714143Z"
+        ],
+        "phase_snapshots": 30
+      },
+      {
+        "arm": "P2-blocking",
+        "boot_comparison": {
+          "matches": 30,
+          "mismatches": 0,
+          "missing_or_invalid": 0,
+          "occurrences": 30,
+          "recorded_boot_id_sha256_counts": {
+            "26168601009363e17137df185a3070b224013329ce1a300831506e8e72a9d080": 30
+          },
+          "status": "same_boot"
+        },
+        "captured_utc_range": [
+          "2026-10-15T00:53:41.469905905Z",
+          "2026-10-15T00:55:42.568811787Z"
+        ],
+        "phase_snapshots": 30
+      },
+      {
+        "arm": "P2-lookahead",
+        "boot_comparison": {
+          "matches": 30,
+          "mismatches": 0,
+          "missing_or_invalid": 0,
+          "occurrences": 30,
+          "recorded_boot_id_sha256_counts": {
+            "26168601009363e17137df185a3070b224013329ce1a300831506e8e72a9d080": 30
+          },
+          "status": "same_boot"
+        },
+        "captured_utc_range": [
+          "2026-10-15T00:56:13.923080453Z",
+          "2026-10-15T00:58:06.199817590Z"
+        ],
+        "phase_snapshots": 30
+      },
+      {
+        "arm": "P3-blocking",
+        "boot_comparison": {
+          "matches": 30,
+          "mismatches": 0,
+          "missing_or_invalid": 0,
+          "occurrences": 30,
+          "recorded_boot_id_sha256_counts": {
+            "26168601009363e17137df185a3070b224013329ce1a300831506e8e72a9d080": 30
+          },
+          "status": "same_boot"
+        },
+        "captured_utc_range": [
+          "2026-10-15T01:00:58.635694113Z",
+          "2026-10-15T01:02:59.001627843Z"
+        ],
+        "phase_snapshots": 30
+      },
+      {
+        "arm": "P3-lookahead",
+        "boot_comparison": {
+          "matches": 30,
+          "mismatches": 0,
+          "missing_or_invalid": 0,
+          "occurrences": 30,
+          "recorded_boot_id_sha256_counts": {
+            "26168601009363e17137df185a3070b224013329ce1a300831506e8e72a9d080": 30
+          },
+          "status": "same_boot"
+        },
+        "captured_utc_range": [
+          "2026-10-15T00:58:36.755829628Z",
+          "2026-10-15T01:00:30.836564296Z"
+        ],
+        "phase_snapshots": 30
+      },
+      {
+        "arm": "P4-blocking",
+        "boot_comparison": {
+          "matches": 30,
+          "mismatches": 0,
+          "missing_or_invalid": 0,
+          "occurrences": 30,
+          "recorded_boot_id_sha256_counts": {
+            "26168601009363e17137df185a3070b224013329ce1a300831506e8e72a9d080": 30
+          },
+          "status": "same_boot"
+        },
+        "captured_utc_range": [
+          "2026-10-15T01:05:55.950563771Z",
+          "2026-10-15T01:07:57.045440552Z"
+        ],
+        "phase_snapshots": 30
+      },
+      {
+        "arm": "P4-lookahead",
+        "boot_comparison": {
+          "matches": 30,
+          "mismatches": 0,
+          "missing_or_invalid": 0,
+          "occurrences": 30,
+          "recorded_boot_id_sha256_counts": {
+            "26168601009363e17137df185a3070b224013329ce1a300831506e8e72a9d080": 30
+          },
+          "status": "same_boot"
+        },
+        "captured_utc_range": [
+          "2026-10-15T01:03:31.656682442Z",
+          "2026-10-15T01:05:25.256352660Z"
+        ],
+        "phase_snapshots": 30
+      },
+      {
+        "arm": "P5-blocking",
+        "boot_comparison": {
+          "matches": 30,
+          "mismatches": 0,
+          "missing_or_invalid": 0,
+          "occurrences": 30,
+          "recorded_boot_id_sha256_counts": {
+            "26168601009363e17137df185a3070b224013329ce1a300831506e8e72a9d080": 30
+          },
+          "status": "same_boot"
+        },
+        "captured_utc_range": [
+          "2026-10-15T01:08:27.509942083Z",
+          "2026-10-15T01:10:28.620637546Z"
+        ],
+        "phase_snapshots": 30
+      },
+      {
+        "arm": "P5-lookahead",
+        "boot_comparison": {
+          "matches": 30,
+          "mismatches": 0,
+          "missing_or_invalid": 0,
+          "occurrences": 30,
+          "recorded_boot_id_sha256_counts": {
+            "26168601009363e17137df185a3070b224013329ce1a300831506e8e72a9d080": 30
+          },
+          "status": "same_boot"
+        },
+        "captured_utc_range": [
+          "2026-10-15T01:10:58.620214747Z",
+          "2026-10-15T01:12:52.007782632Z"
+        ],
+        "phase_snapshots": 30
+      }
+    ],
+    "phase_labels": [
+      "canary-arithmetic-post",
+      "canary-arithmetic-pre",
+      "canary-chinese-post",
+      "canary-chinese-pre",
+      "canary-qa-post",
+      "canary-qa-pre",
+      "hello2-post",
+      "hello2-pre",
+      "prelaunch",
+      "qa-first-excluded-post",
+      "qa-first-excluded-pre",
+      "qa-measured-1-post",
+      "qa-measured-1-pre",
+      "qa-measured-2-post",
+      "qa-measured-2-pre",
+      "qa-measured-3-post",
+      "qa-measured-3-pre",
+      "qa-measured-4-post",
+      "qa-measured-4-pre",
+      "qa-measured-5-post",
+      "qa-measured-5-pre",
+      "qa-warm-1-post",
+      "qa-warm-1-pre",
+      "qa-warm-2-post",
+      "qa-warm-2-pre",
+      "ready",
+      "requests-post",
+      "requests-pre",
+      "shutdown-post",
+      "shutdown-pre"
+    ],
+    "phase_snapshots": 300,
+    "public_json_files_checked_against_manifest": 597,
+    "public_json_files_inspected": 598,
+    "public_json_inventory_sha256": "9d4b4ccf503e61c12f3a57e68cf107842b7c54ead4e48f6516488fbda1253e24",
+    "public_manifest_sha256": "14890f2d90461c0b228a804ae8c77d3ae93cdda6417bdcd1880292839fddccd0",
+    "public_provenance": "papers/arxiv/experiments/storage_demand/paired_read_v1/publication_results_v1/provenance.json.gz",
+    "public_provenance_sha256": "69987129dc0acbe7c3ce3e4e6817b93ff147eb610efe6d3a6f05eb3ac3472a6b",
+    "resource_field_search": {
+      "method": "Recursive JSON keys only, fixed key allowlist; not a claim about all repository archives.",
+      "mounts_are_not_limits": "Original mount snapshots include cgroup mount metadata, not recorded cgroup resource-control file values.",
+      "original_matches": {},
+      "public_matches": {},
+      "searched_case_insensitive_keys": [
+        "affinity",
+        "cgroup",
+        "core id",
+        "cpu.cfs_quota_us",
+        "cpu.max",
+        "cpuinfo",
+        "cpus_allowed_list",
+        "cpuset",
+        "cpuset.cpus",
+        "cpuset.mems",
+        "kernel",
+        "kernel_release",
+        "meminfo",
+        "memory.limit_in_bytes",
+        "memory.max",
+        "mems_allowed_list",
+        "memtotal",
+        "model name",
+        "physical id",
+        "uname"
+      ]
+    },
+    "scope": "papers/arxiv/experiments/storage_demand/paired_read_v1/artifacts-v3-mapfixed-20261015-01",
+    "snapshot_captured_monotonic_seconds_range": [
+      8968265.776779199,
+      8969715.044301666
+    ],
+    "snapshot_captured_utc_range": [
+      "2026-10-15T00:48:42.740259962Z",
+      "2026-10-15T01:12:52.007782632Z"
+    ],
+    "study_ended": {
+      "monotonic": 8969770.774600726,
+      "unix_ns": 1792026827738082277
+    },
+    "study_started": {
+      "monotonic": 8968251.050070027,
+      "unix_ns": 1792025308013551438
+    },
+    "study_utc_range": [
+      "2026-10-15T00:48:28.013551438Z",
+      "2026-10-15T01:13:47.738082277Z"
+    ]
+  }
+}
