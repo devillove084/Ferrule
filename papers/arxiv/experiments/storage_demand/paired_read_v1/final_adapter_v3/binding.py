@@ -28,7 +28,10 @@ EXTRAS = {
     'scripts/__pycache__/test_vllm_qwen35.cpython-310.pyc': '08f3f4bce348ca95d5ecae726473605de4abc51e98356ea8c492a2cf655fa86b',
 }
 SOURCE_FILES = tuple('final_adapter_v3/' + name for name in
-                     ('binding.py', 'evidence.py', 'run.py', 'test_adapter.py', 'README.md'))
+                     ('binding.py', 'evidence.py', 'run.py', 'test_adapter.py', 'README.md')) + (
+    'map_evidence_v1/adapter.py', 'map_evidence_v1/calibrate.py', 'map_evidence_v1/README.md',
+    '../runnerhelpers/library_maps_v1.py', '../tests/test_library_maps_v1.py',
+)
 
 
 def disposition(inventory, manifest):

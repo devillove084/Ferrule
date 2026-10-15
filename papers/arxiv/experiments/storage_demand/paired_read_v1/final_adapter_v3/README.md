@@ -24,7 +24,18 @@ old fixture failures. It binds the real `staged-final/cli` and final runtime pin
 manifest. It never claims CLI mathematical equivalence or a clean full CPU
 suite. New private bindings are written exclusively under
 `bindings-final-v3-20261015-03/`; raw receipts and credentials are not committed.
-All five adapter source/test/document files are pinned by review and execution.
+The final-layout adapter plus the explicit map-evidence source/test/document
+files in `binding.SOURCE_FILES` are pinned by review and execution.
+
+**Stopped historical attempt:** `artifacts-v3-final-20261015-01` reached Ready
+but failed the historical map predicate before issuing any requests. It is
+permanently stopped; the commands below are historical, not instructions to
+resume or overwrite `-03`. The append-only `../map_evidence_v1/` adapter preserves
+raw maps before library validation and requires role/ELF dependency pins.
+Changing the adapter invalidates existing bindings. A fresh parent study plan,
+new private review/binding/execution destinations and authorization are required
+before any future study. Only the separately authorized one-shot Ready-only
+calibration is permitted now; it is neither paired data nor a replacement arm.
 
 Use the repository's CPU-only Python 3.12 with `-S -B`:
 
