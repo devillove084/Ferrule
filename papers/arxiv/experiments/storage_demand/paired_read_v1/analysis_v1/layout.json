@@ -1,0 +1,1430 @@
+{
+  "accounting": {
+    "outside_canvas_text": [],
+    "size_inches": [
+      7.5,
+      5.8
+    ],
+    "text_artists": [
+      {
+        "bbox_fraction": [
+          0.093,
+          0.780595,
+          0.418167,
+          0.803009
+        ],
+        "text": "Application / read-pipeline counter"
+      },
+      {
+        "bbox_fraction": [
+          0.534,
+          0.780595,
+          0.6135,
+          0.803009
+        ],
+        "text": "Blocking"
+      },
+      {
+        "bbox_fraction": [
+          0.768,
+          0.780595,
+          0.87,
+          0.803009
+        ],
+        "text": "Lookahead"
+      },
+      {
+        "bbox_fraction": [
+          0.093,
+          0.745804,
+          0.360833,
+          0.768218
+        ],
+        "text": "Logical checkpoint-reader bytes"
+      },
+      {
+        "bbox_fraction": [
+          0.534,
+          0.745804,
+          0.678,
+          0.768218
+        ],
+        "text": "128,811,263,616"
+      },
+      {
+        "bbox_fraction": [
+          0.768,
+          0.745804,
+          0.912,
+          0.768218
+        ],
+        "text": "128,811,263,616"
+      },
+      {
+        "bbox_fraction": [
+          0.093,
+          0.713386,
+          0.2445,
+          0.7358
+        ],
+        "text": "Facade H2D bytes"
+      },
+      {
+        "bbox_fraction": [
+          0.534,
+          0.713386,
+          0.678,
+          0.7358
+        ],
+        "text": "128,811,927,312"
+      },
+      {
+        "bbox_fraction": [
+          0.768,
+          0.713386,
+          0.912,
+          0.7358
+        ],
+        "text": "128,811,927,312"
+      },
+      {
+        "bbox_fraction": [
+          0.093,
+          0.680967,
+          0.415833,
+          0.703381
+        ],
+        "text": "Verified reads / recorded wasted bytes"
+      },
+      {
+        "bbox_fraction": [
+          0.534,
+          0.680967,
+          0.619667,
+          0.703381
+        ],
+        "text": "40,943 / 0"
+      },
+      {
+        "bbox_fraction": [
+          0.768,
+          0.680967,
+          0.853667,
+          0.703381
+        ],
+        "text": "40,943 / 0"
+      },
+      {
+        "bbox_fraction": [
+          0.093,
+          0.648549,
+          0.365,
+          0.670962
+        ],
+        "text": "Unknown reads / unknown bytes"
+      },
+      {
+        "bbox_fraction": [
+          0.534,
+          0.648549,
+          0.571667,
+          0.670962
+        ],
+        "text": "0 / 0"
+      },
+      {
+        "bbox_fraction": [
+          0.768,
+          0.648549,
+          0.805667,
+          0.670962
+        ],
+        "text": "0 / 0"
+      },
+      {
+        "bbox_fraction": [
+          0.03537,
+          0.628067,
+          0.062037,
+          0.650481
+        ],
+        "text": "0.0"
+      },
+      {
+        "bbox_fraction": [
+          0.03537,
+          0.707137,
+          0.062037,
+          0.729551
+        ],
+        "text": "0.5"
+      },
+      {
+        "bbox_fraction": [
+          0.03537,
+          0.786207,
+          0.062037,
+          0.808621
+        ],
+        "text": "1.0"
+      },
+      {
+        "bbox_fraction": [
+          0.075,
+          0.816379,
+          0.751833,
+          0.840517
+        ],
+        "text": "(a) Request-period totals per lifecycle: identical in all five blocks"
+      },
+      {
+        "bbox_fraction": [
+          0.134977,
+          0.306514,
+          0.218644,
+          0.328928
+        ],
+        "text": "16.000732"
+      },
+      {
+        "bbox_fraction": [
+          0.134977,
+          0.403258,
+          0.218644,
+          0.425672
+        ],
+        "text": "16.000732"
+      },
+      {
+        "bbox_fraction": [
+          0.197271,
+          0.462291,
+          0.285438,
+          0.479533
+        ],
+        "text": "64 MiB limit"
+      },
+      {
+        "bbox_fraction": [
+          0.085886,
+          0.254837,
+          0.291386,
+          0.272079
+        ],
+        "text": "Not RSS or physical host usage"
+      },
+      {
+        "bbox_fraction": [
+          0.115636,
+          0.178831,
+          0.261636,
+          0.201245
+        ],
+        "text": "MiB (2^20 bytes)"
+      },
+      {
+        "bbox_fraction": [
+          0.069667,
+          0.210824,
+          0.080333,
+          0.233238
+        ],
+        "text": "0"
+      },
+      {
+        "bbox_fraction": [
+          0.116943,
+          0.210824,
+          0.138276,
+          0.233238
+        ],
+        "text": "16"
+      },
+      {
+        "bbox_fraction": [
+          0.169552,
+          0.210824,
+          0.190886,
+          0.233238
+        ],
+        "text": "32"
+      },
+      {
+        "bbox_fraction": [
+          0.222162,
+          0.210824,
+          0.243495,
+          0.233238
+        ],
+        "text": "48"
+      },
+      {
+        "bbox_fraction": [
+          0.274771,
+          0.210824,
+          0.296104,
+          0.233238
+        ],
+        "text": "64"
+      },
+      {
+        "bbox_fraction": [
+          0.052704,
+          0.303928,
+          0.062037,
+          0.326342
+        ],
+        "text": "L"
+      },
+      {
+        "bbox_fraction": [
+          0.050537,
+          0.400672,
+          0.062037,
+          0.423086
+        ],
+        "text": "B"
+      },
+      {
+        "bbox_fraction": [
+          0.075,
+          0.50824,
+          0.2305,
+          0.560309
+        ],
+        "text": "(b) Logical host\nreservation"
+      },
+      {
+        "bbox_fraction": [
+          0.53983,
+          0.306514,
+          0.584164,
+          0.328928
+        ],
+        "text": "4,125"
+      },
+      {
+        "bbox_fraction": [
+          0.53983,
+          0.403258,
+          0.584164,
+          0.425672
+        ],
+        "text": "4,125"
+      },
+      {
+        "bbox_fraction": [
+          0.532135,
+          0.462291,
+          0.621801,
+          0.479533
+        ],
+        "text": "7 GiB target"
+      },
+      {
+        "bbox_fraction": [
+          0.405667,
+          0.254837,
+          0.644333,
+          0.272079
+        ],
+        "text": "Not exact process-owned GPU bytes"
+      },
+      {
+        "bbox_fraction": [
+          0.452,
+          0.184004,
+          0.598,
+          0.206418
+        ],
+        "text": "MiB (2^20 bytes)"
+      },
+      {
+        "bbox_fraction": [
+          0.40703,
+          0.215996,
+          0.415697,
+          0.233238
+        ],
+        "text": "0"
+      },
+      {
+        "bbox_fraction": [
+          0.512114,
+          0.215996,
+          0.551114,
+          0.233238
+        ],
+        "text": "4,096"
+      },
+      {
+        "bbox_fraction": [
+          0.602301,
+          0.215996,
+          0.641301,
+          0.233238
+        ],
+        "text": "7,168"
+      },
+      {
+        "bbox_fraction": [
+          0.389067,
+          0.303928,
+          0.398401,
+          0.326342
+        ],
+        "text": "L"
+      },
+      {
+        "bbox_fraction": [
+          0.386901,
+          0.400672,
+          0.398401,
+          0.423086
+        ],
+        "text": "B"
+      },
+      {
+        "bbox_fraction": [
+          0.411364,
+          0.50824,
+          0.598864,
+          0.560309
+        ],
+        "text": "(c) Device-wide\nsampled maximum"
+      },
+      {
+        "bbox_fraction": [
+          0.81603,
+          0.403828,
+          0.961364,
+          0.44107
+        ],
+        "text": "P1-B: 314,825,320 B\nOther nine arms: 0 B"
+      },
+      {
+        "bbox_fraction": [
+          0.72378,
+          0.178831,
+          0.998947,
+          0.201245
+        ],
+        "text": "Request-period client delta (MiB)"
+      },
+      {
+        "bbox_fraction": [
+          0.753664,
+          0.210824,
+          0.76433,
+          0.233238
+        ],
+        "text": "0"
+      },
+      {
+        "bbox_fraction": [
+          0.805607,
+          0.210824,
+          0.837607,
+          0.233238
+        ],
+        "text": "100"
+      },
+      {
+        "bbox_fraction": [
+          0.868216,
+          0.210824,
+          0.900216,
+          0.233238
+        ],
+        "text": "200"
+      },
+      {
+        "bbox_fraction": [
+          0.930826,
+          0.210824,
+          0.962826,
+          0.233238
+        ],
+        "text": "300"
+      },
+      {
+        "bbox_fraction": [
+          0.705598,
+          0.255478,
+          0.734764,
+          0.272719
+        ],
+        "text": "P5-L"
+      },
+      {
+        "bbox_fraction": [
+          0.704264,
+          0.278082,
+          0.734764,
+          0.295323
+        ],
+        "text": "P5-B"
+      },
+      {
+        "bbox_fraction": [
+          0.704264,
+          0.300685,
+          0.734764,
+          0.317927
+        ],
+        "text": "P4-B"
+      },
+      {
+        "bbox_fraction": [
+          0.705598,
+          0.323289,
+          0.734764,
+          0.340531
+        ],
+        "text": "P4-L"
+      },
+      {
+        "bbox_fraction": [
+          0.704264,
+          0.345893,
+          0.734764,
+          0.363134
+        ],
+        "text": "P3-B"
+      },
+      {
+        "bbox_fraction": [
+          0.705598,
+          0.368497,
+          0.734764,
+          0.385738
+        ],
+        "text": "P3-L"
+      },
+      {
+        "bbox_fraction": [
+          0.705598,
+          0.391101,
+          0.734764,
+          0.408342
+        ],
+        "text": "P2-L"
+      },
+      {
+        "bbox_fraction": [
+          0.704264,
+          0.413704,
+          0.734764,
+          0.430946
+        ],
+        "text": "P2-B"
+      },
+      {
+        "bbox_fraction": [
+          0.705598,
+          0.436308,
+          0.734764,
+          0.453549
+        ],
+        "text": "P1-L"
+      },
+      {
+        "bbox_fraction": [
+          0.704264,
+          0.458912,
+          0.734764,
+          0.476153
+        ],
+        "text": "P1-B"
+      },
+      {
+        "bbox_fraction": [
+          0.747727,
+          0.50824,
+          0.955727,
+          0.552723
+        ],
+        "text": "(d) Shared NFS client\nserver-read bytes"
+      },
+      {
+        "bbox_fraction": [
+          0.14575,
+          0.943966,
+          0.85425,
+          0.975
+        ],
+        "text": "Equal logical work; separate host and device scopes"
+      },
+      {
+        "bbox_fraction": [
+          0.024333,
+          0.025,
+          0.975667,
+          0.090517
+        ],
+        "text": "Bars: the same maximum in every arm, not a sum of lifetime peaks. Host logical peak = 16,777,984 B; device maximum = 4,125 MiB.\nReader and H2D totals are equal across modes, not to one another. Recorded zero waste is not unknown physical backend traffic.\nDo not add host PSS to device or logical gauges. Shared NFS/page cache may be warm; startup/shutdown PID-I/O deltas remain unknown."
+      },
+      {
+        "bbox_fraction": [
+          0.373583,
+          0.89819,
+          0.474583,
+          0.920603
+        ],
+        "text": "Blocking (B)"
+      },
+      {
+        "bbox_fraction": [
+          0.554583,
+          0.89819,
+          0.673083,
+          0.920603
+        ],
+        "text": "Lookahead (L)"
+      }
+    ],
+    "text_bbox_overlaps": [],
+    "validation": "Visible text inside canvas with no pairwise text-box overlaps; marker/line intersections require visual review"
+  },
+  "latency": {
+    "outside_canvas_text": [],
+    "size_inches": [
+      7.5,
+      5.8
+    ],
+    "text_artists": [
+      {
+        "bbox_fraction": [
+          0.203773,
+          0.517457,
+          0.379939,
+          0.539871
+        ],
+        "text": "Median client E2E (s)"
+      },
+      {
+        "bbox_fraction": [
+          0.09922,
+          0.54945,
+          0.136553,
+          0.571864
+        ],
+        "text": "6.75"
+      },
+      {
+        "bbox_fraction": [
+          0.163653,
+          0.54945,
+          0.200986,
+          0.571864
+        ],
+        "text": "7.00"
+      },
+      {
+        "bbox_fraction": [
+          0.228086,
+          0.54945,
+          0.26542,
+          0.571864
+        ],
+        "text": "7.25"
+      },
+      {
+        "bbox_fraction": [
+          0.292519,
+          0.54945,
+          0.329853,
+          0.571864
+        ],
+        "text": "7.50"
+      },
+      {
+        "bbox_fraction": [
+          0.356953,
+          0.54945,
+          0.394286,
+          0.571864
+        ],
+        "text": "7.75"
+      },
+      {
+        "bbox_fraction": [
+          0.421386,
+          0.54945,
+          0.458719,
+          0.571864
+        ],
+        "text": "8.00"
+      },
+      {
+        "bbox_fraction": [
+          0.034204,
+          0.598707,
+          0.092037,
+          0.62112
+        ],
+        "text": "P5  B/L"
+      },
+      {
+        "bbox_fraction": [
+          0.034204,
+          0.642113,
+          0.092037,
+          0.664527
+        ],
+        "text": "P4  L/B"
+      },
+      {
+        "bbox_fraction": [
+          0.034204,
+          0.68552,
+          0.092037,
+          0.707934
+        ],
+        "text": "P3  L/B"
+      },
+      {
+        "bbox_fraction": [
+          0.034204,
+          0.728927,
+          0.092037,
+          0.75134
+        ],
+        "text": "P2  B/L"
+      },
+      {
+        "bbox_fraction": [
+          0.034204,
+          0.772333,
+          0.092037,
+          0.794747
+        ],
+        "text": "P1  B/L"
+      },
+      {
+        "bbox_fraction": [
+          0.105,
+          0.826379,
+          0.489833,
+          0.850517
+        ],
+        "text": "(a) E2E: median of five measured QA"
+      },
+      {
+        "bbox_fraction": [
+          0.199689,
+          0.158831,
+          0.384023,
+          0.181245
+        ],
+        "text": "Median client TTFT (s)"
+      },
+      {
+        "bbox_fraction": [
+          0.10604,
+          0.190824,
+          0.132707,
+          0.213238
+        ],
+        "text": "1.9"
+      },
+      {
+        "bbox_fraction": [
+          0.177908,
+          0.190824,
+          0.204575,
+          0.213238
+        ],
+        "text": "2.0"
+      },
+      {
+        "bbox_fraction": [
+          0.249776,
+          0.190824,
+          0.276442,
+          0.213238
+        ],
+        "text": "2.1"
+      },
+      {
+        "bbox_fraction": [
+          0.321643,
+          0.190824,
+          0.34831,
+          0.213238
+        ],
+        "text": "2.2"
+      },
+      {
+        "bbox_fraction": [
+          0.393511,
+          0.190824,
+          0.420178,
+          0.213238
+        ],
+        "text": "2.3"
+      },
+      {
+        "bbox_fraction": [
+          0.034204,
+          0.240081,
+          0.092037,
+          0.262494
+        ],
+        "text": "P5  B/L"
+      },
+      {
+        "bbox_fraction": [
+          0.034204,
+          0.283487,
+          0.092037,
+          0.305901
+        ],
+        "text": "P4  L/B"
+      },
+      {
+        "bbox_fraction": [
+          0.034204,
+          0.326894,
+          0.092037,
+          0.349308
+        ],
+        "text": "P3  L/B"
+      },
+      {
+        "bbox_fraction": [
+          0.034204,
+          0.370301,
+          0.092037,
+          0.392714
+        ],
+        "text": "P2  B/L"
+      },
+      {
+        "bbox_fraction": [
+          0.034204,
+          0.413707,
+          0.092037,
+          0.436121
+        ],
+        "text": "P1  B/L"
+      },
+      {
+        "bbox_fraction": [
+          0.105,
+          0.467753,
+          0.502833,
+          0.491891
+        ],
+        "text": "(b) TTFT: median of five measured QA"
+      },
+      {
+        "bbox_fraction": [
+          0.733972,
+          0.774245,
+          0.750972,
+          0.791486
+        ],
+        "text": "P1"
+      },
+      {
+        "bbox_fraction": [
+          0.696303,
+          0.754742,
+          0.713303,
+          0.771983
+        ],
+        "text": "P2"
+      },
+      {
+        "bbox_fraction": [
+          0.751152,
+          0.735239,
+          0.768152,
+          0.75248
+        ],
+        "text": "P3"
+      },
+      {
+        "bbox_fraction": [
+          0.702472,
+          0.715736,
+          0.719472,
+          0.732977
+        ],
+        "text": "P4"
+      },
+      {
+        "bbox_fraction": [
+          0.721215,
+          0.696233,
+          0.738215,
+          0.713474
+        ],
+        "text": "P5"
+      },
+      {
+        "bbox_fraction": [
+          0.77511,
+          0.67249,
+          0.96461,
+          0.689732
+        ],
+        "text": "0.91823  [0.89303, 0.94946]"
+      },
+      {
+        "bbox_fraction": [
+          0.662599,
+          0.570736,
+          0.679599,
+          0.587977
+        ],
+        "text": "P1"
+      },
+      {
+        "bbox_fraction": [
+          0.711985,
+          0.551233,
+          0.728985,
+          0.568474
+        ],
+        "text": "P2"
+      },
+      {
+        "bbox_fraction": [
+          0.750605,
+          0.53173,
+          0.767605,
+          0.548972
+        ],
+        "text": "P3"
+      },
+      {
+        "bbox_fraction": [
+          0.690791,
+          0.512227,
+          0.707791,
+          0.529469
+        ],
+        "text": "P4"
+      },
+      {
+        "bbox_fraction": [
+          0.685937,
+          0.492724,
+          0.702937,
+          0.509966
+        ],
+        "text": "P5"
+      },
+      {
+        "bbox_fraction": [
+          0.77511,
+          0.468982,
+          0.96461,
+          0.486223
+        ],
+        "text": "0.88755  [0.86004, 0.94888]"
+      },
+      {
+        "bbox_fraction": [
+          0.870426,
+          0.367227,
+          0.887426,
+          0.384469
+        ],
+        "text": "P1"
+      },
+      {
+        "bbox_fraction": [
+          0.910929,
+          0.347724,
+          0.927929,
+          0.364966
+        ],
+        "text": "P2"
+      },
+      {
+        "bbox_fraction": [
+          0.861431,
+          0.328221,
+          0.878431,
+          0.345463
+        ],
+        "text": "P3"
+      },
+      {
+        "bbox_fraction": [
+          0.896826,
+          0.308718,
+          0.913826,
+          0.32596
+        ],
+        "text": "P4"
+      },
+      {
+        "bbox_fraction": [
+          0.890266,
+          0.289216,
+          0.907266,
+          0.306457
+        ],
+        "text": "P5"
+      },
+      {
+        "bbox_fraction": [
+          0.616051,
+          0.265473,
+          0.805551,
+          0.282714
+        ],
+        "text": "1.10908  [1.07393, 1.13498]"
+      },
+      {
+        "bbox_fraction": [
+          0.655414,
+          0.132969,
+          0.925247,
+          0.181245
+        ],
+        "text": "Lookahead / blocking (log scale)\nDashed line = unity"
+      },
+      {
+        "bbox_fraction": [
+          0.624162,
+          0.190824,
+          0.661495,
+          0.213238
+        ],
+        "text": "0.85"
+      },
+      {
+        "bbox_fraction": [
+          0.680666,
+          0.190824,
+          0.707332,
+          0.213238
+        ],
+        "text": "0.9"
+      },
+      {
+        "bbox_fraction": [
+          0.782988,
+          0.190824,
+          0.793654,
+          0.213238
+        ],
+        "text": "1"
+      },
+      {
+        "bbox_fraction": [
+          0.860312,
+          0.190824,
+          0.886979,
+          0.213238
+        ],
+        "text": "1.1"
+      },
+      {
+        "bbox_fraction": [
+          0.938208,
+          0.190824,
+          0.964874,
+          0.213238
+        ],
+        "text": "1.2"
+      },
+      {
+        "bbox_fraction": [
+          0.513347,
+          0.703481,
+          0.60418,
+          0.740722
+        ],
+        "text": "E2E\nlower better"
+      },
+      {
+        "bbox_fraction": [
+          0.513347,
+          0.499972,
+          0.60418,
+          0.537213
+        ],
+        "text": "TTFT\nlower better"
+      },
+      {
+        "bbox_fraction": [
+          0.50618,
+          0.296463,
+          0.60418,
+          0.333704
+        ],
+        "text": "Goodput\nhigher better"
+      },
+      {
+        "bbox_fraction": [
+          0.610661,
+          0.826379,
+          0.818661,
+          0.850517
+        ],
+        "text": "(c) Paired L/B ratios"
+      },
+      {
+        "bbox_fraction": [
+          0.122667,
+          0.943966,
+          0.877333,
+          0.975
+        ],
+        "text": "Five paired blocks: client latency and qualified goodput"
+      },
+      {
+        "bbox_fraction": [
+          0.08575,
+          0.025,
+          0.91425,
+          0.090517
+        ],
+        "text": "n = 5 paired blocks, not 50 independent requests. Rows show block and frozen execution order (B/L or L/B).\nRatio points: P1\u2013P5 (circle B/L; triangle L/B). Diamond: exp(median log ratio). Gray strip: descriptive 2.5/97.5 percentiles\nfrom all 3,125 paired-block resamples; no confidence-coverage or significance claim. Startup probe time is separate."
+      },
+      {
+        "bbox_fraction": [
+          0.373583,
+          0.89819,
+          0.474583,
+          0.920603
+        ],
+        "text": "Blocking (B)"
+      },
+      {
+        "bbox_fraction": [
+          0.554583,
+          0.89819,
+          0.673083,
+          0.920603
+        ],
+        "text": "Lookahead (L)"
+      }
+    ],
+    "text_bbox_overlaps": [],
+    "validation": "Visible text inside canvas with no pairwise text-box overlaps; marker/line intersections require visual review"
+  },
+  "read-wait": {
+    "outside_canvas_text": [],
+    "size_inches": [
+      7.5,
+      4.6
+    ],
+    "text_artists": [
+      {
+        "bbox_fraction": [
+          0.115136,
+          0.190266,
+          0.430136,
+          0.218527
+        ],
+        "text": "Median request read-demand wait (s)"
+      },
+      {
+        "bbox_fraction": [
+          0.107632,
+          0.230604,
+          0.134299,
+          0.258865
+        ],
+        "text": "2.4"
+      },
+      {
+        "bbox_fraction": [
+          0.171493,
+          0.230604,
+          0.19816,
+          0.258865
+        ],
+        "text": "2.6"
+      },
+      {
+        "bbox_fraction": [
+          0.235354,
+          0.230604,
+          0.262021,
+          0.258865
+        ],
+        "text": "2.8"
+      },
+      {
+        "bbox_fraction": [
+          0.299216,
+          0.230604,
+          0.325882,
+          0.258865
+        ],
+        "text": "3.0"
+      },
+      {
+        "bbox_fraction": [
+          0.363077,
+          0.230604,
+          0.389743,
+          0.258865
+        ],
+        "text": "3.2"
+      },
+      {
+        "bbox_fraction": [
+          0.034204,
+          0.314373,
+          0.092037,
+          0.342634
+        ],
+        "text": "P5  B/L"
+      },
+      {
+        "bbox_fraction": [
+          0.034204,
+          0.408491,
+          0.092037,
+          0.436752
+        ],
+        "text": "P4  L/B"
+      },
+      {
+        "bbox_fraction": [
+          0.034204,
+          0.502609,
+          0.092037,
+          0.53087
+        ],
+        "text": "P3  L/B"
+      },
+      {
+        "bbox_fraction": [
+          0.034204,
+          0.596726,
+          0.092037,
+          0.624987
+        ],
+        "text": "P2  B/L"
+      },
+      {
+        "bbox_fraction": [
+          0.034204,
+          0.690844,
+          0.092037,
+          0.719105
+        ],
+        "text": "P1  B/L"
+      },
+      {
+        "bbox_fraction": [
+          0.105,
+          0.780652,
+          0.501667,
+          0.811087
+        ],
+        "text": "(a) Median request read-demand wait"
+      },
+      {
+        "bbox_fraction": [
+          0.767569,
+          0.493498,
+          0.814069,
+          0.515238
+        ],
+        "text": "P1 B/L"
+      },
+      {
+        "bbox_fraction": [
+          0.730304,
+          0.359963,
+          0.776804,
+          0.381702
+        ],
+        "text": "P2 B/L"
+      },
+      {
+        "bbox_fraction": [
+          0.705827,
+          0.560721,
+          0.752327,
+          0.582461
+        ],
+        "text": "P3 L/B"
+      },
+      {
+        "bbox_fraction": [
+          0.644907,
+          0.370952,
+          0.691407,
+          0.392691
+        ],
+        "text": "P4 L/B"
+      },
+      {
+        "bbox_fraction": [
+          0.735064,
+          0.400756,
+          0.781564,
+          0.422495
+        ],
+        "text": "P5 B/L"
+      },
+      {
+        "bbox_fraction": [
+          0.666552,
+          0.157657,
+          0.887886,
+          0.218527
+        ],
+        "text": "Change in median request\nread-demand wait (s)"
+      },
+      {
+        "bbox_fraction": [
+          0.568536,
+          0.230604,
+          0.609203,
+          0.258865
+        ],
+        "text": "\u22120.8"
+      },
+      {
+        "bbox_fraction": [
+          0.657171,
+          0.230604,
+          0.697838,
+          0.258865
+        ],
+        "text": "\u22120.6"
+      },
+      {
+        "bbox_fraction": [
+          0.745806,
+          0.230604,
+          0.786473,
+          0.258865
+        ],
+        "text": "\u22120.4"
+      },
+      {
+        "bbox_fraction": [
+          0.834441,
+          0.230604,
+          0.875108,
+          0.258865
+        ],
+        "text": "\u22120.2"
+      },
+      {
+        "bbox_fraction": [
+          0.930076,
+          0.230604,
+          0.956743,
+          0.258865
+        ],
+        "text": "0.0"
+      },
+      {
+        "bbox_fraction": [
+          0.506068,
+          0.301658,
+          0.523401,
+          0.738342
+        ],
+        "text": "Change in median client E2E (s)"
+      },
+      {
+        "bbox_fraction": [
+          0.530808,
+          0.335062,
+          0.571475,
+          0.363322
+        ],
+        "text": "\u22120.8"
+      },
+      {
+        "bbox_fraction": [
+          0.530808,
+          0.425628,
+          0.571475,
+          0.453888
+        ],
+        "text": "\u22120.6"
+      },
+      {
+        "bbox_fraction": [
+          0.530808,
+          0.516194,
+          0.571475,
+          0.544454
+        ],
+        "text": "\u22120.4"
+      },
+      {
+        "bbox_fraction": [
+          0.530808,
+          0.60676,
+          0.571475,
+          0.635021
+        ],
+        "text": "\u22120.2"
+      },
+      {
+        "bbox_fraction": [
+          0.544808,
+          0.697326,
+          0.571475,
+          0.725587
+        ],
+        "text": "0.0"
+      },
+      {
+        "bbox_fraction": [
+          0.584438,
+          0.780652,
+          0.838771,
+          0.811087
+        ],
+        "text": "(b) Paired change: L \u2212 B"
+      },
+      {
+        "bbox_fraction": [
+          0.0975,
+          0.93587,
+          0.9025,
+          0.975
+        ],
+        "text": "Lower read-demand wait accompanies lower measured E2E"
+      },
+      {
+        "bbox_fraction": [
+          0.08225,
+          0.025,
+          0.91775,
+          0.107609
+        ],
+        "text": "Each point is one paired block; each arm is the median of five measured-QA requests. No fit or causal coefficient.\nHost demand-wait intervals are not CUDA overlap timelines and are not additive to client latency.\nAssociation is consistent with less waiting, but does not establish critical-path causality; shared-cache conditions remain."
+      },
+      {
+        "bbox_fraction": [
+          0.373583,
+          0.887283,
+          0.474583,
+          0.915543
+        ],
+        "text": "Blocking (B)"
+      },
+      {
+        "bbox_fraction": [
+          0.554583,
+          0.887283,
+          0.673083,
+          0.915543
+        ],
+        "text": "Lookahead (L)"
+      }
+    ],
+    "text_bbox_overlaps": [],
+    "validation": "Visible text inside canvas with no pairwise text-box overlaps; marker/line intersections require visual review"
+  }
+}
