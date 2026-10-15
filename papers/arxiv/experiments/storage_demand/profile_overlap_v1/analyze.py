@@ -15,6 +15,25 @@ import sqlite3
 
 from profile_overlap_v1 import scope_contract
 
+READ_SOURCE_BOUNDARY = {
+    "reader": "FileExt::read_at loop; read_calls increments before every attempt",
+    "success": "whole operation SourceVerified after read_incrementally post-read source boundary",
+    "bytes": "typed requested/packed bytes; not a per-syscall byte measurement",
+    "reader_counters": "shared reader submission-through-take intervals, not ticket-certified",
+}
+
+
+def read_measurement_contract():
+    return dict(schema="ferrule.storage-demand.read-measurement.v2",
+        osrt_read_bytes=None, osrt_read_bytes_reason="unsupported_schema_no_size_or_proved_ssize_t",
+        osrt_return_value_semantics="opaque; official generic return-value description does not prove ssize_t",
+        accepted_observed_return_codes=[0],
+        return_code_policy="zero is not proof of success; nonzero/error/uninterpretable rejects this version",
+        source_boundary=READ_SOURCE_BOUNDARY,
+        call_success_proved=False, physical_io_bytes_claim=False,
+        read_success_scope="whole operation only; complete typed source-verified ledger required")
+
+
 MASK = (1 << 24) - 1
 LAUNCH = re.compile(r'^(?:cudaLaunch(?:Kernel(?:ExC)?|CooperativeKernel)|cuLaunch(?:Kernel(?:Ex)?|CooperativeKernel))(?:_v[0-9]+|_ptsz|_ptds)*$')
 LABELS = {
@@ -311,7 +330,7 @@ def audit_sqlite(db, context):
         values[r['name']].append(r['value'])
     check({'Cuda', 'NvtxEvents', 'OSRuntime'} <= set(values['CAPTURE_EVENT_TYPE']), 'missing capture event types')
     check(values['OS_RUNTIME_OPTIONS:DURATION_THRESHOLD_NS'] == ['1000'], 'unknown OSRT threshold')
-    # The CLI receipt is also checked; API bytes/counts below must reconcile. Never
+    # The CLI receipt is also checked; call counts and typed bytes reconcile separately. Never
     # infer file-API completeness merely because the OSRT table is nonempty.
     details = rows(db, 'ANALYSIS_DETAILS')
     session = rows(db, 'TARGET_INFO_SESSION_START_TIME')
@@ -388,6 +407,7 @@ def audit_sqlite(db, context):
     attributed = []
     kernel_shapes = Counter()
     range_hits = Counter()
+    expert_kernels = defaultdict(list)
     for row in kernels:
         physical(row)
         require(0 <= row['start'] < row['end'] <= duration, 'kernel outside trace')
@@ -409,13 +429,14 @@ def audit_sqlite(db, context):
             shape = (string(row['demangledName']), *(row.get(k) for k in
                      ('gridX', 'gridY', 'gridZ', 'blockX', 'blockY', 'blockZ')))
             kernel_shapes[shape] += 1
-            range_hits[expert['rangeId']] += 1
+            range_hits[(expert['domainId'], expert['rangeId'])] += 1
+            expert_kernels[(expert['domainId'], expert['rangeId'])].append((row['start'], row['end']))
     for key, api in by_api.items():
         check(len(api) == 1 and len(by_kernel.get(key, [])) == 1,
               'math API orphan/duplicate/unknown one-to-many kernel correlation')
     check(bool(kernels) and bool(attributed), 'no actual attributed expert math kernels')
     for r in ranges['layer.expert']:
-        check(range_hits[r['rangeId']] > 0, 'expert range without actual correlated math kernel')
+        check(range_hits[(r['domainId'], r['rangeId'])] > 0, 'expert range without actual correlated math kernel')
     for table in tables:
         if table.startswith('CUDA_GRAPH') or table == 'CUPTI_ACTIVITY_KIND_GRAPH_TRACE':
             check(db.execute('SELECT count(*) FROM ' + table).fetchone()[0] == 0, 'captured graph table unsupported')
@@ -431,45 +452,78 @@ def audit_sqlite(db, context):
     counts['OSRT_API'] = osrt_coverage['total_rows']
     osrt_names = Counter(string(r['nameId']) for r in osrt)
     preads, pread_records = [], []
-    read_bytes, read_calls = Counter(), Counter()
-    read_threads = {r['globalTid'] for r in ranges['read_subset']}
-    compute_threads = {r['globalTid'] for r in ranges['layer.expert']}
-    check(not read_threads & compute_threads, 'read worker and compute submission thread not separated')
-    seen_preads = set()
+    read_calls, read_returns = defaultdict(list), defaultdict(Counter)
+    read_threads = {r["globalTid"] for r in ranges["read_subset"]}
+    compute_threads = {r["globalTid"] for r in ranges["layer.expert"]}
+    check(not read_threads & compute_threads, "read worker and compute submission thread not separated")
+    seen_preads, excluded_preads = set(), Counter()
+    target_request_preads = 0
     for row in osrt:
-        name = string(row['nameId'])
-        if name not in ('pread', 'pread64') or row['globalTid'] not in read_threads:
+        name = string(row["nameId"])
+        if name not in ("pread", "pread64"):
             continue
-        require(row['start'] < row['end'], 'invalid pread interval')
-        read = containing(indexes.get('read_subset', {}), row)
-        check(read is not None, 'orphan/ambiguous worker pread')
-        key = row['globalTid'], row['start'], row['end'], row['returnValue']
-        require(key not in seen_preads, 'duplicate pread interval/alias; bytes cannot be counted twice')
+        if process_key(row["globalTid"]) != model:
+            excluded_preads["non_model"] += 1
+            continue
+        require(type(row["start"]) is int and type(row["end"]) is int
+                and 0 <= row["start"] < row["end"] <= duration, "invalid pread interval")
+        if row["end"] <= begin or row["start"] >= end:
+            excluded_preads["model_outside_request"] += 1
+            continue
+        target_request_preads += 1
+        require(begin <= row["start"] < row["end"] <= end, "pread crosses request boundary")
+        read = containing(indexes.get("read_subset", {}), row)
+        check(read is not None, "orphan/ambiguous target-request pread")
+        key = row["globalTid"], row["start"], row["end"]
+        require(key not in seen_preads, "duplicate pread interval/alias")
         seen_preads.add(key)
+        # The exported field is opaque, NOT ssize_t. Zero qualifies only with
+        # independent source-verified operation coverage; it proves no call success.
+        check(type(row["returnValue"]) is int and row["returnValue"] == 0,
+              "nonzero/error/uninterpretable OSRT read return encoding")
         if read is None:
             continue
-        check(row['returnValue'] > 0, 'failed/empty worker pread')
-        rid = read['rangeId']
-        read_bytes[rid] += row['returnValue']
-        read_calls[rid] += 1
-        preads.append((row['start'], row['end']))
+        rid = read["domainId"], read["rangeId"]
+        interval = row["start"], row["end"]
+        read_calls[rid].append(interval)
+        read_returns[rid][row["returnValue"]] += 1
+        preads.append(interval)
         pread_records.append(row)
-    interval_index(pread_records)  # Reject nested libc aliases before summing bytes.
-    for row in ranges['read_subset']:
-        check(read_calls[row['rangeId']] > 0 and read_bytes[row['rangeId']] == row['fields']['requested_bytes'],
-              'worker pread bytes/counts missing or differ from NVTX requested bytes')
-    stats = context['read_stats']
-    check(len(ranges['read_subset']) == stats['io_started_reads'] > 0, 'NVTX reads differ from current final read ledger')
-    check(sum(r['fields']['requested_bytes'] for r in ranges['read_subset']) == stats['proved_read_bytes'] > 0,
-          'NVTX bytes differ from current final read ledger')
-    last = context.get('last_receipt')
-    check(isinstance(last, dict), 'last actual worker receipt missing')
+    interval_index(pread_records)
+    for row in ranges["read_subset"]:
+        check(bool(read_calls[(row["domainId"], row["rangeId"])]), "worker pread calls missing from read range")
+    stats = context.get("read_stats")
+    require(isinstance(stats, dict), "current source-verified read ledger missing")
+    check(context.get("read_source_boundary") == READ_SOURCE_BOUNDARY,
+          "archive-bound read success semantics missing/unverified")
+    check(type(context.get("model_source_generation")) is int
+          and sources == {context["model_source_generation"]}, "ranges differ from actual owner image generation")
+    count = len(ranges["read_subset"])
+    check(type(stats.get("io_started_reads")) is int and count == stats["io_started_reads"] > 0,
+          "NVTX reads differ from current final read ledger")
+    check(all(type(stats.get(k)) is int and stats[k] == count > 0 for k in
+              ("submitted_reads", "worker_started_reads", "completed_reads", "verified_reads")),
+          "whole-operation source-verified read coverage not balanced")
+    check(all(type(stats.get(k)) is int and stats[k] == 0 for k in
+              ("failed_reads", "cancelled_reads", "unknown_reads", "unobserved_terminal_reads",
+               "unobserved_reader_intervals", "unknown_bytes")), "failed/unknown/unobserved read ledger")
+    requested = sum(r["fields"]["requested_bytes"] for r in ranges["read_subset"])
+    check(type(stats.get("proved_read_bytes")) is int and requested == stats["proved_read_bytes"] > 0,
+          "NVTX bytes differ from current final read ledger")
+    check(type(stats.get("reader_interval_bytes")) is int and stats["reader_interval_bytes"] == requested,
+          "shared-reader bytes differ from typed requested/verified bytes")
+    check(type(stats.get("reader_interval_calls")) is int
+          and stats["reader_interval_calls"] == target_request_preads == len(preads) > 0,
+          "target-request pread calls differ from shared-reader ledger")
+    last = context.get("last_receipt")
+    check(isinstance(last, dict), "last actual worker receipt missing")
     if last:
-        identity = last['identity']
-        matching = [r for r in ranges['read_subset'] if r['fields']['operation'] == identity['operation']
-                    and r['fields']['source_generation'] == identity['image_generation']]
-        check(len(matching) == 1 and matching[0]['fields']['requested_bytes'] == last['requested_bytes'] == last['io_bytes'],
-              'last actual worker receipt/source/operation differs')
+        identity = last["identity"]
+        matching = [r for r in ranges["read_subset"] if r["fields"]["operation"] == identity["operation"]
+                    and r["fields"]["source_generation"] == identity["image_generation"]]
+        check(last.get("outcome") == "source_verified", "last worker operation not source verified")
+        check(len(matching) == 1 and matching[0]["fields"]["requested_bytes"] == last["requested_bytes"] == last["io_bytes"],
+              "last actual worker receipt/source/operation differs")
 
     counts['NVTX_EVENTS'] = len(nvtx)
     collector = diagnostic_evidence(db, context, model)
@@ -481,9 +535,37 @@ def audit_sqlite(db, context):
     check(cupti == [context['cupti_path']], 'actual model CUPTI library diagnostic missing/ambiguous/mismatched')
     read_envelopes = [(r['start'], r['end']) for r in ranges['read_subset']]
     kernel_union = union(attributed)
+    kernel_ends = [b for _, b in kernel_union]
+
+    def kernel_overlap(intervals):
+        hits = []
+        for start, stop in union(intervals):
+            i = bisect_right(kernel_ends, start)
+            while i < len(kernel_union) and kernel_union[i][0] < stop:
+                hits.append((max(start, kernel_union[i][0]), min(stop, kernel_union[i][1])))
+                i += 1
+        return length(hits)
+
+    read_metrics = []
+    for row in ranges["read_subset"]:
+        key = row["domainId"], row["rangeId"]
+        calls = read_calls[key]
+        read_metrics.append(dict(domain_id=key[0], range_id=key[1], global_tid=row["globalTid"],
+            **row["fields"], start_ns=row["start"], end_ns=row["end"], pread_calls=len(calls),
+            pread_intervals_ns=calls, osrt_return_values=dict(read_returns[key]), osrt_read_bytes=None,
+            read_envelope_ns=row["end"] - row["start"], pread_union_ns=length(calls),
+            read_envelope_kernel_intersection_ns=kernel_overlap([(row["start"], row["end"])]),
+            pread_kernel_intersection_ns=kernel_overlap(calls),
+            overlapping_pread_calls=sum(kernel_overlap([call]) > 0 for call in calls)))
+    expert_metrics = [dict(domain_id=r["domainId"], range_id=r["rangeId"], global_tid=r["globalTid"],
+        **r["fields"], submission_start_ns=r["start"], submission_end_ns=r["end"],
+        kernel_count=len(expert_kernels[(r["domainId"], r["rangeId"])]),
+        kernel_union_ns=length(expert_kernels[(r["domainId"], r["rangeId"])]),
+        kernel_union_intervals_ns=union(expert_kernels[(r["domainId"], r["rangeId"])]))
+        for r in ranges["layer.expert"]]
     scoped_issues = sorted(set(issues + scope['issues']))
     issues.extend(collector['issues'])
-    summary = dict(schema='ferrule.storage-demand.profile-overlap-sql.v1',
+    summary = dict(schema='ferrule.storage-demand.profile-overlap-sql.v2',
         status='sql_evidence_consistent' if not issues else 'rejected', full_trace_accepted=False,
         scoped_sql_evidence_consistent=not scoped_issues, scoped_overlap_accepted=False,
         scoped_issues=scoped_issues, diagnostic_scope=scope,
@@ -506,7 +588,18 @@ def audit_sqlite(db, context):
                 expert_range_counts_by_layer=dict(Counter(r['fields']['layer'] for r in ranges['layer.expert'])),
                 attributed_kernel_shapes=[dict(name=shape[0], grid=list(shape[1:4]), block=list(shape[4:7]), count=count)
                                           for shape, count in sorted(kernel_shapes.items(), key=lambda item: repr(item[0]))],
-        requested_read_bytes=sum(r['fields']['requested_bytes'] for r in ranges['read_subset']),
+        requested_read_bytes=requested, source_verified_read_bytes=stats.get("proved_read_bytes"),
+        read_measurement=read_measurement_contract(), osrt_read_bytes=None,
+        osrt_read_bytes_reason="unsupported_schema_no_size_or_proved_ssize_t",
+        osrt_read_return_values=dict(Counter(r["returnValue"] for r in pread_records)),
+        target_request_pread_calls=target_request_preads, excluded_pread_calls=dict(excluded_preads),
+        read_ledger_stats=stats, read_range_metrics=read_metrics, expert_range_metrics=expert_metrics,
+        read_ranges_with_kernel_overlap=sum(r["read_envelope_kernel_intersection_ns"] > 0 for r in read_metrics),
+        read_ranges_with_pread_kernel_overlap=sum(r["pread_kernel_intersection_ns"] > 0 for r in read_metrics),
+        pread_calls_with_kernel_overlap=sum(r["overlapping_pread_calls"] for r in read_metrics),
+        observed_pread_calls_per_range=dict(Counter(r["pread_calls"] for r in read_metrics)),
+        clock_basis="Nsight common nanoseconds; Rust Instant values are not aligned or substituted",
+        physical_io_bytes_claim=False, per_call_success_proved=False,
         attributed_kernel_count=len(attributed), expert_kernel_union_ns=length(kernel_union),
         worker_read_envelope_union_ns=length(read_envelopes), worker_pread_union_ns=length(preads),
         read_envelope_kernel_intersection_ns=length(intersection(read_envelopes, kernel_union)),
@@ -522,6 +615,7 @@ def audit_sqlite(db, context):
         limitations='Observed userspace pread/kernel concurrency only. Read envelope includes allocation; '
                      'pread wall time includes CPU preemption and can be page-cache service, not active IO or physical NAS service. '
                                           'No copy enqueue, wait, upload, or host submission duration is GPU time. '
+                     'Source verification proves whole operations, not each pread success or syscall bytes. '
                      'Bidirectional closure does not exclude simultaneous API/activity loss; lifecycle, diagnostics, '
                      'full export, expected ranges and current read counters are independently required.')
     return summary

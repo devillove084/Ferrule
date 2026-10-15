@@ -67,15 +67,19 @@ def fixture():
     db.executemany('INSERT INTO CUPTI_ACTIVITY_KIND_KERNEL VALUES(?,?,0,1,1,?,?,2,NULL)',
                    [(260, 350, 1, GPID), (300, 370, 2, GPID)])
     db.execute('INSERT INTO CUPTI_ACTIVITY_KIND_MEMCPY VALUES(130,210,0,?,3,16)', (GPID,))
-    db.executemany('INSERT INTO OSRT_API VALUES(?,?,27,?,3,8,0,0)', [(250, 280, WORKER), (320, 380, WORKER)])
+    db.executemany('INSERT INTO OSRT_API VALUES(?,?,27,?,3,0,0,0)', [(250, 280, WORKER), (320, 380, WORKER)])
     db.execute('INSERT INTO DIAGNOSTIC_EVENT VALUES(0,2,3,1,?,?)',
                ('Number of OS runtime libraries events collected: \t2.', GPID))
     cupti = str(p.TOOL / 'target-linux-x64/libcupti.so.12.9')
     db.execute('INSERT INTO DIAGNOSTIC_EVENT VALUES(0,1,1,1,?,?)', ('Loaded CUPTI library: ' + cupti, GPID))
     context = dict(model_pid=PID, model_birth_ticks=999, uuid=tc.UUID, wrapper_pids=[PID-1],
         request_begin_unix_ns=EPOCH + 100, request_end_unix_ns=EPOCH + 500,
-        read_stats=dict(io_started_reads=1, proved_read_bytes=16), cupti_path=cupti,
-        last_receipt=dict(identity=dict(operation=1, image_generation=7), requested_bytes=16, io_bytes=16))
+        read_stats=dict(io_started_reads=1, proved_read_bytes=16, reader_interval_calls=2, reader_interval_bytes=16,
+            submitted_reads=1, worker_started_reads=1, completed_reads=1, verified_reads=1,
+            failed_reads=0, cancelled_reads=0, unknown_reads=0, unobserved_terminal_reads=0,
+            unobserved_reader_intervals=0, unknown_bytes=0), cupti_path=cupti,
+        model_source_generation=7, read_source_boundary=copy.deepcopy(a.READ_SOURCE_BOUNDARY),
+        last_receipt=dict(identity=dict(operation=1, image_generation=7), requested_bytes=16, io_bytes=16, outcome='source_verified'))
     return db, context
 
 

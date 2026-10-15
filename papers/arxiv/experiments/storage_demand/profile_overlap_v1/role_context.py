@@ -21,10 +21,11 @@ def same_live(actual, expected):
             and expected.get('state') not in ('Z', 'X'))
 
 
-def expected(case, worker, prepared):
+def expected(case, worker, prepared, *, generation=None):
+    generation = p.GENERATION if generation is None else generation
     case = Path(case)
     pair = case.parent.parent.parent
-    require(pair == Path(prepared['directory']) and pair.name == p.GENERATION
+    require(pair == Path(prepared['directory']) and pair.name == generation
             and worker['mode'] in p.ORDER and case == pair / 'runs' / worker['mode'] / 'session',
             'process roles from wrong generation/arm')
     manifest_path = case / 'collector-manifest.json'
@@ -84,15 +85,16 @@ def capture(case, label, worker, prepared):
     return dict(path=str(path), sha256=ct.sha(path))
 
 
-def bind(case, worker, prepared, processes):
+def bind(case, worker, prepared, processes, *, generation=None):
     """Offline: verify both live observations, then uniquely join raw SQL PIDs."""
-    _, wanted = expected(case, worker, prepared)
+    generation = p.GENERATION if generation is None else generation
+    _, wanted = expected(case, worker, prepared, generation=generation)
     for label in ('ready', 'after-requests'):
         path = Path(case) / (label + '-process-roles.json')
         pin = worker['process_role_receipts'][label]
         require(pin['path'] == str(path), 'role receipt from foreign directory')
         receipt = tc.live.sealed(path, pin['sha256'])
-        require(receipt['schema'] == SCHEMA and receipt['generation'] == p.GENERATION
+        require(receipt['schema'] == SCHEMA and receipt['generation'] == generation
                 and receipt['directory'] == str(case) and receipt['phase'] == label
                 and receipt['manifest_sha256'] == ct.sha(Path(case) / 'collector-manifest.json')
                 and receipt['prepared_sha256'] == ct.sha(Path(prepared['directory']) / 'prepared.json')

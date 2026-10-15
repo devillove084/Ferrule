@@ -149,7 +149,11 @@ class RoleBridgeTests(unittest.TestCase):
         (self.case / 'nsys.nsys-rep').write_bytes(b'SYNTHETIC TEST ONLY; NOT AN NSYS CAPTURE')
         qa = {key: context[key] for key in ('request_begin_unix_ns', 'request_end_unix_ns')}
         ledger = dict(model_source_generation=7, read=dict(stats=context['read_stats'], last_receipt=context['last_receipt']))
-        with patch.object(p, 'prepared', return_value=self.prepared):
+        self.prepared['candidate'] = {}
+        source = dict(read_source_boundary=context['read_source_boundary'])
+        p.ct.write(self.pair / 'nvtx-source-qualification.json', source)
+        with (patch.object(p, 'prepared', return_value=self.prepared),
+              patch.object(p, 'source_qualification', return_value=source)):
             report = run.audit_capture(self.case, self.worker, qa, ledger)
         self.assertTrue(s.sql_eligible(report), report['scoped_issues'])
         self.assertEqual(report['status'], 'rejected')
@@ -210,13 +214,13 @@ class TypedReadCoverageTests(unittest.TestCase):
         self.stats = dict.fromkeys(('submitted_reads', 'worker_started_reads', 'completed_reads',
                                    'verified_reads', 'io_started_reads'), 2)
         self.stats.update(proved_read_bytes=32, failed_reads=0, cancelled_reads=0, unknown_reads=0,
-                          unobserved_terminal_reads=0)
-        self.read = dict(stats=self.stats, last_receipt=dict(identity=dict(image_generation=7)))
+                          unobserved_terminal_reads=0, reader_interval_calls=4, reader_interval_bytes=32, unobserved_reader_intervals=0)
+        self.read = dict(stats=self.stats, last_receipt=dict(identity=dict(image_generation=7), outcome='source_verified'))
         self.closure = dict(final=dict(can_continue=True), attempts=[dict(summary=dict(physical=dict(
             expert_read_pipeline=dict(state='observed', value=self.read),
             image_generation=dict(state='observed', value=7))))])
         self.fields = dict(event='expert_read_decoder_invocation', status='completed',
-            expert_read_counter_reset_detected=False, expert_read_pipeline_delta=json.dumps(dict(io_started_reads=2, proved_read_bytes=32)))
+            expert_read_counter_reset_detected=False, expert_read_pipeline_delta=json.dumps(self.stats))
 
     def ledger(self):
         lines = [json.dumps(dict(level='DEBUG', fields=self.fields))]
@@ -250,7 +254,7 @@ class TypedReadCoverageTests(unittest.TestCase):
 
     def test_partial_submission_balance_cannot_pass(self):
         self.stats['submitted_reads'] = 3
-        with self.assertRaisesRegex(ValueError, 'positively balanced'):
+        with self.assertRaisesRegex(ValueError, 'reconciliation failed|positively balanced'):
             self.ledger()
 
 

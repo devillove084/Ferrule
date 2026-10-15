@@ -11,7 +11,7 @@ sys.path.insert(0, str(HERE.parent))
 from paired_read_v1.final_adapter_v3 import binding
 from runnerhelpers import execution_v2 as ex, library_maps_v1 as maps
 from runnerhelpers.evidence_v2 import ct, require
-from profile_overlap_v1 import tp1_collector as collector, runtime_contract, scope_contract
+from profile_overlap_v1 import tp1_collector as collector, runtime_contract, scope_contract, analyze
 
 ID = 'ferrule.storage-demand.profile-overlap.v1'
 PYTHON = '/home/admin/wxw403883/anaconda3/bin/python3.12'
@@ -21,8 +21,10 @@ VERSION = '2025.3.1.90-253135822126v0'
 COMMIT = '86c58a017d7c4b53490f536a3b1a133f2f7848cc'
 BINARY_SHA = '7cc8e0ff6e84f27090494b8e9e27dc3a388d1d2f3fc34ae39dae416e1e607a01'
 ORDER = ['blocking', 'lookahead']
-GENERATION = 'artifacts-go-20261015-04'
-PREDECESSORS = tuple(HERE / f'artifacts-go-20261015-{n:02d}' for n in (1, 2, 3))
+GENERATION = 'artifacts-go-20261015-05'
+PREDECESSORS = tuple(HERE / f'artifacts-go-20261015-{n:02d}' for n in (1, 2, 3, 4))
+CPU_PREDECESSOR = PREDECESSORS[2]
+DISPOSITIONS = {str(d): ('rejected' if i in (0, 3) else 'blocked') for i, d in enumerate(PREDECESSORS)}
 TOPOLOGY = 'maintained_traced_python_wrapper_owns_unreaped_cli'
 PRIOR = HERE / 'artifacts-go-20261015-01'
 ORDINARY_CLOSEOUT = HERE.parent / 'paired_read_v1/artifacts-v3-mapfixed-20261015-01/paired-final.json'
@@ -77,7 +79,7 @@ def tool_help():
     """Reuse pinned official help receipts; never execute nsys during preparation."""
     from profile_2025 import TOOL_PINS
     ct.check_pins(TOOL_PINS)
-    prior = PREDECESSORS[-1]
+    prior = CPU_PREDECESSOR
     prepared = collector.live.sealed(prior / 'prepared.json', ct.sha(prior / 'prepared.json'))
     require(ct.sha(prior / 'tool-help.json') == prepared['tool_help_sha256'], 'prior official help changed')
     require(prepared['pins'][str(NSYS)] == ct.sha(NSYS), 'installed official tool changed')
@@ -116,7 +118,8 @@ def candidate_check():
             runtime_pin_manifest=str(root / 'runtime-library-pins-final.json'),
             artifact_pins=review['artifact_pins']), review=review,
         qualification_reused_from=dict(path=str(prior_binding), sha256=ct.sha(prior_binding)),
-        qualification_rerun=False, ordinary_acceptance_transferred=False, gpu_authorized=False)
+        qualification_rerun=False, ordinary_acceptance_transferred=False, gpu_authorized=False,
+        profile_generation=GENERATION, read_measurement=analyze.read_measurement_contract())
     build = ct.load(root / 'build-final-cli-command.json')
     args = build['argv']
     require(args[args.index('--features') + 1] == 'cuda,ferrule-common/nvtx-profile'
@@ -134,7 +137,7 @@ def collector_preflight():
     Reuse is explicit, not a fresh permission test. An actual permission/scheduling
     failure rejects the later capture; flags never change in response to data.
     """
-    prior = PREDECESSORS[-1]
+    prior = CPU_PREDECESSOR
     previous = collector.live.sealed(prior / 'prepared.json', ct.sha(prior / 'prepared.json'))
     path = prior / 'collector-contract.json'
     require(ct.sha(path) == previous['collector_contract_sha256'], 'previous CPU contract changed')
@@ -150,8 +153,11 @@ def collector_preflight():
     blockers = [] if compatible else ['recorded CPU permissions no longer applicable; no fallback or capture']
     require(ct.load(PRIOR / 'capture-result.json')['full_trace_accepted'] is False,
             'predecessor rejection must remain immutable')
-    require(all(ct.load(d / 'collector-contract.json')['launch_allowed'] is False for d in PREDECESSORS[1:]),
+    require(all(ct.load(d / 'collector-contract.json')['launch_allowed'] is False for d in PREDECESSORS[1:3]),
             'blocked predecessor must remain blocked')
+    failed = ct.load(PREDECESSORS[3] / 'capture-result.json')
+    require(failed['status'] == 'failed' and failed['scoped_overlap_accepted'] is False
+            and failed['full_trace_accepted'] is False, 'generation -04 rejection must remain immutable')
     return dict(status='resolved' if not blockers else 'blocked_before_gpu',
         launch_allowed=not blockers, blockers=blockers, selected_topology=TOPOLOGY,
         owner_safe_wrapper_verified=True, adapter_binding=binding,
@@ -164,7 +170,7 @@ def collector_preflight():
         forbidden_shutdown=['direct CLI under nsys', 'nsys shutdown --kill', 'numeric grandchild PID signal', 'process group signal'],
         direct_shutdown_prior=old['direct_shutdown'], direct_adapter_verified=False,
         predecessor_pins=ct.inventory([d / 'prepared.json' for d in PREDECESSORS] +
-            [PRIOR / 'capture-result.json', path, prior / 'explicit-parent-GO.json', prior / 'tool-help.json']),
+            [PRIOR / 'capture-result.json', PREDECESSORS[3] / 'capture-result.json', path, prior / 'explicit-parent-GO.json', prior / 'tool-help.json']),
         prior_acceptance_transferred=False, flags_changed_to_hide_warnings=False, collector_loss_waived=False,
         parent_GO_required_after_pressure_cleanup=True, gpu_queries=0, captures_issued=0, tool_commands_executed=0)
 
@@ -183,13 +189,22 @@ def source_qualification(candidate):
         'crates/ferrule-common/src/observability/nvtx.rs': ['attributes.record(&mut fields)',
             'fn on_enter(', 'fn on_exit(', 'value == Some("1")', 'profile.label()'],
         'crates/ferrule-model/src/checkpoint/read_pipeline.rs': ['tracing::dispatcher::get_default(Clone::clone)',
-            'tracing::dispatcher::with_default(&work.dispatch', '"read_subset"', 'source_generation = ticket.source_generation.get()'],
+            'tracing::dispatcher::with_default(&work.dispatch', '"read_subset"', 'source_generation = ticket.source_generation.get()',
+            'session.read_incrementally(|session|', 'receipt.source_verified_at = Some(Instant::now());',
+            'ReadOutcome::SourceVerified(bytes)', 'expected_payload_bytes != receipt.requested_bytes'],
+        'crates/ferrule-model/src/checkpoint/read_session.rs': ['use std::os::unix::fs::FileExt;',
+            'while !bytes.is_empty()', 'self.counters.read_calls.fetch_add(1, Ordering::Relaxed);',
+            'let result = self.file.read_at(bytes, offset);', 'io::ErrorKind::UnexpectedEof',
+            '.fetch_add(count as u64, Ordering::Relaxed);', 'io::ErrorKind::Interrupted => continue',
+            'let result = read(&self)?;', 'self.validate_boundary()?;'],
         'crates/ferrule-model/src/transformer/standard/cuda.rs': ['"layer.expert"', '"layer.expert.upload"',
                                                                'image_generation = self.image_generation()'],
         'crates/ferrule-model/src/transformer/standard/cuda/invocation_trace.rs': ['expert_read_pipeline_delta',
             'expert_read_counter_reset_detected', 'tracing::debug!'],
         'crates/ferrule-model/src/transformer/expert_reads.rs': ['pub io_started_reads: u64',
-            'pub proved_read_bytes: u64', 'tracing::trace!(target: "ferrule_performance", layer, expert, receipt'],
+            'pub proved_read_bytes: u64', 'self.stats.verified_reads += 1;',
+            'pub reader_interval_calls: u64', 'pub reader_interval_bytes: u64',
+            'not partial syscalls', 'tracing::trace!(target: "ferrule_performance", layer, expert, receipt'],
     }
     with tarfile.open(archive) as source:
         members = {m.name.removeprefix('./'): m for m in source.getmembers() if m.isfile()}
@@ -202,7 +217,7 @@ def source_qualification(candidate):
                     and all(needle in data.decode() for needle in needles), 'NVTX/worker/log source qualification differs: ' + name)
             pins[str(path)] = ct.sha(path)
     return dict(source_archive=str(archive), source_archive_sha256=ct.sha(archive), source_pins=pins,
-        cli_sha256=BINARY_SHA, worker_dispatch='per-submission dispatcher carried to worker; process-global CLI subscriber',
+        cli_sha256=BINARY_SHA, read_source_boundary=analyze.READ_SOURCE_BOUNDARY, worker_dispatch='per-submission dispatcher carried to worker; process-global CLI subscriber',
         nvtx_runtime='profile-only FERRULE_PROFILE_NVTX=1; numeric on_new_span fields retained on enter',
         read_stats='DEBUG typed per-invocation deltas plus final owner-lifetime statistics',
         per_read_receipts='TRACE-only Debug diagnostics are not enabled or parsed; not a complete producer-identity journal',
@@ -223,7 +238,7 @@ def workflow_pins():
              and Path(m.__file__).resolve().is_relative_to(ct.ROOT)}
     paths.update(HERE.glob('*.py'))
     paths.update([HERE / 'fixture.sql', HERE / 'README.md', HERE / 'RUN_20261015.md', HERE / 'SCOPE_20261015.md',
-                  HERE / 'GENERATION_04.md',
+                  HERE / 'GENERATION_04.md', HERE / 'GENERATION_05.md',
                   TOOL / 'documentation/UserGuide/index.html', TOOL / 'documentation/InstallationGuide/index.html'])
     paths.update(ct.ROOT / 'scripts' / n for n in ('_profile_capture.py', '_owned_subreaper.py',
                                                  'test_vllm_qwen35.py', 'gpu_idle_window_v2.py', 'run_pinned_jobs.py'))
@@ -240,11 +255,13 @@ def plan():
             ordinary_closeout=dict(path=str(ORDINARY_CLOSEOUT), sha256=ct.sha(ORDINARY_CLOSEOUT)),
             collector_gate='predeclared scoped roles AND original owner-safe collector, then fresh parent GO after pressure cleanup',
                         requested_topology=TOPOLOGY, owner_safe_wrapper_verified=True, direct_cli_adapter_verified=False,
-                        predecessors={str(d): 'rejected' if d == PRIOR else 'blocked' for d in PREDECESSORS},
+                        predecessors=DISPOSITIONS,
+                        read_measurement=analyze.read_measurement_contract(),
                         overlap_scope=scope_contract.policy('process-tree'),
                         generation_delta=['process-tree CPU context switches only; still sample=none and no GPU metrics',
                                           'original traced Python wrapper owns the unreaped CLI; no new execution loop',
-                                          'separate strict scoped overlap eligibility from global full-trace acceptance'],
+                                          'separate strict scoped overlap eligibility from global full-trace acceptance',
+                                          'v2: OSRT call timing separate from source-verified whole-operation bytes'],
             order=ORDER, pair_ceiling=1, captures=2, requests_per_arm=1,
         qa=qa(), hello_requests=0, warmups=0, retries=0, limits=LIMITS, nsys=str(NSYS),
         flags=FLAGS, export_flags=['--type=sqlite', '--lazy=false', '--force-overwrite=false'],
@@ -282,7 +299,7 @@ def prepare(directory):
     else:
         directory.mkdir(mode=0o700, exist_ok=True)
         preserved = dict(files=ct.inventory(sorted(p for d in PREDECESSORS for p in d.rglob('*') if p.is_file())),
-                         dispositions={str(d): 'rejected' if d == PRIOR else 'blocked' for d in PREDECESSORS})
+                         dispositions=DISPOSITIONS)
         collector.live.readonly(seed, preserved)
     candidate = candidate_check()
     help_receipt = tool_help()

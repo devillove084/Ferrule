@@ -129,7 +129,8 @@ def read_ledger(lines, root, mode):
             and r.get('expert_read_counter_reset_detected') is False for r in invocations),
             'current decoder read counters missing/reset')
     deltas = [json.loads(r['expert_read_pipeline_delta']) for r in invocations]
-    for name in ('io_started_reads', 'proved_read_bytes'):
+    for name in ('io_started_reads', 'proved_read_bytes', 'reader_interval_calls', 'reader_interval_bytes',
+                 'submitted_reads', 'worker_started_reads', 'completed_reads', 'verified_reads'):
         require(sum(r[name] for r in deltas) == stats[name] > 0, 'trace/final read count reconciliation failed: ' + name)
     image_state, generation = evidence(closure['attempts'][-1]['summary']['physical']['image_generation'])
     require(image_state in ('observed', 'verified') and type(generation) is int and generation > 0
@@ -137,6 +138,10 @@ def read_ledger(lines, root, mode):
     require(all(type(stats.get(k)) is int and stats[k] == stats['io_started_reads'] > 0 for k in
                 ('submitted_reads', 'worker_started_reads', 'completed_reads', 'verified_reads'))
             and stats.get('unobserved_terminal_reads') == 0, 'typed read coverage not positively balanced')
+    require(read['last_receipt'].get('outcome') == 'source_verified'
+            and stats.get('unobserved_reader_intervals') == 0
+            and stats.get('reader_interval_bytes') == stats['proved_read_bytes'],
+            'post-read source verification/shared-reader coverage incomplete')
     return dict(closure=closure, read=read, model_source_generation=generation, invocation_count=len(invocations),
                 logical_reservations_only=True, full_memory_bound=False)
 
@@ -287,6 +292,10 @@ def run(directory, go, go_sha, sole):
             for mode in p.ORDER:
                 case = directory / 'runs' / mode / 'session'
                 (case / 'nsys-tmp').mkdir(mode=0o700, parents=True)
+                import gpu_idle_window_v2 as idle_v2
+                initial_idle = idle_v2.observe(prepared['candidate']['uuid_inventory'])
+                ct.write(case / 'initial-idle-v2.json', initial_idle)
+                verify_final_idle(initial_idle, prepared['candidate']['uuid_inventory'], preflight=True)
                 before = live.observer.idle(config(), (tc.UUID,), p.NOTE)
                 ct.write(case / 'before.json', before)
                 require(before['status'] == 'verified' and all(d['gpu_bytes'] == 0 for d in before['baseline'].values()),
@@ -362,7 +371,10 @@ def audit_capture(case, worker, qa, ledger):
     arm. It is evidence analysis, not a replacement capture or a PASS override.
     """
     prepared = p.prepared(case.parent.parent.parent)
-    context = dict(scope_contract=prepared['overlap_scope'], model_source_generation=ledger['model_source_generation'],
+    source = p.source_qualification(prepared['candidate'])
+    require(source == ct.load(Path(prepared['directory']) / 'nvtx-source-qualification.json'),
+            'source-verified read semantics not bound to preparation')
+    context = dict(read_source_boundary=source['read_source_boundary'], scope_contract=prepared['overlap_scope'], model_source_generation=ledger['model_source_generation'],
         model_pid=worker['server_identity']['pid'], model_birth_ticks=worker['server_identity']['birth_ticks'],
         uuid=tc.UUID,
         request_begin_unix_ns=qa['request_begin_unix_ns'], request_end_unix_ns=qa['request_end_unix_ns'],
@@ -445,12 +457,13 @@ def capture_evidence(case, worker, supervisor):
     require(release['failure'] is None and release['manifest_sha256'] == ct.sha(manifest_path), 'collector drain release failed')
 
 
-def verify_final_idle(receipt, inventory):
+def verify_final_idle(receipt, inventory, *, preflight=False):
     """Replay V2 raw samples offline, not its saved PASS booleans alone."""
     import gpu_idle_window_v2 as idle
     require(receipt['schema'] == idle.SCHEMA and receipt['status'] == 'verified'
-            and receipt['all_eight_idle'] is True and receipt['authenticated_echild'] is True
-            and receipt['recorded_owners_absent'] is True and receipt['mode'] == 'post_authenticated_echild'
+            and receipt['all_eight_idle'] is True and receipt['authenticated_echild'] is (not preflight)
+            and receipt['recorded_owners_absent'] is (not preflight)
+            and receipt['mode'] == ('strict_preflight' if preflight else 'post_authenticated_echild')
             and receipt['deadline_seconds'] == idle.SECONDS and receipt['required_consecutive'] == idle.CONSECUTIVE
             and 0 <= receipt['elapsed_seconds'] < idle.SECONDS, 'V2 final idle receipt missing or failed')
     samples = receipt['samples']
@@ -460,7 +473,8 @@ def verify_final_idle(receipt, inventory):
     previous_end = None
     for sample in samples:
         state = idle.classify(sample, inventory)
-        require(state in ('idle', 'utilization_only_transient') and sample['classification'] == state,
+        require(state in (('idle',) if preflight else ('idle', 'utilization_only_transient'))
+                and sample['classification'] == state,
                 'raw final idle memory/apps/inventory invalid')
         begin, end = sample['monotonic_started'], sample['monotonic_finished']
         require(begin <= end and (previous_end is None or begin >= previous_end), 'idle clock coverage differs')
@@ -515,6 +529,7 @@ def accept(directory):
         report.update(mode=mode, private_case=str(case),
                       private_map_paths=[str(case / (name + '-library-evidence/maps.raw')) for name in ('ready', 'after-requests')],
                       sqlite_sha256=ct.sha(case / 'nsys.sqlite'), report_sha256=ct.sha(case / 'nsys.nsys-rep'))
+        verify_final_idle(ct.load(case / 'initial-idle-v2.json'), prepared['candidate']['uuid_inventory'], preflight=True)
         verify_final_idle(ct.load(case / 'final-idle-v2.json'), prepared['candidate']['uuid_inventory'])
         gates = dict(one_frozen_qa_http_token_join=True, authenticated_model_pid_birth_source=True,
             ready_and_after_raw_maps=True, dynamic_owner_pair_closed=True, authenticated_echild=True,

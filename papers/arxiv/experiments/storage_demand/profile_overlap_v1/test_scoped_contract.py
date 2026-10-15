@@ -255,11 +255,11 @@ class OwnerSafePlanTests(unittest.TestCase):
         self.assertIn('--kill=none', argv)
         self.assertFalse(hasattr(p, 'direct_profile_argv'))
 
-    def test_new_plan_preserves_three_attempts_and_waits_for_fresh_go(self):
+    def test_new_plan_preserves_four_attempts_and_waits_for_fresh_go(self):
         with patch('subprocess.run', side_effect=AssertionError('no tool commands')):
             plan = p.plan()
-        self.assertEqual(plan['generation'], 'artifacts-go-20261015-04')
-        self.assertEqual(list(plan['predecessors'].values()), ['rejected', 'blocked', 'blocked'])
+        self.assertEqual(plan['generation'], 'artifacts-go-20261015-05')
+        self.assertEqual(list(plan['predecessors'].values()), ['rejected', 'blocked', 'blocked', 'rejected'])
         self.assertFalse(plan['direct_cli_adapter_verified'])
         self.assertTrue(plan['owner_safe_wrapper_verified'])
         self.assertFalse(plan['execute_allowed'])

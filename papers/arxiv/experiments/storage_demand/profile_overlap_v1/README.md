@@ -1,11 +1,83 @@
 # TP1 official read/compute overlap profile v1
 
-> **Current plan: generation -04.** See [GENERATION_04.md](GENERATION_04.md)
-> for the owner-safe traced wrapper, process-tree context switches, independently
-> bound model/wrapper roles, scoped versus full-trace acceptance, and fresh
-> parent GO after pressure cleanup. The original protocol below is historical;
-> its `--cpuctxsw=none`, older lifetime text and preparation commands do not
-> authorize -04. Generations -01/-02/-03 remain rejected/blocked, unchanged.
+> **Current plan: generation -05 / read measurement v2.** See
+> [GENERATION_05.md](GENERATION_05.md). The parent explicitly authorized one new
+> blocking → lookahead pair after the tested source-only commit/push. Generation
+> -04 remains a failed one-capture attempt with lookahead unissued; its prepared
+> seal and verdict are never upgraded. `offline_audit_v2.py` writes a separately
+> labeled retrospective analysis in a new private directory.
+>
+> The original protocol below is historical. Its `--cpuctxsw=none`, preparation
+> commands and lifetime text do not authorize -05. The maintained wrapper,
+> process-tree scheduling and independent role/map/QA/custody gates from -04
+> remain, with the corrected byte/timing distinction below.
+
+## Read measurement v2: timing is not a byte counter
+
+The actual official 2025.3.1 SQLite schema 3.20.2 declares `OSRT_API.start/end`
+as event timestamps in nanoseconds and `returnValue` generically as “Return
+value of the function call.” It has **no size argument or proved byte-result
+column**. The bundled NVIDIA User Guide (`os-runtime-libraries-trace` and
+SQLite schema sections; local lines 4875–4940 and 10541–10553) says these are
+low-level userspace library wrappers, not physical IO service intervals. It
+also describes GUI file-access data, but no such byte field/table is exported
+in this capture. The installed public trace headers do not supply an OSRT
+`pread` return-value decoder. We therefore do not claim documentation proves
+an errno/status encoding, or that this integer is POSIX `ssize_t`.
+
+`osrt_read_bytes=null`, reason `unsupported_schema_no_size_or_proved_ssize_t`,
+is the honest byte observation. The observed zero codes are retained, not
+summed as bytes or used as success evidence. Nonzero/error/uninterpretable
+codes reject this version rather than being decoded speculatively. Six observed
+calls in a range do not measure six equal byte transfers; neither division nor
+NVTX requested bytes can fill an OSRT byte field.
+
+Success and byte coverage come from the **immutable archive-bound source and
+post-read owner/controller ledger**, independently of OSRT:
+
+- `checkpoint/read_session.rs`: `OpenShard::read_exact_at` increments `read_calls`
+  before each `FileExt::read_at` attempt, advances by actual successful counts,
+  retries interrupted calls and fails on EOF/error. `read_incrementally` checks
+  the source boundary again before returning the whole result.
+- `checkpoint/read_pipeline.rs`: the numeric `read_subset` NVTX span encloses
+  allocation and positioned reads, not pre/post source checks. `SourceVerified`
+  is published only after the post boundary and whole requested payload check.
+- `transformer/expert_reads.rs`: typed submitted/started/completed/verified
+  counts must balance positively, failed/cancelled/unknown/unobserved counts
+  must be zero, and per-invocation deltas must reconcile to the final owner.
+  Every numeric source/operation range contributes its requested bytes to the
+  separate typed-byte reconciliation. The last source-verified receipt is one
+  identity check, not an invented complete per-operation receipt journal.
+- Shared reader submission-through-take call/byte deltas are **not certified
+  per-ticket counters**. They are an independent session-level check: observed
+  target-request OSRT call count must match, every call must be contained on
+  the worker thread, every read range must have positive call coverage, and
+  no additional target-request `pread` on another thread may be ignored.
+  Startup/non-model calls are counted separately and never inference overlap.
+
+The source result proves **whole-operation success**, not that every captured
+`pread` succeeded (interrupted attempts may occur). OSRT gives spatial/temporal
+call coverage, not per-call success or bytes. Whole-operation requested/packed
+bytes also do not prove physical disk/NAS traffic.
+
+Report both worker-read-envelope and actual pread-call unions intersected with
+**actual attributed expert GPU kernel unions**, including per-range numeric
+operation/source IDs, positive denominators and overlap counts. Overlapping
+kernels count once. Upload, copy, host submission, startup and wrapper activity
+never become expert compute. All compared intervals use Nsight common ns; no
+Rust `Instant` origin is aligned to Nsight. A closed positive-duration trace
+with zero overlap is a **valid negative**, not an excuse to retry or force a
+positive result. Read envelopes include allocation/CPU work and API wall
+intervals include OS preemption and page-cache service. They measure neither
+active IO nor hardware/NAS service. A reduced host read wait can reflect host
+execution/scheduling rather than GPU overlap.
+
+The corrected predicate does not waive unknown warnings, target warnings,
+collector loss, missing/duplicate generations, orphan math APIs/kernels or
+incomplete source/QA/map/custody coverage. The three exact authenticated
+non-CUDA-wrapper warnings remain visible and reject full-trace acceptance.
+Dropped count stays unknown (`null`), not zero; simultaneous unreported loss
+and universal trace completeness remain unproved.
 
 **CPU preparation only until the parent explicitly says GO.** This is a separate
 profile, never an extension of ordinary paired timing. No profiler capture,
@@ -157,8 +229,8 @@ The analyzer reads only SQLite `mode=ro`:
 - Computes the union of actual attributed kernel intervals and separately
   intersects it with (a) worker read envelopes and (b) actual worker OSRT
   `pread`/`pread64` intervals. Nested aliases/duplicate reads or PIDs reject;
-  overlapping kernels count once. Worker pread bytes must reconcile per numeric
-  read range, and read counts/bytes reconcile to current decoder deltas and
+  overlapping kernels count once. OSRT call coverage and typed requested/verified bytes reconcile separately
+  (see v2 above); read counts/bytes reconcile to current decoder deltas and
   final owner ledger, including the last source/operation receipt.
 - Checks exact generated token IDs, HTTP text/usage, actual request/session ID,
   admission/terminal clocks, raw map snapshots, owner bookkeeping, supervisor
