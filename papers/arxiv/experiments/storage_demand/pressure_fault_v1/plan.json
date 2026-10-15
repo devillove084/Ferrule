@@ -1,0 +1,244 @@
+{
+  "schema": "ferrule.storage-demand.pressure-fault-plan.v1",
+  "id": "pressure-fault-prospective-20261015-v1",
+  "status": "cpu_prepared_execution_blocked_not_authorized",
+  "launch_entry": false,
+  "gpu_queries": 0,
+  "gpu_locks": 0,
+  "gpu_runs": 0,
+  "questions": {
+    "A": "Descriptive coupled cache pressure at three prospective fixed points, blocking schedule only",
+    "B": "Separate actual-component failure/cancellation custody contracts; not an integrated serving E5 ledger"
+  },
+  "candidate": {
+    "commit": "86c58a017d7c4b53490f536a3b1a133f2f7848cc",
+    "source_digest": "10183d246a1278248273e7d3055d1690cb56854cbff30f9f0662f18813dc8188",
+    "source_archive_sha256": "e0d160996147820fcc64cfb29070b265b2297a6d9265a21de541ed77e8f2fa65",
+    "cli_binary_sha256": "7cc8e0ff6e84f27090494b8e9e27dc3a388d1d2f3fc34ae39dae416e1e607a01",
+    "source_members": 1484,
+    "binary": "target/validation/fixesmetadataCLIcurrent-quality-20261015-01/staged-final/cli",
+    "composition_binary": "target/validation/fixesmetadataCLIcurrent-quality-20261015-01/staged-final/composition",
+    "composition_sha256": "0a429c47c158bbe25f91730b75b47fd5cb768106f1d63d844da3a5f84fc8677f",
+    "qualification_final": "target/validation/fixesmetadataCLIcurrent-quality-20261015-01/FINAL.json",
+    "qualification_final_sha256": "9702c49a968c2809d1b43e454e29bef0a4477acbcd4502753c365d85e530d282",
+    "recorded_passed_gates": 9,
+    "qualification_scope": "Existing 64-entry/320-MiB configuration only; no arbitrary-cap numerical PASS",
+    "binding": "papers/arxiv/experiments/storage_demand/paired_read_v1/plan-mapfixed-20261015-01/actual-binding-v3.json"
+  },
+  "pressure": {
+    "order": [
+      "small",
+      "middle",
+      "big"
+    ],
+    "points": [
+      {
+        "id": "small",
+        "entries": 8,
+        "cache_bytes": 67108864
+      },
+      {
+        "id": "middle",
+        "entries": 64,
+        "cache_bytes": 335544320
+      },
+      {
+        "id": "big",
+        "entries": 128,
+        "cache_bytes": 671088640
+      }
+    ],
+    "case_source": "papers/arxiv/experiments/storage_demand/paired_read_v1/cases-v3.json",
+    "candidate_points_source": "papers/arxiv/experiments/storage_demand/case-middle.json",
+    "request_source": "papers/arxiv/experiments/storage_demand/paired_read_v1/requests.json",
+    "oracle_source": "papers/arxiv/experiments/storage_demand/canaries.json",
+    "request_names": [
+      "hello2",
+      "canary-qa",
+      "canary-arithmetic",
+      "canary-chinese"
+    ],
+    "schedule": "blocking",
+    "vary_only": [
+      "--cuda-expert-device-entries",
+      "--cuda-expert-device-bytes"
+    ],
+    "repetitions_per_point": 1,
+    "retry_count": 0,
+    "replacement_count": 0,
+    "extra_qa_requests": 0,
+    "adaptive_orders": false,
+    "reuse_middle_baseline_samples": false,
+    "fixed": {
+      "device_bytes": 7516192768,
+      "host_read_bytes": 67108864,
+      "metadata_bytes": 8388608,
+      "worker_stack_bytes": 2097152,
+      "scratch_bytes": 8388608,
+      "kv_bytes": 16777216,
+      "workspace_bytes": 2147483648,
+      "allocator_margin_bytes": 536870912,
+      "context": 128,
+      "sequences": 2,
+      "batch_tokens": 8,
+      "prefill_tokens": 8,
+      "decode_cohort_target": 1,
+      "decode_cohort_max_deferrals": 0,
+      "profile": "qwen35-mixed-bf16",
+      "numeric_precision": "Bf16ModelMixedF32Accumulate",
+      "storage_policy": "E4M3FnBf16Scales",
+      "topology": {
+        "pp": 1,
+        "tp": 1,
+        "ep": 1
+      },
+      "nvtx": "0",
+      "host_expert_retention_bytes": 0,
+      "physical_host_cap_bytes": null,
+      "physical_nas_backend_bytes": null
+    },
+    "source_geometry": {
+      "evidence": "target/validation/cli-source-admission-20261015-01/actual-headers-v3-full-argv-final.stdout",
+      "scope": "Existing actual-header CPU receipt, not newly observed source or CUDA admission",
+      "routed_layers": 40,
+      "experts_per_layer": 256,
+      "experts_per_token": 8,
+      "max_projection_extents": 2,
+      "max_whole_expert_payload_bytes": 3146112,
+      "required_metadata_bytes": 7704576,
+      "executor_metadata_bytes": 3985408
+    },
+    "limits": {
+      "startup_seconds": 75,
+      "request_seconds": 15,
+      "all_requests_seconds": 60,
+      "worker_bookkeeping_seconds": 10,
+      "target_lifetime_seconds": 145,
+      "shutdown_seconds": 25,
+      "worker_preidle_seconds": 10,
+      "worker_finalization_seconds": 10,
+      "supervisor_seconds": 190,
+      "supervisor_call_overhead_seconds": 10,
+      "coordinator_preidle_seconds": 10,
+      "coordinator_postidle_seconds": 20,
+      "coordinator_finalization_seconds": 10,
+      "outer_lifecycle_seconds": 240,
+      "phase_seconds": 900,
+      "study_cleanup_reserve_seconds": 180
+    },
+    "denominators": {
+      "lifecycles": 3,
+      "requests_per_lifecycle": 4,
+      "requests": 12,
+      "hello_smokes": 3,
+      "exact_eight_id_canaries": 9,
+      "planned_completion_tokens": 78,
+      "exact_oracle_tokens": 72,
+      "measured_repeated_qa": 0
+    },
+    "quality": {
+      "visible_scope": "Full 40-layer model, eight generated IDs for each of the three canonical canaries at every admitted point; Hello2 is length/usage smoke only",
+      "required": [
+        "real HTTP terminal",
+        "exact frozen canary text",
+        "exact usage",
+        "actual worker-enqueue token-ID join",
+        "exact eight IDs"
+      ],
+      "same_kernel_math": "Cache policy/capacity changes only; this is not proof of cross-cap full-logit/route/state equivalence",
+      "full_numerical_per_point": "unverified",
+      "existing_middle_quality": "Independent full40/fresh/ordinary/cold gate evidence for candidate/source and middle configuration, not a pressure observation",
+      "arbitrary_cap_numeric_factory_gate_available": false,
+      "scope_decision": "Parent accepts three full-depth canonical eight-ID HTTP joins plus Hello2 at every point for coupled budget sensitivity only; no new-point full-logit/route/state qualification"
+    },
+    "failure_policy": "Before dispatch retain unissued; after journal/dispatch retain censored or failed. STOP new admission on any gate failure, deadline, unknown custody or source/runtime drift. Never retry, relax admission, replace a point, shorten its reserved envelope, or repurpose the historical middle five pairs. No comparison until all three fresh points qualify."
+  },
+  "faults": {
+    "scope": "Component contracts with actual worker/operator/runner paths; no shared full-serving owner ledger and no E5 closure",
+    "gpu_execution": "not_run_not_authorized",
+    "future_gpu_test_budget_seconds_each": 120,
+    "future_component_phase_cap_seconds": 420,
+    "future_component_cleanup_reserve_seconds": 180,
+    "minimum_gpu_selectors": [
+      {
+        "role": "clean_post_submit_failure",
+        "crate": "ferrule-model",
+        "target": "lib",
+        "features": [
+          "cuda"
+        ],
+        "selector": "transformer::standard::cuda::bf16_chunk::tests::chunk_clean_failure_retains_reusable_workspace_and_releases_operands",
+        "source": "crates/ferrule-model/tests/unit/transformer/bf16_chunk/lifecycle.rs",
+        "profile": "Tiny Mixed numeric-owner BF16 GDN chunk, not a 35B oracle",
+        "asserts": [
+          "real chunk kernel submissions",
+          "proven error is not Unknown",
+          "operand holds released",
+          "workspace pointer reused",
+          "drop/trim returns allocator requested bytes to baseline"
+        ],
+        "same_serving_owner": false
+      },
+      {
+        "role": "lost_finish_proof_old_frontier",
+        "crate": "ferrule-model",
+        "target": "lib",
+        "features": [
+          "cuda"
+        ],
+        "selector": "transformer::forward::tests::cuda::hybrid_unknown_finish_keeps_transaction_pins_despite_independent_kv_fence",
+        "source": "crates/ferrule-model/src/transformer/forward/cuda_tests.rs",
+        "profile": "Tiny synthetic F32 hybrid runner, NOT numeric-FP8 Mixed 35B",
+        "asserts": [
+          "typed CompletionUnknown",
+          "independent compute/upload fences do not clear custody",
+          "transaction/KV/state charge retained",
+          "original topology/core unchanged",
+          "abort/publish/release/preempt/new-sequence/shutdown rejected"
+        ],
+        "same_serving_owner": false,
+        "serving_applicability": "blocked_profile_mismatch"
+      }
+    ],
+    "inspected_not_additional_runs": [
+      "transformer::standard::cuda::expert::bucket_tests::numeric_scope::each_projection_failure_and_unknown_is_sticky",
+      "transformer::standard::cuda::expert::bucket_tests::numeric_scope::final_consumer_unknown_retains_artifacts_operands_and_credit",
+      "checkpoint::read_pipeline::tests::source_replacement_after_actual_read_cannot_escape_mandatory_post_boundary",
+      "transformer::expert_reads::tests::observation::real_worker_notification_panic_finalizes_unknown_without_refund_or_healing"
+    ],
+    "cpu_actual_worker_selector": "checkpoint::read_pipeline::tests::cancellation_after_start_does_not_release_running_read_or_pins",
+    "cpu_snapshot_selector": "checkpoint::read_pipeline::tests::budget_snapshots_do_not_wait_for_or_refund_live_worker_stack",
+    "cpu_observation_selector": "transformer::expert_reads::tests::observation::receipt_identity_clock_and_all_charge_partitions_come_from_real_demand",
+    "required_serving_profile": "Qwen3.5-35B-A3B-FP8 / Bf16ModelMixedF32Accumulate / E4M3FnBf16Scales",
+    "unsupported_policy": "Retain unsupported SM103/FP4 or wrong-profile results as blocked; never substitute FP4 provider, CPU engine, synthetic checkpoint or alternate harness for the requested numeric-FP8 Mixed serving evidence",
+    "current_public_cli_fault_gate": false,
+    "minimal_parent_decision": "If integrated evidence is required, add a private cfg(test) capability at the existing Mixed public-factory owner: inject exactly after real submission or suppress its consumer proof, bind read ticket/image/transaction/request to that same owner, snapshot the existing quota and old committed frontier without poll/join, then exercise maintained abort/shutdown. No public serving flags or new fault framework. Rebuild/source-bind and numerically requalify any changed production artifact."
+  },
+  "blockers": [
+    "Separate explicit parent GO and paused profiling-owner handoff must be recorded in a fresh private receipt before GPU execution",
+    "Main agent must stage the exact whitelist and commit/push the CPU-tested seal before any GPU execution",
+    "Command entry is implemented; the CPU plan remains non-authorizing and requires the separate sealed GO, committed/pushed sources and exact case variants",
+    "All three fresh source/runtime admission receipts are pending; static existing-header arithmetic is not actual CLI lowering or physical admission",
+    "Full numerical qualification remains the prior middle64/320MiB candidate evidence only; the accepted new-point scope is visible eight-ID HTTP quality",
+    "Current CLI has no integrated Mixed fault-injection gate; separate component selectors are not part of this pressure test"
+  ],
+  "claim_limits": [
+    "Not a capacity frontier or independent LRU/entry-vs-byte sensitivity study; two knobs vary jointly",
+    "No 320-MiB whole-model or working-set-fit claim; distinct selected expert IDs are unobserved",
+    "No physical NAS necessity, disk-byte, cold-cache, physical RSS or universal release claim",
+    "No SOTA, broad six-pillar validation, statistical significance, throughput or cross-cap full-quality equivalence",
+    "Fixed order is descriptive n=1 per point with possible time/page-cache carryover; not randomized causal inference",
+    "Source/test inspection and CPU validation are not executed GPU fault or pressure evidence"
+  ],
+  "adapter": {
+    "source": "papers/arxiv/experiments/storage_demand/pressure_fault_v1/subset_adapter.py",
+    "tests": "papers/arxiv/experiments/storage_demand/pressure_fault_v1/test_subset_adapter.py",
+    "status": "cpu_implemented_separate_GO_required",
+    "request_ceiling": 4,
+    "shared_twelve_request_validator_changed": false,
+    "worker_authentication_schema_changed": false,
+    "private_worker_contract_schema": "ferrule.storage-demand.pressure-worker.v1",
+    "launch_entry": true,
+    "execution_authorization": "Explicit parent GO and profiling-owner paused handoff, tested source whitelist committed/pushed; fresh immutable private GO and exact case variants; maintained one-point next only"
+  }
+}
