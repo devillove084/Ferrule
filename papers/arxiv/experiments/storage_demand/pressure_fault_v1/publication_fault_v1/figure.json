@@ -1,0 +1,1817 @@
+{
+  "colors": {
+    "clean": "#087F77",
+    "control": "#246494",
+    "free": "#ECEFF2",
+    "grid": "#D7DCE1",
+    "ink": "#252B33",
+    "unknown": "#AE493B"
+  },
+  "data": {
+    "cells": [
+      {
+        "assertion_backed": {
+          "abort_attempts": 1,
+          "abort_completion": "Completed",
+          "basis": "pinned_fault_cuda_source_actions_and_passed_outcome_not_individual_API_receipts",
+          "healthy_in_test_tx3": "passed_then_aborted_not_selector_retry",
+          "independent_compute_waits_succeeded": null,
+          "independent_upload_waits_succeeded": null,
+          "independent_wait_rounds_succeeded": null,
+          "individual_error_payloads": null,
+          "rejected_operations": null,
+          "source": "reference/fault_cuda.rs",
+          "source_lines": [
+            424,
+            493
+          ],
+          "standalone_wait_receipts": null
+        },
+        "boundary": {
+          "cache_charged_bytes_before_proof": 6918,
+          "error_kind": "known_operation_failure",
+          "faults_observed": 1,
+          "host_charge_bytes_before_cleanup": 524288,
+          "physical_proof_before_discard": {
+            "compute_event_completed": true,
+            "deliberately_discarded": false,
+            "upload_sync_completed": true
+          },
+          "routed_down": {
+            "bf16_elements": 16,
+            "expert": 0,
+            "input_compute_launches": 372,
+            "layer": 1,
+            "output_compute_launches": 374
+          }
+        },
+        "case": "mixed_clean",
+        "committed_content": {
+          "basis": "GDN_and_KV_bitwise_unchanged",
+          "equality": true,
+          "evidence_kind": "serialized_assertion_result_not_raw_content",
+          "raw_contents": null
+        },
+        "host_read_statistics": {
+          "cancelled_reads": 0,
+          "completed_reads": 5,
+          "proved_read_bytes": 3870,
+          "submitted_reads": 5,
+          "unknown_bytes": 0,
+          "unknown_reads": 0,
+          "verified_reads": 5,
+          "wasted_read_bytes": 0,
+          "wasted_reads": 0
+        },
+        "local_final_release": {
+          "allocator_requested_after_drop_trim": 0,
+          "allocator_requested_baseline": 0,
+          "scope": "this_fixture_owner_not_device_wide_free_memory"
+        },
+        "schedule": "blocking",
+        "snapshots": {
+          "after_cleanup": {
+            "aggregate_physical_retained_bytes": null,
+            "cache": {
+              "budget": 65536,
+              "charged": 4096,
+              "free": 61440,
+              "pending": 0,
+              "resident": 0,
+              "scratch": 4096,
+              "unknown_subset": 0
+            },
+            "committed": {
+              "frontier": 1,
+              "gdn_position": 1,
+              "generation": 0,
+              "state_bytes": 512,
+              "topology": 2
+            },
+            "device_quarantined": false,
+            "exact_kv_reference_counts": null,
+            "holds": {
+              "artifact_holds": 0,
+              "bf16_holds": 0,
+              "f32_holds": 0,
+              "route_holds": 0
+            },
+            "host": {
+              "charge_bytes": 0,
+              "status": "closed",
+              "unknown_bytes": 0,
+              "unknown_reads": 0
+            },
+            "image_generation": 1,
+            "kv": {
+              "active_transactions": 0,
+              "committed_page_slot": 0,
+              "free_slots": 31
+            },
+            "live_state_bytes": 1024,
+            "physical_flags": {
+              "allocator": {
+                "state": "unobserved",
+                "value": null
+              },
+              "close": {
+                "state": "observed",
+                "value": "open"
+              },
+              "quiescence": {
+                "state": "unobserved",
+                "value": null
+              },
+              "release": {
+                "state": "unobserved",
+                "value": null
+              }
+            },
+            "recurrent_workspace_bytes_separate": 318720,
+            "runner": {
+              "aborts": 1,
+              "active_transactions": 0,
+              "commits": 1,
+              "completed_batches": 1
+            },
+            "state_content_bytes": null,
+            "workspace_overlap_bytes": null
+          },
+          "after_failure": {
+            "aggregate_physical_retained_bytes": null,
+            "cache": {
+              "budget": 65536,
+              "charged": 4096,
+              "free": 61440,
+              "pending": 0,
+              "resident": 0,
+              "scratch": 4096,
+              "unknown_subset": 0
+            },
+            "committed": {
+              "frontier": 1,
+              "gdn_position": 1,
+              "generation": 0,
+              "state_bytes": 512,
+              "topology": 2
+            },
+            "device_quarantined": false,
+            "exact_kv_reference_counts": null,
+            "holds": {
+              "artifact_holds": 0,
+              "bf16_holds": 0,
+              "f32_holds": 0,
+              "route_holds": 0
+            },
+            "host": {
+              "charge_bytes": 0,
+              "status": "closed",
+              "unknown_bytes": 0,
+              "unknown_reads": 0
+            },
+            "image_generation": 1,
+            "kv": {
+              "active_transactions": 1,
+              "committed_page_slot": 0,
+              "free_slots": 29
+            },
+            "live_state_bytes": 1536,
+            "physical_flags": {
+              "allocator": {
+                "state": "unobserved",
+                "value": null
+              },
+              "close": {
+                "state": "observed",
+                "value": "open"
+              },
+              "quiescence": {
+                "state": "unobserved",
+                "value": null
+              },
+              "release": {
+                "state": "unobserved",
+                "value": null
+              }
+            },
+            "recurrent_workspace_bytes_separate": 318720,
+            "runner": {
+              "aborts": 0,
+              "active_transactions": 1,
+              "commits": 1,
+              "completed_batches": 1
+            },
+            "state_content_bytes": null,
+            "workspace_overlap_bytes": null
+          },
+          "before": {
+            "aggregate_physical_retained_bytes": null,
+            "cache": {
+              "budget": 65536,
+              "charged": 4870,
+              "free": 60666,
+              "pending": 0,
+              "resident": 774,
+              "scratch": 4096,
+              "unknown_subset": 0
+            },
+            "committed": {
+              "frontier": 1,
+              "gdn_position": 1,
+              "generation": 0,
+              "state_bytes": 512,
+              "topology": 2
+            },
+            "device_quarantined": false,
+            "exact_kv_reference_counts": null,
+            "holds": {
+              "artifact_holds": 0,
+              "bf16_holds": 0,
+              "f32_holds": 0,
+              "route_holds": 0
+            },
+            "host": {
+              "charge_bytes": 0,
+              "status": "closed",
+              "unknown_bytes": 0,
+              "unknown_reads": 0
+            },
+            "image_generation": 1,
+            "kv": {
+              "active_transactions": 0,
+              "committed_page_slot": 0,
+              "free_slots": 31
+            },
+            "live_state_bytes": 1024,
+            "physical_flags": {
+              "allocator": {
+                "state": "unobserved",
+                "value": null
+              },
+              "close": {
+                "state": "observed",
+                "value": "open"
+              },
+              "quiescence": {
+                "state": "unobserved",
+                "value": null
+              },
+              "release": {
+                "state": "unobserved",
+                "value": null
+              }
+            },
+            "recurrent_workspace_bytes_separate": 318720,
+            "runner": {
+              "aborts": 0,
+              "active_transactions": 0,
+              "commits": 1,
+              "completed_batches": 1
+            },
+            "state_content_bytes": null,
+            "workspace_overlap_bytes": null
+          },
+          "prepared": {
+            "aggregate_physical_retained_bytes": null,
+            "cache": {
+              "budget": 65536,
+              "charged": 4870,
+              "free": 60666,
+              "pending": 0,
+              "resident": 774,
+              "scratch": 4096,
+              "unknown_subset": 0
+            },
+            "committed": {
+              "frontier": 1,
+              "gdn_position": 1,
+              "generation": 0,
+              "state_bytes": 512,
+              "topology": 2
+            },
+            "device_quarantined": false,
+            "exact_kv_reference_counts": null,
+            "holds": {
+              "artifact_holds": 0,
+              "bf16_holds": 0,
+              "f32_holds": 0,
+              "route_holds": 0
+            },
+            "host": {
+              "charge_bytes": 0,
+              "status": "closed",
+              "unknown_bytes": 0,
+              "unknown_reads": 0
+            },
+            "image_generation": 1,
+            "kv": {
+              "active_transactions": 1,
+              "committed_page_slot": 0,
+              "free_slots": 29
+            },
+            "live_state_bytes": 1536,
+            "physical_flags": {
+              "allocator": {
+                "state": "unobserved",
+                "value": null
+              },
+              "close": {
+                "state": "observed",
+                "value": "open"
+              },
+              "quiescence": {
+                "state": "unobserved",
+                "value": null
+              },
+              "release": {
+                "state": "unobserved",
+                "value": null
+              }
+            },
+            "recurrent_workspace_bytes_separate": 318720,
+            "runner": {
+              "aborts": 0,
+              "active_transactions": 1,
+              "commits": 1,
+              "completed_batches": 1
+            },
+            "state_content_bytes": null,
+            "workspace_overlap_bytes": null
+          }
+        }
+      },
+      {
+        "assertion_backed": {
+          "abort_attempts": 1,
+          "abort_completion": "Completed",
+          "basis": "pinned_fault_cuda_source_actions_and_passed_outcome_not_individual_API_receipts",
+          "healthy_in_test_tx3": "passed_then_aborted_not_selector_retry",
+          "independent_compute_waits_succeeded": null,
+          "independent_upload_waits_succeeded": null,
+          "independent_wait_rounds_succeeded": null,
+          "individual_error_payloads": null,
+          "rejected_operations": null,
+          "source": "reference/fault_cuda.rs",
+          "source_lines": [
+            424,
+            493
+          ],
+          "standalone_wait_receipts": null
+        },
+        "boundary": {
+          "cache_charged_bytes_before_proof": 6918,
+          "error_kind": "known_operation_failure",
+          "faults_observed": 1,
+          "host_charge_bytes_before_cleanup": 525062,
+          "physical_proof_before_discard": {
+            "compute_event_completed": true,
+            "deliberately_discarded": false,
+            "upload_sync_completed": true
+          },
+          "routed_down": {
+            "bf16_elements": 16,
+            "expert": 0,
+            "input_compute_launches": 372,
+            "layer": 1,
+            "output_compute_launches": 374
+          }
+        },
+        "case": "mixed_clean",
+        "committed_content": {
+          "basis": "GDN_and_KV_bitwise_unchanged",
+          "equality": true,
+          "evidence_kind": "serialized_assertion_result_not_raw_content",
+          "raw_contents": null
+        },
+        "host_read_statistics": {
+          "cancelled_reads": 1,
+          "completed_reads": 6,
+          "proved_read_bytes": 4644,
+          "submitted_reads": 6,
+          "unknown_bytes": 0,
+          "unknown_reads": 0,
+          "verified_reads": 5,
+          "wasted_read_bytes": 774,
+          "wasted_reads": 1
+        },
+        "local_final_release": {
+          "allocator_requested_after_drop_trim": 0,
+          "allocator_requested_baseline": 0,
+          "scope": "this_fixture_owner_not_device_wide_free_memory"
+        },
+        "schedule": "lookahead",
+        "snapshots": {
+          "after_cleanup": {
+            "aggregate_physical_retained_bytes": null,
+            "cache": {
+              "budget": 65536,
+              "charged": 4096,
+              "free": 61440,
+              "pending": 0,
+              "resident": 0,
+              "scratch": 4096,
+              "unknown_subset": 0
+            },
+            "committed": {
+              "frontier": 1,
+              "gdn_position": 1,
+              "generation": 0,
+              "state_bytes": 512,
+              "topology": 4
+            },
+            "device_quarantined": false,
+            "exact_kv_reference_counts": null,
+            "holds": {
+              "artifact_holds": 0,
+              "bf16_holds": 0,
+              "f32_holds": 0,
+              "route_holds": 0
+            },
+            "host": {
+              "charge_bytes": 0,
+              "status": "closed",
+              "unknown_bytes": 0,
+              "unknown_reads": 0
+            },
+            "image_generation": 3,
+            "kv": {
+              "active_transactions": 0,
+              "committed_page_slot": 0,
+              "free_slots": 31
+            },
+            "live_state_bytes": 1024,
+            "physical_flags": {
+              "allocator": {
+                "state": "unobserved",
+                "value": null
+              },
+              "close": {
+                "state": "observed",
+                "value": "open"
+              },
+              "quiescence": {
+                "state": "unobserved",
+                "value": null
+              },
+              "release": {
+                "state": "unobserved",
+                "value": null
+              }
+            },
+            "recurrent_workspace_bytes_separate": 318720,
+            "runner": {
+              "aborts": 1,
+              "active_transactions": 0,
+              "commits": 1,
+              "completed_batches": 1
+            },
+            "state_content_bytes": null,
+            "workspace_overlap_bytes": null
+          },
+          "after_failure": {
+            "aggregate_physical_retained_bytes": null,
+            "cache": {
+              "budget": 65536,
+              "charged": 4096,
+              "free": 61440,
+              "pending": 0,
+              "resident": 0,
+              "scratch": 4096,
+              "unknown_subset": 0
+            },
+            "committed": {
+              "frontier": 1,
+              "gdn_position": 1,
+              "generation": 0,
+              "state_bytes": 512,
+              "topology": 4
+            },
+            "device_quarantined": false,
+            "exact_kv_reference_counts": null,
+            "holds": {
+              "artifact_holds": 0,
+              "bf16_holds": 0,
+              "f32_holds": 0,
+              "route_holds": 0
+            },
+            "host": {
+              "charge_bytes": 0,
+              "status": "closed",
+              "unknown_bytes": 0,
+              "unknown_reads": 0
+            },
+            "image_generation": 3,
+            "kv": {
+              "active_transactions": 1,
+              "committed_page_slot": 0,
+              "free_slots": 29
+            },
+            "live_state_bytes": 1536,
+            "physical_flags": {
+              "allocator": {
+                "state": "unobserved",
+                "value": null
+              },
+              "close": {
+                "state": "observed",
+                "value": "open"
+              },
+              "quiescence": {
+                "state": "unobserved",
+                "value": null
+              },
+              "release": {
+                "state": "unobserved",
+                "value": null
+              }
+            },
+            "recurrent_workspace_bytes_separate": 318720,
+            "runner": {
+              "aborts": 0,
+              "active_transactions": 1,
+              "commits": 1,
+              "completed_batches": 1
+            },
+            "state_content_bytes": null,
+            "workspace_overlap_bytes": null
+          },
+          "before": {
+            "aggregate_physical_retained_bytes": null,
+            "cache": {
+              "budget": 65536,
+              "charged": 4870,
+              "free": 60666,
+              "pending": 0,
+              "resident": 774,
+              "scratch": 4096,
+              "unknown_subset": 0
+            },
+            "committed": {
+              "frontier": 1,
+              "gdn_position": 1,
+              "generation": 0,
+              "state_bytes": 512,
+              "topology": 4
+            },
+            "device_quarantined": false,
+            "exact_kv_reference_counts": null,
+            "holds": {
+              "artifact_holds": 0,
+              "bf16_holds": 0,
+              "f32_holds": 0,
+              "route_holds": 0
+            },
+            "host": {
+              "charge_bytes": 0,
+              "status": "closed",
+              "unknown_bytes": 0,
+              "unknown_reads": 0
+            },
+            "image_generation": 3,
+            "kv": {
+              "active_transactions": 0,
+              "committed_page_slot": 0,
+              "free_slots": 31
+            },
+            "live_state_bytes": 1024,
+            "physical_flags": {
+              "allocator": {
+                "state": "unobserved",
+                "value": null
+              },
+              "close": {
+                "state": "observed",
+                "value": "open"
+              },
+              "quiescence": {
+                "state": "unobserved",
+                "value": null
+              },
+              "release": {
+                "state": "unobserved",
+                "value": null
+              }
+            },
+            "recurrent_workspace_bytes_separate": 318720,
+            "runner": {
+              "aborts": 0,
+              "active_transactions": 0,
+              "commits": 1,
+              "completed_batches": 1
+            },
+            "state_content_bytes": null,
+            "workspace_overlap_bytes": null
+          },
+          "prepared": {
+            "aggregate_physical_retained_bytes": null,
+            "cache": {
+              "budget": 65536,
+              "charged": 4870,
+              "free": 60666,
+              "pending": 0,
+              "resident": 774,
+              "scratch": 4096,
+              "unknown_subset": 0
+            },
+            "committed": {
+              "frontier": 1,
+              "gdn_position": 1,
+              "generation": 0,
+              "state_bytes": 512,
+              "topology": 4
+            },
+            "device_quarantined": false,
+            "exact_kv_reference_counts": null,
+            "holds": {
+              "artifact_holds": 0,
+              "bf16_holds": 0,
+              "f32_holds": 0,
+              "route_holds": 0
+            },
+            "host": {
+              "charge_bytes": 0,
+              "status": "closed",
+              "unknown_bytes": 0,
+              "unknown_reads": 0
+            },
+            "image_generation": 3,
+            "kv": {
+              "active_transactions": 1,
+              "committed_page_slot": 0,
+              "free_slots": 29
+            },
+            "live_state_bytes": 1536,
+            "physical_flags": {
+              "allocator": {
+                "state": "unobserved",
+                "value": null
+              },
+              "close": {
+                "state": "observed",
+                "value": "open"
+              },
+              "quiescence": {
+                "state": "unobserved",
+                "value": null
+              },
+              "release": {
+                "state": "unobserved",
+                "value": null
+              }
+            },
+            "recurrent_workspace_bytes_separate": 318720,
+            "runner": {
+              "aborts": 0,
+              "active_transactions": 1,
+              "commits": 1,
+              "completed_batches": 1
+            },
+            "state_content_bytes": null,
+            "workspace_overlap_bytes": null
+          }
+        }
+      },
+      {
+        "assertion_backed": {
+          "abort_attempts": 2,
+          "abort_completion": "CompletionUnknown",
+          "basis": "pinned_fault_cuda_source_actions_and_passed_outcome_not_individual_API_receipts",
+          "healthy_in_test_tx3": null,
+          "independent_compute_waits_succeeded": 2,
+          "independent_upload_waits_succeeded": 2,
+          "independent_wait_rounds_succeeded": 2,
+          "individual_error_payloads": null,
+          "rejected_operations": [
+            "reset_sequence_state",
+            "reset_session",
+            "create_sequence_state",
+            "release_kv_pages_1_2_3",
+            "publish_tx2",
+            "shutdown"
+          ],
+          "source": "reference/fault_cuda.rs",
+          "source_lines": [
+            494,
+            581
+          ],
+          "standalone_wait_receipts": null
+        },
+        "boundary": {
+          "cache_charged_bytes_before_proof": 6918,
+          "error_kind": "CompletionUnknown",
+          "faults_observed": 1,
+          "host_charge_bytes_before_cleanup": 524288,
+          "physical_proof_before_discard": {
+            "compute_event_completed": true,
+            "deliberately_discarded": true,
+            "upload_sync_completed": true
+          },
+          "routed_down": {
+            "bf16_elements": 16,
+            "expert": 0,
+            "input_compute_launches": 372,
+            "layer": 1,
+            "output_compute_launches": 374
+          }
+        },
+        "case": "mixed_unknown",
+        "committed_content": {
+          "basis": "unobserved_post_Unknown_no_device_read_or_release_authority",
+          "equality": null,
+          "evidence_kind": "unobserved",
+          "raw_contents": null
+        },
+        "host_read_statistics": {
+          "cancelled_reads": 0,
+          "completed_reads": 5,
+          "proved_read_bytes": 3870,
+          "submitted_reads": 5,
+          "unknown_bytes": 0,
+          "unknown_reads": 0,
+          "verified_reads": 5,
+          "wasted_read_bytes": 0,
+          "wasted_reads": 0
+        },
+        "local_final_release": null,
+        "schedule": "blocking",
+        "snapshots": {
+          "after_cleanup": {
+            "aggregate_physical_retained_bytes": null,
+            "cache": {
+              "budget": 65536,
+              "charged": 6918,
+              "free": 58618,
+              "pending": 774,
+              "resident": 0,
+              "scratch": 6144,
+              "unknown_subset": 6918
+            },
+            "committed": {
+              "frontier": 1,
+              "gdn_position": 1,
+              "generation": 0,
+              "state_bytes": 512,
+              "topology": 2
+            },
+            "device_quarantined": true,
+            "exact_kv_reference_counts": null,
+            "holds": {
+              "artifact_holds": 3,
+              "bf16_holds": 7,
+              "f32_holds": 3,
+              "route_holds": 1
+            },
+            "host": {
+              "charge_bytes": 0,
+              "status": "closed",
+              "unknown_bytes": 0,
+              "unknown_reads": 0
+            },
+            "image_generation": 1,
+            "kv": {
+              "active_transactions": 1,
+              "committed_page_slot": 0,
+              "free_slots": 29
+            },
+            "live_state_bytes": 1536,
+            "physical_flags": {
+              "allocator": {
+                "state": "unobserved",
+                "value": null
+              },
+              "close": {
+                "state": "unknown",
+                "value": null
+              },
+              "quiescence": {
+                "state": "unknown",
+                "value": null
+              },
+              "release": {
+                "state": "unknown",
+                "value": null
+              }
+            },
+            "recurrent_workspace_bytes_separate": 318720,
+            "runner": {
+              "aborts": 0,
+              "active_transactions": 1,
+              "commits": 1,
+              "completed_batches": 1
+            },
+            "state_content_bytes": null,
+            "workspace_overlap_bytes": null
+          },
+          "after_failure": {
+            "aggregate_physical_retained_bytes": null,
+            "cache": {
+              "budget": 65536,
+              "charged": 6918,
+              "free": 58618,
+              "pending": 774,
+              "resident": 0,
+              "scratch": 6144,
+              "unknown_subset": 6918
+            },
+            "committed": {
+              "frontier": 1,
+              "gdn_position": 1,
+              "generation": 0,
+              "state_bytes": 512,
+              "topology": 2
+            },
+            "device_quarantined": true,
+            "exact_kv_reference_counts": null,
+            "holds": {
+              "artifact_holds": 3,
+              "bf16_holds": 7,
+              "f32_holds": 3,
+              "route_holds": 1
+            },
+            "host": {
+              "charge_bytes": 0,
+              "status": "closed",
+              "unknown_bytes": 0,
+              "unknown_reads": 0
+            },
+            "image_generation": 1,
+            "kv": {
+              "active_transactions": 1,
+              "committed_page_slot": 0,
+              "free_slots": 29
+            },
+            "live_state_bytes": 1536,
+            "physical_flags": {
+              "allocator": {
+                "state": "unobserved",
+                "value": null
+              },
+              "close": {
+                "state": "unknown",
+                "value": null
+              },
+              "quiescence": {
+                "state": "unknown",
+                "value": null
+              },
+              "release": {
+                "state": "unknown",
+                "value": null
+              }
+            },
+            "recurrent_workspace_bytes_separate": 318720,
+            "runner": {
+              "aborts": 0,
+              "active_transactions": 1,
+              "commits": 1,
+              "completed_batches": 1
+            },
+            "state_content_bytes": null,
+            "workspace_overlap_bytes": null
+          },
+          "before": {
+            "aggregate_physical_retained_bytes": null,
+            "cache": {
+              "budget": 65536,
+              "charged": 4870,
+              "free": 60666,
+              "pending": 0,
+              "resident": 774,
+              "scratch": 4096,
+              "unknown_subset": 0
+            },
+            "committed": {
+              "frontier": 1,
+              "gdn_position": 1,
+              "generation": 0,
+              "state_bytes": 512,
+              "topology": 2
+            },
+            "device_quarantined": false,
+            "exact_kv_reference_counts": null,
+            "holds": {
+              "artifact_holds": 0,
+              "bf16_holds": 0,
+              "f32_holds": 0,
+              "route_holds": 0
+            },
+            "host": {
+              "charge_bytes": 0,
+              "status": "closed",
+              "unknown_bytes": 0,
+              "unknown_reads": 0
+            },
+            "image_generation": 1,
+            "kv": {
+              "active_transactions": 0,
+              "committed_page_slot": 0,
+              "free_slots": 31
+            },
+            "live_state_bytes": 1024,
+            "physical_flags": {
+              "allocator": {
+                "state": "unobserved",
+                "value": null
+              },
+              "close": {
+                "state": "observed",
+                "value": "open"
+              },
+              "quiescence": {
+                "state": "unobserved",
+                "value": null
+              },
+              "release": {
+                "state": "unobserved",
+                "value": null
+              }
+            },
+            "recurrent_workspace_bytes_separate": 318720,
+            "runner": {
+              "aborts": 0,
+              "active_transactions": 0,
+              "commits": 1,
+              "completed_batches": 1
+            },
+            "state_content_bytes": null,
+            "workspace_overlap_bytes": null
+          },
+          "prepared": {
+            "aggregate_physical_retained_bytes": null,
+            "cache": {
+              "budget": 65536,
+              "charged": 4870,
+              "free": 60666,
+              "pending": 0,
+              "resident": 774,
+              "scratch": 4096,
+              "unknown_subset": 0
+            },
+            "committed": {
+              "frontier": 1,
+              "gdn_position": 1,
+              "generation": 0,
+              "state_bytes": 512,
+              "topology": 2
+            },
+            "device_quarantined": false,
+            "exact_kv_reference_counts": null,
+            "holds": {
+              "artifact_holds": 0,
+              "bf16_holds": 0,
+              "f32_holds": 0,
+              "route_holds": 0
+            },
+            "host": {
+              "charge_bytes": 0,
+              "status": "closed",
+              "unknown_bytes": 0,
+              "unknown_reads": 0
+            },
+            "image_generation": 1,
+            "kv": {
+              "active_transactions": 1,
+              "committed_page_slot": 0,
+              "free_slots": 29
+            },
+            "live_state_bytes": 1536,
+            "physical_flags": {
+              "allocator": {
+                "state": "unobserved",
+                "value": null
+              },
+              "close": {
+                "state": "observed",
+                "value": "open"
+              },
+              "quiescence": {
+                "state": "unobserved",
+                "value": null
+              },
+              "release": {
+                "state": "unobserved",
+                "value": null
+              }
+            },
+            "recurrent_workspace_bytes_separate": 318720,
+            "runner": {
+              "aborts": 0,
+              "active_transactions": 1,
+              "commits": 1,
+              "completed_batches": 1
+            },
+            "state_content_bytes": null,
+            "workspace_overlap_bytes": null
+          }
+        }
+      },
+      {
+        "assertion_backed": {
+          "abort_attempts": 2,
+          "abort_completion": "CompletionUnknown",
+          "basis": "pinned_fault_cuda_source_actions_and_passed_outcome_not_individual_API_receipts",
+          "healthy_in_test_tx3": null,
+          "independent_compute_waits_succeeded": 2,
+          "independent_upload_waits_succeeded": 2,
+          "independent_wait_rounds_succeeded": 2,
+          "individual_error_payloads": null,
+          "rejected_operations": [
+            "reset_sequence_state",
+            "reset_session",
+            "create_sequence_state",
+            "release_kv_pages_1_2_3",
+            "publish_tx2",
+            "shutdown"
+          ],
+          "source": "reference/fault_cuda.rs",
+          "source_lines": [
+            494,
+            581
+          ],
+          "standalone_wait_receipts": null
+        },
+        "boundary": {
+          "cache_charged_bytes_before_proof": 6918,
+          "error_kind": "CompletionUnknown",
+          "faults_observed": 1,
+          "host_charge_bytes_before_cleanup": 525062,
+          "physical_proof_before_discard": {
+            "compute_event_completed": true,
+            "deliberately_discarded": true,
+            "upload_sync_completed": true
+          },
+          "routed_down": {
+            "bf16_elements": 16,
+            "expert": 0,
+            "input_compute_launches": 372,
+            "layer": 1,
+            "output_compute_launches": 374
+          }
+        },
+        "case": "mixed_unknown",
+        "committed_content": {
+          "basis": "unobserved_post_Unknown_no_device_read_or_release_authority",
+          "equality": null,
+          "evidence_kind": "unobserved",
+          "raw_contents": null
+        },
+        "host_read_statistics": {
+          "cancelled_reads": 1,
+          "completed_reads": 6,
+          "proved_read_bytes": 4644,
+          "submitted_reads": 6,
+          "unknown_bytes": 0,
+          "unknown_reads": 0,
+          "verified_reads": 5,
+          "wasted_read_bytes": 774,
+          "wasted_reads": 1
+        },
+        "local_final_release": null,
+        "schedule": "lookahead",
+        "snapshots": {
+          "after_cleanup": {
+            "aggregate_physical_retained_bytes": null,
+            "cache": {
+              "budget": 65536,
+              "charged": 6918,
+              "free": 58618,
+              "pending": 774,
+              "resident": 0,
+              "scratch": 6144,
+              "unknown_subset": 6918
+            },
+            "committed": {
+              "frontier": 1,
+              "gdn_position": 1,
+              "generation": 0,
+              "state_bytes": 512,
+              "topology": 4
+            },
+            "device_quarantined": true,
+            "exact_kv_reference_counts": null,
+            "holds": {
+              "artifact_holds": 3,
+              "bf16_holds": 7,
+              "f32_holds": 3,
+              "route_holds": 1
+            },
+            "host": {
+              "charge_bytes": 0,
+              "status": "closed",
+              "unknown_bytes": 0,
+              "unknown_reads": 0
+            },
+            "image_generation": 3,
+            "kv": {
+              "active_transactions": 1,
+              "committed_page_slot": 0,
+              "free_slots": 29
+            },
+            "live_state_bytes": 1536,
+            "physical_flags": {
+              "allocator": {
+                "state": "unobserved",
+                "value": null
+              },
+              "close": {
+                "state": "unknown",
+                "value": null
+              },
+              "quiescence": {
+                "state": "unknown",
+                "value": null
+              },
+              "release": {
+                "state": "unknown",
+                "value": null
+              }
+            },
+            "recurrent_workspace_bytes_separate": 318720,
+            "runner": {
+              "aborts": 0,
+              "active_transactions": 1,
+              "commits": 1,
+              "completed_batches": 1
+            },
+            "state_content_bytes": null,
+            "workspace_overlap_bytes": null
+          },
+          "after_failure": {
+            "aggregate_physical_retained_bytes": null,
+            "cache": {
+              "budget": 65536,
+              "charged": 6918,
+              "free": 58618,
+              "pending": 774,
+              "resident": 0,
+              "scratch": 6144,
+              "unknown_subset": 6918
+            },
+            "committed": {
+              "frontier": 1,
+              "gdn_position": 1,
+              "generation": 0,
+              "state_bytes": 512,
+              "topology": 4
+            },
+            "device_quarantined": true,
+            "exact_kv_reference_counts": null,
+            "holds": {
+              "artifact_holds": 3,
+              "bf16_holds": 7,
+              "f32_holds": 3,
+              "route_holds": 1
+            },
+            "host": {
+              "charge_bytes": 0,
+              "status": "closed",
+              "unknown_bytes": 0,
+              "unknown_reads": 0
+            },
+            "image_generation": 3,
+            "kv": {
+              "active_transactions": 1,
+              "committed_page_slot": 0,
+              "free_slots": 29
+            },
+            "live_state_bytes": 1536,
+            "physical_flags": {
+              "allocator": {
+                "state": "unobserved",
+                "value": null
+              },
+              "close": {
+                "state": "unknown",
+                "value": null
+              },
+              "quiescence": {
+                "state": "unknown",
+                "value": null
+              },
+              "release": {
+                "state": "unknown",
+                "value": null
+              }
+            },
+            "recurrent_workspace_bytes_separate": 318720,
+            "runner": {
+              "aborts": 0,
+              "active_transactions": 1,
+              "commits": 1,
+              "completed_batches": 1
+            },
+            "state_content_bytes": null,
+            "workspace_overlap_bytes": null
+          },
+          "before": {
+            "aggregate_physical_retained_bytes": null,
+            "cache": {
+              "budget": 65536,
+              "charged": 4870,
+              "free": 60666,
+              "pending": 0,
+              "resident": 774,
+              "scratch": 4096,
+              "unknown_subset": 0
+            },
+            "committed": {
+              "frontier": 1,
+              "gdn_position": 1,
+              "generation": 0,
+              "state_bytes": 512,
+              "topology": 4
+            },
+            "device_quarantined": false,
+            "exact_kv_reference_counts": null,
+            "holds": {
+              "artifact_holds": 0,
+              "bf16_holds": 0,
+              "f32_holds": 0,
+              "route_holds": 0
+            },
+            "host": {
+              "charge_bytes": 0,
+              "status": "closed",
+              "unknown_bytes": 0,
+              "unknown_reads": 0
+            },
+            "image_generation": 3,
+            "kv": {
+              "active_transactions": 0,
+              "committed_page_slot": 0,
+              "free_slots": 31
+            },
+            "live_state_bytes": 1024,
+            "physical_flags": {
+              "allocator": {
+                "state": "unobserved",
+                "value": null
+              },
+              "close": {
+                "state": "observed",
+                "value": "open"
+              },
+              "quiescence": {
+                "state": "unobserved",
+                "value": null
+              },
+              "release": {
+                "state": "unobserved",
+                "value": null
+              }
+            },
+            "recurrent_workspace_bytes_separate": 318720,
+            "runner": {
+              "aborts": 0,
+              "active_transactions": 0,
+              "commits": 1,
+              "completed_batches": 1
+            },
+            "state_content_bytes": null,
+            "workspace_overlap_bytes": null
+          },
+          "prepared": {
+            "aggregate_physical_retained_bytes": null,
+            "cache": {
+              "budget": 65536,
+              "charged": 4870,
+              "free": 60666,
+              "pending": 0,
+              "resident": 774,
+              "scratch": 4096,
+              "unknown_subset": 0
+            },
+            "committed": {
+              "frontier": 1,
+              "gdn_position": 1,
+              "generation": 0,
+              "state_bytes": 512,
+              "topology": 4
+            },
+            "device_quarantined": false,
+            "exact_kv_reference_counts": null,
+            "holds": {
+              "artifact_holds": 0,
+              "bf16_holds": 0,
+              "f32_holds": 0,
+              "route_holds": 0
+            },
+            "host": {
+              "charge_bytes": 0,
+              "status": "closed",
+              "unknown_bytes": 0,
+              "unknown_reads": 0
+            },
+            "image_generation": 3,
+            "kv": {
+              "active_transactions": 1,
+              "committed_page_slot": 0,
+              "free_slots": 29
+            },
+            "live_state_bytes": 1536,
+            "physical_flags": {
+              "allocator": {
+                "state": "unobserved",
+                "value": null
+              },
+              "close": {
+                "state": "observed",
+                "value": "open"
+              },
+              "quiescence": {
+                "state": "unobserved",
+                "value": null
+              },
+              "release": {
+                "state": "unobserved",
+                "value": null
+              }
+            },
+            "recurrent_workspace_bytes_separate": 318720,
+            "runner": {
+              "aborts": 0,
+              "active_transactions": 1,
+              "commits": 1,
+              "completed_batches": 1
+            },
+            "state_content_bytes": null,
+            "workspace_overlap_bytes": null
+          }
+        }
+      }
+    ],
+    "denominator": {
+      "cells": 4,
+      "passed_cells": 4,
+      "selector_retries": 0,
+      "selectors": 2
+    },
+    "schema": "ferrule.fault-custody-figure-data.v1",
+    "scope": "tiny_actual_Mixed_CudaHybridModule_component_only"
+  },
+  "data_sha256": "befa5f27c37e4673aa22ba2ce42c39661379af0f8b898a9f6f77954fd5b19031",
+  "layout": {
+    "all_text_inside_canvas": true,
+    "figure_inches": [
+      11.4,
+      9.6
+    ],
+    "labels": [
+      {
+        "bounds": [
+          0.055,
+          0.903728,
+          0.50048,
+          0.92051
+        ],
+        "text": "a  Transaction path  (logical stages, not elapsed time)"
+      },
+      {
+        "bounds": [
+          0.075021,
+          0.741169,
+          0.207879,
+          0.792731
+        ],
+        "text": "Tx1 published\nFrontier 1 \u00b7 slot 0\nCommitted metadata"
+      },
+      {
+        "bounds": [
+          0.301731,
+          0.741169,
+          0.494409,
+          0.792731
+        ],
+        "text": "Tx2 continuation [2, 3]\nReal routed-down submit\nActual consumer wait succeeds"
+      },
+      {
+        "bounds": [
+          0.649513,
+          0.825319,
+          0.911027,
+          0.876881
+        ],
+        "text": "CLEAN: owner proof retained\nAbort frees 512 B + 2 transient KV slots\nTx3 succeeds; then aborted, not published"
+      },
+      {
+        "bounds": [
+          0.632091,
+          0.662119,
+          0.928449,
+          0.713681
+        ],
+        "text": "UNKNOWN: owner proof discarded\n2 compute + 2 upload waits succeed*\nStill Unknown; publish / reset / shutdown rejected*"
+      },
+      {
+        "bounds": [
+          0.055,
+          0.635281,
+          0.638577,
+          0.648592
+        ],
+        "text": "* Source + action log + PASS back these outcomes; no individual fence/error receipts were serialized."
+      },
+      {
+        "bounds": [
+          0.388064,
+          0.519881,
+          0.422908,
+          0.53377
+        ],
+        "text": "1,536"
+      },
+      {
+        "bounds": [
+          0.388064,
+          0.414098,
+          0.422908,
+          0.427987
+        ],
+        "text": "1,024"
+      },
+      {
+        "bounds": [
+          0.067663,
+          0.276562,
+          0.120112,
+          0.289873
+        ],
+        "text": "Frontier 1"
+      },
+      {
+        "bounds": [
+          0.169005,
+          0.276562,
+          0.232419,
+          0.289873
+        ],
+        "text": "Prepare tx2"
+      },
+      {
+        "bounds": [
+          0.29444,
+          0.276562,
+          0.320634,
+          0.289873
+        ],
+        "text": "Fault"
+      },
+      {
+        "bounds": [
+          0.391914,
+          0.276562,
+          0.43681,
+          0.289873
+        ],
+        "text": "Cleanup"
+      },
+      {
+        "bounds": [
+          0.023957,
+          0.284343,
+          0.035653,
+          0.570657
+        ],
+        "text": "Bytes (default + committed + working)"
+      },
+      {
+        "bounds": [
+          0.063735,
+          0.291609,
+          0.071472,
+          0.305498
+        ],
+        "text": "0"
+      },
+      {
+        "bounds": [
+          0.048263,
+          0.363345,
+          0.071472,
+          0.377234
+        ],
+        "text": "512"
+      },
+      {
+        "bounds": [
+          0.040526,
+          0.435081,
+          0.071472,
+          0.44897
+        ],
+        "text": "1024"
+      },
+      {
+        "bounds": [
+          0.040526,
+          0.506818,
+          0.071472,
+          0.520706
+        ],
+        "text": "1536"
+      },
+      {
+        "bounds": [
+          0.08,
+          0.599271,
+          0.357351,
+          0.616053
+        ],
+        "text": "b  Retained sequence-state bytes"
+      },
+      {
+        "bounds": [
+          0.101418,
+          0.565135,
+          0.186457,
+          0.576709
+        ],
+        "text": "Baseline control"
+      },
+      {
+        "bounds": [
+          0.219846,
+          0.565135,
+          0.249877,
+          0.576709
+        ],
+        "text": "Clean"
+      },
+      {
+        "bounds": [
+          0.283265,
+          0.565135,
+          0.332608,
+          0.576709
+        ],
+        "text": "Unknown"
+      },
+      {
+        "bounds": [
+          0.788694,
+          0.528942,
+          0.95,
+          0.542252
+        ],
+        "text": "61,440 free + 4,096 charged"
+      },
+      {
+        "bounds": [
+          0.788694,
+          0.466898,
+          0.95,
+          0.480208
+        ],
+        "text": "61,440 free + 4,096 charged"
+      },
+      {
+        "bounds": [
+          0.788694,
+          0.404854,
+          0.95,
+          0.418164
+        ],
+        "text": "58,618 free + 6,918 charged"
+      },
+      {
+        "bounds": [
+          0.788694,
+          0.34281,
+          0.95,
+          0.35612
+        ],
+        "text": "58,618 free + 6,918 charged"
+      },
+      {
+        "bounds": [
+          0.632781,
+          0.256887,
+          0.897219,
+          0.270197
+        ],
+        "text": "Decoded-cache budget (KiB); 65,536 B per row"
+      },
+      {
+        "bounds": [
+          0.576132,
+          0.275984,
+          0.583868,
+          0.289873
+        ],
+        "text": "0"
+      },
+      {
+        "bounds": [
+          0.664764,
+          0.275984,
+          0.680236,
+          0.289873
+        ],
+        "text": "16"
+      },
+      {
+        "bounds": [
+          0.757264,
+          0.275984,
+          0.772736,
+          0.289873
+        ],
+        "text": "32"
+      },
+      {
+        "bounds": [
+          0.849764,
+          0.275984,
+          0.865236,
+          0.289873
+        ],
+        "text": "48"
+      },
+      {
+        "bounds": [
+          0.942264,
+          0.275984,
+          0.957736,
+          0.289873
+        ],
+        "text": "64"
+      },
+      {
+        "bounds": [
+          0.522191,
+          0.50657,
+          0.571472,
+          0.51988
+        ],
+        "text": "Clean / B"
+      },
+      {
+        "bounds": [
+          0.523653,
+          0.444526,
+          0.571472,
+          0.457836
+        ],
+        "text": "Clean / L"
+      },
+      {
+        "bounds": [
+          0.502515,
+          0.382482,
+          0.571472,
+          0.395792
+        ],
+        "text": "Unknown / B"
+      },
+      {
+        "bounds": [
+          0.503977,
+          0.320438,
+          0.571472,
+          0.333748
+        ],
+        "text": "Unknown / L"
+      },
+      {
+        "bounds": [
+          0.58,
+          0.599271,
+          0.827746,
+          0.616053
+        ],
+        "text": "c  Cache budget after cleanup"
+      },
+      {
+        "bounds": [
+          0.601218,
+          0.565135,
+          0.623696,
+          0.576709
+        ],
+        "text": "Free"
+      },
+      {
+        "bounds": [
+          0.657085,
+          0.565135,
+          0.701919,
+          0.576709
+        ],
+        "text": "Charged"
+      },
+      {
+        "bounds": [
+          0.735307,
+          0.565135,
+          0.823148,
+          0.576709
+        ],
+        "text": "Unknown subset"
+      },
+      {
+        "bounds": [
+          0.055,
+          0.953167,
+          0.76242,
+          0.974
+        ],
+        "text": "Completion evidence governs custody after a real routed-down fault"
+      },
+      {
+        "bounds": [
+          0.055,
+          0.930954,
+          0.828026,
+          0.946
+        ],
+        "text": "Mixed CUDA component \u00b7 4/4 cells PASS (2 selectors \u00d7 2 schedules) \u00b7 width 16, GDN/GQA, 4 experts/top-3 \u00b7 BF16; F32 SSM"
+      },
+      {
+        "bounds": [
+          0.08,
+          0.177134,
+          0.430694,
+          0.246
+        ],
+        "text": "Clean: no active transaction; 31 free KV slots.\nClean KV / conv / SSM bitwise unchanged*.\nUnknown: 1 active transaction; 29 free slots.\nBoth schedules agree; committed metadata stays at frontier 1."
+      },
+      {
+        "bounds": [
+          0.58,
+          0.195653,
+          0.942756,
+          0.246
+        ],
+        "text": "Hatch: 6,918 B Unknown is a subset, never added again.\nUnknown = 774 pending + 6,144 scratch; clean = 4,096 scratch.\nB = Blocking; L = Lookahead. Free + charged = 65,536 B."
+      },
+      {
+        "bounds": [
+          0.055,
+          0.131725,
+          0.689808,
+          0.165
+        ],
+        "text": "Host reads close independently: charge = 0, host Unknown = 0 in all four cells.\nLookahead wastes 1 read (774 B) per cell; Blocking wastes 0. Host cleanup does not release GPU custody."
+      },
+      {
+        "bounds": [
+          0.055,
+          0.095954,
+          0.725139,
+          0.111
+        ],
+        "text": "Post-Unknown KV / SSM CONTENTS UNOBSERVED \u2014 only committed metadata is unchanged."
+      },
+      {
+        "bounds": [
+          0.055,
+          0.030653,
+          0.730378,
+          0.081
+        ],
+        "text": "The 318,720 B recurrent workspace is a separate, overlapping owner view: no additive physical-memory total.\nClean-only explicit owner drop + allocator trim returns fixture requested bytes 0 \u2192 0; no device-wide release certificate.\nComponent contract only: not integrated broker / CLI E5, a 35B model fault test, or physical driver proof loss."
+      }
+    ],
+    "overlapping_text_pairs": 0,
+    "png_pixels": [
+      2052,
+      1728
+    ],
+    "text_count": 46
+  },
+  "outputs": {
+    "fault-custody-contract.pdf": {
+      "bytes": 34861,
+      "sha256": "c22b09c187db5c19b9f240a15c6ac3af6542b5c72b8ca8afd0b6763082dfd1d8"
+    },
+    "fault-custody-contract.png": {
+      "bytes": 503360,
+      "sha256": "6ec61f608aa9094f46b73bc30505bfd43e6fe6e0e497ae940a1384faea8f2fd2"
+    }
+  },
+  "publication_manifest_sha256": "5bd65d0706dda32185086f7c8eebf9533ab04856ff39a34d91dc974e6a367c71",
+  "renderer": {
+    "backend": "Agg",
+    "font_family": "DejaVu Sans",
+    "fonts": {
+      "bold": {
+        "name": "DejaVuSans-Bold.ttf",
+        "sha256": "b184b89e3c1075f22f6b71575b6fc20d4972b3cfd3b23322ca6fd596dcaef167"
+      },
+      "normal": {
+        "name": "DejaVuSans.ttf",
+        "sha256": "3fdf69cabf06049ea70a00b5919340e2ce1e6d02b0cc3c4b44fb6801bd1e0d22"
+      }
+    },
+    "freetype": "2.12.1",
+    "matplotlib": "3.8.4",
+    "numpy": "1.26.4",
+    "pdf_fonttype": 42,
+    "pillow": "10.3.0",
+    "png_dpi": 180,
+    "python": "3.12.4",
+    "zlib": "1.2.13"
+  },
+  "schema": "ferrule.fault-custody-figure.v1",
+  "source_sha256": "c56ce16f21b07bcdf48c034c57c7aae1dba1fbbd483d2a83a252274a24a8cbc6"
+}

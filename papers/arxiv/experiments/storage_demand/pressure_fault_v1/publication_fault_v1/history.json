@@ -1,0 +1,22 @@
+{
+  "actual": {
+    "cells_passed": 4,
+    "gpu_execution": true,
+    "original": "actualreports/final-handoff.json",
+    "scope": "component_only_not_production_CLI_E5",
+    "selectors_passed": 2,
+    "sha256": "8f653a69707d057160118f536e77aa061209eb0d3914222223d7228d2be5abda"
+  },
+  "preparation": {
+    "gpu_execution": false,
+    "note": "The immutable preparation document is not the later execution verdict.",
+    "original": "HANDOFF.md"
+  },
+  "preserved_limitations": [
+    "Long temporary paths exceeded the fixed metadata quota; actual execution pins TMPDIR=/tmp.",
+    "The initial CPU audit compared pre/post setsid whole identities; later audit uses stable PID/birth/parent and separately checks session.",
+    "Unknown is synthetic owner-proof discard after successful real waits, not hardware proof loss.",
+    "No new model, production CLI run, integrated broker, GPU probe, or rerun is part of publication."
+  ],
+  "schema": "ferrule.mixed-fault-public-history.v1"
+}

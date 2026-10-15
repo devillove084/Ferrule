@@ -1,0 +1,1504 @@
+{
+  "audit_recorded_unix_ns": 1792048818697655850,
+  "denominator": {
+    "body_entered_cells": 4,
+    "issued_selectors": 2,
+    "passed_cells": 4,
+    "passed_selectors": 2,
+    "planned_cells": 4,
+    "planned_selectors": 2,
+    "unissued_selectors": []
+  },
+  "final": {
+    "authenticated_echild": true,
+    "cli_runs": 0,
+    "final_idle_verified": true,
+    "gpu_proof": true,
+    "gpu_tests_dispatched": 2,
+    "gpu_tests_issued": 2,
+    "physical_cuda_release": "unobserved; ECHILD/NVML idle are not a CUDA release certificate",
+    "profiling_runs": 0,
+    "recorded_owners_absent": true,
+    "retries": 0,
+    "status": "passed",
+    "unissued_selectors": []
+  },
+  "idle": {
+    "gpu-run/01-clean/authenticated-pre-cuda-idle.json": {
+      "accepted_sample_indices": [
+        0,
+        1,
+        2
+      ],
+      "all_eight_idle": true,
+      "authenticated_echild": false,
+      "consecutive_idle": 3,
+      "mode": "strict_preflight",
+      "no_compute_apps_required": true,
+      "physical_owner_release": "unverified",
+      "recorded_owners_absent": false,
+      "required_consecutive": 3,
+      "samples": [
+        {
+          "classification": "idle",
+          "compute_apps": 0,
+          "devices": [
+            {
+              "device": "device_0",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_1",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_2",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_3",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_4",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_5",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_6",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_7",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            }
+          ],
+          "recorded_unix_ns": 1792048421525686523
+        },
+        {
+          "classification": "idle",
+          "compute_apps": 0,
+          "devices": [
+            {
+              "device": "device_0",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_1",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_2",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_3",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_4",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_5",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_6",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_7",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            }
+          ],
+          "recorded_unix_ns": 1792048422751768002
+        },
+        {
+          "classification": "idle",
+          "compute_apps": 0,
+          "devices": [
+            {
+              "device": "device_0",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_1",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_2",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_3",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_4",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_5",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_6",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_7",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            }
+          ],
+          "recorded_unix_ns": 1792048423988000093
+        }
+      ],
+      "status": "verified",
+      "zero_memory_mib": 0,
+      "zero_utilization_percent": 0
+    },
+    "gpu-run/01-clean/post-idle.json": {
+      "accepted_sample_indices": [
+        1,
+        2,
+        3
+      ],
+      "all_eight_idle": true,
+      "authenticated_echild": true,
+      "consecutive_idle": 3,
+      "mode": "post_authenticated_echild",
+      "no_compute_apps_required": true,
+      "physical_owner_release": "unverified",
+      "recorded_owners_absent": true,
+      "required_consecutive": 3,
+      "samples": [
+        {
+          "classification": "utilization_only_transient",
+          "compute_apps": 0,
+          "devices": [
+            {
+              "device": "device_0",
+              "memory_mib": 0,
+              "utilization_percent": 6
+            },
+            {
+              "device": "device_1",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_2",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_3",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_4",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_5",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_6",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_7",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            }
+          ],
+          "recorded_unix_ns": 1792048425299855006
+        },
+        {
+          "classification": "idle",
+          "compute_apps": 0,
+          "devices": [
+            {
+              "device": "device_0",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_1",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_2",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_3",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_4",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_5",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_6",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_7",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            }
+          ],
+          "recorded_unix_ns": 1792048426512883011
+        },
+        {
+          "classification": "idle",
+          "compute_apps": 0,
+          "devices": [
+            {
+              "device": "device_0",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_1",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_2",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_3",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_4",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_5",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_6",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_7",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            }
+          ],
+          "recorded_unix_ns": 1792048427724079513
+        },
+        {
+          "classification": "idle",
+          "compute_apps": 0,
+          "devices": [
+            {
+              "device": "device_0",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_1",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_2",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_3",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_4",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_5",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_6",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_7",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            }
+          ],
+          "recorded_unix_ns": 1792048428941286313
+        }
+      ],
+      "status": "verified",
+      "zero_memory_mib": 0,
+      "zero_utilization_percent": 0
+    },
+    "gpu-run/01-clean/pre-idle.json": {
+      "accepted_sample_indices": [
+        0,
+        1,
+        2
+      ],
+      "all_eight_idle": true,
+      "authenticated_echild": false,
+      "consecutive_idle": 3,
+      "mode": "strict_preflight",
+      "no_compute_apps_required": true,
+      "physical_owner_release": "unverified",
+      "recorded_owners_absent": false,
+      "required_consecutive": 3,
+      "samples": [
+        {
+          "classification": "idle",
+          "compute_apps": 0,
+          "devices": [
+            {
+              "device": "device_0",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_1",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_2",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_3",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_4",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_5",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_6",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_7",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            }
+          ],
+          "recorded_unix_ns": 1792048416551008887
+        },
+        {
+          "classification": "idle",
+          "compute_apps": 0,
+          "devices": [
+            {
+              "device": "device_0",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_1",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_2",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_3",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_4",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_5",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_6",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_7",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            }
+          ],
+          "recorded_unix_ns": 1792048417784606212
+        },
+        {
+          "classification": "idle",
+          "compute_apps": 0,
+          "devices": [
+            {
+              "device": "device_0",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_1",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_2",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_3",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_4",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_5",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_6",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_7",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            }
+          ],
+          "recorded_unix_ns": 1792048419013881642
+        }
+      ],
+      "status": "verified",
+      "zero_memory_mib": 0,
+      "zero_utilization_percent": 0
+    },
+    "gpu-run/02-unknown/authenticated-pre-cuda-idle.json": {
+      "accepted_sample_indices": [
+        0,
+        1,
+        2
+      ],
+      "all_eight_idle": true,
+      "authenticated_echild": false,
+      "consecutive_idle": 3,
+      "mode": "strict_preflight",
+      "no_compute_apps_required": true,
+      "physical_owner_release": "unverified",
+      "recorded_owners_absent": false,
+      "required_consecutive": 3,
+      "samples": [
+        {
+          "classification": "idle",
+          "compute_apps": 0,
+          "devices": [
+            {
+              "device": "device_0",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_1",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_2",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_3",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_4",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_5",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_6",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_7",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            }
+          ],
+          "recorded_unix_ns": 1792048436283983500
+        },
+        {
+          "classification": "idle",
+          "compute_apps": 0,
+          "devices": [
+            {
+              "device": "device_0",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_1",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_2",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_3",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_4",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_5",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_6",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_7",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            }
+          ],
+          "recorded_unix_ns": 1792048437517160777
+        },
+        {
+          "classification": "idle",
+          "compute_apps": 0,
+          "devices": [
+            {
+              "device": "device_0",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_1",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_2",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_3",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_4",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_5",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_6",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_7",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            }
+          ],
+          "recorded_unix_ns": 1792048438738415272
+        }
+      ],
+      "status": "verified",
+      "zero_memory_mib": 0,
+      "zero_utilization_percent": 0
+    },
+    "gpu-run/02-unknown/post-idle.json": {
+      "accepted_sample_indices": [
+        1,
+        2,
+        3
+      ],
+      "all_eight_idle": true,
+      "authenticated_echild": true,
+      "consecutive_idle": 3,
+      "mode": "post_authenticated_echild",
+      "no_compute_apps_required": true,
+      "physical_owner_release": "unverified",
+      "recorded_owners_absent": true,
+      "required_consecutive": 3,
+      "samples": [
+        {
+          "classification": "utilization_only_transient",
+          "compute_apps": 0,
+          "devices": [
+            {
+              "device": "device_0",
+              "memory_mib": 0,
+              "utilization_percent": 13
+            },
+            {
+              "device": "device_1",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_2",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_3",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_4",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_5",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_6",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_7",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            }
+          ],
+          "recorded_unix_ns": 1792048439876531348
+        },
+        {
+          "classification": "idle",
+          "compute_apps": 0,
+          "devices": [
+            {
+              "device": "device_0",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_1",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_2",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_3",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_4",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_5",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_6",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_7",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            }
+          ],
+          "recorded_unix_ns": 1792048441091105644
+        },
+        {
+          "classification": "idle",
+          "compute_apps": 0,
+          "devices": [
+            {
+              "device": "device_0",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_1",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_2",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_3",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_4",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_5",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_6",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_7",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            }
+          ],
+          "recorded_unix_ns": 1792048442306869402
+        },
+        {
+          "classification": "idle",
+          "compute_apps": 0,
+          "devices": [
+            {
+              "device": "device_0",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_1",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_2",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_3",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_4",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_5",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_6",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_7",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            }
+          ],
+          "recorded_unix_ns": 1792048443530380321
+        }
+      ],
+      "status": "verified",
+      "zero_memory_mib": 0,
+      "zero_utilization_percent": 0
+    },
+    "gpu-run/02-unknown/pre-idle.json": {
+      "accepted_sample_indices": [
+        0,
+        1,
+        2
+      ],
+      "all_eight_idle": true,
+      "authenticated_echild": false,
+      "consecutive_idle": 3,
+      "mode": "strict_preflight",
+      "no_compute_apps_required": true,
+      "physical_owner_release": "unverified",
+      "recorded_owners_absent": false,
+      "required_consecutive": 3,
+      "samples": [
+        {
+          "classification": "idle",
+          "compute_apps": 0,
+          "devices": [
+            {
+              "device": "device_0",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_1",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_2",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_3",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_4",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_5",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_6",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_7",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            }
+          ],
+          "recorded_unix_ns": 1792048431358016774
+        },
+        {
+          "classification": "idle",
+          "compute_apps": 0,
+          "devices": [
+            {
+              "device": "device_0",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_1",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_2",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_3",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_4",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_5",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_6",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_7",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            }
+          ],
+          "recorded_unix_ns": 1792048432579336861
+        },
+        {
+          "classification": "idle",
+          "compute_apps": 0,
+          "devices": [
+            {
+              "device": "device_0",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_1",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_2",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_3",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_4",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_5",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_6",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_7",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            }
+          ],
+          "recorded_unix_ns": 1792048433798287202
+        }
+      ],
+      "status": "verified",
+      "zero_memory_mib": 0,
+      "zero_utilization_percent": 0
+    },
+    "gpu-run/final-idle.json": {
+      "accepted_sample_indices": [
+        0,
+        1,
+        2
+      ],
+      "all_eight_idle": true,
+      "authenticated_echild": true,
+      "consecutive_idle": 3,
+      "mode": "post_authenticated_echild",
+      "no_compute_apps_required": true,
+      "physical_owner_release": "unverified",
+      "recorded_owners_absent": true,
+      "required_consecutive": 3,
+      "samples": [
+        {
+          "classification": "idle",
+          "compute_apps": 0,
+          "devices": [
+            {
+              "device": "device_0",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_1",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_2",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_3",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_4",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_5",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_6",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_7",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            }
+          ],
+          "recorded_unix_ns": 1792048443758165521
+        },
+        {
+          "classification": "idle",
+          "compute_apps": 0,
+          "devices": [
+            {
+              "device": "device_0",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_1",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_2",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_3",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_4",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_5",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_6",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_7",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            }
+          ],
+          "recorded_unix_ns": 1792048444977447641
+        },
+        {
+          "classification": "idle",
+          "compute_apps": 0,
+          "devices": [
+            {
+              "device": "device_0",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_1",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_2",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_3",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_4",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_5",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_6",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_7",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            }
+          ],
+          "recorded_unix_ns": 1792048446198110608
+        }
+      ],
+      "status": "verified",
+      "zero_memory_mib": 0,
+      "zero_utilization_percent": 0
+    },
+    "gpu-run/pre-lock-idle.json": {
+      "accepted_sample_indices": [
+        0,
+        1,
+        2
+      ],
+      "all_eight_idle": true,
+      "authenticated_echild": false,
+      "consecutive_idle": 3,
+      "mode": "strict_preflight",
+      "no_compute_apps_required": true,
+      "physical_owner_release": "unverified",
+      "recorded_owners_absent": false,
+      "required_consecutive": 3,
+      "samples": [
+        {
+          "classification": "idle",
+          "compute_apps": 0,
+          "devices": [
+            {
+              "device": "device_0",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_1",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_2",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_3",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_4",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_5",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_6",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_7",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            }
+          ],
+          "recorded_unix_ns": 1792048411739359082
+        },
+        {
+          "classification": "idle",
+          "compute_apps": 0,
+          "devices": [
+            {
+              "device": "device_0",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_1",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_2",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_3",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_4",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_5",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_6",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_7",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            }
+          ],
+          "recorded_unix_ns": 1792048412967030498
+        },
+        {
+          "classification": "idle",
+          "compute_apps": 0,
+          "devices": [
+            {
+              "device": "device_0",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_1",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_2",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_3",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_4",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_5",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_6",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "device": "device_7",
+              "memory_mib": 0,
+              "utilization_percent": 0
+            }
+          ],
+          "recorded_unix_ns": 1792048414205014913
+        }
+      ],
+      "status": "verified",
+      "zero_memory_mib": 0,
+      "zero_utilization_percent": 0
+    }
+  },
+  "locks": {
+    "all_eight_nonblocking_reacquired": true,
+    "global_release_claim": false,
+    "global_reservation": false,
+    "local_lock_count": 8,
+    "local_locks_released": true,
+    "local_only": true
+  },
+  "physical_owner_release_certificate": null,
+  "physical_owner_release_certificate_observed": false,
+  "projection": "allowlisted_quantities_and_names_private_identity_environment_maps_omitted",
+  "schema": "ferrule.mixed-fault-safe-custody.v1",
+  "selectors": [
+    {
+      "audit": {
+        "authenticated_echild": true,
+        "failed": 0,
+        "filtered_out": 902,
+        "ignored": 0,
+        "job": "01-clean",
+        "passed": 1,
+        "recorded_owners_absent_at_audit": true,
+        "returncode": 0,
+        "selector": "transformer::forward::tests::cuda::mixed_fault::mixed_bf16_clean_fault_after_real_expert_submit_both_schedules",
+        "setsid_session_separately_verified": true,
+        "signals": 0,
+        "stable_pid_birth_parent_authenticated": true,
+        "status": "passed",
+        "tests_run": 1,
+        "timed_out": false
+      },
+      "custody": {
+        "containment_verified": true,
+        "echild": true,
+        "errors": [],
+        "method": "linux-subreaper-waitid",
+        "reporting_errors": [],
+        "status": "proven_drained"
+      },
+      "stderr": "evidence/mixed_clean.stderr",
+      "stdout": "evidence/mixed_clean.stdout",
+      "supervisor": {
+        "cleanup_errors": [],
+        "cleanup_scope": "isolated_subreaper_direct_children",
+        "descendant_custody": "proven_drained",
+        "gpu_quiescence": "unverified",
+        "returncode": 0,
+        "stderr_truncated": false,
+        "stdout_truncated": false,
+        "timed_out": false,
+        "wall_seconds": 6.054847467690706
+      }
+    },
+    {
+      "audit": {
+        "authenticated_echild": true,
+        "failed": 0,
+        "filtered_out": 902,
+        "ignored": 0,
+        "job": "02-unknown",
+        "passed": 1,
+        "recorded_owners_absent_at_audit": true,
+        "returncode": 0,
+        "selector": "transformer::forward::tests::cuda::mixed_fault::mixed_bf16_unknown_after_real_expert_submit_both_schedules",
+        "setsid_session_separately_verified": true,
+        "signals": 0,
+        "stable_pid_birth_parent_authenticated": true,
+        "status": "passed",
+        "tests_run": 1,
+        "timed_out": false
+      },
+      "custody": {
+        "containment_verified": true,
+        "echild": true,
+        "errors": [],
+        "method": "linux-subreaper-waitid",
+        "reporting_errors": [],
+        "status": "proven_drained"
+      },
+      "stderr": "evidence/mixed_unknown.stderr",
+      "stdout": "evidence/mixed_unknown.stdout",
+      "supervisor": {
+        "cleanup_errors": [],
+        "cleanup_scope": "isolated_subreaper_direct_children",
+        "descendant_custody": "proven_drained",
+        "gpu_quiescence": "unverified",
+        "returncode": 0,
+        "stderr_truncated": false,
+        "stdout_truncated": false,
+        "timed_out": false,
+        "wall_seconds": 5.851506195962429
+      }
+    }
+  ]
+}

@@ -1,0 +1,84 @@
+{
+  "files": {
+    "custody.json": {
+      "bytes": 40657,
+      "sha256": "a377657a948884f80a9a4586b5bc3bb666c5e5ae0bda3a986db3b9826d8f2b91"
+    },
+    "evidence/mixed_clean.jsonl": {
+      "bytes": 88245,
+      "sha256": "c842088ddfaed935db1102d726e03be937a135bd86b7541107f2b188d946f8ff"
+    },
+    "evidence/mixed_clean.stderr": {
+      "bytes": 88885,
+      "sha256": "95dfec1d61326b60d6e22c8e1a23cc87ad703d10c0ab13b9ea7b47502d605208"
+    },
+    "evidence/mixed_clean.stdout": {
+      "bytes": 237,
+      "sha256": "f21c87f96a864885e735775e7eb2a881bfa9e40d57ab211d14e6d3c369485e26"
+    },
+    "evidence/mixed_unknown.jsonl": {
+      "bytes": 88301,
+      "sha256": "4b1f37cc5a05884d012211a10e6e28b0464a4c60bf7f96d8a53e66d1597089bc"
+    },
+    "evidence/mixed_unknown.stderr": {
+      "bytes": 88941,
+      "sha256": "1f9a9b3a2c172a7cffec909cabaedd10454c5e2b2e7949730934a9097e3be08d"
+    },
+    "evidence/mixed_unknown.stdout": {
+      "bytes": 233,
+      "sha256": "60cb4fd2f5e1680dc23991f3eb46127fa596c8fbd33d4cee3f5d089805d6b602"
+    },
+    "history.json": {
+      "bytes": 986,
+      "sha256": "ea036ea0e19433865f15e079cbcb571091683f03c7d94527460d0a9f21a92041"
+    },
+    "postfailure.json": {
+      "bytes": 44207,
+      "sha256": "9261b8dd9512f5af7f7ab05c0af289bd78ba466cf0b11d05a669efbe0400e615"
+    },
+    "reference/cuda_tests.rs": {
+      "bytes": 10371,
+      "sha256": "3b4f17f5964d66bb390a79ebe9ee9c7b5491be5a6a077a7ead8c9670f94aa724"
+    },
+    "reference/fault_contract.rs": {
+      "bytes": 12856,
+      "sha256": "933c04639814f2b13439ae2752b88819f6a27e782e120bd5dcc68f33591dd270"
+    },
+    "reference/fault_cuda.rs": {
+      "bytes": 26521,
+      "sha256": "fe2117604ca0e2d038c9f675fed5accf95b9ddd6679f08736f521351d9e9c07e"
+    },
+    "reference/fault_hook.rs": {
+      "bytes": 7864,
+      "sha256": "cde5845b012c415acb766ebc66c4ea5d809719be53afd0fe51cc96d450a845a9"
+    },
+    "reference/fixture.rs": {
+      "bytes": 10230,
+      "sha256": "7703d1488580e14062765f6aee5f24ad231610ff51b97f4528879eb92fdc7fe6"
+    },
+    "reference/forward.rs": {
+      "bytes": 35785,
+      "sha256": "9dc28e1237c2a8ae21b54aa113ecea5cfe82a2d0a221ff1efa28ac49d3db323e"
+    },
+    "reference/forward_tests.rs": {
+      "bytes": 29045,
+      "sha256": "09f6edb51dd81a7ff0683d294cc992e25acee767d88d1b605d59e7bc809424eb"
+    },
+    "reference/hybrid.rs": {
+      "bytes": 40095,
+      "sha256": "7254714c9ba8207f86b4592211240b9d1b86afc8c972f377383775c5c0a3547c"
+    },
+    "reference/residency.rs": {
+      "bytes": 18453,
+      "sha256": "f0e39094d02e098e71361db69fe21406f10d01bd350c97119c216821d817e490"
+    },
+    "source-manifest.json": {
+      "bytes": 207933,
+      "sha256": "aa9d0e547a0f89a43519be3bf1fd89667b3a98e00c8d161d039833f1a44138ff"
+    }
+  },
+  "final_handoff_sha256": "8f653a69707d057160118f536e77aa061209eb0d3914222223d7228d2be5abda",
+  "report_contract_sha256": "d37929784be4f572d61fa8867d346d2924adb8871522ad99ddaa608f996c686a",
+  "schema": "ferrule.mixed-fault-public-payload.v1",
+  "scope": "curated_payload_only_not_self_signed_authentication"
+}
