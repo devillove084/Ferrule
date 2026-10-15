@@ -18,6 +18,10 @@ use std::convert::Infallible;
 mod invocation_trace;
 use invocation_trace::InvocationTrace;
 
+#[cfg(test)]
+#[path = "../../../../tests/hybrid_bf16/fault_hook.rs"]
+pub(crate) mod fault_hook;
+
 #[path = "external_experts.rs"]
 pub(super) mod external_experts;
 #[cfg(test)]

@@ -121,6 +121,8 @@ pub struct CudaStandardDecoderOperators {
     #[cfg(test)]
     lose_next_consumer_proof: bool,
     #[cfg(test)]
+    fault_probe: hybrid::fault_hook::FaultProbe,
+    #[cfg(test)]
     consumer_proofs: usize,
     #[cfg(test)]
     numeric_allocation_failure: Option<usize>,
@@ -241,6 +243,8 @@ impl CudaStandardDecoderOperators {
             root_bindings: root_execution::PreparedBindings::default(),
             #[cfg(test)]
             lose_next_consumer_proof: false,
+            #[cfg(test)]
+            fault_probe: hybrid::fault_hook::FaultProbe::default(),
             #[cfg(test)]
             consumer_proofs: 0,
             #[cfg(test)]

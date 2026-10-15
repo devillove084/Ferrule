@@ -1,4 +1,6 @@
 //! Unknown-completion regression using the existing tiny hybrid CPU oracle.
+#[path = "../../../tests/hybrid_bf16/fault_cuda.rs"]
+mod mixed_fault;
 use super::*;
 use crate::execution::ExecutionPrecisionPolicy;
 use crate::nn::{

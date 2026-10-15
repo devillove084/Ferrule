@@ -1,4 +1,5 @@
 //! Native HF BF16 hybrid admission, boundary contracts and opt-in CUDA acceptance.
+use ferrule_model as model;
 #[path = "hybrid_bf16/admission.rs"]
 mod admission;
 #[path = "hybrid_bf16/contracts.rs"]
@@ -6,6 +7,8 @@ mod contracts;
 #[cfg(feature = "cuda")]
 #[path = "hybrid_bf16/cuda.rs"]
 mod cuda;
+#[path = "hybrid_bf16/fault_contract.rs"]
+mod fault_contract;
 #[path = "hybrid_bf16/fixture.rs"]
 mod fixture;
 

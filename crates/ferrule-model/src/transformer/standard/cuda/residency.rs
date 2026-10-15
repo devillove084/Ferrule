@@ -292,6 +292,8 @@ impl CudaStandardDecoderOperators {
         {
             self.consumer_proofs += 1;
         }
+        #[cfg(test)]
+        let lose_observed_proof = self.observe_test_consumer_boundary();
         let prove = || {
             self.ops
                 .record_compute_event()
@@ -306,7 +308,9 @@ impl CudaStandardDecoderOperators {
             None => self.ops.sync_upload_stream(),
         };
         #[cfg(test)]
-        let compute = if std::mem::take(&mut self.lose_next_consumer_proof) {
+        self.observe_test_physical_proof(lose_observed_proof, compute.is_ok(), upload.is_ok());
+        #[cfg(test)]
+        let compute = if std::mem::take(&mut self.lose_next_consumer_proof) || lose_observed_proof {
             Err(cuda_error("injected lost consumer completion proof"))
         } else {
             compute
