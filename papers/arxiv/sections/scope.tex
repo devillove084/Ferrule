@@ -1,129 +1,87 @@
-\section{Resource Model and Execution Contracts}
+\section{Resource Model and Assumptions}
 \label{sec:scope}
 
-\subsection{Representations and one notation}
-The target is a complete request or forward output under a declared model,
-arithmetic, placement, and quality profile $\pi$. Text decoding is the current
-instance: prefill, multiple decode steps, and KV/state lifetime. Vision,
-audio, and combined modalities require their own complete-output contracts
-and remain future implementation and evaluation work.
+\subsection{Representations and physical memory}
+An execution profile $\pi$ specifies the model, arithmetic, placement, inputs,
+state lifetime, and output-quality criterion. The evaluated profile performs
+text prefill and autoregressive decoding with resident KV state. A weight
+representation $r$ includes its encoded payload, scales, decoding metadata,
+expansion, and required copies. Checkpoint size $S_{\mathrm{ckpt}}$, complete
+compact-weight size $W_{\mathrm{compact}}$, and full execution-weight footprint
+$W_{\mathrm{full}}(r)$ describe different objects. None is the complete
+inference working set.
 
-A representation $r$ identifies payload, decoding metadata, expansion, and
-required physical copies. Checkpoint bytes $S_{\mathrm{ckpt}}$ include the
-specified files and container layout. Complete compact weights
-$W_{\mathrm{compact}}$ include all encoded weights, scales, and decoding
-metadata. Full-resident weight demand $W_{\mathrm{full}}(r)$ is the footprint
-of all weights under representation and placement $r$; it is weight-only,
-not the complete inference working set. Expanded execution weights may be
-larger than compact weights and need not all be live at once. Aliased views
-are not extra copies; genuinely copied payloads are.
-
-\begin{table}[tbp]
-\centering
-\small
-\begin{tabularx}{\linewidth}{@{}l>{\raggedright\arraybackslash}X@{}}
-\toprule
-Symbol & Meaning and units \\
-\midrule
-$\pi,r$ & Execution/quality profile and weight representation/placement \\
-$S_{\mathrm{ckpt}},W_{\mathrm{compact}},W_{\mathrm{full}}(r)$ & Checkpoint, complete compact, and full-resident weight bytes \\
-$d\in\mathcal D_{\mathrm{phys}},B_d$ & Disjoint physical domain and available physical byte capacity \\
-$a\in\mathcal D_{\mathrm{acct}},b_a$ & Covered accounting domain and configured limit in that domain's unit \\
-$M_d(t),M_d^{\mathrm{peak}}$ & Deduplicated physical working-set bytes at time $t$, and its true peak \\
-$\widehat M_d(t_i),\widehat M_d^{\mathrm{max}}$ & Reported sample and maximum over stated sampling times; not a true peak \\
-$U_a(t),c_a$ & Charged occupancy and additional proposed claim, in domain $a$'s unit \\
-$\delta,\rho_a,b_a^{\mathrm{eff}}(\delta)$ & Demand class, execution reserve, and its policy-accessible accounting ceiling \\
-$F_a,R_a,I_a,L_a,T_a$ & Free, reserved, provider-in-flight, live, and retained claims \\
-$P=(K,\boldsymbol q,\boldsymbol\ell)$ & Frozen plan: exact key, stage claim vectors, resident claim vector \\
-$K,g_s,g_x$ & Full resource key, source generation, destination reuse generation \\
-$o,e,J$ & Owned operation, completion evidence, provisional owner journal \\
-$\Omega,k,w,\mu_o[s]$ & Post-detachment worklist, per-pass visit limit, persistent cursor, and exact-stage cancellation marker \\
-$\mathcal V_q,L_q,H_q,\Delta_q$ & Request $q$'s invocations, logical reader bytes, facade H2D bytes, and $H_q-L_q$ \\
-$N_j,I_j,E_j$ & Expert entries at invocation boundary $j$, installs/uploads, and evictions \\
-$X_j,Q_j,S_j,C_j^{\mathrm{cache}},Z_j$ & Resident, pending-upload, scratch, cache charge, and retained Unknown subset gauges \\
-$C_{\mathrm{peak}}^{\mathrm{cache}}$ & Lifetime cache-accounting high-water; not a total physical-owner peak \\
-$P_q^{\mathrm{net}},P_q^{\mathrm{blk}}$ & Physical network and backing-block bytes attributed to request $q$ \\
-$b_{\mathrm{cache}},b_{\mathrm{scratch}}$ & Configured cache-credit and scratch limits; neither is a physical-domain bound \\
-\bottomrule
-\end{tabularx}
-\caption{Notation used by the contracts, algorithms, and evaluation.
-Accounting limits are never substituted for physical capacity.}
-\label{tab:symbols}
-\end{table}
-
-\subsection{Physical capacity and measured working set}
-Physical capacity counts disjoint resident-memory pools once:
+Let $\mathcal D_{\mathrm{phys}}$ contain disjoint physical memory pools, with
+available capacity $B_d$ in pool $d$. Aggregate capacity is
 \begin{equation}
  B_{\mathrm{mem}}=\sum_{d\in\mathcal D_{\mathrm{phys}}}B_d.
  \label{eq:physical-capacity}
 \end{equation}
-For a declared representation and placement, consider
-\begin{equation}
- W_{\mathrm{full}}(r)>B_{\mathrm{mem}}.
- \label{eq:full-residency}
-\end{equation}
-The inequality rules out aggregate full residency of \emph{that}
-representation/placement, not streaming feasibility. Disk is excluded.
-Discrete host and GPU pools may be added; host and accelerator aliases of
-one physical pool may not. Unified virtual addressing over separate physical
-pools does not merge those pools. Report installed capacity, fixed exclusions,
-co-tenants, copies, and placement/migration policy for each evaluated domain.
-Per-domain accessibility and placement remain constraints even when the
-aggregate sum is sufficient.
+Discrete host and device memory can be separate pools; two aliases of unified
+physical memory cannot. Backing files add storage, not resident-memory
+capacity. Per-pool accessibility and placement constraints still apply when
+the aggregate capacity is sufficient.
 
-Define $M_d(t)$ as physical bytes resident in domain $d$ that are attributable
-to the selected inference deployment at time $t$. Count resident weights,
-expansion/workspace, activations, model state, staging, outstanding and retained
-buffers, metadata, allocator/driver reserves, and attributable file-backed
-pages, deduplicating shared physical allocations. A full attribution requires
-fixed and external consumers to be measured or excluded explicitly; a
-process heap or device counter alone does not supply it. The desired
-feasibility condition and the reported sampling statistic are different:
+The physical working set $M_d(t)$ includes attributable weights, expansion,
+activations, KV and recurrent state, staging, outstanding transfers, retained
+buffers, metadata, allocator and driver reserves, and resident file-backed
+pages. Shared allocations count once. The feasibility condition and a sampled
+observation are distinct:
 \begin{equation}
 \begin{aligned}
- M_d^{\mathrm{peak}}&=\sup_{t\in\mathcal T}M_d(t)\leq B_d
-       &&\text{for each }d,\\
- \widehat M_d^{\mathrm{max}}&=\max_{t_i\in\mathcal T}
-       \widehat M_d(t_i)
-       &&\text{over the declared samples.}
+ M_d^{\mathrm{peak}}&=\sup_{t\in\mathcal T}M_d(t)\leq B_d,\\
+ \widehat M_d^{\mathrm{max}}&=\max_{t_i\in\mathcal T}\widehat M_d(t_i),
 \end{aligned}
 \label{eq:working-set}
 \end{equation}
-$\mathcal T$ is the declared startup/request/cleanup interval. A sampled
-maximum can miss a transient peak; selected-device telemetry also includes
-unattributed processes, and tree PSS does not cover every machine consumer.
-Thus those proxies are not silently identified with $M_d(t)$. Independent
-component maxima must not be added into a simultaneous working-set peak.
-RQ1 and Figure~\ref{f:paired-accounting} report the current logical
-host high-water and device samples separately; neither converts accounting
-or sample maxima into certified physical bounds.
+where $\mathcal T$ covers the declared execution interval. Samples may miss
+transients or include other consumers. Independent component maxima cannot
+be added to obtain a simultaneous peak.
 
-The stronger, optional storage-necessity claim additionally asks whether
-\emph{all compact weights and metadata} can remain resident with online
-expansion under the quality contract. It is not a prerequisite for the
-bounded-residency mechanism studied here. Failure to fit expanded weights is insufficient if that
-compact alternative fits. A low configured cache budget is likewise not
-physical host-memory insufficiency. Storage necessity is scoped to evaluated
-representations, not a proof against every possible compression scheme.
+A full execution representation cannot reside in aggregate memory if
+$W_{\mathrm{full}}(r)>B_{\mathrm{mem}}$. This does not prove that storage is
+necessary: complete compact weights might still fit with online expansion.
+Conversely, a deliberately small cache can exercise bounded residency even
+when the compact checkpoint fits in physical memory. This paper studies that
+controlled-budget problem rather than compact-residency impossibility.
 
-\subsection{Accounting and admission contract}
-A covered accounting domain $a$ may count bytes, slots, pages, or queue entries.
-Its limit $b_a$ is configured, not installed physical capacity; accounting
-domains can overlap or omit parts of a pool and cannot in general be summed.
-A cache limit covers its cache, not the whole working set. The necessary
-covered-domain capacity condition is
+\begin{table}[!htbp]
+\centering
+\small
+\begin{tabularx}{\linewidth}{@{}l>{\raggedright\arraybackslash}X@{}}
+\toprule
+Symbol & Meaning \\
+\midrule
+$\pi,r$ & Execution/quality profile and weight representation \\
+$B_d,M_d(t)$ & Physical pool capacity and attributable resident bytes \\
+$b_a,U_a,c_a$ & Accounting limit, current charge, and additional stage claim \\
+$\delta,\rho_a$ & Demand class and reserve protected from speculation \\
+$F_a,R_a,I_a,L_a,T_a$ & Free, reserved, in-flight, live, and retained claims \\
+$P=(K,\boldsymbol q,\boldsymbol\ell)$ & Frozen key, stage claims, and resident claims \\
+$K,g_s,g_x$ & Full resource identity, source generation, and destination generation \\
+$o,s,e,J$ & Operation, stage, completion evidence, and persistent owner journal \\
+$\Omega,k,w,\mu_o[s]$ & Cleanup worklist, visit limit, cursor, and cancellation marker \\
+$H,P_{\max},M,S$ & Host limit, largest packed expert, metadata allowance, and requested stack bytes \\
+\bottomrule
+\end{tabularx}
+\caption{Core notation. Accounting quantities use their declared units;
+physical-memory and host-staging quantities are bytes.}
+\label{tab:symbols}
+\end{table}
+
+\subsection{Accounting and stage-local admission}
+An accounting domain $a\in\mathcal D_{\mathrm{acct}}$ may count bytes, slots,
+pages, or queue entries. Its configured limit $b_a$ need not cover an entire
+physical pool. Accounting domains can overlap and cannot generally be added.
+For an additional claim $c_a$, the capacity condition is
 \begin{equation}
- \forall a\in\mathcal D_{\mathrm{acct}},\qquad
- U_a(t)+c_a\leq b_a.
+ U_a(t)+c_a\leq b_a\qquad\text{for every covered domain }a.
  \label{eq:admission}
 \end{equation}
-Here $c_a$ is the additional charge to acquire, not a second charge for an
-already held grant. A revisit preserves that grant and rechecks only unmet
-claims. The inequality is not sufficient for admission: the owner must also
-validate canonical claims and units, arithmetic overflow,
-source/placement/backend compatibility,
-actual reservation and grant authority, and the selected demand policy.
-With execution reserve $0\leq\rho_a\leq b_a$, the policy-accessible ceiling is
+Already held grants are not charged again on a revisit. The owner also
+validates units, overflow, source and placement compatibility, reservation
+authority, and demand policy. With reserve $0\leq\rho_a\leq b_a$, the
+policy-accessible ceiling is
 \begin{equation}
  b_a^{\mathrm{eff}}(\delta)=
  \begin{cases}
@@ -132,91 +90,52 @@ With execution reserve $0\leq\rho_a\leq b_a$, the policy-accessible ceiling is
  \end{cases}
  \label{eq:execution-reserve}
 \end{equation}
-A non-required demand cannot consume the execution reserve even if
-Equation~\ref{eq:admission} holds. Required execution may use that reserve,
-not exceed the hard ceiling. The reserve protects accounting capacity from
-speculation, not eventual progress against a stalled provider.
+Required execution may use the reserve, but not exceed the hard limit.
 
-The abstract admission result has three cases. \textsf{Rejected} includes
-invalid plans and an intrinsically impossible stage: for example, a required
-claim exceeding $b_a$, or a non-required claim exceeding its unchanged
-policy-accessible ceiling even with no other occupancy. Waiting cannot fix
-such a stage; it needs rejection or an explicitly changed, revalidated plan
-or demand policy. \textsf{Wait} means the otherwise admissible stage is
-blocked by current occupancy, including reserve-protected capacity. It retains
-existing claims and registers a revisit condition rather than recharging or
-redispatching them. \textsf{Admitted} requires all authority, compatibility,
-and policy checks as well as capacity. These are explanatory result classes,
-not a new backend API, and do not imply that all future stages can be admitted
-atomically or that their resource waits are acyclic.
+Admission returns one of three abstract outcomes. \textsf{Rejected} means
+that the plan is invalid or a stage exceeds its policy ceiling even without
+competing occupancy. \textsf{Wait} means that an otherwise feasible stage is
+blocked by current occupancy; it retains existing grants and registers a
+revisit condition. \textsf{Admitted} means that the authoritative owner has
+validated and acquired the stage's claims. Admission is local to a stage,
+not an atomic reservation of all future resources.
 
-Each claim has an authoritative owner, unit, and end condition. Canonicalizing
-same-kind claims is not deduplication of arbitrary aliased allocations. A
-bounded request channel does not bound all downstream buffers. Map claims to
-the actual ledger and physical allocations on the selected path; do not infer
-one global broker from a common interface.
+A frozen plan $P=(K,\boldsymbol q,\boldsymbol\ell)$ binds the full resource
+key, read/upload/install claims, and persistent residency claims. The key
+includes model instance, source identity, semantic content, encoding, backend,
+device, and generations $g_s,g_x$. The destination authority supplies the
+actual reservation and reuse generation before hard admission. Extent
+alignment and decoding can make source, staged, and execution byte counts
+different. The plan must account for those differences rather than assuming
+one byte count for every stage.
 
-The plan $P$ binds $K$, read/upload/install claim vectors $\boldsymbol q$,
-and persistent residency $\boldsymbol\ell$. $K$ includes model instance,
-source identity, semantic content descriptor, encoding, backend/device,
-and $g_s,g_x$. Alignment and multiple extents may change staged byte counts;
-expansion may change execution bytes. The destination authority supplies the
-actual reservation and $g_x$ before hard admission. Publication consumes
-validated bindings, not requested addresses. Algorithm~\ref{alg:normal-materialization}
-uses the capacity and policy checks in Equations~\ref{eq:admission}
-and~\ref{eq:execution-reserve} before each physical dispatch.
+\subsection{Completion, quality, and progress assumptions}
+Protocol correctness requires exact identity, authorized publication, and
+no reuse while physical references remain. Numerical quality is a separate
+contract: visible text, generated IDs, full-vocabulary logits, routes, and
+internal states provide different evidence. Argmax agreement alone does not
+establish numerical agreement, and checkpoint quantization does not specify
+activation or KV arithmetic.
 
-OS page cache, storage-server cache, metadata, and driver reserves are not
-implicitly under runtime credit control. Resident file-backed pages count as
-memory; the backing file adds no capacity. Swap must be disabled or explicitly
-accounted for. A logical read, page fault, or migration between physical pools
-is not evidence of a physical storage read. RQ2 consequently distinguishes
-$L_q,H_q,\Delta_q,P_q^{\mathrm{net}},P_q^{\mathrm{blk}}$ rather than translating
-them into one bandwidth number.
+Completion evidence $e$ must identify operation $o$, key $K$, submitted stage
+$s$, both generations, outcome-specific bytes, and any required fence. A
+mismatched event has no mutation or release authority. A matching event that
+reports non-success can end its named stage but cannot authorize publication.
+Producer success and consumer retirement also differ: finishing an upload
+does not establish that a later kernel has stopped using the destination.
 
-\subsection{Quality, completion, and progress contracts}
-Protocol exactness means compatible sharing, exact completion identity,
-authorized publication, and no reuse before physical references end. It is
-separate from numerical/task quality. A quality contract fixes complete
-outputs, independent reference, arithmetic/state precision, inputs, and
-acceptance thresholds. Visible text, usage, generated IDs, full-vocabulary
-logits, ordered routes, and internal states are different checks; argmax
-agreement does not establish numerical agreement. Quantized checkpoint
-storage alone does not specify kernel or KV arithmetic.
+We use \emph{custody} to mean responsibility for retaining the physical
+resources and evidence needed to close an obligation. \textsf{Unknown}
+denotes an obligation whose physical completion cannot be proved. Such an
+obligation retains allocations and charges, potentially indefinitely.
+Cancellation changes demand or caller outcome; it is not itself a completion
+certificate.
 
-Completion evidence must name its operation, full key, submitted stage,
-generations, outcome-specific byte count, and any required physical fence.
-Rejecting an event with mismatched identity, stage, generation, or byte
-contract is not the same as accepting a matching event whose validated
-\texttt{CompletionOutcome::Stale} is a non-success result. The former supplies
-no mutation/release authority; the latter selects terminal cleanup of its
-named operation, never readiness or publication of a newer generation.
-Returning named read custody is separate from releasing the read-slot and
-storage-read claims; pinned host capacity remains charged through upload or
-proven cleanup. Publication preflight similarly distinguishes Ready, Blocked
-by live replacement custody, and Rejected by an invalid binding/conflict.
-Rejected publication retains its journal and remaining custody for cleanup.
-
-Only validated producer success proves readiness of that stage, not
-quiescence of a later consumer. Only owner-accepted cancellation selects a
-canceled caller outcome and detaches demand; a cancellation request or provider acceptance
-alone does not prove physical completion. Shared loads retain their remaining
-owners. Pending/Idle is retained as Pending only for a positively known
-original pollable obligation; otherwise it retains Unknown custody. Unknown
-means remaining physical references cannot be proved. Unknown retains allocation
-and credits, possibly indefinitely. A late exact scoped completion can close
-its named registry obligation but cannot clear physical-owner poison or
-quarantine. Bounded cleanup passes retain unresolved obligations and a
-traversal cursor across wakes and revisits, so the same first items do not hide unvisited
-obligations. Ambiguous cancellation replies remain non-retryable without
-exact owner evidence; they are not treated as known non-acceptance. Neither
-that scheduling contract nor Unknown retention promises eventual reclamation
-or availability.
-
-Conditional liveness requires feasible per-domain resources, no cyclic
-resource waits, fair progress and completion handling, live providers, and
-eventually observable completion. A blocking provider or stalled progress
-worker can violate these conditions. An asynchronous API, event-driven
-progress, and hardware overlap are separate properties. Neither algorithms
-nor current receipts establish global nonblocking execution, lock freedom,
-durable crash recovery, or arbitrary multi-owner atomic commit.
+The reference contracts assume authoritative owners, source and destination
+generations that identify reuse, and completion evidence supplied by the
+relevant provider. Conditional progress additionally requires feasible
+resources, acyclic waits, fair revisits, live providers, and eventually
+observable completion. The model does not assume that a blocking provider
+becomes nonblocking when called by a worker. It also does not place OS page
+cache, storage-server cache, or unaccounted allocator overhead under the
+runtime's logical credit limits.

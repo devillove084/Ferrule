@@ -1,309 +1,116 @@
-\section{Historical Evidence and Separate Supplements}
+\section{Additional Quality Detail and Separate Evidence}
 \label{sec:historical-chronology}
 
-These records retain their original profiles, outcomes and denominators.
-They are not repetitions of the completed \texttt{mapfixed-20261015-01}
-study, and later success does not repair an earlier failure.
+\subsection{Numerical coverage}
+For each retained-fresh and ordinary schedule in
+Table~\ref{tab:enabled-quality}, common-history and free-feedback streams each
+cover 27 calls and 9,187,840 vocabulary values; reset covers nine calls and
+3,228,160 values, and fork covers one call and 248,320 values. For each
+cold-owner schedule, common history, feedback, and reset each cover nine
+calls and 3,228,160 values; fork covers one call and 248,320 values.
+Fingerprints identify compared outputs rather than adding logit observations.
+Ordinary execution does not observe diagnostic route or state fields.
+The fork check replays a same-history committed frontier; it does not test
+divergent KV copy-on-write or broad task accuracy.
 
-\subsection{Qualification cuts and two permanently stopped studies}
-Table~\ref{tab:tp1-quality-chronology} separates numerical outcomes from
-wrapper acceptance. The original tolerance is
-$0.00025+0.012|\mathrm{reference}|$, not bit-exactness or broad task quality.
+The pressure study supplies narrower evidence at its three new cache points:
+complete visible outputs and actual generated IDs. It does not establish
+full-vocabulary, route, or internal-state equivalence at those settings.
+Likewise, the tiny component fixture tests lifecycle behavior, not the
+numerical quality of the complete 35B model.
 
-\begin{table}[H]
-\centering
-\small
-\begin{tabularx}{\linewidth}{@{}lrrX@{}}
-\toprule
-Record & Metrics & Logit elements & Numerical / wrapper outcome \\
-\midrule
-Middle quality \texttt{-01} & 0 & 0 & \texttt{cuInit (3)}; fresh/cold unissued \\
-Full40 \texttt{-02} & 804 & 1,986,560 & Numerical PASS; strict post-idle wrapper FAIL \\
-Retained fresh \texttt{-03} & 5,427 & 9,187,840 & Numerical PASS; strict post-idle wrapper FAIL \\
-Cold owner \texttt{-04} & 1,809 & 3,228,160 & Numerical/wrapper PASS under stable-idle v2; different source cut \\
-Frozen CLI quality \texttt{-01} & 0 & 0 & \texttt{cuInit (3)}; retained fresh unissued \\
-\bottomrule
-\end{tabularx}
-\caption{Historical 2026-10-14 TP1 test gates. Initialization failures are
-not numerical mismatches and are distinct from the prelaunch \texttt{DEVNULL}
-failure below. Numerical PASS does not override wrapper rejection.}
-\label{tab:tp1-quality-chronology}
-\end{table}
-
-The strict full40/fresh wrappers rejected first post-idle samples of 1\%/6\%
-GPU0 utilization (zero MiB, no compute applications); later idle does not
-repair them. Cold \texttt{-04} accepts stable-idle v2 on the 3,533-input
-\texttt{5662b7d2\ldots} cut rather than \texttt{fbf0c225\ldots}; its primary
-relation records \texttt{same\_source\_cut=false}. Separately, all nine
-factory gates pass once on \texttt{033519c}, archived in
-\path{experiments/storage_demand/qualification_v1/} at \texttt{17b16fa}.
-Its per-phase denominators match the structure of
-Table~\ref{tab:enabled-quality}, but are not pooled with \texttt{86c58a0}.
-That older cut reports 2,089 full40, 25,116 fresh, 25,116 ordinary and 11,354
-cold verified reads per schedule; logical host high-water is 16,777,984 bytes
-and allocator reserved high-water 4,106,223,616 bytes. The allocator getter
-can poll retirement fences; these are not cost-free passive physical peaks.
-The 249-file archive has 37 offline tests, not 37 new GPU runs.
-
-\paragraph{Two stopped paired studies.}
+\subsection{Incomplete and non-pooled observations}
 \label{sec:paired-startup-failure}
-The first enabled CLI study, \texttt{artifacts-current-20261015-01}, failed
-before Ready with \texttt{prepared source profile changed}. An unconditional
-TP2 cache accessor rejected enabled TP1's prepared-source payload before
-CUDA owner startup; this was not \texttt{cuInit} or a numerical mismatch.
-The catalog-selected source-plan query fix is \texttt{86c58a0}.
-The independent corrective V3 fixed cohort target/maximum deferrals to 1/0,
-not the earlier implicit 4/3. Its first execution,
-\texttt{artifacts-v3-final-20261015-01}, also stopped, reporting loaded-library
-mappings missing/deleted and a raw effective-mode mismatch. These are failed
-acceptance observations, not timings or numerical-quality results.
+Earlier rejected studies remain excluded from successful-result denominators,
+with their original outcomes retained in the supplementary materials.
+Table~\ref{tab:separate-evidence} summarizes the exclusions by scientific
+scope rather than by implementation chronology. Later corrections establish
+new measurements; they do not retrospectively complete a missing request or
+turn a rejected capture into an accepted repetition.
 
 \begin{table}[H]
 \centering
 \small
-\begin{tabularx}{\linewidth}{@{}Xrrrr@{}}
+\begin{tabularx}{\linewidth}{@{}p{0.24\linewidth}>{\raggedright\arraybackslash}X>{\raggedright\arraybackslash}X@{}}
 \toprule
-Separate study & Attempted & Completed & Unissued HTTP & Unissued QA \\
+Separate evidence & Observed outcome & Treatment \\
 \midrule
-Original enabled CLI & 1 & 0 & 120 & 50 \\
-Corrective V3 first execution & 1 & 0 & 120 & 50 \\
+Two earlier paired studies & Each attempts one lifecycle but completes none; all 120 HTTP requests and 50 measured QA slots unissued & Each retains five incomplete pairs and no aggregate \\
+Earlier pressure study & Three requests complete, one is censored, eight unissued; only two complete HTTP canaries & No qualifying cache point; raw worker IDs do not repair missing HTTP termination \\
+Pressure admission rejection & No server starts; all 12 requests unissued & No latency, memory, or I/O observation \\
+Earlier profiler captures & Two collected captures rejected; other preparations stop before collection & Neither contributes an accepted arm; only the two fresh scoped captures support RQ3 \\
+Earlier numerical configurations & Initialization failures and observation-policy rejections coexist with some numerically accepted tests & Outcomes stay configuration-specific and are not added to current tests \\
 \bottomrule
 \end{tabularx}
-\caption{Each stopped study planned ten lifecycles/five pairs; nine
-lifecycles were unissued. HTTP issued/terminal/success/failed/censored counts
-are all zero. All five incomplete pairs and null aggregates remain in each
-study; no retries, replacements or pooling.}
-\label{tab:stopped-studies}
+\caption{Non-pooled evidence. Missing execution or observation is not reported
+as zero cost or numerical failure. Detailed identities and diagnostics remain
+in the artifact documentation.}
+\label{tab:separate-evidence}
 \end{table}
 
-Neither study's final resource contract becomes a physical-release proof.
-The first has shutdown-only shared-client observations, not Ready/request
-I/O; missing owner evidence remains unknown. The map validator correction
-\texttt{7d3bee2} and independently frozen generation entry \texttt{ac224f7}
-precede the completed study without changing its CLI, workload or estimator.
-The portable bundle's \path{historical-failures.json} preserves both stopped
-journals and denominators (Section~\ref{sec:evaluation}). The separate baseline pilot of five lifecycles,
-60 requests and 25 QA slots remains unexecuted and is not added to any study.
-
-\subsection{Historical TP1 logical-demand observation}
+\subsection{Earlier logical-demand observation}
 \label{sec:tp1-storage-middle}
-The initial CPU-prepared entry was unexecuted after canceled validation.
-Authorized attempt \texttt{-01} then failed before server launch with missing
-\texttt{subprocess.DEVNULL}: four planned, zero dispatched, four not run.
-It supplies no model/OOM, request, read or quality result. Attempt \texttt{-02}
-is a separate single DEBUG-instrumented run ($n=1$) on CLI
-\texttt{36e6aaa5\ldots70a58c}, with the read pipeline disabled. Its four
-serialized requests all terminate successfully: Hello2 is HTTP/usage-only,
-while QA, arithmetic and Chinese pass three frozen visible-text/eight-token
-usage canaries. Generated IDs, logits, routes and states are unobserved.
+A separate, heavily instrumented single-lifecycle observation with the read
+pipeline disabled completed four serial requests. One was a two-token
+length/usage smoke; three passed visible-text and eight-token usage canaries.
+Generated IDs, logits, routes, and states were not observed. Its 30 decoder
+invocations recorded 36,240,064,128 logical reader bytes, 36,240,248,688
+upload-interface bytes, 11,519 expert uploads, 11,455 evictions, and zero
+expert hits. The final observed cache held 64 entries. These values describe
+an earlier logical-demand workload, not additional repetitions of either
+schedule in the paired experiment.
 
-Its PP1/TP1/EP1 Mixed profile uses context 128, batch-token limit 8,
-active-sequence limit 2, resident KV and lazy experts. Configured device
-admission/workspace are 7,168/2,048 MiB; expert cache is 64 entries/320 MiB
-including 8 MiB scratch; KV/maximum tensor limits are 16/1,024 MiB.
-Host expert retention is zero, not zero OS page-cache residency or a physical
-host cap. These overlapping policies are not additive physical capacity.
-
-\begin{table}[tbp]
-\centering
-\small
-\begin{tabular}{@{}lrrrrr@{}}
-\toprule
-Request & Logical GiB & Uploads & Evictions & TTFT (s) & E2E (s) \\
-\midrule
-Hello2 & 2.813 & 960 & 896 & 4.265 & 9.186 \\
-QA canary & 10.777 & 3,678 & 3,678 & 8.332 & 18.309 \\
-Arithmetic canary & 10.396 & 3,548 & 3,548 & 5.308 & 14.110 \\
-Chinese canary & 9.766 & 3,333 & 3,333 & 2.605 & 9.932 \\
-\bottomrule
-\end{tabular}
-\caption{Historical TP1 \texttt{-02}, not current-pipeline or comparative
-performance. Counts are exact invocation deltas; timings/bytes are rounded.}
-\label{tab:tp1-storage-middle}
-\end{table}
-
-The 30 invocations produce 26 usage output tokens, 69,114 reader calls and
-36,240,064,128 logical bytes, 88,763 facade copies and 36,240,248,688 H2D
-bytes, zero recorded expert hits, 11,519 uploads, 11,455 evictions and
-34,557 artifact uploads. Equation~\ref{eq:request-io} gives a 184,560-byte
-H2D-minus-reader difference; startup reads are outside these sums. These
-application counters do not measure physical storage or bus traffic.
-
-\begin{table}[tbp]
-\centering
-\small
-\begin{tabularx}{\linewidth}{@{}Xr@{}}
-\toprule
-Historical observable & Value \\
-\midrule
-Selected GPU0 sampled maximum (32 samples) & 4,125 MiB \\
-Server-tree PSS / RSS maxima (32 complete samples) & 7,610.864 / 7,613.770 MiB \\
-Last resident entries / bytes & 64 / 201,351,168 \\
-Last scratch bytes & 8,388,608 \\
-Cache charged-byte lifetime high-water & 219,754,496 \\
-Last pending-upload / quarantine bytes & 0 / 0 \\
-\bottomrule
-\end{tabularx}
-\caption{Historical samples and compatible cache gauges, not additive
-physical peaks or process-owned GPU attribution. Zero invocation gauges are
-not a final resource ledger.}
-\label{tab:tp1-memory}
-\end{table}
-
-Entry-count reconciliation at observed invocation boundaries is
+At the observed invocation boundaries, entry counts reconcile as
 \begin{equation}
- N_j=N_{j-1}+I_j-E_j,\quad j=2,\ldots,30,\qquad
- N_0^{\mathrm{implied}}=N_1-I_1+E_1=0.
+ N_j=N_{j-1}+I_j-E_j,
  \label{eq:entry-reconciliation}
 \end{equation}
-Initial zero is implied, not measured. All later boundary residuals are zero;
-11,519 uploads minus 11,455 evictions equals 64 final observed entries.
-This is neither byte conservation nor continuous occupancy. Compatible
-resident, pending-upload and scratch gauges define the cache subset
-\begin{equation}
- C_j^{\mathrm{cache}}=X_j+Q_j+S_j,\qquad
- C_{\mathrm{peak}}^{\mathrm{cache}}=
- \max_{u\in\mathcal U_{\mathrm{owner}}}C_u^{\mathrm{cache}}
- \leq b_{\mathrm{cache}}.
- \label{eq:cache-charge}
-\end{equation}
-Unknown quarantine $Z_j$ is already charged, not another additive copy.
-The reported 219,754,496-byte high-water covers cache update points under
-the 320 MiB ceiling, not all physical-owner allocations. The four frozen
-figures below retain these historical scopes and are not regenerated.
+where $N_j$ is resident entries and $I_j,E_j$ are installation and eviction
+deltas. The initial zero is implied by the first boundary, not directly
+measured. This count identity does not establish byte conservation or
+continuous occupancy. Historical plots and the detailed timing and memory
+samples remain in the supplementary materials rather than extending the
+current performance evidence.
 
-\paperplot{figures/storage-demand-logical-transfer.pdf}
-{Paired logical checkpoint-reader and facade H2D byte deltas for four serialized
-requests in storage-demand TP1 middle -02. GiB means $2^{30}$ bytes; the right
-panel resolves the small H2D-minus-reader differences in KiB ($2^{10}$ bytes).
-These are application counters, not physical storage I/O or physical bus
-traffic; startup I/O is outside invocation accounting
-(Equation~\ref{eq:request-io}).}
-{fig:storage-demand-logical-transfer}
-
-\paperplot{figures/storage-demand-cache-reconciliation.pdf}
-{TP1 middle -02 entry reconciliation and cache-accounting gauges.
-Uploads minus evictions ($11{,}519-11{,}455=64$) match the last observed
-entries; initial zero is implied, not measured, and subsequent boundaries
-reconcile. Recorded \texttt{cache.peak\_bytes}, 209.574 MiB, is the
-resident-plus-pending-plus-scratch high-water, bounded by
-\texttt{ExpertCacheLimits.max\_bytes} = 320 MiB, not a physical-owner bound.
-Total physical-owner peak/ceiling are unobserved; no contradiction is implied.
-Invocation gauges and lifetime high-waters are not accumulated or a final
-ledger proof (Equations~\ref{eq:entry-reconciliation} and~\ref{eq:cache-charge}).}
-{fig:storage-demand-cache-reconciliation}
-
-\paperplot{figures/storage-demand-invocation-timeline.pdf}
-{Per-invocation expert upload/eviction deltas and resident-entry observations
-for the 30 completed invocations in storage-demand TP1 middle -02. Serialized
-request/log-byte anchors assign the 3/9/9/9 invocations to requests. The x-axis
-is log-order invocation ordinal, not elapsed time, output-token index, or
-transaction-as-request ID. Entry occupancy is observed only at invocation
-completion, not continuously; uploads are not inferred cache misses
-(Equation~\ref{eq:entry-reconciliation}).}
-{fig:storage-demand-invocation-timeline}
-
-Startup is 18.497 s; four HTTP windows sum to 51.538 s, excluding startup and
-inter-request overhead; supervisor wall time is 75.874 s. Their origins differ:
-\begin{equation}
-\begin{aligned}
- T_{\mathrm{start}}&=t_{\mathrm{ready}}-t_{\mathrm{launch}},\\
- T_q^{\mathrm{first}}&=t_q^{\mathrm{first\ content}}-t_q^{\mathrm{send}},\qquad
- T_q^{\mathrm{end}}=t_q^{\mathrm{EOF}}-t_q^{\mathrm{send}}.
-\end{aligned}
-\label{eq:timing-origins}
-\end{equation}
-They do not form a cumulative throughput timeline or identify an I/O
-bottleneck share. Authenticated drain reaches \texttt{ECHILD} and idle checks
-pass, while \texttt{resource\_contract\_complete=unknown} and raw
-\texttt{gpu\_quiescence=unverified} remain unchanged.
-
-\paperplot{figures/storage-demand-timing.pdf}
-{Launch-to-ready startup and per-request HTTP TTFT/E2E in the single successful
-DEBUG-instrumented storage-demand TP1 middle -02 run ($n=1$). TTFT is send to
-first nonempty SSE content; E2E is send to EOF. Startup has a different origin
-and is not part of the request bars. Instrumentation overhead is unmeasured;
-there are no statistics, confidence intervals, kernel timings, or comparative
-speedups (Equation~\ref{eq:timing-origins}).}
-{fig:storage-demand-timing}
-
-The original \path{report.json} files are under
-\path{experiments/storage_demand/runs/}, in the two directories
-\begin{quote}
-\small
-\path{storage-demand-tp1-middle-20261013-01/}\\
-\path{storage-demand-tp1-middle-20261013-02/}.
-\end{quote}
-The offline analysis in \path{experiments/storage_demand/analysis/output/}
-binds 41 inputs/39 receipt pins with zero divergences; it is not another run. Paths in this appendix are relative to
-\path{papers/arxiv} unless stated otherwise.
-
-\clearpage
-\subsection{Separate TP2 numerical and resident supplements}
+\subsection{Unmatched resident-system supplement}
 \label{sec:resident-supplement}
-The \texttt{native-whole-capture-full40-02} comparator reports 2,178 exact
-fields each for Hello and Capital prefill/first decode, with zero max error,
-RMSE and field failures and matching greedy IDs. This is bounded captured
-comparator evidence, including oracle-only diagnostics, not a blanket bitwise
-claim over all device arrays. The separate \path{model-runtime-quality.json}
-selection under \path{experiments/tp2_resident/} records 33 calls/35,937
-exact metrics: greedy4-02 10/10,890; fork2-03 6/6,534;
-canary2-01 5/5,445; recreate1-01, cold-owner1-01 and cold-owner1-02 each
-4/4,356. The test binary is \texttt{a4977b85\ldots e1cc}, not a serving
-binary. A different \texttt{production-opts-01} selection reports
-37 calls/40,293 metrics; it is not substituted or added. Greedy4-01's
-supervisor failure remains failed. The frozen F32 process-EP8 pass is also
-profile-specific. The independent W8A16 strict oracle fails logits, ordered
-routes and states; argmax agreement does not reverse that failure.
+Two separate resident tensor-parallel blocks compared \system{} with vLLM
+using fresh owners, three excluded QA requests, and five measured requests
+per window. The observed tradeoff differs by metric: \system{} has higher
+output rate and lower mean end-to-end latency in both windows, while vLLM has
+lower TTFT, startup time, sampled device memory, and host PSS
+(Table~\ref{tab:resident-crossblocks}).
 
-\begin{table}[tbp]
+\begin{table}[!htbp]
 \centering
 \small
 \begin{tabular}{@{}lrrrrrr@{}}
 \toprule
-Slot & Output tok/s & TTFT ms & E2E ms & Startup s & GPU GiB/card & PSS GiB \\
+Window & Output tok/s & TTFT ms & E2E ms & Startup s & GPU GiB/card & PSS GiB \\
 \midrule
-F1 & 14.317 & 176.248 & 523.399 & 349.585 & 21.04 & 61.05 \\
-V1 & 10.376 & 132.676 & 694.228 & 66.239 & 19.28 & 7.71 \\
-V2 & 10.330 & 134.651 & 699.213 & 62.814 & 19.28 & 7.32 \\
-F2 & 14.804 & 171.333 & 515.106 & 366.133 & 21.04 & 60.14 \\
+Ferrule 1 & 14.317 & 176.248 & 523.399 & 349.585 & 21.04 & 61.05 \\
+vLLM 1 & 10.376 & 132.676 & 694.228 & 66.239 & 19.28 & 7.71 \\
+vLLM 2 & 10.330 & 134.651 & 699.213 & 62.814 & 19.28 & 7.32 \\
+Ferrule 2 & 14.804 & 171.333 & 515.106 & 366.133 & 21.04 & 60.14 \\
 \bottomrule
 \end{tabular}
-\caption{Historical resident TP2 crossblocks ($n=2$), not a SOTA or matched
-budget comparison. TTFT/E2E are request means; GPU/PSS are sampled maxima.
-F is Ferrule and V is vLLM.}
+\caption{Separate resident observations in two blocks. TTFT and end-to-end
+values are request means; GPU memory and PSS are sampled maxima. Arithmetic
+and resource budgets are unmatched, so these are not comparative speedup estimates.}
 \label{tab:resident-crossblocks}
 \end{table}
 
-The F1--V1/V2--F2 blocks each use fresh owners, three excluded QA8 requests
-and five measured requests (five input/eight output tokens each).
-Ferrule has higher output rate/lower mean E2E in both windows, whereas vLLM
-has lower TTFT/startup/GPU/PSS. Descriptive F/V rate ratios 1.380/1.433 are
-not causal speedups. Ferrule's HF-eager-qualified GemmEx/routing Mixed path
-and vLLM's BF16/FP8 Marlin differ in arithmetic; Ferrule's 22 GiB/device
-policy and vLLM's utilization 0.8 do not match total working-set budgets.
-The record retains \texttt{fairmatch=false}, \texttt{exact\_speedup=null}.
-The measured deployment is vLLM \texttt{0.28.0+cu129} with Torch
-\texttt{2.13.0+cu129}, not an older source checkout. Raw metrics and identities
-are under \path{experiments/tp2_resident/runs/}, in
-\texttt{route-batch-vllm-crossblocks-20261012-01}.
+Both selected deployments use pipeline parallelism one and tensor parallelism
+two, but their arithmetic differs: \system{} uses its qualified Mixed
+GemmEx/routing path, while vLLM uses BF16/FP8 Marlin execution. A 22 GiB
+per-device policy and a device-utilization fraction of 0.8 also do not match
+total working-set budgets. The descriptive output-rate ratios of 1.380 and
+1.433 consequently do not establish a causal speedup or a state-of-the-art
+ranking. The measured vLLM version is 0.28.0 with CUDA 12.9 and Torch 2.13.0.
+Unpaired startup-metadata observations and further numerical comparisons are
+retained with the artifacts and are not combined with these windows.
 
-\paragraph{Startup-metadata observations, also unpaired.}
-The \texttt{36e6} release's S1/S2 smoke lifecycles pass source-bound
-canary/reuse/cancellation-policy gates and authenticated drain, not a fresh
-full numerical validation. Their startup/PSS are 222.079 s/42.716 GiB and
-139.855 s/44.416 GiB. Ordinary F1 records 140.052 s/43.573 GiB and
-40 usage tokens/2.877869 client seconds (13.899 tok/s). Its TTFT
-mean/p50/p95 are 192.944/187.513/209.700 ms. Historical \texttt{e674} ordinary
-F1 is a different series: 351.114 s/60.149 GiB/14.227 tok/s. These are not a
-paired before/after effect, and S1/S2 have no throughput measurement.
-Caches are uncontrolled. Five F1 proc reads cost
-0.643/623.616/725.908/625.392/0.085 ms, outside the measured window;
-persistence cost is unmeasured. Linux 4.19 lacks \texttt{Pss\_Anon/Pss\_File}
-here and the post-exit sample is unavailable, not zero. Source relation and
-CPU checks do not replace fresh GPU numerical or physical-release evidence.
-The owner \path{REPORT.md} is under \path{../../target/validation/}, in
-\path{startup-metadata-owner-20261013-01/}. Raw F1 is under
-\path{experiments/tp2_resident/runs/}, in
-\path{startup-metadata-info-after-20261013-01/}. These local historical
-payloads are not made portable merely by citation.
+The independent W8A16 strict numerical comparison fails logits, ordered
+routes, and state checks despite argmax agreement. That negative result
+remains a failure of its own quality contract and cannot be replaced by the
+successful Mixed-profile observations.

@@ -1,81 +1,74 @@
 \section{Introduction}
 \label{sec:introduction}
 
-Storage-backed weight residency lets an inference owner repeatedly
-materialize selected weights into a bounded execution cache. The problem is
-to bound those copies and reuse their capacity safely, whether or not the
-complete compact checkpoint could fit in host memory. Exceeding device
-memory, exceeding aggregate physical residency, and choosing a controlled
-cache budget are different conditions. Checkpoint file size, expanded weight
-size and the request working set are not interchangeable: the latter also
-includes activations, model state, staging, outstanding transfers,
-allocator/driver reserves, metadata and resident file-backed pages.
+Storage-backed inference repeatedly brings selected weights into an execution
+cache rather than keeping every execution weight resident. This approach can
+reduce device residency, but a small cache alone does not bound the resources
+used to fill it. A read may retain host buffers, an upload may outlive its
+caller, and an evicted binding may still have device consumers. Releasing a
+logical request therefore does not necessarily make its capacity reusable.
+The central problem is to coordinate materialization and physical lifetime
+under explicit resource limits.
 
-\system{} follows \emph{plan, admit, materialize, publish, execute, retire}.
-A source-bound plan fixes what is read; admission bounds covered claims;
-completion validates the requested generation; custody prevents reuse while
-physical references remain. Its concrete next-expert pipeline separates the
-read window from owner compute submission. A safe blocking control waits on
-the same worker immediately; lookahead submits one next selected read after
-current upload and before current compute submission. The whole forward
-remains synchronous. The question is whether this bounded scheduling change
-reduces waiting while preserving quality, logical work and resource limits,
-not whether a worker thread alone establishes hardware overlap.
+Weight streaming and prefetch are established techniques in systems such as
+FlexGen, ZeRO-Inference, and PowerInfer-2~\cite{sheng2023flexgen,deepspeed2022zeroinference,xue2024powerinfer2}.
+\system{} studies a complementary question: how can a bounded materialization
+schedule preserve source identity, accounting, and safe reuse across normal
+completion, cancellation, and uncertain completion? We separate three
+properties that are often conflated: a configured resource budget, a measured
+physical working set, and evidence that a particular operation has finished
+using its resources.
+
+The design follows \emph{plan, admit, materialize, publish, execute, retire}.
+A frozen plan identifies the source and destination generations. Admission
+acquires the claims required by each stage. Completion validates the exact
+operation before publication, while the physical owner retains buffers and
+charges until the relevant consumers finish. If completion cannot be proved,
+the owner retains the uncertain resources instead of treating an error or
+cancellation as permission to reuse them.
+
+The concrete scheduling mechanism is deliberately small. After uploading the
+current routed expert, the operator can submit one read for the next selected
+expert before submitting current computation. The blocking control uses the
+same read worker but waits immediately at demand. Neither schedule changes
+expert order, arithmetic, cache policy, or the synchronous forward interface.
+This comparison isolates a scheduling choice without weakening the resource
+or completion contract.
+
+\paragraph{Contributions.}
+\begin{enumerate}
+  \item A resource and ownership model that distinguishes logical admission
+  limits from physical memory, and producer completion from consumer retirement.
+  \item Reference algorithms for exact materialization and bounded cleanup,
+  together with an implemented, bounded next-expert schedule for a private
+  model-operator path.
+  \item An evaluation connecting output checks, resource accounting, logical
+  I/O, client outcomes, correlated profiling, and scoped failure behavior.
+\end{enumerate}
 
 \paragraph{Research questions.}
 \begin{description}
-  \item[RQ1 -- bounded completion.] Can a quality-accepted request finish
-  with repeated materialization under declared accounting limits, and what
-  physical memory is actually observed? A configured-budget point is not a
-  capacity frontier or evidence that compact weights exceed physical memory.
-  \item[RQ2 -- request I/O.] What demand is visible at the logical-reader
-  and NFS-client levels after separating startup and request windows, and
-  which attribution and backing-store quantities remain unknown?
-  \item[RQ3 -- safe scheduling.] Under identical representation, quality,
-  safety and budgets, how do blocking and bounded lookahead differ in host
-  demand wait, speculative work and client outcomes? Correlated device overlap
-  is a separate measurement question.
-  \item[RQ4 -- custody and failure.] What closure is observed, and which
-  fault cases still need to test stale publication, premature reuse and
-  retained Unknown capacity?
+  \item[RQ1: Bounded completion.] Can requests complete under the declared
+  limits, and how does residency change across coupled cache budgets?
+  \item[RQ2: I/O demand.] What work reaches the logical reader and shared
+  filesystem client, and which physical traffic remains unknown?
+  \item[RQ3: Scheduling.] Does bounded lookahead reduce waiting and client
+  latency, and what read--compute overlap is directly observed?
+  \item[RQ4: Failure and custody.] What resources and state remain after
+  clean abort, uncertain completion, and HTTP cancellation?
 \end{description}
 
-\paragraph{Contributions and results.}
-The paper contributes a resource model separating physical pools from
-accounting domains; a source-bound materialization contract with exact
-completion and custody; and structured normal, terminal and bounded-lookahead
-algorithms with explicit integration limits. Its evaluation connects these
-contracts to a completed, source-pinned serving experiment rather than to
-implementation intent alone.
+For the evaluated single-device text profile, five paired blocks show 8.18\%
+lower client end-to-end latency, 11.24\% lower time to first content, and
+10.91\% higher qualified serial-window goodput with lookahead. All blocks
+show lower host demand waiting, with equal logical reader work and no wasted
+read bytes. These results concern one configuration and short fixed outputs;
+they establish neither statistical significance nor performance leadership.
+The evidence boundaries are consolidated in Table~\ref{tab:evidence}.
 
-On the current serving source cut, nine exact-once factory gates pass for
-constructor/provider and both schedules' full40, retained-fresh, ordinary
-and cold-owner paths. A separate preregistered HTTP study then completes
-five paired blocks, ten fresh lifecycles and all 120 requests, including
-50 measured QA requests. It joins 900 actual worker token IDs to HTTP
-terminal evidence, keeping eight-token oracle checks and two-token smoke
-checks distinct. Every lifecycle records the same logical work, zero wasted
-read bytes and a logical host high-water below its 64 MiB limit. With the
-paired block as the analysis unit, lookahead has 8.18\% lower client E2E,
-11.24\% lower TTFT and 10.91\% higher qualified serial-window goodput.
-All five blocks show lower host demand waiting. These descriptive results
-support bounded residency with measured wait reduction at this point, not
-statistical coverage, general server throughput or a causal overlap claim.
-
-The evidence has deliberate boundaries. Device samples are not certified
-physical peaks; shared NFS counters are not NAS backend traffic; process
-drain and known owner-local closure are not post-drop physical release.
-Integrated fault injection remains pending. Earlier qualification cuts,
-two stopped studies and four historical DEBUG plots are retained separately,
-not borrowed as successful repetitions. The resident vLLM supplement has
-unmatched arithmetic and total budgets and is not a SOTA comparison.
-Storage inference and prefetch are prior art; no first-system, physical-memory
-necessity, universal registry, multimodal or nonblocking-forward claim is made.
-
-Section~\ref{sec:scope} defines the resource and execution contracts.
-Sections~\ref{sec:normal-profile}--\ref{sec:algorithms} give the normal path,
-invariants and algorithms; Section~\ref{sec:implementation} maps their
-implementation boundaries. Section~\ref{sec:evaluation} proceeds from current
-factory quality to serving quality/budgets, equal work/I/O, paired outcomes
-and fault-contract limits. Related work and limitations follow, with
-historical evidence in Appendix~\ref{sec:historical-chronology}.
+Section~\ref{sec:scope} defines the model and assumptions.
+Section~\ref{sec:design} develops the mechanisms and algorithms, and
+Section~\ref{sec:implementation} maps them to the implemented path.
+Section~\ref{sec:eval-setup} fixes the methodology before
+Section~\ref{sec:evaluation} answers the four questions. Related work,
+limitations, and a concise account of separate evidence follow.

@@ -1,60 +1,64 @@
 \section{Limitations}
 \label{sec:limitations}
 
-\paragraph{Accounting is not the complete physical working set.}
-The 64 MiB host limit bounds packed/prepared payload, metadata and requested
-stack charges. OS stack rounding, TLS, allocator headroom, weak-reference
-backing and file-cache residency are distinct. Device samples can miss
-transients and do not provide exact process attribution. A qualified
-configured-budget point does not establish a capacity frontier, compact-weight
-residency impossibility or storage necessity. Other representations,
-shared/unified memory and modalities require independent evidence.
+\paragraph{Resource and deployment scope.}
+The experiments bound selected logical accounts, not the complete physical
+working set. The host limit includes packed and prepared payloads, metadata,
+and requested worker stack; OS stack rounding, TLS, allocator overhead,
+weak-reference backing, and file-cache residency require additional headroom.
+Device samples can miss transient peaks and lack exact process attribution.
+The three cache points vary entry and byte limits together, so they neither
+isolate a replacement-policy effect nor locate a physical capacity frontier.
+The complete compact checkpoint may fit in host memory. Other representations,
+long contexts, shared-memory devices, and multimodal workloads remain outside
+the evaluated profile.
 
-\paragraph{One workload and five paired blocks.}
-The current factory and HTTP checks apply to the frozen Mixed profile and
-short prompts, not broad task quality, long-context behavior or all model
-states. Ordinary factory routes/states and HTTP logits remain unobserved.
-Requests within a server are not independent replicates. Fixed 3:2 order
-balance and exact enumeration of 3,125 resamples do not guarantee interval
-coverage or power; uncontrolled shared caches and instrumentation limit
-external validity. The observed wait/latency association is not a causal
-critical-path decomposition. Serial-window goodput excludes startup,
-inter-request gaps and concurrency; it is not general serving throughput.
-The unmatched TP2/vLLM records remain descriptive supplements.
+\paragraph{Statistical and measurement scope.}
+The timing study contains five paired blocks of short fixed outputs, not
+50 independent repetitions. Shared page and NFS caches can carry state across
+fresh servers. The descriptive resampling ranges therefore provide neither
+guaranteed coverage nor a significance or power result. Serial-window
+goodput excludes startup, gaps, and concurrency. Identical instrumentation
+controls one source of bias, but its overhead is unmeasured. The profiling
+study observes overlap in two separate requests; it does not identify the
+cause of the timing difference. Its target-process checks pass, while
+wrapper warnings and an unknown dropped-event count leave global trace
+completeness unverified. File-call wall time can include cache service and
+preemption, and shared NFS counters do not identify physical backend traffic.
 
-\paragraph{Unobserved physical I/O, overlap and release.}
-Logical reads can be cache-served, shared NFS deltas are not request-exclusive,
-and NAS backing traffic is unknown. Startup/shutdown PID-I/O was not
-collected. Both measured modes compile NVTX but run with profiling off;
-the separate rejected capture supplies no physical-overlap result. Whole
-forwards still synchronize on existing consumer proofs. Known owner-local
-closed/retained state, zero logical charges, authenticated process drain and
-idle samples do not certify post-drop physical release.
+\paragraph{Failure and verification scope.}
+The component experiment runs real CUDA operations but injects a software
+failure or discards proof after valid fences. It does not exercise a driver
+failure, lost hardware event, or full-model uncertain completion. The HTTP
+experiment tests a client disconnect followed by a new request, not resumed
+execution or recovery from a poisoned owner. Neither experiment establishes
+the integrated five-class conservation invariant across a serving request.
+Final physical release remains unobserved. Unknown custody can reduce
+availability indefinitely; the design supplies no general in-place reset,
+durable crash recovery, or arbitrary cross-rank atomic commit.
 
-\paragraph{Faults and reproducibility boundaries.}
-Component tests and lifecycle algorithms do not constitute formal
-verification or integrated E5 fault acceptance. Unknown custody may retain
-capacity indefinitely; no general reset/replay, availability, device-reset
-recovery, durable ACID or arbitrary cross-rank atomicity is promised.
-The portable archive supports offline receipt reconstruction, not independent
-replay of omitted private authentication, live mapped-memory contents or
-external model/native/executable payloads. Historical failures remain
-failures, and source cuts are not pooled. No first-storage-inference or
-state-of-the-art performance claim is made.
+\paragraph{Reproducibility scope.}
+The supplementary materials support offline reconstruction of the public
+measurements and their exclusions. They do not independently replay private
+process authentication or recover omitted executables, native dependencies,
+model payloads, and live mapped-memory contents. Integrity hashes bind retained
+inputs but are not external attestations. Earlier rejected or incomplete
+studies remain separate rather than becoming successful repetitions.
 
 \section{Conclusion}
 \label{sec:conclusion}
 
-\system{} connects bounded storage-backed weight residency to source-bound
-planning, covered admission, exact completion, authorized publication and
-custody through retirement. Its one-next-expert read window preserves the
-same worker, budgets and synchronous device-consumer proofs as the blocking
-control. On a qualified current source cut, the five-block HTTP study
-completes all 120 requests with joined token/terminal evidence, equal logical
-reader work, zero wasted read bytes and bounded logical host charge.
-Lookahead shows lower host demand waiting in every block and paired
-summaries of 8.18\% lower E2E, 11.24\% lower TTFT and 10.91\% higher qualified
-serial-window goodput. These are scoped measurements, not a performance
-ranking or GPU-overlap proof. Capacity frontiers, integrated faults and
-post-drop physical release remain open without weakening the reported
-bounded-residency and measured-wait result.
+Bounded storage-backed inference requires a lifetime contract as well as a
+cache policy. \system{} connects source-bound planning and stage-local
+admission to exact completion, publication, and custody through retirement.
+Its bounded next-expert schedule preserves the blocking control's worker,
+budgets, arithmetic, and synchronous consumer proofs. In five paired blocks,
+lookahead completes the same checked workload with equal logical reads,
+zero wasted read bytes, less host demand waiting, and descriptive reductions
+of 8.18\% in end-to-end latency and 11.24\% in time to first content, with
+10.91\% higher qualified serial-window goodput. The additional experiments
+show bounded completion across three coupled cache budgets, limited measured
+read--kernel overlap, safe component abort or retained uncertainty, and
+fresh-request recovery after HTTP cancellation. These results support the
+mechanism within its measured scope while leaving complete physical
+accounting, integrated fault conservation, and final release open.

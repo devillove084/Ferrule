@@ -1,186 +1,101 @@
-\section{Implementation Mapping and Integration Boundaries}
+\section{Implementation}
 \label{sec:implementation}
 
-The implementation separates common protocol identities, model semantics,
-backend physical work, and runtime coordination. CLI/HTTP interfaces deliver
-caller-visible results; they are not the model driver's publication authority.
-Table~\ref{tab:implementation-map} maps the preceding contracts to concrete
-modules and names the coverage that must be checked before interpreting a run.
-These are local implementation anchors, not a profile-wide correctness result.
+\subsection{Private model-operator path}
+\label{sec:implemented-read-path}
+The evaluated Mixed-precision model path implements Algorithm~\ref{alg:bounded-lookahead}
+inside its private CUDA expert operator. It does not instantiate the general
+runtime resource manager or materialization registry for these expert reads.
+Its local owners implement source validation, host quota, device-cache
+admission, and consumer completion. Algorithms~\ref{alg:normal-materialization}
+and~\ref{alg:terminal-custody} provide reference contracts for reasoning about
+these responsibilities, not a claim of one universal call path.
 
-\begin{table}[tbp]
+The checkpoint catalog records tensor descriptors and ordered file extents.
+A read plan binds filesystem identity using device, inode, length, modification
+time, and change time. The worker verifies this identity before and after
+positioned reads; the consumer rechecks it before constructing the three
+compressed gate, up, and down artifacts. Descriptor hashes describe dtype,
+shape, and extent metadata rather than authenticating every payload byte.
+The worker receives neither CUDA handles nor cache leases or runtime
+continuations.
+
+Both schedules explicitly enable this worker. Blocking submits required
+demand and waits; lookahead carries one exact next ticket across current
+compute submission. After upload, the operator computes from resident device
+handles and immutable binding metadata, allowing temporary host aliases to
+retire before the next read. Kernel mathematics, selected expert order, and
+completed-only cache replacement remain unchanged. A pipeline-disabled path
+would not be an equivalent control.
+
+\begin{table}[!htbp]
 \centering
 \small
-\begin{tabularx}{\linewidth}{@{}p{0.19\linewidth}>{\raggedright\arraybackslash}X>{\raggedright\arraybackslash}X@{}}
+\begin{tabularx}{\linewidth}{@{}p{0.22\linewidth}>{\raggedright\arraybackslash}X>{\raggedright\arraybackslash}X@{}}
 \toprule
-Contract & Implementation anchor (under \texttt{crates/}) & Evaluation obligation \\
+Responsibility & Evaluated implementation & Boundary \\
 \midrule
-Source-bound $P$ & \path{ferrule-model/src/checkpoint/}: catalog, source, read plan & Freeze source/representation; descriptor hash is not payload authentication \\
-Exact $K,e$ & \path{ferrule-common/src/io_protocol.rs}: keys, completion, slabs, leases & Reject stale operation/stage/generation/byte evidence \\
-Covered claims & \path{ferrule-runtime/src/scheduling/resources.rs}: \texttt{PhysicalResourceBroker} & Map ledgers to real allocations and final retained custody \\
-Load publication & \path{ferrule-runtime/src/io/registry.rs}: reserve, completion, preflight, resident transfer & Verify provider transfer installs this registry on the evaluated path \\
-Physical completion & \path{ferrule-model/src/moe/cuda_materialization.rs}: routed-expert provider & Trace pinned read, upload, install, replacement, and Unknown ownership \\
-State publication & \path{ferrule-runtime/src/parallel/pipeline/owner.rs}; decoder KV and page manager & Journal before preparation; exact ACKs and retirement before reuse \\
+Source binding & Immutable catalog and ordered positioned-read plans & Metadata identity, not payload authentication \\
+Host materialization & One worker; packed and prepared quota held through aliases & Logical reservation, not process-memory limit \\
+Device residency & Private expert-cache owner, scratch admission, retained CUDA proofs & Separate from host read quota \\
+Scheduling & One next-expert ticket before current compute submission & Synchronous forward remains unchanged \\
+State lifetime & Prepared state, exact installation acknowledgment, retirement & Request completion can retain KV and weight residency \\
+Observation & Passive counters, token records, owner snapshots, separate profiler & Observation does not refund or repair custody \\
 \bottomrule
 \end{tabularx}
-\caption{Contract-to-code mapping. Common interfaces do not imply universal
-registry integration or measured storage traffic.}
+\caption{Mapping from the contracts to the evaluated operator's responsibilities.}
 \label{tab:implementation-map}
 \end{table}
 
-\paragraph{Source binding and startup preparation.}
-Checkpoint catalogs and read plans hold semantic tensor descriptors, ordered
-file extents, and filesystem identity snapshots, not payload bytes. In this
-adapter, \texttt{ContentHash} hashes dtype/shape/byte descriptors; source
-identity additionally binds paths, offsets, and file metadata. Neither is a
-read-and-hash authentication of every payload byte. The physical provider
-resolves the plan against the residency authority and obtains the actual
-destination generation. A startup CUDA image claim is a different authority
-from a per-request load ticket: actual image grants, compiled context, image
-fence, KV/initial-state creation, and the final claim fence are checked before
-claim consumption. Eligible raw execution bindings may then be replaced by
-runtime descriptors; surviving shared source aliases are not thereby freed.
+The principal configuration uses a 64 MiB host limit containing 8 MiB of
+metadata and 2 MiB of requested stack reservation. The remaining 54 MiB is
+split equally between packed and prepared payload quota. Device cache and
+scratch are separately accounted. Prepared payload charges survive escaped
+weight or scale aliases. Passive snapshots report mode, read counts, waits,
+payload charges, join state, and retained uncertainty without changing them.
+Allocator detail is omitted from passive snapshots when obtaining it would
+poll retirement fences.
 
-\subsection{Implemented bounded expert-read path}
-\label{sec:implemented-read-path}
-The opt-in checkpoint pipeline is a real positioned-read worker, not a task
-that reports completion without performing I/O. Its immutable plan preserves
-ordered extents and original filesystem snapshots. Unix physical-source
-identity version 2 includes device/inode, length, mtime, and ctime coordinates;
-ctime strengthens change detection but is not payload authentication. The
-worker verifies the source before/after reading, and the consumer rechecks it
-before constructing the canonical three compressed artifacts. No CUDA
-handle, cache lease, or runtime continuation enters that worker.
+\subsection{Other protocol implementations}
+The general materialization path installs a registry only when a runner
+transfers a physical provider to the resident engine. This path merges
+compatible exact keys, validates completion before mutation, and separates
+stage-custody return from credit release and resident-grant transfer. Its
+routed-expert provider uses pinned host reads and CUDA upload and installation.
+Registered slabs retain aligned ranges and generations; upload tickets retain
+the original event and frame after notification errors. Replacement also
+carries the old binding and its consumer-completion evidence.
 
-The integration has three local anchors: checkpoint \path{read_pipeline.rs}
-implements tickets, reads, completion custody and join; transformer
-\path{expert_reads.rs} selects gate/up/down plans and accounts payload aliases;
-transformer \path{standard/cuda.rs} separates the read window from compute
-submission. CLI options flow through a prepared, source-bound admission plan
-and lower into the existing numeric BF16 factory/materializer. The selected
-path remains PP1/TP1/EP1, resident KV and lazy experts; enabling host staging
-does not enable unsupported topology or a different forward API.
+The resource broker canonicalizes and checks claims before charging them.
+A later-stage budget wait retains earlier buffers and destinations. Grants
+have no implicit destructor refund. The five accounting classes in
+Equation~\ref{eq:credit-conservation} are refinements of these ownership
+states, not five directly measured counters.
 
-Both \emph{blocking} and \emph{lookahead} explicitly enable the same pipeline;
-the default disabled CLI path has no worker-read evidence and is not the control.
-Blocking submits required demand and waits immediately. Lookahead carries
-one next ticket across the current owner compute call, then waits/takes it
-only when that exact expert is demanded. After current upload, temporary
-host artifacts leave the compute path: compute borrows resident GPU handles
-and immutable binding metadata. A next-residency probe is read-only and
-occurs after current admission/upload; it neither pins the next expert nor
-changes completed-only LRU order, routes, or kernel mathematics. Submission
-and source errors from speculation are deferred to the matching demand;
-abandoned work is canceled/drained and counted as wasted read activity.
-
-The study configuration fixes $H=64$ MiB, $M=8$ MiB, and $S=2$ MiB, with
-one worker, queue depth one, and two read-operation slots in both arms.
-These host charges are separate from the 64-entry, 320 MiB device cache
-charge and its 8 MiB scratch component. Metadata and requested stack are
-\emph{inside} the host ceiling; actual OS/TLS/allocator overhead requires
-additional unmeasured headroom. Packed completion and prepared payload quota
-stay live through their actual aliases, including escaped weight/scale
-\texttt{Arc}s. Weak liveness witnesses do not add a payload copy, but retained
-allocation backing and allocator RSS are distinct from quota
-(Section~\ref{sec:bounded-lookahead}).
-
-Passive snapshots expose requested/effective mode, worker/read evidence,
-operation, image, layer and expert identity, demand waits, completed and wasted bytes,
-charged payload/metadata/stack, join status, and retained Unknown. Reading a
-snapshot does not repair poison, join a worker, or refund custody. A
-scope-ended status is not a final physical-resource closure certificate.
-Cancellation/drain/join proves only named host obligations, never GPU
-quiescence or healing of a poisoned GPU owner. Whole forwards still block
-on their existing consumer proofs. These mechanisms and CPU test fixtures
-exist. The frozen \texttt{86c58a0} factory/profile passes the nine GPU
-gates in Table~\ref{tab:enabled-quality}; the same-cut CLI then completes the
-five paired blocks in Section~\ref{sec:evaluation}. The older \texttt{033519c}
-qualification and both stopped CLI studies remain separate
-(Appendix~\ref{sec:paired-startup-failure}). Passive resource snapshots
-leave allocator state unobserved because its getter can poll retirement
-fences; separately reported allocator high-water is not cost-free passive
-telemetry or physical release evidence.
-
-\subsection{Other lifecycle integration boundaries}
-\paragraph{General materialization path.}
-The registry is installed only when a runner transfers a physical
-materialization provider to the resident engine. It merges compatible exact
-keys, validates completion before mutation, and separates return of stage
-custody from credit release and resident-grant transfer. The concrete
-routed-expert provider uses Linux pinned reads/io\_uring and CUDA upload/
-installation. Registered slabs retain aligned ranges and exact generations;
-upload tickets retain the original event and frame, even after notification
-errors. Replacement passes the previous binding and old-consumer compute
-proof to the install adapter. A generic lease completion contract is owner
-metadata, not an independently recorded global GPU fence. Some preparation
-helpers use compute and upload stream events; synchronization is not excluded.
-
-The broker canonicalizes claims and validates their limits before charging.
-Required execution can use a reserve unavailable to warmup/speculation, but
-that does not guarantee progress if a provider stalls. Load admission is
-stage-local, not an atomic reservation of all future stages. A later-stage
-budget wait leaves earlier slabs/destinations charged. Returned provider
-custody clears the submitted obligation, not occupancy; grants have no
-implicit destructor refund. The five classes of
-Equation~\ref{eq:credit-conservation} are therefore semantic refinements of
-owner state, not five measured fields.
-
-\paragraph{Owner-local state protocols.}
-Ordinary TP1 pipeline segments use startup preparation, persistent stage
-owners, and a prepared-KV journal; they do not automatically inherit registry
-single-flight or I/O overlap. The provisional journal precedes backend
-preparation because preparation can submit work before returning a handle.
-Readiness validates existing evidence, not new submission. Lost install ACKs
-poll the same identity without redispatch. Exact participant ACKs precede
-logical publication, then displaced-state retirement and zero-reference-page
-confirmation precede reuse. Finish consumes transaction-handle custody, not
-live weights, KV, or independent pins. HostKV decode/idle reclaim use typed
-read and placement/page-retirement protocols rather than the expert registry.
-Committed-KV source snapshots include owner, slot, incarnation, generation,
-layout, frontier, range, and pages; acquiring a read lease revalidates them,
-and physical quiescence precedes pin release. Append witnesses are also
-revalidated against the live reservation. These are not database snapshots.
+State publication uses a separate prepared-state protocol. A provisional
+journal precedes backend preparation because preparation can submit work
+before returning a handle. Lost installation acknowledgments cause polling
+of the same operation rather than redispatch. Exact acknowledgments precede
+logical publication; displaced-state retirement and page confirmation precede
+reuse. Committed KV reads revalidate owner, slot, incarnation, generation,
+layout, frontier, range, and page authority. Finishing a transaction consumes
+its handle custody, not every independent weight, KV page, or cache pin.
 
 \begin{figure}[tbp]
 \centering
 \includegraphics[width=\linewidth]{figures/transaction-lifecycle.pdf}
-\caption{Conceptual successful lifecycle for the selected prepared-KV owner,
-not a measured overlap timeline. Named lanes and swatches retain blue
-control/validation, ochre materialization, teal execution, violet
-publication/custody, and brick Unknown/failure roles. The provisional journal
-precedes backend preparation even if submission fails without a handle.
-Candidate readiness validates existing evidence; exact generation-matched
-install ACKs precede logical publication on this path. Producer readiness is
-not consumer retirement. Final relevant fences and scoped quiescence precede
-custody return, with explicit release/transfer still required. Cancellation
-cannot reverse irreversible ending. Neither durable ACID, universal registry
-integration, nor general cross-rank atomicity follows.}
+\caption{Prepared-state lifecycle. The provisional journal precedes backend
+preparation. Exact installation acknowledgments precede logical publication;
+consumer quiescence and retirement precede reuse. The lanes show causal
+ordering, not a measured overlap timeline. Cancellation preserves any
+irreversible ending decision and its residual cleanup obligations.}
 \label{fig:transaction-lifecycle}
 \end{figure}
 
-\paragraph{Unknown and collective scope.}
-Provider Unknown retains native tickets, allocations, claims, and cleanup
-intent, and may poison slot layers, devices, or executors. A matching registry
-completion can close a named obligation without resetting independent poison.
-There is no general in-place reset/replay or device-reset recovery claim.
-Prepared-KV coordination is a narrow state lifecycle, not arbitrary distributed
-atomic publication. Current collective exchanges have separate host-payload
-bounds; Mixed device participation defaults to disabled/host. A typed device
-permit is not evidence of a default GPU reduction or cross-rank fence. For the
-vLLM supplement, Socket-plugin initialization is not proof that local GPU
-payload used Socket: the scoped logs record \texttt{NCCL\_P2P\_DISABLE=1}
-and local channels \texttt{via SHM/direct/direct}. No NCCL capability or
-transport conclusion is generalized beyond the recorded profile.
-
-\paragraph{What must be traced.}
-A full path audit names each progress owner, queue/limit, dependencies,
-submission behavior, completion evidence, blocking calls, locks, and
-synchronization from request admission through storage, expansion, transfer,
-execution, publication, retirement, cancellation, and shutdown. Include
-model-specific and host-KV bypasses. A worker wrapping a blocking call is not
-proof of event-driven progress or hardware overlap. Current BF16/numeric and
-Mixed TP profiles have distinct shard/cache/expansion policies; actual storage
-integration and residency require profile-specific evidence. Shared/unified
-physical pools and other modalities remain design scope, not evaluated
-support. Rust ownership assists local reasoning but does not discharge
-asynchronous physical references owned by providers.
+These integrations share ownership concepts but have different progress and
+completion authorities. An exact late registry completion may close its
+stage while an independent device owner remains poisoned. Host-worker join
+cannot clear that device uncertainty. Ordinary pipeline, host-KV, and
+collective paths therefore require their own audits; the evaluated
+single-device path does not establish universal registry coverage or a
+default device-collective implementation.
