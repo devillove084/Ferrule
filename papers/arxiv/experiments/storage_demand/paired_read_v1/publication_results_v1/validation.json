@@ -1,0 +1,68 @@
+{
+  "bootstrap_draws": 3125,
+  "check": "check.verify: membership, original pointers, full reconstruction, all bootstrap draws",
+  "code_sha256": {
+    "audit_sources.py": "5448223f5a86848df85cbc1f90f5d4dc8c319bac8880053022d84f4cb944f5fa",
+    "check.py": "ecb6b291bf9ccbd0558b6b5087bd74010f64d307ceb31221ddf629ac332e9a27",
+    "common.py": "802a1acb39a3f862827e68d7bd3b041ff34b877bce28c0ab3224cb7322b352c7",
+    "curate.py": "3138bdcfecb500445a127c6ffde7fdb3d2dbcfca615bcbfeffd3a3a7138667a1",
+    "curate_bundle.py": "23363cfe0791306a125035f6ce7a54f72d58d2e0067adbeaf4cfbdc91bf4a78e",
+    "prespecified.py": "d217638a3e1fb5f1b2d76baa9fe5d80ce917725347bc88dc7381da00485ef08c",
+    "reconcile.py": "a5864f07a275840046454a3c3db3483d3ae38b6f976a1590c8353ee7033e247c",
+    "seal.py": "177fcf03652d32a45e8f41b373bb5733e17c058d49f501b5f987babb0beaf48b",
+    "test_publication.py": "7d082929bcecada1576729191885ba1b2ec37492ca46874c6e531ac118273461",
+    "validate.py": "b8c0be8c2a3d6abac0c5ce6963b3127c7674a90150b7d46d62abd9c7bccbf0b3"
+  },
+  "coverage": {
+    "actual_worker_generated_tokens": 900,
+    "exact_eight_token_oracles": 110,
+    "length_only_two_token_smoke": 10,
+    "library_snapshots": 20,
+    "measured_qa": 50,
+    "nfs_phase_deltas": 30,
+    "nfs_request_deltas": 120,
+    "pipeline_invocation_jsons": 1020,
+    "request_pid_io_pairs": 120,
+    "request_pid_io_snapshots": 240,
+    "requests": 120,
+    "required_libraries_per_snapshot": 12,
+    "startup_shutdown_pid_io_deltas": 0
+  },
+  "gpu_workloads": 0,
+  "network_requests": 0,
+  "original_sources_modified": false,
+  "python_version": "3.12.4",
+  "raw_hash_and_private_scan": {
+    "distinct_private_literals_checked": 24,
+    "gpu_workloads": 0,
+    "nested_json_strings_and_original_credential_variants_checked": true,
+    "network_requests": 0,
+    "original_files_verified": 1461,
+    "original_json_files_deep_scanned": 1092,
+    "public_members_scanned": 621,
+    "public_uncompressed_bytes_scanned": 44336360,
+    "raw_sources_modified": false,
+    "scope": "All inventoried current and two historical raw files; all decompressed public files",
+    "status": "passed"
+  },
+  "receipt_scope": "Input manifest/code checked before writing these two receipts; final membership resealed and verified afterward",
+  "schema": "ferrule.paired-http-publication-validation.v1",
+  "status": "passed",
+  "stdlib_only": true,
+  "tested_input_inventory": {
+    "bytes": 4444856,
+    "distinct_original_pointers": 3605,
+    "files": 621,
+    "original_pin_sets": 11,
+    "original_raw_files": 1461,
+    "uncompressed_member_bytes": 44136560
+  },
+  "tested_input_manifest_sha256": "8c758e9238edeb25d803ecaed4a5331fb9cc2145e555c7f6da5bbcb62463c71b",
+  "tests": {
+    "command": "python -S -B test_publication.py",
+    "isolated_copy_check": true,
+    "negative_cases": "See individual test names in validation-tests.txt",
+    "returncode": 0,
+    "tests_run": 29
+  }
+}

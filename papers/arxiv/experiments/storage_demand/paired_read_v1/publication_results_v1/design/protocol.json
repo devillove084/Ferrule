@@ -1,0 +1,174 @@
+{
+  "data": {
+    "actual_lifecycles": 0,
+    "bind_entry": false,
+    "block_count": 5,
+    "candidate_binary": null,
+    "candidate_prerequisites": [
+      "Separate production fix removes TP1 prepared-read versus TP2 cache-accessor clash; this scope does not modify production",
+      "New immutable CLI built from the corrected source cut, not de515995 or declared transfer of old adapter PASS",
+      "Explicit versioned read-only build/source archive/compiler/dependency/native/runtime review for the new CLI; exact-help semantic lowering checks all scheduler fields and case budgets",
+      "Fresh actual same-cut constructor plus BOTH modes full40/retained-fresh/ordinary-no-observer/cold-owner GPU gates with actual producer custody; previous033519c ninePASS reports are references only",
+      "New protocol-v3/cases-v3-bound candidate receipts and reviewed execution registration; namespace-only identity match does not imply quality PASS",
+      "First future planned arm must establish exact CLI Ready/mapped libraries, NVTX OFF, actual worker-enqueue plus HTTP text/ID/usage joins and owner ledger; no extra warmprobe",
+      "Separately renewed GPU-owner authorization and maintained all-eight local UUID locks/idle/authenticated subreaper; not authorized by this CPU plan"
+    ],
+    "candidate_quality": null,
+    "candidate_source_cut": null,
+    "cases_sha256": "b7a8ca3dcb166d6e93eb60f82212e7095e9117462322cea7eee6d91e261ef595",
+    "claim_limits": [
+      "Exploratory paired instrumented TP1/PP1/EP1 serial repeated-QA study, not SOTA/significance/power/general throughput",
+      "No 8k/context sweep/pp/tp expansion",
+      "Fresh servers are not cold storage or independent NFS/page-cache samples",
+      "NFS observations are shared client deltas, not NAS disk bytes",
+      "Logical host reservations exclude OS/TLS/allocator headroom; sampled PSS/device memory are not hard partitions or exact peaks",
+      "NVTX OFF does not remove DEBUG/TRACE, sampler or compiled instrumentation overhead",
+      "Owner-local quiescent close may retain residency; universal final resource release remains unverified"
+    ],
+    "corrective_flags": [
+      "--decode-cohort-target",
+      "1",
+      "--decode-cohort-max-deferrals",
+      "0"
+    ],
+    "custody": {
+      "no_cache_dropping": true,
+      "no_foreign_signals": true,
+      "nonselected_delta_tolerance_bytes": 1048576,
+      "physical_host_cap_bytes": null,
+      "physical_nas_backend_bytes": null,
+      "sample_interval_seconds": 2
+    },
+    "expected_scheduler": {
+      "allow_mixed_batches": true,
+      "decode_cohort_max_deferrals": 0,
+      "decode_cohort_target": 1,
+      "max_active_sequences": 2,
+      "max_batch_tokens": 8,
+      "max_decode_batch": 2,
+      "prefill_chunk_size": 8,
+      "prefill_reserve_tokens": 1,
+      "prefix_cache_capacity_pages": 0
+    },
+    "failure_policy": "STOP new admission on any gate, timeout, stale hash, unknown or pending custody, failed text/usage/actual-ID/trace/counter/NFS gate or post-idle. Never drop/replace a pair. Retain five paired blocks, ten lifecycles, 120 requests and 50 measured QA, including censored and unissued slots. Cancellation retains maintained subreaper cleanup authority.",
+    "fresh_server_lifecycles": 10,
+    "generation_tokens": 8,
+    "goodput": "Per-arm sum of actual completion_tokens from measured eligible QA / sum of actual client request_e2e_seconds for all five measured QA slots. Only complete quality/custody-qualified arms get a number; partial/failed/unissued arms remain null, not zero latency or silently excluded.",
+    "gpu_locks": 0,
+    "gpu_queries": 0,
+    "gpu_runs": 0,
+    "id": "storage-middle64-paired-read-corrective-20261015-v3",
+    "interpretation": "CPU-only separate V3 design, not execution or GPU quality; no binary copied or committed",
+    "interval": "Exact enumerated paired-block bootstrap, resample five block log ratios with replacement (5^5=3125), nearest-rank 2.5%/97.5% percentiles, exp endpoints. Only if all five pairs qualify; otherwise no aggregate estimate or interval. Exploratory descriptive n=5, not coverage-guaranteed confidence or significance.",
+    "launch_entry": false,
+    "limits": {
+      "all_requests_seconds": 300,
+      "coordinator_finalization_seconds": 32,
+      "coordinator_postidle_seconds": 20,
+      "coordinator_preidle_seconds": 20,
+      "outer_lifecycle_seconds": 650,
+      "pilot_seconds": 7200,
+      "request_seconds": 60,
+      "shutdown_seconds": 30,
+      "startup_seconds": 120,
+      "study_cleanup_reserve_seconds": 100,
+      "supervisor_call_overhead_seconds": 28,
+      "supervisor_seconds": 530,
+      "target_lifetime_seconds": 460,
+      "worker_bookkeeping_seconds": 40,
+      "worker_finalization_seconds": 20,
+      "worker_preidle_seconds": 20
+    },
+    "modes": [
+      "blocking",
+      "lookahead"
+    ],
+    "nas_queries": 0,
+    "new_cli_ready_receipt": null,
+    "new_qualification_reports": null,
+    "option_difference": "--expert-read-schedule value only",
+    "order": [
+      {
+        "block": "P1",
+        "modes": [
+          "blocking",
+          "lookahead"
+        ]
+      },
+      {
+        "block": "P2",
+        "modes": [
+          "blocking",
+          "lookahead"
+        ]
+      },
+      {
+        "block": "P3",
+        "modes": [
+          "lookahead",
+          "blocking"
+        ]
+      },
+      {
+        "block": "P4",
+        "modes": [
+          "lookahead",
+          "blocking"
+        ]
+      },
+      {
+        "block": "P5",
+        "modes": [
+          "blocking",
+          "lookahead"
+        ]
+      }
+    ],
+    "order_algorithm": "Sort P1..P5 by SHA256('20261015:' + block); first three are blocking-first, other two lookahead-first; execute blocks P1..P5",
+    "order_seed": 20261015,
+    "primary_estimand": "Median across the five block-level log ratios log(lookahead/blocking), each arm represented by its median of five measured-QA client E2E seconds; report exp(median) and 1-exp(median). TTFT and quality-qualified goodput use the same block pairing as prespecified secondary outcomes.",
+    "profiling_captures": 0,
+    "public_cli_defaults": {
+      "decode_cohort_max_deferrals": 3,
+      "decode_cohort_target": 4
+    },
+    "public_default_policy": "CLI public cohort4/3 unchanged; explicit1/0 is this study case only",
+    "quality_tolerances": {
+      "actual_generated_ids": "exact",
+      "atol": 0.00025,
+      "ordinary_vs_diagnostic_logits": "exact F32-LE SHA256 plus shapes and greedy IDs",
+      "return_text": "exact",
+      "rtol": 0.012
+    },
+    "reference_bindings": {
+      "oracles.json": "8881cdddbfdd3684fd51b598128aa392521d8f2349440560f37c0e40e9f510eb",
+      "order.json": "89b4c03bf00a2bbdcdc45422881dab9db932eca92d9bf5988425b6958fdb10e1",
+      "requests.json": "0ccca80f3cd840c5f3062a1dd33acada056f167081c68630fec7c6c2cc268529"
+    },
+    "replacement_count": 0,
+    "request_phases": {
+      "initial": 4,
+      "qa_excluded_first": 1,
+      "qa_measured": 5,
+      "qa_warmup": 2
+    },
+    "requests_per_lifecycle": 12,
+    "retry_count": 0,
+    "scheduled_measured_qa": 50,
+    "scheduled_requests": 120,
+    "schema": "ferrule.storage-demand.paired-read-preregistration.v3",
+    "server_runs": 0,
+    "status": "prospective_cpu_only_candidate_unbound_not_authorized"
+  },
+  "original_receipt_replaced": false,
+  "original_sources": [
+    {
+      "locator": "papers/arxiv/experiments/storage_demand/paired_read_v1/protocol-v3.json",
+      "original_bytes": 21845,
+      "original_sha256": "1ba4f3f4f5091eebd465e9702514bbcd8ff9aa0db7024ad62c0e312b15cde7b2"
+    }
+  ],
+  "redacted_projection": true,
+  "rule": "Explicit field projection; original bytes are private and not replaced by this copy",
+  "schema": "ferrule.paired-http-publication-projection.v1"
+}

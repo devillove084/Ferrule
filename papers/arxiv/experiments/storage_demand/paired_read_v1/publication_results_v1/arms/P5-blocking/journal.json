@@ -1,0 +1,403 @@
+{
+  "data": {
+    "assessment": {
+      "can_continue": true,
+      "resource_contract_complete": "unverified",
+      "stop_reasons": [],
+      "universal_final_release_verified": false
+    },
+    "block": "P5",
+    "coordinator_ended": {
+      "monotonic": 8969574.44538644,
+      "unix_ns": 1792026631408868350
+    },
+    "mode": "blocking",
+    "outer_deadline": 8970090.425212301,
+    "post_idle": {
+      "accepted_sample_indices": [
+        0,
+        1,
+        2
+      ],
+      "all_eight_idle": true,
+      "authenticated_echild": true,
+      "consecutive_idle": 3,
+      "deadline_seconds": 15,
+      "elapsed_seconds": 2.6737882792949677,
+      "interval_seconds": 1,
+      "mode": "post_authenticated_echild",
+      "no_compute_apps_required": true,
+      "physical_owner_release": "unverified",
+      "recorded_owners_absent": true,
+      "required_consecutive": 3,
+      "samples": [
+        {
+          "classification": "idle",
+          "compute_applications": 0,
+          "consecutive_idle": 1,
+          "devices": [
+            {
+              "index": 0,
+              "memory_used_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "index": 1,
+              "memory_used_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "index": 2,
+              "memory_used_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "index": 3,
+              "memory_used_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "index": 4,
+              "memory_used_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "index": 5,
+              "memory_used_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "index": 6,
+              "memory_used_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "index": 7,
+              "memory_used_mib": 0,
+              "utilization_percent": 0
+            }
+          ],
+          "monotonic_finished": 8969571.97803576,
+          "monotonic_started": 8969571.756215964,
+          "recorded_unix_ns": 1792026628719697949
+        },
+        {
+          "classification": "idle",
+          "compute_applications": 0,
+          "consecutive_idle": 2,
+          "devices": [
+            {
+              "index": 0,
+              "memory_used_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "index": 1,
+              "memory_used_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "index": 2,
+              "memory_used_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "index": 3,
+              "memory_used_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "index": 4,
+              "memory_used_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "index": 5,
+              "memory_used_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "index": 6,
+              "memory_used_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "index": 7,
+              "memory_used_mib": 0,
+              "utilization_percent": 0
+            }
+          ],
+          "monotonic_finished": 8969573.196803013,
+          "monotonic_started": 8969572.978289237,
+          "recorded_unix_ns": 1792026629941773158
+        },
+        {
+          "classification": "idle",
+          "compute_applications": 0,
+          "consecutive_idle": 3,
+          "devices": [
+            {
+              "index": 0,
+              "memory_used_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "index": 1,
+              "memory_used_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "index": 2,
+              "memory_used_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "index": 3,
+              "memory_used_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "index": 4,
+              "memory_used_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "index": 5,
+              "memory_used_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "index": 6,
+              "memory_used_mib": 0,
+              "utilization_percent": 0
+            },
+            {
+              "index": 7,
+              "memory_used_mib": 0,
+              "utilization_percent": 0
+            }
+          ],
+          "monotonic_finished": 8969574.429882891,
+          "monotonic_started": 8969574.197068557,
+          "recorded_unix_ns": 1792026631160551661
+        }
+      ],
+      "status": "verified",
+      "zero_memory_mib": 0,
+      "zero_utilization_percent": 0
+    },
+    "read_ledger": {
+      "can_continue": true,
+      "final_read_ledger": {
+        "charge_basis": "logical_host_reservation_not_physical_rss",
+        "current_charge": {
+          "artifact_bytes": 0,
+          "host_charged_bytes": 0,
+          "metadata_bytes": 0,
+          "packed_bytes": 0,
+          "payload_bytes": 0,
+          "requested_stack_bytes": 0,
+          "reserved_read_slots": 0,
+          "unknown_packed_bytes": 0,
+          "unknown_read_slots": 0,
+          "unknown_stack_bytes": 0
+        },
+        "current_read": null,
+        "effective_mode": "blocking",
+        "enabled": true,
+        "last_receipt": {
+          "cancellation_requested": false,
+          "completed_ns": 13066704,
+          "identity": {
+            "expert": 244,
+            "image_generation": 1,
+            "layer": 39,
+            "operation": 40943
+          },
+          "io_bytes": 3146112,
+          "io_finished_ns": 13060375,
+          "io_started_ns": 12361776,
+          "outcome": "source_verified",
+          "requested_bytes": 3146112,
+          "source_verified_ns": 13066576,
+          "submitted_ns": 12344839,
+          "taken_ns": 13073277,
+          "worker_started_ns": 12352716
+        },
+        "limits": {
+          "max_host_bytes": 67108864,
+          "max_metadata_bytes": 8388608,
+          "schedule": "blocking",
+          "worker_stack_bytes": 2097152
+        },
+        "pending_read": null,
+        "reader_counter_scope": "shared_checkpoint_reader_submit_through_take_not_ticket_certified",
+        "requested_mode": "blocking",
+        "stats": {
+          "cancelled_reads": 0,
+          "completed_reads": 40943,
+          "demand_failures": 0,
+          "demand_wait_calls": 40943,
+          "demand_wait_ns": 33674756412,
+          "demanded_reads": 40943,
+          "failed_reads": 0,
+          "io_duration_ns": 32173577672,
+          "io_started_reads": 40943,
+          "join_failed_sequences": 0,
+          "join_pending_sequences": 0,
+          "materialization_failures": 0,
+          "peak_artifact_bytes": 3146112,
+          "peak_host_charged_bytes": 16777984,
+          "peak_metadata_bytes": 8388608,
+          "peak_packed_bytes": 3146112,
+          "peak_payload_bytes": 6292224,
+          "peak_requested_stack_bytes": 2097152,
+          "prefetched_reads_taken": 0,
+          "proved_read_bytes": 128811263616,
+          "reader_interval_bytes": 128811263616,
+          "reader_interval_calls": 245658,
+          "rejected_submissions": 0,
+          "resident_skips": 0,
+          "sequences_finished": 4080,
+          "sequences_started": 4080,
+          "speculative_reads": 0,
+          "submitted_reads": 40943,
+          "unknown_bytes": 0,
+          "unknown_reads": 0,
+          "unobserved_reader_intervals": 0,
+          "unobserved_terminal_reads": 0,
+          "unproved_wasted_reads": 0,
+          "verified_reads": 40943,
+          "wasted_read_bytes": 0,
+          "wasted_reader_interval_bytes": 0,
+          "wasted_reader_interval_calls": 0,
+          "wasted_reads": 0,
+          "worker_started_reads": 40943
+        },
+        "stats_scope": "owner_lifetime_owner_observed_transitions_peaks_not_invocation_deltas",
+        "status": "closed",
+        "timing_origin": "expert_read_sequence_start_host_monotonic_ns_not_cuda",
+        "worker_read_observed": true
+      },
+      "logical_host_reservation_only": true,
+      "physical_release": "unobserved; no universal release claim"
+    },
+    "summary": {
+      "by_phase": {
+        "initial": {
+          "censored": 0,
+          "failed": 0,
+          "success": 4,
+          "unissued": 0
+        },
+        "qa_excluded_first": {
+          "censored": 0,
+          "failed": 0,
+          "success": 1,
+          "unissued": 0
+        },
+        "qa_measured": {
+          "censored": 0,
+          "failed": 0,
+          "success": 5,
+          "unissued": 0
+        },
+        "qa_warmup": {
+          "censored": 0,
+          "failed": 0,
+          "success": 2,
+          "unissued": 0
+        }
+      },
+      "censored": 0,
+      "conservation": true,
+      "counts": {
+        "censored": 0,
+        "failed": 0,
+        "success": 12,
+        "unissued": 0
+      },
+      "denominator_policy": "No failed/censored/unissued slot is removed or relabeled",
+      "failed": 0,
+      "issued": 12,
+      "measured_qa": {
+        "eligible_success": 5,
+        "request_only_eligible_success": 5,
+        "scheduled": 5,
+        "success": 5
+      },
+      "reasons": {},
+      "scheduled": 12,
+      "successful": 12,
+      "terminal": 12,
+      "unissued": 0
+    },
+    "supervisor": {
+      "cleanup_errors": [],
+      "cleanup_scope": "isolated_subreaper_direct_children",
+      "custody": {
+        "containment_verified": true,
+        "echild": true,
+        "entries": [
+          {
+            "exit_code": 0,
+            "first_observed_at": 8969445.52441743,
+            "identity": {
+              "birth_ticks": 133332517,
+              "pid": 165978,
+              "ppid": 165977
+            },
+            "reaped": true,
+            "reaped_at": 8969571.724125594,
+            "role": "root",
+            "signals": []
+          }
+        ],
+        "errors": [],
+        "helper_identity": {
+          "birth_ticks": 133332514,
+          "pid": 165977,
+          "ppid": 165959
+        },
+        "method": "linux-subreaper-waitid",
+        "reporting_errors": [],
+        "root_identity": {
+          "birth_ticks": 133332517,
+          "pid": 165978,
+          "ppid": 165977
+        },
+        "status": "proven_drained"
+      },
+      "descendant_custody": "proven_drained",
+      "gpu_quiescence": "unverified",
+      "private_authentication_replayed": false,
+      "returncode": 0,
+      "stderr_truncated": false,
+      "stdout_truncated": false,
+      "timed_out": false,
+      "wall_seconds": 126.26006012223661
+    },
+    "trial": "P5-blocking"
+  },
+  "original_receipt_replaced": false,
+  "original_sources": [
+    {
+      "locator": "papers/arxiv/experiments/storage_demand/paired_read_v1/artifacts-v3-mapfixed-20261015-01/paired-final.json",
+      "original_bytes": 32130676,
+      "original_sha256": "33459c536d5a736bb4843e80e2cf3e79016fae054e5e5664cfe859cfb089e357"
+    },
+    {
+      "locator": "papers/arxiv/experiments/storage_demand/paired_read_v1/artifacts-v3-mapfixed-20261015-01/P5-blocking/supervisor.json",
+      "original_bytes": 27988,
+      "original_sha256": "1dca8f447fe7afe327cc062c59fd0b89a99584494c7a7424658f49c171100c32"
+    },
+    {
+      "locator": "papers/arxiv/experiments/storage_demand/paired_read_v1/artifacts-v3-mapfixed-20261015-01/P5-blocking/coordinator-post-idle.json",
+      "original_bytes": 2667,
+      "original_sha256": "322c3fb026389f57a31623082c02916e7f47507bc7bd5a5a20f6ff971238e281"
+    }
+  ],
+  "redacted_projection": true,
+  "rule": "Explicit field projection; original bytes are private and not replaced by this copy",
+  "schema": "ferrule.paired-http-publication-projection.v1"
+}

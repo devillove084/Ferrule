@@ -1,0 +1,106 @@
+{
+  "data": {
+    "additional_startup_probes": 0,
+    "cases_sha256": "b7a8ca3dcb166d6e93eb60f82212e7095e9117462322cea7eee6d91e261ef595",
+    "claim_limits": [
+      "Exploratory n=5; unchanged paired estimands and interval",
+      "Required mapped path/hash/ELF roles, not mapped-memory byte equivalence",
+      "Overlay backing identity may be unobserved; raw maps remain private",
+      "NFS client deltas are not NAS backend bytes",
+      "Owner-local known close is not post-drop physical release proof",
+      "Actual token-ID TRACE and worker metadata remain private"
+    ],
+    "correction": "Readiness map evidence adapter from 7d3bee2 only; no CLI/config/design change",
+    "digest": "be49fdb5d9f69ac1dbde42da951cd8b371a478cba66f9631eb962e8dba873260",
+    "generation": "mapfixed-20261015-01",
+    "limits": {
+      "all_requests_seconds": 300,
+      "coordinator_finalization_seconds": 32,
+      "coordinator_postidle_seconds": 20,
+      "coordinator_preidle_seconds": 20,
+      "outer_lifecycle_seconds": 650,
+      "pilot_seconds": 7200,
+      "request_seconds": 60,
+      "shutdown_seconds": 30,
+      "startup_seconds": 120,
+      "study_cleanup_reserve_seconds": 100,
+      "supervisor_call_overhead_seconds": 28,
+      "supervisor_seconds": 530,
+      "target_lifetime_seconds": 460,
+      "worker_bookkeeping_seconds": 40,
+      "worker_finalization_seconds": 20,
+      "worker_preidle_seconds": 20
+    },
+    "order": [
+      {
+        "block": "P1",
+        "modes": [
+          "blocking",
+          "lookahead"
+        ]
+      },
+      {
+        "block": "P2",
+        "modes": [
+          "blocking",
+          "lookahead"
+        ]
+      },
+      {
+        "block": "P3",
+        "modes": [
+          "lookahead",
+          "blocking"
+        ]
+      },
+      {
+        "block": "P4",
+        "modes": [
+          "lookahead",
+          "blocking"
+        ]
+      },
+      {
+        "block": "P5",
+        "modes": [
+          "blocking",
+          "lookahead"
+        ]
+      }
+    ],
+    "pooling": false,
+    "profiling_captures": 0,
+    "protocol_id": "storage-middle64-paired-read-corrective-20261015-v3",
+    "protocol_sha256": "1ba4f3f4f5091eebd465e9702514bbcd8ff9aa0db7024ad62c0e312b15cde7b2",
+    "replacements": 0,
+    "retries": 0,
+    "scheduled_blocks": 5,
+    "scheduled_measured_qa": 50,
+    "scheduled_requests": 120,
+    "scheduled_starts": 10,
+    "schema": "ferrule.storage-demand.independent-mapfixed-preregistration.v3",
+    "trial_order": [
+      "P1-blocking",
+      "P1-lookahead",
+      "P2-blocking",
+      "P2-lookahead",
+      "P3-lookahead",
+      "P3-blocking",
+      "P4-lookahead",
+      "P4-blocking",
+      "P5-blocking",
+      "P5-lookahead"
+    ]
+  },
+  "original_receipt_replaced": false,
+  "original_sources": [
+    {
+      "locator": "papers/arxiv/experiments/storage_demand/paired_read_v1/plan-mapfixed-20261015-01/preregistration.json",
+      "original_bytes": 5543,
+      "original_sha256": "f631e2b6ce96c0a5a47dde41b28b47944916bfe5644f33cf9e8e07cee424bb15"
+    }
+  ],
+  "redacted_projection": true,
+  "rule": "Explicit field projection; original bytes are private and not replaced by this copy",
+  "schema": "ferrule.paired-http-publication-projection.v1"
+}

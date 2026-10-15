@@ -1,0 +1,135 @@
+{
+  "index": 0,
+  "repetition": 0,
+  "population": "measured",
+  "prompt_id": "prompt-0",
+  "prompt_sha256": "1a176247202551abe92187f32578f28f25601848c6f55d64acff7a261f030e56",
+  "expected_input_tokens": 3,
+  "status": "success",
+  "error": null,
+  "sent_at": 8969636.889418034,
+  "client_dispatch_at": 8969636.889229083,
+  "http_status": 200,
+  "headers_at": 8969636.911654487,
+  "request_payload": {
+    "model": "qwen35-storage-demand-paper",
+    "prompt": "\u4e2d\u56fd\u7684\u9996\u90fd\u662f",
+    "temperature": 0,
+    "seed": 1,
+    "n": 1,
+    "max_tokens": 8,
+    "stream": true,
+    "stream_options": {
+      "include_usage": true
+    }
+  },
+  "after_deadline_events": [],
+  "sent_unix": 1792026693.8528988,
+  "content_type": "text/event-stream",
+  "ended_at": 8969642.984247671,
+  "deadline_at": 8969696.88748639,
+  "text": "\u5317\u4eac\uff0c\u5317\u4eac\u662f\u4e2d\u56fd\u7684\u9996\u90fd\u3002\u90a3\u4e48",
+  "raw_sse_events": [
+    {
+      "at": 8969638.389040207,
+      "event": "",
+      "data": "{\"id\":\"cmpl-ferrule-4\",\"object\":\"text_completion\",\"created\":1792026693,\"model\":\"qwen35-storage-demand-paper\",\"choices\":[{\"text\":\"\u5317\u4eac\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}"
+    },
+    {
+      "at": 8969638.974899627,
+      "event": "",
+      "data": "{\"id\":\"cmpl-ferrule-4\",\"object\":\"text_completion\",\"created\":1792026693,\"model\":\"qwen35-storage-demand-paper\",\"choices\":[{\"text\":\"\uff0c\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}"
+    },
+    {
+      "at": 8969639.537112804,
+      "event": "",
+      "data": "{\"id\":\"cmpl-ferrule-4\",\"object\":\"text_completion\",\"created\":1792026693,\"model\":\"qwen35-storage-demand-paper\",\"choices\":[{\"text\":\"\u5317\u4eac\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}"
+    },
+    {
+      "at": 8969640.099042516,
+      "event": "",
+      "data": "{\"id\":\"cmpl-ferrule-4\",\"object\":\"text_completion\",\"created\":1792026693,\"model\":\"qwen35-storage-demand-paper\",\"choices\":[{\"text\":\"\u662f\u4e2d\u56fd\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}"
+    },
+    {
+      "at": 8969640.718727032,
+      "event": "",
+      "data": "{\"id\":\"cmpl-ferrule-4\",\"object\":\"text_completion\",\"created\":1792026693,\"model\":\"qwen35-storage-demand-paper\",\"choices\":[{\"text\":\"\u7684\u9996\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}"
+    },
+    {
+      "at": 8969641.283438321,
+      "event": "",
+      "data": "{\"id\":\"cmpl-ferrule-4\",\"object\":\"text_completion\",\"created\":1792026693,\"model\":\"qwen35-storage-demand-paper\",\"choices\":[{\"text\":\"\u90fd\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}"
+    },
+    {
+      "at": 8969641.838714248,
+      "event": "",
+      "data": "{\"id\":\"cmpl-ferrule-4\",\"object\":\"text_completion\",\"created\":1792026693,\"model\":\"qwen35-storage-demand-paper\",\"choices\":[{\"text\":\"\u3002\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}"
+    },
+    {
+      "at": 8969642.40105779,
+      "event": "",
+      "data": "{\"id\":\"cmpl-ferrule-4\",\"object\":\"text_completion\",\"created\":1792026693,\"model\":\"qwen35-storage-demand-paper\",\"choices\":[{\"text\":\"\u90a3\u4e48\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}"
+    },
+    {
+      "at": 8969642.984027464,
+      "event": "",
+      "data": "{\"id\":\"cmpl-ferrule-4\",\"object\":\"text_completion\",\"created\":1792026693,\"model\":\"qwen35-storage-demand-paper\",\"choices\":[{\"text\":\"\",\"index\":0,\"logprobs\":null,\"finish_reason\":\"length\"}]}"
+    },
+    {
+      "at": 8969642.984132728,
+      "event": "",
+      "data": "{\"id\":\"cmpl-ferrule-4\",\"object\":\"text_completion\",\"created\":1792026693,\"model\":\"qwen35-storage-demand-paper\",\"choices\":[],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":8,\"total_tokens\":11}}"
+    },
+    {
+      "at": 8969642.984174857,
+      "event": "",
+      "data": "[DONE]"
+    }
+  ],
+  "content_event_times": [
+    8969638.389040207,
+    8969638.974899627,
+    8969639.537112804,
+    8969640.099042516,
+    8969640.718727032,
+    8969641.283438321,
+    8969641.838714248,
+    8969642.40105779
+  ],
+  "content_event_itl_seconds": [
+    0.5858594197779894,
+    0.5622131768614054,
+    0.5619297120720148,
+    0.6196845155209303,
+    0.5647112894803286,
+    0.5552759263664484,
+    0.5623435415327549
+  ],
+  "content_events": 8,
+  "usage": {
+    "prompt_tokens": 3,
+    "completion_tokens": 8,
+    "total_tokens": 11
+  },
+  "actual_output_tokens": 8,
+  "actual_input_tokens": 3,
+  "finish_reason": "length",
+  "finish_at": 8969642.984027464,
+  "usage_at": 8969642.984132728,
+  "done_at": 8969642.984174857,
+  "ttft_seconds": 1.4996221736073494,
+  "request_e2e_seconds": 6.094829637557268,
+  "mean_tpot_usage_proxy_seconds": 0.573145368801696,
+  "token_itl_seconds": null,
+  "exact_token_tpot_seconds": null,
+  "reasoning_observed": false,
+  "output_token_ids": null,
+  "partial_token_count": 8,
+  "input_length_matches": true,
+  "output_length_matches": true,
+  "length_matched_success": true,
+  "client_observed_at": 8969642.984389802,
+  "right_censored": false,
+  "adapter_http_report_complete": true,
+  "adapter_http_report_errors": []
+}

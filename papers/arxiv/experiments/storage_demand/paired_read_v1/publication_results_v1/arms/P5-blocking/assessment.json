@@ -1,0 +1,19 @@
+{
+  "data": {
+    "can_continue": true,
+    "resource_contract_complete": "unverified",
+    "stop_reasons": [],
+    "universal_final_release_verified": false
+  },
+  "original_receipt_replaced": false,
+  "original_sources": [
+    {
+      "locator": "papers/arxiv/experiments/storage_demand/paired_read_v1/artifacts-v3-mapfixed-20261015-01/P5-blocking/assessment.json",
+      "original_bytes": 1636787,
+      "original_sha256": "de0077599eeeb2a967b04197dd44b6789668ba4d107055dd473e3ea2d95970c2"
+    }
+  ],
+  "redacted_projection": true,
+  "rule": "Explicit field projection; original bytes are private and not replaced by this copy",
+  "schema": "ferrule.paired-http-publication-projection.v1"
+}

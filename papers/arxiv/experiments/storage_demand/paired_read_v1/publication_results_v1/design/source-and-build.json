@@ -1,0 +1,586 @@
+{
+  "data": {
+    "build_commands": {
+      "cli": {
+        "argv": [
+          "cargo",
+          "build",
+          "--locked",
+          "--offline",
+          "--release",
+          "--no-default-features",
+          "-p",
+          "ferrule-cli",
+          "--features",
+          "cuda,ferrule-common/nvtx-profile",
+          "--message-format=json"
+        ],
+        "gpu_hidden": true,
+        "profiling_enabled": false,
+        "timeout_seconds": 1800,
+        "working_directory": "immutable-source-archive"
+      },
+      "composition": {
+        "argv": [
+          "cargo",
+          "test",
+          "--locked",
+          "--offline",
+          "--release",
+          "--no-default-features",
+          "-p",
+          "ferrule-composition",
+          "--features",
+          "cuda,ferrule-common/nvtx-profile",
+          "--lib",
+          "full40",
+          "--no-run",
+          "--message-format=json"
+        ],
+        "gpu_hidden": true,
+        "profiling_enabled": false,
+        "timeout_seconds": 1800,
+        "working_directory": "immutable-source-archive"
+      },
+      "constructor": {
+        "argv": [
+          "cargo",
+          "test",
+          "--locked",
+          "--offline",
+          "--release",
+          "--no-default-features",
+          "-p",
+          "ferrule-model",
+          "--features",
+          "cuda,ferrule-common/nvtx-profile",
+          "--test",
+          "expert_read_constructor",
+          "--no-run",
+          "--message-format=json"
+        ],
+        "gpu_hidden": true,
+        "profiling_enabled": false,
+        "timeout_seconds": 1800,
+        "working_directory": "immutable-source-archive"
+      }
+    },
+    "build_custody": "unobserved; bounded CPU command receipts, not authenticated GPU producer custody",
+    "build_roles": {
+      "cli": {
+        "build_custody": "unobserved; bounded CPU command receipts only",
+        "common_nvtx_compiled": true,
+        "feature_argv": "cuda,ferrule-common/nvtx-profile",
+        "native_copy_count": 7,
+        "native_snapshot_sha256": "96c9d84cd05160ad9c901229d44b32b757eb6f8952ad2bf7d959cbf3723891b7",
+        "runtime_library_count": 12,
+        "sha256": "7cc8e0ff6e84f27090494b8e9e27dc3a388d1d2f3fc34ae39dae416e1e607a01"
+      },
+      "composition": {
+        "build_custody": "unobserved; bounded CPU command receipts only",
+        "common_nvtx_compiled": true,
+        "feature_argv": "cuda,ferrule-common/nvtx-profile",
+        "native_copy_count": 7,
+        "native_snapshot_sha256": "e35cc372c2e2c82bad75e02c31f6ffbdf76364a0ba377177b26af86a8823fe53",
+        "runtime_library_count": 12,
+        "sha256": "0a429c47c158bbe25f91730b75b47fd5cb768106f1d63d844da3a5f84fc8677f"
+      },
+      "constructor": {
+        "build_custody": "unobserved; bounded CPU command receipts only",
+        "common_nvtx_compiled": true,
+        "feature_argv": "cuda,ferrule-common/nvtx-profile",
+        "native_copy_count": 7,
+        "native_snapshot_sha256": "338440e5e3570ec50b92640310b972ba721d26410469bd19ee5e59594e6ff74a",
+        "runtime_library_count": 12,
+        "sha256": "693fe2de0983432a12e46d4c079bef370466434ce2ac181bf4af2dffba24ef1f"
+      }
+    },
+    "candidate_identity": {
+      "cli_binary_sha256": "7cc8e0ff6e84f27090494b8e9e27dc3a388d1d2f3fc34ae39dae416e1e607a01",
+      "commit": "86c58a017d7c4b53490f536a3b1a133f2f7848cc",
+      "source_archive_sha256": "e0d160996147820fcc64cfb29070b265b2297a6d9265a21de541ed77e8f2fa65",
+      "source_digest": "10183d246a1278248273e7d3055d1690cb56854cbff30f9f0662f18813dc8188",
+      "source_members": 1484
+    },
+    "current_source_not_initial_preregistration_source": true,
+    "executables_included": false,
+    "native_libraries_included": false,
+    "public_build_controls": {
+      "CARGO_BUILD_JOBS": "4",
+      "CARGO_INCREMENTAL": "0",
+      "CUBLAS_WORKSPACE_CONFIG": ":0:0",
+      "FERRULE_CUDA_ARCH": "sm_86",
+      "FERRULE_CUDA_TEST_ORACLE": "0",
+      "FERRULE_PROFILE_NVTX": "0",
+      "RUSTUP_AUTO_INSTALL": "0",
+      "RUSTUP_TOOLCHAIN": "nightly-2026-08-01"
+    },
+    "quality_review": {
+      "all_nine_raw_producers_and_quality_reviewed": true,
+      "both_cold_primary_subset_fingerprints": 28,
+      "both_ordinary_primary_fingerprints": 64,
+      "cli_http_or_enqueue_join_observed": false,
+      "gates": [
+        {
+          "actual_runtime_libraries": 12,
+          "actual_verified_reads_per_cell": [
+            6,
+            6,
+            6,
+            6
+          ],
+          "authenticated_echild": true,
+          "executable_sha256": "693fe2de0983432a12e46d4c079bef370466434ce2ac181bf4af2dffba24ef1f",
+          "gate": "01-constructor",
+          "natural_exit": true,
+          "physical_release": "unobserved",
+          "report": "target/validation/fixesmetadataCLIcurrent-quality-20261015-01/gates/01-constructor/quality.json",
+          "report_sha256": "92ff130ae79448be81ff227b4be0f4391471f620969bd9009eba33d3b4f22dc7",
+          "supervisor": "target/validation/fixesmetadataCLIcurrent-quality-20261015-01/gates/01-constructor/supervisor.json",
+          "supervisor_sha256": "d45488a40135c8a8de0be3af24c5df0943981341803c6225eba4f74f1d150d9e"
+        },
+        {
+          "actual_ids": {},
+          "actual_runtime_libraries": 12,
+          "authenticated_echild": true,
+          "executable_sha256": "0a429c47c158bbe25f91730b75b47fd5cb768106f1d63d844da3a5f84fc8677f",
+          "fingerprint_calls": 0,
+          "gate": "02-blocking-full40",
+          "main_logit_values": 1986560,
+          "metric_count": 804,
+          "natural_exit": true,
+          "physical_release": "unobserved",
+          "report": "target/validation/fixesmetadataCLIcurrent-quality-20261015-01/gates/02-blocking-full40/numeric-report/full40-bf16-profile.json",
+          "report_sha256": "03eeaa4ad246b3286c9ae37d98b5a943fcc509a91cc81a77311f7856c496b7f4",
+          "resource_release": "unobserved; do not infer physical release from idle/ECHILD",
+          "scheduler_fields_compared": [
+            "allow_mixed_batches",
+            "decode_cohort_max_deferrals",
+            "decode_cohort_target",
+            "max_active_sequences",
+            "max_batch_tokens",
+            "max_decode_batch",
+            "prefill_chunk_size",
+            "prefill_reserve_tokens",
+            "prefix_cache_capacity_pages"
+          ],
+          "supervisor": "target/validation/fixesmetadataCLIcurrent-quality-20261015-01/gates/02-blocking-full40/supervisor.json",
+          "supervisor_sha256": "ec4d406060d7c157a1136c8138b4a954b311eb8b8dd3ccd2c16c57a042ae3698"
+        },
+        {
+          "actual_ids": {},
+          "actual_runtime_libraries": 12,
+          "authenticated_echild": true,
+          "executable_sha256": "0a429c47c158bbe25f91730b75b47fd5cb768106f1d63d844da3a5f84fc8677f",
+          "fingerprint_calls": 0,
+          "gate": "03-lookahead-full40",
+          "main_logit_values": 1986560,
+          "metric_count": 804,
+          "natural_exit": true,
+          "physical_release": "unobserved",
+          "report": "target/validation/fixesmetadataCLIcurrent-quality-20261015-01/gates/03-lookahead-full40/numeric-report/full40-bf16-profile.json",
+          "report_sha256": "8fc33ebcbaa2d51c3c5795021da68b0feaf6cc8a1dfcb89bf986af83ef0c8ae2",
+          "resource_release": "unobserved; do not infer physical release from idle/ECHILD",
+          "scheduler_fields_compared": [
+            "allow_mixed_batches",
+            "decode_cohort_max_deferrals",
+            "decode_cohort_target",
+            "max_active_sequences",
+            "max_batch_tokens",
+            "max_decode_batch",
+            "prefill_chunk_size",
+            "prefill_reserve_tokens",
+            "prefix_cache_capacity_pages"
+          ],
+          "supervisor": "target/validation/fixesmetadataCLIcurrent-quality-20261015-01/gates/03-lookahead-full40/supervisor.json",
+          "supervisor_sha256": "a050b3cbdb550be4df3c07b1a9b25738e29055a0c7d1a55506b32858f3a21281"
+        },
+        {
+          "actual_ids": {
+            "arithmetic": [
+              907,
+              271,
+              22,
+              478,
+              220,
+              23,
+              283,
+              220,
+              16
+            ],
+            "chinese": [
+              98116,
+              3709,
+              98116,
+              108820,
+              102357,
+              95983,
+              1710,
+              97486,
+              3709
+            ],
+            "qa": [
+              25358,
+              13,
+              198,
+              760,
+              6511,
+              314,
+              6124,
+              369,
+              25358
+            ]
+          },
+          "actual_runtime_libraries": 12,
+          "authenticated_echild": true,
+          "executable_sha256": "0a429c47c158bbe25f91730b75b47fd5cb768106f1d63d844da3a5f84fc8677f",
+          "fingerprint_calls": 64,
+          "gate": "04-blocking-fresh",
+          "main_logit_values": 9187840,
+          "metric_count": 5427,
+          "natural_exit": true,
+          "physical_release": "unobserved",
+          "report": "target/validation/fixesmetadataCLIcurrent-quality-20261015-01/gates/04-blocking-fresh/quality.json",
+          "report_sha256": "0229635dbfe2c5e42ec5741478d9900d1029d63670c5b67b7b74db0931d91a40",
+          "resource_release": "unobserved; do not infer physical release from idle/ECHILD",
+          "scheduler_fields_compared": [
+            "allow_mixed_batches",
+            "decode_cohort_max_deferrals",
+            "decode_cohort_target",
+            "max_active_sequences",
+            "max_batch_tokens",
+            "max_decode_batch",
+            "prefill_chunk_size",
+            "prefill_reserve_tokens",
+            "prefix_cache_capacity_pages"
+          ],
+          "supervisor": "target/validation/fixesmetadataCLIcurrent-quality-20261015-01/gates/04-blocking-fresh/supervisor.json",
+          "supervisor_sha256": "e9ecade5afab2f7c9214cbb560959fd69e5d925bd03842a3dbb3019b08af4fb8"
+        },
+        {
+          "actual_ids": {
+            "arithmetic": [
+              907,
+              271,
+              22,
+              478,
+              220,
+              23,
+              283,
+              220,
+              16
+            ],
+            "chinese": [
+              98116,
+              3709,
+              98116,
+              108820,
+              102357,
+              95983,
+              1710,
+              97486,
+              3709
+            ],
+            "qa": [
+              25358,
+              13,
+              198,
+              760,
+              6511,
+              314,
+              6124,
+              369,
+              25358
+            ]
+          },
+          "actual_runtime_libraries": 12,
+          "authenticated_echild": true,
+          "executable_sha256": "0a429c47c158bbe25f91730b75b47fd5cb768106f1d63d844da3a5f84fc8677f",
+          "fingerprint_calls": 64,
+          "gate": "05-lookahead-fresh",
+          "main_logit_values": 9187840,
+          "metric_count": 5427,
+          "natural_exit": true,
+          "physical_release": "unobserved",
+          "report": "target/validation/fixesmetadataCLIcurrent-quality-20261015-01/gates/05-lookahead-fresh/quality.json",
+          "report_sha256": "08c240fa39ea42a524d7d7b2aa5b4de13b82cb2b0d638d6f5d9649b4a383a193",
+          "resource_release": "unobserved; do not infer physical release from idle/ECHILD",
+          "scheduler_fields_compared": [
+            "allow_mixed_batches",
+            "decode_cohort_max_deferrals",
+            "decode_cohort_target",
+            "max_active_sequences",
+            "max_batch_tokens",
+            "max_decode_batch",
+            "prefill_chunk_size",
+            "prefill_reserve_tokens",
+            "prefix_cache_capacity_pages"
+          ],
+          "supervisor": "target/validation/fixesmetadataCLIcurrent-quality-20261015-01/gates/05-lookahead-fresh/supervisor.json",
+          "supervisor_sha256": "8b7d0e02dfee1487382e67791531d51c0f281eced79681c2d00875dd27d932c4"
+        },
+        {
+          "actual_ids": {
+            "arithmetic": [
+              907,
+              271,
+              22,
+              478,
+              220,
+              23,
+              283,
+              220,
+              16
+            ],
+            "chinese": [
+              98116,
+              3709,
+              98116,
+              108820,
+              102357,
+              95983,
+              1710,
+              97486,
+              3709
+            ],
+            "qa": [
+              25358,
+              13,
+              198,
+              760,
+              6511,
+              314,
+              6124,
+              369,
+              25358
+            ]
+          },
+          "actual_runtime_libraries": 12,
+          "authenticated_echild": true,
+          "executable_sha256": "0a429c47c158bbe25f91730b75b47fd5cb768106f1d63d844da3a5f84fc8677f",
+          "fingerprint_calls": 64,
+          "gate": "06-blocking-ordinary",
+          "main_logit_values": 9187840,
+          "metric_count": 27,
+          "natural_exit": true,
+          "physical_release": "unobserved",
+          "report": "target/validation/fixesmetadataCLIcurrent-quality-20261015-01/gates/06-blocking-ordinary/quality.json",
+          "report_sha256": "66cd48ca4adfa276118dfe158d7839b9866954aa8281179c1cdb4d821775a7e0",
+          "resource_release": "unobserved; do not infer physical release from idle/ECHILD",
+          "scheduler_fields_compared": [
+            "allow_mixed_batches",
+            "decode_cohort_max_deferrals",
+            "decode_cohort_target",
+            "max_active_sequences",
+            "max_batch_tokens",
+            "max_decode_batch",
+            "prefill_chunk_size",
+            "prefill_reserve_tokens",
+            "prefix_cache_capacity_pages"
+          ],
+          "supervisor": "target/validation/fixesmetadataCLIcurrent-quality-20261015-01/gates/06-blocking-ordinary/supervisor.json",
+          "supervisor_sha256": "b2fa1bd88319330c7a933bfc5f0253863aa8ec5488f1bc278be669502353d3a6"
+        },
+        {
+          "actual_ids": {
+            "arithmetic": [
+              907,
+              271,
+              22,
+              478,
+              220,
+              23,
+              283,
+              220,
+              16
+            ],
+            "chinese": [
+              98116,
+              3709,
+              98116,
+              108820,
+              102357,
+              95983,
+              1710,
+              97486,
+              3709
+            ],
+            "qa": [
+              25358,
+              13,
+              198,
+              760,
+              6511,
+              314,
+              6124,
+              369,
+              25358
+            ]
+          },
+          "actual_runtime_libraries": 12,
+          "authenticated_echild": true,
+          "executable_sha256": "0a429c47c158bbe25f91730b75b47fd5cb768106f1d63d844da3a5f84fc8677f",
+          "fingerprint_calls": 64,
+          "gate": "07-lookahead-ordinary",
+          "main_logit_values": 9187840,
+          "metric_count": 27,
+          "natural_exit": true,
+          "physical_release": "unobserved",
+          "report": "target/validation/fixesmetadataCLIcurrent-quality-20261015-01/gates/07-lookahead-ordinary/quality.json",
+          "report_sha256": "f8197219e4c53687830c5fe83adff78040a7a01d628cc44d64a1466cb269c89c",
+          "resource_release": "unobserved; do not infer physical release from idle/ECHILD",
+          "scheduler_fields_compared": [
+            "allow_mixed_batches",
+            "decode_cohort_max_deferrals",
+            "decode_cohort_target",
+            "max_active_sequences",
+            "max_batch_tokens",
+            "max_decode_batch",
+            "prefill_chunk_size",
+            "prefill_reserve_tokens",
+            "prefix_cache_capacity_pages"
+          ],
+          "supervisor": "target/validation/fixesmetadataCLIcurrent-quality-20261015-01/gates/07-lookahead-ordinary/supervisor.json",
+          "supervisor_sha256": "e490f6d09b696e795d10ead4219031889c959cd484c087e7588526b63146fb2c"
+        },
+        {
+          "actual_ids": {
+            "qa": [
+              25358,
+              13,
+              198,
+              760,
+              6511,
+              314,
+              6124,
+              369,
+              25358
+            ]
+          },
+          "actual_runtime_libraries": 12,
+          "authenticated_echild": true,
+          "executable_sha256": "0a429c47c158bbe25f91730b75b47fd5cb768106f1d63d844da3a5f84fc8677f",
+          "fingerprint_calls": 28,
+          "gate": "08-blocking-cold",
+          "main_logit_values": 3228160,
+          "metric_count": 1809,
+          "natural_exit": true,
+          "physical_release": "unobserved",
+          "report": "target/validation/fixesmetadataCLIcurrent-quality-20261015-01/gates/08-blocking-cold/quality.json",
+          "report_sha256": "b3eeaab5d374ccc2f22bf98ddefe2eed9256aa3a274cb2a5e7f202d7c2516fc8",
+          "resource_release": "unobserved; do not infer physical release from idle/ECHILD",
+          "scheduler_fields_compared": [
+            "allow_mixed_batches",
+            "decode_cohort_max_deferrals",
+            "decode_cohort_target",
+            "max_active_sequences",
+            "max_batch_tokens",
+            "max_decode_batch",
+            "prefill_chunk_size",
+            "prefill_reserve_tokens",
+            "prefix_cache_capacity_pages"
+          ],
+          "supervisor": "target/validation/fixesmetadataCLIcurrent-quality-20261015-01/gates/08-blocking-cold/supervisor.json",
+          "supervisor_sha256": "e46183c2638ae154b53ce0bb932b583a721bcf1f16d07f434514c4ae75414900"
+        },
+        {
+          "actual_ids": {
+            "qa": [
+              25358,
+              13,
+              198,
+              760,
+              6511,
+              314,
+              6124,
+              369,
+              25358
+            ]
+          },
+          "actual_runtime_libraries": 12,
+          "authenticated_echild": true,
+          "executable_sha256": "0a429c47c158bbe25f91730b75b47fd5cb768106f1d63d844da3a5f84fc8677f",
+          "fingerprint_calls": 28,
+          "gate": "09-lookahead-cold",
+          "main_logit_values": 3228160,
+          "metric_count": 1809,
+          "natural_exit": true,
+          "physical_release": "unobserved",
+          "report": "target/validation/fixesmetadataCLIcurrent-quality-20261015-01/gates/09-lookahead-cold/quality.json",
+          "report_sha256": "72464eadc16ede26eb5d3e61c199652191ebfe7d08136196a1fd488f1595245b",
+          "resource_release": "unobserved; do not infer physical release from idle/ECHILD",
+          "scheduler_fields_compared": [
+            "allow_mixed_batches",
+            "decode_cohort_max_deferrals",
+            "decode_cohort_target",
+            "max_active_sequences",
+            "max_batch_tokens",
+            "max_decode_batch",
+            "prefill_chunk_size",
+            "prefill_reserve_tokens",
+            "prefix_cache_capacity_pages"
+          ],
+          "supervisor": "target/validation/fixesmetadataCLIcurrent-quality-20261015-01/gates/09-lookahead-cold/supervisor.json",
+          "supervisor_sha256": "cf12113249c8740f4eb81e5e31f8fde8f5c2cb64d06d89058b7e823deb5996e2"
+        }
+      ],
+      "reference_sha256": {
+        "fresh": "102c798baeb5200bc8ed8386eabed6146870b3b6da2a90fc6010677041352c7e",
+        "full40": "351495921233e0158eb2a4507c415d173c895a6086d5905b7a72d82de71849f9"
+      }
+    },
+    "runtime_pins": {
+      "ld-2.32.so": "385218198df39d3931fbb0666db2838bce66a7658c82c61454d4903a4e1d2ed3",
+      "libc-2.32.so": "d589c6aea9b813d2392b1c8bdeda73afe694d399687ab867bd26735175faadf1",
+      "libcublas.so.12.4.5.8": "88397a191cfc25f94c272b638ffa942be58d5594ba5d41ac4b766c2cd3fe54ac",
+      "libcublasLt.so.12.4.5.8": "a18a341a9b6de15918e410a2337a74f2a644fd80c0600e61d69ddad69be15687",
+      "libcuda.so.575.57.08": "f2470aa637fa72422534edeaeb9de19afe3d0646388baf7ffb5337b2edafc59e",
+      "libcudart.so.12.4.99": "e8023d1aa80d86175f22986faf55e23c0a9286ff625cede0b560220c6cd8a560",
+      "libdl-2.32.so": "4eec77f1e5131f2b84aaa83c21772dc233ff9a44d2715a195249fee9d1dd3cae",
+      "libgcc_s.so.1": "f43f5563b8e01388eacf8f0b4898a53b88fe8aea535a2424ffb576d85845677e",
+      "libm-2.32.so": "3ad871eb16ece2c91050642503aa18757d3b018b1491afb662aec555fff683dd",
+      "libpthread-2.32.so": "6fd5dbf2a630b845af36c36e4d4509fef9da415b48fa25c6661184000bc3f3ce",
+      "librt-2.32.so": "68bf882c5011e80b654ace48ac7e4164d62fb6991d475514f299c6da57892196",
+      "libstdc++.so.6.0.28": "729ce0312dcd9dd2301f66a1c157fade62d60809dcb0647a5906b3f7e28c88d7"
+    },
+    "source_archive_included": false,
+    "source_disposition": {
+      "compiled_archive_members_unchanged": 1484,
+      "generated_noncompiled_evidence": {
+        "scripts/__pycache__/gpu_idle_window_v2.cpython-310.pyc": "fcdc41de311a8faa25dc911f58e34954231d80c9f5a1091c50c14f7cecf7d5f9",
+        "scripts/__pycache__/run_pinned_jobs.cpython-310.pyc": "29127c251e279ea67e9232eef750399535dfdd1b127b05c98e2c9f7d5003f4c8",
+        "scripts/__pycache__/test_vllm_qwen35.cpython-310.pyc": "08f3f4bce348ca95d5ecae726473605de4abc51e98356ea8c492a2cf655fa86b"
+      },
+      "manifest_rewritten": false,
+      "preserved_in_place": true,
+      "unclassified_extras": 0
+    },
+    "weights_included": false
+  },
+  "original_receipt_replaced": false,
+  "original_sources": [
+    {
+      "locator": "papers/arxiv/experiments/storage_demand/paired_read_v1/plan-mapfixed-20261015-01/actual-build-review-v3.json",
+      "original_bytes": 514613,
+      "original_sha256": "fa9b0d0189f44f74a2d0fa73fa59922e1269a8b40cb43d0ab332fcad76da7858"
+    },
+    {
+      "locator": "target/validation/fixesmetadataCLIcurrent-quality-20261015-01/build-final-cli-command.json",
+      "original_bytes": 2184,
+      "original_sha256": "8730886bef03f00204d278c353545d3a02dfe3ba025ba63c8c5da5cf14e91b2b"
+    },
+    {
+      "locator": "target/validation/fixesmetadataCLIcurrent-quality-20261015-01/build-final-constructor-command.json",
+      "original_bytes": 2246,
+      "original_sha256": "4da4a07e939233b39245a09d86136badd0cff00a74be411262259b3ef341b0d4"
+    },
+    {
+      "locator": "target/validation/fixesmetadataCLIcurrent-quality-20261015-01/build-final-composition-command.json",
+      "original_bytes": 2234,
+      "original_sha256": "b13de48c2b6ce4c71addf7b4e4b6327a2160d1bbe7847c79ab52736d31e645c0"
+    }
+  ],
+  "redacted_projection": true,
+  "rule": "Explicit field projection; original bytes are private and not replaced by this copy",
+  "schema": "ferrule.paired-http-publication-projection.v1"
+}

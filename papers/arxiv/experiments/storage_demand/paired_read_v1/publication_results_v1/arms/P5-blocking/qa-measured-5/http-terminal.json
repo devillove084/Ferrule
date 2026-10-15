@@ -1,0 +1,135 @@
+{
+  "index": 0,
+  "repetition": 0,
+  "population": "measured",
+  "prompt_id": "prompt-0",
+  "prompt_sha256": "729bebb2f0359fff1b03978118b4d7b01a59ce6c9c545fc4e9918d9e847066d2",
+  "expected_input_tokens": 5,
+  "status": "success",
+  "error": null,
+  "sent_at": 8969560.554646831,
+  "client_dispatch_at": 8969560.554429369,
+  "http_status": 200,
+  "headers_at": 8969560.576644946,
+  "request_payload": {
+    "model": "qwen35-storage-demand-paper",
+    "prompt": "The capital of Japan is",
+    "temperature": 0,
+    "seed": 1,
+    "n": 1,
+    "max_tokens": 8,
+    "stream": true,
+    "stream_options": {
+      "include_usage": true
+    }
+  },
+  "after_deadline_events": [],
+  "sent_unix": 1792026617.518128,
+  "content_type": "text/event-stream",
+  "ended_at": 8969568.26436401,
+  "deadline_at": 8969620.552937435,
+  "text": " Tokyo.\nThe capital of Japan is",
+  "raw_sse_events": [
+    {
+      "at": 8969562.871403962,
+      "event": "",
+      "data": "{\"id\":\"cmpl-ferrule-12\",\"object\":\"text_completion\",\"created\":1792026617,\"model\":\"qwen35-storage-demand-paper\",\"choices\":[{\"text\":\" Tokyo\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}"
+    },
+    {
+      "at": 8969563.572179064,
+      "event": "",
+      "data": "{\"id\":\"cmpl-ferrule-12\",\"object\":\"text_completion\",\"created\":1792026617,\"model\":\"qwen35-storage-demand-paper\",\"choices\":[{\"text\":\".\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}"
+    },
+    {
+      "at": 8969564.276232723,
+      "event": "",
+      "data": "{\"id\":\"cmpl-ferrule-12\",\"object\":\"text_completion\",\"created\":1792026617,\"model\":\"qwen35-storage-demand-paper\",\"choices\":[{\"text\":\"\\n\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}"
+    },
+    {
+      "at": 8969564.983406587,
+      "event": "",
+      "data": "{\"id\":\"cmpl-ferrule-12\",\"object\":\"text_completion\",\"created\":1792026617,\"model\":\"qwen35-storage-demand-paper\",\"choices\":[{\"text\":\"The\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}"
+    },
+    {
+      "at": 8969565.702280775,
+      "event": "",
+      "data": "{\"id\":\"cmpl-ferrule-12\",\"object\":\"text_completion\",\"created\":1792026617,\"model\":\"qwen35-storage-demand-paper\",\"choices\":[{\"text\":\" capital\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}"
+    },
+    {
+      "at": 8969566.344586555,
+      "event": "",
+      "data": "{\"id\":\"cmpl-ferrule-12\",\"object\":\"text_completion\",\"created\":1792026617,\"model\":\"qwen35-storage-demand-paper\",\"choices\":[{\"text\":\" of\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}"
+    },
+    {
+      "at": 8969566.960795484,
+      "event": "",
+      "data": "{\"id\":\"cmpl-ferrule-12\",\"object\":\"text_completion\",\"created\":1792026617,\"model\":\"qwen35-storage-demand-paper\",\"choices\":[{\"text\":\" Japan\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}"
+    },
+    {
+      "at": 8969567.654435286,
+      "event": "",
+      "data": "{\"id\":\"cmpl-ferrule-12\",\"object\":\"text_completion\",\"created\":1792026617,\"model\":\"qwen35-storage-demand-paper\",\"choices\":[{\"text\":\" is\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}"
+    },
+    {
+      "at": 8969568.2641374,
+      "event": "",
+      "data": "{\"id\":\"cmpl-ferrule-12\",\"object\":\"text_completion\",\"created\":1792026617,\"model\":\"qwen35-storage-demand-paper\",\"choices\":[{\"text\":\"\",\"index\":0,\"logprobs\":null,\"finish_reason\":\"length\"}]}"
+    },
+    {
+      "at": 8969568.264240885,
+      "event": "",
+      "data": "{\"id\":\"cmpl-ferrule-12\",\"object\":\"text_completion\",\"created\":1792026617,\"model\":\"qwen35-storage-demand-paper\",\"choices\":[],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":8,\"total_tokens\":13}}"
+    },
+    {
+      "at": 8969568.264291286,
+      "event": "",
+      "data": "[DONE]"
+    }
+  ],
+  "content_event_times": [
+    8969562.871403962,
+    8969563.572179064,
+    8969564.276232723,
+    8969564.983406587,
+    8969565.702280775,
+    8969566.344586555,
+    8969566.960795484,
+    8969567.654435286
+  ],
+  "content_event_itl_seconds": [
+    0.7007751017808914,
+    0.7040536589920521,
+    0.7071738634258509,
+    0.7188741881400347,
+    0.6423057802021503,
+    0.6162089295685291,
+    0.6936398018151522
+  ],
+  "content_events": 8,
+  "usage": {
+    "prompt_tokens": 5,
+    "completion_tokens": 8,
+    "total_tokens": 13
+  },
+  "actual_output_tokens": 8,
+  "actual_input_tokens": 5,
+  "finish_reason": "length",
+  "finish_at": 8969568.2641374,
+  "usage_at": 8969568.264240885,
+  "done_at": 8969568.264291286,
+  "ttft_seconds": 2.316757131367922,
+  "request_e2e_seconds": 7.709717178717256,
+  "mean_tpot_usage_proxy_seconds": 0.6832901891320944,
+  "token_itl_seconds": null,
+  "exact_token_tpot_seconds": null,
+  "reasoning_observed": false,
+  "output_token_ids": null,
+  "partial_token_count": 8,
+  "input_length_matches": true,
+  "output_length_matches": true,
+  "length_matched_success": true,
+  "client_observed_at": 8969568.26450299,
+  "right_censored": false,
+  "adapter_http_report_complete": true,
+  "adapter_http_report_errors": []
+}

@@ -1,0 +1,15 @@
+{
+  "status": "verified_local_process_cleanup",
+  "ended": {
+    "monotonic": 8969766.136728939,
+    "unix_ns": 1792026823100210611
+  },
+  "final_authenticated_echild": true,
+  "all_recorded_owned_pid_births_absent": true,
+  "all_eight_idle": true,
+  "all_eight_nonblocking_reacquired": true,
+  "locks_released": true,
+  "overall_deadline": 8975451.049956221,
+  "within_overall_deadline": true,
+  "physical_resource_release": "unobserved_not_claimed"
+}

@@ -1,0 +1,49 @@
+{
+  "index": 4,
+  "name": "qa-first-excluded",
+  "phase": "qa_excluded_first",
+  "population": "excluded_first",
+  "measured": false,
+  "prompt": "The capital of Japan is",
+  "input_tokens": 5,
+  "max_tokens": 8,
+  "reference_id": "qa",
+  "reference": {
+    "id": "qa",
+    "prompt": "The capital of Japan is",
+    "input_tokens": 5,
+    "reference_ids": [
+      25358,
+      13,
+      198,
+      760,
+      6511,
+      314,
+      6124,
+      369
+    ],
+    "reference_text": " Tokyo.\nThe capital of Japan is"
+  },
+  "payload": {
+    "model": "qwen35-storage-demand-paper",
+    "prompt": "The capital of Japan is",
+    "temperature": 0,
+    "seed": 1,
+    "n": 1,
+    "max_tokens": 8,
+    "stream": true,
+    "stream_options": {
+      "include_usage": true
+    }
+  },
+  "status": "censored",
+  "result": null,
+  "issued": true,
+  "censor_reason": "dispatch without terminal",
+  "admission": {
+    "monotonic": 8969344.579841351,
+    "unix_ns": 1792026401543322847
+  },
+  "absolute_deadline": 8969404.579839967,
+  "log_start_byte": 182293
+}

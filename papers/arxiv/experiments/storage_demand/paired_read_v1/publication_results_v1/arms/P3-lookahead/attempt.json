@@ -1,0 +1,18 @@
+{
+  "trial": "P3-lookahead",
+  "admission": {
+    "monotonic": 8968849.561489888,
+    "unix_ns": 1792025906524971652
+  },
+  "outer_deadline": 8969499.561482966,
+  "pilot_deadline": 8975451.049956221,
+  "registration_sha256": "c56434d661bc87fb0383811f7637ac336e6bc907ec423b99d74341a0c8c7f97e",
+  "coordinator": {
+    "pid": 147202,
+    "birth_ticks": 133272461,
+    "ppid": 88644,
+    "pgrp": 147202,
+    "session": 147202
+  },
+  "replay_permitted": false
+}

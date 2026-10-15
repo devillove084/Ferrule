@@ -1,0 +1,16 @@
+{
+  "data": {
+    "all_eight_nonblocking_reacquired": true
+  },
+  "original_receipt_replaced": false,
+  "original_sources": [
+    {
+      "locator": "papers/arxiv/experiments/storage_demand/paired_read_v1/artifacts-v3-mapfixed-20261015-01/P5-lookahead/locks-reprobed.json",
+      "original_bytes": 108,
+      "original_sha256": "9690212e341db5db04e9f17a57a2a3804833c1b7fa885683f718b7aba6f6e985"
+    }
+  ],
+  "redacted_projection": true,
+  "rule": "Explicit field projection; original bytes are private and not replaced by this copy",
+  "schema": "ferrule.paired-http-publication-projection.v1"
+}

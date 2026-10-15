@@ -1,0 +1,18 @@
+{
+  "trial": "P2-blocking",
+  "admission": {
+    "monotonic": 8968554.352170277,
+    "unix_ns": 1792025611315651598
+  },
+  "outer_deadline": 8969204.352163643,
+  "pilot_deadline": 8975451.049956221,
+  "registration_sha256": "c56434d661bc87fb0383811f7637ac336e6bc907ec423b99d74341a0c8c7f97e",
+  "coordinator": {
+    "pid": 137735,
+    "birth_ticks": 133242948,
+    "ppid": 88644,
+    "pgrp": 137735,
+    "session": 137735
+  },
+  "replay_permitted": false
+}

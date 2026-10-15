@@ -1,0 +1,29 @@
+{
+  "data": {
+    "event_counts": {
+      "mixed_decoder_invocation": 102,
+      "request_admitted": 12,
+      "request_http_admitted": 12,
+      "request_http_terminal": 12,
+      "request_worker_terminal": 12,
+      "request_worker_terminal_enqueue": 12,
+      "request_worker_token_enqueued": 90,
+      "resource_shutdown_summary": 1
+    },
+    "omitted": "Non-JSON startup text and non-request startup/listener records; not required for token/read reconciliation",
+    "original_bytes": 605875,
+    "selected_events": 253,
+    "source_byte_offsets_refer_to_original": true
+  },
+  "original_receipt_replaced": false,
+  "original_sources": [
+    {
+      "locator": "papers/arxiv/experiments/storage_demand/paired_read_v1/artifacts-v3-mapfixed-20261015-01/P1-blocking/server.log",
+      "original_bytes": 605875,
+      "original_sha256": "31bcb715961819f0f51c00352fb1b04d2fa328a46cbb33b16194d9c620b04fe0"
+    }
+  ],
+  "redacted_projection": true,
+  "rule": "Explicit field projection; original bytes are private and not replaced by this copy",
+  "schema": "ferrule.paired-http-publication-projection.v1"
+}

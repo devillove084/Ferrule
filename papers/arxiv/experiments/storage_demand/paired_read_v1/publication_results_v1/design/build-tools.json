@@ -1,0 +1,36 @@
+{
+  "data": {
+    "binary_sha256": "7cc8e0ff6e84f27090494b8e9e27dc3a388d1d2f3fc34ae39dae416e1e607a01",
+    "compiled_profile": {
+      "debug_assertions": false,
+      "debuginfo": 0,
+      "opt_level": "3",
+      "overflow_checks": false,
+      "test": false
+    },
+    "nvtx_compiled": true,
+    "qualification_nvtx_runtime_enabled": false,
+    "tool_versions": {
+      "cargo": "cargo 1.99.0-nightly (7c83d4cc0 2026-07-29)\n",
+      "cutlass": "e05f953a5b3d38adc240df2ff928e0421c2abba3\n",
+      "nvcc": "nvcc: NVIDIA (R) Cuda compiler driver\nCopyright (c) 2005-2024 NVIDIA Corporation\nBuilt on Tue_Feb_27_16:19:38_PST_2024\nCuda compilation tools, release 12.4, V12.4.99\nBuild cuda_12.4.r12.4/compiler.33961263_0\n",
+      "rustc": "rustc 1.99.0-nightly (ad3d0bc14 2026-07-31)\nbinary: rustc\ncommit-hash: ad3d0bc141a02cf446e384136d250a1f6950fed5\ncommit-date: 2026-07-31\nhost: x86_64-unknown-linux-gnu\nrelease: 1.99.0-nightly\nLLVM version: 22.1.8\n"
+    }
+  },
+  "original_receipt_replaced": false,
+  "original_sources": [
+    {
+      "locator": "target/validation/fixesmetadataCLIcurrent-quality-20261015-01/toolchain.json",
+      "original_bytes": 1266,
+      "original_sha256": "d306b252928052654d87001ff782841fa86887823a419d9da8a7e164607ff617"
+    },
+    {
+      "locator": "target/validation/fixesmetadataCLIcurrent-quality-20261015-01/artifact-final-cli.json",
+      "original_bytes": 4800,
+      "original_sha256": "07b7e6ab2f1ccf59a0ac51ff97a6070da187adaa4851cab5977a279f5e00ea91"
+    }
+  ],
+  "redacted_projection": true,
+  "rule": "Explicit field projection; original bytes are private and not replaced by this copy",
+  "schema": "ferrule.paired-http-publication-projection.v1"
+}

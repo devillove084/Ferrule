@@ -1,0 +1,330 @@
+{
+  "data": {
+    "after-requests": {
+      "original_raw_map": {
+        "locator": "papers/arxiv/experiments/storage_demand/paired_read_v1/artifacts-v3-mapfixed-20261015-01/P4-lookahead/after-requests-library-evidence/maps.raw",
+        "original_bytes": 54207,
+        "original_sha256": "913ad2e719662b60b5799203a37a9c78908912fc0d59f37c1d90b78cf6df7240"
+      },
+      "policy": {
+        "executable_sha256": "7cc8e0ff6e84f27090494b8e9e27dc3a388d1d2f3fc34ae39dae416e1e607a01",
+        "hash_scope": "pathname SHA256 and inode check; overlay backing identity and live mapped memory hash unobserved",
+        "optional": [],
+        "pins": {
+          "ld-2.32.so": "385218198df39d3931fbb0666db2838bce66a7658c82c61454d4903a4e1d2ed3",
+          "libc-2.32.so": "d589c6aea9b813d2392b1c8bdeda73afe694d399687ab867bd26735175faadf1",
+          "libcublas.so.12.4.5.8": "88397a191cfc25f94c272b638ffa942be58d5594ba5d41ac4b766c2cd3fe54ac",
+          "libcublasLt.so.12.4.5.8": "a18a341a9b6de15918e410a2337a74f2a644fd80c0600e61d69ddad69be15687",
+          "libcuda.so.575.57.08": "f2470aa637fa72422534edeaeb9de19afe3d0646388baf7ffb5337b2edafc59e",
+          "libcudart.so.12.4.99": "e8023d1aa80d86175f22986faf55e23c0a9286ff625cede0b560220c6cd8a560",
+          "libdl-2.32.so": "4eec77f1e5131f2b84aaa83c21772dc233ff9a44d2715a195249fee9d1dd3cae",
+          "libgcc_s.so.1": "f43f5563b8e01388eacf8f0b4898a53b88fe8aea535a2424ffb576d85845677e",
+          "libm-2.32.so": "3ad871eb16ece2c91050642503aa18757d3b018b1491afb662aec555fff683dd",
+          "libpthread-2.32.so": "6fd5dbf2a630b845af36c36e4d4509fef9da415b48fa25c6661184000bc3f3ce",
+          "librt-2.32.so": "68bf882c5011e80b654ace48ac7e4164d62fb6991d475514f299c6da57892196",
+          "libstdc++.so.6.0.28": "729ce0312dcd9dd2301f66a1c157fade62d60809dcb0647a5906b3f7e28c88d7"
+        },
+        "required": [
+          "libcublas.so.12.4.5.8",
+          "libcublasLt.so.12.4.5.8",
+          "libcudart.so.12.4.99",
+          "libgcc_s.so.1",
+          "ld-2.32.so",
+          "libc-2.32.so",
+          "libcuda.so.575.57.08",
+          "libdl-2.32.so",
+          "libm-2.32.so",
+          "libpthread-2.32.so",
+          "librt-2.32.so",
+          "libstdc++.so.6.0.28"
+        ],
+        "role": "cli"
+      },
+      "snapshot": {
+        "acquisition_begin": {
+          "monotonic": 8969265.456849433,
+          "unix_ns": 1792026322420329477
+        },
+        "acquisition_end": {
+          "monotonic": 8969265.483368767,
+          "unix_ns": 1792026322446848922
+        },
+        "after": {
+          "birth_ticks": 133303442,
+          "pid": 156580,
+          "ppid": 156579,
+          "state": "S"
+        },
+        "after_executable": {
+          "birth_ticks": 133303442,
+          "pid": 156580,
+          "ppid": 156579,
+          "state": "S"
+        },
+        "before": {
+          "birth_ticks": 133303442,
+          "pid": 156580,
+          "ppid": 156579,
+          "state": "S"
+        },
+        "errors": [],
+        "executable_sha256": "7cc8e0ff6e84f27090494b8e9e27dc3a388d1d2f3fc34ae39dae416e1e607a01",
+        "expected_executable_sha256": "7cc8e0ff6e84f27090494b8e9e27dc3a388d1d2f3fc34ae39dae416e1e607a01",
+        "hash_scope": "pathname SHA256 and inode check; overlay backing identity and live mapped memory hash unobserved",
+        "parent_after": {
+          "birth_ticks": 133303440,
+          "pid": 156579,
+          "ppid": 156566,
+          "state": "S"
+        },
+        "parent_before": {
+          "birth_ticks": 133303440,
+          "pid": 156579,
+          "ppid": 156566,
+          "state": "S"
+        },
+        "parent_identity": {
+          "birth_ticks": 133303440,
+          "pid": 156579,
+          "ppid": 156566,
+          "state": "R"
+        },
+        "raw_maps_sha256": "913ad2e719662b60b5799203a37a9c78908912fc0d59f37c1d90b78cf6df7240",
+        "raw_saved": {
+          "monotonic": 8969265.458403721,
+          "unix_ns": 1792026322421883904
+        },
+        "root_identity": {
+          "birth_ticks": 133303442,
+          "pid": 156580,
+          "ppid": 156579,
+          "state": "R"
+        },
+        "schema": "ferrule.private-runtime-map-snapshot.v1"
+      },
+      "validation": {
+        "captured": {
+          "monotonic": 8969265.483368767,
+          "unix_ns": 1792026322446848922
+        },
+        "deleted_library_paths": [],
+        "errors": [],
+        "hash_scope": "pathname SHA256 and inode check; overlay backing identity and live mapped memory hash unobserved",
+        "ignored_deleted_nonlibraries_count": 1,
+        "libraries": {
+          "ld-2.32.so": "385218198df39d3931fbb0666db2838bce66a7658c82c61454d4903a4e1d2ed3",
+          "libc-2.32.so": "d589c6aea9b813d2392b1c8bdeda73afe694d399687ab867bd26735175faadf1",
+          "libcublas.so.12.4.5.8": "88397a191cfc25f94c272b638ffa942be58d5594ba5d41ac4b766c2cd3fe54ac",
+          "libcublasLt.so.12.4.5.8": "a18a341a9b6de15918e410a2337a74f2a644fd80c0600e61d69ddad69be15687",
+          "libcuda.so.575.57.08": "f2470aa637fa72422534edeaeb9de19afe3d0646388baf7ffb5337b2edafc59e",
+          "libcudart.so.12.4.99": "e8023d1aa80d86175f22986faf55e23c0a9286ff625cede0b560220c6cd8a560",
+          "libdl-2.32.so": "4eec77f1e5131f2b84aaa83c21772dc233ff9a44d2715a195249fee9d1dd3cae",
+          "libgcc_s.so.1": "f43f5563b8e01388eacf8f0b4898a53b88fe8aea535a2424ffb576d85845677e",
+          "libm-2.32.so": "3ad871eb16ece2c91050642503aa18757d3b018b1491afb662aec555fff683dd",
+          "libpthread-2.32.so": "6fd5dbf2a630b845af36c36e4d4509fef9da415b48fa25c6661184000bc3f3ce",
+          "librt-2.32.so": "68bf882c5011e80b654ace48ac7e4164d62fb6991d475514f299c6da57892196",
+          "libstdc++.so.6.0.28": "729ce0312dcd9dd2301f66a1c157fade62d60809dcb0647a5906b3f7e28c88d7"
+        },
+        "live_mapped_memory_sha256": null,
+        "missing_required_paths": [],
+        "observed_library_count": 12,
+        "overlay_backing_identity": "unobserved",
+        "raw_maps_sha256": "913ad2e719662b60b5799203a37a9c78908912fc0d59f37c1d90b78cf6df7240",
+        "required_pin_check": true,
+        "root_identity": {
+          "birth_ticks": 133303442,
+          "pid": 156580,
+          "ppid": 156579,
+          "state": "R"
+        },
+        "status": "passed"
+      }
+    },
+    "ready": {
+      "original_raw_map": {
+        "locator": "papers/arxiv/experiments/storage_demand/paired_read_v1/artifacts-v3-mapfixed-20261015-01/P4-lookahead/ready-library-evidence/maps.raw",
+        "original_bytes": 53962,
+        "original_sha256": "eeb97ea370d256f2322f97486d275f596a4a682433543ceb0dd5216c4bd2fa91"
+      },
+      "policy": {
+        "executable_sha256": "7cc8e0ff6e84f27090494b8e9e27dc3a388d1d2f3fc34ae39dae416e1e607a01",
+        "hash_scope": "pathname SHA256 and inode check; overlay backing identity and live mapped memory hash unobserved",
+        "optional": [],
+        "pins": {
+          "ld-2.32.so": "385218198df39d3931fbb0666db2838bce66a7658c82c61454d4903a4e1d2ed3",
+          "libc-2.32.so": "d589c6aea9b813d2392b1c8bdeda73afe694d399687ab867bd26735175faadf1",
+          "libcublas.so.12.4.5.8": "88397a191cfc25f94c272b638ffa942be58d5594ba5d41ac4b766c2cd3fe54ac",
+          "libcublasLt.so.12.4.5.8": "a18a341a9b6de15918e410a2337a74f2a644fd80c0600e61d69ddad69be15687",
+          "libcuda.so.575.57.08": "f2470aa637fa72422534edeaeb9de19afe3d0646388baf7ffb5337b2edafc59e",
+          "libcudart.so.12.4.99": "e8023d1aa80d86175f22986faf55e23c0a9286ff625cede0b560220c6cd8a560",
+          "libdl-2.32.so": "4eec77f1e5131f2b84aaa83c21772dc233ff9a44d2715a195249fee9d1dd3cae",
+          "libgcc_s.so.1": "f43f5563b8e01388eacf8f0b4898a53b88fe8aea535a2424ffb576d85845677e",
+          "libm-2.32.so": "3ad871eb16ece2c91050642503aa18757d3b018b1491afb662aec555fff683dd",
+          "libpthread-2.32.so": "6fd5dbf2a630b845af36c36e4d4509fef9da415b48fa25c6661184000bc3f3ce",
+          "librt-2.32.so": "68bf882c5011e80b654ace48ac7e4164d62fb6991d475514f299c6da57892196",
+          "libstdc++.so.6.0.28": "729ce0312dcd9dd2301f66a1c157fade62d60809dcb0647a5906b3f7e28c88d7"
+        },
+        "required": [
+          "libcublas.so.12.4.5.8",
+          "libcublasLt.so.12.4.5.8",
+          "libcudart.so.12.4.99",
+          "libgcc_s.so.1",
+          "ld-2.32.so",
+          "libc-2.32.so",
+          "libcuda.so.575.57.08",
+          "libdl-2.32.so",
+          "libm-2.32.so",
+          "libpthread-2.32.so",
+          "librt-2.32.so",
+          "libstdc++.so.6.0.28"
+        ],
+        "role": "cli"
+      },
+      "snapshot": {
+        "acquisition_begin": {
+          "monotonic": 8969167.698936652,
+          "unix_ns": 1792026224662416614
+        },
+        "acquisition_end": {
+          "monotonic": 8969167.72546072,
+          "unix_ns": 1792026224688940776
+        },
+        "after": {
+          "birth_ticks": 133303442,
+          "pid": 156580,
+          "ppid": 156579,
+          "state": "S"
+        },
+        "after_executable": {
+          "birth_ticks": 133303442,
+          "pid": 156580,
+          "ppid": 156579,
+          "state": "S"
+        },
+        "before": {
+          "birth_ticks": 133303442,
+          "pid": 156580,
+          "ppid": 156579,
+          "state": "S"
+        },
+        "errors": [],
+        "executable_sha256": "7cc8e0ff6e84f27090494b8e9e27dc3a388d1d2f3fc34ae39dae416e1e607a01",
+        "expected_executable_sha256": "7cc8e0ff6e84f27090494b8e9e27dc3a388d1d2f3fc34ae39dae416e1e607a01",
+        "hash_scope": "pathname SHA256 and inode check; overlay backing identity and live mapped memory hash unobserved",
+        "parent_after": {
+          "birth_ticks": 133303440,
+          "pid": 156579,
+          "ppid": 156566,
+          "state": "S"
+        },
+        "parent_before": {
+          "birth_ticks": 133303440,
+          "pid": 156579,
+          "ppid": 156566,
+          "state": "S"
+        },
+        "parent_identity": {
+          "birth_ticks": 133303440,
+          "pid": 156579,
+          "ppid": 156566,
+          "state": "R"
+        },
+        "raw_maps_sha256": "eeb97ea370d256f2322f97486d275f596a4a682433543ceb0dd5216c4bd2fa91",
+        "raw_saved": {
+          "monotonic": 8969167.700367387,
+          "unix_ns": 1792026224663847404
+        },
+        "root_identity": {
+          "birth_ticks": 133303442,
+          "pid": 156580,
+          "ppid": 156579,
+          "state": "R"
+        },
+        "schema": "ferrule.private-runtime-map-snapshot.v1"
+      },
+      "validation": {
+        "captured": {
+          "monotonic": 8969167.72546072,
+          "unix_ns": 1792026224688940776
+        },
+        "deleted_library_paths": [],
+        "errors": [],
+        "hash_scope": "pathname SHA256 and inode check; overlay backing identity and live mapped memory hash unobserved",
+        "ignored_deleted_nonlibraries_count": 1,
+        "libraries": {
+          "ld-2.32.so": "385218198df39d3931fbb0666db2838bce66a7658c82c61454d4903a4e1d2ed3",
+          "libc-2.32.so": "d589c6aea9b813d2392b1c8bdeda73afe694d399687ab867bd26735175faadf1",
+          "libcublas.so.12.4.5.8": "88397a191cfc25f94c272b638ffa942be58d5594ba5d41ac4b766c2cd3fe54ac",
+          "libcublasLt.so.12.4.5.8": "a18a341a9b6de15918e410a2337a74f2a644fd80c0600e61d69ddad69be15687",
+          "libcuda.so.575.57.08": "f2470aa637fa72422534edeaeb9de19afe3d0646388baf7ffb5337b2edafc59e",
+          "libcudart.so.12.4.99": "e8023d1aa80d86175f22986faf55e23c0a9286ff625cede0b560220c6cd8a560",
+          "libdl-2.32.so": "4eec77f1e5131f2b84aaa83c21772dc233ff9a44d2715a195249fee9d1dd3cae",
+          "libgcc_s.so.1": "f43f5563b8e01388eacf8f0b4898a53b88fe8aea535a2424ffb576d85845677e",
+          "libm-2.32.so": "3ad871eb16ece2c91050642503aa18757d3b018b1491afb662aec555fff683dd",
+          "libpthread-2.32.so": "6fd5dbf2a630b845af36c36e4d4509fef9da415b48fa25c6661184000bc3f3ce",
+          "librt-2.32.so": "68bf882c5011e80b654ace48ac7e4164d62fb6991d475514f299c6da57892196",
+          "libstdc++.so.6.0.28": "729ce0312dcd9dd2301f66a1c157fade62d60809dcb0647a5906b3f7e28c88d7"
+        },
+        "live_mapped_memory_sha256": null,
+        "missing_required_paths": [],
+        "observed_library_count": 12,
+        "overlay_backing_identity": "unobserved",
+        "raw_maps_sha256": "eeb97ea370d256f2322f97486d275f596a4a682433543ceb0dd5216c4bd2fa91",
+        "required_pin_check": true,
+        "root_identity": {
+          "birth_ticks": 133303442,
+          "pid": 156580,
+          "ppid": 156579,
+          "state": "R"
+        },
+        "status": "passed"
+      }
+    }
+  },
+  "original_receipt_replaced": false,
+  "original_sources": [
+    {
+      "locator": "papers/arxiv/experiments/storage_demand/paired_read_v1/artifacts-v3-mapfixed-20261015-01/P4-lookahead/ready-library-evidence/snapshot.json",
+      "original_bytes": 1864,
+      "original_sha256": "38b210d91dfab5d66f4d3274cb574860af07d02f7db872b9fbb83c9bb6c650ac"
+    },
+    {
+      "locator": "papers/arxiv/experiments/storage_demand/paired_read_v1/artifacts-v3-mapfixed-20261015-01/P4-lookahead/ready-library-evidence/policy.json",
+      "original_bytes": 10189,
+      "original_sha256": "ab25a948415781e8a937e1b6483e98b2a5dee2b8dc056146e7c47d0ea4973110"
+    },
+    {
+      "locator": "papers/arxiv/experiments/storage_demand/paired_read_v1/artifacts-v3-mapfixed-20261015-01/P4-lookahead/ready-library-evidence/validation.json",
+      "original_bytes": 6009,
+      "original_sha256": "eb80f10cdf09c7a96879335edb787239366e88f0a7a9e1d9e41632df5f29537d"
+    },
+    {
+      "locator": "papers/arxiv/experiments/storage_demand/paired_read_v1/artifacts-v3-mapfixed-20261015-01/P4-lookahead/ready-library-evidence/maps.raw",
+      "original_bytes": 53962,
+      "original_sha256": "eeb97ea370d256f2322f97486d275f596a4a682433543ceb0dd5216c4bd2fa91"
+    },
+    {
+      "locator": "papers/arxiv/experiments/storage_demand/paired_read_v1/artifacts-v3-mapfixed-20261015-01/P4-lookahead/after-requests-library-evidence/snapshot.json",
+      "original_bytes": 1874,
+      "original_sha256": "1e4eff9cbb9b7f9398364ec32ce7bcb3ba5c9ac1a41da08165520180938e13b3"
+    },
+    {
+      "locator": "papers/arxiv/experiments/storage_demand/paired_read_v1/artifacts-v3-mapfixed-20261015-01/P4-lookahead/after-requests-library-evidence/policy.json",
+      "original_bytes": 10189,
+      "original_sha256": "ab25a948415781e8a937e1b6483e98b2a5dee2b8dc056146e7c47d0ea4973110"
+    },
+    {
+      "locator": "papers/arxiv/experiments/storage_demand/paired_read_v1/artifacts-v3-mapfixed-20261015-01/P4-lookahead/after-requests-library-evidence/validation.json",
+      "original_bytes": 6019,
+      "original_sha256": "1c99a9e5923caccf95e0056f9590d985be70a238ad903ce88ed8ed77c0960b88"
+    },
+    {
+      "locator": "papers/arxiv/experiments/storage_demand/paired_read_v1/artifacts-v3-mapfixed-20261015-01/P4-lookahead/after-requests-library-evidence/maps.raw",
+      "original_bytes": 54207,
+      "original_sha256": "913ad2e719662b60b5799203a37a9c78908912fc0d59f37c1d90b78cf6df7240"
+    }
+  ],
+  "redacted_projection": true,
+  "rule": "Required library basenames and original content hashes; raw maps and path/overlay identities withheld",
+  "schema": "ferrule.paired-http-publication-projection.v1"
+}

@@ -1,0 +1,18 @@
+{
+  "trial": "P5-blocking",
+  "admission": {
+    "monotonic": 8969440.425218642,
+    "unix_ns": 1792026497388700299
+  },
+  "outer_deadline": 8970090.425212301,
+  "pilot_deadline": 8975451.049956221,
+  "registration_sha256": "c56434d661bc87fb0383811f7637ac336e6bc907ec423b99d74341a0c8c7f97e",
+  "coordinator": {
+    "pid": 165959,
+    "birth_ticks": 133331548,
+    "ppid": 88644,
+    "pgrp": 165959,
+    "session": 165959
+  },
+  "replay_permitted": false
+}

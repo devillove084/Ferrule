@@ -1,0 +1,19 @@
+{
+  "data": {
+    "can_continue": true,
+    "resource_contract_complete": "unverified",
+    "stop_reasons": [],
+    "universal_final_release_verified": false
+  },
+  "original_receipt_replaced": false,
+  "original_sources": [
+    {
+      "locator": "papers/arxiv/experiments/storage_demand/paired_read_v1/artifacts-v3-mapfixed-20261015-01/P1-lookahead/assessment.json",
+      "original_bytes": 1639772,
+      "original_sha256": "a1897784060c9800b3d4a8bb960b5ce994acc51b96a3991083a7be1726509c0c"
+    }
+  ],
+  "redacted_projection": true,
+  "rule": "Explicit field projection; original bytes are private and not replaced by this copy",
+  "schema": "ferrule.paired-http-publication-projection.v1"
+}

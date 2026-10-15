@@ -1,0 +1,40 @@
+{
+  "seed": 20261015,
+  "blocks": [
+    {
+      "block": "P1",
+      "modes": [
+        "blocking",
+        "lookahead"
+      ]
+    },
+    {
+      "block": "P2",
+      "modes": [
+        "blocking",
+        "lookahead"
+      ]
+    },
+    {
+      "block": "P3",
+      "modes": [
+        "lookahead",
+        "blocking"
+      ]
+    },
+    {
+      "block": "P4",
+      "modes": [
+        "lookahead",
+        "blocking"
+      ]
+    },
+    {
+      "block": "P5",
+      "modes": [
+        "blocking",
+        "lookahead"
+      ]
+    }
+  ]
+}

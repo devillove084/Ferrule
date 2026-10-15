@@ -1,0 +1,49 @@
+{
+  "index": 3,
+  "name": "canary-chinese",
+  "phase": "initial",
+  "population": "initial_canary",
+  "measured": false,
+  "prompt": "\u4e2d\u56fd\u7684\u9996\u90fd\u662f",
+  "input_tokens": 3,
+  "max_tokens": 8,
+  "reference_id": "chinese",
+  "reference": {
+    "id": "chinese",
+    "prompt": "\u4e2d\u56fd\u7684\u9996\u90fd\u662f",
+    "input_tokens": 3,
+    "reference_ids": [
+      98116,
+      3709,
+      98116,
+      108820,
+      102357,
+      95983,
+      1710,
+      97486
+    ],
+    "reference_text": "\u5317\u4eac\uff0c\u5317\u4eac\u662f\u4e2d\u56fd\u7684\u9996\u90fd\u3002\u90a3\u4e48"
+  },
+  "payload": {
+    "model": "qwen35-storage-demand-paper",
+    "prompt": "\u4e2d\u56fd\u7684\u9996\u90fd\u662f",
+    "temperature": 0,
+    "seed": 1,
+    "n": 1,
+    "max_tokens": 8,
+    "stream": true,
+    "stream_options": {
+      "include_usage": true
+    }
+  },
+  "status": "censored",
+  "result": null,
+  "issued": true,
+  "censor_reason": "dispatch without terminal",
+  "admission": {
+    "monotonic": 8968601.525791109,
+    "unix_ns": 1792025658489272549
+  },
+  "absolute_deadline": 8968661.525789773,
+  "log_start_byte": 130499
+}

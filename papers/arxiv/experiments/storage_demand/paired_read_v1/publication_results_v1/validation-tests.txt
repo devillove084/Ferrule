@@ -1,0 +1,34 @@
+test_actual_http_id_join (__main__.PublicationTests.test_actual_http_id_join) ... ok
+test_all_3125_block_draws (__main__.PublicationTests.test_all_3125_block_draws) ... ok
+test_deep_private_fields_and_nested_strings (__main__.PublicationTests.test_deep_private_fields_and_nested_strings) ... ok
+test_duplicate_arm_rejected (__main__.PublicationTests.test_duplicate_arm_rejected) ... ok
+test_duplicate_json_keys (__main__.PublicationTests.test_duplicate_json_keys) ... ok
+test_failed_pair_kept_aggregate_null (__main__.PublicationTests.test_failed_pair_kept_aggregate_null) ... ok
+test_full_offline_rebuild (__main__.PublicationTests.test_full_offline_rebuild) ... ok
+test_host_peak_cap (__main__.PublicationTests.test_host_peak_cap) ... ok
+test_isolated_copy_without_repository_or_raw_receipts (__main__.PublicationTests.test_isolated_copy_without_repository_or_raw_receipts) ... ok
+test_missing_backend_null_is_not_observation (__main__.PublicationTests.test_missing_backend_null_is_not_observation) ... ok
+test_missing_done (__main__.PublicationTests.test_missing_done) ... ok
+test_missing_null_ledger_counter_rejected (__main__.PublicationTests.test_missing_null_ledger_counter_rejected) ... ok
+test_missing_pair_rejected (__main__.PublicationTests.test_missing_pair_rejected) ... ok
+test_missing_required_map (__main__.PublicationTests.test_missing_required_map) ... ok
+test_nfs_null_counter_not_zero (__main__.PublicationTests.test_nfs_null_counter_not_zero) ... ok
+test_nfs_reset_rejected_not_clamped (__main__.PublicationTests.test_nfs_reset_rejected_not_clamped) ... ok
+test_no_winner_only_selection (__main__.PublicationTests.test_no_winner_only_selection) ... ok
+test_nonfinite_measured_time_nulls_aggregate (__main__.PublicationTests.test_nonfinite_measured_time_nulls_aggregate) ... ok
+test_path_traversal (__main__.PublicationTests.test_path_traversal) ... ok
+test_pid_birth_changed (__main__.PublicationTests.test_pid_birth_changed) ... ok
+test_pipeline_counter_reset (__main__.PublicationTests.test_pipeline_counter_reset) ... ok
+test_pipeline_reset_flag (__main__.PublicationTests.test_pipeline_reset_flag) ... ok
+test_private_location_marker (__main__.PublicationTests.test_private_location_marker) ... ok
+test_retained_is_not_released (__main__.PublicationTests.test_retained_is_not_released) ... ok
+test_stale_copy_hash (__main__.PublicationTests.test_stale_copy_hash) ... ok
+test_stale_uncompressed_hash (__main__.PublicationTests.test_stale_uncompressed_hash) ... ok
+test_wrong_actual_oracle_even_if_log_and_trace_agree (__main__.PublicationTests.test_wrong_actual_oracle_even_if_log_and_trace_agree) ... ok
+test_wrong_enqueue_ordinals_even_if_copies_agree (__main__.PublicationTests.test_wrong_enqueue_ordinals_even_if_copies_agree) ... ok
+test_wrong_usage (__main__.PublicationTests.test_wrong_usage) ... ok
+
+----------------------------------------------------------------------
+Ran 29 tests in 7.998s
+
+OK

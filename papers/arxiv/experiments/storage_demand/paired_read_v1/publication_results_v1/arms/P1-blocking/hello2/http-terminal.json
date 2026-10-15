@@ -1,0 +1,93 @@
+{
+  "index": 0,
+  "repetition": 0,
+  "population": "measured",
+  "prompt_id": "prompt-0",
+  "prompt_sha256": "185f8db32271fe25f561a6fc938b2e264306ec304eda518007d1764826381969",
+  "expected_input_tokens": 1,
+  "status": "success",
+  "error": null,
+  "sent_at": 8968281.119889805,
+  "client_dispatch_at": 8968281.11967102,
+  "http_status": 200,
+  "headers_at": 8968281.142056622,
+  "request_payload": {
+    "model": "qwen35-storage-demand-paper",
+    "prompt": "Hello",
+    "temperature": 0,
+    "seed": 1,
+    "n": 1,
+    "max_tokens": 2,
+    "stream": true,
+    "stream_options": {
+      "include_usage": true
+    }
+  },
+  "after_deadline_events": [],
+  "sent_unix": 1792025338.0833707,
+  "content_type": "text/event-stream",
+  "ended_at": 8968285.41135649,
+  "deadline_at": 8968341.11828207,
+  "text": ", I",
+  "raw_sse_events": [
+    {
+      "at": 8968281.906889612,
+      "event": "",
+      "data": "{\"id\":\"cmpl-ferrule-1\",\"object\":\"text_completion\",\"created\":1792025338,\"model\":\"qwen35-storage-demand-paper\",\"choices\":[{\"text\":\",\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}"
+    },
+    {
+      "at": 8968282.626298355,
+      "event": "",
+      "data": "{\"id\":\"cmpl-ferrule-1\",\"object\":\"text_completion\",\"created\":1792025338,\"model\":\"qwen35-storage-demand-paper\",\"choices\":[{\"text\":\" I\",\"index\":0,\"logprobs\":null,\"finish_reason\":null}]}"
+    },
+    {
+      "at": 8968285.411145335,
+      "event": "",
+      "data": "{\"id\":\"cmpl-ferrule-1\",\"object\":\"text_completion\",\"created\":1792025338,\"model\":\"qwen35-storage-demand-paper\",\"choices\":[{\"text\":\"\",\"index\":0,\"logprobs\":null,\"finish_reason\":\"length\"}]}"
+    },
+    {
+      "at": 8968285.411246546,
+      "event": "",
+      "data": "{\"id\":\"cmpl-ferrule-1\",\"object\":\"text_completion\",\"created\":1792025338,\"model\":\"qwen35-storage-demand-paper\",\"choices\":[],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":2,\"total_tokens\":3}}"
+    },
+    {
+      "at": 8968285.411289971,
+      "event": "",
+      "data": "[DONE]"
+    }
+  ],
+  "content_event_times": [
+    8968281.906889612,
+    8968282.626298355
+  ],
+  "content_event_itl_seconds": [
+    0.719408743083477
+  ],
+  "content_events": 2,
+  "usage": {
+    "prompt_tokens": 1,
+    "completion_tokens": 2,
+    "total_tokens": 3
+  },
+  "actual_output_tokens": 2,
+  "actual_input_tokens": 1,
+  "finish_reason": "length",
+  "finish_at": 8968285.411145335,
+  "usage_at": 8968285.411246546,
+  "done_at": 8968285.411289971,
+  "ttft_seconds": 0.7869998067617416,
+  "request_e2e_seconds": 4.291466685011983,
+  "mean_tpot_usage_proxy_seconds": 0.719408743083477,
+  "token_itl_seconds": null,
+  "exact_token_tpot_seconds": null,
+  "reasoning_observed": false,
+  "output_token_ids": null,
+  "partial_token_count": 2,
+  "input_length_matches": true,
+  "output_length_matches": true,
+  "length_matched_success": true,
+  "client_observed_at": 8968285.411508009,
+  "right_censored": false,
+  "adapter_http_report_complete": true,
+  "adapter_http_report_errors": []
+}

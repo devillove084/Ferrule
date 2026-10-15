@@ -1,0 +1,10 @@
+{
+  "distinct_private_literals_checked": 24,
+  "nested_json_strings_scanned": true,
+  "offline_limit": "Checker repeats structural marker scan, not private-literal scan without originals",
+  "original_and_nested_credential_field_variants_checked": true,
+  "original_json_files_scanned": 1092,
+  "raw_sources_modified": false,
+  "scan_scope": "All selected current and two historical raw trees; decompressed public members",
+  "status": "passed"
+}
