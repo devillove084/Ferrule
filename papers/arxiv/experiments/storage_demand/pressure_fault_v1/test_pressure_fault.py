@@ -10,7 +10,7 @@ import prepare as p
 
 class PlanTests(unittest.TestCase):
     def setUp(self):
-        self.plan = p.load(p.HERE / "plan.json")
+        self.plan = p.load(p.PLAN_PATH)
 
     def test_preregistered_denominators_and_canonical_oracles(self):
         p.validate_design(self.plan)

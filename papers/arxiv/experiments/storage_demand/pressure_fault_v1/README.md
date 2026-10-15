@@ -1,10 +1,36 @@
-# Pressure / fault v1 — bounded four-request cache study
+# Pressure / fault — new observation-budget v2 study
 
 The CPU plan does not authorize execution. A separate explicit parent GO and
 paused profiling-owner handoff permit the narrow pressure entry after the exact
-ten-file source whitelist has been tested, committed and pushed. Only this
+nineteen-file source whitelist has been tested, committed and pushed. Only this
 directory is owned; production, manuscript, shared harness and historical
 receipts stay unchanged. Component faults remain separate and unauthorized.
+
+## V2 status: CPU prepared, not launched
+
+`plan_v2/` is a **new prespecified study**, not a resumption or successful
+replacement of `artifacts-go-20261015-01`. The original `plan.json`, `bindings.json`
+and all historical artifacts remain byte-for-byte unchanged. New execution uses
+only `plan_v2/plan.json` and `plan_v2/bindings.json`; prior results are not pooled.
+The only new authorized-directory name is `artifacts-go-v2-20261015-01`.
+A fresh explicit parent GO and paused-profiler handoff are still mandatory.
+
+The stopped small point recorded three successful HTTP requests, including only
+**two** exact HTTP canaries, and one censored Chinese request. All 26 worker IDs
+were enqueued and the three raw eight-ID sequences matched, but the fourth HTTP
+usage/terminal gate did not pass. Middle and big were unissued; no point qualified.
+Neither raw IDs nor restored idle upgrade that outcome.
+
+Source inspection found **three full validation callbacks per request**, each
+rehashing workflow and candidate pins, plus pre/post NFS/PID-I/O observation.
+The prior 60s aggregate included this work. Recorded non-HTTP gaps before the
+last three requests were 9.5808, 9.7081 and 9.7344s; Chinese had only 6.8733s left.
+A separate CPU-only probe measured 0.0902s for 88 workflow pins (94,864,532 bytes)
+and 3.0401s for 2,151 candidate pins (3,182,160,745 bytes), consistent with the
+structural cost. **Historical helper timings remain unobserved/null**: this
+probe does not reconstruct which helper consumed each historical gap.
+`plan_v2/root-analysis.json` preserves the limited counts and source-counter scope;
+`plan_v2/cpu-probe.json` labels the separate probe.
 
 ## A. Prospective coupled cache pressure
 
@@ -44,18 +70,48 @@ are separate history; the middle pressure point must be fresh too.
 
 ### Time and quality boundaries
 
-Pressure cap **900 s = 3 × 240 s + 180 s cleanup reserve**. Each lifecycle has
-startup75, requests60 (15 each), bookkeeping10, target145, shutdown25,
-worker preidle/finalization10 each, supervisor190, outer240. Reserve the entire
-next lifecycle plus cleanup before admission; never extend on slow startup or
-request failure. All clocks/deadlines must remain absolute. A pre-dispatch
-rejection remains unissued; an issued request without a terminal is censored.
-Stop new admission on failed gates, unknown custody or deadlines; retain all
-slots and suppress the three-point comparison if incomplete.
+Pressure cap **900 s = 3 × 240 s + 180 s study cleanup reserve**. V2 allocates
+**60 s startup/preflight + 120 s requests/observations + 15 s bookkeeping +
+45 s cleanup = 240 s**. Both coordinator/worker pre-idles, authentication and
+candidate checks are **inside startup**, not extra time added after launch.
+The sealed old pressure plan was startup75/HTTP15/aggregate60, not the older
+shared protocol's startup120/HTTP60. V2 keeps HTTP15 unchanged. Four HTTP caps
+use60s; the other60s of the aggregate is explicitly for validation, metadata,
+Ready maps, serial preparation and pre/post observation. This is a finite
+allocation, not a promise that any cache state or future startup will fit.
+
+All offsets share the point's original monotonic origin:
+
+| Phase completion | Absolute offset / cap |
+|---|---:|
+| Startup, including preflight and pre-idles | 60s |
+| Request phase, including Ready checks/maps and all four slots | 180s, also at most120s from phase entry |
+| Post-request maps/checks/bookkeeping | 195s, also at most15s |
+| Worker shutdown/observer finish/closure | 215s, also at most20s |
+| Worker finalization | 219s, also at most4s |
+| Supervisor own-child cancellation/reap reserve | 230s |
+| Three-sample post-idle | 235s, also at most5s |
+| Coordinator finalization / point outer cutoff | 240s |
+
+The45s cleanup envelope is20 + 4 + 11 + 5 + 5; it does **not** sit outside240s.
+The supervisor's fixed219s absolute cutoff leaves11s for its maintained
+8s wait,0.1s cancel send and2s direct-helper reap. Unknown/lost custody still
+fails closed. A bounded phase can time out during observation or cleanup;
+no shortened observation waives identity, three samples, ECHILD or quality.
+The separate180s study reserve remains unspent by point admission.
+
+Admission still requires a whole240s point plus180s reserve. No clocks slide on
+progress; no unused startup allowance enlarges the120s request phase. Readiness
+or validation after its cutoff is rejected even if another phase has room.
+Pre-dispatch expiry is unissued; issued but incomplete evidence is censored.
+Post-HTTP observer expiry cannot leave an eligible success. Stop on the first
+failed gate/unknown custody/deadline, keep every denominator, and suppress any
+incomplete three-point comparison. No retry, replacement, adaptive cap or extra
+request is authorized. Cold-start/cache state remains unknown.
 
 CLI86 (`86c58a0`, CLI SHA `7cc8e0ff…e607a01`, source digest
-`10183d24…dc8188`) has **recorded 9/9 candidate gates**, bound in `plan.json` and
-`bindings.json`. Those gates cover the existing middle configuration, including
+`10183d24…dc8188`) has **recorded 9/9 candidate gates**, bound in `plan_v2/plan.json` and
+`plan_v2/bindings.json`. Those gates cover the existing middle configuration, including
 full40/fresh/ordinary/cold numerical checks. Cache changes do not change the
 selected kernel/math, but cannot inherit full-logit/route/state PASS. New-point
 full numerical quality stays **unverified** even after visible eight-ID PASS.
@@ -73,8 +129,9 @@ current-HEAD acceptance and never recaptures a stale source/generation. The prio
 middle case remains middle-only evidence; small/big receive no numerical PASS.
 
 The maintained `execution_v2.serial_requests` and `run_pilot.worker` are compiled
-into **private globals**, each with precisely one pinned `== 12` count expression
-specialized to `== 4`. The shared validator and all shared files stay unchanged.
+into **private globals**, with pinned `== 12` count expressions specialized to
+`== 4`, plus pressure-only timing and absolute phase-cap wrappers. The shared
+validator and all shared files stay unchanged.
 The private schedule is exactly Hello2 plus the three canonical canaries. Whole-log
 validation requires all four HTTP/worker IDs, exactly26 enqueued tokens, exact
 admission/terminal order, full usage/text checks and no fifth request, including
@@ -87,8 +144,9 @@ schema is new; launch-guard/subreaper/custody schemas are unchanged. `next_point
 reuses the maintained no-replay coordinator selector. The private `idle` adapter
 shortens the existing 15s observer to the plan's absolute 10s pre-idle envelope;
 it retains all three consecutive samples, immediate memory/app rejection and
-post-ECHILD identity checks. Neither the shared observer nor the frozen budgets
-change. A parent coordinator must use this bounded helper, not `pilot.idle`.
+post-ECHILD identity checks. The shared observer is unchanged; v2 explicitly
+budgets both pre-idles within startup and a5s post-idle within cleanup.
+A parent coordinator must use this bounded helper, not `pilot.idle`.
 
 The `worker` hook enforces and persists `point_assessment`: actual per-point source
 options, positive verified reads, bounded cache charges and the full four-request
@@ -109,9 +167,10 @@ separate; unreported physical caps stay `null`.
 
 `check` stays CPU-only. `start --directory <new-private-directory>
 --sole-gpu-owner-granted --profiling-owner-paused` requires both explicit grants,
-checks that the exact ten source files are committed and pushed, and writes
+checks that the exact nineteen source/preparation files are committed and pushed, and writes
 read-only exclusive GO, case-variant, precise build-review and registration
-receipts. It starts one absolute 900s clock. A second pressure GO is rejected.
+receipts. It starts one absolute900s clock. The old stopped study is retained,
+never resumed; a second v2 GO or any unrecognized intervening study is rejected.
 
 `next --directory <same-directory>` calls the pinned maintained finite-arm
 coordinator with private entry/schema/count/budget/assessment substitutions.
@@ -124,10 +183,22 @@ request denominator, including unissued points after STOP. The failure policy is
 retry, replacement, or selective comparison. Even if physical idle is restored,
 a failed point cannot reopen admission. Private raw receipts are never staged.
 
-The outer coordinator also applies the maintained absolute alarm during its
-owned point work. A timeout preserves failure/unknown evidence; it cannot authorize
+The outer coordinator applies the pressure-only composable absolute alarm during
+owned point work. Nested alarms take the earlier cutoff and restore only the
+parent's *remaining* time; they cannot reset an outer budget. A timeout preserves failure/unknown evidence; it cannot authorize
 a new run. The CPU plan remains non-authorizing; only the new immutable GO
 authorizes this scope. Component fault selectors are never dispatched here.
+
+`phase_timing.py` records named wall/thread-CPU intervals for metadata, workflow
+pins, candidate pins, receipt hashes, source/custody checks, Ready/after maps,
+NFS, PID I/O, HTTP, token join/source counters, pre/post observers and shutdown.
+The maintained observer's private method records concurrent PSS and process
+inspection spans. JSONL start/end records survive interrupted phases; absent
+measurements stay `null`. Nested and concurrent intervals are **inclusive and
+non-additive**, not extra request E2E or reconstructed historical overhead.
+Only fixed phase names/times/status are recorded, never arguments, secrets,
+environment, pin filenames or exception text. All existing rehashes and gates
+remain in place: **no cache, stat shortcut, observer skip or validation bypass**.
 
 Report requested, logical bound, and **effective admitted** caps separately;
 reader bytes/calls/source checks, hits, evictions, uploads/H2D and observed source
@@ -189,11 +260,34 @@ Actual worker test (180s command bound; no CUDA features):
 CUDA_VISIBLE_DEVICES='' NVIDIA_VISIBLE_DEVICES=none FERRULE_PROFILE_NVTX=0 FERRULE_CUDA_ARCH=sm_86 RUSTUP_TOOLCHAIN=nightly-2026-08-01 RUSTUP_AUTO_INSTALL=0 CARGO_BUILD_JOBS=2 cargo test --offline --locked -p ferrule-model --no-default-features --lib checkpoint::read_pipeline::tests::cancellation_after_start_does_not_release_running_read_or_pins -- --exact --nocapture --test-threads=1
 ```
 
-See `VALIDATION.md` for executed CPU selectors and limitations; `bindings.json`
+See `VALIDATION.md` for executed CPU selectors and limitations; `plan_v2/bindings.json`
 pins inspected sources and existing receipts, excluding the active profiler.
 `prepare.py` and `subset_adapter.py check` check/print only, never reseal or write
-results. `bindings.json` seals the exact budget variant and source inventory;
-`STAGE_FILES.txt` is the exact ten-file staging whitelist (not a directory glob).
+results. `plan_v2/bindings.json` seals the new budget variant and source inventory;
+`STAGE_FILES.txt` is the exact nineteen-file staging whitelist (not a directory glob).
 Only the explicit source whitelist may be staged; private execution directories,
 raw maps/environments, candidates and binaries must be excluded. No GPU results
 are implied by this source document; new private receipts carry actual outcomes.
+
+
+## Future execution commands — NOT launched
+
+Only after the parent issues a **new GO** and the profiling owner explicitly
+hands over GPU exclusivity, from this directory with the committed/pushed v2
+sources, use the maintained interpreter below. Do not start the900s clock while
+waiting for the handoff.
+
+```sh
+/home/admin/wxw403883/anaconda3/bin/python3.12 -S -B subset_adapter.py start --directory artifacts-go-v2-20261015-01 --sole-gpu-owner-granted --profiling-owner-paused
+/home/admin/wxw403883/anaconda3/bin/python3.12 -S -B subset_adapter.py next --directory artifacts-go-v2-20261015-01
+```
+
+`next` issues **one** point. Inspect its assessment before issuing the identical
+`next` command for middle, then big. STOP forbids further points; do not use a
+blind shell loop or retry a failed command. After all three or permanent STOP:
+
+```sh
+/home/admin/wxw403883/anaconda3/bin/python3.12 -S -B subset_adapter.py finalize --directory artifacts-go-v2-20261015-01
+```
+
+Component fault/GPU profiler work is not part of this authorization.

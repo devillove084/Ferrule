@@ -14,13 +14,38 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[4]
 MIB = 1 << 20
 POINTS = (("small", 8, 64 * MIB), ("middle", 64, 320 * MIB), ("big", 128, 640 * MIB))
-LIMITS = dict(startup_seconds=75, request_seconds=15, all_requests_seconds=60,
-              worker_bookkeeping_seconds=10, target_lifetime_seconds=145,
-              shutdown_seconds=25, worker_preidle_seconds=10, worker_finalization_seconds=10,
-              supervisor_seconds=190, supervisor_call_overhead_seconds=10,
-              coordinator_preidle_seconds=10, coordinator_postidle_seconds=20,
-              coordinator_finalization_seconds=10, outer_lifecycle_seconds=240,
+PREPARATION = HERE / "plan_v2"
+PLAN_PATH = PREPARATION / "plan.json"
+BINDING_PATH = PREPARATION / "bindings.json"
+LIMITS = dict(startup_seconds=60, request_seconds=15, all_requests_seconds=120,
+              worker_bookkeeping_seconds=15, target_lifetime_seconds=195,
+              shutdown_seconds=20, worker_preidle_seconds=10, worker_finalization_seconds=4,
+              supervisor_seconds=219, supervisor_call_overhead_seconds=11,
+              coordinator_preidle_seconds=10, coordinator_postidle_seconds=5,
+              coordinator_finalization_seconds=5, outer_lifecycle_seconds=240,
               phase_seconds=900, study_cleanup_reserve_seconds=180)
+
+
+def budget_proof(limits):
+    """Offsets share ONE point origin; pre-idles/reviews are inside startup."""
+    require(limits == LIMITS, "v2 absolute phase caps changed")
+    startup = limits["startup_seconds"]
+    requests = startup + limits["all_requests_seconds"]
+    target = requests + limits["worker_bookkeeping_seconds"]
+    shutdown = target + limits["shutdown_seconds"]
+    worker = shutdown + limits["worker_finalization_seconds"]
+    supervisor = worker + limits["supervisor_call_overhead_seconds"]
+    postidle = supervisor + limits["coordinator_postidle_seconds"]
+    point = postidle + limits["coordinator_finalization_seconds"]
+    require(target == limits["target_lifetime_seconds"] and worker == limits["supervisor_seconds"],
+            "target/worker phases do not compose")
+    require(point == limits["outer_lifecycle_seconds"] == 240, "point phases do not compose")
+    require(3 * point + limits["study_cleanup_reserve_seconds"] == limits["phase_seconds"] == 900,
+            "study phases do not compose")
+    require(limits["request_seconds"] == 15 and 4 * limits["request_seconds"] < limits["all_requests_seconds"],
+            "HTTP caps must leave observation/validation budget")
+    return dict(startup=startup, requests=requests, bookkeeping=target, shutdown=shutdown,
+                worker_finalization=worker, supervisor_cleanup=supervisor, postidle=postidle, point=point)
 
 
 def load(path):
@@ -36,8 +61,8 @@ def sha(path):
 
 
 def check_bindings():
-    binding = load(HERE / "bindings.json")
-    require(binding["schema"] == "ferrule.storage-demand.pressure-fault-inputs.v1", "binding schema")
+    binding = load(BINDING_PATH)
+    require(binding["schema"] == "ferrule.storage-demand.pressure-fault-inputs.v2", "binding schema")
     unsigned = {key: value for key, value in binding.items() if key != "digest"}
     require(binding.get("digest") == hashlib.sha256(
         json.dumps(unsigned, sort_keys=True, allow_nan=False).encode()).hexdigest(), "input seal digest changed")
@@ -61,15 +86,10 @@ def validate_design(value):
     require(all(p[k] == 0 for k in ("retry_count", "replacement_count", "extra_qa_requests"))
             and not p["adaptive_orders"] and not p["reuse_middle_baseline_samples"], "no extra data/adaptation")
     require(p["limits"] == LIMITS, "absolute budget changed")
-    require(3 * LIMITS["outer_lifecycle_seconds"] + LIMITS["study_cleanup_reserve_seconds"]
-            == LIMITS["phase_seconds"] == 900, "phase reserve invalid")
-    require(sum(LIMITS[k] for k in ("worker_preidle_seconds", "target_lifetime_seconds",
-                                  "shutdown_seconds", "worker_finalization_seconds"))
-            == LIMITS["supervisor_seconds"], "supervisor budget invalid")
-    require(sum(LIMITS[k] for k in ("supervisor_seconds", "supervisor_call_overhead_seconds",
-                                  "coordinator_preidle_seconds", "coordinator_postidle_seconds",
-                                  "coordinator_finalization_seconds"))
-            == LIMITS["outer_lifecycle_seconds"], "lifecycle budget invalid")
+    require(value["schema"] == "ferrule.storage-demand.pressure-fault-plan.v2"
+            and value["id"] == "pressure-fault-observation-budget-20261015-v2", "new study identity required")
+    require(p["phase_deadline_offsets"] == budget_proof(LIMITS), "phase deadline composition drift")
+    require(value["historical_resume_permitted"] is False, "historical study cannot resume")
     require(p["quality"]["full_numerical_per_point"] == "unverified"
             and p["quality"]["arbitrary_cap_numeric_factory_gate_available"] is False,
             "cannot transfer middle numerical PASS")
@@ -176,7 +196,7 @@ def static_header_preflight(value, argv):
 
 def prepared():
     binding = check_bindings()
-    value = validate_design(load(HERE / "plan.json"))
+    value = validate_design(load(PLAN_PATH))
     candidate = value["candidate"]
     recorded = load(ROOT / candidate["binding"])
     require(recorded["candidate_identity"]["commit"] == candidate["commit"]
@@ -185,6 +205,8 @@ def prepared():
     require(binding["files"][candidate["qualification_final"]] == candidate["qualification_final_sha256"],
             "nine-gate final not bound")
     requests = frozen_requests(value)
+    require(load(PREPARATION / "requests.json") == requests, "sealed four-request copy differs")
+    require(load(PREPARATION / "cases.json") == cases(value), "sealed prospective cases differ")
     geometry_path = ROOT / value["pressure"]["source_geometry"]["evidence"]
     geometry = [json.loads(line.split("source_geometry=", 1)[1]) for line in geometry_path.read_text().splitlines()
                 if "source_geometry=" in line]
@@ -192,12 +214,12 @@ def prepared():
     for key, actual in geometry[0].items():
         if key in value["pressure"]["source_geometry"]:
             require(actual == value["pressure"]["source_geometry"][key], "source geometry differs: " + key)
-    return dict(schema="ferrule.storage-demand.pressure-fault-prepared.v1",
+    return dict(schema="ferrule.storage-demand.pressure-fault-prepared.v2",
                 status=value["status"], launch_entry=False, gpu_runs=0, gpu_queries=0, gpu_locks=0,
                 candidate=candidate, pressure_points=cases(value), requests=requests,
                 denominators=denominator_summary({}), preregistered_denominators=value["pressure"]["denominators"],
                 limits=LIMITS, blockers=value["blockers"], faults=value["faults"], claim_limits=value["claim_limits"],
-                pressure_comparison=None, inputs_sha256=sha(HERE / "bindings.json"))
+                pressure_comparison=None, inputs_sha256=sha(BINDING_PATH))
 
 
 def main():

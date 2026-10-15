@@ -171,7 +171,7 @@ class SubsetTests(fixtures.CPUOnly):
         self.assertFalse(result['can_continue'])
 
     def test_issued_without_terminal_remains_censored(self):
-        with mock.patch.object(a.ex, 'one_request', side_effect=TimeoutError('lost terminal')):
+        with mock.patch.object(a, 'http_request', side_effect=TimeoutError('lost terminal')):
             result, order = self.execute()
         self.assertEqual(order, [])
         self.assertEqual(result['summary']['counts'], dict(success=0, failed=0, censored=1, unissued=3))
@@ -181,8 +181,8 @@ class SubsetTests(fixtures.CPUOnly):
     def test_absolute_aggregate_deadline_does_not_slide(self):
         from runnerhelpers.evidence_v2 import request_budget_seconds
         self.assertEqual(request_budget_seconds(a.p.LIMITS, 100, 100, 300, 400, 500), 15)
-        self.assertEqual(request_budget_seconds(a.p.LIMITS, 159, 100, 300, 400, 500), 1)
-        self.assertEqual(request_budget_seconds(a.p.LIMITS, 160, 100, 300, 400, 500), 0)
+        self.assertEqual(request_budget_seconds(a.p.LIMITS, 219, 100, 300, 400, 500), 1)
+        self.assertEqual(request_budget_seconds(a.p.LIMITS, 220, 100, 300, 400, 500), 0)
         self.assertFalse(a.p.can_admit(419.999))
         self.assertTrue(a.p.can_admit(420))
 
@@ -353,7 +353,7 @@ class SubsetTests(fixtures.CPUOnly):
         value = a.p.load(a.BINDING_PATH)
         value['files']['papers/arxiv/experiments/storage_demand/runnerhelpers/execution_v2.py'] = '0' * 64
         with mock.patch.object(a.p, 'load', return_value=value), self.assertRaisesRegex(ValueError, 'source changed'):
-            a.serial_requests()
+            a._specialize(a.ex.serial_requests, 'len(observations) == 12', 'len(observations) == 4')
 
     def test_full_worker_contract_keeps_all_eight_locks_and_exact_scope(self):
         candidate = dict(candidate=a.p.load(a.BINDING_PATH)['candidate'], uuid_inventory=fixtures.UUIDS)
@@ -567,7 +567,8 @@ class CommandTests(fixtures.CPUOnly):
             a.unseal(path, 'wrong')
 
     def test_supervisor_keeps_authentication_and_only_changes_worker_entry(self):
-        payload = dict(directory=str(self.directory))
+        payload = dict(directory=str(self.directory), limits=a.p.LIMITS,
+            outer_deadline=time.monotonic() + 240, pilot_deadline=time.monotonic() + 900)
         sealed = dict(payload, worker_token='fixture-secret')
         with mock.patch.object(a.pilot.launch_guard, 'seal', return_value=(sealed, 'fixture-hash')), \
                 mock.patch.object(a.ct, 'isolated_argv', side_effect=lambda argv, env: argv), \
@@ -608,7 +609,7 @@ class CommandTests(fixtures.CPUOnly):
             row = private(self.directory)
         self.assertEqual(len(captured), 1)
         payload, seconds = captured[0]
-        self.assertEqual(seconds, 190)
+        self.assertEqual(seconds, a.p.LIMITS['supervisor_seconds'])
         self.assertEqual(payload['schema'], a.SCHEMA)
         self.assertEqual(payload['trial'], 'small-blocking')
         self.assertEqual(payload['request_ceiling'], 4)

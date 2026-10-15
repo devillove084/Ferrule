@@ -1,0 +1,151 @@
+[
+  {
+    "index": 0,
+    "input_tokens": 1,
+    "max_tokens": 2,
+    "measured": false,
+    "name": "hello2",
+    "payload": {
+      "max_tokens": 2,
+      "model": "qwen35-storage-demand-paper",
+      "n": 1,
+      "prompt": "Hello",
+      "seed": 1,
+      "stream": true,
+      "stream_options": {
+        "include_usage": true
+      },
+      "temperature": 0
+    },
+    "phase": "initial",
+    "population": "initial_canary",
+    "prompt": "Hello",
+    "reference": null,
+    "reference_id": null,
+    "result": null,
+    "status": "scheduled"
+  },
+  {
+    "index": 1,
+    "input_tokens": 5,
+    "max_tokens": 8,
+    "measured": false,
+    "name": "canary-qa",
+    "payload": {
+      "max_tokens": 8,
+      "model": "qwen35-storage-demand-paper",
+      "n": 1,
+      "prompt": "The capital of Japan is",
+      "seed": 1,
+      "stream": true,
+      "stream_options": {
+        "include_usage": true
+      },
+      "temperature": 0
+    },
+    "phase": "initial",
+    "population": "initial_canary",
+    "prompt": "The capital of Japan is",
+    "reference": {
+      "id": "qa",
+      "input_tokens": 5,
+      "prompt": "The capital of Japan is",
+      "reference_ids": [
+        25358,
+        13,
+        198,
+        760,
+        6511,
+        314,
+        6124,
+        369
+      ],
+      "reference_text": " Tokyo.\nThe capital of Japan is"
+    },
+    "reference_id": "qa",
+    "result": null,
+    "status": "scheduled"
+  },
+  {
+    "index": 2,
+    "input_tokens": 5,
+    "max_tokens": 8,
+    "measured": false,
+    "name": "canary-arithmetic",
+    "payload": {
+      "max_tokens": 8,
+      "model": "qwen35-storage-demand-paper",
+      "n": 1,
+      "prompt": "7 + 8 =",
+      "seed": 1,
+      "stream": true,
+      "stream_options": {
+        "include_usage": true
+      },
+      "temperature": 0
+    },
+    "phase": "initial",
+    "population": "initial_canary",
+    "prompt": "7 + 8 =",
+    "reference": {
+      "id": "arithmetic",
+      "input_tokens": 5,
+      "prompt": "7 + 8 =",
+      "reference_ids": [
+        907,
+        271,
+        22,
+        478,
+        220,
+        23,
+        283,
+        220
+      ],
+      "reference_text": " ?\n\n7 + 8 = "
+    },
+    "reference_id": "arithmetic",
+    "result": null,
+    "status": "scheduled"
+  },
+  {
+    "index": 3,
+    "input_tokens": 3,
+    "max_tokens": 8,
+    "measured": false,
+    "name": "canary-chinese",
+    "payload": {
+      "max_tokens": 8,
+      "model": "qwen35-storage-demand-paper",
+      "n": 1,
+      "prompt": "\u4e2d\u56fd\u7684\u9996\u90fd\u662f",
+      "seed": 1,
+      "stream": true,
+      "stream_options": {
+        "include_usage": true
+      },
+      "temperature": 0
+    },
+    "phase": "initial",
+    "population": "initial_canary",
+    "prompt": "\u4e2d\u56fd\u7684\u9996\u90fd\u662f",
+    "reference": {
+      "id": "chinese",
+      "input_tokens": 3,
+      "prompt": "\u4e2d\u56fd\u7684\u9996\u90fd\u662f",
+      "reference_ids": [
+        98116,
+        3709,
+        98116,
+        108820,
+        102357,
+        95983,
+        1710,
+        97486
+      ],
+      "reference_text": "\u5317\u4eac\uff0c\u5317\u4eac\u662f\u4e2d\u56fd\u7684\u9996\u90fd\u3002\u90a3\u4e48"
+    },
+    "reference_id": "chinese",
+    "result": null,
+    "status": "scheduled"
+  }
+]

@@ -18,8 +18,10 @@ import re
 import signal
 import subprocess
 import sys
+import textwrap
 from types import SimpleNamespace
 
+from phase_timing import Timings, deadline_cap
 import prepare as p
 from evidence import NAMES, POINT_IDS, counter_totals, denominator_summary, integer
 
@@ -35,21 +37,21 @@ from paired_read_v1.final_adapter_v3 import binding as prior_binding, evidence a
 from paired_read_v1.map_evidence_v1 import adapter as mapped
 from newversionedprotocol import run_pilot as pilot
 
-BINDING_PATH = p.HERE / 'bindings.json'
+BINDING_PATH = p.BINDING_PATH
 ENTRY = Path(__file__).resolve()
-REGISTRATION_SCHEMA = 'ferrule.storage-demand.pressure-registration.v1'
+REGISTRATION_SCHEMA = 'ferrule.storage-demand.pressure-registration.v2'
 TRIALS = [point + '-blocking' for point in POINT_IDS]
 CONTRACT_KEYS = paired.CONTRACT_KEYS
 IDLE_OBSERVER = pilot.idle_window.observe
 WORKFLOW_TOOLS = ('/home/admin/wxw403883/anaconda3/bin/python3.12', '/usr/bin/env', '/usr/bin/nvidia-smi')
-SCHEMA = 'ferrule.storage-demand.pressure-worker.v1'
+SCHEMA = 'ferrule.storage-demand.pressure-worker.v2'
 NOTE = 'Separate parent GO and profiling-owner handoff required for three blocking pressure points; no retries or profiling'
 REQUEST_EVENTS = ('request_admitted', 'request_http_admitted', 'request_worker_terminal',
                   'request_worker_terminal_enqueue', 'request_http_terminal')
 
 
 def design():
-    return p.validate_design(p.load(p.HERE / 'plan.json'))
+    return p.validate_design(p.load(p.PLAN_PATH))
 
 
 def schedule():
@@ -78,8 +80,8 @@ def case_for_point(point):
 def seal_design():
     """Deterministic contents for the owned input seal, never a launch/quality PASS."""
     value = design()
-    return dict(schema='ferrule.storage-demand.pressure-budget-variant.v1',
-        plan_sha256=p.sha(p.HERE / 'plan.json'), request_ceiling=4, trial_order=TRIALS,
+    return dict(schema='ferrule.storage-demand.pressure-budget-variant.v2',
+        plan_sha256=p.sha(p.PLAN_PATH), request_ceiling=4, trial_order=TRIALS,
         schedule_sha256=ct.digest(schedule()),
         case_sha256={point: ct.digest(case_for_point(point)) for point in POINT_IDS},
         limits=value['pressure']['limits'], prior_numerical_scope='middle64_320MiB_only',
@@ -209,7 +211,7 @@ def _specializations(function, replacements, **bindings):
     pins = p.load(BINDING_PATH)['files']
     name = str(path.relative_to(p.ROOT))
     require(name in pins and p.sha(path) == pins[name], 'maintained specialization source changed')
-    source = inspect.getsource(function)
+    source = textwrap.dedent(inspect.getsource(function))
     for before, after in replacements:
         require(source.count(before) == 1, 'maintained expression changed: ' + before)
         source = source.replace(before, after)
@@ -235,10 +237,59 @@ def idle(directory, label, uuids, deadline, custody=None):
     return result
 
 
-def serial_requests(*args, **kwargs):
-    private = _specialize(ex.serial_requests, 'len(observations) == 12', 'len(observations) == 4',
-                          validate_schedule=validate_schedule)
-    return private(*args, **kwargs)
+def phase_deadlines(payload):
+    require(payload['limits'] == p.LIMITS, 'v2 pressure limits changed')
+    outer = min(payload['outer_deadline'], payload['pilot_deadline'])
+    origin = outer - p.LIMITS['outer_lifecycle_seconds']
+    return {name: origin + offset for name, offset in p.budget_proof(payload['limits']).items()}
+
+
+def http_request(*args):
+    private = _specialize(ex.one_request, 'with absolute_alarm(deadline):',
+                          'with absolute_alarm(deadline):', absolute_alarm=deadline_cap)
+    return private(*args)
+
+
+def serial_requests(directory, schedule, spec, limits, target_deadline, outer_deadline,
+                    pilot_deadline, check, sample, io_sample, *, phase_started=None, timings=None):
+    own_timings = timings is None
+    timings = Timings(directory) if own_timings else timings
+    started = pilot.time.monotonic() if phase_started is None else phase_started
+    phase_deadline = min(started + limits['all_requests_seconds'], target_deadline, outer_deadline, pilot_deadline)
+    source = inspect.getsource(ex.serial_requests)
+    begin = source.index('            check()')
+    end = source.index('        except (Exception, KeyboardInterrupt)', begin)
+    body = source[begin:end]
+    observed = body
+    for label in ('pre_admission_validation', 'pre_dispatch_validation', 'post_http_validation'):
+        observed = observed.replace('check()', "timings.call('" + label + "', check)", 1)
+    observed = observed.replace("pre = sample(planned['name'] + '-pre')\n            before_io = io_sample()",
+        "with timings.span('pre_observer'):\n                pre = timings.call('nfs', sample, planned['name'] + '-pre')\n                before_io = timings.call('pid_io', io_sample)")
+    observed = observed.replace("after_io = io_sample()\n            post = sample(planned['name'] + '-post')",
+        "with timings.span('post_observer'):\n                after_io = timings.call('pid_io', io_sample)\n                post = timings.call('nfs', sample, planned['name'] + '-post')")
+    observed = observed.replace('actual = one_request(folder, planned, spec, deadline)',
+                                "actual = timings.call('http', one_request, folder, planned, spec, deadline)")
+    observed = observed.replace('trace = join_token_trace_http(parse_token_trace(lines), [dict(planned, actual=actual)], lines)[0]',
+        "trace = timings.call('token_join', join_token_trace_http, parse_token_trace(lines), [dict(planned, actual=actual)], lines)[0]")
+    observed = observed.replace('counters = logical_counter_window(lines)',
+                                "counters = timings.call('source_counters', logical_counter_window, lines)")
+    observed = observed.replace('            window_end = log.stat().st_size',
+        "            if time.monotonic() >= phase_deadline:\n                raise TimeoutError('absolute pressure post-observation deadline')\n            window_end = log.stat().st_size")
+    wrapped = '            with deadline_cap(phase_deadline):\n' + textwrap.indent(observed, '    ')
+    private = _specializations(ex.serial_requests, (
+        ('len(observations) == 12', 'len(observations) == 4'),
+        ('started = time.monotonic()', 'started = phase_started'),
+        ("absolute_aggregate_deadline=started + limits['all_requests_seconds'],",
+         "absolute_aggregate_deadline=started + limits['all_requests_seconds'], effective_phase_deadline=phase_deadline,"),
+        (body, wrapped)),
+        validate_schedule=validate_schedule, one_request=http_request, timings=timings,
+        phase_started=started, phase_deadline=phase_deadline, deadline_cap=deadline_cap)
+    try:
+        return private(directory, schedule, spec, limits, target_deadline, outer_deadline,
+                       pilot_deadline, check, sample, io_sample)
+    finally:
+        if own_timings:
+            timings.finish()
 
 
 def whole_log_join(trace_rows, requests, server_lines=()):
@@ -353,31 +404,94 @@ def point_assessment(point, lifecycle, lines):
 
 @contextmanager
 def private_worker(payload):
-    """Yield the maintained authenticated worker with only private count/scope hooks.
-
-No call or launch occurs on context entry. The command entry requires the
-separate immutable GO; maintained launch authentication remains mandatory.
-"""
+    """Private timing/deadline seams; maintained authentication and cleanup stay."""
     point = payload['trial'].rsplit('-', 1)[0]
     require(payload['trial'] in TRIALS, 'unknown worker point')
+    # Construction does not write, query, launch, or authenticate anything.
+    timings = Timings(payload.get('directory', p.HERE))
+    caps = phase_deadlines(payload) if 'limits' in payload else {}
+    def timed_contract(value):
+        with deadline_cap(caps['startup']):
+            return timings.call('worker_contract', worker_contract, value)
+    def observed(name, function):
+        return lambda *args, **kwargs: timings.call(name, function, *args, **kwargs)
     with mapped.mapped_worker(payload):
         original_maps = ex.library_maps
         def timing_maps(root, pins):
-            ex.observer.verify_root(root)
-            environment = dict(item.split('=', 1) for item in
-                Path(f'/proc/{root["pid"]}/environ').read_text().split('\0') if '=' in item)
-            require(environment.get('FERRULE_PROFILE_NVTX') == '0', 'actual timing NVTX must be OFF')
-            return original_maps(root, pins)
+            with timings.span('library_maps'):
+                ex.observer.verify_root(root)
+                environment = dict(item.split('=', 1) for item in
+                    Path(f'/proc/{root["pid"]}/environ').read_text().split('\0') if '=' in item)
+                require(environment.get('FERRULE_PROFILE_NVTX') == '0', 'actual timing NVTX must be OFF')
+                return original_maps(root, pins)
         def point_requests(directory, *args, **kwargs):
-            source = source_options(point, ex.log_lines(Path(directory) / 'server.log'))
+            source = timings.call('source_options', source_options, point, ex.log_lines(Path(directory) / 'server.log'))
             ct.write(Path(directory) / 'source-options.json', source)
-            return serial_requests(directory, *args, **kwargs)
+            return serial_requests(directory, *args, timings=timings, **kwargs)
+        # Observer work runs concurrently. Keep inclusive PSS/diagnostic spans
+        # separate from main-thread serial overhead; never sum them as a gap.
+        collect = _specialize(ex.observer.Monitor.collect, 'host_snapshot(self.root)', 'host_snapshot(self.root)',
+            host_snapshot=observed('observer_pss', ex.observer.host_snapshot),
+            process_diagnostics=observed('observer_diagnostics', ex.observer.process_diagnostics))
+        monitor = type('PressureMonitor', (pilot.PilotMonitor,), dict(collect=collect,
+            finish=observed('observer_finish', pilot.PilotMonitor.finish)))
         facade = SimpleNamespace(**dict(vars(ex), serial_requests=point_requests,
-                                        library_maps=timing_maps, join_token_trace_http=whole_log_join))
-        worker = _specialize(pilot.worker, "len(result['whole_log_token_join']) == 12",
-                             "len(result['whole_log_token_join']) == 4",
-                             ex=facade, HERE=p.HERE, worker_contract=worker_contract, idle=idle)
-        yield worker
+            library_maps=timing_maps, join_token_trace_http=whole_log_join))
+        source = inspect.getsource(pilot.worker)
+        # Preserve every operation and exception/cleanup path; only wrap the
+        # maintained blocks, with exact pinned expressions checked on each use.
+        startup_start = source.index('        idle(directory,')
+        startup_end = source.index('        result.update(server_identity=', startup_start)
+        startup = source[startup_start:startup_end]
+        new_startup = startup.replace("min(started + limits['worker_preidle_seconds'], payload['outer_deadline'], payload['pilot_deadline'])",
+                                      "min(started + limits['worker_preidle_seconds'], caps['startup'])")
+        target_start = new_startup.index('        target_deadline = min(')
+        target_end = new_startup.index('        capture = ex.launch_capture', target_start)
+        new_startup = new_startup[:target_start] + "        target_deadline = caps['bookkeeping']\n        remaining(caps['startup'], 0, 'absolute point startup')\n" + new_startup[target_end:]
+        new_startup = new_startup.replace("startup_deadline = min(launch + limits['startup_seconds'], target_deadline)",
+                                          "startup_deadline = caps['startup']")
+        request_start = source.index('        environment = dict(', startup_end)
+        request_end = source.index("        phase_post = sample('requests-post')", request_start)
+        requests = source[request_start:request_end]
+        new_requests = requests.replace("runtime = ct.load(candidate['candidate']['runtime_pin_manifest'])['pins']",
+            "runtime = timings.call('runtime_metadata', ct.load, candidate['candidate']['runtime_pin_manifest'])['pins']")
+        new_requests = new_requests.replace("ct.check_pins(payload['adapter_pins'])", "timings.call('workflow_pins', ct.check_pins, payload['adapter_pins'])")
+        new_requests = new_requests.replace("ct.check_pins(candidate['candidate']['artifact_pins'])", "timings.call('candidate_pins', ct.check_pins, candidate['candidate']['artifact_pins'])")
+        check_start = new_requests.index('            ex.observer.verify_root(root)')
+        check_end = new_requests.index("            timings.call('workflow_pins'", check_start)
+        custody = new_requests[check_start:check_end]
+        new_requests = new_requests.replace(custody, "            with timings.span('source_custody_checks'):\n" + textwrap.indent(custody, '    '))
+        receipts = "            for key in ('execution', 'candidate'):\n                require(ct.sha(payload[key + '_path']) == payload[key + '_sha256'], key + ' receipt changed')"
+        assert receipts in new_requests
+        new_requests = new_requests.replace(receipts, "            with timings.span('receipt_hashes'):\n" + textwrap.indent(receipts, '    '))
+        new_requests = new_requests.replace("target_deadline, payload['outer_deadline'], payload['pilot_deadline'], check, sample,\n            lambda: ex.process_io(root))",
+            "request_deadline, payload['outer_deadline'], payload['pilot_deadline'], check, sample,\n            lambda: ex.process_io(root), phase_started=request_started)")
+        book_end = source.index('    except (Exception, KeyboardInterrupt)', request_end)
+        bookkeeping = source[request_end:book_end]
+        cleanup_start = source.index('                try:\n                    if server is not None:', book_end)
+        cleanup_end = source.index('            except (Exception, KeyboardInterrupt)', cleanup_start)
+        cleanup = source[cleanup_start:cleanup_end]
+        cleanup = cleanup.replace("capture.wait(timeout=limits['shutdown_seconds'] + 2)",
+            "capture.wait(timeout=max(0.001, min(limits['shutdown_seconds'] + 2, caps['shutdown'] - time.monotonic())))")
+        replacements = (
+            ('candidate = worker_contract(payload)', 'candidate = timed_contract(payload)'),
+            ("ct.load(STORAGE / 'checkpoint-metadata.json')", "timings.call('checkpoint_metadata', ct.load, STORAGE / 'checkpoint-metadata.json')"),
+            (startup, "        with deadline_cap(caps['startup']), timings.span('startup'):\n" + textwrap.indent(new_startup, '    ')),
+            (requests, "        request_started = time.monotonic()\n        request_deadline = min(request_started + limits['all_requests_seconds'], caps['requests'])\n        with deadline_cap(request_deadline), timings.span('request_phase'):\n" + textwrap.indent(new_requests, '    ')),
+            (bookkeeping, "        with deadline_cap(min(time.monotonic() + limits['worker_bookkeeping_seconds'], caps['bookkeeping'])), timings.span('bookkeeping'):\n" + textwrap.indent(bookkeeping, '    ')),
+            (source[cleanup_start:cleanup_end], "                with deadline_cap(min(time.monotonic() + limits['shutdown_seconds'], caps['shutdown'])), timings.span('shutdown'):\n" + textwrap.indent(cleanup, '    ')),
+        )
+        replacements += (("len(result['whole_log_token_join']) == 12", "len(result['whole_log_token_join']) == 4"),)
+        replacements += tuple((call, "timings.call('nfs', " + call.split('(', 1)[0] + ", " + call.split('(', 1)[1])
+            for call in ("sample_after('prelaunch')", "sample('ready')", "sample('requests-pre')",
+                         "sample('requests-post')", "sample_after('shutdown-pre')", "sample_after('shutdown-post')"))
+        private = _specializations(pilot.worker, replacements, ex=facade, HERE=p.HERE,
+            worker_contract=worker_contract, timed_contract=timed_contract, idle=idle,
+            PilotMonitor=monitor, caps=caps, timings=timings, deadline_cap=deadline_cap)
+        try:
+            yield private
+        finally:
+            timings.finish()
 
 
 def worker(launch_hash):
@@ -389,14 +503,18 @@ def worker(launch_hash):
         sys.stdin = io.StringIO(raw)
         with private_worker(payload) as maintained_worker:
             code = maintained_worker(launch_hash)
+            folder = Path(payload['directory'])
+            with deadline_cap(min(pilot.time.monotonic() + payload['limits']['worker_finalization_seconds'],
+                                  phase_deadlines(payload)['worker_finalization'])):
+                timings = maintained_worker.__globals__['timings']
+                with timings.span('worker_finalization'):
+                    lifecycle = ct.load(folder / 'lifecycle.json')
+                    log = folder / 'server.log'
+                    lines = ex.log_lines(log) if log.is_file() else []
+                    assessment = point_assessment(payload['trial'].rsplit('-', 1)[0], lifecycle, lines)
+                    ct.write(folder / 'point-assessment.json', assessment)
     finally:
         sys.stdin = previous
-    folder = Path(payload['directory'])
-    lifecycle = ct.load(folder / 'lifecycle.json')
-    log = folder / 'server.log'
-    lines = ex.log_lines(log) if log.is_file() else []
-    assessment = point_assessment(payload['trial'].rsplit('-', 1)[0], lifecycle, lines)
-    ct.write(folder / 'point-assessment.json', assessment)
     return 0 if code == 0 and assessment['can_continue'] else 1
 
 
@@ -450,8 +568,8 @@ def unseal(path, schema):
 def directory_check(directory):
     directory = Path(directory)
     require(directory.parent.resolve() == p.HERE and not directory.is_symlink()
-            and re.fullmatch(r'artifacts-go-[A-Za-z0-9_-]{1,60}', directory.name),
-            'new private artifacts-go-NAME directly in pressure_fault_v1 required')
+            and directory.name == 'artifacts-go-v2-20261015-01',
+            'new v2 artifacts-go-v2-20261015-01 only; historical resume forbidden')
     return directory.resolve()
 
 
@@ -462,7 +580,9 @@ def committed_sources():
     require(commit == git('rev-parse', '@{upstream}').decode().strip(), 'source commit must already be pushed')
     require(not git('diff', '--cached', '--name-only').strip(), 'index must be empty before GPU ownership')
     names = (p.HERE / 'STAGE_FILES.txt').read_text().splitlines()
-    require(len(names) == len(set(names)) == 10, 'exact ten-file source whitelist required')
+    require(len(names) == 19 and names == sorted(set(names)) and all(name.startswith(str(p.HERE.relative_to(p.ROOT)) + '/')
+        and '..' not in Path(name).parts and 'artifacts-go-' not in name for name in names),
+        'exact sorted owned-source whitelist required; no raw artifacts')
     for name in names:
         require(git('show', commit + ':' + name) == (p.ROOT / name).read_bytes(), 'uncommitted pressure source: ' + name)
     return dict(commit=commit, source_files={name: ct.sha(p.ROOT / name) for name in names})
@@ -471,27 +591,29 @@ def committed_sources():
 def start(directory, granted, profiling_paused):
     require(granted is True and profiling_paused is True, 'explicit GO and profiling-owner paused handoff required')
     directory = directory_check(directory)
-    require(not any(p.HERE.glob('artifacts-go-*')), 'a pressure GO already exists; no replacement study')
+    require(not directory.exists() and all(path.name == 'artifacts-go-20261015-01'
+        for path in p.HERE.glob('artifacts-go-*')), 'one new v2 study only; no retry/replacement/resume')
     execution, candidate = validate_execution(), validate_candidate()
     build = review_build(candidate)
     committed = committed_sources()
     directory.mkdir(mode=0o700, exist_ok=False)
-    authorization = dict(schema='ferrule.storage-demand.pressure-go.v1', id=directory.name,
+    authorization = dict(schema='ferrule.storage-demand.pressure-go.v2', id=directory.name,
         recorded=ex.stamp(), parent_explicit_go=True, profiling_owner_paused=True,
         active_profiling_captures=0, owner_note=NOTE, sources=committed,
+        study_design_id=design()['id'], historical_resume_permitted=False,
         limits=execution['limits'], trial_order=TRIALS, request_ceiling=4,
         failure_policy=design()['pressure']['failure_policy'],
         scope=design()['pressure']['quality']['scope_decision'], no_other_gpu_work=True,
         retries=0, replacements=0, profiling_captures=0)
     sealed_write(directory / 'GO.json', authorization)
-    sealed_write(directory / 'candidate-review.json', dict(schema='ferrule.storage-demand.pressure-build-review.v1', **build))
-    cases = dict(schema='ferrule.storage-demand.pressure-case-registration.v1',
+    sealed_write(directory / 'candidate-review.json', dict(schema='ferrule.storage-demand.pressure-build-review.v2', **build))
+    cases = dict(schema='ferrule.storage-demand.pressure-case-registration.v2',
         candidate_identity=candidate['candidate_identity'], case_variants=[dict(
             **case_for_point(point), spec=spec_for(candidate, candidate['uuid_inventory'][0], point),
             candidate_case_variant=True, inherits_full_numerical_qualification=False) for point in POINT_IDS])
     sealed_write(directory / 'cases.json', cases)
     now = pilot.time.monotonic()
-    value = dict(schema=REGISTRATION_SCHEMA, protocol_id=directory.name, started=ex.stamp(),
+    value = dict(schema=REGISTRATION_SCHEMA, protocol_id=directory.name, study_design_id=design()['id'], started=ex.stamp(),
         pilot_deadline=now + execution['limits']['phase_seconds'], boot_id=coordinator.boot_id(),
         trial_order=TRIALS, order=list(POINT_IDS), limits=execution['limits'], schedule=schedule(),
         binding_path=str(BINDING_PATH), binding_sha256=ct.sha(BINDING_PATH),
@@ -510,7 +632,7 @@ def registration(directory):
     directory = directory_check(directory)
     value = unseal(directory / 'registration.json', REGISTRATION_SCHEMA)
     execution = validate_execution()
-    require(value['boot_id'] == coordinator.boot_id() and value['trial_order'] == TRIALS
+    require(value['study_design_id'] == design()['id'] and value['boot_id'] == coordinator.boot_id() and value['trial_order'] == TRIALS
             and value['order'] == list(POINT_IDS) and value['limits'] == execution['limits']
             and value['schedule'] == schedule() and value['request_ceiling'] == 4, 'boot/order/budget/schedule drift')
     for key in ('binding', 'execution'):
@@ -519,9 +641,10 @@ def registration(directory):
     for key, name in (('go', 'GO.json'), ('cases', 'cases.json'), ('build_review', 'candidate-review.json')):
         immutable(directory / name)
         require(value[key + '_sha256'] == ct.sha(directory / name), 'immutable pressure registration input changed')
-    go = unseal(directory / 'GO.json', 'ferrule.storage-demand.pressure-go.v1')
+    go = unseal(directory / 'GO.json', 'ferrule.storage-demand.pressure-go.v2')
     require(go['parent_explicit_go'] is True and go['profiling_owner_paused'] is True
-            and go['owner_note'] == value['owner_note'] == NOTE and value['owner_authorization'] is True,
+            and go['owner_note'] == value['owner_note'] == NOTE and value['owner_authorization'] is True
+            and go['study_design_id'] == value['study_design_id'] and go['historical_resume_permitted'] is False,
             'separate pressure owner handoff missing')
     prior = ct.load(p.ROOT / design()['candidate']['binding'])
     require(value['eight_uuids'] == prior['uuid_inventory'] and value['selected_uuid'] == value['eight_uuids'][0],
@@ -531,7 +654,25 @@ def registration(directory):
 
 
 def supervise(payload, seconds):
-    return _specialize(pilot.supervise, 'str(ENTRY)', 'str(ENTRY)', ENTRY=ENTRY)(payload, seconds)
+    caps = phase_deadlines(payload)
+    # The maintained parent reserves up to 8s wait + .1s cancel + 2s
+    # own-helper reap on cancellation. Its 5s handshake + 5s send happen
+    # inside startup. Cancel by worker_end to leave eleven full cleanup seconds.
+    def bounded_process(argv, timeout, sealed):
+        result = None
+        try:
+            with deadline_cap(caps['worker_finalization']):
+                result = pilot.supervisor.run_process(argv, timeout, sealed)
+                return result
+        except BaseException as error:
+            if result is not None:
+                error.supervisor_result = result
+            raise
+    remaining = caps['worker_finalization'] - pilot.time.monotonic()
+    require(remaining > 0, 'no finite worker budget before absolute worker cutoff')
+    supervisor = SimpleNamespace(run_process=bounded_process)
+    return _specialize(pilot.supervise, 'str(ENTRY)', 'str(ENTRY)',
+        ENTRY=ENTRY, supervisor=supervisor)(payload, min(seconds, remaining))
 
 
 def can_admit(deadline):
@@ -551,27 +692,40 @@ def maintained_next():
         ('absolute 7200s envelope lacks full next-arm plus reserve', 'absolute 900s pressure envelope lacks full point plus reserve'),
         ("outer = min(time.monotonic() + 650, registered['pilot_deadline'] - 100)",
          "outer = min(time.monotonic() + limits['outer_lifecycle_seconds'], registered['pilot_deadline'] - limits['study_cleanup_reserve_seconds'])"),
-        ("with ExitStack() as stack:\n                for uuid", "with ex.absolute_alarm(outer), ExitStack() as stack:\n                for uuid"),
+        ("with ExitStack() as stack:\n                for uuid", "with deadline_cap(outer), ExitStack() as stack:\n                for uuid"),
         ("pilot.idle(folder, 'coordinator-pre-idle', registered['eight_uuids'], min(time.monotonic() + 20, outer))",
-         "pilot.idle(folder, 'coordinator-pre-idle', registered['eight_uuids'], min(time.monotonic() + limits['coordinator_preidle_seconds'], outer))"),
+         "pilot.idle(folder, 'coordinator-pre-idle', registered['eight_uuids'], min(time.monotonic() + limits['coordinator_preidle_seconds'], outer - 180))"),
         ("schema='ferrule.storage-demand.paired-read-worker.v1'", 'schema=SCHEMA'),
         ('request_ceiling=12', 'request_ceiling=4'),
         ("spec=planned.spec_for(candidate, registered['selected_uuid'], mode)",
          "spec=planned.spec_for(candidate, registered['selected_uuid'], trial.rsplit('-', 1)[0])"),
         ("pilot_deadline=registered['pilot_deadline'] - 100", "pilot_deadline=registered['pilot_deadline'] - limits['study_cleanup_reserve_seconds']"),
         ("pilot.remaining(outer, 530 + 28 + 20 + 32, 'supervisor and finite cleanup')",
-         "pilot.remaining(outer, sum(limits[k] for k in ('supervisor_seconds', 'supervisor_call_overhead_seconds', 'coordinator_postidle_seconds', 'coordinator_finalization_seconds')), 'supervisor and finite cleanup')"),
+         "pilot.remaining(outer - 180, 0, 'absolute startup including preflight and preidle')"),
         ('receipt = planned.supervise(payload, 530)', "receipt = planned.supervise(payload, limits['supervisor_seconds'])"),
+        ("min(time.monotonic() + 20, outer), receipt)",
+         "min(time.monotonic() + limits['coordinator_postidle_seconds'], outer - limits['coordinator_finalization_seconds']), receipt)"),
         ('assessment = ex.lifecycle_assessment(observed, receipt, post)',
          "assessment = lifecycle_assessment(trial.rsplit('-', 1)[0], observed, ex.log_lines(folder / 'server.log') if (folder / 'server.log').is_file() else [], receipt, post)"),
         ('complete: 12/12 requests, 5/5 measured QA;', 'complete: 4/4 requests, three eight-ID canaries plus Hello2;'),
     )
+    source = inspect.getsource(coordinator.execute_next)
+    begin = source.index("                candidate = binding.validate_binding(Path(registered['binding_path']))")
+    end = source.index('                with actual_adapter():', begin)
+    preflight = source[begin:end]
+    final_begin = source.index("            ct.write(folder / 'locks-released.json', dict(context_exited=True, all_eight_local=True))")
+    final_end = source.index('        except (Exception, KeyboardInterrupt)', final_begin)
+    finalization = source[final_begin:final_end]
+    replacements = (
+        (preflight, "                with deadline_cap(outer - 180):\n" + textwrap.indent(preflight, '    ')),
+        (finalization, "            with deadline_cap(outer):\n" + textwrap.indent(finalization, '    ')),
+    ) + replacements
     binding = SimpleNamespace(validate_execution=validate_execution, validate_binding=validate_candidate)
     planned = SimpleNamespace(can_admit=can_admit, supervise=supervise, spec_for=spec_for, CONTRACT_KEYS=CONTRACT_KEYS)
     private_pilot = SimpleNamespace(**dict(vars(pilot), idle=idle))
     return _specializations(coordinator.execute_next, replacements, registration=registration, next_trial=next_point,
         binding=binding, planned=planned, pilot=private_pilot, actual_adapter=nullcontext, NOTE=NOTE,
-        SCHEMA=SCHEMA, ledger=ledger, lifecycle_assessment=lifecycle_assessment)
+        SCHEMA=SCHEMA, ledger=ledger, lifecycle_assessment=lifecycle_assessment, deadline_cap=deadline_cap)
 
 
 def execute_next(directory):
@@ -602,7 +756,8 @@ def finalize(directory):
         complete = all(row.get('assessment', {}).get('can_continue') is True for row in rows)
         require(complete or (directory / 'study-stop.json').exists(), 'remaining points must not be silently omitted')
         complete = complete and not (directory / 'study-stop.json').exists()
-        report = dict(schema='ferrule.storage-demand.pressure-final.v1', status='complete' if complete else 'stopped',
+        report = dict(schema='ferrule.storage-demand.pressure-final.v2', status='complete' if complete else 'stopped',
+            study_design_id=design()['id'], limits=registered['limits'], historical_resume_permitted=False,
             registration_sha256=ct.sha(directory / 'registration.json'), trial_order=TRIALS, lifecycles=rows,
             denominators=denominator_summary(records), ended=ex.stamp(),
             issued_lifecycles=sum((directory / t / 'launch.json').is_file() for t in TRIALS),
@@ -639,8 +794,11 @@ def main(argv=None):
         candidate = validate_candidate()
         build = review_build(candidate)
         maintained_next()
+        with private_worker(dict(trial=TRIALS[0])):
+            pass
         _specialize(ex.serial_requests, 'len(observations) == 12', 'len(observations) == 4', validate_schedule=validate_schedule)
-        result = dict(status='cpu_checked_separate_GO_required', request_ceiling=4, order=list(POINT_IDS),
+        result = dict(status='cpu_checked_separate_GO_required', study_design_id=design()['id'],
+            phase_deadline_offsets=p.budget_proof(p.LIMITS), request_ceiling=4, order=list(POINT_IDS),
             prior_middle_numerical_gates=candidate['prior_middle_numerical_gates'],
             required_cli_libraries=len(build['runtime_role_policy']['required']),
             all_cap_full_numerical_verified=False, all_cap_actual_header_lowering_executed=False,
@@ -651,7 +809,8 @@ def main(argv=None):
             result = start(args.directory, args.sole_gpu_owner_granted, args.profiling_owner_paused)
         elif args.mode == 'next':
             row = execute_next(args.directory)
-            result = dict(trial=row['trial'], can_continue=row['assessment']['can_continue'], summary=row['summary'])
+            result = dict(trial=row['trial'], can_continue=row['assessment']['can_continue']
+                and not (args.directory / 'study-stop.json').exists(), summary=row['summary'])
         else:
             result = finalize(args.directory)
     print(json.dumps(result, indent=2))

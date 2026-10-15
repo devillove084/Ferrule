@@ -1,0 +1,23 @@
+{
+  "bytes_definition": "Sum of pinned file sizes rehashed; not physical disk/NFS/backend traffic",
+  "candidate_artifact_pins": {
+    "bytes": 3182160745,
+    "files": 2151,
+    "seconds": 3.040114127099514
+  },
+  "candidate_review_seconds": 5.9554183781147,
+  "gpu_locks": 0,
+  "gpu_queries": 0,
+  "gpu_runs": 0,
+  "historical_helper_durations_seconds": null,
+  "probe_source_commit": "dcbbe759894e62c05e2f7927034d09e4c3ac3734",
+  "probe_stage": "Before v2 edits, with the original pressure binding",
+  "schema": "ferrule.storage-demand.pressure-cpu-probe.v2",
+  "scope": "CPU only; separate probe, not historical phase timing or performance qualification",
+  "validation_bypass": false,
+  "workflow_pins": {
+    "bytes": 94864532,
+    "files": 88,
+    "seconds": 0.09019188024103642
+  }
+}

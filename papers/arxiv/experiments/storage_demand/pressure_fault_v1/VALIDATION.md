@@ -1,3 +1,102 @@
+# Observation-budget v2 — CPU validation and handoff
+
+Status: **new study CPU-prepared; NOT launched**. Profiling retains GPU
+exclusivity. No GPU query, lock, serving process, capture or fault run was issued
+in this change. No production/shared protocol/manuscript/historical artifact was
+edited. Parent explicitly authorized this separate source/test/preparation fix
+and its scoped commit/push; the older authorization notes below are historical.
+
+## Root finding and evidence boundary
+
+The sealed pressure v1 used startup75 / HTTP15 / aggregate60. The shared paired
+protocol's120 /60 startup/HTTP values were not its pressure settings. Three
+callbacks per request rehash both pin sets; there are12 callbacks in the four-slot
+loop plus a final worker check. NFS, PID I/O, serial preparation and callback work
+all consume the aggregate. Historical gaps are9.5808/9.7081/9.7344s, leaving the
+Chinese HTTP request6.8733s. Its raw eight-ID match does not supply missing HTTP
+usage. Three HTTP successes include only two exact HTTP oracle passes; there
+were26 raw enqueued IDs, one censored slot, eight unissued slots, zero qualified
+points and no valid three-point comparison. These results are not upgraded.
+
+A distinct CPU-only probe measured workflow pin hashing0.0902s (88 files,
+94,864,532 bytes) and candidate pins3.0401s (2,151 files,3,182,160,745 bytes).
+This supports the structural diagnosis, but historical per-helper durations
+remain **null/unobserved**. No assumed hash-time subtraction or reconstructed
+measurement is used. The v2 timing ledger will measure named intervals directly.
+
+## Budget proof
+
+One point:60s startup/preflight +120s request/observation +15s bookkeeping +45s
+cleanup =240s. Three points plus180s reserve =900s. Both10s pre-idles and
+validation/authentication are inside the startup phase, not additive. HTTP15 is
+unchanged;4 ×15=60s leaves60s for the required validation/observation work.
+
+Absolute offsets from point origin:60,180,195,215,219,230,235,240s. Cleanup is
+20s worker shutdown +4s worker finalization +11s supervisor cancellation/reap
++5s post-idle +5s coordinator finalization. The supervisor cutoff reserves its
+maintained8s wait +0.1s cancel send +2s direct-helper reap. Startup/cache state is
+unknown; slow startup or cleanup remains rejection/unknown, not a waiver or an
+extension. A timed-out observer cannot leave an eligible request success.
+
+The new plan is not a performance qualification or a guarantee of completion.
+All source checks, full per-callback rehashes, role-library maps, PSS observer,
+three-sample all-eight idle, launch authentication, own-child custody, ECHILD,
+full HTTP text/usage/token joins and source counters remain required. No stat/hash
+cache, warmup, retry, replacement, quality relaxation or extra request was added.
+Nine historical numerical gates remain **middle64/320MiB only**; new-point full
+numerical quality is unverified.
+
+## Tests run in this change
+
+Passed **63/63 owned CPU tests** and **33/33 unchanged maintained execution tests**.
+Tests include fake-clock slow callbacks, pre/post observer budget consumption,
+120s composition versus a censored60s CPU fixture, earlier target caps, nested
+alarm restoration without sliding, real blocking-callback interruption, retained
+supervisor cleanup receipts, and the actual maintained worker's owned stop/reap
+path under timeout. Subprocess/HTTP/GPU ownership are mocked in worker tests;
+these are not fresh GPU measurements. The three-point fixture dispatches exactly
+12 requests and retains all four-request/26-token and source/closure gates.
+
+Commands from repository root (tests bounded externally to120s; review180s):
+
+```sh
+CUDA_VISIBLE_DEVICES='' NVIDIA_VISIBLE_DEVICES=none FERRULE_PROFILE_NVTX=0 /home/admin/wxw403883/anaconda3/bin/python3.12 -S -B -m unittest discover -s papers/arxiv/experiments/storage_demand/pressure_fault_v1 -p 'test_*.py' -v
+CUDA_VISIBLE_DEVICES='' NVIDIA_VISIBLE_DEVICES=none FERRULE_PROFILE_NVTX=0 /home/admin/wxw403883/anaconda3/bin/python3.12 -S -B -m unittest discover -s papers/arxiv/experiments/storage_demand/tests -p 'test_execution_v2.py' -v
+CUDA_VISIBLE_DEVICES='' NVIDIA_VISIBLE_DEVICES=none FERRULE_PROFILE_NVTX=0 /home/admin/wxw403883/anaconda3/bin/python3.12 -S -B papers/arxiv/experiments/storage_demand/pressure_fault_v1/prepare.py check
+CUDA_VISIBLE_DEVICES='' NVIDIA_VISIBLE_DEVICES=none FERRULE_PROFILE_NVTX=0 /home/admin/wxw403883/anaconda3/bin/python3.12 -S -B papers/arxiv/experiments/storage_demand/pressure_fault_v1/subset_adapter.py check
+```
+
+Both CPU check commands passed: preparation retains12 unissued requests and
+logical entry bounds `[8, 64, 128]`; candidate review retains9 prior middle-only
+gates and requires all12 CLI runtime libraries. It reports zero GPU queries,
+locks and runs. No execution command was launched.
+
+The first test pass exposed a real post-observer expiry edge: HTTP terminal
+success had been written before the context's exit deadline check. The private
+serial seam now checks the phase clock before writing success evidence; the
+regression requires censored plus three unissued slots. Shared code is unchanged.
+
+## Seal and ownership
+
+`plan_v2/plan.json`, `cases.json`, `requests.json`, `bindings.json`, `prepared.json`,
+`cpu-probe.json` and `root-analysis.json` are separate preparation artifacts.
+The cases and requests are exact checked copies for the same compiled86 candidate;
+only the two existing coupled cache caps vary. The old root `plan.json` and
+`bindings.json` are preserved and themselves pinned by the new seal.
+`prepared.json` is an output containing the binding SHA, not a circular binding
+input. All preparation files are made read-only after final verification.
+
+`STAGE_FILES.txt` lists exactly19 owned source/docs/preparation files, including
+unchanged historical root seals. Private raw artifacts and credentials are
+excluded; no directory-wide staging. The new v2 entry refuses the historical
+execution directory and permits only one new v2 GO. Source must be committed and
+pushed before a future start. See `README.md` for the exact future commands;
+**none of start/next/finalize has been invoked in this change**.
+
+---
+
+# Historical validation notes (unchanged record below)
+
 # CPU validation — 2026-10-15
 
 ## Separately authorized command-entry extension

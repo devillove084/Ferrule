@@ -1,0 +1,97 @@
+{
+  "all_three_http_canaries_passed": false,
+  "attribution": "Historical gaps are observed but their per-helper attribution is unobserved; separate CPU probe is not retroactive evidence",
+  "callback_counts": {
+    "four_request_loop": 12,
+    "per_request": 3,
+    "retained_final_worker_check": 1
+  },
+  "exact_http_oracle_passes": 2,
+  "full_numerical_per_point": "unverified",
+  "historical_artifacts_modified": false,
+  "historical_denominators": {
+    "censored": 1,
+    "failed": 0,
+    "issued": 4,
+    "scheduled": 12,
+    "successful": 3,
+    "terminal": 3,
+    "unissued": 8
+  },
+  "historical_helper_durations_seconds": null,
+  "historical_last_http_remaining_seconds": 6.873322343453765,
+  "historical_qualified_lifecycles": 0,
+  "historical_request_phase_seconds": 60,
+  "historical_requests": [
+    {
+      "name": "hello2",
+      "non_HTTP_gap_since_previous_terminal_seconds": 6.43132970482111,
+      "remaining_at_issue_seconds": 14.999995904043317,
+      "request_e2e_seconds": 2.0943611040711403,
+      "status": "success"
+    },
+    {
+      "name": "canary-qa",
+      "non_HTTP_gap_since_previous_terminal_seconds": 9.580827625468373,
+      "remaining_at_issue_seconds": 14.999997785314918,
+      "request_e2e_seconds": 7.798292746767402,
+      "status": "success"
+    },
+    {
+      "name": "canary-arithmetic",
+      "non_HTTP_gap_since_previous_terminal_seconds": 9.70813811570406,
+      "remaining_at_issue_seconds": 14.999998331069946,
+      "request_e2e_seconds": 7.539907867088914,
+      "status": "success"
+    },
+    {
+      "name": "canary-chinese",
+      "non_HTTP_gap_since_previous_terminal_seconds": 9.73440670222044,
+      "remaining_at_issue_seconds": 6.873322343453765,
+      "request_e2e_seconds": null,
+      "status": "censored"
+    }
+  ],
+  "historical_results_reclassified": false,
+  "historical_source": "papers/arxiv/experiments/storage_demand/pressure_fault_v1/artifacts-go-20261015-01/stopped-observations.json",
+  "historical_source_sha256": "cb575ae3876ec28ba1062240a35f029c7458708a6d848a2e64d8956f115caac0",
+  "historical_startup_seconds": 13.753291048109531,
+  "historical_unissued_points": [
+    "middle",
+    "big"
+  ],
+  "new_study": "pressure-fault-observation-budget-20261015-v2",
+  "new_study_gpu_executed": false,
+  "owner_peaks_and_cumulative_stats_summed": false,
+  "prior_numerical_scope": "middle64_320MiB_only",
+  "raw_completed_decoder_invocations": 30,
+  "raw_eight_id_matches": 3,
+  "raw_enqueued_tokens": 26,
+  "schema": "ferrule.storage-demand.pressure-root-analysis.v2",
+  "source_functions": [
+    "runnerhelpers.execution_v2.serial_requests",
+    "newversionedprotocol.run_pilot.worker.check",
+    "contract.check_pins",
+    "runnerhelpers.evidence_v2.request_budget_seconds"
+  ],
+  "structural_cause": "The 60s aggregate covered all serial callbacks and observations, not only four HTTP transports; callbacks rehash both pin sets three times per request",
+  "whole_lifecycle_raw_invocation_deltas": {
+    "artifact_upload_bytes": 36240064128,
+    "artifact_uploads": 34557,
+    "cache_hit_rate": null,
+    "checkpoint_handle_metadata_calls": 46076,
+    "checkpoint_path_metadata_calls": 46076,
+    "checkpoint_read_bytes": 36240064128,
+    "checkpoint_read_calls": 69114,
+    "checkpoint_source_checks": 46076,
+    "expert_cache_misses": null,
+    "expert_evictions": 11511,
+    "expert_hits": 0,
+    "expert_uploads": 11519,
+    "h2d_bytes": 36240248688,
+    "h2d_copies": 88763,
+    "physical_nas_backend_bytes": null,
+    "source_extents_read": null,
+    "working_set_unique_expert_ids": null
+  }
+}
