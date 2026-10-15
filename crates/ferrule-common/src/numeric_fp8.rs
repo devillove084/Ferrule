@@ -187,16 +187,20 @@ pub struct ImmutableValidatedNumericFp8Payload {
     weight: Arc<[u8]>,
     scales: Arc<[u8]>,
 }
-/// Read-only liveness of the exact underlying weight and scale allocations.
-/// This does not retain bytes, expose an alias, prove source freshness, or prove
-/// GPU completion. Any by-value payload clone or original input `Arc` keeps the
-/// corresponding allocation live.
+/// Read-only observation of strong aliases to the exact weight and scale payloads.
+/// This witness does not retain strong payload ownership, copy bytes, expose an
+/// alias, prove source freshness, or prove GPU completion. Any by-value payload
+/// clone or original input `Arc` retains strong ownership of the corresponding
+/// payload. The `Weak` references may keep the backing allocations alive until
+/// the witnesses are dropped, even after all strong payload aliases are gone.
 #[derive(Debug, Clone)]
 pub struct NumericFp8PayloadLiveness {
     weight: Weak<[u8]>,
     scales: Weak<[u8]>,
 }
 impl NumericFp8PayloadLiveness {
+    /// Observes whether either payload still has a surviving strong alias.
+    /// A `false` result does not establish physical deallocation.
     pub fn is_live(&self) -> bool {
         self.weight.strong_count() != 0 || self.scales.strong_count() != 0
     }
@@ -219,7 +223,8 @@ impl ImmutableValidatedNumericFp8Payload {
             scales,
         })
     }
-    /// Tracks allocation aliases without extending their lifetime.
+    /// Tracks strong payload aliases without retaining strong ownership or copying
+    /// bytes. The weak witness may keep the backing allocations alive until dropped.
     pub fn allocation_liveness(&self) -> NumericFp8PayloadLiveness {
         NumericFp8PayloadLiveness {
             weight: Arc::downgrade(&self.weight),

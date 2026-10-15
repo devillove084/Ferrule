@@ -197,7 +197,7 @@ unobserved; zero final logical charges do not prove physical release.}
 \subsection{RQ3: Lower observed waiting under the same budgets}
 \label{sec:rq3}
 \paragraph{Prespecified design and estimator.}
-The five independent analysis blocks retain order B--L, B--L, L--B, L--B,
+The five paired analysis blocks retain order B--L, B--L, L--B, L--B,
 B--L (B: blocking; L: lookahead), a fixed 3:2 balance, with a fresh server per
 arm. The independent map-fixed generation uses the readiness-map validator
 from \texttt{7d3bee2}, not a new CLI or an adaptive execution plan. The
@@ -227,7 +227,8 @@ throughput or startup-inclusive completion rate. It uses sums of durations,
 not an average of per-request rates. The archive enumerates all $5^5=3,125$
 ordered paired-block resamples, takes each median log ratio, and exponentiates
 nearest ranks 79 and 3047 for descriptive 2.5/97.5 percentile endpoints.
-Requests are not resampled as independent replicates. At $n=5$ these ranges
+Requests are not resampled as independent replicates. Cross-block independence
+is not established under shared page/NFS caches. At $n=5$ these ranges
 are not coverage-guaranteed 95\% confidence intervals, significance tests or
 power guarantees; shared-client/cache conditions further limit generalization.
 
@@ -266,7 +267,7 @@ $\exp(\operatorname{median}\ln(L/B))$ as a diamond: E2E 0.91823, TTFT
 0.88755, goodput 1.10908. Gray strips and brackets are descriptive nearest-rank
 2.5/97.5 percentile ranges over all 3,125 ordered block resamples (ranks
 79 and 3047), not coverage-guaranteed confidence intervals or significance
-tests. The independent unit is the block ($n=5$), not 50 requests.
+tests. The resampling unit is the block ($n=5$), not 50 requests.
 Startup is separate. Goodput is a serial-window metric, not server throughput;
 this one instrumented study supports no power or SOTA claim.}
 {f:paired-latency}
