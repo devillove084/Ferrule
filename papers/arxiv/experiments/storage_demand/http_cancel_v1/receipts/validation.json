@@ -1,0 +1,34 @@
+{
+  "schema": "ferrule.storage-demand.http-cancel.v1.validation",
+  "status": "passed",
+  "pre_GPU_CPU_tests": 16,
+  "post_GPU_CPU_tests": 21,
+  "failures": 0,
+  "errors": 0,
+  "test_command": "python3.12 -S -B -m unittest -v test_http_cancel test_receipt",
+  "CPU_only": true,
+  "additional_GPU_runs": 0,
+  "redaction": {
+    "status": "passed",
+    "known_private_credentials_checked": 5,
+    "publication_files": 12,
+    "raw_files_published": 0
+  },
+  "private_directory_mode": "0o700",
+  "raw_launch_credentials_private": true,
+  "source_and_receipt_sha256": {
+    "papers/arxiv/experiments/storage_demand/http_cancel_v1/.gitignore": "524ac503783c06349f030188b1985bf37865de20212eb9cab8db3b1660b88bd8",
+    "papers/arxiv/experiments/storage_demand/http_cancel_v1/PLAN.md": "0d8b7794579744abbf93eced095d497e3c1a1305151b684895399fba9e2c4a7b",
+    "papers/arxiv/experiments/storage_demand/http_cancel_v1/README.md": "8707c1eb3c396f630ca494ca53117eb164741851fa0a92df9d5cfa18d8547989",
+    "papers/arxiv/experiments/storage_demand/http_cancel_v1/RESULTS.md": "23bbb93b036acf3ff22f3be608e8dea1dd0aa5fa03cf16093aa52a9eefbcc2ab",
+    "papers/arxiv/experiments/storage_demand/http_cancel_v1/STAGE_FILES.txt": "d1ed63ca6b5306a606277dc696bb4b1c1a59e36cf13555f279cb6469633240ad",
+    "papers/arxiv/experiments/storage_demand/http_cancel_v1/client.py": "2a85e2d28b571d2676aba561ddfe25b24eaeb4aae69056799dbc78a3fc198373",
+    "papers/arxiv/experiments/storage_demand/http_cancel_v1/curate.py": "dc681e9005160d429900fb16f16073730e673d00c85d50393edf3027faa62b82",
+    "papers/arxiv/experiments/storage_demand/http_cancel_v1/plan.json": "95b50c2c7adf360a8ef22e720e9d0c5e3d44d756e2816f2fad379730874e0266",
+    "papers/arxiv/experiments/storage_demand/http_cancel_v1/receipts/result.json": "fcc477461283ead2f207917bfd8f05af19076172a75fda5cc3bdf0f911c14d15",
+    "papers/arxiv/experiments/storage_demand/http_cancel_v1/run.py": "2cc13a3ae523f17c1880e773e9a1eb8bd340f04b63ed242f5d1941b965096ee0",
+    "papers/arxiv/experiments/storage_demand/http_cancel_v1/test_http_cancel.py": "959ef57e6c6977f4bd19a317d69622a6352168648c7bb6d8d9d2911982c958de",
+    "papers/arxiv/experiments/storage_demand/http_cancel_v1/test_receipt.py": "b11492f2df9e81800e2a7b00f94b9b824a0da7903482b6d16719782dced46883"
+  },
+  "seconds": 0.1510695517063141
+}
