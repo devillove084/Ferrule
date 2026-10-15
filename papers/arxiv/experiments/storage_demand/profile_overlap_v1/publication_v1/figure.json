@@ -1,0 +1,707 @@
+{
+  "figures": {
+    "read-compute-overlap.pdf": {
+      "bytes": 39996,
+      "sha256": "c8a8eb48f0e11d6dbf06c7a717b1eb2ea83eac8aec745a9c870d92bd8b36470a"
+    },
+    "read-compute-overlap.png": {
+      "bytes": 278524,
+      "sha256": "2d6cbec37b077913388d4fd8f9833bde3ae71b2cd899d1358ebe4121570835f8"
+    }
+  },
+  "hashes": {
+    "manifest_sha256": "3906671e772992eeff4187cfab71c3fe30eb923b924f4b1e52ac3f0be25723f4",
+    "renderer_source_sha256": "6c429531bf955cbaecbc4e9846e91f2c4543f828752f98aa8098532e8f58a827",
+    "toolchain_sha256": "375c2bba2e1fb44aecbf8404aa918a65d91dfa169f20c76d32d7f8b900df7c93"
+  },
+  "layout": {
+    "outside_canvas_text": [],
+    "overlapping_text": [],
+    "size_inches": [
+      9.0,
+      8.9
+    ],
+    "text": [
+      {
+        "bounds": [
+          0.223747,
+          0.797458,
+          0.230553,
+          0.808694
+        ],
+        "text": "1"
+      },
+      {
+        "bounds": [
+          0.412379,
+          0.797458,
+          0.419184,
+          0.808694
+        ],
+        "text": "2"
+      },
+      {
+        "bounds": [
+          0.541206,
+          0.797458,
+          0.548012,
+          0.808694
+        ],
+        "text": "3"
+      },
+      {
+        "bounds": [
+          0.62722,
+          0.797458,
+          0.634026,
+          0.808694
+        ],
+        "text": "4"
+      },
+      {
+        "bounds": [
+          0.829077,
+          0.797458,
+          0.835882,
+          0.808694
+        ],
+        "text": "5"
+      },
+      {
+        "bounds": [
+          0.913824,
+          0.797458,
+          0.92063,
+          0.808694
+        ],
+        "text": "6"
+      },
+      {
+        "bounds": [
+          0.358611,
+          0.647674,
+          0.791389,
+          0.65891
+        ],
+        "text": "Time after first read start (ms); request-relative offset = 7.435922 ms"
+      },
+      {
+        "bounds": [
+          0.180556,
+          0.665152,
+          0.189444,
+          0.679759
+        ],
+        "text": "0"
+      },
+      {
+        "bounds": [
+          0.375556,
+          0.665152,
+          0.384444,
+          0.679759
+        ],
+        "text": "5"
+      },
+      {
+        "bounds": [
+          0.566111,
+          0.665152,
+          0.583889,
+          0.679759
+        ],
+        "text": "10"
+      },
+      {
+        "bounds": [
+          0.761111,
+          0.665152,
+          0.778889,
+          0.679759
+        ],
+        "text": "15"
+      },
+      {
+        "bounds": [
+          0.956111,
+          0.665152,
+          0.973889,
+          0.679759
+        ],
+        "text": "20"
+      },
+      {
+        "bounds": [
+          0.104182,
+          0.771437,
+          0.179599,
+          0.795707
+        ],
+        "text": "Worker read\nenvelope"
+      },
+      {
+        "bounds": [
+          0.096404,
+          0.73189,
+          0.179599,
+          0.75616
+        ],
+        "text": "Worker pread\nwall interval"
+      },
+      {
+        "bounds": [
+          0.102932,
+          0.692344,
+          0.179599,
+          0.716613
+        ],
+        "text": "Expert math\nGPU activity"
+      },
+      {
+        "bounds": [
+          0.185,
+          0.829114,
+          0.806111,
+          0.842597
+        ],
+        "text": "(a) Blocking \u00b7 first 20 ms from operation 1 \u00b7 numbers = source operation IDs"
+      },
+      {
+        "bounds": [
+          0.222925,
+          0.552031,
+          0.22973,
+          0.563267
+        ],
+        "text": "1"
+      },
+      {
+        "bounds": [
+          0.394085,
+          0.552031,
+          0.400891,
+          0.563267
+        ],
+        "text": "2"
+      },
+      {
+        "bounds": [
+          0.504098,
+          0.552031,
+          0.510904,
+          0.563267
+        ],
+        "text": "3"
+      },
+      {
+        "bounds": [
+          0.567308,
+          0.552031,
+          0.574113,
+          0.563267
+        ],
+        "text": "4"
+      },
+      {
+        "bounds": [
+          0.635958,
+          0.552031,
+          0.642764,
+          0.563267
+        ],
+        "text": "5"
+      },
+      {
+        "bounds": [
+          0.696608,
+          0.552031,
+          0.703413,
+          0.563267
+        ],
+        "text": "6"
+      },
+      {
+        "bounds": [
+          0.757545,
+          0.552031,
+          0.76435,
+          0.563267
+        ],
+        "text": "7"
+      },
+      {
+        "bounds": [
+          0.817354,
+          0.552031,
+          0.82416,
+          0.563267
+        ],
+        "text": "8"
+      },
+      {
+        "bounds": [
+          0.876012,
+          0.552031,
+          0.882817,
+          0.563267
+        ],
+        "text": "9"
+      },
+      {
+        "bounds": [
+          0.931341,
+          0.552031,
+          0.944952,
+          0.563267
+        ],
+        "text": "10"
+      },
+      {
+        "bounds": [
+          0.358611,
+          0.402246,
+          0.791389,
+          0.413482
+        ],
+        "text": "Time after first read start (ms); request-relative offset = 8.662259 ms"
+      },
+      {
+        "bounds": [
+          0.180556,
+          0.419724,
+          0.189444,
+          0.434331
+        ],
+        "text": "0"
+      },
+      {
+        "bounds": [
+          0.375556,
+          0.419724,
+          0.384444,
+          0.434331
+        ],
+        "text": "5"
+      },
+      {
+        "bounds": [
+          0.566111,
+          0.419724,
+          0.583889,
+          0.434331
+        ],
+        "text": "10"
+      },
+      {
+        "bounds": [
+          0.761111,
+          0.419724,
+          0.778889,
+          0.434331
+        ],
+        "text": "15"
+      },
+      {
+        "bounds": [
+          0.956111,
+          0.419724,
+          0.973889,
+          0.434331
+        ],
+        "text": "20"
+      },
+      {
+        "bounds": [
+          0.104182,
+          0.52601,
+          0.179599,
+          0.550279
+        ],
+        "text": "Worker read\nenvelope"
+      },
+      {
+        "bounds": [
+          0.096404,
+          0.486463,
+          0.179599,
+          0.510733
+        ],
+        "text": "Worker pread\nwall interval"
+      },
+      {
+        "bounds": [
+          0.102932,
+          0.446916,
+          0.179599,
+          0.471186
+        ],
+        "text": "Expert math\nGPU activity"
+      },
+      {
+        "bounds": [
+          0.185,
+          0.583686,
+          0.825694,
+          0.597169
+        ],
+        "text": "(b) Lookahead \u00b7 first 20 ms from operation 1 \u00b7 numbers = source operation IDs"
+      },
+      {
+        "bounds": [
+          0.185,
+          0.303074,
+          0.245694,
+          0.31431
+        ],
+        "text": "0 ms (0%)"
+      },
+      {
+        "bounds": [
+          0.185,
+          0.241002,
+          0.350694,
+          0.252238
+        ],
+        "text": "174.409210 ms (5.83314%)"
+      },
+      {
+        "bounds": [
+          0.246296,
+          0.161991,
+          0.446018,
+          0.173227
+        ],
+        "text": "Whole-request intersection (ms)"
+      },
+      {
+        "bounds": [
+          0.180556,
+          0.179469,
+          0.189444,
+          0.194076
+        ],
+        "text": "0"
+      },
+      {
+        "bounds": [
+          0.249364,
+          0.179469,
+          0.267142,
+          0.194076
+        ],
+        "text": "50"
+      },
+      {
+        "bounds": [
+          0.318173,
+          0.179469,
+          0.34484,
+          0.194076
+        ],
+        "text": "100"
+      },
+      {
+        "bounds": [
+          0.391426,
+          0.179469,
+          0.418093,
+          0.194076
+        ],
+        "text": "150"
+      },
+      {
+        "bounds": [
+          0.464679,
+          0.179469,
+          0.491346,
+          0.194076
+        ],
+        "text": "200"
+      },
+      {
+        "bounds": [
+          0.12696,
+          0.282056,
+          0.179599,
+          0.293292
+        ],
+        "text": "Blocking"
+      },
+      {
+        "bounds": [
+          0.112793,
+          0.219984,
+          0.179599,
+          0.23122
+        ],
+        "text": "Lookahead"
+      },
+      {
+        "bounds": [
+          0.185,
+          0.339819,
+          0.431667,
+          0.353302
+        ],
+        "text": "(c) Read-envelope \u2229 GPU math"
+      },
+      {
+        "bounds": [
+          0.642686,
+          0.303074,
+          0.70338,
+          0.31431
+        ],
+        "text": "0 ms (0%)"
+      },
+      {
+        "bounds": [
+          0.642686,
+          0.241002,
+          0.79338,
+          0.252238
+        ],
+        "text": "0.751507 ms (0.03274%)"
+      },
+      {
+        "bounds": [
+          0.703982,
+          0.161991,
+          0.903704,
+          0.173227
+        ],
+        "text": "Whole-request intersection (ms)"
+      },
+      {
+        "bounds": [
+          0.62713,
+          0.179469,
+          0.658242,
+          0.194076
+        ],
+        "text": "0.00"
+      },
+      {
+        "bounds": [
+          0.707709,
+          0.179469,
+          0.73882,
+          0.194076
+        ],
+        "text": "0.25"
+      },
+      {
+        "bounds": [
+          0.788287,
+          0.179469,
+          0.819399,
+          0.194076
+        ],
+        "text": "0.50"
+      },
+      {
+        "bounds": [
+          0.868866,
+          0.179469,
+          0.899977,
+          0.194076
+        ],
+        "text": "0.75"
+      },
+      {
+        "bounds": [
+          0.949444,
+          0.179469,
+          0.980556,
+          0.194076
+        ],
+        "text": "1.00"
+      },
+      {
+        "bounds": [
+          0.584646,
+          0.282056,
+          0.637285,
+          0.293292
+        ],
+        "text": "Blocking"
+      },
+      {
+        "bounds": [
+          0.570479,
+          0.219984,
+          0.637285,
+          0.23122
+        ],
+        "text": "Lookahead"
+      },
+      {
+        "bounds": [
+          0.642686,
+          0.339819,
+          0.857269,
+          0.353302
+        ],
+        "text": "(d) pread-wall \u2229 GPU math"
+      },
+      {
+        "bounds": [
+          0.152014,
+          0.954775,
+          0.847986,
+          0.975
+        ],
+        "text": "Read\u2013compute overlap: scoped evidence from two fresh captures"
+      },
+      {
+        "bounds": [
+          0.192361,
+          0.939629,
+          0.807639,
+          0.954236
+        ],
+        "text": "One profiled QA per arm \u00b7 same frozen CLI \u00b7 3,678 source-verified read operations per arm"
+      },
+      {
+        "bounds": [
+          0.168819,
+          0.872753,
+          0.831181,
+          0.883989
+        ],
+        "text": "Exact interval widths; symbols mark starts (not minimum durations). Zoom selection does not use overlap."
+      },
+      {
+        "bounds": [
+          0.185,
+          0.095303,
+          0.840278,
+          0.138
+        ],
+        "text": "Percent denominators: union of the corresponding worker intervals, not request length or summed spans.\nRead envelope: B 2.982516 s / L 2.989969 s.  pread wall: B 2.299020 s / L 2.295077 s.\nGPU union: B 0.194741 s / L 0.194217 s; gaps, leading delay, upload and CPU submission are excluded."
+      },
+      {
+        "bounds": [
+          0.178958,
+          0.041629,
+          0.821042,
+          0.056236
+        ],
+        "text": "SCOPED ACCEPTED  \u00b7  FULL TRACE NOT ACCEPTED  \u00b7  DROPPED-EVENT COUNT UNKNOWN"
+      },
+      {
+        "bounds": [
+          0.159306,
+          0.016753,
+          0.840694,
+          0.027989
+        ],
+        "text": "Three wrapper warnings per arm remain. No active-I/O, physical NAS-service, or ordinary-speed confidence claim."
+      },
+      {
+        "bounds": [
+          0.263789,
+          0.898528,
+          0.390039,
+          0.909764
+        ],
+        "text": "NVTX read envelope"
+      },
+      {
+        "bounds": [
+          0.449298,
+          0.898528,
+          0.550131,
+          0.909764
+        ],
+        "text": "OSRT pread wall"
+      },
+      {
+        "bounds": [
+          0.60939,
+          0.898528,
+          0.770779,
+          0.909764
+        ],
+        "text": "Actual expert GPU kernels"
+      }
+    ]
+  },
+  "results": {
+    "blocking": {
+      "expert_kernel_union_ns": 194741187,
+      "expert_kernels": 33403,
+      "osrt_read_bytes": null,
+      "pread_calls": 22068,
+      "pread_kernel_intersection_ns": 0,
+      "pread_overlap_percent": 0.0,
+      "read_envelope_kernel_intersection_ns": 0,
+      "read_envelope_overlap_percent": 0.0,
+      "read_ranges": 3678,
+      "source_verified_read_bytes": 11571399936,
+      "worker_pread_union_ns": 2299019830,
+      "worker_read_envelope_union_ns": 2982515538,
+      "zoom_end_ns": 27435922,
+      "zoom_start_ns": 7435922
+    },
+    "lookahead": {
+      "expert_kernel_union_ns": 194217266,
+      "expert_kernels": 33403,
+      "osrt_read_bytes": null,
+      "pread_calls": 22068,
+      "pread_kernel_intersection_ns": 751507,
+      "pread_overlap_percent": 0.032744302984205366,
+      "read_envelope_kernel_intersection_ns": 174409210,
+      "read_envelope_overlap_percent": 5.833143797665073,
+      "read_ranges": 3678,
+      "source_verified_read_bytes": 11571399936,
+      "worker_pread_union_ns": 2295077102,
+      "worker_read_envelope_union_ns": 2989969321,
+      "zoom_end_ns": 28662259,
+      "zoom_start_ns": 8662259
+    }
+  },
+  "schema": "ferrule.overlap.figure.v1",
+  "toolchain": {
+    "backend": "Agg",
+    "font_family": "DejaVu Sans",
+    "fonts": {
+      "bold": {
+        "name": "DejaVuSans-Bold.ttf",
+        "sha256": "b184b89e3c1075f22f6b71575b6fc20d4972b3cfd3b23322ca6fd596dcaef167"
+      },
+      "normal": {
+        "name": "DejaVuSans.ttf",
+        "sha256": "3fdf69cabf06049ea70a00b5919340e2ce1e6d02b0cc3c4b44fb6801bd1e0d22"
+      }
+    },
+    "freetype": "2.12.1",
+    "matplotlib": "3.8.4",
+    "numpy": "1.26.4",
+    "pdf_fonttype": 42,
+    "pillow": "10.3.0",
+    "png_dpi": 180,
+    "python": "3.12.4",
+    "zlib": "1.2.13"
+  },
+  "zooms": {
+    "blocking": {
+      "tracks": {
+        "kernel": 46,
+        "pread": 36,
+        "read": 6
+      },
+      "zoom_end_ns": 27435922,
+      "zoom_start_ns": 7435922
+    },
+    "lookahead": {
+      "tracks": {
+        "kernel": 82,
+        "pread": 60,
+        "read": 10
+      },
+      "zoom_end_ns": 28662259,
+      "zoom_start_ns": 8662259
+    }
+  }
+}

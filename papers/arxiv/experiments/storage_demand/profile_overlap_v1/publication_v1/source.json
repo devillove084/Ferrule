@@ -1,0 +1,253 @@
+{
+  "candidate_identity": {
+    "cli_binary_sha256": "7cc8e0ff6e84f27090494b8e9e27dc3a388d1d2f3fc34ae39dae416e1e607a01",
+    "commit": "86c58a017d7c4b53490f536a3b1a133f2f7848cc",
+    "source_archive_sha256": "e0d160996147820fcc64cfb29070b265b2297a6d9265a21de541ed77e8f2fa65",
+    "source_digest": "10183d246a1278248273e7d3055d1690cb56854cbff30f9f0662f18813dc8188",
+    "source_members": 1484
+  },
+  "captures_issued": 0,
+  "final_handoff": {
+    "accepted_arms": 2,
+    "captures_completed_and_exported": 2,
+    "captures_launched": 2,
+    "dropped_event_count": null,
+    "full_trace_accepted": false,
+    "qa_requests_completed": 2,
+    "qa_requests_issued": 2,
+    "scoped_overlap_accepted": true,
+    "simultaneous_unreported_loss_excluded": false,
+    "status": "two_fresh_scoped_captures_accepted",
+    "validation": {
+      "diff_check": true,
+      "idle_tests": 11,
+      "maps_tests": 19,
+      "profile_tests": 115,
+      "source_compiles": true
+    }
+  },
+  "generation": "actual-05",
+  "gpu_queries": 0,
+  "measurement_fix_commit": "5e4e29cb883c84392dfaff15120ee910dac093ad",
+  "original_files": {
+    "candidate-binding.json": {
+      "bytes": 1003521,
+      "sha256": "3439b17677cb6b588278f4971effa0127df1ce19d6c1b2910d6d2cccbbf0124d"
+    },
+    "collector-contract.json": {
+      "bytes": 5927,
+      "sha256": "5f9a96e9965f8d1f802734fde0b0679cb1ca09fe4383bc1128d4e8eec3d29615"
+    },
+    "final-handoff.json": {
+      "bytes": 44004,
+      "sha256": "4c9592f64016e1d23418acd1589b664d45b47f245c129b2bba3097515dbfb1a1"
+    },
+    "nvtx-source-qualification.json": {
+      "bytes": 3255,
+      "sha256": "3f6a54a376a08416e4d811d95945c7a3054965e5c767785a825b09c7bdd74317"
+    },
+    "prepared.json": {
+      "bytes": 1052461,
+      "sha256": "3b31de42d16a2e4696aa6d8243f53489f60bd3981a60b752c2a734b2080adc2f"
+    },
+    "runtime-provenance.json": {
+      "bytes": 27441,
+      "sha256": "7a257f8d1451acc00539d921a1539c7c1a2b6757afc542559107300374d59cf0"
+    }
+  },
+  "read_measurement": {
+    "accepted_observed_return_codes": [
+      0
+    ],
+    "call_success_proved": false,
+    "osrt_read_bytes": null,
+    "osrt_read_bytes_reason": "unsupported_schema_no_size_or_proved_ssize_t",
+    "osrt_return_value_semantics": "opaque; official generic return-value description does not prove ssize_t",
+    "physical_io_bytes_claim": false,
+    "read_success_scope": "whole operation only; complete typed source-verified ledger required",
+    "return_code_policy": "zero is not proof of success; nonzero/error/uninterpretable rejects this version",
+    "schema": "ferrule.storage-demand.read-measurement.v2",
+    "source_boundary": {
+      "bytes": "typed requested/packed bytes; not a per-syscall byte measurement",
+      "reader": "FileExt::read_at loop; read_calls increments before every attempt",
+      "reader_counters": "shared reader submission-through-take intervals, not ticket-certified",
+      "success": "whole operation SourceVerified after read_incrementally post-read source boundary"
+    }
+  },
+  "read_source_boundary": {
+    "bytes": "typed requested/packed bytes; not a per-syscall byte measurement",
+    "reader": "FileExt::read_at loop; read_calls increments before every attempt",
+    "reader_counters": "shared reader submission-through-take intervals, not ticket-certified",
+    "success": "whole operation SourceVerified after read_incrementally post-read source boundary"
+  },
+  "redaction": {
+    "map_hash_scope": "Backing-file/source hashes and observed map checks; live mapped-memory content and physical final release remain unobserved.",
+    "method": "explicit positive field projection, not recursive scrubbing",
+    "omitted": [
+      "worker authorization credentials",
+      "environment and command arguments",
+      "host and filesystem paths",
+      "physical GPU UUIDs",
+      "application maps and private logs",
+      "absolute UTC and capture origins",
+      "diagnostic timestamps (mixed clocks; not relabeled as request-relative)",
+      "kernel symbols and callchains",
+      "unrelated/out-of-request SQL rows"
+    ],
+    "private_replay": "Hashes commit to originals but public projection cannot independently replay omitted authentication, map validation, or simultaneous missing events.",
+    "retained": "Numeric SQL process/thread/source-row/correlation identities are local to each capture."
+  },
+  "schema": "ferrule.overlap.public-source.v1",
+  "source_boundary_excerpts": [
+    {
+      "first_line": 1184,
+      "last_line": 1219,
+      "lines": [
+        "        let result = reader",
+        "            .verified_read_session(ticket.read_plan())",
+        "            .and_then(|session| {",
+        "                #[cfg(test)]",
+        "                call_hook(hook, TestPhase::SessionOpened, &mut ticket.clone());",
+        "                session.read_incrementally(|session| {",
+        "                    receipt.io_started_at = Some(Instant::now());",
+        "                    #[cfg(test)]",
+        "                    call_hook(hook, TestPhase::IoStarted, &mut ticket.clone());",
+        "                    let result = {",
+        "                        // Actual worker allocation/pread envelope, excluding",
+        "                        // session opening and pre/post source verification.",
+        "                        let _range = tracing::debug_span!(target: \"ferrule_profile\", \"read_subset\",",
+        "                            operation = ticket.operation.get(),",
+        "                            source_generation = ticket.source_generation.get(),",
+        "                            requested_bytes = ticket.read_plan().storage_bytes())",
+        "                        .entered();",
+        "                        session.read_subset(ticket.read_plan())",
+        "                    };",
+        "                    receipt.io_finished_at = Some(Instant::now());",
+        "                    if let Ok(bytes) = &result {",
+        "                        receipt.io_bytes = Some(bytes.len() as u64);",
+        "                    }",
+        "                    #[cfg(test)]",
+        "                    call_hook(hook, TestPhase::PayloadRead, &mut ticket.clone());",
+        "                    result",
+        "                })",
+        "            });",
+        "        match result {",
+        "            Ok(bytes) => {",
+        "                receipt.source_verified_at = Some(Instant::now());",
+        "                receipt.payload_bytes = bytes.len() as u64;",
+        "                ReadOutcome::SourceVerified(bytes)",
+        "            }",
+        "            Err(error) => ReadOutcome::Failed(error),",
+        "        }"
+      ],
+      "source_member": "crates/ferrule-model/src/checkpoint/read_pipeline.rs",
+      "whole_file_sha256": "bd9a3bf2e8545798ecda4f7734da2eeea724a564bd416bcdb29298cc86100493"
+    },
+    {
+      "first_line": 98,
+      "last_line": 135,
+      "lines": [
+        "",
+        "    fn read_exact_at(&self, mut bytes: &mut [u8], mut offset: u64) -> io::Result<()> {",
+        "        #[cfg(not(unix))]",
+        "        use std::io::{Read, Seek, SeekFrom};",
+        "        #[cfg(unix)]",
+        "        use std::os::unix::fs::FileExt;",
+        "        #[cfg(not(unix))]",
+        "        let mut file = self",
+        "            .file",
+        "            .lock()",
+        "            .map_err(|_| io::Error::other(\"checkpoint file lock poisoned\"))?;",
+        "        #[cfg(not(unix))]",
+        "        file.seek(SeekFrom::Start(offset))?;",
+        "        while !bytes.is_empty() {",
+        "            self.counters.read_calls.fetch_add(1, Ordering::Relaxed);",
+        "            #[cfg(unix)]",
+        "            let result = self.file.read_at(bytes, offset);",
+        "            #[cfg(not(unix))]",
+        "            let result = file.read(bytes);",
+        "            match result {",
+        "                Ok(0) => {",
+        "                    return Err(io::Error::new(",
+        "                        io::ErrorKind::UnexpectedEof,",
+        "                        \"checkpoint source truncated\",",
+        "                    ));",
+        "                }",
+        "                Ok(count) => {",
+        "                    self.counters",
+        "                        .bytes_read",
+        "                        .fetch_add(count as u64, Ordering::Relaxed);",
+        "                    offset += count as u64;",
+        "                    bytes = &mut bytes[count..];",
+        "                }",
+        "                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,",
+        "                Err(error) => return Err(error),",
+        "            }",
+        "        }",
+        "        Ok(())"
+      ],
+      "source_member": "crates/ferrule-model/src/checkpoint/read_session.rs",
+      "whole_file_sha256": "100313f44b1d08fab0505c201d295df309fecdbb5847e0ec4db7390011bc6600"
+    },
+    {
+      "first_line": 316,
+      "last_line": 355,
+      "lines": [
+        "    /// The callback must join all workers before returning. Nothing escapes the",
+        "    /// transaction until the unique-source post boundary succeeds.",
+        "    pub(crate) fn read_incrementally<T>(self, read: impl FnOnce(&Self) -> Result<T>) -> Result<T> {",
+        "        let result = read(&self)?;",
+        "        self.validate_boundary()?;",
+        "        Ok(result)",
+        "    }",
+        "",
+        "    pub(crate) fn read_subset(&self, plan: &CheckpointReadPlan) -> Result<Vec<u8>> {",
+        "        if plan",
+        "            .source_files()",
+        "            .iter()",
+        "            .any(|s| !self.plan.source_files().contains(s))",
+        "            || plan.extents().iter().any(|e| {",
+        "                !self",
+        "                    .extents",
+        "                    .contains(&(e.path().to_path_buf(), e.offset(), e.bytes()))",
+        "            })",
+        "        {",
+        "            return Err(invalid(\"incremental read is outside the verified session\"));",
+        "        }",
+        "        let length = plan.storage_bytes() as usize;",
+        "        let mut bytes = Vec::new();",
+        "        bytes",
+        "            .try_reserve_exact(length)",
+        "            .map_err(|error| invalid(format!(\"allocate batch: {error}\")))?;",
+        "        bytes.resize(length, 0);",
+        "        let mut cursor = 0;",
+        "        for extent in plan.extents() {",
+        "            let end = cursor + extent.bytes() as usize;",
+        "            self.handles[extent.path()]",
+        "                .read_exact_at(&mut bytes[cursor..end], extent.offset())",
+        "                .map_err(|error| {",
+        "                    invalid(format!(",
+        "                        \"read '{}' extent {}..{}: {error}\",",
+        "                        extent.path().display(),",
+        "                        extent.offset(),",
+        "                        extent.end()",
+        "                    ))",
+        "                })?;"
+      ],
+      "source_member": "crates/ferrule-model/src/checkpoint/read_session.rs",
+      "whole_file_sha256": "100313f44b1d08fab0505c201d295df309fecdbb5847e0ec4db7390011bc6600"
+    }
+  ],
+  "source_pins": {
+    "crates/ferrule-cli/src/main.rs": "d421aaba40bc1bf298ff37a2e192b90d287d5b9b4977bd75ae9ffc3be2dd0845",
+    "crates/ferrule-common/src/observability.rs": "a6a9bef496fd72c800a52ee7ccf5955c42df799102901f79f315c2160db65ca2",
+    "crates/ferrule-common/src/observability/nvtx.rs": "94664f9675cac48c4d1e62c7276792ecae69cdc7c0a8a81f02cc574e3c2f343c",
+    "crates/ferrule-model/src/checkpoint/read_pipeline.rs": "bd9a3bf2e8545798ecda4f7734da2eeea724a564bd416bcdb29298cc86100493",
+    "crates/ferrule-model/src/checkpoint/read_session.rs": "100313f44b1d08fab0505c201d295df309fecdbb5847e0ec4db7390011bc6600",
+    "crates/ferrule-model/src/transformer/expert_reads.rs": "55dc60ea16dbf714db86ef23ece46cfa77c9a1e02088d311f253f333c2cbe093",
+    "crates/ferrule-model/src/transformer/standard/cuda.rs": "db6835984a6dece5d31eb48398cb510263cab27b0f30409f2aff5b04da8247f3",
+    "crates/ferrule-model/src/transformer/standard/cuda/invocation_trace.rs": "ebd514d1cc79aa57faa9f00baeeae4ce51493e0a05259e65832423d5df15623d"
+  },
+  "timestamp_policy": "Every interval start/end is signed integer Nsight ns minus the private request-window start. UTC and the subtracted origin are omitted.",
+  "zoom_rule": "First source-generation-1 read_subset in start order after request bound; [its start, its start + 20000000 ns). No overlap-based selection."
+}

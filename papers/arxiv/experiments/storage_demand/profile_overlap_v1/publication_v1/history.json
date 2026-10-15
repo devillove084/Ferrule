@@ -1,0 +1,86 @@
+[
+  {
+    "accepted_arms": 0,
+    "full_trace_accepted": false,
+    "generation": "-01",
+    "new_captures": 1,
+    "original_file": {
+      "bytes": 673,
+      "sha256": "dc89a8be952e6de89bc2205532f923bddb33b568da085fc3644a458d80474af0"
+    },
+    "status": "failed"
+  },
+  {
+    "accepted_arms": 0,
+    "full_trace_accepted": false,
+    "generation": "-02",
+    "new_captures": 0,
+    "original_file": {
+      "bytes": 10373,
+      "sha256": "ad4322af94cd9731e14904f19eb6e2c027134fa65f35b3776e0840416021b7c1"
+    },
+    "status": "blocked_before_gpu"
+  },
+  {
+    "accepted_arms": 0,
+    "full_trace_accepted": false,
+    "generation": "-03",
+    "new_captures": 0,
+    "original_file": {
+      "bytes": 25511,
+      "sha256": "349239d5a1a73dacc0147a7123b19aa286d1ca48541c4a9fa3b05f1f25a21040"
+    },
+    "status": "blocked_before_gpu"
+  },
+  {
+    "accepted_arms": 0,
+    "full_trace_accepted": false,
+    "generation": "-04",
+    "lookahead_status": "unissued",
+    "new_captures": 1,
+    "original_file": {
+      "bytes": 27811,
+      "sha256": "57055ae23234fbdabaaf64231a0f9d3672c12fa1b0f28dfbdc83db9e38e09890"
+    },
+    "rejection_reasons": [
+      "failed/empty worker pread",
+      "worker pread bytes/counts missing or differ from NVTX requested bytes"
+    ],
+    "status": "rejected_stop_lookahead_unissued"
+  },
+  {
+    "accepted_arms": 0,
+    "corrected_predicate": {
+      "dropped_event_count": null,
+      "full_trace_accepted": false,
+      "missing_gates": [],
+      "scoped_overlap_accepted": true,
+      "simultaneous_unreported_loss_excluded": false,
+      "universal_trace_completeness_established": false
+    },
+    "full_trace_accepted": false,
+    "generation": "-04-retrospective-v2",
+    "historical_acceptance_transferred": false,
+    "historical_prepared_upgraded": false,
+    "new_captures": 0,
+    "original_file": {
+      "bytes": 7923489,
+      "sha256": "6e569248061ea286a15d23bd1165705677f1bbb94686e7d731bc569d0bffdc02"
+    },
+    "original_files_unchanged": true,
+    "original_status": "rejected_stop_lookahead_unissued",
+    "retrospective": true,
+    "status": "retrospective_corrected_predicate_evaluated"
+  },
+  {
+    "accepted_arms": 2,
+    "full_trace_accepted": false,
+    "generation": "-05",
+    "new_captures": 2,
+    "original_file": {
+      "bytes": 44004,
+      "sha256": "4c9592f64016e1d23418acd1589b664d45b47f245c129b2bba3097515dbfb1a1"
+    },
+    "status": "two_fresh_scoped_captures_accepted"
+  }
+]

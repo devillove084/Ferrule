@@ -1,0 +1,693 @@
+{
+  "arm": "lookahead",
+  "capture_header": {
+    "CAPTURE_EVENT_TYPE": [
+      "OSRuntime",
+      "NvtxEvents",
+      "Cuda"
+    ],
+    "COLLECT_GPU_CTX_SW_TRACE": [
+      "false"
+    ],
+    "INCLUDE_CHILDREN": [
+      "true"
+    ],
+    "LINUX_PERF_OPTIONS:COLLECTION_MODE": [
+      "ProcessTree"
+    ],
+    "LINUX_PERF_OPTIONS:COLLECT_CPU_CTXSW_TRACE": [
+      "true"
+    ],
+    "NVTX_OPTIONS:NVTX_DOMAIN_FILTER_STRING": [
+      ""
+    ],
+    "OS_RUNTIME_OPTIONS:DURATION_THRESHOLD_NS": [
+      "1000"
+    ],
+    "RATE_HZ": [
+      "0"
+    ]
+  },
+  "collector_options": {
+    "cpuctxsw": "process-tree",
+    "osrt_file_access": true,
+    "osrt_threshold_ns": 1000,
+    "sample": "none",
+    "trace": [
+      "cuda",
+      "nvtx",
+      "osrt"
+    ]
+  },
+  "diagnostics": [
+    {
+      "affects_full_trace": false,
+      "affects_scoped_overlap": false,
+      "classification": "informational",
+      "globalPid": -144115188075855872,
+      "original_row_sha256": "1e6528d02ad43d00ad2f59e544e8879120a8d51e81b223f6b0b6cc1c6a6e3864",
+      "original_text_sha256": "648c403fc3ee828ec2f365aec6794a08170ca8cb598a988bff4591db19f3de84",
+      "row_id": 1,
+      "severity": 1,
+      "source": 3,
+      "text": "Profiling has started.",
+      "text_redacted": false,
+      "timestampType": 1
+    },
+    {
+      "affects_full_trace": false,
+      "affects_scoped_overlap": false,
+      "classification": "informational",
+      "globalPid": 284311970381824,
+      "original_row_sha256": "30d250e54c96ddae3514505e063ff65314885025deb6c7ee578d5efce5029238",
+      "original_text_sha256": "adebd792b67dbeb9b4e9fda86ad4c1d19021d639ff254fddb09d25de82146639",
+      "row_id": 2,
+      "severity": 1,
+      "source": 2,
+      "text": "Process was launched by the profiler; output locations [REDACTED]",
+      "text_redacted": true,
+      "timestampType": 1
+    },
+    {
+      "affects_full_trace": false,
+      "affects_scoped_overlap": false,
+      "classification": "informational",
+      "globalPid": 284311970381824,
+      "original_row_sha256": "4140fdb5402ba198910ae105fb8cd84a321eadea63f962567ad6f95464ad6b51",
+      "original_text_sha256": "a34a4bc4c6022471d4cce25e245d7955ac5afbfc47666f15251bed4e38f64357",
+      "row_id": 3,
+      "severity": 1,
+      "source": 1,
+      "text": "Common injection library initialized successfully.",
+      "text_redacted": false,
+      "timestampType": 1
+    },
+    {
+      "affects_full_trace": false,
+      "affects_scoped_overlap": false,
+      "classification": "informational",
+      "globalPid": 284311970381824,
+      "original_row_sha256": "418b533275eec86b834a45d7908906d34e220ae27de8acbef3e92045043863ad",
+      "original_text_sha256": "c466ea80cf65ebe3c129d3a478e8741fdf79619941bebc96bff4634eac0831e8",
+      "row_id": 4,
+      "severity": 1,
+      "source": 1,
+      "text": "OS runtime libraries injection initialized successfully.",
+      "text_redacted": false,
+      "timestampType": 1
+    },
+    {
+      "affects_full_trace": true,
+      "affects_scoped_overlap": false,
+      "classification": "authenticated_non_cuda_wrapper_no_payload",
+      "globalPid": 284311970381824,
+      "original_row_sha256": "9e8d02741b924ea72ee68db3945910c4e1d41c04d951d91ece9044eebe11a21c",
+      "original_text_sha256": "866c8fb8cdd085e4f8596db0c739b6dd284d3d6613406df86fcd8e90238d33f0",
+      "row_id": 5,
+      "severity": 2,
+      "source": 3,
+      "text": "No NVTX events collected. Does the process use NVTX?",
+      "text_redacted": false,
+      "timestampType": 2
+    },
+    {
+      "affects_full_trace": false,
+      "affects_scoped_overlap": false,
+      "classification": "informational",
+      "globalPid": 284312591138816,
+      "original_row_sha256": "57620edd2c0ef97a268f8cd8b18f0eda4be5c6ea117a73f555616057699d8fc3",
+      "original_text_sha256": "5e5dbecba1d95158a56b26de51187171923c0e81eb55110e409164c854e7c37b",
+      "row_id": 6,
+      "severity": 1,
+      "source": 3,
+      "text": "Number of NVTX events collected: \t11035.",
+      "text_redacted": false,
+      "timestampType": 2
+    },
+    {
+      "affects_full_trace": true,
+      "affects_scoped_overlap": false,
+      "classification": "authenticated_non_cuda_wrapper_no_payload",
+      "globalPid": 284311970381824,
+      "original_row_sha256": "01b218c3e22310651e5466b47b13398423b57b73dec95b2bee6b85c195c18f40",
+      "original_text_sha256": "6f91457a39b321eb369edc0ebb0d8af871788760a394a2dfb2d430444c2d8af1",
+      "row_id": 7,
+      "severity": 2,
+      "source": 3,
+      "text": "CUDA profiling might have not been started correctly.",
+      "text_redacted": false,
+      "timestampType": 2
+    },
+    {
+      "affects_full_trace": true,
+      "affects_scoped_overlap": false,
+      "classification": "authenticated_non_cuda_wrapper_no_payload",
+      "globalPid": 284311970381824,
+      "original_row_sha256": "0dba1b43ba3e5599d42bae5ffd68965a0fac24acaa937df05bfbe048fef5b918",
+      "original_text_sha256": "1f0ab1a4c8811268ec9e81a67069be2a8cb0f29ba573743e4d9c011473a7553d",
+      "row_id": 8,
+      "severity": 2,
+      "source": 3,
+      "text": "No CUDA events collected. Does the process use CUDA?",
+      "text_redacted": false,
+      "timestampType": 2
+    },
+    {
+      "affects_full_trace": false,
+      "affects_scoped_overlap": false,
+      "classification": "informational",
+      "globalPid": 284312591138816,
+      "original_row_sha256": "2270ceb49022e622f4b779847fbf0abd6d33f73bcb2b4051a1a16c4dfd216cd2",
+      "original_text_sha256": "391aaa21550b93b3a634003f2661e7013cc03db5aba57f340ec6f6f0956d4393",
+      "row_id": 9,
+      "severity": 1,
+      "source": 3,
+      "text": "Number of CUDA events collected: \t610581.",
+      "text_redacted": false,
+      "timestampType": 2
+    },
+    {
+      "affects_full_trace": false,
+      "affects_scoped_overlap": false,
+      "classification": "informational",
+      "globalPid": 284311970381824,
+      "original_row_sha256": "cd9e3d2fbf2761865b1d5f7f0d44c9b91f8145d285b2ad7ee3c49df78e3b2172",
+      "original_text_sha256": "8345b0b3a090625e9ae35c110e4e2f3ec5494e2b71e183d2d3e795b6bd32484e",
+      "row_id": 10,
+      "severity": 1,
+      "source": 3,
+      "text": "Number of OS runtime libraries events collected: \t26800.",
+      "text_redacted": false,
+      "timestampType": 2
+    },
+    {
+      "affects_full_trace": false,
+      "affects_scoped_overlap": false,
+      "classification": "informational",
+      "globalPid": 284312591138816,
+      "original_row_sha256": "eda47adf578f50fe6b138883e53bd0c4e0ad0dcd3ee74024261f139f7e7d7082",
+      "original_text_sha256": "51e447ef7214a9343d7c7f6bf0257259bdc2e7d027f9d47fdbcbcb27beaa17ba",
+      "row_id": 11,
+      "severity": 1,
+      "source": 3,
+      "text": "Number of OS runtime libraries events collected: \t232688.",
+      "text_redacted": false,
+      "timestampType": 2
+    },
+    {
+      "affects_full_trace": false,
+      "affects_scoped_overlap": false,
+      "classification": "informational",
+      "globalPid": 284312591138816,
+      "original_row_sha256": "4ca671ea3a1e9c918ebe906f93800127036b917dff255b059d59c06c96cfdb83",
+      "original_text_sha256": "a34a4bc4c6022471d4cce25e245d7955ac5afbfc47666f15251bed4e38f64357",
+      "row_id": 12,
+      "severity": 1,
+      "source": 1,
+      "text": "Common injection library initialized successfully.",
+      "text_redacted": false,
+      "timestampType": 1
+    },
+    {
+      "affects_full_trace": false,
+      "affects_scoped_overlap": false,
+      "classification": "informational",
+      "globalPid": 284312591138816,
+      "original_row_sha256": "b15340e4ac786dc28bf6848135038f5b75e05e5e9209f7ff39392286d2e79b9f",
+      "original_text_sha256": "c466ea80cf65ebe3c129d3a478e8741fdf79619941bebc96bff4634eac0831e8",
+      "row_id": 13,
+      "severity": 1,
+      "source": 1,
+      "text": "OS runtime libraries injection initialized successfully.",
+      "text_redacted": false,
+      "timestampType": 1
+    },
+    {
+      "affects_full_trace": false,
+      "affects_scoped_overlap": false,
+      "classification": "informational",
+      "globalPid": 284312591138816,
+      "original_row_sha256": "8a8613023dd6463730cbecdd6b8b958f6a9a4d18d2e638bb8d9c864150ac61ed",
+      "original_text_sha256": "5d7187d8515532b7e74b1a5c3782fd713296238fd82da0f136b2f2b5ae8cdd05",
+      "row_id": 14,
+      "severity": 1,
+      "source": 1,
+      "text": "NVTX injection initialized successfully.",
+      "text_redacted": false,
+      "timestampType": 1
+    },
+    {
+      "affects_full_trace": false,
+      "affects_scoped_overlap": false,
+      "classification": "informational",
+      "globalPid": 284312591138816,
+      "original_row_sha256": "50b5792ebb8db6298400d4712fb887a2ec6b87979d89cbf7fb3d4aa750af1845",
+      "original_text_sha256": "c0614ac7639ad1d60b6742e5cacc227fdde4a54f283118b3c5d993b4b93b8dd0",
+      "row_id": 15,
+      "severity": 1,
+      "source": 1,
+      "text": "Buffers holding CUDA trace data will be flushed on CudaProfilerStop() call. See --flush-on-cudaprofilerstop to control this behavior.",
+      "text_redacted": false,
+      "timestampType": 1
+    },
+    {
+      "affects_full_trace": false,
+      "affects_scoped_overlap": false,
+      "classification": "informational",
+      "globalPid": 284312591138816,
+      "original_row_sha256": "a802bc40e3073e28dd9b1eee1eba70e05e60ca887cbabb5feb2b04d590760fac",
+      "original_text_sha256": "16b92dfc5e7ab6e2114774bca0d702eb0affa5e0f16db21c7182dd7f5032226e",
+      "row_id": 16,
+      "severity": 1,
+      "source": 1,
+      "text": "Loaded CUPTI library: [REDACTED]",
+      "text_redacted": true,
+      "timestampType": 1
+    },
+    {
+      "affects_full_trace": false,
+      "affects_scoped_overlap": false,
+      "classification": "informational",
+      "globalPid": 284312591138816,
+      "original_row_sha256": "50612352ce1c1406081d77ee68a3626cb47ca3ada9b799175a696d286d409e6c",
+      "original_text_sha256": "acc217ce97e547b355ad62479c455eaca35c4a5f8ed0f620612104e4662dfa64",
+      "row_id": 17,
+      "severity": 1,
+      "source": 1,
+      "text": "Enabling trace for device graph launch",
+      "text_redacted": false,
+      "timestampType": 1
+    },
+    {
+      "affects_full_trace": false,
+      "affects_scoped_overlap": false,
+      "classification": "informational",
+      "globalPid": 284312591138816,
+      "original_row_sha256": "1d66b4f8aeb0f1c39585dbcb4048da76afd3f36382abf040477a755808533333",
+      "original_text_sha256": "c4d55aa17ed98d10764a12009f89d0a778b9f835ecc1721de818f44c67c21965",
+      "row_id": 18,
+      "severity": 1,
+      "source": 1,
+      "text": "CUDA injection initialized successfully.",
+      "text_redacted": false,
+      "timestampType": 1
+    },
+    {
+      "affects_full_trace": false,
+      "affects_scoped_overlap": false,
+      "classification": "informational",
+      "globalPid": 284312591138816,
+      "original_row_sha256": "5cac53919d88a25670654c2c45346e6deb5fde064978031e7ef72bbc314beb06",
+      "original_text_sha256": "ff43cb4e307d4f2e86d3f46e1e4cce9646d9a8904237dcaaed4a87ba5a60980f",
+      "row_id": 19,
+      "severity": 1,
+      "source": 1,
+      "text": "Number of CUPTI events produced: \t720437, CUPTI buffers: 50.",
+      "text_redacted": false,
+      "timestampType": 1
+    },
+    {
+      "affects_full_trace": false,
+      "affects_scoped_overlap": false,
+      "classification": "informational",
+      "globalPid": -144115188075855872,
+      "original_row_sha256": "e945778c15f1ca03d983896f37364793e89c704aaf75cb9f5aad254cb74c4b0a",
+      "original_text_sha256": "ae291322233de2d24685db97d8223a61b46ef727fa397b7d9349c90ff984b2d6",
+      "row_id": 20,
+      "severity": 1,
+      "source": 3,
+      "text": "Profiling has stopped.",
+      "text_redacted": false,
+      "timestampType": 1
+    }
+  ],
+  "export_header": {
+    "EXPORT_PARAM_LAZY": "false",
+    "EXPORT_PARAM_TABLES_TO_EXPORT": "",
+    "EXPORT_PARAM_TIMES_TO_EXPORT": "",
+    "EXPORT_PARAM_TIME_NORMALIZE": "false",
+    "EXPORT_PARAM_TIME_SHIFT": "0",
+    "EXPORT_PRODUCT_NAME": "NVIDIA Nsight Systems",
+    "EXPORT_PRODUCT_VERSION": "2025.3.1.90",
+    "EXPORT_SCHEMA_VERSION": "3.20.2"
+  },
+  "final_scope": {
+    "dropped_event_count": null,
+    "full_trace_accepted": false,
+    "lifecycle_gates": {
+      "authenticated_echild": true,
+      "authenticated_model_pid_birth_source": true,
+      "collector_export_closed": true,
+      "dynamic_owner_pair_closed": true,
+      "one_frozen_qa_http_token_join": true,
+      "original_all_eight_stable_idle": true,
+      "ready_and_after_raw_maps": true
+    },
+    "log_issues": [],
+    "loss_diagnostic_count": 0,
+    "missing_gates": [],
+    "scoped_issues": [],
+    "scoped_overlap_accepted": true,
+    "simultaneous_unreported_loss_excluded": false,
+    "universal_trace_completeness_established": false
+  },
+  "full_export_projection": {
+    "all_diagnostic_rows": 20,
+    "all_kernel_rows": 63042,
+    "all_math_launch_rows": 63042,
+    "correlation_counts": {
+      "duplicate_kernel_keys": 0,
+      "duplicate_math_api_keys": 0,
+      "kernel_without_unique_math_api": 0,
+      "math_api_without_unique_kernel": 0
+    },
+    "excluded_kernels": {
+      "outside_request": 4458,
+      "request_nonexpert": 25181
+    },
+    "excluded_preads": {
+      "model_outside_request": 863
+    },
+    "retained_expert_kernels": 33403,
+    "retained_preads": 22068,
+    "table_counts": {
+      "CUPTI_ACTIVITY_KIND_BLOCK_PHASE_TRACE": 0,
+      "CUPTI_ACTIVITY_KIND_BLOCK_TRACE": 0,
+      "CUPTI_ACTIVITY_KIND_CUDA_EVENT": 0,
+      "CUPTI_ACTIVITY_KIND_GRAPH_TRACE": 0,
+      "CUPTI_ACTIVITY_KIND_KERNEL": 63042,
+      "CUPTI_ACTIVITY_KIND_MEMCPY": 34609,
+      "CUPTI_ACTIVITY_KIND_MEMSET": 35321,
+      "CUPTI_ACTIVITY_KIND_OPENACC_DATA": 0,
+      "CUPTI_ACTIVITY_KIND_OPENACC_LAUNCH": 0,
+      "CUPTI_ACTIVITY_KIND_OPENACC_OTHER": 0,
+      "CUPTI_ACTIVITY_KIND_RUNTIME": 477609,
+      "CUPTI_ACTIVITY_KIND_SYNCHRONIZATION": 109352,
+      "CUPTI_ACTIVITY_KIND_WARP_PHASE_TRACE": 0,
+      "CUPTI_ACTIVITY_KIND_WARP_TRACE": 0,
+      "NVTX_EVENTS": 11035,
+      "OSRT_API": 259494
+    },
+    "wrapper_cuda_api_rows": 0,
+    "wrapper_kernel_rows": 0,
+    "wrapper_nvtx_rows": 0
+  },
+  "ledger": {
+    "effective_mode": "lookahead",
+    "invocation_count": 9,
+    "last_receipt": {
+      "cancellation_requested": false,
+      "identity": {
+        "expert": 244,
+        "image_generation": 1,
+        "layer": 39,
+        "operation": 3678
+      },
+      "io_bytes": 3146112,
+      "outcome": "source_verified",
+      "requested_bytes": 3146112
+    },
+    "model_source_generation": 1,
+    "stats": {
+      "cancelled_reads": 0,
+      "completed_reads": 3678,
+      "demand_failures": 0,
+      "demand_wait_calls": 3678,
+      "demand_wait_ns": 2768678685,
+      "demanded_reads": 3678,
+      "failed_reads": 0,
+      "io_duration_ns": 3000947670,
+      "io_started_reads": 3678,
+      "join_failed_sequences": 0,
+      "join_pending_sequences": 0,
+      "materialization_failures": 0,
+      "peak_artifact_bytes": 3146112,
+      "peak_host_charged_bytes": 16777984,
+      "peak_metadata_bytes": 8388608,
+      "peak_packed_bytes": 3146112,
+      "peak_payload_bytes": 6292224,
+      "peak_requested_stack_bytes": 2097152,
+      "prefetched_reads_taken": 3318,
+      "proved_read_bytes": 11571399936,
+      "reader_interval_bytes": 11571399936,
+      "reader_interval_calls": 22068,
+      "rejected_submissions": 0,
+      "resident_skips": 0,
+      "sequences_finished": 360,
+      "sequences_started": 360,
+      "speculative_reads": 3318,
+      "submitted_reads": 3678,
+      "unknown_bytes": 0,
+      "unknown_reads": 0,
+      "unobserved_reader_intervals": 0,
+      "unobserved_terminal_reads": 0,
+      "unproved_wasted_reads": 0,
+      "verified_reads": 3678,
+      "wasted_read_bytes": 0,
+      "wasted_reader_interval_bytes": 0,
+      "wasted_reader_interval_calls": 0,
+      "wasted_reads": 0,
+      "worker_started_reads": 3678
+    },
+    "status": "closed"
+  },
+  "maps": {
+    "after-requests": {
+      "observed": 19,
+      "raw_sha256": "05c92128748e8d1a67384d5efd987a2a647b5141bc239ab091913dc56f1ca0a9",
+      "required": 16,
+      "status": "passed"
+    },
+    "ready": {
+      "observed": 19,
+      "raw_sha256": "22d4d9fe37499736f4246a8b8a2d74c0bf13a58f1b65dd63130c9b7ff07fbbb0",
+      "required": 16,
+      "status": "passed"
+    }
+  },
+  "metrics": {
+    "attributed_kernel_count": 33403,
+    "correlation_counts": {
+      "duplicate_kernel_keys": 0,
+      "duplicate_math_api_keys": 0,
+      "kernel_without_unique_math_api": 0,
+      "math_api_without_unique_kernel": 0
+    },
+    "excluded_pread_calls": {
+      "model_outside_request": 863
+    },
+    "expert_kernel_union_ns": 194217266,
+    "image_generations": [
+      1
+    ],
+    "nvtx_range_counts": {
+      "layer.expert": 3678,
+      "layer.expert.upload": 3678,
+      "read_subset": 3678
+    },
+    "observed_pread_calls_per_range": {
+      "6": 3678
+    },
+    "osrt_read_bytes": null,
+    "osrt_read_bytes_reason": "unsupported_schema_no_size_or_proved_ssize_t",
+    "osrt_read_return_values": {
+      "0": 22068
+    },
+    "pread_calls_with_kernel_overlap": 77,
+    "pread_kernel_intersection_ns": 751507,
+    "pread_overlap_percent": 0.032744302984205366,
+    "read_envelope_kernel_intersection_ns": 174409210,
+    "read_envelope_overlap_percent": 5.833143797665073,
+    "read_ranges_with_kernel_overlap": 3317,
+    "read_ranges_with_pread_kernel_overlap": 77,
+    "requested_read_bytes": 11571399936,
+    "source_generations": [
+      1
+    ],
+    "source_verified_read_bytes": 11571399936,
+    "target_request_pread_calls": 22068,
+    "worker_pread_calls": 22068,
+    "worker_pread_union_ns": 2295077102,
+    "worker_read_envelope_union_ns": 2989969321
+  },
+  "original_files": {
+    "after_maps": {
+      "bytes": 82731,
+      "sha256": "05c92128748e8d1a67384d5efd987a2a647b5141bc239ab091913dc56f1ca0a9"
+    },
+    "after_roles": {
+      "bytes": 5993,
+      "sha256": "7001ceeefbe0b95c14069c91f0ca9ab9938719200ddcc3dd4ff7521f8d438317"
+    },
+    "collector_command": {
+      "bytes": 2075,
+      "sha256": "a2756a670b6b0a954fc83b07b345949ca160dfe5b2ade069bb46578d1f34ebb9"
+    },
+    "collector_manifest": {
+      "bytes": 6134,
+      "sha256": "0c1ece3395512b522d842bc5b2e28cdcbaf1296151e74573ae8e6bafb6834798"
+    },
+    "custody": {
+      "bytes": 1594,
+      "sha256": "9e530c245b22bd8dfc79b70e73cd1a6ffbb94c52374d8f6f5974b27f2fa31c20"
+    },
+    "export_result": {
+      "bytes": 22,
+      "sha256": "1e3f6691f455051e8adb15d961e4bf3c7a17e83dd88b2afdd13315cc288250bb"
+    },
+    "final_analysis": {
+      "bytes": 7194093,
+      "sha256": "913b24ca25994b6cd74cedc14c4ed4efe451574a3e6974326c30d250ccf7f792"
+    },
+    "quality": {
+      "bytes": 10588,
+      "sha256": "f19e3076a8e97ee8d6922aa49c79bee0989c2d6e816ed153cf317310e79fbd4c"
+    },
+    "read_ledger": {
+      "bytes": 42434,
+      "sha256": "879c9bd0e58d06650342e1d85d83670e6066f0bfc3b580d7aa032c95f3fe7692"
+    },
+    "ready_maps": {
+      "bytes": 82100,
+      "sha256": "22d4d9fe37499736f4246a8b8a2d74c0bf13a58f1b65dd63130c9b7ff07fbbb0"
+    },
+    "ready_roles": {
+      "bytes": 5984,
+      "sha256": "0b34120998606dd8f3d98a49552ea6b88e3d55249b9d3375aa8a47fe0d82c19e"
+    },
+    "report": {
+      "bytes": 19581966,
+      "sha256": "c8ec44bebe9dfbf01daca20d216fc6e51137368fe2a2804fd99edaf15cbb8799"
+    },
+    "server_log": {
+      "bytes": 73217,
+      "sha256": "5796a223dbdd5b867a153b1f5b07b665f625ae6a492b7e97fee0a7ada46c335e"
+    },
+    "sqlite": {
+      "bytes": 50315264,
+      "sha256": "5332ed93e51a610a3939f668280481f4eaeffbd724dd9889e5bf9911a770b4d1"
+    },
+    "supervisor": {
+      "bytes": 4612,
+      "sha256": "095d83ff1a41a3fb0cf3777163e69a1d4d1552ba56b0bbf1cb529a8b2d43fab4"
+    },
+    "worker_audit": {
+      "bytes": 7193120,
+      "sha256": "01b835610a84135a84409be01240d54c8a5d1a39922e3690503314ae8863918f"
+    },
+    "worker_capture": {
+      "bytes": 43321,
+      "sha256": "3bf7684148c16ffde7e3c43b290f3b955a0dfd4c7f8e8eec5db16004a94f3b5f"
+    }
+  },
+  "osrt_counter_coverage": {
+    "api_rows": 259488,
+    "count_scope": "OSRT API class only; exporter START/FINISH markers retained separately, not dropped APIs",
+    "counters": [
+      {
+        "api_rows": 26800,
+        "event_class_counts": {
+          "TRACE_PROCESS_EVENT_OS_RUNTIME": 26800,
+          "TRACE_PROCESS_EVENT_OS_RUNTIME_FINISH": 2,
+          "TRACE_PROCESS_EVENT_OS_RUNTIME_START": 1
+        },
+        "globalPid": 284311970381824,
+        "matched": true,
+        "official_counts": [
+          26800
+        ],
+        "pid": 169098
+      },
+      {
+        "api_rows": 232688,
+        "event_class_counts": {
+          "TRACE_PROCESS_EVENT_OS_RUNTIME": 232688,
+          "TRACE_PROCESS_EVENT_OS_RUNTIME_FINISH": 2,
+          "TRACE_PROCESS_EVENT_OS_RUNTIME_START": 1
+        },
+        "globalPid": 284312591138816,
+        "matched": true,
+        "official_counts": [
+          232688
+        ],
+        "pid": 169135
+      }
+    ],
+    "dropped_event_count": null,
+    "issues": [],
+    "lifecycle_marker_rows": 6,
+    "total_rows": 259494
+  },
+  "osrt_schema_columns": [
+    "start",
+    "end",
+    "eventClass",
+    "globalTid",
+    "nameId",
+    "returnValue",
+    "nestingLevel",
+    "callchainId"
+  ],
+  "physical_mapping": {
+    "gpu_inventory_count": 8,
+    "logical_device_id": 0,
+    "model_pid": 169135,
+    "physical_uuid_bound": true,
+    "uuid_redacted": true
+  },
+  "preliminary_worker": {
+    "full_trace_accepted": false,
+    "scoped_overlap_accepted": false,
+    "scoped_sql_evidence_consistent": true,
+    "status": "rejected"
+  },
+  "process_roles": [
+    {
+      "birth_ticks": 134847741,
+      "executable_sha256": "7cc8e0ff6e84f27090494b8e9e27dc3a388d1d2f3fc34ae39dae416e1e607a01",
+      "globalPid": 284312591138816,
+      "pid": 169135,
+      "ppid": 169098,
+      "role": "model",
+      "source_binding_sha256": "3439b17677cb6b588278f4971effa0127df1ce19d6c1b2910d6d2cccbbf0124d"
+    },
+    {
+      "birth_ticks": 134846784,
+      "executable_sha256": "ab69351532e9128b35988453c0e929320ef5b325ae1ecf102db3dcd9a5c45293",
+      "globalPid": 284311970381824,
+      "pid": 169098,
+      "ppid": 169097,
+      "role": "non_cuda_wrapper",
+      "source_binding_sha256": "3b31de42d16a2e4696aa6d8243f53489f60bd3981a60b752c2a734b2080adc2f"
+    }
+  ],
+  "qa": {
+    "actual_generated_ids": [
+      25358,
+      13,
+      198,
+      760,
+      6511,
+      314,
+      6124,
+      369
+    ],
+    "decoder_invocations": 9,
+    "status": "passed",
+    "text": " Tokyo.\nThe capital of Japan is",
+    "usage": {
+      "completion_tokens": 8,
+      "prompt_tokens": 5,
+      "total_tokens": 13
+    }
+  },
+  "request_duration_ns": 7837405000,
+  "schema": "ferrule.overlap.public-projection.v1",
+  "source_binding": {
+    "cli_sha256": "7cc8e0ff6e84f27090494b8e9e27dc3a388d1d2f3fc34ae39dae416e1e607a01",
+    "image_generation": 1,
+    "measurement_fix_commit": "5e4e29cb883c84392dfaff15120ee910dac093ad",
+    "source_commit": "86c58a017d7c4b53490f536a3b1a133f2f7848cc",
+    "source_generation": 1
+  }
+}
