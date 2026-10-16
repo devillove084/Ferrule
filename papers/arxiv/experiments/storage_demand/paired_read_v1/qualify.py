@@ -12,7 +12,7 @@ import time
 ROOT = Path('/home/admin/luhuanbing.lhb/Ferrule')
 HERE = Path(__file__).resolve().parent
 SOURCE = ROOT / 'target/validation/retained-upload-57e4629-gpu-20261016-01'
-OUT = ROOT / 'target/validation/retained-profile-57e4629-postsetsid-20261016-01'
+OUT = ROOT / 'target/validation/retained-profile-57e4629-natural-drain-20261016-01'
 PARENT = ROOT / 'target/validation/retained-performance-57e4629-20261016-01'
 PYTHON = '/home/admin/wxw403883/anaconda3/bin/python3.12'
 SCRIPT = Path(__file__).resolve()
@@ -355,6 +355,7 @@ def main():
         source_archive_sha256=ct.sha(SOURCE/'source.tar'),qualification_plan_sha256=ct.sha(OUT/'performance-plan.json'),
         status='blocked',results=[],actual_gpu_tests_issued=0,retries=0,conditioning_probes=0,warmups=0,profiling_captures=0,
         artifact_sha256={'composition': PLAN['binary_sha256']},binary_math_proof=False,
+        profile_evidence_scope=profile_audit.model_summary_policy(),
         relationship='Fresh four profile-only captures; completed20 never rerun; no unprofiled latency population, default switch, TTFT/token/request latency or overlap claim',
         physical_release='unobserved; authenticated ECHILD and observed NVML idle are not a CUDA fence or physical-release certificate')
     last_custody=None; locks=[]
@@ -401,7 +402,7 @@ def main():
 def configure(directory):
     global OUT, PLAN
     wanted = Path(directory).resolve()
-    ct.require(wanted == ROOT / 'target/validation/retained-profile-57e4629-postsetsid-20261016-01',
+    ct.require(wanted == ROOT / 'target/validation/retained-profile-57e4629-natural-drain-20261016-01',
                'Only the fresh separately sealed same-cut four-profile stage is admitted')
     plan = ct.load(wanted / 'performance-plan.json')
     perf.validate_plan(plan)
@@ -540,7 +541,8 @@ def export_profile(directory, gate, custody, observations):
         db.set_progress_handler(lambda: int(time.monotonic() >= audit_deadline), 10000)
         result = profile_audit.process_api_summary(db, start['model']['before']['pid'], start['wrapper']['pid'], PLAN['uuid_inventory'][0])
     ct.write(directory / 'cuda-api-observations.json', result)
-    return dict(observed_api_summary_sha256=ct.sha(directory / 'cuda-api-observations.json'),
+    return dict(status=result['status'], dropped_event_count=None,
+        api_count_exhaustiveness='unproven', observed_api_summary_sha256=ct.sha(directory / 'cuda-api-observations.json'),
         nsys_report_sha256=ct.sha(directory / 'nsys.nsys-rep'), sqlite_sha256=ct.sha(directory / 'nsys.sqlite'),
         full_trace_accepted=False, whole_test_profiled_time_not_latency_population=True)
 
@@ -582,10 +584,7 @@ def prepare():
         fresh_reference_sha256=original['fresh_reference_sha256'], full40_reference_sha256=original['full40_reference_sha256'],
         nsys_version=perf.VERSION, nsys=tools['nsys'], nsys_sha256=ct.sha(tools['nsys']),
         measurement='official_nsight_process_wide_counts_and_host_durations_not_unprofiled_latency',
-        exact_diagnostic_exceptions=dict(wrapper=list(scope_contract.NO_PAYLOAD),
-            model=['No NVTX events collected. Does the process use NVTX?'],
-            global_scheduling=scope_contract.SCHEDULING,
-            full_trace_accepted=False, no_unknown_warning_or_loss_waiver=True),
+        observed_model_summary_policy=profile_audit.model_summary_policy(),
         source_control_relationship='Application binary/archive unchanged57; current maintained controls separately pinned, no rebuild',
         previous_plan_sha256=ct.sha(SOURCE / 'retained-plan.json'), previous_final_sha256=ct.sha(SOURCE / 'FINAL.json'),
         pins=dict(original['pins']))
@@ -605,7 +604,7 @@ def prepare():
     PLAN['pins'].update({path: row['sha256'] for path, row in tools['pins'].items()})
     paths = {SCRIPT, HERE / 'performance.py', HERE / 'retained_evidence.py', HERE / 'quality.py', HERE / 'profile_audit.py',
              HERE / 'test_performance.py', ROOT / 'scripts/_profile_capture.py', ROOT / 'scripts/tests/test_profile_capture.py',
-             ROOT / 'scripts/_owned_subreaper.py', ROOT / 'scripts/tests/test_vllm_supervisor_failures.py',
+             ROOT / 'scripts/_owned_subreaper.py', ROOT / 'scripts/tests/test_owned_descendants.py', ROOT / 'scripts/tests/test_vllm_supervisor_failures.py',
              tool_manifest, package, prior_runtime_path, OUT / 'profile-runtime-policy.json', Path(PYTHON).resolve(), SOURCE / 'source.tar'}
     for module in list(sys.modules.values()):
         file = getattr(module, '__file__', None)

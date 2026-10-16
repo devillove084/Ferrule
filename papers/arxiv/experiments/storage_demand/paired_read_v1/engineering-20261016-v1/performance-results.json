@@ -8384,5 +8384,380 @@
       }
     }
   },
-  "historical_completed_quality_stages": "completed-stages.json retains original9+1+11 actual passes; these20 additional successful primaries/trials and blocked profile are separate and do not turn the24-job experiment into a pass"
+  "historical_completed_quality_stages": "completed-stages.json retains original9+1+11 actual passes; these20 additional successful primaries/trials and blocked profile are separate and do not turn the24-job experiment into a pass",
+  "profile_failure_log": [
+    {
+      "id": "postsetsid-four-profile-attempt",
+      "status": "FAILED_CAPTURE_INCOMPLETE_UNQUALIFIED",
+      "application_commit": "57e46295d3cf5725605e076eb5543f6124bd9245",
+      "attempted": 1,
+      "accepted": 0,
+      "not_dispatched": 3,
+      "retries": 0,
+      "root_wrapper_model_returned_zero": true,
+      "post_setsid_exact_identity_verified": true,
+      "failure": "successful root went directly to custodian cleanup; adopted child received signals before natural drain, so natural_exit=False; original rejection remains intact",
+      "signaled_adopted_identity": {
+        "pid": 262053,
+        "birth_ticks": 145860510,
+        "parent": 262030
+      },
+      "official_sql_process_name": "nsys",
+      "precise_historical_executable_cmdline_role": "unobserved; name alone is not a daemon/importer identification",
+      "model_quality_and_own_primary_cpu_revalidation_passed": true,
+      "safe_echild_all8idle_locks_verified": true,
+      "failed_final": {
+        "path": "target/validation/retained-profile-57e4629-postsetsid-20261016-01/FINAL.json",
+        "sha256": "cb9cc67c1a4d18b7265f696147d3093f0a65e8df5940baf861b0140d92efb821",
+        "bytes": 1412525
+      },
+      "capture": {
+        "path": "target/validation/retained-profile-57e4629-postsetsid-20261016-01/gates/21-profile-blocking-synchronous/nsys.nsys-rep",
+        "sha256": "e3691c48b03174ff789a38b565eb0e118fc8565cba39b4535533d9494ac8f881",
+        "bytes": 111708856
+      },
+      "offline_diagnostic_only": true,
+      "qualified": false,
+      "offline_baseline": {
+        "path": "target/validation/retained-profile-57e4629-postsetsid-20261016-01/failure-closeout-01/offline-diagnostic/baseline-counts.json",
+        "sha256": "b4f68975aecd120a461f6a07a78ced0a63fcb840d64d978b8d1d2a41036e7509",
+        "bytes": 49446
+      },
+      "offline_blockers": {
+        "path": "target/validation/retained-profile-57e4629-postsetsid-20261016-01/failure-closeout-01/offline-diagnostic/baseline-zero-and-auditor-blockers.json",
+        "sha256": "d6b17049095f0115ad2bb376d4a0441fd92bbffb983d449c9375ac0c8e9a8732",
+        "bytes": 65865
+      },
+      "normalization_denominator": 25116,
+      "normalization_scope": "Whole-process observed aggregate divided by logical cache uploads; not isolated expert cost, latency, or retained delta",
+      "selected_offline_api_observations": [
+        {
+          "name": "cuMemAllocHost_v2",
+          "return_value": 0,
+          "count": 2,
+          "host_sum_ns": 938981,
+          "host_mean_ns_per_call": 469490.5,
+          "host_min_ns": 4256,
+          "host_max_ns": 934725,
+          "observed_calls_per_logical_upload": 7.963051441312311e-05,
+          "host_ns_per_logical_upload": 37.38577002707437
+        },
+        {
+          "name": "cuMemAlloc_v2",
+          "return_value": 0,
+          "count": 34,
+          "host_sum_ns": 7048467,
+          "host_mean_ns_per_call": 207307.85294117648,
+          "host_min_ns": 87530,
+          "host_max_ns": 343534,
+          "observed_calls_per_logical_upload": 0.0013537187450230928,
+          "host_ns_per_logical_upload": 280.6365265169613
+        },
+        {
+          "name": "cuEventCreate",
+          "return_value": 0,
+          "count": 347563,
+          "host_sum_ns": 177301203,
+          "host_mean_ns_per_call": 510.1268057877277,
+          "host_min_ns": 148,
+          "host_max_ns": 1451431,
+          "observed_calls_per_logical_upload": 13.838310240484153,
+          "host_ns_per_logical_upload": 7059.293000477783
+        },
+        {
+          "name": "cuEventRecord",
+          "return_value": 0,
+          "count": 347563,
+          "host_sum_ns": 146345688,
+          "host_mean_ns_per_call": 421.06233402289655,
+          "host_min_ns": 209,
+          "host_max_ns": 17578,
+          "observed_calls_per_logical_upload": 13.838310240484153,
+          "host_ns_per_logical_upload": 5826.791208791209
+        },
+        {
+          "name": "cuStreamWaitEvent",
+          "return_value": 0,
+          "count": 1387,
+          "host_sum_ns": 586772,
+          "host_mean_ns_per_call": 423.0511896178803,
+          "host_min_ns": 310,
+          "host_max_ns": 4320,
+          "observed_calls_per_logical_upload": 0.05522376174550087,
+          "host_ns_per_logical_upload": 23.362478101608538
+        },
+        {
+          "name": "cuEventDestroy_v2",
+          "return_value": 0,
+          "count": 347563,
+          "host_sum_ns": 72275977,
+          "host_mean_ns_per_call": 207.9507226028087,
+          "host_min_ns": 113,
+          "host_max_ns": 71785,
+          "observed_calls_per_logical_upload": 13.838310240484153,
+          "host_ns_per_logical_upload": 2877.686614110527
+        },
+        {
+          "name": "cuStreamSynchronize",
+          "return_value": 0,
+          "count": 382743,
+          "host_sum_ns": 4335003887,
+          "host_mean_ns_per_call": 11326.1480601866,
+          "host_min_ns": 293,
+          "host_max_ns": 121497,
+          "observed_calls_per_logical_upload": 15.239010989010989,
+          "host_ns_per_logical_upload": 172599.2947523491
+        },
+        {
+          "name": "cudaEventCreateWithFlags_v3020",
+          "return_value": 0,
+          "count": 16,
+          "host_sum_ns": 14701,
+          "host_mean_ns_per_call": 918.8125,
+          "host_min_ns": 266,
+          "host_max_ns": 7986,
+          "observed_calls_per_logical_upload": 0.0006370441153049849,
+          "host_ns_per_logical_upload": 0.5853240961936614
+        },
+        {
+          "name": "cudaStreamSynchronize_v3020",
+          "return_value": 0,
+          "count": 290,
+          "host_sum_ns": 5886559,
+          "host_mean_ns_per_call": 20298.47931034483,
+          "host_min_ns": 2388,
+          "host_max_ns": 89315,
+          "observed_calls_per_logical_upload": 0.01154642458990285,
+          "host_ns_per_logical_upload": 234.37486064659979
+        },
+        {
+          "name": "cuEventSynchronize",
+          "return_value": 0,
+          "count": 77904,
+          "host_sum_ns": 1480455692,
+          "host_mean_ns_per_call": 19003.59021359622,
+          "host_min_ns": 297,
+          "host_max_ns": 1214461,
+          "observed_calls_per_logical_upload": 3.1017677974199716,
+          "host_ns_per_logical_upload": 58944.724159898076
+        },
+        {
+          "name": "cuMemsetD8Async",
+          "return_value": 0,
+          "count": 243170,
+          "host_sum_ns": 764494711,
+          "host_mean_ns_per_call": 3143.8693547723815,
+          "host_min_ns": 1328,
+          "host_max_ns": 413328,
+          "observed_calls_per_logical_upload": 9.681876094919573,
+          "host_ns_per_logical_upload": 30438.55355152094
+        },
+        {
+          "name": "cuMemcpyHtoDAsync_v2",
+          "return_value": 0,
+          "count": 195985,
+          "host_sum_ns": 5396958078,
+          "host_mean_ns_per_call": 27537.60786794908,
+          "host_min_ns": 1778,
+          "host_max_ns": 105994938,
+          "observed_calls_per_logical_upload": 7.803193183627966,
+          "host_ns_per_logical_upload": 214881.2740086001
+        },
+        {
+          "name": "cuEventQuery",
+          "return_value": 0,
+          "count": 269528,
+          "host_sum_ns": 147755378,
+          "host_mean_ns_per_call": 548.200476388353,
+          "host_min_ns": 253,
+          "host_max_ns": 19971,
+          "observed_calls_per_logical_upload": 10.731326644370123,
+          "host_ns_per_logical_upload": 5882.918378722727
+        },
+        {
+          "name": "cuEventQuery",
+          "return_value": 600,
+          "count": 20059,
+          "host_sum_ns": 7732605,
+          "host_mean_ns_per_call": 385.4930455157286,
+          "host_min_ns": 273,
+          "host_max_ns": 10610,
+          "observed_calls_per_logical_upload": 0.7986542443064182,
+          "host_ns_per_logical_upload": 307.8756569517439
+        },
+        {
+          "name": "cuMemFree_v2",
+          "return_value": 0,
+          "count": 34,
+          "host_sum_ns": 40955616,
+          "host_mean_ns_per_call": 1204576.9411764706,
+          "host_min_ns": 267466,
+          "host_max_ns": 2492128,
+          "observed_calls_per_logical_upload": 0.0013537187450230928,
+          "host_ns_per_logical_upload": 1630.6583850931677
+        },
+        {
+          "name": "cuMemFreeHost",
+          "return_value": 0,
+          "count": 2,
+          "host_sum_ns": 2285333,
+          "host_mean_ns_per_call": 1142666.5,
+          "host_min_ns": 12486,
+          "host_max_ns": 2272847,
+          "observed_calls_per_logical_upload": 7.963051441312311e-05,
+          "host_ns_per_logical_upload": 90.99112119764294
+        },
+        {
+          "name": "cudaDeviceSynchronize_v3020",
+          "return_value": 0,
+          "count": 4,
+          "host_sum_ns": 17773,
+          "host_mean_ns_per_call": 4443.25,
+          "host_min_ns": 1919,
+          "host_max_ns": 9550,
+          "observed_calls_per_logical_upload": 0.00015926102882624622,
+          "host_ns_per_logical_upload": 0.7076365663322185
+        },
+        {
+          "name": "cudaEventDestroy_v3020",
+          "return_value": 0,
+          "count": 16,
+          "host_sum_ns": 11466,
+          "host_mean_ns_per_call": 716.625,
+          "host_min_ns": 204,
+          "host_max_ns": 1848,
+          "observed_calls_per_logical_upload": 0.0006370441153049849,
+          "host_ns_per_logical_upload": 0.45652173913043476
+        },
+        {
+          "name": "cuCtxSynchronize",
+          "return_value": 0,
+          "count": 3,
+          "host_sum_ns": 6403,
+          "host_mean_ns_per_call": 2134.3333333333335,
+          "host_min_ns": 569,
+          "host_max_ns": 5210,
+          "observed_calls_per_logical_upload": 0.00011944577161968466,
+          "host_ns_per_logical_upload": 0.25493709189361363
+        }
+      ],
+      "copies": [
+        {
+          "deviceId": 0,
+          "calls": 195985,
+          "bytes": 82512273944,
+          "device_ns": 3831883434,
+          "min_ns": 448,
+          "max_ns": 105879386,
+          "kind": "CUDA_MEMCPY_KIND_HTOD",
+          "calls_per_logical_upload": 7.803193183627966,
+          "bytes_per_logical_upload": 3285247.409778627
+        },
+        {
+          "deviceId": 0,
+          "calls": 6568,
+          "bytes": 87634176,
+          "device_ns": 13751863,
+          "min_ns": 1408,
+          "max_ns": 5280,
+          "kind": "CUDA_MEMCPY_KIND_DTOH",
+          "calls_per_logical_upload": 0.2615066093326963,
+          "bytes_per_logical_upload": 3489.1772575250834
+        },
+        {
+          "deviceId": 0,
+          "calls": 29820,
+          "bytes": 4382064640,
+          "device_ns": 46962782,
+          "min_ns": 1248,
+          "max_ns": 6400,
+          "kind": "CUDA_MEMCPY_KIND_DTOD",
+          "calls_per_logical_upload": 1.1872909698996656,
+          "bytes_per_logical_upload": 174473.03073737858
+        }
+      ],
+      "kernels": [
+        {
+          "deviceId": 0,
+          "calls": 409411,
+          "device_ns": 3377694488,
+          "first": 22060915389,
+          "last": 77175388135
+        }
+      ],
+      "device_memset": [
+        {
+          "value": 0,
+          "deviceId": 0,
+          "calls": 243379,
+          "bytes": 7859206660,
+          "device_ns": 220097978
+        }
+      ],
+      "cpu_initial_zero_and_pack_time": null,
+      "semantic_pending_sleep": null,
+      "per_upload_completion_gap": null,
+      "retained_comparison": null,
+      "warnings_total": 248,
+      "warnings_outside_existing_scope": 243,
+      "wrapper_model_global_warning_texts": [
+        "Scheduling information is absent. The thread activity is deduced based on OS runtime libraries traces. This is inaccurate and does not take into account asynchronous interrupts and exception faults.",
+        "No NVTX events collected. Does the process use NVTX?",
+        "No NVTX events collected. Does the process use NVTX?",
+        "CUDA profiling might have not been started correctly.",
+        "No CUDA events collected. Does the process use CUDA?"
+      ],
+      "dropped_event_total": null,
+      "all_warnings_preserved_in_ignored_official_diagnostics": true,
+      "additional_auditor_blocker": "Maintained auditor rejects8 target-device inventory rows; observed activity is model/device0.243 warnings also fall outside existing exact warning scope. Neither criterion has been changed or waived.",
+      "candidate_supervisor_fix": {
+        "review_required": true,
+        "nsys_gpu_validation": false,
+        "grace": "successful root only; min(existing5s cleanup bound, remaining original job deadline); no deadline extension",
+        "reap_before_signals": true,
+        "identity_bound_executable_cmdline_before_signals": true,
+        "signal_authority": "unchanged waitid-WNOWAIT-proven unreaped direct children; metadata does not authorize signals",
+        "helper_sha256": "8ca57ee1c251057f0dbcc8af45a636c7f324e6c98098b0567a2ae8a84d2d858c",
+        "cpu_tests": 115,
+        "validation_summary": {
+          "path": "target/validation/retained-profile-57e4629-postsetsid-20261016-01/failure-closeout-01/natural-drain-review-01/cpu-validation-summary.json",
+          "sha256": "30e396d4b64b32a8c72a4acdb58762345493e43ad3678d33f977a64d293cb53e",
+          "bytes": 2292
+        }
+      },
+      "next_gpu_stage": "not prepared or authorized; review supervisor fix and resolve offline auditor findings first; no blind third capture",
+      "prior20_performance_stage_not_rerun": true,
+      "followup_control_review": {
+        "status": "review_ready_not_GPU_GO",
+        "fresh_stage": "target/validation/retained-profile-57e4629-natural-drain-20261016-01",
+        "fresh_plan_sha256": "a7f4a7b1835fccbd7fa6bfed59228c29931f14a42cecc38c757f3a3ddbe911e0",
+        "supervisor_fix": "bounded natural grace plus final terminal WNOWAIT after metadata before kill; existing reap sweep consumes; no atomic check/kill claim",
+        "auditor_fix": "unique VM/GPU mapping; whole-export observed CUDA provenance; exact mechanism/subject/binding/effect classification not an ownership waiver",
+        "cpu_tests": 127,
+        "independent_review_required": true,
+        "offline_diagnostic": {
+          "path": "target/validation/retained-profile-57e4629-natural-drain-20261016-01/offline-historical-diagnostic-final.json",
+          "sha256": "a6545a4d34e262a10354f0c45f43ae1062d134a329dc7f51328302d4600787ad",
+          "status": "INCOMPLETE_FAILED_CAPTURE_UNQUALIFIED",
+          "model_summary_status": "PARTIAL_OBSERVED_MODEL_SUMMARY",
+          "diagnostics_preserved": 506,
+          "warnings": 248,
+          "unbound_warning_subjects": 73,
+          "unbound_warning_rows": 219,
+          "sql_only_not_owned_warning_rows": 24,
+          "wrapper_warning_rows": 3,
+          "model_no_nvtx_warning_rows": 1,
+          "global_scheduling_warning_rows": 1,
+          "full_trace_accepted": false,
+          "dropped_event_count": null,
+          "api_count_exhaustiveness": "unproven"
+        },
+        "historical_custody_gate": "failed_unchanged_not_requalified",
+        "raw_ignored_artifacts_public": false,
+        "new_gpu_runs": 0,
+        "performance_trials_rerun": 0,
+        "builds": 0
+      }
+    }
+  ]
 }

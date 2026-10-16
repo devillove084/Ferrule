@@ -37,7 +37,7 @@ def profile_plan():
         completed_performance_source=dict(directory=str(q.PARENT),
             plan_sha256='875957578ca9479e553d5017b04bff4c8b3dd44bff270c86211c6b129109b991',
             final_sha256='9e080fa6149832d2d2b3c6962048a2ecc9dc4364ac5cacdd520a887d393b52e2'),
-        diagnostic_primaries=[], pins={})
+        diagnostic_primaries=[], pins={}, observed_model_summary_policy=q.profile_audit.model_summary_policy())
     for filename,key in (('performance-plan.json','plan_sha256'),('FINAL.json','final_sha256')):
         value['pins'][str(q.PARENT/filename)]=value['completed_performance_source'][key]
     for row in p.fixed_jobs()[:4]:
@@ -419,6 +419,16 @@ class ContractTests(unittest.TestCase):
         for row in value['jobs']:
             self.validate(report(row,value),row)
 
+    def test_partial_model_summary_policy_is_predeclared_exact_and_not_full_trace(self):
+        value=profile_plan();p.validate_plan(value)
+        for field,original in value["observed_model_summary_policy"].items():
+            variants = (True, 0) if original is False else (0,) if original is None else ("relaxed",)
+            for variant in variants:
+                bad=copy.deepcopy(value);bad["observed_model_summary_policy"][field]=variant
+                with self.subTest(field=field,variant=variant),self.assertRaises(ValueError):p.validate_plan(bad)
+        del value["observed_model_summary_policy"]
+        with self.assertRaises(ValueError):p.validate_plan(value)
+
     def test_profile_only_primary_keeps_exact_policy_schedule_cut_and_report_binding(self):
         value=profile_plan()
         for row in value['jobs']:
@@ -436,8 +446,9 @@ class ContractTests(unittest.TestCase):
 
     def test_consumed24_directory_rejected_before_plan_load_or_any_gpu_action(self):
         before=q.OUT
-        with self.assertRaisesRegex(ValueError,'fresh separately sealed'):q.configure(q.PARENT)
-        self.assertEqual(q.OUT,before)
+        for consumed in (q.PARENT, q.ROOT / 'target/validation/retained-profile-57e4629-postsetsid-20261016-01'):
+            with self.subTest(consumed=str(consumed)),self.assertRaisesRegex(ValueError,'fresh separately sealed'):q.configure(consumed)
+            self.assertEqual(q.OUT,before)
 
     def test_old24_review_cannot_authorize_fresh4_scope(self):
         with tempfile.TemporaryDirectory() as folder,mock.patch.object(q,'OUT',Path(folder)), \
@@ -473,6 +484,10 @@ class ProfileSQLiteTests(unittest.TestCase):
         self.db.execute("INSERT INTO StringIds VALUES(20,'cuEventQuery')")
         self.db.execute('INSERT INTO CUPTI_ACTIVITY_KIND_RUNTIME VALUES(430,440,0,?,20,20,600,NULL)',(GPID|PID,))
 
+        self.db.executescript("CREATE TABLE ENUM_DIAGNOSTIC_SOURCE_TYPE(id INTEGER,name TEXT); INSERT INTO ENUM_DIAGNOSTIC_SOURCE_TYPE VALUES(3,'Analysis'); CREATE TABLE ENUM_DIAGNOSTIC_TIMESTAMP_SOURCE(id INTEGER,name TEXT); INSERT INTO ENUM_DIAGNOSTIC_TIMESTAMP_SOURCE VALUES(2,'HostTimestamp'); INSERT INTO META_DATA_CAPTURE VALUES('COLLECT_THREAD_STATE_TRACE','false'); ALTER TABLE CUPTI_ACTIVITY_KIND_MEMSET ADD COLUMN bytes INTEGER; CREATE TABLE CUPTI_ACTIVITY_KIND_SYNCHRONIZATION(start INTEGER,end INTEGER,deviceId INTEGER,globalPid INTEGER); ALTER TABLE CUPTI_ACTIVITY_KIND_MEMCPY ADD COLUMN srcDeviceId INTEGER; ALTER TABLE CUPTI_ACTIVITY_KIND_MEMCPY ADD COLUMN dstDeviceId INTEGER;")
+        self.db.execute("INSERT INTO CUPTI_ACTIVITY_KIND_MEMSET VALUES(450,460,0,?,NULL,16)",(GPID,))
+        self.db.execute("INSERT INTO CUPTI_ACTIVITY_KIND_SYNCHRONIZATION VALUES(460,470,0,?)",(GPID,))
+
     def audit(self):
         return q.profile_audit.process_api_summary(self.db,PID,PID-1,self.context['uuid'])
 
@@ -505,6 +520,121 @@ class ProfileSQLiteTests(unittest.TestCase):
         self.assertFalse(self.audit()['full_trace_accepted'])
         self.db.execute('INSERT INTO DIAGNOSTIC_EVENT VALUES(0,2,3,2,?,?)',('No CUDA events collected. Does the process use CUDA?',GPID))
         with self.assertRaises(ValueError):self.audit()
+
+
+    def mutation_rejected(self, sql, params=()):
+        self.db.execute("SAVEPOINT mutation")
+        try:
+            self.db.execute(sql, params)
+            with self.subTest(sql=sql, params=params), self.assertRaises(ValueError):self.audit()
+        finally:
+            self.db.execute("ROLLBACK TO mutation");self.db.execute("RELEASE mutation")
+
+    def test_eight_inventory_rows_and_other_vm_same_gpu_id_are_not_activity(self):
+        for i in range(1,8):self.db.execute("INSERT INTO TARGET_INFO_CUDA_DEVICE VALUES(?,?,?)",(i,i,PID))
+        self.db.execute("INSERT INTO TARGET_INFO_GPU VALUES(?,?,?)",(2<<48,0,"foreign-vm-uuid"))
+        value=self.audit()
+        self.assertEqual(value["device_binding"]["model_inventory_rows"],8)
+        self.assertEqual(value["device_binding"]["vm_id"],1<<48)
+        for sql in ("INSERT INTO TARGET_INFO_CUDA_DEVICE SELECT * FROM TARGET_INFO_CUDA_DEVICE WHERE cudaId=0",
+                "INSERT INTO TARGET_INFO_GPU SELECT * FROM TARGET_INFO_GPU WHERE vmId=(1<<48) AND id=0",
+                "UPDATE TARGET_INFO_GPU SET uuid='wrong' WHERE vmId=(1<<48) AND id=0",
+                "DELETE FROM TARGET_INFO_GPU WHERE vmId=(1<<48) AND id=0",
+                "UPDATE TARGET_INFO_CUDA_DEVICE SET cudaId=8 WHERE cudaId=0"):
+            self.mutation_rejected(sql)
+
+    def test_consistent_cuda_mapping_and_physical_uuid_swap_cannot_relabel_device0_activity(self):
+        self.audit()
+        uuids = dict(self.db.execute("SELECT id,uuid FROM TARGET_INFO_GPU WHERE vmId=?",(1<<48,)))
+        self.db.execute("UPDATE TARGET_INFO_GPU SET uuid=CASE id WHEN 0 THEN ? WHEN 1 THEN ? END WHERE vmId=? AND id IN (0,1)",
+                        (uuids[1],uuids[0],1<<48))
+        self.db.execute("UPDATE TARGET_INFO_CUDA_DEVICE SET gpuId=1 WHERE pid=? AND cudaId=0",(PID,))
+        self.assertEqual(self.db.execute("SELECT uuid FROM TARGET_INFO_GPU WHERE vmId=? AND id=1",(1<<48,)).fetchone()[0],
+                         self.context["uuid"].removeprefix("GPU-"))
+        with self.assertRaisesRegex(ValueError,"Actual model CUDA ordinal/UUID differs"):
+            self.audit()
+
+    def test_all_four_activity_families_reject_foreign_device_process_and_null(self):
+        for table in ("KERNEL","MEMCPY","MEMSET","SYNCHRONIZATION"):
+            for change in ("globalPid=globalPid+(1<<24)","globalPid=globalPid+(1<<48)",
+                    "globalPid=NULL","deviceId=1","deviceId=NULL","start=end"):
+                if table == "KERNEL" and change == "deviceId=NULL":change="deviceId='unknown'"
+                self.mutation_rejected("UPDATE CUPTI_ACTIVITY_KIND_"+table+" SET "+change)
+
+    def test_memcpy_endpoints_explicit_foreign_reject_and_null_never_becomes_zero(self):
+        value=self.audit()
+        for field in ("srcDeviceId","dstDeviceId"):
+            self.assertEqual(value["memcpy_endpoint_observations"][field],{"unobserved":1})
+            for wrong in (1,-1):self.mutation_rejected("UPDATE CUPTI_ACTIVITY_KIND_MEMCPY SET "+field+"=?",(wrong,))
+        self.db.execute("INSERT INTO ENUM_CUDA_MEMCPY_OPER VALUES(10,'CUDA_MEMCPY_KIND_PTOP','Peer')")
+        self.db.execute("INSERT INTO CUPTI_ACTIVITY_KIND_MEMCPY SELECT start+1,end+1,deviceId,globalPid,correlationId+1,bytes,10,0,0 FROM CUPTI_ACTIVITY_KIND_MEMCPY")
+        self.assertEqual(self.audit()["copies"]["CUDA_MEMCPY_KIND_PTOP"]["count"],1)
+        for field in ("srcDeviceId","dstDeviceId"):
+            for wrong in (None,1):self.mutation_rejected("UPDATE CUPTI_ACTIVITY_KIND_MEMCPY SET "+field+"=? WHERE copyKind=10",(wrong,))
+
+    def test_runtime_and_driver_provenance_never_silently_filter_foreign_cuda(self):
+        self.db.execute("CREATE TABLE CUPTI_ACTIVITY_KIND_DRIVER AS SELECT * FROM CUPTI_ACTIVITY_KIND_RUNTIME WHERE 0")
+        self.db.execute("INSERT INTO CUPTI_ACTIVITY_KIND_DRIVER SELECT * FROM CUPTI_ACTIVITY_KIND_RUNTIME WHERE nameId=20")
+        self.audit()
+        for table in ("RUNTIME","DRIVER"):
+            for key in (GPID-(1<<24),GPID+(1<<24),GPID+(1<<48),None,0):
+                self.mutation_rejected("UPDATE CUPTI_ACTIVITY_KIND_"+table+" SET globalTid=?",(key,))
+
+
+
+    def test_248_exact_absent_payload_warnings_preserve_unbound_not_owned_subjects(self):
+        messages=q.profile_audit.model_summary_policy()
+        from profile_overlap_v1 import scope_contract as scope
+        subjects=[GPID-(1<<24)]+[GPID+((i+1)<<24) for i in range(81)]
+        for i,key in enumerate(subjects[1:9]):
+            self.db.execute("INSERT INTO PROCESSES VALUES(?,?,?)",(key,PID+i+1,"SQL-only-not-owned"))
+        for key in subjects:
+            for text in scope.NO_PAYLOAD:
+                self.db.execute("INSERT INTO DIAGNOSTIC_EVENT VALUES(0,2,3,2,?,?)",(text,key))
+        self.db.execute("INSERT INTO DIAGNOSTIC_EVENT VALUES(0,2,3,2,?,?)",(scope.NO_PAYLOAD[0],GPID))
+        self.db.execute("INSERT INTO DIAGNOSTIC_EVENT VALUES(0,2,3,2,?,?)",(scope.SCHEDULING,scope.GLOBAL_DIAGNOSTIC_PID))
+        value=self.audit();warnings=[r for r in value["diagnostics"] if r["mechanism"]]
+        self.assertEqual(len(warnings),248)
+        unbound={r["subject_global_pid"] for r in warnings if r["binding"]=="unbound_not_owned"}
+        self.assertEqual(len(unbound),73)
+        self.assertTrue(all(r["raw"] and r["effect"] for r in warnings))
+        self.assertEqual(value["policy"],messages)
+        self.assertEqual(value["status"],"PARTIAL_OBSERVED_MODEL_SUMMARY")
+        self.assertFalse(value["full_trace_accepted"])
+        self.assertIsNone(value["dropped_event_count"])
+        self.assertFalse(value["cpu_scheduling_claim"]);self.assertFalse(value["expert_range_claim"])
+        self.assertIn("unproven",value["api_count_exhaustiveness"])
+
+    def test_model_cuda_failure_unknown_message_origin_subject_and_loss_reject(self):
+        from profile_overlap_v1 import scope_contract as scope
+        for text in (*scope.NO_PAYLOAD[1:],"unknown warning","dropped events"):
+            self.mutation_rejected("INSERT INTO DIAGNOSTIC_EVENT VALUES(0,2,3,2,?,?)",(text,GPID))
+        for severity in (1,2,3):
+            self.mutation_rejected("INSERT INTO DIAGNOSTIC_EVENT VALUES(0,2,3,?,?,?)",(severity,"lost events",GPID+(1<<24)))
+        for source,timestamp,subject in ((1,2,GPID),(3,1,GPID),(3,2,None),(3,2,-1),(3,2,GPID+1)):
+            self.mutation_rejected("INSERT INTO DIAGNOSTIC_EVENT VALUES(0,?,?,2,?,?)",(timestamp,source,scope.NO_PAYLOAD[0],subject))
+        self.db.execute("INSERT INTO DIAGNOSTIC_EVENT VALUES(0,2,3,2,?,?)",(scope.NO_PAYLOAD[0],GPID))
+        for table in ("ENUM_DIAGNOSTIC_SOURCE_TYPE","ENUM_DIAGNOSTIC_TIMESTAMP_SOURCE"):
+            self.mutation_rejected("UPDATE "+table+" SET name='UnknownOrigin'")
+        self.mutation_rejected("INSERT INTO DIAGNOSTIC_EVENT VALUES(0,2,3,2,?,?)",("unknown warning",GPID+(1<<24)))
+
+    def test_absent_scheduling_requires_disabled_collection_and_exact_global_subject(self):
+        from profile_overlap_v1 import scope_contract as scope
+        self.db.execute("INSERT INTO DIAGNOSTIC_EVENT VALUES(0,2,3,2,?,?)",(scope.SCHEDULING,scope.GLOBAL_DIAGNOSTIC_PID))
+        self.audit()
+        for sql in ("UPDATE META_DATA_CAPTURE SET value='true' WHERE name='COLLECT_THREAD_STATE_TRACE'",
+                "DELETE FROM META_DATA_CAPTURE WHERE name='COLLECT_THREAD_STATE_TRACE'",
+                "UPDATE DIAGNOSTIC_EVENT SET globalPid="+str(GPID)+" WHERE severity=2"):
+            self.mutation_rejected(sql)
+
+    def test_absent_optional_activity_tables_stay_unobserved_not_zero(self):
+        for table in ("CUPTI_ACTIVITY_KIND_MEMSET","CUPTI_ACTIVITY_KIND_SYNCHRONIZATION"):
+            self.db.execute("DROP TABLE "+table)
+        value=self.audit()
+        for table in ("CUPTI_ACTIVITY_KIND_MEMSET","CUPTI_ACTIVITY_KIND_SYNCHRONIZATION"):
+            self.assertEqual(value["activity_tables"][table]["state"],"unobserved")
+            self.assertNotIn("count",value["activity_tables"][table])
+
 
 
 class CuratedEvidenceTests(unittest.TestCase):

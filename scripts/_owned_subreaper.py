@@ -84,13 +84,50 @@ class Custodian:
                 if error not in self.custody['reporting_errors']:
                     self.custody['reporting_errors'].append(error)
 
+    def observe_process(self, pid, row, point, before):
+        evidence = dict(point=point, role=row['role'], before=before,
+                        monotonic=time.monotonic(), signals_already_recorded=len(row['signals']))
+        base = Path(f'/proc/{pid}')
+        executable_stat = None
+        try:
+            path = os.readlink(base / 'exe')
+            executable_stat = (base / 'exe').stat()
+            evidence['executable'] = dict(state='observed', path=path,
+                device=executable_stat.st_dev, inode=executable_stat.st_ino,
+                scope='identity-bound procfs link/inode, not content hash or signal authority')
+        except OSError as exc:
+            evidence['executable'] = dict(state='unobserved', error=f'{type(exc).__name__}: {exc}')
+        try:
+            with (base / 'cmdline').open('rb') as stream:
+                command = stream.read(65537)
+            evidence['command'] = dict(state='observed' if command and len(command) <= 65536 else 'unobserved',
+                argv=command[:65536].rstrip(b'\0').decode('utf-8', 'replace').split('\0') if command else None,
+                truncated=len(command) > 65536)
+        except OSError as exc:
+            evidence['command'] = dict(state='unobserved', error=f'{type(exc).__name__}: {exc}')
+        after = identity(pid)
+        keys = ('pid', 'birth_ticks', 'ppid')
+        if after['ppid'] != self.pid or any(before[k] != after[k] or after[k] != row['identity'][k] for k in keys):
+            raise RuntimeError('Process evidence changed direct-child PID/birth/parent identity')
+        if executable_stat is not None:
+            try:
+                current = (base / 'exe').stat()
+                if (current.st_dev, current.st_ino) != (executable_stat.st_dev, executable_stat.st_ino):
+                    evidence['executable'] = dict(state='unobserved', error='exec changed during observation')
+                    evidence['command']['state'] = 'unobserved'
+            except OSError as exc:
+                evidence['executable'] = dict(state='unobserved', error=f'{type(exc).__name__}: {exc}')
+        evidence['after'] = after
+        row.setdefault('process_observations', {})[point] = evidence
+        self.persist()
+
     def register(self, pid):
         # This is the authority check, NOT procfs membership/name matching. No
         # other thread or SIGCHLD handler reaps, so a child exiting here stays a
         # zombie and cannot have its PID recycled before our explicit reap.
         os.waitid(os.P_PID, pid, WAIT)
         current = identity(pid)
-        if current['ppid'] != self.pid:
+        if current['pid'] != pid or current['ppid'] != self.pid:
             raise RuntimeError('waitid/procfs direct-child identity mismatch')
         if pid not in self.active:
             is_root = pid == self.root_pid and self.custody['root_identity'] is None
@@ -100,7 +137,7 @@ class Custodian:
             self.active[pid] = row
             if is_root:
                 self.custody['root_identity'] = current
-            self.persist()
+            self.observe_process(pid, row, 'registration', current)
         elif current['birth_ticks'] != self.active[pid]['identity']['birth_ticks']:
             raise RuntimeError('Direct-child PID birth changed before reap')
         return self.active[pid]
@@ -109,6 +146,14 @@ class Custodian:
         row = self.register(pid)
         # register has proved an unreaped, stable, direct child. Never use this
         # numeric-PID signaling procedure in a threaded/general-purpose parent.
+        point = 'before_signal_' + str(int(sig))
+        if point not in row.get('process_observations', {}):
+            self.observe_process(pid, row, point, identity(pid))
+        # WNOWAIT does not consume a terminal child: reap_available owns that
+        # transition. This closes the metadata-observation window, not the
+        # unavoidable exit race between this final check and kill (no pidfd).
+        if os.waitid(os.P_PID, pid, WAIT) is not None:
+            return
         try:
             os.kill(pid, sig)
             row['signals'].append(int(sig))
@@ -194,7 +239,13 @@ class Custodian:
         deadline = time.monotonic() + seconds
         self.custody['status'] = 'cleaning'
         term_at = {}
-        # Freeze current direct fork sources before reaping or graceful requests.
+        # Reap finished children before any signal; an eligible natural-drain
+        # window has already used only time within the original job deadline.
+        if self.reap_available():
+            self.custody['status'] = 'proven_drained'
+            self.persist()
+            return
+        # Freeze current direct fork sources before forced cleanup requests.
         for pid in self.children():
             self.signal_child(pid, signal.SIGSTOP)
         while True:
@@ -262,18 +313,49 @@ def main():
         if config['argv'] is not None:
             deadline = time.monotonic() + config['timeout']
             owner.launch(config['argv'], int(input_fd), min(5, config['timeout']))
-            while owner.root_code is None:
-                owner.reap_available()
+            natural = None
+            while True:
+                drained = owner.reap_available()
                 for pid in owner.children():
                     owner.register(pid)
+                now = time.monotonic()
                 if owner.root_code is not None:
-                    break
+                    if owner.root_code != 0:
+                        break
+                    if natural is not None and now >= deadline:
+                        natural.update(outcome='original_job_deadline', finished_monotonic=now)
+                        owner.persist()
+                        result.update(timed_out=True,
+                            primary_error='TimeoutExpired: original job deadline before natural descendant drain')
+                        break
+                    if drained:
+                        if natural is not None:
+                            natural.update(outcome='echild_without_signals', finished_monotonic=now)
+                            owner.persist()
+                        break
+                    if natural is None:
+                        # Reuse the cleanup bound, without extending the job or
+                        # granting metadata/group-based signal authority.
+                        natural = dict(outcome='waiting', started_monotonic=now,
+                            deadline_monotonic=min(deadline, now + CLEANUP_SECONDS),
+                            original_job_deadline_monotonic=deadline, maximum_seconds=CLEANUP_SECONDS)
+                        owner.custody['natural_drain'] = natural
+                        owner.persist()
+                    if now >= natural['deadline_monotonic']:
+                        natural.update(outcome='original_job_deadline' if now >= deadline else 'grace_exhausted',
+                                       finished_monotonic=now)
+                        owner.persist()
+                        if now >= deadline:
+                            result.update(timed_out=True,
+                                primary_error='TimeoutExpired: original job deadline before natural descendant drain')
+                        break
                 if stopped:
                     raise RuntimeError('Owner/helper interrupted: ' + stopped[0])
-                if time.monotonic() >= deadline:
+                if now >= deadline:
                     result.update(timed_out=True, primary_error='TimeoutExpired: owned root deadline')
                     break
-                if select.select([control], [], [], .01)[0]:
+                remaining = min(deadline, natural['deadline_monotonic'] if natural else deadline) - now
+                if select.select([control], [], [], min(.01, max(0, remaining)))[0]:
                     message = control.recv(65536)
                     raise RuntimeError('Owner cancellation' if message else 'Owner connection lost')
         else:
@@ -281,6 +363,8 @@ def main():
     except BaseException as exc:
         result['primary_error'] = f'{type(exc).__name__}: {exc}'
         result['error'] = 'Helper launch/execution failed'
+        if owner is not None and owner.custody.get('natural_drain', {}).get('outcome') == 'waiting':
+            owner.custody['natural_drain'].update(outcome='interrupted', finished_monotonic=time.monotonic())
     finally:
         if owner is not None:
             try:

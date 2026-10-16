@@ -5,6 +5,7 @@ import re
 from runnerhelpers.evidence_v2 import ct, integer, require
 import quality
 import retained_evidence
+import profile_audit
 
 COMMIT = '57e46295d3cf5725605e076eb5543f6124bd9245'
 BINARY_SHA = '2c15bbde1aa377630045068439a68adf260c3c836a8de69b120784deb0b067bd'
@@ -73,6 +74,8 @@ def validate_plan(plan):
             if profile_only(plan) else 'whole_test_libtest_footer_only_not_token_TTFT_or_request_latency'),
             'No per-token/per-request latency claim on immutable57')
     if profile_only(plan):
+        require(ct.digest(plan.get('observed_model_summary_policy')) == ct.digest(profile_audit.model_summary_policy()),
+                'Exact predeclared partial observed-model policy required; no full trace/count completeness waiver')
         parent = ct.ROOT / 'target/validation/retained-performance-57e4629-20261016-01'
         require(plan['completed_performance_source'] == dict(directory=str(parent),
             plan_sha256='875957578ca9479e553d5017b04bff4c8b3dd44bff270c86211c6b129109b991',

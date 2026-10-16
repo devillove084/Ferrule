@@ -73,6 +73,35 @@ class IdentityBoundaryTests(unittest.TestCase):
         self.assertTrue(wait.call_args.args[2] & os.WNOWAIT)
         kill.assert_called_once_with(123, signal.SIGSTOP)
 
+    def test_terminal_at_registration_or_during_metadata_is_never_signalled_or_consumed(self):
+        terminal = os.waitid_result((123, os.getuid(), signal.SIGCHLD, 0, os.CLD_EXITED))
+        for at_registration in (True, False):
+            owner = helper.Custodian("fixture")
+            with self.subTest(at_registration=at_registration), \
+                    mock.patch.object(helper.os, "waitid", side_effect=[terminal if at_registration else None, terminal]) as wait, \
+                    mock.patch.object(helper, "identity", return_value=ident()), \
+                    mock.patch.object(helper.os, "kill") as kill:
+                owner.signal_child(123, signal.SIGSTOP)
+            kill.assert_not_called()
+            self.assertEqual(wait.call_args_list, [mock.call(os.P_PID, 123, helper.WAIT)] * 2)
+            self.assertFalse(owner.active[123]["reaped"])
+            self.assertEqual(owner.active[123]["signals"], [])
+
+    def test_changed_group_and_session_do_not_remove_direct_child_signal_authority(self):
+        owner = helper.Custodian("fixture")
+        original = ident()
+        changed = dict(original, pgrp=456, session=456)
+        with mock.patch.object(helper.os, "waitid", return_value=None), \
+                mock.patch.object(helper, "identity", return_value=original):
+            owner.register(123)
+        with mock.patch.object(helper.os, "waitid", return_value=None) as wait, \
+                mock.patch.object(helper, "identity", return_value=changed), \
+                mock.patch.object(helper.os, "kill") as kill:
+            owner.signal_child(123, signal.SIGSTOP)
+        kill.assert_called_once_with(123, signal.SIGSTOP)
+        self.assertEqual(wait.call_args.args, (os.P_PID, 123, helper.WAIT))
+        self.assertEqual(owner.active[123]["identity"], original)
+
     def test_empty_child_list_is_not_echild_and_timeout_is_unknown(self):
         owner = helper.Custodian('fixture')
         with mock.patch.object(helper.os, 'waitid', return_value=None), \
@@ -109,6 +138,47 @@ class IdentityBoundaryTests(unittest.TestCase):
         with mock.patch.object(helper.os, 'waitid', side_effect=ChildProcessError):
             with self.assertRaisesRegex(RuntimeError, 'unreconciled'):
                 owner.reap_available()
+
+
+    def test_cleanup_reaps_echild_before_signalling_or_scanning_children(self):
+        owner = helper.Custodian('fixture')
+        with mock.patch.object(owner, 'reap_available', return_value=True), \
+                mock.patch.object(owner, 'children') as children, \
+                mock.patch.object(helper.os, 'kill') as kill:
+            owner.cleanup()
+        children.assert_not_called(); kill.assert_not_called()
+        self.assertEqual(owner.custody['status'], 'proven_drained')
+
+    def test_metadata_never_authorizes_foreign_pid_or_unknown_kernel_identity(self):
+        owner = helper.Custodian('fixture')
+        with mock.patch.object(helper.os, 'waitid', side_effect=ChildProcessError), \
+                mock.patch.object(helper.os, 'readlink') as image, \
+                mock.patch.object(helper.os, 'kill') as kill:
+            with self.assertRaises(ChildProcessError):owner.signal_child(123, signal.SIGKILL)
+        image.assert_not_called(); kill.assert_not_called()
+        for changed in (ident(birth=11), ident(ppid=1), FileNotFoundError('identity unobserved')):
+            owner = helper.Custodian('fixture')
+            with mock.patch.object(helper.os, 'waitid', return_value=None), \
+                    mock.patch.object(helper, 'identity', side_effect=[ident(), changed]), \
+                    mock.patch.object(helper.os, 'kill') as kill:
+                with self.assertRaises((RuntimeError, FileNotFoundError)):
+                    owner.signal_child(123, signal.SIGKILL)
+            kill.assert_not_called()
+
+    def test_inaccessible_exec_metadata_is_unobserved_not_signal_authority(self):
+        owner = helper.Custodian('fixture')
+        with mock.patch.object(helper.os, 'waitid', return_value=None), \
+                mock.patch.object(helper, 'identity', return_value=ident()), \
+                mock.patch.object(helper.os, 'readlink', side_effect=FileNotFoundError), \
+                mock.patch.object(helper.Path, 'open', side_effect=FileNotFoundError), \
+                mock.patch.object(helper.os, 'kill') as kill:
+            owner.signal_child(123, signal.SIGSTOP)
+        kill.assert_called_once_with(123, signal.SIGSTOP)
+        observation=owner.entries[0]['process_observations']['before_signal_19']
+        self.assertEqual(observation['executable']['state'], 'unobserved')
+        self.assertEqual(observation['command']['state'], 'unobserved')
+        self.assertEqual(observation['signals_already_recorded'], 0)
+        self.assertEqual(observation['before'], observation['after'])
 
 
 @unittest.skipUnless(Path('/proc/self/stat').exists(), 'Linux procfs required')
@@ -160,6 +230,91 @@ class RealDescendantTests(unittest.TestCase):
         self.drained(report)
         self.assertEqual(report['returncode'], 127)
         self.assertIn('Root exec', report['stderr'])
+
+    def test_successful_root_allows_adopted_child_to_finish_before_any_signal(self):
+        with tempfile.TemporaryDirectory() as folder:
+            report = self.run_code('''
+                import json,os,pathlib,sys,time
+                config=json.load(sys.stdin)
+                journal=pathlib.Path(config["directory"])/"custody.json"
+                if os.fork() != 0:
+                    os._exit(0)
+                deadline=time.monotonic()+1.5
+                while time.monotonic()<deadline:
+                    data=json.loads(journal.read_text())
+                    if data.get("natural_drain",{}).get("outcome")=="waiting":
+                        print("ADOPTED_NATURAL_DRAIN_ACK",flush=True)
+                        os._exit(0)
+                    time.sleep(.005)
+                os._exit(11)
+            ''', timeout=2, payload=dict(manifest={}, directory=folder))
+        self.drained(report, minimum=2)
+        self.assertEqual(report['returncode'], 0)
+        self.assertFalse(report['timed_out'])
+        self.assertIn('ADOPTED_NATURAL_DRAIN_ACK', report['stdout'])
+        self.assertTrue(all(not row['signals'] and row['exit_code']==0 for row in report['custody']['entries']))
+        natural=report['custody']['natural_drain']
+        self.assertEqual(natural['outcome'], 'echild_without_signals')
+        self.assertLessEqual(natural['deadline_monotonic'],natural['original_job_deadline_monotonic'])
+        self.assertLessEqual(natural['deadline_monotonic']-natural['started_monotonic'],helper.CLEANUP_SECONDS)
+        adopted=[r for r in report['custody']['entries'] if r['role']=='adopted']
+        evidence=adopted[0]['process_observations']['registration']
+        self.assertEqual(evidence['role'], 'adopted')
+        self.assertEqual(evidence['before']['birth_ticks'],adopted[0]['identity']['birth_ticks'])
+        self.assertEqual(evidence['executable']['state'], 'observed')
+        self.assertEqual(evidence['command']['state'], 'observed')
+
+    def test_stuck_descendant_uses_only_remaining_job_deadline_then_owned_cleanup(self):
+        report = self.run_code('''
+            import os,signal,time
+            read,write=os.pipe()
+            if os.fork()==0:
+                os.close(read)
+                signal.signal(signal.SIGTERM,signal.SIG_IGN)
+                os.write(write,b"R");os.close(write)
+                time.sleep(10)
+                os._exit(0)
+            os.close(write)
+            assert os.read(read,1)==b"R"
+            os.close(read);os._exit(0)
+        ''', timeout=.3)
+        self.drained(report, minimum=2)
+        self.assertEqual(report['returncode'],0)
+        self.assertTrue(report['timed_out'])
+        self.assertLess(report['wall_seconds'],3)
+        natural=report['custody']['natural_drain']
+        self.assertEqual(natural['outcome'],'original_job_deadline')
+        self.assertEqual(natural['deadline_monotonic'],natural['original_job_deadline_monotonic'])
+        self.assertLess(natural['deadline_monotonic']-natural['started_monotonic'],.3)
+        signaled=[r for r in report['custody']['entries'] if r['signals']]
+        self.assertEqual(len(signaled),1)
+        self.assertEqual(signaled[0]['role'],'adopted')
+        self.assertIn(signal.SIGKILL,signaled[0]['signals'])
+        before=signaled[0]['process_observations']['before_signal_19']
+        self.assertEqual(before['signals_already_recorded'],0)
+        self.assertEqual(before['executable']['state'],'observed')
+        self.assertEqual(before['command']['state'],'observed')
+        self.assertEqual(before['before']['ppid'],report['custody']['helper_identity']['pid'])
+        self.assertEqual(before['before']['birth_ticks'],signaled[0]['identity']['birth_ticks'])
+        self.assertTrue(all(not r['signals'] for r in report['custody']['entries'] if r['role']=='root'))
+
+    def test_natural_grace_cap_does_not_consume_the_entire_long_job_budget(self):
+        report = self.run_code('''
+            import os,signal,time
+            read,write=os.pipe()
+            if os.fork()==0:
+                os.close(read);signal.signal(signal.SIGTERM,signal.SIG_IGN)
+                os.write(write,b"R");os.close(write);time.sleep(12);os._exit(0)
+            os.close(write);assert os.read(read,1)==b"R";os.close(read);os._exit(0)
+        ''', timeout=9)
+        self.drained(report, minimum=2)
+        self.assertFalse(report['timed_out'])
+        natural=report['custody']['natural_drain']
+        self.assertEqual(natural['outcome'],'grace_exhausted')
+        self.assertEqual(natural['deadline_monotonic'],natural['started_monotonic']+helper.CLEANUP_SECONDS)
+        self.assertLess(natural['deadline_monotonic'],natural['original_job_deadline_monotonic'])
+        self.assertTrue(any(r['signals'] for r in report['custody']['entries']))
+        self.assertLess(report['wall_seconds'],8)
 
     def test_timeout_stubborn_root_escalates_without_group_signals(self):
         report = self.run_code('''
