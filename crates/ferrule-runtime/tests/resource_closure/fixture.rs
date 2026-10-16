@@ -27,6 +27,7 @@ pub struct Control {
     pub closed: Cell<bool>,
     pub omit_quiescence_proof: Cell<bool>,
     pub pipeline: Cell<ResourceEvidence<ExpertReadPipelineObservation>>,
+    pub cache_stats: Cell<ExpertCacheStats>,
     pub state_resident_bytes: Cell<Option<ResourceEvidence<usize>>>,
 }
 
@@ -72,23 +73,25 @@ impl TransformerModule for ReportingModule {
             }),
             resident_parameter_bytes: ResourceEvidence::Observed(self.resident.len()),
             live_model_state_bytes: ResourceEvidence::Observed(state.kv_state().len()),
-            expert_cache: ResourceEvidence::Observed(ExpertCacheObservation {
-                resident_entries: 1,
-                resident_bytes: self.resident.len(),
-                pending_upload_bytes: self.pending.len(),
-                scratch_bytes: self.scratch.len(),
-                charged_bytes: charged,
-                unknown_quarantine_bytes: if self.control.unknown.get() {
-                    charged
-                } else {
-                    0
+            expert_cache: ResourceEvidence::Observed(ExpertCacheObservation::from(
+                ExpertCacheStats {
+                    resident_experts: 1,
+                    resident_bytes: self.resident.len(),
+                    pending_upload_bytes: self.pending.len(),
+                    scratch_bytes: self.scratch.len(),
+                    unknown_quarantine_bytes: if self.control.unknown.get() {
+                        charged
+                    } else {
+                        0
+                    },
+                    peak_bytes: charged,
+                    quarantined: self.control.unknown.get(),
+                    uploads: 1,
+                    hits: 0,
+                    evictions: 0,
+                    ..self.control.cache_stats.get()
                 },
-                peak_bytes: charged,
-                quarantined: self.control.unknown.get(),
-                uploads: 1,
-                hits: 0,
-                evictions: 0,
-            }),
+            )),
             expert_read_pipeline: self.control.pipeline.get(),
             numeric_workspace: ResourceEvidence::Observed(WorkspaceObservation {
                 image_generation: 47,
@@ -257,7 +260,80 @@ impl TransformerModule for ReportingModule {
                 message: "mock physical completion remains unknown".into(),
             });
         }
+        if !self.control.omit_quiescence_proof.get() {
+            self.close_pipeline()?;
+        }
         self.control.closed.set(true);
+        Ok(())
+    }
+}
+
+impl ReportingModule {
+    // Only the explicit mock-owner close protocol can supply a quiescence
+    // receipt. Observation-only fixtures may instead omit that proof entirely.
+    fn close_pipeline(&self) -> Result<()> {
+        let evidence = self.control.pipeline.get();
+        let fail = || Error::Execution {
+            message: "mock physical close retains host read/upload custody or unknown evidence"
+                .into(),
+        };
+        let mut pipeline = match evidence {
+            ResourceEvidence::Unobserved => return Ok(()),
+            ResourceEvidence::Unknown => return Err(fail()),
+            ResourceEvidence::Observed(value) | ResourceEvidence::Verified(value) => value,
+        };
+        let charge = pipeline.current_charge;
+        if pipeline.worker_unknown
+            || pipeline.worker_join_pending
+            || pipeline.current_read.is_some()
+            || pipeline.pending_read.is_some()
+            || charge.upload_reserved_packed_bytes != 0
+            || charge.pinned_upload_bytes != 0
+            || charge.upload_ticket_metadata_bytes != 0
+            || charge.upload_policy_headroom_bytes != 0
+            || charge.unknown_upload_bytes != 0
+        {
+            return Err(fail());
+        }
+        if pipeline.status == "idle_retained" {
+            let limits = pipeline.limits.ok_or_else(fail)?;
+            let idle_charge = ExpertReadHostCharge {
+                metadata_bytes: limits.max_metadata_bytes,
+                requested_stack_bytes: limits.worker_stack_bytes as u64,
+                host_charged_bytes: limits.max_metadata_bytes + limits.worker_stack_bytes as u64,
+                ..Default::default()
+            };
+            if !pipeline.worker_alive
+                || charge != idle_charge
+                || pipeline
+                    .stats
+                    .workers_created
+                    .checked_sub(pipeline.stats.workers_joined)
+                    != Some(1)
+                || pipeline
+                    .stats
+                    .workers_created
+                    .checked_add(pipeline.stats.worker_reuses)
+                    != Some(pipeline.stats.sequences_started)
+                || pipeline.stats.sequences_started != pipeline.stats.sequences_finished
+            {
+                return Err(fail());
+            }
+            // Synchronous CPU mock close receipt, not a join inferred from zero
+            // gauges or from finishing a read scope. Image allocations stay live.
+            pipeline.worker_alive = false;
+            pipeline.stats.workers_joined += 1;
+            pipeline.status = "closed";
+            pipeline.current_charge = ExpertReadHostCharge::default();
+            self.control
+                .pipeline
+                .set(ResourceEvidence::Observed(pipeline));
+        } else if charge != ExpertReadHostCharge::default()
+            || pipeline.worker_alive
+            || !matches!(pipeline.status, "closed" | "configured" | "disabled")
+        {
+            return Err(fail());
+        }
         Ok(())
     }
 }

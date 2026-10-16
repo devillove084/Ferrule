@@ -9,8 +9,9 @@ use fixture::{Control, runner, runner_with_plan};
 use model::ResidentModelRunner;
 use model::resource_observability::*;
 use model::transformer::{
-    ExpertReadHostCharge, ExpertReadHostReceipt, ExpertReadIdentity, ExpertReadPipelineObservation,
-    ExpertReadPipelineOptions, ExpertReadPipelineStats, ExpertReadSchedule, TransformerModule,
+    ExpertCacheStats, ExpertReadHostCharge, ExpertReadHostReceipt, ExpertReadIdentity,
+    ExpertReadPipelineObservation, ExpertReadPipelineOptions, ExpertReadPipelineStats,
+    ExpertReadSchedule, TransformerModule,
 };
 use std::rc::Rc;
 
@@ -44,6 +45,8 @@ fn actual_runner_executor_module_chain_reads_allocations_and_identity_without_pr
     );
     assert_eq!(cache.charged_bytes, 112);
     assert_eq!(cache.unknown_quarantine_bytes, 0);
+    assert!(!cache.counters_overflowed);
+    assert_eq!(cache.diagnostics, ResourceEvidence::Unobserved);
     let workspace = before.numeric_workspace.value().unwrap();
     assert_eq!(
         (workspace.image_generation, workspace.kind),
@@ -344,7 +347,12 @@ fn pipeline_observation(status: &'static str) -> ExpertReadPipelineObservation {
                 metadata_bytes: 24,
                 requested_stack_bytes: 4096,
                 payload_bytes: 240,
-                host_charged_bytes: 4360,
+                host_charged_bytes: 4648,
+                upload_reserved_packed_bytes: 40,
+                pinned_upload_bytes: 96,
+                upload_ticket_metadata_bytes: 24,
+                upload_policy_headroom_bytes: 128,
+                unknown_upload_bytes: if status == "quarantined" { 408 } else { 0 },
                 unknown_packed_bytes: if status == "quarantined" { 80 } else { 0 },
                 unknown_stack_bytes: if status == "quarantined" { 4096 } else { 0 },
                 reserved_read_slots: 2,
@@ -357,7 +365,7 @@ fn pipeline_observation(status: &'static str) -> ExpertReadPipelineObservation {
             speculative_reads: 1,
             unknown_reads: 1,
             unknown_bytes: 80,
-            peak_host_charged_bytes: 4400,
+            peak_host_charged_bytes: 4700,
             ..Default::default()
         },
         current_read: (status == "active").then_some(current),
@@ -419,6 +427,351 @@ fn assert_coverage<T>(
             usize::from(expected)
         );
     }
+}
+
+#[test]
+fn cache_diagnostics_forward_disabled_observed_and_overflowed_evidence_without_zero_filling() {
+    for (enabled, overflowed) in [(false, false), (true, false), (true, true), (false, true)] {
+        let control = Rc::new(Control::default());
+        control.cache_stats.set(ExpertCacheStats {
+            diagnostics_enabled: enabled,
+            counters_overflowed: overflowed,
+            misses: 3,
+            entry_limit_evictions: 2,
+            byte_limit_evictions: 1,
+            scratch_limit_evictions: 1,
+            admission_stalls: 4,
+            ..Default::default()
+        });
+        let mut driver =
+            ResidentTopKDriver::new(runner(control.clone()), FixedSequenceSlotPool::new(1));
+        let before = driver.resource_observability_snapshot();
+        let cache = before.model.expert_cache.value().unwrap();
+        assert_eq!(cache.counters_overflowed, overflowed);
+        assert_eq!(cache.charged_bytes, 112);
+        if !enabled {
+            assert_eq!(cache.diagnostics, ResourceEvidence::Unobserved);
+        } else if overflowed {
+            assert_eq!(cache.diagnostics, ResourceEvidence::Unknown);
+        } else {
+            let diagnostics = cache.diagnostics.value().unwrap();
+            assert_eq!(diagnostics.misses, 3);
+            assert_eq!(diagnostics.entry_limit_evictions, 2);
+            assert_eq!(diagnostics.byte_limit_evictions, 1);
+            assert_eq!(diagnostics.scratch_limit_evictions, 1);
+            assert_eq!(diagnostics.admission_stalls, 4);
+            for unsupported in [
+                diagnostics.cold_misses,
+                diagnostics.evicted_misses,
+                diagnostics.evicted_selected,
+                diagnostics.evicted_future_hint,
+            ] {
+                assert_eq!(unsupported, ResourceEvidence::Unobserved);
+            }
+            assert_eq!(diagnostics.history_bytes, 0);
+        }
+        for _ in 0..3 {
+            assert_eq!(driver.resource_observability_snapshot(), before);
+        }
+        assert_eq!(control.shutdown_calls.get(), 0);
+        driver.shutdown_and_close_progress(&mut |_| Ok(())).unwrap();
+        let summary = driver.resource_shutdown_summary().unwrap();
+        assert_eq!(summary.physical.expert_cache, before.model.expert_cache);
+        let json = parsed(summary);
+        let diagnostic_json = &json["physical"]["expert_cache"]["value"]["diagnostics"];
+        assert_eq!(
+            json["physical"]["expert_cache"]["value"]["counters_overflowed"],
+            overflowed
+        );
+        assert_eq!(
+            diagnostic_json,
+            &serde_json::to_value(cache.diagnostics).unwrap()
+        );
+        if !enabled || overflowed {
+            assert!(diagnostic_json.get("value").is_none());
+        } else {
+            for field in [
+                "cold_misses",
+                "evicted_misses",
+                "evicted_selected",
+                "evicted_future_hint",
+            ] {
+                assert_eq!(
+                    diagnostic_json["value"][field],
+                    serde_json::json!({"state":"unobserved"})
+                );
+            }
+        }
+        assert_eq!(summary.physical.release, ResourceEvidence::Unobserved);
+    }
+}
+
+fn idle_pipeline_observation() -> ExpertReadPipelineObservation {
+    ExpertReadPipelineObservation {
+        enabled: true,
+        requested_mode: Some(ExpertReadSchedule::Lookahead),
+        effective_mode: Some(ExpertReadSchedule::Lookahead),
+        worker_read_observed: true,
+        status: "idle_retained",
+        limits: Some(ExpertReadPipelineOptions {
+            schedule: ExpertReadSchedule::Lookahead,
+            max_host_bytes: 8192,
+            max_metadata_bytes: 128,
+            worker_stack_bytes: 4096,
+        }),
+        current_charge: ExpertReadHostCharge {
+            metadata_bytes: 128,
+            requested_stack_bytes: 4096,
+            host_charged_bytes: 4224,
+            ..Default::default()
+        },
+        stats: ExpertReadPipelineStats {
+            sequences_started: 2,
+            sequences_finished: 2,
+            workers_created: 1,
+            worker_reuses: 1,
+            submitted_reads: 2,
+            completed_reads: 2,
+            verified_reads: 2,
+            worker_started_reads: 2,
+            io_started_reads: 2,
+            proved_read_bytes: 160,
+            peak_metadata_bytes: 128,
+            peak_requested_stack_bytes: 4096,
+            peak_host_charged_bytes: 4648,
+            ..Default::default()
+        },
+        worker_alive: true,
+        ..Default::default()
+    }
+}
+
+#[test]
+fn retained_upload_charges_forward_and_block_owner_close_until_explicit_retirement() {
+    for field in [
+        "upload_reserved_packed_bytes",
+        "pinned_upload_bytes",
+        "upload_ticket_metadata_bytes",
+        "upload_policy_headroom_bytes",
+        "unknown_upload_bytes",
+    ] {
+        let control = Rc::new(Control::default());
+        let mut pipeline = idle_pipeline_observation();
+        let charge = &mut pipeline.current_charge;
+        let bytes = match field {
+            "upload_reserved_packed_bytes" => {
+                charge.upload_reserved_packed_bytes = 40;
+                40
+            }
+            "pinned_upload_bytes" => {
+                charge.pinned_upload_bytes = 96;
+                96
+            }
+            "upload_ticket_metadata_bytes" => {
+                charge.upload_ticket_metadata_bytes = 24;
+                24
+            }
+            "upload_policy_headroom_bytes" => {
+                charge.upload_policy_headroom_bytes = 128;
+                128
+            }
+            "unknown_upload_bytes" => {
+                charge.artifact_bytes = 64;
+                charge.payload_bytes = 64;
+                charge.unknown_upload_bytes = 64;
+                64
+            }
+            _ => unreachable!(),
+        };
+        charge.host_charged_bytes += bytes;
+        control.pipeline.set(ResourceEvidence::Observed(pipeline));
+        let runner = runner(control.clone());
+        let module = runner
+            .forward_executor()
+            .module()
+            .physical_resource_snapshot(runner.default_state());
+        assert_eq!(
+            module.expert_read_pipeline,
+            ResourceEvidence::Observed(pipeline)
+        );
+        assert_eq!(
+            runner.physical_resource_snapshot().expert_read_pipeline,
+            module.expert_read_pipeline
+        );
+        let mut driver = ResidentTopKDriver::new(runner, FixedSequenceSlotPool::new(1));
+        let before = driver.resource_observability_snapshot();
+        for _ in 0..3 {
+            assert_eq!(driver.resource_observability_snapshot(), before);
+        }
+        assert_eq!(control.pipeline.get(), ResourceEvidence::Observed(pipeline));
+        assert_eq!(control.shutdown_calls.get(), 0);
+        let error = driver
+            .shutdown_and_close_progress(&mut |_| Ok(()))
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("retains host read/upload custody")
+        );
+        assert!(!driver.physical_shutdown_complete());
+        assert!(!control.closed.get());
+        let summary = driver.resource_shutdown_summary().unwrap();
+        assert_eq!(
+            summary.outcome,
+            ferrule_runtime::engine::ResourceShutdownOutcome::Error
+        );
+        assert_eq!(
+            summary.physical.expert_read_pipeline,
+            ResourceEvidence::Observed(pipeline)
+        );
+        assert_eq!(summary.runtime.closure, ResourceEvidence::Unknown);
+        assert_eq!(summary.physical.close, ResourceEvidence::Unknown);
+        assert_eq!(summary.physical.quiescence, ResourceEvidence::Unknown);
+        assert_eq!(summary.physical.release, ResourceEvidence::Unknown);
+        let json = parsed(summary);
+        let forwarded = &json["physical"]["expert_read_pipeline"]["value"]["current_charge"];
+        assert_eq!(forwarded[field], bytes, "{field}");
+        assert_eq!(forwarded["host_charged_bytes"], 4224 + bytes);
+        assert_eq!(
+            json["physical"]["expert_read_pipeline"],
+            serde_json::to_value(ResourceEvidence::Observed(pipeline)).unwrap()
+        );
+
+        // The test owner explicitly retires the held upload. Snapshot reads and
+        // the failed close did not retire it; the real driver retains ambiguity.
+        control
+            .pipeline
+            .set(ResourceEvidence::Observed(idle_pipeline_observation()));
+        driver.shutdown_and_close_progress(&mut |_| Ok(())).unwrap();
+        assert!(driver.physical_shutdown_complete());
+        let summary = driver.resource_shutdown_summary().unwrap();
+        assert_eq!(summary.attempt, 2);
+        let closed = summary.physical.expert_read_pipeline.value().unwrap();
+        assert_eq!(closed.status, "closed");
+        assert_eq!(closed.current_charge, ExpertReadHostCharge::default());
+        assert_eq!(summary.runtime.closure, ResourceEvidence::Unknown);
+        assert_eq!(summary.physical.close, ResourceEvidence::Unknown);
+        assert_eq!(summary.physical.quiescence, ResourceEvidence::Unknown);
+        assert_eq!(summary.physical.release, ResourceEvidence::Unknown);
+        assert_eq!(control.shutdown_calls.get(), 2);
+    }
+}
+
+#[test]
+fn unknown_pipeline_or_zero_byte_worker_ambiguity_never_becomes_close_proof() {
+    let mut zero_unknown = idle_pipeline_observation();
+    zero_unknown.current_charge = ExpertReadHostCharge::default();
+    zero_unknown.worker_unknown = true;
+    let mut zero_join_pending = zero_unknown;
+    zero_join_pending.worker_unknown = false;
+    zero_join_pending.worker_join_pending = true;
+    for pipeline in [
+        ResourceEvidence::Unknown,
+        ResourceEvidence::Observed(zero_unknown),
+        ResourceEvidence::Observed(zero_join_pending),
+    ] {
+        let control = Rc::new(Control::default());
+        control.pipeline.set(pipeline);
+        let mut driver =
+            ResidentTopKDriver::new(runner(control.clone()), FixedSequenceSlotPool::new(1));
+        assert_eq!(
+            driver
+                .resource_observability_snapshot()
+                .model
+                .expert_read_pipeline,
+            pipeline
+        );
+        assert!(driver.shutdown_and_close_progress(&mut |_| Ok(())).is_err());
+        assert!(!driver.physical_shutdown_complete());
+        let summary = driver.resource_shutdown_summary().unwrap();
+        assert_eq!(summary.physical.expert_read_pipeline, pipeline);
+        assert_eq!(summary.physical.close, ResourceEvidence::Unknown);
+        assert_eq!(summary.physical.quiescence, ResourceEvidence::Unknown);
+        assert_eq!(summary.physical.release, ResourceEvidence::Unknown);
+        assert_eq!(
+            parsed(summary)["physical"]["expert_read_pipeline"],
+            serde_json::to_value(pipeline).unwrap()
+        );
+        control
+            .pipeline
+            .set(ResourceEvidence::Observed(idle_pipeline_observation()));
+        driver.shutdown_and_close_progress(&mut |_| Ok(())).unwrap();
+        let summary = driver.resource_shutdown_summary().unwrap();
+        assert_eq!(summary.physical.close, ResourceEvidence::Unknown);
+        assert_eq!(summary.physical.quiescence, ResourceEvidence::Unknown);
+        assert_eq!(summary.physical.release, ResourceEvidence::Unknown);
+        if matches!(pipeline, ResourceEvidence::Unknown) {
+            assert_eq!(
+                summary.physical.expert_read_pipeline,
+                ResourceEvidence::Unknown
+            );
+            assert_eq!(
+                parsed(summary)["physical"]["expert_read_pipeline"],
+                serde_json::json!({"state":"unknown"})
+            );
+        }
+    }
+}
+
+#[test]
+fn idle_worker_metadata_and_stack_are_retained_until_explicit_close_not_final_owner_release() {
+    let control = Rc::new(Control::default());
+    let idle = idle_pipeline_observation();
+    control.pipeline.set(ResourceEvidence::Observed(idle));
+    let mut driver =
+        ResidentTopKDriver::new(runner(control.clone()), FixedSequenceSlotPool::new(1));
+    let before = driver.resource_observability_snapshot();
+    assert_eq!(
+        before.model.expert_read_pipeline,
+        ResourceEvidence::Observed(idle)
+    );
+    assert_eq!(idle.current_charge.host_charged_bytes, 4224);
+    assert_eq!(idle.current_charge.payload_bytes, 0);
+    assert!(idle.worker_alive);
+    assert_eq!(idle.stats.workers_joined, 0);
+    assert_eq!(driver.resource_observability_snapshot(), before);
+    assert_eq!(control.shutdown_calls.get(), 0);
+    driver.shutdown_and_close_progress(&mut |_| Ok(())).unwrap();
+    let summary = driver.resource_shutdown_summary().unwrap();
+    let closed = summary.physical.expert_read_pipeline.value().unwrap();
+    assert_eq!(closed.status, "closed");
+    assert!(!closed.worker_alive);
+    assert_eq!(closed.stats.workers_created, 1);
+    assert_eq!(closed.stats.workers_joined, 1);
+    assert_eq!(closed.stats.worker_reuses, 1);
+    assert_eq!(closed.stats.sequences_started, 2);
+    assert_eq!(closed.current_charge, ExpertReadHostCharge::default());
+    assert_eq!(summary.physical.expert_cache, before.model.expert_cache);
+    assert_eq!(summary.physical.default_state, before.model.default_state);
+    assert_eq!(
+        summary.physical.numeric_workspace,
+        before.model.numeric_workspace
+    );
+    assert_eq!(
+        summary.physical.quiescence,
+        ResourceEvidence::Verified(ResourceQuiescence::Quiescent)
+    );
+    assert_eq!(
+        summary.physical.residency,
+        ResourceEvidence::Observed(ResourceResidency::Retained)
+    );
+    assert_eq!(summary.physical.release, ResourceEvidence::Unobserved);
+    let json = parsed(summary);
+    for field in [
+        "upload_reserved_packed_bytes",
+        "pinned_upload_bytes",
+        "upload_ticket_metadata_bytes",
+        "upload_policy_headroom_bytes",
+        "unknown_upload_bytes",
+    ] {
+        assert!(
+            json["physical"]["expert_read_pipeline"]["value"]["current_charge"]
+                .get(field)
+                .is_none()
+        );
+    }
+    driver.shutdown_and_close_progress(&mut |_| Ok(())).unwrap();
+    assert_eq!(control.shutdown_calls.get(), 1);
 }
 
 #[test]
@@ -796,6 +1149,8 @@ fn overlapping_broker_cache_and_workspace_views_are_not_summed() {
 #[test]
 fn every_shutdown_attempt_emits_the_versioned_log_and_retains_unknown_after_retry() {
     let control = Rc::new(Control::default());
+    // This exercises lifecycle-event logging, not a quiescent owner receipt.
+    control.omit_quiescence_proof.set(true);
     control.failures.set(1);
     let pipeline = pipeline_observation("quarantined");
     control.pipeline.set(ResourceEvidence::Observed(pipeline));
