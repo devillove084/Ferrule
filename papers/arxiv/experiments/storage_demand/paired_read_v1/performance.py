@@ -22,14 +22,20 @@ CACHE_WORK = ('uploads', 'evictions', 'hits')
 
 GROUPED_STAGE = ct.ROOT / 'target/validation/grouped-performance-ce6d4ff-20261017-01'
 GROUPED_PROFILE_STAGE = ct.ROOT / 'target/validation/grouped-profile-ce6d4ff-terminal-handoff-20261017-01'
+LOOKAHEAD_PROFILE_STAGE = ct.ROOT / 'target/validation/grouped-profile-ce6d4ff-lookahead-proc-exit-20261017-01'
 
 
 def grouped_comparison(plan):
     return plan is not None and plan.get('schema') == 'ferrule.grouped-upload.performance-plan.v1'
 
 
+def lookahead_profile_only(plan):
+    return plan is not None and plan.get('schema') == 'ferrule.grouped-upload.lookahead-profile-only-plan.v1'
+
+
 def grouped_profile_only(plan):
-    return plan is not None and plan.get('schema') == 'ferrule.grouped-upload.profile-only-plan.v1'
+    return plan is not None and (plan.get('schema') == 'ferrule.grouped-upload.profile-only-plan.v1'
+        or lookahead_profile_only(plan))
 
 
 def experimental_arm(plan):
@@ -37,7 +43,14 @@ def experimental_arm(plan):
 
 
 def planned_jobs(plan):
+    if lookahead_profile_only(plan):
+        return profile_jobs('grouped')[2:]
     return profile_jobs(experimental_arm(plan)) if profile_only(plan) else fixed_jobs(experimental_arm(plan))
+
+
+def primary_jobs(plan):
+    return [row for row in fixed_jobs(experimental_arm(plan))[:4]
+            if not lookahead_profile_only(plan) or row['schedule'] == 'lookahead']
 
 
 def fixed_jobs(variant='retained'):
@@ -76,14 +89,14 @@ def profile_jobs(variant='retained'):
 
 
 def profile_only(plan):
-    return plan.get('schema') in ('ferrule.retained-upload.profile-only-plan.v1',
-        'ferrule.grouped-upload.profile-only-plan.v1')
+    return plan.get('schema') == 'ferrule.retained-upload.profile-only-plan.v1' or grouped_profile_only(plan)
 
 
 def validate_plan(plan):
     grouped = experimental_arm(plan) == 'grouped'
     require(plan['schema'] in ('ferrule.retained-upload.performance-plan.v1', 'ferrule.retained-upload.profile-only-plan.v1',
-                'ferrule.grouped-upload.performance-plan.v1', 'ferrule.grouped-upload.profile-only-plan.v1')
+                'ferrule.grouped-upload.performance-plan.v1', 'ferrule.grouped-upload.profile-only-plan.v1',
+                'ferrule.grouped-upload.lookahead-profile-only-plan.v1')
             and plan['commit'] == (retained_evidence.GROUPED_COMMIT if grouped else COMMIT)
             and plan['binary_sha256'] == (retained_evidence.GROUPED_BINARIES['composition'] if grouped else BINARY_SHA)
             and plan['source_archive_sha256'] == (retained_evidence.GROUPED_SOURCE_SHA if grouped else SOURCE_SHA),
@@ -118,9 +131,9 @@ def validate_plan(plan):
             and plan['pins'].get(str(parent / 'FINAL.json')) == plan['completed_performance_source']['final_sha256'],
             'Consumed source plan/final must remain content-pinned')
         bindings = plan['diagnostic_primaries']
-        require(isinstance(bindings, list) and len(bindings) == 4
-            and ct.digest([b['job'] for b in bindings]) == ct.digest(fixed_jobs(experimental_arm(plan))[:4]),
-            'Exact four completed policy/schedule diagnostic primaries required')
+        require(isinstance(bindings, list) and len(bindings) == len(primary_jobs(plan))
+            and ct.digest([b['job'] for b in bindings]) == ct.digest(primary_jobs(plan)),
+            'Exact matching completed policy/schedule diagnostic primaries required')
         for binding in bindings:
             directory = parent / 'gates' / binding['job']['id']
             for field, filename in (('report', 'quality.json'), ('gate_result', 'gate-result.json')):
@@ -131,7 +144,24 @@ def validate_plan(plan):
     if grouped_profile_only(plan):
         require(ct.digest(plan.get('terminal_observer_policy')) == ct.digest(terminal_observer_policy()),
                 'Exact owner terminal handoff policy required')
+    if lookahead_profile_only(plan):
+        history = dict(directory=str(GROUPED_PROFILE_STAGE),
+            final_sha256='e9e37dfbe4ef04210b0dcdd20afc3bd99da9ef62a1c377854251d1cc4dbca36d')
+        require(plan.get('historical_profile_source') == history
+            and plan['pins'].get(str(GROUPED_PROFILE_STAGE / 'FINAL.json')) == history['final_sha256'],
+            'Historical three-pass/failed-fourth profile stage must remain immutable')
+        require(ct.digest(plan.get('proc_exit_observer_policy')) == ct.digest(proc_exit_observer_policy()),
+                'Exact declared model proc-exit acquisition policy required')
     return plan
+
+
+def proc_exit_observer_policy():
+    return dict(allowed_operations=dict(exe='sha256', maps='read_text', cmdline='read_bytes'),
+        exception_filename='exact_declared_model_proc_path',
+        identity_only_recheck_seconds=dict(exe=.25, maps=.25, cmdline=0),
+        deadline='min_original_capture_deadline_and_failed_read_plus_operation_bound', failed_read_retries=0,
+        fabricated_hashes=False, terminal='exact_model_exited_identity_plus_existing_owner_receipt_ack',
+        foreign_filesystem_ancestor_missing_or_reused_pid='fatal', handshake_changed=False)
 
 
 def terminal_observer_policy():
@@ -176,7 +206,8 @@ def validate_grouped_comparison(plan):
         grouped=retained_evidence.GROUPED_POLICY)), 'Comparison policy arms differ')
     for name in ('retries', 'extra_warmups', 'calibration'):
         require(type(plan[name]) is int and plan[name] == 0, 'Comparison extra invocation prohibited')
-    require(type(plan.get('profiling_captures')) is int and plan['profiling_captures'] == 4
+    require(type(plan.get('profiling_captures')) is int
+        and plan['profiling_captures'] == (2 if lookahead_profile_only(plan) else 4)
         and plan.get('profiling') is True and plan.get('independent_review_required') is True
         and plan.get('exact_cross_policy_fingerprints_required') is True
         and plan.get('historical_results_in_population') is False, 'Comparison scope/review differs')

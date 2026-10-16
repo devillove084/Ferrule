@@ -1,5 +1,6 @@
 """Synthetic CPU mutations of same-cut controls, not performance/GPU evidence."""
 import copy
+from contextlib import ExitStack, nullcontext
 import importlib.util
 import json
 import os
@@ -1715,6 +1716,144 @@ class GroupedProfileOnlyTests(unittest.TestCase):
                 with self.assertRaises(ValueError):q.configure(directory)
         rows=[dict(job=g,status='passed',whole_test_elapsed=dict(seconds=1)) for g in self.plan['jobs']]
         with self.assertRaises(ValueError):p.pair_summary(rows,'grouped')
+
+
+def lookahead_profile_plan():
+    value=grouped_profile_plan()
+    value.update(schema='ferrule.grouped-upload.lookahead-profile-only-plan.v1',
+        jobs=p.profile_jobs('grouped')[2:],profiling_captures=2,
+        diagnostic_primaries=value['diagnostic_primaries'][2:],
+        historical_profile_source=dict(directory=str(p.GROUPED_PROFILE_STAGE),
+            final_sha256='e9e37dfbe4ef04210b0dcdd20afc3bd99da9ef62a1c377854251d1cc4dbca36d'),
+        proc_exit_observer_policy=p.proc_exit_observer_policy())
+    value['pins'][str(p.GROUPED_PROFILE_STAGE/'FINAL.json')]=value['historical_profile_source']['final_sha256']
+    return value
+
+
+class LookaheadProfileOnlyTests(unittest.TestCase):
+    def setUp(self):
+        ContractTests.setUp(self)
+        self.plan=lookahead_profile_plan();q.PLAN=dict(self.plan,gates=self.plan['jobs'])
+
+    validate=ContractTests.validate
+
+    def test_only_exact_grouped_then_sync_lookahead_pair_no_omission_or_unknown_jobs(self):
+        p.validate_plan(self.plan)
+        self.assertEqual(p.planned_jobs(self.plan),p.fixed_jobs('grouped')[22:])
+        self.assertEqual([(j['schedule'],j['transfer_mode']) for j in self.plan['jobs']],
+            [('lookahead','grouped'),('lookahead','synchronous')])
+        for jobs in (self.plan['jobs'][:1],self.plan['jobs'][1:],self.plan['jobs'][::-1],
+                [self.plan['jobs'][0]]*2,p.profile_jobs('grouped'),p.fixed_jobs('grouped')):
+            changed=copy.deepcopy(self.plan);changed['jobs']=jobs
+            with self.assertRaises(ValueError):p.validate_plan(changed)
+        for field,bad in (('id','unknown-job'),('schedule','blocking'),('transfer_mode','retained'),
+                ('phase','latency'),('selector','foreign'),('seconds',1201)):
+            changed=copy.deepcopy(self.plan);changed['jobs'][0][field]=bad
+            with self.subTest(field=field),self.assertRaises(ValueError):p.validate_plan(changed)
+        with self.assertRaises(ValueError):p.job(self.plan,p.profile_jobs('grouped')[0])
+
+    def test_matching_two_completed_primaries_only_and_crosspolicy_binding_reject(self):
+        self.assertEqual([b['job'] for b in self.plan['diagnostic_primaries']],p.fixed_jobs('grouped')[2:4])
+        for row in self.plan['jobs']:
+            binding=next(b for b in self.plan['diagnostic_primaries'] if p.primary_key(b['job'])==p.primary_key(row))
+            prior=comparison_report(binding['job'],self.plan)
+            accepted=dict(status='passed',report_sha256='e'*64,commit=self.plan['commit'],
+                source_digest=self.plan['source_digest'],binary_sha256=self.plan['binary_sha256'],job=binding['job'])
+            p.validate_primary(accepted,prior,row,self.plan,'e'*64)
+            other=next(b['job'] for b in self.plan['diagnostic_primaries'] if b['job']!=binding['job'])
+            with self.assertRaises(ValueError):p.validate_primary(dict(accepted,job=other),prior,row,self.plan,'e'*64)
+        for bindings in (self.plan['diagnostic_primaries'][:1],self.plan['diagnostic_primaries'][::-1],
+                grouped_profile_plan()['diagnostic_primaries']):
+            changed=copy.deepcopy(self.plan);changed['diagnostic_primaries']=bindings
+            with self.assertRaises(ValueError):p.validate_plan(changed)
+
+    def test_same_cut_numeric_work_fingerprints_quotas_and_partial_policy_unchanged(self):
+        pair=[]
+        for row in self.plan['jobs']:
+            binding=next(b for b in self.plan['diagnostic_primaries'] if p.primary_key(b['job'])==p.primary_key(row))
+            prior=comparison_report(binding['job'],self.plan);data=comparison_report(row,self.plan)
+            self.validate(data,row,prior);self.assertTrue(p.compare_work(prior,data,require_fingerprints=True)['equal']);pair.append(data)
+        self.assertTrue(p.compare_work(*pair,require_fingerprints=True)['fingerprints_equal'])
+        for field,bad in (('commit',p.COMMIT),('binary_sha256',p.BINARY_SHA),('source_digest','f'*64),
+                ('capacity_and_options',{}),('profiling_captures',4),('retries',1),('extra_warmups',1),
+                ('calibration',1),('atol',.001),('rtol',.1),('historical_results_in_population',True)):
+            changed=copy.deepcopy(self.plan);changed[field]=bad
+            with self.subTest(field=field),self.assertRaises(ValueError):p.validate_plan(changed)
+        for policy in ('observed_model_summary_policy','terminal_observer_policy','proc_exit_observer_policy'):
+            for field in self.plan[policy]:
+                changed=copy.deepcopy(self.plan);changed[policy][field]='relaxed'
+                with self.subTest(policy=policy,field=field),self.assertRaises(ValueError):p.validate_plan(changed)
+
+    def test_historical_three_pass_failed_fourth_stage_must_remain_content_pinned(self):
+        for mutate in (lambda v:v.pop('historical_profile_source'),
+                lambda v:v['historical_profile_source'].update(final_sha256='f'*64),
+                lambda v:v['historical_profile_source'].update(directory=str(p.GROUPED_STAGE)),
+                lambda v:v['pins'].pop(str(p.GROUPED_PROFILE_STAGE/'FINAL.json'))):
+            changed=copy.deepcopy(self.plan);mutate(changed)
+            with self.assertRaises(ValueError):p.validate_plan(changed)
+
+    def test_new_directory_refuses_four_scope_and_consumed_directories_refuse_pair(self):
+        with mock.patch.object(q.ct,'load',return_value=copy.deepcopy(self.plan)), \
+                mock.patch.object(q,'OUT'),mock.patch.object(q,'SOURCE'),mock.patch.object(q,'PLAN'):
+            q.configure(p.LOOKAHEAD_PROFILE_STAGE);self.assertEqual(q.SOURCE,q.retained_evidence.GROUPED_STAGE)
+            for directory in (p.GROUPED_PROFILE_STAGE,p.GROUPED_STAGE,
+                    q.ROOT/'target/validation/retained-profile-57e4629-natural-drain-20261016-01'):
+                with self.assertRaises(ValueError):q.configure(directory)
+            with mock.patch.object(q.ct,'load',return_value=grouped_profile_plan()),self.assertRaises(ValueError):
+                q.configure(p.LOOKAHEAD_PROFILE_STAGE)
+
+    def test_all_old_go_scopes_and_wrong_reviewer_decision_block_before_gpu_or_locks(self):
+        with tempfile.TemporaryDirectory() as folder,mock.patch.object(q,'OUT',Path(folder)):
+            with self.assertRaisesRegex(ValueError,'Independent review/GO missing'):q.main()
+            old=[('ferrule.worker-reuse.grouped-profile-only-control-review.v1',p.profile_jobs('grouped')),
+                ('ferrule.worker-reuse.profile-only-control-review.v1',p.profile_jobs()),
+                ('ferrule.worker-reuse.performance-control-review.v1',p.fixed_jobs('grouped')),
+                ('ferrule.worker-reuse.control-review.v1',q.retained_evidence.grouped_jobs())]
+            record=dict(schema='ferrule.worker-reuse.grouped-lookahead-profile-only-control-review.v1',
+                status='passed',gpu_execution_authorized=True,reviewer='independent fixture',reviewer_id='089b',
+                decision='GO_EXACT2_SAME_CE6_LOOKAHEAD_GROUPED_THEN_SYNCHRONOUS_PROFILE_ONLY',
+                commit=self.plan['commit'],qualification_plan_sha256='e'*64,control_sha256='e'*64,
+                review_packet_sha256='e'*64,jobs=self.plan['jobs'])
+            path=Path(folder)/'independent-review.json'
+            bad=[dict(record,schema=schema,jobs=jobs) for schema,jobs in old]
+            bad.extend([dict(record,decision='GO_EXACT4_SAME_CE6_SYNCHRONOUS_VERSUS_GROUPED_PROFILE_ONLY'),
+                dict(record,reviewer_id='implementer'),dict(record,jobs=self.plan['jobs'][:1])])
+            for value in bad:
+                if path.exists():path.chmod(0o644)
+                path.write_text(json.dumps(value));path.chmod(0o444)
+                with mock.patch.object(q.ct,'sha',return_value='e'*64),self.assertRaises(ValueError):q.main()
+                self.assertFalse((Path(folder)/'FINAL.json').exists())
+            path.chmod(0o644);path.write_text(json.dumps(record));path.chmod(0o444)
+            with mock.patch.object(q.ct,'sha',return_value='e'*64):q.require_independent_review()
+
+
+    def test_two_completion_is_not_four_and_first_failure_never_dispatches_second(self):
+        for fail_first in (False,True):
+            with tempfile.TemporaryDirectory() as folder,ExitStack() as stack:
+                directory=Path(folder);(directory/'gates').mkdir()
+                plan=copy.deepcopy(self.plan);plan['gates']=plan['jobs'];plan['pins'][str(q.SCRIPT)]='e'*64
+                def execute(gate,locks):
+                    return dict(gate_id=gate['id'],status='failed' if fail_first else 'passed',
+                        actual_test_issued=True,failure_classification='synthetic failure' if fail_first else None), {'synthetic':True}, None
+                patches=[mock.patch.object(q,'OUT',directory),mock.patch.object(q,'PLAN',plan),
+                    mock.patch.object(q,'require_independent_review'),mock.patch.object(q.ct,'require_cpu_python'),
+                    mock.patch.object(q,'verify'),mock.patch.object(q.ct,'sha',return_value='e'*64),
+                    mock.patch.object(q.ct,'exclusive_owner_lock',side_effect=lambda uuid:nullcontext({})),
+                    mock.patch.object(q.ct,'validate_owner_lock'),mock.patch.object(q.guard,'identity',return_value={}),
+                    mock.patch.object(q.idle,'observe',return_value=dict(status='verified',samples=[{}, {}, {}])),
+                    mock.patch.object(q.idle,'no_recorded_owner',return_value=True),mock.patch.object(q.ct,'drained',return_value=True),
+                    mock.patch.object(q.subprocess,'check_output',return_value=''),mock.patch.object(q,'execute_gate',side_effect=execute)]
+                mocks=[stack.enter_context(patch) for patch in patches]
+                self.assertEqual(q.main(),1 if fail_first else 0)
+                final=q.ct.load(directory/'FINAL.json')
+                self.assertNotIn('all4_profiles_completed',final)
+                self.assertEqual(final['scheduled_gates'],2)
+                self.assertEqual(final['actual_gpu_tests_issued'],1 if fail_first else 2)
+                self.assertEqual(mocks[-1].call_count,1 if fail_first else 2)
+                if fail_first:
+                    self.assertNotIn('all2_profiles_completed',final)
+                    self.assertEqual(final['not_issued_gates'],[plan['jobs'][1]['id']])
+                else:self.assertTrue(final['all2_profiles_completed'])
 
 
 if __name__=='__main__':

@@ -112,7 +112,7 @@ def verify(full=False):
         perf.validate_completed_performance(PLAN, ct.load(Path(PLAN['completed_performance_source']['directory']) / 'FINAL.json'))
         primaries = [primary(gate)[2] for gate in PLAN['jobs']]
         if perf.grouped_profile_only(PLAN):
-            for schedule in ('blocking', 'lookahead'):
+            for schedule in dict.fromkeys(gate['schedule'] for gate in PLAN['jobs']):
                 pair = [data for gate, data in zip(PLAN['jobs'], primaries) if gate['schedule'] == schedule]
                 perf.compare_work(*pair, require_fingerprints=True)
     baseline = ROOT / 'target/validation/retained-upload-57e4629-gpu-20261016-01' if is_grouped() or perf.experimental_arm(PLAN) == 'grouped' else SOURCE
@@ -302,7 +302,7 @@ def execute_gate(gate, locks):
             qualification_plan_sha256=ct.sha(plan_path()), all_uuid_locks=locks, granted=True,
             owner_note=('Separately reviewed grouped quality14 authority; only this sealed job, no retries/probes/warmups/profiling' if is_grouped() else
                 'Separately reviewed same-ce6-cut synchronous/grouped fixed24; no retries/probes/warmups; only four declared profiles' if perf.grouped_comparison(PLAN) else
-                'Separate reviewed fresh4 profile-only authority; completed primaries reused, no timing/quality reruns or retries/probes/warmups' if perf.profile_only(PLAN) else
+                'Separate reviewed exact profile-only authority; completed primaries reused, no timing/quality reruns or retries/probes/warmups' if perf.profile_only(PLAN) else
                 'Separate reviewed fixed24 authority, only this sealed job, no retries/probes/warmups; profiling only for four declared captures'))
         payload, seal = guard.seal(payload, directory)
         cpu_env = dict(PATH='/usr/bin:/bin', HOME='/root', CUDA_VISIBLE_DEVICES='', NVIDIA_VISIBLE_DEVICES='none', PYTHONDONTWRITEBYTECODE='1', FERRULE_PAPER_WORKER_TOKEN=payload['worker_token'])
@@ -382,6 +382,7 @@ def require_independent_review():
     review = ct.load(path)
     ct.require(review.get('schema') == ('ferrule.worker-reuse.control-review.v1' if is_grouped() else
             'ferrule.worker-reuse.performance-control-review.v1' if perf.grouped_comparison(PLAN) else
+            'ferrule.worker-reuse.grouped-lookahead-profile-only-control-review.v1' if perf.lookahead_profile_only(PLAN) else
             'ferrule.worker-reuse.grouped-profile-only-control-review.v1' if perf.grouped_profile_only(PLAN) else
             'ferrule.worker-reuse.profile-only-control-review.v1')
         and review.get('status') == 'passed' and review.get('gpu_execution_authorized') is True
@@ -394,8 +395,9 @@ def require_independent_review():
         'Independent review/GO must bind this exact frozen cut, plan and control')
     if perf.grouped_profile_only(PLAN):
         ct.require(review.get('reviewer_id') == '089b'
-            and review.get('decision') == 'GO_EXACT4_SAME_CE6_SYNCHRONOUS_VERSUS_GROUPED_PROFILE_ONLY',
-            'Fresh grouped profile-only scope requires independent089b exact4 GO')
+            and review.get('decision') == ('GO_EXACT2_SAME_CE6_LOOKAHEAD_GROUPED_THEN_SYNCHRONOUS_PROFILE_ONLY'
+                if perf.lookahead_profile_only(PLAN) else 'GO_EXACT4_SAME_CE6_SYNCHRONOUS_VERSUS_GROUPED_PROFILE_ONLY'),
+            'Fresh grouped profile-only scope requires independent089b exact-scope GO')
 
 
 def main():
@@ -406,6 +408,7 @@ def main():
                'Fresh empty exact-once gate directory required; no resume/retry')
     final=dict(schema='ferrule.grouped-upload.current-quality-qualification.v1' if is_grouped() else
         'ferrule.grouped-upload.performance-qualification.v1' if perf.grouped_comparison(PLAN) else
+        'ferrule.grouped-upload.lookahead-profile-only-execution.v1' if perf.lookahead_profile_only(PLAN) else
         'ferrule.grouped-upload.profile-only-execution.v1' if perf.grouped_profile_only(PLAN) else
         'ferrule.retained-upload.profile-only-execution.v1',commit=PLAN['commit'],source_digest=PLAN['source_digest'],scheduled_gates=len(PLAN['jobs']),
         source_archive_sha256=ct.sha(SOURCE/'source.tar'),qualification_plan_sha256=ct.sha(plan_path()),
@@ -413,7 +416,7 @@ def main():
         artifact_sha256=retained_evidence.GROUPED_BINARIES if is_grouped() else {'composition': PLAN['binary_sha256']},binary_math_proof=False,
         profile_evidence_scope=None if is_grouped() else profile_audit.model_summary_policy(),
         relationship='Frozen ce6 grouped quality14; no performance/default/overlap claim' if is_grouped() else
-        'Same-ce6-cut synchronous/grouped fixed24; whole-test elapsed only; four separate partial observed-model profiles; no default/token/TTFT/request/overlap claim' if perf.grouped_comparison(PLAN) else 'Fresh four profile-only captures; completed20 never rerun; no unprofiled latency population, default switch, TTFT/token/request latency or overlap claim',
+        'Same-ce6-cut synchronous/grouped fixed24; whole-test elapsed only; four separate partial observed-model profiles; no default/token/TTFT/request/overlap claim' if perf.grouped_comparison(PLAN) else f'Fresh {len(PLAN["jobs"])} profile-only captures; historical stages unchanged; completed20 never rerun; no unprofiled latency population, default switch, TTFT/token/request latency or overlap claim',
         physical_release='unobserved; authenticated ECHILD and observed NVML idle are not a CUDA fence or physical-release certificate')
     last_custody=None; locks=[]
     try:
@@ -435,7 +438,8 @@ def main():
             else:
                 final.update(status='passed', **({'all14_quality_completed': True} if is_grouped() else
                     {'all24_completed': True, 'paired_whole_test_summary': perf.pair_summary(final['results'], 'grouped')}
-                    if perf.grouped_comparison(PLAN) else {'all4_profiles_completed': True}))
+                    if perf.grouped_comparison(PLAN) else
+                    {'all2_profiles_completed': True} if perf.lookahead_profile_only(PLAN) else {'all4_profiles_completed': True}))
             final['not_issued_gates']=[g['id'] for g in PLAN['gates'] if g['id'] not in {r['gate_id'] for r in final['results'] if r['actual_test_issued']}]
             final_idle=idle.observe(PLAN['uuid_inventory'],custody=last_custody) if last_custody else idle.observe(PLAN['uuid_inventory'])
             ct.write(OUT/'final-idle.json',final_idle)
@@ -463,7 +467,8 @@ def configure(directory):
     wanted = Path(directory).resolve()
     grouped = wanted == retained_evidence.GROUPED_STAGE
     comparison = wanted == perf.GROUPED_STAGE
-    grouped_profile = wanted == perf.GROUPED_PROFILE_STAGE
+    lookahead_profile = wanted == perf.LOOKAHEAD_PROFILE_STAGE
+    grouped_profile = wanted == perf.GROUPED_PROFILE_STAGE or lookahead_profile
     ct.require(grouped or comparison or grouped_profile or wanted == ROOT / 'target/validation/retained-profile-57e4629-natural-drain-20261016-01',
                'Only the fresh separately sealed frozen quality/profile stage is admitted')
     plan = ct.load(wanted / ('grouped-plan.json' if grouped else 'performance-plan.json'))
@@ -472,7 +477,8 @@ def configure(directory):
     else:
         perf.validate_plan(plan)
         ct.require(perf.grouped_comparison(plan) if comparison else
-            perf.grouped_profile_only(plan) if grouped_profile else
+            perf.lookahead_profile_only(plan) if lookahead_profile else
+            perf.grouped_profile_only(plan) and not perf.lookahead_profile_only(plan) if grouped_profile else
             perf.profile_only(plan) and not perf.grouped_profile_only(plan),
                    'Exact fresh quality/comparison/profile scope required; historical24 cannot execute')
     OUT, PLAN = wanted, plan
@@ -878,13 +884,15 @@ def export_profile(directory, gate, custody, observations):
         owner_terminal_sha256=ct.sha(terminal_path), observer_ack_sha256=ct.sha(ack_path))
 
 
-def prepare(variant='retained'):
+def prepare(variant='retained', *, lookahead_only=False):
     """CPU-only binding of existing artifacts and maintained controls; no build."""
     global PLAN, OUT, SOURCE, PARENT
     ct.require(variant in ('retained', 'grouped'), 'Unknown profile-only arm')
     grouped = variant == 'grouped'
+    ct.require(not lookahead_only or grouped, 'Lookahead-only requires the same-ce6 grouped comparison')
     if grouped:
-        OUT, SOURCE, PARENT = perf.GROUPED_PROFILE_STAGE, retained_evidence.GROUPED_STAGE, perf.GROUPED_STAGE
+        OUT = perf.LOOKAHEAD_PROFILE_STAGE if lookahead_only else perf.GROUPED_PROFILE_STAGE
+        SOURCE, PARENT = retained_evidence.GROUPED_STAGE, perf.GROUPED_STAGE
     ct.require_cpu_python()
     from profile_overlap_v1 import runtime_contract, analyze, scope_contract
     profile_modules()
@@ -910,11 +918,12 @@ def prepare(variant='retained'):
         executable_sha256=retained_evidence.GROUPED_BINARIES['composition'] if grouped else perf.BINARY_SHA)
     ct.check_pins(runtime['pins'])
     ct.write(OUT / 'profile-runtime-policy.json', runtime)
-    PLAN = dict(schema='ferrule.grouped-upload.profile-only-plan.v1' if grouped else 'ferrule.retained-upload.profile-only-plan.v1',
+    PLAN = dict(schema='ferrule.grouped-upload.lookahead-profile-only-plan.v1' if lookahead_only else
+        'ferrule.grouped-upload.profile-only-plan.v1' if grouped else 'ferrule.retained-upload.profile-only-plan.v1',
         commit=retained_evidence.GROUPED_COMMIT if grouped else perf.COMMIT,
         source_digest=original['source_digest'], source_archive_sha256=retained_evidence.GROUPED_SOURCE_SHA if grouped else perf.SOURCE_SHA,
         executable=str(SOURCE / 'staged/composition'), binary_sha256=runtime['executable_sha256'],
-        jobs=perf.profile_jobs(variant), retries=0, extra_warmups=0, calibration=0, stop_on_first_failure=True,
+        jobs=perf.profile_jobs(variant)[2:] if lookahead_only else perf.profile_jobs(variant), retries=0, extra_warmups=0, calibration=0, stop_on_first_failure=True,
         atol=.00025, rtol=.012, host_options=dict(max_host_bytes=64 << 20, max_metadata_bytes=8 << 20, worker_stack_bytes=2 << 20),
         capacity_and_options=original['composition_capacity_and_options'],
         composition_capacity_and_options=original['composition_capacity_and_options'],
@@ -929,7 +938,7 @@ def prepare(variant='retained'):
     PLAN['completed_performance_source'] = dict(directory=str(PARENT),
         plan_sha256=ct.sha(PARENT / 'performance-plan.json'), final_sha256=ct.sha(PARENT / 'FINAL.json'))
     PLAN['diagnostic_primaries'] = []
-    for job in perf.fixed_jobs(variant)[:4]:
+    for job in perf.primary_jobs(PLAN):
         directory = PARENT / 'gates' / job['id']
         binding = dict(job=job)
         for field, filename in (('report', 'quality.json'), ('gate_result', 'gate-result.json')):
@@ -939,11 +948,16 @@ def prepare(variant='retained'):
         PLAN['diagnostic_primaries'].append(binding)
     if grouped:
         PLAN.update(policies=dict(synchronous='unchanged_default', grouped=retained_evidence.GROUPED_POLICY),
-            completed_quality_source=perf.grouped_quality_source(), profiling_captures=4, profiling=True,
+            completed_quality_source=perf.grouped_quality_source(), profiling_captures=len(PLAN['jobs']), profiling=True,
             independent_review_required=True, exact_cross_policy_fingerprints_required=True,
             historical_results_in_population=False, terminal_observer_policy=perf.terminal_observer_policy())
         PLAN['pins'].update({str(SOURCE / n): ct.sha(SOURCE / n) for n in
             ('grouped-plan.json', 'FINAL.json', 'independent-review.json')})
+    if lookahead_only:
+        history = perf.GROUPED_PROFILE_STAGE / 'FINAL.json'
+        PLAN.update(historical_profile_source=dict(directory=str(perf.GROUPED_PROFILE_STAGE),
+            final_sha256=ct.sha(history)), proc_exit_observer_policy=perf.proc_exit_observer_policy())
+        PLAN['pins'][str(history)] = ct.sha(history)
     PLAN['pins'].update({str(PARENT / n): ct.sha(PARENT / n) for n in
         ('performance-plan.json', 'FINAL.json', 'independent-review.json', 'review-ready.json')})
     PLAN['pins'].update({path: row['sha256'] for path, row in tools['pins'].items()})
@@ -968,7 +982,7 @@ def prepare(variant='retained'):
     PLAN['gates'] = PLAN['jobs']
     verify(full=True)
     (OUT / 'gates').mkdir(exist_ok=False)
-    print('PREPARED4 fresh profile-only jobs, existing same-cut artifacts/completed primaries; CPU pins only; review GO still required', flush=True)
+    print(f'PREPARED{len(PLAN["jobs"])} fresh profile-only jobs, existing same-cut artifacts/completed primaries; CPU pins only; review GO still required', flush=True)
 
 
 if __name__ == '__main__':
@@ -982,8 +996,10 @@ if __name__ == '__main__':
     args = parser.parse_args()
     if args.prepare:
         ct.require(not args.worker and not args.profile_target and not args.gate_id, 'Preparation cannot execute a role')
-        ct.require(args.directory.resolve() in (OUT, perf.GROUPED_PROFILE_STAGE), 'Wrong dedicated same-cut four-profile output')
-        prepare('grouped' if args.directory.resolve() == perf.GROUPED_PROFILE_STAGE else 'retained')
+        ct.require(args.directory.resolve() in (OUT, perf.GROUPED_PROFILE_STAGE, perf.LOOKAHEAD_PROFILE_STAGE),
+                   'Wrong dedicated exact-scope profile output')
+        prepare('grouped' if args.directory.resolve() in (perf.GROUPED_PROFILE_STAGE, perf.LOOKAHEAD_PROFILE_STAGE) else 'retained',
+                lookahead_only=args.directory.resolve() == perf.LOOKAHEAD_PROFILE_STAGE)
         raise SystemExit(0)
     import signal
     def cancelled(number, frame):
