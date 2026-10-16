@@ -78,7 +78,7 @@ fn one_owner_rejects_duplicate_lease_and_unknown_never_reopens() {
     assert!(state.begin_lease(&lease).is_err());
     state.finish_lease().unwrap();
     state.begin_lease(&lease).unwrap();
-    state.failed = true;
+    state.quarantine();
     assert!(state.finish_lease().is_err());
     assert!(state.begin_lease(&lease).is_err());
 }
