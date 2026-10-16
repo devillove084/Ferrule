@@ -15,6 +15,10 @@ pub mod numeric_fp8;
 #[path = "operators/numeric_fp8_upload.rs"]
 pub(crate) mod numeric_fp8_upload;
 
+#[cfg(test)]
+#[path = "../../tests/numeric_fp8_async_upload/fixture.rs"]
+mod numeric_fp8_fixture;
+
 #[path = "operators/resource_views.rs"]
 mod resource_views;
 

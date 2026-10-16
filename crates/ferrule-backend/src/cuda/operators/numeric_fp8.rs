@@ -8,6 +8,9 @@ use crate::cuda::operators::linear::{
 use ferrule_common::Result;
 use ferrule_common::numeric_fp8::ImmutableValidatedNumericFp8Payload;
 
+#[path = "numeric_fp8_group_sync.rs"]
+mod group_sync;
+
 impl CudaOperators {
     /// Validate immutable packed FP8 and numeric scales before any H2D/allocation.
     /// Scales stay in their original BF16/F32 representation on device.
