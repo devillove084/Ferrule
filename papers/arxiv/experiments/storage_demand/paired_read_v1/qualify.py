@@ -31,8 +31,23 @@ import profile_audit
 PLAN = None
 
 
+def is_grouped():
+    return retained_evidence.grouped_quality(PLAN)
+
+
+def plan_path():
+    return OUT / ('grouped-plan.json' if is_grouped() else 'performance-plan.json')
+
+
+def payload_argv(gate):
+    if not is_grouped():
+        return perf.payload_argv(PLAN, gate)
+    retained_evidence.grouped_job(PLAN, gate)
+    return [gate["executable"], gate["selector"], "--exact", "--ignored", "--nocapture", "--test-threads=1"]
+
+
 def primary(gate):
-    perf.job(PLAN, gate)
+    (retained_evidence.grouped_job if is_grouped() else perf.job)(PLAN, gate)
     if perf.profile_only(PLAN):
         binding = next(b for b in PLAN['diagnostic_primaries']
                        if perf.primary_key(b['job']) == perf.primary_key(gate))
@@ -45,7 +60,16 @@ def primary(gate):
         path = OUT / 'gates' / source['id'] / 'quality.json'
     accepted = ct.load(path.parent / 'gate-result.json')
     data = ct.load(path)
-    perf.validate_primary(accepted, data, gate, PLAN, ct.sha(path))
+    if is_grouped():
+        wanted = next(g for g in PLAN['jobs'] if g['phase'] == 'primary'
+                      and perf.primary_key(g) == perf.primary_key(gate))
+        ct.require(accepted.get('status') == 'passed' and accepted.get('report_sha256') == ct.sha(path)
+            and accepted.get('commit') == PLAN['commit'] and accepted.get('source_digest') == PLAN['source_digest']
+            and accepted.get('binary_sha256') == wanted['binary_sha256']
+            and ct.digest(accepted.get('job')) == ct.digest(wanted), 'Grouped primary failed/foreign policy/schedule/source/hash')
+        validate_composition(data, wanted)
+    else:
+        perf.validate_primary(accepted, data, gate, PLAN, ct.sha(path))
     return path, ct.sha(path), data
 
 
@@ -81,17 +105,27 @@ def environment(gate):
 
 def verify(full=False):
     ct.check_pins(PLAN['pins'])
-    perf.validate_plan(PLAN)
+    (retained_evidence.validate_grouped_plan if is_grouped() else perf.validate_plan)(PLAN)
     if perf.profile_only(PLAN):
         ct.require(ct.load(PARENT / 'FINAL.json')['actual_gpu_tests_issued'] == 20, 'Completed same-cut20 prerequisite missing')
         for gate in PLAN['jobs']:
             primary(gate)
-    original = ct.load(SOURCE / 'retained-plan.json')
+    baseline = ROOT / 'target/validation/retained-upload-57e4629-gpu-20261016-01' if is_grouped() or perf.grouped_comparison(PLAN) else SOURCE
+    original = ct.load(baseline / 'retained-plan.json')
     ct.require(PLAN['capacity_and_options'] == original['composition_capacity_and_options']
         and PLAN['uuid_inventory'] == original['uuid_inventory']
         and PLAN['runtime_base_environment'] == original['runtime_base_environment']
         and PLAN['fresh_reference_sha256'] == original['fresh_reference_sha256']
         and PLAN['full40_reference_sha256'] == original['full40_reference_sha256'], 'Frozen source/quota/environment/reference differs')
+    if perf.grouped_comparison(PLAN):
+        proof = ct.load(retained_evidence.GROUPED_STAGE / 'FINAL.json')
+        ct.require(proof['status'] == 'passed' and proof['actual_gpu_tests_issued'] == 14
+            and proof['commit'] == PLAN['commit'] and proof['source_digest'] == PLAN['source_digest'],
+            'Completed frozen quality14 prerequisite failed/foreign')
+        runtime = ct.load(OUT / 'profile-runtime-policy.json')
+        ct.require(runtime['executable'] == PLAN['executable'] and runtime['executable_sha256'] == PLAN['binary_sha256'],
+                   'Profile runtime bound to a foreign binary')
+        ct.check_pins(runtime['pins'])
     source = ct.load(SOURCE / 'source-freeze.json')
     ct.require(source['commit'] == PLAN['commit'] and source['source_pins_digest'] == PLAN['source_digest'], 'Wrong frozen cut')
     ct.check_pins({str(Path(source['frozen_source']) / p): h for p, h in source['pins_relative_to_frozen_source'].items()})
@@ -129,7 +163,7 @@ def worker(seal):
     payload = json.load(sys.stdin)
     authenticated = guard.authenticate(payload, seal)
     require_independent_review()
-    ct.require(ct.sha(OUT / 'performance-plan.json') == payload['qualification_plan_sha256'], 'Plan drift')
+    ct.require(ct.sha(plan_path()) == payload['qualification_plan_sha256'], 'Plan drift')
     gate = next(g for g in PLAN['gates'] if g['id'] == payload['gate_id'])
     directory = Path(payload['directory'])
     ct.require(directory == OUT / 'gates' / gate['id'] and payload['gate'] == gate and payload['environment'] == environment(gate), 'Gate/environment drift')
@@ -140,7 +174,7 @@ def worker(seal):
     pre = idle.observe(PLAN['uuid_inventory'])
     ct.write(directory / 'authenticated-pre-cuda-idle.json', pre)
     ct.require(pre['status'] == 'verified', 'Authenticated pre-CUDA strict all-eight idle failed')
-    argv = perf.payload_argv(PLAN, gate)
+    argv = payload_argv(gate)
     if gate['phase'] == 'profile':
         target = [PYTHON, '-S', '-B', str(SCRIPT), '--profile-target', seal,
                           '--directory', str(OUT), '--gate-id', gate['id']]
@@ -195,8 +229,17 @@ def validate_constructor(report):
 
 
 def validate_config(report, gate):
-    perf.job(PLAN, gate)
-    perf.policy(report, gate['transfer_mode'], gate['schedule'], PLAN['capacity_and_options'])
+    (retained_evidence.grouped_job if is_grouped() else perf.job)(PLAN, gate)
+    if is_grouped():
+        conf = report['test_config']
+        ct.require(conf['capacity_and_options'] == PLAN['composition_capacity_and_options']
+            and conf['numeric_precision'] == 'Bf16ModelMixedF32Accumulate'
+            and conf['expert_read_pipeline'] == dict(schedule=gate['schedule'].capitalize(),
+                max_host_bytes=64 << 20, max_metadata_bytes=8 << 20, worker_stack_bytes=2 << 20,
+                metadata_and_stack_included_in_host_cap=True, device_budget_separate=True), 'Grouped fixed config differs')
+        retained_evidence.validate_grouped(report, gate['schedule'])
+    else:
+        perf.policy(report, gate['transfer_mode'], gate['schedule'], PLAN['capacity_and_options'])
 
 
 def validate_composition(report, gate):
@@ -266,8 +309,10 @@ def execute_gate(gate, locks):
         pre = idle.observe(PLAN['uuid_inventory']); ct.write(directory / 'pre-idle.json', pre)
         ct.require(pre['status'] == 'verified', 'Pre-gate all-eight strict idle failed')
         payload = dict(directory=str(directory), gate_id=gate['id'], gate=gate, seconds=1200, environment=env,
-            qualification_plan_sha256=ct.sha(OUT / 'performance-plan.json'), all_uuid_locks=locks, granted=True,
-            owner_note='Separate reviewed fixed24 authority, only this sealed job, no retries/probes/warmups; profiling only for four declared captures')
+            qualification_plan_sha256=ct.sha(plan_path()), all_uuid_locks=locks, granted=True,
+            owner_note=('Separately reviewed grouped quality14 authority; only this sealed job, no retries/probes/warmups/profiling' if is_grouped() else
+                'Separately reviewed same-ce6-cut synchronous/grouped fixed24; no retries/probes/warmups; only four declared profiles' if perf.grouped_comparison(PLAN) else
+                'Separate reviewed fixed24 authority, only this sealed job, no retries/probes/warmups; profiling only for four declared captures'))
         payload, seal = guard.seal(payload, directory)
         cpu_env = dict(PATH='/usr/bin:/bin', HOME='/root', CUDA_VISIBLE_DEVICES='', NVIDIA_VISIBLE_DEVICES='none', PYTHONDONTWRITEBYTECODE='1', FERRULE_PAPER_WORKER_TOKEN=payload['worker_token'])
         argv = ct.isolated_argv([PYTHON, '-S', '-B', str(SCRIPT), '--worker', seal, '--directory', str(OUT)], cpu_env)
@@ -301,23 +346,32 @@ def execute_gate(gate, locks):
         else:
             report = ct.load(report_path)
             validate_composition(report,gate)
-            timing = perf.libtest_elapsed(stdout)
-            perf.work_vector(report)
-            if gate['phase'] != 'primary':
-                _, _, prior = primary(gate)
-                ct.write(directory / 'same-work-own-primary.json', perf.compare_work(prior, report))
-            opposite = next(g for g in PLAN['jobs'] if g['phase'] == gate['phase']
-                and g['schedule'] == gate['schedule'] and g['transfer_mode'] != gate['transfer_mode']
-                and g['repetition'] == gate['repetition'])
-            other = OUT / 'gates' / opposite['id']
-            if (other / 'gate-result.json').exists():
-                accepted = ct.load(other / 'gate-result.json')
-                ct.require(accepted['status'] == 'passed' and accepted['report_sha256'] == ct.sha(other / 'quality.json'), 'Opposite arm failed/changed')
-                ct.write(directory / 'same-work-cross-policy.json', perf.compare_work(ct.load(other / 'quality.json'), report))
-            if gate['phase'] == 'profile':
-                result['profile'] = export_profile(directory, gate, custody, observations)
-            result.update(status='passed', numerical_pass=True, whole_test_elapsed=timing,
-                          latency_population=gate['phase'] == 'latency')
+            if is_grouped():
+                if gate['kind'] == 'ordinary':
+                    _, _, prior = primary(gate)
+                    ct.write(directory / 'same-work-own-primary.json', perf.compare_work(prior, report))
+                result.update(status='passed', numerical_pass=True, latency_population=False,
+                    grouped_facade_sync_count=dict(state='unobserved', reason='not exported by frozen public stats; no zero/fallback inference'))
+            else:
+                timing = perf.libtest_elapsed(stdout)
+                perf.work_vector(report)
+                if gate['phase'] != 'primary':
+                    _, _, prior = primary(gate)
+                    ct.write(directory / 'same-work-own-primary.json', perf.compare_work(prior, report,
+                        require_fingerprints=perf.grouped_comparison(PLAN)))
+                opposite = next(g for g in PLAN['jobs'] if g['phase'] == gate['phase']
+                    and g['schedule'] == gate['schedule'] and g['transfer_mode'] != gate['transfer_mode']
+                    and g['repetition'] == gate['repetition'])
+                other = OUT / 'gates' / opposite['id']
+                if (other / 'gate-result.json').exists():
+                    accepted = ct.load(other / 'gate-result.json')
+                    ct.require(accepted['status'] == 'passed' and accepted['report_sha256'] == ct.sha(other / 'quality.json'), 'Opposite arm failed/changed')
+                    ct.write(directory / 'same-work-cross-policy.json', perf.compare_work(ct.load(other / 'quality.json'), report,
+                        require_fingerprints=perf.grouped_comparison(PLAN)))
+                if gate['phase'] == 'profile':
+                    result['profile'] = export_profile(directory, gate, custody, observations)
+                result.update(status='passed', numerical_pass=True, whole_test_elapsed=timing,
+                              latency_population=gate['phase'] == 'latency')
     except BaseException as error:
         result.update(status='failed' if result['actual_test_issued'] else 'blocked', error=type(error).__name__+': '+str(error), numerical_pass=False)
     finally:
@@ -334,13 +388,15 @@ def require_independent_review():
     ct.require(path.is_file() and not path.is_symlink() and path.stat().st_mode & 0o222 == 0,
                'Independent review/GO missing; no GPU locks, telemetry or launch permitted')
     review = ct.load(path)
-    ct.require(review.get('schema') == 'ferrule.worker-reuse.profile-only-control-review.v1'
+    ct.require(review.get('schema') == ('ferrule.worker-reuse.control-review.v1' if is_grouped() else
+            'ferrule.worker-reuse.performance-control-review.v1' if perf.grouped_comparison(PLAN) else
+            'ferrule.worker-reuse.profile-only-control-review.v1')
         and review.get('status') == 'passed' and review.get('gpu_execution_authorized') is True
         and isinstance(review.get('reviewer'), str) and bool(review['reviewer'].strip())
         and review.get('commit') == PLAN['commit']
-        and review.get('qualification_plan_sha256') == ct.sha(OUT / 'performance-plan.json')
+        and review.get('qualification_plan_sha256') == ct.sha(plan_path())
         and review.get('control_sha256') == ct.sha(SCRIPT)
-        and review.get('jobs') == perf.profile_jobs()
+        and ct.digest(review.get('jobs')) == ct.digest(retained_evidence.grouped_jobs() if is_grouped() else perf.planned_jobs(PLAN))
         and review.get('review_packet_sha256') == ct.sha(OUT / 'review-ready.json'),
         'Independent review/GO must bind this exact frozen cut, plan and control')
 
@@ -351,12 +407,15 @@ def main():
     ct.require(not (OUT/'FINAL.json').exists(), 'Qualification is exact-once; final receipt already exists')
     ct.require((OUT / 'gates').is_dir() and not any((OUT / 'gates').iterdir()),
                'Fresh empty exact-once gate directory required; no resume/retry')
-    final=dict(schema='ferrule.retained-upload.profile-only-execution.v1',commit=PLAN['commit'],source_digest=PLAN['source_digest'],scheduled_gates=4,
-        source_archive_sha256=ct.sha(SOURCE/'source.tar'),qualification_plan_sha256=ct.sha(OUT/'performance-plan.json'),
+    final=dict(schema='ferrule.grouped-upload.current-quality-qualification.v1' if is_grouped() else
+        'ferrule.grouped-upload.performance-qualification.v1' if perf.grouped_comparison(PLAN) else
+        'ferrule.retained-upload.profile-only-execution.v1',commit=PLAN['commit'],source_digest=PLAN['source_digest'],scheduled_gates=len(PLAN['jobs']),
+        source_archive_sha256=ct.sha(SOURCE/'source.tar'),qualification_plan_sha256=ct.sha(plan_path()),
         status='blocked',results=[],actual_gpu_tests_issued=0,retries=0,conditioning_probes=0,warmups=0,profiling_captures=0,
-        artifact_sha256={'composition': PLAN['binary_sha256']},binary_math_proof=False,
-        profile_evidence_scope=profile_audit.model_summary_policy(),
-        relationship='Fresh four profile-only captures; completed20 never rerun; no unprofiled latency population, default switch, TTFT/token/request latency or overlap claim',
+        artifact_sha256=retained_evidence.GROUPED_BINARIES if is_grouped() else {'composition': PLAN['binary_sha256']},binary_math_proof=False,
+        profile_evidence_scope=None if is_grouped() else profile_audit.model_summary_policy(),
+        relationship='Frozen ce6 grouped quality14; no performance/default/overlap claim' if is_grouped() else
+        'Same-ce6-cut synchronous/grouped fixed24; whole-test elapsed only; four separate partial observed-model profiles; no default/token/TTFT/request/overlap claim' if perf.grouped_comparison(PLAN) else 'Fresh four profile-only captures; completed20 never rerun; no unprofiled latency population, default switch, TTFT/token/request latency or overlap claim',
         physical_release='unobserved; authenticated ECHILD and observed NVML idle are not a CUDA fence or physical-release certificate')
     last_custody=None; locks=[]
     try:
@@ -376,7 +435,9 @@ def main():
                 if result['status']!='passed':
                     final.update(status='failed' if result['actual_test_issued'] else 'blocked',stop_gate=gate['id'],stop_reason=result.get('failure_classification') or result.get('error'));break
             else:
-                final.update(status='passed', all4_profiles_completed=True)
+                final.update(status='passed', **({'all14_quality_completed': True} if is_grouped() else
+                    {'all24_completed': True, 'paired_whole_test_summary': perf.pair_summary(final['results'], 'grouped')}
+                    if perf.grouped_comparison(PLAN) else {'all4_profiles_completed': True}))
             final['not_issued_gates']=[g['id'] for g in PLAN['gates'] if g['id'] not in {r['gate_id'] for r in final['results'] if r['actual_test_issued']}]
             final_idle=idle.observe(PLAN['uuid_inventory'],custody=last_custody) if last_custody else idle.observe(PLAN['uuid_inventory'])
             ct.write(OUT/'final-idle.json',final_idle)
@@ -400,14 +461,21 @@ def main():
     return 0 if final['status']=='passed' else 1
 
 def configure(directory):
-    global OUT, PLAN
+    global OUT, PLAN, SOURCE
     wanted = Path(directory).resolve()
-    ct.require(wanted == ROOT / 'target/validation/retained-profile-57e4629-natural-drain-20261016-01',
-               'Only the fresh separately sealed same-cut four-profile stage is admitted')
-    plan = ct.load(wanted / 'performance-plan.json')
-    perf.validate_plan(plan)
-    ct.require(perf.profile_only(plan), 'Fresh profile-only plan required; consumed24 cannot execute')
+    grouped = wanted == retained_evidence.GROUPED_STAGE
+    comparison = wanted == perf.GROUPED_STAGE
+    ct.require(grouped or comparison or wanted == ROOT / 'target/validation/retained-profile-57e4629-natural-drain-20261016-01',
+               'Only the fresh separately sealed frozen quality/profile stage is admitted')
+    plan = ct.load(wanted / ('grouped-plan.json' if grouped else 'performance-plan.json'))
+    if grouped:
+        retained_evidence.validate_grouped_plan(plan)
+    else:
+        perf.validate_plan(plan)
+        ct.require(perf.grouped_comparison(plan) if comparison else perf.profile_only(plan),
+                   'Exact fresh quality/comparison/profile scope required; historical24 cannot execute')
     OUT, PLAN = wanted, plan
+    SOURCE = wanted if grouped else retained_evidence.GROUPED_STAGE if comparison else ROOT / 'target/validation/retained-upload-57e4629-gpu-20261016-01'
     PLAN['gates'] = PLAN['jobs']
 
 
@@ -427,7 +495,7 @@ def profile_auth(directory, seal):
     gate = perf.job(PLAN, payload['gate'])
     ct.require(gate['phase'] == 'profile' and gate['id'] == payload['gate_id']
         and directory == OUT / 'gates' / gate['id']
-        and payload['qualification_plan_sha256'] == ct.sha(OUT / 'performance-plan.json')
+        and payload['qualification_plan_sha256'] == ct.sha(plan_path())
         and payload['environment'] == environment(gate), 'Foreign profile job/environment/plan')
     launch = ct.load(directory / 'authenticated-launch.json')
     auth = launch['identity']
@@ -453,7 +521,7 @@ def profile_observation(directory, index):
     live, maps = profile_modules()
     start = ct.load(directory / 'profile-model-start.json')
     _, gate, auth = profile_auth(directory, start['launch_sha256'])
-    ct.require(start['plan_sha256'] == ct.sha(OUT / 'performance-plan.json')
+    ct.require(start['plan_sha256'] == ct.sha(plan_path())
         and start['job'] == gate and start['authenticated'] == auth, 'Profile role source/job/root binding differs')
     model, wrapper = start['model']['before'], start['wrapper']
     live.descendant(wrapper, auth['worker'])
@@ -495,7 +563,7 @@ def profile_target(seal, gate_id):
         ct.require(before['ppid'] == wrapper_identity['pid'], 'Model is not the traced Popen wrapper direct child')
         live.descendant(wrapper_identity, auth['worker'])
         live.readonly(directory / 'profile-model-start.json', dict(model=record, wrapper=wrapper_identity,
-            authenticated=auth, job=gate, plan_sha256=ct.sha(OUT / 'performance-plan.json'), launch_sha256=seal))
+            authenticated=auth, job=gate, plan_sha256=ct.sha(plan_path()), launch_sha256=seal))
     spec = importlib.util.spec_from_file_location('_finite_maintained_capture', ROOT / 'scripts/_profile_capture.py')
     wrapper = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(wrapper)
@@ -513,7 +581,7 @@ def export_profile(directory, gate, custody, observations):
     ct.require(len(valid) >= 2, 'Two independent live birth/executable model observations required')
     start = ct.load(directory / 'profile-model-start.json')
     for row in valid:
-        ct.require(row['job'] == gate and row['plan_sha256'] == ct.sha(OUT / 'performance-plan.json')
+        ct.require(row['job'] == gate and row['plan_sha256'] == ct.sha(plan_path())
             and row['wrapper'] == start['wrapper'], 'Observed model from foreign job/root')
         perf.validate_role(row['model'], start['model']['before'], gate['binary_sha256'], perf.payload_argv(PLAN, gate))
         # An early loader snapshot may lack required CUDA DSOs; unknown maps or

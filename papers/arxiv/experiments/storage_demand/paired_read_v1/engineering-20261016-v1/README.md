@@ -272,3 +272,31 @@ For this later profile closeout, only `profile-results.json`, `README.md` and
 `manifest.json` change. Current selective main staging hashes are in
 `target/validation/retained-profile-57e4629-natural-drain-20261016-01/actual-closeout-01/stage-files.json`.
 All executable controls remain byte-identical to the four-capture approval.
+
+
+## Grouped synchronous upload quality (`ce6d4ff`)
+
+`grouped-quality-results.json` records the separately reviewed, actual14 GPU gates
+on immutable `ce6d4ff28b96d4057d0de6dfa858707104aad16b`: backend1, model5 and
+composition8 all passed once, without retries, extra warmups or numeric/quota
+relaxation. The exact selectors, command, cut/artifact/control receipts and raw
+ignored-target references are recorded there. Raw target output is not public.
+
+Both schedules passed full40, fresh generation, exact no-observer fingerprints
+and cold-owner restart against the unchanged references and ATOL0.00025/RTOL0.012.
+Fresh and no-observer runs each observed25,116 cache uploads, one persistent
+worker creation and2,559 reuses. Their logical host peak was16,777,984B under the
+same64MiB cap; settled live-owner charge remained10MiB (metadata8MiB +stack2MiB).
+Cache current/peak maxima were209,739,776/219,754,496B under320MiB including scratch.
+Upload charges, pending cache uploads and Unknown bytes were zero at proof
+endpoints. No additional retained pin/ticket reservation is used by grouped mode.
+
+The passing backend real-GPU contract asserts6 copies and1 synchronization per
+grouped call for both scale types. Model-wide group synchronization counts and
+post-final-owner join witnesses are unobserved, not invented. All14 jobs exited
+naturally with authenticated ECHILD and owner absence; strict all8 idle and final
+lock release/reprobe passed. These do not certify physical CUDA release.
+
+This is quality evidence only: default remains unchanged, no performance or
+overlap claim. The prior57e4629 negative timing pairs and partial official
+profiles remain unchanged and must not enter a new ce6d4ff performance population.

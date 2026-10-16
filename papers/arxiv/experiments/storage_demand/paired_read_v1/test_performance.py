@@ -637,6 +637,192 @@ class ProfileSQLiteTests(unittest.TestCase):
 
 
 
+def grouped_plan():
+    r=q.retained_evidence
+    value=dict(schema='ferrule.grouped-upload.current-quality-plan.v1', commit=r.GROUPED_COMMIT,
+        source_archive_sha256=r.GROUPED_SOURCE_SHA, source_digest=r.GROUPED_SOURCE_DIGEST,
+        jobs=r.grouped_jobs(), atol=.00025, rtol=.012, transfer_policy=copy.deepcopy(r.GROUPED_POLICY),
+        capacity_and_options=copy.deepcopy(r.GROUPED_FIXED_INPUTS['composition_capacity_and_options']),
+        retries=0, extra_warmups=0, calibration=0, profiling_captures=0, profiling=False,
+        stop_on_first_failure=True, independent_review_required=True, measurement='quality_only_no_performance_claim',
+        pins={str(q.ROOT/'target/validation/retained-upload-57e4629-gpu-20261016-01/retained-plan.json'):
+            '6041cae37cdd08795a980e912af3ab82b52cefe3a795f42fa2631513e284da76'})
+    value.update(copy.deepcopy(r.GROUPED_FIXED_INPUTS))
+    value['artifacts']={role:dict(executable=str(r.GROUPED_STAGE/'staged'/role),sha256=sha) for role,sha in r.GROUPED_BINARIES.items()}
+    value['host_options']=dict(max_host_bytes=64<<20,max_metadata_bytes=8<<20,worker_stack_bytes=2<<20)
+    return value
+
+
+def grouped_report(row, manifest):
+    value=report(row,manifest);kind=row['kind'];cold=kind=='cold'
+    value['test_config'].update(name='storage-middle64-grouped-'+row['schedule'],
+        expert_transfer_policy=copy.deepcopy(q.retained_evidence.GROUPED_POLICY))
+    value['effective_config'].update(expert_transfer_policy=copy.deepcopy(q.retained_evidence.GROUPED_POLICY),
+        expert_transfer_selection='explicit existing-owner capability before first prediction')
+    for call in value['expert_read_quality']['calls']:
+        for endpoint in ('before','after'):
+            read=call[endpoint]['expert_read_pipeline']['value']
+            if read['stats']['workers_created']:
+                read['stats']['peak_host_charged_bytes']=q.retained_evidence.GROUPED_MINIMUM_AGGREGATE_BYTES
+        call['delta']['peak_host_charged_bytes']=call['after']['expert_read_pipeline']['value']['stats']['peak_host_charged_bytes']
+    diagnostic=kind!='ordinary'
+    value.update(actual_peak_reserved_bytes=4<<30,reference_manifest_sha256=manifest['full40_reference_sha256'],
+        next_token_checks=[dict(equal=True)]*4,cold_owner_restart=cold,
+        observer_mode='diagnostic_routes_and_states' if diagnostic else 'ordinary_no_diagnostic_observer',
+        ordinary_no_observer_claim=not diagnostic,
+        metrics=[dict(failures=0,nonfinite=0)]*(804 if kind=='full40' else 1809 if cold else 5427 if diagnostic else 27),
+        logits_compared=1986560 if kind=='full40' else 3228160 if cold else 9187840)
+    if cold:
+        value['cases']=value['cases'][:1]
+        value['prediction_fingerprints']['calls']=dict(list(value['prediction_fingerprints']['calls'].items())[:28])
+        for name,stream in value['prediction_denominators']['streams'].items():
+            if name in ('common_history','free_feedback'):
+                for key in ('prediction_calls','greedy_checks','input_history_matched_reference_calls'):stream[key]=9
+    return value
+
+
+class GroupedQualityTests(unittest.TestCase):
+    def setUp(self):
+        self.plan=grouped_plan()
+        patch=mock.patch.object(q,'PLAN',dict(self.plan,gates=self.plan['jobs']));patch.start();self.addCleanup(patch.stop)
+        for name in ('subprocess.Popen','subprocess.run','os.kill','os.execve'):
+            patch=mock.patch(name,side_effect=AssertionError('CPU mutation: no execution/signal'));patch.start();self.addCleanup(patch.stop)
+        for obj,name in ((q.idle,'observe'),(q.ct,'exclusive_owner_lock'),(q.supervisor,'run_process')):
+            patch=mock.patch.object(obj,name,side_effect=AssertionError('No GPU/locks/custody'));patch.start();self.addCleanup(patch.stop)
+
+    def validate(self,value,row,prior=None):
+        with mock.patch.object(q,'primary',return_value=(Path('/synthetic/primary.json'),'e'*64,prior or value)):
+            q.validate_composition(value,row)
+
+    def test_exact14_backend_five_model_eight_quality_selectors_and_cut_mutations(self):
+        r=q.retained_evidence;r.validate_grouped_plan(self.plan)
+        self.assertEqual([sum(g['role']==role for g in self.plan['jobs']) for role in ('backend','model','composition')],[1,5,8])
+        for field,bad in (('commit','f'*40),('source_archive_sha256','f'*64),
+                ('source_digest','f'*64),('atol',.000251),('rtol',.01201),
+                ('retries',1),('extra_warmups',1),('calibration',1),('profiling',True),
+                ('profiling_captures',1),('measurement','latency'),('independent_review_required',False),('artifacts',{}),('host_options',{})):
+            value=copy.deepcopy(self.plan);value[field]=bad
+            with self.subTest(field=field),self.assertRaises(ValueError):r.validate_grouped_plan(value)
+        for index in range(14):
+            for field,bad in (('selector','wrong'),('seconds',1201),('binary_sha256','f'*64),
+                    ('transfer_mode','retained'),('role','foreign'),('phase','profile')):
+                value=copy.deepcopy(self.plan);value['jobs'][index][field]=bad
+                with self.subTest(index=index,field=field),self.assertRaises(ValueError):r.validate_grouped_plan(value)
+                with self.assertRaises(ValueError):r.grouped_job(self.plan,value['jobs'][index])
+        for key in r.GROUPED_FIXED_INPUTS:
+            value=copy.deepcopy(self.plan);value[key]=None
+            with self.subTest(key=key),self.assertRaises(ValueError):r.validate_grouped_plan(value)
+        for mutate in (lambda v:v['jobs'].reverse(),lambda v:v['pins'].clear(),lambda v:v['capacity_and_options'].update(max_bytes=321<<20)):
+            value=copy.deepcopy(self.plan);mutate(value)
+            with self.assertRaises(ValueError):r.validate_grouped_plan(value)
+
+    def test_exact_per_role_payload_argv_never_uses_a_shared_composition_executable(self):
+        self.assertNotIn("executable", self.plan)
+        for row in self.plan["jobs"]:
+            self.assertEqual(q.payload_argv(row), [row["executable"], row["selector"],
+                "--exact", "--ignored", "--nocapture", "--test-threads=1"])
+            for field, bad in (("executable", "/foreign/binary"), ("selector", "wrong"), ("seconds", 1200.0)):
+                with self.subTest(job=row["id"], field=field), self.assertRaises(ValueError):
+                    q.payload_argv(dict(row, **{field: bad}))
+        with mock.patch.object(q, "PLAN", plan()):
+            for row in p.fixed_jobs():
+                self.assertEqual(q.payload_argv(row), p.payload_argv(q.PLAN, row))
+
+    def test_all_eight_grouped_quality_shapes_accept_baseline_peak_not_retained_minimum(self):
+        for row in self.plan['jobs'][6:]:
+            value=grouped_report(row,self.plan);self.validate(value,row)
+            self.assertEqual(q.retained_evidence.GROUPED_MINIMUM_AGGREGATE_BYTES,16777984)
+            self.assertLess(q.retained_evidence.GROUPED_MINIMUM_AGGREGATE_BYTES,q.retained_evidence.MINIMUM_AGGREGATE_BYTES)
+
+    def test_exact_grouped_policy_types_missing_and_cross_policy_reject_both_manifests(self):
+        r=q.retained_evidence
+        for row in self.plan['jobs'][6:]:
+            for container in ('test_config','effective_config'):
+                for bad in (None,{},r.POLICY,dict(r.GROUPED_POLICY,mode='synchronous'),
+                        dict(r.GROUPED_POLICY,additional_pinned_bytes=1),dict(r.GROUPED_POLICY,additional_pinned_bytes=False),
+                        dict(r.GROUPED_POLICY,host_quota_unchanged=1),dict(r.GROUPED_POLICY,physical_overhead_measured=0),
+                        dict(r.GROUPED_POLICY,source_custody='borrowed_unbounded')):
+                    value=grouped_report(row,self.plan);value[container]['expert_transfer_policy']=copy.deepcopy(bad)
+                    with self.subTest(job=row['id'],container=container,bad=bad),self.assertRaises(ValueError):self.validate(value,row)
+
+    def test_positive_real_upload_and_minimum_peak_mandatory(self):
+        for row in self.plan['jobs'][6:]:
+            for change in ('zero_upload','low_peak'):
+                value=grouped_report(row,self.plan)
+                for call in value['expert_read_quality']['calls']:
+                    for endpoint in ('before','after'):
+                        physical=call[endpoint]
+                        if change=='zero_upload':physical['expert_cache']['value']['uploads']=0
+                        elif physical['expert_read_pipeline']['value']['stats']['workers_created']:
+                            physical['expert_read_pipeline']['value']['stats']['peak_host_charged_bytes']=16777983
+                    call['delta']['peak_host_charged_bytes']=call['after']['expert_read_pipeline']['value']['stats']['peak_host_charged_bytes']
+                with self.subTest(job=row['id'],change=change),self.assertRaises(ValueError):self.validate(value,row)
+
+    def test_shared_cache_health_unknown_pending_and_upload_custody_reject_all_cells_endpoints(self):
+        for row in self.plan['jobs'][6:]:
+            for endpoint in ('before','after'):
+                for field,bad in (('state','unobserved'),('pending_upload_bytes',1),('unknown_quarantine_bytes',1),
+                        ('peak_bytes',(320<<20)+1),('resident_entries',65),('scratch_bytes',(8<<20)+1),
+                        ('quarantined',True),('counters_overflowed',True),('uploads',True)):
+                    value=grouped_report(row,self.plan);item=value['expert_read_quality']['calls'][1][endpoint]['expert_cache']
+                    (item if field=='state' else item['value'])[field]=bad
+                    with self.subTest(job=row['id'],endpoint=endpoint,field=field),self.assertRaises(ValueError):self.validate(value,row)
+                for field in ('worker_unknown','worker_join_pending'):
+                    value=grouped_report(row,self.plan);value['expert_read_quality']['calls'][1][endpoint]['expert_read_pipeline']['value'][field]=True
+                    with self.assertRaises(ValueError):self.validate(value,row)
+                for field in q.retained_evidence.UPLOAD_FIELDS:
+                    value=grouped_report(row,self.plan);value['expert_read_quality']['calls'][1][endpoint]['expert_read_pipeline']['value']['current_charge'][field]=1
+                    with self.assertRaises(ValueError):self.validate(value,row)
+
+    def test_same_cut_grouped_primary_rejects_report_hash_policy_schedule_and_source_crossbinding(self):
+        for row in self.plan['jobs'][10:]:
+            source=next(g for g in self.plan['jobs'] if g['phase']=='primary' and g['schedule']==row['schedule'])
+            data=grouped_report(source,self.plan)
+            accepted=dict(status='passed',report_sha256='e'*64,commit=self.plan['commit'],source_digest=self.plan['source_digest'],
+                binary_sha256=source['binary_sha256'],job=source)
+            def load(path):return accepted if path.name=='gate-result.json' else data
+            with mock.patch.object(q.ct,'load',side_effect=load),mock.patch.object(q.ct,'sha',return_value='e'*64):
+                self.assertEqual(q.primary(row)[2],data)
+                for field,bad in (('status','failed'),('report_sha256','f'*64),('commit',p.COMMIT),
+                        ('binary_sha256',p.BINARY_SHA),('source_digest','f'*64),('job',self.plan['jobs'][0]),('job',dict(source,seconds=1200.0)),
+                        ('job',next(g for g in self.plan['jobs'] if g['phase']=='primary' and g['schedule']!=row['schedule']))):
+                    original=accepted[field];accepted[field]=bad
+                    with self.subTest(job=row['id'],field=field),self.assertRaises(ValueError):q.primary(row)
+                    accepted[field]=original
+                for container in ('test_config','effective_config'):
+                    original=data[container]['expert_transfer_policy'];data[container]['expert_transfer_policy']=q.retained_evidence.POLICY
+                    with self.assertRaises(ValueError):q.primary(row)
+                    data[container]['expert_transfer_policy']=original
+
+    def test_numeric_reference_routes_greedy_streams_and_no_observer_fingerprints_unchanged(self):
+        for row in self.plan['jobs'][6:]:
+            for field,bad in (('atol',.001),('rtol',.02),('logits_compared',1),('device_budget_bytes',8<<30),
+                    ('reference_manifest_sha256','wrong') if row['kind']=='full40' else ('oracle_manifest_sha256','wrong')):
+                value=grouped_report(row,self.plan);value[field]=bad
+                with self.subTest(job=row['id'],field=field),self.assertRaises(ValueError):self.validate(value,row)
+            value=grouped_report(row,self.plan);value['metrics'][0]['failures']=1
+            with self.assertRaises(ValueError):self.validate(value,row)
+            if row['kind']=='full40':
+                value=grouped_report(row,self.plan);value['next_token_checks'][0]['equal']=False
+                with self.assertRaises(ValueError):self.validate(value,row)
+            else:
+                value=grouped_report(row,self.plan);value['cases'][0]['free_greedy_ids']=[99]*9
+                with self.assertRaises(ValueError):self.validate(value,row)
+        row=self.plan['jobs'][10];value=grouped_report(row,self.plan);prior=copy.deepcopy(value)
+        value['prediction_fingerprints']['calls']['prediction.00']['next_token_id']=999
+        with self.assertRaises(ValueError):self.validate(value,row,prior)
+
+    def test_no_grouped_review_blocks_before_any_gpu_or_final_and_profile_go_is_wrong_scope(self):
+        with tempfile.TemporaryDirectory() as folder,mock.patch.object(q,'OUT',Path(folder)):
+            with self.assertRaisesRegex(ValueError,'Independent review/GO missing'):q.main()
+            self.assertFalse((Path(folder)/'FINAL.json').exists())
+            record=dict(schema='ferrule.worker-reuse.profile-only-control-review.v1',status='passed',
+                gpu_execution_authorized=True,reviewer='synthetic-only',commit=p.COMMIT,
+                qualification_plan_sha256='e'*64,control_sha256='e'*64,jobs=p.profile_jobs(),review_packet_sha256='e'*64)
+            path=Path(folder)/'independent-review.json';path.write_text(json.dumps(record));path.chmod(0o444)
+            with mock.patch.object(q.ct,'sha',return_value='e'*64),self.assertRaises(ValueError):q.require_independent_review()
+
+
 class CuratedEvidenceTests(unittest.TestCase):
     def test_bounded_relative_source_pins_and_actual21_results_are_not_performance(self):
         folder=HERE/'engineering-20261016-v1'
@@ -655,6 +841,159 @@ class CuratedEvidenceTests(unittest.TestCase):
                 self.assertEqual(len(receipt['sha256']),64)
         for filename in ('completed-stages.json','source-pins.json'):
             self.assertLess((folder/filename).stat().st_size,200_000)
+
+
+
+
+
+def grouped_performance_plan():
+    value=grouped_plan();r=q.retained_evidence
+    value.update(schema='ferrule.grouped-upload.performance-plan.v1',jobs=p.fixed_jobs('grouped'),
+        executable=p.fixed_jobs('grouped')[0]['executable'],binary_sha256=r.GROUPED_BINARIES['composition'],
+        nsys_version=p.VERSION,nsys=str(q.ROOT/'target/vendor/nsight-systems-cli-2025.3.1/opt/nvidia/nsight-systems-cli/2025.3.1/target-linux-x64/nsys'),
+        nsys_sha256='525f35a10de49b396e91a3831ae40e98a8631d619b7c8bbb4c54469b8c08a72e',
+        observed_model_summary_policy=q.profile_audit.model_summary_policy(),
+        policies=dict(synchronous='unchanged_default',grouped=copy.deepcopy(r.GROUPED_POLICY)),
+        completed_quality_source=p.grouped_quality_source(),profiling_captures=4,profiling=True,
+        exact_cross_policy_fingerprints_required=True,historical_results_in_population=False,
+        measurement='whole_test_libtest_footer_only_not_token_TTFT_or_request_latency')
+    for name,field in (('grouped-plan.json','plan_sha256'),('FINAL.json','final_sha256'),('independent-review.json','review_sha256')):
+        value['pins'][str(r.GROUPED_STAGE/name)]=value['completed_quality_source'][field]
+    value['pins'][value['nsys']]=value['nsys_sha256']
+    return value
+
+
+def comparison_report(row, manifest):
+    return grouped_report(row,manifest) if row['transfer_mode']=='grouped' else report(row,manifest)
+
+
+class GroupedPerformanceTests(unittest.TestCase):
+    def setUp(self):
+        ContractTests.setUp(self)
+        self.plan=grouped_performance_plan()
+        q.PLAN=dict(self.plan,gates=self.plan['jobs'])
+
+    validate=ContractTests.validate
+
+    def test_generic_arm_preserves_historical_jobs_and_fixes_same_cut24_abba(self):
+        p.validate_plan(self.plan)
+        self.assertEqual(p.fixed_jobs(),p.fixed_jobs('retained'))
+        self.assertEqual([r['phase'] for r in self.plan['jobs']].count('primary'),4)
+        self.assertEqual([r['phase'] for r in self.plan['jobs']].count('profile'),4)
+        for schedule in ('blocking','lookahead'):
+            rows=[r for r in self.plan['jobs'] if r['phase']=='latency' and r['schedule']==schedule]
+            self.assertEqual([r['transfer_mode'] for r in rows],['synchronous','grouped','grouped','synchronous','grouped','synchronous','synchronous','grouped'])
+        for index in range(24):
+            for field,bad in (('binary_sha256',p.BINARY_SHA),('executable',p.fixed_jobs()[0]['executable']),
+                    ('transfer_mode','retained'),('selector','wrong'),('seconds',1200.0),('phase','foreign')):
+                changed=copy.deepcopy(self.plan);changed['jobs'][index][field]=bad
+                with self.subTest(index=index,field=field),self.assertRaises(ValueError):p.validate_plan(changed)
+
+    def test_cut_quota_policy_tool_scope_and_completed_quality_pin_mutations(self):
+        for field,bad in (('commit',p.COMMIT),('source_digest','f'*64),('source_archive_sha256',p.SOURCE_SHA),
+                ('binary_sha256',p.BINARY_SHA),('executable',p.fixed_jobs()[0]['executable']),
+                ('completed_quality_source',{}),('policies',{}),('profiling',False),('profiling_captures',3),
+                ('retries',False),('calibration',1),('extra_warmups',1),('atol',.000251),('rtol',.01201),
+                ('independent_review_required',False),('exact_cross_policy_fingerprints_required',False),
+                ('historical_results_in_population',True),('measurement','TTFT'),('nsys_version','2025.4'),
+                ('nsys','/foreign/nsight-systems-cli/2025.3.1/target-linux-x64/nsys'),('nsys_sha256','f'*64),
+                ('observed_model_summary_policy',dict(q.profile_audit.model_summary_policy(),full_trace_accepted=True))):
+            changed=copy.deepcopy(self.plan);changed[field]=bad
+            with self.subTest(field=field),self.assertRaises(ValueError):p.validate_plan(changed)
+        for name in (*q.retained_evidence.GROUPED_FIXED_INPUTS,'host_options','capacity_and_options'):
+            changed=copy.deepcopy(self.plan);changed[name]={}
+            with self.subTest(name=name),self.assertRaises(ValueError):p.validate_plan(changed)
+        for path in self.plan['pins']:
+            if path.endswith('retained-plan.json'):continue
+            changed=copy.deepcopy(self.plan);changed['pins'][path]='f'*64
+            with self.subTest(pin=path),self.assertRaises(ValueError):p.validate_plan(changed)
+
+    def test_all24_reports_keep_baseline_host_peak_and_exact_grouped_or_sync_policy(self):
+        for row in self.plan['jobs']:
+            value=comparison_report(row,self.plan);self.validate(value,row)
+            self.assertLess(value['expert_read_quality']['calls'][-1]['after']['expert_read_pipeline']['value']['stats']['peak_host_charged_bytes'],q.retained_evidence.MINIMUM_AGGREGATE_BYTES)
+            for container in ('test_config','effective_config'):
+                changed=copy.deepcopy(value);changed[container]['expert_transfer_policy']=q.retained_evidence.POLICY
+                with self.assertRaises(ValueError):self.validate(changed,row)
+
+    def test_all24_cache_health_both_endpoints_reject_with_unchanged_ordered_work(self):
+        for row in self.plan['jobs']:
+            base=comparison_report(row,self.plan);expected=p.work_vector(base)
+            for endpoint in ('before','after'):
+                for field,bad in (('state','unobserved'),('state','unknown'),('peak_bytes',(320<<20)+1),
+                        ('pending_upload_bytes',1),('unknown_quarantine_bytes',1),('quarantined',True),
+                        ('counters_overflowed',True),('resident_entries',65),('scratch_bytes',(8<<20)+1),
+                        ('charged_bytes',0),('uploads',False),('uploads',None)):
+                    value=copy.deepcopy(base);item=value['expert_read_quality']['calls'][1][endpoint]['expert_cache']
+                    (item if field=='state' else item['value'])[field]=bad
+                    # The ordered work arrays themselves are unchanged for the historical invalid-evidence mutations.
+                    if field not in p.CACHE_WORK:
+                        self.assertEqual([c['delta'] for c in value['expert_read_quality']['calls']], [c['delta'] for c in base['expert_read_quality']['calls']])
+                    with self.subTest(job=row['id'],endpoint=endpoint,field=field):
+                        with self.assertRaises(ValueError):self.validate(value,row)
+                        with self.assertRaises(ValueError):p.work_vector(value)
+                for field in ('worker_unknown','worker_join_pending'):
+                    value=copy.deepcopy(base);value['expert_read_quality']['calls'][1][endpoint]['expert_read_pipeline']['value'][field]=True
+                    with self.assertRaises(ValueError):self.validate(value,row)
+        self.assertEqual(len(expected),64)
+
+    def test_same_cut_primary_rejects_historical_cut_foreign_policy_job_and_report(self):
+        for row in self.plan['jobs'][4:]:
+            primary=next(g for g in self.plan['jobs'][:4] if p.primary_key(g)==p.primary_key(row))
+            data=comparison_report(primary,self.plan)
+            accepted=dict(status='passed',report_sha256='e'*64,commit=self.plan['commit'],binary_sha256=self.plan['binary_sha256'],source_digest=self.plan['source_digest'],job=primary)
+            p.validate_primary(accepted,data,row,self.plan,'e'*64)
+            for field,bad in (('commit',p.COMMIT),('binary_sha256',p.BINARY_SHA),('source_digest','f'*64),
+                    ('report_sha256','f'*64),('job',p.fixed_jobs()[0]),('job',dict(primary,seconds=1200.0)),
+                    ('job',next(g for g in self.plan['jobs'][:4] if p.primary_key(g)!=p.primary_key(row)))):
+                changed=copy.deepcopy(accepted);changed[field]=bad
+                with self.subTest(job=row['id'],field=field),self.assertRaises(ValueError):p.validate_primary(changed,data,row,self.plan,'e'*64)
+
+    def test_exact_work_checks_and_cross_policy_fingerprints_required(self):
+        left=comparison_report(self.plan['jobs'][0],self.plan);right=comparison_report(self.plan['jobs'][1],self.plan)
+        self.assertTrue(p.compare_work(left,right,require_fingerprints=True)['fingerprints_equal'])
+        changed=copy.deepcopy(right);changed['prediction_fingerprints']['calls']['prediction.00']['next_token_id']=999
+        with self.assertRaisesRegex(ValueError,'fingerprints differ'):p.compare_work(left,changed,require_fingerprints=True)
+        changed=copy.deepcopy(right);changed['expert_read_quality']['calls'][1]['label']='foreign'
+        with self.assertRaises(ValueError):p.compare_work(left,changed,require_fingerprints=True)
+        changed=copy.deepcopy(right);changed['prediction_denominators']['streams']['common_history']['greedy_checks']+=1
+        with self.assertRaises(ValueError):p.compare_work(left,changed,require_fingerprints=True)
+
+    def test_profile_four_only_and_same_cut_role_custody_stays_exact(self):
+        for row in self.plan['jobs']:
+            self.assertEqual(q.payload_argv(row),p.payload_argv(self.plan,row))
+            if row['phase']!='profile':
+                with self.assertRaises(ValueError):p.profile_argv(self.plan,row,Path('/fresh'),['wrapper'])
+                continue
+            argv=p.profile_argv(self.plan,row,Path('/fresh'),['wrapper'])
+            for flag in ('--kill=none','--wait=primary','--sample=none','--cpuctxsw=none','--duration=1080','--force-overwrite=false'):
+                self.assertIn(flag,argv)
+            identity=dict(pid=123,birth_ticks=456,ppid=122,state='R')
+            record=dict(before=identity,after=copy.deepcopy(identity),executable_sha256=row['binary_sha256'],command=q.payload_argv(row))
+            p.validate_role(record,identity,row['binary_sha256'],q.payload_argv(row))
+            record['after']['birth_ticks']+=1
+            with self.assertRaises(ValueError):p.validate_role(record,identity,row['binary_sha256'],q.payload_argv(row))
+
+    def test_pairs_exclude_profiles_and_historical_population_and_preserve_regression(self):
+        rows=[dict(job=row,status='passed',whole_test_elapsed=dict(seconds=999 if row['phase']=='profile' else 5 if row['transfer_mode']=='grouped' else 4)) for row in self.plan['jobs']]
+        summary=p.pair_summary(rows,'grouped')
+        self.assertEqual(len(summary['pairs']),8);self.assertFalse(summary['significance_claim'])
+        self.assertTrue(all(v['grouped_over_synchronous']==1.25 for v in summary['pairs']))
+        self.assertNotIn('retained_over_synchronous',summary['pairs'][0])
+        for bad in (rows[4:],rows+[rows[-1]],[dict(row,job=p.fixed_jobs()[i]) for i,row in enumerate(rows)]):
+            with self.assertRaises(ValueError):p.pair_summary(bad,'grouped')
+
+    def test_no_review_or_quality14_profile4_historical24_go_cannot_authorize_new24(self):
+        with tempfile.TemporaryDirectory() as folder,mock.patch.object(q,'OUT',Path(folder)):
+            with self.assertRaisesRegex(ValueError,'Independent review/GO missing'):q.main()
+            self.assertFalse((Path(folder)/'FINAL.json').exists())
+            for schema,jobs,commit in (('ferrule.worker-reuse.control-review.v1',q.retained_evidence.grouped_jobs(),self.plan['commit']),
+                    ('ferrule.worker-reuse.profile-only-control-review.v1',p.profile_jobs(),p.COMMIT),
+                    ('ferrule.worker-reuse.performance-control-review.v1',p.fixed_jobs(),p.COMMIT)):
+                record=dict(schema=schema,status='passed',gpu_execution_authorized=True,reviewer='synthetic-only',commit=commit,
+                    qualification_plan_sha256='e'*64,control_sha256='e'*64,jobs=jobs,review_packet_sha256='e'*64)
+                path=Path(folder)/'independent-review.json';path.chmod(0o644) if path.exists() else None;path.write_text(json.dumps(record));path.chmod(0o444)
+                with mock.patch.object(q.ct,'sha',return_value='e'*64),self.assertRaises(ValueError):q.require_independent_review()
 
 
 if __name__=='__main__':

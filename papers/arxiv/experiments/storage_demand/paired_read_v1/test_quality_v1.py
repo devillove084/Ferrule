@@ -241,7 +241,10 @@ class LifecycleV3Tests(shared.CPUOnly):
             body = source.split('pub struct ' + name + ' {', 1)[1].split('\n}', 1)[0]
             return set(re.findall(r'^\s*pub (\w+):', body, re.MULTILINE))
         self.assertEqual(set(quality.V3_COUNTERS + quality.V3_PEAKS), fields('ExpertReadPipelineStats'))
-        self.assertEqual(set(quality.V3_CHARGES), fields('ExpertReadHostCharge'))
+        from retained_evidence import UPLOAD_FIELDS
+        self.assertEqual(set(quality.V3_CHARGES) | set(UPLOAD_FIELDS), fields('ExpertReadHostCharge'))
+        for name in UPLOAD_FIELDS:
+            self.assertIn('#[serde(skip_serializing_if = "zero_host_charge")]\n    pub ' + name + ': u64,', source)
 
     def test_valid_reuse_and_exact_ten_mib_both_schedules(self):
         for mode in ('blocking', 'lookahead'):

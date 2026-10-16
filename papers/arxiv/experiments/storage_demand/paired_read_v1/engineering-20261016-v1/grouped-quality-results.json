@@ -1,0 +1,860 @@
+{
+  "schema": "ferrule.engineering.grouped-quality-results.v1",
+  "status": "passed_actual_gpu_quality14",
+  "commit": "ce6d4ff28b96d4057d0de6dfa858707104aad16b",
+  "source_archive_sha256": "4e15b7301f678424878ba97c3a3df8f8533a696053d2eb58b36bb35e6895e135",
+  "source_digest": "7405b6fd931dc5986a5a1cc745e9979f1ceac64b029e50e82708b4ef3ed68294",
+  "binary_sha256": {
+    "backend": "9ecac19e5f0e9929134ae6ebda3aedb66493f46fcdde36269ef662c18265d722",
+    "model": "ffde27858ad59584ac7bd58309792a3865db3bc21ab72d56b23cb6def2355a9d",
+    "composition": "d8c0bae4872ffbbb6828dd7f49acecb4de0f69ab32748662845ddaa6d0b30557"
+  },
+  "command": [
+    "/home/admin/wxw403883/anaconda3/bin/python3.12",
+    "-S",
+    "-B",
+    "papers/arxiv/experiments/storage_demand/paired_read_v1/qualify.py",
+    "--directory",
+    "target/validation/grouped-upload-ce6d4ff-gpu-20261017-01"
+  ],
+  "raw_evidence": {
+    "public": false,
+    "reason": "Ignored local target validation output; no raw trace/model/vendor/binary payload is published here",
+    "stage": "target/validation/grouped-upload-ce6d4ff-gpu-20261017-01",
+    "final_sha256": "b1b8d18a3d778d6bdee9cc76262f01ef47e78b1fdddef78ca8d9adae47b614fe",
+    "plan_sha256": "d08c66a2af2f8cb5df199a31c841e00d1b5e2acd1a4bfb9a78d764566d68a94e",
+    "review_sha256": "18065aa62360f85b230eb143e4e19d2af1e2afadf2e8bfaddf95f6ec331b45ea",
+    "executed_controls_snapshots": "target/validation/grouped-performance-ce6d4ff-20261017-01/before-*.py"
+  },
+  "actual_gpu_tests_issued": 14,
+  "retries": 0,
+  "extra_warmups": 0,
+  "profiling_captures": 0,
+  "rows": [
+    {
+      "id": "01-backend-group-sync",
+      "selector": "cuda::operator_owner::numeric_fp8::group_sync::contract_tests::gpu::public_group_sync_matches_three_baseline_uploads_both_scale_types",
+      "role": "backend",
+      "schedule": null,
+      "kind": "model_contract",
+      "status": "passed",
+      "actual_test_issued": true,
+      "returncode": 0,
+      "natural_exit": true,
+      "echild": true,
+      "recorded_owners_absent": true,
+      "post_idle": "verified",
+      "signal_count": 0,
+      "raw_result": {
+        "path": "target/validation/grouped-upload-ce6d4ff-gpu-20261017-01/gates/01-backend-group-sync/gate-result.json",
+        "sha256": "d7b52ecb5c6735d4bb893a420315bb99421b71be79c85a923518508559189fba"
+      },
+      "raw_supervisor": {
+        "path": "target/validation/grouped-upload-ce6d4ff-gpu-20261017-01/gates/01-backend-group-sync/supervisor.json",
+        "sha256": "b2936e902895611a3ebc716e2a98c45eb905cdb5c6a2735e52b5e493459b7ce7"
+      }
+    },
+    {
+      "id": "02-model-root-route",
+      "selector": "transformer::standard::cuda::residency::retained_upload::tests::real_root_route_rejects_metadata_less_provider_before_payload_read",
+      "role": "model",
+      "schedule": null,
+      "kind": "model_contract",
+      "status": "passed",
+      "actual_test_issued": true,
+      "returncode": 0,
+      "natural_exit": true,
+      "echild": true,
+      "recorded_owners_absent": true,
+      "post_idle": "verified",
+      "signal_count": 0,
+      "raw_result": {
+        "path": "target/validation/grouped-upload-ce6d4ff-gpu-20261017-01/gates/02-model-root-route/gate-result.json",
+        "sha256": "98ed89d2882e96e144fe0a8876583495fc1773938b77a5fafd3899bc3829fd35"
+      },
+      "raw_supervisor": {
+        "path": "target/validation/grouped-upload-ce6d4ff-gpu-20261017-01/gates/02-model-root-route/supervisor.json",
+        "sha256": "8ea2a1194473ece667ccb06f50959fc2c02432c1154c9991da15f9a37821eb08"
+      }
+    },
+    {
+      "id": "03-model-worker-route",
+      "selector": "transformer::standard::cuda::residency::retained_upload::tests::real_worker_route_rejects_metadata_less_provider_before_payload_read",
+      "role": "model",
+      "schedule": null,
+      "kind": "model_contract",
+      "status": "passed",
+      "actual_test_issued": true,
+      "returncode": 0,
+      "natural_exit": true,
+      "echild": true,
+      "recorded_owners_absent": true,
+      "post_idle": "verified",
+      "signal_count": 0,
+      "raw_result": {
+        "path": "target/validation/grouped-upload-ce6d4ff-gpu-20261017-01/gates/03-model-worker-route/gate-result.json",
+        "sha256": "e692ef3d43daeba4aad0983cb214adb0d0131667b0570ac4949e442d0f975b99"
+      },
+      "raw_supervisor": {
+        "path": "target/validation/grouped-upload-ce6d4ff-gpu-20261017-01/gates/03-model-worker-route/supervisor.json",
+        "sha256": "b7fc37617c8ce336edcfad07d4e4e53f1e56e270a31a346208e5476d8f794efd"
+      }
+    },
+    {
+      "id": "04-model-owner-lifecycle",
+      "selector": "transformer::standard::cuda::residency::retained_upload::tests::real_owner_opt_in_matches_default_and_reloads_only_after_consumer_proof",
+      "role": "model",
+      "schedule": null,
+      "kind": "model_contract",
+      "status": "passed",
+      "actual_test_issued": true,
+      "returncode": 0,
+      "natural_exit": true,
+      "echild": true,
+      "recorded_owners_absent": true,
+      "post_idle": "verified",
+      "signal_count": 0,
+      "raw_result": {
+        "path": "target/validation/grouped-upload-ce6d4ff-gpu-20261017-01/gates/04-model-owner-lifecycle/gate-result.json",
+        "sha256": "d7c8ce3646df30b777f8f9fc341205348cfe6a90ddc4cd81ca75a919b48e0de4"
+      },
+      "raw_supervisor": {
+        "path": "target/validation/grouped-upload-ce6d4ff-gpu-20261017-01/gates/04-model-owner-lifecycle/supervisor.json",
+        "sha256": "003bb6c8347d60d1bb599e0f392d1593815ec92c74f8d36697a3c76c602cc595"
+      }
+    },
+    {
+      "id": "05-model-group-policy",
+      "selector": "transformer::standard::cuda::residency::grouped_upload::tests::real_owner_group_policy_rejects_unsupported_duplicate_revert_and_cross_policy",
+      "role": "model",
+      "schedule": null,
+      "kind": "model_contract",
+      "status": "passed",
+      "actual_test_issued": true,
+      "returncode": 0,
+      "natural_exit": true,
+      "echild": true,
+      "recorded_owners_absent": true,
+      "post_idle": "verified",
+      "signal_count": 0,
+      "raw_result": {
+        "path": "target/validation/grouped-upload-ce6d4ff-gpu-20261017-01/gates/05-model-group-policy/gate-result.json",
+        "sha256": "1a2f497e636857441681722a31c9e3e3739572e2d92870a000fdd5fe15708d41"
+      },
+      "raw_supervisor": {
+        "path": "target/validation/grouped-upload-ce6d4ff-gpu-20261017-01/gates/05-model-group-policy/supervisor.json",
+        "sha256": "06ea4f8921cb70bebf3bf21b21eba3f8a32314156ccb1641cd5e516ba6036461"
+      }
+    },
+    {
+      "id": "06-model-group-admission",
+      "selector": "transformer::standard::cuda::residency::grouped_upload::tests::real_owner_group_admits_all_six_destinations_plus_scratch_before_payload_read",
+      "role": "model",
+      "schedule": null,
+      "kind": "model_contract",
+      "status": "passed",
+      "actual_test_issued": true,
+      "returncode": 0,
+      "natural_exit": true,
+      "echild": true,
+      "recorded_owners_absent": true,
+      "post_idle": "verified",
+      "signal_count": 0,
+      "raw_result": {
+        "path": "target/validation/grouped-upload-ce6d4ff-gpu-20261017-01/gates/06-model-group-admission/gate-result.json",
+        "sha256": "8b16c937d78ed1073faadfb9b613e2cc31a677cfa5698825325089982c67ee51"
+      },
+      "raw_supervisor": {
+        "path": "target/validation/grouped-upload-ce6d4ff-gpu-20261017-01/gates/06-model-group-admission/supervisor.json",
+        "sha256": "69aafad6b72e3599c4a439aaa1529407fb4c3ce43ddaf3e11e3902144b5dbf52"
+      }
+    },
+    {
+      "id": "07-blocking-full40",
+      "selector": "model_factory::dense_bf16_tests::full40::numeric_bf16_mixed_storage_middle64_grouped_blocking_public_factory_full40_logits_routes_states_match_profile_reference",
+      "role": "composition",
+      "schedule": "blocking",
+      "kind": "full40",
+      "status": "passed",
+      "actual_test_issued": true,
+      "returncode": 0,
+      "natural_exit": true,
+      "echild": true,
+      "recorded_owners_absent": true,
+      "post_idle": "verified",
+      "signal_count": 0,
+      "raw_result": {
+        "path": "target/validation/grouped-upload-ce6d4ff-gpu-20261017-01/gates/07-blocking-full40/gate-result.json",
+        "sha256": "a4c093a725700767100e26bd76f1b002fc21a28282dc363db8a80f170576b6e1"
+      },
+      "raw_supervisor": {
+        "path": "target/validation/grouped-upload-ce6d4ff-gpu-20261017-01/gates/07-blocking-full40/supervisor.json",
+        "sha256": "8ca96089d912afb93ebd254fb6b1bfa6d2886c905cf46eadc15ab8227e84e763"
+      },
+      "report": {
+        "path": "target/validation/grouped-upload-ce6d4ff-gpu-20261017-01/gates/07-blocking-full40/numeric-report/full40-bf16-profile.json",
+        "sha256": "4e7b60560b1e361475162d032113b6340bf28afe5f5b91384b2448615a4e8287"
+      },
+      "policy": {
+        "additional_pinned_bytes": 0,
+        "gpu_overlap_claim": false,
+        "host_quota_unchanged": true,
+        "mode": "grouped_synchronous",
+        "physical_overhead_measured": false,
+        "source_custody": "existing_bounded_read"
+      },
+      "numerics": {
+        "atol": 0.00025,
+        "rtol": 0.012,
+        "metrics": 804,
+        "logit_values": 1986560,
+        "failures": [],
+        "state_bytes_after_shutdown": 0,
+        "device_budget_bytes": 7516192768
+      },
+      "evidence": {
+        "sampled_operations": 128,
+        "positive_worker_read_calls": 4,
+        "workers_created": 1,
+        "worker_reuses": 159,
+        "workers_joined_at_live_samples": 0,
+        "final_owner_join_witness": {
+          "state": "unobserved",
+          "value": null,
+          "reason": "No public post-final-owner witness exported in this model report; ECHILD is not a host-join witness"
+        },
+        "worker_alive_at_final_live_sample": true,
+        "host_current_at_final_live_sample": 10485760,
+        "host_current_max": 10485760,
+        "host_peak": 16777984,
+        "upload_current_max": {
+          "upload_reserved_packed_bytes": 0,
+          "pinned_upload_bytes": 0,
+          "upload_ticket_metadata_bytes": 0,
+          "upload_policy_headroom_bytes": 0,
+          "unknown_upload_bytes": 0
+        },
+        "upload_current_zero_omission_basis": "Frozen Rust serializer explicitly skips each of these five fields only when zero; complete present nonzero/Unknown fields reject",
+        "uploads": 2089,
+        "cache_current_max": 209739776,
+        "cache_peak": 219754496,
+        "cache_pending_max": 0,
+        "cache_unknown_max": 0,
+        "model_group_facade_sync_count": {
+          "state": "unobserved",
+          "value": null
+        }
+      }
+    },
+    {
+      "id": "08-lookahead-full40",
+      "selector": "model_factory::dense_bf16_tests::full40::numeric_bf16_mixed_storage_middle64_grouped_lookahead_public_factory_full40_logits_routes_states_match_profile_reference",
+      "role": "composition",
+      "schedule": "lookahead",
+      "kind": "full40",
+      "status": "passed",
+      "actual_test_issued": true,
+      "returncode": 0,
+      "natural_exit": true,
+      "echild": true,
+      "recorded_owners_absent": true,
+      "post_idle": "verified",
+      "signal_count": 0,
+      "raw_result": {
+        "path": "target/validation/grouped-upload-ce6d4ff-gpu-20261017-01/gates/08-lookahead-full40/gate-result.json",
+        "sha256": "1e4450747d463731181f51428b78d2e4815b6c87bd906e66bf3c767c13331610"
+      },
+      "raw_supervisor": {
+        "path": "target/validation/grouped-upload-ce6d4ff-gpu-20261017-01/gates/08-lookahead-full40/supervisor.json",
+        "sha256": "e86f5da61f16fc4019ddccaac7ca21288ec2cce2062e05d7cf3f31a2634f3dd3"
+      },
+      "report": {
+        "path": "target/validation/grouped-upload-ce6d4ff-gpu-20261017-01/gates/08-lookahead-full40/numeric-report/full40-bf16-profile.json",
+        "sha256": "69a5300d04deee021e8c361333a64502584b969e376bd167d854d9ce1b27b9c5"
+      },
+      "policy": {
+        "additional_pinned_bytes": 0,
+        "gpu_overlap_claim": false,
+        "host_quota_unchanged": true,
+        "mode": "grouped_synchronous",
+        "physical_overhead_measured": false,
+        "source_custody": "existing_bounded_read"
+      },
+      "numerics": {
+        "atol": 0.00025,
+        "rtol": 0.012,
+        "metrics": 804,
+        "logit_values": 1986560,
+        "failures": [],
+        "state_bytes_after_shutdown": 0,
+        "device_budget_bytes": 7516192768
+      },
+      "evidence": {
+        "sampled_operations": 128,
+        "positive_worker_read_calls": 4,
+        "workers_created": 1,
+        "worker_reuses": 159,
+        "workers_joined_at_live_samples": 0,
+        "final_owner_join_witness": {
+          "state": "unobserved",
+          "value": null,
+          "reason": "No public post-final-owner witness exported in this model report; ECHILD is not a host-join witness"
+        },
+        "worker_alive_at_final_live_sample": true,
+        "host_current_at_final_live_sample": 10485760,
+        "host_current_max": 10485760,
+        "host_peak": 16777984,
+        "upload_current_max": {
+          "upload_reserved_packed_bytes": 0,
+          "pinned_upload_bytes": 0,
+          "upload_ticket_metadata_bytes": 0,
+          "upload_policy_headroom_bytes": 0,
+          "unknown_upload_bytes": 0
+        },
+        "upload_current_zero_omission_basis": "Frozen Rust serializer explicitly skips each of these five fields only when zero; complete present nonzero/Unknown fields reject",
+        "uploads": 2089,
+        "cache_current_max": 209739776,
+        "cache_peak": 219754496,
+        "cache_pending_max": 0,
+        "cache_unknown_max": 0,
+        "model_group_facade_sync_count": {
+          "state": "unobserved",
+          "value": null
+        }
+      }
+    },
+    {
+      "id": "09-blocking-fresh",
+      "selector": "model_factory::dense_bf16_tests::full40::fresh_quality::mixed_storage_middle64_grouped_blocking_fresh_quality_retained_generation",
+      "role": "composition",
+      "schedule": "blocking",
+      "kind": "fresh",
+      "status": "passed",
+      "actual_test_issued": true,
+      "returncode": 0,
+      "natural_exit": true,
+      "echild": true,
+      "recorded_owners_absent": true,
+      "post_idle": "verified",
+      "signal_count": 0,
+      "raw_result": {
+        "path": "target/validation/grouped-upload-ce6d4ff-gpu-20261017-01/gates/09-blocking-fresh/gate-result.json",
+        "sha256": "47450d9d34e370fee9b65f6a1a35132b023ac63246cbdc6f8db6f6108a6f5e19"
+      },
+      "raw_supervisor": {
+        "path": "target/validation/grouped-upload-ce6d4ff-gpu-20261017-01/gates/09-blocking-fresh/supervisor.json",
+        "sha256": "c22bef2b7c13d206aacd4ca7e088bc55d24ae678eaaf8b3b2ecc8a47a62f07d0"
+      },
+      "report": {
+        "path": "target/validation/grouped-upload-ce6d4ff-gpu-20261017-01/gates/09-blocking-fresh/quality.json",
+        "sha256": "6d2fc6c4143f8d3c90832c40256284c7dc0bc3ff46b407caf42e75473abda862"
+      },
+      "policy": {
+        "additional_pinned_bytes": 0,
+        "gpu_overlap_claim": false,
+        "host_quota_unchanged": true,
+        "mode": "grouped_synchronous",
+        "physical_overhead_measured": false,
+        "source_custody": "existing_bounded_read"
+      },
+      "numerics": {
+        "atol": 0.00025,
+        "rtol": 0.012,
+        "metrics": 5427,
+        "logit_values": 9187840,
+        "failures": [],
+        "state_bytes_after_shutdown": 0,
+        "device_budget_bytes": 7516192768
+      },
+      "evidence": {
+        "sampled_operations": 963,
+        "positive_worker_read_calls": 64,
+        "workers_created": 1,
+        "worker_reuses": 2559,
+        "workers_joined_at_live_samples": 0,
+        "final_owner_join_witness": {
+          "state": "unobserved",
+          "value": null,
+          "reason": "No public post-final-owner witness exported in this model report; ECHILD is not a host-join witness"
+        },
+        "worker_alive_at_final_live_sample": true,
+        "host_current_at_final_live_sample": 10485760,
+        "host_current_max": 10485760,
+        "host_peak": 16777984,
+        "upload_current_max": {
+          "upload_reserved_packed_bytes": 0,
+          "pinned_upload_bytes": 0,
+          "upload_ticket_metadata_bytes": 0,
+          "upload_policy_headroom_bytes": 0,
+          "unknown_upload_bytes": 0
+        },
+        "upload_current_zero_omission_basis": "Frozen Rust serializer explicitly skips each of these five fields only when zero; complete present nonzero/Unknown fields reject",
+        "uploads": 25116,
+        "cache_current_max": 209739776,
+        "cache_peak": 219754496,
+        "cache_pending_max": 0,
+        "cache_unknown_max": 0,
+        "model_group_facade_sync_count": {
+          "state": "unobserved",
+          "value": null
+        }
+      }
+    },
+    {
+      "id": "10-lookahead-fresh",
+      "selector": "model_factory::dense_bf16_tests::full40::fresh_quality::mixed_storage_middle64_grouped_lookahead_fresh_quality_retained_generation",
+      "role": "composition",
+      "schedule": "lookahead",
+      "kind": "fresh",
+      "status": "passed",
+      "actual_test_issued": true,
+      "returncode": 0,
+      "natural_exit": true,
+      "echild": true,
+      "recorded_owners_absent": true,
+      "post_idle": "verified",
+      "signal_count": 0,
+      "raw_result": {
+        "path": "target/validation/grouped-upload-ce6d4ff-gpu-20261017-01/gates/10-lookahead-fresh/gate-result.json",
+        "sha256": "08070e398e5e92231f5d1e0edb7385a572255d049e684a489d1bb5a1a662fb14"
+      },
+      "raw_supervisor": {
+        "path": "target/validation/grouped-upload-ce6d4ff-gpu-20261017-01/gates/10-lookahead-fresh/supervisor.json",
+        "sha256": "37bdc7823682d187709b9b9bbbad9403060c4a9d7b07fb17328500719225fe52"
+      },
+      "report": {
+        "path": "target/validation/grouped-upload-ce6d4ff-gpu-20261017-01/gates/10-lookahead-fresh/quality.json",
+        "sha256": "b66e610b7961a0334dd20b84a67fdb18fd0019c4d9b91e62734edb6ea36c0744"
+      },
+      "policy": {
+        "additional_pinned_bytes": 0,
+        "gpu_overlap_claim": false,
+        "host_quota_unchanged": true,
+        "mode": "grouped_synchronous",
+        "physical_overhead_measured": false,
+        "source_custody": "existing_bounded_read"
+      },
+      "numerics": {
+        "atol": 0.00025,
+        "rtol": 0.012,
+        "metrics": 5427,
+        "logit_values": 9187840,
+        "failures": [],
+        "state_bytes_after_shutdown": 0,
+        "device_budget_bytes": 7516192768
+      },
+      "evidence": {
+        "sampled_operations": 963,
+        "positive_worker_read_calls": 64,
+        "workers_created": 1,
+        "worker_reuses": 2559,
+        "workers_joined_at_live_samples": 0,
+        "final_owner_join_witness": {
+          "state": "unobserved",
+          "value": null,
+          "reason": "No public post-final-owner witness exported in this model report; ECHILD is not a host-join witness"
+        },
+        "worker_alive_at_final_live_sample": true,
+        "host_current_at_final_live_sample": 10485760,
+        "host_current_max": 10485760,
+        "host_peak": 16777984,
+        "upload_current_max": {
+          "upload_reserved_packed_bytes": 0,
+          "pinned_upload_bytes": 0,
+          "upload_ticket_metadata_bytes": 0,
+          "upload_policy_headroom_bytes": 0,
+          "unknown_upload_bytes": 0
+        },
+        "upload_current_zero_omission_basis": "Frozen Rust serializer explicitly skips each of these five fields only when zero; complete present nonzero/Unknown fields reject",
+        "uploads": 25116,
+        "cache_current_max": 209739776,
+        "cache_peak": 219754496,
+        "cache_pending_max": 0,
+        "cache_unknown_max": 0,
+        "model_group_facade_sync_count": {
+          "state": "unobserved",
+          "value": null
+        }
+      }
+    },
+    {
+      "id": "11-blocking-ordinary",
+      "selector": "model_factory::dense_bf16_tests::full40::fresh_quality::mixed_storage_middle64_grouped_blocking_fresh_quality_no_observer_equality",
+      "role": "composition",
+      "schedule": "blocking",
+      "kind": "ordinary",
+      "status": "passed",
+      "actual_test_issued": true,
+      "returncode": 0,
+      "natural_exit": true,
+      "echild": true,
+      "recorded_owners_absent": true,
+      "post_idle": "verified",
+      "signal_count": 0,
+      "raw_result": {
+        "path": "target/validation/grouped-upload-ce6d4ff-gpu-20261017-01/gates/11-blocking-ordinary/gate-result.json",
+        "sha256": "72daf1df3808a7ea4387e492952adedbff2a49e0a6bc2695e5e870460acf90d7"
+      },
+      "raw_supervisor": {
+        "path": "target/validation/grouped-upload-ce6d4ff-gpu-20261017-01/gates/11-blocking-ordinary/supervisor.json",
+        "sha256": "404d069ae7b9a7b15f0e6f4270011b3140024430d70d7ef020d97bf929901d26"
+      },
+      "report": {
+        "path": "target/validation/grouped-upload-ce6d4ff-gpu-20261017-01/gates/11-blocking-ordinary/quality.json",
+        "sha256": "46ea2e33222f4fa4ac21c5bc8db3ea7fb57ebd1de9fedf03fc03840b9b791776"
+      },
+      "policy": {
+        "additional_pinned_bytes": 0,
+        "gpu_overlap_claim": false,
+        "host_quota_unchanged": true,
+        "mode": "grouped_synchronous",
+        "physical_overhead_measured": false,
+        "source_custody": "existing_bounded_read"
+      },
+      "numerics": {
+        "atol": 0.00025,
+        "rtol": 0.012,
+        "metrics": 27,
+        "logit_values": 9187840,
+        "failures": [],
+        "state_bytes_after_shutdown": 0,
+        "device_budget_bytes": 7516192768
+      },
+      "evidence": {
+        "sampled_operations": 66,
+        "positive_worker_read_calls": 64,
+        "workers_created": 1,
+        "worker_reuses": 2559,
+        "workers_joined_at_live_samples": 0,
+        "final_owner_join_witness": {
+          "state": "unobserved",
+          "value": null,
+          "reason": "No public post-final-owner witness exported in this model report; ECHILD is not a host-join witness"
+        },
+        "worker_alive_at_final_live_sample": true,
+        "host_current_at_final_live_sample": 10485760,
+        "host_current_max": 10485760,
+        "host_peak": 16777984,
+        "upload_current_max": {
+          "upload_reserved_packed_bytes": 0,
+          "pinned_upload_bytes": 0,
+          "upload_ticket_metadata_bytes": 0,
+          "upload_policy_headroom_bytes": 0,
+          "unknown_upload_bytes": 0
+        },
+        "upload_current_zero_omission_basis": "Frozen Rust serializer explicitly skips each of these five fields only when zero; complete present nonzero/Unknown fields reject",
+        "uploads": 25116,
+        "cache_current_max": 209739776,
+        "cache_peak": 219754496,
+        "cache_pending_max": 0,
+        "cache_unknown_max": 0,
+        "model_group_facade_sync_count": {
+          "state": "unobserved",
+          "value": null
+        }
+      },
+      "same_work_own_primary": true,
+      "exact_logits_and_greedy_fingerprints_equal": true
+    },
+    {
+      "id": "12-lookahead-ordinary",
+      "selector": "model_factory::dense_bf16_tests::full40::fresh_quality::mixed_storage_middle64_grouped_lookahead_fresh_quality_no_observer_equality",
+      "role": "composition",
+      "schedule": "lookahead",
+      "kind": "ordinary",
+      "status": "passed",
+      "actual_test_issued": true,
+      "returncode": 0,
+      "natural_exit": true,
+      "echild": true,
+      "recorded_owners_absent": true,
+      "post_idle": "verified",
+      "signal_count": 0,
+      "raw_result": {
+        "path": "target/validation/grouped-upload-ce6d4ff-gpu-20261017-01/gates/12-lookahead-ordinary/gate-result.json",
+        "sha256": "2276786ae73c033512176692ab501b9ed8f4509e402766db16ab221a4075afbb"
+      },
+      "raw_supervisor": {
+        "path": "target/validation/grouped-upload-ce6d4ff-gpu-20261017-01/gates/12-lookahead-ordinary/supervisor.json",
+        "sha256": "552416321f4324078e64da44ce0632ca335d8a6839671f5a9f80b05563f20e62"
+      },
+      "report": {
+        "path": "target/validation/grouped-upload-ce6d4ff-gpu-20261017-01/gates/12-lookahead-ordinary/quality.json",
+        "sha256": "2c125ca891a197ee61fa6268a4a063424bf19c1cfa7aef6147fc66fbc151aef4"
+      },
+      "policy": {
+        "additional_pinned_bytes": 0,
+        "gpu_overlap_claim": false,
+        "host_quota_unchanged": true,
+        "mode": "grouped_synchronous",
+        "physical_overhead_measured": false,
+        "source_custody": "existing_bounded_read"
+      },
+      "numerics": {
+        "atol": 0.00025,
+        "rtol": 0.012,
+        "metrics": 27,
+        "logit_values": 9187840,
+        "failures": [],
+        "state_bytes_after_shutdown": 0,
+        "device_budget_bytes": 7516192768
+      },
+      "evidence": {
+        "sampled_operations": 66,
+        "positive_worker_read_calls": 64,
+        "workers_created": 1,
+        "worker_reuses": 2559,
+        "workers_joined_at_live_samples": 0,
+        "final_owner_join_witness": {
+          "state": "unobserved",
+          "value": null,
+          "reason": "No public post-final-owner witness exported in this model report; ECHILD is not a host-join witness"
+        },
+        "worker_alive_at_final_live_sample": true,
+        "host_current_at_final_live_sample": 10485760,
+        "host_current_max": 10485760,
+        "host_peak": 16777984,
+        "upload_current_max": {
+          "upload_reserved_packed_bytes": 0,
+          "pinned_upload_bytes": 0,
+          "upload_ticket_metadata_bytes": 0,
+          "upload_policy_headroom_bytes": 0,
+          "unknown_upload_bytes": 0
+        },
+        "upload_current_zero_omission_basis": "Frozen Rust serializer explicitly skips each of these five fields only when zero; complete present nonzero/Unknown fields reject",
+        "uploads": 25116,
+        "cache_current_max": 209739776,
+        "cache_peak": 219754496,
+        "cache_pending_max": 0,
+        "cache_unknown_max": 0,
+        "model_group_facade_sync_count": {
+          "state": "unobserved",
+          "value": null
+        }
+      },
+      "same_work_own_primary": true,
+      "exact_logits_and_greedy_fingerprints_equal": true
+    },
+    {
+      "id": "13-blocking-cold",
+      "selector": "model_factory::dense_bf16_tests::full40::fresh_quality::mixed_storage_middle64_grouped_blocking_fresh_quality_cold_owner_restart",
+      "role": "composition",
+      "schedule": "blocking",
+      "kind": "cold",
+      "status": "passed",
+      "actual_test_issued": true,
+      "returncode": 0,
+      "natural_exit": true,
+      "echild": true,
+      "recorded_owners_absent": true,
+      "post_idle": "verified",
+      "signal_count": 0,
+      "raw_result": {
+        "path": "target/validation/grouped-upload-ce6d4ff-gpu-20261017-01/gates/13-blocking-cold/gate-result.json",
+        "sha256": "e296e954f7767f8c320a0e9a94b8f733f0870202ed527f502cc141d292aac0b9"
+      },
+      "raw_supervisor": {
+        "path": "target/validation/grouped-upload-ce6d4ff-gpu-20261017-01/gates/13-blocking-cold/supervisor.json",
+        "sha256": "affef4f8d7918cf6b88537486da1ca1599e321f21713a72dfd71c73498fc1775"
+      },
+      "report": {
+        "path": "target/validation/grouped-upload-ce6d4ff-gpu-20261017-01/gates/13-blocking-cold/quality.json",
+        "sha256": "f7291c67a6e82df73bb0ca57059550f2814c0577bb953ac40d3656a4d2e93cf2"
+      },
+      "policy": {
+        "additional_pinned_bytes": 0,
+        "gpu_overlap_claim": false,
+        "host_quota_unchanged": true,
+        "mode": "grouped_synchronous",
+        "physical_overhead_measured": false,
+        "source_custody": "existing_bounded_read"
+      },
+      "numerics": {
+        "atol": 0.00025,
+        "rtol": 0.012,
+        "metrics": 1809,
+        "logit_values": 3228160,
+        "failures": [],
+        "state_bytes_after_shutdown": 0,
+        "device_budget_bytes": 7516192768
+      },
+      "evidence": {
+        "sampled_operations": 369,
+        "positive_worker_read_calls": 28,
+        "workers_created": 1,
+        "worker_reuses": 1119,
+        "workers_joined_at_live_samples": 0,
+        "final_owner_join_witness": {
+          "state": "unobserved",
+          "value": null,
+          "reason": "No public post-final-owner witness exported in this model report; ECHILD is not a host-join witness"
+        },
+        "worker_alive_at_final_live_sample": true,
+        "host_current_at_final_live_sample": 10485760,
+        "host_current_max": 10485760,
+        "host_peak": 16777984,
+        "upload_current_max": {
+          "upload_reserved_packed_bytes": 0,
+          "pinned_upload_bytes": 0,
+          "upload_ticket_metadata_bytes": 0,
+          "upload_policy_headroom_bytes": 0,
+          "unknown_upload_bytes": 0
+        },
+        "upload_current_zero_omission_basis": "Frozen Rust serializer explicitly skips each of these five fields only when zero; complete present nonzero/Unknown fields reject",
+        "uploads": 11354,
+        "cache_current_max": 209739776,
+        "cache_peak": 219754496,
+        "cache_pending_max": 0,
+        "cache_unknown_max": 0,
+        "model_group_facade_sync_count": {
+          "state": "unobserved",
+          "value": null
+        }
+      }
+    },
+    {
+      "id": "14-lookahead-cold",
+      "selector": "model_factory::dense_bf16_tests::full40::fresh_quality::mixed_storage_middle64_grouped_lookahead_fresh_quality_cold_owner_restart",
+      "role": "composition",
+      "schedule": "lookahead",
+      "kind": "cold",
+      "status": "passed",
+      "actual_test_issued": true,
+      "returncode": 0,
+      "natural_exit": true,
+      "echild": true,
+      "recorded_owners_absent": true,
+      "post_idle": "verified",
+      "signal_count": 0,
+      "raw_result": {
+        "path": "target/validation/grouped-upload-ce6d4ff-gpu-20261017-01/gates/14-lookahead-cold/gate-result.json",
+        "sha256": "ea6d91c3debd3579eb514420b5043b0a5d0c55821e29e62d59c797a6e7ce513e"
+      },
+      "raw_supervisor": {
+        "path": "target/validation/grouped-upload-ce6d4ff-gpu-20261017-01/gates/14-lookahead-cold/supervisor.json",
+        "sha256": "42664f6949510a36d50b8ac6ba08e385939020c94b971674eb6c4480d1aa148f"
+      },
+      "report": {
+        "path": "target/validation/grouped-upload-ce6d4ff-gpu-20261017-01/gates/14-lookahead-cold/quality.json",
+        "sha256": "58bbe14208f9b1c6b69f41b536f47df08dbc8127dd5b9459db63a5760d7643ee"
+      },
+      "policy": {
+        "additional_pinned_bytes": 0,
+        "gpu_overlap_claim": false,
+        "host_quota_unchanged": true,
+        "mode": "grouped_synchronous",
+        "physical_overhead_measured": false,
+        "source_custody": "existing_bounded_read"
+      },
+      "numerics": {
+        "atol": 0.00025,
+        "rtol": 0.012,
+        "metrics": 1809,
+        "logit_values": 3228160,
+        "failures": [],
+        "state_bytes_after_shutdown": 0,
+        "device_budget_bytes": 7516192768
+      },
+      "evidence": {
+        "sampled_operations": 369,
+        "positive_worker_read_calls": 28,
+        "workers_created": 1,
+        "worker_reuses": 1119,
+        "workers_joined_at_live_samples": 0,
+        "final_owner_join_witness": {
+          "state": "unobserved",
+          "value": null,
+          "reason": "No public post-final-owner witness exported in this model report; ECHILD is not a host-join witness"
+        },
+        "worker_alive_at_final_live_sample": true,
+        "host_current_at_final_live_sample": 10485760,
+        "host_current_max": 10485760,
+        "host_peak": 16777984,
+        "upload_current_max": {
+          "upload_reserved_packed_bytes": 0,
+          "pinned_upload_bytes": 0,
+          "upload_ticket_metadata_bytes": 0,
+          "upload_policy_headroom_bytes": 0,
+          "unknown_upload_bytes": 0
+        },
+        "upload_current_zero_omission_basis": "Frozen Rust serializer explicitly skips each of these five fields only when zero; complete present nonzero/Unknown fields reject",
+        "uploads": 11354,
+        "cache_current_max": 209739776,
+        "cache_peak": 219754496,
+        "cache_pending_max": 0,
+        "cache_unknown_max": 0,
+        "model_group_facade_sync_count": {
+          "state": "unobserved",
+          "value": null
+        }
+      }
+    }
+  ],
+  "backend_contract": {
+    "state": "actual_real_GPU_test_assertions_passed",
+    "scale_types": [
+      "BF16",
+      "F32"
+    ],
+    "device_allocations": 6,
+    "host_to_device_copies": 6,
+    "stream_wide_syncs": 1,
+    "scope": "Per grouped call in the passing public API contract, not model-wide profiling counters",
+    "source": "crates/ferrule-backend/tests/numeric_fp8_group_sync/gpu.rs",
+    "frozen_source_sha256": "098852651c090d797744a2e47c25fdd479109f0aa7c132172b4a3155ea5a3488"
+  },
+  "capacity_and_options": {
+    "allocator_margin_bytes": 536870912,
+    "ctx_size": 128,
+    "device_bytes": 7516192768,
+    "enable_native_proposals": false,
+    "expert_cache": "ExpertCacheOptions { host_entries: 256, host_mebibytes: 0, pinned_entries: 64, pinned_mebibytes: 0 }",
+    "expert_reader_max_tensor_mebibytes": 64,
+    "kv_bytes": 16777216,
+    "kv_cache_mebibytes": 16,
+    "max_batch_tokens": 8,
+    "max_bytes": 335544320,
+    "max_experts": 64,
+    "max_layers": null,
+    "max_positions": 128,
+    "max_sequences": 2,
+    "max_tensor_mebibytes": 1024,
+    "moe_hotset_experts": 0,
+    "numeric_fp8_profile": "None",
+    "output_head_chunk_rows": 4096,
+    "qwen35_host_cache": "None",
+    "scheduler": {
+      "allow_mixed_batches": true,
+      "decode_cohort_max_deferrals": 0,
+      "decode_cohort_target": 1,
+      "max_active_sequences": 2,
+      "max_batch_tokens": 8,
+      "max_decode_batch": 2,
+      "prefill_chunk_size": 8,
+      "prefill_reserve_tokens": 1,
+      "prefix_cache_capacity_pages": 0
+    },
+    "scratch_bytes": 8388608,
+    "stop_at_eos": false,
+    "workspace_bytes": 2147483648
+  },
+  "host": {
+    "cap_bytes": 67108864,
+    "metadata_bytes": 8388608,
+    "requested_stack_bytes": 2097152,
+    "grouped_logical_peak_bytes": 16777984,
+    "additional_pinned_bytes": 0,
+    "retained_ticket_bytes": 0,
+    "scope": "Logical charged reservations, not physical RSS/pinning overhead"
+  },
+  "final_idle": "verified",
+  "final_echild": true,
+  "final_recorded_owners_absent": true,
+  "all_eight_locks_released_and_reprobed": true,
+  "limits": [
+    "Quality only; no performance/default enablement/overlap claim",
+    "Model group-facade synchronization counts and model final-owner join are unobserved",
+    "Process ECHILD/NVML idle are not CUDA physical-release certificates",
+    "Historical 57e4629 negative timing and partial-profile results remain historical, not ce6 performance"
+  ]
+}
