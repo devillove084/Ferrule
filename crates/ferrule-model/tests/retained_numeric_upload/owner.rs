@@ -89,8 +89,8 @@ fn real_owner_opt_in_matches_default_and_reloads_only_after_consumer_proof() {
     use crate::transformer::expert_reads::tests::options;
     use crate::transformer::standard::{ExpertSemantics, StateDictExpertProvider};
     use crate::transformer::{
-        ExpertCachePolicy, ExpertReadSchedule, HostRows, Rows, RowsDType, RowsShape,
-        StandardDecoderOperators, StateDictMaterializer,
+        ExpertCachePolicy, ExpertReadSchedule, ExpertTransferControl, ExpertTransferPolicy,
+        HostRows, Rows, RowsDType, RowsShape, StandardDecoderOperators, StateDictMaterializer,
     };
     use ferrule_backend::cuda::operators::linear::CudaOperators;
     use std::rc::Rc;
@@ -106,7 +106,20 @@ fn real_owner_opt_in_matches_default_and_reloads_only_after_consumer_proof() {
         .map(ExpertSemantics::read_test_fixture)
         .collect::<Vec<_>>();
     let mut outputs = Vec::new();
-    for retained in [false, true] {
+    for (schedule, policy) in [ExpertReadSchedule::Blocking, ExpertReadSchedule::Lookahead]
+        .into_iter()
+        .flat_map(|schedule| {
+            [
+                ExpertTransferPolicy::Synchronous,
+                ExpertTransferPolicy::Retained {
+                    policy_headroom_bytes: 4096,
+                    readiness_timeout: Duration::from_secs(1),
+                },
+                ExpertTransferPolicy::GroupedSynchronous,
+            ]
+            .map(|policy| (schedule, policy))
+        })
+    {
         let mut owner = CudaStandardDecoderOperators::new_numeric_fp8(
             Rc::new(CudaOperators::new_on_device(0).unwrap()),
             &parameters,
@@ -118,13 +131,10 @@ fn real_owner_opt_in_matches_default_and_reloads_only_after_consumer_proof() {
         )
         .unwrap();
         assert!(!owner.retained_numeric_fp8_upload_enabled());
-        if retained {
-            owner
-                .enable_retained_numeric_fp8_upload(4096, Duration::from_secs(1))
-                .unwrap();
-        }
+        owner.set_expert_transfer_policy(policy).unwrap();
+        assert_eq!(owner.expert_transfer_policy(), policy);
         let mut materializer = StateDictMaterializer::new(128).unwrap();
-        let mut limits = options(ExpertReadSchedule::Lookahead);
+        let mut limits = options(schedule);
         limits.max_host_bytes += 8192;
         materializer.configure_expert_read_pipeline(limits).unwrap();
         let mut provider = StateDictExpertProvider {
@@ -168,7 +178,9 @@ fn real_owner_opt_in_matches_default_and_reloads_only_after_consumer_proof() {
         assert_eq!(owner.expert_cache_stats().unwrap().evictions, 2);
         outputs.push(values);
     }
-    assert_eq!(outputs[0], outputs[1]);
+    for values in &outputs[1..] {
+        assert_eq!(&outputs[0], values);
+    }
 }
 
 struct MetadataLessProvider {
@@ -181,7 +193,7 @@ impl crate::transformer::ExpertProvider for MetadataLessProvider {
     }
 }
 
-fn routing_owner() -> CudaStandardDecoderOperators {
+fn routing_owner(policy: crate::transformer::ExpertTransferPolicy) -> CudaStandardDecoderOperators {
     use crate::transformer::ExpertCachePolicy;
     let f = Fixture::new(1);
     let mut owner = CudaStandardDecoderOperators::new_numeric_fp8(
@@ -196,8 +208,7 @@ fn routing_owner() -> CudaStandardDecoderOperators {
         1024,
     )
     .unwrap();
-    owner
-        .enable_retained_numeric_fp8_upload(16 << 20, Duration::from_secs(30))
+    crate::transformer::ExpertTransferControl::set_expert_transfer_policy(&mut owner, policy)
         .unwrap();
     owner
 }
@@ -206,24 +217,32 @@ fn routing_owner() -> CudaStandardDecoderOperators {
 #[ignore = "GPU-owner authorization only; actual root routing preflight, zero payload reads"]
 fn real_root_route_rejects_metadata_less_provider_before_payload_read() {
     use crate::transformer::{HostRows, RouterRoutes, Rows, RowsDType, RowsShape};
-    let mut owner = routing_owner();
-    let mut provider = MetadataLessProvider { reads: 0 };
-    let input = Rows::Host(
-        HostRows::new(
-            RowsShape::new(1, 2).unwrap(),
-            RowsDType::F32,
-            None,
-            vec![1.0, 2.0],
-        )
-        .unwrap(),
-    );
-    let routes = RouterRoutes::new(1, 1, vec![0], vec![1.0]).unwrap();
-    let error = owner
-        .routed_swiglu_batched(0, &input, &routes, &mut provider, None)
-        .unwrap_err();
-    assert!(error.to_string().contains("metadata before payload reads"));
-    assert_eq!(provider.reads, 0);
-    assert_eq!(owner.expert_cache_stats().unwrap().uploads, 0);
+    for policy in [
+        crate::transformer::ExpertTransferPolicy::Retained {
+            policy_headroom_bytes: 16 << 20,
+            readiness_timeout: Duration::from_secs(30),
+        },
+        crate::transformer::ExpertTransferPolicy::GroupedSynchronous,
+    ] {
+        let mut owner = routing_owner(policy);
+        let mut provider = MetadataLessProvider { reads: 0 };
+        let input = Rows::Host(
+            HostRows::new(
+                RowsShape::new(1, 2).unwrap(),
+                RowsDType::F32,
+                None,
+                vec![1.0, 2.0],
+            )
+            .unwrap(),
+        );
+        let routes = RouterRoutes::new(1, 1, vec![0], vec![1.0]).unwrap();
+        let error = owner
+            .routed_swiglu_batched(0, &input, &routes, &mut provider, None)
+            .unwrap_err();
+        assert!(error.to_string().contains("metadata before payload reads"));
+        assert_eq!(provider.reads, 0);
+        assert_eq!(owner.expert_cache_stats().unwrap().uploads, 0);
+    }
 }
 
 #[test]
@@ -232,24 +251,32 @@ fn real_worker_route_rejects_metadata_less_provider_before_payload_read() {
     use crate::transformer::CudaExpertWorker;
     use crate::transformer::expert_parallel::{ExpertPlacement, ExpertToken, ExpertWorker};
     use ferrule_common::{ParallelRankId, execution::ExecutionTransactionId};
-    let mut owner = routing_owner();
-    let mut provider = MetadataLessProvider { reads: 0 };
-    let rank = ParallelRankId::new(0);
-    let placement = ExpertPlacement::new([(0, 0, rank)]).unwrap();
-    let token = ExpertToken {
-        transaction: ExecutionTransactionId::new(1).unwrap(),
-        sequence: 1,
-        source_rank: rank,
-        source_row: 0,
-        route_slot: 0,
-        expert: crate::moe::ExpertId::new(0, 0),
-        weight: 1.0,
-        payload: vec![1.0, 2.0],
-    };
-    let error = CudaExpertWorker::new(rank, &placement, &mut provider, &mut owner)
-        .compute(&[token])
-        .unwrap_err();
-    assert!(error.to_string().contains("metadata before payload reads"));
-    assert_eq!(provider.reads, 0);
-    assert_eq!(owner.expert_cache_stats().unwrap().uploads, 0);
+    for policy in [
+        crate::transformer::ExpertTransferPolicy::Retained {
+            policy_headroom_bytes: 16 << 20,
+            readiness_timeout: Duration::from_secs(30),
+        },
+        crate::transformer::ExpertTransferPolicy::GroupedSynchronous,
+    ] {
+        let mut owner = routing_owner(policy);
+        let mut provider = MetadataLessProvider { reads: 0 };
+        let rank = ParallelRankId::new(0);
+        let placement = ExpertPlacement::new([(0, 0, rank)]).unwrap();
+        let token = ExpertToken {
+            transaction: ExecutionTransactionId::new(1).unwrap(),
+            sequence: 1,
+            source_rank: rank,
+            source_row: 0,
+            route_slot: 0,
+            expert: crate::moe::ExpertId::new(0, 0),
+            weight: 1.0,
+            payload: vec![1.0, 2.0],
+        };
+        let error = CudaExpertWorker::new(rank, &placement, &mut provider, &mut owner)
+            .compute(&[token])
+            .unwrap_err();
+        assert!(error.to_string().contains("metadata before payload reads"));
+        assert_eq!(provider.reads, 0);
+        assert_eq!(owner.expert_cache_stats().unwrap().uploads, 0);
+    }
 }

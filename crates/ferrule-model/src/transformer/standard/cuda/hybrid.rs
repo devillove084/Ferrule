@@ -449,36 +449,22 @@ impl crate::transformer::ExpertTransferControl
                 "expert transfer policy requires an open healthy owner",
             ));
         }
-        match policy {
-            ExpertTransferPolicy::Synchronous if module.operators.retained_upload.is_none() => {
-                Ok(())
-            }
-            ExpertTransferPolicy::Synchronous => Err(unsupported(
-                "cannot disable an installed retained expert transfer policy",
-            )),
-            ExpertTransferPolicy::Retained {
-                policy_headroom_bytes,
-                readiness_timeout,
-            } => {
-                if module.external.attachment.is_some()
-                    || module.materializer.expert_read_pipeline_options().is_none()
-                {
-                    return Err(unsupported(
-                        "retained expert transfer requires local bounded expert reads",
-                    ));
-                }
-                module
-                    .operators
-                    .enable_retained_numeric_fp8_upload(policy_headroom_bytes, readiness_timeout)
-            }
+        if policy != ExpertTransferPolicy::Synchronous
+            && (module.external.attachment.is_some()
+                || module.materializer.expert_read_pipeline_options().is_none())
+        {
+            return Err(unsupported(
+                "expert transfer policy requires local bounded expert reads",
+            ));
         }
+        crate::transformer::ExpertTransferControl::set_expert_transfer_policy(
+            &mut module.operators,
+            policy,
+        )
     }
 
     fn expert_transfer_policy(&self) -> crate::transformer::ExpertTransferPolicy {
-        self.module().operators.retained_upload.as_ref().map_or(
-            crate::transformer::ExpertTransferPolicy::Synchronous,
-            |state| state.policy(),
-        )
+        crate::transformer::ExpertTransferControl::expert_transfer_policy(&self.module().operators)
     }
 }
 

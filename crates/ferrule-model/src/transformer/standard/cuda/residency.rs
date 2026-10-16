@@ -3,6 +3,8 @@
 use ferrule_backend::cuda::operators::linear::CudaF32Buffer;
 use ferrule_common::Result;
 
+#[path = "grouped_upload.rs"]
+pub(super) mod grouped_upload;
 #[path = "retained_upload.rs"]
 pub(super) mod retained_upload;
 
@@ -23,15 +25,7 @@ impl CudaStandardDecoderOperators {
         policy_headroom_bytes: usize,
         ready_timeout: std::time::Duration,
     ) -> Result<()> {
-        if self.retained_upload.is_some()
-            || self.needs_quarantine()
-            || self.numeric.is_none()
-            || self.bounded_experts.is_none()
-            || self.bindings.tensor.is_some()
-            || self.bindings.numeric_rank.is_some()
-            || self.bindings.expert_admission.is_some()
-            || self.root_submission.is_some()
-            || self.expert_cache_stats().is_some_and(|s| s.uploads != 0)
+        if !self.can_configure_expert_upload()
             || policy_headroom_bytes == 0
             || ready_timeout.is_zero()
             || ready_timeout > std::time::Duration::from_secs(60)
@@ -49,6 +43,22 @@ impl CudaStandardDecoderOperators {
 
     pub fn retained_numeric_fp8_upload_enabled(&self) -> bool {
         self.retained_upload.is_some()
+    }
+
+    fn can_configure_expert_upload(&self) -> bool {
+        !self.requires_metadata_expert_upload()
+            && !self.needs_quarantine()
+            && self.numeric.is_some()
+            && self.bounded_experts.is_some()
+            && self.bindings.tensor.is_none()
+            && self.bindings.numeric_rank.is_none()
+            && self.bindings.expert_admission.is_none()
+            && self.root_submission.is_none()
+            && self.expert_cache_stats().is_some_and(|s| s.uploads == 0)
+    }
+
+    pub(super) fn requires_metadata_expert_upload(&self) -> bool {
+        self.retained_upload.is_some() || self.grouped_upload.is_some()
     }
 
     /// No decoding or upload during sizing. Converted BF16 has F32 device cost.
@@ -388,9 +398,9 @@ impl CudaStandardDecoderOperators {
             // Shared and dense FFNs retain the original policy, not this cache.
             return run(self);
         }
-        if self.retained_upload.is_some() {
+        if self.requires_metadata_expert_upload() {
             return Err(cuda_error(
-                "retained expert uploads require metadata-backed provider admission",
+                "opt-in expert uploads require metadata-backed provider admission",
             ));
         }
         let (key, bytes, scratch) = self.expert_plan(expert, rows)?;
@@ -404,7 +414,7 @@ impl CudaStandardDecoderOperators {
         scratch: usize,
         run: impl FnOnce(&mut Self) -> Result<T>,
     ) -> Result<T> {
-        if self.retained_upload.is_some() {
+        if self.requires_metadata_expert_upload() {
             let operation =
                 SwiGluScratchPlan::reserved_bytes(scratch, self.route_scratch_bytes, 0)?;
             let operation = self
@@ -513,6 +523,7 @@ impl CudaStandardDecoderOperators {
             upload.quarantine();
         }
         std::mem::forget(self.retained_upload.take());
+        std::mem::forget(self.grouped_upload.take());
         std::mem::forget(std::mem::take(&mut self.expert_hold));
         std::mem::forget(std::mem::take(&mut self.bf16_hold));
         std::mem::forget(std::mem::take(&mut self.expert_artifacts));
@@ -520,6 +531,50 @@ impl CudaStandardDecoderOperators {
         std::mem::forget(std::mem::take(&mut self.route_ids));
         std::mem::forget(self.bounded_experts.take());
         std::mem::forget(self.numeric.take());
+    }
+}
+
+impl crate::transformer::ExpertTransferControl for CudaStandardDecoderOperators {
+    fn set_expert_transfer_policy(
+        &mut self,
+        policy: crate::transformer::ExpertTransferPolicy,
+    ) -> Result<()> {
+        use crate::transformer::ExpertTransferPolicy;
+        if self.needs_quarantine() {
+            return Err(cuda_error(
+                "expert transfer policy requires a healthy owner",
+            ));
+        }
+        match policy {
+            ExpertTransferPolicy::Synchronous if !self.requires_metadata_expert_upload() => Ok(()),
+            ExpertTransferPolicy::Synchronous => Err(cuda_error(
+                "cannot disable an installed expert transfer policy",
+            )),
+            ExpertTransferPolicy::Retained {
+                policy_headroom_bytes,
+                readiness_timeout,
+            } => self.enable_retained_numeric_fp8_upload(policy_headroom_bytes, readiness_timeout),
+            ExpertTransferPolicy::GroupedSynchronous => {
+                if !self.can_configure_expert_upload() {
+                    return Err(cuda_error(
+                        "grouped upload requires an unused healthy bounded numeric TP1 owner",
+                    ));
+                }
+                self.grouped_upload = Some(grouped_upload::State::default());
+                Ok(())
+            }
+        }
+    }
+
+    fn expert_transfer_policy(&self) -> crate::transformer::ExpertTransferPolicy {
+        if self.grouped_upload.is_some() {
+            crate::transformer::ExpertTransferPolicy::GroupedSynchronous
+        } else {
+            self.retained_upload.as_ref().map_or(
+                crate::transformer::ExpertTransferPolicy::Synchronous,
+                |state| state.policy(),
+            )
+        }
     }
 }
 

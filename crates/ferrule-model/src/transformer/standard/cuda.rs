@@ -102,6 +102,7 @@ pub struct CudaStandardDecoderOperators {
     experts: BTreeMap<(usize, usize), Arc<PreparedSwiGlu>>,
     bounded_experts: Option<BoundedExpertCache<ExpertCacheKey>>,
     retained_upload: Option<residency::retained_upload::State>,
+    grouped_upload: Option<residency::grouped_upload::State>,
     expert_hold: Vec<DeviceBuffer<f32>>,
     bf16_hold: Vec<DeviceBuffer<u16>>,
     bf16_chunk_workspace: Option<CudaF32Buffer>,
@@ -227,6 +228,7 @@ impl CudaStandardDecoderOperators {
             experts: BTreeMap::new(),
             bounded_experts,
             retained_upload: None,
+            grouped_upload: None,
             expert_hold: Vec::new(),
             bf16_hold: Vec::new(),
             bf16_chunk_workspace: None,
@@ -422,6 +424,10 @@ impl CudaStandardDecoderOperators {
     }
     pub fn needs_quarantine(&self) -> bool {
         self.poisoned
+            || self
+                .grouped_upload
+                .as_ref()
+                .is_some_and(|state| state.has_sources())
             || self
                 .mixed_rank_block
                 .as_ref()
@@ -898,6 +904,8 @@ impl CudaStandardDecoderOperators {
             if !this.bindings.has_metadata_expert(metadata)? {
                 if this.retained_upload.is_some() {
                     this.retained_metadata_upload(metadata, provider, input.shape().rows())?;
+                } else if this.grouped_upload.is_some() {
+                    this.grouped_metadata_upload(metadata, provider, input.shape().rows())?;
                 } else {
                     let expert = match provider.expert(layer, id)? {
                         ExpertAvailability::Ready(expert) => expert,

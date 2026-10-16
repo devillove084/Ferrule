@@ -125,6 +125,32 @@ fn mixed_storage_middle64_retained_lookahead_fresh_quality_no_observer_equality(
     );
 }
 
+macro_rules! grouped_quality_tests {
+    ($config:ident, $fresh:ident, $cold:ident, $ordinary:ident) => {
+        #[test]
+        #[ignore = "sole GPU owner; explicit grouped synchronous uploads; unchanged fresh quality/reference/host64MiB quota"]
+        fn $fresh() { run(false, Full40TestConfig::$config); }
+        #[test]
+        #[ignore = "sole GPU owner; grouped cold owner requires exact matching grouped primary"]
+        fn $cold() { run(true, Full40TestConfig::$config); }
+        #[test]
+        #[ignore = "sole GPU owner; grouped no-observer equality requires exact matching grouped diagnostic primary"]
+        fn $ordinary() { run_with_observer(false, Full40TestConfig::$config, false); }
+    };
+}
+grouped_quality_tests!(
+    StorageMiddle64GroupedBlocking,
+    mixed_storage_middle64_grouped_blocking_fresh_quality_retained_generation,
+    mixed_storage_middle64_grouped_blocking_fresh_quality_cold_owner_restart,
+    mixed_storage_middle64_grouped_blocking_fresh_quality_no_observer_equality
+);
+grouped_quality_tests!(
+    StorageMiddle64GroupedLookahead,
+    mixed_storage_middle64_grouped_lookahead_fresh_quality_retained_generation,
+    mixed_storage_middle64_grouped_lookahead_fresh_quality_cold_owner_restart,
+    mixed_storage_middle64_grouped_lookahead_fresh_quality_no_observer_equality
+);
+
 fn assert_cold_primary(
     prior: &Value,
     test_config: Full40TestConfig,

@@ -39,6 +39,9 @@ pub use ferrule_backend::cpu::{HostRows, RouterRoutes, RowsArenaId, RowsDType, R
 pub enum ExpertTransferPolicy {
     #[default]
     Synchronous,
+    /// Upload one admitted expert group with one synchronous completion proof.
+    /// Uses the existing source budget; no retained pinned ticket is selected.
+    GroupedSynchronous,
     Retained {
         policy_headroom_bytes: usize,
         readiness_timeout: std::time::Duration,
@@ -909,6 +912,12 @@ pub trait ExpertProvider {
         _next: Option<&ExpertMetadata>,
         _next_is_resident: bool,
     ) {
+    }
+
+    /// Existing bounded source custody can cover a synchronous expert group.
+    /// This capability adds no payload storage or pinned/ticket reservation.
+    fn supports_grouped_expert_upload(&self) -> bool {
+        false
     }
 
     /// Default-disabled retained upload capability. Reserve the complete host

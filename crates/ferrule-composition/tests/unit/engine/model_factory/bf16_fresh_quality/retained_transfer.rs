@@ -14,6 +14,64 @@ fn profiles() -> [(Full40TestConfig, Full40TestConfig); 2] {
     ]
 }
 
+fn grouped_profiles() -> [(Full40TestConfig, Full40TestConfig); 2] {
+    [
+        (
+            Full40TestConfig::StorageMiddle64Blocking,
+            Full40TestConfig::StorageMiddle64GroupedBlocking,
+        ),
+        (
+            Full40TestConfig::StorageMiddle64Lookahead,
+            Full40TestConfig::StorageMiddle64GroupedLookahead,
+        ),
+    ]
+}
+
+#[test]
+fn grouped_profiles_bind_exact_policy_and_baseline_host_cap_without_reference_changes() {
+    let precision = NumericFp8Precision::Bf16ModelMixedF32Accumulate;
+    assert_eq!(
+        ExpertTransferPolicy::default(),
+        ExpertTransferPolicy::Synchronous
+    );
+    assert_eq!((BF16_ATOL, BF16_RTOL), (0.00025, 0.012));
+    for (sync, grouped) in grouped_profiles() {
+        assert_eq!(sync.capacity(precision), grouped.capacity(precision));
+        assert_eq!(sync.scheduler(), grouped.scheduler());
+        assert_eq!(sync.expert_read_pipeline(), grouped.expert_read_pipeline());
+        assert_eq!(
+            sync.manifest(precision)["capacity_and_options"],
+            grouped.manifest(precision)["capacity_and_options"]
+        );
+        assert_eq!(
+            grouped.expert_transfer_policy(),
+            ExpertTransferPolicy::GroupedSynchronous
+        );
+        assert_eq!(
+            grouped.manifest(precision)["expert_transfer_policy"],
+            json!({
+                "mode":"grouped_synchronous", "source_custody":"existing_bounded_read",
+                "host_quota_unchanged":true, "additional_pinned_bytes":0,
+                "physical_overhead_measured":false, "gpu_overlap_claim":false,
+            })
+        );
+        let read = grouped.expert_read_pipeline().unwrap();
+        assert_eq!(
+            (
+                read.max_host_bytes,
+                read.max_metadata_bytes,
+                read.worker_stack_bytes
+            ),
+            (64 << 20, 8 << 20, 2 << 20)
+        );
+        let payload = 3 * (512 * 2048 + 64 * 2);
+        let charged = 2 * payload + read.max_metadata_bytes + read.worker_stack_bytes as u64;
+        assert!(charged <= read.max_host_bytes);
+        assert!(charged + payload <= read.max_host_bytes);
+        assert_ne!(sync.manifest(precision), grouped.manifest(precision));
+    }
+}
+
 #[test]
 fn retained_profiles_bind_exact_policy_without_changing_any_quota_or_reference_bound() {
     let precision = NumericFp8Precision::Bf16ModelMixedF32Accumulate;
@@ -103,7 +161,15 @@ fn primary(config: Full40TestConfig, effective: Value) -> Value {
 fn retained_cold_and_no_observer_reject_cross_policy_missing_and_modified_primary() {
     let precision = NumericFp8Precision::Bf16ModelMixedF32Accumulate;
     let fixture = crate::model_factory::mixed_serving::fixture::Fixture::new();
-    for (sync, retained) in profiles() {
+    let retained_vs_grouped = profiles()
+        .into_iter()
+        .zip(grouped_profiles())
+        .map(|((_, retained), (_, grouped))| (retained, grouped));
+    for (sync, retained) in profiles()
+        .into_iter()
+        .chain(grouped_profiles())
+        .chain(retained_vs_grouped)
+    {
         let plan = prepare_full40_with_config(fixture.dir.path(), precision, retained);
         let effective = full40_effective_config(&plan, retained, precision);
         assert_eq!(
@@ -118,12 +184,20 @@ fn retained_cold_and_no_observer_reject_cross_policy_missing_and_modified_primar
             &effective,
             "same-pin",
         );
-        for field in ["mode", "policy_headroom_bytes", "readiness_timeout_ms"] {
+        for field in [
+            "mode",
+            "policy_headroom_bytes",
+            "readiness_timeout_ms",
+            "source_custody",
+            "additional_pinned_bytes",
+        ] {
             let mut bad = prior.clone();
             bad["test_config"]["expert_transfer_policy"][field] = match field {
                 "mode" => json!("synchronous"),
                 "policy_headroom_bytes" => json!((16 << 20) + 1),
                 "readiness_timeout_ms" => json!(30_001),
+                "source_custody" => json!("unbounded"),
+                "additional_pinned_bytes" => json!(1),
                 _ => unreachable!(),
             };
             assert!(

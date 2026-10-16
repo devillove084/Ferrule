@@ -88,6 +88,8 @@ enum Full40TestConfig {
     StorageMiddle64Lookahead,
     StorageMiddle64RetainedBlocking,
     StorageMiddle64RetainedLookahead,
+    StorageMiddle64GroupedBlocking,
+    StorageMiddle64GroupedLookahead,
 }
 
 impl Full40TestConfig {
@@ -99,6 +101,8 @@ impl Full40TestConfig {
             Self::StorageMiddle64Lookahead => "storage-middle64-lookahead",
             Self::StorageMiddle64RetainedBlocking => "storage-middle64-retained-blocking",
             Self::StorageMiddle64RetainedLookahead => "storage-middle64-retained-lookahead",
+            Self::StorageMiddle64GroupedBlocking => "storage-middle64-grouped-blocking",
+            Self::StorageMiddle64GroupedLookahead => "storage-middle64-grouped-lookahead",
         }
     }
 
@@ -116,7 +120,9 @@ impl Full40TestConfig {
             | Self::StorageMiddle64Blocking
             | Self::StorageMiddle64Lookahead
             | Self::StorageMiddle64RetainedBlocking
-            | Self::StorageMiddle64RetainedLookahead => {
+            | Self::StorageMiddle64RetainedLookahead
+            | Self::StorageMiddle64GroupedBlocking
+            | Self::StorageMiddle64GroupedLookahead => {
                 assert_eq!(precision, NumericFp8Precision::Bf16ModelMixedF32Accumulate);
                 Qwen35MoeCapacityLimits {
                     max_experts: 64,
@@ -135,7 +141,9 @@ impl Full40TestConfig {
                 | Self::StorageMiddle64Blocking
                 | Self::StorageMiddle64Lookahead
                 | Self::StorageMiddle64RetainedBlocking
-                | Self::StorageMiddle64RetainedLookahead => 2,
+                | Self::StorageMiddle64RetainedLookahead
+                | Self::StorageMiddle64GroupedBlocking
+                | Self::StorageMiddle64GroupedLookahead => 2,
             },
             max_batch_tokens: 8,
             prefill_chunk_size: 8,
@@ -150,12 +158,12 @@ impl Full40TestConfig {
     fn expert_read_pipeline(self) -> Option<ExpertReadPipelineOptions> {
         let schedule = match self {
             Self::Historical8 | Self::StorageMiddle64 => return None,
-            Self::StorageMiddle64Blocking | Self::StorageMiddle64RetainedBlocking => {
-                ExpertReadSchedule::Blocking
-            }
-            Self::StorageMiddle64Lookahead | Self::StorageMiddle64RetainedLookahead => {
-                ExpertReadSchedule::Lookahead
-            }
+            Self::StorageMiddle64Blocking
+            | Self::StorageMiddle64RetainedBlocking
+            | Self::StorageMiddle64GroupedBlocking => ExpertReadSchedule::Blocking,
+            Self::StorageMiddle64Lookahead
+            | Self::StorageMiddle64RetainedLookahead
+            | Self::StorageMiddle64GroupedLookahead => ExpertReadSchedule::Lookahead,
         };
         Some(ExpertReadPipelineOptions {
             schedule,
@@ -173,6 +181,9 @@ impl Full40TestConfig {
                     readiness_timeout: std::time::Duration::from_secs(30),
                 }
             }
+            Self::StorageMiddle64GroupedBlocking | Self::StorageMiddle64GroupedLookahead => {
+                ExpertTransferPolicy::GroupedSynchronous
+            }
             _ => ExpertTransferPolicy::Synchronous,
         }
     }
@@ -180,6 +191,11 @@ impl Full40TestConfig {
     fn transfer_manifest(self) -> Option<Value> {
         match self.expert_transfer_policy() {
             ExpertTransferPolicy::Synchronous => None,
+            ExpertTransferPolicy::GroupedSynchronous => Some(json!({
+                "mode":"grouped_synchronous", "source_custody":"existing_bounded_read",
+                "host_quota_unchanged":true, "additional_pinned_bytes":0,
+                "physical_overhead_measured":false, "gpu_overlap_claim":false,
+            })),
             ExpertTransferPolicy::Retained {
                 policy_headroom_bytes,
                 readiness_timeout,
@@ -902,6 +918,28 @@ fn numeric_bf16_mixed_storage_middle64_retained_lookahead_public_factory_full40_
     );
 }
 
+macro_rules! grouped_full40_test {
+    ($name:ident, $config:ident) => {
+        #[test]
+        #[ignore = "sole GPU owner; explicit grouped synchronous uploads; unchanged full40 reference and host64MiB quota"]
+        fn $name() {
+            full40_run(
+                Full40TestConfig::$config,
+                NumericFp8Precision::Bf16ModelMixedF32Accumulate,
+                None,
+            );
+        }
+    };
+}
+grouped_full40_test!(
+    numeric_bf16_mixed_storage_middle64_grouped_blocking_public_factory_full40_logits_routes_states_match_profile_reference,
+    StorageMiddle64GroupedBlocking
+);
+grouped_full40_test!(
+    numeric_bf16_mixed_storage_middle64_grouped_lookahead_public_factory_full40_logits_routes_states_match_profile_reference,
+    StorageMiddle64GroupedLookahead
+);
+
 fn configure_full40_expert_transfer(runner: &mut Runner, config: Full40TestConfig) {
     assert_eq!(
         runner.expert_transfer_policy(),
@@ -915,7 +953,7 @@ fn configure_full40_expert_transfer(runner: &mut Runner, config: Full40TestConfi
             runner
                 .set_expert_transfer_policy(ExpertTransferPolicy::Synchronous)
                 .is_err(),
-            "an explicit retained profile must not escape to default-off execution"
+            "an explicit transfer profile must not escape to default-off execution"
         );
         assert!(
             runner
@@ -923,6 +961,17 @@ fn configure_full40_expert_transfer(runner: &mut Runner, config: Full40TestConfi
                 .is_err(),
             "duplicate policy configuration must not replace owner state"
         );
+    }
+    if config.transfer_manifest().is_some() {
+        let other = match config.expert_transfer_policy() {
+            ExpertTransferPolicy::Retained { .. } => ExpertTransferPolicy::GroupedSynchronous,
+            ExpertTransferPolicy::GroupedSynchronous => ExpertTransferPolicy::Retained {
+                policy_headroom_bytes: 16 << 20,
+                readiness_timeout: std::time::Duration::from_secs(30),
+            },
+            ExpertTransferPolicy::Synchronous => unreachable!(),
+        };
+        assert!(runner.set_expert_transfer_policy(other).is_err());
     }
     assert_eq!(
         runner.expert_transfer_policy(),
@@ -972,6 +1021,21 @@ fn assert_full40_expert_transfer_exercised(runner: &Runner, config: Full40TestCo
         assert_eq!(observed.current_charge.pinned_upload_bytes, 0);
         assert_eq!(observed.current_charge.upload_ticket_metadata_bytes, 0);
         assert_eq!(observed.current_charge.upload_policy_headroom_bytes, 0);
+        assert!(!observed.worker_unknown);
+    } else if config.expert_transfer_policy() == ExpertTransferPolicy::GroupedSynchronous {
+        let read = config.expert_read_pipeline().unwrap();
+        let module = runner.forward_executor().module();
+        let observed = module.expert_read_pipeline_observation();
+        assert!(module.expert_cache_stats().unwrap().uploads > 0);
+        let payload = 3 * (512 * 2048 + 64 * 2);
+        let minimum = 2 * payload + read.max_metadata_bytes + read.worker_stack_bytes as u64;
+        assert!(observed.stats.peak_host_charged_bytes >= minimum);
+        assert!(observed.stats.peak_host_charged_bytes <= read.max_host_bytes);
+        assert_eq!(observed.current_charge.pinned_upload_bytes, 0);
+        assert_eq!(observed.current_charge.upload_ticket_metadata_bytes, 0);
+        assert_eq!(observed.current_charge.upload_policy_headroom_bytes, 0);
+        assert_eq!(observed.current_charge.upload_reserved_packed_bytes, 0);
+        assert_eq!(observed.current_charge.unknown_upload_bytes, 0);
         assert!(!observed.worker_unknown);
     }
 }

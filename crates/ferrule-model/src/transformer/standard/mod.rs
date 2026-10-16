@@ -240,6 +240,10 @@ impl ExpertProvider for StateDictExpertProvider<'_> {
         }
     }
 
+    fn supports_grouped_expert_upload(&self) -> bool {
+        self.reads.is_some()
+    }
+
     fn reserve_expert_upload(
         &mut self,
         metadata: &super::ExpertMetadata,

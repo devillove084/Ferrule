@@ -126,9 +126,9 @@ impl CudaStandardDecoderOperators {
                     continue;
                 }
             }
-            if self.retained_numeric_fp8_upload_enabled() {
+            if self.requires_metadata_expert_upload() {
                 return Err(cuda_error(
-                    "retained expert uploads require metadata before payload reads",
+                    "opt-in expert uploads require metadata before payload reads",
                 ));
             }
             let availability = if let Some(expert) = self.experts.get(&(layer, id)) {
@@ -607,9 +607,9 @@ impl ExpertWorker for CudaExpertWorker<'_> {
                 metadata.insert(id, plan);
                 (bytes, activation)
             } else {
-                if self.operators.retained_numeric_fp8_upload_enabled() {
+                if self.operators.requires_metadata_expert_upload() {
                     return Err(cuda_error(
-                        "retained expert uploads require metadata before payload reads",
+                        "opt-in expert uploads require metadata before payload reads",
                     ));
                 }
                 let expert = match self.experts.expert(id.layer, id.expert)? {
@@ -667,9 +667,9 @@ impl ExpertWorker for CudaExpertWorker<'_> {
                 } else if let Some(expert) = prepared.get(&id) {
                     Some(std::sync::Arc::clone(expert))
                 } else {
-                    if this.retained_numeric_fp8_upload_enabled() {
+                    if this.requires_metadata_expert_upload() {
                         return Err(cuda_error(
-                            "retained expert uploads require metadata before payload reads",
+                            "opt-in expert uploads require metadata before payload reads",
                         ));
                     }
                     let expert = match self.experts.expert(id.layer, id.expert)? {
