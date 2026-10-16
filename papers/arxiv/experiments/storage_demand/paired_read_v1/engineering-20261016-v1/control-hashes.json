@@ -1,0 +1,32 @@
+{
+  "schema": "ferrule.engineering.maintained-control-provenance.v1",
+  "application_commit": "57e46295d3cf5725605e076eb5543f6124bd9245",
+  "promoted_qualifier": {
+    "path": "target/validation/retained-upload-57e4629-gpu-20261016-01/qualify_v2.py",
+    "sha256": "9d60e3a4ac31ada93fad9f16c8ad4a0c427f55078ee4801b7c91467a1e1e9fae"
+  },
+  "unchanged_lifecycle_validator": {
+    "path": "papers/arxiv/experiments/storage_demand/paired_read_v1/quality.py",
+    "sha256": "1e8623c3fade1a843945667f33a64a665d4237aa88d0217913e7512317fa17ac"
+  },
+  "new_plan": {
+    "path": "target/validation/retained-performance-57e4629-20261016-01/performance-plan.json",
+    "sha256": "875957578ca9479e553d5017b04bff4c8b3dd44bff270c86211c6b129109b991"
+  },
+  "code_pins": {
+    "papers/arxiv/experiments/storage_demand/paired_read_v1/qualify.py": "8b9ad20f9baea9102b8949e731743a96cf8ac502d8d4135af3d651e1158fec0a",
+    "papers/arxiv/experiments/storage_demand/paired_read_v1/performance.py": "1a33b282039579399639d235102bbdcae72affe6f21a8ca6fda5e1fc93051e5f",
+    "papers/arxiv/experiments/storage_demand/paired_read_v1/retained_evidence.py": "769e203ec951d70bd1b315f877677e96c09b561eb9f6017fb962429a1ffc0ec2",
+    "papers/arxiv/experiments/storage_demand/paired_read_v1/profile_audit.py": "a97ef0e257a2681b7e01be4fbe87ad511caef26df007392d58bc41bb24e5aec2",
+    "papers/arxiv/experiments/storage_demand/paired_read_v1/test_performance.py": "2c4e966793a41ea049b6395073afc4e3f777afe7a28faaaee9b42a56c9478e40",
+    "scripts/_profile_capture.py": "892f44d3a3a83805c7dbc83634145f567eda8516cc47958df528305c1c65a833",
+    "scripts/tests/test_profile_capture.py": "8d31ee0b8aecc663e86eaf7c89f9dbb9e75a5a63a37eb3b86a00907a378b8678"
+  },
+  "publication_scope": "Only engineering controls/tests and bounded derived receipts; no application source rebuild or default switch; raw ignored outputs not publicly included",
+  "retained_validator_sha256": "769e203ec951d70bd1b315f877677e96c09b561eb9f6017fb962429a1ffc0ec2",
+  "cache_health_review_fix": {
+    "shared_between_both_policies_and_work_vectors": true,
+    "retained_only_policy_positive_upload_and_reservation_minimum_remain_separate": true,
+    "previous_packet_sha256": "bf1f5391e3c28fec604bb8dd215cb8bd9cf7f6186c8492d82862610e164312b7"
+  }
+}

@@ -28,7 +28,10 @@ def checkpoint(path, report):
     temporary.replace(path)
 
 
-def run_target(directory, command, lifetime_seconds, shutdown_seconds):
+def run_target(directory, command, lifetime_seconds, shutdown_seconds, *,
+               natural_completion=False, on_spawn=None):
+    if type(natural_completion) is not bool:
+        raise ValueError("natural_completion must be an explicit boolean")
     started = time.monotonic()
     report = dict(schema='ferrule.profile-server.v1', started_monotonic=started,
                   started_unix_ns=time.time_ns(), returncode=None, stop_reason=None,
@@ -47,6 +50,8 @@ def run_target(directory, command, lifetime_seconds, shutdown_seconds):
         child = subprocess.Popen(command, stdin=subprocess.DEVNULL)
         report['pid'] = child.pid
         checkpoint(path, report)
+        if on_spawn is not None:
+            on_spawn(child)  # Observation only; the maintained wrapper owns this child.
         deadline = started + lifetime_seconds
         while child.poll() is None:
             if stop_signals or (directory / 'profile-stop').exists():
@@ -66,6 +71,8 @@ def run_target(directory, command, lifetime_seconds, shutdown_seconds):
                 report['shutdown_timeout'] = True
                 # Exit to allow nsys partial export; the outer subreaper owns
                 # this still-live child. Do not race its descendant cleanup.
+        if natural_completion and report['stop_reason'] is None:
+            report['stop_reason'] = 'natural_completion'
         report['returncode'] = child.returncode
         report['ended_monotonic'] = time.monotonic()
         report['ended_unix_ns'] = time.time_ns()
@@ -73,8 +80,8 @@ def run_target(directory, command, lifetime_seconds, shutdown_seconds):
     finally:
         for sig, handler in previous.items():
             signal.signal(sig, handler)
-    return 0 if (report['stop_reason'] == 'matrix_worker_stop_marker'
-                 and report['returncode'] == 0) else 1
+    expected = 'natural_completion' if natural_completion else 'matrix_worker_stop_marker'
+    return 0 if report['stop_reason'] == expected and report['returncode'] == 0 else 1
 
 
 def main(argv=None):

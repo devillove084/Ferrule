@@ -1,0 +1,1267 @@
+{
+  "schema": "ferrule.engineering.completed-gpu-stages.v1",
+  "actual_gpu_tests": 21,
+  "stages": [
+    {
+      "id": "worker-reuse-nine",
+      "summary": {
+        "status": "passed",
+        "frozen_commit": "dae07b85c647cfc418b5412078874f9e8e9bf1db",
+        "final_sha256": "2de9eca6bffbb6ceec13314b4e536b2a03cf6631c8f017fb2c5f1ed9e4b060e3",
+        "qualification_plan_sha256": "1ac862377b7a18911f373f945b6010a4992ef7bd02aa6976f36e22387cbbb476",
+        "approval_sha256": "a43dc40f445f37c686a0e75002645b0eb3f29586f1ac5333954fbdd371fc5157",
+        "actual_gpu_tests_issued": 9,
+        "retries": 0,
+        "gates": [
+          {
+            "id": "01-constructor",
+            "passed": true,
+            "returncode": 0,
+            "wall_seconds": 6.654687851667404,
+            "report_sha256": "221cbf192dde2fd68270fac089c42d384e239707ca582db59bf0442217d2e2f2",
+            "supervisor_sha256": "e113675e18d7134a6d990d4978fd7ee0071c8aa318fefb16d2df95f33a372d1e",
+            "metrics": 0,
+            "logits": null,
+            "fingerprints": 0,
+            "authenticated_echild": true,
+            "recorded_owners_absent": true,
+            "all8_pre_and_post_idle": true,
+            "cells": 4,
+            "logit_values": 128,
+            "host_postdrop": [
+              null,
+              null,
+              null,
+              null
+            ],
+            "worker_cells": [
+              {
+                "workers_created": 1,
+                "worker_reuses": 1,
+                "workers_joined": 0
+              },
+              {
+                "workers_created": 1,
+                "worker_reuses": 1,
+                "workers_joined": 0
+              },
+              {
+                "workers_created": 1,
+                "worker_reuses": 1,
+                "workers_joined": 0
+              },
+              {
+                "workers_created": 1,
+                "worker_reuses": 1,
+                "workers_joined": 0
+              }
+            ]
+          },
+          {
+            "id": "02-blocking-full40",
+            "passed": true,
+            "returncode": 0,
+            "wall_seconds": 28.928956551477313,
+            "report_sha256": "f74b4266ae15ec183703941f200c31b84352735948a14e916b0f1d3ae44ed942",
+            "supervisor_sha256": "74089cb1196801bc0c44f392d23a760fb6633a42e941b38229b9c309dd2a9861",
+            "metrics": 804,
+            "logits": 1986560,
+            "fingerprints": 0,
+            "authenticated_echild": true,
+            "recorded_owners_absent": true,
+            "all8_pre_and_post_idle": true,
+            "interval_revision": 3,
+            "last_worker_status": "idle_retained",
+            "last_host_charge": 10485760,
+            "last_worker_counts": {
+              "workers_created": 1,
+              "worker_reuses": 159,
+              "workers_joined": 0
+            }
+          },
+          {
+            "id": "03-lookahead-full40",
+            "passed": true,
+            "returncode": 0,
+            "wall_seconds": 28.02918636612594,
+            "report_sha256": "9310feef487ba5deeb7a575400bd905bf1633b063a0bfd58c72d285ba27ac5e6",
+            "supervisor_sha256": "5ffac0d46f0a9755333f546244b5b43a0d4ddfd78e225c1bf2140993dc7c2301",
+            "metrics": 804,
+            "logits": 1986560,
+            "fingerprints": 0,
+            "authenticated_echild": true,
+            "recorded_owners_absent": true,
+            "all8_pre_and_post_idle": true,
+            "interval_revision": 3,
+            "last_worker_status": "idle_retained",
+            "last_host_charge": 10485760,
+            "last_worker_counts": {
+              "workers_created": 1,
+              "worker_reuses": 159,
+              "workers_joined": 0
+            }
+          },
+          {
+            "id": "04-blocking-fresh",
+            "passed": true,
+            "returncode": 0,
+            "wall_seconds": 81.20348310284317,
+            "report_sha256": "8b0dd999444db5a2bb6b5ba99030a24ee62daf773108b71bf0b9a3c0dea61b14",
+            "supervisor_sha256": "6ef7d9c9ac7fe7cf8a03da68075a0a6cb312945b3778557297f2d936b0f69aa5",
+            "metrics": 5427,
+            "logits": 9187840,
+            "fingerprints": 64,
+            "authenticated_echild": true,
+            "recorded_owners_absent": true,
+            "all8_pre_and_post_idle": true,
+            "interval_revision": 3,
+            "last_worker_status": "idle_retained",
+            "last_host_charge": 10485760,
+            "last_worker_counts": {
+              "workers_created": 1,
+              "worker_reuses": 2559,
+              "workers_joined": 0
+            }
+          },
+          {
+            "id": "05-lookahead-fresh",
+            "passed": true,
+            "returncode": 0,
+            "wall_seconds": 75.85700131766498,
+            "report_sha256": "34f601121369c966538cda2a4ee338c4e1307ca47b4844f808b91c3760b51183",
+            "supervisor_sha256": "d6f83ad6ce808666c3dcdb80af66db8031240b95b1ca50089120dde80fb6867e",
+            "metrics": 5427,
+            "logits": 9187840,
+            "fingerprints": 64,
+            "authenticated_echild": true,
+            "recorded_owners_absent": true,
+            "all8_pre_and_post_idle": true,
+            "interval_revision": 3,
+            "last_worker_status": "idle_retained",
+            "last_host_charge": 10485760,
+            "last_worker_counts": {
+              "workers_created": 1,
+              "worker_reuses": 2559,
+              "workers_joined": 0
+            }
+          },
+          {
+            "id": "06-blocking-ordinary",
+            "passed": true,
+            "returncode": 0,
+            "wall_seconds": 73.09085294790566,
+            "report_sha256": "d27a4e5c8ab3722b91b392c7ffb940ca089ef87e6ca1a1d8f8102f81de5f8938",
+            "supervisor_sha256": "fad0507c9e3573b65269c3461c4415593fea613ba66f1da661a1f2b888ec7da3",
+            "metrics": 27,
+            "logits": 9187840,
+            "fingerprints": 64,
+            "authenticated_echild": true,
+            "recorded_owners_absent": true,
+            "all8_pre_and_post_idle": true,
+            "interval_revision": 3,
+            "last_worker_status": "idle_retained",
+            "last_host_charge": 10485760,
+            "last_worker_counts": {
+              "workers_created": 1,
+              "worker_reuses": 2559,
+              "workers_joined": 0
+            }
+          },
+          {
+            "id": "07-lookahead-ordinary",
+            "passed": true,
+            "returncode": 0,
+            "wall_seconds": 67.39068100042641,
+            "report_sha256": "f09ae15654ada4d8e9fb13f4869a72cde21df28a877c167611e81f5b0951ace4",
+            "supervisor_sha256": "3fde6a1aa841aee9c903bcbf435f17d00c69f5d9b9cbb5669db49a1bd3efa6be",
+            "metrics": 27,
+            "logits": 9187840,
+            "fingerprints": 64,
+            "authenticated_echild": true,
+            "recorded_owners_absent": true,
+            "all8_pre_and_post_idle": true,
+            "interval_revision": 3,
+            "last_worker_status": "idle_retained",
+            "last_host_charge": 10485760,
+            "last_worker_counts": {
+              "workers_created": 1,
+              "worker_reuses": 2559,
+              "workers_joined": 0
+            }
+          },
+          {
+            "id": "08-blocking-cold",
+            "passed": true,
+            "returncode": 0,
+            "wall_seconds": 47.81559865176678,
+            "report_sha256": "91df17261604c1e8c4fca04a726e921384b7fff3b357ebc190c9df07159e6a9b",
+            "supervisor_sha256": "64c2f0494f6d5b81fa8922f259fb480e9800552fd00fef7e268cfc2749f58b44",
+            "metrics": 1809,
+            "logits": 3228160,
+            "fingerprints": 28,
+            "authenticated_echild": true,
+            "recorded_owners_absent": true,
+            "all8_pre_and_post_idle": true,
+            "interval_revision": 3,
+            "last_worker_status": "idle_retained",
+            "last_host_charge": 10485760,
+            "last_worker_counts": {
+              "workers_created": 1,
+              "worker_reuses": 1119,
+              "workers_joined": 0
+            }
+          },
+          {
+            "id": "09-lookahead-cold",
+            "passed": true,
+            "returncode": 0,
+            "wall_seconds": 46.0082598850131,
+            "report_sha256": "25d4f49fa6a9f9e4b1ffe78350cd4806307c8eb88a28b225795182abb1152c3d",
+            "supervisor_sha256": "d88a248d767585d079848fe8454ffe9dcebcd1f228762ec2a2cee63efe6819c9",
+            "metrics": 1809,
+            "logits": 3228160,
+            "fingerprints": 28,
+            "authenticated_echild": true,
+            "recorded_owners_absent": true,
+            "all8_pre_and_post_idle": true,
+            "interval_revision": 3,
+            "last_worker_status": "idle_retained",
+            "last_host_charge": 10485760,
+            "last_worker_counts": {
+              "workers_created": 1,
+              "worker_reuses": 1119,
+              "workers_joined": 0
+            }
+          }
+        ],
+        "final_idle": "verified",
+        "final_authenticated_echild": true,
+        "final_owner_absence": true,
+        "all8_lock_release_and_reprobe": true,
+        "physical_release": "unobserved; process drain and idle are not a CUDA release/fence certificate"
+      },
+      "actual_invocations": [
+        {
+          "id": "01-constructor",
+          "selector": "normal_cuda_constructor_reaches_configured_provider_for_both_model_boundaries",
+          "executed_argv": [
+            "target/validation/worker-reuse-dae07b8-freeze-20261016-01/staged/constructor",
+            "normal_cuda_constructor_reaches_configured_provider_for_both_model_boundaries",
+            "--exact",
+            "--ignored",
+            "--nocapture",
+            "--test-threads=1"
+          ],
+          "binary_sha256": "f583932e245ea0ec0583006b3199d7671cdb618f87a2913def7c2b4f5bcb5b31",
+          "supervisor_sha256": "e113675e18d7134a6d990d4978fd7ee0071c8aa318fefb16d2df95f33a372d1e",
+          "supervisor_wall_seconds": 6.654687851667404,
+          "wall_scope": "Enclosing qualifier wall, not model latency or same-cut performance evidence"
+        },
+        {
+          "id": "02-blocking-full40",
+          "selector": "model_factory::dense_bf16_tests::full40::numeric_bf16_mixed_storage_middle64_blocking_public_factory_full40_logits_routes_states_match_profile_reference",
+          "executed_argv": [
+            "target/validation/worker-reuse-dae07b8-freeze-20261016-01/staged/composition",
+            "model_factory::dense_bf16_tests::full40::numeric_bf16_mixed_storage_middle64_blocking_public_factory_full40_logits_routes_states_match_profile_reference",
+            "--exact",
+            "--ignored",
+            "--nocapture",
+            "--test-threads=1"
+          ],
+          "binary_sha256": "077ce4ccdbcae0611e7f9fe4e2e6b58abc16df24b9cab87428d83cdbf66f25fa",
+          "supervisor_sha256": "74089cb1196801bc0c44f392d23a760fb6633a42e941b38229b9c309dd2a9861",
+          "supervisor_wall_seconds": 28.928956551477313,
+          "wall_scope": "Enclosing qualifier wall, not model latency or same-cut performance evidence"
+        },
+        {
+          "id": "03-lookahead-full40",
+          "selector": "model_factory::dense_bf16_tests::full40::numeric_bf16_mixed_storage_middle64_lookahead_public_factory_full40_logits_routes_states_match_profile_reference",
+          "executed_argv": [
+            "target/validation/worker-reuse-dae07b8-freeze-20261016-01/staged/composition",
+            "model_factory::dense_bf16_tests::full40::numeric_bf16_mixed_storage_middle64_lookahead_public_factory_full40_logits_routes_states_match_profile_reference",
+            "--exact",
+            "--ignored",
+            "--nocapture",
+            "--test-threads=1"
+          ],
+          "binary_sha256": "077ce4ccdbcae0611e7f9fe4e2e6b58abc16df24b9cab87428d83cdbf66f25fa",
+          "supervisor_sha256": "5ffac0d46f0a9755333f546244b5b43a0d4ddfd78e225c1bf2140993dc7c2301",
+          "supervisor_wall_seconds": 28.02918636612594,
+          "wall_scope": "Enclosing qualifier wall, not model latency or same-cut performance evidence"
+        },
+        {
+          "id": "04-blocking-fresh",
+          "selector": "model_factory::dense_bf16_tests::full40::fresh_quality::mixed_storage_middle64_blocking_fresh_quality_retained_generation",
+          "executed_argv": [
+            "target/validation/worker-reuse-dae07b8-freeze-20261016-01/staged/composition",
+            "model_factory::dense_bf16_tests::full40::fresh_quality::mixed_storage_middle64_blocking_fresh_quality_retained_generation",
+            "--exact",
+            "--ignored",
+            "--nocapture",
+            "--test-threads=1"
+          ],
+          "binary_sha256": "077ce4ccdbcae0611e7f9fe4e2e6b58abc16df24b9cab87428d83cdbf66f25fa",
+          "supervisor_sha256": "6ef7d9c9ac7fe7cf8a03da68075a0a6cb312945b3778557297f2d936b0f69aa5",
+          "supervisor_wall_seconds": 81.20348310284317,
+          "wall_scope": "Enclosing qualifier wall, not model latency or same-cut performance evidence"
+        },
+        {
+          "id": "05-lookahead-fresh",
+          "selector": "model_factory::dense_bf16_tests::full40::fresh_quality::mixed_storage_middle64_lookahead_fresh_quality_retained_generation",
+          "executed_argv": [
+            "target/validation/worker-reuse-dae07b8-freeze-20261016-01/staged/composition",
+            "model_factory::dense_bf16_tests::full40::fresh_quality::mixed_storage_middle64_lookahead_fresh_quality_retained_generation",
+            "--exact",
+            "--ignored",
+            "--nocapture",
+            "--test-threads=1"
+          ],
+          "binary_sha256": "077ce4ccdbcae0611e7f9fe4e2e6b58abc16df24b9cab87428d83cdbf66f25fa",
+          "supervisor_sha256": "d6f83ad6ce808666c3dcdb80af66db8031240b95b1ca50089120dde80fb6867e",
+          "supervisor_wall_seconds": 75.85700131766498,
+          "wall_scope": "Enclosing qualifier wall, not model latency or same-cut performance evidence"
+        },
+        {
+          "id": "06-blocking-ordinary",
+          "selector": "model_factory::dense_bf16_tests::full40::fresh_quality::mixed_storage_middle64_blocking_fresh_quality_no_observer_equality",
+          "executed_argv": [
+            "target/validation/worker-reuse-dae07b8-freeze-20261016-01/staged/composition",
+            "model_factory::dense_bf16_tests::full40::fresh_quality::mixed_storage_middle64_blocking_fresh_quality_no_observer_equality",
+            "--exact",
+            "--ignored",
+            "--nocapture",
+            "--test-threads=1"
+          ],
+          "binary_sha256": "077ce4ccdbcae0611e7f9fe4e2e6b58abc16df24b9cab87428d83cdbf66f25fa",
+          "supervisor_sha256": "fad0507c9e3573b65269c3461c4415593fea613ba66f1da661a1f2b888ec7da3",
+          "supervisor_wall_seconds": 73.09085294790566,
+          "wall_scope": "Enclosing qualifier wall, not model latency or same-cut performance evidence"
+        },
+        {
+          "id": "07-lookahead-ordinary",
+          "selector": "model_factory::dense_bf16_tests::full40::fresh_quality::mixed_storage_middle64_lookahead_fresh_quality_no_observer_equality",
+          "executed_argv": [
+            "target/validation/worker-reuse-dae07b8-freeze-20261016-01/staged/composition",
+            "model_factory::dense_bf16_tests::full40::fresh_quality::mixed_storage_middle64_lookahead_fresh_quality_no_observer_equality",
+            "--exact",
+            "--ignored",
+            "--nocapture",
+            "--test-threads=1"
+          ],
+          "binary_sha256": "077ce4ccdbcae0611e7f9fe4e2e6b58abc16df24b9cab87428d83cdbf66f25fa",
+          "supervisor_sha256": "3fde6a1aa841aee9c903bcbf435f17d00c69f5d9b9cbb5669db49a1bd3efa6be",
+          "supervisor_wall_seconds": 67.39068100042641,
+          "wall_scope": "Enclosing qualifier wall, not model latency or same-cut performance evidence"
+        },
+        {
+          "id": "08-blocking-cold",
+          "selector": "model_factory::dense_bf16_tests::full40::fresh_quality::mixed_storage_middle64_blocking_fresh_quality_cold_owner_restart",
+          "executed_argv": [
+            "target/validation/worker-reuse-dae07b8-freeze-20261016-01/staged/composition",
+            "model_factory::dense_bf16_tests::full40::fresh_quality::mixed_storage_middle64_blocking_fresh_quality_cold_owner_restart",
+            "--exact",
+            "--ignored",
+            "--nocapture",
+            "--test-threads=1"
+          ],
+          "binary_sha256": "077ce4ccdbcae0611e7f9fe4e2e6b58abc16df24b9cab87428d83cdbf66f25fa",
+          "supervisor_sha256": "64c2f0494f6d5b81fa8922f259fb480e9800552fd00fef7e268cfc2749f58b44",
+          "supervisor_wall_seconds": 47.81559865176678,
+          "wall_scope": "Enclosing qualifier wall, not model latency or same-cut performance evidence"
+        },
+        {
+          "id": "09-lookahead-cold",
+          "selector": "model_factory::dense_bf16_tests::full40::fresh_quality::mixed_storage_middle64_lookahead_fresh_quality_cold_owner_restart",
+          "executed_argv": [
+            "target/validation/worker-reuse-dae07b8-freeze-20261016-01/staged/composition",
+            "model_factory::dense_bf16_tests::full40::fresh_quality::mixed_storage_middle64_lookahead_fresh_quality_cold_owner_restart",
+            "--exact",
+            "--ignored",
+            "--nocapture",
+            "--test-threads=1"
+          ],
+          "binary_sha256": "077ce4ccdbcae0611e7f9fe4e2e6b58abc16df24b9cab87428d83cdbf66f25fa",
+          "supervisor_sha256": "d88a248d767585d079848fe8454ffe9dcebcd1f228762ec2a2cee63efe6819c9",
+          "supervisor_wall_seconds": 46.0082598850131,
+          "wall_scope": "Enclosing qualifier wall, not model latency or same-cut performance evidence"
+        }
+      ]
+    },
+    {
+      "id": "backend-public-api",
+      "summary": {
+        "status": "passed",
+        "frozen_commit": "fc47c4173ca860b26f36774a3210f5a970a9e8b1",
+        "source_archive_sha256": "de26c0da525c0d4cb93f247821dc4daf2f3771921b8034fcb34b38ef460b0e82",
+        "source_digest": "69cd5ce1556fcb21909c423da34803c9abab34b408a8d52a4042c43ee54ee0e8",
+        "executable_sha256": "7557e58c832082297a2c0a3b225f83b736c32af2994fa2caf2999452d3cb4dcc",
+        "selector": "cuda::operator_owner::numeric_fp8_upload::contract_tests::gpu::public_stage_submit_poll_drain_matches_sync_both_scale_types",
+        "actual_gpu_tests_issued": 1,
+        "returncode": 0,
+        "wall_seconds": 4.7057530246675014,
+        "stdout_sha256": "d0b84e7076668796298ca36355cc4b1c5f697fc7874a89d303d92c836d4d1f03",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "supervisor_sha256": "6982ced1276b6f5d182da516a3886cb2b50b70de91d1e8d3bf81516f931c7ff6",
+        "final_sha256": "fcfbea281e9c090a9a3dfdc8ccd7ae95a4acba82ac3fc9d63d92388a41c43723",
+        "plan_sha256": "1be5e6200bd47841a787d801950692ab5c7ffdb7a30b4ce09a66fb616c0960f4",
+        "control_sha256": "f1aec7a90bc1dc155fce4d904e654bbbe4affadd709e84703dd8d1774b333326",
+        "user_authorization_sha256": "7745c043ab758c4fd65c613e2c4af21bc6746f65abaf761efdf2e611654115d4",
+        "prerequisite_nine_final_sha256": "2de9eca6bffbb6ceec13314b4e536b2a03cf6631c8f017fb2c5f1ed9e4b060e3",
+        "prerequisite_nine_summary_sha256": "8f57783f7bc0e41718f27e7c1d3c57ef05b16cb60827702135c757a9bc13841c",
+        "source_defined_asserted_coverage": {
+          "scale_types": [
+            "Bf16",
+            "F32"
+          ],
+          "precision_paths": [
+            "Bf16RneF32Accumulate",
+            "F32Tf32x3"
+          ],
+          "artifacts_per_scale": 3,
+          "bitwise_async_sync_comparisons": 12,
+          "expected_output": "[0, 3*value, 0, -4*value]",
+          "host_charge": "pageable + pinned + metadata; cap and cap-minus-one rejection",
+          "custody": "payloads retained through submission/wait; released on observed completion or proved drain",
+          "owner_checks": "foreign and retired tickets rejected",
+          "drain_cases_per_scale": [
+            "staged",
+            "submitted"
+          ]
+        },
+        "authenticated_echild": true,
+        "natural_exit": true,
+        "recorded_owners_absent": true,
+        "all8_pre_and_post_idle": true,
+        "all8_final_idle": true,
+        "all8_lock_release_and_reprobe": true,
+        "retries": 0,
+        "extra_warmups": 0,
+        "gpu_profiling": false,
+        "physical_release": "unobserved; authenticated drain and NVML idle do not certify general CUDA physical release",
+        "cpu_contract_tests": 16,
+        "release_build_seconds": 82.86892408505082,
+        "tracked_edits_by_this_gpu_stage": false,
+        "commits_by_this_gpu_stage": 0,
+        "pushes_by_this_gpu_stage": 0,
+        "sealed_unix_ns": 1792122989595879505
+      },
+      "actual_invocations": [
+        {
+          "id": "01-backend-public-api",
+          "selector": "cuda::operator_owner::numeric_fp8_upload::contract_tests::gpu::public_stage_submit_poll_drain_matches_sync_both_scale_types",
+          "executed_argv": [
+            "target/validation/backend-fp8-upload-fc47c41-gpu-20261016-01/staged/backend-public-api-tests",
+            "cuda::operator_owner::numeric_fp8_upload::contract_tests::gpu::public_stage_submit_poll_drain_matches_sync_both_scale_types",
+            "--exact",
+            "--ignored",
+            "--nocapture",
+            "--test-threads=1"
+          ],
+          "binary_sha256": "7557e58c832082297a2c0a3b225f83b736c32af2994fa2caf2999452d3cb4dcc",
+          "supervisor_sha256": "6982ced1276b6f5d182da516a3886cb2b50b70de91d1e8d3bf81516f931c7ff6",
+          "supervisor_wall_seconds": 4.7057530246675014,
+          "wall_scope": "Enclosing qualifier wall, not model latency or same-cut performance evidence"
+        }
+      ]
+    },
+    {
+      "id": "retained-integration-eleven",
+      "summary": {
+        "status": "passed",
+        "frozen_commit": "57e46295d3cf5725605e076eb5543f6124bd9245",
+        "actual_gpu_tests_issued": 11,
+        "retries": 0,
+        "extra_warmups": 0,
+        "profiling": false,
+        "approval_sha256": "a7589d37de90f2905a05a6fb3b24decbe8e920729cc2045ae27df88855f5fed0",
+        "plan_sha256": "6041cae37cdd08795a980e912af3ab82b52cefe3a795f42fa2631513e284da76",
+        "control_sha256": "9d60e3a4ac31ada93fad9f16c8ad4a0c427f55078ee4801b7c91467a1e1e9fae",
+        "final_sha256": "02c63b3e947ec4bf727b691798e5bf2ac958fa66bbcdb09a94d4a2649e423c88",
+        "source_archive_sha256": "81a399a5cb004e9dd2a22a9303fc4c609cebcf0856654ec29866f50fa2f9e441",
+        "artifacts": {
+          "model": "a01eacd1b02cdd243576977a690b719b859293235c45ff4cd79a80b5401e5387",
+          "composition": "2c15bbde1aa377630045068439a68adf260c3c836a8de69b120784deb0b067bd"
+        },
+        "gates": [
+          {
+            "id": "01-model-root-route",
+            "selector": "transformer::standard::cuda::residency::retained_upload::tests::real_root_route_rejects_metadata_less_provider_before_payload_read",
+            "status": "passed",
+            "returncode": 0,
+            "wall_seconds": 6.602802440524101,
+            "supervisor_sha256": "e3080d69869d381a69dd56b6c47c10c2a114ff25919a8e90e62078e11d1209aa",
+            "stdout_sha256": "57fc9f8bc43a62cdc19b7f9b64eb8f61235da9112ed7ba0150847a422fa19e4d",
+            "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "authenticated_echild": true,
+            "recorded_owners_absent": true,
+            "all8_pre_and_post_idle": true
+          },
+          {
+            "id": "02-model-worker-route",
+            "selector": "transformer::standard::cuda::residency::retained_upload::tests::real_worker_route_rejects_metadata_less_provider_before_payload_read",
+            "status": "passed",
+            "returncode": 0,
+            "wall_seconds": 6.501801460981369,
+            "supervisor_sha256": "1e3194f30d3a7ea5ee17f47cf0163b836653377a3851393e9aeec32f4bac2dd4",
+            "stdout_sha256": "7313b3f3a2be8617967d54ea3f4c4fee6fffee85d86f0087596bb4e0c4874c9c",
+            "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "authenticated_echild": true,
+            "recorded_owners_absent": true,
+            "all8_pre_and_post_idle": true
+          },
+          {
+            "id": "03-model-owner-lifecycle",
+            "selector": "transformer::standard::cuda::residency::retained_upload::tests::real_owner_opt_in_matches_default_and_reloads_only_after_consumer_proof",
+            "status": "passed",
+            "returncode": 0,
+            "wall_seconds": 6.507474023848772,
+            "supervisor_sha256": "c15f0b0bbd5a022ecb94c337a7d04c192d3603cc9425e70a81c81ff4d96a14ce",
+            "stdout_sha256": "32d5496e51e44055fc55c297d43b0f365d0c54a4447cbc2e9d1fd59f7ee06fe6",
+            "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "authenticated_echild": true,
+            "recorded_owners_absent": true,
+            "all8_pre_and_post_idle": true
+          },
+          {
+            "id": "04-blocking-full40",
+            "selector": "model_factory::dense_bf16_tests::full40::numeric_bf16_mixed_storage_middle64_retained_blocking_public_factory_full40_logits_routes_states_match_profile_reference",
+            "status": "passed",
+            "returncode": 0,
+            "wall_seconds": 31.841502122581005,
+            "supervisor_sha256": "37df9011c042117c703659d548e92748fd68511dfbfde923fd389859a02672c6",
+            "stdout_sha256": "5e0820e2e6394a2a8be2e671aef985cca87c5ef9f4deaed92067d1386fb435c4",
+            "stderr_sha256": "eb3e8cce6ce4110fa99f96d272e7377c3708a470cb460a9af00bd8f4384ab988",
+            "authenticated_echild": true,
+            "recorded_owners_absent": true,
+            "all8_pre_and_post_idle": true,
+            "report_sha256": "c215c168399db27a21fdb63e7ea6c0aba1a4174e9d82ddedb995d7ad3a70c22d",
+            "metrics": 804,
+            "logits": 1986560,
+            "fingerprint_calls": 0,
+            "requested_policy": {
+              "gpu_overlap_claim": false,
+              "host_quota_unchanged": true,
+              "mode": "retained",
+              "physical_overhead_measured": false,
+              "policy_headroom_bytes": 16777216,
+              "readiness_timeout_ms": 30000
+            },
+            "effective_policy": {
+              "gpu_overlap_claim": false,
+              "host_quota_unchanged": true,
+              "mode": "retained",
+              "physical_overhead_measured": false,
+              "policy_headroom_bytes": 16777216,
+              "readiness_timeout_ms": 30000
+            },
+            "positive_read_and_cache_upload_intervals": 4,
+            "host_peak_bytes": 36701896,
+            "host_cap_bytes": 67108864,
+            "host_slack_bytes": 30406968,
+            "minimum_retained_reservation_bytes": 36701896,
+            "last_host_charge_bytes": 10485760,
+            "settled_upload_charges": {
+              "upload_reserved_packed_bytes": [
+                0
+              ],
+              "pinned_upload_bytes": [
+                0
+              ],
+              "upload_ticket_metadata_bytes": [
+                0
+              ],
+              "upload_policy_headroom_bytes": [
+                0
+              ],
+              "unknown_upload_bytes": [
+                0
+              ]
+            },
+            "worker_counts": {
+              "workers_created": 1,
+              "worker_reuses": 159,
+              "workers_joined": 0
+            },
+            "cache_uploads": 2089,
+            "cache_hits": 0,
+            "cache_evictions": 2025,
+            "cache_peak_bytes": 219754496,
+            "cache_cap_bytes": 335544320,
+            "pending_cache_upload_bytes": 0,
+            "last_worker_status": "idle_retained",
+            "release_claim": "unobserved"
+          },
+          {
+            "id": "05-lookahead-full40",
+            "selector": "model_factory::dense_bf16_tests::full40::numeric_bf16_mixed_storage_middle64_retained_lookahead_public_factory_full40_logits_routes_states_match_profile_reference",
+            "status": "passed",
+            "returncode": 0,
+            "wall_seconds": 30.985442547127604,
+            "supervisor_sha256": "afa7dbb268f0c85dee167d0dcf34c71af459d25c38ccd2f1d91b170c02cc51ac",
+            "stdout_sha256": "9a27ce7f3ec91165c8fd5b2b4bd0638228ef0c295ef50358ca5cd4e1b583e91e",
+            "stderr_sha256": "eb3e8cce6ce4110fa99f96d272e7377c3708a470cb460a9af00bd8f4384ab988",
+            "authenticated_echild": true,
+            "recorded_owners_absent": true,
+            "all8_pre_and_post_idle": true,
+            "report_sha256": "2d7e1eab8aa3305bde7ccf0bf647be1703373db4d38ba5dcff9c3e187fd66736",
+            "metrics": 804,
+            "logits": 1986560,
+            "fingerprint_calls": 0,
+            "requested_policy": {
+              "gpu_overlap_claim": false,
+              "host_quota_unchanged": true,
+              "mode": "retained",
+              "physical_overhead_measured": false,
+              "policy_headroom_bytes": 16777216,
+              "readiness_timeout_ms": 30000
+            },
+            "effective_policy": {
+              "gpu_overlap_claim": false,
+              "host_quota_unchanged": true,
+              "mode": "retained",
+              "physical_overhead_measured": false,
+              "policy_headroom_bytes": 16777216,
+              "readiness_timeout_ms": 30000
+            },
+            "positive_read_and_cache_upload_intervals": 4,
+            "host_peak_bytes": 36701896,
+            "host_cap_bytes": 67108864,
+            "host_slack_bytes": 30406968,
+            "minimum_retained_reservation_bytes": 36701896,
+            "last_host_charge_bytes": 10485760,
+            "settled_upload_charges": {
+              "upload_reserved_packed_bytes": [
+                0
+              ],
+              "pinned_upload_bytes": [
+                0
+              ],
+              "upload_ticket_metadata_bytes": [
+                0
+              ],
+              "upload_policy_headroom_bytes": [
+                0
+              ],
+              "unknown_upload_bytes": [
+                0
+              ]
+            },
+            "worker_counts": {
+              "workers_created": 1,
+              "worker_reuses": 159,
+              "workers_joined": 0
+            },
+            "cache_uploads": 2089,
+            "cache_hits": 0,
+            "cache_evictions": 2025,
+            "cache_peak_bytes": 219754496,
+            "cache_cap_bytes": 335544320,
+            "pending_cache_upload_bytes": 0,
+            "last_worker_status": "idle_retained",
+            "release_claim": "unobserved"
+          },
+          {
+            "id": "06-blocking-fresh",
+            "selector": "model_factory::dense_bf16_tests::full40::fresh_quality::mixed_storage_middle64_retained_blocking_fresh_quality_retained_generation",
+            "status": "passed",
+            "returncode": 0,
+            "wall_seconds": 114.7515106163919,
+            "supervisor_sha256": "7648b7c3fd3b2921879226288956c19524e03be4cd7421501046672b6c0b15b3",
+            "stdout_sha256": "1f8f353784da2f2ccf0c39a57fcda3b1e7ccb446805038b31b7851583cc9c077",
+            "stderr_sha256": "66cde7eed413419a570fbd82e780c3e8e72359fbcb59ab72ba0e4fb1fe9c9ad1",
+            "authenticated_echild": true,
+            "recorded_owners_absent": true,
+            "all8_pre_and_post_idle": true,
+            "report_sha256": "6d6787fcdf847b440949ea007d4ad833f8c2a8052bca56e38471b993b5526a58",
+            "metrics": 5427,
+            "logits": 9187840,
+            "fingerprint_calls": 64,
+            "requested_policy": {
+              "gpu_overlap_claim": false,
+              "host_quota_unchanged": true,
+              "mode": "retained",
+              "physical_overhead_measured": false,
+              "policy_headroom_bytes": 16777216,
+              "readiness_timeout_ms": 30000
+            },
+            "effective_policy": {
+              "gpu_overlap_claim": false,
+              "host_quota_unchanged": true,
+              "mode": "retained",
+              "physical_overhead_measured": false,
+              "policy_headroom_bytes": 16777216,
+              "readiness_timeout_ms": 30000
+            },
+            "positive_read_and_cache_upload_intervals": 64,
+            "host_peak_bytes": 36701896,
+            "host_cap_bytes": 67108864,
+            "host_slack_bytes": 30406968,
+            "minimum_retained_reservation_bytes": 36701896,
+            "last_host_charge_bytes": 10485760,
+            "settled_upload_charges": {
+              "upload_reserved_packed_bytes": [
+                0
+              ],
+              "pinned_upload_bytes": [
+                0
+              ],
+              "upload_ticket_metadata_bytes": [
+                0
+              ],
+              "upload_policy_headroom_bytes": [
+                0
+              ],
+              "unknown_upload_bytes": [
+                0
+              ]
+            },
+            "worker_counts": {
+              "workers_created": 1,
+              "worker_reuses": 2559,
+              "workers_joined": 0
+            },
+            "cache_uploads": 25116,
+            "cache_hits": 0,
+            "cache_evictions": 25052,
+            "cache_peak_bytes": 219754496,
+            "cache_cap_bytes": 335544320,
+            "pending_cache_upload_bytes": 0,
+            "last_worker_status": "idle_retained",
+            "release_claim": "unobserved"
+          },
+          {
+            "id": "07-lookahead-fresh",
+            "selector": "model_factory::dense_bf16_tests::full40::fresh_quality::mixed_storage_middle64_retained_lookahead_fresh_quality_retained_generation",
+            "status": "passed",
+            "returncode": 0,
+            "wall_seconds": 107.85225013643503,
+            "supervisor_sha256": "128344e3978363d6c609625a4e80c3a17c7d4ed49dcd8439a318ecc5e4fecf11",
+            "stdout_sha256": "58994eeec92cfe629aa2148624c37104ce56a3e789ffb33e433425b78c9315fa",
+            "stderr_sha256": "66cde7eed413419a570fbd82e780c3e8e72359fbcb59ab72ba0e4fb1fe9c9ad1",
+            "authenticated_echild": true,
+            "recorded_owners_absent": true,
+            "all8_pre_and_post_idle": true,
+            "report_sha256": "33e13c8e11007d40006f4b3a578af986e491f6dec76920561d43c04dbbbe0ec2",
+            "metrics": 5427,
+            "logits": 9187840,
+            "fingerprint_calls": 64,
+            "requested_policy": {
+              "gpu_overlap_claim": false,
+              "host_quota_unchanged": true,
+              "mode": "retained",
+              "physical_overhead_measured": false,
+              "policy_headroom_bytes": 16777216,
+              "readiness_timeout_ms": 30000
+            },
+            "effective_policy": {
+              "gpu_overlap_claim": false,
+              "host_quota_unchanged": true,
+              "mode": "retained",
+              "physical_overhead_measured": false,
+              "policy_headroom_bytes": 16777216,
+              "readiness_timeout_ms": 30000
+            },
+            "positive_read_and_cache_upload_intervals": 64,
+            "host_peak_bytes": 36701896,
+            "host_cap_bytes": 67108864,
+            "host_slack_bytes": 30406968,
+            "minimum_retained_reservation_bytes": 36701896,
+            "last_host_charge_bytes": 10485760,
+            "settled_upload_charges": {
+              "upload_reserved_packed_bytes": [
+                0
+              ],
+              "pinned_upload_bytes": [
+                0
+              ],
+              "upload_ticket_metadata_bytes": [
+                0
+              ],
+              "upload_policy_headroom_bytes": [
+                0
+              ],
+              "unknown_upload_bytes": [
+                0
+              ]
+            },
+            "worker_counts": {
+              "workers_created": 1,
+              "worker_reuses": 2559,
+              "workers_joined": 0
+            },
+            "cache_uploads": 25116,
+            "cache_hits": 0,
+            "cache_evictions": 25052,
+            "cache_peak_bytes": 219754496,
+            "cache_cap_bytes": 335544320,
+            "pending_cache_upload_bytes": 0,
+            "last_worker_status": "idle_retained",
+            "release_claim": "unobserved"
+          },
+          {
+            "id": "08-blocking-ordinary",
+            "selector": "model_factory::dense_bf16_tests::full40::fresh_quality::mixed_storage_middle64_retained_blocking_fresh_quality_no_observer_equality",
+            "status": "passed",
+            "returncode": 0,
+            "wall_seconds": 108.04424769990146,
+            "supervisor_sha256": "4d7940cc33179a8b2ef9581892d739d4a9b3202bbbf3f32a70485c143b782a0f",
+            "stdout_sha256": "7c8a4eb27253e7ea39ccbf42317259a464caddcc50de61c4d78199eebd111188",
+            "stderr_sha256": "ee7875208dc259cd55886388389deb7512d51c02da3ed6b5af47e9e4551590be",
+            "authenticated_echild": true,
+            "recorded_owners_absent": true,
+            "all8_pre_and_post_idle": true,
+            "report_sha256": "04f9e86466a87788ffc0315e75e26a80f096a1cabd042ebdfaefd89f0778e349",
+            "metrics": 27,
+            "logits": 9187840,
+            "fingerprint_calls": 64,
+            "requested_policy": {
+              "gpu_overlap_claim": false,
+              "host_quota_unchanged": true,
+              "mode": "retained",
+              "physical_overhead_measured": false,
+              "policy_headroom_bytes": 16777216,
+              "readiness_timeout_ms": 30000
+            },
+            "effective_policy": {
+              "gpu_overlap_claim": false,
+              "host_quota_unchanged": true,
+              "mode": "retained",
+              "physical_overhead_measured": false,
+              "policy_headroom_bytes": 16777216,
+              "readiness_timeout_ms": 30000
+            },
+            "positive_read_and_cache_upload_intervals": 64,
+            "host_peak_bytes": 36701896,
+            "host_cap_bytes": 67108864,
+            "host_slack_bytes": 30406968,
+            "minimum_retained_reservation_bytes": 36701896,
+            "last_host_charge_bytes": 10485760,
+            "settled_upload_charges": {
+              "upload_reserved_packed_bytes": [
+                0
+              ],
+              "pinned_upload_bytes": [
+                0
+              ],
+              "upload_ticket_metadata_bytes": [
+                0
+              ],
+              "upload_policy_headroom_bytes": [
+                0
+              ],
+              "unknown_upload_bytes": [
+                0
+              ]
+            },
+            "worker_counts": {
+              "workers_created": 1,
+              "worker_reuses": 2559,
+              "workers_joined": 0
+            },
+            "cache_uploads": 25116,
+            "cache_hits": 0,
+            "cache_evictions": 25052,
+            "cache_peak_bytes": 219754496,
+            "cache_cap_bytes": 335544320,
+            "pending_cache_upload_bytes": 0,
+            "last_worker_status": "idle_retained",
+            "release_claim": "unobserved"
+          },
+          {
+            "id": "09-lookahead-ordinary",
+            "selector": "model_factory::dense_bf16_tests::full40::fresh_quality::mixed_storage_middle64_retained_lookahead_fresh_quality_no_observer_equality",
+            "status": "passed",
+            "returncode": 0,
+            "wall_seconds": 104.15637424774468,
+            "supervisor_sha256": "60c87a4cc1de00cda99bbe97aaab16ae0c574028f1f4ee3b26bc4ce603c33949",
+            "stdout_sha256": "f7dadae1ef8321981c29723fc4202439eb21711a591fa67bdd6d1ae17c04cdc1",
+            "stderr_sha256": "ee7875208dc259cd55886388389deb7512d51c02da3ed6b5af47e9e4551590be",
+            "authenticated_echild": true,
+            "recorded_owners_absent": true,
+            "all8_pre_and_post_idle": true,
+            "report_sha256": "78bd7089dee7037d5c07c9188ae936a4ed25ded668c5ae0a7168c2f60c92a0ce",
+            "metrics": 27,
+            "logits": 9187840,
+            "fingerprint_calls": 64,
+            "requested_policy": {
+              "gpu_overlap_claim": false,
+              "host_quota_unchanged": true,
+              "mode": "retained",
+              "physical_overhead_measured": false,
+              "policy_headroom_bytes": 16777216,
+              "readiness_timeout_ms": 30000
+            },
+            "effective_policy": {
+              "gpu_overlap_claim": false,
+              "host_quota_unchanged": true,
+              "mode": "retained",
+              "physical_overhead_measured": false,
+              "policy_headroom_bytes": 16777216,
+              "readiness_timeout_ms": 30000
+            },
+            "positive_read_and_cache_upload_intervals": 64,
+            "host_peak_bytes": 36701896,
+            "host_cap_bytes": 67108864,
+            "host_slack_bytes": 30406968,
+            "minimum_retained_reservation_bytes": 36701896,
+            "last_host_charge_bytes": 10485760,
+            "settled_upload_charges": {
+              "upload_reserved_packed_bytes": [
+                0
+              ],
+              "pinned_upload_bytes": [
+                0
+              ],
+              "upload_ticket_metadata_bytes": [
+                0
+              ],
+              "upload_policy_headroom_bytes": [
+                0
+              ],
+              "unknown_upload_bytes": [
+                0
+              ]
+            },
+            "worker_counts": {
+              "workers_created": 1,
+              "worker_reuses": 2559,
+              "workers_joined": 0
+            },
+            "cache_uploads": 25116,
+            "cache_hits": 0,
+            "cache_evictions": 25052,
+            "cache_peak_bytes": 219754496,
+            "cache_cap_bytes": 335544320,
+            "pending_cache_upload_bytes": 0,
+            "last_worker_status": "idle_retained",
+            "release_claim": "unobserved"
+          },
+          {
+            "id": "10-blocking-cold",
+            "selector": "model_factory::dense_bf16_tests::full40::fresh_quality::mixed_storage_middle64_retained_blocking_fresh_quality_cold_owner_restart",
+            "status": "passed",
+            "returncode": 0,
+            "wall_seconds": 62.784269236028194,
+            "supervisor_sha256": "e4528d05274468bd84a2de9a984dd23429d4a14557c605b8b4d442c1671b209b",
+            "stdout_sha256": "179077f915124603d7034cd0e2399a6de1d2ce74bdd15f48c69e5d553eaf952a",
+            "stderr_sha256": "90a14a54f5f6ff5f034f3263e01098d104e5f59a62913b76f881d674f507d845",
+            "authenticated_echild": true,
+            "recorded_owners_absent": true,
+            "all8_pre_and_post_idle": true,
+            "report_sha256": "7cbf114c4a4677a2e823b09e5c5db9b3964b60bd29caddae98e9e51d3e8ee99f",
+            "metrics": 1809,
+            "logits": 3228160,
+            "fingerprint_calls": 28,
+            "requested_policy": {
+              "gpu_overlap_claim": false,
+              "host_quota_unchanged": true,
+              "mode": "retained",
+              "physical_overhead_measured": false,
+              "policy_headroom_bytes": 16777216,
+              "readiness_timeout_ms": 30000
+            },
+            "effective_policy": {
+              "gpu_overlap_claim": false,
+              "host_quota_unchanged": true,
+              "mode": "retained",
+              "physical_overhead_measured": false,
+              "policy_headroom_bytes": 16777216,
+              "readiness_timeout_ms": 30000
+            },
+            "positive_read_and_cache_upload_intervals": 28,
+            "host_peak_bytes": 36701896,
+            "host_cap_bytes": 67108864,
+            "host_slack_bytes": 30406968,
+            "minimum_retained_reservation_bytes": 36701896,
+            "last_host_charge_bytes": 10485760,
+            "settled_upload_charges": {
+              "upload_reserved_packed_bytes": [
+                0
+              ],
+              "pinned_upload_bytes": [
+                0
+              ],
+              "upload_ticket_metadata_bytes": [
+                0
+              ],
+              "upload_policy_headroom_bytes": [
+                0
+              ],
+              "unknown_upload_bytes": [
+                0
+              ]
+            },
+            "worker_counts": {
+              "workers_created": 1,
+              "worker_reuses": 1119,
+              "workers_joined": 0
+            },
+            "cache_uploads": 11354,
+            "cache_hits": 0,
+            "cache_evictions": 11290,
+            "cache_peak_bytes": 219754496,
+            "cache_cap_bytes": 335544320,
+            "pending_cache_upload_bytes": 0,
+            "last_worker_status": "idle_retained",
+            "release_claim": "unobserved"
+          },
+          {
+            "id": "11-lookahead-cold",
+            "selector": "model_factory::dense_bf16_tests::full40::fresh_quality::mixed_storage_middle64_retained_lookahead_fresh_quality_cold_owner_restart",
+            "status": "passed",
+            "returncode": 0,
+            "wall_seconds": 60.485627772286534,
+            "supervisor_sha256": "8e8af86643bcaf8c5e0581c4f92bc2c3e766ce2e9619aac4b4b7d85b7ab64c42",
+            "stdout_sha256": "5b0d68c1a0cf05c6a318e1047d99fb889cb06482d74133da274133ab85ab3603",
+            "stderr_sha256": "90a14a54f5f6ff5f034f3263e01098d104e5f59a62913b76f881d674f507d845",
+            "authenticated_echild": true,
+            "recorded_owners_absent": true,
+            "all8_pre_and_post_idle": true,
+            "report_sha256": "f874ed42f9880e04918a2c84df69c114f86de1949178596feed698c0b970d262",
+            "metrics": 1809,
+            "logits": 3228160,
+            "fingerprint_calls": 28,
+            "requested_policy": {
+              "gpu_overlap_claim": false,
+              "host_quota_unchanged": true,
+              "mode": "retained",
+              "physical_overhead_measured": false,
+              "policy_headroom_bytes": 16777216,
+              "readiness_timeout_ms": 30000
+            },
+            "effective_policy": {
+              "gpu_overlap_claim": false,
+              "host_quota_unchanged": true,
+              "mode": "retained",
+              "physical_overhead_measured": false,
+              "policy_headroom_bytes": 16777216,
+              "readiness_timeout_ms": 30000
+            },
+            "positive_read_and_cache_upload_intervals": 28,
+            "host_peak_bytes": 36701896,
+            "host_cap_bytes": 67108864,
+            "host_slack_bytes": 30406968,
+            "minimum_retained_reservation_bytes": 36701896,
+            "last_host_charge_bytes": 10485760,
+            "settled_upload_charges": {
+              "upload_reserved_packed_bytes": [
+                0
+              ],
+              "pinned_upload_bytes": [
+                0
+              ],
+              "upload_ticket_metadata_bytes": [
+                0
+              ],
+              "upload_policy_headroom_bytes": [
+                0
+              ],
+              "unknown_upload_bytes": [
+                0
+              ]
+            },
+            "worker_counts": {
+              "workers_created": 1,
+              "worker_reuses": 1119,
+              "workers_joined": 0
+            },
+            "cache_uploads": 11354,
+            "cache_hits": 0,
+            "cache_evictions": 11290,
+            "cache_peak_bytes": 219754496,
+            "cache_cap_bytes": 335544320,
+            "pending_cache_upload_bytes": 0,
+            "last_worker_status": "idle_retained",
+            "release_claim": "unobserved"
+          }
+        ],
+        "final_idle_status": "verified",
+        "final_authenticated_echild": true,
+        "final_recorded_owners_absent": true,
+        "all8_locks_released_and_reprobed": true,
+        "physical_scope": "Logical reservations and actual test assertions; not measured RSS/memlock/allocator overhead or a general CUDA release certificate",
+        "performance_accepted": false
+      },
+      "actual_invocations": [
+        {
+          "id": "01-model-root-route",
+          "selector": "transformer::standard::cuda::residency::retained_upload::tests::real_root_route_rejects_metadata_less_provider_before_payload_read",
+          "executed_argv": [
+            "target/validation/retained-upload-57e4629-gpu-20261016-01/staged/model",
+            "transformer::standard::cuda::residency::retained_upload::tests::real_root_route_rejects_metadata_less_provider_before_payload_read",
+            "--exact",
+            "--ignored",
+            "--nocapture",
+            "--test-threads=1"
+          ],
+          "binary_sha256": "a01eacd1b02cdd243576977a690b719b859293235c45ff4cd79a80b5401e5387",
+          "supervisor_sha256": "e3080d69869d381a69dd56b6c47c10c2a114ff25919a8e90e62078e11d1209aa",
+          "supervisor_wall_seconds": 6.602802440524101,
+          "wall_scope": "Enclosing qualifier wall, not model latency or same-cut performance evidence"
+        },
+        {
+          "id": "02-model-worker-route",
+          "selector": "transformer::standard::cuda::residency::retained_upload::tests::real_worker_route_rejects_metadata_less_provider_before_payload_read",
+          "executed_argv": [
+            "target/validation/retained-upload-57e4629-gpu-20261016-01/staged/model",
+            "transformer::standard::cuda::residency::retained_upload::tests::real_worker_route_rejects_metadata_less_provider_before_payload_read",
+            "--exact",
+            "--ignored",
+            "--nocapture",
+            "--test-threads=1"
+          ],
+          "binary_sha256": "a01eacd1b02cdd243576977a690b719b859293235c45ff4cd79a80b5401e5387",
+          "supervisor_sha256": "1e3194f30d3a7ea5ee17f47cf0163b836653377a3851393e9aeec32f4bac2dd4",
+          "supervisor_wall_seconds": 6.501801460981369,
+          "wall_scope": "Enclosing qualifier wall, not model latency or same-cut performance evidence"
+        },
+        {
+          "id": "03-model-owner-lifecycle",
+          "selector": "transformer::standard::cuda::residency::retained_upload::tests::real_owner_opt_in_matches_default_and_reloads_only_after_consumer_proof",
+          "executed_argv": [
+            "target/validation/retained-upload-57e4629-gpu-20261016-01/staged/model",
+            "transformer::standard::cuda::residency::retained_upload::tests::real_owner_opt_in_matches_default_and_reloads_only_after_consumer_proof",
+            "--exact",
+            "--ignored",
+            "--nocapture",
+            "--test-threads=1"
+          ],
+          "binary_sha256": "a01eacd1b02cdd243576977a690b719b859293235c45ff4cd79a80b5401e5387",
+          "supervisor_sha256": "c15f0b0bbd5a022ecb94c337a7d04c192d3603cc9425e70a81c81ff4d96a14ce",
+          "supervisor_wall_seconds": 6.507474023848772,
+          "wall_scope": "Enclosing qualifier wall, not model latency or same-cut performance evidence"
+        },
+        {
+          "id": "04-blocking-full40",
+          "selector": "model_factory::dense_bf16_tests::full40::numeric_bf16_mixed_storage_middle64_retained_blocking_public_factory_full40_logits_routes_states_match_profile_reference",
+          "executed_argv": [
+            "target/validation/retained-upload-57e4629-gpu-20261016-01/staged/composition",
+            "model_factory::dense_bf16_tests::full40::numeric_bf16_mixed_storage_middle64_retained_blocking_public_factory_full40_logits_routes_states_match_profile_reference",
+            "--exact",
+            "--ignored",
+            "--nocapture",
+            "--test-threads=1"
+          ],
+          "binary_sha256": "2c15bbde1aa377630045068439a68adf260c3c836a8de69b120784deb0b067bd",
+          "supervisor_sha256": "37df9011c042117c703659d548e92748fd68511dfbfde923fd389859a02672c6",
+          "supervisor_wall_seconds": 31.841502122581005,
+          "wall_scope": "Enclosing qualifier wall, not model latency or same-cut performance evidence"
+        },
+        {
+          "id": "05-lookahead-full40",
+          "selector": "model_factory::dense_bf16_tests::full40::numeric_bf16_mixed_storage_middle64_retained_lookahead_public_factory_full40_logits_routes_states_match_profile_reference",
+          "executed_argv": [
+            "target/validation/retained-upload-57e4629-gpu-20261016-01/staged/composition",
+            "model_factory::dense_bf16_tests::full40::numeric_bf16_mixed_storage_middle64_retained_lookahead_public_factory_full40_logits_routes_states_match_profile_reference",
+            "--exact",
+            "--ignored",
+            "--nocapture",
+            "--test-threads=1"
+          ],
+          "binary_sha256": "2c15bbde1aa377630045068439a68adf260c3c836a8de69b120784deb0b067bd",
+          "supervisor_sha256": "afa7dbb268f0c85dee167d0dcf34c71af459d25c38ccd2f1d91b170c02cc51ac",
+          "supervisor_wall_seconds": 30.985442547127604,
+          "wall_scope": "Enclosing qualifier wall, not model latency or same-cut performance evidence"
+        },
+        {
+          "id": "06-blocking-fresh",
+          "selector": "model_factory::dense_bf16_tests::full40::fresh_quality::mixed_storage_middle64_retained_blocking_fresh_quality_retained_generation",
+          "executed_argv": [
+            "target/validation/retained-upload-57e4629-gpu-20261016-01/staged/composition",
+            "model_factory::dense_bf16_tests::full40::fresh_quality::mixed_storage_middle64_retained_blocking_fresh_quality_retained_generation",
+            "--exact",
+            "--ignored",
+            "--nocapture",
+            "--test-threads=1"
+          ],
+          "binary_sha256": "2c15bbde1aa377630045068439a68adf260c3c836a8de69b120784deb0b067bd",
+          "supervisor_sha256": "7648b7c3fd3b2921879226288956c19524e03be4cd7421501046672b6c0b15b3",
+          "supervisor_wall_seconds": 114.7515106163919,
+          "wall_scope": "Enclosing qualifier wall, not model latency or same-cut performance evidence"
+        },
+        {
+          "id": "07-lookahead-fresh",
+          "selector": "model_factory::dense_bf16_tests::full40::fresh_quality::mixed_storage_middle64_retained_lookahead_fresh_quality_retained_generation",
+          "executed_argv": [
+            "target/validation/retained-upload-57e4629-gpu-20261016-01/staged/composition",
+            "model_factory::dense_bf16_tests::full40::fresh_quality::mixed_storage_middle64_retained_lookahead_fresh_quality_retained_generation",
+            "--exact",
+            "--ignored",
+            "--nocapture",
+            "--test-threads=1"
+          ],
+          "binary_sha256": "2c15bbde1aa377630045068439a68adf260c3c836a8de69b120784deb0b067bd",
+          "supervisor_sha256": "128344e3978363d6c609625a4e80c3a17c7d4ed49dcd8439a318ecc5e4fecf11",
+          "supervisor_wall_seconds": 107.85225013643503,
+          "wall_scope": "Enclosing qualifier wall, not model latency or same-cut performance evidence"
+        },
+        {
+          "id": "08-blocking-ordinary",
+          "selector": "model_factory::dense_bf16_tests::full40::fresh_quality::mixed_storage_middle64_retained_blocking_fresh_quality_no_observer_equality",
+          "executed_argv": [
+            "target/validation/retained-upload-57e4629-gpu-20261016-01/staged/composition",
+            "model_factory::dense_bf16_tests::full40::fresh_quality::mixed_storage_middle64_retained_blocking_fresh_quality_no_observer_equality",
+            "--exact",
+            "--ignored",
+            "--nocapture",
+            "--test-threads=1"
+          ],
+          "binary_sha256": "2c15bbde1aa377630045068439a68adf260c3c836a8de69b120784deb0b067bd",
+          "supervisor_sha256": "4d7940cc33179a8b2ef9581892d739d4a9b3202bbbf3f32a70485c143b782a0f",
+          "supervisor_wall_seconds": 108.04424769990146,
+          "wall_scope": "Enclosing qualifier wall, not model latency or same-cut performance evidence"
+        },
+        {
+          "id": "09-lookahead-ordinary",
+          "selector": "model_factory::dense_bf16_tests::full40::fresh_quality::mixed_storage_middle64_retained_lookahead_fresh_quality_no_observer_equality",
+          "executed_argv": [
+            "target/validation/retained-upload-57e4629-gpu-20261016-01/staged/composition",
+            "model_factory::dense_bf16_tests::full40::fresh_quality::mixed_storage_middle64_retained_lookahead_fresh_quality_no_observer_equality",
+            "--exact",
+            "--ignored",
+            "--nocapture",
+            "--test-threads=1"
+          ],
+          "binary_sha256": "2c15bbde1aa377630045068439a68adf260c3c836a8de69b120784deb0b067bd",
+          "supervisor_sha256": "60c87a4cc1de00cda99bbe97aaab16ae0c574028f1f4ee3b26bc4ce603c33949",
+          "supervisor_wall_seconds": 104.15637424774468,
+          "wall_scope": "Enclosing qualifier wall, not model latency or same-cut performance evidence"
+        },
+        {
+          "id": "10-blocking-cold",
+          "selector": "model_factory::dense_bf16_tests::full40::fresh_quality::mixed_storage_middle64_retained_blocking_fresh_quality_cold_owner_restart",
+          "executed_argv": [
+            "target/validation/retained-upload-57e4629-gpu-20261016-01/staged/composition",
+            "model_factory::dense_bf16_tests::full40::fresh_quality::mixed_storage_middle64_retained_blocking_fresh_quality_cold_owner_restart",
+            "--exact",
+            "--ignored",
+            "--nocapture",
+            "--test-threads=1"
+          ],
+          "binary_sha256": "2c15bbde1aa377630045068439a68adf260c3c836a8de69b120784deb0b067bd",
+          "supervisor_sha256": "e4528d05274468bd84a2de9a984dd23429d4a14557c605b8b4d442c1671b209b",
+          "supervisor_wall_seconds": 62.784269236028194,
+          "wall_scope": "Enclosing qualifier wall, not model latency or same-cut performance evidence"
+        },
+        {
+          "id": "11-lookahead-cold",
+          "selector": "model_factory::dense_bf16_tests::full40::fresh_quality::mixed_storage_middle64_retained_lookahead_fresh_quality_cold_owner_restart",
+          "executed_argv": [
+            "target/validation/retained-upload-57e4629-gpu-20261016-01/staged/composition",
+            "model_factory::dense_bf16_tests::full40::fresh_quality::mixed_storage_middle64_retained_lookahead_fresh_quality_cold_owner_restart",
+            "--exact",
+            "--ignored",
+            "--nocapture",
+            "--test-threads=1"
+          ],
+          "binary_sha256": "2c15bbde1aa377630045068439a68adf260c3c836a8de69b120784deb0b067bd",
+          "supervisor_sha256": "8e8af86643bcaf8c5e0581c4f92bc2c3e766ce2e9619aac4b4b7d85b7ab64c42",
+          "supervisor_wall_seconds": 60.485627772286534,
+          "wall_scope": "Enclosing qualifier wall, not model latency or same-cut performance evidence"
+        }
+      ]
+    }
+  ],
+  "raw_availability": "Referenced target/validation files are local ignored raw artifacts, not publicly included here",
+  "performance_accepted": false
+}

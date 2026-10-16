@@ -1,0 +1,146 @@
+{
+  "schema": "ferrule.engineering.upload-controls-cpu-validation.v1",
+  "status": "passed",
+  "unique_tests": 47,
+  "tests": [
+    {
+      "id": "controls",
+      "tests": 23,
+      "argv": [
+        "/usr/bin/env",
+        "-i",
+        "PATH=/usr/bin:/bin",
+        "HOME=/root",
+        "CUDA_VISIBLE_DEVICES=",
+        "NVIDIA_VISIBLE_DEVICES=none",
+        "TMPDIR=/tmp",
+        "/home/admin/wxw403883/anaconda3/bin/python3.12",
+        "-S",
+        "-B",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "papers/arxiv/experiments/storage_demand/paired_read_v1",
+        "-p",
+        "test_performance.py",
+        "-v"
+      ],
+      "timeout_seconds": 300,
+      "returncode": 0,
+      "authenticated_cpu_drain": true,
+      "raw_receipt": {
+        "path": "target/validation/retained-performance-57e4629-20261016-01/cache-health-review-fix-01/cpu-controls-final.json",
+        "sha256": "452757607530da4b85d119185aa8081485289bd8972e1883ded213079695330b"
+      }
+    },
+    {
+      "id": "wrapper",
+      "tests": 5,
+      "argv": [
+        "/usr/bin/env",
+        "-i",
+        "PATH=/usr/bin:/bin",
+        "HOME=/root",
+        "CUDA_VISIBLE_DEVICES=",
+        "NVIDIA_VISIBLE_DEVICES=none",
+        "TMPDIR=/tmp",
+        "/home/admin/wxw403883/anaconda3/bin/python3.12",
+        "-S",
+        "-B",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "scripts/tests",
+        "-p",
+        "test_profile_capture.py",
+        "-v"
+      ],
+      "timeout_seconds": 120,
+      "returncode": 0,
+      "authenticated_cpu_drain": true,
+      "raw_receipt": {
+        "path": "target/validation/retained-performance-57e4629-20261016-01/cpu-final-wrapper.json",
+        "sha256": "c0d8ba3ac94b4289cbf654c1d5515f36119add477a61f12a460818daf2104778"
+      }
+    },
+    {
+      "id": "existing-profiler",
+      "tests": 19,
+      "argv": [
+        "/usr/bin/env",
+        "-i",
+        "PATH=/usr/bin:/bin",
+        "HOME=/root",
+        "CUDA_VISIBLE_DEVICES=",
+        "NVIDIA_VISIBLE_DEVICES=none",
+        "TMPDIR=/tmp",
+        "/home/admin/wxw403883/anaconda3/bin/python3.12",
+        "-S",
+        "-B",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "scripts/tests",
+        "-p",
+        "test_bench_profiling.py",
+        "-v"
+      ],
+      "timeout_seconds": 120,
+      "returncode": 0,
+      "authenticated_cpu_drain": true,
+      "raw_receipt": {
+        "path": "target/validation/retained-performance-57e4629-20261016-01/cpu-final-existing-profiler.json",
+        "sha256": "4546ae922072472b24a61d825118c6b13fd836f64062a6a416a9853d21ae8edb"
+      }
+    }
+  ],
+  "fresh_interpreter_pin_and_no_go_check": {
+    "passed": true,
+    "raw_receipt": {
+      "path": "target/validation/retained-performance-57e4629-20261016-01/cache-health-review-fix-01/cpu-fresh-pin-and-no-go.json",
+      "sha256": "3481c099b2172e73602660b0bbb7fcaa94cb9b6fc5d09d2c9d1af132a68559c2"
+    }
+  },
+  "raw_completed_stage_receipt_hashes_checked": 220,
+  "performance_gpu_tests_issued": 0,
+  "release_builds": 0,
+  "production_or_manuscript_edits": false,
+  "commits": 0,
+  "stage_heads": {
+    "application": "57e46295d3cf5725605e076eb5543f6124bd9245",
+    "live_head_at_closeout": "e8c8930336cd5cf73d375aa5745333ac274ad744"
+  },
+  "preserved_cpu_preparation_failure": {
+    "path": "target/validation/retained-performance-57e4629-20261016-01/cpu-prepare-01.json",
+    "sha256": "1798c68ecb7283bc5f489bb878c163d5bb64b220d61bf3f56f362f1e5af02d10",
+    "reason": "Initial check used SDK filename build suffix; corrected to actual Debian control Version2025.3.1.90-253135822126v0; CPU-only failure preserved, no GPU retry"
+  },
+  "subsequent_cpu_preparation": {
+    "path": "target/validation/retained-performance-57e4629-20261016-01/cpu-prepare-02.json",
+    "sha256": "713055cf6514b663ff0d22f4d2d2afde7ccb63a16b82de7d0b39e5f6d101139f",
+    "status": "passed"
+  },
+  "final_source_pin_check": {
+    "path": "target/validation/retained-performance-57e4629-20261016-01/cache-health-review-fix-01/cpu-fresh-pin-and-no-go.json",
+    "sha256": "3481c099b2172e73602660b0bbb7fcaa94cb9b6fc5d09d2c9d1af132a68559c2"
+  },
+  "cache_health_review_fix": {
+    "previous_packet_not_approved": true,
+    "previous_review_packet_sha256": "bf1f5391e3c28fec604bb8dd215cb8bd9cf7f6186c8492d82862610e164312b7",
+    "unchanged_work_cache_mutations_rejected": 720,
+    "shape_type_mutations_rejected": 5232,
+    "original_reviewer_synchronous_pattern_cases_rejected": 120,
+    "all24_jobs_both_endpoints_both_schedules": true,
+    "retained_minimum_not_applied_to_sync": true,
+    "changed_control_tests_rerun": 23,
+    "unchanged_prior_wrapper_and_profiler_tests_retained": 24,
+    "existing_retained_reports_cpu_revalidated": 8,
+    "real_report_recheck": {
+      "path": "target/validation/retained-performance-57e4629-20261016-01/cache-health-review-fix-01/cpu-eight-completed-retained-reports.json",
+      "sha256": "53bcd36a7a51a6a4dc1e2afd2a8fff4ce6de84470c48a3263406080d446ce8e1"
+    }
+  }
+}

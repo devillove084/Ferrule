@@ -1,0 +1,31 @@
+{
+  "schema": "ferrule.engineering.curated-stage-manifest.v1",
+  "scope": "Bounded engineering receipts, pre-execution CPU validation and partial actual whole-test comparison; official profiling blocked; no manuscript or complete24-job acceptance",
+  "files": {
+    "README.md": {
+      "sha256": "e464dfa1b6b5a4ec38fb6bec431141eaf57246a7b6ec61888d19b06ece93ba54",
+      "bytes": 11491
+    },
+    "completed-stages.json": {
+      "sha256": "8492747e3db129ba63faaf947d23e12c22d94a1e9ffdf1da4ab0bbdcc1bf81ec",
+      "bytes": 58785
+    },
+    "control-hashes.json": {
+      "sha256": "48307c92d6c5761fb3396eca046bc03c6004990d995dbc9e5280bf8ec0b536fa",
+      "bytes": 2271
+    },
+    "source-pins.json": {
+      "sha256": "fc1ad8959ee9a9569aea3358033abfbede34d1b78fef82b5dda1cb9e33a38e40",
+      "bytes": 58684
+    },
+    "validation.json": {
+      "sha256": "5e979942c3980bc7bc5349f44837ca05f195d212eb38eaa64d9c3f4582f0195c",
+      "bytes": 5049
+    },
+    "performance-results.json": {
+      "sha256": "36aef0d5aad9102a59f6eac106e41696ac204607bbcdb48d7373e5243a60a233",
+      "bytes": 313419
+    }
+  },
+  "raw_target_vendor_weights_or_binaries_included": false
+}

@@ -71,7 +71,7 @@ class Custodian:
         self.active = {}
         self.custody = dict(status='tracking', method='linux-subreaper-waitid',
                             containment_verified=True, launch_id=launch_id,
-                            helper_identity=identity(self.pid), root_identity=None,
+                            helper_identity=identity(self.pid), root_identity=None, root_session_ready=False,
                             boot_id=Path('/proc/sys/kernel/random/boot_id').read_text().strip(),
                             entries=self.entries, errors=[], reporting_errors=[], echild=False)
 
@@ -146,13 +146,17 @@ class Custodian:
             self.persist()
         return False
 
-    def launch(self, argv, input_fd):
+    def launch(self, argv, input_fd, ready_seconds=5):
         read_gate, write_gate = os.pipe()
+        read_ready, write_ready = os.pipe()
         self.root_pid = os.fork()
         if self.root_pid == 0:
             try:
                 os.close(write_gate)
+                os.close(read_ready)
                 os.setsid()
+                os.write(write_ready, b'R')
+                os.close(write_ready)
                 if os.read(read_gate, 1) != b'G':
                     os._exit(125)
                 os.close(read_gate)
@@ -166,11 +170,24 @@ class Custodian:
                 os.write(2, f'Root exec: {type(exc).__name__}: {exc}\n'.encode())
                 os._exit(127)
         os.close(read_gate)
+        os.close(write_ready)
         self.custody['echild'] = False
         try:
-            self.register(self.root_pid)
+            # The child cannot exec before this parent has recorded its final
+            # session identity. Waiting for a byte also bounds setsid failure.
+            if not select.select([read_ready], [], [], ready_seconds)[0] or os.read(read_ready, 1) != b'R':
+                raise RuntimeError('Root post-setsid readiness missing or expired')
+            row = self.register(self.root_pid)
+            current = row['identity']
+            if current['pid'] != self.root_pid or current['pgrp'] != self.root_pid or current['session'] != self.root_pid:
+                raise RuntimeError('Root post-setsid group/session identity mismatch')
+            self.custody['root_session_ready'] = True
+            self.persist()
+            if self.custody['reporting_errors']:
+                raise RuntimeError('Root post-setsid custody checkpoint failed before exec')
             os.write(write_gate, b'G')
         finally:
+            os.close(read_ready)
             os.close(write_gate)
 
     def cleanup(self, seconds=CLEANUP_SECONDS):
@@ -243,8 +260,8 @@ def main():
         owner.journal = config.get('journal')
         owner.persist()
         if config['argv'] is not None:
-            owner.launch(config['argv'], int(input_fd))
             deadline = time.monotonic() + config['timeout']
+            owner.launch(config['argv'], int(input_fd), min(5, config['timeout']))
             while owner.root_code is None:
                 owner.reap_available()
                 for pid in owner.children():
