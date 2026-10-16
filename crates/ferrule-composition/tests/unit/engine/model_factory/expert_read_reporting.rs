@@ -313,6 +313,16 @@ struct PredictionStream {
     report: StrictReport,
 }
 
+pub(crate) struct PredictionSample<'a> {
+    pub(crate) rows: usize,
+    pub(crate) actual: &'a [f32],
+    pub(crate) expected: &'a [f32],
+    pub(crate) actual_token: u32,
+    pub(crate) expected_token: u32,
+    pub(crate) history_matches: bool,
+    pub(crate) label: &'a str,
+}
+
 pub(crate) struct PredictionReports {
     diagnostic: bool,
     streams: BTreeMap<&'static str, PredictionStream>,
@@ -333,17 +343,16 @@ impl PredictionReports {
             .collect(),
         }
     }
-    pub(crate) fn record(
-        &mut self,
-        stream: &'static str,
-        rows: usize,
-        actual: &[f32],
-        expected: &[f32],
-        actual_token: u32,
-        expected_token: u32,
-        history_matches: bool,
-        label: &str,
-    ) {
+    pub(crate) fn record(&mut self, stream: &'static str, sample: PredictionSample<'_>) {
+        let PredictionSample {
+            rows,
+            actual,
+            expected,
+            actual_token,
+            expected_token,
+            history_matches,
+            label,
+        } = sample;
         let value = self.streams.get_mut(stream).unwrap();
         value.calls += 1;
         value.rows += rows;
@@ -1349,6 +1358,73 @@ mod tests {
     }
 
     #[test]
+    fn prediction_sample_preserves_rows_logits_tokens_and_label() {
+        let mut reports = PredictionReports::new(false);
+        let before = reports.json();
+        reports.record(
+            "common_history",
+            PredictionSample {
+                rows: 2,
+                actual: &[0., 1., 2., 3.],
+                expected: &[0., 1., 2., 4.],
+                actual_token: 2,
+                expected_token: 3,
+                history_matches: true,
+                label: "multirow sample",
+            },
+        );
+        let report = reports.json();
+        let stream = &report["streams"]["common_history"];
+        assert_eq!(stream["prediction_calls"], 1);
+        assert_eq!(stream["logit_rows"], 2);
+        assert_eq!(stream["logit_values_compared"], 4);
+        assert_eq!(stream["greedy_checks"], 1);
+        assert_eq!(stream["input_history_matched_reference_calls"], 1);
+        assert_eq!(stream["metrics"].as_array().unwrap().len(), 1);
+        assert_eq!(stream["metrics"][0]["label"], "multirow sample");
+        assert_eq!(stream["metrics"][0]["elements"], 4);
+        assert_eq!(stream["metrics"][0]["failures"], 1);
+        assert_eq!(stream["metrics"][0]["first_failure"]["actual"], 3.0);
+        assert_eq!(stream["metrics"][0]["first_failure"]["expected"], 4.0);
+        assert_eq!(
+            stream["failures"],
+            json!(["multirow sample/greedy: 2 != 3", "multirow sample"])
+        );
+        for name in ["free_feedback", "reset_replay", "fork_replay"] {
+            assert_eq!(report["streams"][name], before["streams"][name]);
+        }
+    }
+
+    #[test]
+    fn prediction_sample_divergent_history_keeps_greedy_check_without_logit_comparison() {
+        let mut reports = PredictionReports::new(false);
+        reports.record(
+            "free_feedback",
+            PredictionSample {
+                rows: 2,
+                actual: &[0., 1., 2., 3.],
+                expected: &[],
+                actual_token: 3,
+                expected_token: 1,
+                history_matches: false,
+                label: "divergent history",
+            },
+        );
+        let report = reports.json();
+        let stream = &report["streams"]["free_feedback"];
+        assert_eq!(stream["prediction_calls"], 1);
+        assert_eq!(stream["logit_rows"], 2);
+        assert_eq!(stream["logit_values_compared"], 0);
+        assert_eq!(stream["greedy_checks"], 1);
+        assert_eq!(stream["input_history_matched_reference_calls"], 0);
+        assert_eq!(stream["metrics"], json!([]));
+        assert_eq!(
+            stream["failures"],
+            json!(["divergent history/greedy: 3 != 1"])
+        );
+    }
+
+    #[test]
     fn prediction_denominators_do_not_mix_or_admit_vacuous_passes() {
         let mut reports = PredictionReports::new(false);
         for stream in [
@@ -1361,13 +1437,15 @@ mod tests {
             for _ in 0..count {
                 reports.record(
                     stream,
-                    1,
-                    &[0., 1.],
-                    &[0., 1.],
-                    1,
-                    1,
-                    true,
-                    "same pinned comparator",
+                    PredictionSample {
+                        rows: 1,
+                        actual: &[0., 1.],
+                        expected: &[0., 1.],
+                        actual_token: 1,
+                        expected_token: 1,
+                        history_matches: true,
+                        label: "same pinned comparator",
+                    },
                 );
             }
         }
@@ -1377,13 +1455,15 @@ mod tests {
         assert_eq!(json["streams"]["reset_replay"]["logit_values_compared"], 18);
         reports.record(
             "free_feedback",
-            1,
-            &[0., 1.],
-            &[0., 1.],
-            1,
-            1,
-            false,
-            "divergent history",
+            PredictionSample {
+                rows: 1,
+                actual: &[0., 1.],
+                expected: &[0., 1.],
+                actual_token: 1,
+                expected_token: 1,
+                history_matches: false,
+                label: "divergent history",
+            },
         );
         assert!(!reports.passed(1));
     }

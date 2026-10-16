@@ -1,6 +1,8 @@
 //! Fresh quality gate reusing the maintained public-factory full40 runner.
 use super::*;
-use crate::model_factory::bf16_serving::expert_read_reporting::PredictionFingerprints;
+use crate::model_factory::bf16_serving::expert_read_reporting::{
+    PredictionFingerprints, PredictionSample,
+};
 
 mod retained_transfer;
 
@@ -315,13 +317,15 @@ fn record_prediction(
         let label = format!("{case}/{stream}/step.{step:02}");
         reports.borrow_mut().record(
             stream,
-            logits.len(),
-            &actual,
-            &oracle.values(&format!("step.{step:02}.logits")),
-            token,
-            expected,
-            history_matches,
-            &label,
+            PredictionSample {
+                rows: logits.len(),
+                actual: &actual,
+                expected: &oracle.values(&format!("step.{step:02}.logits")),
+                actual_token: token,
+                expected_token: expected,
+                history_matches,
+                label: &label,
+            },
         );
         fingerprints
             .as_ref()
@@ -535,7 +539,20 @@ fn run_with_observer(cold: bool, test_config: Full40TestConfig, diagnostic: bool
                     let actual:Vec<_>=logits.into_iter().flatten().collect();typed(&actual);
                     let mut r=result.borrow_mut();r.logits+=actual.len();
                     r.bf16_values(&actual,&oracle.values(&format!("{stage}.logits")),&format!("{case}/{stage}/all_logits"));
-                    if let Some(reports) = &call_predictions { reports.borrow_mut().record("common_history",tokens.len(),&actual,&oracle.values(&format!("{stage}.logits")),next,expected,true,&format!("{case}/common_history/{stage}")); }
+                    if let Some(reports) = &call_predictions {
+                        reports.borrow_mut().record(
+                            "common_history",
+                            PredictionSample {
+                                rows: tokens.len(),
+                                actual: &actual,
+                                expected: &oracle.values(&format!("{stage}.logits")),
+                                actual_token: next,
+                                expected_token: expected,
+                                history_matches: true,
+                                label: &format!("{case}/common_history/{stage}"),
+                            },
+                        );
+                    }
                     if let Some(fingerprints) = &call_fingerprints { fingerprints.borrow_mut().record(&format!("{case}/common_history/{stage}"),tokens.len(),&actual,next); }
                     if diagnostic {
                     let captured=std::mem::take(&mut *routes.borrow_mut());assert_eq!(captured.len(),40);
