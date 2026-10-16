@@ -777,7 +777,7 @@ fn retire_after_fence<T, E>(
     *active = None;
     Ok(())
 }
-fn drop_after_proof<T>(bundle: T, prove: impl FnOnce(&T) -> bool) {
+pub(crate) fn drop_after_proof<T>(bundle: T, prove: impl FnOnce(&T) -> bool) {
     let mut bundle = std::mem::ManuallyDrop::new(bundle);
     if prove(&bundle) {
         // SAFETY: this is the only drop path, after proof; false or unwinding

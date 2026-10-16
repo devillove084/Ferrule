@@ -12,6 +12,9 @@ pub use crate::cuda::operators::{recurrent_bf16, standard_bf16};
 #[path = "operators/numeric_fp8.rs"]
 pub mod numeric_fp8;
 
+#[path = "operators/numeric_fp8_upload.rs"]
+pub(crate) mod numeric_fp8_upload;
+
 #[path = "operators/resource_views.rs"]
 mod resource_views;
 
@@ -2455,6 +2458,7 @@ pub struct CudaOperators {
     /// a capture region returns an error immediately. This is the E2
     /// capture-safe assertion mode.
     capture_safe: Cell<bool>,
+    numeric_fp8_upload_generation: Cell<u64>,
     pending_copy_cleanup: RefCell<Vec<(Arc<PinnedHostBuffer<i32>>, DeviceBuffer<i32>)>>,
     numeric_gemv: RefCell<Option<Arc<crate::cuda::providers::cutlass::NumericBf16Gemv>>>,
 }
@@ -2513,6 +2517,7 @@ impl CudaOperators {
             failpoints: CudaFailpoints::default(),
             observability,
             capture_safe: Cell::new(false),
+            numeric_fp8_upload_generation: Cell::new(0),
             pending_copy_cleanup: RefCell::new(Vec::new()),
             numeric_gemv: RefCell::new(None),
         })
