@@ -135,20 +135,30 @@ def capture(directory, root, parent, executable_sha256, identity):
                   parent_identity=dict(parent), acquisition_begin=stamp(), raw_maps_path=None,
                   raw_maps_sha256=None, errors=[], expected_executable_sha256=executable_sha256,
                   hash_scope=LIMIT)
+    def read_proc(name, operation, read):
+        try:
+            return read()
+        except (FileNotFoundError, ProcessLookupError) as error:
+            # Preserve which authenticated proc read failed, not an inference
+            # that the model exited. Existing consumers still fail on errors.
+            record['proc_read_error'] = dict(identity=dict(root), path=f'/proc/{root["pid"]}/{name}',
+                operation=operation, exception_type=type(error).__name__,
+                error=type(error).__name__ + ': ' + str(error), observed=stamp())
+            raise
     try:
         record['before'] = identity(root['pid'])
         record['parent_before'] = identity(parent['pid'])
         require(_identity_matches(record['before'], root), 'owned server PID/birth/parent differs before capture')
         require(_identity_matches(record['parent_before'], parent)
                 and root['ppid'] == parent['pid'], 'owned capture parent/wrong child differs')
-        raw = Path(f'/proc/{root["pid"]}/maps').read_bytes()
+        raw = read_proc('maps', 'read_bytes', lambda: Path(f'/proc/{root["pid"]}/maps').read_bytes())
         private_write(directory / 'maps.raw', raw)
         record.update(raw_maps_path=str((directory / 'maps.raw').resolve()),
                       raw_maps_sha256=hashlib.sha256(raw).hexdigest(), raw_saved=stamp())
         record['after'] = identity(root['pid'])
         record['parent_after'] = identity(parent['pid'])
-        record['executable_path'] = str(Path(f'/proc/{root["pid"]}/exe').readlink())
-        record['executable_sha256'] = ct.sha(f'/proc/{root["pid"]}/exe')
+        record['executable_path'] = str(read_proc('exe', 'readlink', lambda: Path(f'/proc/{root["pid"]}/exe').readlink()))
+        record['executable_sha256'] = read_proc('exe', 'sha256', lambda: ct.sha(f'/proc/{root["pid"]}/exe'))
         record['after_executable'] = identity(root['pid'])
     except Exception as error:
         record['errors'].append(type(error).__name__ + ': ' + str(error))

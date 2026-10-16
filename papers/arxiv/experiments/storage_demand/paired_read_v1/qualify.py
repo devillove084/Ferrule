@@ -1,6 +1,7 @@
 """Validation-only serial exact-once gates; maintained authenticated custody/idle."""
 import contextlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -195,22 +196,7 @@ def monitor(directory, stop, observations):
         try:
             launch = ct.load(directory / 'authenticated-launch.json')
             if launch.get('profiled'):
-                if (directory / 'profile-model-start.json').exists():
-                    if (directory / 'profile-model-ended.json').exists():
-                        continue
-                    start = ct.load(directory / 'profile-model-start.json')
-                    model_pid = start['model']['before']['pid']
-                    live, _ = profile_modules()
-                    current = live.observer.proc_identity(model_pid)
-                    expected = start['model']['before']
-                    ct.require(all(current[k] == expected[k] for k in ('pid', 'birth_ticks', 'ppid')), 'Profile child identity changed')
-                    if current['state'] in ('Z', 'X'):
-                        continue
-                    key = Path(f'/proc/{model_pid}/maps').read_text()
-                    if key not in seen or len(observations) < 2:
-                        seen.add(key)
-                        observations.append(profile_observation(directory, len(observations)))
-                continue
+                return profile_monitor(directory, stop, observations)
             root = launch['identity']['worker']
             now = guard.identity(root['pid'])
             if now['birth_ticks'] != root['birth_ticks']: continue
@@ -326,6 +312,7 @@ def execute_gate(gate, locks):
             custody = getattr(error, 'supervisor_result', {}); custody.setdefault('error', type(error).__name__ + ': ' + str(error))
         finally:
             stop.set(); thread.join(timeout=5)
+            if thread.is_alive(): observations.append(dict(error='Profile/mapping monitor did not stop'))
             ct.write(directory / 'runtime-mapping-observations.json', dict(samples=observations, sample_count=len(observations), actual_loaded_mappings_claim=bool(observations), cadence_seconds=.25, no_cuda_or_signal_authority=True))
         ct.write(directory / 'supervisor.json', custody)
         result.update(actual_test_issued=(directory/('profile-model-start.json' if gate['phase'] == 'profile' else 'authenticated-launch.json')).exists(), returncode=custody.get('returncode'), timed_out=custody.get('timed_out'),
@@ -517,25 +504,238 @@ def profile_auth(directory, seal):
     return live, gate, auth
 
 
-def profile_observation(directory, index):
-    live, maps = profile_modules()
+# One in-flight pin-validation pass; never extends the capture lifetime.
+PROFILE_TERMINAL_ACK_SECONDS = 15
+
+
+def profile_binding(directory, start):
+    return dict(model={k: start['model']['before'][k] for k in ('pid', 'birth_ticks', 'ppid')},
+                **{k: start[k] for k in ('wrapper', 'authenticated', 'job', 'plan_sha256', 'launch_sha256',
+                    'capture_started_monotonic', 'capture_deadline_monotonic', 'model_observed_monotonic')},
+                start_sha256=ct.sha(directory / 'profile-model-start.json'))
+
+
+def profile_context(directory):
+    live, _ = profile_modules()
     start = ct.load(directory / 'profile-model-start.json')
     _, gate, auth = profile_auth(directory, start['launch_sha256'])
-    ct.require(start['plan_sha256'] == ct.sha(plan_path())
-        and start['job'] == gate and start['authenticated'] == auth, 'Profile role source/job/root binding differs')
+    ct.require(start['plan_sha256'] == ct.sha(plan_path()) and start['job'] == gate
+        and start['authenticated'] == auth, 'Profile role source/job/root binding differs')
+    live.descendant(start['wrapper'], auth['worker'])
+    ct.require(start['capture_started_monotonic'] <= start['model_observed_monotonic']
+        < start['capture_deadline_monotonic'], 'Invalid profile startup/deadline binding')
+    return live, start, profile_binding(directory, start)
+
+
+def profile_validate_terminal(receipt, binding):
+    ct.require(receipt['binding'] == binding, 'Foreign/stale profile terminal binding')
+    event, deadline = receipt['waitid'], receipt['deadline_monotonic']
+    times = [event[k] for k in ('started_monotonic', 'observed_monotonic')]
+    ct.require(all(type(t) in (int, float) and math.isfinite(t) for t in [*times, deadline])
+        and times[0] == binding['capture_started_monotonic'] and times[0] <= times[1]
+        and binding['model_observed_monotonic'] <= times[1]
+        and deadline == min(binding['capture_deadline_monotonic'], times[1] + PROFILE_TERMINAL_ACK_SECONDS),
+        'Invalid profile terminal timing')
+    ct.require(all(type(event[k]) is int for k in ('pid', 'code', 'status'))
+        and event['pid'] == binding['model']['pid'] and event['code'] == os.CLD_EXITED
+        and event['status'] == 0, 'Profile terminal is not the successful direct model child')
+
+
+def profile_terminal(directory, receipt=None):
+    live, _, binding = profile_context(directory)
+    path = directory / 'profile-model-terminal.json'
+    if receipt is None:
+        receipt = live.sealed(path, ct.sha(path))
+    profile_validate_terminal(receipt, binding)
+    ct.require(receipt['waitid']['observed_monotonic'] <= time.monotonic() < receipt['deadline_monotonic'],
+               'Expired profile terminal acknowledgement')
+    current = live.observer.proc_identity(binding['model']['pid'])
+    ct.require(all(current[k] == binding['model'][k] for k in ('pid', 'birth_ticks', 'ppid'))
+        and current['state'] in ('Z', 'X'), 'Profile terminal birth anchor is missing/changed/not held')
+    ct.require(not (directory / 'profile-stop').exists(), 'Profile terminal acknowledgement cancelled')
+    return live, binding, receipt
+
+
+def profile_validate_ack(ack, binding, receipt, digest):
+    profile_validate_terminal(receipt, binding)
+    stopped, sample = ack['stopped_monotonic'], ack['last_sample']
+    ct.require(ack['binding'] == binding and ack['terminal_sha256'] == digest
+        and ack['status'] == 'stopped' and ack['errors'] == [], 'Missing/blocked/foreign profile observer acknowledgement')
+    ct.require(type(stopped) in (int, float) and math.isfinite(stopped)
+        and receipt['waitid']['observed_monotonic'] <= stopped <= time.monotonic()
+        and stopped < receipt['deadline_monotonic'], 'Late/invalid profile observer acknowledgement')
+    if sample is not None:
+        begin, end = sample['started_monotonic'], sample['ended_monotonic']
+        ct.require(all(type(t) in (int, float) and math.isfinite(t) for t in (begin, end))
+            and binding['model_observed_monotonic'] <= begin <= end <= stopped,
+            'Invalid profile terminal sample interval')
+
+
+def profile_terminal_hook(directory, child, event, deadline, active):
+    live, _, binding = profile_context(directory)
+    ct.require(child.pid == binding['model']['pid'] and binding['model']['ppid'] == os.getpid()
+        and binding['wrapper']['pid'] == os.getpid() and deadline == binding['capture_deadline_monotonic'],
+        'Profile terminal hook is not the owning wrapper/direct child')
+    receipt = dict(binding=binding, waitid=event,
+        deadline_monotonic=min(deadline, event['observed_monotonic'] + PROFILE_TERMINAL_ACK_SECONDS))
+    profile_terminal(directory, receipt)
+    digest = live.readonly(directory / 'profile-model-terminal.json', receipt)
+    ack_path = directory / 'profile-observer-stopped.json'
+    while True:
+        active()
+        profile_terminal(directory)
+        if ack_path.exists():
+            ack = live.sealed(ack_path, ct.sha(ack_path))
+            profile_validate_ack(ack, binding, receipt, digest)
+            profile_terminal(directory)  # Recheck every held ancestor after consuming the ack.
+            active()
+            return
+        time.sleep(.05)
+
+
+def profile_monitor_ack(directory, stop, observations, sample, error=None):
+    ct.require(not stop.is_set(), 'Profile observer acknowledgement cancelled')
+    live, start, binding = profile_context(directory)
+    if error is not None:
+        ct.require(isinstance(error, live.observer.CustodyLost) and error.reason == 'exited'
+            and error.expected is not None and error.current is not None
+            and all(error.expected[k] == error.current[k] == binding['model'][k]
+                    for k in ('pid', 'birth_ticks', 'ppid')) and error.current['state'] in ('Z', 'X'),
+            'Unexpected profile identity loss; not the exact terminal model')
+    deadline = min(start['capture_deadline_monotonic'], time.monotonic() + PROFILE_TERMINAL_ACK_SECONDS)
+    while not (directory / 'profile-model-terminal.json').exists():
+        ct.require(error is not None and time.monotonic() < deadline and not stop.wait(.05),
+                   'Missing profile terminal receipt/cancelled observer')
+    live, binding, receipt = profile_terminal(directory)
+    digest = ct.sha(directory / 'profile-model-terminal.json')
+    if error is not None:
+        event = receipt['waitid']
+        ct.require(sample is not None and binding['model_observed_monotonic'] <= sample['started_monotonic']
+            <= error.observed_monotonic <= sample['ended_monotonic'],
+            'Model terminal evidence does not overlap the interrupted sample')
+        kind = 'model_terminal_before_sample' if event['observed_monotonic'] < sample['started_monotonic'] else 'model_terminal_during_sample'
+        observations.append(dict(kind=kind, sample=sample,
+            terminal_sha256=digest, identity_event=dict(message=str(error), expected=error.expected,
+                current=error.current, reason=error.reason, observed_monotonic=error.observed_monotonic)))
+    errors = [row['error'] for row in observations if 'error' in row]
+    ack = dict(binding=binding, terminal_sha256=digest, last_sample=sample,
+               stopped_monotonic=time.monotonic(), status='blocked' if errors else 'stopped', errors=errors)
+    if not errors:
+        profile_validate_ack(ack, binding, receipt, digest)
+    ct.require(not stop.is_set(), 'Profile observer acknowledgement cancelled')
+    stop.set()  # This same thread has finished its final sample, before publication.
+    live.readonly(directory / 'profile-observer-stopped.json', ack)
+
+
+def profile_model_read(live, model, read):
+    try:
+        return read()
+    except (FileNotFoundError, ProcessLookupError):
+        # Only this model's proc read can be interrupted by its held terminal
+        # transition. Missing/reused anchors and every other error remain fatal.
+        live.observer.verify_root(model, identity=live.observer.proc_identity)
+        raise
+
+
+def profile_monitor(directory, stop, observations):
+    live, _ = profile_modules()
+    seen, last_sample = set(), None
+    while not stop.wait(.25):
+        sample = None
+        try:
+            if not (directory / 'profile-model-start.json').exists():
+                continue
+            if (directory / 'profile-model-terminal.json').exists():
+                profile_monitor_ack(directory, stop, observations, last_sample)
+                return
+            ct.require(not (directory / 'profile-model-ended.json').exists(), 'Model reaped before observer acknowledgement')
+            sample = dict(started_monotonic=time.monotonic())
+            _, start, _ = profile_context(directory)
+            model = start['model']['before']
+            live.observer.verify_root(model, identity=live.observer.proc_identity)
+            key = profile_model_read(live, model, lambda: Path(f'/proc/{model["pid"]}/maps').read_text())
+            if key not in seen or len(observations) < 2:
+                seen.add(key)
+                observations.append(profile_observation(directory, len(observations)))
+            sample['ended_monotonic'] = time.monotonic()
+            last_sample = sample
+        except Exception as error:
+            if sample is not None:
+                sample['ended_monotonic'] = time.monotonic()
+            if isinstance(error, live.observer.CustodyLost) and error.reason == 'exited':
+                try:
+                    profile_monitor_ack(directory, stop, observations, sample, error)
+                except Exception as terminal_error:
+                    observations.append(dict(error=type(error).__name__ + ': ' + str(error)
+                        + '; terminal acknowledgement: ' + str(terminal_error), sample=sample))
+                return
+            observations.append(dict(error=type(error).__name__ + ': ' + str(error), sample=sample))
+            if sample is None:
+                return
+
+
+def profile_observation(directory, index):
+    live, maps = profile_modules()
+    _, start, _ = profile_context(directory)
+    gate = start['job']
     model, wrapper = start['model']['before'], start['wrapper']
-    live.descendant(wrapper, auth['worker'])
     live.descendant(model, wrapper)
-    before = live.observer.proc_identity(model['pid'])
-    record = dict(before=before, executable_sha256=ct.sha(f'/proc/{model["pid"]}/exe'),
-                  command=Path(f'/proc/{model["pid"]}/cmdline').read_bytes().rstrip(b'\0').decode().split('\0'),
-                  after=live.observer.proc_identity(model['pid']))
+    before = live.observer.verify_root(model, identity=live.observer.proc_identity)
+    record = dict(before=before,
+                  executable_sha256=profile_model_read(live, model, lambda: ct.sha(f'/proc/{model["pid"]}/exe')),
+                  command=profile_model_read(live, model, lambda: Path(f'/proc/{model["pid"]}/cmdline').read_bytes()).rstrip(b'\0').decode().split('\0'),
+                  after=live.observer.verify_root(model, identity=live.observer.proc_identity))
     perf.validate_role(record, model, gate['binary_sha256'], perf.payload_argv(PLAN, gate))
+    identity_errors = []
+    def capture_identity(pid):
+        ct.require(pid in (model['pid'], wrapper['pid']), 'Foreign profile capture identity request')
+        try:
+            return live.observer.verify_root(model if pid == model['pid'] else wrapper,
+                                             identity=live.observer.proc_identity)
+        except live.observer.CustodyLost as error:
+            identity_errors.append(error)
+            raise
     snapshot = maps.capture(directory / ('profile-maps-' + str(index)), model, wrapper,
-                            gate['binary_sha256'], live.observer.proc_identity)
+                            gate['binary_sha256'], capture_identity)
+    error = None
+    if identity_errors:
+        error = identity_errors[0]
+        ct.require(snapshot['errors'] == [type(error).__name__ + ': ' + str(error)],
+                   'Additional profile map errors during terminal transition')
+    elif snapshot.get('proc_read_error'):
+        failed = snapshot['proc_read_error']
+        allowed = {'read_bytes': f'/proc/{model["pid"]}/maps',
+                   'readlink': f'/proc/{model["pid"]}/exe', 'sha256': f'/proc/{model["pid"]}/exe'}
+        ct.require(all(failed['identity'][k] == model[k] for k in ('pid', 'birth_ticks', 'ppid'))
+            and failed['operation'] in allowed and failed['path'] == allowed[failed['operation']]
+            and failed['exception_type'] in ('FileNotFoundError', 'ProcessLookupError')
+            and snapshot['errors'] == [failed['error']]
+            and snapshot['acquisition_begin']['monotonic'] <= failed['observed']['monotonic']
+                <= snapshot['acquisition_end']['monotonic'], 'Unbound/additional profile proc-read error')
+        try:
+            live.observer.verify_root(model, identity=live.observer.proc_identity)
+        except live.observer.CustodyLost as lost:
+            if lost.reason != 'exited':
+                raise
+            error = lost
+    if error is not None:
+        if snapshot.get('raw_maps_path'):
+            # The role read may be terminal, but already saved library evidence
+            # must not conceal an independent pin/deletion error.
+            ct.require(ct.sha(snapshot['raw_maps_path']) == snapshot['raw_maps_sha256'], 'Saved terminal maps changed')
+            policy = ct.load(OUT / 'profile-runtime-policy.json')
+            ct.require(('executable_path' not in snapshot or snapshot['executable_path'] == policy['executable'])
+                and ('executable_sha256' not in snapshot or snapshot['executable_sha256'] == policy['executable_sha256']),
+                'Independent profile executable role/pin error during terminal transition')
+            libraries = maps.assess(Path(snapshot['raw_maps_path']).read_text(), policy)
+            ct.require(not libraries['errors'] and not libraries['deleted_library_paths'],
+                       'Independent profile library error during terminal transition')
+        raise error
     assessment = maps.validate_snapshot(snapshot, ct.load(OUT / 'profile-runtime-policy.json'))
     ct.write(directory / ('profile-maps-' + str(index)) / 'assessment.json', assessment)
+    ct.require(not assessment['errors'], 'Unknown/changed/deleted profile library mapping')
     profile_auth(directory, start['launch_sha256'])
+    live.observer.verify_root(model, identity=live.observer.proc_identity)
     return dict(model=record, wrapper=wrapper, map_assessment=assessment,
                 plan_sha256=start['plan_sha256'], job=gate, launch_sha256=start['launch_sha256'])
 
@@ -554,7 +754,6 @@ def profile_target(seal, gate_id):
             ct.require(os.environ.get(name) == value, 'Actual profile target environment differs: ' + name)
     command = perf.payload_argv(PLAN, gate)
     def spawned(child):
-        ct.require(child.poll() is None, 'Model exited before birth/executable observation')
         before = live.observer.proc_identity(child.pid)
         record = dict(before=before, executable_sha256=ct.sha(f'/proc/{child.pid}/exe'),
                       command=Path(f'/proc/{child.pid}/cmdline').read_bytes().rstrip(b'\0').decode().split('\0'),
@@ -562,12 +761,17 @@ def profile_target(seal, gate_id):
         perf.validate_role(record, before, gate['binary_sha256'], command)
         ct.require(before['ppid'] == wrapper_identity['pid'], 'Model is not the traced Popen wrapper direct child')
         live.descendant(wrapper_identity, auth['worker'])
+        report = ct.load(directory / 'profile-server.json')
+        ct.require(report['pid'] == child.pid, 'Foreign profile wrapper spawn report')
         live.readonly(directory / 'profile-model-start.json', dict(model=record, wrapper=wrapper_identity,
-            authenticated=auth, job=gate, plan_sha256=ct.sha(plan_path()), launch_sha256=seal))
+            authenticated=auth, job=gate, plan_sha256=ct.sha(plan_path()), launch_sha256=seal,
+            capture_started_monotonic=report['started_monotonic'],
+            capture_deadline_monotonic=report['started_monotonic'] + 1000, model_observed_monotonic=time.monotonic()))
     spec = importlib.util.spec_from_file_location('_finite_maintained_capture', ROOT / 'scripts/_profile_capture.py')
     wrapper = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(wrapper)
-    result = wrapper.run_target(directory, command, 1000, 45, natural_completion=True, on_spawn=spawned)
+    result = wrapper.run_target(directory, command, 1000, 45, natural_completion=True, on_spawn=spawned,
+        on_terminal=lambda child, event, deadline, active: profile_terminal_hook(directory, child, event, deadline, active))
     live.readonly(directory / 'profile-model-ended.json', dict(result=result, job=gate,
         launch_sha256=seal, wrapper_report_sha256=ct.sha(directory / 'profile-server.json')))
     return result
@@ -588,12 +792,22 @@ def export_profile(directory, gate, custody, observations):
         # changed content are never waived by a later good snapshot.
         ct.require(not row['map_assessment']['errors'], 'Unknown/changed/deleted profile library mapping')
     ct.require(any(r['map_assessment']['status'] == 'passed' for r in valid), 'No complete pinned profile-library observation')
+    live, _ = profile_modules()
+    terminal_path = directory / 'profile-model-terminal.json'
+    ack_path = directory / 'profile-observer-stopped.json'
+    terminal = live.sealed(terminal_path, ct.sha(terminal_path))
+    ack = live.sealed(ack_path, ct.sha(ack_path))
+    profile_validate_ack(ack, profile_binding(directory, start), terminal, ct.sha(terminal_path))
     ended = ct.load(directory / 'profile-model-ended.json')
     wrapper = ct.load(directory / 'profile-server.json')
     ct.require(ended['result'] == 0 and ended['job'] == gate
         and ended['wrapper_report_sha256'] == ct.sha(directory / 'profile-server.json')
         and wrapper['stop_reason'] == 'natural_completion' and wrapper['returncode'] == 0,
         'Profile target did not finish naturally with the maintained direct-child wrapper')
+    ct.require(wrapper['pid'] == start['model']['before']['pid']
+        and wrapper['started_monotonic'] == start['capture_started_monotonic']
+        and ack['stopped_monotonic'] <= wrapper['ended_monotonic'] < start['capture_deadline_monotonic'],
+        'Profile final reap report does not follow this observer acknowledgement within its lifetime')
     cpu_env = dict(PATH='/usr/bin:/bin', HOME='/root', CUDA_VISIBLE_DEVICES='', NVIDIA_VISIBLE_DEVICES='none', TMPDIR='/tmp')
     for format in ('sqlite', 'info'):
         output = directory / ('nsys.sqlite' if format == 'sqlite' else 'nsys.info.json')

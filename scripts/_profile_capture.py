@@ -29,9 +29,20 @@ def checkpoint(path, report):
 
 
 def run_target(directory, command, lifetime_seconds, shutdown_seconds, *,
-               natural_completion=False, on_spawn=None):
+               natural_completion=False, on_spawn=None, on_terminal=None):
+    """Run the direct child; an optional terminal hook fences its final reap.
+
+    on_terminal(child, waitid_event, absolute_deadline, active) is cooperative:
+    it must check active(), honour the deadline, and return only after observer
+    acknowledgement. It must not poll/wait/reap/signal the child. Hook failure
+    is non-success and leaves failure drain to the outer maintained owner.
+    """
     if type(natural_completion) is not bool:
         raise ValueError("natural_completion must be an explicit boolean")
+    if on_terminal is not None and (not natural_completion or not callable(on_terminal)):
+        raise ValueError("on_terminal requires natural completion and a callable")
+    if on_terminal is not None and not (math.isfinite(lifetime_seconds) and 0 < lifetime_seconds <= 1560):
+        raise ValueError("Observed capture requires a finite bounded lifetime")
     started = time.monotonic()
     report = dict(schema='ferrule.profile-server.v1', started_monotonic=started,
                   started_unix_ns=time.time_ns(), returncode=None, stop_reason=None,
@@ -53,24 +64,72 @@ def run_target(directory, command, lifetime_seconds, shutdown_seconds, *,
         if on_spawn is not None:
             on_spawn(child)  # Observation only; the maintained wrapper owns this child.
         deadline = started + lifetime_seconds
-        while child.poll() is None:
-            if stop_signals or (directory / 'profile-stop').exists():
-                report['stop_reason'] = 'signal' if stop_signals else 'matrix_worker_stop_marker'
-                break
-            if time.monotonic() >= deadline:
-                report['stop_reason'] = 'capture_lifetime_timeout'
-                break
-            time.sleep(.1)
-        if child.poll() is None:
-            report['shutdown_started_monotonic'] = time.monotonic()
-            checkpoint(path, report)
-            child.terminate()  # only our unreaped direct child, never a numeric PID/group
+        if on_terminal is not None:
+            def active():
+                if stop_signals or (directory / 'profile-stop').exists():
+                    report['stop_reason'] = 'signal' if stop_signals else 'matrix_worker_stop_marker'
+                    raise RuntimeError('Observed capture cancelled before terminal acknowledgement')
+                if time.monotonic() >= deadline:
+                    report['stop_reason'] = 'capture_lifetime_timeout'
+                    raise TimeoutError('Observed capture lifetime includes startup and terminal acknowledgement')
+
+            # poll()/wait() would discard the birth anchor while a sample may
+            # still be in flight. The hook must honour deadline/active(); it
+            # observes only, and must never wait/reap or signal this child.
             try:
-                child.wait(timeout=shutdown_seconds)
-            except subprocess.TimeoutExpired:
-                report['shutdown_timeout'] = True
-                # Exit to allow nsys partial export; the outer subreaper owns
-                # this still-live child. Do not race its descendant cleanup.
+                while True:
+                    active()
+                    terminal = os.waitid(os.P_PID, child.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+                    observed = time.monotonic()
+                    if terminal is not None:
+                        break
+                    # No waitable event is not liveness: the group leader
+                    # may already be a zombie while other threads remain.
+                    time.sleep(.05)
+                if terminal.si_pid != child.pid or terminal.si_code not in (os.CLD_EXITED, os.CLD_KILLED, os.CLD_DUMPED):
+                    raise RuntimeError('Unexpected direct-child terminal waitid identity/status')
+                event = dict(pid=child.pid, code=terminal.si_code, status=terminal.si_status,
+                             started_monotonic=started,
+                             observed_monotonic=observed)
+                active()
+                on_terminal(child, event, deadline, active)
+                active()
+                held = os.waitid(os.P_PID, child.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+                if held != terminal or child.returncode is not None:
+                    raise RuntimeError('Terminal hook lost unreaped direct-child custody')
+                code = child.wait(timeout=deadline - time.monotonic())
+                expected_code = terminal.si_status if terminal.si_code == os.CLD_EXITED else -terminal.si_status
+                if code != expected_code:
+                    raise RuntimeError('Authoritative child wait differs from terminal evidence')
+                active()
+            except BaseException as error:
+                report['stop_reason'] = report['stop_reason'] or 'terminal_observer_failure'
+                report['error'] = type(error).__name__ + ': ' + str(error)
+                report['ended_monotonic'] = time.monotonic()
+                report['ended_unix_ns'] = time.time_ns()
+                checkpoint(path, report)
+                # No success receipt or alternate reaper. Failure drain remains
+                # the outer maintained subreaper responsibility.
+                raise
+        else:
+            while child.poll() is None:
+                if stop_signals or (directory / 'profile-stop').exists():
+                    report['stop_reason'] = 'signal' if stop_signals else 'matrix_worker_stop_marker'
+                    break
+                if time.monotonic() >= deadline:
+                    report['stop_reason'] = 'capture_lifetime_timeout'
+                    break
+                time.sleep(.1)
+            if child.poll() is None:
+                report['shutdown_started_monotonic'] = time.monotonic()
+                checkpoint(path, report)
+                child.terminate()  # only our unreaped direct child, never a numeric PID/group
+                try:
+                    child.wait(timeout=shutdown_seconds)
+                except subprocess.TimeoutExpired:
+                    report['shutdown_timeout'] = True
+                    # Exit to allow nsys partial export; the outer subreaper owns
+                    # this still-live child. Do not race its descendant cleanup.
         if natural_completion and report['stop_reason'] is None:
             report['stop_reason'] = 'natural_completion'
         report['returncode'] = child.returncode

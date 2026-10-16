@@ -2,6 +2,8 @@
 import copy
 import importlib.util
 import json
+import os
+import threading
 from pathlib import Path
 import sqlite3
 import sys
@@ -97,6 +99,471 @@ def report(row, manifest):
             value[container]['expert_transfer_policy'] = copy.deepcopy(q.retained_evidence.POLICY)
         value['effective_config']['expert_transfer_selection'] = 'explicit existing-owner capability before first prediction'
     return value
+
+
+class ProfileTerminalLifecycleTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
+        self.directory = Path(self.temp.name)
+        self.clock = [20.]
+        self.live, self.maps = q.profile_modules()
+        self.gate = plan()['jobs'][20]
+        wrapper = dict(pid=os.getpid(), birth_ticks=22, ppid=101, state='R')
+        self.model = dict(pid=300, birth_ticks=33, ppid=wrapper['pid'], state='R')
+        self.auth = dict(worker=dict(pid=100, birth_ticks=10, ppid=99, pgrp=100, session=100),
+            helper=dict(pid=99, birth_ticks=9, ppid=98), coordinator=dict(pid=98, birth_ticks=8, ppid=1), launch_id='owned')
+        self.ids = {value['pid']: dict(value, state='S') for value in self.auth.values() if isinstance(value, dict)}
+        self.ids.update({300: dict(self.model, state='S'), wrapper['pid']: wrapper,
+                        101: dict(pid=101, birth_ticks=11, ppid=100, state='S')})
+        self.start = dict(model=dict(before=self.model, after=dict(self.model),
+            executable_sha256=self.gate['binary_sha256'], command=p.payload_argv(plan(), self.gate)),
+            wrapper=wrapper, authenticated=self.auth, job=self.gate, plan_sha256='a'*64, launch_sha256='b'*64,
+            capture_started_monotonic=10., capture_deadline_monotonic=100., model_observed_monotonic=11.)
+        self.live.readonly(self.directory / 'profile-model-start.json', self.start)
+        original_verify, sha = self.live.observer.verify_root, q.ct.sha
+        def identity(pid):
+            if pid not in self.ids: raise FileNotFoundError('Synthetic missing PID')
+            return dict(self.ids[pid])
+        def verify(expected, identity=None):
+            return original_verify(expected, identity=self.live.observer.proc_identity)
+        patches = [mock.patch.object(q, 'profile_auth', return_value=(self.live, self.gate, self.auth)),
+            mock.patch.object(q.ct, 'sha', side_effect=lambda path: 'a'*64 if Path(path).name == 'plan.json' else sha(path)),
+            mock.patch.object(q, 'plan_path', return_value=self.directory / 'plan.json'),
+            mock.patch.object(q.time, 'monotonic', side_effect=lambda: self.clock[0]),
+            mock.patch.object(self.live.observer, 'proc_identity', side_effect=identity),
+            mock.patch.object(self.live.observer, 'verify_root', side_effect=verify),
+            mock.patch.object(q.os, 'kill', side_effect=AssertionError('No signals')),
+            mock.patch.object(q.os, 'killpg', side_effect=AssertionError('No process-group signals')),
+            mock.patch.object(q.subprocess, 'Popen', side_effect=AssertionError('No workload')),
+            mock.patch.object(q.subprocess, 'run', side_effect=AssertionError('No external queries')),
+            mock.patch.object(q.idle, 'observe', side_effect=AssertionError('No GPU queries'))]
+        for patch in patches:
+            patch.start(); self.addCleanup(patch.stop)
+        self.binding = q.profile_binding(self.directory, self.start)
+
+    def event(self, observed=19.):
+        return dict(pid=300, code=os.CLD_EXITED, status=0, started_monotonic=10.,
+                    observed_monotonic=observed)
+
+    def receipt(self, observed=19.):
+        return dict(binding=copy.deepcopy(self.binding), waitid=self.event(observed),
+            deadline_monotonic=min(100., observed + q.PROFILE_TERMINAL_ACK_SECONDS))
+
+    def publish(self, observed=19.):
+        self.ids[300]['state'] = 'Z'
+        receipt = self.receipt(observed)
+        self.live.readonly(self.directory / 'profile-model-terminal.json', receipt)
+        return receipt
+
+    def stop(self):
+        stop = mock.Mock(spec=threading.Event)
+        stop.wait.return_value = False
+        stop.is_set.return_value = False
+        return stop
+
+    def ack(self):
+        return q.ct.load(self.directory / 'profile-observer-stopped.json')
+
+    def test_terminal_before_next_sample_stops_without_live_proof(self):
+        self.publish()
+        observations, stop = [], self.stop()
+        with mock.patch.object(q, 'profile_observation') as sample:
+            q.profile_monitor(self.directory, stop, observations)
+        sample.assert_not_called(); stop.set.assert_called_once()
+        self.assertEqual(self.ack()['status'], 'stopped')
+        self.assertEqual(self.ack()['binding'], self.binding)
+        self.assertIsNone(self.ack()['last_sample'])
+        self.assertFalse(any('model' in row for row in observations))
+
+    def test_terminal_during_sample_is_explicit_and_not_live_proof(self):
+        observations = []
+        def sampling(*args):
+            self.clock[0] = 21.
+            self.publish(observed=21.)
+            self.live.observer.verify_root(self.model)
+        with mock.patch.object(q, 'profile_model_read', return_value='maps'), \
+                mock.patch.object(q, 'profile_observation', side_effect=sampling):
+            q.profile_monitor(self.directory, self.stop(), observations)
+        self.assertEqual(len(observations), 1)
+        self.assertEqual(observations[0]['kind'], 'model_terminal_during_sample')
+        self.assertNotIn('model', observations[0]); self.assertNotIn('error', observations[0])
+        self.assertEqual(self.ack()['status'], 'stopped')
+        self.assertEqual(self.ack()['last_sample'], dict(started_monotonic=20., ended_monotonic=21.))
+
+    def test_terminal_before_sample_receipt_publication_races_check(self):
+        context = q.profile_context
+        def raced_context(directory):
+            value = context(directory)
+            if not (directory / 'profile-model-terminal.json').exists(): self.publish()
+            return value
+        observations = []
+        with mock.patch.object(q, 'profile_context', side_effect=raced_context):
+            q.profile_monitor(self.directory, self.stop(), observations)
+        self.assertEqual(observations[0]['kind'], 'model_terminal_before_sample')
+        self.assertEqual(self.ack()['status'], 'stopped')
+
+    def test_terminal_receipt_mutations_and_changed_or_missing_birth_fail(self):
+        self.ids[300]['state'] = 'Z'
+        mutations = [lambda r: r['binding']['model'].update(birth_ticks=999),
+            lambda r: r['binding'].update(job=dict(self.gate, id='foreign')),
+            lambda r: r['binding'].update(plan_sha256='f'*64),
+            lambda r: r['binding'].update(launch_sha256='f'*64),
+            lambda r: r['binding']['wrapper'].update(birth_ticks=999),
+            lambda r: r['waitid'].update(pid=301), lambda r: r['waitid'].update(status=1),
+            lambda r: r['waitid'].update(code=os.CLD_KILLED),
+            lambda r: r['waitid'].update(status=False),
+            lambda r: r['waitid'].update(started_monotonic=9.),
+            lambda r: r.update(deadline_monotonic=100.),
+            lambda r: r['waitid'].update(observed_monotonic=float('nan'))]
+        for mutate in mutations:
+            receipt = self.receipt(); mutate(receipt)
+            with self.subTest(receipt=receipt), self.assertRaises(ValueError):
+                q.profile_terminal(self.directory, receipt)
+        for change in ('reuse', 'parent', 'missing', 'alive', 'late', 'ancestor'):
+            ids, clock = copy.deepcopy(self.ids), self.clock[0]
+            if change == 'reuse': self.ids[300]['birth_ticks'] += 1
+            if change == 'parent': self.ids[300]['ppid'] = 1
+            if change == 'missing': del self.ids[300]
+            if change == 'alive': self.ids[300]['state'] = 'S'
+            if change == 'late': self.clock[0] = self.receipt()['deadline_monotonic']
+            if change == 'ancestor': del self.ids[100]
+            with self.subTest(change=change), self.assertRaises((ValueError, FileNotFoundError)):
+                q.profile_terminal(self.directory, self.receipt())
+            self.ids, self.clock[0] = ids, clock
+
+    def test_ack_mutations_late_sample_sticky_and_crossjob_fail(self):
+        receipt = self.publish()
+        ack = dict(binding=copy.deepcopy(self.binding), terminal_sha256='d'*64,
+            stopped_monotonic=20., last_sample=dict(started_monotonic=17., ended_monotonic=20.),
+            status='stopped', errors=[])
+        q.profile_validate_ack(ack, self.binding, receipt, 'd'*64)
+        mutations = [lambda a: a.update(terminal_sha256='e'*64),
+            lambda a: a['binding']['job'].update(id='foreign'),
+            lambda a: a['binding']['model'].update(birth_ticks=999),
+            lambda a: a.update(errors=['prior sticky error']), lambda a: a.update(status='blocked'),
+            lambda a: a.update(stopped_monotonic=receipt['deadline_monotonic']),
+            lambda a: a.update(stopped_monotonic=18.),
+            lambda a: a['last_sample'].update(ended_monotonic=21.),
+            lambda a: a['last_sample'].update(started_monotonic=float('nan'))]
+        for mutate in mutations:
+            changed = copy.deepcopy(ack); mutate(changed)
+            with self.subTest(ack=changed), self.assertRaises(ValueError):
+                q.profile_validate_ack(changed, self.binding, receipt, 'd'*64)
+
+    def test_prior_sticky_error_is_preserved_and_blocks_ack(self):
+        self.publish()
+        observations = [dict(error='prior unknown library error')]
+        q.profile_monitor(self.directory, self.stop(), observations)
+        self.assertEqual(observations, [dict(error='prior unknown library error')])
+        self.assertEqual(self.ack()['status'], 'blocked')
+        with self.assertRaises(ValueError):
+            q.profile_validate_ack(self.ack(), self.binding, self.receipt(), q.ct.sha(self.directory / 'profile-model-terminal.json'))
+
+    def test_missing_reused_and_ancestor_identity_never_become_terminal_events(self):
+        for problem in ('missing', 'reuse', 'parent', 'ancestor', 'ancestor_exited', 'generic'):
+            with self.subTest(problem=problem):
+                for name in ('profile-model-terminal.json', 'profile-observer-stopped.json'):
+                    (self.directory / name).unlink(missing_ok=True)
+                ids = copy.deepcopy(self.ids)
+                observations = []
+                def sampling(*args):
+                    self.publish(observed=20.)
+                    if problem == 'generic': raise ValueError('Unrelated sticky mapping error')
+                    wanted = self.model
+                    if problem == 'missing': del self.ids[300]
+                    if problem == 'reuse': self.ids[300]['birth_ticks'] += 1
+                    if problem == 'parent': self.ids[300]['ppid'] = 1
+                    if problem in ('ancestor', 'ancestor_exited'):
+                        wanted = self.start['wrapper']
+                        if problem == 'ancestor': del self.ids[wanted['pid']]
+                        else: self.ids[wanted['pid']]['state'] = 'Z'
+                    self.live.observer.verify_root(wanted)
+                with mock.patch.object(q, 'profile_model_read', return_value='maps'), \
+                        mock.patch.object(q, 'profile_observation', side_effect=sampling):
+                    q.profile_monitor(self.directory, self.stop(), observations)
+                self.assertTrue(any('error' in row for row in observations))
+                self.assertFalse(any('identity_event' in row for row in observations))
+                path = self.directory / 'profile-observer-stopped.json'
+                self.assertTrue(not path.exists() or self.ack()['status'] == 'blocked')
+                self.ids = ids
+
+    def test_terminal_error_without_receipt_and_unknown_timing_refuse_ack(self):
+        self.ids[300]['state'] = 'Z'
+        try: self.live.observer.verify_root(self.model)
+        except self.live.observer.CustodyLost as error: lost = error
+        sample = dict(started_monotonic=19., ended_monotonic=20.)
+        stop = self.stop(); stop.wait.side_effect = lambda delay: self.clock.__setitem__(0, self.clock[0] + 1) or False
+        with self.assertRaisesRegex(ValueError, 'Missing profile terminal'):
+            q.profile_monitor_ack(self.directory, stop, [], sample, lost)
+        self.clock[0] = 20.
+        self.publish()
+        lost.observed_monotonic = 17.  # Outside this sample interval, not a waitid-derived live bound.
+        with self.assertRaisesRegex(ValueError, 'overlap'):
+            q.profile_monitor_ack(self.directory, self.stop(), [], sample, lost)
+        self.assertFalse((self.directory / 'profile-observer-stopped.json').exists())
+
+    def test_owner_hook_missing_ack_cancel_and_success_use_same_monitor(self):
+        child = mock.Mock(pid=300, returncode=None)
+        self.ids[300]['state'] = 'Z'
+        def active():
+            if not (self.directory / 'profile-observer-stopped.json').exists():
+                q.profile_monitor_ack(self.directory, self.stop(), [], None)
+        q.profile_terminal_hook(self.directory, child, self.event(), 100., active)
+        self.assertEqual(self.ack()['status'], 'stopped')
+        child.wait.assert_not_called(); child.poll.assert_not_called(); child.terminate.assert_not_called()
+        for name in ('profile-model-terminal.json', 'profile-observer-stopped.json'):
+            (self.directory / name).unlink()
+        with mock.patch.object(q.time, 'sleep', side_effect=lambda delay: self.clock.__setitem__(0, self.clock[0] + 1)), \
+                self.assertRaisesRegex(ValueError, 'Expired'):
+            q.profile_terminal_hook(self.directory, child, self.event(), 100., lambda: None)
+        (self.directory / 'profile-model-terminal.json').unlink()
+        self.clock[0] = 20.
+        with self.assertRaisesRegex(RuntimeError, 'cancelled'):
+            q.profile_terminal_hook(self.directory, child, self.event(), 100.,
+                                    mock.Mock(side_effect=RuntimeError('cancelled')))
+        child.wait.assert_not_called(); child.poll.assert_not_called()
+
+    def test_structured_identity_error_keeps_generic_message_and_exact_role(self):
+        for problem, reason in (('missing', 'missing'), ('reuse', 'identity_changed'), ('zombie', 'exited')):
+            ids = copy.deepcopy(self.ids)
+            if problem == 'missing': del self.ids[300]
+            if problem == 'reuse': self.ids[300]['birth_ticks'] += 1
+            if problem == 'zombie': self.ids[300]['state'] = 'Z'
+            with self.subTest(problem=problem), self.assertRaises(self.live.observer.CustodyLost) as raised:
+                self.live.observer.verify_root(self.model)
+            error = raised.exception
+            self.assertIsInstance(error, ValueError)
+            self.assertTrue(str(error).startswith('Authenticated server root'))
+            self.assertEqual(error.expected, self.model)
+            self.assertEqual(error.reason, reason)
+            self.assertEqual(error.observed_monotonic, self.clock[0])
+            self.ids = ids
+
+    def test_interrupted_map_capture_cannot_hide_independent_errors(self):
+        for problem in ('terminal_only', 'extra_capture_error', 'unknown_library', 'deleted_library'):
+            with self.subTest(problem=problem):
+                self.ids[300]['state'] = 'S'
+                raw = self.directory / 'saved-maps.raw'; raw.write_text('synthetic raw maps')
+                def capture(directory, model, wrapper, digest, identity):
+                    self.ids[300]['state'] = 'Z'
+                    try: identity(300)
+                    except self.live.observer.CustodyLost as error:
+                        errors = [type(error).__name__ + ': ' + str(error)]
+                    if problem == 'extra_capture_error': errors.append('prior capture identity failure')
+                    return dict(errors=errors, raw_maps_path=str(raw), raw_maps_sha256=q.ct.sha(raw))
+                sha, load = q.ct.sha, q.ct.load
+                with mock.patch.object(q, 'PLAN', plan()), \
+                        mock.patch.object(q.ct, 'sha', side_effect=lambda path: self.gate['binary_sha256'] if str(path) == '/proc/300/exe' else sha(path)), \
+                        mock.patch.object(q.ct, 'load', side_effect=lambda path: {} if Path(path).name == 'profile-runtime-policy.json' else load(path)), \
+                        mock.patch.object(Path, 'read_bytes', return_value=('\0'.join(self.start['model']['command']) + '\0').encode()), \
+                        mock.patch.object(self.maps, 'capture', side_effect=capture), \
+                        mock.patch.object(self.maps, 'assess', return_value=dict(
+                            errors=['unknown library'] if problem == 'unknown_library' else [],
+                            deleted_library_paths=['deleted.so'] if problem == 'deleted_library' else [])):
+                    with self.assertRaises(ValueError) as raised:
+                        q.profile_observation(self.directory, 0)
+                self.assertEqual(isinstance(raised.exception, self.live.observer.CustodyLost), problem == 'terminal_only')
+
+    def test_real_collector_exe_read_race_preserves_independent_failures(self):
+        lib = self.directory / 'lib-bound.so'
+        lib.write_bytes(b'\x7fELFsynthetic-pinned-library')
+        stat = lib.stat()
+        line = (f'1000-2000 r-xp 00000000 {os.major(stat.st_dev):x}:{os.minor(stat.st_dev):x} '
+                f'{stat.st_ino} {lib}\n')
+        policy = dict(pins={str(lib): q.ct.sha(lib)}, required={str(lib): ['runtime']}, optional={},
+                      executable=self.gate['executable'], executable_sha256=self.gate['binary_sha256'])
+        for problem in ('terminal', 'alive', 'missing', 'reuse', 'ancestor', 'pin', 'deleted', 'malformed', 'exe_role', 'exe_pin'):
+            with self.subTest(problem=problem), tempfile.TemporaryDirectory(dir=self.directory) as folder:
+                directory = Path(folder)
+                self.live.readonly(directory / 'profile-model-start.json', self.start)
+                ids = copy.deepcopy(self.ids)
+                raw = 'malformed maps' if problem == 'malformed' else line.rstrip('\n') + (' (deleted)' if problem == 'deleted' else '') + '\n'
+                pins = copy.deepcopy(policy)
+                if problem == 'pin': pins['pins'][str(lib)] = 'f'*64
+                read_bytes, read_text, readlink, sha, load = Path.read_bytes, Path.read_text, Path.readlink, q.ct.sha, q.ct.load
+                def proc_bytes(path, *args, **kwargs):
+                    if str(path) == '/proc/300/maps': return raw.encode()
+                    if str(path) == '/proc/300/cmdline': return ('\0'.join(self.start['model']['command']) + '\0').encode()
+                    return read_bytes(path, *args, **kwargs)
+                def proc_text(path, *args, **kwargs):
+                    return raw if str(path) == '/proc/300/maps' else read_text(path, *args, **kwargs)
+                def end_model():
+                    self.ids[300]['state'] = 'Z'
+                    receipt = self.receipt(observed=20.)
+                    receipt['binding'] = q.profile_binding(directory, self.start)
+                    self.live.readonly(directory / 'profile-model-terminal.json', receipt)
+                hash_calls = [0]
+                def model_sha(path):
+                    if str(path) != '/proc/300/exe': return sha(path)
+                    hash_calls[0] += 1
+                    if hash_calls[0] > 1:
+                        end_model()
+                        if problem == 'exe_role': raise FileNotFoundError('Synthetic exe hash proc-read race')
+                        if problem == 'exe_pin': return 'f'*64
+                    return self.gate['binary_sha256']
+                def exe_race(path, *args, **kwargs):
+                    if str(path) != '/proc/300/exe': return readlink(path, *args, **kwargs)
+                    if problem in ('exe_role', 'exe_pin'):
+                        return Path('/foreign/model' if problem == 'exe_role' else pins['executable'])
+                    # REAL capture has completed both after-identity checks.
+                    if problem != 'alive': end_model()
+                    if problem == 'missing': del self.ids[300]
+                    if problem == 'reuse': self.ids[300]['birth_ticks'] += 1
+                    if problem == 'ancestor': del self.ids[self.start['wrapper']['pid']]
+                    raise FileNotFoundError(2, 'Synthetic exit between identity and exe read', '/proc/300/exe')
+                stop, observations = self.stop(), []
+                stop.wait.side_effect = [False, True]
+                with mock.patch.object(q, 'PLAN', plan()), \
+                        mock.patch.object(q.ct, 'sha', side_effect=model_sha), \
+                        mock.patch.object(q.ct, 'load', side_effect=lambda path: pins if Path(path).name == 'profile-runtime-policy.json' else load(path)), \
+                        mock.patch.object(Path, 'read_bytes', proc_bytes), \
+                        mock.patch.object(Path, 'read_text', proc_text), \
+                        mock.patch.object(Path, 'readlink', exe_race):
+                    q.profile_monitor(directory, stop, observations)
+                snapshot = load(directory / 'profile-maps-0/snapshot.json')
+                self.assertIn('parent_after', snapshot)
+                if problem not in ('exe_role', 'exe_pin'): self.assertNotIn('executable_path', snapshot)
+                if problem != 'exe_pin':
+                    self.assertEqual(snapshot['proc_read_error']['path'], '/proc/300/exe')
+                    self.assertEqual(snapshot['errors'], [snapshot['proc_read_error']['error']])
+                if problem == 'terminal':
+                    self.assertEqual(observations[0]['kind'], 'model_terminal_during_sample')
+                    self.assertNotIn('model', observations[0])
+                    self.assertEqual(load(directory / 'profile-observer-stopped.json')['status'], 'stopped')
+                else:
+                    self.assertTrue(any('error' in row for row in observations))
+                    self.assertFalse(any('identity_event' in row for row in observations))
+                    self.assertFalse((directory / 'profile-observer-stopped.json').exists())
+                self.ids = ids
+
+    def test_leader_exited_sample_can_precede_thread_group_terminal_event(self):
+        self.ids[300]['state'] = 'Z'
+        try: self.live.observer.verify_root(self.model)
+        except self.live.observer.CustodyLost as error: lost = error
+        sample = dict(started_monotonic=19., ended_monotonic=20.)
+        self.clock[0] = 24.
+        self.publish(observed=24.)
+        observations = []
+        q.profile_monitor_ack(self.directory, self.stop(), observations, sample, lost)
+        self.assertEqual(self.ack()['status'], 'stopped')
+        self.assertEqual(observations[0]['identity_event']['observed_monotonic'], 20.)
+        self.assertNotIn('last_running_monotonic', self.receipt()['waitid'])
+
+    def test_cancelled_monitor_cannot_publish_successful_ack(self):
+        self.publish()
+        stop = self.stop(); stop.is_set.return_value = True
+        with self.assertRaisesRegex(ValueError, 'cancelled'):
+            q.profile_monitor_ack(self.directory, stop, [], None)
+        self.assertFalse((self.directory / 'profile-observer-stopped.json').exists())
+
+    def test_ancestor_loss_after_ack_consumption_still_refuses_owner_release(self):
+        child = mock.Mock(pid=300, returncode=None)
+        self.ids[300]['state'] = 'Z'
+        validate = q.profile_validate_ack
+        def active():
+            if not (self.directory / 'profile-observer-stopped.json').exists():
+                q.profile_monitor_ack(self.directory, self.stop(), [], None)
+        def lose_after_ack(*args):
+            validate(*args)
+            if (self.directory / 'profile-observer-stopped.json').exists(): del self.ids[100]
+        with mock.patch.object(q, 'profile_validate_ack', side_effect=lose_after_ack), \
+                self.assertRaises(self.live.observer.CustodyLost):
+            q.profile_terminal_hook(self.directory, child, self.event(), 100., active)
+        child.wait.assert_not_called(); child.poll.assert_not_called()
+
+
+@unittest.skipUnless(hasattr(os, 'WNOWAIT'), 'Linux terminal-child custody')
+class ProfileTerminalCPUIntegrationTests(unittest.TestCase):
+    def test_real_wrapper_and_collector_hold_exe_read_race_until_ack(self):
+        with tempfile.TemporaryDirectory() as folder:
+            directory = Path(folder)
+            spec = importlib.util.spec_from_file_location('_cpu_profile_capture', q.ROOT / 'scripts/_profile_capture.py')
+            capture = importlib.util.module_from_spec(spec); spec.loader.exec_module(capture)
+            live, _ = q.profile_modules()
+            wrapper = live.observer.proc_identity(os.getpid())
+            auth = dict(worker=live.observer.proc_identity(os.getppid()), launch_id='cpu-only')
+            gate = dict(plan()['jobs'][20], executable=str(Path(sys.executable).resolve()), binary_sha256=q.ct.sha(sys.executable))
+            # A pinned library-map fixture isolates the live proc-read race from
+            # this test host's loader policy; capture/identity/assessment are real.
+            lib = directory / 'lib-cpu-fixture.so'; lib.write_bytes(b'\x7fELFcpu-fixture')
+            stat = lib.stat()
+            raw = (f'1000-2000 r-xp 00000000 {os.major(stat.st_dev):x}:{os.minor(stat.st_dev):x} '
+                   f'{stat.st_ino} {lib}\n').encode()
+            policy = dict(pins={str(lib): q.ct.sha(lib)}, required={str(lib): ['runtime']}, optional={},
+                executable=gate['executable'], executable_sha256=gate['binary_sha256'])
+            observations, failures, waits, children = [], [], [], []
+            stop, entered = threading.Event(), threading.Event()
+            command = [sys.executable, '-S', '-B', '-c',
+                'import pathlib,sys,time; p=pathlib.Path(sys.argv[1]); deadline=time.monotonic()+5; '
+                'exec("while not p.exists() and time.monotonic()<deadline: time.sleep(.005)")',
+                str(directory / 'cpu-release')]
+            def spawned(child):
+                children.append(child)
+                model = live.observer.proc_identity(child.pid)
+                report = q.ct.load(directory / 'profile-server.json')
+                live.readonly(directory / 'profile-model-start.json', dict(model=dict(before=model,
+                    after=dict(model), executable_sha256=gate['binary_sha256'], command=command),
+                    wrapper=wrapper, authenticated=auth, job=gate, plan_sha256='a'*64, launch_sha256='b'*64,
+                    capture_started_monotonic=report['started_monotonic'],
+                    capture_deadline_monotonic=report['started_monotonic'] + 5,
+                    model_observed_monotonic=q.time.monotonic()))
+                original = child.wait
+                def wait(*args, **kwargs):
+                    ack = q.ct.load(directory / 'profile-observer-stopped.json')
+                    self.assertEqual(ack['status'], 'stopped')
+                    self.assertTrue(stop.is_set())
+                    self.assertEqual(live.observer.proc_identity(child.pid)['state'], 'Z')
+                    waits.append(child.pid)
+                    return original(*args, **kwargs)
+                child.wait = wait
+                child.poll = mock.Mock(side_effect=AssertionError('No reaping poll'))
+            read_bytes, readlink, sha, load = Path.read_bytes, Path.readlink, q.ct.sha, q.ct.load
+            def proc_bytes(path, *args, **kwargs):
+                if children and str(path) == f'/proc/{children[0].pid}/maps': return raw
+                return read_bytes(path, *args, **kwargs)
+            def exe_race(path, *args, **kwargs):
+                if children and str(path) == f'/proc/{children[0].pid}/exe':
+                    entered.set()
+                    (directory / 'cpu-release').touch()
+                    deadline = q.time.monotonic() + 3
+                    while not (directory / 'profile-model-terminal.json').exists():
+                        if q.time.monotonic() >= deadline: raise TimeoutError('CPU terminal receipt missing')
+                        q.time.sleep(.005)
+                    self.assertEqual(live.observer.proc_identity(children[0].pid)['state'], 'Z')
+                return readlink(path, *args, **kwargs)  # The actual Linux proc exe read now fails.
+            def monitor():
+                try: q.profile_monitor(directory, stop, observations)
+                except BaseException as error: failures.append(error)
+            with mock.patch.object(q, 'PLAN', plan()), \
+                    mock.patch.object(q, 'profile_auth', return_value=(live, gate, auth)), \
+                    mock.patch.object(q, 'plan_path', return_value=directory / 'plan.json'), \
+                    mock.patch.object(q.ct, 'sha', side_effect=lambda path: 'a'*64 if Path(path).name == 'plan.json' else sha(path)), \
+                    mock.patch.object(q.ct, 'load', side_effect=lambda path: policy if Path(path).name == 'profile-runtime-policy.json' else load(path)), \
+                    mock.patch.object(q.perf, 'payload_argv', return_value=command), \
+                    mock.patch.object(Path, 'read_bytes', proc_bytes), \
+                    mock.patch.object(Path, 'readlink', exe_race), \
+                    mock.patch.dict(os.environ, CUDA_VISIBLE_DEVICES='', NVIDIA_VISIBLE_DEVICES='none'), \
+                    mock.patch.object(os, 'kill', side_effect=AssertionError('No signals')), \
+                    mock.patch.object(os, 'killpg', side_effect=AssertionError('No group signals')):
+                thread = threading.Thread(target=monitor)
+                thread.start()
+                try:
+                    result = capture.run_target(directory, command, 5, 1, natural_completion=True,
+                        on_spawn=spawned, on_terminal=lambda *args: q.profile_terminal_hook(directory, *args))
+                finally:
+                    stop.set(); thread.join(timeout=4)
+                self.assertFalse(thread.is_alive())
+            self.assertEqual(result, 0)
+            self.assertEqual(failures, [])
+            self.assertTrue(entered.is_set())
+            self.assertEqual(len(waits), 1)
+            self.assertEqual([row['kind'] for row in observations], ['model_terminal_during_sample'])
+            snapshot = load(directory / 'profile-maps-0/snapshot.json')
+            self.assertIn('parent_after', snapshot)
+            self.assertEqual(snapshot['proc_read_error']['operation'], 'readlink')
+            self.assertEqual(snapshot['proc_read_error']['path'], f'/proc/{children[0].pid}/exe')
+            self.assertEqual(snapshot['proc_read_error']['exception_type'], 'FileNotFoundError')
+            self.assertEqual(snapshot['errors'], [snapshot['proc_read_error']['error']])
 
 
 class ContractTests(unittest.TestCase):

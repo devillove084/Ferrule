@@ -23,7 +23,12 @@ VALID_SAMPLE_DEADLINE_SECONDS = 60
 
 
 class CustodyLost(ValueError):
-    pass
+    def __init__(self, *args, expected=None, current=None, reason=None):
+        super().__init__(*args)
+        self.expected = dict(expected) if expected is not None else None
+        self.current = dict(current) if current is not None else None
+        self.reason = reason
+        self.observed_monotonic = time.monotonic()
 
 
 def proc_identity(pid):
@@ -172,11 +177,11 @@ def verify_root(expected, identity=proc_identity):
     try:
         current = identity(expected['pid'])
     except (FileNotFoundError, ProcessLookupError) as error:
-        raise CustodyLost('Authenticated server root disappeared') from error
+        raise CustodyLost('Authenticated server root disappeared', expected=expected, reason='missing') from error
     if root_key(current) != root_key(expected) or current['ppid'] != expected['ppid']:
-        raise CustodyLost('Authenticated server root PID/start-time/parent changed')
+        raise CustodyLost('Authenticated server root PID/start-time/parent changed', expected=expected, current=current, reason='identity_changed')
     if current['state'] in ('Z', 'X'):
-        raise CustodyLost('Authenticated server root exited')
+        raise CustodyLost('Authenticated server root exited', expected=expected, current=current, reason='exited')
     return current
 
 

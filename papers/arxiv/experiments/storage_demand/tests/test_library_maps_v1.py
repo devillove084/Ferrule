@@ -144,6 +144,43 @@ class MapEvidenceTests(unittest.TestCase):
         self.assertIsNotNone(snapshot['raw_maps_sha256'])
         self.assertNotIn('environment', snapshot)
 
+    def test_missing_model_proc_read_provenance_survives_real_capture(self):
+        root = ex.observer.proc_identity(os.getpid())
+        parent = ex.observer.proc_identity(root['ppid'])
+        executable_hash = maps.ct.sha(sys.executable)
+        read_bytes, readlink, sha = Path.read_bytes, Path.readlink, maps.ct.sha
+        for name, operation in (('maps', 'read_bytes'), ('exe', 'readlink'), ('exe', 'sha256')):
+            target = f'/proc/{root["pid"]}/{name}'
+            def missing(path, *args, **kwargs):
+                if str(path) == target: raise FileNotFoundError(2, 'Synthetic proc-read race', target)
+                return {'read_bytes': read_bytes, 'readlink': readlink, 'sha256': sha}[operation](path, *args, **kwargs)
+            with self.subTest(operation=operation), ExitStack() as stack:
+                obj, method = (maps.ct, 'sha') if operation == 'sha256' else (Path, operation)
+                stack.enter_context(mock.patch.object(obj, method, missing))
+                result = maps.capture(self.directory / operation, root, parent, executable_hash, ex.observer.proc_identity)
+            failed = result['proc_read_error']
+            self.assertEqual(failed['identity'], root)
+            self.assertEqual((failed['path'], failed['operation']), (target, operation))
+            self.assertEqual(failed['exception_type'], 'FileNotFoundError')
+            self.assertEqual(result['errors'], [failed['error']])
+            self.assertLessEqual(result['acquisition_begin']['monotonic'], failed['observed']['monotonic'])
+            self.assertLessEqual(failed['observed']['monotonic'], result['acquisition_end']['monotonic'])
+            self.assertEqual(json.loads((self.directory / operation / 'snapshot.json').read_text())['proc_read_error'], failed)
+            self.assertTrue(maps.validate_snapshot(result, self.policy)['errors'])
+
+    def test_capture_persistence_failure_is_not_model_proc_read_provenance(self):
+        root = ex.observer.proc_identity(os.getpid())
+        parent = ex.observer.proc_identity(root['ppid'])
+        write = maps.private_write
+        def missing(path, value):
+            if path.name == 'maps.raw': raise FileNotFoundError('Non-proc capture persistence failure')
+            return write(path, value)
+        with mock.patch.object(maps, 'private_write', side_effect=missing):
+            result = maps.capture(self.directory / 'persistence', root, parent,
+                                  maps.ct.sha(sys.executable), ex.observer.proc_identity)
+        self.assertIn('persistence failure', result['errors'][0])
+        self.assertNotIn('proc_read_error', result)
+
     def test_pid_reuse_before_capture_does_not_read_foreign_proc(self):
         output = self.directory / 'wrong-birth'
         actual = dict(self.root, birth_ticks=999)
