@@ -1,10 +1,10 @@
 {
   "schema": "ferrule.engineering.curated-stage-manifest.v1",
-  "scope": "Bounded engineering quality receipts, unchanged negative whole-test comparison and four separately approved partial observed-model official profiles; historical failures preserved; no manuscript or full-trace acceptance; separately reviewed frozen ce6d4ff actual14 grouped-upload quality, no performance/default claim",
+  "scope": "Bounded engineering quality receipts, unchanged negative whole-test comparison and four separately approved partial observed-model official profiles; historical failures preserved; no manuscript or full-trace acceptance; separately reviewed frozen ce6d4ff actual14 grouped-upload quality, no performance/default claim; separately approved frozen ce6d4ff grouped comparison failed at profile21 after20passes, eight completed unprofiled pairs descriptive only, failed-trace offline diagnostic not qualified, no default/TTFT/significance claim",
   "files": {
     "README.md": {
-      "sha256": "c65b08fe9f32507b4f30b4554ec1bf920e93792e7c28f95c3f926ebffca8438d",
-      "bytes": 19556
+      "sha256": "847314f7ba678b2d4174acbb28ddbdf5a2f0d054759dbd0d388e7cf5d3169ff0",
+      "bytes": 25403
     },
     "completed-stages.json": {
       "sha256": "8492747e3db129ba63faaf947d23e12c22d94a1e9ffdf1da4ab0bbdcc1bf81ec",
@@ -33,6 +33,10 @@
     "grouped-quality-results.json": {
       "sha256": "6f66971ac2659112b3d1c0a751011aee65d7405d4789b3868f3e61dd4ac35552",
       "bytes": 34569
+    },
+    "grouped-performance-results.json": {
+      "sha256": "8c5ee3cda54a53da2a6b7273f5279d7f29807122a3cac593ddc33592d4f1231b",
+      "bytes": 1395340
     }
   },
   "raw_target_vendor_weights_or_binaries_included": false

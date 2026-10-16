@@ -300,3 +300,94 @@ lock release/reprobe passed. These do not certify physical CUDA release.
 This is quality evidence only: default remains unchanged, no performance or
 overlap claim. The prior57e4629 negative timing pairs and partial official
 profiles remain unchanged and must not enter a new ce6d4ff performance population.
+
+
+## Grouped whole-test comparison: completed pairs, failed profile gate (`ce6d4ff`)
+
+`grouped-performance-results.json` closes the separately approved fixed24 plan
+from `target/validation/grouped-performance-ce6d4ff-20261017-01/`. **The stage
+failed, not24passed:** jobs1–20 passed (four diagnostic primaries and16 unprofiled
+trials); profile21 failed and22–24 were not dispatched. There were no retries,
+extra warmups or calibration. This offline closeout issued no GPU jobs, builds,
+new captures, production/control changes, commits or pushes. The original
+negative eight57e4629 retained pairs, historical partial profiles and actual14
+grouped-quality evidence remain byte-identical and outside this timing population.
+
+The executable remains frozen `ce6d4ff28b96d4057d0de6dfa858707104aad16b`,
+SHA256 `d8c0bae4872ffbbb6828dd7f49acecb4de0f69ab32748662845ddaa6d0b30557`;
+the archive SHA256 is `4e15b7301f678424878ba97c3a3df8f8533a696053d2eb58b36bb35e6895e135`.
+The closeout worktree HEAD is not the application cut. The JSON includes frozen
+source-file pins, all trial/primary times, ordered64 work/check/fingerprint arrays,
+case IDs, per-report hashes, effective configs and27 equality receipts (including
+the failed profile's numerical-only comparison). All20 successful reports pass
+the unchanged ATOL0.00025/RTOL0.012 checks. All21 numerical reports share exact64
+output fingerprints; each schedule's ordered work/check arrays match across arms,
+repetitions and its primary. Lookahead speculation differs from Blocking by design.
+
+### Descriptive completed unprofiled pairs only
+
+| Schedule | Pair | Synchronous whole test (s) | Grouped whole test (s) | Grouped / synchronous |
+|---|---:|---:|---:|---:|
+| Blocking | 1 | 66.92 | 63.93 | 0.955320 |
+| Blocking | 2 | 64.61 | 62.50 | 0.967343 |
+| Blocking | 3 | 65.17 | 61.84 | 0.948903 |
+| Blocking | 4 | 66.51 | 65.55 | 0.985566 |
+| Lookahead | 1 | 62.10 | 60.05 | 0.966989 |
+| Lookahead | 2 | 63.62 | 60.77 | 0.955203 |
+| Lookahead | 3 | 63.19 | 57.61 | 0.911695 |
+| Lookahead | 4 | 61.25 | 59.53 | 0.971918 |
+
+Median within-pair ratios are **0.961331 Blocking** and **0.961096 Lookahead**.
+Grouped has lower elapsed time in all eight observed pairs, but these are only
+four pairs per schedule, printed at0.01s resolution, including IO, construction,
+numerical checking and teardown. They are **not TTFT, token or request latency**,
+not significance/quantile/causal evidence, and do not enable a default. Primaries
+and profiles are excluded. The maintained exact24 accepted-summary guard still
+rejects this failed stage; the table is explicitly an offline descriptive summary
+of the completed pairs, not an accepted full-stage result.
+
+Each numerical report observes25,116 logical cache uploads,25,116 verified reads,
+79,017,748,992 proved read bytes and150,696 reader intervals. Logical host peak
+is16,777,984B under64MiB; final live-owner charge is10MiB (metadata8MiB +stack2MiB),
+with one worker creation and2,559 reuses. Cache current/peak maxima are
+209,739,776/219,754,496B under320MiB including8MiB scratch. Upload/pending/Unknown
+charges are zero at validated proof endpoints. Grouped adds no retained pin/ticket
+reservation. These are logical charges, not RSS or physical CUDA-release proof;
+post-final-owner join and model-wide grouped synchronization counts are unobserved.
+
+### Profile21 remains failed; existing offline export is diagnostic only
+
+The recorded error is `ValueError: Sticky profile identity/observer error`.
+The observer log contains36 identity-bound model samples, then
+`CustodyLost: Authenticated server root disappeared`. Three early mapping
+assessments lacked required `libcupti.so.12.9`;33 later assessments passed.
+The wrapper records `natural_completion` and application return0; the outer
+supervisor records return0, natural drain without signals, authenticated ECHILD,
+owner absence and strict all8 idle. **None of this waives the sticky failed gate.**
+No profiling fix, retry, restart or jobs22–24 were attempted in this closeout.
+
+The prior agent already exported the failed container to
+`actual-closeout-01/failed-capture.sqlite` and audited it CPU-only; takeover
+verified and reused that output without another export. The JSON retains counts,
+API host-duration sums, kernels and copy rows under
+`INCOMPLETE_FAILED_CAPTURE_DIAGNOSTIC_ONLY`, never as an accepted paired profile.
+For example, the failed synchronous trace contains382,743 `cuStreamSynchronize`
+rows and2 each host-pin allocation/free rows. No grouped comparator exists, so
+**accepted profile metrics and arm deltas are unobserved, not zero**. The proposed
+−5 synchronizations/upload remains a hypothesis; no expert-range, API-exhaustiveness,
+dropped-events=0, full-trace, overlap or causal attribution is justified.
+
+Historical final cleanup receipts show three consecutive all8-idle samples,
+authenticated ECHILD, owner absence and eight local lock releases/reprobes. Offline
+PID/birth inspection found no surviving owned task; no new GPU query or foreign
+signal was issued. This does not certify physical CUDA release or global reservation.
+
+**Availability:** raw ignored `target/validation/` reports, receipts, source archives,
+binaries, profile container and SQLite remain local-only; hashes do not imply
+public availability. Only the curated derived result, this README and manifest
+are closeout staging candidates. No private weights, vendor packages, raw target
+files or binaries are included. `grouped-performance-results.json` is ignored and
+requires selective force-add by the reviewing main agent, not recursive target staging.
+CPU closeout validation uses the existing80 control tests and full frozen-pin/GO
+checks with the pinned Python3.12, plus manifest and raw-receipt/hash checks.
+The default synchronous path and prior engineering conclusions remain unchanged.
