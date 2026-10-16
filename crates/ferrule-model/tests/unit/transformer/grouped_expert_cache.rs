@@ -130,19 +130,24 @@ fn randomized_operations_match_old_linear_victims_credits_and_leases() {
                     } else {
                         49
                     };
-                    if let Some(lease) = same_result(
+                    match (
                         index.acquire(key, bytes, |k| a.push(*k)),
                         reference.acquire(key, bytes, |k| b.push(*k)),
                     ) {
-                        leases.push(lease);
+                        (Ok(a), Ok(b)) => {
+                            assert_eq!((&a.key, a.epoch), (&b.key, b.epoch));
+                            leases.push((a, b));
+                        }
+                        (Err(a), Err(b)) => assert_eq!(a.to_string(), b.to_string()),
+                        pair => panic!("different acquisitions: {pair:?}"),
                     }
                 }
                 4 | 5 if !leases.is_empty() => {
                     // Keep historical leases to exercise stale and double completion.
-                    let lease = &leases[(rng >> 40) as usize % leases.len()];
+                    let (a, b) = &leases[(rng >> 40) as usize % leases.len()];
                     same_result(
-                        index.complete(lease, rng & 128 != 0),
-                        reference.complete(lease, rng & 128 != 0),
+                        index.complete(a, rng & 128 != 0),
+                        reference.complete(b, rng & 128 != 0),
                     );
                 }
                 6 => {
@@ -177,12 +182,9 @@ fn randomized_operations_match_old_linear_victims_credits_and_leases() {
         }
         index.quarantine();
         reference.quarantine();
-        for lease in &leases {
-            same_result(index.complete(lease, true), reference.complete(lease, true));
-            same_result(
-                index.complete(lease, false),
-                reference.complete(lease, false),
-            );
+        for (a, b) in &leases {
+            same_result(index.complete(a, true), reference.complete(b, true));
+            same_result(index.complete(a, false), reference.complete(b, false));
         }
         for group in 0..4 {
             same_result(

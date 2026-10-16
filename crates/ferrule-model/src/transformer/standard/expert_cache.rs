@@ -11,6 +11,7 @@ use crate::nn::ParameterId;
 use crate::support::TensorRole;
 use ferrule_common::{Error, Result};
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum ExpertCachePolicy {
@@ -90,6 +91,29 @@ pub(super) struct ExpertCacheKey {
     pub parameters: [(ParameterId, TensorRole); 3],
 }
 
+/// Read-only admission result, after validating the exact binding and owner.
+#[allow(dead_code, reason = "Staged owner API; scalar execution is unchanged")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Admission {
+    /// The next use fits, possibly after evicting only idle entries.
+    Fits,
+    /// Active leases must complete before retrying; no eviction was attempted.
+    RequiresFlush,
+    /// The payload plus total scratch cannot fit even in an empty cache.
+    Impossible,
+}
+
+// Allocation identity cannot wrap or be reused while any lease retains it.
+#[derive(Debug, Clone)]
+struct Owner(Arc<()>);
+
+impl PartialEq for Owner {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+impl Eq for Owner {}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum State {
     Uploading,
@@ -105,9 +129,11 @@ struct Entry<G> {
     group: Option<G>,
 }
 
-/// Epochs bind completion to an exact use, so stale proofs cannot retire a reload.
+/// Owner identity and epochs bind completion to an exact use, never a reload
+/// or a numerically identical lease issued by a different cache.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct Lease<K> {
+    owner: Owner,
     pub key: K,
     epoch: u64,
 }
@@ -120,6 +146,7 @@ struct CompletedGroups<K, G> {
 }
 
 pub(super) struct Cache<K, G = ()> {
+    owner: Owner,
     limits: ExpertCacheLimits,
     entries: BTreeMap<K, Entry<G>>,
     groups: Option<Box<CompletedGroups<K, G>>>,
@@ -160,6 +187,7 @@ impl<K: Ord + Clone, G: Ord + Clone> Cache<K, G> {
             return Err(error("limits must be nonzero"));
         }
         Ok(Self {
+            owner: Owner(Arc::new(())),
             limits,
             entries: BTreeMap::new(),
             groups,
@@ -338,6 +366,62 @@ impl<K: Ord + Clone, G: Ord + Clone> Cache<K, G> {
         Ok(())
     }
 
+    /// Assess the next exact key/payload without changing leases, LRU, budgets,
+    /// counters or group indexes, and without cloning keys or retaining payloads.
+    /// `total_scratch` replaces the scratch reservation: it MUST include all
+    /// simultaneously retained batch, upload, numeric and operation scratch, not
+    /// just the next consumer's scratch or an increment. No completion is assumed.
+    ///
+    /// With no intervening owner mutation, Fits guarantees that applying
+    /// `scratch(total_scratch, ...)` and then `acquire` has enough logical room.
+    /// Callers must not reduce scratch still retained by unproved work. This is
+    /// not a reservation or a proof of physical allocator capacity/slot layout.
+    #[allow(dead_code, reason = "Staged owner API; scalar execution is unchanged")]
+    pub fn assess_admission(
+        &self,
+        key: &K,
+        bytes: usize,
+        total_scratch: usize,
+    ) -> Result<Admission> {
+        self.healthy()?;
+        let existing = self.entries.get(key);
+        if let Some(entry) = existing {
+            if entry.bytes != bytes {
+                return Err(error("changed binding"));
+            }
+        } else if self
+            .groups
+            .as_ref()
+            .is_some_and(|groups| !groups.registration.contains_key(key))
+        {
+            return Err(error("unregistered group key"));
+        }
+        self.clock
+            .checked_add(1)
+            .ok_or_else(|| error("epoch exhausted"))?;
+        let Some(required) = bytes.checked_add(total_scratch) else {
+            return Ok(Admission::Impossible);
+        };
+        if required > self.limits.max_bytes {
+            return Ok(Admission::Impossible);
+        }
+        if existing.is_some_and(|entry| entry.state != State::Idle) {
+            return Ok(Admission::RequiresFlush);
+        }
+        // Protect the prospective hit as well as every active lease. All other
+        // entries are idle-only victims, independent of their LRU order.
+        let mut available = self.limits.max_bytes - required;
+        let mut slots = self.limits.max_experts - 1;
+        for entry in self.entries.values().filter(|e| e.state != State::Idle) {
+            if slots == 0 || entry.bytes > available {
+                return Ok(Admission::RequiresFlush);
+            }
+            slots -= 1;
+            available -= entry.bytes;
+        }
+        Ok(Admission::Fits)
+    }
+
     /// Reserve the entire expert before the first upload. Hits are also pinned.
     pub fn acquire(&mut self, key: K, bytes: usize, evict: impl FnMut(&K)) -> Result<Lease<K>> {
         self.healthy()?;
@@ -384,20 +468,84 @@ impl<K: Ord + Clone, G: Ord + Clone> Cache<K, G> {
             }
             self.peak();
         }
-        Ok(Lease { key, epoch })
+        Ok(Lease {
+            owner: self.owner.clone(),
+            key,
+            epoch,
+        })
     }
 
     /// Called only after upload synchronization and a consumer event succeed.
     /// On a failed operation, the physical partial install is removed first.
     pub fn complete(&mut self, lease: &Lease<K>, installed: bool) -> Result<()> {
         self.healthy()?;
+        self.validate_lease(lease, false)?;
+        self.apply_completion(lease, installed);
+        Ok(())
+    }
+
+    /// Same fenced-completion contract as `complete`, with per-lease install
+    /// outcomes. Unknown completion MUST quarantine the owner instead. `false`
+    /// requires the caller to have fenced and removed the partial binding first;
+    /// it is not a shortcut for retiring a successfully uploaded transient entry.
+    ///
+    /// Health, owner identity, exact epochs, active states and duplicate keys are
+    /// checked for the entire batch before any accounting or index mutation.
+    /// Empty batches are no-ops only on a healthy owner. No GPU proof is created
+    /// here: the caller must first prove upload AND last-consumer completion for
+    /// every member, just as for single completion.
+    #[allow(dead_code, reason = "Staged owner API; scalar execution is unchanged")]
+    pub fn complete_batch(&mut self, completions: &[(&Lease<K>, bool)]) -> Result<()> {
+        self.healthy()?;
+        let mut keys = BTreeSet::new();
+        for (lease, _) in completions {
+            if !keys.insert(&lease.key) {
+                return Err(error("duplicate completion key"));
+            }
+            self.validate_lease(lease, false)?;
+        }
+        for (lease, installed) in completions {
+            self.apply_completion(lease, *installed);
+        }
+        Ok(())
+    }
+
+    /// Retire only the exact use already accepted by `complete(..., true)` or
+    /// `complete_batch`. A live lease, failed install, stale epoch or foreign
+    /// owner is not a retirement proof, and Unknown never releases credit.
+    ///
+    /// Returns the exact binding key to remove physically. The caller MUST
+    /// remove it before any further admission; this is logical retirement, not
+    /// allocator reclamation or permission to drop a still-borrowed backing pool.
+    /// Counts one eviction, but no entry/byte/scratch pressure eviction. Upload
+    /// history is preserved and scratch remains charged after retirement.
+    #[allow(dead_code, reason = "Staged owner API; scalar execution is unchanged")]
+    pub fn retire_completed(&mut self, lease: &Lease<K>) -> Result<K> {
+        self.healthy()?;
+        self.validate_lease(lease, true)?;
+        let key = lease.key.clone();
+        self.evict_completed_key(key.clone(), |_| {});
+        Ok(key)
+    }
+
+    fn validate_lease(&self, lease: &Lease<K>, completed: bool) -> Result<()> {
+        if lease.owner != self.owner {
+            return Err(error("foreign lease owner"));
+        }
         let entry = self
             .entries
-            .get_mut(&lease.key)
+            .get(&lease.key)
             .ok_or_else(|| error("missing lease"))?;
-        if entry.epoch != lease.epoch || entry.state == State::Idle {
+        if entry.epoch != lease.epoch || (entry.state == State::Idle) != completed {
             return Err(error("stale completion epoch"));
         }
+        Ok(())
+    }
+
+    // Infallible after full validation, so batch application cannot partially
+    // succeed on an ordinary error. Keep single and batch accounting identical.
+    fn apply_completion(&mut self, lease: &Lease<K>, installed: bool) {
+        let entry = self.entries.get_mut(&lease.key).expect("validated lease");
         if entry.state == State::Uploading {
             self.stats.pending_upload_bytes -= entry.bytes;
             if installed {
@@ -422,7 +570,6 @@ impl<K: Ord + Clone, G: Ord + Clone> Cache<K, G> {
         } else {
             self.entries.remove(&lease.key);
         }
-        Ok(())
     }
 }
 
@@ -561,3 +708,7 @@ mod grouped_tests;
 #[cfg(test)]
 #[path = "../../../tests/unit/transformer/expert_cache_diagnostics.rs"]
 mod diagnostic_tests;
+
+#[cfg(test)]
+#[path = "../../../tests/unit/transformer/expert_cache_prerequisites.rs"]
+mod prerequisite_tests;

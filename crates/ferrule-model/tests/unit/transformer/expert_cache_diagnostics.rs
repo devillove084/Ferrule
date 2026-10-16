@@ -44,19 +44,19 @@ fn diagnostics_on_off_preserve_victims_leases_and_completion_order() {
                     let y = off.acquire(key, 8, |k| b.push(*k));
                     match (x, y) {
                         (Ok(x), Ok(y)) => {
-                            assert_eq!(x, y);
-                            leases.push(x);
+                            assert_eq!((&x.key, x.epoch), (&y.key, y.epoch));
+                            leases.push((x, y));
                         }
                         (Err(x), Err(y)) => assert_eq!(x.to_string(), y.to_string()),
                         pair => panic!("different acquisitions: {pair:?}"),
                     }
                 }
                 3 if !leases.is_empty() => {
-                    let lease = &leases[(rng as usize >> 16) % leases.len()];
+                    let (x, y) = &leases[(rng as usize >> 16) % leases.len()];
                     let installed = rng & 128 == 0;
                     assert_eq!(
-                        on.complete(lease, installed).map_err(|e| e.to_string()),
-                        off.complete(lease, installed).map_err(|e| e.to_string())
+                        on.complete(x, installed).map_err(|e| e.to_string()),
+                        off.complete(y, installed).map_err(|e| e.to_string())
                     );
                 }
                 4 => {
@@ -184,6 +184,7 @@ fn identity_registration_and_epoch_rejections_have_zero_mutation() {
             4 => wrong.parameters[0].0 = ParameterId::new(4),
             _ => wrong.parameters[0].1 = TensorRole::RoutedExpertUp,
         }
+        assert!(cache.assess_admission(&wrong, 8, 0).is_err());
         assert!(cache.acquire(wrong, 8, |_| panic!()).is_err());
         assert_eq!(before, (cache.stats(), cache.clock, state(&cache)));
     }
