@@ -436,6 +436,74 @@ class ProfileTerminalLifecycleTests(unittest.TestCase):
                     self.assertFalse((directory / 'profile-observer-stopped.json').exists())
                 self.ids = ids
 
+    def test_real_role_hash_failure_rechecks_exiting_model_without_live_proof(self):
+        # The REAL qualifier/role hasher reaches Path.open; only that syscall's
+        # deterministic exit interleaving is injected. maps.capture is not used.
+        for problem in ('terminal', 'mapping', 'wrong_pid', 'birth', 'parent', 'missing', 'ancestor',
+                        'unrelated_file', 'stays_live', 'deadline', 'deleted_library'):
+            with self.subTest(problem=problem), tempfile.TemporaryDirectory(dir=self.directory) as folder:
+                directory = Path(folder)
+                self.live.readonly(directory / 'profile-model-start.json', self.start)
+                ids, now = copy.deepcopy(self.ids), self.clock[0]
+                observations = [dict(error='prior deleted library pin failure')] if problem == 'deleted_library' else []
+                opened, read_text, identity = Path.open, Path.read_text, self.live.observer.proc_identity.side_effect
+                seen, checks = [], [0]
+                target = '/proc/300/maps' if problem == 'mapping' else '/proc/300/exe'
+                def proc_text(path, *args, **kwargs):
+                    if str(path) == '/proc/300/maps' and problem != 'mapping': return 'maps'
+                    return read_text(path, *args, **kwargs)
+                def open_race(path, *args, **kwargs):
+                    if str(path) != target: return opened(path, *args, **kwargs)
+                    seen.append(str(path))
+                    # First post-failure identity remains live, as in the real
+                    # CPU reproduction; only the second read may observe Z.
+                    raise FileNotFoundError(2, 'role proc read exit race',
+                        '/proc/301/exe' if problem == 'wrong_pid' else
+                        '/tmp/unrelated-library.so' if problem == 'unrelated_file' else target)
+                def recheck(pid):
+                    if seen and pid == 300:
+                        checks[0] += 1
+                        if problem == 'birth': self.ids[300]['birth_ticks'] += 1
+                        if problem == 'parent': self.ids[300]['ppid'] = 1
+                        if problem == 'missing': del self.ids[300]
+                        if checks[0] > 1 and problem not in ('stays_live', 'deadline'):
+                            self.ids[300]['state'] = 'Z'
+                            receipt = self.receipt(observed=self.clock[0])
+                            receipt['binding'] = q.profile_binding(directory, self.start)
+                            path = directory / 'profile-model-terminal.json'
+                            if not path.exists(): self.live.readonly(path, receipt)
+                            if problem == 'ancestor': self.ids[self.start['wrapper']['pid']]['birth_ticks'] += 1
+                    return identity(pid)
+                stop = self.stop(); stop.wait.side_effect = [False, True]
+                with mock.patch.object(q, 'PLAN', plan()), \
+                        mock.patch.object(Path, 'open', open_race), \
+                        mock.patch.object(Path, 'read_text', proc_text), \
+                        mock.patch.object(self.live.observer, 'proc_identity', side_effect=recheck), \
+                        mock.patch.object(q.time, 'sleep', side_effect=lambda delay: self.clock.__setitem__(0, self.clock[0] + delay)), \
+                        mock.patch.object(q, 'PROFILE_PROC_TERMINAL_SECONDS', .001 if problem == 'deadline' else .25):
+                    q.profile_monitor(directory, stop, observations)
+                if problem in ('terminal', 'mapping'):
+                    event = observations[0]
+                    self.assertEqual(event['kind'], 'model_terminal_during_sample')
+                    self.assertEqual(event['identity_event']['reason'], 'exited')
+                    evidence = event['identity_event']['proc_read']
+                    self.assertEqual(evidence['path'], target)
+                    self.assertEqual(evidence['operation'], 'read_text' if problem == 'mapping' else 'sha256')
+                    self.assertEqual(evidence['first_recheck']['identity']['state'], 'S')
+                    self.assertLessEqual(evidence['failed_monotonic'], event['identity_event']['observed_monotonic'])
+                    self.assertNotIn('model', event)
+                    self.assertEqual(q.ct.load(directory / 'profile-observer-stopped.json')['status'], 'stopped')
+                else:
+                    self.assertTrue(any('error' in row for row in observations))
+                    ack = directory / 'profile-observer-stopped.json'
+                    self.assertTrue(not ack.exists() or q.ct.load(ack)['status'] == 'blocked')
+                    if problem in ('wrong_pid', 'unrelated_file', 'stays_live', 'deadline'):
+                        self.assertIn('traceback', observations[-1])
+                        self.assertEqual(observations[-1]['proc_read']['path'], target)
+                self.assertFalse((directory / 'profile-maps-0').exists())
+                self.assertEqual(seen, [target])  # No hash/read retry or cached role fabricated.
+                self.ids, self.clock[0] = ids, now
+
     def test_leader_exited_sample_can_precede_thread_group_terminal_event(self):
         self.ids[300]['state'] = 'Z'
         try: self.live.observer.verify_root(self.model)
@@ -506,6 +574,12 @@ class ProfileTerminalLifecycleTests(unittest.TestCase):
 @unittest.skipUnless(hasattr(os, 'WNOWAIT'), 'Linux terminal-child custody')
 class ProfileTerminalCPUIntegrationTests(unittest.TestCase):
     def test_real_wrapper_and_collector_hold_exe_read_race_until_ack(self):
+        self.capture_exit_race('collector')
+
+    def test_real_wrapper_and_role_hash_hold_exe_open_race_until_ack(self):
+        self.capture_exit_race('role_hash')
+
+    def capture_exit_race(self, boundary):
         with tempfile.TemporaryDirectory() as folder:
             directory = Path(folder)
             spec = importlib.util.spec_from_file_location('_cpu_profile_capture', q.ROOT / 'scripts/_profile_capture.py')
@@ -548,20 +622,41 @@ class ProfileTerminalCPUIntegrationTests(unittest.TestCase):
                     return original(*args, **kwargs)
                 child.wait = wait
                 child.poll = mock.Mock(side_effect=AssertionError('No reaping poll'))
-            read_bytes, readlink, sha, load = Path.read_bytes, Path.readlink, q.ct.sha, q.ct.load
+            read_bytes, readlink, opened, sha, load = Path.read_bytes, Path.readlink, Path.open, q.ct.sha, q.ct.load
+            identity, pending_live_recheck, before_exit = live.observer.proc_identity, [False], []
+            def proc_identity(pid):
+                if pending_live_recheck[0] and children and pid == children[0].pid and threading.current_thread() is thread:
+                    # Deterministically replay the actual Linux mm/exe-before-Z
+                    # ordering reproduced separately; the failing exe read and
+                    # all subsequent terminal identities below are real procfs.
+                    pending_live_recheck[0] = False
+                    return dict(before_exit[0])
+                return identity(pid)
             def proc_bytes(path, *args, **kwargs):
                 if children and str(path) == f'/proc/{children[0].pid}/maps': return raw
                 return read_bytes(path, *args, **kwargs)
+            def exit_at_read():
+                entered.set()
+                before_exit.append(identity(children[0].pid))
+                (directory / 'cpu-release').touch()
+                deadline = q.time.monotonic() + 3
+                while not (directory / 'profile-model-terminal.json').exists():
+                    if q.time.monotonic() >= deadline: raise TimeoutError('CPU terminal receipt missing')
+                    q.time.sleep(.005)
+                self.assertEqual(identity(children[0].pid)['state'], 'Z')
             def exe_race(path, *args, **kwargs):
-                if children and str(path) == f'/proc/{children[0].pid}/exe':
-                    entered.set()
-                    (directory / 'cpu-release').touch()
-                    deadline = q.time.monotonic() + 3
-                    while not (directory / 'profile-model-terminal.json').exists():
-                        if q.time.monotonic() >= deadline: raise TimeoutError('CPU terminal receipt missing')
-                        q.time.sleep(.005)
-                    self.assertEqual(live.observer.proc_identity(children[0].pid)['state'], 'Z')
-                return readlink(path, *args, **kwargs)  # The actual Linux proc exe read now fails.
+                if boundary == 'collector' and children and str(path) == f'/proc/{children[0].pid}/exe':
+                    exit_at_read()
+                return readlink(path, *args, **kwargs)  # Actual Linux proc exe read.
+            def role_hash_race(path, *args, **kwargs):
+                if boundary == 'role_hash' and children and str(path) == f'/proc/{children[0].pid}/exe':
+                    exit_at_read()
+                    try:
+                        return opened(path, *args, **kwargs)
+                    except FileNotFoundError:
+                        pending_live_recheck[0] = True
+                        raise
+                return opened(path, *args, **kwargs)
             def monitor():
                 try: q.profile_monitor(directory, stop, observations)
                 except BaseException as error: failures.append(error)
@@ -573,6 +668,8 @@ class ProfileTerminalCPUIntegrationTests(unittest.TestCase):
                     mock.patch.object(q.perf, 'payload_argv', return_value=command), \
                     mock.patch.object(Path, 'read_bytes', proc_bytes), \
                     mock.patch.object(Path, 'readlink', exe_race), \
+                    mock.patch.object(Path, 'open', role_hash_race), \
+                    mock.patch.object(live.observer, 'proc_identity', side_effect=proc_identity), \
                     mock.patch.dict(os.environ, CUDA_VISIBLE_DEVICES='', NVIDIA_VISIBLE_DEVICES='none'), \
                     mock.patch.object(os, 'kill', side_effect=AssertionError('No signals')), \
                     mock.patch.object(os, 'killpg', side_effect=AssertionError('No group signals')):
@@ -589,12 +686,21 @@ class ProfileTerminalCPUIntegrationTests(unittest.TestCase):
             self.assertTrue(entered.is_set())
             self.assertEqual(len(waits), 1)
             self.assertEqual([row['kind'] for row in observations], ['model_terminal_during_sample'])
-            snapshot = load(directory / 'profile-maps-0/snapshot.json')
-            self.assertIn('parent_after', snapshot)
-            self.assertEqual(snapshot['proc_read_error']['operation'], 'readlink')
-            self.assertEqual(snapshot['proc_read_error']['path'], f'/proc/{children[0].pid}/exe')
-            self.assertEqual(snapshot['proc_read_error']['exception_type'], 'FileNotFoundError')
-            self.assertEqual(snapshot['errors'], [snapshot['proc_read_error']['error']])
+            if boundary == 'collector':
+                snapshot = load(directory / 'profile-maps-0/snapshot.json')
+                self.assertIn('parent_after', snapshot)
+                self.assertEqual(snapshot['proc_read_error']['operation'], 'readlink')
+                self.assertEqual(snapshot['proc_read_error']['path'], f'/proc/{children[0].pid}/exe')
+                self.assertEqual(snapshot['proc_read_error']['exception_type'], 'FileNotFoundError')
+                self.assertEqual(snapshot['errors'], [snapshot['proc_read_error']['error']])
+            else:
+                evidence = observations[0]['identity_event']['proc_read']
+                self.assertEqual(evidence['operation'], 'sha256')
+                self.assertEqual(evidence['path'], f'/proc/{children[0].pid}/exe')
+                self.assertIn(evidence['first_recheck']['identity']['state'], ('R', 'S'))
+                self.assertFalse((directory / 'profile-maps-0').exists())
+                self.assertNotIn('model', observations[0])
+                self.assertEqual(len(before_exit), 1)  # No second hash attempt.
 
 
 class ContractTests(unittest.TestCase):

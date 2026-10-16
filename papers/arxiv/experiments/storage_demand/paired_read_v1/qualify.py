@@ -9,6 +9,7 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 
 ROOT = Path('/home/admin/luhuanbing.lhb/Ferrule')
 HERE = Path(__file__).resolve().parent
@@ -519,6 +520,7 @@ def profile_auth(directory, seal):
 
 # One in-flight pin-validation pass; never extends the capture lifetime.
 PROFILE_TERMINAL_ACK_SECONDS = 15
+PROFILE_PROC_TERMINAL_SECONDS = .25
 
 
 def profile_binding(directory, start):
@@ -629,7 +631,8 @@ def profile_monitor_ack(directory, stop, observations, sample, error=None):
         kind = 'model_terminal_before_sample' if event['observed_monotonic'] < sample['started_monotonic'] else 'model_terminal_during_sample'
         observations.append(dict(kind=kind, sample=sample,
             terminal_sha256=digest, identity_event=dict(message=str(error), expected=error.expected,
-                current=error.current, reason=error.reason, observed_monotonic=error.observed_monotonic)))
+                current=error.current, reason=error.reason, observed_monotonic=error.observed_monotonic,
+                **({'proc_read': error.profile_proc_read} if hasattr(error, 'profile_proc_read') else {}))))
     errors = [row['error'] for row in observations if 'error' in row]
     ack = dict(binding=binding, terminal_sha256=digest, last_sample=sample,
                stopped_monotonic=time.monotonic(), status='blocked' if errors else 'stopped', errors=errors)
@@ -640,14 +643,39 @@ def profile_monitor_ack(directory, stop, observations, sample, error=None):
     live.readonly(directory / 'profile-observer-stopped.json', ack)
 
 
-def profile_model_read(live, model, read):
+def profile_model_read(live, model, read, *, name, operation, deadline):
+    allowed = {'exe': ('sha256',), 'maps': ('read_text',), 'cmdline': ('read_bytes',)}
+    ct.require(name in allowed and operation in allowed[name], 'Unbound model proc acquisition site')
+    path, started = f'/proc/{model["pid"]}/{name}', time.monotonic()
     try:
         return read()
-    except (FileNotFoundError, ProcessLookupError):
-        # Only this model's proc read can be interrupted by its held terminal
-        # transition. Missing/reused anchors and every other error remain fatal.
-        live.observer.verify_root(model, identity=live.observer.proc_identity)
-        raise
+    except (FileNotFoundError, ProcessLookupError) as error:
+        failed = time.monotonic()
+        evidence = dict(source='qualify.profile_model_read', expected=dict(model), path=path,
+            operation=operation, started_monotonic=started, failed_monotonic=failed,
+            exception_type=type(error).__name__, error=str(error), filename=error.filename)
+        error.profile_proc_read = evidence
+        # Provenance is the declared acquisition site AND the actual failing
+        # syscall path, never a substring in an arbitrary exception message.
+        if error.filename != path:
+            raise
+        until = min(deadline, failed + (PROFILE_PROC_TERMINAL_SECONDS if name in ('exe', 'maps') else 0))
+        evidence['recheck_deadline_monotonic'] = until
+        while True:
+            if 'first_recheck' in evidence and time.monotonic() >= until:
+                raise
+            try:
+                current = live.observer.verify_root(model, identity=live.observer.proc_identity)
+            except live.observer.CustodyLost as lost:
+                lost.profile_proc_read = evidence
+                raise lost from error
+            evidence.setdefault('first_recheck', dict(identity=current, monotonic=time.monotonic()))
+            # Linux can remove mm/exe while stat still reports R/S during exit.
+            # Do not retry the read or fabricate a hash: only recheck the exact
+            # birth/parent briefly, then require the existing owner receipt.
+            if time.monotonic() >= until:
+                raise
+            time.sleep(max(0, min(.005, until - time.monotonic())))
 
 
 def profile_monitor(directory, stop, observations):
@@ -666,7 +694,8 @@ def profile_monitor(directory, stop, observations):
             _, start, _ = profile_context(directory)
             model = start['model']['before']
             live.observer.verify_root(model, identity=live.observer.proc_identity)
-            key = profile_model_read(live, model, lambda: Path(f'/proc/{model["pid"]}/maps').read_text())
+            key = profile_model_read(live, model, lambda: Path(f'/proc/{model["pid"]}/maps').read_text(),
+                name='maps', operation='read_text', deadline=start['capture_deadline_monotonic'])
             if key not in seen or len(observations) < 2:
                 seen.add(key)
                 observations.append(profile_observation(directory, len(observations)))
@@ -680,9 +709,13 @@ def profile_monitor(directory, stop, observations):
                     profile_monitor_ack(directory, stop, observations, sample, error)
                 except Exception as terminal_error:
                     observations.append(dict(error=type(error).__name__ + ': ' + str(error)
-                        + '; terminal acknowledgement: ' + str(terminal_error), sample=sample))
+                        + '; terminal acknowledgement: ' + str(terminal_error), sample=sample,
+                        traceback=traceback.format_exc(),
+                        **({'proc_read': error.profile_proc_read} if hasattr(error, 'profile_proc_read') else {})))
                 return
-            observations.append(dict(error=type(error).__name__ + ': ' + str(error), sample=sample))
+            observations.append(dict(error=type(error).__name__ + ': ' + str(error), sample=sample,
+                traceback=traceback.format_exc(),
+                **({'proc_read': error.profile_proc_read} if hasattr(error, 'profile_proc_read') else {})))
             if sample is None:
                 return
 
@@ -695,8 +728,10 @@ def profile_observation(directory, index):
     live.descendant(model, wrapper)
     before = live.observer.verify_root(model, identity=live.observer.proc_identity)
     record = dict(before=before,
-                  executable_sha256=profile_model_read(live, model, lambda: ct.sha(f'/proc/{model["pid"]}/exe')),
-                  command=profile_model_read(live, model, lambda: Path(f'/proc/{model["pid"]}/cmdline').read_bytes()).rstrip(b'\0').decode().split('\0'),
+                  executable_sha256=profile_model_read(live, model, lambda: ct.sha(f'/proc/{model["pid"]}/exe'),
+                      name='exe', operation='sha256', deadline=start['capture_deadline_monotonic']),
+                  command=profile_model_read(live, model, lambda: Path(f'/proc/{model["pid"]}/cmdline').read_bytes(),
+                      name='cmdline', operation='read_bytes', deadline=start['capture_deadline_monotonic']).rstrip(b'\0').decode().split('\0'),
                   after=live.observer.verify_root(model, identity=live.observer.proc_identity))
     perf.validate_role(record, model, gate['binary_sha256'], perf.payload_argv(PLAN, gate))
     identity_errors = []
