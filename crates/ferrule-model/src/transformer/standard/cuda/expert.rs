@@ -126,6 +126,11 @@ impl CudaStandardDecoderOperators {
                     continue;
                 }
             }
+            if self.retained_numeric_fp8_upload_enabled() {
+                return Err(cuda_error(
+                    "retained expert uploads require metadata before payload reads",
+                ));
+            }
             let availability = if let Some(expert) = self.experts.get(&(layer, id)) {
                 ExpertAvailability::Ready(std::sync::Arc::clone(expert))
             } else {
@@ -602,6 +607,11 @@ impl ExpertWorker for CudaExpertWorker<'_> {
                 metadata.insert(id, plan);
                 (bytes, activation)
             } else {
+                if self.operators.retained_numeric_fp8_upload_enabled() {
+                    return Err(cuda_error(
+                        "retained expert uploads require metadata before payload reads",
+                    ));
+                }
                 let expert = match self.experts.expert(id.layer, id.expert)? {
                     ExpertAvailability::Ready(expert) => expert,
                     ExpertAvailability::Waiting => {
@@ -657,6 +667,11 @@ impl ExpertWorker for CudaExpertWorker<'_> {
                 } else if let Some(expert) = prepared.get(&id) {
                     Some(std::sync::Arc::clone(expert))
                 } else {
+                    if this.retained_numeric_fp8_upload_enabled() {
+                        return Err(cuda_error(
+                            "retained expert uploads require metadata before payload reads",
+                        ));
+                    }
                     let expert = match self.experts.expert(id.layer, id.expert)? {
                         ExpertAvailability::Ready(expert) => expert,
                         ExpertAvailability::Waiting => {

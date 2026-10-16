@@ -3,12 +3,54 @@
 use ferrule_backend::cuda::operators::linear::CudaF32Buffer;
 use ferrule_common::Result;
 
+#[path = "retained_upload.rs"]
+pub(super) mod retained_upload;
+
 use super::{CudaStandardDecoderOperators, ExpertCacheKey, cuda_error};
 use crate::nn::ParameterResidency;
 use crate::support::TensorRole;
 use crate::transformer::{PreparedSwiGlu, SwiGluScratchPlan};
 
 impl CudaStandardDecoderOperators {
+    /// Explicit, default-off owner option for the metadata-backed numeric TP1
+    /// miss path. Configure on an existing numeric owner before execution. The
+    /// provider must have configured bounded expert reads. Headroom is reserved
+    /// policy space for unmeasured physical overhead, NOT an RSS measurement.
+    /// This first stage waits for host-observed readiness before compute and
+    /// preserves existing consumer fences; it makes no overlap claim.
+    pub fn enable_retained_numeric_fp8_upload(
+        &mut self,
+        policy_headroom_bytes: usize,
+        ready_timeout: std::time::Duration,
+    ) -> Result<()> {
+        if self.retained_upload.is_some()
+            || self.needs_quarantine()
+            || self.numeric.is_none()
+            || self.bounded_experts.is_none()
+            || self.bindings.tensor.is_some()
+            || self.bindings.numeric_rank.is_some()
+            || self.bindings.expert_admission.is_some()
+            || self.root_submission.is_some()
+            || self.expert_cache_stats().is_some_and(|s| s.uploads != 0)
+            || policy_headroom_bytes == 0
+            || ready_timeout.is_zero()
+            || ready_timeout > std::time::Duration::from_secs(60)
+        {
+            return Err(cuda_error(
+                "retained upload requires an unused bounded numeric TP1 owner, nonzero policy headroom and a timeout in (0, 60s]",
+            ));
+        }
+        self.retained_upload = Some(retained_upload::State::new(
+            policy_headroom_bytes,
+            ready_timeout,
+        ));
+        Ok(())
+    }
+
+    pub fn retained_numeric_fp8_upload_enabled(&self) -> bool {
+        self.retained_upload.is_some()
+    }
+
     /// No decoding or upload during sizing. Converted BF16 has F32 device cost.
     pub(super) fn expert_plan(
         &self,
@@ -346,6 +388,11 @@ impl CudaStandardDecoderOperators {
             // Shared and dense FFNs retain the original policy, not this cache.
             return run(self);
         }
+        if self.retained_upload.is_some() {
+            return Err(cuda_error(
+                "retained expert uploads require metadata-backed provider admission",
+            ));
+        }
         let (key, bytes, scratch) = self.expert_plan(expert, rows)?;
         self.admitted_expert_operation(key, bytes, scratch, run)
     }
@@ -357,6 +404,38 @@ impl CudaStandardDecoderOperators {
         scratch: usize,
         run: impl FnOnce(&mut Self) -> Result<T>,
     ) -> Result<T> {
+        if self.retained_upload.is_some() {
+            let operation =
+                SwiGluScratchPlan::reserved_bytes(scratch, self.route_scratch_bytes, 0)?;
+            let operation = self
+                .root_submission
+                .as_ref()
+                .map_or(operation, |s| operation.max(s.limit()));
+            let total_scratch = SwiGluScratchPlan::reserved_bytes(
+                operation,
+                0,
+                self.numeric.as_ref().map_or(0, |n| n.stats.reserved_bytes),
+            )?;
+            use crate::transformer::standard::expert_cache::Admission;
+            match self
+                .bounded_experts
+                .as_ref()
+                .expect("bounded opt in")
+                .assess_admission(&key, bytes, total_scratch)?
+            {
+                Admission::Fits => (),
+                Admission::RequiresFlush => {
+                    return Err(cuda_error(
+                        "serial retained owner has an unresolved expert lease",
+                    ));
+                }
+                Admission::Impossible => {
+                    return Err(cuda_error(
+                        "retained expert plus total scratch exceeds cache budget",
+                    ));
+                }
+            }
+        }
         self.preflight_expert_admission(bytes, scratch, self.route_scratch_bytes)?;
         let scratch = SwiGluScratchPlan::reserved_bytes(scratch, self.route_scratch_bytes, 0)?;
         self.cache_scratch(scratch)?;
@@ -368,6 +447,13 @@ impl CudaStandardDecoderOperators {
                 .as_mut()
                 .expect("bounded")
                 .acquire(key.clone(), bytes, |key| self.bindings.evict_expert(key))?;
+        if let Some(upload) = &mut self.retained_upload
+            && let Err(error) = upload.begin_lease(&lease)
+        {
+            self.poisoned = true;
+            self.cache_quarantine();
+            return Err(error);
+        }
         self.bindings.expert_admission = Some(key);
         let result = run(self);
         // This event is on the actual matmul consumer stream, not an upload
@@ -391,6 +477,13 @@ impl CudaStandardDecoderOperators {
         self.expert_hold.clear();
         self.expert_artifacts.clear();
         self.bindings.expert_admission = None;
+        if let Some(upload) = &mut self.retained_upload
+            && let Err(error) = upload.finish_lease()
+        {
+            self.poisoned = true;
+            self.cache_quarantine();
+            return Err(error);
+        }
         if result.is_err() {
             self.bindings.evict_expert(&lease.key);
         }
@@ -416,6 +509,10 @@ impl CudaStandardDecoderOperators {
 
     pub(super) fn retain_cache_on_unknown(&mut self) {
         self.cache_quarantine();
+        if let Some(upload) = &mut self.retained_upload {
+            upload.quarantine();
+        }
+        std::mem::forget(self.retained_upload.take());
         std::mem::forget(std::mem::take(&mut self.expert_hold));
         std::mem::forget(std::mem::take(&mut self.bf16_hold));
         std::mem::forget(std::mem::take(&mut self.expert_artifacts));

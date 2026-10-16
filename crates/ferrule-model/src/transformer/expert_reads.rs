@@ -41,7 +41,8 @@ pub enum ExpertReadSchedule {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct ExpertReadPipelineOptions {
     pub schedule: ExpertReadSchedule,
-    /// Combined packed buffers, prepared compressed artifacts, metadata and stack.
+    /// Combined packed buffers, prepared artifacts, metadata and requested stack;
+    /// retained upload opt-in also charges pinned bytes, ticket and policy headroom.
     pub max_host_bytes: u64,
     pub max_metadata_bytes: u64,
     /// Requested stack reservation; OS rounding, TLS and allocator overhead are
@@ -76,6 +77,8 @@ pub(crate) struct ExpertReadAdmissionState {
     join: Option<ReadJoinHandoff>,
     worker: Option<CheckpointReadPipeline>,
     identity: Option<ExpertReadOwnerIdentity>,
+    upload_epoch: u64,
+    upload: Option<UploadHostHold>,
 }
 
 impl ExpertReadAdmissionState {
@@ -90,6 +93,154 @@ impl ExpertReadAdmissionState {
         drop(worker);
         if let Some(join) = join {
             let _ = join.join();
+        }
+    }
+}
+
+/// Logical host custody, not physical RSS. Headroom is an explicit policy
+/// reservation for unmeasured allocator/driver/page overhead, not a measurement.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+pub struct ExpertUploadHostCharge {
+    pub prepared_bytes: u64,
+    pub pinned_bytes: u64,
+    pub ticket_metadata_bytes: u64,
+    pub policy_headroom_bytes: u64,
+}
+
+impl ExpertUploadHostCharge {
+    fn extra(self) -> Result<u64> {
+        self.pinned_bytes
+            .checked_add(self.ticket_metadata_bytes)
+            .and_then(|n| n.checked_add(self.policy_headroom_bytes))
+            .ok_or_else(|| invalid("upload host charge overflow"))
+    }
+}
+
+#[derive(Debug)]
+struct UploadHostHold {
+    epoch: u64,
+    key: (u64, usize, usize),
+    charge: ExpertUploadHostCharge,
+    transferred: bool,
+    unknown: bool,
+    reserved_packed_floor: u64,
+}
+
+/// A non-cloneable reservation from the existing read owner's aggregate ledger.
+/// Dropping unresolved custody freezes admission; it never refunds quota. Only
+/// the CUDA owner may supply completion proof, and source aliases must also end.
+#[derive(Debug)]
+pub struct ExpertUploadReservation {
+    admission: Option<ExpertReadAdmission>,
+    epoch: u64,
+    key: (u64, usize, usize),
+    charge: ExpertUploadHostCharge,
+    read: Option<CurrentExpertRead>,
+    payloads: Vec<NumericFp8PayloadLiveness>,
+    #[cfg(any(feature = "cuda", test))]
+    proved: bool,
+}
+
+impl ExpertUploadReservation {
+    pub fn host_charge(&self) -> ExpertUploadHostCharge {
+        self.charge
+    }
+
+    #[cfg(any(feature = "cuda", test))]
+    pub(crate) fn validate_identity(&self, image: u64, layer: usize, expert: usize) -> Result<()> {
+        if self.key != (image, layer, expert) || self.admission.is_none() {
+            return Err(invalid(
+                "upload reservation belongs to another image/expert",
+            ));
+        }
+        Ok(())
+    }
+
+    #[cfg(any(feature = "cuda", test))]
+    pub(crate) fn quarantine(&mut self) {
+        if let Some(admission) = &self.admission {
+            let mut state = admission.0.state.lock().unwrap_or_else(|p| p.into_inner());
+            state.quarantined = true;
+            if let Some(hold) = &mut state.upload {
+                hold.unknown = true;
+            }
+        }
+    }
+
+    #[cfg(any(feature = "cuda", test))]
+    pub(crate) fn prove_completion(&mut self) {
+        self.proved = true;
+    }
+
+    #[cfg(any(feature = "cuda", test))]
+    pub(crate) fn release(&mut self) -> Result<()> {
+        if !self.proved
+            || self.read.is_none()
+            || self.payloads.len() != 3
+            || self.payloads.iter().any(NumericFp8PayloadLiveness::is_live)
+        {
+            return Err(invalid(
+                "upload release needs completion and retired source aliases",
+            ));
+        }
+        let admission = self
+            .admission
+            .as_ref()
+            .ok_or_else(|| invalid("upload reservation already released"))?;
+        let state = admission
+            .0
+            .state
+            .lock()
+            .map_err(|_| invalid("upload host ledger is poisoned"))?;
+        let hold = state
+            .upload
+            .as_ref()
+            .ok_or_else(|| invalid("missing upload reservation"))?;
+        if state.quarantined || hold.unknown || hold.epoch != self.epoch || hold.key != self.key {
+            return Err(invalid("stale or unknown upload reservation"));
+        }
+        drop(state);
+        // No admission lock may span completion Drop: releasing read quota may
+        // invoke an inline observer/waker. Keep the upload hold installed while
+        // dropping all tracked weak allocations and the packed completion.
+        self.payloads.clear();
+        self.read = None;
+        let mut state = admission
+            .0
+            .state
+            .lock()
+            .map_err(|_| invalid("upload host ledger is poisoned"))?;
+        let hold = state
+            .upload
+            .as_ref()
+            .ok_or_else(|| invalid("missing upload reservation"))?;
+        if state.quarantined || hold.unknown || hold.epoch != self.epoch || hold.key != self.key {
+            return Err(invalid(
+                "upload reservation changed during resource retirement",
+            ));
+        }
+        state.upload = None;
+        drop(state);
+        self.admission = None;
+        Ok(())
+    }
+}
+
+impl Drop for ExpertUploadReservation {
+    fn drop(&mut self) {
+        if let Some(admission) = self.admission.take() {
+            {
+                let mut state = admission.0.state.lock().unwrap_or_else(|p| p.into_inner());
+                state.quarantined = true;
+                if let Some(hold) = &mut state.upload {
+                    hold.unknown = true;
+                }
+            }
+            // Unknown includes abandoned reservations and unwinds. Keep the read,
+            // weak backing allocations and admission authority, not just counters.
+            std::mem::forget(self.read.take());
+            std::mem::forget(std::mem::take(&mut self.payloads));
+            std::mem::forget(admission);
         }
     }
 }
@@ -528,6 +679,10 @@ statistics!(
         peak_requested_stack_bytes, peak_payload_bytes, peak_host_charged_bytes]
 );
 
+fn zero_host_charge(bytes: &u64) -> bool {
+    *bytes == 0
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
 pub struct ExpertReadHostCharge {
     pub packed_bytes: u64,
@@ -540,6 +695,17 @@ pub struct ExpertReadHostCharge {
     pub unknown_stack_bytes: u64,
     pub reserved_read_slots: usize,
     pub unknown_read_slots: usize,
+    /// Packed demand quota reserved before its read has been submitted.
+    #[serde(skip_serializing_if = "zero_host_charge")]
+    pub upload_reserved_packed_bytes: u64,
+    #[serde(skip_serializing_if = "zero_host_charge")]
+    pub pinned_upload_bytes: u64,
+    #[serde(skip_serializing_if = "zero_host_charge")]
+    pub upload_ticket_metadata_bytes: u64,
+    #[serde(skip_serializing_if = "zero_host_charge")]
+    pub upload_policy_headroom_bytes: u64,
+    #[serde(skip_serializing_if = "zero_host_charge")]
+    pub unknown_upload_bytes: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -647,7 +813,14 @@ impl ExpertReadObservationState {
                 || budget.unknown_slots != 0
                 || budget.worker_stack.unknown_bytes != 0;
             observed.stats.workers_joined = self.prior_worker_joins + u64::from(worker.joined);
-            let (artifacts_live, owner_poisoned, owner_quarantined) = self
+            let (
+                artifacts_live,
+                owner_poisoned,
+                owner_quarantined,
+                upload,
+                upload_unknown,
+                upload_packed,
+            ) = self
                 .admission_state
                 .as_ref()
                 .and_then(Weak::upgrade)
@@ -658,18 +831,27 @@ impl ExpertReadObservationState {
                     };
                     // Weak witnesses themselves retain backing allocations;
                     // only operational admission drops the retired witnesses.
-                    (!state.payloads.is_empty(), poisoned, state.quarantined)
+                    (
+                        !state.payloads.is_empty(),
+                        poisoned,
+                        state.quarantined,
+                        state.upload.as_ref().map(|h| h.charge).unwrap_or_default(),
+                        state.upload.as_ref().is_some_and(|h| h.unknown),
+                        state.upload.as_ref().map_or(0, |h| h.reserved_packed_floor),
+                    )
                 })
                 .unwrap_or_default();
-            let artifact_bytes = if self.scope_open || artifacts_live || owner_poisoned {
+            let artifact_bytes = (if self.scope_open || artifacts_live || owner_poisoned {
                 self.artifact_bytes
             } else {
                 0
-            };
+            })
+            .max(upload.prepared_bytes);
             let retained = self.scope_open
                 || artifacts_live
                 || budget.reserved_bytes != 0
-                || budget.worker_stack.reserved_bytes != 0;
+                || budget.worker_stack.reserved_bytes != 0
+                || upload != ExpertUploadHostCharge::default();
             observed.current_charge = ExpertReadHostCharge {
                 packed_bytes: budget.reserved_bytes,
                 artifact_bytes,
@@ -684,13 +866,28 @@ impl ExpertReadObservationState {
                 unknown_stack_bytes: budget.worker_stack.unknown_bytes as u64,
                 reserved_read_slots: budget.reserved_slots,
                 unknown_read_slots: budget.unknown_slots,
+                upload_reserved_packed_bytes: upload_packed.saturating_sub(budget.reserved_bytes),
+                pinned_upload_bytes: upload.pinned_bytes,
+                upload_ticket_metadata_bytes: upload.ticket_metadata_bytes,
+                upload_policy_headroom_bytes: upload.policy_headroom_bytes,
+                unknown_upload_bytes: if upload_unknown {
+                    upload
+                        .prepared_bytes
+                        .saturating_add(upload.extra().unwrap_or(u64::MAX))
+                } else {
+                    0
+                },
                 ..Default::default()
             };
             let charge = &mut observed.current_charge;
             charge.host_charged_bytes = charge
                 .payload_bytes
                 .saturating_add(charge.metadata_bytes)
-                .saturating_add(charge.requested_stack_bytes);
+                .saturating_add(charge.requested_stack_bytes)
+                .saturating_add(charge.upload_reserved_packed_bytes)
+                .saturating_add(charge.pinned_upload_bytes)
+                .saturating_add(charge.upload_ticket_metadata_bytes)
+                .saturating_add(charge.upload_policy_headroom_bytes);
             if !self.scope_open && worker.joined {
                 observed.status = if retained {
                     "closed_retained"
@@ -1198,6 +1395,190 @@ impl ExpertReadSequence {
         self.publish("active");
     }
 
+    fn upload_charge(&self) -> Result<ExpertUploadHostCharge> {
+        let Some(admission) = &self.admission else {
+            return Ok(Default::default());
+        };
+        let state = admission
+            .0
+            .state
+            .lock()
+            .map_err(|_| invalid("upload host ledger is poisoned"))?;
+        if state.quarantined {
+            return Err(invalid("upload host custody is quarantined"));
+        }
+        Ok(state.upload.as_ref().map(|h| h.charge).unwrap_or_default())
+    }
+
+    pub(crate) fn reserve_upload(
+        &mut self,
+        metadata: &ExpertMetadata,
+        ticket_metadata_bytes: usize,
+        policy_headroom_bytes: usize,
+    ) -> Result<ExpertUploadReservation> {
+        if ticket_metadata_bytes == 0 || policy_headroom_bytes == 0 {
+            return Err(invalid(
+                "ticket metadata and policy headroom must be nonzero",
+            ));
+        }
+        let admission = self
+            .admission
+            .as_ref()
+            .cloned()
+            .ok_or_else(|| invalid("retained uploads require an admitted read owner"))?;
+        {
+            let state = admission
+                .0
+                .state
+                .lock()
+                .map_err(|_| invalid("upload host ledger is poisoned"))?;
+            if state.quarantined || state.upload.is_some() {
+                return Err(invalid(
+                    "one unresolved upload per read owner; no replacement",
+                ));
+            }
+        }
+        self.release_current()?;
+        let ParameterResidency::Expert { layer, expert } = *metadata.parameters()[0].residency()
+        else {
+            return Err(invalid("upload requires routed metadata"));
+        };
+        let key = (layer, expert);
+        let plan = self
+            .plans
+            .get(&key)
+            .cloned()
+            .ok_or_else(|| invalid("upload expert was not selected"))?;
+        for (i, parameter) in metadata.parameters().iter().enumerate() {
+            plan.validate_binding(i, parameter)?;
+        }
+        if self.pending.as_ref().is_some_and(|p| p.key != key) {
+            self.discard_pending()?;
+        }
+        let payload = plan.packed.storage_bytes();
+        let charge = ExpertUploadHostCharge {
+            prepared_bytes: payload,
+            pinned_bytes: payload,
+            ticket_metadata_bytes: u64::try_from(ticket_metadata_bytes)
+                .map_err(|_| invalid("ticket metadata overflow"))?,
+            policy_headroom_bytes: u64::try_from(policy_headroom_bytes)
+                .map_err(|_| invalid("headroom overflow"))?,
+        };
+        // A matching accepted lookahead already reserved its packed buffer. If
+        // absent, include the exact future demand BEFORE its read or allocation.
+        let packed = self
+            .pipeline()
+            .budget()
+            .reserved_bytes
+            .checked_add(
+                if self
+                    .pending
+                    .as_ref()
+                    .is_some_and(|p| p.key == key && p.ticket.is_ok())
+                {
+                    0
+                } else {
+                    payload
+                },
+            )
+            .ok_or_else(|| invalid("packed upload reservation overflow"))?;
+        let aggregate = packed
+            .checked_add(payload)
+            .and_then(|n| n.checked_add(charge.extra().ok()?))
+            .and_then(|n| n.checked_add(self.options.max_metadata_bytes))
+            .and_then(|n| n.checked_add(self.options.worker_stack_bytes as u64))
+            .ok_or_else(|| invalid("aggregate upload reservation overflow"))?;
+        if aggregate > self.options.max_host_bytes {
+            return Err(invalid(
+                "packed + prepared + pinned + ticket + headroom exceeds host bound",
+            ));
+        }
+        let mut state = admission
+            .0
+            .state
+            .lock()
+            .map_err(|_| invalid("upload host ledger is poisoned"))?;
+        if state.quarantined || state.upload.is_some() {
+            return Err(invalid("upload reservation changed"));
+        }
+        let epoch = state
+            .upload_epoch
+            .checked_add(1)
+            .ok_or_else(|| invalid("upload epoch exhausted"))?;
+        state.upload_epoch = epoch;
+        let key = (plan.image, layer, expert);
+        state.upload = Some(UploadHostHold {
+            epoch,
+            key,
+            charge,
+            transferred: false,
+            unknown: false,
+            reserved_packed_floor: packed,
+        });
+        drop(state);
+        self.stats.peak_host_charged_bytes = self.stats.peak_host_charged_bytes.max(aggregate);
+        self.publish("active");
+        Ok(ExpertUploadReservation {
+            admission: Some(admission),
+            epoch,
+            key,
+            charge,
+            read: None,
+            payloads: Vec::new(),
+            #[cfg(any(feature = "cuda", test))]
+            proved: false,
+        })
+    }
+
+    pub(crate) fn transfer_upload(
+        &mut self,
+        reservation: &mut ExpertUploadReservation,
+    ) -> Result<()> {
+        let admission = self
+            .admission
+            .as_ref()
+            .ok_or_else(|| invalid("missing upload read owner"))?;
+        let authority = reservation
+            .admission
+            .as_ref()
+            .ok_or_else(|| invalid("released upload reservation"))?;
+        if !Arc::ptr_eq(&admission.0, &authority.0)
+            || reservation.read.is_some()
+            || self.artifacts.len() != 3
+        {
+            return Err(invalid("foreign or duplicate upload custody transfer"));
+        }
+        let read = self
+            .current
+            .as_ref()
+            .ok_or_else(|| invalid("missing current upload read"))?;
+        if (read.plan.image, read.plan.layer, read.plan.expert) != reservation.key {
+            return Err(invalid("upload custody belongs to another expert"));
+        }
+        let mut state = admission
+            .0
+            .state
+            .lock()
+            .map_err(|_| invalid("upload host ledger is poisoned"))?;
+        let hold = state
+            .upload
+            .as_mut()
+            .ok_or_else(|| invalid("missing upload reservation"))?;
+        if hold.epoch != reservation.epoch
+            || hold.key != reservation.key
+            || hold.unknown
+            || hold.transferred
+        {
+            return Err(invalid("stale upload custody transfer"));
+        }
+        hold.transferred = true;
+        reservation.read = self.current.take();
+        reservation.payloads = std::mem::take(&mut self.artifacts);
+        self.artifact_bytes = 0;
+        drop(state);
+        self.observe_peak()
+    }
+
     fn observe_peak(&mut self) -> Result<()> {
         let budget = self.pipeline().budget();
         self.stats.peak_packed_bytes = self.stats.peak_packed_bytes.max(budget.reserved_bytes);
@@ -1210,9 +1591,10 @@ impl ExpertReadSequence {
             .stats
             .peak_requested_stack_bytes
             .max(budget.worker_stack.reserved_bytes as u64);
+        let upload = self.upload_charge()?;
         let live = budget
             .reserved_bytes
-            .checked_add(self.artifact_bytes)
+            .checked_add(self.artifact_bytes.max(upload.prepared_bytes))
             .ok_or_else(|| invalid("live host payload overflows"))?;
         if live > self.options.payload_bound()? {
             return Err(invalid(
@@ -1223,7 +1605,11 @@ impl ExpertReadSequence {
         let charged = live
             .checked_add(self.options.max_metadata_bytes)
             .and_then(|bytes| bytes.checked_add(self.options.worker_stack_bytes as u64))
+            .and_then(|bytes| bytes.checked_add(upload.extra().ok()?))
             .ok_or_else(|| invalid("host charge overflows"))?;
+        if charged > self.options.max_host_bytes {
+            return Err(invalid("aggregate upload host bound exceeded"));
+        }
         self.stats.peak_host_charged_bytes = self.stats.peak_host_charged_bytes.max(charged);
         self.publish("active");
         Ok(())
@@ -1251,6 +1637,36 @@ impl ExpertReadSequence {
             .plans
             .get(&key)
             .ok_or_else(|| invalid("expert was not selected before compute"))?;
+        let upload = self.upload_charge()?;
+        if upload != ExpertUploadHostCharge::default() {
+            let predicted = self
+                .pipeline()
+                .budget()
+                .reserved_bytes
+                .checked_add(plan.packed.storage_bytes())
+                .and_then(|n| n.checked_add(self.artifact_bytes.max(upload.prepared_bytes)))
+                .and_then(|n| n.checked_add(upload.extra().ok()?))
+                .ok_or_else(|| invalid("read plus upload host charge overflow"))?;
+            if predicted > self.options.payload_bound()? {
+                return Err(invalid("read plus upload exceeds host bound"));
+            }
+        }
+        if let Some(admission) = &self.admission {
+            let state = admission
+                .0
+                .state
+                .lock()
+                .map_err(|_| invalid("upload host ledger is poisoned"))?;
+            if state
+                .upload
+                .as_ref()
+                .is_some_and(|h| h.key != (plan.image, key.0, key.1) || h.transferred)
+            {
+                return Err(invalid(
+                    "serial upload must retire before another source read",
+                ));
+            }
+        }
         let reader_before = self.reader.read_counters();
         let image = plan.image;
         let packed = plan.packed.clone();
@@ -1337,6 +1753,28 @@ impl ExpertReadSequence {
             layer, expert, schedule = ?self.options.schedule)
         .entered();
         self.release_current()?;
+        if let Some(admission) = &self.admission {
+            let state = admission
+                .0
+                .state
+                .lock()
+                .map_err(|_| invalid("upload host ledger is poisoned"))?;
+            if state.quarantined
+                || state.upload.as_ref().is_some_and(|h| {
+                    h.transferred
+                        || h.key
+                            != (
+                                self.plans.get(&(layer, expert)).map_or(0, |p| p.image),
+                                layer,
+                                expert,
+                            )
+                })
+            {
+                return Err(invalid(
+                    "unresolved upload prevents another materialization",
+                ));
+            }
+        }
         let key = (layer, expert);
         if let Some((failed_key, error)) = self.deferred.take()
             && failed_key == key
@@ -1528,3 +1966,7 @@ impl Drop for ExpertReadSequence {
 #[cfg(test)]
 #[path = "../../tests/expert_read_pipeline/mod.rs"]
 pub(crate) mod tests;
+
+#[cfg(test)]
+#[path = "../../tests/retained_numeric_upload/ledger.rs"]
+mod retained_upload_tests;

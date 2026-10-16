@@ -101,6 +101,7 @@ pub struct CudaStandardDecoderOperators {
     mixed_gqa_block: Option<Rc<hybrid_rank::MixedGqaInvocation>>,
     experts: BTreeMap<(usize, usize), Arc<PreparedSwiGlu>>,
     bounded_experts: Option<BoundedExpertCache<ExpertCacheKey>>,
+    retained_upload: Option<residency::retained_upload::State>,
     expert_hold: Vec<DeviceBuffer<f32>>,
     bf16_hold: Vec<DeviceBuffer<u16>>,
     bf16_chunk_workspace: Option<CudaF32Buffer>,
@@ -225,6 +226,7 @@ impl CudaStandardDecoderOperators {
             mixed_gqa_block: None,
             experts: BTreeMap::new(),
             bounded_experts,
+            retained_upload: None,
             expert_hold: Vec::new(),
             bf16_hold: Vec::new(),
             bf16_chunk_workspace: None,
@@ -894,27 +896,31 @@ impl CudaStandardDecoderOperators {
                 return consume(this, output);
             }
             if !this.bindings.has_metadata_expert(metadata)? {
-                let expert = match provider.expert(layer, id)? {
-                    ExpertAvailability::Ready(expert) => expert,
-                    ExpertAvailability::Waiting => {
-                        return Err(cuda_error("metadata-ready expert became unavailable"));
+                if this.retained_upload.is_some() {
+                    this.retained_metadata_upload(metadata, provider, input.shape().rows())?;
+                } else {
+                    let expert = match provider.expert(layer, id)? {
+                        ExpertAvailability::Ready(expert) => expert,
+                        ExpertAvailability::Waiting => {
+                            return Err(cuda_error("metadata-ready expert became unavailable"));
+                        }
+                        ExpertAvailability::Unsupported(reason) => return Err(cuda_error(reason)),
+                    };
+                    metadata.validate_payload(&expert)?;
+                    this.expert_plan(&expert, input.shape().rows())?;
+                    {
+                        let _upload =
+                            tracing::debug_span!(target: "ferrule_profile", "layer.expert.upload",
+                            image_generation = this.image_generation(), layer, expert = id,
+                            rows = input.shape().rows())
+                            .entered();
+                        for projection in [expert.gate(), expert.up(), expert.down()] {
+                            this.bindings.linear(&this.ops, projection)?;
+                        }
                     }
-                    ExpertAvailability::Unsupported(reason) => return Err(cuda_error(reason)),
-                };
-                metadata.validate_payload(&expert)?;
-                this.expert_plan(&expert, input.shape().rows())?;
-                {
-                    let _upload =
-                        tracing::debug_span!(target: "ferrule_profile", "layer.expert.upload",
-                        image_generation = this.image_generation(), layer, expert = id,
-                        rows = input.shape().rows())
-                        .entered();
-                    for projection in [expert.gate(), expert.up(), expert.down()] {
-                        this.bindings.linear(&this.ops, projection)?;
-                    }
+                    // No payload survives the upload; execution borrows GPU handles
+                    // and immutable BoundParameter metadata, not PreparedLinear.
                 }
-                // No payload survives the upload; execution borrows GPU handles
-                // and immutable BoundParameter metadata, not PreparedLinear.
             }
             if !already_resident {
                 this.expert_read_lookahead(provider, metadata, next);

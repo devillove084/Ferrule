@@ -32,6 +32,26 @@ pub use cuda::CudaRows;
 
 pub use ferrule_backend::cpu::{HostRows, RouterRoutes, RowsArenaId, RowsDType, RowsShape};
 
+/// Explicit owner-local expert transfer policy. Retained transfers require a
+/// capable leaf and its existing bounded host admission; this does not raise
+/// quotas or certify physical allocator/driver overhead.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ExpertTransferPolicy {
+    #[default]
+    Synchronous,
+    Retained {
+        policy_headroom_bytes: usize,
+        readiness_timeout: std::time::Duration,
+    },
+}
+
+/// Optional owner capability. Selection is explicit, before execution; the
+/// implementing leaf must reject unsupported policies without silent fallback.
+pub trait ExpertTransferControl {
+    fn set_expert_transfer_policy(&mut self, policy: ExpertTransferPolicy) -> Result<()>;
+    fn expert_transfer_policy(&self) -> ExpertTransferPolicy;
+}
+
 /// Device that owns row storage.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RowsDevice {
@@ -889,6 +909,28 @@ pub trait ExpertProvider {
         _next: Option<&ExpertMetadata>,
         _next_is_resident: bool,
     ) {
+    }
+
+    /// Default-disabled retained upload capability. Reserve the complete host
+    /// peak before materializing; unsupported providers must not fake admission.
+    fn reserve_expert_upload(
+        &mut self,
+        _metadata: &ExpertMetadata,
+        _ticket_metadata_bytes: usize,
+        _policy_headroom_bytes: usize,
+    ) -> Result<Option<super::expert_reads::ExpertUploadReservation>> {
+        Ok(None)
+    }
+
+    /// Move packed completion and source-allocation witnesses into the exact
+    /// reservation. This is custody transfer, never host completion or refund.
+    fn transfer_expert_upload(
+        &mut self,
+        _reservation: &mut super::expert_reads::ExpertUploadReservation,
+    ) -> Result<()> {
+        Err(model_error(
+            "expert provider has no retained upload custody",
+        ))
     }
 
     fn expert(&mut self, layer: usize, expert: usize) -> Result<ExpertAvailability>;

@@ -24,8 +24,8 @@ use crate::runner::{
 use crate::spec::{AttentionKind, ModelFamily, WeightSource};
 use crate::tokenizer::TokenizerHandle;
 use crate::transformer::{
-    BoundDecoderResources, CpuGqaMoeModule, FeedForward, PreparedDecoderGeneration,
-    StateDictMaterializer, TransformerForwardExecutor,
+    BoundDecoderResources, CpuGqaMoeModule, ExpertTransferControl, FeedForward,
+    PreparedDecoderGeneration, StateDictMaterializer, TransformerForwardExecutor,
 };
 use ferrule_common::execution::{
     ExecutionBatch, ExecutionCapabilities, ExecutionTransactionId, KvBindingMode, KvPageId,
@@ -692,6 +692,31 @@ where
     pub const fn forward_executor(&self) -> &D::ForwardExecutor {
         &self.forward_executor
     }
+    /// Configure the existing owner's expert transfer capability, never an
+    /// alternate executor. The leaf validates support and unused-owner state.
+    pub fn set_expert_transfer_policy(
+        &mut self,
+        policy: crate::transformer::ExpertTransferPolicy,
+    ) -> Result<()>
+    where
+        D::ForwardExecutor: crate::transformer::ExpertTransferControl,
+    {
+        if self.shutdown || !self.transactions.is_empty() || !self.proposal_continuations.is_empty()
+        {
+            return Err(runner_error(
+                "expert transfer policy requires an idle open owner",
+            ));
+        }
+        self.forward_executor.set_expert_transfer_policy(policy)
+    }
+
+    pub fn expert_transfer_policy(&self) -> crate::transformer::ExpertTransferPolicy
+    where
+        D::ForwardExecutor: crate::transformer::ExpertTransferControl,
+    {
+        self.forward_executor.expert_transfer_policy()
+    }
+
     pub fn backend(&self) -> &D::KvBackend {
         &self.backend
     }

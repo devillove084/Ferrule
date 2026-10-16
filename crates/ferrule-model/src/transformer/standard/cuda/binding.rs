@@ -286,6 +286,103 @@ impl Bindings {
         Ok(true)
     }
 
+    pub(super) fn publish_numeric_expert(
+        &mut self,
+        key: &ExpertCacheKey,
+        metadata: &ExpertMetadata,
+        artifacts: [ferrule_backend::cuda::operators::linear::CudaNumericFp8Artifact; 3],
+    ) -> Result<()> {
+        if self.expert_admission.as_ref() != Some(key)
+            || key.image_generation != self.generation.get()
+            || !self.bounded_experts
+            || !self.numeric_fp8
+            || self.tensor.is_some()
+        {
+            return Err(cuda_error("stale retained upload publication authority"));
+        }
+        metadata.validate_sources()?;
+        let mut bytes = 0usize;
+        for ((parameter, artifact), (id, role)) in metadata
+            .parameters()
+            .iter()
+            .zip(&artifacts)
+            .zip(&key.parameters)
+        {
+            self.validate_metadata(parameter)?;
+            let layout = artifact.layout();
+            let encoding = parameter
+                .numeric_fp8_encoding()
+                .ok_or_else(|| cuda_error("numeric metadata required"))?;
+            let source = parameter.numeric_fp8_source_metadata(encoding)?;
+            let scale_type = match encoding {
+                crate::checkpoint::NumericFp8Encoding::E4M3FnBlock128Bf16 => {
+                    ferrule_backend::cuda::operators::linear::NumericFp8ScaleType::Bf16
+                }
+                crate::checkpoint::NumericFp8Encoding::E4M3FnBlock128F32 => {
+                    ferrule_backend::cuda::operators::linear::NumericFp8ScaleType::F32
+                }
+            };
+            if parameter.canonical_id() != *id
+                || parameter.role() != role
+                || parameter.residency()
+                    != &(ParameterResidency::Expert {
+                        layer: key.layer,
+                        expert: key.expert,
+                    })
+                || source.matrix_shape() != [layout.n, layout.k]
+                || layout.row_origin != 0
+                || layout.column_origin != 0
+                || layout.scale_type != scale_type
+                || self.linear.contains_key(&(*id, Some(role.clone())))
+            {
+                return Err(cuda_error(
+                    "retained triple destination/shape/role mismatch",
+                ));
+            }
+            bytes = bytes
+                .checked_add(artifact.storage_bytes())
+                .ok_or_else(|| cuda_error("retained binding bytes overflow"))?;
+        }
+        let total = self
+            .bytes
+            .checked_add(bytes)
+            .ok_or_else(|| cuda_error("binding bytes overflow"))?;
+        // Build the entire triple before mutating the map. No payload Arc is
+        // retained in the resident catalog, only original source metadata.
+        let residents = metadata
+            .parameters()
+            .each_ref()
+            .map(|p| p.clone())
+            .into_iter()
+            .zip(artifacts)
+            .map(|(parameter, artifact)| {
+                let source = parameter.numeric_fp8_source_metadata(
+                    parameter.numeric_fp8_encoding().expect("validated numeric"),
+                )?;
+                let layout = artifact.layout();
+                Ok(Rc::new(ResidentLinear {
+                    bytes: artifact.storage_bytes(),
+                    shape: (layout.n, layout.k),
+                    bias: None,
+                    bias_values: None,
+                    storage: ResidentLinearStorage::Numeric(
+                        super::numeric_binding::NumericBinding {
+                            artifact,
+                            source,
+                            role: parameter.role().clone(),
+                        },
+                    ),
+                    parameter,
+                }))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        for ((id, role), resident) in key.parameters.iter().zip(residents) {
+            self.linear.insert((*id, Some(role.clone())), resident);
+        }
+        self.bytes = total;
+        Ok(())
+    }
+
     pub fn linear(
         &mut self,
         ops: &CudaOperators,

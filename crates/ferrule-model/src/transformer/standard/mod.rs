@@ -240,6 +240,30 @@ impl ExpertProvider for StateDictExpertProvider<'_> {
         }
     }
 
+    fn reserve_expert_upload(
+        &mut self,
+        metadata: &super::ExpertMetadata,
+        ticket_metadata_bytes: usize,
+        policy_headroom_bytes: usize,
+    ) -> Result<Option<super::expert_reads::ExpertUploadReservation>> {
+        self.reads
+            .as_mut()
+            .map(|reads| {
+                reads.reserve_upload(metadata, ticket_metadata_bytes, policy_headroom_bytes)
+            })
+            .transpose()
+    }
+
+    fn transfer_expert_upload(
+        &mut self,
+        reservation: &mut super::expert_reads::ExpertUploadReservation,
+    ) -> Result<()> {
+        self.reads
+            .as_mut()
+            .ok_or_else(|| model_error("retained upload requires configured expert reads"))?
+            .transfer_upload(reservation)
+    }
+
     fn expert(&mut self, layer: usize, expert: usize) -> Result<ExpertAvailability> {
         if layer != self.layer {
             return Err(model_error(format!(
@@ -1361,3 +1385,7 @@ fn model_error(message: impl Into<String>) -> Error {
 mod expert_read_provider_tests;
 #[cfg(test)]
 mod shared_gate_tests;
+
+#[cfg(test)]
+#[path = "../../../tests/retained_numeric_upload/provider.rs"]
+mod retained_upload_provider_tests;

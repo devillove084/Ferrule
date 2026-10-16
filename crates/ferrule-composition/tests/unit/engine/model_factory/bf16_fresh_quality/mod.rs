@@ -2,6 +2,8 @@
 use super::*;
 use crate::model_factory::bf16_serving::expert_read_reporting::PredictionFingerprints;
 
+mod retained_transfer;
+
 pub(super) fn top1(values: &[f32]) -> u32 {
     assert!(!values.is_empty() && values.iter().all(|v| v.is_finite()));
     values
@@ -75,6 +77,50 @@ fn mixed_storage_middle64_blocking_fresh_quality_no_observer_equality() {
 #[ignore = "sole GPU owner; Lookahead ordinary no-diagnostic-observer equality; requires newly pinned matching diagnostic primary report"]
 fn mixed_storage_middle64_lookahead_fresh_quality_no_observer_equality() {
     run_with_observer(false, Full40TestConfig::StorageMiddle64Lookahead, false);
+}
+
+#[test]
+#[ignore = "sole GPU owner; explicit retained blocking uploads; unchanged quality/reference/quota and primary policy binding"]
+fn mixed_storage_middle64_retained_blocking_fresh_quality_retained_generation() {
+    run(false, Full40TestConfig::StorageMiddle64RetainedBlocking);
+}
+
+#[test]
+#[ignore = "sole GPU owner; explicit retained blocking uploads; unchanged quality/reference/quota and primary policy binding"]
+fn mixed_storage_middle64_retained_blocking_fresh_quality_cold_owner_restart() {
+    run(true, Full40TestConfig::StorageMiddle64RetainedBlocking);
+}
+
+#[test]
+#[ignore = "sole GPU owner; explicit retained blocking uploads; unchanged quality/reference/quota and primary policy binding"]
+fn mixed_storage_middle64_retained_blocking_fresh_quality_no_observer_equality() {
+    run_with_observer(
+        false,
+        Full40TestConfig::StorageMiddle64RetainedBlocking,
+        false,
+    );
+}
+
+#[test]
+#[ignore = "sole GPU owner; explicit retained lookahead uploads; unchanged quality/reference/quota and primary policy binding"]
+fn mixed_storage_middle64_retained_lookahead_fresh_quality_retained_generation() {
+    run(false, Full40TestConfig::StorageMiddle64RetainedLookahead);
+}
+
+#[test]
+#[ignore = "sole GPU owner; explicit retained lookahead uploads; unchanged quality/reference/quota and primary policy binding"]
+fn mixed_storage_middle64_retained_lookahead_fresh_quality_cold_owner_restart() {
+    run(true, Full40TestConfig::StorageMiddle64RetainedLookahead);
+}
+
+#[test]
+#[ignore = "sole GPU owner; explicit retained lookahead uploads; unchanged quality/reference/quota and primary policy binding"]
+fn mixed_storage_middle64_retained_lookahead_fresh_quality_no_observer_equality() {
+    run_with_observer(
+        false,
+        Full40TestConfig::StorageMiddle64RetainedLookahead,
+        false,
+    );
 }
 
 fn assert_cold_primary(
@@ -448,6 +494,7 @@ fn run_with_observer(cold: bool, test_config: Full40TestConfig, diagnostic: bool
     crate::model_factory::bf16_serving::NUMERIC_BF16_TEST_RUNNER.with(|slot| {
         assert!(slot.borrow().is_none());
         *slot.borrow_mut()=Some(Box::new(move |runner| {
+            configure_full40_expert_transfer(runner, test_config);
             assert_eq!(runner.forward_executor().module().expert_read_pipeline_options(), test_config.expert_read_pipeline());
             assert_eq!(runner.forward_executor().module().numeric_fp8_precision(), Some(precision));
             assert!(runner.forward_executor().module().numeric_bf16_profile().is_some());
@@ -594,6 +641,7 @@ fn run_with_observer(cold: bool, test_config: Full40TestConfig, diagnostic: bool
                 }
             }
             runner.forward_executor().module().clear_diagnostic_trace();
+            assert_full40_expert_transfer_exercised(runner, test_config);
         }));
     });
     let mut initial = json!({"schema":"ferrule.bf16-fresh-quality-result.v1","complete":false,"passed":false,"status":"prepared; computation not started","test_config":config_manifest,"effective_config":effective_config,"cold_owner_restart":cold,"oracle_manifest_sha256":pin});

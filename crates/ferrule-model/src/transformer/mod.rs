@@ -11,7 +11,7 @@ pub(crate) mod expert_reads;
 pub use expert_reads::{
     ExpertReadHostCharge, ExpertReadHostReceipt, ExpertReadIdentity, ExpertReadPipelineError,
     ExpertReadPipelineObservation, ExpertReadPipelineOptions, ExpertReadPipelineStats,
-    ExpertReadSchedule,
+    ExpertReadSchedule, ExpertUploadHostCharge, ExpertUploadReservation,
 };
 mod forward;
 pub mod host_experts;
@@ -70,10 +70,10 @@ pub use materialize::{
 pub use operators::CudaRows;
 pub use operators::{
     CpuStandardDecoderOperators, ExpertAvailability, ExpertMetadata, ExpertMetadataBindings,
-    ExpertProvider, ExpertSwiGluOperator, GatedDeltaNetRequest, GqaMetadata, GqaRequest, HostRows,
-    KvAppendRequest, KvHistory, KvView, OperatorProgress, OperatorWaiting, PreparedSwiGlu,
-    RouterRoutes, Rows, RowsArenaId, RowsDType, RowsDevice, RowsShape, StandardDecoderKvView,
-    StandardDecoderOperators, UnsupportedOperator,
+    ExpertProvider, ExpertSwiGluOperator, ExpertTransferControl, ExpertTransferPolicy,
+    GatedDeltaNetRequest, GqaMetadata, GqaRequest, HostRows, KvAppendRequest, KvHistory, KvView,
+    OperatorProgress, OperatorWaiting, PreparedSwiGlu, RouterRoutes, Rows, RowsArenaId, RowsDType,
+    RowsDevice, RowsShape, StandardDecoderKvView, StandardDecoderOperators, UnsupportedOperator,
 };
 pub use recipe::{DecoderRecipe, DecoderRecipeError, DecoderRecipeOutput, SyntheticDecoderRecipe};
 pub use segment::{
