@@ -391,3 +391,94 @@ requires selective force-add by the reviewing main agent, not recursive target s
 CPU closeout validation uses the existing80 control tests and full frozen-pin/GO
 checks with the pinned Python3.12, plus manifest and raw-receipt/hash checks.
 The default synchronous path and prior engineering conclusions remain unchanged.
+
+
+## Fresh grouped profiles: three qualified captures, fourth failed
+
+`grouped-profile-results.json` records the actual, separately approved four-profile
+execution in `target/validation/grouped-profile-ce6d4ff-terminal-handoff-20261017-01/`.
+**The stage failed:** Blocking synchronous21, Blocking grouped22 and Lookahead
+grouped23 passed; Lookahead synchronous24 failed. All four were issued once;
+no retries, warmups, release builds, original20 timing/primary reruns or quality14
+reruns. No further GPU work followed. Frozen ce6d4ff application/archive/binary
+are unchanged; committed control d48cad78 uses the reviewed258b12c terminal fix.
+
+The three passing captures validate exact job/plan/launch/model/wrapper/ancestry
+terminal receipts, stopped observer acknowledgements, final owner wait ordering,
+signal-free natural custody, authenticated ECHILD and all8 idle. Their observer
+acks followed terminal observation by1.395/1.439/1.427s, within15s and the original
+capture deadlines. The pinned wrapper performs its single authoritative
+`Popen.wait` only after the successful ack; no independent runtime wait counter
+is claimed. Terminal/ack receipt hashes and ordering are retained per capture.
+
+### Qualified Blocking pair: whole-model-process observations
+
+Both reports record25,116 logical uploads and identical ordered work/check arrays
+and64 exact output fingerprints against their own completed primaries.
+
+| Observation | Synchronous21 | Grouped22 | Grouped − synchronous / upload |
+|---|---:|---:|---:|
+| `cuStreamSynchronize` rows | 382,743 | 257,163 | −5 |
+| `cudaStreamSynchronize_v3020` rows | 290 | 290 | 0 |
+| Host-pin allocation rows | 2 | 2 | 0 |
+| Host-pin free rows | 2 | 2 | 0 |
+| H2D copy rows | 195,985 | 195,985 | 0 |
+| H2D bytes | 82,512,273,944 | 82,512,273,944 | 0 |
+| Observed kernel rows | 409,411 | 409,411 | 0 |
+
+The stream-sync reduction is125,580 rows, exactly5 per logical upload, matching
+the predeclared hypothesis **without using it as an acceptance threshold**.
+Both pin/free counts match the expected2 per model process; all69 observed
+kernel-name/count entries match exactly. Event-query and context-selection
+counts differ; the JSON retains every observed API's count, host-duration sum,
+normalization and Blocking delta, plus copy bytes and kernel-map hashes.
+
+`cuStreamSynchronize` host-duration sums are4.343492514s versus1.597095312s
+(−109,348.511ns / logical upload). These are process-wide host sums that may
+overlap other work, **not elapsed savings or per-expert/per-upload latency**.
+No expert NVTX/range attribution, causal or default-enabling claim follows.
+
+Lookahead grouped23 is qualified but unpaired:257,163 stream-sync rows,2 each
+pin/free rows, and the same observed H2D/kernel work. **Qualified Lookahead arm
+deltas remain unobserved, not zero.** The prior eight unprofiled whole-test pairs
+and their approximately3.9% descriptive median difference remain byte-identical
+in `grouped-performance-results.json`; none of these profiled times joins that
+population, and no TTFT/token/request latency or significance is inferred.
+
+### Failed24: sticky observer error is not waived
+
+The model's WNOWAIT receipt records exit0, but an earlier observer sample saved
+`FileNotFoundError: [Errno 2] No such file or directory: '/proc/56467/exe'`.
+Its ack has status `blocked` and retains that sticky error. The wrapper failed
+with `Missing/blocked/foreign profile observer acknowledgement`; successful
+`profile-model-ended.json` is absent. Supervisor return1 and owned failure-cleanup
+signals mean **this was not signal-free natural completion**. No source fix,
+retry or recollection was attempted. This evidence does not establish a new
+root-cause diagnosis and does not rehabilitate any failed historical capture.
+
+The existing failed container was exported once CPU-only to ignored
+`actual-closeout-01/failed-capture.sqlite` and read-only audited. Its382,743
+stream-sync rows,2 each pin/free rows and matching H2D/kernel observations are
+retained solely under `FAILED_CAPTURE_DIAGNOSTIC_ONLY_NOT_QUALIFIED`, with no
+accepted Lookahead delta. SQL completeness does not waive the blocked ack.
+The original fixed24 profile21 failure is also retained unchanged.
+
+All four numerical reports pass the original tolerances/work/fingerprints and
+observe25,116 uploads each. Host peak16,777,984B remains below64MiB; live-owner
+settled charge10MiB, cache current/peak209,739,776/219,754,496B below320MiB, and
+validated endpoint upload/pending/Unknown charges remain zero. Numerical report
+success does not override failed profile custody.
+
+Final authenticated ECHILD, owner absence, three consecutive all8-idle samples
+and all8 local lock release/reprobe passed. Offline PID/birth checks found no
+surviving owned tasks. The failed fourth required maintained owned cleanup; no
+manual or foreign signal was issued. Physical CUDA release remains unobserved.
+
+All evidence is **PARTIAL_OBSERVED_MODEL_SUMMARY**: full_trace_accepted=false,
+dropped_event_count=null, API exhaustiveness unproven; no CPU scheduling, expert
+ranges or overlap claims. Raw ignored receipts/traces/SQLite/binaries remain
+local-only, not public; no private weights or raw target files are staged. Only
+this README, `grouped-profile-results.json` and `manifest.json` change. The new
+JSON requires selective force-add by main. CPU validation reran103 maintained
+control/lifecycle tests, reproduced all four SQL summaries exactly read-only
+(the fourth remains diagnostic), and verifies manifest/source/receipt hashes.

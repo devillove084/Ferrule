@@ -1,10 +1,10 @@
 {
   "schema": "ferrule.engineering.curated-stage-manifest.v1",
-  "scope": "Bounded engineering quality receipts, unchanged negative whole-test comparison and four separately approved partial observed-model official profiles; historical failures preserved; no manuscript or full-trace acceptance; separately reviewed frozen ce6d4ff actual14 grouped-upload quality, no performance/default claim; separately approved frozen ce6d4ff grouped comparison failed at profile21 after20passes, eight completed unprofiled pairs descriptive only, failed-trace offline diagnostic not qualified, no default/TTFT/significance claim",
+  "scope": "Bounded engineering quality receipts, unchanged negative whole-test comparison and four separately approved partial observed-model official profiles; historical failures preserved; no manuscript or full-trace acceptance; separately reviewed frozen ce6d4ff actual14 grouped-upload quality, no performance/default claim; separately approved frozen ce6d4ff grouped comparison failed at profile21 after20passes, eight completed unprofiled pairs descriptive only, failed-trace offline diagnostic not qualified, no default/TTFT/significance claim; fresh same-ce6 four-profile stage failed at24 after three qualified partial observed-model captures, qualified Blocking count pair only, failed Lookahead capture diagnostic only, no latency/default/full-trace claim",
   "files": {
     "README.md": {
-      "sha256": "847314f7ba678b2d4174acbb28ddbdf5a2f0d054759dbd0d388e7cf5d3169ff0",
-      "bytes": 25403
+      "sha256": "68da1c42a7d0d636d5825229a0f2bdce2ce4b7d62c5a78aa1010c69cdeb2f817",
+      "bytes": 30937
     },
     "completed-stages.json": {
       "sha256": "8492747e3db129ba63faaf947d23e12c22d94a1e9ffdf1da4ab0bbdcc1bf81ec",
@@ -37,6 +37,10 @@
     "grouped-performance-results.json": {
       "sha256": "8c5ee3cda54a53da2a6b7273f5279d7f29807122a3cac593ddc33592d4f1231b",
       "bytes": 1395340
+    },
+    "grouped-profile-results.json": {
+      "sha256": "ebc860bd80260cfdb77c07cd4485044b41954f2ec7a7c01c8ed6d93241303a25",
+      "bytes": 441961
     }
   },
   "raw_target_vendor_weights_or_binaries_included": false
