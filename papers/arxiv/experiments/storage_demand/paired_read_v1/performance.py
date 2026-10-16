@@ -21,18 +21,23 @@ CACHE_WORK = ('uploads', 'evictions', 'hits')
 
 
 GROUPED_STAGE = ct.ROOT / 'target/validation/grouped-performance-ce6d4ff-20261017-01'
+GROUPED_PROFILE_STAGE = ct.ROOT / 'target/validation/grouped-profile-ce6d4ff-terminal-handoff-20261017-01'
 
 
 def grouped_comparison(plan):
     return plan is not None and plan.get('schema') == 'ferrule.grouped-upload.performance-plan.v1'
 
 
+def grouped_profile_only(plan):
+    return plan is not None and plan.get('schema') == 'ferrule.grouped-upload.profile-only-plan.v1'
+
+
 def experimental_arm(plan):
-    return 'grouped' if grouped_comparison(plan) else 'retained'
+    return 'grouped' if grouped_comparison(plan) or grouped_profile_only(plan) else 'retained'
 
 
 def planned_jobs(plan):
-    return profile_jobs() if profile_only(plan) else fixed_jobs(experimental_arm(plan))
+    return profile_jobs(experimental_arm(plan)) if profile_only(plan) else fixed_jobs(experimental_arm(plan))
 
 
 def fixed_jobs(variant='retained'):
@@ -66,18 +71,19 @@ def fixed_jobs(variant='retained'):
     return rows
 
 
-def profile_jobs():
-    return fixed_jobs()[20:]
+def profile_jobs(variant='retained'):
+    return fixed_jobs(variant)[20:]
 
 
 def profile_only(plan):
-    return plan.get('schema') == 'ferrule.retained-upload.profile-only-plan.v1'
+    return plan.get('schema') in ('ferrule.retained-upload.profile-only-plan.v1',
+        'ferrule.grouped-upload.profile-only-plan.v1')
 
 
 def validate_plan(plan):
-    grouped = grouped_comparison(plan)
+    grouped = experimental_arm(plan) == 'grouped'
     require(plan['schema'] in ('ferrule.retained-upload.performance-plan.v1', 'ferrule.retained-upload.profile-only-plan.v1',
-                'ferrule.grouped-upload.performance-plan.v1')
+                'ferrule.grouped-upload.performance-plan.v1', 'ferrule.grouped-upload.profile-only-plan.v1')
             and plan['commit'] == (retained_evidence.GROUPED_COMMIT if grouped else COMMIT)
             and plan['binary_sha256'] == (retained_evidence.GROUPED_BINARIES['composition'] if grouped else BINARY_SHA)
             and plan['source_archive_sha256'] == (retained_evidence.GROUPED_SOURCE_SHA if grouped else SOURCE_SHA),
@@ -103,17 +109,17 @@ def validate_plan(plan):
     if grouped:
         validate_grouped_comparison(plan)
     if profile_only(plan):
-        parent = ct.ROOT / 'target/validation/retained-performance-57e4629-20261016-01'
+        parent = GROUPED_STAGE if grouped else ct.ROOT / 'target/validation/retained-performance-57e4629-20261016-01'
         require(plan['completed_performance_source'] == dict(directory=str(parent),
-            plan_sha256='875957578ca9479e553d5017b04bff4c8b3dd44bff270c86211c6b129109b991',
-            final_sha256='9e080fa6149832d2d2b3c6962048a2ecc9dc4364ac5cacdd520a887d393b52e2'),
+            plan_sha256='02b43e97fb91cfda443d30b93f6e0ee264fbf8e85b88d8291fe5923a99872a6a' if grouped else '875957578ca9479e553d5017b04bff4c8b3dd44bff270c86211c6b129109b991',
+            final_sha256='31c11f38d3c059d82f47ae8a36b5784036fd99276249028056918421c3ff8b44' if grouped else '9e080fa6149832d2d2b3c6962048a2ecc9dc4364ac5cacdd520a887d393b52e2'),
             'Profile-only source must bind consumed same-cut20; never resume/retry it')
         require(plan['pins'].get(str(parent / 'performance-plan.json')) == plan['completed_performance_source']['plan_sha256']
             and plan['pins'].get(str(parent / 'FINAL.json')) == plan['completed_performance_source']['final_sha256'],
             'Consumed source plan/final must remain content-pinned')
         bindings = plan['diagnostic_primaries']
         require(isinstance(bindings, list) and len(bindings) == 4
-            and ct.digest([b['job'] for b in bindings]) == ct.digest(fixed_jobs()[:4]),
+            and ct.digest([b['job'] for b in bindings]) == ct.digest(fixed_jobs(experimental_arm(plan))[:4]),
             'Exact four completed policy/schedule diagnostic primaries required')
         for binding in bindings:
             directory = parent / 'gates' / binding['job']['id']
@@ -122,7 +128,32 @@ def validate_plan(plan):
                     and re.fullmatch(r'[0-9a-f]{64}', binding[field + '_sha256'] or '')
                     and plan['pins'].get(binding[field]) == binding[field + '_sha256'],
                     'Completed primary path/hash/policy crossbinding differs')
+    if grouped_profile_only(plan):
+        require(ct.digest(plan.get('terminal_observer_policy')) == ct.digest(terminal_observer_policy()),
+                'Exact owner terminal handoff policy required')
     return plan
+
+
+def terminal_observer_policy():
+    return dict(owner='maintained_direct_Popen_wrapper', terminal='direct_child_waitid_WNOWAIT_held_birth_anchor',
+        binding='exact_job_plan_launch_model_wrapper_authenticated_ancestry', acknowledgement_seconds=15,
+        deadline='within_original_1000s_capture_and_1200s_outer_job', authoritative_waits=1,
+        terminal_receipt='profile-model-terminal.json', observer_ack='profile-observer-stopped.json',
+        missing_stale_late_reused_or_ancestor_error='reject', independent_map_or_pin_error='reject',
+        last_running_inference=False, receipts_required_every_capture=True)
+
+
+def validate_completed_performance(plan, proof):
+    if grouped_profile_only(plan):
+        require(proof['status'] == 'failed' and proof['actual_gpu_tests_issued'] == 21
+            and proof['stop_gate'] == '21-profile-blocking-synchronous'
+            and proof['commit'] == plan['commit'] and proof['source_digest'] == plan['source_digest']
+            and len(proof['results']) == 21 and proof['results'][20]['status'] == 'failed'
+            and ct.digest([r['job'] for r in proof['results'][:20]]) == ct.digest(fixed_jobs('grouped')[:20])
+            and all(r['status'] == 'passed' for r in proof['results'][:20]),
+            'Completed same-cut20 required; failed historical profile21 remains failed')
+    else:
+        require(proof['actual_gpu_tests_issued'] == 20, 'Completed same-cut20 prerequisite missing')
 
 
 def grouped_quality_source():

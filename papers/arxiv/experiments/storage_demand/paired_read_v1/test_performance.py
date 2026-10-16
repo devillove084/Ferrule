@@ -472,6 +472,37 @@ class ProfileTerminalLifecycleTests(unittest.TestCase):
         child.wait.assert_not_called(); child.poll.assert_not_called()
 
 
+    def test_each_grouped_capture_export_requires_exact_terminal_and_stopped_ack(self):
+        value=grouped_profile_plan()
+        with mock.patch.object(q,'PLAN',value),mock.patch.object(q.ct,'successful_process',return_value=True), \
+                mock.patch.object(q.idle,'no_recorded_owner',return_value=True):
+            for gate in value['jobs']:
+                directory=self.directory/gate['id'];directory.mkdir()
+                start=copy.deepcopy(self.start);start['job']=gate
+                start['model'].update(executable_sha256=gate['binary_sha256'],command=p.payload_argv(value,gate))
+                self.live.readonly(directory/'profile-model-start.json',start)
+                binding=q.profile_binding(directory,start)
+                observations=[dict(model=start['model'],wrapper=start['wrapper'],job=gate,
+                    plan_sha256='a'*64,map_assessment=dict(status='passed',errors=[])) for _ in range(2)]
+                def missing(filename):
+                    with self.assertRaises(FileNotFoundError) as caught:q.export_profile(directory,gate,{},observations)
+                    self.assertEqual(Path(caught.exception.filename).name,filename)
+                missing('profile-model-terminal.json')
+                receipt=dict(binding=binding,waitid=self.event(),deadline_monotonic=34.)
+                digest=self.live.readonly(directory/'profile-model-terminal.json',receipt)
+                missing('profile-observer-stopped.json')
+                ack=dict(binding=copy.deepcopy(binding),terminal_sha256=digest,last_sample=None,
+                    stopped_monotonic=20.,status='stopped',errors=[])
+                for field,bad in (('terminal_sha256','f'*64),('stopped_monotonic',35.),('status','blocked')):
+                    path=directory/'profile-observer-stopped.json'
+                    if path.exists():path.unlink()
+                    self.live.readonly(path,dict(ack,**{field:bad}))
+                    with self.subTest(gate=gate['id'],field=field),self.assertRaises(ValueError):
+                        q.export_profile(directory,gate,{},observations)
+                path.unlink();self.live.readonly(path,ack)
+                missing('profile-model-ended.json')
+
+
 @unittest.skipUnless(hasattr(os, 'WNOWAIT'), 'Linux terminal-child custody')
 class ProfileTerminalCPUIntegrationTests(unittest.TestCase):
     def test_real_wrapper_and_collector_hold_exe_read_race_until_ack(self):
@@ -1461,6 +1492,123 @@ class GroupedPerformanceTests(unittest.TestCase):
                     qualification_plan_sha256='e'*64,control_sha256='e'*64,jobs=jobs,review_packet_sha256='e'*64)
                 path=Path(folder)/'independent-review.json';path.chmod(0o644) if path.exists() else None;path.write_text(json.dumps(record));path.chmod(0o444)
                 with mock.patch.object(q.ct,'sha',return_value='e'*64),self.assertRaises(ValueError):q.require_independent_review()
+
+
+def grouped_profile_plan():
+    value=grouped_performance_plan()
+    value.update(schema='ferrule.grouped-upload.profile-only-plan.v1',jobs=p.profile_jobs('grouped'),
+        measurement='official_nsight_process_wide_counts_and_host_durations_not_unprofiled_latency',
+        terminal_observer_policy=p.terminal_observer_policy(),diagnostic_primaries=[],
+        completed_performance_source=dict(directory=str(p.GROUPED_STAGE),
+            plan_sha256='02b43e97fb91cfda443d30b93f6e0ee264fbf8e85b88d8291fe5923a99872a6a',
+            final_sha256='31c11f38d3c059d82f47ae8a36b5784036fd99276249028056918421c3ff8b44'))
+    for name,field in (('performance-plan.json','plan_sha256'),('FINAL.json','final_sha256')):
+        value['pins'][str(p.GROUPED_STAGE/name)]=value['completed_performance_source'][field]
+    for row in p.fixed_jobs('grouped')[:4]:
+        binding=dict(job=row)
+        for field,name in (('report','quality.json'),('gate_result','gate-result.json')):
+            path=str(p.GROUPED_STAGE/'gates'/row['id']/name)
+            binding[field]=path;binding[field+'_sha256']='e'*64;value['pins'][path]='e'*64
+        value['diagnostic_primaries'].append(binding)
+    return value
+
+
+class GroupedProfileOnlyTests(unittest.TestCase):
+    def setUp(self):
+        ContractTests.setUp(self)
+        self.plan=grouped_profile_plan()
+        q.PLAN=dict(self.plan,gates=self.plan['jobs'])
+
+    validate=ContractTests.validate
+
+    def test_exact_four_same_cut_profiles_original_order_no_other_jobs(self):
+        p.validate_plan(self.plan)
+        self.assertTrue(p.profile_only(self.plan));self.assertTrue(p.grouped_profile_only(self.plan))
+        self.assertFalse(p.grouped_comparison(self.plan))
+        self.assertEqual(self.plan['jobs'],p.fixed_jobs('grouped')[20:])
+        self.assertEqual([(g['schedule'],g['transfer_mode']) for g in self.plan['jobs']],
+            [('blocking','synchronous'),('blocking','grouped'),('lookahead','grouped'),('lookahead','synchronous')])
+        self.assertEqual(p.profile_jobs(),p.fixed_jobs()[20:])
+        for field,bad in (('jobs',p.fixed_jobs('grouped')),('jobs',p.profile_jobs()),
+                ('commit',p.COMMIT),('binary_sha256',p.BINARY_SHA),('source_digest','f'*64),
+                ('capacity_and_options',{}),('policies',{}),('retries',1),('extra_warmups',1),
+                ('measurement','whole_test_libtest_footer_only_not_token_TTFT_or_request_latency'),
+                ('historical_results_in_population',True)):
+            changed=copy.deepcopy(self.plan);changed[field]=bad
+            with self.subTest(field=field),self.assertRaises(ValueError):p.validate_plan(changed)
+        for mutate in (lambda v:v['jobs'].reverse(),lambda v:v['jobs'][0].update(seconds=1201),
+                lambda v:v['diagnostic_primaries'].reverse(),lambda v:v['diagnostic_primaries'][0].update(report='foreign'),
+                lambda v:v['completed_performance_source'].update(directory=str(q.PARENT)),
+                lambda v:v['completed_performance_source'].update(final_sha256='f'*64),lambda v:v['pins'].clear()):
+            changed=copy.deepcopy(self.plan);mutate(changed)
+            with self.assertRaises(ValueError):p.validate_plan(changed)
+
+    def test_terminal_and_partial_scope_cannot_be_missing_or_relaxed(self):
+        for policy in ('terminal_observer_policy','observed_model_summary_policy'):
+            changed=copy.deepcopy(self.plan);del changed[policy]
+            with self.assertRaises(ValueError):p.validate_plan(changed)
+            for field in self.plan[policy]:
+                changed=copy.deepcopy(self.plan);changed[policy][field]='relaxed'
+                with self.subTest(policy=policy,field=field),self.assertRaises(ValueError):p.validate_plan(changed)
+
+    def test_completed_twenty_required_failed_profile_is_never_rehabilitated(self):
+        proof=dict(status='failed',actual_gpu_tests_issued=21,stop_gate='21-profile-blocking-synchronous',
+            commit=self.plan['commit'],source_digest=self.plan['source_digest'],
+            results=[dict(job=j,status='passed' if i<20 else 'failed') for i,j in enumerate(p.fixed_jobs('grouped')[:21])])
+        p.validate_completed_performance(self.plan,proof)
+        for mutate in (lambda v:v.update(status='passed'),lambda v:v.update(actual_gpu_tests_issued=24),
+                lambda v:v.update(commit=p.COMMIT),lambda v:v['results'][19].update(status='failed'),
+                lambda v:v['results'][20].update(status='passed'),lambda v:v['results'].reverse()):
+            changed=copy.deepcopy(proof);mutate(changed)
+            with self.assertRaises(ValueError):p.validate_completed_performance(self.plan,changed)
+
+    def test_all_four_keep_numeric_quota_lifecycle_work_and_own_primary(self):
+        for row in self.plan['jobs']:
+            binding=next(b for b in self.plan['diagnostic_primaries'] if p.primary_key(b['job'])==p.primary_key(row))
+            primary=comparison_report(binding['job'],self.plan);data=comparison_report(row,self.plan)
+            accepted=dict(status='passed',report_sha256='e'*64,commit=self.plan['commit'],
+                source_digest=self.plan['source_digest'],binary_sha256=self.plan['binary_sha256'],job=binding['job'])
+            p.validate_primary(accepted,primary,row,self.plan,'e'*64)
+            self.validate(data,row,primary)
+            self.assertTrue(p.compare_work(primary,data,require_fingerprints=True)['equal'])
+            for change in (dict(status='failed'),dict(job=self.plan['jobs'][0]),dict(commit=p.COMMIT)):
+                with self.assertRaises(ValueError):p.validate_primary(dict(accepted,**change),primary,row,self.plan,'e'*64)
+        for schedule in ('blocking','lookahead'):
+            pair=[comparison_report(row,self.plan) for row in self.plan['jobs'] if row['schedule']==schedule]
+            self.assertTrue(p.compare_work(*pair,require_fingerprints=True)['fingerprints_equal'])
+
+    def test_no_go_and_every_old_scope_stop_before_gpu_query_lock_or_dispatch(self):
+        with tempfile.TemporaryDirectory() as folder,mock.patch.object(q,'OUT',Path(folder)):
+            with self.assertRaisesRegex(ValueError,'Independent review/GO missing'):q.main()
+            self.assertFalse((Path(folder)/'FINAL.json').exists())
+            for schema,jobs,commit in (
+                    ('ferrule.worker-reuse.control-review.v1',q.retained_evidence.grouped_jobs(),self.plan['commit']),
+                    ('ferrule.worker-reuse.performance-control-review.v1',p.fixed_jobs('grouped'),self.plan['commit']),
+                    ('ferrule.worker-reuse.profile-only-control-review.v1',p.profile_jobs(),p.COMMIT)):
+                record=dict(schema=schema,status='passed',gpu_execution_authorized=True,reviewer='old scope',
+                    reviewer_id='089b',decision='GO_EXACT4_SAME_CE6_SYNCHRONOUS_VERSUS_GROUPED_PROFILE_ONLY',
+                    commit=commit,qualification_plan_sha256='e'*64,control_sha256='e'*64,jobs=jobs,review_packet_sha256='e'*64)
+                path=Path(folder)/'independent-review.json'
+                if path.exists():path.chmod(0o644)
+                path.write_text(json.dumps(record));path.chmod(0o444)
+                with mock.patch.object(q.ct,'sha',return_value='e'*64),self.assertRaises(ValueError):q.main()
+            record.update(schema='ferrule.worker-reuse.grouped-profile-only-control-review.v1',
+                jobs=self.plan['jobs'],commit=self.plan['commit'])
+            for field,bad in (('reviewer_id','implementer'),('decision','old GO'),('jobs',p.fixed_jobs('grouped'))):
+                path.chmod(0o644);path.write_text(json.dumps(dict(record,**{field:bad})));path.chmod(0o444)
+                with mock.patch.object(q.ct,'sha',return_value='e'*64),self.assertRaises(ValueError):q.require_independent_review()
+            path.chmod(0o644);path.write_text(json.dumps(record));path.chmod(0o444)
+            with mock.patch.object(q.ct,'sha',return_value='e'*64):q.require_independent_review()
+
+    def test_configure_scopes_and_profile_samples_never_become_timing_pairs(self):
+        with mock.patch.object(q.ct,'load',return_value=copy.deepcopy(self.plan)), \
+                mock.patch.object(q,'OUT'),mock.patch.object(q,'SOURCE'),mock.patch.object(q,'PLAN'):
+            q.configure(p.GROUPED_PROFILE_STAGE)
+            self.assertEqual(q.SOURCE,q.retained_evidence.GROUPED_STAGE)
+            for directory in (p.GROUPED_STAGE,q.ROOT/'target/validation/retained-profile-57e4629-natural-drain-20261016-01'):
+                with self.assertRaises(ValueError):q.configure(directory)
+        rows=[dict(job=g,status='passed',whole_test_elapsed=dict(seconds=1)) for g in self.plan['jobs']]
+        with self.assertRaises(ValueError):p.pair_summary(rows,'grouped')
 
 
 if __name__=='__main__':

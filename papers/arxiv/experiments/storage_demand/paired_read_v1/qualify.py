@@ -108,17 +108,20 @@ def verify(full=False):
     ct.check_pins(PLAN['pins'])
     (retained_evidence.validate_grouped_plan if is_grouped() else perf.validate_plan)(PLAN)
     if perf.profile_only(PLAN):
-        ct.require(ct.load(PARENT / 'FINAL.json')['actual_gpu_tests_issued'] == 20, 'Completed same-cut20 prerequisite missing')
-        for gate in PLAN['jobs']:
-            primary(gate)
-    baseline = ROOT / 'target/validation/retained-upload-57e4629-gpu-20261016-01' if is_grouped() or perf.grouped_comparison(PLAN) else SOURCE
+        perf.validate_completed_performance(PLAN, ct.load(Path(PLAN['completed_performance_source']['directory']) / 'FINAL.json'))
+        primaries = [primary(gate)[2] for gate in PLAN['jobs']]
+        if perf.grouped_profile_only(PLAN):
+            for schedule in ('blocking', 'lookahead'):
+                pair = [data for gate, data in zip(PLAN['jobs'], primaries) if gate['schedule'] == schedule]
+                perf.compare_work(*pair, require_fingerprints=True)
+    baseline = ROOT / 'target/validation/retained-upload-57e4629-gpu-20261016-01' if is_grouped() or perf.experimental_arm(PLAN) == 'grouped' else SOURCE
     original = ct.load(baseline / 'retained-plan.json')
     ct.require(PLAN['capacity_and_options'] == original['composition_capacity_and_options']
         and PLAN['uuid_inventory'] == original['uuid_inventory']
         and PLAN['runtime_base_environment'] == original['runtime_base_environment']
         and PLAN['fresh_reference_sha256'] == original['fresh_reference_sha256']
         and PLAN['full40_reference_sha256'] == original['full40_reference_sha256'], 'Frozen source/quota/environment/reference differs')
-    if perf.grouped_comparison(PLAN):
+    if perf.experimental_arm(PLAN) == 'grouped' and not is_grouped():
         proof = ct.load(retained_evidence.GROUPED_STAGE / 'FINAL.json')
         ct.require(proof['status'] == 'passed' and proof['actual_gpu_tests_issued'] == 14
             and proof['commit'] == PLAN['commit'] and proof['source_digest'] == PLAN['source_digest'],
@@ -298,6 +301,7 @@ def execute_gate(gate, locks):
             qualification_plan_sha256=ct.sha(plan_path()), all_uuid_locks=locks, granted=True,
             owner_note=('Separately reviewed grouped quality14 authority; only this sealed job, no retries/probes/warmups/profiling' if is_grouped() else
                 'Separately reviewed same-ce6-cut synchronous/grouped fixed24; no retries/probes/warmups; only four declared profiles' if perf.grouped_comparison(PLAN) else
+                'Separate reviewed fresh4 profile-only authority; completed primaries reused, no timing/quality reruns or retries/probes/warmups' if perf.profile_only(PLAN) else
                 'Separate reviewed fixed24 authority, only this sealed job, no retries/probes/warmups; profiling only for four declared captures'))
         payload, seal = guard.seal(payload, directory)
         cpu_env = dict(PATH='/usr/bin:/bin', HOME='/root', CUDA_VISIBLE_DEVICES='', NVIDIA_VISIBLE_DEVICES='none', PYTHONDONTWRITEBYTECODE='1', FERRULE_PAPER_WORKER_TOKEN=payload['worker_token'])
@@ -345,7 +349,7 @@ def execute_gate(gate, locks):
                 if gate['phase'] != 'primary':
                     _, _, prior = primary(gate)
                     ct.write(directory / 'same-work-own-primary.json', perf.compare_work(prior, report,
-                        require_fingerprints=perf.grouped_comparison(PLAN)))
+                        require_fingerprints=perf.experimental_arm(PLAN) == 'grouped'))
                 opposite = next(g for g in PLAN['jobs'] if g['phase'] == gate['phase']
                     and g['schedule'] == gate['schedule'] and g['transfer_mode'] != gate['transfer_mode']
                     and g['repetition'] == gate['repetition'])
@@ -354,7 +358,7 @@ def execute_gate(gate, locks):
                     accepted = ct.load(other / 'gate-result.json')
                     ct.require(accepted['status'] == 'passed' and accepted['report_sha256'] == ct.sha(other / 'quality.json'), 'Opposite arm failed/changed')
                     ct.write(directory / 'same-work-cross-policy.json', perf.compare_work(ct.load(other / 'quality.json'), report,
-                        require_fingerprints=perf.grouped_comparison(PLAN)))
+                        require_fingerprints=perf.experimental_arm(PLAN) == 'grouped'))
                 if gate['phase'] == 'profile':
                     result['profile'] = export_profile(directory, gate, custody, observations)
                 result.update(status='passed', numerical_pass=True, whole_test_elapsed=timing,
@@ -377,6 +381,7 @@ def require_independent_review():
     review = ct.load(path)
     ct.require(review.get('schema') == ('ferrule.worker-reuse.control-review.v1' if is_grouped() else
             'ferrule.worker-reuse.performance-control-review.v1' if perf.grouped_comparison(PLAN) else
+            'ferrule.worker-reuse.grouped-profile-only-control-review.v1' if perf.grouped_profile_only(PLAN) else
             'ferrule.worker-reuse.profile-only-control-review.v1')
         and review.get('status') == 'passed' and review.get('gpu_execution_authorized') is True
         and isinstance(review.get('reviewer'), str) and bool(review['reviewer'].strip())
@@ -386,6 +391,10 @@ def require_independent_review():
         and ct.digest(review.get('jobs')) == ct.digest(retained_evidence.grouped_jobs() if is_grouped() else perf.planned_jobs(PLAN))
         and review.get('review_packet_sha256') == ct.sha(OUT / 'review-ready.json'),
         'Independent review/GO must bind this exact frozen cut, plan and control')
+    if perf.grouped_profile_only(PLAN):
+        ct.require(review.get('reviewer_id') == '089b'
+            and review.get('decision') == 'GO_EXACT4_SAME_CE6_SYNCHRONOUS_VERSUS_GROUPED_PROFILE_ONLY',
+            'Fresh grouped profile-only scope requires independent089b exact4 GO')
 
 
 def main():
@@ -396,6 +405,7 @@ def main():
                'Fresh empty exact-once gate directory required; no resume/retry')
     final=dict(schema='ferrule.grouped-upload.current-quality-qualification.v1' if is_grouped() else
         'ferrule.grouped-upload.performance-qualification.v1' if perf.grouped_comparison(PLAN) else
+        'ferrule.grouped-upload.profile-only-execution.v1' if perf.grouped_profile_only(PLAN) else
         'ferrule.retained-upload.profile-only-execution.v1',commit=PLAN['commit'],source_digest=PLAN['source_digest'],scheduled_gates=len(PLAN['jobs']),
         source_archive_sha256=ct.sha(SOURCE/'source.tar'),qualification_plan_sha256=ct.sha(plan_path()),
         status='blocked',results=[],actual_gpu_tests_issued=0,retries=0,conditioning_probes=0,warmups=0,profiling_captures=0,
@@ -452,17 +462,20 @@ def configure(directory):
     wanted = Path(directory).resolve()
     grouped = wanted == retained_evidence.GROUPED_STAGE
     comparison = wanted == perf.GROUPED_STAGE
-    ct.require(grouped or comparison or wanted == ROOT / 'target/validation/retained-profile-57e4629-natural-drain-20261016-01',
+    grouped_profile = wanted == perf.GROUPED_PROFILE_STAGE
+    ct.require(grouped or comparison or grouped_profile or wanted == ROOT / 'target/validation/retained-profile-57e4629-natural-drain-20261016-01',
                'Only the fresh separately sealed frozen quality/profile stage is admitted')
     plan = ct.load(wanted / ('grouped-plan.json' if grouped else 'performance-plan.json'))
     if grouped:
         retained_evidence.validate_grouped_plan(plan)
     else:
         perf.validate_plan(plan)
-        ct.require(perf.grouped_comparison(plan) if comparison else perf.profile_only(plan),
+        ct.require(perf.grouped_comparison(plan) if comparison else
+            perf.grouped_profile_only(plan) if grouped_profile else
+            perf.profile_only(plan) and not perf.grouped_profile_only(plan),
                    'Exact fresh quality/comparison/profile scope required; historical24 cannot execute')
     OUT, PLAN = wanted, plan
-    SOURCE = wanted if grouped else retained_evidence.GROUPED_STAGE if comparison else ROOT / 'target/validation/retained-upload-57e4629-gpu-20261016-01'
+    SOURCE = wanted if grouped else retained_evidence.GROUPED_STAGE if comparison or grouped_profile else ROOT / 'target/validation/retained-upload-57e4629-gpu-20261016-01'
     PLAN['gates'] = PLAN['jobs']
 
 
@@ -826,18 +839,24 @@ def export_profile(directory, gate, custody, observations):
     return dict(status=result['status'], dropped_event_count=None,
         api_count_exhaustiveness='unproven', observed_api_summary_sha256=ct.sha(directory / 'cuda-api-observations.json'),
         nsys_report_sha256=ct.sha(directory / 'nsys.nsys-rep'), sqlite_sha256=ct.sha(directory / 'nsys.sqlite'),
-        full_trace_accepted=False, whole_test_profiled_time_not_latency_population=True)
+        full_trace_accepted=False, whole_test_profiled_time_not_latency_population=True,
+        owner_terminal_sha256=ct.sha(terminal_path), observer_ack_sha256=ct.sha(ack_path))
 
 
-def prepare():
+def prepare(variant='retained'):
     """CPU-only binding of existing artifacts and maintained controls; no build."""
-    global PLAN
+    global PLAN, OUT, SOURCE, PARENT
+    ct.require(variant in ('retained', 'grouped'), 'Unknown profile-only arm')
+    grouped = variant == 'grouped'
+    if grouped:
+        OUT, SOURCE, PARENT = perf.GROUPED_PROFILE_STAGE, retained_evidence.GROUPED_STAGE, perf.GROUPED_STAGE
     ct.require_cpu_python()
     from profile_overlap_v1 import runtime_contract, analyze, scope_contract
     profile_modules()
-    original = ct.load(SOURCE / 'retained-plan.json')
-    ct.require(ct.load(SOURCE / 'FINAL.json')['status'] == 'passed', 'Completed11 prerequisite missing')
-    tool_manifest = SOURCE / 'performance-planning/official-nsight-pins.json'
+    source_plan = SOURCE / ('grouped-plan.json' if grouped else 'retained-plan.json')
+    original = ct.load(source_plan)
+    ct.require(ct.load(SOURCE / 'FINAL.json')['status'] == 'passed', 'Completed frozen quality prerequisite missing')
+    tool_manifest = ROOT / 'target/validation/retained-upload-57e4629-gpu-20261016-01/performance-planning/official-nsight-pins.json'
     tools = ct.load(tool_manifest)
     ct.check_pins({path: row['sha256'] for path, row in tools['pins'].items()})
     package = ROOT / 'target/vendor/nsight-systems-cli-2025.3.1/NsightSystems-linux-cli-public-2025.3.1.90-3582212.deb'
@@ -848,17 +867,19 @@ def prepare():
     target = Path(tools['nsys']).parent
     for name in (*runtime_contract.SDK_LIBRARIES, 'nsys'):
         ct.require(ct.sha(target / name) == members[relative + name], 'Installed official tool differs from package')
-    prior_runtime_path = ROOT / 'papers/arxiv/experiments/storage_demand/profile_overlap_v1/artifacts-go-20261015-05/runtime-policy.json'
+    prior_runtime_path = PARENT / 'profile-runtime-policy.json' if grouped else ROOT / 'papers/arxiv/experiments/storage_demand/profile_overlap_v1/artifacts-go-20261015-05/runtime-policy.json'
     runtime = ct.load(prior_runtime_path)
     base = ct.load(SOURCE / 'runtime-library-pins.json')['per_role']['composition']
     ct.require(all(runtime['pins'].get(path) == sha for path, sha in base.items()), 'Maintained profile runtime base differs from same-cut binary')
-    runtime.update(role='composition', executable=str(SOURCE / 'staged/composition'), executable_sha256=perf.BINARY_SHA)
+    runtime.update(role='composition', executable=str(SOURCE / 'staged/composition'),
+        executable_sha256=retained_evidence.GROUPED_BINARIES['composition'] if grouped else perf.BINARY_SHA)
     ct.check_pins(runtime['pins'])
     ct.write(OUT / 'profile-runtime-policy.json', runtime)
-    PLAN = dict(schema='ferrule.retained-upload.profile-only-plan.v1', commit=perf.COMMIT,
-        source_digest=original['source_digest'], source_archive_sha256=perf.SOURCE_SHA,
-        executable=str(SOURCE / 'staged/composition'), binary_sha256=perf.BINARY_SHA,
-        jobs=perf.profile_jobs(), retries=0, extra_warmups=0, calibration=0, stop_on_first_failure=True,
+    PLAN = dict(schema='ferrule.grouped-upload.profile-only-plan.v1' if grouped else 'ferrule.retained-upload.profile-only-plan.v1',
+        commit=retained_evidence.GROUPED_COMMIT if grouped else perf.COMMIT,
+        source_digest=original['source_digest'], source_archive_sha256=retained_evidence.GROUPED_SOURCE_SHA if grouped else perf.SOURCE_SHA,
+        executable=str(SOURCE / 'staged/composition'), binary_sha256=runtime['executable_sha256'],
+        jobs=perf.profile_jobs(variant), retries=0, extra_warmups=0, calibration=0, stop_on_first_failure=True,
         atol=.00025, rtol=.012, host_options=dict(max_host_bytes=64 << 20, max_metadata_bytes=8 << 20, worker_stack_bytes=2 << 20),
         capacity_and_options=original['composition_capacity_and_options'],
         composition_capacity_and_options=original['composition_capacity_and_options'],
@@ -867,13 +888,13 @@ def prepare():
         nsys_version=perf.VERSION, nsys=tools['nsys'], nsys_sha256=ct.sha(tools['nsys']),
         measurement='official_nsight_process_wide_counts_and_host_durations_not_unprofiled_latency',
         observed_model_summary_policy=profile_audit.model_summary_policy(),
-        source_control_relationship='Application binary/archive unchanged57; current maintained controls separately pinned, no rebuild',
-        previous_plan_sha256=ct.sha(SOURCE / 'retained-plan.json'), previous_final_sha256=ct.sha(SOURCE / 'FINAL.json'),
+        source_control_relationship='Application binary/archive unchanged; current maintained controls separately pinned, no rebuild',
+        previous_plan_sha256=ct.sha(source_plan), previous_final_sha256=ct.sha(SOURCE / 'FINAL.json'),
         pins=dict(original['pins']))
     PLAN['completed_performance_source'] = dict(directory=str(PARENT),
         plan_sha256=ct.sha(PARENT / 'performance-plan.json'), final_sha256=ct.sha(PARENT / 'FINAL.json'))
     PLAN['diagnostic_primaries'] = []
-    for job in perf.fixed_jobs()[:4]:
+    for job in perf.fixed_jobs(variant)[:4]:
         directory = PARENT / 'gates' / job['id']
         binding = dict(job=job)
         for field, filename in (('report', 'quality.json'), ('gate_result', 'gate-result.json')):
@@ -881,6 +902,13 @@ def prepare():
             binding[field] = str(path); binding[field + '_sha256'] = ct.sha(path)
             PLAN['pins'][str(path)] = binding[field + '_sha256']
         PLAN['diagnostic_primaries'].append(binding)
+    if grouped:
+        PLAN.update(policies=dict(synchronous='unchanged_default', grouped=retained_evidence.GROUPED_POLICY),
+            completed_quality_source=perf.grouped_quality_source(), profiling_captures=4, profiling=True,
+            independent_review_required=True, exact_cross_policy_fingerprints_required=True,
+            historical_results_in_population=False, terminal_observer_policy=perf.terminal_observer_policy())
+        PLAN['pins'].update({str(SOURCE / n): ct.sha(SOURCE / n) for n in
+            ('grouped-plan.json', 'FINAL.json', 'independent-review.json')})
     PLAN['pins'].update({str(PARENT / n): ct.sha(PARENT / n) for n in
         ('performance-plan.json', 'FINAL.json', 'independent-review.json', 'review-ready.json')})
     PLAN['pins'].update({path: row['sha256'] for path, row in tools['pins'].items()})
@@ -888,6 +916,12 @@ def prepare():
              HERE / 'test_performance.py', ROOT / 'scripts/_profile_capture.py', ROOT / 'scripts/tests/test_profile_capture.py',
              ROOT / 'scripts/_owned_subreaper.py', ROOT / 'scripts/tests/test_owned_descendants.py', ROOT / 'scripts/tests/test_vllm_supervisor_failures.py',
              tool_manifest, package, prior_runtime_path, OUT / 'profile-runtime-policy.json', Path(PYTHON).resolve(), SOURCE / 'source.tar'}
+    if grouped:
+        paths.update({OUT / 'control-source-pins.json',
+            ROOT / 'papers/arxiv/experiments/storage_demand/tests/test_library_maps_v1.py',
+            ROOT / 'papers/arxiv/experiments/tp2_resident/test_observer.py'})
+        PLAN['control_source'] = dict(path=str(OUT / 'control-source-pins.json'),
+            sha256=ct.sha(OUT / 'control-source-pins.json'))
     for module in list(sys.modules.values()):
         file = getattr(module, '__file__', None)
         if file and Path(file).suffix == '.py' and Path(file).resolve().is_relative_to(ROOT):
@@ -913,8 +947,8 @@ if __name__ == '__main__':
     args = parser.parse_args()
     if args.prepare:
         ct.require(not args.worker and not args.profile_target and not args.gate_id, 'Preparation cannot execute a role')
-        ct.require(args.directory.resolve() == OUT, 'Wrong dedicated same-cut four-profile output')
-        prepare()
+        ct.require(args.directory.resolve() in (OUT, perf.GROUPED_PROFILE_STAGE), 'Wrong dedicated same-cut four-profile output')
+        prepare('grouped' if args.directory.resolve() == perf.GROUPED_PROFILE_STAGE else 'retained')
         raise SystemExit(0)
     import signal
     def cancelled(number, frame):
