@@ -1,8 +1,11 @@
 # Engineering closeout and same-cut upload experiment, v1
 
 This is engineering evidence, not manuscript content. It includes completed GPU
-quality stages and a partial actual same-cut whole-test comparison; the official
-Nsight portion was blocked, so the24-job experiment did not pass.
+quality stages, the negative same-cut whole-test comparison, preserved blocked
+profiling attempts, and four later separately approved official Nsight captures.
+Those four pass execution/quality/custody gates only: their observed-model
+summaries remain PARTIAL, not accepted full traces. The original24-job stage
+remains blocked and was never resumed or relabeled successful.
 
 ## Completed actual GPU stages
 
@@ -40,7 +43,7 @@ was36,701,896B under64MiB; sampled live idle charge10,485,760B. Cache current wa
 and pending/Unknown charges were zero. These are NOT measured allocator/RSS/
 memlock overhead, continuous alias/refund observations or a performance claim.
 
-## Actual same-cut comparison:20 passed, official profiling blocked
+## Historical same-cut comparison:20 passed, first profiling attempt blocked
 
 `performance-results.json` records the actual approved57e4629 execution. Four
 new policy/schedule diagnostic primaries and all16unprofiled trials passed.
@@ -94,9 +97,96 @@ PID-birth identities were absent at closeout, all8GPUs were observed idle, and
 all8local locks were released and reprobed. This was not a wholly natural exit
 and is not a CUDA physical-release certificate.
 
-**Official model sync/event/query/kernel/H2D/alloc/pin/unpin counts and costs are
-unobserved, not zero.** The small preserved Nsight container is not accepted model
-profiling evidence. There is no measured mechanism attribution for the regression.
+**That original attempt has no qualified model API counts.** Its small preserved
+container was not accepted model profiling evidence. It provides no mechanism
+attribution. The later failed post-setsid capture and its offline diagnostic-only
+export are preserved in `performance-results.json#/profile_failure_log`; neither
+historical failure was promoted by the separately approved captures below.
+
+## Actual four-profile closeout: partial observed-model evidence
+
+`profile-results.json` records four fresh captures from the same immutable57e4629
+composition executable, using official Nsight2025.3.1.90. The separately approved
+stage was `target/validation/retained-profile-57e4629-natural-drain-20261016-01`;
+all4 gates passed exactly once with no retries, warmups, calibration or builds.
+Each compared9,187,840 common-history logit values, maintained its exact own-primary
+fingerprints/greedy checks, and matched the canonical ordered64-prediction work,
+read/upload and per-stream check arrays already published in `performance-results.json`.
+Each policy executed25,116 logical uploads. These are real opt-in retained runs,
+not results from the unchanged default-off branch.
+
+The post-setsid root handshake, bounded natural descendant grace and final
+terminal WNOWAIT check were independently reviewed. All4 captures exited naturally
+without signals: each custodian reaped4 authenticated identities, then ECHILD.
+Adopted descendants drained in about0.31-0.64s within the existing5s bound and original
+job deadline. All8 GPUs were observed idle before/after; final ECHILD/owner absence
+and all8 lock releases/reprobes passed. No CUDA physical-release certificate is
+inferred. The two prior consumed stages and all8 negative timing pairs remain unchanged.
+
+For each policy, the API counts listed below matched across schedules. Query-spin and context-selection counts differed. All counts are whole-model-process observations. Synchronous versus retained:
+
+| Observed API | Synchronous calls | Retained calls | Delta /25,116 logical uploads |
+|---|---:|---:|---:|
+| Host-pin allocate | 2 | 25,118 | +1 |
+| Host-pin free | 2 | 25,118 | +1 |
+| Event create / record / destroy, each | 347,563 | 372,679 | +1 each |
+| Stream wait-event | 1,387 | 26,503 | +1 |
+| Stream synchronize | 382,743 | 232,047 | -6 |
+| Event synchronize | 77,904 | 77,904 | 0 |
+| Context synchronize | 3 | 3 | 0 |
+| Device allocate / free, each | 34 | 34 | 0 |
+| H2D copies | 195,985 | 195,985 | 0 |
+
+| Schedule | Pin+free host sum, sync | Pin+free host sum, retained | Added pin+free host sum / logical upload | Stream-sync host sum, sync → retained |
+|---|---:|---:|---:|---:|
+| Blocking | 0.003209s | 29.853418s | 1.188494ms | 4.340770s → 0.302237s |
+| Lookahead | 0.003164s | 29.472179s | 1.173316ms | 4.344680s → 0.302241s |
+
+H2D API host sums decreased5.512→1.150s Blocking and5.523→1.134s Lookahead.
+H2D device counts/bytes were unchanged:195,985 copies /82,512,273,944B; summed
+copy device durations were3.854→3.965s Blocking and3.850→3.968s Lookahead.
+Kernel names/counts matched (409,411); summed actual kernel intervals were
+3.378→3.399s Blocking and3.380→3.399s Lookahead. These interval sums are not
+whole-test elapsed time, and copy/kernel time need not be additive.
+
+Ready-query NOT_READY600 counts increased18,210→69,553 Blocking and
+20,104→70,451 Lookahead (added2.044 /2.005 per logical upload). Total query host
+sums were0.158→0.210s and0.155→0.209s respectively. Retained model-process OSRT
+also recorded50,129 /50,167 `clock_nanosleep` calls, about5.213 /5.216s summed
+wall intervals (~2 observed calls per logical upload). Synchronous exports had
+no matching sleep rows: that remains unobserved, not a semantic zero. Without
+prediction/upload ranges or call stacks, these sleeps are not proven to be
+upload-pending sleeps. CPU initial zero/packing costs and completion gaps remain
+unobserved. Other OSRT calls and per-return query durations are in the JSON.
+
+Live proof endpoints retained metadata8MiB+stack2MiB charge10,485,760B. Host peak
+was16,777,984B synchronous /36,701,896B retained under64MiB. Cache current/peak
+209,739,776B /219,754,496B stayed under320MiB including8MiB scratch. All132
+sampled endpoints per run passed settled pending/Unknown/upload-charge checks.
+The committed serializer omits upload-charge fields only when zero; this is not
+a missing-observation waiver. Each live endpoint showed1 worker creation,
+2,559 reuses,0 joins and an alive worker. A post-owner-drop join witness is not
+exposed here and remains null/unobserved; neither ECHILD nor still-live zero joins
+is substituted for that witness.
+
+**Scope:** all summaries are `PARTIAL_OBSERVED_MODEL_SUMMARY`, full-trace acceptance
+false, dropped events null and exhaustive API counts unproven. All248 warnings per
+capture are retained/classified by exact Analysis/HostTimestamp mechanism, subject,
+SQL binding and effect. Unbound subjects remain not owned. Scheduling-absent means
+no CPU scheduling claims; no NVTX means no expert/range attribution. Ordinary NULL
+copy endpoints remain unknown. H2D size buckets do not uniquely certify the six
+expert parts. Raw ignored containers/SQLite/full diagnostics remain local-only;
+the compact JSON publishes their hashes, bounded observations and canonical-array
+references, not unavailable raw evidence as a public reproducibility claim.
+
+**Engineering conclusion:** per-upload pin/free churn is a directly observed
+large host API outlay consistent with the measured regression. The partial
+profile sums overlap across threads/OSRT and are not an exclusive causal account
+of the earlier unprofiled elapsed differences. The prior1.5451× /1.5649× negative
+paired medians remain the performance result; profiled footer times do not enter
+that population. Keep the default unchanged. Prioritize separately reviewed
+bounded pinned-staging reuse with full quota/lease/consumer-proof accounting and
+then quality plus measured A/B; grouped-event work alone is not a speedup claim.
 
 ## Approved separately reviewed24-run plan
 
@@ -173,7 +263,12 @@ so the explicitly listed new maintained controls and this bounded stage director
 need selective `git add -f`; do not add raw target/vendor outputs or alter ignore
 rules. This executing agent has not staged, committed or pushed anything.
 
-Exact refreshed main staging hashes are in the local ignored
+Historical closeout staging hashes are in the local ignored
 `target/validation/retained-performance-57e4629-20261016-01/actual-closeout-01/stage-files.json`.
 Only README.md, performance-results.json and manifest.json changed for this
 actual-results closeout; executable controls remain byte-identical to approval.
+
+For this later profile closeout, only `profile-results.json`, `README.md` and
+`manifest.json` change. Current selective main staging hashes are in
+`target/validation/retained-profile-57e4629-natural-drain-20261016-01/actual-closeout-01/stage-files.json`.
+All executable controls remain byte-identical to the four-capture approval.

@@ -1,10 +1,10 @@
 {
   "schema": "ferrule.engineering.curated-stage-manifest.v1",
-  "scope": "Bounded engineering receipts, pre-execution CPU validation and partial actual whole-test comparison; official profiling blocked; no manuscript or complete24-job acceptance",
+  "scope": "Bounded engineering quality receipts, unchanged negative whole-test comparison and four separately approved partial observed-model official profiles; historical failures preserved; no manuscript or full-trace acceptance",
   "files": {
     "README.md": {
-      "sha256": "e464dfa1b6b5a4ec38fb6bec431141eaf57246a7b6ec61888d19b06ece93ba54",
-      "bytes": 11491
+      "sha256": "02cd8872e5f67ed682d6e0a5e69bbfc9754da52fc39d9f8b4516b04dd14160e5",
+      "bytes": 17829
     },
     "completed-stages.json": {
       "sha256": "8492747e3db129ba63faaf947d23e12c22d94a1e9ffdf1da4ab0bbdcc1bf81ec",
@@ -25,6 +25,10 @@
     "performance-results.json": {
       "sha256": "5b395cfc4d4cc3840621a300b13ce63f2181622ee182bda108ef48a91f1e9f89",
       "bytes": 328655
+    },
+    "profile-results.json": {
+      "sha256": "df917069df9780ee12e798109490b7965c390cc1a1b3f7b60d5882f0bb217271",
+      "bytes": 399466
     }
   },
   "raw_target_vendor_weights_or_binaries_included": false
