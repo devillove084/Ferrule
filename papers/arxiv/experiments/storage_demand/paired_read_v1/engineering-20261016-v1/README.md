@@ -482,3 +482,88 @@ this README, `grouped-profile-results.json` and `manifest.json` change. The new
 JSON requires selective force-add by main. CPU validation reran103 maintained
 control/lifecycle tests, reproduced all four SQL summaries exactly read-only
 (the fourth remains diagnostic), and verifies manifest/source/receipt hashes.
+
+
+## Fresh limited Lookahead pair: both captures qualified, histories unchanged
+
+The independently approved exact2 stage
+`target/validation/grouped-profile-ce6d4ff-lookahead-proc-exit-20261017-01/`
+**passed both captures once**, in order: new Lookahead grouped23, then new
+Lookahead synchronous24. There were no retries, warmups, builds, Blocking reruns,
+old20 timing/primary reruns or quality14 reruns, and no further GPU jobs.
+
+`grouped-profile-results.json` appends `additional_profile_stages[0]` and a
+`qualified_schedule_pair_index`. **Every original root field remains unchanged**:
+the earlier four-profile stage still has status `failed`, all4_passed=false, its
+old Lookahead pair unqualified, and its failed24 diagnostic-only. The old grouped
+Lookahead23 is not substituted for the new grouped arm. Neither old profile24 nor
+the earlier fixed24 profile21 is rehabilitated. The prior text and raw histories
+above continue to describe their original stages.
+
+Both new arms use identical current observer control99c6b92 (approved proc-exit
+fixd20d3f8), while the qualified Blocking pair remains in its separate historical
+controld48cad78 stage. Both stages use the same frozen ce6d4ff application,
+archive4e15b730... and binaryd8c0bae...; **no arm is mixed across control cuts**.
+The pair index identifies the exact stage/control/raw FINAL for each schedule.
+
+### Qualified Lookahead observations
+
+Both new reports match their own completed Lookahead primaries and each other:
+25,116 logical uploads, identical ordered work/check arrays and64 exact output
+fingerprints, unchanged ATOL0.00025/RTOL0.012, configuration and lifecycle-v3
+quotas. Complete shared arrays remain in their original JSON locations; each new
+capture binds their hashes and includes its own report/receipt provenance.
+
+| Whole-model-process observation | Synchronous24 | Grouped23 | Grouped − synchronous / logical upload |
+|---|---:|---:|---:|
+| `cuStreamSynchronize` rows | 382,743 | 257,163 | −5 |
+| `cudaStreamSynchronize_v3020` rows | 290 | 290 | 0 |
+| Host-pin allocation rows | 2 | 2 | 0 |
+| Host-pin free rows | 2 | 2 | 0 |
+| H2D rows | 195,985 | 195,985 | 0 |
+| H2D bytes | 82,512,273,944 | 82,512,273,944 | 0 |
+| Observed kernel rows | 409,411 | 409,411 | 0 |
+
+The stream-sync reduction is125,580, exactly5 per logical upload, matching the
+predeclared hypothesis **without using it as a pass/fail threshold**. Counts per
+upload are15.239011 synchronous versus10.239011 grouped. Both model processes
+have the expected2 pin allocations and2 frees. All69 observed kernel-name/count
+entries match; H2D/D2D/D2H counts and bytes match. Event-query and context-selection
+counts may differ. Every observed API count, host sum and normalization is retained.
+
+`cuStreamSynchronize` host sums are4.348171507s synchronous versus1.595895095s
+grouped (difference−2.752276412s). These process-wide sums may overlap other work
+and **are not causal elapsed savings, expert-range attribution or measured
+per-upload latency**. The earlier eight unprofiled whole-test pairs and their
+approximately3.9% descriptive median reduction remain unchanged and separate;
+no profiled time enters that population or implies TTFT/token/request latency.
+The original negative57e4629 retained pairs remain unchanged as well.
+
+### Terminal, custody and closeout validation
+
+Both new captures have exact identity/job/plan/launch/ancestry-bound WNOWAIT
+terminal receipts, successful stopped observer acknowledgements, and final owner
+wait ordering from the pinned single-authoritative-wait wrapper. Acks followed
+terminal observation by1.439s grouped and1.387s synchronous, inside15s and the
+original deadlines. Their recorded terminal events bind the declared model's
+matching PID/birth/parent in stateZ with reasonexited; no sticky errors or
+independent map/pin errors were waived. A runtime wait-call counter is not claimed.
+
+Both supervisors exited0, without signals/timeouts, and authenticated custody
+reached ECHILD with recorded owners absent. Final strict all8 idle passed three
+consecutive samples; all8 local locks exited and were nonblocking-reprobed.
+Offline PID/birth checks found no surviving owned jobs. Physical CUDA release
+remains unobserved, not certified by idle/ECHILD/local lock receipts.
+
+Host peak16,777,984B remains below64MiB, settled live-owner charge10MiB, cache
+current/peak209,739,776/219,754,496B below320MiB, with endpoint upload/pending/
+Unknown charges zero. Read-only CPU SQL re-audits reproduced both model summaries
+exactly;112 maintained CPU control/lifecycle tests passed. Source/control/GO,
+manifest, raw receipt and historical-preservation hashes are checked.
+
+Evidence remains **PARTIAL_OBSERVED_MODEL_SUMMARY**: full_trace_accepted=false,
+dropped_event_count=null and API exhaustiveness unproven. No expert NVTX/range,
+CPU scheduling, overlap, default-switch, significance or causal-speedup claim.
+Only this README, appended `grouped-profile-results.json` and manifest change;
+private weights, binaries, SQLite, vendor packages and ignored raw artifacts
+remain unstaged/local-only, not publicly supplied.

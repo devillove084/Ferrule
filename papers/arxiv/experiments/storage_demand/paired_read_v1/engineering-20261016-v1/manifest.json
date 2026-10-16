@@ -1,10 +1,10 @@
 {
   "schema": "ferrule.engineering.curated-stage-manifest.v1",
-  "scope": "Bounded engineering quality receipts, unchanged negative whole-test comparison and four separately approved partial observed-model official profiles; historical failures preserved; no manuscript or full-trace acceptance; separately reviewed frozen ce6d4ff actual14 grouped-upload quality, no performance/default claim; separately approved frozen ce6d4ff grouped comparison failed at profile21 after20passes, eight completed unprofiled pairs descriptive only, failed-trace offline diagnostic not qualified, no default/TTFT/significance claim; fresh same-ce6 four-profile stage failed at24 after three qualified partial observed-model captures, qualified Blocking count pair only, failed Lookahead capture diagnostic only, no latency/default/full-trace claim",
+  "scope": "Bounded engineering quality receipts, unchanged negative whole-test comparison and four separately approved partial observed-model official profiles; historical failures preserved; no manuscript or full-trace acceptance; separately reviewed frozen ce6d4ff actual14 grouped-upload quality, no performance/default claim; separately approved frozen ce6d4ff grouped comparison failed at profile21 after20passes, eight completed unprofiled pairs descriptive only, failed-trace offline diagnostic not qualified, no default/TTFT/significance claim; fresh same-ce6 four-profile stage failed at24 after three qualified partial observed-model captures, qualified Blocking count pair only, failed Lookahead capture diagnostic only, no latency/default/full-trace claim; appended separately approved same-ce6 exact2 Lookahead profile stage passed, qualified Lookahead pair under disclosed newer control cut, all historical first-stage fields/failures preserved, no pooled timing/full-trace/default claim",
   "files": {
     "README.md": {
-      "sha256": "68da1c42a7d0d636d5825229a0f2bdce2ce4b7d62c5a78aa1010c69cdeb2f817",
-      "bytes": 30937
+      "sha256": "d76a0fa4446ec68aa3c27d042a2688bea3a5446dc913255863b4b9638da5c1b9",
+      "bytes": 36041
     },
     "completed-stages.json": {
       "sha256": "8492747e3db129ba63faaf947d23e12c22d94a1e9ffdf1da4ab0bbdcc1bf81ec",
@@ -39,8 +39,8 @@
       "bytes": 1395340
     },
     "grouped-profile-results.json": {
-      "sha256": "ebc860bd80260cfdb77c07cd4485044b41954f2ec7a7c01c8ed6d93241303a25",
-      "bytes": 441961
+      "sha256": "033515cc938a3bf7c266a29918f33d122406fb6da5b32b44cc4304c97a5b3141",
+      "bytes": 647836
     }
   },
   "raw_target_vendor_weights_or_binaries_included": false
