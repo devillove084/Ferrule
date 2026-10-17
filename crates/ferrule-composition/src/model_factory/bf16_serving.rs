@@ -682,6 +682,14 @@ pub(super) fn build_numeric_bf16(
             expert_transfer_policy = ?runner.expert_transfer_policy(),
             "configured resident expert transfers before engine composition"
         );
+        if request.execution.expert_read_pipeline.is_some() {
+            use ferrule_model::runner::ResidentModelRunner;
+            log_initial_expert_read_endpoint(
+                || runner.physical_resource_snapshot(),
+                request.execution.expert_transfer_policy,
+                runner.expert_transfer_policy(),
+            )?;
+        }
         #[cfg(test)]
         NUMERIC_BF16_TEST_RUNNER.with(|slot| {
             if let Some(observe) = slot.borrow_mut().take() {
@@ -698,6 +706,59 @@ pub(super) fn build_numeric_bf16(
         Ok(Box::new(engine))
     }
 }
+
+// Metadata-only builds do not construct the numeric device owner. Keep this
+// serialization seam feature-neutral so its evidence contract is CPU-testable.
+#[allow(dead_code)]
+fn log_initial_expert_read_endpoint(
+    snapshot: impl FnOnce() -> ferrule_model::resource_observability::PhysicalResourceObservation,
+    requested_policy: Option<ServingExpertTransferPolicy>,
+    effective_policy: ferrule_model::transformer::ExpertTransferPolicy,
+) -> Result<()> {
+    if !tracing::enabled!(target: "ferrule_performance", tracing::Level::INFO) {
+        return Ok(());
+    }
+    use ferrule_model::resource_observability::{ResourceEvidence, ResourceObservationScope};
+    #[derive(serde::Serialize)]
+    struct OwnerBinding {
+        scope: ResourceEvidence<ResourceObservationScope>,
+        prepared_plan_id: ResourceEvidence<u64>,
+        image_generation: ResourceEvidence<u64>,
+        device_ordinal: ResourceEvidence<usize>,
+    }
+    let snapshot = snapshot();
+    let initial = serde_json::to_string(&snapshot.expert_read_pipeline).map_err(|source| {
+        ferrule_common::Error::ModelSource {
+            source: Box::new(source),
+        }
+    })?;
+    let owner_binding = serde_json::to_string(&OwnerBinding {
+        scope: snapshot.scope,
+        prepared_plan_id: snapshot.prepared_plan_id,
+        image_generation: snapshot.image_generation,
+        device_ordinal: snapshot.device_ordinal,
+    })
+    .map_err(|source| ferrule_common::Error::ModelSource {
+        source: Box::new(source),
+    })?;
+    tracing::info!(target: "ferrule_performance",
+        event = "expert_read_initial_endpoint",
+        producer_schema_version = 1u64,
+        source_contract = "resident_model_runner.physical_resource_snapshot.expert_read_pipeline",
+        endpoint = "after_owner_configuration_before_prediction",
+        process_id = std::process::id(),
+        owner_binding = owner_binding.as_str(),
+        requested_expert_transfer_policy = ?requested_policy,
+        expert_transfer_policy = ?effective_policy,
+        expert_read_pipeline_initial = initial.as_str(),
+        "Observed initial expert read endpoint before engine composition"
+    );
+    Ok(())
+}
+
+#[cfg(test)]
+#[path = "../../tests/unit/engine/model_factory/expert_read_initial_endpoint.rs"]
+mod initial_endpoint_tests;
 
 /// Frozen metadata for the opt-in lazy read path. The original bound resources
 /// and read budget cross admission and construction together, without rebinding.
