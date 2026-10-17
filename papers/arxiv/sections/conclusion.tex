@@ -6,25 +6,49 @@ The experiments bound selected logical accounts, not the complete physical
 working set. The host limit includes packed and prepared payloads, metadata,
 and requested worker stack; OS stack rounding, TLS, allocator overhead,
 weak-reference backing, and file-cache residency require additional headroom.
-Device samples can miss transient peaks and lack exact process attribution.
-The three cache points vary entry and byte limits together, so they neither
-isolate a replacement-policy effect nor locate a physical capacity frontier.
-The complete compact checkpoint may fit in host memory. Other representations,
-long contexts, shared-memory devices, and multimodal workloads remain outside
-the evaluated profile.
+Persistent-worker observations retain 10 MiB of logical metadata and stack
+charge while the owner is idle and alive. Zero joins in those snapshots are
+not evidence of a missing required live join or of a completed final-owner
+join; the latter witness remains unobserved. Device samples can miss transient
+peaks and lack exact process attribution. The three cache points vary entry
+and byte limits together, so they neither isolate a replacement-policy effect
+nor locate a physical capacity frontier. The complete compact checkpoint may
+fit in host memory. Logical reads do not establish physical NAS traffic or
+physical storage necessity.
+
+\paragraph{Numerical and model scope.}
+The evaluated Qwen3.5-35B-A3B-FP8 text profile decodes storage values to BF16
+execution weights and uses explicit F32 accumulation and state boundaries.
+Its numerical and HTTP checks do not establish full-model W8A16 quality,
+stock dynamic-FP8 behavior, or same-precision equivalence to another engine.
+DeepSeek-V4 end-to-end execution remains untested. Other precisions, adapters,
+topologies, long contexts, shared-memory devices, and multimodal workloads
+remain outside the evaluated profile.
 
 \paragraph{Statistical and measurement scope.}
-The timing study contains five paired blocks of short fixed outputs, not
-50 independent repetitions. Shared page and NFS caches can carry state across
-fresh servers. The descriptive resampling ranges therefore provide neither
-guaranteed coverage nor a significance or power result. Serial-window
-goodput excludes startup, gaps, and concurrency. Identical instrumentation
-controls one source of bias, but its overhead is unmeasured. The profiling
-study observes overlap in two separate requests; it does not identify the
-cause of the timing difference. Its target-process checks pass, while
-wrapper warnings and an unknown dropped-event count leave global trace
-completeness unverified. File-call wall time can include cache service and
-preemption, and shared NFS counters do not identify physical backend traffic.
+The earlier read-scheduling study has five paired blocks, not 50 independent
+request repetitions. The transfer-policy pilot has two pairs per read schedule;
+its 40 measured requests are nested observations, not 40 independent policy
+replicates. Schedules, source cuts, and experiments are not pooled. Shared page
+and NFS caches can carry state across fresh servers. The older descriptive
+resampling ranges provide neither guaranteed coverage nor a significance or
+power result; no intervals or significance claim are made for the newer pilot.
+Older serial-window goodput excludes inter-request gaps, whereas the newer
+phase-qualified goodput includes them between the first measured dispatch and
+last measured terminal. Neither measures concurrent-server capacity or
+startup-inclusive throughput. Client time to first nonempty content is not
+first-device-token latency. Instrumentation overhead remains unmeasured.
+
+The read--compute overlap study concerns two separate requests. Its scoped
+checks pass, while wrapper warnings and an unknown dropped-event count leave
+full-trace completeness unverified. The grouped-transfer profiles are also
+partial selected-process observations: qualified pairs exist for both read
+schedules under separately disclosed collection controls, but full-trace
+acceptance is false and event loss remains unknown. Failed captures retain
+their failed status. API and interval sums may overlap and cannot be added
+into an exclusive explanation of elapsed time. Neither fewer synchronization
+calls nor the retained-upload pin/free overhead identifies the exact cause of
+unprofiled timing differences.
 
 \paragraph{Failure and verification scope.}
 The component experiment runs real CUDA operations but injects a software
@@ -33,32 +57,43 @@ failure, lost hardware event, or full-model uncertain completion. The HTTP
 experiment tests a client disconnect followed by a new request, not resumed
 execution or recovery from a poisoned owner. Neither experiment establishes
 the integrated five-class conservation invariant across a serving request.
-Final physical release remains unobserved. Unknown custody can reduce
-availability indefinitely; the design supplies no general in-place reset,
-durable crash recovery, or arbitrary cross-rank atomic commit.
+Logical host/cache observations do not supply that missing ledger. Final
+physical release remains unobserved; process drain, device idle, and local
+lock release are not universal CUDA-release certificates. Unknown custody
+can reduce availability indefinitely; the design supplies no general in-place
+reset, durable crash recovery, or arbitrary cross-rank atomic commit.
 
 \paragraph{Reproducibility scope.}
-The supplementary materials support offline reconstruction of the public
-measurements and their exclusions. They do not independently replay private
-process authentication or recover omitted executables, native dependencies,
-model payloads, and live mapped-memory contents. Integrity hashes bind retained
-inputs but are not external attestations. Earlier rejected or incomplete
-studies remain separate rather than becoming successful repetitions.
+Public archives support offline reconstruction of the earlier paired results
+and selected figures. The newer worker and transfer summaries instead retain
+bounded derived evidence and hashes of local originals; their raw reports,
+traces, binaries, and build inputs are not a complete portable public archive.
+Receipt checks do not replay private authentication or recover omitted native
+dependencies, model payloads, or live mapped-memory contents. Integrity hashes
+are not external attestations. Historical rejected or incomplete studies
+remain separate rather than becoming successful repetitions, and measured
+source cuts do not automatically qualify a later cleaned implementation.
 
 \section{Conclusion}
 \label{sec:conclusion}
 
-Bounded storage-backed inference requires a lifetime contract as well as a
-cache policy. \system{} connects source-bound planning and stage-local
-admission to exact completion, publication, and custody through retirement.
-Its bounded next-expert schedule preserves the blocking control's worker,
-budgets, arithmetic, and synchronous consumer proofs. In five paired blocks,
-lookahead completes the same checked workload with equal logical reads,
-zero wasted read bytes, less host demand waiting, and descriptive reductions
-of 8.18\% in end-to-end latency and 11.24\% in time to first content, with
-10.91\% higher qualified serial-window goodput. The additional experiments
-show bounded completion across three coupled cache budgets, limited measured
-read--kernel overlap, safe component abort or retained uncertainty, and
-fresh-request recovery after HTTP cancellation. These results support the
-mechanism within its measured scope while leaving complete physical
-accounting, integrated fault conservation, and final release open.
+Bounded storage-backed weight residency requires a lifetime contract as well
+as a cache policy. \system{} connects source-bound planning and stage-local
+admission to exact completion, publication, and ownership through retirement.
+The implemented expert path combines a persistent bounded read worker,
+optional lookahead, and grouped synchronous uploads while preserving a
+synchronous forward interface. Quality-checked serving and component
+experiments support this architecture within one explicit numerical profile
+and selected logical accounting domains.
+
+The measurements also show why mechanism and performance claims must remain
+separate. The earlier five-pair experiment isolates read scheduling; newer
+whole-test and HTTP comparisons isolate transfer policy within each read
+schedule. In the HTTP pilot, grouping improves observed latency and
+phase-qualified goodput with lookahead but regresses time to first content
+with blocking reads. A retained-upload alternative has a substantial negative
+whole-test result. Partial profiles expose synchronization and host API costs
+without proving a complete critical-path explanation. These findings support
+conditional engineering choices, not universal superiority. Integrated fault
+conservation, a physical capacity frontier, final physical release, and
+broader model generality remain outside the demonstrated result.

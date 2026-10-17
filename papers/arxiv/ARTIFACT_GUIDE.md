@@ -38,9 +38,16 @@ root. A public receipt is not automatically a self-contained re-execution kit.
 
 | Scientific label / actual result | Public input | Offline check | Figure / scope boundary |
 |---|---|---|---|
-| **factory-qualification**: nine gates on the serving source | [Build and quality projection](experiments/storage_demand/paired_read_v1/publication_results_v1/design/source-and-build.json) | [Paired checker](#public-cpu-checks), projection only; [external originals](#external-current-qualification) | Qualification table, not a performance figure; complete current raw qualification is not a portable public archive |
+| **persistent-worker**: nine completed GPU gates | [Completed stages](experiments/storage_demand/paired_read_v1/engineering-20261016-v1/completed-stages.json), [source pins](experiments/storage_demand/paired_read_v1/engineering-20261016-v1/source-pins.json) | [Bounded-summary checks](#bounded-worker-and-transfer-summary-checks) | One worker creation, 159/2,559 reuses at selected live endpoints; 10 MiB idle charge, zero live joins; final-owner join unobserved |
+| **grouped-quality**: 14 completed GPU gates (backend 1, model 5, composition 8) | [Quality summary](experiments/storage_demand/paired_read_v1/engineering-20261016-v1/grouped-quality-results.json) | [Bounded-summary checks](#bounded-worker-and-transfer-summary-checks) | Actual numerical/path tests, not 14 serving lifecycles or a new performance population |
+| **grouped-whole-test**: eight completed unprofiled pairs, four per read schedule | [Timing summary](experiments/storage_demand/paired_read_v1/engineering-20261016-v1/grouped-performance-results.json) | [Bounded-summary checks](#bounded-worker-and-transfer-summary-checks) | Approximately 3.9% lower paired whole-test time; the 24-job stage **failed** at profiling, not 24/24; not HTTP latency |
+| **grouped-api-observations**: qualified selected-process pairs for both schedules | [Profile summary and qualified pair index](experiments/storage_demand/paired_read_v1/engineering-20261016-v1/grouped-profile-results.json) | [Bounded-summary checks](#bounded-worker-and-transfer-summary-checks) | 382,743 → 257,163 native stream-sync rows, −5 per logical upload; partial observations, full trace false, drops unknown |
+| **http-transfer-acceptance**: four fresh servers, 48/48 checked requests | [Acceptance summary](experiments/storage_demand/paired_read_v1/http-transfer-v1/acceptance-results.json) | [Bounded-summary checks](#bounded-worker-and-transfer-summary-checks) | Quality-only acceptance; all timing aggregates null, not pilot repetitions |
+| **http-transfer-pilot**: eight fresh servers, 96/96 requests; 40 measured QA8, 320 measured tokens | [Pilot summary](experiments/storage_demand/paired_read_v1/http-transfer-v1/pilot-attempt-03.json), [all 96 request records](experiments/storage_demand/paired_read_v1/http-transfer-v1/pilot-attempt-03-requests.json) | [Bounded-summary checks](#bounded-worker-and-transfer-summary-checks) | Two pairs per read schedule, grouped/synchronous; lookahead benefit and blocking TTFT regression; phase goodput includes gaps |
+| **retained-upload negative result**: eight completed unprofiled pairs | [Timing summary](experiments/storage_demand/paired_read_v1/engineering-20261016-v1/performance-results.json), [partial profiles](experiments/storage_demand/paired_read_v1/engineering-20261016-v1/profile-results.json) | [Bounded-summary checks](#bounded-worker-and-transfer-summary-checks) | +54.51%/+56.49% whole-test time, blocking/lookahead; rejected historical alternative, not a supported current production policy |
+| **factory-qualification (earlier serving cut)**: nine gates | [Build and quality projection](experiments/storage_demand/paired_read_v1/publication_results_v1/design/source-and-build.json) | [Paired checker](#public-cpu-checks), projection only; [external originals](#external-qualification-for-the-earlier-serving-cut) | Qualification table, not a performance figure; complete raw qualification for that cut is not a portable public archive |
 | **earlier-factory-qualification**: nine gates on a different source | [Qualification archive](experiments/storage_demand/qualification_v1/README.md) | [Qualification checker](#public-cpu-checks) | Historical qualification only; not another nine serving-source repetitions |
-| **paired-study**: five completed pairs, ten lifecycles, 120 completed requests; 50 measured QA | [Paired receipts and results](experiments/storage_demand/paired_read_v1/publication_results_v1/README.md) | [Paired checker](#public-cpu-checks) | [Latency](figures/paired-read-latency.pdf), [read wait](figures/paired-read-read-wait.pdf), [accounting](figures/paired-read-accounting.pdf); [public figure regeneration](#paired-public-figures) |
+| **paired-study (earlier read scheduling)**: five completed pairs, ten lifecycles, 120 completed requests; 50 measured QA | [Paired receipts and results](experiments/storage_demand/paired_read_v1/publication_results_v1/README.md) | [Paired checker](#public-cpu-checks) | [Latency](figures/paired-read-latency.pdf), [read wait](figures/paired-read-read-wait.pdf), [accounting](figures/paired-read-accounting.pdf); [public figure regeneration](#paired-public-figures) |
 | **cache-pressure**: three completed blocking lifecycles; 12 completed requests | [Pressure projection](experiments/storage_demand/pressure_fault_v1/publication_pressure_v1/README.md) | [Pressure verifier](#public-cpu-checks) | [Cache budgets](figures/cache-pressure-budget.pdf); one fixed-order coupled entry/byte sweep, not a capacity frontier or repeated timing study |
 | **scoped-overlap**: two accepted profiled QA arms | [Interval archive](experiments/storage_demand/profile_overlap_v1/publication_v1/README.md) | [Overlap checker](#public-cpu-checks) | [Read/compute overlap](figures/read-compute-overlap.pdf); scoped acceptance true, full-trace acceptance false, dropped-event count null |
 | **mixed-fault**: two selectors / four actual component cells pass | [Portable actual-fault archive](experiments/storage_demand/pressure_fault_v1/publication_fault_v1/README.md), [typed evidence](experiments/storage_demand/pressure_fault_v1/publication_fault_v1/SCHEMA.md) | [Fault checker and 27 tests](#public-cpu-checks), no private inputs | [Fault custody](figures/fault-custody-contract.pdf); tiny Mixed CUDA fixture, not the serving executable, a 35B fault experiment or an integrated broker ledger |
@@ -50,6 +57,150 @@ root. A public receipt is not automatically a self-contained re-execution kit.
 Detailed scalar tables live in those result documents, not in parallel copies
 here. Requests, paired blocks, component cells, and distinct source cuts must not
 be pooled into a larger sample size.
+
+## Worker and transfer evidence: separate comparisons
+
+The newer [worker/upload evidence](experiments/storage_demand/paired_read_v1/engineering-20261016-v1/README.md)
+and [HTTP evidence](experiments/storage_demand/paired_read_v1/http-transfer-v1/README.md)
+are **curated derived summaries**, not raw public archives. Their manifests bind
+the curated files; embedded hashes identify ignored local reports, traces,
+SQLite, executables, source archives and custody receipts. Those originals,
+model/oracle payloads and build dependencies are not supplied by the manifests.
+The HTTP README's historical “pending main review” wording describes curation
+handoff, not an additional scientific outcome or a public replay guarantee.
+
+- **Persistent worker:** nine actual gates on their own source cut. Full-forward
+  endpoints show one creation and 159 reuses; fresh/no-observer endpoints show
+  one creation and 2,559 reuses. The live idle worker retains 10 MiB (8 MiB
+  metadata + 2 MiB requested stack), with zero joins while alive. Final-owner
+  join and universal physical release remain unobserved. Do not infer either
+  from ECHILD or substitute later worker counters for the earlier five-pair data.
+  The same completed-stages file separately records one backend ticket-API gate
+  and 11 retained-upload integration gates on older cuts; these are not another
+  persistent-worker denominator or current grouped-CLI qualification.
+- **Grouped quality and whole-test timing:** 14 gates pass, comprising backend 1,
+  model 5 and composition 8. The separate fixed 24-job timing stage passes four
+  primaries and 16 unprofiled trials, then fails at its first profile; three jobs
+  remain unissued. The eight completed pairs have median grouped/synchronous
+  whole-test ratios 0.961331 blocking and 0.961096 lookahead. Whole-test time
+  includes construction, reads, checks and teardown; it is not model-only,
+  per-request, token or HTTP latency. The stage is never relabeled 24/24.
+- **Grouped API observations:** use `qualified_schedule_pair_index` in the
+  profile JSON, not just its original root status. The original four-profile
+  stage remains failed; its qualified blocking pair uses control `d48cad78`.
+  A separate two-profile lookahead stage passes under control `99c6b92`, using
+  the same frozen application. Each within-schedule pair has matched controls;
+  no arm is spliced across stages. Both observe native `cuStreamSynchronize`
+  rows 382,743 → 257,163, a reduction of five per 25,116 logical uploads.
+  H2D counts/bytes and observed kernel counts match. These are partial selected-
+  process counts, not expert-range attribution, exhaustive API counts, a full
+  trace, or a causal elapsed-time saving; dropped-event counts remain null.
+- **Retained-upload alternative:** the earlier same-cut experiment records
+  blocking/lookahead median whole-test regressions of 54.51%/56.49%. Separate
+  partial profiles observe about 29.85/29.47 s of retained pin-plus-free host
+  API sums. These sums may overlap other work and do not exactly explain the
+  elapsed regression. The rejected production path is not retained as a
+  supported mode of the cleaned engine. Preserve its experimental evidence
+  and Git history, not a copied or vendored dead implementation. Historical
+  reproduction requires its pinned Git source and external build inputs;
+  historical flags/selectors are not promised to run on current HEAD.
+
+### Current production selection versus measured policies
+
+After production cleanup (`080a903d96151d02c54b28727ff3f8ffa571ea25`), ordinary
+serving defaults are blocking reads with synchronous transfer. When transfer
+policy is omitted (`None`), an explicitly bounded lookahead pipeline resolves
+to grouped synchronous only on the supported local resident Mixed BF16/F32 CUDA
+numeric capability; otherwise resolution remains synchronous. Explicit
+synchronous selection remains the ablation baseline. Public serving rejects
+explicit grouped transfer with blocking or absent bounded reads; grouped/blocking
+is a private experimental cell, not a public serving mode. The regressed retained
+upload implementation and production selector are removed. Current selector
+validation is CPU-only, not post-cleanup GPU, HTTP, numerical-quality or
+performance requalification. The frozen pilot did not benchmark the post-cleanup
+resolver. The frozen application and control identities below remain the
+provenance of all reported runtime results.
+
+### HTTP comparison and metric boundaries
+
+Acceptance is four actual fresh servers and 48 correct requests, including
+20 measured QA8 requests / 160 measured tokens. It is quality evidence only.
+The later completed pilot is a separate eight-server, four-pair comparison:
+96 requests, 40 measured QA8 requests and 320 measured tokens. Every scheduled
+request completes correctly; failed/censored/unissued counts are zero. Normal
+EOS stopping, payloads, seed and references are bound in the summaries.
+
+The pilot compares **grouped-synchronous / synchronous transfer within each
+read schedule**. Two paired blocks per schedule give descriptive median
+ratios; cross-block independence is not established under shared cache state:
+blocking client TTFT **+4.96%**, E2E approximately flat (−0.43%), phase goodput
++3.74%; lookahead TTFT −8.47%, E2E −7.34%, phase goodput +6.52%. These frozen
+explicit-policy comparisons did not benchmark the post-cleanup resolver and
+do not establish significance or a universal improvement. The current selection
+rules above have CPU-only validation, not new GPU qualification. Do not pool
+requests as independent replicates, combine read schedules, or reuse the older
+five-pair read-scheduling estimates as these transfer-policy effects.
+
+Client TTFT is first nonempty SSE content minus client send time, not first
+GPU-token latency. E2E is client terminal minus send time. Phase width is the
+last measured client terminal minus the first measured client dispatch,
+**including inter-request gaps**; phase-qualified goodput is qualified measured
+output tokens divided by that width. The separately retained request-only
+serialized-service rate excludes those gaps and is not the same metric. The
+older paired study's serial-window goodput also has its own definition.
+
+Each pilot arm records 40,943 uploads and 128,811,927,312 logical H2D bytes.
+Lookahead reports 36,863 speculative/taken reads; blocking reports zero. Final
+live-reader charge remains 10 MiB, with observed logical host peak 16,777,984 B
+below 64 MiB. Requested/effective policy getters, positive uploads and pinned
+source dispatch support path evidence, not a direct grouped-backend-call
+counter, route/logit measurement, physical NAS-byte measurement, or full
+resource-contract proof. Planned model returns, ACK ordering, authenticated
+ECHILD, strict idle and lock reprobes are not CUDA-release certificates.
+
+Pilot attempts 01 and 02 remain permanent **zero-server/zero-request** setup
+failures, with 96 requests and 40 measured QA slots each unissued. Attempt 01
+fails absolute reserve admission; attempt 02 reaches the active setup deadline.
+One launch journal is not a server start. Later recovery/cleanup does not heal
+those outcomes. The third pilot uses separately reviewed role-partitioned
+controls: full build/input identity is proved once, while 145 live-role inputs
+are freshly checked at entry (18,377 build-only and 589 archived-quality roles
+are separately bound). Its static preparation is about 1.84–2.16 s, with no
+larger timers. This is admission/control engineering, not a model-speed result.
+The exact interrupted operation in the earlier attempts remains unknown.
+
+### Bounded worker and transfer summary checks
+
+This standard-library-only check verifies the two curated manifests without
+opening local raw evidence, querying a GPU, rebuilding, or running a server.
+It does **not** independently rederive the local raw measurements or authorize
+historical commands. Run from the repository root:
+
+```sh
+python3 -S -B - <<'PY_CHECK'
+import hashlib
+import json
+from pathlib import Path
+base = Path("papers/arxiv/experiments/storage_demand/paired_read_v1")
+for name in ("engineering-20261016-v1", "http-transfer-v1"):
+    root = base / name
+    manifest = json.loads((root / "manifest.json").read_text())
+    files = manifest["files"]
+    rows = files.items() if isinstance(files, dict) else ((r["path"], r) for r in files)
+    for path, record in rows:
+        data = (root / path).read_bytes()
+        assert hashlib.sha256(data).hexdigest() == record["sha256"], path
+        assert len(data) == record.get("bytes", record.get("size_bytes")), path
+    print(name, "curated manifest PASS")
+PY_CHECK
+```
+
+The exact historical build/test/public CLI argv are data in the source-pin and
+pilot records, not commands to replay a consumed stage. Sealed/fake/no-op
+preflight plans or plans pending main GO do not establish actual GPU execution
+and are not public re-execution instructions. New execution needs new output
+roots, required private/external inputs, independent review and fresh owner GO.
+Do not rerun stopped generations or the failed profile stages.
 
 ## Public CPU checks
 
@@ -171,6 +322,45 @@ Byte equality is not promised across arbitrary renderer installations.
   hash verification are already covered by the standard-library checker above;
   those checks do not invoke the renderer.
 
+### Current worker/transfer figures
+
+The two new figures use the separate
+[`render_current_evidence.py`](figures/render_current_evidence.py), not the older
+paired renderer or its frozen manifest:
+[`current-http-outcomes.pdf`](figures/current-http-outcomes.pdf) and
+[`current-transfer-mechanism.pdf`](figures/current-transfer-mechanism.pdf).
+Their [current evidence manifest](figures/current-evidence-manifest.json) binds
+the generator, pinned renderer/fonts, input hashes, all four PDF/PNG outputs,
+and experiment-specific denominators. The check rederives the HTTP pair ratios,
+checks 96 preserved raw request receipts and four full acceptance stats
+snapshots, and validates figure text bounds, non-overlap and minimum eight-point
+fonts. It is a custodian check requiring those hash-bound local originals;
+**the curated public summaries alone are not a portable regeneration kit for
+these figures**. It neither invokes the older renderer nor verifies an entire
+build-input/raw-artifact tree.
+
+Run this explicit, CPU-only, read-only verification from the repository root in
+the pinned environment:
+
+```sh
+/home/admin/wxw403883/anaconda3/bin/python3.12 -B papers/arxiv/figures/render_current_evidence.py --check
+```
+
+To intentionally regenerate only these two PDF/PNG pairs and their manifest,
+run the same command without `--check`. No GPU experiment is run. The figure
+Makefile builds the mechanism diagrams; it does not regenerate these new plots
+or replace their explicit check. The older public paired-figure route below
+continues to use its unchanged renderer and manifest.
+
+For label-only maintenance without reopening raw receipts, both generation and
+`--check` also accept `--verified-data-manifest PATH` together with
+`--verified-data-sha256 SHA256`. Use a preserved copy of a previously verified
+current-evidence manifest and its exact SHA-256. This mode verifies that snapshot,
+its internal evidence identity, input pins and renderer/font environment, then
+reuses its plot data and prior validation results. It does **not** newly verify
+the raw HTTP receipts or confer new runtime qualification. The new output
+manifest binds the changed renderer; input and measurement identities stay fixed.
+
 ### Paired public figures
 
 [`analysis_v1/render_public.py`](experiments/storage_demand/paired_read_v1/analysis_v1/render_public.py)
@@ -238,8 +428,8 @@ not the enabled paired study.
 
 ## Immutable identities and data pins
 
-The serving executable used for paired-study, cache-pressure, scoped-overlap,
-and http-cancel stays bound to source
+The **earlier** serving executable used for paired-study, cache-pressure,
+scoped-overlap, and http-cancel stays bound to source
 `86c58a017d7c4b53490f536a3b1a133f2f7848cc`, even when the current checkout gains
 documentation, collectors, or component tests. **Current HEAD is not the measured
 CLI.** The paired [build projection](experiments/storage_demand/paired_read_v1/publication_results_v1/design/source-and-build.json)
@@ -263,11 +453,56 @@ need network access and third-party licenses. New GPU work requires fresh
 reviewed plans, output directories and owner authorization; never replay consumed
 start/next commands or resume a stopped generation.
 
+### Newer application and control identities
+
+The HTTP acceptance and transfer pilot use a **different measured CLI** from
+the earlier serving study:
+
+| Identity role | Exact source or digest |
+|---|---|
+| Compiled production source | `d8c92d80dc2ec95c44ba7513198232d36f290a34` |
+| Source archive/control cut | `37b2f40c2dfc02825a373e417b0d5bb428e1622e` |
+| CLI SHA-256 | `c3db43b8c556a210a77f7fac29dc23c4bc9399d5e0374e6dc9fecd016625ccaa` |
+| Source archive SHA-256 | `2645585f2e33dd833c2c785dab97d4f9f9090604b89353d940879593ef41d5bb` |
+| Completed pilot orchestration, not a rebuilt CLI | `728df96114f06d63f40cf9a5f5f166b47c46295d` |
+
+The [HTTP source pins](experiments/storage_demand/paired_read_v1/http-transfer-v1/source-pins.json)
+retain the historical build and acceptance identity, unchanged. The
+[pilot summary](experiments/storage_demand/paired_read_v1/http-transfer-v1/pilot-attempt-03.json)
+separately binds the later controls, workflow, role partition, reviewed identity,
+GO/layout and raw-final receipts. The declared Cargo/Rust scope is byte-equal
+between the production and archive cuts; neither is the earlier serving cut.
+The build was once, release/offline/locked, CUDA 12.4.99/SM86 with compiled
+`cuda,nvtx-profile` and runtime NVTX disabled. The exact invocation and all quotas
+are in those records. Checkpoint shard identities are stat-bound, not full
+payload content-SHA256 certification; library maps do not hash live memory.
+
+The grouped component and whole-test experiments instead use application
+`ce6d4ff28b96d4057d0de6dfa858707104aad16b`, composition SHA-256
+`d8c0bae4872ffbbb6828dd7f49acecb4de0f69ab32748662845ddaa6d0b30557`,
+and archive SHA-256
+`4e15b7301f678424878ba97c3a3df8f8533a696053d2eb58b36bb35e6895e135`.
+The worker stage uses `dae07b85c647cfc418b5412078874f9e8e9bf1db`;
+the rejected retained-upload experiment uses
+`57e46295d3cf5725605e076eb5543f6124bd9245`. Their own source/control and executable
+pins remain separate in the engineering summaries. Do not assign one global
+source identity to these experiments.
+
+**The current checkout, including production cleanup, is not either measured
+CLI and is not newly compiled or GPU-qualified by this documentation update.**
+To rebuild a historical experiment, first obtain its pinned Git tree in a
+separate checkout and provision its recorded external inputs. Checking out a
+revision does not itself supply omitted binaries, model weights, toolchains,
+or authorization. Never restore rejected production code into current HEAD
+merely to make an old selector available.
+
 The following are compact integrity entry points, not a complete Git history.
 Each manifest supplies member-level hashes and the original/projection distinction.
 
 | Public input identity | Publication commit, where recorded | SHA-256 of the named manifest or receipt |
 |---|---|---|
+| [Worker/transfer curated manifest](experiments/storage_demand/paired_read_v1/engineering-20261016-v1/manifest.json) | Content-pinned derived summaries; raw local inputs external | `efc57f4aedc4c04e1147b446a89aa4dcfa10e5aeb58dfca08605686e398eb72e` |
+| [HTTP-transfer curated manifest](experiments/storage_demand/paired_read_v1/http-transfer-v1/manifest.json) | Content-pinned derived summaries; raw local inputs external | `b67766f1313df7639bbb69c687a8641abb4e72d3f01cf9bf82114ba86b43a009` |
 | [Earlier qualification manifest](experiments/storage_demand/qualification_v1/manifest.json) | `17b16fa` | `948d52e6485bea02eb0135690b3fcd9b8091d1b13e65d6b13934df01c32bbcac` |
 | [Paired-results manifest](experiments/storage_demand/paired_read_v1/publication_results_v1/manifest.json) | `c624335` | `14890f2d90461c0b228a804ae8c77d3ae93cdda6417bdcd1880292839fddccd0` |
 | [Public paired-plot manifest](experiments/storage_demand/paired_read_v1/analysis_v1/plot-manifest.json) | Public renderer; content-pinned | `38d5c40cc4dee0286c24e03310b7ef5d21c155c4e7cf2d88158d2e09da79a518` |
@@ -330,7 +565,7 @@ unestablished.
 
 ### Quality, schedules and budgets
 
-The full-model studies use Qwen3.5-35B-A3B-FP8, Mixed precision, PP1/TP1/EP1,
+The earlier full-model read-scheduling studies use Qwen3.5-35B-A3B-FP8, Mixed precision, PP1/TP1/EP1,
 lazy experts and resident KV. The common middle configuration is context 128,
 batch/prefill 8, two sequences, decode cohort target 1 / maximum deferrals 0;
 device policy 7 GiB, workspace 2 GiB, margin 512 MiB, KV 16 MiB. The host read
@@ -341,7 +576,7 @@ accounting/configuration scopes, not a total physical-memory partition.
 Cache-pressure couples caps at 8/64, 64/320 and 128/640 entries/MiB; all use
 blocking. There is no 256-entry observation.
 
-Both paired arms enable the real read pipeline; only `--expert-read-schedule`
+Both earlier paired arms enable the real read pipeline; only `--expert-read-schedule`
 changes between `blocking` and `lookahead`. Ordinary timings use
 `FERRULE_PROFILE_NVTX=0`; compiled NVTX support does not mean profiling was on.
 The [preregistration](experiments/storage_demand/paired_read_v1/publication_results_v1/design/preregistration.json)
@@ -398,9 +633,9 @@ charges and retained ownership. Unknown/quarantined cache bytes are a subset of
 charged bytes, not a fifth additive physical pool. No theorem about integrated
 broker conservation is experimentally established by those observations.
 
-## External current qualification
+## External qualification for the earlier serving cut
 
-The current nine-gate raw evidence is local/external, under
+The nine-gate raw evidence for the earlier serving source is local/external, under
 `target/validation/fixesmetadataCLIcurrent-quality-20261015-01/`.
 `FINAL.json`, `qualification-plan-v2.json`, `gates/*/quality.json`, the full40
 `gates/*/numeric-report/full40-bf16-profile.json` reports, and their supervisor
@@ -408,7 +643,9 @@ records are **not a complete portable archive**. The public
 [source/build projection](experiments/storage_demand/paired_read_v1/publication_results_v1/design/source-and-build.json)
 records all nine report/supervisor hashes, executable identities, acceptance
 rows and reference pins. Its check validates that projection, not the missing
-raw qualification corpus. The older public archive does not fill this gap.
+raw qualification corpus. The still-earlier public qualification archive does not fill this gap. These
+receipts do not substitute for the newer worker, grouped-quality or public-CLI
+acceptance stages, which have their own source cuts and denominators.
 
 Exact selectors use the constructor name
 `normal_cuda_constructor_reaches_configured_provider_for_both_model_boundaries`
@@ -516,6 +753,9 @@ turning artifact chronology into the main scientific argument.
 
 | Record | Locator / exclusion |
 |---|---|
+| Two stopped transfer-policy pilots | [Attempt 01](experiments/storage_demand/paired_read_v1/http-transfer-v1/pilot-attempt-01.json), [attempt 02](experiments/storage_demand/paired_read_v1/http-transfer-v1/pilot-attempt-02.json): each zero starts, 96 requests / 40 measured QA unissued; neither contributes timing observations to the completed third pilot |
+| Rejected retained-upload alternative | [Original negative timing and blocked profiling](experiments/storage_demand/paired_read_v1/engineering-20261016-v1/performance-results.json), [later partial profiles](experiments/storage_demand/paired_read_v1/engineering-20261016-v1/profile-results.json): keep negative outcomes; reproduce only from pinned historical Git, not cleaned production |
+| Grouped stage/profile failures | [Whole-test stage](experiments/storage_demand/paired_read_v1/engineering-20261016-v1/grouped-performance-results.json), [profile history and separate qualified pairs](experiments/storage_demand/paired_read_v1/engineering-20261016-v1/grouped-profile-results.json): failed roots remain failed; later approved captures are not retries or healed old captures |
 | Two stopped paired studies | [Historical failures](experiments/storage_demand/paired_read_v1/publication_results_v1/historical-failures.json): each one attempted / zero completed lifecycles, 120 HTTP and 50 QA slots unissued, five null pairs; neither contributes to paired-study |
 | Earlier pressure attempts | [Pressure history](experiments/storage_demand/pressure_fault_v1/publication_pressure_v1/history.json): one deadline STOP with 3 successful / 1 censored / 8 unissued requests; a separate source-admission rejection with zero starts; neither contributes to cache-pressure |
 | Rejected/blocked profile captures | [Profile history](experiments/storage_demand/profile_overlap_v1/publication_v1/history.json): original acceptance is unchanged; retrospective correction is not a newly accepted capture; only two fresh scoped arms qualify |
@@ -527,9 +767,93 @@ turning artifact chronology into the main scientific argument.
 | Startup metadata supplement | External `target/validation/startup-metadata-owner-20261013-01/REPORT.md`; separate unpaired startup/PSS observations and out-of-window observer costs, not a causal latency or heap-release result |
 | Unexecuted baseline pilot | [Independent protocol](experiments/storage_demand/newversionedprotocol/protocol.json): five lifecycles / 60 requests / 25 QA planned, not measured |
 
+### Unmatched resident-system observations
+
+The [original crossblock results](experiments/tp2_resident/runs/route-batch-vllm-crossblocks-20261012-01/crossblocks-results.md)
+preserve two resident TP2 windows with fresh owners, three excluded QA requests
+and five measured requests per window. These values were previously shown in
+the manuscript's resident supplement; they are retained here as ground-truth
+historical observations, **not an offload comparison or comparative speedup**.
+
+| Historical window | Output tok/s | Mean client TTFT ms | Mean client E2E ms | Startup s | Sampled GPU GiB/card | Sampled PSS GiB |
+|---|---:|---:|---:|---:|---:|---:|
+| Ferrule 1 | 14.317 | 176.248 | 523.399 | 349.585 | 21.04 | 61.05 |
+| vLLM 1 | 10.376 | 132.676 | 694.228 | 66.239 | 19.28 | 7.71 |
+| vLLM 2 | 10.330 | 134.651 | 699.213 | 62.814 | 19.28 | 7.32 |
+| Ferrule 2 | 14.804 | 171.333 | 515.106 | 366.133 | 21.04 | 60.14 |
+
+Both use PP1/TP2, but Ferrule's qualified Mixed GemmEx/routing execution and
+vLLM's BF16/FP8 Marlin execution do not match arithmetic. A 22 GiB per-device
+policy and utilization fraction 0.8 do not match total working-set budgets.
+The recorded vLLM version is 0.28.0, CUDA 12.9, Torch 2.13.0. Different metrics
+favor different deployments; none establishes a causal winner or SOTA ranking.
+They do not qualify an offload combination, another precision, or DeepSeek-V4.
+The unpaired startup/metadata observations remain separate as well.
+
+## Primary-source and license audit for positioning
+
+Related-work inspection used already downloaded local primary sources, not a
+new live-web snapshot. The local, ignored research index is
+`target/research/offload-capabilities/capability-matrix.csv`; its
+`source-integrity.json` binds downloaded Git blobs. These local research caches
+are **not promised as public artifact payloads**. The bibliography links the
+upstream pinned source, not an unavailable local cache.
+
+The added `sglang2026expertpack` citation points to the official SGLang source
+at `5ef8319f16290d054295c1499bf82e712a9474c7`, inspected 2026-10-18. Its loader,
+runtime store and constraints are respectively:
+
+- `python/sglang/srt/model_loader/expert_pack_loader.py`;
+- runtime store: `python/sglang/srt/layers/moe/expert_pack.py`;
+- preparation: `python/sglang/srt/model_loader/expert_pack_runtime.py`;
+- `python/sglang/srt/model_loader/expert_pack_config.py` and
+  `python/sglang/srt/arg_groups/expert_pack_hook.py`.
+
+The loader/store show runtime demand storage reads and a GPU expert cache;
+preparation is not the only storage operation. The inspected path accepts
+DeepSeek-V4 Flash or the restricted text-only Kimi-K3 configuration, not Qwen3.5;
+unit TP/DP/EP and disabled CUDA graphs/shared fusion are explicit checks. This
+is not a universal statement about every SGLang adapter/version. Release
+inclusion, actual execution and relative quality/performance were not tested.
+The new bibliography entry is a source snapshot, not an invented paper,
+conference, byline, release date or benchmark. Relevant files carry Apache-2.0
+SPDX headers; this update cites their behavior and copies no upstream code.
+
+The capability matrix separately records inspected vLLM 0.28.0+cu129 CPU-weight
+offload/UVA paths as host-resident mechanisms, not equivalent disk-weight
+demand. KV offload is distinct; arbitrary plugins are not ruled out. FlexGen
+and ZeRO-Inference already explicitly include disk/NVMe weight streaming and
+are acknowledged as such. No Ferrule-equivalent or absent custody guarantee
+is inferred without an exhaustive audit. A full third-party distribution and
+model/toolchain licensing audit remains separate from this new citation check.
+
 ## Documentation validation
 
-Focused CPU validation of the current public rendering and platform supplement:
+Lead/artifact integration checks completed without a GPU query, release build,
+server launch, profiler export or paper build:
+
+- Both newer curated manifests pass SHA-256 and byte-count checks: 10 engineering
+  members and eight HTTP members, with no duplicate member paths.
+- All 17 cached primary-source blobs pass SHA-256 and Git-blob checks. Five
+  relevant SGLang files additionally match the pinned repository tree and decoded
+  local source bytes and contain Apache-2.0 SPDX headers.
+- The completed pilot's 96 request qualifications, 40 measured requests and
+  320 measured tokens reconcile. Client timestamp arithmetic, all eight arm
+  TTFT/E2E medians and phase-width/goodput values, and the two paired ratios per
+  schedule reproduce from the curated records. This is internal-consistency
+  verification, not reauthentication or reconstruction of unpublished raw SSE.
+- All assigned guide/ledger/checklist local links resolve. Manuscript citation
+  keys and label references (including labels generated by the figure macro)
+  resolve at the inspected integration point. `main.tex` differs only inside
+  the abstract; title, preamble and input order are unchanged. Assigned lead
+  prose contains no project paths, temporary artifact labels or source hashes.
+- The scoped Git whitespace check passes. Final LaTeX warnings/boxes, rendered
+  figure/table review, grayscale review and source/PDF correspondence are not
+  established by these checks and remain unchecked.
+
+
+Previously recorded focused CPU validation of the public rendering and platform
+supplement (not rerun as part of this lead/artifact integration):
 
 - Paired archive checker and **29** standard-library archive tests pass on
   Python 3.10.9; the immutable 623-file manifest remains unchanged.
@@ -541,7 +865,10 @@ Focused CPU validation of the current public rendering and platform supplement:
 - Pressure, scoped-overlap and mixed-fault checkers pass; the fault check includes
   its companion figure hashes without rendering that figure.
 
-That is **86 focused tests**, not additional experimental replications. Earlier
+That is **86 previously recorded focused tests**, not additional experimental
+replications. The present integration uses bounded curated-manifest, source-blob,
+citation/reference and documentation checks; it launches no GPU work or build.
+Final LaTeX integration and visual review remain separate checklist gates. Earlier
 qualification/fault/overlap/pressure and HTTP test coverage remains recorded in
 their archive documentation. No GPU query, native build, new platform collection
 or paper build is part of these checks. Figure rendering here reads public data

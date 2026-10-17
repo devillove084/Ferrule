@@ -33,23 +33,27 @@
 \maketitle
 
 \begin{abstract}
-Storage-backed inference must bound temporary weight copies and prevent reuse
-while reads, transfers, or device consumers still hold them. We present
-\system{}, which connects source-bound materialization plans, stage-local
-resource admission, and exact completion evidence to explicit ownership
-through retirement. A bounded next-expert read schedule uses the same worker,
-host and device budgets, and synchronous forward as a blocking control.
-On Qwen3.5-35B-A3B, five paired blocks complete all 120 HTTP requests with
-the prescribed output checks, identical logical reader work, zero wasted read bytes,
-and logical host reservations below 64 MiB. In this configuration, the
-prespecified paired summaries show 8.18\% lower end-to-end latency, 11.24\%
-lower time to first content, and 10.91\% higher qualified serial-window
-goodput with lookahead. Separate cache-budget, profiling, component-failure,
-and HTTP-cancellation experiments clarify the mechanism's resource and
-completion behavior. The five-block estimates are descriptive: shared
-filesystem caches limit independence, logical budgets do not bound the
-complete physical working set, and integrated fault conservation and final
-physical release remain unverified.
+Storage-backed weight residency requires more than a small cache: reads,
+transfers, and device consumers can retain resources after a request or binding
+is logically finished. We present \system{}, an architecture that connects
+source-bound materialization plans, stage-local admission, exact completion
+identity, and ownership through retirement. Its implemented expert path combines
+a persistent bounded read worker, optional next-expert lookahead, and grouped
+synchronous uploads without changing the synchronous forward interface.
+We evaluate a single-device, text-only Qwen3.5-35B-A3B-FP8 profile using
+BF16 execution weights and explicit F32 boundaries. Separate public-CLI
+acceptance checks complete 48 requests; a transfer-policy pilot completes
+96 requests across eight fresh servers, including 40 measured, output-checked
+requests. Grouped uploads improve observed client latency and phase-qualified
+goodput with lookahead, but increase time to first content with blocking reads
+while end-to-end latency remains nearly unchanged. With two pairs per read
+schedule, these are conditional, descriptive benefits rather than a universal
+performance result. An earlier five-pair study separately isolates the effect
+of read scheduling. Quality gates, selected-process profiles, component faults,
+and HTTP cancellation provide complementary evidence about materialization and
+custody. The measurements bound selected logical host and cache accounts, not
+physical RSS, storage traffic, or universal device release; integrated
+five-class conservation and end-to-end fault coverage remain unverified.
 \end{abstract}
 
 \input{sections/introduction}

@@ -1,7 +1,7 @@
 \section{Additional Quality Detail and Separate Evidence}
 \label{sec:historical-chronology}
 
-\subsection{Numerical coverage}
+\subsection{Original numerical coverage}
 For each retained-fresh and ordinary schedule in
 Table~\ref{tab:enabled-quality}, common-history and free-feedback streams each
 cover 27 calls and 9,187,840 vocabulary values; reset covers nine calls and
@@ -72,43 +72,14 @@ continuous occupancy. Historical plots and the detailed timing and memory
 samples remain in the supplementary materials rather than extending the
 current performance evidence.
 
-\subsection{Unmatched resident-system supplement}
+\subsection{Excluded unmatched resident-system observations}
 \label{sec:resident-supplement}
-Two separate resident tensor-parallel blocks compared \system{} with vLLM
-using fresh owners, three excluded QA requests, and five measured requests
-per window. The observed tradeoff differs by metric: \system{} has higher
-output rate and lower mean end-to-end latency in both windows, while vLLM has
-lower TTFT, startup time, sampled device memory, and host PSS
-(Table~\ref{tab:resident-crossblocks}).
-
-\begin{table}[!htbp]
-\centering
-\small
-\begin{tabular}{@{}lrrrrrr@{}}
-\toprule
-Window & Output tok/s & TTFT ms & E2E ms & Startup s & GPU GiB/card & PSS GiB \\
-\midrule
-Ferrule 1 & 14.317 & 176.248 & 523.399 & 349.585 & 21.04 & 61.05 \\
-vLLM 1 & 10.376 & 132.676 & 694.228 & 66.239 & 19.28 & 7.71 \\
-vLLM 2 & 10.330 & 134.651 & 699.213 & 62.814 & 19.28 & 7.32 \\
-Ferrule 2 & 14.804 & 171.333 & 515.106 & 366.133 & 21.04 & 60.14 \\
-\bottomrule
-\end{tabular}
-\caption{Separate resident observations in two blocks. TTFT and end-to-end
-values are request means; GPU memory and PSS are sampled maxima. Arithmetic
-and resource budgets are unmatched, so these are not comparative speedup estimates.}
-\label{tab:resident-crossblocks}
-\end{table}
-
-Both selected deployments use pipeline parallelism one and tensor parallelism
-two, but their arithmetic differs: \system{} uses its qualified Mixed
-GemmEx/routing path, while vLLM uses BF16/FP8 Marlin execution. A 22 GiB
-per-device policy and a device-utilization fraction of 0.8 also do not match
-total working-set budgets. The descriptive output-rate ratios of 1.380 and
-1.433 consequently do not establish a causal speedup or a state-of-the-art
-ranking. The measured vLLM version is 0.28.0 with CUDA 12.9 and Torch 2.13.0.
-Unpaired startup-metadata observations and further numerical comparisons are
-retained with the artifacts and are not combined with these windows.
+Separate tensor-parallel resident observations with vLLM use unmatched
+arithmetic and working-set budgets. They are retained only in the artifact
+documentation and are excluded from all demand-serving denominators and
+comparative speedup claims. Neither the current HTTP pilot nor those
+observations close a matched-baseline gap or establish a state-of-the-art
+ranking.
 
 The independent W8A16 strict numerical comparison fails logits, ordered
 routes, and state checks despite argmax agreement. That negative result

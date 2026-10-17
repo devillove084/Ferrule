@@ -51,9 +51,11 @@ Every claim belongs to exactly one class: free, reserved, provider-in-flight,
 live, or retained. Different claims of one operation may occupy different
 classes. Unknown claims belong to $T_a$; uncertainty does not create a second
 charge. Returning custody can change ownership without reducing $U_a$.
-Release or transfer is an explicit action. This is a semantic invariant of
-the reference contract, not five literal implementation fields or a measured
-integrated conservation proof.
+Release or transfer is an explicit action. This is an intended, conditional
+contract: it requires complete claim coverage and correct owner transitions
+in each declared domain. The tested logical host and device-cache bounds do
+not establish integrated five-class conservation or a complete physical-memory
+bound; the classes are not five literal implementation fields.
 
 \paragraph{Exact evidence before mutation.}
 An event must match the operation, key, stage, generations, and byte contract
@@ -271,16 +273,19 @@ isolation boundary, which these algorithms do not supply.
 \label{sec:bounded-lookahead}
 Algorithm~\ref{alg:bounded-lookahead} describes the implemented synchronous
 expert-operator schedule. A bucket binds an expert to its selected token
-rows; the operator preserves the existing bucket order. Let $H$ be its logical host-staging limit,
-$P_{\max}$ the largest selected expert's packed weights and scales, $M$ the
-metadata allowance, and $S$ the requested worker-stack reservation. Both
-schedules require
+rows; the operator preserves the existing bucket order. Let $H$ be its logical
+host-staging limit, $P_{\max}$ the largest selected expert's packed weights
+and scales, $M$ the
+metadata allowance, and $S$ the requested worker-stack reservation. The
+materialization owner holds one bounded worker across compatible sequential
+read sequences; a sequence does not own a new thread. Both schedules require
 \begin{equation}
  2P_{\max}+M+S\leq H
  \label{eq:host-read-bound}
 \end{equation}
-before starting the worker. The factor two covers packed/prepared coexistence,
-not two permanent expert copies. During execution the charged occupancy is
+before worker creation or reuse. The factor two covers packed/prepared
+coexistence, not two permanent expert copies. During execution the charged
+occupancy is
 \begin{equation}
  C_{\mathrm{host}}(t)=B_{\mathrm{packed}}(t)+B_{\mathrm{prepared}}(t)
                     +M(t)+S(t)\leq H.
@@ -297,10 +302,11 @@ of depth one, and two charged read slots bound the outstanding host work.
 \label{alg:bounded-lookahead}
 \fontsize{9}{9.6}\selectfont
 \begin{algorithmic}[1]
-\REQUIRE ordered selected buckets $\mathcal B$, source-bound plans,
+\REQUIRE materialization owner, ordered selected buckets $\mathcal B$, source-bound plans,
          mode $m\in\{\mathsf{Blocking},\mathsf{Lookahead}\}$, limits $H,M,S$
 \ENSURE unchanged bucket order and device proofs; residual custody retained
-\STATE validate three-artifact plans and Equation~\ref{eq:host-read-bound}; start the same worker
+\STATE validate three-artifact plans and Equation~\ref{eq:host-read-bound}
+\STATE check out the owner's compatible idle worker, or create it on first admission
 \STATE \textbf{State:} at most one next ticket $\tau$, exact deferred error, payload-alias charges
 \FOR{current bucket $b$ in $\mathcal B$}
   \STATE admit and pin current device residency and scratch; validate source
@@ -334,8 +340,11 @@ of depth one, and two charged read slots bound the outstanding host work.
   \STATE submit current computation from resident device handles
   \STATE consume output under its lease; preserve existing fences and retirement
 \ENDFOR
-\STATE on scope end or error, cancel unused reads, drain, and join the original worker
-\STATE retain Unknown and alias-held quota; host join does not discharge device custody
+\STATE on sequence end or error, cancel unused reads and drain original completions
+\STATE release proved read-slot/payload claims; retain surviving alias charges
+\STATE if clean, park worker at owner; otherwise preserve custody through exceptional shutdown
+\STATE normal final owner teardown closes the queue and joins; retain stack charge until actual join
+\STATE preserve any Unknown and its quarantine; host join does not discharge device custody
 \end{algorithmic}
 \end{algorithm}
 
@@ -349,7 +358,19 @@ it does not do so in the paired experiment. Cancellation cannot interrupt an
 already executing synchronous file read. The owner still waits for its
 existing consumer proofs, so the complete forward remains synchronous.
 
-Weak liveness witnesses track prepared allocations without adding payload
-copies. Strong aliases retain quota; after their final retirement, weak
-control blocks and allocator-retained memory can still occupy physical
-memory. Thus quota release and RSS reduction are separate observations.
+Normal sequence completion returns the healthy worker to its materialization
+owner, not to a joined state. Only proved read slots and retired payloads are
+released. Metadata $M$ and requested stack $S$ remain charged while the worker
+is idle. Reuse requires the same image, reader, limits, and schedule, fresh
+source checks, and no surviving payload aliases or unresolved host custody.
+Normal final owner teardown closes the queue and joins outside the admission
+lock. Exceptional worker-side teardown instead retains an original join
+handoff for an off-worker caller. Stack credit requires an actual successful
+join, not thread exit or cancellation. Unknown remains sticky even after a
+later successful drain or fence.
+
+Weak liveness witnesses track prepared payload lifetime without adding copies.
+Strong aliases retain quota, but their retirement is not a physical allocation
+or RSS-release proof: weak control blocks and allocator-retained storage can
+remain. Allocator overhead, page caches, thread-local storage, stack rounding,
+and driver reserves lie outside Equation~\ref{eq:host-logical-charge}.

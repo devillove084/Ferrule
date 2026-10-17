@@ -7,9 +7,14 @@ one CUDA device: pipeline, tensor, and expert parallelism are each one.
 Experts are materialized lazily and KV state remains resident. The Mixed
 profile uses BF16 activations, KV, and convolution state, with F32 accumulation
 and state-space-model state. Checkpoints reside on a shared NFS mount.
-The paired, pressure, profiling, and HTTP-cancellation experiments use the
-same frozen serving executable; the component-fault experiment uses a
-separate small test executable.
+The original five-pair read-scheduling study, its pressure sweep, read--compute
+captures, and HTTP-cancellation experiment share one frozen serving executable.
+The later persistent-worker, grouped-transfer, and HTTP-policy experiments
+are separate experiment families, with separately frozen application and
+control identities (Table~\ref{tab:experiment-families}). They are not
+additional runs of that executable. Component faults use a small test
+executable. The artifact guide records source, binary, and control identities;
+source identity alone does not transfer numerical or performance acceptance.
 
 \paragraph{Platform and observation.}
 The serving experiments use one NVIDIA GeForce RTX 3090 with 24 GiB of
@@ -25,8 +30,9 @@ paired study and 2.276--2.368 s in the pressure study; collection adds time
 to the nominal wait. Whole-lifecycle maxima use 49--54 samples per paired
 arm and 36 per pressure point, not continuous or uniform-rate observations.
 
-Table~\ref{tab:paired-config} gives the paired configuration. The two arms
-change only the read schedule. Both retain the same source checks, arithmetic,
+Table~\ref{tab:paired-config} gives the original five-pair configuration.
+Within that older experiment, the two arms change only the read schedule.
+Both retain the same source checks, arithmetic,
 cache policy, worker, consumer proofs, and synchronous forward. Runtime
 profiling is disabled for ordinary timings; the separate overlap captures
 enable it. Logging is identical between timing arms. No experiment flushes
@@ -80,12 +86,78 @@ acceptance from source identity alone.
 For HTTP requests, we join actual worker-enqueued token IDs to request
 identities, emission ordinals, terminal usage, and complete server-sent-event
 (SSE) responses. IDs are not inferred by retokenizing text. An SSE content
-event is not necessarily a token boundary. Eight-token requests must match
-the frozen ID, text, and usage references; two-token smoke requests check
-length and usage only. The profiled and pressure requests use these same
-output criteria within their stated request sets.
+event is not necessarily a token boundary. In the original serving study,
+eight-token requests must match the frozen ID,
+text, and usage references; two-token smoke requests check length and usage
+only. The original read--compute and pressure requests use those same criteria
+within their stated sets. The later public-CLI acceptance and HTTP-policy pilot
+instead check exact IDs, text, finish reason, usage, and request/EOS semantics
+for all outputs, including the two-token Hello request. EOS stopping remains
+enabled; QA happens to produce eight actual completion tokens, not an
+imputed eight-token normalization.
 
-\subsection{Paired design and prespecified estimator}
+\subsection{Experiment families and estimators}
+Table~\ref{tab:experiment-families} separates numerical gates, whole-test
+engineering timings, serving acceptance, and the later descriptive HTTP
+pilot. Their denominators are never pooled. The model and arithmetic policy
+above are shared scientific controls, not a claim that all stages execute
+the same source or binary.
+
+\begin{table}[!htbp]
+\centering
+\small
+\begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}p{0.24\linewidth}>{\raggedright\arraybackslash}p{0.26\linewidth}>{\raggedright\arraybackslash}X@{}}
+\toprule
+Experiment family & Analysis population & Question and acceptance scope \\
+\midrule
+Original read scheduling & Five pairs; ten lifecycles; 120 requests, 50 measured QA & Blocking versus lookahead on one older frozen executable \\
+Persistent-worker qualification & Nine numerical/lifecycle gates & Worker ownership and reuse; not nine latency replicates \\
+Grouped-transfer qualification & 14 gates: one backend, five model, eight composition & Numerical and contract checks; profiling is separate \\
+Grouped whole-test / profiling & Four elapsed-time pairs per schedule; separate qualified partial profile pair per schedule & Whole-test elapsed and observed process mechanisms, not HTTP TTFT \\
+Public-CLI acceptance & Four policy/schedule cells; 48 requests & Exact serving outputs and reconciled counters; no timing aggregate \\
+HTTP-policy pilot & Eight lifecycles; 96 requests; 40 measured QA / 320 tokens; two pairs per schedule & Grouped versus synchronous within each read schedule \\
+Rejected retained upload & Four whole-test pairs per schedule; separate partial captures & Archived negative alternative; never pooled with grouped transfer \\
+\bottomrule
+\end{tabularx}
+\caption{Distinct experiment families. A gate, request, lifecycle, and pair are
+different units. Successful sub-stages do not turn a failed planned stage
+into a complete experiment. Detailed identities are in the artifact guide.}
+\label{tab:experiment-families}
+\end{table}
+
+\paragraph{Later HTTP-policy pilot.}
+Each arm starts a fresh server and executes 12 serial requests: four initial
+checks, one excluded QA, two QA warmups, and five measured QA requests.
+Within each read schedule $r$, two paired blocks compare synchronous ($S$)
+with grouped synchronous ($G$) transfer; both arms retain equal observed
+logical work and exact outputs. Let $s_{krpj}$ be client send time,
+$c_{krpj}$ the first nonempty SSE content event, $e_{krpj}$ client terminal
+time, and $d_{krpj}$ dispatch time. Define
+\begin{equation}
+\begin{aligned}
+ F_{krp}&=\operatorname{median}_{j=1}^{5}(c_{krpj}-s_{krpj}),\\
+ E_{krp}&=\operatorname{median}_{j=1}^{5}(e_{krpj}-s_{krpj}),\\
+ W_{krp}&=\max_j e_{krpj}-\min_j d_{krpj},\qquad
+ Q_{krp}=\frac{\sum_j n^{\mathrm{qualified}}_{krpj}}{W_{krp}},\\
+ R_{kr,X}&=\frac{X_{krG}}{X_{krS}},\qquad
+ \widetilde R_{r,X}=\operatorname{median}_{k=1,2}R_{kr,X},
+ \quad X\in\{F,E,Q\}.
+\end{aligned}
+\label{eq:http-policy-estimator}
+\end{equation}
+Here $n^{\mathrm{qualified}}$ counts actual reference-qualified completion
+tokens. TTFT is client first \emph{nonempty content}, not first GPU-token
+latency. Phase $W$ includes inter-request gaps and failures; qualification
+requires the entire lifecycle and both paired arms, rather than dropping
+unsuccessful slots. All observed measured completions contain eight tokens.
+The analysis unit is the paired block, not the 40 measured requests.
+The median of two ratios is their arithmetic mean, not a median-log estimate.
+We show both pair points and no confidence intervals or significance test.
+Startup is excluded. The separate serialized service rate
+$40/\sum_j(e_{krpj}-s_{krpj})$ excludes gaps and must not be called phase-wide
+goodput. Neither rate measures concurrent serving throughput.
+
+\paragraph{Original read-scheduling estimator.}
 Five paired blocks use the fixed order B--L, B--L, L--B, L--B, B--L, where
 B is blocking and L is lookahead. Each arm starts a fresh server and executes
 12 requests: four initial checks, one excluded QA request, two QA warmups,
@@ -116,7 +188,7 @@ enumerates all $5^5=3{,}125$ ordered paired-block resamples and exponentiates
 the median log ratios at nearest ranks 79 and 3047. It does not treat
 individual requests as independent replicates.
 
-\subsection{Complementary experiments and observation scope}
+\subsection{Original complementary experiments and observation scope}
 Three fresh blocking lifecycles jointly vary cache entries and byte ceilings
 in fixed order: 8 entries/64 MiB, 64/320 MiB, and 128/640 MiB. Each executes
 one two-token smoke and three eight-token canaries: QA, arithmetic, and
@@ -138,8 +210,8 @@ in the same process.
 The measurements answer different questions rather than composing into one
 universal guarantee. Logical charges are not RSS or certified physical peaks;
 shared NFS counters are not request-exclusive backend traffic; and component
-failure checks are not full-model fault conservation. The timing estimate is
-descriptive at $n=5$: shared cache state leaves cross-block independence
+failure checks are not full-model fault conservation. The original scheduling estimate is
+descriptive at $n=5$; the later policy pilot has only two pairs per schedule: shared cache state leaves cross-block independence
 unestablished, so its ranges are not guaranteed-coverage confidence intervals
 or significance tests. Table~\ref{tab:evidence} consolidates the main
 availability limits; the results below retain each measurement's units and
@@ -154,7 +226,7 @@ Question & Available evidence & Not established \\
 \midrule
 RQ1 & Numerical factory checks; HTTP/ID checks; logical high-waters; device and host samples & Total physical peak, physical admission at each cache point, capacity frontier, storage necessity \\
 RQ2 & Logical reader/upload counters; request process-I/O snapshots; shared NFS deltas & Startup/shutdown process-I/O deltas, request-exclusive network or backend-disk bytes \\
-RQ3 & Five paired timing blocks; two scoped read/kernel captures & Statistical significance, global trace completeness, physical storage-service overlap, critical-path causality \\
+RQ3 & Older five-pair scheduling study; later two-pair/schedule HTTP policy pilot; separate scoped captures & Statistical significance, global trace completeness, physical storage-service overlap, critical-path causality \\
 RQ4 & Four real-CUDA component cells; full-model HTTP cancellation and new-request recovery & Hardware/driver faults, integrated five-class conservation, full-model Unknown recovery, final physical release \\
 \bottomrule
 \end{tabularx}
@@ -167,18 +239,61 @@ unknown rather than becoming a zero or a guarantee.}
 \label{sec:evaluation}
 \label{sec:core-rqs}
 
-The results separate bounded completion, logical I/O demand, scheduling
-behavior, and failure handling. Each comparison retains its own workload
-and observation scope.
+The current engineering evidence supports persistent read ownership and
+bounded grouped transfer, but not a uniform latency improvement. We report
+those results separately from the older read-scheduling contrast, logical
+I/O observations, and failure experiments. Each comparison retains its own
+workload, acceptance criteria, and observation scope.
 
 \subsection{RQ1: Bounded completion and cache-budget sensitivity}
 \label{sec:rq1}
 \label{sec:current-quality}
-All 120 requests in the paired study complete under the declared accounting
+\paragraph{Persistent ownership and grouped qualification.}
+The later persistent-worker stage passes all nine gates. Both schedules
+create one worker, with 159 reuses in the full 40-layer check and 2,559 in
+each fresh-state and no-observer check. The observed live-idle charge is
+10 MiB (8 MiB metadata plus 2 MiB requested stack). Zero joins in those
+still-live snapshots do not establish final-owner join or physical release.
+Grouped-transfer qualification separately passes all 14 gates: one backend,
+five model, and eight composition gates under the same numerical tolerance
+and required exact comparisons. These are quality/lifecycle tests, not
+additional serving observations or elapsed-time replicates.
+
+Public-CLI acceptance covers all four read-schedule/transfer-policy cells:
+48 of 48 requests match exact IDs, text, finish reason, and usage, with
+reconciled request windows. The later HTTP pilot separately completes eight
+lifecycles and all 96 requests, including all 40 measured QA requests and
+320 actual measured completion tokens. All 96 outputs meet the exact serving
+reference and EOS/payload contract; none is failed, censored, or unissued.
+This does not imply that logits or routes were observed through HTTP.
+
+\begin{table}[!htbp]
+\centering
+\small
+\begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}Xrr@{}}
+\toprule
+Logical host quantity & Bytes & MiB \\
+\midrule
+Original baseline / later grouped peak & 16,777,984 & 16.0007 \\
+Rejected retained alternative peak / reservation & 36,701,896 & 35.0017 \\
+Later persistent-worker live idle & 10,485,760 & 10 \\
+Declared host quota & 67,108,864 & 64 \\
+\bottomrule
+\end{tabularx}
+\caption{Logical capacities, not RSS, allocator, memlock, or continuous physical
+peaks. Equal baseline/grouped values are separate observations, not pooled
+samples. The rejected alternative requires extra reservation; it is not the
+production design. Live idle includes retained worker metadata and requested
+stack, not proof of a final join.}
+\label{tab:current-host-capacity}
+\end{table}
+
+\paragraph{Original bounded-completion study.}
+All 120 requests in the original five-pair study complete under the declared accounting
 limits, and all three cache-budget points complete their separate four-request
 workloads. The numerical checks for the paired configuration also satisfy
-their acceptance criteria in all nine factory tests
-(Table~\ref{tab:enabled-quality}). These observations establish bounded
+their acceptance criteria in its original nine factory tests
+(Table~\ref{tab:enabled-quality}), distinct from the later worker gates. These observations establish bounded
 completion at the tested settings, not a minimum feasible capacity.
 
 \begin{table}[!htbp]
@@ -195,20 +310,20 @@ Cold owner & 2 & 1,809 & 3,228,160 & 28 fingerprints match current reference/con
 Constructor & 1 & --- & 128 total & Four cells, each with 32 finite values and six verified reads \\
 \bottomrule
 \end{tabularx}
-\caption{Factory quality checks for the paired serving configuration.
+\caption{Original factory quality checks for the older paired serving configuration.
 Two-test rows contain one test per schedule. Vocabulary counts for stateful
 rows describe common-history comparisons, not every checked stream.
 Ordinary-execution route and state metrics are unobserved.}
 \label{tab:enabled-quality}
 \end{table}
 
-The serving study has ten completed lifecycles, 110 exact eight-token oracle
+The original serving study has ten completed lifecycles, 110 exact eight-token oracle
 matches, and ten length/usage-only smoke checks. All 900 generated IDs join
 to successful HTTP terminal evidence. Failed, censored, and unissued request
 counts are zero. The 50 measured QA requests remain the latency subset;
 quality checks do not increase the number of paired replicates.
 
-Every paired lifecycle reaches the same logical host high-water:
+Every original paired lifecycle reaches the same logical host high-water:
 \begin{equation}
  2(3{,}146{,}112)+8{,}388{,}608+2{,}097{,}152
  =16{,}777{,}984<67{,}108{,}864\ \text{bytes}.
@@ -251,8 +366,9 @@ increased residency, but neither read reduction nor a physical capacity frontier
 
 \subsection{RQ2: Equal logical demand and limited storage attribution}
 \label{sec:rq2}
-Blocking and lookahead perform identical observed logical reader work in
-every paired lifecycle, while the available filesystem observations do not
+In the original five-pair study, blocking and lookahead perform identical
+observed logical reader work in every paired lifecycle, while the available
+filesystem observations do not
 identify physical backend traffic. For request $q$, let $\mathcal V_q$ be
 its anchored decoder invocations and define
 \begin{equation}
@@ -307,7 +423,10 @@ logical reads but insufficient to attribute service to a physical NAS device.
 Request-boundary process-I/O observations comprise 240 identity-bound
 snapshots and 120 deltas. Corresponding startup/shutdown process-I/O snapshots
 and startup logical-reader totals were not collected. Neither the zero client
-deltas nor fresh process lifecycles establish storage-cold behavior.
+deltas nor fresh process lifecycles establish storage-cold behavior. The later
+HTTP-policy observations likewise include zero shared-client READ-RPC deltas
+and process \texttt{rchar} observations, not request-exclusive physical NAS
+traffic. OS page-cache service is not cold-filesystem or backend-disk evidence.
 
 \paperplot{figures/paired-read-accounting.pdf}
 {Logical work and memory observations for all ten paired lifecycles. Both
@@ -320,9 +439,91 @@ delta, with 2,093,056 bytes outside individual request windows. Shared-client
 counters do not measure request-exclusive backend traffic.}
 {f:paired-accounting}
 
-\subsection{RQ3: Less waiting and scoped read--compute overlap}
+\subsection{RQ3: Policy effects, mechanisms, and the older scheduling contrast}
 \label{sec:rq3}
-Lookahead reduces median host demand waiting and client end-to-end latency
+\paragraph{Current HTTP-policy pilot: a mixed outcome.}
+Figure~\ref{fig:current-http-outcomes} compares grouped with synchronous
+transfer \emph{within} each read schedule using
+Equation~\ref{eq:http-policy-estimator}. Blocking has median paired ratios
+1.049610928 for client TTFT (\textbf{4.96\% regression}), 0.995661998 for
+E2E (0.43\% lower, approximately flat), and 1.037363952 for phase-qualified
+goodput (3.74\% higher). Lookahead ratios are 0.915281371 for TTFT (8.47\%
+lower), 0.926627716 for E2E (7.34\% lower), and 1.065190254 for
+phase-qualified goodput (6.52\% higher). Both pair points remain visible;
+$n=2$ per schedule does not support significance or a robust optimal-policy
+claim. The serialized-service paired ratios, 1.039273072 and 1.069921443,
+are different quantities and are not substituted for phase goodput.
+
+\paperplot{figures/current-http-outcomes.pdf}
+{Later HTTP-policy pilot: grouped/synchronous ratios within blocking and
+lookahead, not the older lookahead/blocking comparison. Circles and triangles
+show the two pair ratios; black diamonds show their arithmetic median.
+Dashed lines mark no change. Client TTFT ends at first nonempty SSE content,
+E2E at client terminal, and phase-qualified goodput includes inter-request
+gaps. Blocking TTFT regresses by 4.96\%. Eight lifecycles contain 96 requests;
+only 40 QA requests (320 actual tokens) are measured. The analysis unit is
+the pair, with two pairs per schedule; no interval or significance is claimed.}
+{fig:current-http-outcomes}
+
+\paragraph{Grouped mechanism, not a causal timing decomposition.}
+Separately qualified partial process captures for both schedules observe
+382,743 native \texttt{cuStreamSynchronize} calls for synchronous transfer
+versus 257,163 for grouped: $-125{,}580/25{,}116=-5$ calls per logical cache
+upload (Figure~\ref{fig:current-transfer-mechanism}a). Each pair retains equal
+ordered logical work and output fingerprints. Observed H2D counts and bytes
+are unchanged at 195,985 copies and 82,512,273,944 bytes, and observed kernel
+names/counts match (409,411 kernel rows). Normalizing process totals by
+25,116 logical uploads does not isolate an expert range or its elapsed cost.
+Native host-duration sums cannot be interpreted as causal client-latency gains.
+
+Blocking and lookahead captures use separate observer-control stages but the
+same frozen application; each qualified pair uses a common control within
+its own stage. The original four-capture stage remains failed; the later
+qualified lookahead pair does not repair its rejected capture or create a
+single successful four-capture stage. These are selected-model,
+process-wide partial observations, not full traces. Drop counts remain
+unknown, not zero, and absence of an API row is not evidence of zero calls.
+
+The earlier grouped whole-test comparison has eight unprofiled pairs (four
+per schedule), with grouped/synchronous median elapsed ratios 0.96133 and
+0.96110, approximately 3.9\% lower. Its planned profiling stage failed;
+it is not a 24/24 success. Libtest elapsed includes construction, checks,
+I/O, and teardown: it is neither TTFT nor request latency, and is not pooled
+with the HTTP pilot or profiled durations.
+
+\paragraph{Rejected retained-upload alternative.}
+The archived alternative is slower in all eight whole-test pairs: median
+retained/synchronous ratios are 1.5451 for blocking and 1.5649 for lookahead
+(54.51\% and 56.49\% more elapsed time). Separate partial captures observe
+host-pin allocations and frees increasing from two to 25,118 each, with
+extra pin/free host-duration sums of approximately 29.85 s and 29.47 s
+(Figure~\ref{fig:current-transfer-mechanism}b). These sums may overlap and
+are not an exclusive causal explanation of the unprofiled regression.
+The negative data remain archived; retained upload is removed from the
+production design, not recommended as its implementation.
+
+\paperplot{figures/current-transfer-mechanism.pdf}
+{Separate mechanism observations. (a) Qualified partial grouped/synchronous
+process pairs, one per read schedule: native stream-sync counts normalized
+by 25,116 logical uploads fall by five calls/upload, while observed H2D work
+and kernel counts match. (b) The older, rejected retained/synchronous
+alternative adds 29.850 s (blocking) and 29.469 s (lookahead) of summed host
+pin/free API duration; each allocation/free count rises from two to 25,118.
+Panels use separate frozen experiments, not a common timing baseline or
+additive critical-path decomposition. Both are partial process observations;
+full-trace completeness and dropped-event counts remain unknown.}
+{fig:current-transfer-mechanism}
+
+The post-cleanup production choice is conservative: synchronous transfer
+with blocking reads, grouped synchronous with lookahead. The frozen pilot
+contains all four policy/schedule cells needed for the ablation; it does
+not measure the later cleanup or establish a causal optimum. Eight-token
+outputs do not establish sustained decode, token-aligned ITL, long-output,
+or concurrent-serving performance.
+
+\paragraph{Older five-pair read-scheduling contrast.}
+On its original frozen executable, lookahead reduces median host demand
+waiting and client end-to-end latency
 in all five paired blocks. The prespecified summaries are 8.18\% lower
 end-to-end latency, 11.24\% lower TTFT, and 10.91\% higher qualified
 serial-window goodput (Table~\ref{tab:paired-results} and
@@ -340,7 +541,7 @@ Client TTFT & 0.88755 & $-11.24\%$ & [0.86004, 0.94888] \\
 Qualified serial-window goodput & 1.10908 & $+10.91\%$ & [1.07393, 1.13498] \\
 \bottomrule
 \end{tabular}
-\caption{Five-block paired estimates from Equation~\ref{eq:paired-estimator}.
+\caption{Older five-block read-scheduling estimates from Equation~\ref{eq:paired-estimator}.
 Ranges are descriptive block-resampling endpoints, not significance tests or
 guaranteed-coverage confidence intervals.}
 \label{tab:paired-results}
@@ -380,7 +581,7 @@ latency with lookahead. These host measurements establish an association,
 not a causal critical-path decomposition or hardware-overlap result.}
 {f:paired-read-wait}
 
-\paragraph{Direct overlap observation.}
+\paragraph{Original direct overlap observation.}
 The separate profiled lookahead request has 174.409210 ms of reader-envelope
 intersection with expert kernels, but only 0.751507 ms of positioned-read
 wall-time intersection; blocking has zero observed intersection in both
@@ -443,6 +644,8 @@ unverified. File-call wall time does not establish physical NAS-service overlap.
 
 \subsection{RQ4: Abort, uncertain custody, and HTTP cancellation}
 \label{sec:rq4}
+The original component and cancellation experiments retain their own frozen
+configuration; they do not qualify later transfer-policy fault paths.
 Clean component failures preserve committed state and permit a checked retry;
 withheld completion proof instead retains device charges and blocks unsafe
 reuse. Separately, a real HTTP disconnect reaches a cancelled worker outcome,
@@ -521,7 +724,7 @@ Equation~\ref{eq:credit-conservation}; integrated serving conservation under
 faults remains unverified.
 
 \subsection{Reproducibility}
-The supplementary materials contain the frozen configurations, request
+The supplementary materials contain family-specific frozen configurations, request
 references, provenance inventories, public measurement projections, and
 offline checkers. They reconstruct all paired arms, token-to-response joins,
 logical counters, shared-client observations, and descriptive resamples, as
@@ -530,4 +733,21 @@ inputs derive from those records. Appendix~\ref{sec:historical-chronology}
 explains why earlier incomplete studies and unmatched supplements do not
 contribute to the reported denominators. The accompanying artifact guide
 maps each result to its inputs and checks, distinguishing public offline
-verification from rebuilding or rerunning with external artifacts.
+verification from rebuilding or rerunning with external artifacts. The current
+CPU figure renderer checks pinned canonical JSON, exact HTTP references and
+raw receipt hashes, the four acceptance stats snapshots, pair denominators,
+and the recorded rendering/font environment without changing the older
+five-pair renderer. Raw local traces, binaries, and checkpoint payloads are
+not made public merely by publishing their hashes.
+
+\paragraph{Limits and conditional claims.}
+The evidence supports these tested workloads and source-bound configurations,
+not a universal resource or performance guarantee. Logical charge is not
+physical peak memory, a fresh server is not cold NFS, and process drain is
+not final-worker-join or universal CUDA-release proof. Conditional lifetime
+proofs retain their stated source-identity and completion-authority
+assumptions. Component withheld-proof checks do not establish full-model
+Unknown recovery, and acceptance does not transfer to an unmeasured source
+configuration. Neither unmatched resident observations nor the HTTP pilot
+close the matched-vLLM comparison gap or establish a state-of-the-art
+ranking. Other models remain untested.

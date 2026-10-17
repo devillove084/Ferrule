@@ -10,34 +10,53 @@ PowerInfer-2~\cite{xue2024powerinfer2} targets smartphone inference beyond
 resident capacity using neuron clusters, segmented caching, and an
 I/O/computation pipeline. These systems establish weight streaming and
 transfer/computation scheduling as prior work. \system{} focuses on the
-contract that links each materialization stage to its resource claims,
-completion identity, and eventual reuse.
+contract linking each materialization stage to its source identity, resource
+claims, completion evidence, and eventual reuse.
+
+\paragraph{Demand-loaded expert caches.}
+The inspected SGLang source includes a specialized expert-pack loader and
+runtime cache~\cite{sglang2026expertpack}. Cache misses issue storage reads into
+staging slots, followed by event-gated host-to-device copies; preparation of
+the packed representation does not eliminate those runtime reads. The loader
+and argument checks restrict this path to DeepSeek-V4 Flash and text-only
+Kimi-K3, require unit tensor, data, and expert parallelism, and disable CUDA
+graphs and shared-expert fusion. These are boundaries of the inspected path,
+not claims about every SGLang configuration or future version. We neither ran
+this path nor established its release inclusion, numerical qualification, or
+relative performance. Its source demonstrates that storage-backed expert
+loading is not unique to \system{}; equivalent failure-custody guarantees
+have not been exhaustively audited in either direction.
 
 \paragraph{Resident offload and state management.}
 PowerInfer~\cite{song2023powerinfer} exploits activation locality by executing
 hot neurons on a GPU and cold neurons on a CPU. This resident-domain hybrid
-differs from PowerInfer-2's storage pipeline. vLLM's
-PagedAttention~\cite{kwon2023pagedattention} addresses serving KV memory through
-paged allocation; it is relevant to state lifetime but is not the same
-operation as request-time weight materialization. A fair comparison must
-specify the representation, physical memory pools, arithmetic, and quality
-criterion. The separate resident vLLM observations in
-Appendix~\ref{sec:resident-supplement} do not match those conditions and are
-not used to estimate a comparative speedup.
+differs from PowerInfer-2's storage pipeline. The inspected CPU-weight-offload
+paths in vLLM use host-resident weights, including unified virtual addressing;
+they should not be equated with disk-backed weight materialization.
+vLLM's PagedAttention~\cite{kwon2023pagedattention} addresses serving KV memory
+through paged allocation. KV offload, whether to host memory or storage,
+concerns a different object from checkpoint-weight demand. A fair performance
+comparison must match representation, arithmetic, physical memory pools,
+workload, and quality criterion. The unmatched resident-system observations
+preserved with the artifacts do not satisfy those conditions and support no
+comparative speedup or ranking here.
 
 \paragraph{Scheduling and lifetime.}
 An asynchronous interface, an independent progress worker, and hardware
-overlap are distinct properties. The comparison in this paper holds worker,
-representation, and resource limits fixed, then changes when one next-expert
-read is submitted. Client timing measures the resulting behavior; correlated
-file-call and kernel intervals separately measure observed overlap. Neither
-the presence of a worker nor an intersection of broad host ranges is used as
-a substitute for device activity.
+overlap are distinct properties. The earlier read-scheduling comparison holds
+worker, representation, and resource limits fixed, then changes when one
+next-expert read is submitted. The transfer-policy comparison instead holds
+the read schedule fixed and changes upload grouping. Client timing measures
+the resulting behavior; correlated file-call and kernel intervals separately
+measure observed read--compute overlap. Selected-process API counts quantify
+observed synchronization calls, not a complete causal decomposition. Neither
+a worker, a broad host-range intersection, nor fewer synchronization calls
+alone establishes device overlap or faster serving.
 
 \begin{table}[!htbp]
 \centering
 \small
-\begin{tabularx}{\linewidth}{@{}p{0.20\linewidth}XX@{}}
+\begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}p{0.20\linewidth}>{\raggedright\arraybackslash}X>{\raggedright\arraybackslash}X@{}}
 \toprule
 System & Resource focus & Principal mechanism \\
 \midrule
@@ -45,11 +64,13 @@ FlexGen & GPU, CPU, disk & Tensor placement, batching, compression \\
 ZeRO-Inference & CPU or NVMe to GPU & Layer streaming and prefetch \\
 PowerInfer & GPU--CPU residency & Hot/cold neuron execution \\
 PowerInfer-2 & Smartphone memory/storage & Neuron clusters and I/O pipeline \\
-vLLM & Serving KV residency & PagedAttention \\
+SGLang expert pack & Storage to GPU expert cache & Demand reads, staging, event-gated copies \\
+vLLM & Serving KV residency; host-weight offload & PagedAttention; separate resident offload paths \\
 \bottomrule
 \end{tabularx}
-\caption{Comparison by the mechanisms described in the cited sources,
-not by matched performance measurements.}
+\caption{Mechanism-level positioning from the cited papers and inspected source.
+The SGLang entry concerns its specialized expert-pack path, not all adapters.
+These are not matched performance measurements.}
 \label{tab:prior-work}
 \end{table}
 
@@ -57,6 +78,8 @@ not by matched performance measurements.}
 admission, publication, and retirement, together with measurements that keep
 logical and physical observations separate. We have not exhaustively audited
 the custody or failure semantics of the systems above and do not claim that
-they lack equivalent mechanisms. The empirical contribution is the controlled
-comparison and its explicit resource and completion scope, not a first-system
-or state-of-the-art claim.
+they lack equivalent mechanisms. Model-registry entries and architectural
+capability are not substitutes for qualified execution: in particular,
+\system{} has no tested DeepSeek-V4 serving result. The empirical contribution
+is controlled internal comparisons and their explicit resource and completion
+scope, not a first-system or state-of-the-art claim.

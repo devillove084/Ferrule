@@ -7,68 +7,89 @@ reduce device residency, but a small cache alone does not bound the resources
 used to fill it. A read may retain host buffers, an upload may outlive its
 caller, and an evicted binding may still have device consumers. Releasing a
 logical request therefore does not necessarily make its capacity reusable.
-The central problem is to coordinate materialization and physical lifetime
-under explicit resource limits.
+The central problem is to coordinate weight materialization, resource admission,
+and ownership through the last consumer.
 
 Weight streaming and prefetch are established techniques in systems such as
 FlexGen, ZeRO-Inference, and PowerInfer-2~\cite{sheng2023flexgen,deepspeed2022zeroinference,xue2024powerinfer2}.
-\system{} studies a complementary question: how can a bounded materialization
-schedule preserve source identity, accounting, and safe reuse across normal
-completion, cancellation, and uncertain completion? We separate three
-properties that are often conflated: a configured resource budget, a measured
-physical working set, and evidence that a particular operation has finished
-using its resources.
+SGLang also provides a specialized storage-backed expert path in the inspected
+source~\cite{sglang2026expertpack}.
+\system{} addresses a complementary architectural question: how should a
+materialization schedule bind source identity, stage-local accounting, and
+completion evidence so that capacity is not reused prematurely? We distinguish
+three properties that are often conflated: a configured resource budget, a
+measured physical working set, and evidence that a particular operation has
+finished using its resources. Neither storage offload itself nor performance
+leadership is the claimed novelty.
 
 The design follows \emph{plan, admit, materialize, publish, execute, retire}.
 A frozen plan identifies the source and destination generations. Admission
 acquires the claims required by each stage. Completion validates the exact
-operation before publication, while the physical owner retains buffers and
-charges until the relevant consumers finish. If completion cannot be proved,
-the owner retains the uncertain resources instead of treating an error or
-cancellation as permission to reuse them.
+operation before publication, while the owner retains buffers and charges
+until the relevant consumers finish. If completion cannot be proved, the
+intended discipline retains uncertain resources instead of treating an error
+or cancellation as permission to reuse them. The resulting conservation model
+is conditional on complete ownership and transfer rules; the serving evidence
+observes selected host and expert-cache accounts, not every class in an
+integrated system-wide ledger.
 
-The concrete scheduling mechanism is deliberately small. After uploading the
-current routed expert, the operator can submit one read for the next selected
-expert before submitting current computation. The blocking control uses the
-same read worker but waits immediately at demand. Neither schedule changes
-expert order, arithmetic, cache policy, or the synchronous forward interface.
-This comparison isolates a scheduling choice without weakening the resource
-or completion contract.
+The implemented expert path separates read scheduling from transfer policy.
+A persistent worker serves bounded checkpoint-read slots. The blocking schedule
+waits at demand; lookahead submits one next-expert read before current expert
+computation. Independently, grouped synchronous transfer batches the expert's
+weight and scale copies behind one upload completion boundary. Both choices
+preserve the expert order, arithmetic, and synchronous forward interface.
+Worker lifetime, payload lifetime, upload completion, and device-consumer
+retirement remain distinct: an idle live worker can still own charged metadata
+and stack capacity.
 
 \paragraph{Contributions.}
 \begin{enumerate}
-  \item A resource and ownership model that distinguishes logical admission
-  limits from physical memory, and producer completion from consumer retirement.
+  \item An architecture for bounded storage-backed weight residency that connects
+  source identity, stage-local admission, publication, and retirement, while
+  distinguishing logical accounting from physical memory and producer completion
+  from consumer quiescence.
   \item Reference algorithms for exact materialization and bounded cleanup,
-  together with an implemented, bounded next-expert schedule for a private
-  model-operator path.
-  \item An evaluation connecting output checks, resource accounting, logical
-  I/O, client outcomes, correlated profiling, and scoped failure behavior.
+  together with an implemented persistent read worker, bounded next-expert
+  scheduling, and grouped synchronous expert uploads.
+  \item A profile-scoped evaluation linking numerical and HTTP output checks,
+  logical work and resource accounts, client timing, selected-process profiling,
+  and component-failure and cancellation behavior, including negative results.
 \end{enumerate}
 
 \paragraph{Research questions.}
 \begin{description}
   \item[RQ1: Bounded completion.] Can requests complete under the declared
-  limits, and how does residency change across coupled cache budgets?
+  accounting policies, and how does residency change across coupled cache budgets?
   \item[RQ2: I/O demand.] What work reaches the logical reader and shared
   filesystem client, and which physical traffic remains unknown?
-  \item[RQ3: Scheduling.] Does bounded lookahead reduce waiting and client
-  latency, and what read--compute overlap is directly observed?
+  \item[RQ3: Scheduling and transfer.] How do read scheduling and upload grouping
+  affect observed waiting, synchronization, and client outcomes?
   \item[RQ4: Failure and custody.] What resources and state remain after
   clean abort, uncertain completion, and HTTP cancellation?
 \end{description}
 
-For the evaluated single-device text profile, five paired blocks show 8.18\%
-lower client end-to-end latency, 11.24\% lower time to first content, and
-10.91\% higher qualified serial-window goodput with lookahead. All blocks
-show lower host demand waiting, with equal logical reader work and no wasted
-read bytes. These results concern one configuration and short fixed outputs;
-they establish neither statistical significance nor performance leadership.
-The evidence boundaries are consolidated in Table~\ref{tab:evidence}.
+The core serving workload uses Qwen3.5-35B-A3B-FP8 through the public CLI,
+with BF16 execution weights and explicitly defined F32 boundaries, not a
+full-model W8A16 quality claim. Four acceptance servers complete 48 checked
+requests. A separate grouped-versus-synchronous transfer pilot completes eight
+fresh server lifecycles and 96 requests, including 40 measured eight-token
+quality checks. With lookahead, grouped uploads reduce observed client latency
+and increase phase-qualified goodput; with blocking reads, time to first content
+regresses despite nearly unchanged end-to-end latency. There are only two
+pairs per read schedule. An earlier five-pair read-scheduling study instead
+compares blocking with lookahead under its own fixed implementation, finding
+less demand waiting and lower observed client latency with equal logical reads.
+These are separate comparisons, not a pooled population or evidence of a
+universal improvement.
 
+The evaluation establishes neither a physical capacity frontier nor a matched
+external-system ranking. DeepSeek-V4 end-to-end execution is untested;
+architecture-level applicability does not qualify another model adapter.
+Table~\ref{tab:evidence} consolidates the measurement boundaries.
 Section~\ref{sec:scope} defines the model and assumptions.
 Section~\ref{sec:design} develops the mechanisms and algorithms, and
 Section~\ref{sec:implementation} maps them to the implemented path.
 Section~\ref{sec:eval-setup} fixes the methodology before
 Section~\ref{sec:evaluation} answers the four questions. Related work,
-limitations, and a concise account of separate evidence follow.
+limitations, and separate historical evidence follow.

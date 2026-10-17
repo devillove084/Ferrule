@@ -1,15 +1,20 @@
 \section{Implementation}
 \label{sec:implementation}
 
-\subsection{Private model-operator path}
+\subsection{Capability-scoped resource owners}
 \label{sec:implemented-read-path}
-The evaluated Mixed-precision model path implements Algorithm~\ref{alg:bounded-lookahead}
-inside its private CUDA expert operator. It does not instantiate the general
-runtime resource manager or materialization registry for these expert reads.
-Its local owners implement source validation, host quota, device-cache
-admission, and consumer completion. Algorithms~\ref{alg:normal-materialization}
-and~\ref{alg:terminal-custody} provide reference contracts for reasoning about
-these responsibilities, not a claim of one universal call path.
+The model-neutral decoder binds immutable parameter descriptors to a
+materializer, expert provider, and execution operators. The materializer owns
+source validation and host quota; the CUDA leaf owns device-cache admission,
+scratch, uploads, and consumer completion. Capability checks select compatible
+read and transfer mechanisms rather than model-specific materialization
+factories. The full-model evidence covers Qwen3.5 only, not DeepSeek-V4.
+
+This private expert path implements Algorithm~\ref{alg:bounded-lookahead}
+without instantiating the general runtime resource manager or materialization
+registry for these reads. Algorithms~\ref{alg:normal-materialization}
+and~\ref{alg:terminal-custody} are reference contracts for its responsibilities,
+not one universal call path.
 
 The checkpoint catalog records tensor descriptors and ordered file extents.
 A read plan binds filesystem identity using device, inode, length, modification
@@ -20,13 +25,20 @@ shape, and extent metadata rather than authenticating every payload byte.
 The worker receives neither CUDA handles nor cache leases or runtime
 continuations.
 
-Both schedules explicitly enable this worker. Blocking submits required
-demand and waits; lookahead carries one exact next ticket across current
-compute submission. After upload, the operator computes from resident device
-handles and immutable binding metadata, allowing temporary host aliases to
-retire before the next read. Kernel mathematics, selected expert order, and
-completed-only cache replacement remain unchanged. A pipeline-disabled path
-would not be an equivalent control.
+Both compared schedules enable the same owner-held worker. Blocking submits
+required demand and waits; lookahead carries one exact next ticket across
+current compute submission. The first admitted sequence creates the worker;
+clean later sequences reuse it without resetting identities or source
+snapshots. Sequence completion drains unused reads and releases proved
+payload/read-slot claims, but does not join. Timing boundaries and warmup
+exclusions remain those declared for each experiment; reuse implies no extra
+warmup procedure.
+
+After upload, computation borrows resident device handles and immutable
+binding metadata, so temporary host aliases can retire before the next read.
+Kernel mathematics, selected expert order, and completed-only cache
+replacement are unchanged. A pipeline-disabled path is not an equivalent
+blocking control.
 
 \begin{table}[!htbp]
 \centering
@@ -36,9 +48,10 @@ would not be an equivalent control.
 Responsibility & Evaluated implementation & Boundary \\
 \midrule
 Source binding & Immutable catalog and ordered positioned-read plans & Metadata identity, not payload authentication \\
-Host materialization & One worker; packed and prepared quota held through aliases & Logical reservation, not process-memory limit \\
+Host materialization & One persistent worker; packed/prepared quota held through aliases & Idle metadata and stack remain charged \\
 Device residency & Private expert-cache owner, scratch admission, retained CUDA proofs & Separate from host read quota \\
 Scheduling & One next-expert ticket before current compute submission & Synchronous forward remains unchanged \\
+Transfer & Six pageable copies; grouped policy shares one exact stream fence & No pinned numeric-upload ticket or async guarantee \\
 State lifetime & Prepared state, exact installation acknowledgment, retirement & Request completion can retain KV and weight residency \\
 Observation & Passive counters, token records, owner snapshots, separate profiler & Observation does not refund or repair custody \\
 \bottomrule
@@ -47,30 +60,63 @@ Observation & Passive counters, token records, owner snapshots, separate profile
 \label{tab:implementation-map}
 \end{table}
 
-The principal configuration uses a 64 MiB host limit containing 8 MiB of
-metadata and 2 MiB of requested stack reservation. The remaining 54 MiB is
-split equally between packed and prepared payload quota. Device cache and
-scratch are separately accounted. Prepared payload charges survive escaped
-weight or scale aliases. Passive snapshots report mode, read counts, waits,
-payload charges, join state, and retained uncertainty without changing them.
-Allocator detail is omitted from passive snapshots when obtaining it would
-poll retirement fences.
+The principal configuration uses a 64 MiB logical host limit, including
+8 MiB metadata and 2 MiB requested stack; the remaining 54 MiB is split
+equally between packed and prepared quotas. With $P_{\max}=3{,}146{,}112$
+bytes, Equation~\ref{eq:host-read-bound} gives 16,777,984 bytes, matching the
+observed logical peak in the synchronous and grouped HTTP arms. Their idle
+live-owner charge remains 10,485,760 bytes, not zero. Device cache and scratch
+are separate domains; these charges do not bound total RSS.
+
+Passive snapshots report reads, waits, charges, join state, and uncertainty
+without refunding or repairing custody. Final owner teardown, rather than
+sequence completion, owns the actual join. The full-model reports expose no
+post-owner-drop join witness. Process reaping and idle-device observations do
+not supply that witness or certify physical memory release.
+
+\subsection{Synchronous expert transfer and serving policy}
+The baseline uploads three numeric expert projections using six pageable
+copies, each with its explicit completion fence. Grouped synchronous upload
+uses the same six copies and source representation, but one exact
+compute-stream fence covers the successful group. All six destinations and
+immutable source aliases enter custody before the first possibly submitting
+copy. There is no extra pinned allocation, concatenation buffer, upload
+event, or polling ticket. A failed proof retains the group and source charge
+and quarantines the owner; later proof cannot heal it. Pageable driver calls
+may still block or stage internally, so one explicit fence is not one total
+native synchronization or an asynchronous-transfer claim. These are code-level
+counts, not observed per-request backend-call counts.
+
+Grouping does not remove the existing last-consumer event or owner
+upload-stream fence. Their redundancy has not been established for this leaf,
+lookahead, or other outstanding work. The complete forward remains
+synchronous; host lookahead alone does not prove hardware overlap.
+
+With bounded reads absent or blocking, omitted transfer policy resolves to
+synchronous upload. A supported bounded-lookahead configuration on the local
+Mixed BF16/F32 CUDA numeric leaf instead resolves to grouped synchronous
+upload; explicit synchronous selection remains a baseline. Normal serving
+rejects grouped upload with blocking reads; that combination is confined to
+private experiments. These current selection rules do not relabel the frozen
+explicit-policy measurements on the same operator leaf or establish new
+numerical-quality results.
 
 \subsection{Other protocol implementations}
 The general materialization path installs a registry only when a runner
 transfers a physical provider to the resident engine. This path merges
 compatible exact keys, validates completion before mutation, and separates
-stage-custody return from credit release and resident-grant transfer. Its
-routed-expert provider uses pinned host reads and CUDA upload and installation.
-Registered slabs retain aligned ranges and generations; upload tickets retain
-the original event and frame after notification errors. Replacement also
-carries the old binding and its consumer-completion evidence.
+stage-custody return from credit release and resident-grant transfer. A separate
+routed-expert provider implements pinned reads and CUDA upload/installation.
+Its registered slabs retain aligned ranges and generations; tickets retain
+the original event and frame after notification errors. Replacement carries
+the old binding and consumer-completion evidence. This capability is distinct
+from the pageable numeric expert path, not evidence of its registry coverage.
 
 The resource broker canonicalizes and checks claims before charging them.
 A later-stage budget wait retains earlier buffers and destinations. Grants
 have no implicit destructor refund. The five accounting classes in
-Equation~\ref{eq:credit-conservation} are refinements of these ownership
-states, not five directly measured counters.
+Equation~\ref{eq:credit-conservation} refine these ownership states; tested
+host/cache bounds are not an integrated five-class proof.
 
 State publication uses a separate prepared-state protocol. A provisional
 journal precedes backend preparation because preparation can submit work
@@ -92,10 +138,12 @@ irreversible ending decision and its residual cleanup obligations.}
 \label{fig:transaction-lifecycle}
 \end{figure}
 
-These integrations share ownership concepts but have different progress and
-completion authorities. An exact late registry completion may close its
-stage while an independent device owner remains poisoned. Host-worker join
-cannot clear that device uncertainty. Ordinary pipeline, host-KV, and
-collective paths therefore require their own audits; the evaluated
-single-device path does not establish universal registry coverage or a
-default device-collective implementation.
+Other capabilities have separate boundaries. Host-KV placement exposes
+logical read pins and admission, not a completed production DMA path; its
+accepted or Unknown commands still require backend quiescence evidence.
+Shared CUDA transport independently retains fixed pinned chunks and device
+views until their own fences; it is not the pageable expert-upload mechanism.
+Hybrid and collective paths require their own audits, not extrapolation from
+single-device results. A late registry completion can close its named stage
+without clearing another owner's poison, and host-worker join cannot clear
+device uncertainty.
