@@ -121,7 +121,14 @@ def _v3_integer(value):
     return integer(value) and value <= (1 << 64) - 1
 
 
-def read_observation_v3(value, options, *, stage=None):
+TRANSFER_UPLOAD_PRODUCER = "ferrule.expert-read-host-charge.zero-omitting.d3d643a.v1"
+INITIAL_ENDPOINT_PRODUCER = dict(event='expert_read_initial_endpoint', producer_schema_version=1,
+    source_contract='resident_model_runner.physical_resource_snapshot.expert_read_pipeline',
+    endpoint='after_owner_configuration_before_prediction', target='ferrule_performance', level='INFO')
+INITIAL_ENDPOINT_SOURCE = 'crates/ferrule-composition/src/model_factory/bf16_serving.rs'
+
+
+def read_observation_v3(value, options, *, stage=None, producer_contract=None):
     """Validate a copied settled endpoint; never drive/join/refund an owner.
 
     ``closed`` is structural evidence only. Call final_owner_join_v3 with the
@@ -148,13 +155,15 @@ def read_observation_v3(value, options, *, stage=None):
             and 'pending_read' in value and value['pending_read'] is None and 'last_receipt' in value,
             'v3 current/pending read custody retained or missing')
     stats, charge = value.get('stats'), value.get('current_charge')
-    # These fields are serialized only when nonzero by the host-charge producer.
-    # A settled synchronous/grouped endpoint must never retain upload custody.
-    upload_fields = ('upload_reserved_packed_bytes', 'pinned_upload_bytes',
-        'upload_ticket_metadata_bytes', 'upload_policy_headroom_bytes', 'unknown_upload_bytes')
-    require(isinstance(charge, dict) and all(type(charge.get(k, 0)) is int
-            and charge.get(k, 0) == 0 for k in upload_fields), 'v3 outstanding/Unknown host upload charge')
-    charge = {k: v for k, v in charge.items() if k not in upload_fields}
+    require(producer_contract in (None, TRANSFER_UPLOAD_PRODUCER),
+            "unknown upload-charge producer contract")
+    if producer_contract == TRANSFER_UPLOAD_PRODUCER:
+        upload_fields = ("upload_reserved_packed_bytes", "pinned_upload_bytes",
+            "upload_ticket_metadata_bytes", "upload_policy_headroom_bytes", "unknown_upload_bytes")
+        require(isinstance(charge, dict) and all(type(charge.get(k, 0)) is int
+                and charge.get(k, 0) == 0 for k in upload_fields),
+                "v3 outstanding/Unknown host upload charge")
+        charge = {k: v for k, v in charge.items() if k not in upload_fields}
     require(isinstance(stats, dict) and set(stats) == set(V3_COUNTERS + V3_PEAKS)
             and all(_v3_integer(v) for v in stats.values()), 'v3 typed full-owner stats missing/invalid')
     require(isinstance(charge, dict) and set(charge) == set(V3_CHARGES)
@@ -176,7 +185,10 @@ def read_observation_v3(value, options, *, stage=None):
     if status == 'configured':
         require(value.get('effective_mode') is None and 'effective_mode' in value
                 and 'last_receipt' in value and value['last_receipt'] is None
-                and not any(stats.values()), 'v3 configured endpoint already executed')
+                and all(v == 0 for k, v in stats.items() if producer_contract != TRANSFER_UPLOAD_PRODUCER
+                    or k not in ('reader_interval_calls', 'reader_interval_bytes'))
+                and value['worker_alive'] is False and value['worker_read_observed'] is False,
+                'v3 configured endpoint already executed')
     else:
         require(stats['workers_created'] == 1 and value.get('effective_mode') == options['schedule'],
                 'v3 compatible scopes must retain exactly one worker')

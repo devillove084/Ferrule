@@ -107,12 +107,74 @@ def next_trial(directory, registered):
         folder = directory / trial
         if not folder.exists():
             return trial
-        require((folder / 'attempt.json').is_file() and (folder / 'assessment.json').is_file(),
-                'prior attempt lost/incomplete custody; permanent STOP, never replay')
-        row = ct.load(folder / 'assessment.json')
-        require(row['trial'] == trial and row['assessment']['can_continue'] is True,
-                'prior attempt failed/unknown; no resume or replacement')
+        complete_attempt = (folder / 'attempt.json').is_file() and (folder / 'assessment.json').is_file()
+        if 'study_layout' in registered and not complete_attempt:
+            stop(directory, 'prior attempt lost/incomplete custody; permanent STOP, never replay')
+        require(complete_attempt, 'prior attempt lost/incomplete custody; permanent STOP, never replay')
+        row = effective_assessment(folder, ct.load(folder / 'assessment.json'),
+            require_completion='study_layout' in registered)
+        qualified = row['trial'] == trial and row['assessment']['can_continue'] is True
+        if 'study_layout' in registered and not qualified:
+            stop(directory, 'prior attempt failed/unknown; no resume or replacement')
+        require(qualified, 'prior attempt failed/unknown; no resume or replacement')
     raise ValueError('all planned arms already issued; no additional lifecycle')
+
+
+def coordinator_terminal_binding(folder):
+    folder = Path(folder)
+    return dict(schema='ferrule.storage-demand.coordinator-terminal.v1', trial=folder.name,
+        attempt_sha256=ct.sha(folder / 'attempt.json'), assessment_sha256=ct.sha(folder / 'assessment.json'),
+        locks_held_sha256=ct.sha(folder / 'locks-held.json'))
+
+
+def coordinator_failure(folder, reason):
+    folder = Path(folder)
+    failure = folder / 'coordinator-failure.json'
+    if not failure.exists():
+        ct.write(failure, dict(schema='ferrule.storage-demand.coordinator-failure.v1',
+            trial=folder.name, reason=reason, recorded=ex.stamp(),
+            assessment_sha256=ct.sha(folder / 'assessment.json'), qualification=False))
+    stop(folder.parent, reason)
+    return ct.load(failure)
+
+
+def coordinator_completion(folder):
+    """Read-only validation: terminal receipts cannot be replayed across arms."""
+    folder = Path(folder)
+    try:
+        binding = coordinator_terminal_binding(folder)
+        release, reprobe = (ct.load(folder / name) for name in ('locks-released.json', 'locks-reprobed.json'))
+        return (not (folder / 'coordinator-failure.json').exists()
+            and all(release.get(k) == v and reprobe.get(k) == v for k, v in binding.items())
+            and release.get('phase') == 'release' and release.get('context_exited') is True
+            and release.get('all_eight_local') is True and reprobe.get('phase') == 'reprobe'
+            and reprobe.get('all_eight_nonblocking_reacquired') is True and reprobe.get('local_only') is True
+            and reprobe.get('context_exited') is True)
+    except (OSError, ValueError, TypeError, AttributeError):
+        return False
+
+
+def effective_assessment(folder, row, *, require_completion=False):
+    """Append-only coordinator failures supersede qualification, not evidence."""
+    folder = Path(folder)
+    failure = folder / 'coordinator-failure.json'
+    if not failure.exists():
+        if not require_completion or coordinator_completion(folder):
+            return row
+        terminal = coordinator_failure(folder, 'coordinator terminal release/reprobe evidence missing/invalid; permanent STOP')
+    else:
+        terminal = ct.load(failure)
+    require(terminal.get('schema') == 'ferrule.storage-demand.coordinator-failure.v1'
+        and terminal.get('trial') == folder.name and terminal.get('qualification') is False
+        and terminal.get('assessment_sha256') == ct.sha(folder / 'assessment.json'),
+        'coordinator failure/assessment binding changed')
+    import copy
+    result = copy.deepcopy(row)
+    result['assessment']['can_continue'] = False
+    result['assessment'].setdefault('stop_reasons', []).append(terminal['reason'])
+    result['summary']['measured_qa']['eligible_success'] = 0
+    result['coordinator_failure'] = terminal
+    return result
 
 
 def start(directory, granted):
@@ -193,7 +255,7 @@ def execute_next(directory):
                 observed = ct.load(folder / 'lifecycle.json') if (folder / 'lifecycle.json').is_file() else {}
                 if 'study_layout' in registered:
                     observed.setdefault('requests', {})['observations'] = ex.recover_observations(folder, schedule)
-                assessment = ex.lifecycle_assessment(observed, receipt, post)
+                assessment = ex.lifecycle_assessment(observed, receipt, post, transfer_required='study_layout' in registered)
                 read = ledger(observed, mode)
                 if not read['can_continue']:
                     assessment['can_continue'] = False
@@ -207,7 +269,8 @@ def execute_next(directory):
                     assessment=assessment, read_ledger=read, supervisor=receipt, post_idle=post, lifecycle=observed,
                     actual_http_token_ids_source='worker enqueue actual IDs joined to actual HTTP request ID, not retokenization',
                     outer_deadline=outer, coordinator_ended=ex.stamp())
-                if 'study_layout' in registered and assessment['can_continue']:
+                if ('study_layout' in registered and registered['study_layout'].get('purpose') != 'public_cli_acceptance'
+                        and assessment['can_continue']):
                     block = next(b for b in registered['order'] if b['block'] == row['block'])
                     paired = {trial: row}
                     for pair_mode in block['modes']:
@@ -216,7 +279,10 @@ def execute_next(directory):
                         if pair_trial != trial and prior.is_file():
                             paired[pair_trial] = ct.load(prior)
                     if len(paired) == 2:
-                        paired_metrics = analysis.transfer_pair_metrics(block, paired, schedule)
+                        paired_metrics = analysis.transfer_pair_metrics(block, paired, schedule,
+                            contract=registered['study_layout']['http_expectation_contract'],
+                            reference_context=ex.reference_context_for_layout(registered['study_layout']),
+                            producer_contract=registered['study_layout']['upload_producer_contract'])
                         row['paired_quality'] = {k: paired_metrics[k] for k in
                             ('qualified', 'crosspolicy_exact_output', 'crosspolicy_equal_work')}
                         if not paired_metrics['qualified']:
@@ -225,19 +291,23 @@ def execute_next(directory):
                             summary['measured_qa']['eligible_success'] = 0
                 ct.write(folder / 'assessment.json', row)
                 require(assessment['can_continue'], '; '.join(assessment['stop_reasons']))
-            ct.write(folder / 'locks-released.json', dict(context_exited=True, all_eight_local=True))
+            terminal = coordinator_terminal_binding(folder) if 'study_layout' in registered else {}
+            ct.write(folder / 'locks-released.json', dict(terminal, phase='release', context_exited=True, all_eight_local=True))
             with ExitStack() as stack:
                 reprobed = [stack.enter_context(ct.exclusive_owner_lock(uuid)) for uuid in registered['eight_uuids']]
                 for uuid, lock in zip(registered['eight_uuids'], reprobed):
                     ct.validate_owner_lock(lock, uuid, os.getpid())
-                ct.write(folder / 'locks-reprobed.json', dict(all_eight_nonblocking_reacquired=True,
-                    context_exits_after_receipt=True, local_only=True))
-            print('ARM ' + trial + ' complete: 12/12 requests, 5/5 measured QA; normal shutdown, ECHILD, all-eight idle', flush=True)
+            ct.write(folder / 'locks-reprobed.json', dict(terminal, phase='reprobe', all_eight_nonblocking_reacquired=True,
+                context_exited=True, local_only=True))
+            disposition = 'qualified intentional owned HTTP stop' if 'study_layout' in registered else 'normal shutdown'
+            print('ARM ' + trial + ' complete: 12/12 requests, 5/5 measured QA; ' + disposition + ', ECHILD, all-eight idle', flush=True)
             return row
         except (Exception, KeyboardInterrupt) as error:
             reason = type(error).__name__ + ': ' + str(error)
             stop(directory, reason)
-            if not (folder / 'assessment.json').exists():
+            if (folder / 'assessment.json').exists():
+                coordinator_failure(folder, reason)
+            else:
                 observed = ct.load(folder / 'lifecycle.json') if (folder / 'lifecycle.json').is_file() else observed
                 if 'study_layout' in registered:
                     observed.setdefault('requests', {})['observations'] = ex.recover_observations(folder, schedule)
@@ -251,7 +321,8 @@ def execute_next(directory):
                 ct.write(folder / 'locks-released.json', dict(context_exited=True, all_eight_local=True,
                     physical_owner_release='unverified', descendant_custody_known=ct.drained(receipt)))
             print('ARM ' + trial + ' STOP: ' + reason, flush=True)
-            return ct.load(folder / 'assessment.json')
+            return effective_assessment(folder, ct.load(folder / 'assessment.json'),
+                require_completion='study_layout' in registered)
 
 
 def finalize(directory):
@@ -263,16 +334,32 @@ def finalize(directory):
         schedule = registered['schedule']
         for trial in registered['trial_order']:
             folder = directory / trial
+            recovery_error = None
             if (folder / 'assessment.json').is_file():
-                rows.append(ct.load(folder / 'assessment.json'))
-            else:
-                summary = ex.recover_requests(folder, schedule)
-                summary['measured_qa']['request_only_eligible_success'] = summary['measured_qa']['eligible_success']
-                summary['measured_qa']['eligible_success'] = 0
-                rows.append(dict(trial=trial, block=trial.split('-')[0], mode=trial.split('-', 1)[1], summary=summary,
-                    status='unissued_or_incomplete', stop_reason='prior STOP/incomplete attempt/finite envelope; no replacement'))
-                if 'study_layout' in registered:
-                    rows[-1]['lifecycle'] = dict(requests=dict(observations=ex.recover_observations(folder, schedule)))
+                try:
+                    original = ct.load(folder / 'assessment.json')
+                    require(original['trial'] == trial and isinstance(original['assessment']['can_continue'], bool),
+                        'arm assessment identity/type differs')
+                    rows.append(effective_assessment(folder, original, require_completion='study_layout' in registered))
+                    continue
+                except (OSError, ValueError, TypeError, KeyError) as error:
+                    if 'study_layout' not in registered:
+                        raise
+                    recovery_error = type(error).__name__ + ': ' + str(error)
+                    stop(directory, 'invalid/partial arm assessment; permanent STOP')
+                    if not (folder / 'coordinator-failure.json').exists():
+                        coordinator_failure(folder, recovery_error)
+            if 'study_layout' in registered and folder.exists():
+                stop(directory, 'interrupted/invalid arm evidence; permanent STOP')
+            summary = ex.recover_requests(folder, schedule)
+            summary['measured_qa']['request_only_eligible_success'] = summary['measured_qa']['eligible_success']
+            summary['measured_qa']['eligible_success'] = 0
+            rows.append(dict(trial=trial, block=trial.split('-')[0], mode=trial.split('-', 1)[1], summary=summary,
+                status='unissued_or_incomplete', stop_reason='prior STOP/incomplete attempt/finite envelope; no replacement'))
+            if 'study_layout' in registered:
+                rows[-1]['lifecycle'] = dict(requests=dict(observations=ex.recover_observations(folder, schedule)))
+            if recovery_error is not None:
+                rows[-1]['assessment_recovery_error'] = recovery_error
         complete = all(row.get('assessment', {}).get('can_continue') is True for row in rows)
         if (directory / 'study-stop.json').exists():
             complete = False
@@ -288,9 +375,21 @@ def finalize(directory):
             physical_nas_backend_bytes=None, universal_final_release_verified=False,
             resource_contract_complete='unverified', scientific_acceptance=False)
         if 'study_layout' in registered:
-            report['study_layout'] = registered['study_layout']
-        report['analysis'] = analysis.summarize(report)
-        if 'study_layout' in registered and not all(b['qualified'] for b in report['analysis']['blocks']):
+            report['study_layout'] = dict(registered['study_layout'])
+
+        acceptance = registered.get('study_layout', {}).get('purpose') == 'public_cli_acceptance'
+        if acceptance:
+            report['analysis'] = dict(quality_only=True, scheduled_cells=4, scheduled_requests=48,
+                completed_cells=sum(row.get('assessment', {}).get('can_continue') is True for row in rows),
+                performance_claim=False, filesystem_cold_claim=False)
+        else:
+            analysis_report = report
+            if 'study_layout' in registered:
+                analysis_report = dict(report, study_layout=dict(report['study_layout'],
+                    http_reference_context=ex.reference_context_for_layout(registered['study_layout']),
+                            producer_contract=registered['study_layout']['upload_producer_contract']))
+            report['analysis'] = analysis.summarize(analysis_report)
+        if not acceptance and 'study_layout' in registered and not all(b['qualified'] for b in report['analysis']['blocks']):
             report['status'] = 'stopped'
         report['actual_completed_lifecycles'] = sum(row.get('assessment', {}).get('can_continue') is True for row in rows)
         report['actual_issued_lifecycles'] = sum((directory / trial / 'launch.json').is_file() for trial in registered['trial_order'])

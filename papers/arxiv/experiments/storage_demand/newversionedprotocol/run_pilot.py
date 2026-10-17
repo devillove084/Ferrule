@@ -187,6 +187,9 @@ def worker(launch_hash):
     started = time.monotonic()
     result = dict(status='failed', trial=payload['trial'], started_monotonic=started,
                   authenticated_worker=authenticated, physical_nas_backend_bytes=None)
+    transfer = payload['spec'].get('transfer_controls_revision') == 2
+    if transfer:
+        result['transfer_controls_revision'] = 2
     capture = monitor = server = root = None
     shutdown_sample = None
     reader = dict(authenticated['worker'])
@@ -201,8 +204,11 @@ def worker(launch_hash):
                               payload['outer_deadline'] - limits['shutdown_seconds'] - limits['worker_finalization_seconds'],
                               payload['pilot_deadline'] - limits['shutdown_seconds'] - limits['worker_finalization_seconds'])
         remaining(target_deadline, limits['startup_seconds'] + limits['all_requests_seconds'], 'target admission')
-        capture = ex.launch_capture(directory, payload['spec'], candidate['candidate']['binary_sha256'],
-                                    target_deadline - launch, limits['shutdown_seconds'])
+        if transfer:
+            capture = ex.launch_http_capture(directory, payload, target_deadline, target_started=launch)
+        else:
+            capture = ex.launch_capture(directory, payload['spec'], candidate['candidate']['binary_sha256'],
+                                        target_deadline - launch, limits['shutdown_seconds'])
         startup_deadline = min(launch + limits['startup_seconds'], target_deadline)
         target, root, target_report = ex.capture_root(capture, directory, startup_deadline, authenticated)
         server = ex.CapturedServer(capture, directory, root)
@@ -220,6 +226,7 @@ def worker(launch_hash):
                                    startup_deadline - time.monotonic())
         require(ready <= startup_deadline, 'absolute startup deadline exceeded')
         monitor.mark_ready(ready)
+        ready_log_end = (directory / 'server.log').stat().st_size if transfer else None
         result.update(server_identity=root, capture_identity=target, physical_uuid=payload['uuid'],
                       startup_seconds=ready - launch, ready=ex.stamp(), target_deadline=target_deadline)
         environment = dict(item.split('=', 1) for item in Path(f'/proc/{root["pid"]}/environ').read_text().split('\0') if '=' in item)
@@ -232,7 +239,8 @@ def worker(launch_hash):
         require(result['startup_nfs']['status'] == 'shared_client_delta', 'startup mount sample/reset')
         result['startup_logical_counters'] = ex.logical_counter_window(ex.log_lines(directory / 'server.log'))
         runtime = ct.load(candidate['candidate']['runtime_pin_manifest'])['pins']
-        maps = ex.library_maps(root, runtime)
+        maps = (ex.transfer_runtime_maps(directory, 'ready', root, target, payload['spec']) if transfer
+            else ex.library_maps(root, runtime))
         ct.write(directory / 'ready-library-maps.json', maps)
         phase_pre = sample('requests-pre')
         def check():
@@ -251,10 +259,11 @@ def worker(launch_hash):
                 require(ct.sha(payload[key + '_path']) == payload[key + '_sha256'], key + ' receipt changed')
         result['requests'] = ex.serial_requests(directory, payload['schedule'], payload['spec'], limits,
             target_deadline, payload['outer_deadline'], payload['pilot_deadline'], check, sample,
-            lambda: ex.process_io(root))
+            lambda: ex.process_io(root), **(dict(server_identity=root, ready_log_end=ready_log_end) if transfer else {}))
         phase_post = sample('requests-post')
         result['requests_nfs'] = mountstats_delta(phase_pre, phase_post)
-        after_maps = ex.library_maps(root, runtime)
+        after_maps = (ex.transfer_runtime_maps(directory, 'after-requests', root, target, payload['spec']) if transfer
+            else ex.library_maps(root, runtime))
         ct.write(directory / 'after-requests-library-maps.json', after_maps)
         require(after_maps['libraries'] == maps['libraries'], 'loaded libraries changed')
         require(result['requests']['can_continue'] and result['requests_nfs']['status'] == 'shared_client_delta',
@@ -271,9 +280,13 @@ def worker(launch_hash):
                         shutdown_sample = sample_after('shutdown-pre')
                 except Exception as error:
                     result['shutdown_sample_error'] = str(error)
-                if monitor is not None:
-                    result['resources'] = monitor.finish()
-                ex.stop_capture(directory)
+                if transfer:
+                    result['resources'] = ex.acknowledge_http_stop(directory, payload, root, target, monitor,
+                        result.get('requests', {}))
+                else:
+                    if monitor is not None:
+                        result['resources'] = monitor.finish()
+                    ex.stop_capture(directory)
                 capture.wait(timeout=limits['shutdown_seconds'] + 2)
                 result['capture'] = ct.load(directory / 'profile-server.json')
                 try:
@@ -285,11 +298,24 @@ def worker(launch_hash):
                 lines = ex.log_lines(directory / 'server.log')
                 result['closure'] = ex.owner_summary(lines, root, payload['uuid'])
                 result['server_log_sha256'] = ct.sha(directory / 'server.log')
-                result['whole_log_token_join'] = ex.join_token_trace_http(ex.parse_token_trace(lines),
-                    result.get('requests', {}).get('observations', []), lines)
-                require(result['capture'].get('pid') == (root or {}).get('pid')
-                        and result['capture'].get('returncode') == 0 and capture.returncode == 0
-                        and not result['capture'].get('shutdown_timeout'), 'normal capture/server shutdown missing')
+                requests = result.get('requests', {}).get('observations', [])
+                if transfer:
+                    from runnerhelpers.http_expectations import normalize_http_expectation
+                    adjusted = []
+                    for row in requests:
+                        expected = normalize_http_expectation(row, contract=payload['spec']['http_expectation_contract'],
+                            reference_context=payload['spec']['http_reference_context'])
+                        adjusted.append(dict(row, reference=None if expected['reference_ids'] is None else dict(
+                            reference_ids=expected['reference_ids'], reference_text=expected['reference_text'])))
+                    requests = adjusted
+                result['whole_log_token_join'] = ex.join_token_trace_http(ex.parse_token_trace(lines), requests, lines)
+                if transfer:
+                    result['planned_http_stop'] = ex.validate_http_stop(directory, result['capture'], root, target_deadline=target_deadline)
+                    require(capture.returncode == 0, 'planned HTTP capture callback failed')
+                else:
+                    require(result['capture'].get('pid') == (root or {}).get('pid')
+                            and result['capture'].get('returncode') == 0 and capture.returncode == 0
+                            and not result['capture'].get('shutdown_timeout'), 'normal capture/server shutdown missing')
                 require(result['closure']['final']['can_continue'], 'owner close missing/pending/unknown')
                 require(result['shutdown_nfs']['status'] == 'shared_client_delta', 'shutdown mount sample/reset')
                 require(result.get('resources', {}).get('status') == 'observed_within_targets', 'resource observer failed')

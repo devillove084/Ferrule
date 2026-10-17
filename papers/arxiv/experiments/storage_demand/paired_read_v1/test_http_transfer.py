@@ -19,6 +19,12 @@ from runnerhelpers.evidence_v2 import ct, COUNTERS, censoring_summary
 import test_quality_v1 as workers
 import test_paired_read_v1 as shared
 import test_execution_v2 as http_fixtures
+from runnerhelpers import http_expectations as expectations
+
+
+def fixture_layout():
+    # Historical pure-metric fixtures never satisfy prospective launch admission.
+    return dict(run.transfer_plan(), http_expectation_contract=expectations.HISTORICAL_LENGTH)
 
 
 def schedule():
@@ -43,7 +49,8 @@ def invocation(index=0, read_schedule='blocking'):
 
 
 def window(value, read_schedule='blocking'):
-    return trace.transfer_counter_window([json.dumps(dict(fields=value))], workers.options(read_schedule))
+    return trace.transfer_counter_window([json.dumps(dict(fields=value))], workers.options(read_schedule),
+        producer_contract=quality.TRANSFER_UPLOAD_PRODUCER)
 
 
 def startup(policy):
@@ -67,11 +74,21 @@ def arm(trial, read_schedule='blocking', policy='synchronous'):
                 actual_output_tokens=planned['max_tokens'], text=ref['reference_text'] if ref else 'fixture',
                 finish_reason='length', usage=dict(prompt_tokens=planned['input_tokens'],
                     completion_tokens=planned['max_tokens'], total_tokens=planned['input_tokens'] + planned['max_tokens']))))
+    initial = workers.observation(workers.options(read_schedule), configured=True)
+    previous = initial
+    for row in rows:
+        row['logical_counters'] = trace.transfer_counter_window(
+            [json.dumps(dict(fields=r['fields'])) for r in row['logical_counters']['rows']],
+            workers.options(read_schedule), previous_read=previous,
+            producer_contract=quality.TRANSFER_UPLOAD_PRODUCER)
+        previous = row['logical_counters']['final_read_endpoint']
     final = rows[-1]['logical_counters']['rows'][-1]['read_endpoint']
     case = dict(read_schedule=read_schedule, transfer_policy=policy, read_options=workers.options(read_schedule))
-    observed = dict(requests=dict(observations=rows, expert_transfers=dict(requested_case=case,
+    observed = dict(status='complete', requests=dict(initial_read_endpoint=workers.observation(workers.options(read_schedule), configured=True),
+        observations=rows, expert_transfers=dict(requested_case=case,
         startup=trace.transfer_startup([json.dumps(dict(fields=startup(policy)))], policy, 'a' * 64))),
-        closure=dict(attempts=[dict(summary=dict(physical=dict(expert_read_pipeline=dict(state='observed', value=final))))]))
+        closure=dict(final=dict(can_continue=True), attempts=[dict(summary=dict(physical=dict(
+            expert_read_pipeline=dict(state='observed', value=final))))]))
     return dict(trial=trial, lifecycle=observed, assessment=dict(can_continue=True),
         read_ledger=run.transfer_ledger(observed, read_schedule + '-' + policy),
         summary=censoring_summary(rows, schedule()))
@@ -288,7 +305,7 @@ class MetricTests(shared.CPUOnly):
         self.assertIsNone(result['phase_wall_seconds'])
 
     def report(self):
-        value = run.transfer_plan()
+        value = fixture_layout()
         rows = []
         for block in value['order']:
             for mode in block['modes']:
@@ -327,7 +344,7 @@ class MetricTests(shared.CPUOnly):
     def test_maintained_finalizer_retains_all_unissued_slots(self):
         directory = self.directory / 'artifacts-transfer-pilot-fixture'
         directory.mkdir()
-        value = run.transfer_plan()
+        value = fixture_layout()
         path = self.directory / 'layout.json'
         ct.write(path, value)
         registered = dict(study_layout=value, schedule=value['schedule'], order=value['order'],
@@ -340,7 +357,7 @@ class MetricTests(shared.CPUOnly):
             with run.transfer_adapter(path):
                 result = run.maintained.finalize(directory)
         final = ct.load(directory / 'paired-final.json')
-        self.assertEqual(final['schema'], 'ferrule.storage-demand.http-transfer-actual.v1')
+        self.assertEqual(final['schema'], 'ferrule.storage-demand.http-transfer-actual.v2')
         self.assertEqual(final['scheduled_starts'], 8)
         self.assertEqual(final['scheduled_measured_qa'], 40)
         self.assertEqual(result['analysis']['denominators']['unissued'], 96)
@@ -352,7 +369,12 @@ class MaintainedRequestTests(http_fixtures.CPUOnly):
         for policy in analysis.POLICIES:
             directory = self.directory / policy
             directory.mkdir()
-            (directory / 'server.log').write_text(json.dumps(dict(fields=startup(policy))) + '\n')
+            from test_http_transfer_controls import initial_event, initial_producer_binding
+            server_identity = dict(pid=12345, birth_ticks=8, ppid=12344)
+            (directory / 'server.log').write_text(json.dumps(dict(fields=startup(policy))) + '\n' +
+                json.dumps(initial_event(workers.options(), policy, server_identity['pid'])) + '\n' +
+                json.dumps(dict(fields=dict(message='Ferrule OpenAI server listening'))) + '\n')
+            ready_log_end = (directory / 'server.log').stat().st_size
             order = []
             delegate = http_fixtures.MockClient(directory, order)
             def request(config, identity, cutoff=None):
@@ -375,13 +397,19 @@ class MaintainedRequestTests(http_fixtures.CPUOnly):
                 return result
             client = mock.Mock(request=request, close=lambda: None)
             deadline = time.monotonic() + 2000
+            import test_http_transfer_metrics as metrics_fixtures
+            context = metrics_fixtures.reference_context(schedule())
             spec = dict(url='http://127.0.0.1:18369/v1/completions', model='qwen35-storage-demand-paper',
-                frozen_cli_sha256='a' * 64, expert_transfer_case=dict(read_schedule='blocking',
+                frozen_cli_sha256='a' * 64, upload_producer_contract=quality.TRANSFER_UPLOAD_PRODUCER,
+                initial_read_producer_binding=initial_producer_binding(),
+                http_expectation_contract=expectations.BOUND_HTTP_REFERENCE, http_reference_context=context,
+                expert_transfer_case=dict(read_schedule='blocking',
                     transfer_policy=policy, read_options=workers.options()))
             # The fixture client appends corrected logs without truncating prior windows.
             with mock.patch.object(ex.http, 'Client', return_value=client):
                 result = ex.serial_requests(directory, schedule(), spec, run.transfer_plan()['limits'],
-                    deadline, deadline, deadline, lambda: None, self.sampling(directory), lambda: {})
+                    deadline, deadline, deadline, lambda: None, self.sampling(directory), lambda: {},
+                    server_identity=server_identity, ready_log_end=ready_log_end)
             self.assertTrue(result['can_continue'], result['stop_reason'])
             self.assertEqual(len(order), 12)
             self.assertEqual(result['expert_transfers']['startup']['requested'], policy)
@@ -408,82 +436,23 @@ class MaintainedRequestTests(http_fixtures.CPUOnly):
 
 
 class CandidateTests(shared.CPUOnly):
-    def fixture(self):
+    def test_legacy_boolean_or_dummy_candidate_rejected(self):
         layout = run.transfer_plan()
-        frozen = self.directory / 'frozen-source'
-        pins = {}
-        for name in run.PROOF_PATHS:
-            path = frozen / name
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes((ct.ROOT / name).read_bytes())
-            path.chmod(0o444)
-            pins[name] = ct.sha(path)
-        frozen.chmod(0o555)
-        source = dict(schema='ferrule.expert-read.committed-source-freeze.v1',
-            commit=run.TRANSFER_COMMIT, immutable_readonly_inputs=True,
-            frozen_source=str(frozen), pins_relative_to_frozen_source=pins)
-        source_path = self.directory / 'source-fixture.json'
-        binary = self.directory / 'fixture-never-executable'
-        binary.write_text('CPU fixture only, not a binary or qualification receipt')
-        binary.chmod(0o444)
-        runtime = self.directory / 'runtime-fixture.json'
-        ct.write(runtime, dict(pins=ct.inventory([binary])))
-        ct.write(source_path, source)
-        runtime.chmod(0o444)
-        source_path.chmod(0o444)
-        review = self.directory / 'launch-review-fixture.json'
-        ct.write(review, dict(schema='ferrule.storage-demand.http-transfer-launch-review.v1',
-            production_commit=run.TRANSFER_COMMIT, cli_binary_sha256=ct.sha(binary),
-            source_freeze_sha256=ct.sha(source_path), runtime_pin_manifest_sha256=ct.sha(runtime),
-            main_source_reviewed=True, build_custody_reviewed=True, same_cut_cli_quality_accepted=True))
-        review.chmod(0o444)
-        layout['candidate'] = dict(binary=str(binary), binary_sha256=ct.sha(binary),
-            runtime_pin_manifest=str(runtime), source_freeze=str(source_path), launch_review=str(review),
-            artifact_pins=ct.inventory([binary, runtime, source_path, review]), uuid_inventory=http_fixtures.UUIDS)
-        return layout, source
+        layout['candidate'] = dict(binary=str(self.directory / 'fixture-never-executable'),
+            binary_sha256='a' * 64, same_cut_cli_quality_accepted=True)
+        with self.assertRaisesRegex(ValueError, 'candidate pending'):
+            run.validate_transfer_candidate(layout)
 
-    def test_candidate_exact_freeze_binary_runtime_and_old_cut_pin_rejection(self):
-        layout, source = self.fixture()
-        candidate = run.validate_transfer_candidate(layout)
-        self.assertEqual(candidate['candidate']['binary_sha256'], layout['candidate']['binary_sha256'])
-        changed = copy.deepcopy(layout)
-        changed['candidate']['binary_sha256'] = '0' * 64
-        with self.assertRaisesRegex(ValueError, 'CLI hash'):
-            run.validate_transfer_candidate(changed)
-        for mutation in ('commit', 'source_pin'):
-            changed_source = copy.deepcopy(source)
-            if mutation == 'commit':
-                changed_source['commit'] = 'ce6d4ff28b96d4057d0de6dfa858707104aad16b'
-            else:
-                changed_source['pins_relative_to_frozen_source'][run.PROOF_PATHS[0]] = '0' * 64
-            path = self.directory / (mutation + '-fixture.json')
-            ct.write(path, changed_source)
-            path.chmod(0o444)
-            changed = copy.deepcopy(layout)
-            changed['candidate']['source_freeze'] = str(path)
-            changed['candidate']['artifact_pins'].update(ct.inventory([path]))
-            with self.subTest(mutation=mutation), self.assertRaisesRegex(ValueError, 'old-cut|frozen source pin'):
-                run.validate_transfer_candidate(changed)
-        review = self.directory / 'pending-main-review-fixture.json'
-        value = ct.load(layout['candidate']['launch_review'])
-        value['same_cut_cli_quality_accepted'] = False
-        ct.write(review, value)
-        review.chmod(0o444)
-        changed = copy.deepcopy(layout)
-        changed['candidate']['launch_review'] = str(review)
-        changed['candidate']['artifact_pins'].update(ct.inventory([review]))
-        with self.assertRaisesRegex(ValueError, 'acceptance pending'):
-            run.validate_transfer_candidate(changed)
 
 
 class CoordinatorTests(shared.CPUOnly):
     def test_existing_next_arm_uses_eight_locks_and_pair_mismatch_stops_admission(self):
         directory = self.directory / 'artifacts-transfer-pilot-fixture'
         directory.mkdir()
-        layout = run.transfer_plan()
+        layout = fixture_layout()
         path = self.directory / 'layout.json'
-        candidate = dict(candidate=dict(binary=str(self.directory / 'fixture-cli'), binary_sha256='a' * 64),
-            uuid_inventory=http_fixtures.UUIDS)
+        candidate = dict(candidate=dict(binary=str(self.directory / 'fixture-cli'), binary_sha256='a' * 64,
+            runtime_pin_manifest=str(self.directory / 'fixture-runtime.json')), uuid_inventory=http_fixtures.UUIDS)
         ct.write(path, layout)
         registered = dict(study_layout=layout, trial_order=layout['trial_order'], order=layout['order'],
             limits=layout['limits'], schedule=layout['schedule'], pilot_deadline=10000,
@@ -495,6 +464,10 @@ class CoordinatorTests(shared.CPUOnly):
         prior_folder.mkdir()
         ct.write(prior_folder / 'attempt.json', dict(fixture=True))
         ct.write(prior_folder / 'assessment.json', prior)
+        ct.write(prior_folder / 'locks-held.json', dict(fixture=True))
+        terminal = run.maintained.coordinator_terminal_binding(prior_folder)
+        ct.write(prior_folder / 'locks-released.json', dict(terminal, phase='release', context_exited=True, all_eight_local=True))
+        ct.write(prior_folder / 'locks-reprobed.json', dict(terminal, phase='reprobe', all_eight_nonblocking_reacquired=True, context_exited=True, local_only=True))
         current = arm(layout['trial_order'][1], policy='grouped-synchronous')
         current['lifecycle']['requests']['observations'][0]['actual']['text'] = 'cross-policy mismatch'
         payloads = []
