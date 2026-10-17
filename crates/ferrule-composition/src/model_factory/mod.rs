@@ -505,11 +505,43 @@ pub enum ServingEngineSelection {
     Pipeline,
 }
 
+/// Public serving selection for the existing owner-local transfer capability.
+/// Retained uploads are deliberately not a serving option.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ServingExpertTransferPolicy {
+    #[default]
+    Synchronous,
+    GroupedSynchronous,
+}
+
+impl ServingExpertTransferPolicy {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Synchronous => "synchronous",
+            Self::GroupedSynchronous => "grouped_synchronous",
+        }
+    }
+}
+
+impl From<ServingExpertTransferPolicy> for ferrule_model::transformer::ExpertTransferPolicy {
+    fn from(policy: ServingExpertTransferPolicy) -> Self {
+        match policy {
+            ServingExpertTransferPolicy::Synchronous => Self::Synchronous,
+            ServingExpertTransferPolicy::GroupedSynchronous => Self::GroupedSynchronous,
+        }
+    }
+}
+
 /// Explicit serving inputs. `Some(default)` is still an explicit policy and
 /// must not disappear when an implementation does not support that option.
 /// The legacy `ModelFactoryOptions` APIs keep their existing default semantics.
 #[derive(Debug, Clone, Default)]
 pub struct ServingModelOptions {
+    /// None preserves synchronous transfers. Explicit selections require a
+    /// supported local numeric owner; grouped transfers also require bounded reads
+    /// and validated mixed BF16/F32 numeric model precision.
+    pub expert_transfer_policy: Option<ServingExpertTransferPolicy>,
     /// Explicit bounded host staging for lazy unsharded numeric experts.
     /// None preserves synchronous demand reads; not a device or host cache budget.
     pub expert_read_pipeline: Option<ferrule_model::transformer::ExpertReadPipelineOptions>,
@@ -590,6 +622,9 @@ impl ServingModelOptions {
 /// Frozen metadata selection, not a device admission or source-binding proof.
 #[derive(Debug, Clone, Copy)]
 struct ResolvedExecution {
+    // Declared only by constructors that forward selection to their existing owner.
+    supports_expert_transfer: bool,
+    expert_transfer_policy: Option<ServingExpertTransferPolicy>,
     expert_read_pipeline: Option<ferrule_model::transformer::ExpertReadPipelineOptions>,
     // Immutable, model-BF16-only choice; not the legacy W8/F32 expert wire profile.
     numeric_bf16_precision: Option<ferrule_model::transformer::NumericFp8Precision>,
@@ -615,6 +650,8 @@ impl ResolvedExecution {
     ) -> Self {
         let cuda = backend == ModelExecutionBackend::Cuda;
         Self {
+            supports_expert_transfer: false,
+            expert_transfer_policy: None,
             expert_read_pipeline: None,
             numeric_bf16_precision: None,
             numeric_profile: None,
@@ -828,6 +865,19 @@ impl ResidentModelBuildPlan {
         (self.request.execution.serving_resource_requirements)(self)
     }
 
+    /// Explicit selection, including an explicitly requested synchronous policy.
+    pub fn requested_expert_transfer_policy(&self) -> Option<ServingExpertTransferPolicy> {
+        self.request.execution.expert_transfer_policy
+    }
+
+    /// Effective construction policy; omission never enables grouped transfers.
+    pub fn expert_transfer_policy(&self) -> ServingExpertTransferPolicy {
+        self.request
+            .execution
+            .expert_transfer_policy
+            .unwrap_or_default()
+    }
+
     pub fn expert_read_pipeline_options(
         &self,
     ) -> Option<ferrule_model::transformer::ExpertReadPipelineOptions> {
@@ -916,12 +966,13 @@ impl ResidentModelBuildPlan {
     /// Use the typed accessors rather than parsing this presentation string.
     pub fn resolution_report(&self) -> String {
         format!(
-            "{} {:?}: backend {:?} -> {:?}, profile={}; numeric arithmetic={}; {:?}; topology={:?}; scheduler requested={:?}, effective={:?}; context={}; adjustments=[{}]; metadata only, owner live admission required (source identity, free memory, allocator/headroom and cleanup are not guaranteed); KV logical pages L and physical transaction slots P remain separately owner-planned",
+            "{} {:?}: backend {:?} -> {:?}, profile={}; expert_transfer_policy={}; numeric arithmetic={}; {:?}; topology={:?}; scheduler requested={:?}, effective={:?}; context={}; adjustments=[{}]; metadata only, owner live admission required (source identity, free memory, allocator/headroom and cleanup are not guaranteed); KV logical pages L and physical transaction slots P remain separately owner-planned",
             self.model_name,
             self.selected_implementation().kind,
             self.requested_backend,
             self.backend,
             self.backend_profile,
+            self.expert_transfer_policy().as_str(),
             self.numeric_fp8_profile()
                 .map_or("not applicable", NumericFp8Profile::arithmetic_description),
             self.support(),
@@ -998,7 +1049,7 @@ impl ResidentModelBuildPlan {
 
     /// Load model state and build the resident engine on the calling thread.
     pub fn build(self) -> Result<BoxedSessionInferenceEngine> {
-        tracing::info!(report = %self.resolution_report(), "resident model build entering owner-local admission");
+        tracing::info!(expert_transfer_policy = self.expert_transfer_policy().as_str(), report = %self.resolution_report(), "resident model build entering owner-local admission");
         let build = self.request.execution.construction.builder();
         let policy = self.request.execution.kv_execution_policy;
         let mut engine = self.build_with(build)?;
@@ -1265,6 +1316,10 @@ mod dense_bf16_tests;
 #[cfg(test)]
 #[path = "../../tests/unit/engine/model_factory/resolution.rs"]
 mod resolution_tests;
+
+#[cfg(test)]
+#[path = "../../tests/unit/engine/model_factory/expert_transfer/mod.rs"]
+mod expert_transfer_tests;
 
 #[cfg(test)]
 #[path = "../../tests/unit/engine/model_factory/expert_read_config.rs"]

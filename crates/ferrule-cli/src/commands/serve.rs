@@ -89,7 +89,11 @@ fn serving_resource_report(prepared: &ResidentModelBuildPlan) -> anyhow::Result<
 
 fn execution_report(prepared: &ResidentModelBuildPlan, rank_timeout_ms: u64) -> Vec<String> {
     let topology = prepared.topology_placement();
-    let mut report = Vec::new();
+    let mut report = vec![format!(
+        "expert transfers: requested={:?} effective={}; unchanged host staging and device/cache budgets",
+        prepared.requested_expert_transfer_policy(),
+        prepared.expert_transfer_policy().as_str(),
+    )];
     if let Some(read) = prepared.expert_read_pipeline_options() {
         report.push(format!(
             "expert read host staging: schedule={:?} host_cap_bytes={} metadata_bytes={} worker_stack_bytes={}; metadata and requested stack included in host cap; separate from CUDA cache/device budgets; OS/TLS/allocator headroom not included; no GPU-overlap claim",
@@ -181,6 +185,7 @@ fn prepare_model(args: &ServeArgs) -> anyhow::Result<ResidentModelBuildPlan> {
 
 fn serving_options(args: &ServeArgs) -> anyhow::Result<ServingModelOptions> {
     Ok(ServingModelOptions {
+        expert_transfer_policy: args.expert_transfer_policy.map(Into::into),
         expert_read_pipeline: args.expert_read.options()?,
         model_profile: args.model_profile.map(Into::into),
         model_precision: args.model_precision.map(Into::into),
@@ -521,6 +526,8 @@ fn validate_common_args(args: &ServeArgs) -> anyhow::Result<()> {
 mod tests {
     #[path = "expert_read_config.rs"]
     mod expert_read_config;
+    #[path = "expert_transfer/mod.rs"]
+    mod expert_transfer_tests;
     #[path = "host_kv_policy.rs"]
     mod host_kv_policy_tests;
     #[path = "model_precision/mod.rs"]

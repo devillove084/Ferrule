@@ -57,6 +57,11 @@ impl SelectionRequest {
         backend: BackendSelection,
         options: &ModelFactoryOptions,
     ) -> Result<Self> {
+        expert_read_policy::validate_transfer_request(
+            backend,
+            &self.serving,
+            self.numeric_model.is_some(),
+        )?;
         expert_read_policy::validate_request(
             backend,
             options,
@@ -396,6 +401,8 @@ impl ResidentModelPlanner {
         request: SelectionRequest,
     ) -> Result<ResidentModelBuildPlan> {
         let mut strategy = (implementation.select)(implementation, backend, &request, &options)?;
+        strategy.execution.expert_transfer_policy = request.serving.expert_transfer_policy;
+        expert_read_policy::validate_transfer_execution(&strategy.execution)?;
         strategy.execution.expert_read_pipeline = request.serving.expert_read_pipeline;
         if request.serving.model_precision == Some(ModelPrecision::F32)
             && !matches!(
@@ -468,6 +475,7 @@ impl ResidentModelBuildPlan {
             topology.physical.root_device = Some(0);
             topology.physical.devices = Some(vec![0]);
         }
+        expert_read_policy::validate_transfer_execution(&self.request.execution)?;
         expert_read_policy::validate_resolved(&self.request)?;
         self.topology = topology;
         self.provider_adjustments = AdjustmentReport::default();
@@ -552,6 +560,8 @@ pub(super) fn same_final_request(
             execution.serving_resource_requirements,
             right.execution.serving_resource_requirements,
         )
+        && execution.supports_expert_transfer == right.execution.supports_expert_transfer
+        && execution.expert_transfer_policy == right.execution.expert_transfer_policy
         && execution.expert_read_pipeline == right.execution.expert_read_pipeline
         && execution.numeric_bf16_precision == right.execution.numeric_bf16_precision
         && execution.numeric_profile == right.execution.numeric_profile

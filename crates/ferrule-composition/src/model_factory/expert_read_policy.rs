@@ -187,3 +187,71 @@ pub(super) fn validate_available_host(
     }
     Ok(())
 }
+
+/// Transfer admission is separate from read scheduling and does not alter caps.
+pub(super) fn validate_transfer_request(
+    backend: BackendSelection,
+    serving: &ServingModelOptions,
+    numeric_model: bool,
+) -> Result<()> {
+    let Some(policy) = serving.expert_transfer_policy else {
+        return Ok(());
+    };
+    if backend != BackendSelection::Cuda
+        || (!numeric_model && serving.model_profile.is_none())
+        || serving.parallel.is_some()
+        || serving.engine == ServingEngineSelection::Pipeline
+        || serving.kv_execution_policy != ferrule_runtime::engine::KvExecutionPolicy::Resident
+    {
+        return Err(unsupported_transfer(
+            policy,
+            "requires explicit CUDA and a local resident numeric model profile; no CPU/dense/parallel/HostKV fallback",
+        ));
+    }
+    if policy == ServingExpertTransferPolicy::GroupedSynchronous
+        && serving.expert_read_pipeline.is_none()
+    {
+        return Err(unsupported_transfer(
+            policy,
+            "grouped synchronous transfers require an explicit bounded expert read pipeline",
+        ));
+    }
+    Ok(())
+}
+
+pub(super) fn validate_transfer_execution(execution: &ResolvedExecution) -> Result<()> {
+    let Some(policy) = execution.expert_transfer_policy else {
+        return Ok(());
+    };
+    if !execution.supports_expert_transfer
+        || execution.numeric_bf16_precision.is_none()
+        || execution.support.storage != StorageEncoding::NumericFp8E4m3fnBf16Scales
+        || execution.construction.kind() != SelectedImplementationKind::Resident
+    {
+        return Err(unsupported_transfer(
+            policy,
+            "selected provider does not implement local numeric expert transfer selection",
+        ));
+    }
+    if policy == ServingExpertTransferPolicy::GroupedSynchronous
+        && execution.numeric_bf16_precision
+            != Some(ferrule_model::transformer::NumericFp8Precision::Bf16ModelMixedF32Accumulate)
+    {
+        return Err(unsupported_transfer(
+            policy,
+            "grouped synchronous serving requires validated mixed BF16/F32 numeric model precision",
+        ));
+    }
+    Ok(())
+}
+
+fn unsupported_transfer(policy: ServingExpertTransferPolicy, reason: &str) -> Error {
+    tracing::warn!(
+        expert_transfer_policy = policy.as_str(),
+        reason,
+        "unsupported expert transfer selection"
+    );
+    Error::InvalidRequest {
+        message: format!("expert transfer policy {}: {reason}", policy.as_str()),
+    }
+}

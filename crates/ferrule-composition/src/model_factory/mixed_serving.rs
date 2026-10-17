@@ -29,6 +29,7 @@ impl ServingModelOptions {
         options: &ModelFactoryOptions,
         provenance: &ServingOptionProvenance,
     ) -> Result<()> {
+        super::expert_read_policy::validate_transfer_request(backend, self, false)?;
         super::expert_read_policy::validate_request(backend, options, self, false)?;
         if let Some(profile) = self.model_profile {
             return profile.validate_request(backend, options, self, provenance);

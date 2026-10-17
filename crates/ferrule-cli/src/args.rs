@@ -523,8 +523,31 @@ impl From<ServeModelProfile> for ferrule_composition::model_factory::ServingMode
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub(crate) enum ServeExpertTransferPolicy {
+    Synchronous,
+    GroupedSynchronous,
+}
+
+impl From<ServeExpertTransferPolicy>
+    for ferrule_composition::model_factory::ServingExpertTransferPolicy
+{
+    fn from(policy: ServeExpertTransferPolicy) -> Self {
+        match policy {
+            ServeExpertTransferPolicy::Synchronous => Self::Synchronous,
+            ServeExpertTransferPolicy::GroupedSynchronous => Self::GroupedSynchronous,
+        }
+    }
+}
+
 #[derive(Args, Clone)]
 pub(crate) struct ServeArgs {
+    /// Expert H2D completion policy; omitted preserves synchronous transfers.
+    /// Explicit policies require a local CUDA numeric model profile. Grouped
+    /// synchronous also requires mixed BF16/F32 precision and --expert-read-host-mb;
+    /// read/cache caps are unchanged.
+    #[arg(long, value_enum)]
+    pub(crate) expert_transfer_policy: Option<ServeExpertTransferPolicy>,
     #[command(flatten)]
     pub(crate) expert_read: ExpertReadArgs,
     #[command(flatten)]

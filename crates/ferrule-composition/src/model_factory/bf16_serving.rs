@@ -499,6 +499,7 @@ pub(super) fn select_numeric(
         "numeric model BF16 resident",
     );
     execution.support.static_constraints = "numeric E4M3FN/BF16 scales; native BF16 resident weights/Rows/residual/KV/conv/logits; router parameter weights/logits BF16, probabilities/route weights F32; GDN A_log/norm sources BF16 or F32, F32 sources cast once to resident/operator BF16; F32 accumulation/SSM; RoPE inv_freq/trig F32, resident cos/sin/output BF16; full-depth 35B TP1/PP1/EP1/device0; lazy bounded typed experts; batch<=32; no HostKV/prefix/speculation/host prewarm; declared device policy, metadata admission does not validate GPU storage; GPU quality acceptance pending";
+    execution.supports_expert_transfer = true;
     execution.numeric_bf16_precision = Some(numeric.precision);
     execution.topology_policy = Some(LOCAL_TOPOLOGY);
     execution.conversion =
@@ -663,13 +664,24 @@ pub(super) fn build_numeric_bf16(
         #[cfg(test)]
         NUMERIC_BF16_TEST_DEVICE.with(|slot| *slot.borrow_mut() = Some(device.clone()));
         let tokenizer = TokenizerHandle::load(&request.model_path)?;
-        #[allow(unused_mut)]
         let mut runner = GenericDecoderRunner::<HybridCudaDecoder>::hybrid_cuda(
             plan.resources,
             tokenizer,
             plan.options,
             device,
         )?;
+        runner.set_expert_transfer_policy(
+            request
+                .execution
+                .expert_transfer_policy
+                .unwrap_or_default()
+                .into(),
+        )?;
+        tracing::info!(
+            requested_expert_transfer_policy = ?request.execution.expert_transfer_policy,
+            expert_transfer_policy = ?runner.expert_transfer_policy(),
+            "configured resident expert transfers before engine composition"
+        );
         #[cfg(test)]
         NUMERIC_BF16_TEST_RUNNER.with(|slot| {
             if let Some(observe) = slot.borrow_mut().take() {

@@ -10,7 +10,7 @@ pub use model_factory::{
     BackendSelection, BuiltinModelResolver, ModelFactoryOptions, ModelPrecision,
     NumericStoragePolicy, Qwen35NumericBf16MemoryPlan, ResidentModelBuildObservability,
     ResidentModelBuildPlan, ResidentModelPlanner, ResolvedModelBackend, ServingEngineSelection,
-    ServingModelOptions,
+    ServingExpertTransferPolicy, ServingModelOptions,
 };
 
 pub use ferrule_runtime::{Error, Result};
