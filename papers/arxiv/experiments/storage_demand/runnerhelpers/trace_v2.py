@@ -140,3 +140,67 @@ def logical_counter_window(lines):
                 deltas=deltas, cache_miss_count=None, physical_nas_bytes=None,
                 binding='serial request log-byte window, not transaction or worker ID',
                 scope='logical checkpoint reader and facade transfer, not physical traffic')
+
+
+TRANSFER_WORK = ('rows', 'sequences', 'prefill_rows', 'decode_rows',
+    'expert_uploads', 'expert_hits', 'expert_evictions', 'h2d_copies', 'h2d_bytes',
+    'artifact_uploads', 'artifact_upload_bytes', 'checkpoint_read_bytes')
+
+
+def transfer_counter_window(lines, options):
+    """Strict prospective health, without changing historical counter semantics."""
+    from paired_read_v1 import quality
+    from .evidence_v2 import COUNTERS
+    value = logical_counter_window(lines)
+    try:
+        require(value['valid'], 'missing/invalid invocation counters')
+        previous = None
+        for row in value['rows']:
+            f = row['fields']
+            require(all(quality._v3_integer(f.get(k)) for k in COUNTERS + TRANSFER_WORK),
+                    'missing/overflowed typed work counter')
+            require(f.get('expert_cache_counters_overflowed') is False
+                and f.get('expert_read_counter_reset_detected') is False,
+                'cache overflow/read counter reset or missing health')
+            for key in ('expert_pending_upload_bytes', 'expert_unknown_quarantine_bytes',
+                        'facade_stream_sync_failures'):
+                require(type(f.get(key)) is int and f[key] == 0, 'pending/Unknown/failure: ' + key)
+            require(all(integer(f.get(k)) for k in TRANSFER_WORK + ('expert_resident_entries',
+                'expert_resident_bytes', 'expert_scratch_bytes', 'expert_owner_peak_bytes')),
+                'missing typed work/cache gauge')
+            require(f['expert_resident_entries'] <= 64 and f['expert_scratch_bytes'] <= 8 << 20
+                and f['expert_resident_bytes'] + f['expert_scratch_bytes']
+                    <= f['expert_owner_peak_bytes'] <= 320 << 20, 'cache budget/conservation')
+            read = json.loads(f['expert_read_pipeline'])
+            quality.read_observation_v3(read, options, stage='idle_retained')
+            delta = json.loads(f['expert_read_pipeline_delta'])
+            require(isinstance(delta, dict) and set(delta) == set(quality.V3_COUNTERS + quality.V3_PEAKS)
+                and all(quality._v3_integer(v) for v in delta.values()), 'missing typed read delta')
+            for key in quality.V3_COUNTERS:
+                require(delta[key] <= read['stats'][key] and (previous is None or
+                    read['stats'][key] - previous['stats'][key] == delta[key]),
+                    'read lifetime reset/delta mismatch: ' + key)
+            require(all(delta[k] == read['stats'][k] for k in quality.V3_PEAKS), 'read peak delta mismatch')
+            if previous is not None:
+                require(all(read['stats'][k] >= previous['stats'][k] for k in quality.V3_PEAKS),
+                        'read lifetime peak reset')
+            previous = read
+            row['read_endpoint'] = read
+        value.update(transfer_health_valid=True, health_error=None,
+            grouped_backend_call_count=None,
+            dispatch_evidence='positive cache uploads plus reviewed frozen-source policy dispatch; no direct grouped-call counter')
+    except (ValueError, KeyError, TypeError) as error:
+        value.update(valid=False, transfer_health_valid=False, health_error=str(error),
+                     grouped_backend_call_count=None)
+    return value
+
+
+def transfer_startup(lines, policy, cli_sha256):
+    expected = {'synchronous': 'Synchronous', 'grouped-synchronous': 'GroupedSynchronous'}[policy]
+    rows = [fields(event) for _, event in json_events(lines) if fields(event).get('message')
+        == 'configured resident expert transfers before engine composition']
+    require(len(rows) == 1 and rows[0].get('requested_expert_transfer_policy') == 'Some(' + expected + ')'
+        and rows[0].get('expert_transfer_policy') == expected, 'startup requested/observed transfer policy mismatch')
+    require(re.fullmatch(r'[0-9a-f]{64}', cli_sha256 or ''), 'frozen CLI hash missing')
+    return dict(requested=policy, effective=policy, observed_getter=rows[0], frozen_cli_sha256=cli_sha256,
+                backend_grouped_dispatch_proven_by_getter=False)

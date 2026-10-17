@@ -112,7 +112,7 @@ def next_trial(directory, registered):
         row = ct.load(folder / 'assessment.json')
         require(row['trial'] == trial and row['assessment']['can_continue'] is True,
                 'prior attempt failed/unknown; no resume or replacement')
-    raise ValueError('all ten planned arms already issued; no additional lifecycle')
+    raise ValueError('all planned arms already issued; no additional lifecycle')
 
 
 def start(directory, granted):
@@ -191,6 +191,8 @@ def execute_next(directory):
                     post = pilot.idle(folder, 'coordinator-post-idle', registered['eight_uuids'],
                                       min(time.monotonic() + 20, outer), receipt)
                 observed = ct.load(folder / 'lifecycle.json') if (folder / 'lifecycle.json').is_file() else {}
+                if 'study_layout' in registered:
+                    observed.setdefault('requests', {})['observations'] = ex.recover_observations(folder, schedule)
                 assessment = ex.lifecycle_assessment(observed, receipt, post)
                 read = ledger(observed, mode)
                 if not read['can_continue']:
@@ -205,6 +207,22 @@ def execute_next(directory):
                     assessment=assessment, read_ledger=read, supervisor=receipt, post_idle=post, lifecycle=observed,
                     actual_http_token_ids_source='worker enqueue actual IDs joined to actual HTTP request ID, not retokenization',
                     outer_deadline=outer, coordinator_ended=ex.stamp())
+                if 'study_layout' in registered and assessment['can_continue']:
+                    block = next(b for b in registered['order'] if b['block'] == row['block'])
+                    paired = {trial: row}
+                    for pair_mode in block['modes']:
+                        pair_trial = block['block'] + '-' + pair_mode
+                        prior = directory / pair_trial / 'assessment.json'
+                        if pair_trial != trial and prior.is_file():
+                            paired[pair_trial] = ct.load(prior)
+                    if len(paired) == 2:
+                        paired_metrics = analysis.transfer_pair_metrics(block, paired, schedule)
+                        row['paired_quality'] = {k: paired_metrics[k] for k in
+                            ('qualified', 'crosspolicy_exact_output', 'crosspolicy_equal_work')}
+                        if not paired_metrics['qualified']:
+                            assessment['can_continue'] = False
+                            assessment['stop_reasons'].append('paired HTTP output/work/metric mismatch; permanent STOP')
+                            summary['measured_qa']['eligible_success'] = 0
                 ct.write(folder / 'assessment.json', row)
                 require(assessment['can_continue'], '; '.join(assessment['stop_reasons']))
             ct.write(folder / 'locks-released.json', dict(context_exited=True, all_eight_local=True))
@@ -221,6 +239,8 @@ def execute_next(directory):
             stop(directory, reason)
             if not (folder / 'assessment.json').exists():
                 observed = ct.load(folder / 'lifecycle.json') if (folder / 'lifecycle.json').is_file() else observed
+                if 'study_layout' in registered:
+                    observed.setdefault('requests', {})['observations'] = ex.recover_observations(folder, schedule)
                 summary = ex.recover_requests(folder, schedule)
                 summary['measured_qa']['request_only_eligible_success'] = summary['measured_qa']['eligible_success']
                 summary['measured_qa']['eligible_success'] = 0
@@ -251,21 +271,27 @@ def finalize(directory):
                 summary['measured_qa']['eligible_success'] = 0
                 rows.append(dict(trial=trial, block=trial.split('-')[0], mode=trial.split('-', 1)[1], summary=summary,
                     status='unissued_or_incomplete', stop_reason='prior STOP/incomplete attempt/finite envelope; no replacement'))
+                if 'study_layout' in registered:
+                    rows[-1]['lifecycle'] = dict(requests=dict(observations=ex.recover_observations(folder, schedule)))
         complete = all(row.get('assessment', {}).get('can_continue') is True for row in rows)
         if (directory / 'study-stop.json').exists():
             complete = False
         require(complete or (directory / 'study-stop.json').exists() or time.monotonic() >= registered['pilot_deadline'] - 100,
                 'do not finalize early without fixed STOP/deadline; planned arms remain')
         report = dict(schema='ferrule.storage-demand.paired-read-actual.v2', status='complete' if complete else 'stopped',
-            order=registered['order'], lifecycles=rows, scheduled_blocks=5, scheduled_starts=10,
-            scheduled_requests=120, scheduled_measured_qa=50, started=registered['started'], ended=ex.stamp(),
+            order=registered['order'], lifecycles=rows, scheduled_blocks=registered.get('scheduled_blocks', 5), scheduled_starts=len(registered['trial_order']),
+            scheduled_requests=len(rows) * 12, scheduled_measured_qa=len(rows) * 5, started=registered['started'], ended=ex.stamp(),
             pilot_deadline=registered['pilot_deadline'], candidate_sha256=registered['binding_sha256'],
             execution_sha256=registered['execution_sha256'], binding_path=registered['binding_path'],
             physical_uuid=registered['selected_uuid'], eight_uuids=registered['eight_uuids'],
             retries=0, replacements=0, extra_pilot_lifecycles=0, profile_lifecycles=0,
             physical_nas_backend_bytes=None, universal_final_release_verified=False,
             resource_contract_complete='unverified', scientific_acceptance=False)
+        if 'study_layout' in registered:
+            report['study_layout'] = registered['study_layout']
         report['analysis'] = analysis.summarize(report)
+        if 'study_layout' in registered and not all(b['qualified'] for b in report['analysis']['blocks']):
+            report['status'] = 'stopped'
         report['actual_completed_lifecycles'] = sum(row.get('assessment', {}).get('can_continue') is True for row in rows)
         report['actual_issued_lifecycles'] = sum((directory / trial / 'launch.json').is_file() for trial in registered['trial_order'])
         report['pipeline'] = [{key: row.get(key) for key in ('trial', 'mode', 'read_ledger')} for row in rows]

@@ -314,7 +314,10 @@ def worker(launch_hash):
 def supervise(payload, seconds):
     payload, launch_hash = launch_guard.seal(payload, payload['directory'])
     environment = dict(ex.runner.cpu_environment(), FERRULE_PAPER_WORKER_TOKEN=payload['worker_token'])
-    argv = ct.isolated_argv([sys.executable, '-S', '-B', str(ENTRY), '--_worker', launch_hash], environment)
+    command = [sys.executable, '-S', '-B', str(ENTRY), '--_worker', launch_hash]
+    if payload.get('spec', {}).get('expert_transfer_case') is not None:
+        command += ['--layout', payload['execution_path']]
+    argv = ct.isolated_argv(command, environment)
     try:
         return supervisor.run_process(argv, seconds, payload)
     except BaseException as error:

@@ -220,6 +220,11 @@ def serial_requests(directory, schedule, spec, limits, target_deadline, outer_de
     observations, issued, seen_ids = [], [], set()
     log = Path(directory) / 'server.log'
     stop_reason = None
+    transfer_case = spec.get('expert_transfer_case')
+    startup = None
+    if transfer_case is not None:
+        from .trace_v2 import transfer_startup
+        startup = transfer_startup(log_lines(log), transfer_case['transfer_policy'], spec['frozen_cli_sha256'])
     for planned in schedule:
         try:
             check()
@@ -257,8 +262,14 @@ def serial_requests(directory, schedule, spec, limits, target_deadline, outer_de
             if trace['actual_worker_request_id'] is not None:
                 seen_ids.add(trace['actual_worker_request_id'])
             counters = logical_counter_window(lines)
+            if transfer_case is not None:
+                from .trace_v2 import transfer_counter_window
+                counters = transfer_counter_window(lines, transfer_case['read_options'])
             nfs = mountstats_delta(pre, post)
             eligible = not duplicate and end['monotonic'] <= deadline and request_gate(planned, actual, trace, counters, nfs)
+            if transfer_case is not None:
+                eligible = eligible and actual.get('finish_reason') == 'length' and all(
+                    integer(counters['deltas'].get(k), 1) for k in ('expert_uploads', 'h2d_bytes'))
             status = 'success' if actual.get('status') == 'success' else (
                 'censored' if actual.get('status') in ('timeout', 'client_error', 'transport_error') else 'failed')
             observed = dict(planned, issued=True, status=status, actual=actual, trace=trace,
@@ -266,7 +277,18 @@ def serial_requests(directory, schedule, spec, limits, target_deadline, outer_de
                             metric_eligible=eligible, logical_counters=counters, nfs=nfs,
                             process_io=dict(before=before_io, after=after_io),
                             log_start_byte=offset, log_end_byte=window_end,
-                            window_begin=begin, window_end=end, absolute_deadline=deadline)
+                            window_begin=begin, window_end=end, admission=journal['admission'], absolute_deadline=deadline)
+            if transfer_case is not None:
+                from .trace_v2 import fields, json_events
+                admitted = [fields(event) for _, event in json_events(lines) if
+                    fields(event).get('event') == 'request_http_admitted' and
+                    fields(event).get('request_id') == trace['actual_worker_request_id']]
+                observed['server_http_admission_us'] = admitted[0].get('http_admission_us') if len(admitted) == 1 else None
+                eligible = eligible and integer(observed['server_http_admission_us'])
+                observed.update(metric_eligible=eligible, quality_passed=eligible)
+                from paired_read_v1.analysis import request_metrics
+                eligible = eligible and request_metrics(planned, observed)['reference_qualified']
+                observed.update(metric_eligible=eligible, quality_passed=eligible)
             if end['monotonic'] > deadline:
                 observed.update(status='censored', right_censored=True, censor_reason='absolute request deadline')
             ct.write(folder / 'observed.json', observed)
@@ -275,13 +297,17 @@ def serial_requests(directory, schedule, spec, limits, target_deadline, outer_de
         except (Exception, KeyboardInterrupt) as error:
             stop_reason = type(error).__name__ + ': ' + str(error)
             if issued and issued[-1]['name'] == planned['name'] and not any(r['name'] == planned['name'] for r in observations):
+                terminal = folder / 'http-terminal.json'
+                actual = ct.load(terminal) if terminal.is_file() else {}
                 observations.append(dict(issued[-1], status='censored', right_censored=True,
-                                         metric_eligible=False, censor_reason=stop_reason))
+                    actual=actual, metric_eligible=False, censor_reason=stop_reason))
             break
     journal_schedule = [dict(row, issued=any(i['name'] == row['name'] for i in issued)) for row in schedule]
     result = dict(started_monotonic=started, absolute_aggregate_deadline=started + limits['all_requests_seconds'],
                   observations=observations, summary=censoring_summary(observations, journal_schedule),
                   stop_reason=stop_reason, can_continue=stop_reason is None and len(observations) == 12)
+    if transfer_case is not None:
+        result['expert_transfers'] = dict(startup=startup, requested_case=transfer_case)
     ct.write(Path(directory) / 'requests-final.json', result)
     return result
 
@@ -327,14 +353,21 @@ def lifecycle_assessment(observed, supervisor, post_idle):
                 resource_contract_complete='unverified', universal_final_release_verified=False)
 
 
-def recover_requests(directory, schedule):
-    """After lost worker output, admitted records never become unissued."""
+def recover_observations(directory, schedule):
+    """Preserve dispatch/terminal evidence even if post-request sampling failed."""
     rows = []
     for planned in schedule:
         folder = Path(directory) / planned['name']
         if (folder / 'observed.json').is_file():
             rows.append(ct.load(folder / 'observed.json'))
         elif (folder / 'issued.json').is_file():
+            terminal = folder / 'http-terminal.json'
             rows.append(dict(ct.load(folder / 'issued.json'), status='censored', metric_eligible=False,
-                             censor_reason='worker lost before terminal artifact'))
-    return censoring_summary(rows, schedule)
+                actual=ct.load(terminal) if terminal.is_file() else {},
+                censor_reason='worker lost before observation artifact'))
+    return rows
+
+
+def recover_requests(directory, schedule):
+    """After lost worker output, admitted records never become unissued."""
+    return censoring_summary(recover_observations(directory, schedule), schedule)

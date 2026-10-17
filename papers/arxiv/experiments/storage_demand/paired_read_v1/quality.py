@@ -148,6 +148,13 @@ def read_observation_v3(value, options, *, stage=None):
             and 'pending_read' in value and value['pending_read'] is None and 'last_receipt' in value,
             'v3 current/pending read custody retained or missing')
     stats, charge = value.get('stats'), value.get('current_charge')
+    # These fields are serialized only when nonzero by the host-charge producer.
+    # A settled synchronous/grouped endpoint must never retain upload custody.
+    upload_fields = ('upload_reserved_packed_bytes', 'pinned_upload_bytes',
+        'upload_ticket_metadata_bytes', 'upload_policy_headroom_bytes', 'unknown_upload_bytes')
+    require(isinstance(charge, dict) and all(type(charge.get(k, 0)) is int
+            and charge.get(k, 0) == 0 for k in upload_fields), 'v3 outstanding/Unknown host upload charge')
+    charge = {k: v for k, v in charge.items() if k not in upload_fields}
     require(isinstance(stats, dict) and set(stats) == set(V3_COUNTERS + V3_PEAKS)
             and all(_v3_integer(v) for v in stats.values()), 'v3 typed full-owner stats missing/invalid')
     require(isinstance(charge, dict) and set(charge) == set(V3_CHARGES)

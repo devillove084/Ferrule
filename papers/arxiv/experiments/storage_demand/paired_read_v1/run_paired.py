@@ -34,8 +34,12 @@ def spec_for(candidate, uuid, mode):
     environment.update(CUDA_VISIBLE_DEVICES=uuid, NVIDIA_VISIBLE_DEVICES=uuid,
         CUDA_DEVICE_ORDER='PCI_BUS_ID', HF_HUB_OFFLINE='1', TRANSFORMERS_OFFLINE='1')
     argv = [str(ct.absolute(candidate['candidate']['binary']).resolve()), *case['argv_after_binary']]
-    return dict(engine='ferrule', argv=argv, environment=environment,
+    spec = dict(engine='ferrule', argv=argv, environment=environment,
         model='qwen35-storage-demand-paper', url='http://127.0.0.1:18369/v1/completions')
+    if 'transfer_policy' in case:
+        spec['expert_transfer_case'] = {k: case[k] for k in ('read_schedule', 'transfer_policy', 'read_options')}
+        spec['frozen_cli_sha256'] = candidate['candidate']['binary_sha256']
+    return spec
 
 
 def worker_contract(payload):
