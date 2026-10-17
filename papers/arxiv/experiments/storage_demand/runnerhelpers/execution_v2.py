@@ -273,6 +273,11 @@ def http_capture_main(directory, launch_hash, target_deadline):
             require(time.monotonic() < target_deadline, 'absolute target deadline expired during capture input/ELF verification')
             static = transfer.validate_static_preparation(spec['static_preparation'], payload['execution_path'], deadline=target_deadline)
             require(approved == static['bound_candidate'], 'capture prepared candidate changed')
+        elif spec.get('role_admission') is not None:
+            require(approved.get('role_partition_sha256') == spec['role_admission']['role_partition_sha256'],
+                'capture lacks independently approved live role coverage')
+            # The real entry has freshly verified the category-derived live set;
+            # never re-enter historical build/quality review from this boundary.
         else:
             ct.check_pins(approved['candidate']['artifact_pins'])
         ct.check_pins(payload['adapter_pins'])

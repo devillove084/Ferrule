@@ -198,3 +198,59 @@ run. Old acceptance, stopped pilot/all 96 unissued slots and separate immutable
 historical recovery are untouched. The existing `/papers/` rule ignores both
 regression files and this note; they remain unstaged and require explicit
 inclusion by commit tooling.
+
+## Prospective role-partition admission (candidate v4)
+
+The measured attempt02 path repeated prepared validation four times after its
+receipt and three times in active setup, including nested context entry. Its
+interrupted operation is unobserved. CPU replay measured costly directory
+ancestry work and repeated historical library verification; this is not a new
+attribution of the original timeout.
+
+`plan --acceptance-final ... --role-partition` selects a new, explicitly
+prospective candidate. Legacy v2/v3 subjects, strict receipt checks and the
+original compatibility allowlist are unchanged. The v2 prospective compatibility
+subject additionally exposes the reusable admission helper and its dedicated
+CPU tests for independent human review. Neither that plan nor a provenance
+proof grants permission. No old GO can authorize this new workflow.
+
+`review --layout ... --reviewed-provenance-output ...` performs full maintained
+build/source/Git/existing-archive/external/dependency/native and four-cell
+historical quality validation under the original identities. It emits a pending,
+content-hashed provenance proof, exhaustive disjoint role partition, and reviewed
+identity subject. The eventual independently reviewed MAIN-GO v3 must bind all
+three exact hashes in addition to purpose/layout/workflow/runtime/bridge.
+
+Launch admission independently reconstructs the role universe from real pinned
+descriptor categories and explicit frozen semantic sources, then compares the
+entire proof/partition/identity subject. Live overlaps win; unknown categories
+reject and uncategorized fixed metadata stays live. Actual ELF, twelve runtime
+libraries, current Python/workflow/tools, references/tokenizers/metadata,
+checkpoint manifest and existing fourteen-shard stat contract stay fresh.
+Build-only original writable headers/registries/toolchains/native artifacts are
+not rehashed or inventoried at launch. Their exact build-to-ELF relation and
+original quality evidence remain in the independently approved review proof.
+This minimization is restricted to the exact accepted Qwen workload/ELF with
+two SM86 cubins, zero embedded PTX and retained twelve-library maps; it is not
+an all-model/no-transient-JIT claim or a stronger mapped-memory identity claim.
+
+A process-local single-trial Admission drives existing runner callbacks without
+recursive review/admission. Coordinator pre-worker and worker pre-capture spawn
+boundaries rehash live inputs; worker/capture entries independently reconstruct
+real authority and freshly check the live set. Ready/after-request/pre-stop
+role-map validation is unchanged. Request-control pin checks retain the derived
+non-ELF live set; binary/runtime content is checked at execution/admission and
+role-map boundaries rather than rehashing 653 MB on every request-control poll.
+This phase-use policy is part of the exact approved partition. Completion, STOP, boot/PID/birth/layout/trial
+or clock changes deny reuse; no global cache or sliding TTL exists. A static
+journal is evidence only, never a deserializable capability. Registration content
+is rehashed; its explicit one-way 0644-to-0400 seal may change ctime without
+pretending to preserve an earlier identity verification. Other mutable inputs
+are not weakened to stat-only checks.
+
+Static **180s**, active **650s**, reserve **610s**, original target deadlines,
+all-eight owner/custody checks, no-retry barriers and scientific phase-W
+semantics are unchanged. Local admin remains inside the trust boundary: local
+GO/filesystem hashes are not independent cryptographic authority against that
+admin. A new independently reviewed proof/bridge/GO and satisfactory bounded CPU
+boundary evidence are required before considering a new authorized GPU stage.

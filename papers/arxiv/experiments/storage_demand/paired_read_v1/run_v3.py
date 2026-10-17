@@ -139,7 +139,7 @@ def main(argv=None):
             try:
                 sys.stdin = io.StringIO(raw)
                 with transfer_adapter(Path(argv[3]), prepared=payload['spec'].get('static_preparation'),
-                        deadline=min(payload['outer_deadline'], payload['pilot_deadline'])):
+                        deadline=min(payload['outer_deadline'], payload['pilot_deadline']), launch=payload):
                     return planned.worker(argv[1])
             finally:
                 sys.stdin = previous
@@ -152,6 +152,8 @@ def main(argv=None):
     parser.add_argument('--layout', type=Path)
     parser.add_argument('--build-inputs', type=Path, help='immutable v2 candidate descriptor for a separately committed/compiled cut')
     parser.add_argument('--verified-artifact-identity-output', type=Path, help='review-only exclusive unapproved identity manifest, before MAIN-GO')
+    parser.add_argument('--role-partition', action='store_true', help='prospective reviewed-provenance admission; separate human bridge and MAIN-GO required')
+    parser.add_argument('--reviewed-provenance-output', type=Path, help='review-only exclusive pending provenance/role proof, never GO')
     parser.add_argument('--workflow-compatibility', type=Path, help='immutable separately reviewed prospective compatibility receipt; no implicit bridge')
     parser.add_argument('--acceptance-final', type=Path, help='sealed original acceptance FINAL for a prospective compatibility review plan')
     parser.add_argument('--purpose', choices=('pilot', 'public_cli_acceptance'), default='pilot')
@@ -159,7 +161,8 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if (args.layout is not None or args.study == 'transfer-pilot-v1'
             or args.acceptance_final is not None or args.workflow_compatibility is not None
-            or args.mode == 'compatibility-plan' or args.verified_artifact_identity_output is not None):
+            or args.mode == 'compatibility-plan' or args.verified_artifact_identity_output is not None
+            or args.role_partition or args.reviewed_provenance_output is not None):
         return transfer_main(args)
     if args.mode == 'plan':
         value = dict(plan.plan(), versioned_execution_entry=str(ENTRY), binding_pending=not binding.BINDING_PATH.exists(),
@@ -223,9 +226,9 @@ TRANSFER_SOURCE_SHA256 = {
     "crates/ferrule-model/src/transformer/standard/cuda/invocation_trace.rs": "be51b69dac63ec4b086d2af9cd665c3f5604cfebf95f304a5347fbb83a69ffb6"
 }
 
-def transfer_workflow_paths():
+def transfer_workflow_paths(*, role_partition=False):
     from newversionedprotocol import protocol as worker_protocol
-    return [ct.ROOT / p for p in worker_protocol.IMPORTS] + [
+    paths = [ct.ROOT / p for p in worker_protocol.IMPORTS] + [
         ct.ROOT / 'scripts/gpu_idle_window_v2.py', ct.ROOT / 'scripts/run_pinned_jobs.py',
         ct.ROOT / 'target/validation/qwen35-35b-current/toolchain/env-cuda124.sh',
         Path(sys.executable), *HERE.parent.joinpath('runnerhelpers').glob('*.py'),
@@ -235,6 +238,9 @@ def transfer_workflow_paths():
             'cases-v3.json', 'requests.json', 'oracles.json', 'plan_v3.py', 'current_binding_v2.py',
             'current_binding_v3.py', 'test_http_transfer_controls.py', 'test_deadline_phase.py', 'test_preparation_authority.py')),
         HERE.parent / 'checkpoint-metadata.json', Path('/usr/bin/env'), Path('/usr/bin/readelf'), Path('/usr/bin/git')]
+    if role_partition:
+        return paths + [HERE / 'test_transfer_admission.py']
+    return [p for p in paths if p.name != 'transfer_admission.py']
 
 
 def transfer_input_contract():
@@ -265,7 +271,10 @@ def validate_transfer_inputs(contract):
     return dict(input_contract_sha256=ct.digest(contract), checkpoint_content_sha256=None)
 
 
-def transfer_plan(purpose='pilot', *, compiled_identity=None, http_reference_binding=None):
+def transfer_plan(purpose='pilot', *, compiled_identity=None, http_reference_binding=None,
+        role_partition=False, workflow_pins=None):
+    require(workflow_pins is None or (role_partition and set(workflow_pins) ==
+        {str(p.resolve()) for p in transfer_workflow_paths(role_partition=True)}), 'exact prospective workflow universe required')
     identity = validate_compiled_identity(compiled_identity or historical_compiled_identity())
     require(purpose in ('pilot', 'public_cli_acceptance'), 'unknown transfer purpose')
     cases = {}
@@ -299,7 +308,8 @@ def transfer_plan(purpose='pilot', *, compiled_identity=None, http_reference_bin
         scheduled_measured_qa_per_policy=starts * 5 // 2, expected_measured_tokens_per_policy=None,
         acceptance_starts_disclosed=4, acceptance_requests_disclosed=48, filesystem_cold_claim=False,
         required_cuda_toolkit='12.4', required_cuda_architecture='sm_86',
-        candidate=None, artifact_pins=ct.inventory(transfer_workflow_paths()),
+        candidate=None, artifact_pins=(workflow_pins if workflow_pins is not None else
+            ct.inventory(transfer_workflow_paths(role_partition=role_partition))),
         gpu_authorized=False, gpu_queries=0, gpu_locks=0, gpu_runs=0,
         http_eos='ignore_eos omitted, stop enabled; reviewed exact IDs/text/finish_reason/usage references pending',
         diagnostic_eos='stop_at_eos=false; compatibility requires exact observed IDs/text/finish/usage',
@@ -319,7 +329,9 @@ def validate_transfer_layout(path, *, candidate_required=True):
     value = ct.load(path)
     require(isinstance(value, dict) and value.get('controls_revision') == 2, 'new versioned transfer controls required')
     expected = transfer_plan(value.get('purpose'), compiled_identity=value.get('compiled_identity'),
-        http_reference_binding=value.get('http_reference_binding'))
+        http_reference_binding=value.get('http_reference_binding'),
+        role_partition=role_admission_enabled(value),
+        workflow_pins=value['artifact_pins'] if role_admission_enabled(value) else None)
     require(isinstance(value, dict) and set(value) == set(expected)
         and all(value[k] == v for k, v in expected.items()
             if k not in ('candidate', 'http_reference_binding')),
@@ -742,7 +754,24 @@ def approval_subject(layout, facts):
     anchor = layout['candidate'].get('verified_artifact_identity')
     if anchor is not None:
         subject['verified_artifact_identity_sha256'] = anchor['sha256']
+    if role_admission_enabled(layout):
+        subject.update(reviewed_provenance_sha256=facts['reviewed_provenance_sha256'],
+            role_partition_sha256=facts['role_partition_sha256'],
+            reviewed_identity_sha256=facts['reviewed_identity_sha256'])
     return subject
+
+
+def role_admission_enabled(layout):
+    return (layout.get('candidate') or {}).get('schema') == 'ferrule.storage-demand.http-transfer-candidate-binding.v4'
+
+
+def transfer_admission_api():
+    from runnerhelpers import transfer_admission
+    return transfer_admission
+
+
+def review_transfer_provenance(layout, *, deadline):
+    return transfer_admission_api().review_transfer_provenance(sys.modules[__name__], layout, deadline=deadline)
 
 
 def transfer_candidate_descriptor(layout):
@@ -753,7 +782,9 @@ def transfer_candidate_descriptor(layout):
         and ((candidate.get('schema') == 'ferrule.storage-demand.http-transfer-candidate-binding.v2'
               and set(candidate) == fields)
             or (candidate.get('schema') == 'ferrule.storage-demand.http-transfer-candidate-binding.v3'
-              and set(candidate) == fields | {'verified_artifact_identity'})),
+              and set(candidate) == fields | {'verified_artifact_identity'})
+            or (candidate.get('schema') == 'ferrule.storage-demand.http-transfer-candidate-binding.v4'
+              and set(candidate) == fields | {'reviewed_provenance'})),
         'candidate pending: versioned actual CLI/build/source/runtime binding required')
     if 'verified_artifact_identity' in candidate:
         reference = candidate['verified_artifact_identity']
@@ -797,7 +828,8 @@ def authorize_transfer_candidate(layout, facts):
         'separate main purpose/layout/workflow/evidence-bound GO pending')
     review = ct.load(immutable_input(candidate['launch_review']))
     require(ct.sha(candidate['launch_review']) == candidate['launch_review_sha256']
-        and review.get('schema') == 'ferrule.storage-demand.http-transfer-launch-review.v2'
+        and review.get('schema') == ('ferrule.storage-demand.http-transfer-launch-review.v3'
+            if role_admission_enabled(layout) else 'ferrule.storage-demand.http-transfer-launch-review.v2')
         and review.get('decision') == 'GO' and review.get('subject') == subject,
         'separate main purpose/layout/workflow/evidence-bound GO pending')
     return subject
@@ -964,9 +996,16 @@ def transfer_candidate_authority(layout, *, historical_workflow=False, approval_
 def coverage_directories(authority):
     directories = set(authority['required_globs'])
     for root, members in authority['required_trees'].items():
+        base = Path(root)
         directories.add(root)
-        directories.update(str(parent) for name in members for parent in Path(name).parents
-            if parent == Path(root) or parent.is_relative_to(root))
+        seen = set()
+        for name in members:
+            parent = Path(name).parent
+            require(parent == base or parent.is_relative_to(base), 'coverage member escaped root')
+            while parent != base and parent not in seen:
+                seen.add(parent)
+                directories.add(str(parent))
+                parent = parent.parent
     return directories
 
 
@@ -1119,6 +1158,12 @@ def validate_prepared_coverage(value, authority, admission_pins):
 
 
 def validate_transfer_candidate(layout, *, approval_required=True, freshness=None, admission_pins=None):
+    if role_admission_enabled(layout):
+        require(approval_required and freshness is None, 'role admission never trusts a legacy preparation receipt; review provenance separately')
+        api = transfer_admission_api()
+        graph, bound = api.authority(sys.modules[__name__], layout)
+        api.verify_live(sys.modules[__name__], layout, graph)
+        return bound
     if freshness is not None:
         require(approval_required is True, 'prepared admission cannot bypass MAIN-GO')
         authority = transfer_candidate_authority(layout)
@@ -1156,6 +1201,19 @@ COMPATIBILITY_FILES = {
     'papers/arxiv/experiments/storage_demand/runnerhelpers/execution_v2.py': {'http_capture_main'},
 }
 COMPATIBILITY_TESTS = ('test_deadline_phase.py', 'test_preparation_authority.py')
+# Separate prospective scope; legacy compatibility subjects/allowlists stay strict.
+ROLE_COMPATIBILITY_FILES = {
+    name: functions | ({'transfer_candidate_descriptor', 'authorize_transfer_candidate', 'coverage_directories',
+        'prospective_compatibility_subject', 'prospective_transfer_plan', 'workflow_compatibility_plan',
+        'validate_workflow_compatibility'} if name.endswith('/run_v3.py') else
+        {'http_capture_main'} if name.endswith('/execution_v2.py') else set())
+    for name, functions in COMPATIBILITY_FILES.items()
+}
+ROLE_COMPATIBILITY_ADDED = (
+    'papers/arxiv/experiments/storage_demand/runnerhelpers/transfer_admission.py',
+    'papers/arxiv/experiments/storage_demand/paired_read_v1/test_transfer_admission.py',
+)
+
 
 
 def acceptance_manifest(binding):
@@ -1210,7 +1268,7 @@ def compatibility_quality_identity(layout):
         runtime_sha256=descriptor['sha256']['runtime_pin_manifest'])
 
 
-def prospective_compatibility_subject(layout, binding):
+def prospective_compatibility_subject(layout, binding, *, role_partition=False):
     require(layout['purpose'] == 'pilot' and binding['sha256'] == COMPATIBILITY_ACCEPTANCE_SHA256,
         'compatibility is prospective pilot-only for the exact reviewed acceptance final')
     report = acceptance_manifest({key: binding[key] for key in ('path', 'sha256')})
@@ -1218,14 +1276,17 @@ def prospective_compatibility_subject(layout, binding):
     require(compatibility_quality_identity(accepted) == compatibility_quality_identity(layout),
         'compatibility quality-relevant CLI/runtime/profile/quota/input/reference/EOS/producer/config differs')
     old, new = accepted['artifact_pins'], layout['artifact_pins']
-    allowed = {str(ct.ROOT / name) for name in COMPATIBILITY_FILES}
+    scope = ROLE_COMPATIBILITY_FILES if role_partition else COMPATIBILITY_FILES
+    allowed = {str(ct.ROOT / name) for name in scope}
     allowed_added = {str(HERE / name) for name in COMPATIBILITY_TESTS}
+    if role_partition:
+        allowed_added.update(str(ct.ROOT / name) for name in ROLE_COMPATIBILITY_ADDED)
     require(not (set(old) - set(new)) and set(new) - set(old) <= allowed_added,
         'compatibility workflow additions/removals exceed the reviewed orchestration/test scope')
     changed = {name for name in old if old[name] != new[name]}
     require(changed <= allowed, 'compatibility changed quality controls outside orchestration scope')
     semantic = {}
-    for relative, mutable_functions in COMPATIBILITY_FILES.items():
+    for relative, mutable_functions in scope.items():
         name = str(ct.ROOT / relative)
         original = original_workflow_bytes(name, old[name], accepted['compiled_identity']['archive_commit'])
         current = Path(name).read_bytes()
@@ -1260,6 +1321,8 @@ def prospective_compatibility_subject(layout, binding):
         'original acceptance MAIN-GO identity differs')
     prospective = copy.deepcopy(layout)
     prospective['candidate'].update(launch_review=None, launch_review_sha256=None)
+    if role_partition:
+        prospective['candidate']['reviewed_provenance'] = None
     if prospective['candidate'].pop('verified_artifact_identity', None) is not None:
         prospective['candidate']['schema'] = 'ferrule.storage-demand.http-transfer-candidate-binding.v2'
     prospective['candidate']['acceptance'] = {key: binding[key] for key in ('path', 'sha256')}
@@ -1271,10 +1334,11 @@ def prospective_compatibility_subject(layout, binding):
         quality_identity_sha256=ct.digest(compatibility_quality_identity(layout)),
         protected_semantic_source_pins=semantic, changed_orchestration_paths=sorted(changed),
         required_cpu_test_pins={name: new[name] for name in sorted(allowed_added)},
-        scope='prospective orchestration/admission-cache/deadline only; no production or quality-control change')
+        scope=('prospective role-partition/provenance admission; explicit helper/test review; unchanged quality/work/deadlines'
+            if role_partition else 'prospective orchestration/admission-cache/deadline only; no production or quality-control change'))
 
 
-def prospective_transfer_plan(acceptance_path, *, build_inputs=None, compatibility_path=None):
+def prospective_transfer_plan(acceptance_path, *, build_inputs=None, compatibility_path=None, role_partition=False):
     """CPU plan only: reuse the sealed CLI/HTTP references, never authorize it."""
     acceptance_path = immutable_input(Path(acceptance_path).resolve())
     binding = dict(path=str(acceptance_path), sha256=ct.sha(acceptance_path))
@@ -1282,17 +1346,23 @@ def prospective_transfer_plan(acceptance_path, *, build_inputs=None, compatibili
     accepted = acceptance_manifest(binding)['study_layout']
     identity = compiled_identity_for_inputs(build_inputs) if build_inputs else accepted['compiled_identity']
     require(identity == accepted['compiled_identity'], 'prospective CLI/source/runtime descriptor differs from acceptance')
-    layout = transfer_plan('pilot', compiled_identity=identity, http_reference_binding=accepted['http_reference_binding'])
+    layout = transfer_plan('pilot', compiled_identity=identity, http_reference_binding=accepted['http_reference_binding'],
+        role_partition=role_partition)
     if compatibility_path is not None:
         path = immutable_input(Path(compatibility_path).resolve())
         binding['workflow_compatibility'] = dict(path=str(path), sha256=ct.sha(path))
     layout['candidate'] = dict(accepted['candidate'], acceptance=binding, launch_review=None, launch_review_sha256=None)
+    if role_partition:
+        layout['candidate'].pop('verified_artifact_identity', None)
+        layout['candidate'].update(schema='ferrule.storage-demand.http-transfer-candidate-binding.v4', reviewed_provenance=None)
     return layout
 
 
 def workflow_compatibility_plan(layout, binding):
-    return dict(schema='ferrule.storage-demand.http-workflow-compatibility.v1',
-        subject=prospective_compatibility_subject(layout, binding), review=None,
+    role = role_admission_enabled(layout)
+    return dict(schema=('ferrule.storage-demand.http-workflow-compatibility.v2' if role else
+        'ferrule.storage-demand.http-workflow-compatibility.v1'),
+        subject=prospective_compatibility_subject(layout, binding, role_partition=role), review=None,
         status='pending_separate_human_review', gpu_authorized=False)
 
 
@@ -1302,9 +1372,11 @@ def validate_workflow_compatibility(binding, layout):
     path = immutable_input(reference['path'])
     require(ct.sha(path) == reference['sha256'], 'workflow compatibility hash differs')
     value = ct.load(path)
-    subject = prospective_compatibility_subject(layout, binding)
+    role = role_admission_enabled(layout)
+    subject = prospective_compatibility_subject(layout, binding, role_partition=role)
     review = value.get('review')
-    require(value.get('schema') == 'ferrule.storage-demand.http-workflow-compatibility.v1'
+    require(value.get('schema') == ('ferrule.storage-demand.http-workflow-compatibility.v2' if role else
+        'ferrule.storage-demand.http-workflow-compatibility.v1')
         and value.get('subject') == subject
         and value.get('status') == 'reviewed_for_prospective_orchestration_only'
         and value.get('gpu_authorized') is False and isinstance(review, dict)
@@ -1336,7 +1408,24 @@ def validate_public_cli_acceptance(binding, layout, facts):
     report = acceptance_manifest(binding)
     path, accepted = Path(binding['path']), report['study_layout']
     check_acceptance_layout(binding, layout, accepted)
-    candidate = validate_transfer_candidate(accepted)
+    return validate_acceptance_evidence(binding, report, facts)
+
+
+def validate_acceptance_evidence(binding, report, facts, *, reviewed_candidate=None):
+    path, accepted = Path(binding['path']), report['study_layout']
+    if reviewed_candidate is None:
+        candidate = validate_transfer_candidate(accepted)
+    else:
+        # Review owns this real full-validator result. Recheck the original GO;
+        # never treat a serialized quality/preparation receipt as permission.
+        candidate = reviewed_candidate
+        original = copy.deepcopy(candidate['build_review'])
+        old = accepted['candidate']
+        require(original['artifact_pins'].pop(old['launch_review']) == old['launch_review_sha256']
+            and original['compiled_identity'] == accepted['compiled_identity']
+            and candidate['uuid_inventory'] == old['uuid_inventory']
+            and authorize_transfer_candidate(accepted, original) == candidate['approval_subject'],
+            'review reuse is not the exact original candidate/GO')
     require(candidate['build_review']['source'] == facts['source'], 'acceptance full compiled identity differs')
     pins = report['artifact_pins']
     ct.check_pins(pins)
@@ -1617,10 +1706,17 @@ def prepare_transfer_admission(directory, path):
         deadline = min(started['monotonic'] + STATIC_PREPARATION_SECONDS, registered['pilot_deadline'] - 750)
         output = directory / ('static-preparation-' + trial + '.json')
         require(not output.exists(), 'static preparation exclusive; no retry')
+        with maintained.ex.absolute_alarm(deadline):
+            role_layout = ct.load(path)
     except (Exception, KeyboardInterrupt) as error:
         maintained.admission_refusal(directory, error, trial=trial, started=started, deadline=deadline,
             source_proof='prepare_transfer_admission initial entry failed before yielding')
         raise
+    if role_admission_enabled(role_layout):
+        with transfer_admission_api().prepared_admission(sys.modules[__name__], directory, path,
+                registered, trial, started, deadline):
+            yield
+        return
     inputs = {}
     original_sha = ct.sha
     def sha(name):
@@ -1706,11 +1802,16 @@ def prepare_transfer_admission(directory, path):
         raise
 
 
-def transfer_registration(directory, path, *, selected_layout=None):
+def transfer_registration(directory, path, *, selected_layout=None, admission=None):
     value = historical.unseal(Path(directory) / 'registration.json',
         'ferrule.storage-demand.actual-http-transfer-registration.v1')
     layout = validate_transfer_layout(path) if selected_layout is None else selected_layout
-    validate_transfer_inputs(layout['input_contract'])
+    if admission is not None:
+        require(isinstance(admission, transfer_admission_api().Admission) and role_admission_enabled(layout),
+            'process-local role admission required')
+        admission.check(path)
+    else:
+        validate_transfer_inputs(layout['input_contract'])
     require(value['study_layout'] == layout and value['execution_path'] == value['binding_path'] == str(Path(path).resolve())
         and value['binding_sha256'] == value['execution_sha256'] == ct.sha(path), 'transfer layout/candidate changed')
     require(value['boot_id'] == maintained.boot_id() and value['trial_order'] == layout['trial_order']
@@ -1728,7 +1829,7 @@ def validate_http_capture_entry(directory, payload, launch_hash, target_deadline
     directory = Path(directory)
     path = Path(payload['execution_path'])
     prepared = payload['spec'].get('static_preparation')
-    with transfer_adapter(path, prepared=prepared, deadline=target_deadline):
+    with transfer_adapter(path, prepared=prepared, deadline=target_deadline, launch=payload):
         registered = maintained.registration(directory.parent)
         layout = registered['study_layout']
         directory_check(directory.parent, transfer=True, purpose=layout['purpose'])
@@ -1790,15 +1891,42 @@ def transfer_note(layout):
 
 
 @contextmanager
-def transfer_adapter(path, *, prepared=None, deadline=None):
+def transfer_adapter(path, *, prepared=None, deadline=None, admission=None, launch=None, finalizing=False):
     path = Path(path).resolve()
+    closing_layout = validate_transfer_layout(path, candidate_required=False) if finalizing else None
+    closing = finalizing and role_admission_enabled(closing_layout)
+    closing_bound = validate_transfer_candidate(closing_layout) if closing else None
+    role = admission is not None or (launch is not None and launch['spec'].get('role_admission') is not None)
+    require(not finalizing or (admission is None and launch is None and prepared is None), 'closeout cannot grant launch admission')
+    owned = role and admission is None
+    if owned:
+        require(prepared is None and launch is not None, 'role adapter requires a validated lifecycle admission')
+        api = transfer_admission_api()
+        with ExitStack() if signal.getitimer(signal.ITIMER_REAL)[0] else maintained.ex.absolute_alarm(deadline):
+            admission = api.admit_transfer_launch(sys.modules[__name__], path, Path(launch['directory']).parent,
+                launch['trial'], deadline=deadline, payload=launch)
+    if role:
+        require(isinstance(admission, transfer_admission_api().Admission) and prepared is None,
+            'role adapter cannot reuse a legacy/static receipt')
+        admission.check(path)
     static = validate_static_preparation(prepared, path, deadline=deadline) if prepared else None
-    layout = static['layout'] if static else validate_transfer_layout(path)
+    layout = admission.layout if role else closing_layout if closing else static['layout'] if static else validate_transfer_layout(path)
+    require(role or closing or not role_admission_enabled(layout), 'role adapter needs one process-local admission; no implicit recursion')
     def execution(selected=path):
         require(Path(selected).resolve() == path, 'unknown transfer execution path')
+        if closing:
+            return copy.deepcopy(layout)
+        if role:
+            admission.check(selected)
+            return copy.deepcopy(admission.layout)
         return validate_static_preparation(prepared, path, deadline=deadline)['layout'] if prepared else validate_transfer_layout(path)
     def candidate(selected=path):
         require(Path(selected).resolve() == path, 'unknown transfer candidate path')
+        if closing:
+            return copy.deepcopy(closing_bound)
+        if role:
+            admission.check(selected)
+            return copy.deepcopy(admission.bound)
         if prepared:
             return copy.deepcopy(validate_static_preparation(prepared, path, deadline=deadline)['bound_candidate'])
         selected_layout = execution(selected)
@@ -1809,7 +1937,10 @@ def transfer_adapter(path, *, prepared=None, deadline=None):
         return copy.deepcopy(layout['cases'][mode])
     original_spec = planned.spec_for
     def spec_for(bound, uuid, mode):
+        require(not closing, 'closeout is not launch permission')
         spec = original_spec(bound, uuid, mode)
+        if role:
+            spec['role_admission'] = admission.reference()
         if prepared is not None:
             spec['static_preparation'] = prepared
         spec['environment']['HOME'] = '/root'
@@ -1824,8 +1955,9 @@ def transfer_adapter(path, *, prepared=None, deadline=None):
         return spec
     facade = SimpleNamespace(validate_execution=execution, validate_binding=candidate,
         raw_options=lambda mode: case(mode)['read_options'], static_preparation=prepared,
-        admission_deadline=static['deadline'] if static else None,
-        static_preparation_started=static['started']['monotonic'] if static else None)
+        admission_deadline=admission.deadline if role else static['deadline'] if static else None,
+        static_preparation_started=admission.started['monotonic'] if role else static['started']['monotonic'] if static else None,
+        role_admission=admission, finalization_only=closing)
     def write(selected, value):
         if Path(selected).name == 'paired-final.json':
             schema = ('ferrule.storage-demand.http-transfer-acceptance.v2' if layout['purpose'] == 'public_cli_acceptance'
@@ -1839,10 +1971,18 @@ def transfer_adapter(path, *, prepared=None, deadline=None):
         (historical, 'expected_order', lambda: layout['order']),
         (planned, 'ENTRY', ENTRY), (planned, 'worker_contract', maintained.contract),
         (planned, 'spec_for', spec_for), (planned, 'read_ledger_assessment', transfer_ledger), (maintained, 'binding', facade),
-        (maintained, 'registration', lambda directory: transfer_registration(directory, path, selected_layout=execution())
-            if prepared else transfer_registration(directory, path)),
-        (maintained, 'actual_adapter', lambda: transfer_adapter(path, prepared=prepared, deadline=deadline)),
+        (maintained, 'registration', lambda directory: transfer_registration(directory, path, selected_layout=execution(), admission=admission)
+            if prepared or role or closing else transfer_registration(directory, path)),
+        (maintained, 'actual_adapter', lambda: transfer_adapter(path, prepared=prepared, deadline=deadline, admission=admission)),
         (maintained, 'ledger', transfer_ledger), (maintained, 'NOTE', transfer_note(layout)), (ct, 'write', write))
+    if role:
+        original_capture_launch = maintained.ex.launch_http_capture
+        def launch_capture(directory, payload, target_deadline, *, target_started):
+            require(payload['spec']['role_admission'] == admission.reference(), 'worker role launch crossbinding')
+            with ExitStack() if signal.getitimer(signal.ITIMER_REAL)[0] else maintained.ex.absolute_alarm(target_deadline):
+                admission.before_spawn()
+            return original_capture_launch(directory, payload, target_deadline, target_started=target_started)
+        changes += ((maintained.ex, 'launch_http_capture', launch_capture),)
     originals = [(module, name, getattr(module, name)) for module, name, value in changes]
     try:
         for module, name, value in changes:
@@ -1851,6 +1991,8 @@ def transfer_adapter(path, *, prepared=None, deadline=None):
     finally:
         for module, name, value in reversed(originals):
             setattr(module, name, value)
+        if owned:
+            admission.close()
 
 
 def adapter(layout_path=None):
@@ -1881,6 +2023,11 @@ def transfer_start(directory, path, granted):
 
 
 def transfer_main(args):
+    if getattr(args, 'role_partition', False):
+        require(args.mode == 'plan' and args.acceptance_final is not None and args.purpose == 'pilot',
+            '--role-partition is prospective plan --acceptance-final only')
+    if getattr(args, 'reviewed_provenance_output', None) is not None:
+        require(args.mode == 'review' and args.layout is not None, 'role proof output is review-only')
     if getattr(args, 'verified_artifact_identity_output', None) is not None:
         require(args.mode == 'review' and args.layout is not None, 'identity issuance requires review --layout before MAIN-GO')
     if args.mode == 'review' and args.layout is None:
@@ -1896,7 +2043,8 @@ def transfer_main(args):
         if getattr(args, 'acceptance_final', None) is not None:
             require(args.purpose == 'pilot', 'prospective acceptance reuse is pilot-only')
             value = prospective_transfer_plan(args.acceptance_final, build_inputs=args.build_inputs,
-                compatibility_path=getattr(args, 'workflow_compatibility', None))
+                compatibility_path=getattr(args, 'workflow_compatibility', None),
+                role_partition=getattr(args, 'role_partition', False))
         else:
             require(getattr(args, 'workflow_compatibility', None) is None, '--workflow-compatibility requires --acceptance-final')
             value = transfer_plan(args.purpose, compiled_identity=compiled_identity_for_inputs(args.build_inputs) if args.build_inputs else None)
@@ -1904,6 +2052,18 @@ def transfer_main(args):
         require(args.layout is not None, '--layout required; no historical candidate reuse')
         if args.mode == 'review':
             layout = validate_transfer_layout(args.layout, candidate_required=False)
+            if role_admission_enabled(layout):
+                require(args.verified_artifact_identity_output is None, 'role proof is separate from legacy stat identity issuance')
+                output = getattr(args, 'reviewed_provenance_output', None)
+                require(output is not None and not output.exists(), 'role review requires an exclusive --reviewed-provenance-output; no implicit GO')
+                review_deadline = time.monotonic() + STATIC_PREPARATION_SECONDS
+                with maintained.ex.absolute_alarm(review_deadline):
+                    proof = review_transfer_provenance(layout, deadline=review_deadline)
+                ct.write(output, proof)
+                output.chmod(0o400)
+                print(json.dumps(dict(status='provenance_reviewed_not_authorized', path=str(output.resolve()),
+                    sha256=ct.sha(output), role_partition_sha256=ct.digest(proof['partition']))), flush=True)
+                return 0
             if args.verified_artifact_identity_output is not None:
                 value = issue_verified_artifact_identity(layout, args.verified_artifact_identity_output)
                 print(json.dumps(value, sort_keys=True), flush=True)
@@ -1928,7 +2088,7 @@ def transfer_main(args):
                 value = transfer_start(directory, args.layout, args.sole_gpu_owner_granted)
             else:
                 transfer_registration(directory, args.layout)
-                with transfer_adapter(args.layout):
+                with transfer_adapter(args.layout, finalizing=args.mode == 'finalize'):
                     value = maintained.execute_next(directory) if args.mode == 'next' else maintained.finalize(directory)
                 if args.mode == 'next':
                     print(json.dumps(dict(trial=value['trial'], assessment=value['assessment'], summary=value['summary'])), flush=True)

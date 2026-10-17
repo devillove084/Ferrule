@@ -45,6 +45,13 @@ def ledger(observed, mode):
 
 def contract(payload):
     candidate = ORIGINAL_WORKER_CONTRACT(payload)
+    role = payload['spec'].get('role_admission')
+    if role is not None:
+        admission = getattr(binding, 'role_admission', None)
+        require(admission is not None and admission.reference() == role
+            and ct.load(Path(payload['directory']) / 'attempt.json')['role_admission'] == role,
+            'worker role admission/attempt binding changed')
+        admission.check(payload['execution_path'])
     prepared = payload['spec'].get('static_preparation')
     if prepared is not None:
         folder = Path(payload['directory'])
@@ -268,6 +275,7 @@ def admission_entry(directory, admission):
 
 
 def execute_next(directory, *, admission=None):
+    require(not getattr(binding, 'finalization_only', False), 'closeout cannot admit another lifecycle')
     directory = directory.resolve()
     with coordinator_lock(directory), admission_entry(directory, admission):
         admission_deadline = getattr(binding, 'admission_deadline', None)
@@ -296,10 +304,14 @@ def execute_next(directory, *, admission=None):
             raise
         active_started = ex.stamp()
         outer = min(active_started['monotonic'] + 650, registered['pilot_deadline'] - 100)
+        role_admission = getattr(binding, 'role_admission', None)
+        if role_admission is not None:
+            role_admission.activate(active_started, outer)
         ct.write(folder / 'attempt.json', dict(trial=trial, admission=active_started, outer_deadline=outer,
+            **({'role_admission': role_admission.reference()} if role_admission is not None else {}),
             static_preparation=getattr(binding, 'static_preparation', None),
             static_preparation_seconds=(active_started['monotonic'] - binding.static_preparation_started
-                if getattr(binding, 'static_preparation', None) else None),
+                if getattr(binding, 'static_preparation', None) or role_admission is not None else None),
             pilot_deadline=registered['pilot_deadline'], registration_sha256=ct.sha(directory / 'registration.json'),
             coordinator=pilot.launch_guard.identity(os.getpid()), replay_permitted=False))
         receipt, observed, post, locks = {}, {}, dict(status='blocked', all_eight_idle=False), []
@@ -374,6 +386,8 @@ def execute_next(directory, *, admission=None):
                         payload['contract_sha256'] = ct.digest({k: payload[k] for k in planned.CONTRACT_KEYS})
                         ct.write(folder / 'launch.json', payload)
                         worker_adapter.enter_context(actual_adapter())
+                        if role_admission is not None:
+                            role_admission.before_spawn()
                     pilot.remaining(outer, 530 + 28 + 20 + 32, 'supervisor and finite cleanup')
                     supervisor_entered = True
                     receipt = planned.supervise(payload, 530)
