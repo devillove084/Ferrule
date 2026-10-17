@@ -1,0 +1,397 @@
+{
+  "actual_server_starts": 0,
+  "actual_worker_starts": 0,
+  "arm_metrics": [
+    {
+      "e2e_seconds": null,
+      "goodput": null,
+      "measured_scheduled": 5,
+      "measured_unissued": 5,
+      "phase_wall_seconds": null,
+      "qualified": false,
+      "scheduled_requests": 12,
+      "throughput": null,
+      "trial": "B1-blocking-synchronous",
+      "ttft_seconds": null,
+      "unissued_requests": 12
+    },
+    {
+      "e2e_seconds": null,
+      "goodput": null,
+      "measured_scheduled": 5,
+      "measured_unissued": 5,
+      "phase_wall_seconds": null,
+      "qualified": false,
+      "scheduled_requests": 12,
+      "throughput": null,
+      "trial": "B1-blocking-grouped-synchronous",
+      "ttft_seconds": null,
+      "unissued_requests": 12
+    },
+    {
+      "e2e_seconds": null,
+      "goodput": null,
+      "measured_scheduled": 5,
+      "measured_unissued": 5,
+      "phase_wall_seconds": null,
+      "qualified": false,
+      "scheduled_requests": 12,
+      "throughput": null,
+      "trial": "B2-blocking-grouped-synchronous",
+      "ttft_seconds": null,
+      "unissued_requests": 12
+    },
+    {
+      "e2e_seconds": null,
+      "goodput": null,
+      "measured_scheduled": 5,
+      "measured_unissued": 5,
+      "phase_wall_seconds": null,
+      "qualified": false,
+      "scheduled_requests": 12,
+      "throughput": null,
+      "trial": "B2-blocking-synchronous",
+      "ttft_seconds": null,
+      "unissued_requests": 12
+    },
+    {
+      "e2e_seconds": null,
+      "goodput": null,
+      "measured_scheduled": 5,
+      "measured_unissued": 5,
+      "phase_wall_seconds": null,
+      "qualified": false,
+      "scheduled_requests": 12,
+      "throughput": null,
+      "trial": "L1-lookahead-synchronous",
+      "ttft_seconds": null,
+      "unissued_requests": 12
+    },
+    {
+      "e2e_seconds": null,
+      "goodput": null,
+      "measured_scheduled": 5,
+      "measured_unissued": 5,
+      "phase_wall_seconds": null,
+      "qualified": false,
+      "scheduled_requests": 12,
+      "throughput": null,
+      "trial": "L1-lookahead-grouped-synchronous",
+      "ttft_seconds": null,
+      "unissued_requests": 12
+    },
+    {
+      "e2e_seconds": null,
+      "goodput": null,
+      "measured_scheduled": 5,
+      "measured_unissued": 5,
+      "phase_wall_seconds": null,
+      "qualified": false,
+      "scheduled_requests": 12,
+      "throughput": null,
+      "trial": "L2-lookahead-grouped-synchronous",
+      "ttft_seconds": null,
+      "unissued_requests": 12
+    },
+    {
+      "e2e_seconds": null,
+      "goodput": null,
+      "measured_scheduled": 5,
+      "measured_unissued": 5,
+      "phase_wall_seconds": null,
+      "qualified": false,
+      "scheduled_requests": 12,
+      "throughput": null,
+      "trial": "L2-lookahead-synchronous",
+      "ttft_seconds": null,
+      "unissued_requests": 12
+    }
+  ],
+  "attempt": 1,
+  "claims": {
+    "direct_grouped_call_count": null,
+    "performance": false,
+    "routes_or_logits": false,
+    "statistical_significance": false,
+    "vllm_or_sota": false
+  },
+  "completed_lifecycles": 0,
+  "effective_stop_reasons": [
+    "ProtocolError: insufficient absolute reserve: supervisor and finite cleanup",
+    "coordinator terminal release/reprobe evidence missing/invalid; permanent STOP"
+  ],
+  "expected_measured_tokens": 320,
+  "historical_cleanup": {
+    "authenticated_echild": null,
+    "descendant_custody_known": false,
+    "lock_context_exited": true,
+    "lock_reprobe_evidence": null,
+    "physical_owner_release": "unverified",
+    "postidle_evidence": null,
+    "preidle_verified": true,
+    "strict_samples": 3
+  },
+  "launch_journals_written": 1,
+  "measured_qa": {
+    "censored": 0,
+    "failed": 0,
+    "lifecycle_qualified": 0,
+    "reference_qualified": 0,
+    "scheduled": 40,
+    "success": 0,
+    "unissued": 40,
+    "unknown_partial_token_slots": 0
+  },
+  "observed_generated_tokens": 0,
+  "pair_ratios": [
+    {
+      "block": "B1",
+      "grouped_over_synchronous": null,
+      "order": [
+        "blocking-synchronous",
+        "blocking-grouped-synchronous"
+      ],
+      "qualified": false,
+      "read_schedule": "blocking"
+    },
+    {
+      "block": "B2",
+      "grouped_over_synchronous": null,
+      "order": [
+        "blocking-grouped-synchronous",
+        "blocking-synchronous"
+      ],
+      "qualified": false,
+      "read_schedule": "blocking"
+    },
+    {
+      "block": "L1",
+      "grouped_over_synchronous": null,
+      "order": [
+        "lookahead-synchronous",
+        "lookahead-grouped-synchronous"
+      ],
+      "qualified": false,
+      "read_schedule": "lookahead"
+    },
+    {
+      "block": "L2",
+      "grouped_over_synchronous": null,
+      "order": [
+        "lookahead-grouped-synchronous",
+        "lookahead-synchronous"
+      ],
+      "qualified": false,
+      "read_schedule": "lookahead"
+    }
+  ],
+  "primary_error": "ProtocolError: insufficient absolute reserve: supervisor and finite cleanup",
+  "qualified": false,
+  "raw_final": {
+    "path": "papers/arxiv/experiments/storage_demand/paired_read_v1/artifacts-transfer-pilot-37b2f40-20261017-01/paired-final.json",
+    "sha256": "247f88a1787f6f71291b68dec836bc8930a14be9360145285424220637cb05fd"
+  },
+  "recovery_only_closeout": {
+    "all_eight_idle": true,
+    "context_fd_closure_events": [
+      {
+        "all_eight_fds_closed": true,
+        "at": {
+          "monotonic": 9171755.682867656,
+          "unix_ns": 1792228812646348330
+        },
+        "event": "initial_lock_contexts_exited"
+      },
+      {
+        "all_eight_fds_closed": true,
+        "at": {
+          "monotonic": 9171755.683506016,
+          "unix_ns": 1792228812646986658
+        },
+        "event": "reprobe_lock_contexts_exited"
+      }
+    ],
+    "elapsed_seconds": 2.75424693338573,
+    "ended": {
+      "monotonic": 9171755.683537189,
+      "unix_ns": 1792228812647017839
+    },
+    "historical_coordinator_identity_check": {
+      "current": null,
+      "recorded": {
+        "birth_ticks": 153439789,
+        "pgrp": 164370,
+        "pid": 164370,
+        "ppid": 258524,
+        "session": 164370
+      },
+      "same_birth": false,
+      "status": "recorded_pid_absent"
+    },
+    "idle_attempts": 1,
+    "initial_custody_context_exited": true,
+    "initial_locks_acquired": 8,
+    "not_retroactive_pilot_cleanup": true,
+    "old_final_sha256_unchanged": true,
+    "old_worker_authenticated_echild": null,
+    "owner_identity": {
+      "birth_ticks": 153563250,
+      "pgrp": 166098,
+      "pid": 166098,
+      "ppid": 258524,
+      "session": 166098
+    },
+    "physical_owner_release": "unverified",
+    "post_context_locks_reprobed": 8,
+    "post_context_reprobe_context_exited": true,
+    "purpose": "recovery_only_not_pilot_retry",
+    "receipt": {
+      "path": "target/validation/qwen35-35b-current/request-http-pilot-37b2f40-results-20261017-01/RECOVERY-01.json",
+      "sha256": "e06778ef1c4ef44492eac78162e479a5112fcff4224937bef249397dc890cfb0"
+    },
+    "recovery_authenticated_echild": null,
+    "sample_classifications": [
+      "idle",
+      "idle",
+      "idle"
+    ],
+    "signals_sent": [],
+    "started": {
+      "monotonic": 9171752.929340605,
+      "unix_ns": 1792228809892821723
+    },
+    "status": "recovery_all_eight_strict_idle_and_local_reprobe_verified",
+    "strict_idle_samples": 3,
+    "worker_or_server_starts": 0
+  },
+  "replacements": 0,
+  "requests": {
+    "censored": 0,
+    "failed": 0,
+    "issued": 0,
+    "scheduled": 96,
+    "successful": 0,
+    "terminal": 0,
+    "unissued": 96
+  },
+  "retries": 0,
+  "saved_setup_timeline": {
+    "admission": {
+      "monotonic": 9170599.621987673,
+      "unix_ns": 1792227656585469375
+    },
+    "arithmetic": {
+      "admission_to_first_preidle_sample_seconds": 0.02642693556845188,
+      "last_preidle_sample_finish_to_recorded_stop_seconds": 60.760060753673315,
+      "remaining_at_recorded_stop_seconds": 586.5198480691761,
+      "required_reserve_seconds": 610,
+      "setup_allowance_seconds": 40,
+      "total_setup_to_recorded_stop_seconds": 63.48014437779784
+    },
+    "attribution": "The last-preidle-to-stop interval includes validation, baseline/payload work and exception bookkeeping; separate validation durations are unknown. Revalidation cost is an inference, not a measured phase attribution.",
+    "coordinator_terminal_failure": {
+      "monotonic": 9170663.105802754,
+      "unix_ns": 1792227720069283641
+    },
+    "old_final": {
+      "path": "papers/arxiv/experiments/storage_demand/paired_read_v1/artifacts-transfer-pilot-37b2f40-20261017-01/paired-final.json",
+      "sha256": "247f88a1787f6f71291b68dec836bc8930a14be9360145285424220637cb05fd"
+    },
+    "outer_deadline_monotonic": 9171249.62198012,
+    "permanent_stop": {
+      "monotonic": 9170663.10213205,
+      "unix_ns": 1792227720065613526
+    },
+    "preidle": {
+      "elapsed_seconds": 2.693733001127839,
+      "receipt": {
+        "path": "papers/arxiv/experiments/storage_demand/paired_read_v1/artifacts-transfer-pilot-37b2f40-20261017-01/B1-blocking-synchronous/coordinator-pre-idle.json",
+        "sha256": "d80e44032ed81a8b00d990003b9c3cd646b00b42122e6137349087e4d400ce59"
+      },
+      "samples": [
+        {
+          "classification": "idle",
+          "index": 0,
+          "monotonic_finished": 9170599.891145775,
+          "monotonic_started": 9170599.648414608,
+          "recorded_unix_ns": 1792227656611897567
+        },
+        {
+          "classification": "idle",
+          "index": 1,
+          "monotonic_finished": 9170601.11641672,
+          "monotonic_started": 9170600.89155141,
+          "recorded_unix_ns": 1792227657855043031
+        },
+        {
+          "classification": "idle",
+          "index": 2,
+          "monotonic_finished": 9170602.342071297,
+          "monotonic_started": 9170602.11654248,
+          "recorded_unix_ns": 1792227659080029467
+        }
+      ]
+    },
+    "schema": "ferrule.http-transfer.saved-setup-timeline.v1",
+    "scope": "Existing receipt timestamps only; no rerun, filesystem timestamp substitution, or guessed phase durations",
+    "source_order": [
+      "admission journal",
+      "authorize and acquire/validate all-eight local locks",
+      "strict coordinator pre-idle",
+      "validate_binding(candidate)",
+      "validate_execution(execution)",
+      "GPU baseline query",
+      "write baseline and launch contract",
+      "610-second reserve check",
+      "planned.supervise NOT reached",
+      "exception writes permanent STOP and assessment",
+      "lock context-exit receipt",
+      "effective assessment persists missing terminal release/reprobe failure"
+    ],
+    "unstamped_phases": {
+      "baseline_query": {
+        "elapsed_seconds": null,
+        "end": null,
+        "start": null
+      },
+      "candidate_validation": {
+        "elapsed_seconds": null,
+        "end": null,
+        "start": null
+      },
+      "execution_validation": {
+        "elapsed_seconds": null,
+        "end": null,
+        "start": null
+      },
+      "launch_write": {
+        "elapsed_seconds": null,
+        "end": null,
+        "start": null
+      },
+      "lock_acquisition": {
+        "elapsed_seconds": null,
+        "end": null,
+        "start": null
+      },
+      "lock_context_release": {
+        "elapsed_seconds": null,
+        "end": null,
+        "start": null
+      },
+      "reserve_check_exact_instant": {
+        "elapsed_seconds": null,
+        "end": null,
+        "start": null
+      }
+    }
+  },
+  "saved_setup_timeline_receipt": {
+    "path": "target/validation/qwen35-35b-current/request-http-pilot-37b2f40-results-20261017-01/SETUP-TIMELINE-01.json",
+    "sha256": "2d727036d5c94b2d9aa5726606c2bdfbb8aaa36baeee24de6ff9ffc0acf42a03"
+  },
+  "scheduled_lifecycles": 8,
+  "schema": "ferrule.http-transfer.curated-pilot-attempt.v1",
+  "status": "permanent_stop_before_worker_or_server_launch",
+  "traceback_preserved": false
+}

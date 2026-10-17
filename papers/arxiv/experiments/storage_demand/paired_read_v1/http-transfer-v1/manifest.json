@@ -1,0 +1,49 @@
+{
+  "acceptance_quality_passed": true,
+  "availability": "Curated summaries intended for version control; raw/model/build inputs remain local and owner-only",
+  "curation_input_index": {
+    "path": "target/validation/qwen35-35b-current/request-http-pilot-37b2f40-results-20261017-01/CURATION-INPUT-INDEX-01.json",
+    "sha256": "7d08559951c92aac3352e01aa5bdc2358e7016b0b5819dc4fb06b07c6ffd1ea1"
+  },
+  "files": [
+    {
+      "path": "README.md",
+      "sha256": "70cab4bcc3f7f867538446b16423863f1d0a512f88199851a567b4357741ff36",
+      "size_bytes": 10285
+    },
+    {
+      "path": "acceptance-results.json",
+      "sha256": "853270d42d79e00e7afe4ddd3f01c6c9026cce77b4763857a5e4b37b1baf147d",
+      "size_bytes": 35760
+    },
+    {
+      "path": "pilot-attempt-01.json",
+      "sha256": "053805eea4af8a2111fe9287d08bb5b9c69aa9e53bc6682ddf1aa0588999f5a2",
+      "size_bytes": 11875
+    },
+    {
+      "path": "source-pins.json",
+      "sha256": "8bec14f3b02810ea0a781920a852aca3feb836456b71836866d6e1d395e2a625",
+      "size_bytes": 27116
+    }
+  ],
+  "manifest_self_hash": "Excluded to avoid recursion; supplied in the handoff",
+  "performance_claim": false,
+  "pilot_qualified": false,
+  "raw_receipts": [
+    {
+      "path": "papers/arxiv/experiments/storage_demand/paired_read_v1/artifacts-transfer-acceptance-37b2f40-20261017-01/paired-final.json",
+      "sha256": "6f544f9d25bc64b6c37ce0f0ffbe2f8e48ad332d80b38ea5b3221905dd530356"
+    },
+    {
+      "path": "papers/arxiv/experiments/storage_demand/paired_read_v1/artifacts-transfer-pilot-37b2f40-20261017-01/paired-final.json",
+      "sha256": "247f88a1787f6f71291b68dec836bc8930a14be9360145285424220637cb05fd"
+    },
+    {
+      "path": "target/validation/qwen35-35b-current/request-http-pilot-37b2f40-results-20261017-01/RECOVERY-01.json",
+      "sha256": "e06778ef1c4ef44492eac78162e479a5112fcff4224937bef249397dc890cfb0"
+    }
+  ],
+  "schema": "ferrule.http-transfer.curation-manifest.v1",
+  "status": "prepared_for_main_review_not_committed"
+}

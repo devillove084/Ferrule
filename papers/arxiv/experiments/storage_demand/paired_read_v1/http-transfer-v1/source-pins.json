@@ -1,0 +1,566 @@
+{
+  "acceptance_replay_receipt": {
+    "path": "target/validation/qwen35-35b-current/public-cli-acceptance-37b2f40-results-20261017-01/FORMAL-VALIDATION.json",
+    "sha256": "651596680a308d27d5ef6708a743435f00be1050926e8c66ff607f609fb0beec"
+  },
+  "approval_receipts": [
+    {
+      "path": "target/validation/qwen35-35b-current/public-cli-acceptance-37b2f40-plan-20261017-01/MAIN-GO.json",
+      "sha256": "2ee7b0e177f52ff3a90be45f302c5c3216e05a66aa481b2b944bf51c9316bccd"
+    },
+    {
+      "path": "target/validation/qwen35-35b-current/public-cli-acceptance-37b2f40-plan-20261017-01/APPROVAL-SUBJECT.json",
+      "sha256": "ac13a19c4e9dc8accafba4faba194aa8e13fe0ce0b9a28f17335fb5f737fccb6"
+    },
+    {
+      "path": "target/validation/qwen35-35b-current/public-cli-acceptance-37b2f40-plan-20261017-01/REVIEW-PACKET.json",
+      "sha256": "5ecee4caef28fbd39728c5412539a437c3f6796e3f512034a50897fdb8cfca62"
+    },
+    {
+      "path": "target/validation/qwen35-35b-current/request-http-pilot-37b2f40-plan-20261017-01/MAIN-GO.json",
+      "sha256": "ec6f5754a6dc3018b484be1a40e2ab52dc4954f553b99cf0b7957af903049c83"
+    },
+    {
+      "path": "target/validation/qwen35-35b-current/request-http-pilot-37b2f40-plan-20261017-01/APPROVAL-SUBJECT.json",
+      "sha256": "d34991fbcc2b6470cf647ec02f81015d69d26183dd0bd6158c6cc62ee538d5af"
+    },
+    {
+      "path": "target/validation/qwen35-35b-current/request-http-pilot-37b2f40-plan-20261017-01/REVIEW-PACKET.json",
+      "sha256": "e07fa66632b34a1cf92f0bd39fa788655e68588e346faa2f59f4b58e5591faef"
+    }
+  ],
+  "build": {
+    "architecture": "sm_86",
+    "compiled_cuda_toolkit": "12.4.99",
+    "count": 1,
+    "dependency_files": 7445,
+    "dependency_packages": 158,
+    "embedded_ptx": 0,
+    "environment_receipt": {
+      "path": "target/validation/http-transfer-37b2f40-cpu-freeze-20261017-01/build-environment.json",
+      "sha256": "58a4da3a1a41d11bdd0e6d53ede6420e3af2418810504210799e9abe0eab9ca1"
+    },
+    "external_input_pins": 9414,
+    "features": [
+      "cuda",
+      "nvtx-profile"
+    ],
+    "gpu_hidden": true,
+    "historical_argv": [
+      "/root/.cargo/bin/cargo",
+      "build",
+      "--locked",
+      "--offline",
+      "--release",
+      "--no-default-features",
+      "-p",
+      "ferrule-cli",
+      "--features",
+      "cuda,nvtx-profile",
+      "--message-format=json"
+    ],
+    "historical_cwd": "target/validation/http-transfer-37b2f40-cpu-freeze-20261017-01/frozen-source",
+    "maintained_workflow_pins": 49,
+    "native_archives": 7,
+    "nvtx_runtime": "0",
+    "sm86_cubin_sha256": {
+      "cli.1.sm_86.cubin": "33cbd4400ba57538a2c981e382b1088dd4ca8be73694eceedf6bf5b59e272445",
+      "cli.2.sm_86.cubin": "d1d85e4a13ed56f0278e8e89a1092b7bdc5e80153969fd9abf0b271b034ffd12"
+    },
+    "sm86_cubins": 2,
+    "toolchain_versions": {
+      "cargo": "cargo 1.99.0-nightly (7c83d4cc0 2026-07-29)",
+      "cutlass": "e05f953a5b3d38adc240df2ff928e0421c2abba3",
+      "nvcc": "nvcc: NVIDIA (R) Cuda compiler driver\nCopyright (c) 2005-2024 NVIDIA Corporation\nBuilt on Tue_Feb_27_16:19:38_PST_2024\nCuda compilation tools, release 12.4, V12.4.99\nBuild cuda_12.4.r12.4/compiler.33961263_0",
+      "rustc": "rustc 1.99.0-nightly (ad3d0bc14 2026-07-31)\nbinary: rustc\ncommit-hash: ad3d0bc141a02cf446e384136d250a1f6950fed5\ncommit-date: 2026-07-31\nhost: x86_64-unknown-linux-gnu\nrelease: 1.99.0-nightly\nLLVM version: 22.1.8"
+    }
+  },
+  "candidate_inputs": {
+    "path": "target/validation/http-transfer-37b2f40-cpu-freeze-20261017-01/CANDIDATE-INPUTS.json",
+    "sha256": "17b171b84463ab543e44c620f0fb783abbfe8edae4b1769c421a2d34c9b8bd6b"
+  },
+  "compiled_identity": {
+    "archive_commit": "37b2f40c2dfc02825a373e417b0d5bb428e1622e",
+    "archive_sha256": "2645585f2e33dd833c2c785dab97d4f9f9090604b89353d940879593ef41d5bb",
+    "binary_sha256": "c3db43b8c556a210a77f7fac29dc23c4bc9399d5e0374e6dc9fecd016625ccaa",
+    "candidate_inputs": "target/validation/http-transfer-37b2f40-cpu-freeze-20261017-01/CANDIDATE-INPUTS.json",
+    "candidate_inputs_sha256": "17b171b84463ab543e44c620f0fb783abbfe8edae4b1769c421a2d34c9b8bd6b",
+    "compiled_scope": [
+      "Cargo.toml",
+      "Cargo.lock",
+      "rust-toolchain.toml",
+      "README.md",
+      ".cargo",
+      "crates"
+    ],
+    "initial_endpoint_producer": {
+      "contract": {
+        "endpoint": "after_owner_configuration_before_prediction",
+        "event": "expert_read_initial_endpoint",
+        "level": "INFO",
+        "producer_schema_version": 1,
+        "source_contract": "resident_model_runner.physical_resource_snapshot.expert_read_pipeline",
+        "target": "ferrule_performance"
+      },
+      "source": "crates/ferrule-composition/src/model_factory/bf16_serving.rs",
+      "source_sha256": "7e2428eba71541d3bc222395ad3f72c64876cbe05620c4a0a96b07d85a1f6c2d"
+    },
+    "production_commit": "d8c92d80dc2ec95c44ba7513198232d36f290a34",
+    "runtime_sha256": "84c5d9e5ed9829a3c90f95f790f6ea2089e07205b68ec517a7b08e38265bb33c",
+    "schema": "ferrule.storage-demand.http-transfer-compiled-identity.v1",
+    "source_proof_pins": {
+      "crates/ferrule-backend/src/cuda/operators/numeric_fp8_group_sync.rs": "37abf2ad1a1907c7007ccfab66a9deadf33204a0cd2d8dd9533d318f42894dd1",
+      "crates/ferrule-cli/src/args.rs": "36177fff729744d3feb6e4cd0736ef035e14d2f5f67f7c06050364a51df3f788",
+      "crates/ferrule-cli/src/commands/serve.rs": "6858ebca10e7c7bceb1f6a67839769039dc5077fd3e2f6f454d9ddaae7444d86",
+      "crates/ferrule-composition/src/model_factory/bf16_serving.rs": "7e2428eba71541d3bc222395ad3f72c64876cbe05620c4a0a96b07d85a1f6c2d",
+      "crates/ferrule-composition/src/model_factory/expert_read_policy.rs": "8afc745af7db8218d31ebbf24f3dc3d262c01fa7ad01cafdcb74f0ef795859fa",
+      "crates/ferrule-composition/src/model_factory/mixed_serving.rs": "2287edf8cadd528b0e59ed79a2503eb7afed691f62a3d1e6d2c479a74da4184a",
+      "crates/ferrule-composition/src/model_factory/mod.rs": "2968b46125baf09af02867512c97177c1068329c98ffc672a32b18aae1d088a8",
+      "crates/ferrule-model/src/decoder/runner.rs": "8e0dcf44a5973ec1a7a04d1a970c42f691eae1f1faaf478e8e4c6dc566728c8b",
+      "crates/ferrule-model/src/transformer/expert_reads.rs": "eaa2063cf8861c7917269efe13a4b0ec6cf3927fc46a3d5574d21f9717970372",
+      "crates/ferrule-model/src/transformer/standard/cuda.rs": "6fce9fd2e623cccce12ce629706559af68efb786df8a00ca0da357185a89c5a7",
+      "crates/ferrule-model/src/transformer/standard/cuda/grouped_upload.rs": "09db08bc534429eb468fa98d023a862ec1f950e854abf9379727d20646fb91d5",
+      "crates/ferrule-model/src/transformer/standard/cuda/hybrid.rs": "8e78055f3af8782c6c7b0eb6c2c1aa48fd41bed9ab1f6b4c40cceb42ecc255b0",
+      "crates/ferrule-model/src/transformer/standard/cuda/invocation_trace.rs": "be51b69dac63ec4b086d2af9cd665c3f5604cfebf95f304a5347fbb83a69ffb6",
+      "crates/ferrule-model/src/transformer/standard/cuda/residency.rs": "f8d9c21fa5c4228a1f98f7a81bb44397faabfefc5402f2beb3223c54f64adea5"
+    }
+  },
+  "cpu_results": {
+    "path": "target/validation/http-transfer-37b2f40-cpu-freeze-20261017-01/CPU-RESULTS.json",
+    "sha256": "6b49efffe185f7ae9da7827e6659727e1a866dad47e992ca789d57bd2ef725b4"
+  },
+  "historical_protocol_commands": {
+    "acceptance": {
+      "cpu_check_argv": [
+        "/home/admin/wxw403883/anaconda3/bin/python3.12",
+        "-S",
+        "-B",
+        "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/run_v3.py",
+        "check",
+        "--study",
+        "transfer-pilot-v1",
+        "--layout",
+        "/home/admin/luhuanbing.lhb/Ferrule/target/validation/qwen35-35b-current/public-cli-acceptance-37b2f40-plan-20261017-01/PUBLIC_CLI_ACCEPTANCE.json"
+      ],
+      "cpu_review_argv": [
+        "/home/admin/wxw403883/anaconda3/bin/python3.12",
+        "-S",
+        "-B",
+        "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/run_v3.py",
+        "review",
+        "--study",
+        "transfer-pilot-v1",
+        "--layout",
+        "/home/admin/luhuanbing.lhb/Ferrule/target/validation/qwen35-35b-current/public-cli-acceptance-37b2f40-plan-20261017-01/PUBLIC_CLI_ACCEPTANCE-REVIEW.json"
+      ],
+      "historical_commands_not_permission_to_rerun": true,
+      "receipt": {
+        "path": "target/validation/qwen35-35b-current/public-cli-acceptance-37b2f40-plan-20261017-01/COMMANDS.json",
+        "sha256": "3ff62f1213927b1fefd5e5fdf26b807ce60126ae1285db0c786c4a3d6ee752ef"
+      }
+    },
+    "pilot_attempt_01": {
+      "cpu_check_argv": [
+        "/home/admin/wxw403883/anaconda3/bin/python3.12",
+        "-S",
+        "-B",
+        "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/run_v3.py",
+        "check",
+        "--study",
+        "transfer-pilot-v1",
+        "--layout",
+        "/home/admin/luhuanbing.lhb/Ferrule/target/validation/qwen35-35b-current/request-http-pilot-37b2f40-plan-20261017-01/PILOT.json"
+      ],
+      "cpu_review_argv": [
+        "/home/admin/wxw403883/anaconda3/bin/python3.12",
+        "-S",
+        "-B",
+        "/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1/run_v3.py",
+        "review",
+        "--study",
+        "transfer-pilot-v1",
+        "--layout",
+        "/home/admin/luhuanbing.lhb/Ferrule/target/validation/qwen35-35b-current/request-http-pilot-37b2f40-plan-20261017-01/PILOT-REVIEW.json"
+      ],
+      "historical_commands_not_permission_to_rerun": true,
+      "receipt": {
+        "path": "target/validation/qwen35-35b-current/request-http-pilot-37b2f40-plan-20261017-01/COMMANDS.json",
+        "sha256": "4115e2ce0fbeb5c75412c1f7cf43b161472e383ad525a20f22631b4f6092203a"
+      }
+    }
+  },
+  "initial_producer": {
+    "contract": {
+      "endpoint": "after_owner_configuration_before_prediction",
+      "event": "expert_read_initial_endpoint",
+      "level": "INFO",
+      "producer_schema_version": 1,
+      "source_contract": "resident_model_runner.physical_resource_snapshot.expert_read_pipeline",
+      "target": "ferrule_performance"
+    },
+    "source": "crates/ferrule-composition/src/model_factory/bf16_serving.rs",
+    "source_sha256": "7e2428eba71541d3bc222395ad3f72c64876cbe05620c4a0a96b07d85a1f6c2d"
+  },
+  "input_receipts": [
+    {
+      "path": "target/validation/http-transfer-37b2f40-cpu-freeze-20261017-01/staged/cli",
+      "role": "binary",
+      "sha256": "c3db43b8c556a210a77f7fac29dc23c4bc9399d5e0374e6dc9fecd016625ccaa"
+    },
+    {
+      "path": "target/validation/http-transfer-37b2f40-cpu-freeze-20261017-01/source-freeze.json",
+      "role": "source_freeze",
+      "sha256": "bc0f78e6e45d34d2b84745a05a065da733f8533d68f4e4a4bfec41be9618674f"
+    },
+    {
+      "path": "target/validation/http-transfer-37b2f40-cpu-freeze-20261017-01/runtime-library-pins.json",
+      "role": "runtime_pin_manifest",
+      "sha256": "84c5d9e5ed9829a3c90f95f790f6ea2089e07205b68ec517a7b08e38265bb33c"
+    },
+    {
+      "path": "target/validation/http-transfer-37b2f40-cpu-freeze-20261017-01/build-cli-receipt.json",
+      "role": "build_receipt",
+      "sha256": "005d4a987d6a4ce023992c8be9fc0a165572238af7c3c7e46785bcf773309d4e"
+    },
+    {
+      "path": "target/validation/http-transfer-37b2f40-cpu-freeze-20261017-01/build-cli-supervisor.json",
+      "role": "build_supervisor",
+      "sha256": "2166750babc1285a2cda1e946b1ecf26025c67a1b00e5f255f2cda176437b7fe"
+    },
+    {
+      "path": "target/validation/http-transfer-37b2f40-cpu-freeze-20261017-01/artifact-cli.json",
+      "role": "artifact",
+      "sha256": "ea8946366b93789ae4ea1465080b9b1b9ce12600511da2c81f2ab783ce72591f"
+    },
+    {
+      "path": "target/validation/http-transfer-37b2f40-cpu-freeze-20261017-01/toolchain.json",
+      "role": "toolchain",
+      "sha256": "d306b252928052654d87001ff782841fa86887823a419d9da8a7e164607ff617"
+    },
+    {
+      "path": "target/validation/http-transfer-37b2f40-cpu-freeze-20261017-01/toolchain-input-pins.json",
+      "role": "toolchain_pins",
+      "sha256": "b00b0d6af119dbbad1f2cb40250e629f0e1bb41933d674449ae110038f838047"
+    },
+    {
+      "path": "target/validation/http-transfer-37b2f40-cpu-freeze-20261017-01/external-input-pins.json",
+      "role": "external_inputs",
+      "sha256": "abd436dc912210e7ff23b1f2e808823739e1b5f60bc190d26c1f3f8e954b92ed"
+    },
+    {
+      "path": "target/validation/http-transfer-37b2f40-cpu-freeze-20261017-01/compiled-dependency-pins.json",
+      "role": "dependencies",
+      "sha256": "a6e8e079bc88ec93cf89e2191fc8dbcaa726715989d5ef98f46336e81db6e7ba"
+    },
+    {
+      "path": "target/validation/http-transfer-37b2f40-cpu-freeze-20261017-01/native-archive-pins.json",
+      "role": "native_archives",
+      "sha256": "2ca746f7a64c691efe783e2112f8ad177cc32909041f016251a8418b4dd8ad93"
+    },
+    {
+      "path": "target/validation/http-transfer-37b2f40-cpu-freeze-20261017-01/native-cubin-pins.json",
+      "role": "native_cubins",
+      "sha256": "c52620d5d97c43c653004a47d1339ca359f173947c042937c3d2b08c6681335e"
+    },
+    {
+      "path": "target/validation/http-transfer-37b2f40-cpu-freeze-20261017-01/executed-helper-pins.json",
+      "role": "executed_helpers",
+      "sha256": "0ca06604e1e8ee280798ae31c94501dd17cf88895562c76b09ff99a2252905bf"
+    },
+    {
+      "path": "target/validation/http-transfer-37b2f40-cpu-freeze-20261017-01/control-helper-pins.json",
+      "role": "control_helpers",
+      "sha256": "aa54d8f477e75c42646eb26b32a8247a7f39c261550b2d9833674769d05f190d"
+    },
+    {
+      "path": "target/validation/http-transfer-37b2f40-cpu-freeze-20261017-01/cpu-current-tests-receipt.json",
+      "role": "cpu_tests",
+      "sha256": "012c91a4e53e691a782bf31045aeb4423ef618db9d8260b2b0dc9a9101810ded"
+    }
+  ],
+  "model": {
+    "backend": "cuda",
+    "checkpoint_content_sha256": null,
+    "checkpoint_manifest": {
+      "path": "papers/arxiv/experiments/storage_demand/checkpoint-metadata.json",
+      "sha256": "245bbe37b18bb79fded1be883b1a6c63d570dfd42e70bb302ef834b3caf95854"
+    },
+    "engine": "resident",
+    "explicit_bounded_reads": true,
+    "historical_path": "/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8",
+    "local_resident": true,
+    "metadata_sha256": {
+      "/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8/config.json": "236c373b0682a4f40c2fa49ef8e5f722a87a8dbfe265286b6d5260b23d7cb229",
+      "/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8/model.safetensors.index.json": "b009f7a49c442fce959a2ff6fee41c69248879b90d7ff5636ec6d2068ac4876d",
+      "/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8/tokenizer.json": "5f9e4d4901a92b997e463c1f46055088b6cca5ca61a6522d1b9f64c4bb81cb42",
+      "/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8/tokenizer_config.json": "316230d6a809701f4db5ea8f8fc862bc3a6f3229c937c174e674ff3ca0a64ac8"
+    },
+    "precision": "MixedBF16/F32",
+    "profile": "qwen35-mixed-bf16",
+    "shard_count": 14,
+    "shard_identity_scope": "stat device/inode/size/mtime/ctime; not checkpoint content hash",
+    "shard_stat_identities_digest": "79f60f06c459b9710e28f3621f6c75ea652f449cdb1ca4b7daf605fe0dcf1aed"
+  },
+  "public_cli": {
+    "argv_hash_encoding": "SHA256 of UTF-8 JSON: sort_keys=True, ensure_ascii=False, separators comma/colon, allow_nan=False",
+    "base_argv": [
+      "/home/admin/luhuanbing.lhb/Ferrule/target/validation/http-transfer-37b2f40-cpu-freeze-20261017-01/staged/cli",
+      "serve",
+      "/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8",
+      "--backend",
+      "cuda",
+      "--engine",
+      "resident",
+      "--model-profile",
+      "qwen35-mixed-bf16",
+      "--expert-prewarm",
+      "lazy",
+      "--kv-execution-policy",
+      "resident",
+      "--ctx-size",
+      "128",
+      "--max-active-sequences",
+      "2",
+      "--max-batch-tokens",
+      "8",
+      "--prefill-chunk-size",
+      "8",
+      "--kv-cache-mb",
+      "16",
+      "--max-tensor-mb",
+      "1024",
+      "--cuda-device-budget-mb",
+      "7168",
+      "--cuda-workspace-mb",
+      "2048",
+      "--cuda-expert-scratch-mb",
+      "8",
+      "--cuda-expert-device-entries",
+      "64",
+      "--cuda-expert-device-bytes",
+      "335544320",
+      "--request-queue-capacity",
+      "2",
+      "--max-inflight-requests",
+      "2",
+      "--served-model-name",
+      "qwen35-storage-demand-paper",
+      "--host",
+      "127.0.0.1",
+      "--port",
+      "18369",
+      "--expert-read-host-mb",
+      "64",
+      "--expert-read-metadata-mb",
+      "8",
+      "--expert-read-worker-stack-mb",
+      "2",
+      "--expert-read-schedule",
+      "blocking",
+      "--decode-cohort-target",
+      "1",
+      "--decode-cohort-max-deferrals",
+      "0",
+      "--expert-transfer-policy",
+      "synchronous"
+    ],
+    "cases": [
+      {
+        "argv_sha256": "c307e62eca055f50812aa3dd6a9c9022d0f45dd40e084d98a9ceefb27e2eeb20",
+        "flag_overrides": {
+          "--expert-read-schedule": "blocking",
+          "--expert-transfer-policy": "synchronous"
+        },
+        "launch": {
+          "path": "papers/arxiv/experiments/storage_demand/paired_read_v1/artifacts-transfer-acceptance-37b2f40-20261017-01/A1-blocking-synchronous/launch.json",
+          "sha256": "73040e4987f539424026654354d598cff93cb5cd9033cb11faf7c2ed614c3d88"
+        },
+        "trial": "A1-blocking-synchronous"
+      },
+      {
+        "argv_sha256": "eb09739d1d833f9476ff0d6276ad624bbac3996bedc310ac4892271e12250937",
+        "flag_overrides": {
+          "--expert-read-schedule": "blocking",
+          "--expert-transfer-policy": "grouped-synchronous"
+        },
+        "launch": {
+          "path": "papers/arxiv/experiments/storage_demand/paired_read_v1/artifacts-transfer-acceptance-37b2f40-20261017-01/A1-blocking-grouped-synchronous/launch.json",
+          "sha256": "3a838c519fc52380820beca833de0c36db5e70d85720dd010cde2a1999909d3c"
+        },
+        "trial": "A1-blocking-grouped-synchronous"
+      },
+      {
+        "argv_sha256": "d5237ce521fd78b76928647e9d7ac93e4ad111f94d66ffb1aad7af50bfac0cfc",
+        "flag_overrides": {
+          "--expert-read-schedule": "lookahead",
+          "--expert-transfer-policy": "synchronous"
+        },
+        "launch": {
+          "path": "papers/arxiv/experiments/storage_demand/paired_read_v1/artifacts-transfer-acceptance-37b2f40-20261017-01/A2-lookahead-synchronous/launch.json",
+          "sha256": "a5f18d23b14d9379bc61c3f61a28ea6ec94353c7796e52cdb3cd93b88d8a29aa"
+        },
+        "trial": "A2-lookahead-synchronous"
+      },
+      {
+        "argv_sha256": "61234b11afc223592f72e0622cb5ed2af3bdd7e95d28a0874e5ecf9ec18a92be",
+        "flag_overrides": {
+          "--expert-read-schedule": "lookahead",
+          "--expert-transfer-policy": "grouped-synchronous"
+        },
+        "launch": {
+          "path": "papers/arxiv/experiments/storage_demand/paired_read_v1/artifacts-transfer-acceptance-37b2f40-20261017-01/A2-lookahead-grouped-synchronous/launch.json",
+          "sha256": "b4e3e19a772c6625f0270874a6a90f7410c4490caad0eb2171732295a02bbe66"
+        },
+        "trial": "A2-lookahead-grouped-synchronous"
+      }
+    ],
+    "reconstruction": "Copy base_argv, replace the value immediately after each flag_override; canonical JSON hash must equal argv_sha256"
+  },
+  "public_environment": {
+    "CUBLAS_WORKSPACE_CONFIG": ":0:0",
+    "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
+    "CUDA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+    "FERRULE_LOG": "info,ferrule_performance=debug,ferrule_request=debug,ferrule_token=trace,ferrule_resource_observability=info",
+    "FERRULE_LOG_FORMAT": "json",
+    "FERRULE_PROFILE_NVTX": "0",
+    "HF_HUB_OFFLINE": "1",
+    "HOME": "/root",
+    "LD_LIBRARY_PATH": "/home/admin/wxw403883/anaconda3/envs/tao/lib:/usr/lib64",
+    "NVIDIA_VISIBLE_DEVICES": "GPU-b980f22b-58a3-fc88-21c1-ae86053d8535",
+    "PATH": "/usr/bin:/bin",
+    "PYTHONDONTWRITEBYTECODE": "1",
+    "TRANSFORMERS_OFFLINE": "1"
+  },
+  "quota": {
+    "context_tokens": 128,
+    "decode_cohort_target": 1,
+    "device_budget_bytes": 7516192768,
+    "device_cache_bytes": 335544320,
+    "device_cache_entries": 64,
+    "expert_scratch_bytes": 8388608,
+    "host_read_bytes": 67108864,
+    "kv_cache_bytes": 16777216,
+    "max_active_sequences": 2,
+    "max_batch_tokens": 8,
+    "max_deferrals": 0,
+    "metadata_bytes": 8388608,
+    "prefill_chunk_tokens": 8,
+    "worker_stack_bytes": 2097152,
+    "workspace_bytes": 2147483648
+  },
+  "raw_availability": "Owner-only local receipts/maps/HTTP/SSE/logs; not copied or promised as a public raw archive. No private weights, binaries, vendor data, SQLite, or temporary GPU receipts included",
+  "reference": {
+    "canonical_document_sha256": "5dea9034f2e8b1dc6165744619ba82502eb3b1870b67ad1a76ae3c6e419f15b6",
+    "eos": "HTTP ignore_eos omitted, stop enabled; diagnostic stop_at_eos=false is not substituted",
+    "http": {
+      "path": "target/validation/qwen35-35b-current/public-cli-acceptance-37b2f40-plan-20261017-01/HTTP-REFERENCES.json",
+      "sha256": "3cd767618f8ae071a689923f986c99d5ce87e8b59e10ed04087be22447ff780f"
+    },
+    "new_gpu_reference_generation": false,
+    "oracle_and_tokenizer_pins": {
+      "/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8/tokenizer.json": "5f9e4d4901a92b997e463c1f46055088b6cca5ca61a6522d1b9f64c4bb81cb42",
+      "/mnt/nas1/hf/Qwen3.5-35B-A3B-FP8/tokenizer_config.json": "316230d6a809701f4db5ea8f8fc862bc3a6f3229c937c174e674ff3ca0a64ac8",
+      "papers/arxiv/experiments/runs/g10-exclusive-001/g10.py": "9d3f1f0fc4bd0d61742979853103d8a3798674641f5a7fbfe3c03fde2b6a5993",
+      "target/validation/bf16-fresh-quality-20261007/INPUT.json": "1341fe3212b8fd23096cec393aae8ac2be085aae2a6380557bfa7454bf20bf46",
+      "target/validation/bf16-fresh-quality-20261007/oracle/arithmetic.json": "9c97268959e1d12dae5f8a9118934004f1c9bee9a0dc73086ec16c95c154deed",
+      "target/validation/bf16-fresh-quality-20261007/oracle/chinese.json": "8e579b8bafded26b8370279b3687e3109ed5f8bfb65e9a249a4623357c0ee52b",
+      "target/validation/bf16-fresh-quality-20261007/oracle/manifest.json": "102c798baeb5200bc8ed8386eabed6146870b3b6da2a90fc6010677041352c7e",
+      "target/validation/bf16-fresh-quality-20261007/oracle/qa.json": "188e3f557eaef7576e5b4619a4498abf0715eb2b237c53ab2b3a39d2281d24e7"
+    }
+  },
+  "repository_commit": "37b2f40c2dfc02825a373e417b0d5bb428e1622e",
+  "runtime": {
+    "actual_maps_scope": "See each acceptance cell Ready/after-requests/pre-stop receipts; loader resolution alone is not actual mapping evidence",
+    "libraries_sha256": {
+      "/home/admin/wxw403883/anaconda3/envs/tao/lib/libcublas.so.12.4.5.8": "88397a191cfc25f94c272b638ffa942be58d5594ba5d41ac4b766c2cd3fe54ac",
+      "/home/admin/wxw403883/anaconda3/envs/tao/lib/libcublasLt.so.12.4.5.8": "a18a341a9b6de15918e410a2337a74f2a644fd80c0600e61d69ddad69be15687",
+      "/home/admin/wxw403883/anaconda3/envs/tao/lib/libcudart.so.12.4.99": "e8023d1aa80d86175f22986faf55e23c0a9286ff625cede0b560220c6cd8a560",
+      "/home/admin/wxw403883/anaconda3/envs/tao/lib/libgcc_s.so.1": "f43f5563b8e01388eacf8f0b4898a53b88fe8aea535a2424ffb576d85845677e",
+      "/usr/lib64/ld-2.32.so": "385218198df39d3931fbb0666db2838bce66a7658c82c61454d4903a4e1d2ed3",
+      "/usr/lib64/libc-2.32.so": "d589c6aea9b813d2392b1c8bdeda73afe694d399687ab867bd26735175faadf1",
+      "/usr/lib64/libcuda.so.575.57.08": "f2470aa637fa72422534edeaeb9de19afe3d0646388baf7ffb5337b2edafc59e",
+      "/usr/lib64/libdl-2.32.so": "4eec77f1e5131f2b84aaa83c21772dc233ff9a44d2715a195249fee9d1dd3cae",
+      "/usr/lib64/libm-2.32.so": "3ad871eb16ece2c91050642503aa18757d3b018b1491afb662aec555fff683dd",
+      "/usr/lib64/libpthread-2.32.so": "6fd5dbf2a630b845af36c36e4d4509fef9da415b48fa25c6661184000bc3f3ce",
+      "/usr/lib64/librt-2.32.so": "68bf882c5011e80b654ace48ac7e4164d62fb6991d475514f299c6da57892196",
+      "/usr/lib64/libstdc++.so.6.0.28": "729ce0312dcd9dd2301f66a1c157fade62d60809dcb0647a5906b3f7e28c88d7"
+    },
+    "library_count": 12,
+    "live_mapped_memory_hash_observed": false,
+    "loader_pin_manifest": {
+      "path": "target/validation/http-transfer-37b2f40-cpu-freeze-20261017-01/runtime-library-pins.json",
+      "sha256": "84c5d9e5ed9829a3c90f95f790f6ea2089e07205b68ec517a7b08e38265bb33c"
+    }
+  },
+  "schema": "ferrule.http-transfer.curated-source-pins.v1",
+  "scope_equality_basis": "Previously passed maintained compiled-source formal review; full declared 37b2f40 archive scope equals d8c92d8 production bytes, not a relabelled EB3 binary",
+  "scope_equality_recheck": {
+    "argv": [
+      "git",
+      "--no-pager",
+      "diff",
+      "--exit-code",
+      "d8c92d80dc2ec95c44ba7513198232d36f290a34",
+      "37b2f40c2dfc02825a373e417b0d5bb428e1622e",
+      "--",
+      "Cargo.toml",
+      "Cargo.lock",
+      "rust-toolchain.toml",
+      "README.md",
+      ".cargo",
+      "crates"
+    ],
+    "compared": "Committed trees over the full declared compiled scope, not the mutable worktree",
+    "new_build": false,
+    "returncode": 0
+  },
+  "source_archive": {
+    "path": "target/validation/http-transfer-37b2f40-cpu-freeze-20261017-01/source.tar",
+    "sha256": "2645585f2e33dd833c2c785dab97d4f9f9090604b89353d940879593ef41d5bb"
+  },
+  "source_archive_files": 1514,
+  "tests": {
+    "errors": 0,
+    "failures": 0,
+    "historical_argv": [
+      "/home/admin/wxw403883/anaconda3/bin/python3.12",
+      "-S",
+      "-B",
+      "-m",
+      "unittest",
+      "-v",
+      "test_http_transfer",
+      "test_quality_v1",
+      "test_execution_v2",
+      "test_protocol_v2",
+      "test_actual_v2",
+      "test_paired_read_v1.AnalysisTests",
+      "test_paired_read_v1.LedgerTests",
+      "test_run_v3.V3IntegrationTests.test_authenticated_worker_entry_dispatches_maintained_worker",
+      "test_run_v3.V3IntegrationTests.test_nested_adapter_restores_after_cancellation",
+      "test_run_v3.V3IntegrationTests.test_failed_finalization_retains_all_slots_and_produces_v3_not_v2",
+      "test_http_transfer_metrics",
+      "test_http_transfer_controls",
+      "test_profile_capture"
+    ],
+    "historical_pythonpath": "/home/admin/luhuanbing.lhb/Ferrule/scripts/tests:/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/paired_read_v1:/home/admin/luhuanbing.lhb/Ferrule/papers/arxiv/experiments/storage_demand/tests",
+    "new_tests_run_during_curation": false,
+    "previous_main_reported_rust_tests": {
+      "initial_producer": 6,
+      "policy": 7,
+      "status": "Main-reported prior production tests passed; not rerun or independently re-counted during this curation"
+    },
+    "production_rust_test_provenance": "Previously reviewed/passed d8c92d8 production tests per main; new formal compiled-source/producer guards checked, no redundant Rust test rebuild",
+    "production_rust_tests_repeated": false,
+    "python_tests": 220,
+    "receipt": {
+      "path": "target/validation/http-transfer-37b2f40-cpu-freeze-20261017-01/cpu-current-tests-receipt.json",
+      "sha256": "012c91a4e53e691a782bf31045aeb4423ef618db9d8260b2b0dc9a9101810ded"
+    },
+    "stderr": {
+      "path": "target/validation/http-transfer-37b2f40-cpu-freeze-20261017-01/cpu-current-tests.stderr",
+      "sha256": "703ddd7a086998c0dfb0033eda6b5c39999158e1a9982cce3f69e74627eb54b8"
+    }
+  },
+  "upload_zero_contract": "ferrule.expert-read-host-charge.zero-omitting.d3d643a.v1"
+}
