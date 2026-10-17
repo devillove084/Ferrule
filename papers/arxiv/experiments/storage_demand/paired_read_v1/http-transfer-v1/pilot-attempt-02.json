@@ -1,0 +1,454 @@
+{
+  "actual_completed_lifecycles": 0,
+  "actual_issued_lifecycles": 0,
+  "actual_server_starts": 0,
+  "actual_supervisor_calls": 0,
+  "actual_worker_starts": 0,
+  "arms": [
+    {
+      "measured_counts": {
+        "censored": 0,
+        "failed": 0,
+        "success": 0,
+        "unissued": 5
+      },
+      "metrics": {
+        "median_request_e2e_seconds": null,
+        "median_ttft_seconds": null,
+        "observed_span_lower_bound_seconds": null,
+        "phase_qualified_requests_per_second": null,
+        "phase_qualified_tokens_per_second": null,
+        "phase_request_only_reference_qualified_requests_per_second": null,
+        "phase_request_only_reference_qualified_tokens_per_second": null,
+        "phase_requests_per_second": null,
+        "phase_tokens_per_second": null,
+        "phase_wall_seconds": null,
+        "serialized_service_denominator_seconds": null,
+        "serialized_service_normalized_qa8_tokens_per_second": null,
+        "serialized_service_reference_tokens_per_second": null
+      },
+      "qualified": false,
+      "trial": "B1-blocking-synchronous"
+    },
+    {
+      "measured_counts": {
+        "censored": 0,
+        "failed": 0,
+        "success": 0,
+        "unissued": 5
+      },
+      "metrics": {
+        "median_request_e2e_seconds": null,
+        "median_ttft_seconds": null,
+        "observed_span_lower_bound_seconds": null,
+        "phase_qualified_requests_per_second": null,
+        "phase_qualified_tokens_per_second": null,
+        "phase_request_only_reference_qualified_requests_per_second": null,
+        "phase_request_only_reference_qualified_tokens_per_second": null,
+        "phase_requests_per_second": null,
+        "phase_tokens_per_second": null,
+        "phase_wall_seconds": null,
+        "serialized_service_denominator_seconds": null,
+        "serialized_service_normalized_qa8_tokens_per_second": null,
+        "serialized_service_reference_tokens_per_second": null
+      },
+      "qualified": false,
+      "trial": "B1-blocking-grouped-synchronous"
+    },
+    {
+      "measured_counts": {
+        "censored": 0,
+        "failed": 0,
+        "success": 0,
+        "unissued": 5
+      },
+      "metrics": {
+        "median_request_e2e_seconds": null,
+        "median_ttft_seconds": null,
+        "observed_span_lower_bound_seconds": null,
+        "phase_qualified_requests_per_second": null,
+        "phase_qualified_tokens_per_second": null,
+        "phase_request_only_reference_qualified_requests_per_second": null,
+        "phase_request_only_reference_qualified_tokens_per_second": null,
+        "phase_requests_per_second": null,
+        "phase_tokens_per_second": null,
+        "phase_wall_seconds": null,
+        "serialized_service_denominator_seconds": null,
+        "serialized_service_normalized_qa8_tokens_per_second": null,
+        "serialized_service_reference_tokens_per_second": null
+      },
+      "qualified": false,
+      "trial": "B2-blocking-grouped-synchronous"
+    },
+    {
+      "measured_counts": {
+        "censored": 0,
+        "failed": 0,
+        "success": 0,
+        "unissued": 5
+      },
+      "metrics": {
+        "median_request_e2e_seconds": null,
+        "median_ttft_seconds": null,
+        "observed_span_lower_bound_seconds": null,
+        "phase_qualified_requests_per_second": null,
+        "phase_qualified_tokens_per_second": null,
+        "phase_request_only_reference_qualified_requests_per_second": null,
+        "phase_request_only_reference_qualified_tokens_per_second": null,
+        "phase_requests_per_second": null,
+        "phase_tokens_per_second": null,
+        "phase_wall_seconds": null,
+        "serialized_service_denominator_seconds": null,
+        "serialized_service_normalized_qa8_tokens_per_second": null,
+        "serialized_service_reference_tokens_per_second": null
+      },
+      "qualified": false,
+      "trial": "B2-blocking-synchronous"
+    },
+    {
+      "measured_counts": {
+        "censored": 0,
+        "failed": 0,
+        "success": 0,
+        "unissued": 5
+      },
+      "metrics": {
+        "median_request_e2e_seconds": null,
+        "median_ttft_seconds": null,
+        "observed_span_lower_bound_seconds": null,
+        "phase_qualified_requests_per_second": null,
+        "phase_qualified_tokens_per_second": null,
+        "phase_request_only_reference_qualified_requests_per_second": null,
+        "phase_request_only_reference_qualified_tokens_per_second": null,
+        "phase_requests_per_second": null,
+        "phase_tokens_per_second": null,
+        "phase_wall_seconds": null,
+        "serialized_service_denominator_seconds": null,
+        "serialized_service_normalized_qa8_tokens_per_second": null,
+        "serialized_service_reference_tokens_per_second": null
+      },
+      "qualified": false,
+      "trial": "L1-lookahead-synchronous"
+    },
+    {
+      "measured_counts": {
+        "censored": 0,
+        "failed": 0,
+        "success": 0,
+        "unissued": 5
+      },
+      "metrics": {
+        "median_request_e2e_seconds": null,
+        "median_ttft_seconds": null,
+        "observed_span_lower_bound_seconds": null,
+        "phase_qualified_requests_per_second": null,
+        "phase_qualified_tokens_per_second": null,
+        "phase_request_only_reference_qualified_requests_per_second": null,
+        "phase_request_only_reference_qualified_tokens_per_second": null,
+        "phase_requests_per_second": null,
+        "phase_tokens_per_second": null,
+        "phase_wall_seconds": null,
+        "serialized_service_denominator_seconds": null,
+        "serialized_service_normalized_qa8_tokens_per_second": null,
+        "serialized_service_reference_tokens_per_second": null
+      },
+      "qualified": false,
+      "trial": "L1-lookahead-grouped-synchronous"
+    },
+    {
+      "measured_counts": {
+        "censored": 0,
+        "failed": 0,
+        "success": 0,
+        "unissued": 5
+      },
+      "metrics": {
+        "median_request_e2e_seconds": null,
+        "median_ttft_seconds": null,
+        "observed_span_lower_bound_seconds": null,
+        "phase_qualified_requests_per_second": null,
+        "phase_qualified_tokens_per_second": null,
+        "phase_request_only_reference_qualified_requests_per_second": null,
+        "phase_request_only_reference_qualified_tokens_per_second": null,
+        "phase_requests_per_second": null,
+        "phase_tokens_per_second": null,
+        "phase_wall_seconds": null,
+        "serialized_service_denominator_seconds": null,
+        "serialized_service_normalized_qa8_tokens_per_second": null,
+        "serialized_service_reference_tokens_per_second": null
+      },
+      "qualified": false,
+      "trial": "L2-lookahead-grouped-synchronous"
+    },
+    {
+      "measured_counts": {
+        "censored": 0,
+        "failed": 0,
+        "success": 0,
+        "unissued": 5
+      },
+      "metrics": {
+        "median_request_e2e_seconds": null,
+        "median_ttft_seconds": null,
+        "observed_span_lower_bound_seconds": null,
+        "phase_qualified_requests_per_second": null,
+        "phase_qualified_tokens_per_second": null,
+        "phase_request_only_reference_qualified_requests_per_second": null,
+        "phase_request_only_reference_qualified_tokens_per_second": null,
+        "phase_requests_per_second": null,
+        "phase_tokens_per_second": null,
+        "phase_wall_seconds": null,
+        "serialized_service_denominator_seconds": null,
+        "serialized_service_normalized_qa8_tokens_per_second": null,
+        "serialized_service_reference_tokens_per_second": null
+      },
+      "qualified": false,
+      "trial": "L2-lookahead-synchronous"
+    }
+  ],
+  "attempt": 2,
+  "availability": "Raw final and receipts are local owner-only; no weights/binary/vendor/raw mass logs copied into curation",
+  "budget": {
+    "active_admission": {
+      "monotonic": 9187706.138927668,
+      "unix_ns": 1792244763102409480
+    },
+    "active_limit_seconds": 650,
+    "active_setup_absolute_deadline": 9187746.138927668,
+    "active_setup_limit_seconds": 40,
+    "active_to_postidle_first_sample_seconds": 40.001699743792415,
+    "active_to_recorded_stop_seconds": 42.72369205020368,
+    "attribution": "The active setup alarm fired at its unchanged 40-second bound before supervisor entry. Launch journal exists. Per-operation timings and interrupted stack are unobserved; no specific hash or adapter call is blamed.",
+    "exact_interrupted_operation": null,
+    "first_postidle_sample_started": 9187746.140627412,
+    "outer_deadline": 9188356.138927668,
+    "postidle_seconds": 2.7062702998518944,
+    "preidle_seconds": 2.70993447676301,
+    "recorded_stop": {
+      "monotonic": 9187748.862619719,
+      "unix_ns": 1792244805826100899
+    },
+    "required_remaining_reserve_seconds": 610,
+    "source_callsite": "run_actual_v2.py: with ex.absolute_alarm(outer - (530 + 28 + 20 + 32)) before planned.supervise",
+    "static_limit_seconds": 180,
+    "static_receipt_duration_seconds": 33.00041696988046,
+    "static_receipt_end_to_active_seconds": 52.35927133820951,
+    "total_pre_active_seconds": 85.35968830808997,
+    "verified_static_directories": 2092,
+    "verified_static_inputs": 19114
+  },
+  "by_read_schedule": {
+    "blocking": {
+      "independent_unit": "PAIR, not request",
+      "interval": null,
+      "median_paired_ratios": null,
+      "qualified_pairs": 0,
+      "scheduled_pairs": 2,
+      "significance_claim": false
+    },
+    "lookahead": {
+      "independent_unit": "PAIR, not request",
+      "interval": null,
+      "median_paired_ratios": null,
+      "qualified_pairs": 0,
+      "scheduled_pairs": 2,
+      "significance_claim": false
+    }
+  },
+  "candidate": {
+    "approval_subject": {
+      "path": "target/validation/qwen35-35b-current/request-http-pilot-attempt02-713fba3-plan-20261017-01/APPROVAL-SUBJECT.V3.json",
+      "sha256": "dac4cfd37a54917e3412987e7b7b0156bb4cd5d2de8188769782d568e6cf651f"
+    },
+    "archive_commit": "37b2f40c2dfc02825a373e417b0d5bb428e1622e",
+    "cli_sha256": "c3db43b8c556a210a77f7fac29dc23c4bc9399d5e0374e6dc9fecd016625ccaa",
+    "compiled_production_commit": "d8c92d80dc2ec95c44ba7513198232d36f290a34",
+    "controls_commit": "713fba3eff08fcf17dd1bb5fc910eec7f93b7d41",
+    "layout": {
+      "path": "target/validation/qwen35-35b-current/request-http-pilot-attempt02-713fba3-plan-20261017-01/PILOT.json",
+      "sha256": "bacf37076c4935c57f08da08c3ef7d52e23e3bd609ec00334d961e3f8fc0fd1d"
+    },
+    "main_go": {
+      "path": "target/validation/qwen35-35b-current/request-http-pilot-attempt02-713fba3-plan-20261017-01/MAIN-GO.json",
+      "sha256": "6ca85e257caea73b9aa54dce2f2f289de050c9f4c55eacbfe9296dd48ac509dc"
+    },
+    "review_packet": {
+      "path": "target/validation/qwen35-35b-current/request-http-pilot-attempt02-713fba3-plan-20261017-01/REVIEW-PACKET.V3.json",
+      "sha256": "bb15fb8457119c41c3748a4971ea78837c25e7fac2d643a3bba7d50ee9ec7ae9"
+    },
+    "verified_anchor": {
+      "path": "target/validation/qwen35-35b-current/request-http-pilot-attempt02-713fba3-identity-20261017-01/VERIFIED-ARTIFACT-IDENTITY.json",
+      "sha256": "1a85ab52e0d3e70c170e809bb66b5243457b18b9bd7777187cafc781dc7813ad"
+    }
+  },
+  "cleanup": {
+    "echild_note": "False, not a failed worker drain: positive never_spawned evidence; no old worker/subreaper ECHILD claim",
+    "final_all_eight_idle": true,
+    "final_authenticated_echild": false,
+    "final_recorded_owners_absent": false,
+    "never_spawned": {
+      "attempt_sha256": "a88a7e35a246dfd34e52c8c70d6c968284145102683306183458152d184f6a7e",
+      "authenticated_echild": false,
+      "coordinator": {
+        "birth_ticks": 155150024,
+        "pgrp": 183222,
+        "pid": 183223,
+        "ppid": 183222,
+        "session": 183222
+      },
+      "coordinator_source_sha256": "54052e50c7c417aa8d52e0f811eacd9a83c86781a92c82f38a0979e4574d7b8c",
+      "locks_held_sha256": "3d24ab8ac7a40c8731cd22ec96fe56793af9d720ee8d2a926ac23498d29b13bf",
+      "physical_owner_release": "unverified",
+      "schema": "ferrule.storage-demand.never-spawned-refusal.v1",
+      "source_proof": "execute_next: planned.supervise not entered",
+      "supervisor_call_entered": false,
+      "trial": "B1-blocking-synchronous",
+      "worker_state": "never_spawned"
+    },
+    "never_spawned_receipt": {
+      "path": "papers/arxiv/experiments/storage_demand/paired_read_v1/artifacts-transfer-pilot-attempt02-713fba3-20261017-01/B1-blocking-synchronous/worker-refusal.json",
+      "sha256": "28507efd02bc76cc233cf4599d998e6872577b9d478fedc3d578b4134a7131c6"
+    },
+    "no_additional_gpu_or_lock_probes": true,
+    "physical_owner_release": "unverified",
+    "postidle": {
+      "all_eight_idle": true,
+      "mode": "strict_preflight",
+      "samples": 3,
+      "status": "verified"
+    },
+    "preidle": {
+      "all_eight_idle": true,
+      "mode": "strict_preflight",
+      "samples": 3,
+      "status": "verified"
+    },
+    "release": {
+      "acquired_local_locks": 8,
+      "all_eight_local": true,
+      "assessment_sha256": "1832a33db405f1b433d260d7bbd460f2f37ab8ff6697ce9c1481028f00389121",
+      "attempt_sha256": "a88a7e35a246dfd34e52c8c70d6c968284145102683306183458152d184f6a7e",
+      "context_exited": true,
+      "descendant_custody_known": false,
+      "locks_held_sha256": "3d24ab8ac7a40c8731cd22ec96fe56793af9d720ee8d2a926ac23498d29b13bf",
+      "phase": "release",
+      "physical_owner_release": "unverified",
+      "schema": "ferrule.storage-demand.coordinator-terminal.v1",
+      "trial": "B1-blocking-synchronous"
+    },
+    "reprobe": {
+      "all_eight_nonblocking_reacquired": true,
+      "assessment_sha256": "1832a33db405f1b433d260d7bbd460f2f37ab8ff6697ce9c1481028f00389121",
+      "attempt_sha256": "a88a7e35a246dfd34e52c8c70d6c968284145102683306183458152d184f6a7e",
+      "context_exited": true,
+      "local_only": true,
+      "locks_held_sha256": "3d24ab8ac7a40c8731cd22ec96fe56793af9d720ee8d2a926ac23498d29b13bf",
+      "phase": "reprobe",
+      "schema": "ferrule.storage-demand.coordinator-terminal.v1",
+      "trial": "B1-blocking-synchronous"
+    }
+  },
+  "default_policy_recommendation": "No policy comparison was measured; no evidence supports switching the synchronous default",
+  "direct_grouped_call_count": null,
+  "expected_measured_tokens": 320,
+  "historical_acceptance": {
+    "path": "acceptance-results.json",
+    "scope": "Four original-control cells/48 actual requests, not attempted02 quality or performance evidence",
+    "sha256": "853270d42d79e00e7afe4ddd3f01c6c9026cce77b4763857a5e4b37b1baf147d"
+  },
+  "historical_source_pins": {
+    "path": "source-pins.json",
+    "scope": "Original accepted CLI/build/runtime/model/reference provenance retained; attempt02 orchestration/anchor/GO are separately bound in candidate receipts",
+    "sha256": "8bec14f3b02810ea0a781920a852aca3feb836456b71836866d6e1d395e2a625"
+  },
+  "initial_runtime_policy_event": null,
+  "initial_runtime_read_counters": null,
+  "launch_journals_written": 1,
+  "measured_qa": {
+    "censored": 0,
+    "failed": 0,
+    "lifecycle_qualified": 0,
+    "reference_qualified": 0,
+    "scheduled": 40,
+    "success": 0,
+    "unissued": 40,
+    "unknown_partial_token_slots": 0
+  },
+  "observed_generated_tokens": 0,
+  "pairs": [
+    {
+      "block": "B1",
+      "grouped_over_synchronous": null,
+      "modes": [
+        "blocking-synchronous",
+        "blocking-grouped-synchronous"
+      ],
+      "qualified": false,
+      "read_schedule": "blocking"
+    },
+    {
+      "block": "B2",
+      "grouped_over_synchronous": null,
+      "modes": [
+        "blocking-grouped-synchronous",
+        "blocking-synchronous"
+      ],
+      "qualified": false,
+      "read_schedule": "blocking"
+    },
+    {
+      "block": "L1",
+      "grouped_over_synchronous": null,
+      "modes": [
+        "lookahead-synchronous",
+        "lookahead-grouped-synchronous"
+      ],
+      "qualified": false,
+      "read_schedule": "lookahead"
+    },
+    {
+      "block": "L2",
+      "grouped_over_synchronous": null,
+      "modes": [
+        "lookahead-grouped-synchronous",
+        "lookahead-synchronous"
+      ],
+      "qualified": false,
+      "read_schedule": "lookahead"
+    }
+  ],
+  "performance_claim": false,
+  "physical_nas_backend_bytes": null,
+  "previous_failed_attempt": {
+    "path": "pilot-attempt-01.json",
+    "sha256": "053805eea4af8a2111fe9287d08bb5b9c69aa9e53bc6682ddf1aa0588999f5a2",
+    "unchanged": true
+  },
+  "primary_error": "TimeoutError: absolute pilot phase deadline",
+  "qualified": false,
+  "raw_final": {
+    "path": "papers/arxiv/experiments/storage_demand/paired_read_v1/artifacts-transfer-pilot-attempt02-713fba3-20261017-01/paired-final.json",
+    "sha256": "328bcb3ba35bee4db73af08e27f905925c4a8d5ea8e8ca6f21049706ecb9f075"
+  },
+  "replacements": 0,
+  "request_table": {
+    "path": "pilot-attempt-02-requests.json",
+    "rows": 96,
+    "sha256": "82d930aa531627602ce60fa62c724c40f5bf1b496c960e130b184f335c275a2f"
+  },
+  "requests": {
+    "censored": 0,
+    "failed": 0,
+    "issued": 0,
+    "scheduled": 96,
+    "successful": 0,
+    "terminal": 0,
+    "unissued": 96
+  },
+  "retries": 0,
+  "scheduled_lifecycles": 8,
+  "schema": "ferrule.http-transfer.curated-pilot-attempt.v2",
+  "status": "permanent_stop_before_worker_or_server_launch",
+  "traceback_note": "Maintained coordinator caught and persisted the timeout reason; execution stderr was empty, no traceback invented",
+  "traceback_preserved": false
+}

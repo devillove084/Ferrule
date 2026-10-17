@@ -1,5 +1,9 @@
 {
   "acceptance_quality_passed": true,
+  "attempt02_raw_evidence_index": {
+    "path": "target/validation/qwen35-35b-current/request-http-pilot-attempt02-713fba3-results-20261017-01/RAW-EVIDENCE-INDEX.json",
+    "sha256": "4b8c6e994840e6351e88a084c9b933355f0b301e4b15f96a4d99d0762e4207ee"
+  },
   "availability": "Curated summaries intended for version control; raw/model/build inputs remain local and owner-only",
   "curation_input_index": {
     "path": "target/validation/qwen35-35b-current/request-http-pilot-37b2f40-results-20261017-01/CURATION-INPUT-INDEX-01.json",
@@ -8,8 +12,8 @@
   "files": [
     {
       "path": "README.md",
-      "sha256": "70cab4bcc3f7f867538446b16423863f1d0a512f88199851a567b4357741ff36",
-      "size_bytes": 10285
+      "sha256": "59913d2bfd23e26634373a6089c1e0ac4e423a3793a19c35ff4f5b7a89635c66",
+      "size_bytes": 13732
     },
     {
       "path": "acceptance-results.json",
@@ -25,10 +29,33 @@
       "path": "source-pins.json",
       "sha256": "8bec14f3b02810ea0a781920a852aca3feb836456b71836866d6e1d395e2a625",
       "size_bytes": 27116
+    },
+    {
+      "path": "pilot-attempt-02.json",
+      "sha256": "4c2cb1247298f506308bc3e51d23b424cba562f1e6e7928b4a42d1db3ee575ef",
+      "size_bytes": 17405
+    },
+    {
+      "path": "pilot-attempt-02-requests.json",
+      "sha256": "82d930aa531627602ce60fa62c724c40f5bf1b496c960e130b184f335c275a2f",
+      "size_bytes": 26634
     }
   ],
   "manifest_self_hash": "Excluded to avoid recursion; supplied in the handoff",
   "performance_claim": false,
+  "pilot_attempts": {
+    "attempt_01": {
+      "qualified": false,
+      "unchanged": true
+    },
+    "attempt_02": {
+      "actual_server_starts": 0,
+      "measured_unissued": 40,
+      "qualified": false,
+      "status": "permanent_stop_before_worker_or_server_launch",
+      "unissued": 96
+    }
+  },
   "pilot_qualified": false,
   "raw_receipts": [
     {
@@ -42,6 +69,10 @@
     {
       "path": "target/validation/qwen35-35b-current/request-http-pilot-37b2f40-results-20261017-01/RECOVERY-01.json",
       "sha256": "e06778ef1c4ef44492eac78162e479a5112fcff4224937bef249397dc890cfb0"
+    },
+    {
+      "path": "papers/arxiv/experiments/storage_demand/paired_read_v1/artifacts-transfer-pilot-attempt02-713fba3-20261017-01/paired-final.json",
+      "sha256": "328bcb3ba35bee4db73af08e27f905925c4a8d5ea8e8ca6f21049706ecb9f075"
     }
   ],
   "schema": "ferrule.http-transfer.curation-manifest.v1",
