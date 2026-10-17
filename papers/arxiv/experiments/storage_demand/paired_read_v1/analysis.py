@@ -6,6 +6,9 @@ import math
 import statistics
 
 from runnerhelpers.evidence_v2 import finite, require
+from runnerhelpers.http_expectations import (
+    BOUND_HTTP_REFERENCE, HISTORICAL_LENGTH, http_output_matches, normalize_http_expectation,
+)
 
 METRICS = ('request_e2e_seconds', 'ttft_seconds', 'qualified_goodput_tokens_per_second')
 
@@ -46,9 +49,10 @@ def arm_metrics(row):
                 measured_slots=5, quality_qualified_tokens=sum(tokens), client_e2e_denominator_seconds=sum(times))
 
 
-def summarize(report):
+def summarize(report, *, contract=None, reference_context=None, producer_contract=None):
     if report.get('study_layout', {}).get('schema') == TRANSFER_LAYOUT:
-        return summarize_transfer(report)
+        return summarize_transfer(report, contract=contract, reference_context=reference_context,
+            producer_contract=producer_contract)
     rows = report.get('lifecycles', [])
     by_trial = {row['trial']: row for row in rows}
     require(len(by_trial) == len(rows), 'duplicate lifecycle cannot repair a failed pair')
@@ -99,12 +103,12 @@ def transfer_trials(order=None):
             for mode in block['modes']]
 
 
-def request_metrics(planned, observed=None):
+def request_metrics(planned, observed=None, *, contract=HISTORICAL_LENGTH, reference_context=None):
     """Scheduled-slot metrics, including failures; token counts are terminal usage, not chunks."""
     from runnerhelpers.evidence_v2 import integer
     observed = observed or {}
     actual, trace = observed.get('actual', {}), observed.get('trace', {})
-    usage = actual.get('usage') or {}
+    usage = actual.get('usage') if isinstance(actual.get('usage'), dict) else {}
     dispatch, sent, ended = (actual.get(k) for k in ('client_dispatch_at', 'sent_at', 'ended_at'))
     content = actual.get('content_event_times', [])
     first = content[0] if content and finite(content[0]) else None
@@ -116,16 +120,10 @@ def request_metrics(planned, observed=None):
     timing = timing and native_ttft > 0 and native_e2e > 0 and all(
         finite(actual.get(k)) and math.isclose(actual[k], v, rel_tol=1e-9, abs_tol=1e-9)
         for k, v in (('ttft_seconds', native_ttft), ('request_e2e_seconds', native_e2e)))
-    ref = planned.get('reference')
-    terminal_usage = all(type(usage.get(k)) is int and usage[k] == expected for k, expected in
-        (('prompt_tokens', planned['input_tokens']), ('completion_tokens', planned['max_tokens']),
-         ('total_tokens', planned['input_tokens'] + planned['max_tokens'])))
     success = observed.get('status') == actual.get('status') == 'success' and finite(ended)
-    quality = success and observed.get('issued') is True and observed.get('metric_eligible') is True and terminal_usage and timing
-    quality = quality and actual.get('finish_reason') == 'length' and trace.get('terminal_reconciled') is True
-    quality = quality and actual.get('actual_output_tokens') == planned['max_tokens']
-    quality = quality and (ref is None or (trace.get('actual_generated_ids') == ref['reference_ids']
-        and actual.get('text') == ref['reference_text']))
+    quality = success and observed.get('issued') is True and observed.get('metric_eligible') is True and timing
+    quality = quality and trace.get('terminal_reconciled') is True and http_output_matches(
+        planned, actual, trace, contract=contract, reference_context=reference_context)
     quality = quality and integer(observed.get('server_http_admission_us'))
     count = usage.get('completion_tokens')
     count = count if integer(count) else None
@@ -143,14 +141,17 @@ def request_metrics(planned, observed=None):
         route_ids=None, logits=None)
 
 
-def transfer_arm_metrics(row, schedule):
-    requests = row.get('lifecycle', {}).get('requests', {})
+def transfer_arm_metrics(row, schedule, *, contract=HISTORICAL_LENGTH, reference_context=None, producer_contract=None):
+    from runnerhelpers.trace_v2 import transfer_read_continuity
+    lifecycle = row.get('lifecycle', {})
+    requests = lifecycle.get('requests', {})
     observations = requests.get('observations', [])
     by_name = {r['name']: r for r in observations}
     require(len(by_name) == len(observations) and [r['name'] for r in observations]
             == [r['name'] for r in schedule[:len(observations)]],
             'duplicate/unknown request cannot repair a scheduled slot')
-    slots = [request_metrics(planned, by_name.get(planned['name'])) for planned in schedule]
+    slots = [request_metrics(planned, by_name.get(planned['name']),
+        contract=contract, reference_context=reference_context) for planned in schedule]
     measured = [r for r in slots if r['measured']]
     require(len(measured) == 5, 'frozen five measured QA slots required')
     issued = [r for r in measured if r['issued']]
@@ -168,30 +169,49 @@ def transfer_arm_metrics(row, schedule):
         return sum(r['completion_tokens'] for r in rows) if all(r['completion_tokens'] is not None for r in rows) else None
     def rate(n):
         return n / wall if n is not None and wall is not None else None
+    transfer = requests.get('expert_transfers', {})
+    continuity = transfer_read_continuity([r.get('logical_counters', {}) for r in observations],
+        transfer.get('requested_case', {}).get('read_options'), initial_read=requests.get('initial_read_endpoint'),
+        producer_contract=producer_contract)
     accepted = row.get('assessment', {}).get('can_continue') is True and row.get('read_ledger', {}).get('can_continue') is True
-    accepted = accepted and len(qualified) == 5 and all(r['reference_qualified'] for r in slots)
+    accepted = accepted and lifecycle.get('status') == 'complete'
+    accepted = accepted and lifecycle.get('closure', {}).get('final', {}).get('can_continue') is True
+    accepted = accepted and continuity['can_continue'] and len(qualified) == 5 and all(r['reference_qualified'] for r in slots)
     total_e2e = sum(r['native_e2e_seconds'] for r in qualified) if len(qualified) == 5 else None
     return dict(requests=slots, scheduled=5, counts=counts, successful=len(successful), reference_qualified=len(qualified),
-        success_fraction=len(successful) / 5, qualified_fraction=len(qualified) / 5,
-        qualified_arm=bool(accepted), phase_wall_seconds=wall, observed_span_lower_bound_seconds=known_span,
+        success_fraction=len(successful) / 5, qualified_fraction=len(qualified) / 5 if accepted else 0,
+        request_only_reference_qualified_fraction=len(qualified) / 5,
+        qualified_arm=bool(accepted), read_continuity={k: continuity[k] for k in
+            ('can_continue', 'read_continuity', 'stop_reason')},
+        phase_wall_seconds=wall, observed_span_lower_bound_seconds=known_span,
         phase_wall_definition='first MEASURED client dispatch to last MEASURED client-observed terminal; includes gaps/failures',
         phase_requests_per_second=rate(len(successful)), phase_tokens_per_second=rate(token_sum(successful)),
-        phase_qualified_requests_per_second=rate(len(qualified)), phase_qualified_tokens_per_second=rate(token_sum(qualified)),
+        phase_request_only_reference_qualified_requests_per_second=rate(len(qualified)),
+        phase_request_only_reference_qualified_tokens_per_second=rate(token_sum(qualified)),
+        phase_qualified_requests_per_second=rate(len(qualified)) if accepted else None,
+        phase_qualified_tokens_per_second=rate(token_sum(qualified)) if accepted else None,
         serialized_service_normalized_qa8_tokens_per_second=40 / total_e2e if total_e2e else None,
+        serialized_service_reference_tokens_per_second=token_sum(qualified) / total_e2e if total_e2e else None,
+        serialized_service_scope='request-only reference-qualified; QA8 normalization is not actual EOS token throughput',
         serialized_service_denominator_seconds=total_e2e,
         median_request_e2e_seconds=statistics.median(r['native_e2e_seconds'] for r in qualified) if len(qualified) == 5 else None,
         median_ttft_seconds=statistics.median(r['native_ttft_seconds'] for r in qualified) if len(qualified) == 5 else None,
         unknown_partial_token_slots=sum(r['unknown_partial_tokens'] for r in measured))
 
 
-def summarize_transfer(report):
+def summarize_transfer(report, *, contract=None, reference_context=None, producer_contract=None):
     layout, rows = report['study_layout'], report.get('lifecycles', [])
     require(layout.get('schema') == TRANSFER_LAYOUT and report.get('order') == transfer_order(), 'unknown transfer layout/order')
     by_trial = {r['trial']: r for r in rows}
     require(len(by_trial) == len(rows) and set(by_trial) == set(transfer_trials()),
             'all eight planned lifecycles, including unissued placeholders, required')
     schedule = layout['schedule']
-    blocks = [transfer_pair_metrics(block, by_trial, schedule) for block in transfer_order()]
+    contract = layout.get('http_expectation_contract', HISTORICAL_LENGTH) if contract is None else contract
+    reference_context = layout.get('http_reference_context') if reference_context is None else reference_context
+    producer_contract = layout.get('upload_producer_contract') if producer_contract is None else producer_contract
+    blocks = [transfer_pair_metrics(block, by_trial, schedule,
+        contract=contract, reference_context=reference_context, producer_contract=producer_contract)
+        for block in transfer_order()]
     summaries = {}
     for schedule_name in ('blocking', 'lookahead'):
         selected = [b for b in blocks if b['read_schedule'] == schedule_name]
@@ -209,20 +229,29 @@ def summarize_transfer(report):
     measured_qa = {key: sum(arm['counts'][key] for arm in all_arms)
         for key in ('success', 'failed', 'censored', 'unissued')}
     measured_qa.update(scheduled=40, reference_qualified=sum(arm['reference_qualified'] for arm in all_arms),
+        lifecycle_qualified=sum(arm['reference_qualified'] for arm in all_arms if arm['qualified_arm']),
         unknown_partial_token_slots=sum(arm['unknown_partial_token_slots'] for arm in all_arms))
     require(sum(measured_qa[k] for k in ('success', 'failed', 'censored', 'unissued')) == 40,
             'measured scheduled denominator changed')
+    expected_measured_tokens = 320
+    if contract == BOUND_HTTP_REFERENCE:
+        expected_measured_tokens = len(by_trial) * sum(normalize_http_expectation(
+            planned, contract=contract, reference_context=reference_context)['actual_output_tokens']
+            for planned in schedule if planned['measured'])
     return dict(schema='ferrule.storage-demand.http-transfer-analysis.v1', measured_qa=measured_qa, blocks=blocks, by_read_schedule=summaries,
-        denominators=denominators, scheduled_measured_qa=40, expected_measured_tokens=320,
+        denominators=denominators, scheduled_measured_qa=40, expected_measured_tokens=expected_measured_tokens,
+        scheduled_measured_token_ceiling=320,
         aggregate_policy='both pairs per schedule or null; no pooling schedules, dropping failures or replacements',
         pilot_only=True, scientific_acceptance=False, vllm_comparison=False,
         routes_observed=False, logits_observed=False, grouped_backend_call_count=None)
 
 
-def transfer_pair_metrics(block, by_trial, schedule):
+def transfer_pair_metrics(block, by_trial, schedule, *, contract=HISTORICAL_LENGTH, reference_context=None, producer_contract=None):
     from runnerhelpers.trace_v2 import TRANSFER_WORK
     trials = [block['block'] + '-' + block['read_schedule'] + '-' + p for p in POLICIES]
-    arms = {policy: transfer_arm_metrics(by_trial[trial], schedule) for policy, trial in zip(POLICIES, trials)}
+    arms = {policy: transfer_arm_metrics(by_trial[trial], schedule,
+        contract=contract, reference_context=reference_context, producer_contract=producer_contract)
+        for policy, trial in zip(POLICIES, trials)}
     signatures, work = [], []
     for trial in trials:
         observations = by_trial[trial].get('lifecycle', {}).get('requests', {}).get('observations', [])
@@ -235,7 +264,8 @@ def transfer_pair_metrics(block, by_trial, schedule):
     equal_work = bool(work[0]) and all(work[0]) and work[0] == work[1]
     qualified = all(a['qualified_arm'] for a in arms.values()) and equal_output and equal_work
     metrics = ('median_request_e2e_seconds', 'median_ttft_seconds',
-        'serialized_service_normalized_qa8_tokens_per_second', 'phase_qualified_tokens_per_second')
+        'serialized_service_normalized_qa8_tokens_per_second', 'serialized_service_reference_tokens_per_second',
+        'phase_qualified_tokens_per_second')
     ratios = {k: arms[POLICIES[1]][k] / arms[POLICIES[0]][k] for k in metrics} if qualified else None
     return dict(**block, arms=arms, qualified=qualified, crosspolicy_exact_output=equal_output,
         crosspolicy_equal_work=equal_work, grouped_over_synchronous=ratios, failure_pair_retained=not qualified)

@@ -147,14 +147,25 @@ TRANSFER_WORK = ('rows', 'sequences', 'prefill_rows', 'decode_rows',
     'artifact_uploads', 'artifact_upload_bytes', 'checkpoint_read_bytes')
 
 
-def transfer_counter_window(lines, options):
-    """Strict prospective health, without changing historical counter semantics."""
+def transfer_counter_window(lines, options, *, previous_read=None, initial_read=None, producer_contract=None):
+    """Validate raw health; absent boundary evidence stays explicitly unreconciled.
+
+    Supply initial_read once, then previous_read for later serial windows. Without
+    either, valid describes local health only, NOT owner-lifetime continuity.
+    """
     from paired_read_v1 import quality
     from .evidence_v2 import COUNTERS
     value = logical_counter_window(lines)
+    value.update(read_continuity_valid=False, read_continuity='unobserved_initial_baseline',
+                 final_read_endpoint=None)
     try:
         require(value['valid'], 'missing/invalid invocation counters')
-        previous = None
+        require(previous_read is None or initial_read is None, 'ambiguous read boundary baseline')
+        previous = initial_read if initial_read is not None else previous_read
+        bound = previous is not None
+        if bound:
+            quality.read_observation_v3(previous, options, producer_contract=producer_contract)
+            require(previous['status'] in ('configured', 'idle_retained'), 'read baseline is not live/settled')
         for row in value['rows']:
             f = row['fields']
             require(all(quality._v3_integer(f.get(k)) for k in COUNTERS + TRANSFER_WORK),
@@ -172,7 +183,7 @@ def transfer_counter_window(lines, options):
                 and f['expert_resident_bytes'] + f['expert_scratch_bytes']
                     <= f['expert_owner_peak_bytes'] <= 320 << 20, 'cache budget/conservation')
             read = json.loads(f['expert_read_pipeline'])
-            quality.read_observation_v3(read, options, stage='idle_retained')
+            quality.read_observation_v3(read, options, stage='idle_retained', producer_contract=producer_contract)
             delta = json.loads(f['expert_read_pipeline_delta'])
             require(isinstance(delta, dict) and set(delta) == set(quality.V3_COUNTERS + quality.V3_PEAKS)
                 and all(quality._v3_integer(v) for v in delta.values()), 'missing typed read delta')
@@ -186,13 +197,47 @@ def transfer_counter_window(lines, options):
                         'read lifetime peak reset')
             previous = read
             row['read_endpoint'] = read
-        value.update(transfer_health_valid=True, health_error=None,
+            row['read_delta'] = delta
+        value.update(read_continuity_valid=bound,
+            read_continuity='reconciled' if bound else 'unobserved_initial_baseline',
+            final_read_endpoint=previous, transfer_health_valid=True, health_error=None,
             grouped_backend_call_count=None,
             dispatch_evidence='positive cache uploads plus reviewed frozen-source policy dispatch; no direct grouped-call counter')
     except (ValueError, KeyError, TypeError) as error:
         value.update(valid=False, transfer_health_valid=False, health_error=str(error),
-                     grouped_backend_call_count=None)
+                     read_continuity_valid=False, read_continuity='invalid',
+                     final_read_endpoint=None, grouped_backend_call_count=None)
     return value
+
+
+def transfer_read_continuity(windows, options, *, initial_read, producer_contract=None):
+    """Revalidate ordered raw windows from an observed baseline; never heal a bad window.
+
+    A gap with unaccounted inter-request work fails delta equality. No synthetic
+    zero baseline or final healthy endpoint can replace missing/failed evidence.
+    """
+    from paired_read_v1 import quality
+    checked = []
+    try:
+        require(initial_read is not None, 'initial read baseline unobserved')
+        quality.read_observation_v3(initial_read, options, producer_contract=producer_contract)
+        require(initial_read['status'] in ('configured', 'idle_retained'), 'initial read baseline is not live/settled')
+        require(isinstance(windows, (list, tuple)) and windows, 'read invocation windows missing')
+        previous = initial_read
+        for index, window in enumerate(windows):
+            require(isinstance(window, dict) and window.get('valid') is True
+                and window.get('transfer_health_valid') is True, 'prior read/cache window invalid or unknown')
+            lines = [json.dumps(dict(fields=row['fields'])) for row in window['rows']]
+            current = transfer_counter_window(lines, options, previous_read=previous, producer_contract=producer_contract)
+            checked.append(current)
+            require(current['valid'] and current['read_continuity_valid'],
+                    'read boundary/window ' + str(index) + ': ' + str(current.get('health_error')))
+            previous = current['final_read_endpoint']
+        return dict(can_continue=True, read_continuity='reconciled', final_read_endpoint=previous,
+                    checked_windows=checked, stop_reason=None)
+    except (ValueError, KeyError, TypeError) as error:
+        return dict(can_continue=False, read_continuity='unobserved_or_invalid', final_read_endpoint=None,
+                    checked_windows=checked, stop_reason=str(error))
 
 
 def transfer_startup(lines, policy, cli_sha256):
