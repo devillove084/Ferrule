@@ -269,7 +269,12 @@ def http_capture_main(directory, launch_hash, target_deadline):
     with ct.pinned_executable(spec['argv'][0], spec['frozen_cli_sha256']):
         # Input and ELF verification consume the original cap; neither grants a fresh lifetime.
         authenticate_capture_parent(payload, launch_hash)
-        ct.check_pins(approved['candidate']['artifact_pins'])
+        if spec.get('static_preparation') is not None:
+            require(time.monotonic() < target_deadline, 'absolute target deadline expired during capture input/ELF verification')
+            static = transfer.validate_static_preparation(spec['static_preparation'], payload['execution_path'], deadline=target_deadline)
+            require(approved == static['bound_candidate'], 'capture prepared candidate changed')
+        else:
+            ct.check_pins(approved['candidate']['artifact_pins'])
         ct.check_pins(payload['adapter_pins'])
         ct.check_pins({payload['execution_path']: payload['execution_sha256']})
         for uuid, lock in zip(payload['eight_uuids'], payload['all_uuid_locks']):

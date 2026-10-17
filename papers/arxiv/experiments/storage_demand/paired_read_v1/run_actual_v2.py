@@ -45,6 +45,14 @@ def ledger(observed, mode):
 
 def contract(payload):
     candidate = ORIGINAL_WORKER_CONTRACT(payload)
+    prepared = payload['spec'].get('static_preparation')
+    if prepared is not None:
+        folder = Path(payload['directory'])
+        require(Path(prepared['path']).parent == folder.parent
+            and ct.sha(prepared['path']) == prepared['sha256']
+            and ct.load(prepared['path'])['trial'] == payload['trial']
+            and ct.load(folder / 'attempt.json')['static_preparation'] == prepared,
+            'worker static preparation/attempt binding changed')
     locks = payload.get('all_uuid_locks', [])
     require(len(locks) == 8, 'all eight authenticated local UUID locks required')
     for uuid, lock in zip(payload['eight_uuids'], locks):
@@ -99,10 +107,23 @@ def registration(directory):
     return value
 
 
+def admission_refused(directory):
+    # Presence is terminal even for a partial/unknown-trial refusal journal.
+    return any(path.name == 'static-refusal.json'
+        or (path.name.startswith('static-refusal-') and path.name.endswith('.json'))
+        for path in Path(directory).iterdir())
+
+
+def require_admission_open(directory):
+    directory = Path(directory)
+    require(not admission_refused(directory) and not (directory / 'study-stop.json').exists()
+        and not (directory / 'paired-final.json').exists(),
+        'study permanently stopped/finalized/admission refused; no resume or replacement')
+
+
 def next_trial(directory, registered):
     directory = Path(directory)
-    require(not (directory / 'study-stop.json').exists() and not (directory / 'paired-final.json').exists(),
-            'study permanently stopped/finalized; no resume or replacement')
+    require_admission_open(directory)
     for trial in registered['trial_order']:
         folder = directory / trial
         if not folder.exists():
@@ -205,21 +226,124 @@ def stop(directory, reason):
                            retries_permitted=False, remaining_slots='retain unissued/censored denominators'))
 
 
-def execute_next(directory):
+def admission_refusal(directory, error, *, trial=None, started=None, deadline=None, source_proof):
+    """Best-effort independent journals; neither may replace the primary error."""
+    reason = type(error).__name__ + ': ' + str(error)
+    try:
+        if admission_refused(directory):
+            return  # Preserve the first refusal and its primary cause, including on retry.
+    except OSError as journal_error:
+        error.add_note('refusal barrier inspection failed: ' + str(journal_error))
+    if not isinstance(trial, str) or re.fullmatch(r'[A-Za-z0-9_-]{1,96}', trial) is None:
+        trial = None
+    operations = (
+        ('STOP', lambda: stop(directory, reason)),
+        ('refusal', lambda: ct.write(Path(directory) / (
+            'static-refusal-' + trial + '.json' if trial is not None else 'static-refusal.json'), dict(
+                schema='ferrule.storage-demand.http-static-refusal.v1', trial=trial,
+                started=started, deadline=deadline, recorded=ex.stamp(), reason=reason,
+                worker_state='never_spawned', supervisor_call_entered=False, gpu_locks_acquired=False,
+                source_proof=source_proof, authenticated_echild=False, physical_owner_release='unverified'))),
+    )
+    for label, operation in operations:
+        try:
+            operation()
+        except (Exception, KeyboardInterrupt) as journal_error:
+            error.add_note(label + ' journal failure: ' + type(journal_error).__name__ + ': ' + str(journal_error))
+
+
+@contextmanager
+def admission_entry(directory, admission):
+    entered = False
+    try:
+        require_admission_open(directory)
+        with admission(directory) if admission else ExitStack():
+            entered = True
+            yield
+    except (Exception, KeyboardInterrupt) as error:
+        if admission is not None and not entered:
+            # Covers context factory/__enter__ as well as preparation itself.
+            admission_refusal(directory, error, source_proof='admission context did not yield to execute_next')
+        raise
+
+
+def execute_next(directory, *, admission=None):
     directory = directory.resolve()
-    with coordinator_lock(directory):
-        registered = registration(directory)
-        trial = next_trial(directory, registered)
-        limits, schedule = registered['limits'], registered['schedule']
-        require(planned.can_admit(registered['pilot_deadline']), 'absolute 7200s envelope lacks full next-arm plus reserve')
-        folder = directory / trial
-        folder.mkdir(exist_ok=False)
-        outer = min(time.monotonic() + 650, registered['pilot_deadline'] - 100)
-        ct.write(folder / 'attempt.json', dict(trial=trial, admission=ex.stamp(), outer_deadline=outer,
+    with coordinator_lock(directory), admission_entry(directory, admission):
+        admission_deadline = getattr(binding, 'admission_deadline', None)
+        try:
+            with ex.absolute_alarm(admission_deadline) if admission_deadline is not None else ExitStack():
+                registered = registration(directory)
+                trial = next_trial(directory, registered)
+                limits, schedule = registered['limits'], registered['schedule']
+                require(planned.can_admit(registered['pilot_deadline']), 'absolute 7200s envelope lacks full next-arm plus reserve')
+                if admission_deadline is not None:
+                    binding.validate_binding(Path(registered['binding_path']))
+                    binding.validate_execution(Path(registered['execution_path']))
+                    require(time.monotonic() <= admission_deadline, 'static admission deadline exceeded after final setup')
+                    require(planned.can_admit(registered['pilot_deadline']), 'static preparation exhausted next-arm admission')
+                prepared = getattr(binding, 'static_preparation', None)
+                if prepared is not None:
+                    require(Path(prepared['path']).parent == directory
+                        and ct.load(prepared['path'])['trial'] == trial, 'static preparation belongs to another arm')
+                folder = directory / trial
+                folder.mkdir(exist_ok=False)
+        except (Exception, KeyboardInterrupt) as error:
+            if admission_deadline is not None:
+                admission_refusal(directory, error, trial=locals().get('trial'),
+                    deadline=admission_deadline,
+                    source_proof='execute_next failed before active clock/owner locks')
+            raise
+        active_started = ex.stamp()
+        outer = min(active_started['monotonic'] + 650, registered['pilot_deadline'] - 100)
+        ct.write(folder / 'attempt.json', dict(trial=trial, admission=active_started, outer_deadline=outer,
+            static_preparation=getattr(binding, 'static_preparation', None),
+            static_preparation_seconds=(active_started['monotonic'] - binding.static_preparation_started
+                if getattr(binding, 'static_preparation', None) else None),
             pilot_deadline=registered['pilot_deadline'], registration_sha256=ct.sha(directory / 'registration.json'),
             coordinator=pilot.launch_guard.identity(os.getpid()), replay_permitted=False))
         receipt, observed, post, locks = {}, {}, dict(status='blocked', all_eight_idle=False), []
         mode = trial.split('-', 1)[1]
+        supervisor_entered = locks_authenticated = post_attempted = False
+        cleanup_errors = []
+
+        def post_idle():
+            nonlocal post, post_attempted
+            post_attempted = True
+            if not supervisor_entered:
+                try:
+                    ct.write(folder / 'worker-refusal.json', dict(
+                        schema='ferrule.storage-demand.never-spawned-refusal.v1', trial=trial,
+                        attempt_sha256=ct.sha(folder / 'attempt.json'),
+                        locks_held_sha256=ct.sha(folder / 'locks-held.json') if (folder / 'locks-held.json').exists() else None,
+                        coordinator_source_sha256=ct.sha(Path(__file__).resolve()),
+                        coordinator=pilot.launch_guard.identity(os.getpid()),
+                        worker_state='never_spawned', supervisor_call_entered=False,
+                        source_proof='execute_next: planned.supervise not entered',
+                        authenticated_echild=False, physical_owner_release='unverified'))
+                except (Exception, KeyboardInterrupt) as error:
+                    cleanup_errors.append('refusal receipt: ' + type(error).__name__ + ': ' + str(error))
+            if not locks_authenticated:
+                return
+            try:
+                if not supervisor_entered:
+                    custody = None  # Strict idle, never inferred ECHILD/stabilization.
+                elif ct.drained(receipt) and pilot.idle_window.no_recorded_owner(receipt):
+                    custody = receipt
+                else:
+                    return
+                post = pilot.idle(folder, 'coordinator-post-idle', registered['eight_uuids'],
+                                  min(time.monotonic() + 20, outer), custody)
+            except (Exception, KeyboardInterrupt) as error:
+                reason = type(error).__name__ + ': ' + str(error)
+                post = dict(status='blocked', all_eight_idle=False, error=reason)
+                cleanup_errors.append('post-idle: ' + reason)
+            try:
+                if not (folder / 'coordinator-post-idle.json').exists():
+                    ct.write(folder / 'coordinator-post-idle.json', post)
+            except (Exception, KeyboardInterrupt) as error:
+                cleanup_errors.append('post-idle receipt: ' + type(error).__name__ + ': ' + str(error))
+
         try:
             pilot.telemetry.authorize(True, registered['selected_uuid'], NOTE, 'device_exclusive_local_custody')
             with ExitStack() as stack:
@@ -227,31 +351,34 @@ def execute_next(directory):
                     locks.append(stack.enter_context(ct.exclusive_owner_lock(uuid)))
                 for uuid, lock in zip(registered['eight_uuids'], locks):
                     ct.validate_owner_lock(lock, uuid, os.getpid())
+                locks_authenticated = True
+                stack.callback(lambda: None if post_attempted else post_idle())
                 ct.write(folder / 'locks-held.json', dict(locks=locks, coordinator=pilot.launch_guard.identity(os.getpid()),
                     all_eight_local=True, global_reservation=False))
-                pilot.idle(folder, 'coordinator-pre-idle', registered['eight_uuids'], min(time.monotonic() + 20, outer))
-                candidate = binding.validate_binding(Path(registered['binding_path']))
-                execution = binding.validate_execution(Path(registered['execution_path']))
-                anchor = pilot.baseline(registered['eight_uuids'], registered['selected_uuid'], NOTE)
-                ct.write(folder / 'baseline.json', anchor)
-                payload = dict(schema='ferrule.storage-demand.paired-read-worker.v1', directory=str(folder),
-                    trial=trial, trial_order=registered['trial_order'], mode=mode, request_ceiling=12,
-                    schedule=schedule, limits=limits, execution_path=registered['execution_path'],
-                    execution_sha256=registered['execution_sha256'], candidate_path=registered['binding_path'],
-                    candidate_sha256=registered['binding_sha256'], uuid=registered['selected_uuid'],
-                    eight_uuids=registered['eight_uuids'], owner_lock=locks[0], owner_note=NOTE, granted=True,
-                    spec=planned.spec_for(candidate, registered['selected_uuid'], mode), baseline=anchor,
-                    outer_deadline=outer, pilot_deadline=registered['pilot_deadline'] - 100,
-                    adapter_pins=execution['artifact_pins'], all_uuid_locks=locks)
-                payload['contract_sha256'] = ct.digest({k: payload[k] for k in planned.CONTRACT_KEYS})
-                ct.write(folder / 'launch.json', payload)
-                pilot.remaining(outer, 530 + 28 + 20 + 32, 'supervisor and finite cleanup')
-                with actual_adapter():
+                with ExitStack() as worker_adapter:
+                    with ex.absolute_alarm(outer - (530 + 28 + 20 + 32)):
+                        pilot.idle(folder, 'coordinator-pre-idle', registered['eight_uuids'], min(time.monotonic() + 20, outer))
+                        candidate = binding.validate_binding(Path(registered['binding_path']))
+                        execution = binding.validate_execution(Path(registered['execution_path']))
+                        anchor = pilot.baseline(registered['eight_uuids'], registered['selected_uuid'], NOTE)
+                        ct.write(folder / 'baseline.json', anchor)
+                        payload = dict(schema='ferrule.storage-demand.paired-read-worker.v1', directory=str(folder),
+                            trial=trial, trial_order=registered['trial_order'], mode=mode, request_ceiling=12,
+                            schedule=schedule, limits=limits, execution_path=registered['execution_path'],
+                            execution_sha256=registered['execution_sha256'], candidate_path=registered['binding_path'],
+                            candidate_sha256=registered['binding_sha256'], uuid=registered['selected_uuid'],
+                            eight_uuids=registered['eight_uuids'], owner_lock=locks[0], owner_note=NOTE, granted=True,
+                            spec=planned.spec_for(candidate, registered['selected_uuid'], mode), baseline=anchor,
+                            outer_deadline=outer, pilot_deadline=registered['pilot_deadline'] - 100,
+                            adapter_pins=execution['artifact_pins'], all_uuid_locks=locks)
+                        payload['contract_sha256'] = ct.digest({k: payload[k] for k in planned.CONTRACT_KEYS})
+                        ct.write(folder / 'launch.json', payload)
+                        worker_adapter.enter_context(actual_adapter())
+                    pilot.remaining(outer, 530 + 28 + 20 + 32, 'supervisor and finite cleanup')
+                    supervisor_entered = True
                     receipt = planned.supervise(payload, 530)
                 ct.write(folder / 'supervisor.json', receipt)
-                if ct.drained(receipt) and pilot.idle_window.no_recorded_owner(receipt):
-                    post = pilot.idle(folder, 'coordinator-post-idle', registered['eight_uuids'],
-                                      min(time.monotonic() + 20, outer), receipt)
+                post_idle()
                 observed = ct.load(folder / 'lifecycle.json') if (folder / 'lifecycle.json').is_file() else {}
                 if 'study_layout' in registered:
                     observed.setdefault('requests', {})['observations'] = ex.recover_observations(folder, schedule)
@@ -291,19 +418,10 @@ def execute_next(directory):
                             summary['measured_qa']['eligible_success'] = 0
                 ct.write(folder / 'assessment.json', row)
                 require(assessment['can_continue'], '; '.join(assessment['stop_reasons']))
-            terminal = coordinator_terminal_binding(folder) if 'study_layout' in registered else {}
-            ct.write(folder / 'locks-released.json', dict(terminal, phase='release', context_exited=True, all_eight_local=True))
-            with ExitStack() as stack:
-                reprobed = [stack.enter_context(ct.exclusive_owner_lock(uuid)) for uuid in registered['eight_uuids']]
-                for uuid, lock in zip(registered['eight_uuids'], reprobed):
-                    ct.validate_owner_lock(lock, uuid, os.getpid())
-            ct.write(folder / 'locks-reprobed.json', dict(terminal, phase='reprobe', all_eight_nonblocking_reacquired=True,
-                context_exited=True, local_only=True))
-            disposition = 'qualified intentional owned HTTP stop' if 'study_layout' in registered else 'normal shutdown'
-            print('ARM ' + trial + ' complete: 12/12 requests, 5/5 measured QA; ' + disposition + ', ECHILD, all-eight idle', flush=True)
-            return row
         except (Exception, KeyboardInterrupt) as error:
             reason = type(error).__name__ + ': ' + str(error)
+            if not post_attempted:
+                post_idle()
             stop(directory, reason)
             if (folder / 'assessment.json').exists():
                 coordinator_failure(folder, reason)
@@ -317,12 +435,63 @@ def execute_next(directory):
                 ct.write(folder / 'assessment.json', dict(trial=trial, block=trial.split('-')[0], mode=mode,
                     summary=summary, assessment=dict(can_continue=False, stop_reasons=[reason]), read_ledger=ledger(observed, mode),
                     supervisor=receipt, post_idle=post, lifecycle=observed, coordinator_error=reason))
-            if not (folder / 'locks-released.json').exists():
-                ct.write(folder / 'locks-released.json', dict(context_exited=True, all_eight_local=True,
+        finally:
+            # Both paths leave the lock context before bounded nonblocking reprobe.
+            terminal = {}
+            try:
+                terminal = coordinator_terminal_binding(folder) if locks_authenticated and 'study_layout' in registered else {}
+                ct.write(folder / 'locks-released.json', dict(terminal, phase='release', context_exited=True,
+                    all_eight_local=len(locks) == 8, acquired_local_locks=len(locks),
                     physical_owner_release='unverified', descendant_custody_known=ct.drained(receipt)))
-            print('ARM ' + trial + ' STOP: ' + reason, flush=True)
-            return effective_assessment(folder, ct.load(folder / 'assessment.json'),
-                require_completion='study_layout' in registered)
+            except (Exception, KeyboardInterrupt) as error:
+                cleanup_errors.append('release receipt: ' + type(error).__name__ + ': ' + str(error))
+            if locks_authenticated:
+                try:
+                    with ex.absolute_alarm(min(time.monotonic() + 32, outer)):
+                        with ExitStack() as stack:
+                            reprobed = [stack.enter_context(ct.exclusive_owner_lock(uuid)) for uuid in registered['eight_uuids']]
+                            for uuid, lock in zip(registered['eight_uuids'], reprobed):
+                                ct.validate_owner_lock(lock, uuid, os.getpid())
+                        ct.write(folder / 'locks-reprobed.json', dict(terminal, phase='reprobe',
+                            all_eight_nonblocking_reacquired=True, context_exited=True, local_only=True))
+                except (Exception, KeyboardInterrupt) as error:
+                    cleanup_errors.append('reprobe: ' + type(error).__name__ + ': ' + str(error))
+            if cleanup_errors:
+                ct.write(folder / 'coordinator-cleanup-errors.json', dict(
+                    schema='ferrule.storage-demand.coordinator-cleanup-errors.v1', trial=trial,
+                    errors=cleanup_errors, assessment_sha256=ct.sha(folder / 'assessment.json'),
+                    qualification=False, recorded=ex.stamp()))
+                coordinator_failure(folder, '; '.join(cleanup_errors))
+        row = effective_assessment(folder, ct.load(folder / 'assessment.json'),
+            require_completion='study_layout' in registered)
+        if row['assessment']['can_continue']:
+            print('ARM ' + trial + ' complete: 12/12 requests, 5/5 measured QA; normal owned shutdown, ECHILD, all-eight idle', flush=True)
+        else:
+            print('ARM ' + trial + ' STOP: ' + '; '.join(row['assessment']['stop_reasons']), flush=True)
+        return row
+
+
+def never_spawned(folder):
+    """Positive arm-bound source/control-flow evidence, never file absence."""
+    folder = Path(folder)
+    try:
+        refusal = ct.load(folder / 'worker-refusal.json')
+        attempt = ct.load(folder / 'attempt.json')
+        registered = ct.load(folder.parent / 'registration.json')
+        source = str(Path(__file__).resolve())
+        source_pin = registered.get('study_layout', {}).get('artifact_pins', {}).get(source)
+        if source_pin is None:
+            source_pin = ct.sha(source)
+        return (refusal.get('schema') == 'ferrule.storage-demand.never-spawned-refusal.v1'
+            and refusal.get('trial') == folder.name and refusal.get('worker_state') == 'never_spawned'
+            and refusal.get('supervisor_call_entered') is False
+            and refusal.get('source_proof') == 'execute_next: planned.supervise not entered'
+            and refusal.get('coordinator') == attempt['coordinator']
+            and refusal.get('coordinator_source_sha256') == source_pin
+            and refusal.get('attempt_sha256') == ct.sha(folder / 'attempt.json')
+            and refusal.get('authenticated_echild') is False)
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
 
 
 def finalize(directory):
@@ -392,7 +561,8 @@ def finalize(directory):
         if not acceptance and 'study_layout' in registered and not all(b['qualified'] for b in report['analysis']['blocks']):
             report['status'] = 'stopped'
         report['actual_completed_lifecycles'] = sum(row.get('assessment', {}).get('can_continue') is True for row in rows)
-        report['actual_issued_lifecycles'] = sum((directory / trial / 'launch.json').is_file() for trial in registered['trial_order'])
+        report['actual_issued_lifecycles'] = sum((directory / trial / 'launch.json').is_file() and not never_spawned(directory / trial)
+            for trial in registered['trial_order'])
         report['pipeline'] = [{key: row.get(key) for key in ('trial', 'mode', 'read_ledger')} for row in rows]
         report['http_quality_evidence'] = []
         for row in rows:
@@ -401,7 +571,7 @@ def finalize(directory):
                 name=request['name'], status=request.get('status'), metric_eligible=request.get('metric_eligible'),
                 measured=request.get('measured'), actual=request.get('actual'), actual_token_id_join=request.get('trace'),
                 nfs=request.get('nfs'), logical_counters=request.get('logical_counters')) for request in requests]))
-        attempted = [row for row in rows if row.get('supervisor')]
+        attempted = [row for row in rows if row.get('supervisor') or never_spawned(directory / row['trial'])]
         if attempted:
             last = attempted[-1]
             report['final_authenticated_echild'] = ct.drained(last['supervisor'])
