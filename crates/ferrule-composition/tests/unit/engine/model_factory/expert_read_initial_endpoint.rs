@@ -160,7 +160,7 @@ fn initial_endpoint_serializes_actual_configured_unexecuted_materializer_observa
 }
 
 #[test]
-fn initial_endpoint_retains_nonzero_counters_live_worker_and_all_upload_charges() {
+fn initial_endpoint_retains_nonzero_counters_live_worker_and_read_charges() {
     let mut observed =
         materializer(ExpertReadSchedule::Lookahead).expert_read_pipeline_observation();
     // Injected producer sample tests verbatim serialization, not a GPU/idle proof.
@@ -169,11 +169,9 @@ fn initial_endpoint_retains_nonzero_counters_live_worker_and_all_upload_charges(
     observed.stats.reader_interval_calls = 3;
     observed.stats.reader_interval_bytes = 4096;
     observed.stats.unobserved_reader_intervals = 2;
-    observed.current_charge.upload_reserved_packed_bytes = 128;
-    observed.current_charge.pinned_upload_bytes = 256;
-    observed.current_charge.upload_ticket_metadata_bytes = 32;
-    observed.current_charge.upload_policy_headroom_bytes = 64;
-    observed.current_charge.unknown_upload_bytes = 512;
+    observed.current_charge.packed_bytes = 128;
+    observed.current_charge.artifact_bytes = 256;
+    observed.current_charge.unknown_packed_bytes = 512;
     let snapshot = owner_fixture(observed);
     let before = snapshot.clone();
     let record = emit(&snapshot);
@@ -185,11 +183,9 @@ fn initial_endpoint_retains_nonzero_counters_live_worker_and_all_upload_charges(
     assert_eq!(initial["value"]["stats"]["reader_interval_calls"], 3);
     assert_eq!(initial["value"]["worker_alive"], true);
     for (key, value) in [
-        ("upload_reserved_packed_bytes", 128),
-        ("pinned_upload_bytes", 256),
-        ("upload_ticket_metadata_bytes", 32),
-        ("upload_policy_headroom_bytes", 64),
-        ("unknown_upload_bytes", 512),
+        ("packed_bytes", 128),
+        ("artifact_bytes", 256),
+        ("unknown_packed_bytes", 512),
     ] {
         assert_eq!(initial["value"]["current_charge"][key], value);
     }
@@ -253,6 +249,10 @@ fn initial_endpoint_factory_call_is_once_after_policy_and_before_callback_or_eng
         1
     );
     assert!(builder[..initial].contains("if request.execution.expert_read_pipeline.is_some()"));
+    assert!(
+        builder[..initial]
+            .contains("expert_read_policy::effective_transfer_policy(&request.execution).into()")
+    );
     assert!(builder[initial..callback].contains("|| runner.physical_resource_snapshot()"));
     assert!(builder[initial..callback].contains(")?;"));
     assert!(builder[initial..callback].contains("runner.expert_transfer_policy()"));
@@ -261,7 +261,7 @@ fn initial_endpoint_factory_call_is_once_after_policy_and_before_callback_or_eng
 #[test]
 fn initial_endpoint_preserves_omission_and_the_independent_runtime_policy() {
     let snapshot = owner_fixture(
-        materializer(ExpertReadSchedule::Blocking).expert_read_pipeline_observation(),
+        materializer(ExpertReadSchedule::Lookahead).expert_read_pipeline_observation(),
     );
     for (requested, effective, expected_requested, expected_effective) in [
         (
@@ -269,6 +269,12 @@ fn initial_endpoint_preserves_omission_and_the_independent_runtime_policy() {
             ExpertTransferPolicy::Synchronous,
             "None",
             "Synchronous",
+        ),
+        (
+            None,
+            ExpertTransferPolicy::GroupedSynchronous,
+            "None",
+            "GroupedSynchronous",
         ),
         (
             Some(ServingExpertTransferPolicy::Synchronous),

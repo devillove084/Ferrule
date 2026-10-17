@@ -45,7 +45,8 @@ fn expert_transfer_cli_defaults_and_enum_values_are_unambiguous() {
         .to_string();
     assert!(help.contains("--expert-transfer-policy"));
     assert!(help.contains("grouped-synchronous"));
-    assert!(help.contains("omitted preserves synchronous"));
+    assert!(help.contains("omitted selects grouped"));
+    assert!(help.contains("--expert-read-schedule lookahead"));
 }
 
 #[test]
@@ -99,23 +100,36 @@ fn expert_transfer_cli_unsupported_selections_fail_before_model_path_io() {
             assert!(!error.to_string().contains("No such file"), "{error}");
         }
     }
-    let error = prepare_model(&serve(&[
-        "ferrule",
-        "serve",
-        "not-opened",
-        "--expert-transfer-policy",
-        "grouped-synchronous",
-        "--model-profile",
-        "qwen35-mixed-bf16",
-        "--max-batch-tokens",
-        "8",
-    ]))
-    .err()
-    .unwrap();
-    assert!(
-        error.to_string().contains("bounded expert read pipeline"),
-        "{error}"
-    );
+    for reads in [
+        vec![],
+        vec!["--expert-read-host-mb", "64"],
+        vec![
+            "--expert-read-host-mb",
+            "64",
+            "--expert-read-schedule",
+            "blocking",
+        ],
+    ] {
+        let mut argv = vec![
+            "ferrule",
+            "serve",
+            "not-opened",
+            "--expert-transfer-policy",
+            "grouped-synchronous",
+            "--model-profile",
+            "qwen35-mixed-bf16",
+            "--max-batch-tokens",
+            "8",
+        ];
+        argv.extend(reads);
+        let error = prepare_model(&serve(&argv)).err().unwrap();
+        assert!(
+            error.to_string().contains("bounded expert read pipeline"),
+            "{error}"
+        );
+        assert!(error.to_string().contains("Lookahead"), "{error}");
+        assert!(!error.to_string().contains("No such file"), "{error}");
+    }
 }
 
 #[test]
@@ -160,11 +174,18 @@ fn expert_transfer_cli_public_plan_reports_effective_policy_and_preserves_caps()
                     schedule,
                 ];
                 let default = prepare_model(&serve(&base)).unwrap();
-                assert_eq!(
-                    default.expert_transfer_policy(),
+                let automatic = if schedule == "lookahead" {
+                    ServingExpertTransferPolicy::GroupedSynchronous
+                } else {
                     ServingExpertTransferPolicy::Synchronous
-                );
+                };
+                assert_eq!(default.expert_transfer_policy(), automatic);
                 assert_eq!(default.requested_expert_transfer_policy(), None);
+                let report = execution_report(&default, 30_000).join("\n");
+                assert!(
+                    report.contains(&format!("requested=None effective={}", automatic.as_str())),
+                    "{report}"
+                );
                 for (flag, expected) in [
                     ("synchronous", ServingExpertTransferPolicy::Synchronous),
                     (
@@ -174,6 +195,13 @@ fn expert_transfer_cli_public_plan_reports_effective_policy_and_preserves_caps()
                 ] {
                     let mut argv = base.clone();
                     argv.extend(["--expert-transfer-policy", flag]);
+                    if schedule == "blocking"
+                        && expected == ServingExpertTransferPolicy::GroupedSynchronous
+                    {
+                        let error = prepare_model(&serve(&argv)).err().unwrap();
+                        assert!(error.to_string().contains("Lookahead"), "{error}");
+                        continue;
+                    }
                     let plan = prepare_model(&serve(&argv)).unwrap();
                     assert_eq!(plan.expert_transfer_policy(), expected);
                     assert_eq!(plan.requested_expert_transfer_policy(), Some(expected));

@@ -220,7 +220,7 @@ pub struct PreparedNumericFp8RankLinear {
     segments: Arc<[PreparedNumericFp8RankSegment]>,
 }
 impl PreparedNumericFp8RankLinear {
-    #[cfg(test)]
+    #[cfg(all(test, feature = "cuda"))]
     pub(crate) fn payload_liveness(&self) -> std::sync::Weak<[PreparedNumericFp8RankSegment]> {
         Arc::downgrade(&self.segments)
     }

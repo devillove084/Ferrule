@@ -11,7 +11,7 @@ pub(crate) mod expert_reads;
 pub use expert_reads::{
     ExpertReadHostCharge, ExpertReadHostReceipt, ExpertReadIdentity, ExpertReadPipelineError,
     ExpertReadPipelineObservation, ExpertReadPipelineOptions, ExpertReadPipelineStats,
-    ExpertReadSchedule, ExpertUploadHostCharge, ExpertUploadReservation,
+    ExpertReadSchedule,
 };
 mod forward;
 pub mod host_experts;

@@ -32,9 +32,9 @@ pub use cuda::CudaRows;
 
 pub use ferrule_backend::cpu::{HostRows, RouterRoutes, RowsArenaId, RowsDType, RowsShape};
 
-/// Explicit owner-local expert transfer policy. Retained transfers require a
-/// capable leaf and its existing bounded host admission; this does not raise
-/// quotas or certify physical allocator/driver overhead.
+/// Explicit owner-local synchronous expert transfer policy. Grouped uploads
+/// require a capable leaf and its existing bounded host admission; selection
+/// does not raise quotas or certify physical allocator/driver overhead.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum ExpertTransferPolicy {
     #[default]
@@ -42,10 +42,6 @@ pub enum ExpertTransferPolicy {
     /// Upload one admitted expert group with one synchronous completion proof.
     /// Uses the existing source budget; no retained pinned ticket is selected.
     GroupedSynchronous,
-    Retained {
-        policy_headroom_bytes: usize,
-        readiness_timeout: std::time::Duration,
-    },
 }
 
 /// Optional owner capability. Selection is explicit, before execution; the
@@ -918,28 +914,6 @@ pub trait ExpertProvider {
     /// This capability adds no payload storage or pinned/ticket reservation.
     fn supports_grouped_expert_upload(&self) -> bool {
         false
-    }
-
-    /// Default-disabled retained upload capability. Reserve the complete host
-    /// peak before materializing; unsupported providers must not fake admission.
-    fn reserve_expert_upload(
-        &mut self,
-        _metadata: &ExpertMetadata,
-        _ticket_metadata_bytes: usize,
-        _policy_headroom_bytes: usize,
-    ) -> Result<Option<super::expert_reads::ExpertUploadReservation>> {
-        Ok(None)
-    }
-
-    /// Move packed completion and source-allocation witnesses into the exact
-    /// reservation. This is custody transfer, never host completion or refund.
-    fn transfer_expert_upload(
-        &mut self,
-        _reservation: &mut super::expert_reads::ExpertUploadReservation,
-    ) -> Result<()> {
-        Err(model_error(
-            "expert provider has no retained upload custody",
-        ))
     }
 
     fn expert(&mut self, layer: usize, expert: usize) -> Result<ExpertAvailability>;

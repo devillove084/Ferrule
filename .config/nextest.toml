@@ -36,7 +36,6 @@ package(=ferrule-backend) & (
     (kind(lib) & (
         test(/cuda::graph::gpu_lifecycle_tests::/) |
         test(/cuda::operator_owner::pr01_tests::/) |
-        test(/^cuda::operator_owner::numeric_fp8_upload::contract_tests::/) |
         test(/^cuda::operator_owner::numeric_fp8::group_sync::contract_tests::/)
     ))
 )

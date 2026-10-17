@@ -101,7 +101,6 @@ pub struct CudaStandardDecoderOperators {
     mixed_gqa_block: Option<Rc<hybrid_rank::MixedGqaInvocation>>,
     experts: BTreeMap<(usize, usize), Arc<PreparedSwiGlu>>,
     bounded_experts: Option<BoundedExpertCache<ExpertCacheKey>>,
-    retained_upload: Option<residency::retained_upload::State>,
     grouped_upload: Option<residency::grouped_upload::State>,
     expert_hold: Vec<DeviceBuffer<f32>>,
     bf16_hold: Vec<DeviceBuffer<u16>>,
@@ -227,7 +226,6 @@ impl CudaStandardDecoderOperators {
             mixed_gqa_block: None,
             experts: BTreeMap::new(),
             bounded_experts,
-            retained_upload: None,
             grouped_upload: None,
             expert_hold: Vec::new(),
             bf16_hold: Vec::new(),
@@ -902,9 +900,7 @@ impl CudaStandardDecoderOperators {
                 return consume(this, output);
             }
             if !this.bindings.has_metadata_expert(metadata)? {
-                if this.retained_upload.is_some() {
-                    this.retained_metadata_upload(metadata, provider, input.shape().rows())?;
-                } else if this.grouped_upload.is_some() {
+                if this.grouped_upload.is_some() {
                     this.grouped_metadata_upload(metadata, provider, input.shape().rows())?;
                 } else {
                     let expert = match provider.expert(layer, id)? {

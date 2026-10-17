@@ -671,11 +671,7 @@ pub(super) fn build_numeric_bf16(
             device,
         )?;
         runner.set_expert_transfer_policy(
-            request
-                .execution
-                .expert_transfer_policy
-                .unwrap_or_default()
-                .into(),
+            expert_read_policy::effective_transfer_policy(&request.execution).into(),
         )?;
         tracing::info!(
             requested_expert_transfer_policy = ?request.execution.expert_transfer_policy,

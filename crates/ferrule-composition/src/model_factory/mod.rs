@@ -506,7 +506,6 @@ pub enum ServingEngineSelection {
 }
 
 /// Public serving selection for the existing owner-local transfer capability.
-/// Retained uploads are deliberately not a serving option.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ServingExpertTransferPolicy {
@@ -538,9 +537,9 @@ impl From<ServingExpertTransferPolicy> for ferrule_model::transformer::ExpertTra
 /// The legacy `ModelFactoryOptions` APIs keep their existing default semantics.
 #[derive(Debug, Clone, Default)]
 pub struct ServingModelOptions {
-    /// None preserves synchronous transfers. Explicit selections require a
-    /// supported local numeric owner; grouped transfers also require bounded reads
-    /// and validated mixed BF16/F32 numeric model precision.
+    /// None selects grouped transfers only for a supported local CUDA mixed
+    /// BF16/F32 numeric owner with explicit bounded Lookahead reads; otherwise
+    /// synchronous. Explicit selections require the corresponding owner capability.
     pub expert_transfer_policy: Option<ServingExpertTransferPolicy>,
     /// Explicit bounded host staging for lazy unsharded numeric experts.
     /// None preserves synchronous demand reads; not a device or host cache budget.
@@ -870,12 +869,9 @@ impl ResidentModelBuildPlan {
         self.request.execution.expert_transfer_policy
     }
 
-    /// Effective construction policy; omission never enables grouped transfers.
+    /// Effective construction policy, resolved from the selected owner and reads.
     pub fn expert_transfer_policy(&self) -> ServingExpertTransferPolicy {
-        self.request
-            .execution
-            .expert_transfer_policy
-            .unwrap_or_default()
+        expert_read_policy::effective_transfer_policy(&self.request.execution)
     }
 
     pub fn expert_read_pipeline_options(

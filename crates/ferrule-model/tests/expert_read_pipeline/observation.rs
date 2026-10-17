@@ -12,6 +12,17 @@ fn configured_mode_is_not_a_positive_worker_read_qualification() {
     assert_eq!(disabled.requested_mode, None);
     assert_eq!(disabled.effective_mode, None);
     assert_eq!(disabled.status, "disabled");
+    // Removed upload policies must not expand the historical default schema.
+    let charge = serde_json::to_value(disabled.current_charge).unwrap();
+    for field in [
+        "upload_reserved_packed_bytes",
+        "pinned_upload_bytes",
+        "upload_ticket_metadata_bytes",
+        "upload_policy_headroom_bytes",
+        "unknown_upload_bytes",
+    ] {
+        assert!(charge.get(field).is_none());
+    }
     for schedule in [ExpertReadSchedule::Blocking, ExpertReadSchedule::Lookahead] {
         let f = Fixture::new(1);
         let materializer = f.materializer(schedule);

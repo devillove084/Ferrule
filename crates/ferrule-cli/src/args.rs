@@ -542,9 +542,10 @@ impl From<ServeExpertTransferPolicy>
 
 #[derive(Args, Clone)]
 pub(crate) struct ServeArgs {
-    /// Expert H2D completion policy; omitted preserves synchronous transfers.
-    /// Explicit policies require a local CUDA numeric model profile. Grouped
-    /// synchronous also requires mixed BF16/F32 precision and --expert-read-host-mb;
+    /// Expert H2D completion policy; omitted selects grouped for supported bounded
+    /// Lookahead reads, otherwise synchronous. Explicit policies require a local
+    /// CUDA numeric model profile. Grouped synchronous also requires mixed BF16/F32
+    /// precision, --expert-read-host-mb and --expert-read-schedule lookahead;
     /// read/cache caps are unchanged.
     #[arg(long, value_enum)]
     pub(crate) expert_transfer_policy: Option<ServeExpertTransferPolicy>,

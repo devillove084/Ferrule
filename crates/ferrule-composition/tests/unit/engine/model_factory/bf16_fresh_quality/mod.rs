@@ -4,7 +4,7 @@ use crate::model_factory::bf16_serving::expert_read_reporting::{
     PredictionFingerprints, PredictionSample,
 };
 
-mod retained_transfer;
+mod transfer_policy;
 
 pub(super) fn top1(values: &[f32]) -> u32 {
     assert!(!values.is_empty() && values.iter().all(|v| v.is_finite()));
@@ -79,50 +79,6 @@ fn mixed_storage_middle64_blocking_fresh_quality_no_observer_equality() {
 #[ignore = "sole GPU owner; Lookahead ordinary no-diagnostic-observer equality; requires newly pinned matching diagnostic primary report"]
 fn mixed_storage_middle64_lookahead_fresh_quality_no_observer_equality() {
     run_with_observer(false, Full40TestConfig::StorageMiddle64Lookahead, false);
-}
-
-#[test]
-#[ignore = "sole GPU owner; explicit retained blocking uploads; unchanged quality/reference/quota and primary policy binding"]
-fn mixed_storage_middle64_retained_blocking_fresh_quality_retained_generation() {
-    run(false, Full40TestConfig::StorageMiddle64RetainedBlocking);
-}
-
-#[test]
-#[ignore = "sole GPU owner; explicit retained blocking uploads; unchanged quality/reference/quota and primary policy binding"]
-fn mixed_storage_middle64_retained_blocking_fresh_quality_cold_owner_restart() {
-    run(true, Full40TestConfig::StorageMiddle64RetainedBlocking);
-}
-
-#[test]
-#[ignore = "sole GPU owner; explicit retained blocking uploads; unchanged quality/reference/quota and primary policy binding"]
-fn mixed_storage_middle64_retained_blocking_fresh_quality_no_observer_equality() {
-    run_with_observer(
-        false,
-        Full40TestConfig::StorageMiddle64RetainedBlocking,
-        false,
-    );
-}
-
-#[test]
-#[ignore = "sole GPU owner; explicit retained lookahead uploads; unchanged quality/reference/quota and primary policy binding"]
-fn mixed_storage_middle64_retained_lookahead_fresh_quality_retained_generation() {
-    run(false, Full40TestConfig::StorageMiddle64RetainedLookahead);
-}
-
-#[test]
-#[ignore = "sole GPU owner; explicit retained lookahead uploads; unchanged quality/reference/quota and primary policy binding"]
-fn mixed_storage_middle64_retained_lookahead_fresh_quality_cold_owner_restart() {
-    run(true, Full40TestConfig::StorageMiddle64RetainedLookahead);
-}
-
-#[test]
-#[ignore = "sole GPU owner; explicit retained lookahead uploads; unchanged quality/reference/quota and primary policy binding"]
-fn mixed_storage_middle64_retained_lookahead_fresh_quality_no_observer_equality() {
-    run_with_observer(
-        false,
-        Full40TestConfig::StorageMiddle64RetainedLookahead,
-        false,
-    );
 }
 
 macro_rules! grouped_quality_tests {

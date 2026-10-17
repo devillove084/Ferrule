@@ -86,8 +86,6 @@ enum Full40TestConfig {
     StorageMiddle64,
     StorageMiddle64Blocking,
     StorageMiddle64Lookahead,
-    StorageMiddle64RetainedBlocking,
-    StorageMiddle64RetainedLookahead,
     StorageMiddle64GroupedBlocking,
     StorageMiddle64GroupedLookahead,
 }
@@ -99,8 +97,6 @@ impl Full40TestConfig {
             Self::StorageMiddle64 => "storage-middle64",
             Self::StorageMiddle64Blocking => "storage-middle64-blocking",
             Self::StorageMiddle64Lookahead => "storage-middle64-lookahead",
-            Self::StorageMiddle64RetainedBlocking => "storage-middle64-retained-blocking",
-            Self::StorageMiddle64RetainedLookahead => "storage-middle64-retained-lookahead",
             Self::StorageMiddle64GroupedBlocking => "storage-middle64-grouped-blocking",
             Self::StorageMiddle64GroupedLookahead => "storage-middle64-grouped-lookahead",
         }
@@ -119,8 +115,6 @@ impl Full40TestConfig {
             Self::StorageMiddle64
             | Self::StorageMiddle64Blocking
             | Self::StorageMiddle64Lookahead
-            | Self::StorageMiddle64RetainedBlocking
-            | Self::StorageMiddle64RetainedLookahead
             | Self::StorageMiddle64GroupedBlocking
             | Self::StorageMiddle64GroupedLookahead => {
                 assert_eq!(precision, NumericFp8Precision::Bf16ModelMixedF32Accumulate);
@@ -140,8 +134,6 @@ impl Full40TestConfig {
                 Self::StorageMiddle64
                 | Self::StorageMiddle64Blocking
                 | Self::StorageMiddle64Lookahead
-                | Self::StorageMiddle64RetainedBlocking
-                | Self::StorageMiddle64RetainedLookahead
                 | Self::StorageMiddle64GroupedBlocking
                 | Self::StorageMiddle64GroupedLookahead => 2,
             },
@@ -158,12 +150,12 @@ impl Full40TestConfig {
     fn expert_read_pipeline(self) -> Option<ExpertReadPipelineOptions> {
         let schedule = match self {
             Self::Historical8 | Self::StorageMiddle64 => return None,
-            Self::StorageMiddle64Blocking
-            | Self::StorageMiddle64RetainedBlocking
-            | Self::StorageMiddle64GroupedBlocking => ExpertReadSchedule::Blocking,
-            Self::StorageMiddle64Lookahead
-            | Self::StorageMiddle64RetainedLookahead
-            | Self::StorageMiddle64GroupedLookahead => ExpertReadSchedule::Lookahead,
+            Self::StorageMiddle64Blocking | Self::StorageMiddle64GroupedBlocking => {
+                ExpertReadSchedule::Blocking
+            }
+            Self::StorageMiddle64Lookahead | Self::StorageMiddle64GroupedLookahead => {
+                ExpertReadSchedule::Lookahead
+            }
         };
         Some(ExpertReadPipelineOptions {
             schedule,
@@ -175,12 +167,6 @@ impl Full40TestConfig {
 
     fn expert_transfer_policy(self) -> ExpertTransferPolicy {
         match self {
-            Self::StorageMiddle64RetainedBlocking | Self::StorageMiddle64RetainedLookahead => {
-                ExpertTransferPolicy::Retained {
-                    policy_headroom_bytes: 16 << 20,
-                    readiness_timeout: std::time::Duration::from_secs(30),
-                }
-            }
             Self::StorageMiddle64GroupedBlocking | Self::StorageMiddle64GroupedLookahead => {
                 ExpertTransferPolicy::GroupedSynchronous
             }
@@ -195,15 +181,6 @@ impl Full40TestConfig {
                 "mode":"grouped_synchronous", "source_custody":"existing_bounded_read",
                 "host_quota_unchanged":true, "additional_pinned_bytes":0,
                 "physical_overhead_measured":false, "gpu_overlap_claim":false,
-            })),
-            ExpertTransferPolicy::Retained {
-                policy_headroom_bytes,
-                readiness_timeout,
-            } => Some(json!({
-                "mode":"retained", "policy_headroom_bytes":policy_headroom_bytes,
-                "readiness_timeout_ms":readiness_timeout.as_millis(),
-                "host_quota_unchanged":true, "physical_overhead_measured":false,
-                "gpu_overlap_claim":false,
             })),
         }
     }
@@ -896,28 +873,6 @@ fn numeric_bf16_mixed_storage_middle64_lookahead_public_factory_full40_logits_ro
     );
 }
 
-#[test]
-#[ignore = "sole GPU owner; retained Blocking uploads, unchanged full40 reference and host64MiB quota"]
-fn numeric_bf16_mixed_storage_middle64_retained_blocking_public_factory_full40_logits_routes_states_match_profile_reference()
- {
-    full40_run(
-        Full40TestConfig::StorageMiddle64RetainedBlocking,
-        NumericFp8Precision::Bf16ModelMixedF32Accumulate,
-        None,
-    );
-}
-
-#[test]
-#[ignore = "sole GPU owner; retained Lookahead uploads, unchanged full40 reference and host64MiB quota"]
-fn numeric_bf16_mixed_storage_middle64_retained_lookahead_public_factory_full40_logits_routes_states_match_profile_reference()
- {
-    full40_run(
-        Full40TestConfig::StorageMiddle64RetainedLookahead,
-        NumericFp8Precision::Bf16ModelMixedF32Accumulate,
-        None,
-    );
-}
-
 macro_rules! grouped_full40_test {
     ($name:ident, $config:ident) => {
         #[test]
@@ -962,17 +917,6 @@ fn configure_full40_expert_transfer(runner: &mut Runner, config: Full40TestConfi
             "duplicate policy configuration must not replace owner state"
         );
     }
-    if config.transfer_manifest().is_some() {
-        let other = match config.expert_transfer_policy() {
-            ExpertTransferPolicy::Retained { .. } => ExpertTransferPolicy::GroupedSynchronous,
-            ExpertTransferPolicy::GroupedSynchronous => ExpertTransferPolicy::Retained {
-                policy_headroom_bytes: 16 << 20,
-                readiness_timeout: std::time::Duration::from_secs(30),
-            },
-            ExpertTransferPolicy::Synchronous => unreachable!(),
-        };
-        assert!(runner.set_expert_transfer_policy(other).is_err());
-    }
     assert_eq!(
         runner.expert_transfer_policy(),
         config.expert_transfer_policy()
@@ -984,45 +928,7 @@ fn assert_full40_expert_transfer_exercised(runner: &Runner, config: Full40TestCo
         runner.expert_transfer_policy(),
         config.expert_transfer_policy()
     );
-    if let ExpertTransferPolicy::Retained {
-        policy_headroom_bytes,
-        ..
-    } = config.expert_transfer_policy()
-    {
-        let read = config.expert_read_pipeline().unwrap();
-        let observed = runner
-            .forward_executor()
-            .module()
-            .expert_read_pipeline_observation();
-        // Original Qwen3.5 source headers: three 512*2048 FP8 matrices,
-        // each with 64 BF16 scales. This is logical storage, not physical RSS.
-        let payload = 3 * (512 * 2048 + 64 * 2);
-        let minimum = 3 * payload
-            + std::mem::size_of::<
-                ferrule_backend::cuda::operators::linear::CudaNumericFp8UploadTicket,
-            >()
-            + policy_headroom_bytes
-            + read.max_metadata_bytes as usize
-            + read.worker_stack_bytes;
-        assert!(
-            runner
-                .forward_executor()
-                .module()
-                .expert_cache_stats()
-                .unwrap()
-                .uploads
-                > 0
-        );
-        assert!(
-            observed.stats.peak_host_charged_bytes >= minimum as u64,
-            "no positive aggregate retained-upload reservation evidence"
-        );
-        assert!(observed.stats.peak_host_charged_bytes <= read.max_host_bytes);
-        assert_eq!(observed.current_charge.pinned_upload_bytes, 0);
-        assert_eq!(observed.current_charge.upload_ticket_metadata_bytes, 0);
-        assert_eq!(observed.current_charge.upload_policy_headroom_bytes, 0);
-        assert!(!observed.worker_unknown);
-    } else if config.expert_transfer_policy() == ExpertTransferPolicy::GroupedSynchronous {
+    if config.expert_transfer_policy() == ExpertTransferPolicy::GroupedSynchronous {
         let read = config.expert_read_pipeline().unwrap();
         let module = runner.forward_executor().module();
         let observed = module.expert_read_pipeline_observation();
@@ -1031,11 +937,6 @@ fn assert_full40_expert_transfer_exercised(runner: &Runner, config: Full40TestCo
         let minimum = 2 * payload + read.max_metadata_bytes + read.worker_stack_bytes as u64;
         assert!(observed.stats.peak_host_charged_bytes >= minimum);
         assert!(observed.stats.peak_host_charged_bytes <= read.max_host_bytes);
-        assert_eq!(observed.current_charge.pinned_upload_bytes, 0);
-        assert_eq!(observed.current_charge.upload_ticket_metadata_bytes, 0);
-        assert_eq!(observed.current_charge.upload_policy_headroom_bytes, 0);
-        assert_eq!(observed.current_charge.upload_reserved_packed_bytes, 0);
-        assert_eq!(observed.current_charge.unknown_upload_bytes, 0);
         assert!(!observed.worker_unknown);
     }
 }
@@ -1061,6 +962,8 @@ fn prepare_full40_with_config(
             None,
             options,
             ServingModelOptions {
+                // Closed experiments configure grouped transfers only in their private callback.
+                expert_transfer_policy: Some(ServingExpertTransferPolicy::Synchronous),
                 expert_read_pipeline: test_config.expert_read_pipeline(),
                 model_precision: Some(ModelPrecision::Bf16),
                 max_tensor_mebibytes: Some(1024),

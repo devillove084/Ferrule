@@ -90,3 +90,7 @@ impl CudaStandardDecoderOperators {
 #[cfg(test)]
 #[path = "../../../../tests/grouped_numeric_upload/contracts.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../../../../tests/grouped_numeric_upload/owner.rs"]
+mod owner_tests;

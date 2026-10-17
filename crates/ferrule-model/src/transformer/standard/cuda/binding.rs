@@ -298,7 +298,7 @@ impl Bindings {
             || !self.numeric_fp8
             || self.tensor.is_some()
         {
-            return Err(cuda_error("stale retained upload publication authority"));
+            return Err(cuda_error("stale grouped upload publication authority"));
         }
         metadata.validate_sources()?;
         let mut bytes = 0usize;
@@ -335,13 +335,11 @@ impl Bindings {
                 || layout.scale_type != scale_type
                 || self.linear.contains_key(&(*id, Some(role.clone())))
             {
-                return Err(cuda_error(
-                    "retained triple destination/shape/role mismatch",
-                ));
+                return Err(cuda_error("grouped triple destination/shape/role mismatch"));
             }
             bytes = bytes
                 .checked_add(artifact.storage_bytes())
-                .ok_or_else(|| cuda_error("retained binding bytes overflow"))?;
+                .ok_or_else(|| cuda_error("grouped binding bytes overflow"))?;
         }
         let total = self
             .bytes

@@ -208,41 +208,72 @@ pub(super) fn validate_transfer_request(
             "requires explicit CUDA and a local resident numeric model profile; no CPU/dense/parallel/HostKV fallback",
         ));
     }
-    if policy == ServingExpertTransferPolicy::GroupedSynchronous
-        && serving.expert_read_pipeline.is_none()
-    {
-        return Err(unsupported_transfer(
-            policy,
-            "grouped synchronous transfers require an explicit bounded expert read pipeline",
-        ));
+    if policy == ServingExpertTransferPolicy::GroupedSynchronous {
+        validate_grouped_reads(serving.expert_read_pipeline)
+            .map_err(|reason| unsupported_transfer(policy, reason))?;
     }
     Ok(())
 }
 
+pub(super) fn effective_transfer_policy(
+    execution: &ResolvedExecution,
+) -> ServingExpertTransferPolicy {
+    execution.expert_transfer_policy.unwrap_or_else(|| {
+        let grouped = ServingExpertTransferPolicy::GroupedSynchronous;
+        if transfer_support(execution, grouped).is_ok() {
+            grouped
+        } else {
+            ServingExpertTransferPolicy::Synchronous
+        }
+    })
+}
+
 pub(super) fn validate_transfer_execution(execution: &ResolvedExecution) -> Result<()> {
-    let Some(policy) = execution.expert_transfer_policy else {
-        return Ok(());
-    };
+    if let Some(policy) = execution.expert_transfer_policy {
+        transfer_support(execution, policy)
+            .map_err(|reason| unsupported_transfer(policy, reason))?;
+    }
+    Ok(())
+}
+
+fn transfer_support(
+    execution: &ResolvedExecution,
+    policy: ServingExpertTransferPolicy,
+) -> std::result::Result<(), &'static str> {
     if !execution.supports_expert_transfer
+        || execution.support.required_feature != Some("cuda")
         || execution.numeric_bf16_precision.is_none()
         || execution.support.storage != StorageEncoding::NumericFp8E4m3fnBf16Scales
         || execution.construction.kind() != SelectedImplementationKind::Resident
+        || execution.kv_execution_policy != ferrule_runtime::engine::KvExecutionPolicy::Resident
     {
-        return Err(unsupported_transfer(
-            policy,
-            "selected provider does not implement local numeric expert transfer selection",
-        ));
+        return Err("selected provider does not implement local numeric expert transfer selection");
     }
-    if policy == ServingExpertTransferPolicy::GroupedSynchronous
-        && execution.numeric_bf16_precision
+    if policy == ServingExpertTransferPolicy::GroupedSynchronous {
+        if execution.numeric_bf16_precision
             != Some(ferrule_model::transformer::NumericFp8Precision::Bf16ModelMixedF32Accumulate)
-    {
-        return Err(unsupported_transfer(
-            policy,
-            "grouped synchronous serving requires validated mixed BF16/F32 numeric model precision",
-        ));
+        {
+            return Err(
+                "grouped synchronous serving requires validated mixed BF16/F32 numeric model precision",
+            );
+        }
+        validate_grouped_reads(execution.expert_read_pipeline)?;
     }
     Ok(())
+}
+
+fn validate_grouped_reads(
+    read: Option<ferrule_model::transformer::ExpertReadPipelineOptions>,
+) -> std::result::Result<(), &'static str> {
+    if read.is_some_and(|read| {
+        read.schedule == ferrule_model::transformer::ExpertReadSchedule::Lookahead
+    }) {
+        Ok(())
+    } else {
+        Err(
+            "grouped synchronous transfers require an explicit bounded expert read pipeline with Lookahead scheduling",
+        )
+    }
 }
 
 fn unsupported_transfer(policy: ServingExpertTransferPolicy, reason: &str) -> Error {

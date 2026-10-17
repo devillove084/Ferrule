@@ -43,9 +43,6 @@ use crate::cuda::providers::cutlass;
 use crate::cuda::runtime::{CudaStream, DeviceBuffer};
 
 pub(crate) use crate::cuda::operator_owner::ARTIFACT_LINEAR_FP8_ACTIVATION_BLOCK_SIZE;
-pub use crate::cuda::operator_owner::numeric_fp8_upload::{
-    CudaNumericFp8UploadHostCharge, CudaNumericFp8UploadTicket,
-};
 pub use crate::cuda::operator_owner::{
     CudaArtifactLinearHandle, CudaArtifactLinearShape, CudaArtifactLinearWorkspace, CudaBf16Buffer,
     CudaF32Buffer, CudaFp8ActivationPack, CudaOperators, CudaPreparedFp8Activation, cuda_gemv,

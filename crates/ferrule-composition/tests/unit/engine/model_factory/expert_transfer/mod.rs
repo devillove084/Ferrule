@@ -33,7 +33,7 @@ fn serving(policy: Option<ServingExpertTransferPolicy>) -> ServingModelOptions {
         expert_transfer_policy: policy,
         model_profile: Some(ServingModelProfile::Qwen35MixedBf16),
         expert_read_pipeline: Some(ExpertReadPipelineOptions {
-            schedule: ExpertReadSchedule::Blocking,
+            schedule: ExpertReadSchedule::Lookahead,
             max_host_bytes: 64 << 20,
             max_metadata_bytes: 8 << 20,
             worker_stack_bytes: 2 << 20,
@@ -142,6 +142,16 @@ fn expert_transfer_rejects_backend_profile_topology_and_missing_reads_before_io(
             BackendSelection::Cuda,
             ServingModelOptions {
                 expert_read_pipeline: None,
+                ..serving(policy)
+            },
+        ),
+        (
+            BackendSelection::Cuda,
+            ServingModelOptions {
+                expert_read_pipeline: Some(ExpertReadPipelineOptions {
+                    schedule: ExpertReadSchedule::Blocking,
+                    ..serving(policy).expert_read_pipeline.unwrap()
+                }),
                 ..serving(policy)
             },
         ),
@@ -257,23 +267,40 @@ fn expert_transfer_both_schedules_freeze_public_policy_without_budget_changes() 
                 let prepare = |policy| {
                     let mut request = serving(policy);
                     request.expert_read_pipeline.as_mut().unwrap().schedule = schedule;
-                    ResidentModelPlanner
-                        .prepare_serving(&config, BackendSelection::Cuda, None, options(), request)
-                        .unwrap()
+                    ResidentModelPlanner.prepare_serving(
+                        &config,
+                        BackendSelection::Cuda,
+                        None,
+                        options(),
+                        request,
+                    )
                 };
-                let default = prepare(None);
+                let default = prepare(None).unwrap();
                 let baseline = default.numeric_bf16_memory_plan().unwrap().unwrap();
-                assert_eq!(
-                    default.expert_transfer_policy(),
-                    ServingExpertTransferPolicy::Synchronous
-                );
-                for policy in [
-                    ServingExpertTransferPolicy::Synchronous,
-                    ServingExpertTransferPolicy::GroupedSynchronous,
+                let automatic = match schedule {
+                    ExpertReadSchedule::Blocking => ServingExpertTransferPolicy::Synchronous,
+                    ExpertReadSchedule::Lookahead => {
+                        ServingExpertTransferPolicy::GroupedSynchronous
+                    }
+                };
+                assert_eq!(default.requested_expert_transfer_policy(), None);
+                assert_eq!(default.expert_transfer_policy(), automatic);
+                for requested in [
+                    None,
+                    Some(ServingExpertTransferPolicy::Synchronous),
+                    Some(ServingExpertTransferPolicy::GroupedSynchronous),
                 ] {
-                    let plan = prepare(Some(policy));
+                    if schedule == ExpertReadSchedule::Blocking
+                        && requested == Some(ServingExpertTransferPolicy::GroupedSynchronous)
+                    {
+                        let error = prepare(requested).err().unwrap();
+                        assert!(error.to_string().contains("Lookahead"), "{error}");
+                        continue;
+                    }
+                    let policy = requested.unwrap_or(automatic);
+                    let plan = prepare(requested).unwrap();
                     let admitted = plan.numeric_bf16_memory_plan().unwrap().unwrap();
-                    assert_eq!(plan.requested_expert_transfer_policy(), Some(policy));
+                    assert_eq!(plan.requested_expert_transfer_policy(), requested);
                     assert_eq!(plan.expert_transfer_policy(), policy);
                     assert!(
                         plan.resolution_report()
@@ -295,9 +322,26 @@ fn expert_transfer_both_schedules_freeze_public_policy_without_budget_changes() 
                         admitted.expert_read_pipeline_options(),
                         baseline.expert_read_pipeline_options()
                     );
-                    assert!(!same_final_request(&default.request, &plan.request));
-                    let mut crossed = prepare(Some(policy));
-                    crossed.request.execution.expert_transfer_policy = None;
+                    assert_eq!(
+                        same_final_request(&default.request, &plan.request),
+                        requested.is_none()
+                    );
+                    let mut crossed = prepare(requested).unwrap();
+                    if requested.is_some() {
+                        crossed.request.execution.expert_transfer_policy = None;
+                    } else {
+                        crossed
+                            .request
+                            .execution
+                            .expert_read_pipeline
+                            .as_mut()
+                            .unwrap()
+                            .schedule = match schedule {
+                            ExpertReadSchedule::Blocking => ExpertReadSchedule::Lookahead,
+                            ExpertReadSchedule::Lookahead => ExpertReadSchedule::Blocking,
+                        };
+                        assert_ne!(crossed.expert_transfer_policy(), policy);
+                    }
                     let called = std::cell::Cell::new(false);
                     assert!(
                         crossed
@@ -312,9 +356,12 @@ fn expert_transfer_both_schedules_freeze_public_policy_without_budget_changes() 
                         "frozen source policy must reject before factory invocation"
                     );
                     plan.build_with(|request| {
+                        assert_eq!(request.resolved.execution.expert_transfer_policy, requested);
                         assert_eq!(
-                            request.resolved.execution.expert_transfer_policy,
-                            Some(policy)
+                            expert_read_policy::effective_transfer_policy(
+                                &request.resolved.execution
+                            ),
+                            policy
                         );
                         let expected: fn(ModelBuildRequest) -> Result<BoxedSessionInferenceEngine> =
                             bf16_serving::build_numeric_bf16;
@@ -338,6 +385,55 @@ fn expert_transfer_both_schedules_freeze_public_policy_without_budget_changes() 
             }
         },
     );
+}
+
+#[test]
+fn expert_transfer_automatic_selection_requires_the_complete_grouped_capability() {
+    use ferrule_model::transformer::NumericFp8Precision;
+    fn build(_: ModelBuildRequest) -> Result<BoxedSessionInferenceEngine> {
+        panic!("metadata-only transfer selection must not construct an owner")
+    }
+    let mut execution = ResolvedExecution::new(
+        ModelExecutionBackend::Cuda,
+        ResolvedConstruction::Resident(build),
+        StorageEncoding::NumericFp8E4m3fnBf16Scales,
+        ArithmeticPrecision::Bf16Compatibility,
+        "local numeric transfer fixture",
+    );
+    execution.supports_expert_transfer = true;
+    execution.numeric_bf16_precision = Some(NumericFp8Precision::Bf16ModelMixedF32Accumulate);
+    execution.expert_read_pipeline = serving(None).expert_read_pipeline;
+    assert_eq!(
+        expert_read_policy::effective_transfer_policy(&execution),
+        ServingExpertTransferPolicy::GroupedSynchronous
+    );
+    let restrictions: &[fn(&mut ResolvedExecution)] = &[
+        |e| e.supports_expert_transfer = false,
+        |e| e.support.required_feature = None,
+        |e| e.support.storage = StorageEncoding::NativeBf16,
+        |e| e.numeric_bf16_precision = None,
+        |e| e.numeric_bf16_precision = Some(NumericFp8Precision::Bf16ModelF32Accumulate),
+        |e| e.numeric_bf16_precision = Some(NumericFp8Precision::Bf16ModelTiledF32Accumulate),
+        |e| e.construction = ResolvedConstruction::Pipeline(build),
+        |e| {
+            e.kv_execution_policy =
+                ferrule_runtime::engine::KvExecutionPolicy::HostKvDecode(Default::default())
+        },
+        |e| e.expert_read_pipeline = None,
+        |e| e.expert_read_pipeline.as_mut().unwrap().schedule = ExpertReadSchedule::Blocking,
+    ];
+    for restrict in restrictions {
+        let mut unsupported = execution;
+        restrict(&mut unsupported);
+        assert_eq!(unsupported.expert_transfer_policy, None);
+        assert_eq!(
+            expert_read_policy::effective_transfer_policy(&unsupported),
+            ServingExpertTransferPolicy::Synchronous
+        );
+        expert_read_policy::validate_transfer_execution(&unsupported).unwrap();
+        unsupported.expert_transfer_policy = Some(ServingExpertTransferPolicy::GroupedSynchronous);
+        assert!(expert_read_policy::validate_transfer_execution(&unsupported).is_err());
+    }
 }
 
 #[test]

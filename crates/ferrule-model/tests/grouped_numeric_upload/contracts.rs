@@ -192,7 +192,7 @@ fn unresolved_group_drop_or_caller_unwind_never_refunds_source_credit() {
 
 #[test]
 #[ignore = "GPU-owner authorization only; actual owner capability and policy isolation"]
-fn real_owner_group_policy_rejects_unsupported_duplicate_revert_and_cross_policy() {
+fn real_owner_group_policy_rejects_unsupported_duplicate_and_revert() {
     use crate::transformer::{
         ExpertCacheLimits, ExpertCachePolicy, ExpertTransferControl, ExpertTransferPolicy,
     };
@@ -236,10 +236,6 @@ fn real_owner_group_policy_rejects_unsupported_duplicate_revert_and_cross_policy
     for policy in [
         ExpertTransferPolicy::Synchronous,
         ExpertTransferPolicy::GroupedSynchronous,
-        ExpertTransferPolicy::Retained {
-            policy_headroom_bytes: 4096,
-            readiness_timeout: std::time::Duration::from_secs(1),
-        },
     ] {
         assert!(owner.set_expert_transfer_policy(policy).is_err());
         assert_eq!(
