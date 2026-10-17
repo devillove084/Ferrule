@@ -1,6 +1,6 @@
-# Public HTTP expert-transfer acceptance and failed pilot attempt 01
+# Public HTTP expert-transfer acceptance and pilot attempts 01–03
 
-This is a bounded engineering curation, pending main review, not a pilot performance result. It separates four completed public-CLI acceptance cells, a permanently stopped prelaunch pilot, and one subsequently authorized recovery-only safety observation. No manuscript body is changed.
+This bounded engineering curation, pending main review, separates four completed public-CLI acceptance cells, permanently stopped pilot attempts 01/02, separate recovery evidence, and the completed Attempt03 paired HTTP pilot. **Attempt03 blocking grouped/synchronous TTFT regressed 4.96%; lookahead gains are descriptive only. No default policy is changed.** No manuscript body is changed.
 
 ## Actual outcomes
 
@@ -51,7 +51,7 @@ Each acceptance cell reported 40,943 cache uploads and 128,811,927,312 logical H
 
 Each acceptance cell bound actual CLI runtime maps at Ready, after requests and pre-stop to the same 12 pinned libraries. Loader resolution alone is not actual mapping evidence; pathname/inode checks do not hash live mapped memory or prove overlay backing identity. Planned stops retained actual child return code 0 and observer ACK-before-signal evidence; authenticated acceptance ECHILD, strict pre/post idle and lock reprobes passed, with no helper-forced descendant signals. These process/idle proofs do not certify universal physical CUDA release. Physical NAS/backend bytes and full resource-contract completeness remain unknown/unverified. Invocation-record owner identity is not invented.
 
-TTFT, E2E, phase W, throughput and goodput are deliberately null in this quality-only curation. Raw acceptance client timings are not pooled into the failed pilot. No statistical significance, vLLM/SOTA, first-GPU-token latency, route/logit equivalence, or grouped-call-count claim is supported.
+Acceptance TTFT, E2E, phase W, throughput and goodput remain deliberately null in the quality-only acceptance records. Raw acceptance client timings are not pooled into any pilot; Attempt03 metrics are reported separately below. No statistical significance, vLLM/SOTA, first-GPU-token latency, route/logit equivalence, or grouped-call-count claim is supported.
 
 ## Files, hashes and reproduction boundary
 
@@ -79,3 +79,56 @@ The static receipt records 33.000417 s of preparation; total preparation through
 Failure cleanup completed within the maintained command: all eight locks were held and authenticated, pre-idle and post-idle each passed three strict all-eight samples, lock contexts exited, and one nonblocking all-eight reprobe passed and exited. There were no additional manual probes or recovery jobs. Authenticated ECHILD and recorded-owner-absence-via-supervisor remain false: no worker/subreaper was spawned, and no such proof is invented. Positive never-spawned evidence is distinct from ECHILD. Physical resource release remains unverified; strict idle/local lock receipts are not a universal CUDA-release certificate. These successful cleanup observations do not heal the failed lifecycle.
 
 `pilot-attempt-02.json` binds the actual failed final, new GO/layout/anchor/control identities, eight null arm records/four null ratios, exact budgets and cleanup receipts. `pilot-attempt-02-requests.json` is a column-labelled 96-row table derived from the maintained final analysis, not model outputs or synthetic requests. The raw final SHA256 is `328bcb3ba35bee4db73af08e27f905925c4a8d5ea8e8ca6f21049706ecb9f075`. All 13 raw artifact pins matched; 15 raw files are owner-only 0400 and both enclosing raw directories 0500. Raw evidence remains local, not publicly bundled. Existing acceptance, attempt-01 and historical source-pin files are byte-unchanged. No significance, policy speedup, vLLM/SOTA, route/logit, direct grouped-call-count or physical-NAS-byte claim is available.
+
+## Pilot attempt 03: completed paired HTTP engineering pilot
+
+**Blocking TTFT regression comes first:** the median of two grouped/synchronous pair ratios is 1.0496109283018722 (+4.96% latency). Lookahead improvements below are descriptive; there is no significance claim, default enablement, automatic tuning, extra run or replacement.
+
+Exactly eight fresh lifecycles completed in the fixed blocking S/G, G/S then lookahead S/G, G/S order: 96/96 requests, 40/40 measured QA8 and 320 measured tokens; 720 tokens across all requests. All failed/censored/unissued counts are zero. Each lifecycle retained the original twelve slots (four canaries including Hello2, one excluded first QA, two warmups, five measured QA), payloads, seed 1 and EOS-enabled references. Attempts01/02 remain permanently STOPPED and all96 requests each remain unissued; the old acceptance and separate recovery are not relabeled.
+
+### Eight measured arms
+
+| Arm | Median client TTFT (s) | Median client E2E (s) | Phase W (s) | Phase-qualified tokens/s |
+|---|---:|---:|---:|---:|
+| B1-blocking-synchronous | 2.067174 | 7.625831 | 40.083504 | 0.997917 |
+| B1-blocking-grouped-synchronous | 2.089687 | 7.627164 | 38.442621 | 1.040512 |
+| B2-blocking-grouped-synchronous | 2.206235 | 7.049646 | 37.718814 | 1.060479 |
+| B2-blocking-synchronous | 2.027172 | 7.112599 | 38.927474 | 1.027552 |
+| L1-lookahead-synchronous | 1.805835 | 6.299729 | 34.083656 | 1.173583 |
+| L1-lookahead-grouped-synchronous | 1.710249 | 6.102782 | 32.707932 | 1.222945 |
+| L2-lookahead-grouped-synchronous | 1.691538 | 5.893401 | 32.945068 | 1.214142 |
+| L2-lookahead-synchronous | 1.914599 | 6.662837 | 35.854765 | 1.115612 |
+
+Native client TTFT is `first nonempty content event - sent_at`, **not proven first GPU-token latency**. E2E is client `ended_at - sent_at`. Dispatch/admission variants are computed from those recorded starts and retained at request level and as measured-arm medians. Phase W is first measured client dispatch to last measured client terminal, including gaps/failures. Whole-lifecycle-qualified measured tokens / W is phase-qualified goodput; `40 / sum(five native E2E)` is a separate request-only serialized-service rate, not that goodput. Full-precision JSON is authoritative; tables are rounded only for display.
+
+### Four independent paired ratios, grouped/synchronous
+
+| Pair / schedule median | TTFT ratio | E2E ratio | Phase-goodput ratio | Serialized-service tokens/s ratio |
+|---|---:|---:|---:|---:|
+| B1 (blocking) | 1.010890657 | 1.000174840 | 1.042683938 | 1.045929502 |
+| B2 (blocking) | 1.088331200 | 0.991149156 | 1.032043966 | 1.032616642 |
+| L1 (lookahead) | 0.947067968 | 0.968737303 | 1.042060862 | 1.047123957 |
+| L2 (lookahead) | 0.883494775 | 0.884518130 | 1.088319647 | 1.092718930 |
+| blocking median of 2 pairs | 1.049610928 | 0.995661998 | 1.037363952 | 1.039273072 |
+| lookahead median of 2 pairs | 0.915281371 | 0.926627716 | 1.065190254 | 1.069921443 |
+
+Latency ratios below one are lower latency; throughput ratios above one are higher throughput. Blocking median paired E2E is about 0.43% lower and phase goodput 3.74% higher, alongside its 4.96% TTFT regression. Lookahead median paired TTFT/E2E are 8.47%/7.34% lower and phase goodput 6.52% higher. The independent unit is **PAIR, two per schedule**, not request. No pooling schedules, significance/interval, vLLM/SOTA, cold-filesystem or universal speedup claim.
+
+### Actual admission, source, counters and closeout
+
+Recorded receipt/event boundaries give static preparation 1.843197–2.157446 s, total preparation through active admission 1.884930–2.294886 s, active admission to first recorded worker 4.118357–4.220157 s, and active admission to capture target start after entry checks 12.952526–13.261888 s. These are actual monotonic timestamps, not file mtimes or the earlier CPU proxies. Exact spawn/supervisor-entry and individual live-hash timings remain unobserved. All eight authenticated entries passed unchanged 180 s static / 650 s active / 610 s reserve and the original 460 s target cap; no timer was enlarged. Per-arm absolute timestamps and their receipt hashes are in `pilot-attempt-03.json`.
+
+The current orchestration is 728df96114f06d63f40cf9a5f5f166b47c46295d; the accepted CLI remains c3db43b8c556a210a77f7fac29dc23c4bc9399d5e0374e6dc9fecd016625ccaa, compiled production d8c92d80dc2ec95c44ba7513198232d36f290a34 / archive37b2f40c2dfc02825a373e417b0d5bb428e1622e. No rebuild or archive relabeling occurred. `source-pins.json` and its historical fields remain byte-unchanged; new control/workflow, compatibility/provenance/role/identity/GO/layout hashes and exact historical check/start/eight-next/finalize commands are recorded separately in the Attempt03 summary. Public CLI argv/environment, MixedBF16/F32 profile, TP/PP/EP1 topology, all quotas, seed/payloads, EOS references and runtime pins remain bound.
+
+Every actual lifecycle re-observed configured initial owner state with workers_created=0 before Ready, reconciled its first delta and all request counter windows, and retained actual requested/effective transfer-policy getter evidence. Each arm had 40,943 expert uploads and 128,811,927,312 logical H2D bytes; lookahead speculative/taken-prefetch counts were 36,863 (blocking zero). Each final retained reader charged 10 MiB logically, with observed peak 16,777,984 bytes below the unchanged 64 MiB host cap. No direct grouped-backend-call count is observed: positive uploads/H2D plus frozen source binding are the evidence, and previous Nsight mechanism evidence stays separate.
+
+All24 runtime role maps (Ready, after requests, pre-stop) and all24 strict three-sample all-eight idle windows were revalidated offline. All eight actual planned model return codes were 0, ACK-before-owned-signal held, authenticated ECHILD and recorded-owner absence passed, helper-forced signals were zero, and eight lock release/nonblocking reprobe pairs passed. No extra GPU query/job followed the scheduled closeout. These facts do not certify universal physical CUDA release; resource-contract completeness and physical NAS bytes remain unverified.
+
+### Compact files and local evidence
+
+- `pilot-attempt-03.json`: eight arm metrics, four paired ratios/two schedule medians, actual timing boundaries, source/control/proof/runtime references, exact invocation/configuration and cleanup disclosure.
+- `pilot-attempt-03-requests.json`: all96 records in execution order, with actual IDs/text/usage/finish, native/dispatch/admission metrics, timestamps, safe test payloads/references and per-request raw hashes. No SSE or raw logs are copied.
+- Local final SHA256: `2c40a8d8a33a17dab151300000665a762549585650bab73a2db5f857fcf58887`.
+- Local raw index SHA256: `342d8eb15d760bbe2999a88df8495690bd26c51a2b88f3fee896c6652bc842db`.
+
+All1,187 raw files remain 0400 and all129 raw directories 0500. The raw index, original receipts/logs/maps, private model/tokenizer data, binaries, vendor/build trees and large traces remain local, not bundled for commit. The manifest verifier above is file-count independent and covers the new summaries. CPU validation re-derives the maintained analysis and checks all96 records/metrics, exact pair aggregation and preserved source/raw identities without new hardware activity. Reproduction requiring local raw inputs is not independent public replay; historical execution argv are data, not renewed authorization. Main independently reviews before any commit/push.

@@ -4,6 +4,18 @@
     "path": "target/validation/qwen35-35b-current/request-http-pilot-attempt02-713fba3-results-20261017-01/RAW-EVIDENCE-INDEX.json",
     "sha256": "4b8c6e994840e6351e88a084c9b933355f0b301e4b15f96a4d99d0762e4207ee"
   },
+  "attempt03_raw_evidence_index": {
+    "path": "target/validation/qwen35-35b-current/request-http-pilot-attempt03-728df96-results-20261017-01/RAW-EVIDENCE-INDEX.json",
+    "sha256": "342d8eb15d760bbe2999a88df8495690bd26c51a2b88f3fee896c6652bc842db"
+  },
+  "attempt03_requests": {
+    "path": "papers/arxiv/experiments/storage_demand/paired_read_v1/http-transfer-v1/pilot-attempt-03-requests.json",
+    "sha256": "7eec5d3e52f96f76bf0a3a9c8c44fadd98705808628d67021f9a731ac2009034"
+  },
+  "attempt03_summary": {
+    "path": "papers/arxiv/experiments/storage_demand/paired_read_v1/http-transfer-v1/pilot-attempt-03.json",
+    "sha256": "15fe86b9963118e65fe1433e0b01e04ce6418428f381a88f1e0cb258095b49fe"
+  },
   "availability": "Curated summaries intended for version control; raw/model/build inputs remain local and owner-only",
   "curation_input_index": {
     "path": "target/validation/qwen35-35b-current/request-http-pilot-37b2f40-results-20261017-01/CURATION-INPUT-INDEX-01.json",
@@ -12,8 +24,8 @@
   "files": [
     {
       "path": "README.md",
-      "sha256": "59913d2bfd23e26634373a6089c1e0ac4e423a3793a19c35ff4f5b7a89635c66",
-      "size_bytes": 13732
+      "sha256": "19efcf5c55135b05bd181468b2186e810c1ec1f3ef4cab8c93600be8127bb12f",
+      "size_bytes": 21377
     },
     {
       "path": "acceptance-results.json",
@@ -26,9 +38,9 @@
       "size_bytes": 11875
     },
     {
-      "path": "source-pins.json",
-      "sha256": "8bec14f3b02810ea0a781920a852aca3feb836456b71836866d6e1d395e2a625",
-      "size_bytes": 27116
+      "path": "pilot-attempt-02-requests.json",
+      "sha256": "82d930aa531627602ce60fa62c724c40f5bf1b496c960e130b184f335c275a2f",
+      "size_bytes": 26634
     },
     {
       "path": "pilot-attempt-02.json",
@@ -36,13 +48,24 @@
       "size_bytes": 17405
     },
     {
-      "path": "pilot-attempt-02-requests.json",
-      "sha256": "82d930aa531627602ce60fa62c724c40f5bf1b496c960e130b184f335c275a2f",
-      "size_bytes": 26634
+      "path": "pilot-attempt-03-requests.json",
+      "sha256": "7eec5d3e52f96f76bf0a3a9c8c44fadd98705808628d67021f9a731ac2009034",
+      "size_bytes": 219470
+    },
+    {
+      "path": "pilot-attempt-03.json",
+      "sha256": "15fe86b9963118e65fe1433e0b01e04ce6418428f381a88f1e0cb258095b49fe",
+      "size_bytes": 229641
+    },
+    {
+      "path": "source-pins.json",
+      "sha256": "8bec14f3b02810ea0a781920a852aca3feb836456b71836866d6e1d395e2a625",
+      "size_bytes": 27116
     }
   ],
   "manifest_self_hash": "Excluded to avoid recursion; supplied in the handoff",
-  "performance_claim": false,
+  "performance_claim": true,
+  "performance_claim_scope": "Attempt03 descriptive paired engineering observations only; blocking TTFT regression disclosed; no significance/general superiority/default-policy claim.",
   "pilot_attempts": {
     "attempt_01": {
       "qualified": false,
@@ -54,9 +77,21 @@
       "qualified": false,
       "status": "permanent_stop_before_worker_or_server_launch",
       "unissued": 96
+    },
+    "attempt_03": {
+      "actual_lifecycles": 8,
+      "blocking_ttft_regression_percent": 4.961092830187219,
+      "measured_qa8": 40,
+      "measured_tokens": 320,
+      "qualified": true,
+      "qualified_pairs_per_schedule": 2,
+      "requests": 96,
+      "status": "complete",
+      "successful": 96
     }
   },
-  "pilot_qualified": false,
+  "pilot_qualified": true,
+  "qualification_scope": "Attempt03 only; attempts01/02 remain failed and unchanged.",
   "raw_receipts": [
     {
       "path": "papers/arxiv/experiments/storage_demand/paired_read_v1/artifacts-transfer-acceptance-37b2f40-20261017-01/paired-final.json",
@@ -73,8 +108,15 @@
     {
       "path": "papers/arxiv/experiments/storage_demand/paired_read_v1/artifacts-transfer-pilot-attempt02-713fba3-20261017-01/paired-final.json",
       "sha256": "328bcb3ba35bee4db73af08e27f905925c4a8d5ea8e8ca6f21049706ecb9f075"
+    },
+    {
+      "path": "papers/arxiv/experiments/storage_demand/paired_read_v1/artifacts-transfer-pilot-attempt03-728df96-20261017-01/paired-final.json",
+      "sha256": "2c40a8d8a33a17dab151300000665a762549585650bab73a2db5f857fcf58887"
     }
   ],
   "schema": "ferrule.http-transfer.curation-manifest.v1",
-  "status": "prepared_for_main_review_not_committed"
+  "scientific_acceptance": false,
+  "significance_claim": false,
+  "status": "prepared_for_main_review_not_committed",
+  "vllm_comparison": false
 }
