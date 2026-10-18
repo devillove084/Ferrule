@@ -57,14 +57,14 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
           toolchain: nightly-2026-08-01
           components: clippy,rustfmt
       - name: Install just
         uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4.0.0
       - name: Cache Rust build artifacts
-        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
         with:
           shared-key: lint
       - name: Run lint checks
@@ -90,7 +90,7 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
           toolchain: nightly-2026-08-01
       - name: Install just
@@ -100,14 +100,14 @@ jobs:
         with:
           tool: nextest
       - name: Cache Rust build artifacts
-        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
         with:
           shared-key: test-${{ matrix.lane }}
       - name: Run CPU test suite
         run: just ${{ matrix.recipe }}
       - name: Upload Nextest JUnit report
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: nextest-junit-${{ matrix.lane }}
           path: target/nextest/${{ matrix.profile }}/junit.xml
@@ -125,7 +125,7 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
           toolchain: nightly-2026-08-01
           components: llvm-tools-preview
@@ -140,21 +140,21 @@ jobs:
         with:
           tool: cargo-llvm-cov
       - name: Cache Rust build artifacts
-        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
         with:
           shared-key: coverage
       - name: Generate coverage reports
         run: just coverage
       - name: Upload coverage reports
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: cpu-coverage
           path: target/coverage
           if-no-files-found: error
           retention-days: 14
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           use_oidc: true
           files: target/coverage/lcov.info
@@ -168,14 +168,14 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
           toolchain: nightly-2026-08-01
           components: miri,rust-src
       - name: Install just
         uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4.0.0
       - name: Cache Rust build artifacts
-        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
         with:
           shared-key: miri
       - name: Run Miri
@@ -189,7 +189,7 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
           toolchain: nightly-2026-08-01
       - name: Install just
@@ -237,7 +237,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
           toolchain: nightly-2026-08-01
       - name: Install just
@@ -250,7 +250,7 @@ jobs:
           just ci-cuda-compile sm_86 2>&1 | tee target/validation/ci/cuda-compile/build.log
       - name: Upload compile-only evidence (not GPU execution)
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: cuda-compile
           path: target/validation/ci/cuda-compile
@@ -275,7 +275,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
           toolchain: nightly-2026-08-01
       - name: Install just
@@ -292,7 +292,7 @@ jobs:
           just ci-gpu-smoke sm_86 2>&1 | tee target/validation/ci/gpu-smoke/run.log
       - name: Upload GPU smoke evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: gpu-smoke
           path: target/validation/ci/gpu-smoke
@@ -300,7 +300,7 @@ jobs:
           retention-days: 14
       - name: Upload required GPU JUnit
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: gpu-smoke-junit
           path: target/nextest/gpu-smoke/junit.xml
@@ -364,7 +364,7 @@ jobs:
           cat target/validation/ci/gpu-nightly/status.txt >> "$GITHUB_STEP_SUMMARY"
       - name: Install Rust toolchain
         if: steps.probe.outputs.ready == 'true'
-        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
           toolchain: nightly-2026-08-01
       - name: Install cargo-nextest
@@ -381,7 +381,7 @@ jobs:
           just ci-gpu-nightly sm_86 2>&1 | tee target/validation/ci/gpu-nightly/run.log
       - name: Upload nightly classification and evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: gpu-nightly
           path: target/validation/ci/gpu-nightly
@@ -389,7 +389,7 @@ jobs:
           retention-days: 14
       - name: Upload nightly JUnit only when tests were attempted
         if: always() && steps.tests.outcome != 'skipped' && steps.probe.outputs.ready == 'true'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: gpu-nightly-junit
           path: target/nextest/gpu-nightly/junit.xml
@@ -422,7 +422,7 @@ jobs:
           test "$NIGHTLY_RESULT" != failure && test "$NIGHTLY_RESULT" != cancelled
       - name: Upload nightly classification even when execution was skipped
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: gpu-nightly-classification
           path: target/validation/ci/gpu-nightly/classification.txt
