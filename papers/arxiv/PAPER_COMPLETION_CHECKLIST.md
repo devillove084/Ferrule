@@ -1,7 +1,7 @@
 # Ferrule manuscript completion checklist
 
 **Ferrule: Bounded Storage-Backed Weight Residency**
-Lu Huanbing · Independent Researcher · `luhuanbing084@gmail.com`
+Huanbing Lu · `luhuanbing084@gmail.com`
 
 Checked items describe available evidence, not universal system guarantees or
 submission acceptance. Use the [artifact guide](ARTIFACT_GUIDE.md) for exact
@@ -11,7 +11,7 @@ for claim boundaries. Do not copy engineering provenance into the manuscript.
 ## Remaining integration gates
 
 Final cross-section/source integration and the finite paper build are complete:
-the current tracked PDF has 37 pages, converged references/citations, and no
+the current tracked PDF has 41 pages, converged references/citations, and no
 LaTeX/BibTeX warnings or underfull/overfull boxes. The two new plots passed the
 explicit renderer check and color/grayscale visual review; rendered-page review
 covered Algorithms 1–3, the experiment-family and logical-host tables, related
@@ -187,7 +187,7 @@ restore them as required gates only if the manuscript claims those results.
 - [x] Audit formal statement types: intended/conditional invariants versus proved
   results, component observations versus integrated behavior, and accounting
   ceilings versus physical memory. No five-bucket measurement may be invented.
-- [x] Run the finite final paper build with latexmk/pdfLaTeX/BibTeX: 37 pages,
+- [x] Run the finite final paper build with latexmk/pdfLaTeX/BibTeX: 41 pages,
   resolved references/citations, no warnings or underfull/overfull boxes. Bind
   the tracked PDF to recorded TeX/bibliography/figure inputs and exact hashes.
 - [x] Check the two current figures with their separate pinned renderer; inspect

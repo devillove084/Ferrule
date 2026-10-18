@@ -1,0 +1,7 @@
+# Isolated submission tooling only; Python 3.12. Never install into the base conda env.
+# arxiv-latex-cleaner and its complete runtime dependency set, resolved 2026-10-18.
+arxiv-latex-cleaner==1.0.11
+absl-py==2.5.1
+pillow==13.0.0
+PyYAML==6.0.3
+regex==2026.9.29

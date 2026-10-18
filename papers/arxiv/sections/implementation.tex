@@ -82,10 +82,18 @@ compute-stream fence covers the successful group. All six destinations and
 immutable source aliases enter custody before the first possibly submitting
 copy. There is no extra pinned allocation, concatenation buffer, upload
 event, or polling ticket. A failed proof retains the group and source charge
-and quarantines the owner; later proof cannot heal it. Pageable driver calls
-may still block or stage internally, so one explicit fence is not one total
-native synchronization or an asynchronous-transfer claim. These are code-level
-counts, not observed per-request backend-call counts.
+and quarantines the owner; later proof cannot heal it.
+
+CUDA 12.4.0 documents that an \texttt{Async} suffix does not unconditionally
+promise host-asynchronous behavior: the arguments matter. Asynchronous copies
+between pageable host and device memory may be synchronous with respect to
+the host, and staging through pinned memory may also synchronize the stream.
+For the documented synchronous pageable host-to-device case, return can
+precede completion of the final DMA~\cite{nvidia2024cudasync}. API return,
+device completion, and transfer--compute overlap are therefore distinct.
+One explicit fence is not a count of all native synchronizations or evidence
+of asynchronous transfer or overlap. These are code-level counts, not observed
+per-request backend-call counts.
 
 Grouping does not remove the existing last-consumer event or owner
 upload-stream fence. Their redundancy has not been established for this leaf,

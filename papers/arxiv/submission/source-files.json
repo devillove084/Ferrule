@@ -1,0 +1,27 @@
+{
+  "entrypoint": "main.tex",
+  "figure_macros": ["paperplot"],
+  "files": [
+    "main.tex",
+    "references.bib",
+    "sections/introduction.tex",
+    "sections/scope.tex",
+    "sections/design.tex",
+    "sections/implementation.tex",
+    "sections/evaluation.tex",
+    "sections/related-work.tex",
+    "sections/conclusion.tex",
+    "sections/evaluation-history.tex",
+    "figures/architecture.pdf",
+    "figures/operation-state.pdf",
+    "figures/transaction-lifecycle.pdf",
+    "figures/cache-pressure-budget.pdf",
+    "figures/paired-read-accounting.pdf",
+    "figures/current-http-outcomes.pdf",
+    "figures/current-transfer-mechanism.pdf",
+    "figures/paired-read-latency.pdf",
+    "figures/paired-read-read-wait.pdf",
+    "figures/read-compute-overlap.pdf"
+  ],
+  "licenses": []
+}

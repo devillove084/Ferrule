@@ -8,6 +8,9 @@ a source-bound plan and obtains an exact destination reservation. The owner
 then admits the read, upload, and installation claims as each stage becomes
 eligible. Before any preparation can submit physical work, it records the
 provisional operation and cleanup intent in a persistent journal.
+Explicit stages and local admission are also central to SEDA's
+resource-control architecture~\cite{welsh2001seda}; here admission accounts
+for materialization claims rather than implementing its adaptive controllers.
 
 A successful read returns read custody. The owner explicitly releases the
 read slot and storage-read claims while retaining the host payload charge
@@ -76,7 +79,14 @@ Producer success makes a candidate ready; publication also validates the
 actual binding and authorization. Replacement requires old-consumer
 quiescence. For prepared KV state, exact installation acknowledgments precede
 logical publication, and retirement acknowledgments precede page reuse.
-This ordering is a scoped in-memory lifecycle, not distributed durable commit.
+This ordering is a scoped in-memory completion protocol, not a persistent
+ACID transaction. Linearizability specifies concurrent-object
+behavior~\cite{herlihy1990linearizability}; the local publication and completion
+rules here are not a proof of that condition.
+The separation of logical removal from safe reclamation is familiar from
+hazard pointers~\cite{michael2004hazard}. \system{} instead relies on
+owner-held completion evidence; the analogy neither describes a hazard-pointer
+or RCU implementation nor supplies a device-reclamation proof.
 
 \paragraph{Terminal demand preserves residual obligations.}
 Accepted cancellation detaches only the terminating demand. Independent
@@ -278,7 +288,11 @@ host-staging limit, $P_{\max}$ the largest selected expert's packed weights
 and scales, $M$ the
 metadata allowance, and $S$ the requested worker-stack reservation. The
 materialization owner holds one bounded worker across compatible sequential
-read sequences; a sequence does not own a new thread. Both schedules require
+read sequences; a sequence does not own a new thread.
+Application-informed prefetching couples anticipated accesses to finite cache
+and I/O buffers~\cite{patterson1995informed}. Here the lookahead is one
+selected next expert, and speculative reads remain subject to the same host
+claims as demand reads. Both schedules require
 \begin{equation}
  2P_{\max}+M+S\leq H
  \label{eq:host-read-bound}

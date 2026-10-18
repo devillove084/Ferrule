@@ -1,66 +1,272 @@
-% Metadata checked against locally cached primary sources on 2026-10-13.
-% arXiv entries use first-submission years, not inferred conference venues.
+% Conference metadata and mechanisms follow verified primary-source records.
+% arXiv entries identify the cited version; years retain first posting where noted.
+% ZeRO-Inference has no verified individual byline, so no author is inferred.
+% SGLang expert-pack cites a fixed source snapshot, not the 2024 SGLang paper.
 
-% Source: target/research/ferrule-prior-work-20261013/flexgen-abs.html
-@misc{sheng2023flexgen,
-  title = {{FlexGen: High-Throughput Generative Inference of Large Language Models with a Single GPU}},
-  author = {Sheng, Ying and Zheng, Lianmin and Yuan, Binhang and Li, Zhuohan and Ryabinin, Max and Fu, Daniel Y. and Xie, Zhiqiang and Chen, Beidi and Barrett, Clark and Gonzalez, Joseph E. and Liang, Percy and R{\'e}, Christopher and Stoica, Ion and Zhang, Ce},
+@inproceedings{sheng2023flexgen,
+  author = {Sheng, Ying and Zheng, Lianmin and Yuan, Binhang and
+    Li, Zhuohan and Ryabinin, Max and Chen, Beidi and Liang, Percy and
+    Re, Christopher and Stoica, Ion and Zhang, Ce},
+  title = {{FlexGen}: High-Throughput Generative Inference of Large
+    Language Models with a Single {GPU}},
+  booktitle = {Proceedings of the 40th International Conference on Machine Learning},
+  series = {Proceedings of Machine Learning Research},
+  volume = {202},
+  pages = {31094--31116},
   year = {2023},
-  eprint = {2303.06865},
-  archivePrefix = {arXiv},
-  url = {https://arxiv.org/abs/2303.06865},
-  note = {arXiv:2303.06865}
+  publisher = {PMLR},
+  url = {https://proceedings.mlr.press/v202/sheng23a.html}
 }
 
-% Source: target/research/ferrule-prior-work-20261013/zero-inference.html
-% No individual byline was verified; omit author rather than invent one.
+@inproceedings{rajbhandari2021zeroinfinity,
+  author = {Rajbhandari, Samyam and Ruwase, Olatunji and Rasley, Jeff and
+    Smith, Shaden and He, Yuxiong},
+  title = {{ZeRO-Infinity}: Breaking the {GPU} Memory Wall for
+    Extreme Scale Deep Learning},
+  booktitle = {Proceedings of the International Conference for High
+    Performance Computing, Networking, Storage and Analysis},
+  series = {SC '21},
+  pages = {1--14},
+  year = {2021},
+  publisher = {ACM},
+  doi = {10.1145/3458817.3476205},
+  url = {https://doi.org/10.1145/3458817.3476205}
+}
+
+@inproceedings{aminabadi2022deepspeed,
+  author = {Aminabadi, Reza Yazdani and Rajbhandari, Samyam and
+    Awan, Ammar Ahmad and Li, Cheng and Li, Du and Zheng, Elton and
+    Ruwase, Olatunji and Smith, Shaden and Zhang, Minjia and
+    Rasley, Jeff and He, Yuxiong},
+  title = {{DeepSpeed-Inference}: Enabling Efficient Inference of
+    Transformer Models at Unprecedented Scale},
+  booktitle = {SC22: International Conference for High Performance
+    Computing, Networking, Storage and Analysis},
+  pages = {1--15},
+  year = {2022},
+  publisher = {IEEE},
+  doi = {10.1109/SC41404.2022.00051},
+  url = {https://doi.org/10.1109/SC41404.2022.00051}
+}
+
 @misc{deepspeed2022zeroinference,
   key = {ZeRO-Inference},
   title = {{ZeRO-Inference: Democratizing massive model inference}},
   year = {2022},
   month = sep,
-  howpublished = {DeepSpeed technical web page},
+  howpublished = {\href{https://www.deepspeed.ai/2022/09/09/zero-inference.html}{DeepSpeed technical web page}},
   url = {https://www.deepspeed.ai/2022/09/09/zero-inference.html},
   note = {September 9, 2022; technical web page, not a conference paper}
 }
 
-% Source: target/research/ferrule-prior-work-20261013/powerinfer-abs.html
-@misc{song2023powerinfer,
-  title = {{PowerInfer: Fast Large Language Model Serving with a Consumer-grade GPU}},
-  author = {Song, Yixin and Mi, Zeyu and Xie, Haotong and Chen, Haibo},
-  year = {2023},
-  eprint = {2312.12456},
-  archivePrefix = {arXiv},
-  url = {https://arxiv.org/abs/2312.12456},
-  note = {arXiv:2312.12456}
+@inproceedings{alizadeh2024llmflash,
+  author = {Alizadeh, Keivan and Mirzadeh, Seyed Iman and
+    Belenko, Dmitry and Khatamifard, S. and Cho, Minsik and
+    Del Mundo, Carlo C and Rastegari, Mohammad and Farajtabar, Mehrdad},
+  title = {{LLM} in a flash: Efficient Large Language Model
+    Inference with Limited Memory},
+  booktitle = {Proceedings of the 62nd Annual Meeting of the
+    Association for Computational Linguistics (Volume 1: Long Papers)},
+  pages = {12562--12584},
+  year = {2024},
+  publisher = {Association for Computational Linguistics},
+  doi = {10.18653/v1/2024.acl-long.678},
+  url = {https://aclanthology.org/2024.acl-long.678/}
 }
 
-% Source: target/research/ferrule-prior-work-20261013/powerinfer2-abs.html
+@inproceedings{kwon2023pagedattention,
+  author = {Kwon, Woosuk and Li, Zhuohan and Zhuang, Siyuan and
+    Sheng, Ying and Zheng, Lianmin and Yu, Cody Hao and
+    Gonzalez, Joseph and Zhang, Hao and Stoica, Ion},
+  title = {Efficient Memory Management for Large Language Model
+    Serving with {PagedAttention}},
+  booktitle = {Proceedings of the 29th Symposium on Operating Systems Principles},
+  pages = {611--626},
+  year = {2023},
+  publisher = {ACM},
+  doi = {10.1145/3600006.3613165},
+  url = {https://doi.org/10.1145/3600006.3613165}
+}
+
+@inproceedings{zheng2024sglang,
+  author = {Zheng, Lianmin and Yin, Liangsheng and Xie, Zhiqiang and
+    Sun, Chuyue and Huang, Jeff and Yu, Cody Hao and Cao, Shiyi and
+    Kozyrakis, Christos and Stoica, Ion and Gonzalez, Joseph E. and
+    Barrett, Clark and Sheng, Ying},
+  title = {{SGLang}: Efficient Execution of Structured Language Model Programs},
+  booktitle = {Advances in Neural Information Processing Systems},
+  volume = {37},
+  pages = {62557--62583},
+  year = {2024},
+  publisher = {Curran Associates, Inc.},
+  doi = {10.52202/079017-2000},
+  url = {https://proceedings.neurips.cc/paper_files/paper/2024/hash/724be4472168f31ba1c9ac630f15dec8-Abstract-Conference.html}
+}
+
+@inproceedings{lee2024infinigen,
+  author = {Lee, Wonbeom and Lee, Jungi and Seo, Junghwan and Sim, Jaewoong},
+  title = {{InfiniGen}: Efficient Generative Inference of Large
+    Language Models with Dynamic {KV} Cache Management},
+  booktitle = {18th USENIX Symposium on Operating Systems Design
+    and Implementation (OSDI 24)},
+  pages = {155--172},
+  year = {2024},
+  publisher = {USENIX Association},
+  url = {https://www.usenix.org/conference/osdi24/presentation/lee}
+}
+
+@inproceedings{yu2025pensieve,
+  author = {Yu, Lingfan and Lin, Jinkun and Li, Jinyang},
+  title = {Stateful Large Language Model Serving with {Pensieve}},
+  booktitle = {Proceedings of the Twentieth European Conference on Computer Systems},
+  pages = {144--158},
+  year = {2025},
+  publisher = {ACM},
+  doi = {10.1145/3689031.3696086},
+  url = {https://doi.org/10.1145/3689031.3696086}
+}
+
+@inproceedings{zhong2024distserve,
+  author = {Zhong, Yinmin and Liu, Shengyu and Chen, Junda and
+    Hu, Jianbo and Zhu, Yibo and Liu, Xuanzhe and Jin, Xin and Zhang, Hao},
+  title = {{DistServe}: Disaggregating Prefill and Decoding for
+    Goodput-optimized Large Language Model Serving},
+  booktitle = {18th USENIX Symposium on Operating Systems Design
+    and Implementation (OSDI 24)},
+  pages = {193--210},
+  year = {2024},
+  publisher = {USENIX Association},
+  url = {https://www.usenix.org/conference/osdi24/presentation/zhong-yinmin}
+}
+
+@inproceedings{qin2025mooncake,
+  author = {Qin, Ruoyu and Li, Zheming and He, Weiran and Cui, Jialei and
+    Ren, Feng and Zhang, Mingxing and Wu, Yongwei and Zheng, Weimin and Xu, Xinran},
+  title = {{Mooncake}: Trading More Storage for Less Computation ---
+    A {KVCache-centric} Architecture for Serving {LLM} Chatbot},
+  booktitle = {23rd USENIX Conference on File and Storage Technologies (FAST 25)},
+  pages = {155--170},
+  year = {2025},
+  publisher = {USENIX Association},
+  url = {https://www.usenix.org/conference/fast25/presentation/qin}
+}
+
+@inproceedings{liu2024cachegen,
+  author = {Liu, Yuhan and Li, Hanchen and Cheng, Yihua and Ray, Siddhant and
+    Huang, Yuyang and Zhang, Qizheng and Du, Kuntai and Yao, Jiayi and
+    Lu, Shan and Ananthanarayanan, Ganesh and Maire, Michael and
+    Hoffmann, Henry and Holtzman, Ari and Jiang, Junchen},
+  title = {{CacheGen}: {KV} Cache Compression and Streaming for
+    Fast Large Language Model Serving},
+  booktitle = {Proceedings of the ACM SIGCOMM 2024 Conference},
+  pages = {38--56},
+  year = {2024},
+  publisher = {ACM},
+  doi = {10.1145/3651890.3672274},
+  url = {https://doi.org/10.1145/3651890.3672274}
+}
+
+@inproceedings{strati2024dejavu,
+  author = {Strati, Foteini and Mcallister, Sara and Phanishayee, Amar and
+    Tarnawski, Jakub and Klimovic, Ana},
+  title = {{D{\'e}j{\`a}Vu}: {KV}-cache Streaming for Fast,
+    Fault-tolerant Generative {LLM} Serving},
+  booktitle = {Proceedings of the 41st International Conference on Machine Learning},
+  series = {Proceedings of Machine Learning Research},
+  volume = {235},
+  pages = {46745--46771},
+  year = {2024},
+  publisher = {PMLR},
+  url = {https://proceedings.mlr.press/v235/strati24a.html}
+}
+
+@misc{xue2024moeinfinity,
+  author = {Xue, Leyang and Fu, Yao and Lu, Zhan and Sun, Chuanhao and
+    Mai, Luo and Marina, Mahesh},
+  title = {{MoE-Infinity}: Efficient {MoE} Inference on Personal Machines
+    with Sparsity-Aware Expert Cache},
+  year = {2024},
+  archivePrefix = {arXiv},
+  eprint = {2401.14361v3},
+  primaryClass = {cs.LG},
+  note = {arXiv:2401.14361v3, revised March 12, 2025; first posted in 2024},
+  url = {https://arxiv.org/html/2401.14361v3}
+}
+
+@inproceedings{kamahori2025fiddler,
+  author = {Kamahori, Keisuke and Tang, Tian and Gu, Yile and
+    Zhu, Kan and Kasikci, Baris},
+  title = {{Fiddler}: {CPU-GPU} Orchestration for Fast Inference
+    of Mixture-of-Experts Models},
+  booktitle = {International Conference on Learning Representations},
+  pages = {56099--56115},
+  year = {2025},
+  url = {https://proceedings.iclr.cc/paper_files/paper/2025/hash/8cd1ce03ea58b3d7dfd809e4d42f08ea-Abstract-Conference.html}
+}
+
+@misc{eliseev2023fastmoeoffloading,
+  author = {Eliseev, Artyom and Mazur, Denis},
+  title = {Fast Inference of Mixture-of-Experts Language Models
+    with Offloading},
+  year = {2023},
+  archivePrefix = {arXiv},
+  eprint = {2312.17238v1},
+  primaryClass = {cs.LG},
+  note = {Technical report, arXiv:2312.17238v1},
+  url = {https://arxiv.org/abs/2312.17238v1}
+}
+
+@inproceedings{hwang2024pregatedmoe,
+  author = {Hwang, Ranggi and Wei, Jianyu and Cao, Shijie and
+    Hwang, Changho and Tang, Xiaohu and Cao, Ting and Yang, Mao},
+  title = {Pre-gated {MoE}: An Algorithm-System Co-Design for Fast
+    and Scalable Mixture-of-Expert Inference},
+  booktitle = {2024 ACM/IEEE 51st Annual International Symposium
+    on Computer Architecture (ISCA)},
+  pages = {1018--1031},
+  year = {2024},
+  publisher = {IEEE},
+  doi = {10.1109/ISCA59077.2024.00078},
+  url = {https://doi.org/10.1109/ISCA59077.2024.00078}
+}
+
+@misc{tang2024hobbit,
+  author = {Tang, Peng and Liu, Jiacheng and Hou, Xiaofeng and
+    Pu, Yifei and Wang, Jing and Heng, Pheng-Ann and
+    Li, Chao and Guo, Minyi},
+  title = {{HOBBIT}: A Mixed Precision Expert Offloading System
+    for Fast {MoE} Inference},
+  year = {2024},
+  archivePrefix = {arXiv},
+  eprint = {2411.01433v2},
+  primaryClass = {cs.DC},
+  note = {arXiv:2411.01433v2},
+  url = {https://arxiv.org/html/2411.01433v2}
+}
+
+@inproceedings{song2023powerinfer,
+  author = {Song, Yixin and Mi, Zeyu and Xie, Haotong and Chen, Haibo},
+  title = {{PowerInfer}: Fast Large Language Model Serving with a
+    Consumer-grade {GPU}},
+  booktitle = {Proceedings of the ACM SIGOPS 30th Symposium on
+    Operating Systems Principles},
+  pages = {590--606},
+  year = {2024},
+  publisher = {ACM},
+  doi = {10.1145/3694715.3695964},
+  url = {https://doi.org/10.1145/3694715.3695964}
+}
+
 @misc{xue2024powerinfer2,
   title = {{PowerInfer-2: Fast Large Language Model Inference on a Smartphone}},
   author = {Xue, Zhenliang and Song, Yixin and Mi, Zeyu and Zheng, Xinrui and Xia, Yubin and Chen, Haibo},
   year = {2024},
-  eprint = {2406.06282},
+  eprint = {2406.06282v3},
   archivePrefix = {arXiv},
-  url = {https://arxiv.org/abs/2406.06282},
-  note = {arXiv:2406.06282}
+  url = {https://arxiv.org/abs/2406.06282v3},
+  note = {arXiv:2406.06282v3, December 2024}
 }
 
-% Source: official vLLM citation in
-% target/validation/vllm-cuda12-selection-high/0.28.0-cu129-METADATA.txt
-@misc{kwon2023pagedattention,
-  title = {{Efficient Memory Management for Large Language Model Serving with PagedAttention}},
-  author = {Woosuk Kwon and Zhuohan Li and Siyuan Zhuang and Ying Sheng and Lianmin Zheng and Cody Hao Yu and Joseph E. Gonzalez and Hao Zhang and Ion Stoica},
-  year = {2023},
-  eprint = {2309.06180},
-  archivePrefix = {arXiv},
-  url = {https://arxiv.org/abs/2309.06180},
-  note = {arXiv:2309.06180}
-}
-
-% Official source snapshot inspected locally on 2026-10-18.
-% Loader, runtime, model constraints, and argument hook are bound by the
-% artifact guide's primary-source audit; no release or execution is inferred.
 @misc{sglang2026expertpack,
   author = {{SGLang contributors}},
   title = {{SGLang expert-pack runtime, loader, and configuration checks}},
@@ -68,4 +274,173 @@
   howpublished = {\href{https://github.com/sgl-project/sglang/blob/5ef8319f16290d054295c1499bf82e712a9474c7/python/sglang/srt/model_loader/expert_pack_loader.py}{Official source repository}},
   url = {https://github.com/sgl-project/sglang/blob/5ef8319f16290d054295c1499bf82e712a9474c7/python/sglang/srt/model_loader/expert_pack_loader.py},
   note = {Source snapshot; accessed October 18, 2026}
+}
+
+@inproceedings{yu2022orca,
+  author = {Yu, Gyeong-In and Jeong, Joo Seong and Kim, Geon-Woo and
+            Kim, Soojeong and Chun, Byung-Gon},
+  title = {{Orca}: A Distributed Serving System for
+           {Transformer-Based} Generative Models},
+  booktitle = {16th USENIX Symposium on Operating Systems Design
+               and Implementation (OSDI 22)},
+  year = {2022},
+  pages = {521--538},
+  publisher = {USENIX Association},
+  url = {https://www.usenix.org/conference/osdi22/presentation/yu}
+}
+
+@inproceedings{agrawal2024sarathiserve,
+  author = {Agrawal, Amey and Kedia, Nitin and Panwar, Ashish and
+            Mohan, Jayashree and Kwatra, Nipun and Gulavani, Bhargav and
+            Tumanov, Alexey and Ramjee, Ramachandran},
+  title = {Taming {Throughput-Latency} Tradeoff in {LLM} Inference
+           with {Sarathi-Serve}},
+  booktitle = {18th USENIX Symposium on Operating Systems Design
+               and Implementation (OSDI 24)},
+  year = {2024},
+  pages = {117--134},
+  publisher = {USENIX Association},
+  url = {https://www.usenix.org/conference/osdi24/presentation/agrawal}
+}
+
+@inproceedings{patel2024splitwise,
+  author = {Patel, Pratyush and Choukse, Esha and Zhang, Chaojie and
+            Shah, Aashaka and Goiri, {\'I}{\~n}igo and Maleki, Saeed and
+            Bianchini, Ricardo},
+  title = {{Splitwise}: Efficient Generative {LLM} Inference
+           Using Phase Splitting},
+  booktitle = {2024 ACM/IEEE 51st Annual International Symposium
+               on Computer Architecture (ISCA)},
+  year = {2024},
+  pages = {118--132},
+  doi = {10.1109/ISCA59077.2024.00019},
+  url = {https://www.microsoft.com/en-us/research/publication/splitwise-efficient-generative-llm-inference-using-phase-splitting/}
+}
+
+@inproceedings{li2023alpaserve,
+  author = {Li, Zhuohan and Zheng, Lianmin and Zhong, Yinmin and
+            Liu, Vincent and Sheng, Ying and Jin, Xin and Huang, Yanping and
+            Chen, Zhifeng and Zhang, Hao and Gonzalez, Joseph E. and
+            Stoica, Ion},
+  title = {{AlpaServe}: Statistical Multiplexing with Model Parallelism
+           for Deep Learning Serving},
+  booktitle = {17th USENIX Symposium on Operating Systems Design
+               and Implementation (OSDI 23)},
+  year = {2023},
+  pages = {663--679},
+  publisher = {USENIX Association},
+  url = {https://www.usenix.org/conference/osdi23/presentation/li-zhouhan}
+}
+
+
+@inproceedings{yu2020salus,
+  author = {Yu, Peifeng and Chowdhury, Mosharaf},
+  title = {Fine-Grained {GPU} Sharing Primitives
+           for Deep Learning Applications},
+  booktitle = {Proceedings of Machine Learning and Systems},
+  year = {2020},
+  volume = {2},
+  pages = {98--111},
+  url = {https://proceedings.mlsys.org/paper_files/paper/2020/hash/d9cd83bc91b8c36a0c7c0fcca59228f2-Abstract.html}
+}
+
+@inproceedings{gujarati2020clockwork,
+  author = {Gujarati, Arpan and Karimi, Reza and Alzayat, Safya and
+            Hao, Wei and Kaufmann, Antoine and Vigfusson, Ymir and
+            Mace, Jonathan},
+  title = {Serving {DNNs} like {Clockwork}:
+           Performance Predictability from the Bottom Up},
+  booktitle = {14th USENIX Symposium on Operating Systems Design
+               and Implementation (OSDI 20)},
+  year = {2020},
+  pages = {443--462},
+  publisher = {USENIX Association},
+  url = {https://www.usenix.org/conference/osdi20/presentation/gujarati}
+}
+
+@inproceedings{hwang2023tutel,
+  author = {Hwang, Changho and Cui, Wei and Xiong, Yifan and Yang, Ziyue and
+            Liu, Ze and Hu, Han and Wang, Zilong and Salas, Rafael and
+            Jose, Jithin and Ram, Prabhat and Chau, HoYuen and Cheng, Peng and
+            Yang, Fan and Yang, Mao and Xiong, Yongqiang},
+  title = {{Tutel}: Adaptive Mixture-of-Experts at Scale},
+  booktitle = {Proceedings of Machine Learning and Systems},
+  year = {2023},
+  volume = {5},
+  pages = {269--287},
+  url = {https://proceedings.mlsys.org/paper_files/paper/2023/hash/5616d34cf8ff73942cfd5aa922842556-Abstract-mlsys2023.html}
+}
+
+@article{michael2004hazard,
+  author = {Michael, Maged M.},
+  title = {Hazard Pointers: Safe Memory Reclamation for Lock-Free Objects},
+  journal = {IEEE Transactions on Parallel and Distributed Systems},
+  year = {2004},
+  volume = {15},
+  number = {6},
+  pages = {491--504},
+  doi = {10.1109/TPDS.2004.8},
+  url = {https://research.ibm.com/publications/hazard-pointers-safe-memory-reclamation-for-lock-free-objects}
+}
+
+@article{herlihy1990linearizability,
+  author = {Herlihy, Maurice P. and Wing, Jeannette M.},
+  title = {Linearizability: A Correctness Condition for Concurrent Objects},
+  journal = {ACM Transactions on Programming Languages and Systems},
+  year = {1990},
+  volume = {12},
+  number = {3},
+  pages = {463--492},
+  doi = {10.1145/78969.78972},
+  url = {https://doi.org/10.1145/78969.78972}
+}
+
+@inproceedings{patterson1995informed,
+  author = {Patterson, R. Hugo and Gibson, Garth A. and Ginting, Eka and
+            Stodolsky, Daniel and Zelenka, Jim},
+  title = {Informed Prefetching and Caching},
+  booktitle = {Proceedings of the Fifteenth ACM Symposium
+               on Operating Systems Principles},
+  series = {SOSP '95},
+  year = {1995},
+  pages = {79--95},
+  publisher = {ACM},
+  doi = {10.1145/224056.224064},
+  url = {https://www.pdl.cmu.edu/PDL-FTP/TIP/SOSP15_abstract.shtml}
+}
+
+@inproceedings{welsh2001seda,
+  author = {Welsh, Matt and Culler, David and Brewer, Eric},
+  title = {{SEDA}: An Architecture for Well-Conditioned,
+           Scalable Internet Services},
+  booktitle = {Proceedings of the Eighteenth ACM Symposium
+               on Operating Systems Principles},
+  series = {SOSP '01},
+  year = {2001},
+  pages = {230--243},
+  publisher = {ACM},
+  doi = {10.1145/502034.502057},
+  url = {https://doi.org/10.1145/502034.502057}
+}
+
+@inproceedings{lin2024awq,
+  author = {Lin, Ji and Tang, Jiaming and Tang, Haotian and Yang, Shang and
+            Chen, Wei-Ming and Wang, Wei-Chen and Xiao, Guangxuan and
+            Dang, Xingyu and Gan, Chuang and Han, Song},
+  title = {{AWQ}: Activation-aware Weight Quantization
+           for On-Device {LLM} Compression and Acceleration},
+  booktitle = {Proceedings of Machine Learning and Systems},
+  year = {2024},
+  volume = {6},
+  pages = {87--100},
+  url = {https://proceedings.mlsys.org/paper_files/paper/2024/hash/42a452cbafa9dd64e9ba4aa95cc1ef21-Abstract-Conference.html}
+}
+
+@misc{nvidia2024cudasync,
+  author = {{NVIDIA Corporation}},
+  title = {{CUDA Driver API}: {API} Synchronization Behavior},
+  year = {2024},
+  howpublished = {\href{https://docs.nvidia.com/cuda/archive/12.4.0/cuda-driver-api/api-sync-behavior.html}{CUDA Toolkit v12.4.0 documentation}},
+  note = {Last updated March 5, 2024},
+  url = {https://docs.nvidia.com/cuda/archive/12.4.0/cuda-driver-api/api-sync-behavior.html}
 }

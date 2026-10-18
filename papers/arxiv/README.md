@@ -2,9 +2,9 @@
 
 **Ferrule: Bounded Storage-Backed Weight Residency**
 
-English working manuscript, not an accepted submission. Author: Lu Huanbing,
-Independent Researcher, `luhuanbing084@gmail.com`. Unprovided ORCID, funding and
-author declarations are not inferred.
+English working manuscript, not an accepted submission. Author: Huanbing Lu,
+`luhuanbing084@gmail.com`. Unprovided ORCID, funding and author declarations are
+not inferred.
 
 ## Start here
 
@@ -17,6 +17,8 @@ numerical settings, test selectors, and external-data limitations.
 - [Completion checklist](PAPER_COMPLETION_CHECKLIST.md): scientific, artifact
   and submission gates, without treating documentation work as new experiments.
 - [Manuscript PDF](build/main.pdf) and [LaTeX source](main.tex).
+- [arXiv preparation CLI](submission/README.md): reviewed source archives and
+  isolated compilation checks; browser upload and final author approval remain manual.
 
 The scientific evidence is organized as **quality and controlled budgets →
 logical demand and cache pressure → paired scheduling and scoped overlap →

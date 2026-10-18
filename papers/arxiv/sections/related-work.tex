@@ -1,19 +1,66 @@
 \section{Related Work}
 \label{sec:related}
 
-\paragraph{Storage-backed inference.}
+\paragraph{Storage-backed inference and memory hierarchies.}
 FlexGen~\cite{sheng2023flexgen} distributes tensors across GPU, CPU, and disk
 and optimizes throughput-oriented schedules with compression and
-attention-cache management. ZeRO-Inference~\cite{deepspeed2022zeroinference}
-describes CPU or NVMe weight hosting, layer streaming, prefetch, and release.
-PowerInfer-2~\cite{xue2024powerinfer2} targets smartphone inference beyond
-resident capacity using neuron clusters, segmented caching, and an
-I/O/computation pipeline. These systems establish weight streaming and
-transfer/computation scheduling as prior work. \system{} focuses on the
-contract linking each materialization stage to its source identity, resource
-claims, completion evidence, and eventual reuse.
+attention-cache management. DeepSpeed-Inference~\cite{aminabadi2022deepspeed}
+also provides heterogeneous inference using CPU and NVMe capacity;
+ZeRO-Inference~\cite{deepspeed2022zeroinference} describes weight hosting,
+layer streaming, prefetch, and release in an official technical web page.
+These are direct precedents for inference beyond device residency.
+ZeRO-Infinity~\cite{rajbhandari2021zeroinfinity} establishes a related
+GPU/CPU/NVMe hierarchy for training, whose optimizer-state and training
+results do not directly characterize inference. At the storage-access level,
+LLM in a flash~\cite{alizadeh2024llmflash} uses windowing and row-column
+bundling to reduce flash weight reads and enlarge useful transfers when a
+model exceeds DRAM. These works motivate managing both placement and access
+patterns; \system{} focuses on the contract connecting each materialization
+stage to source identity, resource claims, completion evidence, and reuse.
 
-\paragraph{Demand-loaded expert caches.}
+\paragraph{Heterogeneous execution and representation.}
+PowerInfer~\cite{song2023powerinfer} exploits activation locality by executing
+hot neurons on a GPU and cold neurons on a CPU. This differs from
+PowerInfer-2~\cite{xue2024powerinfer2}, whose cited smartphone version uses
+neuron clusters, segmented caching, and an I/O/computation pipeline beyond
+resident capacity. CPU execution, storage traffic, and device-cache residency
+are therefore separate comparison dimensions. Weight representation is
+another independent axis: AWQ~\cite{lin2024awq} uses activation-aware scaling
+to protect salient weights during low-bit quantization. Representation and
+materialization scheduling can be considered separately, but equal bit widths
+do not establish equal algorithms, quality, or execution costs. This citation
+does not imply that \system{} implements or evaluates AWQ.
+
+\paragraph{Expert caching, prediction, and execution location.}
+Direct MoE offload systems already exploit selective expert demand.
+MoE-Infinity~\cite{xue2024moeinfinity} uses activation traces to guide GPU
+expert-cache replacement and prefetch for host-memory-backed inference on
+personal machines. Eliseev and Mazur~\cite{eliseev2023fastmoeoffloading}
+combine an LRU expert cache with speculative loading from earlier hidden
+states and mixed quantization. Their speculative prefetch does not itself
+change routing: a prediction miss still requires the demanded expert;
+quantization has a separate numerical-quality boundary.
+Fiddler~\cite{kamahori2025fiddler} instead coordinates moving expert weights
+to the GPU with moving activations to CPU experts. Its execution-location
+choice is not equivalent to a cache policy that always executes demanded
+experts on the GPU. These mechanisms concern different combinations of cache
+reuse, transfer avoidance, and heterogeneous computation, not one common
+storage or execution path.
+
+\paragraph{Routing and precision changes for expert offload.}
+Pre-gated MoE~\cite{hwang2024pregatedmoe} changes gating so that one block
+selects experts for the next, enabling migration to overlap current expert
+computation. Its pre-gate is trained during fine-tuning while retaining
+pretrained parameters; this is a model change rather than speculative
+prefetch applied to an unmodified checkpoint.
+HOBBIT~\cite{tang2024hobbit} dynamically loads lower-precision versions of
+less-critical experts on cache misses, together with adaptive prefetch and
+multidimensional caching. Its loading policy thus includes a quality--latency
+tradeoff. \system{} instead studies read scheduling and upload grouping with
+fixed selected-expert order and arithmetic. That distinction does not establish
+superior performance or rule out complementary caching policies.
+
+\paragraph{Demand-loaded expert caches in serving engines.}
 The inspected SGLang source includes a specialized expert-pack loader and
 runtime cache~\cite{sglang2026expertpack}. Cache misses issue storage reads into
 staging slots, followed by event-gated host-to-device copies; preparation of
@@ -27,21 +74,79 @@ relative performance. Its source demonstrates that storage-backed expert
 loading is not unique to \system{}; equivalent failure-custody guarantees
 have not been exhaustively audited in either direction.
 
-\paragraph{Resident offload and state management.}
-PowerInfer~\cite{song2023powerinfer} exploits activation locality by executing
-hot neurons on a GPU and cold neurons on a CPU. This resident-domain hybrid
-differs from PowerInfer-2's storage pipeline. The inspected CPU-weight-offload
-paths in vLLM use host-resident weights, including unified virtual addressing;
-they should not be equated with disk-backed weight materialization.
-vLLM's PagedAttention~\cite{kwon2023pagedattention} addresses serving KV memory
-through paged allocation. KV offload, whether to host memory or storage,
-concerns a different object from checkpoint-weight demand. A fair performance
-comparison must match representation, arithmetic, physical memory pools,
-workload, and quality criterion. The unmatched resident-system observations
-preserved with the artifacts do not satisfy those conditions and support no
-comparative speedup or ranking here.
+\paragraph{KV allocation, selection, and prefix reuse.}
+KV state is a different object from checkpoint weights.
+vLLM uses PagedAttention~\cite{kwon2023pagedattention} for block-based KV
+allocation and sharing, and its paper includes CPU KV swapping for preempted
+requests. The separately inspected CPU-weight-offload paths use host-resident
+weights, including unified virtual addressing; these should not be equated
+with disk-backed weight materialization. SGLang uses a radix tree for KV
+prefix reuse across calls~\cite{zheng2024sglang}; that paper is distinct from
+the expert-pack source snapshot above.
+Pensieve~\cite{yu2025pensieve} retains conversation state across requests in
+a GPU/CPU cache to avoid repeated history processing.
+InfiniGen~\cite{lee2024infinigen} instead predicts important tokens and
+prefetches selected KV from host memory. Importance-based approximate
+selection must be distinguished from retaining complete state: its quality
+conditions are not those of exact capacity management.
 
-\paragraph{Scheduling and lifetime.}
+\paragraph{KV storage and transport.}
+Mooncake~\cite{qin2025mooncake} builds a cluster-wide KV-centric serving
+architecture using CPU, DRAM, SSD, and network resources, establishing an
+explicit storage-backed KV precedent. CacheGen~\cite{liu2024cachegen}
+compresses and streams KV with bandwidth-adaptive compression, addressing
+network loading and its quality tradeoff rather than only local placement.
+D{\'e}j{\`a}Vu~\cite{strati2024dejavu} provides KV streaming for prompt/token
+separation, microbatch swapping, and state replication for recovery.
+These systems show why reuse scope, storage tier, transfer path, and numerical
+semantics must be stated separately. KV transport and replication can support
+a serving architecture without being the same mechanism as checkpoint-weight
+materialization or establishing its resource-lifetime guarantees.
+
+\paragraph{Request and phase scheduling.}
+Orca~\cite{yu2022orca} schedules at generation-iteration boundaries with
+selective batching. Sarathi-Serve~\cite{agrawal2024sarathiserve} combines
+chunked prefill and stall-free scheduling to manage the throughput--latency
+tradeoff. Splitwise~\cite{patel2024splitwise} places prompt processing and
+token generation on separate machines according to their resource demands;
+DistServe~\cite{zhong2024distserve} separates prefill and decoding to optimize
+goodput under latency constraints. At a broader placement level,
+AlpaServe~\cite{li2023alpaserve} combines model parallelism and statistical
+multiplexing for bursty workloads. These works choose when and where requests
+or phases execute. \system{} addresses resource admission and completion
+within materialization, not a new request-batching or cluster-placement
+algorithm; this positioning implies no cross-system performance ordering.
+
+\paragraph{Execution control.}
+Salus~\cite{yu2020salus} separates GPU-sharing primitives, including fast
+switching and memory sharing, from scheduling policy.
+Clockwork~\cite{gujarati2020clockwork} builds predictable serving around
+explicit control of execution and resource behavior.
+Tutel~\cite{hwang2023tutel} adapts parallelism and pipelined execution to
+dynamic MoE workloads. These works concern execution control rather than the
+source-bound materialization lifecycle studied here. Their results do not
+establish \system{} performance, predictability, or completion guarantees.
+
+\paragraph{Bounded prefetch and staged admission.}
+Informed prefetching~\cite{patterson1995informed} uses future-access hints to
+coordinate prefetching with cache-buffer allocation. This precedent treats
+lookahead as a consumer of finite buffers, not free early I/O.
+SEDA~\cite{welsh2001seda} connects event-driven stages with explicit queues
+and stage-local resource control. \system{} applies bounded admission to
+materialization claims; it does not implement those systems' buffer-allocation
+algorithms or adaptive controllers.
+
+\paragraph{Publication and safe reclamation.}
+Linearizability~\cite{herlihy1990linearizability} is a correctness condition
+for concurrent-object histories, not a resource-reclamation mechanism or a
+persistent transaction protocol. Hazard pointers~\cite{michael2004hazard}
+distinguish logical removal from safe reclamation after concurrent use ends.
+\system{} uses a local publication and completion protocol with owner-held
+evidence through retirement. This is neither a linearizability proof nor a
+persistent ACID protocol, and the reclamation analogy does not imply a
+hazard-pointer implementation or a general device-reclamation theorem.
+
+\paragraph{Measurement and comparison boundaries.}
 An asynchronous interface, an independent progress worker, and hardware
 overlap are distinct properties. The earlier read-scheduling comparison holds
 worker, representation, and resource limits fixed, then changes when one
@@ -51,7 +156,11 @@ the resulting behavior; correlated file-call and kernel intervals separately
 measure observed read--compute overlap. Selected-process API counts quantify
 observed synchronization calls, not a complete causal decomposition. Neither
 a worker, a broad host-range intersection, nor fewer synchronization calls
-alone establishes device overlap or faster serving.
+alone establishes device overlap or faster serving. A fair external comparison
+must also match representation, arithmetic, physical memory pools, workload,
+and quality criterion. The unmatched resident-system observations preserved
+with the artifacts do not satisfy those conditions and support no comparative
+speedup or ranking here.
 
 \begin{table}[!htbp]
 \centering

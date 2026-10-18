@@ -12,6 +12,8 @@ and ownership through the last consumer.
 
 Weight streaming and prefetch are established techniques in systems such as
 FlexGen, ZeRO-Inference, and PowerInfer-2~\cite{sheng2023flexgen,deepspeed2022zeroinference,xue2024powerinfer2}.
+Expert caches and speculative loading also address sparse demand in MoE
+models~\cite{xue2024moeinfinity,eliseev2023fastmoeoffloading}.
 SGLang also provides a specialized storage-backed expert path in the inspected
 source~\cite{sglang2026expertpack}.
 \system{} addresses a complementary architectural question: how should a
