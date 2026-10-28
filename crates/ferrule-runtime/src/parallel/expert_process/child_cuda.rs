@@ -1,6 +1,7 @@
 //! Physical numeric CUDA child; no CPU implementation or stats defaults.
 use std::collections::BTreeMap;
 
+use ferrule_model::transformer::ExpertPlacementEpoch;
 use ferrule_model::transformer::host_experts::HostExpertWarmPlan;
 
 use super::*;
@@ -127,66 +128,123 @@ impl ProcessChildHandler for NumericExpertChild {
         #[cfg(test)]
         let _proof_reuse = super::boot_cache_tests::RequestValidationGuard::new();
         if request.identity.owner != self.validated.identity || request.session != 0 {
-            return Err(unknown("numeric envelope mismatch"));
+            return Err(invalid("numeric envelope mismatch"));
         }
-        let NumericCommand::Compute {
-            transaction,
-            source,
-            layer,
-            tokens,
-        } = request.command
-        else {
-            return self.stats().map(NumericReply::Stats).map_err(unknown);
+        enum Work {
+            Legacy(Vec<NumericToken>),
+            Routes(Vec<NumericRouteToken>),
+        }
+        let (transaction, source, layer, work) = match request.command {
+            NumericCommand::Stats => return self.stats().map(NumericReply::Stats).map_err(unknown),
+            NumericCommand::Compute {
+                transaction,
+                source,
+                layer,
+                tokens,
+            } => (transaction, source, layer, Work::Legacy(tokens)),
+            NumericCommand::ComputeRoutes {
+                transaction,
+                source,
+                layer,
+                tokens,
+            } => (transaction, source, layer, Work::Routes(tokens)),
         };
         if transaction != request.identity.transaction.get() {
-            return Err(unknown("outer transaction mismatch"));
+            return Err(invalid(format!(
+                "outer transaction mismatch: transaction={} envelope={} source={} layer={}",
+                transaction,
+                request.identity.transaction.get(),
+                source,
+                layer
+            )));
         }
         let context = ExpertDispatchContext {
-            transaction: ExecutionTransactionId::new(transaction).map_err(unknown)?,
+            transaction: ExecutionTransactionId::new(transaction).map_err(invalid)?,
             source_rank: ParallelRankId::new(source),
             layer,
         };
-        let tokens = self
-            .validated
-            .validate_tokens(context, tokens)
-            .map_err(unknown)?;
-        preflight_numeric_source(&self.host, self.host_generation).map_err(unknown)?;
-        let results = self.worker.compute(&tokens).map_err(unknown)?;
-        let mut by_route = BTreeMap::new();
-        for r in results {
-            if r.owner_rank.get() != self.validated.boot.owner
-                || r.transaction != context.transaction
-                || r.source_rank != context.source_rank
-                || by_route.insert((r.source_row, r.route_slot), r).is_some()
-            {
-                return Err(unknown("invalid numeric worker result"));
+        match work {
+            Work::Legacy(tokens) => {
+                if self.validated.group.placement.is_replicated()
+                    || self.validated.group.placement.epoch() != ExpertPlacementEpoch::INITIAL
+                {
+                    return Err(invalid(
+                        "versioned or replicated placement requires route-aware numeric command",
+                    ));
+                }
+                let tokens = self
+                    .validated
+                    .validate_tokens(context, tokens)
+                    .map_err(invalid)?;
+                preflight_numeric_source(&self.host, self.host_generation).map_err(invalid)?;
+                let results = self.worker.compute(&tokens).map_err(unknown)?;
+                let mut by_route = BTreeMap::new();
+                for r in results {
+                    if r.owner_rank.get() != self.validated.boot.owner
+                        || r.transaction != context.transaction
+                        || r.source_rank != context.source_rank
+                        || by_route.insert((r.source_row, r.route_slot), r).is_some()
+                    {
+                        return Err(unknown("invalid numeric worker result"));
+                    }
+                }
+                let mut output = Vec::with_capacity(tokens.len());
+                for t in &tokens {
+                    let r = by_route
+                        .remove(&(t.source_row, t.route_slot))
+                        .ok_or_else(|| unknown("missing numeric result"))?;
+                    if r.sequence != t.sequence
+                        || r.expert != t.expert
+                        || r.output.len() != self.validated.boot.hidden
+                        || r.output.iter().any(|v| !v.is_finite())
+                    {
+                        return Err(unknown("invalid numeric output identity/shape"));
+                    }
+                    output.push(NumericToken::encode_values(
+                        t,
+                        r.output.into_iter().map(f32::to_bits).collect(),
+                    ));
+                }
+                if !by_route.is_empty() {
+                    return Err(unknown("extra numeric result"));
+                }
+                self.worker.record_process_call(tokens.len());
+                Ok(NumericReply::Results {
+                    owner: self.validated.boot.owner,
+                    tokens: output,
+                })
+            }
+            Work::Routes(frames) => {
+                self.validated
+                    .validate_route_frames(context, &frames)
+                    .map_err(invalid)?;
+                let routes = frames
+                    .into_iter()
+                    .map(|frame| {
+                        let token = frame.token.decode().map_err(invalid)?;
+                        let metadata = validate_expert_route(
+                            &self.validated.group.placement,
+                            self.validated.rank.owner,
+                            context,
+                            token.expert,
+                            frame.route,
+                        )
+                        .map_err(invalid)?;
+                        Ok(ExpertRouteToken { metadata, token })
+                    })
+                    .collect::<std::result::Result<Vec<_>, ProcessHandlerError>>()?;
+                preflight_numeric_source(&self.host, self.host_generation).map_err(invalid)?;
+                let results = self.worker.compute_routes(&routes).map_err(unknown)?;
+                let output =
+                    encode_numeric_route_results(&routes, results, self.validated.rank.owner)
+                        .map_err(unknown)?;
+                self.worker.record_process_call(routes.len());
+                Ok(NumericReply::RouteResults {
+                    owner: self.validated.boot.owner,
+                    tokens: output,
+                })
             }
         }
-        let mut output = Vec::with_capacity(tokens.len());
-        for t in &tokens {
-            let r = by_route
-                .remove(&(t.source_row, t.route_slot))
-                .ok_or_else(|| unknown("missing numeric result"))?;
-            if r.sequence != t.sequence
-                || r.expert != t.expert
-                || r.output.len() != self.validated.boot.hidden
-                || r.output.iter().any(|v| !v.is_finite())
-            {
-                return Err(unknown("invalid numeric output identity/shape"));
-            }
-            output.push(NumericToken::encode_values(
-                t,
-                r.output.into_iter().map(f32::to_bits).collect(),
-            ));
-        }
-        if !by_route.is_empty() {
-            return Err(unknown("extra numeric result"));
-        }
-        self.worker.record_process_call(tokens.len());
-        Ok(NumericReply::Results {
-            owner: self.validated.boot.owner,
-            tokens: output,
-        })
     }
     fn shutdown(&mut self) -> std::result::Result<(), ProcessHandlerError> {
         self.worker.shutdown().map_err(unknown)

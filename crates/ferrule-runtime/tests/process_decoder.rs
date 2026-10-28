@@ -178,6 +178,8 @@ impl Fixture {
                             .clone()
                             .flat_map(|layer| [(layer, 0, first), (layer, 1, first + 1)])
                             .collect(),
+                        route_entries: None,
+                        placement_epoch: 0,
                         max_tokens: 32,
                         max_bytes: 4096,
                         devices: vec![DecoderDevice::Cpu; 2],
@@ -205,12 +207,37 @@ impl Fixture {
             })
             .collect()
     }
-    fn pipeline(
+    fn versioned_boots(&self, degree: u32, ep: bool) -> Vec<(ProcessIdentity, DecoderBoot)> {
+        let mut boots = self.boots(degree, ep);
+        for (_, boot) in &mut boots {
+            let Some(placement) = boot.experts.as_mut() else {
+                continue;
+            };
+            let entries = std::mem::take(&mut placement.entries);
+            placement.placement_epoch = 7;
+            placement.route_entries = Some(
+                entries
+                    .into_iter()
+                    .enumerate()
+                    .map(
+                        |(physical_slot, (layer, expert, owner))| ExpertPlacementEntryFrame {
+                            layer,
+                            expert,
+                            physical_slot: 100 + physical_slot,
+                            replica: 0,
+                            owner,
+                        },
+                    )
+                    .collect(),
+            );
+        }
+        boots
+    }
+    fn pipeline_with_boots(
         &self,
         degree: u32,
-        ep: bool,
+        boots: Vec<(ProcessIdentity, DecoderBoot)>,
     ) -> (PipelineParallelExecutor, SharedProcessPipelineTransport) {
-        let boots = self.boots(degree, ep);
         let plans = boots
             .iter()
             .map(|(_, boot)| boot.segment.decode().unwrap())
@@ -226,6 +253,13 @@ impl Fixture {
         )
         .unwrap();
         (pipeline, transport)
+    }
+    fn pipeline(
+        &self,
+        degree: u32,
+        ep: bool,
+    ) -> (PipelineParallelExecutor, SharedProcessPipelineTransport) {
+        self.pipeline_with_boots(degree, self.boots(degree, ep))
     }
 }
 impl Drop for Fixture {
@@ -552,6 +586,33 @@ fn process_pp2_ep2_external_source_matches_unsplit_through_prefill_decode_fork_r
         pipeline.shutdown().unwrap();
         oracle.shutdown().unwrap();
     }
+}
+
+#[test]
+fn versioned_process_stage_routes_cross_process_experts_and_keep_owner_custody() {
+    let fixture = Fixture::new();
+    let (mut pipeline, transport) =
+        fixture.pipeline_with_boots(2, fixture.versioned_boots(2, true));
+    let (mut oracle, _) = fixture.pipeline(1, false);
+    pipeline.create_session(SessionId(19)).unwrap();
+    oracle.create_session(SessionId(19)).unwrap();
+    let expected = oracle
+        .forward(SessionId(19), &[1, 2, 3], ForwardPhase::Prefill)
+        .unwrap();
+    let actual = pipeline
+        .forward(SessionId(19), &[1, 2, 3], ForwardPhase::Prefill)
+        .unwrap();
+    same_logits(&actual.logits, &expected.logits);
+    assert_eq!(pipeline.outstanding(), 0);
+    for rank in 0..2 {
+        let stats = transport.process_stats(rank).unwrap();
+        assert_eq!(stats.experts.len(), 2);
+        assert!(stats.experts.iter().all(|expert| expert.calls > 0));
+    }
+    pipeline.release_session(SessionId(19)).unwrap();
+    oracle.release_session(SessionId(19)).unwrap();
+    pipeline.shutdown().unwrap();
+    oracle.shutdown().unwrap();
 }
 
 #[test]
@@ -1334,7 +1395,238 @@ fn external_source_boot_topology_roundtrip_and_invalid_identity_rejection() {
 }
 
 #[test]
-fn expert_external_source_spoof_quarantines_real_process_without_replay() {
+fn numeric_boot_route_entries_reject_replica_without_residency_authority() {
+    use ferrule_runtime::parallel::expert_process::{
+        NUMERIC_EXPERT_WIRE_VERSION, NumericBoot, NumericSource,
+    };
+    let placement = ExpertPlacementFrame {
+        source_scope: ferrule_common::topology::ExpertSourceScope::ExternalStage,
+        source: 7,
+        members: vec![109, 42],
+        entries: Vec::new(),
+        route_entries: Some(
+            [(1, 0, 20, 0, 109), (1, 1, 21, 0, 42), (2, 0, 22, 0, 109)]
+                .into_iter()
+                .map(
+                    |(layer, expert, physical_slot, replica, owner)| ExpertPlacementEntryFrame {
+                        layer,
+                        expert,
+                        physical_slot,
+                        replica,
+                        owner,
+                    },
+                )
+                .collect(),
+        ),
+        placement_epoch: 7,
+        max_tokens: 16,
+        max_bytes: 512,
+        devices: vec![DecoderDevice::Cuda { ordinal: 0 }; 2],
+        timeout_ms: 2000,
+    };
+    let mut boot = NumericBoot {
+        numeric_expert_boot: NUMERIC_EXPERT_WIRE_VERSION,
+        numeric_profile: ferrule_model::transformer::NumericFp8Precision::expert_wire_default(),
+        checkpoint: "metadata-only-route-test".into(),
+        total_layers: 3,
+        layers: 1..3,
+        placement,
+        owner: 109,
+        hidden: 8,
+        max_rows: 16,
+        max_parameter_bytes: 4096,
+        host_max_bytes: 8192,
+        host_max_experts: 2,
+        host_workers: 1,
+        host_headroom_bytes: 0,
+        device_bytes: 8192,
+        workspace_bytes: 4096,
+        expected: vec![
+            NumericSource {
+                layer: 1,
+                expert: 0,
+                identity: [1; 32],
+                content_hash: [2; 32],
+                encoding: 1,
+                generation: 1,
+                bytes: 128,
+            },
+            NumericSource {
+                layer: 2,
+                expert: 0,
+                identity: [3; 32],
+                content_hash: [4; 32],
+                encoding: 1,
+                generation: 1,
+                bytes: 128,
+            },
+        ],
+    };
+    assert_eq!(boot.group().unwrap().placement.epoch().get(), 7);
+    boot.placement
+        .route_entries
+        .as_mut()
+        .unwrap()
+        .push(ExpertPlacementEntryFrame {
+            layer: 1,
+            expert: 0,
+            physical_slot: 99,
+            replica: 1,
+            owner: 42,
+        });
+    let error = boot.group().unwrap_err().to_string();
+    assert!(error.contains("route unsupported"), "{error}");
+    assert!(error.contains("replica=1"), "{error}");
+}
+
+#[test]
+fn expert_process_route_metadata_crosses_real_cpu_owner_and_rejects_stale_or_wrong_routes() {
+    type ExpertOwner = ProcessRankOwner<ExpertBoot, ExpertCommand, ExpertReply>;
+    let fixture = Fixture::new();
+    let (_, mut boot) = fixture.boots(1, true).remove(0);
+    let placement = boot.experts.as_mut().unwrap();
+    let entries = std::mem::take(&mut placement.entries);
+    placement.placement_epoch = 7;
+    placement.route_entries = Some(
+        entries
+            .into_iter()
+            .enumerate()
+            .map(
+                |(physical_slot, (layer, expert, owner))| ExpertPlacementEntryFrame {
+                    layer,
+                    expert,
+                    physical_slot: 100 + physical_slot,
+                    replica: 0,
+                    owner,
+                },
+            )
+            .collect(),
+    );
+    let worker = placement.members[0];
+    let identity = identity(worker);
+    let mut owner = ExpertOwner::spawn(
+        launch(),
+        identity,
+        &ExpertBoot {
+            expert_boot: boot,
+            owner: worker,
+        },
+        options(),
+    )
+    .unwrap();
+    let valid = ExpertCommand::ComputeRoutes {
+        transaction: 71,
+        source: 0,
+        layer: 0,
+        tokens: vec![ExpertRouteTokenFrame {
+            route: ExpertRouteFrame {
+                placement_epoch: 7,
+                layer: 0,
+                expert: 0,
+                physical_slot: 100,
+                replica: 0,
+                owner: worker,
+            },
+            token: ExpertTokenFrame {
+                transaction: 71,
+                sequence: 19,
+                source: 0,
+                row: 0,
+                route: 0,
+                layer: 0,
+                expert: 0,
+                weight: 0.5,
+                values: vec![0.1; 4],
+            },
+        }],
+    };
+    let ExpertReply::RouteResults {
+        owner: actual,
+        tokens,
+    } = owner.execute(tx(71), 0, &valid).unwrap()
+    else {
+        panic!("expected route-aware expert result")
+    };
+    assert_eq!(actual, worker);
+    assert_eq!(tokens[0].route.placement_epoch, 7);
+    assert_eq!(
+        (
+            tokens[0].route.layer,
+            tokens[0].route.expert,
+            tokens[0].route.physical_slot
+        ),
+        (0, 0, 100)
+    );
+    assert!(tokens[0].token.values.iter().all(|value| value.is_finite()));
+    assert_eq!(owner.state(), ProcessOwnerState::Ready);
+
+    for case in 0..6 {
+        let mut command = valid.clone();
+        let label = match case {
+            0 => {
+                let ExpertCommand::ComputeRoutes { tokens, .. } = &mut command else {
+                    unreachable!()
+                };
+                tokens[0].route.placement_epoch = 6;
+                "stale placement epoch"
+            }
+            1 => {
+                let ExpertCommand::ComputeRoutes { tokens, .. } = &mut command else {
+                    unreachable!()
+                };
+                tokens[0].route.placement_epoch = 8;
+                "future placement epoch"
+            }
+            2 => {
+                let ExpertCommand::ComputeRoutes { tokens, .. } = &mut command else {
+                    unreachable!()
+                };
+                tokens[0].route.owner = worker + 1;
+                "wrong owner"
+            }
+            3 => {
+                let ExpertCommand::ComputeRoutes { tokens, .. } = &mut command else {
+                    unreachable!()
+                };
+                tokens[0].route.physical_slot = 999;
+                "wrong physical slot"
+            }
+            4 => {
+                let ExpertCommand::ComputeRoutes { tokens, .. } = &mut command else {
+                    unreachable!()
+                };
+                tokens[0].route.replica = 1;
+                "wrong replica"
+            }
+            5 => {
+                let ExpertCommand::ComputeRoutes { source, .. } = &mut command else {
+                    unreachable!()
+                };
+                *source = 1;
+                "source identity mismatch"
+            }
+            _ => unreachable!(),
+        };
+        let error = owner.execute(tx(71), 0, &command).unwrap_err();
+        assert!(error.is_command_rejection(), "{label}: {error}");
+        assert!(error.to_string().contains(label), "{label}: {error}");
+        assert_eq!(owner.state(), ProcessOwnerState::Ready, "{label}");
+    }
+
+    let mut transaction_mismatch = valid.clone();
+    let ExpertCommand::ComputeRoutes { transaction, .. } = &mut transaction_mismatch else {
+        unreachable!()
+    };
+    *transaction = 72;
+    let error = owner.execute(tx(71), 0, &transaction_mismatch).unwrap_err();
+    assert!(error.is_command_rejection());
+    assert!(error.to_string().contains("transaction"));
+    assert_eq!(owner.state(), ProcessOwnerState::Ready);
+    owner.shutdown().unwrap();
+}
+
+#[test]
+fn expert_external_source_spoof_is_fenced_without_quarantine() {
     type ExpertOwner = ProcessRankOwner<ExpertBoot, ExpertCommand, ExpertReply>;
     let fixture = Fixture::new();
     // Exercise both PP caller ranks and spoof the envelope source, token source,
@@ -1401,18 +1693,17 @@ fn expert_external_source_spoof_quarantines_real_process_without_replay() {
                 _ => unreachable!(),
             }
             let error = owner.execute(tx(71), 0, &spoof).unwrap_err();
-            assert!(error.is_quiescence_unknown(), "{error}");
+            assert!(error.is_command_rejection(), "{error}");
             assert!(
                 error
                     .to_string()
                     .contains("expert source identity mismatch"),
                 "{error}"
             );
-            assert!(matches!(
-                owner.execute(tx(71), 0, &valid),
-                Err(ProcessError::OwnerUnavailable)
-            ));
-            assert!(owner.shutdown().unwrap_err().is_quiescence_unknown());
+            let reply = owner.execute(tx(71), 0, &valid).unwrap();
+            assert!(matches!(reply, ExpertReply::Results { .. }));
+            assert_eq!(owner.state(), ProcessOwnerState::Ready);
+            owner.shutdown().unwrap();
         }
     }
 }

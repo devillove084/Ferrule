@@ -1,9 +1,56 @@
 use super::*;
 
 use crate::build_process_child as numeric_child_artifact;
+use crate::parallel::expert::validate_route_results;
+use ferrule_model::transformer::{
+    ExpertPlacementEpoch, ExpertResult, ExpertRouteMetadata, ExpertRouteResult, ExpertRouteToken,
+    ExpertToken,
+};
 
 #[path = "expert_completion_wait.rs"]
 mod completion_wait_tests;
+
+#[test]
+fn route_result_validator_rejects_mismatched_identity_and_shape() {
+    let context = ExpertDispatchContext {
+        transaction: ExecutionTransactionId::new(901).unwrap(),
+        source_rank: ParallelRankId::new(7),
+        layer: 0,
+    };
+    let token = ExpertToken {
+        transaction: context.transaction,
+        sequence: 1,
+        source_rank: context.source_rank,
+        source_row: 0,
+        route_slot: 0,
+        expert: ferrule_model::moe::ExpertId::new(0, 0),
+        weight: 0.5,
+        payload: vec![0.0; 4],
+    };
+    let metadata = ExpertRouteMetadata::new(
+        token.expert,
+        4,
+        0,
+        ParallelRankId::new(109),
+        ExpertPlacementEpoch::new(7),
+    );
+    let route = ExpertRouteToken {
+        metadata,
+        token: token.clone(),
+    };
+    let mut result = ExpertResult::from_token(&token, ParallelRankId::new(109), vec![0.0; 4]);
+    result.transaction = ExecutionTransactionId::new(902).unwrap();
+    let error = validate_route_results(
+        &[route],
+        vec![ExpertRouteResult { metadata, result }],
+        Some(ParallelRankId::new(109)),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("identity/shape mismatch"), "{error}");
+    assert!(error.contains("transaction=901"), "{error}");
+    assert!(error.contains("slot=4"), "{error}");
+}
 
 fn numeric_child() -> PathBuf {
     static CHILD: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
@@ -28,6 +75,8 @@ fn numeric_boots(
         source: 7,
         members: members.clone(),
         entries: (0..4).map(|e| (1, e, members[e % 2])).collect(),
+        route_entries: None,
+        placement_epoch: 0,
         max_tokens: 4,
         max_bytes: 128,
         devices: vec![
@@ -711,6 +760,8 @@ fn numeric_process_gpu_ep2_ep8_owned_compute_oracle_and_cleanup() {
                     (0..8).map(move |e| (layer, e, members[e % count]))
                 })
                 .collect(),
+            route_entries: None,
+            placement_epoch: 0,
             max_tokens: 8,
             max_bytes: 8 * 8 * 4,
             devices: (0..count)

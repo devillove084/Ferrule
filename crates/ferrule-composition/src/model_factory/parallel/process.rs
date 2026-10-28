@@ -40,6 +40,11 @@ impl Plan {
         let launch = placement
             .process_launch()
             .ok_or_else(|| provider_unsupported("numeric process EP requires process launch"))?;
+        if owners.group.placement.epoch().get() != 0 || owners.group.placement.is_replicated() {
+            return Err(provider_unsupported(
+                "numeric process supports only fixed single-replica placement (epoch 0); versioned or replicated routes require an unsupported residency/provider authority",
+            ));
+        }
         let options = fit_frames(
             placement.process_owner_config()?,
             resources.spec().hidden_size(),
@@ -97,6 +102,8 @@ impl Plan {
             source: owners.group.source_rank.get(),
             members: owners.group.members.iter().map(|rank| rank.get()).collect(),
             entries,
+            route_entries: None,
+            placement_epoch: 0,
             max_tokens: owners.group.limits.max_tokens,
             max_bytes: owners.group.limits.max_bytes,
             devices: placement

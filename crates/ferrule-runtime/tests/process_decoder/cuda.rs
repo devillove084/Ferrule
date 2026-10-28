@@ -175,6 +175,8 @@ fn boots(
                     entries: (start..end)
                         .flat_map(|layer| [(layer, 0, first), (layer, 1, first + 1)])
                         .collect(),
+                    route_entries: None,
+                    placement_epoch: 0,
                     max_tokens: cfg.max_batch_tokens * 2,
                     max_bytes: 4096,
                     devices: (0..2)

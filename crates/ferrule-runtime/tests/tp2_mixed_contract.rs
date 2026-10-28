@@ -149,6 +149,8 @@ mod wire {
                 source: 0,
                 members: vec![2, 3],
                 entries: vec![(0, 0, 2), (0, 1, 3)],
+                route_entries: None,
+                placement_epoch: 0,
                 max_tokens: 2,
                 max_bytes: 64,
                 devices: vec![

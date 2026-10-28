@@ -8,15 +8,21 @@ use ferrule_common::{Error, Result};
 use ferrule_model::decoder::{
     CpuKvView, CpuPagedKvPool, PackedDecoderBatch, PagedKvBackend, StandardGqaPlanes,
 };
-use ferrule_model::transformer::expert_parallel::ExpertParallelRoutedExecutor;
+use ferrule_model::moe::ExpertId;
+use ferrule_model::transformer::expert_parallel::{
+    ExpertDispatchPlan, ExpertParallelRoutedExecutor, ExpertResult, ExpertRouteMetadata,
+    ExpertRouteResult, ExpertRouteToken, ExpertWorker, RoutedSwiGluExecutor, RoutedSwiGluRequest,
+};
 use ferrule_model::transformer::{
-    Attention, LayerSegmentPlan, SegmentInput, SegmentOutput, StandardDecoderSegment,
+    Attention, ExpertPlacementEpoch, HostRows, LayerSegmentPlan, OperatorProgress, Rows, RowsDType,
+    SegmentInput, SegmentOutput, StandardDecoderSegment, UnsupportedOperator,
 };
 
 #[cfg(feature = "cuda")]
 use super::decoder::Retained;
 use super::decoder::{DecoderBoot, DecoderDevice, error};
 use super::decoder_expert::ProcessExperts;
+use crate::parallel::expert::ExpertGroup;
 use crate::parallel::pipeline::{
     BoxedPipelineStageWorker, PipelineExecutionContext, PipelineStage, PipelineStageProgram,
     PipelineStageWorker,
@@ -174,6 +180,197 @@ fn segment_error(e: ferrule_model::transformer::SegmentError) -> Error {
     }
 }
 
+fn validate_stage_context(
+    group: &ExpertGroup,
+    context: ferrule_model::transformer::ExpertDispatchContext,
+) -> Result<()> {
+    if context.source_rank != group.source_rank || !group.layers.contains(&context.layer) {
+        return Err(Error::Execution {
+            message: format!(
+                "process expert route protocol mismatch: transaction={} source={} layer={} expected_source={} expected_layers={:?}",
+                context.transaction.get(),
+                context.source_rank.get(),
+                context.layer,
+                group.source_rank.get(),
+                group.layers
+            ),
+        });
+    }
+    Ok(())
+}
+
+fn unsupported_route(message: impl Into<String>) -> Error {
+    Error::ModelSource {
+        source: Box::new(UnsupportedOperator::new(
+            "process_expert_route",
+            message.into(),
+        )),
+    }
+}
+
+struct ProcessRouteWorker<'a> {
+    experts: &'a mut ProcessExperts,
+    context: ferrule_model::transformer::ExpertDispatchContext,
+    owner: ferrule_common::ParallelRankId,
+}
+impl ExpertWorker for ProcessRouteWorker<'_> {
+    fn owner(&self) -> ferrule_common::ParallelRankId {
+        self.owner
+    }
+
+    fn compute(
+        &mut self,
+        _tokens: &[ferrule_model::transformer::ExpertToken],
+    ) -> Result<Vec<ExpertResult>> {
+        Err(unsupported_route(
+            "process stage route worker requires explicit route metadata",
+        ))
+    }
+
+    fn compute_routes(&mut self, routes: &[ExpertRouteToken]) -> Result<Vec<ExpertRouteResult>> {
+        self.experts.execute_routes(self.context, routes)
+    }
+}
+
+struct ProcessStageExperts<'a> {
+    group: ExpertGroup,
+    experts: &'a mut ProcessExperts,
+}
+impl ProcessStageExperts<'_> {
+    fn route_metadata(
+        &self,
+        context: ferrule_model::transformer::ExpertDispatchContext,
+        routes: &ferrule_model::transformer::RouterRoutes,
+    ) -> Result<Vec<ExpertRouteMetadata>> {
+        if self.group.placement.is_replicated() {
+            return Err(unsupported_route(format!(
+                "replicated route unsupported before process dispatch: transaction={} source={} epoch={}",
+                context.transaction.get(),
+                context.source_rank.get(),
+                self.group.placement.epoch().get()
+            )));
+        }
+        routes
+            .expert_ids()
+            .iter()
+            .map(|&expert| {
+                self.group
+                    .placement
+                    .route_metadata(ExpertId::new(context.layer, expert), 0)
+                    .ok_or_else(|| {
+                        unsupported_route(format!(
+                            "missing current route metadata: transaction={} source={} logical={}:{} epoch={}",
+                            context.transaction.get(),
+                            context.source_rank.get(),
+                            context.layer,
+                            expert,
+                            self.group.placement.epoch().get()
+                        ))
+                    })
+            })
+            .collect()
+    }
+
+    fn execute_versioned(
+        &mut self,
+        request: RoutedSwiGluRequest<'_>,
+        check_active: &mut dyn FnMut(
+            ferrule_common::execution::ExecutionTransactionId,
+        ) -> Result<()>,
+    ) -> Result<OperatorProgress<Rows>> {
+        validate_stage_context(&self.group, request.context)?;
+        let route_metadata = self.route_metadata(request.context, request.routes)?;
+        check_active(request.context.transaction)?;
+        let input = request.input.host()?;
+        if input.dtype() != RowsDType::F32 {
+            return Ok(OperatorProgress::Unsupported(UnsupportedOperator::new(
+                "process_expert_route",
+                "versioned process experts require F32 activations",
+            )));
+        }
+        if request.routes.rows() != input.shape().rows() {
+            return Err(unsupported_route(format!(
+                "versioned route row mismatch: transaction={} source={}",
+                request.context.transaction.get(),
+                request.context.source_rank.get()
+            )));
+        }
+        let plan = ExpertDispatchPlan::new_with_route_metadata(
+            request.context,
+            self.group.members.clone(),
+            &self.group.placement,
+            request.routes,
+            &route_metadata,
+            request.sequences,
+            input.shape().width(),
+            self.group.limits,
+        )?;
+        let buckets = plan.dispatch(input.values(), check_active)?;
+        let mut results = Vec::with_capacity(plan.token_count());
+        for bucket in buckets {
+            if bucket.tokens.is_empty() {
+                continue;
+            }
+            let owner = bucket.owner_rank;
+            let mut worker = ProcessRouteWorker {
+                experts: self.experts,
+                context: request.context,
+                owner,
+            };
+            results.extend(plan.execute_bucket(&bucket, &mut worker, check_active)?);
+        }
+        let output = plan.combine(&results, check_active)?;
+        Ok(OperatorProgress::Ready(Rows::Host(HostRows::new(
+            output.shape(),
+            RowsDType::F32,
+            request.arena,
+            output.into_values(),
+        )?)))
+    }
+}
+impl RoutedSwiGluExecutor for ProcessStageExperts<'_> {
+    fn routed_swiglu(
+        &mut self,
+        request: RoutedSwiGluRequest<'_>,
+        check_active: &mut dyn FnMut(
+            ferrule_common::execution::ExecutionTransactionId,
+        ) -> Result<()>,
+    ) -> Result<OperatorProgress<Rows>> {
+        validate_stage_context(&self.group, request.context)?;
+        if self.group.placement.epoch() == ExpertPlacementEpoch::INITIAL
+            && !self.group.placement.is_replicated()
+        {
+            return ExpertParallelRoutedExecutor::new(
+                self.group.members.clone(),
+                &self.group.placement,
+                self.group.limits,
+                self.experts,
+            )
+            .routed_swiglu(request, check_active);
+        }
+        self.execute_versioned(request, check_active)
+    }
+}
+
+#[cfg(feature = "cuda")]
+struct ContextValidatedExecutor<'a> {
+    group: ExpertGroup,
+    inner: &'a mut dyn RoutedSwiGluExecutor,
+}
+#[cfg(feature = "cuda")]
+impl RoutedSwiGluExecutor for ContextValidatedExecutor<'_> {
+    fn routed_swiglu(
+        &mut self,
+        request: RoutedSwiGluRequest<'_>,
+        check_active: &mut dyn FnMut(
+            ferrule_common::execution::ExecutionTransactionId,
+        ) -> Result<()>,
+    ) -> Result<OperatorProgress<Rows>> {
+        validate_stage_context(&self.group, request.context)?;
+        self.inner.routed_swiglu(request, check_active)
+    }
+}
+
 struct CpuProgram {
     segment: StandardDecoderSegment,
     experts: Experts,
@@ -192,18 +389,17 @@ impl PipelineStageProgram for CpuProgram {
     ) -> Result<SegmentOutput> {
         let mut experts = self.experts.borrow_mut();
         let group = experts.group.clone();
+        let mut routed = ProcessStageExperts {
+            group: group.clone(),
+            experts: &mut experts,
+        };
         self.segment
             .execute_with_experts(
                 batch,
                 input,
                 view,
                 (context.transaction, group.source_rank, context.sequence_ids),
-                &mut ExpertParallelRoutedExecutor::new(
-                    group.members,
-                    &group.placement,
-                    group.limits,
-                    &mut *experts,
-                ),
+                &mut routed,
                 context.check_active,
             )
             .map_err(segment_error)
@@ -245,24 +441,54 @@ impl PipelineStageProgram for CudaProgram {
         let result = {
             let mut experts = self.experts.borrow_mut();
             let group = experts.group.clone();
-            let mut routed = ferrule_model::transformer::CudaExpertParallelRoutedExecutor::new(
-                &mut self.staging,
-                group.members,
-                &group.placement,
-                group.limits,
-                &mut *experts,
-            );
-            self.segment
-                .execute_cuda_bound_with_experts(
-                    batch,
-                    input.into(),
-                    view,
-                    (context.transaction, group.source_rank, context.sequence_ids),
-                    &mut routed,
-                    context.check_active,
-                )
-                .and_then(|output| self.segment.download_output(output))
-                .map_err(segment_error)
+            if group.placement.epoch() == ExpertPlacementEpoch::INITIAL {
+                let mut routed = ferrule_model::transformer::CudaExpertParallelRoutedExecutor::new(
+                    &mut self.staging,
+                    group.members,
+                    &group.placement,
+                    group.limits,
+                    &mut experts,
+                );
+                let mut validated = ContextValidatedExecutor {
+                    group: group.clone(),
+                    inner: &mut routed,
+                };
+                self.segment
+                    .execute_cuda_bound_with_experts(
+                        batch,
+                        input.into(),
+                        view,
+                        (context.transaction, group.source_rank, context.sequence_ids),
+                        &mut validated,
+                        context.check_active,
+                    )
+                    .and_then(|output| self.segment.download_output(output))
+                    .map_err(segment_error)
+            } else {
+                let mut process = ProcessStageExperts {
+                    group: group.clone(),
+                    experts: &mut experts,
+                };
+                let mut host_routed = ferrule_model::transformer::CudaHostRoutedExecutor::new(
+                    Rc::clone(self.staging.operators()),
+                    &mut process,
+                )?;
+                let mut validated = ContextValidatedExecutor {
+                    group: group.clone(),
+                    inner: &mut host_routed,
+                };
+                self.segment
+                    .execute_cuda_bound_with_experts(
+                        batch,
+                        input.into(),
+                        view,
+                        (context.transaction, group.source_rank, context.sequence_ids),
+                        &mut validated,
+                        context.check_active,
+                    )
+                    .and_then(|output| self.segment.download_output(output))
+                    .map_err(segment_error)
+            }
         };
         self.checked(result)
     }

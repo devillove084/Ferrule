@@ -13,6 +13,7 @@ use ferrule_common::execution::ExecutionTransactionId;
 use ferrule_common::topology::ExpertSourceScope;
 use ferrule_common::{Error, ParallelRankId};
 use ferrule_model::execution::ExecutionPrecisionPolicy;
+use ferrule_model::moe::ExpertId;
 use ferrule_model::transformer::{BoundDecoderResources, LayerSegmentPlan};
 use serde::{Deserialize, Serialize};
 
@@ -29,11 +30,15 @@ use crate::parallel::pipeline::{
     PipelineStage, PipelineStageBoot, PipelineStageDescription, PipelineStageWorker,
     PipelineTransport,
 };
-use ferrule_model::transformer::expert_parallel::{ExpertDispatchLimits, ExpertPlacement};
+use ferrule_model::transformer::expert_parallel::{
+    ExpertDispatchContext, ExpertDispatchLimits, ExpertPlacement, ExpertPlacementEntry,
+    ExpertPlacementEpoch, ExpertRouteMetadata,
+};
 
 pub use super::decoder_endpoint::{DecoderBindings, DecoderEndpoint};
 pub use super::decoder_expert::{
-    ExpertBoot, ExpertCommand, ExpertProcessStats, ExpertReply, ExpertTokenFrame,
+    ExpertBoot, ExpertCommand, ExpertProcessStats, ExpertReply, ExpertRouteTokenFrame,
+    ExpertTokenFrame,
 };
 pub use super::decoder_hybrid::{HybridBootFrame, HybridCudaBudgetFrame, HybridLayerFrame};
 pub use super::decoder_wire::{DecoderCommand, DecoderProcessStats, DecoderReply};
@@ -183,7 +188,17 @@ pub struct ExpertPlacementFrame {
     pub source_scope: ExpertSourceScope,
     pub source: u32,
     pub members: Vec<u32>,
+    /// Legacy fixed routes: `(layer, logical expert, owner)`.
     pub entries: Vec<(usize, usize, u32)>,
+    /// Explicit route placement. Its presence is the wire discriminator for
+    /// physical slots, replicas, and a placement epoch; it is never inferred
+    /// from `entries` or from the logical primary owner.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route_entries: Option<Vec<ExpertPlacementEntryFrame>>,
+    /// Zero is reserved for the legacy fixed placement. Explicit route
+    /// entries require a nonzero epoch, so they cannot silently enter legacy.
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub placement_epoch: u64,
     pub max_tokens: usize,
     pub max_bytes: usize,
     /// One device per independent expert owner, in `members` order.
@@ -193,12 +208,125 @@ pub struct ExpertPlacementFrame {
     #[serde(default = "default_expert_timeout_ms")]
     pub timeout_ms: u64,
 }
+
+fn is_zero_u64(value: &u64) -> bool {
+    *value == 0
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExpertPlacementEntryFrame {
+    pub layer: usize,
+    pub expert: usize,
+    pub physical_slot: usize,
+    pub replica: usize,
+    pub owner: u32,
+}
+
+/// Route identity carried by the explicit process expert command. It contains
+/// only model routing metadata: no pointer, event, weight, residency, or
+/// transaction handle crosses the process boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExpertRouteFrame {
+    pub placement_epoch: u64,
+    pub layer: usize,
+    pub expert: usize,
+    pub physical_slot: usize,
+    pub replica: usize,
+    pub owner: u32,
+}
+
+impl ExpertRouteFrame {
+    pub fn encode(metadata: ExpertRouteMetadata) -> Self {
+        Self {
+            placement_epoch: metadata.placement_epoch.get(),
+            layer: metadata.logical_expert.layer,
+            expert: metadata.logical_expert.expert,
+            physical_slot: metadata.physical_slot,
+            replica: metadata.replica,
+            owner: metadata.owner_rank.get(),
+        }
+    }
+
+    pub fn metadata(self) -> ExpertRouteMetadata {
+        ExpertRouteMetadata::new(
+            ExpertId::new(self.layer, self.expert),
+            self.physical_slot,
+            self.replica,
+            ParallelRankId::new(self.owner),
+            ExpertPlacementEpoch::new(self.placement_epoch),
+        )
+    }
+}
+
+/// Validate route metadata at the receiving owner, before model execution.
+/// Error text deliberately includes the route coordinates and epoch so a
+/// rejected stale/future/wrong-owner message is observable without exposing
+/// any storage or device handle.
+pub(crate) fn validate_expert_route(
+    placement: &ExpertPlacement,
+    expected_owner: ParallelRankId,
+    context: ExpertDispatchContext,
+    token_expert: ExpertId,
+    frame: ExpertRouteFrame,
+) -> Result<ExpertRouteMetadata> {
+    let metadata = frame.metadata();
+    let route = format!(
+        "transaction={} source={} logical={}:{} slot={} replica={} owner={} epoch={}",
+        context.transaction.get(),
+        context.source_rank.get(),
+        metadata.logical_expert.layer,
+        metadata.logical_expert.expert,
+        metadata.physical_slot,
+        metadata.replica,
+        metadata.owner_rank.get(),
+        metadata.placement_epoch.get()
+    );
+    if metadata.placement_epoch != placement.epoch() {
+        let reason = if metadata.placement_epoch < placement.epoch() {
+            "stale"
+        } else {
+            "future"
+        };
+        return Err(error(format!(
+            "expert route validation: {reason} placement epoch in {route}, current={}",
+            placement.epoch().get()
+        )));
+    }
+    if metadata.logical_expert != token_expert || metadata.logical_expert.layer != context.layer {
+        return Err(error(format!(
+            "expert route validation: logical expert mismatch in {route}, token={}:{}",
+            token_expert.layer, token_expert.expert
+        )));
+    }
+    let Some(entry) = placement.entry(metadata.logical_expert, metadata.physical_slot) else {
+        return Err(error(format!(
+            "expert route validation: wrong physical slot in {route}"
+        )));
+    };
+    if entry.replica != metadata.replica {
+        return Err(error(format!(
+            "expert route validation: wrong replica in {route}, registered={}",
+            entry.replica
+        )));
+    }
+    if entry.owner_rank != metadata.owner_rank || metadata.owner_rank != expected_owner {
+        return Err(error(format!(
+            "expert route validation: wrong owner in {route}, registered={}, receiver={}",
+            entry.owner_rank.get(),
+            expected_owner.get()
+        )));
+    }
+    Ok(metadata)
+}
 fn default_expert_timeout_ms() -> u64 {
     30_000
 }
 
 impl ExpertPlacementFrame {
     pub fn decode(&self, layers: std::ops::Range<usize>) -> Result<ExpertGroup> {
+        let explicit_entries = self.route_entries.as_deref();
         if self.members.is_empty()
             || self.members.len() > PROCESS_REAPER_CAPACITY
             || (self.devices.len() != self.members.len() && !self.devices.is_empty())
@@ -216,13 +344,40 @@ impl ExpertPlacementFrame {
                 != self.members.len()
             || self.max_tokens == 0
             || self.max_bytes == 0
+            || (explicit_entries.is_none() && self.placement_epoch != 0)
+            || (explicit_entries.is_some() && self.placement_epoch == 0)
+            || (explicit_entries.is_some() && !self.entries.is_empty())
             || self
                 .entries
                 .iter()
                 .any(|(layer, _, owner)| !layers.contains(layer) || !self.members.contains(owner))
+            || explicit_entries.is_some_and(|entries| {
+                entries.iter().any(|entry| {
+                    !layers.contains(&entry.layer) || !self.members.contains(&entry.owner)
+                })
+            })
         {
-            return Err(error("invalid expert placement"));
+            return Err(error(
+                "invalid expert placement or missing explicit versioned route entries",
+            ));
         }
+        let placement = match explicit_entries {
+            Some(entries) => ExpertPlacement::from_entries(
+                ExpertPlacementEpoch::new(self.placement_epoch),
+                entries.iter().map(|entry| ExpertPlacementEntry {
+                    logical_expert: ExpertId::new(entry.layer, entry.expert),
+                    physical_slot: entry.physical_slot,
+                    replica: entry.replica,
+                    owner_rank: ParallelRankId::new(entry.owner),
+                }),
+                self.members.iter().copied().map(ParallelRankId::new),
+            )?,
+            None => ExpertPlacement::new(
+                self.entries
+                    .iter()
+                    .map(|&(l, e, o)| (l, e, ParallelRankId::new(o))),
+            )?,
+        };
         Ok(ExpertGroup {
             source_rank: ParallelRankId::new(self.source),
             members: self
@@ -232,11 +387,7 @@ impl ExpertPlacementFrame {
                 .map(ParallelRankId::new)
                 .collect(),
             layers,
-            placement: ExpertPlacement::new(
-                self.entries
-                    .iter()
-                    .map(|&(l, e, o)| (l, e, ParallelRankId::new(o))),
-            )?,
+            placement,
             limits: ExpertDispatchLimits {
                 max_tokens: self.max_tokens,
                 max_bytes: self.max_bytes,

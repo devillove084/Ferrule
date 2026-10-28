@@ -123,6 +123,8 @@ fn injected_expert_binding_is_geometry_checked_before_payload() {
         entries: (0..3)
             .flat_map(|l| (0..4).map(move |e| (l, e, 109)))
             .collect(),
+        route_entries: None,
+        placement_epoch: 0,
         max_tokens: 4,
         max_bytes: 128,
         devices: vec![DecoderDevice::Cpu],

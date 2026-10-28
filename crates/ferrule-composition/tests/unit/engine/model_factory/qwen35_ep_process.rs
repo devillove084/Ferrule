@@ -7,10 +7,12 @@ use crate::model_factory::qwen35::ep::tests::Fixture;
 use crate::model_factory::qwen35::ep_unsupported;
 use crate::model_factory::qwen35::finish_owner_admission;
 use crate::model_factory::*;
-use ferrule_model::transformer::BoundDecoderResources;
 use ferrule_model::transformer::host_experts::{
     HostCacheMemoryPlan, HostExpertCacheOptions, HostExpertWarmPlan, HostMemoryBudget,
     HostMemorySnapshot, StandardHostStartupMemory,
+};
+use ferrule_model::transformer::{
+    BoundDecoderResources, ExpertPlacement, ExpertPlacementEntry, ExpertPlacementEpoch,
 };
 use ferrule_runtime::parallel::data::PanicQuiescence;
 use ferrule_runtime::parallel::expert_process::{NumericBoot, NumericFrameSize, owned_catalog};
@@ -85,6 +87,63 @@ fn snapshot(bytes: u64) -> HostMemorySnapshot {
         cgroup_limit_bytes: None,
         cgroup_current_bytes: None,
     }
+}
+
+#[test]
+fn numeric_process_factory_rejects_versioned_and_replicated_routes_before_boot() {
+    let f = Fixture::new();
+    let p = placement();
+    let mut owners = scoped(&f, &p, 0..2);
+    let entries = owners
+        .group
+        .placement
+        .entries()
+        .copied()
+        .collect::<Vec<_>>();
+    owners.group.placement = ExpertPlacement::from_entries(
+        ExpertPlacementEpoch::new(7),
+        entries.clone(),
+        owners.group.members.clone(),
+    )
+    .unwrap();
+    let error = match new_plan(&f.request(), &f.resources, &p, &owners, host_options(&f)) {
+        Ok(_) => panic!("versioned numeric process placement was accepted"),
+        Err(error) => error.to_string(),
+    };
+    assert!(error.contains("fixed single-replica"), "{error}");
+    assert!(error.contains("epoch 0"), "{error}");
+
+    let mut replicated = scoped(&f, &p, 0..2);
+    let mut replicated_entries = replicated
+        .group
+        .placement
+        .entries()
+        .copied()
+        .collect::<Vec<_>>();
+    let first = replicated_entries[0];
+    replicated_entries.push(ExpertPlacementEntry {
+        logical_expert: first.logical_expert,
+        physical_slot: first.physical_slot + 10_000,
+        replica: 1,
+        owner_rank: replicated.group.members[1],
+    });
+    replicated.group.placement = ExpertPlacement::from_entries(
+        ExpertPlacementEpoch::INITIAL,
+        replicated_entries,
+        replicated.group.members.clone(),
+    )
+    .unwrap();
+    let error = match new_plan(
+        &f.request(),
+        &f.resources,
+        &p,
+        &replicated,
+        host_options(&f),
+    ) {
+        Ok(_) => panic!("replicated numeric process placement was accepted"),
+        Err(error) => error.to_string(),
+    };
+    assert!(error.contains("fixed single-replica"), "{error}");
 }
 
 #[test]

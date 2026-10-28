@@ -48,6 +48,8 @@ pub(crate) fn costs(owner: usize, frames: &[NumericToken]) -> serde_json::Value 
             source: 0,
             members: (1..=8).collect(),
             entries,
+            route_entries: None,
+            placement_epoch: 0,
             max_tokens: 256,
             max_bytes: 256 * 2048 * 4,
             devices: vec![DecoderDevice::Cuda { ordinal: 0 }; 8],

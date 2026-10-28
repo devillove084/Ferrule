@@ -12,6 +12,8 @@
 //! `NumericFrameSize` and `FrameSizeOverflow` are the public sizing preflight.
 //! Do not import the private `frame_budget` or IPC codec modules. Wire types,
 //! including `NumericProcessStats`, remain available on Unix CPU builds.
+#[cfg(feature = "cuda")]
+use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -23,7 +25,9 @@ use ferrule_common::topology::ExpertSourceScope;
 use ferrule_common::{Error, ParallelRankId, Result};
 #[cfg(any(feature = "cuda", test))]
 use ferrule_model::transformer::ExpertTokenBucket;
-use ferrule_model::transformer::expert_parallel::ExpertDispatchContext;
+#[cfg(feature = "cuda")]
+use ferrule_model::transformer::expert_parallel::ExpertRouteToken;
+use ferrule_model::transformer::expert_parallel::{ExpertDispatchContext, ExpertRouteResult};
 use ferrule_model::transformer::host_experts::{
     ExpertPrewarmMode, HostExpertCacheOptions, HostMemoryBudget,
 };
@@ -41,7 +45,9 @@ use super::expert::{
 /// Numeric batch preflight only; the process codec remains private.
 #[doc(inline)]
 pub use super::frame_budget::{FrameSizeOverflow, NumericFrameSize};
-use super::process::decoder::{DecoderDevice, ExpertPlacementFrame};
+use super::process::decoder::{
+    DecoderDevice, ExpertPlacementFrame, ExpertRouteFrame, validate_expert_route,
+};
 use super::process::*;
 
 #[cfg(feature = "cuda")]
@@ -59,6 +65,10 @@ fn error(message: impl std::fmt::Display) -> Error {
 }
 fn startup(message: impl std::fmt::Display) -> ProcessHandlerError {
     ProcessHandlerError::fenced(ProcessFailureKind::Startup, message.to_string())
+}
+#[cfg(feature = "cuda")]
+fn invalid(message: impl std::fmt::Display) -> ProcessHandlerError {
+    ProcessHandlerError::fenced(ProcessFailureKind::CommandDecode, message.to_string())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -162,6 +172,17 @@ impl NumericBoot {
         }
         let group = self.placement.decode(self.layers.clone())?;
         group.validate()?;
+        if let Some(entry) = group.placement.entries().find(|entry| entry.replica != 0) {
+            return Err(error(format!(
+                "numeric process route unsupported: placement_epoch={} logical={}:{} physical_slot={} replica={} owner={} has no explicit residency/provider authority",
+                group.placement.epoch().get(),
+                entry.logical_expert.layer,
+                entry.logical_expert.expert,
+                entry.physical_slot,
+                entry.replica,
+                entry.owner_rank.get()
+            )));
+        }
         if self.placement.members.contains(&self.placement.source)
             || self.placement.devices.iter().any(|device| !matches!(device, DecoderDevice::Cuda { ordinal } if i32::try_from(*ordinal).is_ok()))
             || !group.members.contains(&ParallelRankId::new(self.owner))
@@ -169,12 +190,11 @@ impl NumericBoot {
             || std::time::Instant::now().checked_add(Duration::from_millis(self.placement.timeout_ms)).is_none()
         { return Err(error("invalid numeric owner/source/device/deadline")); }
         self.host_options().validate()?;
-        let declared = self
+        let declared = group
             .placement
-            .entries
-            .iter()
-            .filter(|(_, _, owner)| *owner == self.owner)
-            .map(|&(l, e, _)| (l, e))
+            .entries()
+            .filter(|entry| entry.owner_rank.get() == self.owner)
+            .map(|entry| (entry.logical_expert.layer, entry.logical_expert.expert))
             .collect::<BTreeSet<_>>();
         let actual = self
             .expected
@@ -326,7 +346,60 @@ impl ValidatedNumericBoot {
         frames: &[NumericToken],
     ) -> Result<()> {
         validate_frame_bounds(&self.boot, frames)?;
-        validate_frame_metadata(&self.group, self.rank.owner, context, frames)
+        validate_frame_metadata(
+            &self.group,
+            self.rank.owner,
+            context,
+            frames.iter().map(|frame| {
+                (
+                    frame.transaction,
+                    ParallelRankId::new(frame.source),
+                    frame.layer,
+                    frame.expert,
+                    frame.values.len(),
+                )
+            }),
+        )
+    }
+
+    fn validate_route_frames(
+        &self,
+        context: ExpertDispatchContext,
+        frames: &[NumericRouteToken],
+    ) -> Result<()> {
+        if frames.len() > self.boot.placement.max_tokens {
+            return Err(error("numeric route token limit"));
+        }
+        let mut seen = BTreeSet::new();
+        for frame in frames {
+            validate_frame_bounds(&self.boot, std::slice::from_ref(&frame.token))?;
+            let token_expert =
+                ferrule_model::moe::ExpertId::new(frame.token.layer, frame.token.expert);
+            validate_expert_route(
+                &self.group.placement,
+                self.rank.owner,
+                context,
+                token_expert,
+                frame.route,
+            )?;
+            if !seen.insert((frame.token.row, frame.token.route)) {
+                return Err(error("duplicate numeric route identity"));
+            }
+        }
+        validate_frame_metadata(
+            &self.group,
+            self.rank.owner,
+            context,
+            frames.iter().map(|frame| {
+                (
+                    frame.token.transaction,
+                    ParallelRankId::new(frame.token.source),
+                    frame.token.layer,
+                    frame.token.expert,
+                    frame.token.values.len(),
+                )
+            }),
+        )
     }
 
     #[cfg(any(feature = "cuda", test))]
@@ -366,6 +439,13 @@ pub struct NumericToken {
     pub expert: usize,
     pub weight: u32,
     pub values: Vec<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NumericRouteToken {
+    pub route: ExpertRouteFrame,
+    pub token: NumericToken,
 }
 impl NumericToken {
     fn encode(t: &ExpertToken) -> Self {
@@ -413,6 +493,26 @@ impl NumericToken {
         })
     }
 }
+
+#[cfg(feature = "cuda")]
+impl NumericRouteToken {
+    fn encode_result(result: &ExpertRouteResult, weight: u32) -> Self {
+        Self {
+            route: ExpertRouteFrame::encode(result.metadata),
+            token: NumericToken {
+                transaction: result.result.transaction.get(),
+                sequence: result.result.sequence,
+                source: result.result.source_rank.get(),
+                row: result.result.source_row,
+                route: result.result.route_slot,
+                layer: result.result.expert.layer,
+                expert: result.result.expert.expert,
+                weight,
+                values: result.result.output.iter().map(|v| v.to_bits()).collect(),
+            },
+        }
+    }
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum NumericCommand {
@@ -422,6 +522,14 @@ pub enum NumericCommand {
         source: u32,
         layer: usize,
         tokens: Vec<NumericToken>,
+    },
+    /// Explicit route-aware process command. Legacy `Compute` remains fixed
+    /// single-replica only and cannot select a logical primary implicitly.
+    ComputeRoutes {
+        transaction: u64,
+        source: u32,
+        layer: usize,
+        tokens: Vec<NumericRouteToken>,
     },
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -451,6 +559,10 @@ pub enum NumericReply {
     Results {
         owner: u32,
         tokens: Vec<NumericToken>,
+    },
+    RouteResults {
+        owner: u32,
+        tokens: Vec<NumericRouteToken>,
     },
 }
 
@@ -536,7 +648,15 @@ fn validate_token_frames(
         &boot.group()?,
         ParallelRankId::new(boot.owner),
         context,
-        frames,
+        frames.iter().map(|frame| {
+            (
+                frame.transaction,
+                ParallelRankId::new(frame.source),
+                frame.layer,
+                frame.expert,
+                frame.values.len(),
+            )
+        }),
     )
 }
 
@@ -567,25 +687,59 @@ fn validate_frame_bounds(boot: &NumericBoot, frames: &[NumericToken]) -> Result<
     Ok(())
 }
 
-fn validate_frame_metadata(
+fn validate_frame_metadata<I>(
     group: &ExpertGroup,
     owner: ParallelRankId,
     context: ExpertDispatchContext,
-    frames: &[NumericToken],
-) -> Result<()> {
-    group.validate_token_metadata(
-        context,
-        owner,
-        frames.iter().map(|frame| {
-            (
-                frame.transaction,
-                ParallelRankId::new(frame.source),
-                frame.layer,
-                frame.expert,
-                frame.values.len(),
-            )
-        }),
-    )
+    frames: I,
+) -> Result<()>
+where
+    I: ExactSizeIterator<Item = (u64, ParallelRankId, usize, usize, usize)>,
+{
+    group.validate_token_metadata(context, owner, frames)
+}
+
+#[cfg(feature = "cuda")]
+fn encode_numeric_route_results(
+    routes: &[ExpertRouteToken],
+    results: Vec<ExpertRouteResult>,
+    owner: ParallelRankId,
+) -> Result<Vec<NumericRouteToken>> {
+    let mut by_route = BTreeMap::new();
+    for result in results {
+        if result.result.owner_rank != owner
+            || by_route
+                .insert((result.result.source_row, result.result.route_slot), result)
+                .is_some()
+        {
+            return Err(error("invalid numeric route computation identity"));
+        }
+    }
+    let mut output = Vec::with_capacity(routes.len());
+    for route in routes {
+        let result = by_route
+            .remove(&(route.token.source_row, route.token.route_slot))
+            .ok_or_else(|| error("missing numeric route computation result"))?;
+        if result.metadata != route.metadata
+            || result.result.transaction != route.token.transaction
+            || result.result.sequence != route.token.sequence
+            || result.result.source_rank != route.token.source_rank
+            || result.result.expert != route.token.expert
+        {
+            return Err(error("numeric route computation identity mismatch"));
+        }
+        if result.result.output.iter().any(|value| !value.is_finite()) {
+            return Err(error("nonfinite numeric route result"));
+        }
+        output.push(NumericRouteToken::encode_result(
+            &result,
+            route.token.weight.to_bits(),
+        ));
+    }
+    if !by_route.is_empty() {
+        return Err(error("extra numeric route computation result"));
+    }
+    Ok(output)
 }
 
 type Owner = ProcessRankOwner<NumericBoot, NumericCommand, NumericReply>;
@@ -722,6 +876,68 @@ impl ReplicaWorker<Command> for Proxy {
                     });
                 }
                 Ok(Reply::Results(results))
+            }
+            Command::ComputeRoutes { context, routes } => {
+                let Some(owner) = routes.first().map(|route| route.metadata.owner_rank) else {
+                    return Ok(Reply::RouteResults(Vec::new()));
+                };
+                if owner != self.validated.rank.owner
+                    || routes.iter().any(|route| {
+                        route.metadata.owner_rank != owner
+                            || route.token.expert.layer != context.layer
+                    })
+                {
+                    return Err(error(
+                        "numeric route validation: process owner/layer mismatch",
+                    ));
+                }
+                let frames = routes
+                    .iter()
+                    .map(|route| NumericRouteToken {
+                        route: ExpertRouteFrame::encode(route.metadata),
+                        token: NumericToken::encode(&route.token),
+                    })
+                    .collect::<Vec<_>>();
+                self.validated.validate_route_frames(context, &frames)?;
+                let command = NumericCommand::ComputeRoutes {
+                    transaction: context.transaction.get(),
+                    source: context.source_rank.get(),
+                    layer: context.layer,
+                    tokens: frames,
+                };
+                let NumericReply::RouteResults { owner, tokens } =
+                    self.call(context.transaction, &command)?
+                else {
+                    self.lose_proof()
+                };
+                if owner != self.validated.boot.owner || tokens.len() != routes.len() {
+                    self.lose_proof();
+                }
+                let mut results = Vec::with_capacity(tokens.len());
+                for (actual, expected) in tokens.into_iter().zip(&routes) {
+                    if actual.route.metadata() != expected.metadata
+                        || !actual
+                            .token
+                            .matches_input(&expected.token, self.validated.boot.hidden)
+                    {
+                        self.lose_proof();
+                    }
+                    let token = actual.token.decode().unwrap_or_else(|_| self.lose_proof());
+                    results.push(ExpertRouteResult {
+                        metadata: expected.metadata,
+                        result: ExpertResult {
+                            transaction: token.transaction,
+                            sequence: token.sequence,
+                            source_rank: token.source_rank,
+                            owner_rank: ParallelRankId::new(owner),
+                            source_row: token.source_row,
+                            route_slot: token.route_slot,
+                            expert: token.expert,
+                            output: token.payload,
+                        },
+                    });
+                }
+                Ok(Reply::RouteResults(results))
             }
         }
     }

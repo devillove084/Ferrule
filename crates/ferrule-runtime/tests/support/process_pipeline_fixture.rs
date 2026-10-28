@@ -148,6 +148,8 @@ impl Fixture {
                             .clone()
                             .flat_map(|layer| [(layer, 0, first), (layer, 1, first + 1)])
                             .collect(),
+                        route_entries: None,
+                        placement_epoch: 0,
                         max_tokens: 32,
                         max_bytes: 4096,
                         devices: vec![DecoderDevice::Cpu; 2],

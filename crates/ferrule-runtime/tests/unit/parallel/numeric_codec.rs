@@ -1,4 +1,4 @@
-use super::super::process::decoder::ExpertPlacementFrame;
+use super::super::process::decoder::{ExpertPlacementEntryFrame, ExpertPlacementFrame};
 use super::*;
 
 pub(super) fn boot() -> NumericBoot {
@@ -13,6 +13,8 @@ pub(super) fn boot() -> NumericBoot {
             source: 7,
             members: vec![109, 42],
             entries: vec![(1, 0, 109), (1, 1, 42), (2, 0, 109)],
+            route_entries: None,
+            placement_epoch: 0,
             max_tokens: 16,
             max_bytes: 16 * 8 * 4,
             devices: vec![DecoderDevice::Cuda { ordinal: 0 }; 2],
@@ -40,6 +42,55 @@ pub(super) fn boot() -> NumericBoot {
             })
             .to_vec(),
     }
+}
+
+#[test]
+fn numeric_boot_uses_explicit_route_entries_and_rejects_unowned_replicas() {
+    let mut versioned = boot();
+    let entries = std::mem::take(&mut versioned.placement.entries);
+    versioned.placement.placement_epoch = 7;
+    versioned.placement.route_entries = Some(
+        entries
+            .into_iter()
+            .enumerate()
+            .map(
+                |(physical_slot, (layer, expert, owner))| ExpertPlacementEntryFrame {
+                    layer,
+                    expert,
+                    physical_slot: 20 + physical_slot,
+                    replica: 0,
+                    owner,
+                },
+            )
+            .collect(),
+    );
+    let group = versioned.group().unwrap();
+    assert_eq!(group.placement.epoch().get(), 7);
+    assert_eq!(
+        group
+            .placement
+            .entry(ferrule_model::moe::ExpertId::new(1, 0), 20)
+            .unwrap()
+            .owner_rank,
+        ParallelRankId::new(109)
+    );
+
+    let mut replicated = versioned.clone();
+    replicated
+        .placement
+        .route_entries
+        .as_mut()
+        .unwrap()
+        .push(ExpertPlacementEntryFrame {
+            layer: 1,
+            expert: 0,
+            physical_slot: 99,
+            replica: 1,
+            owner: 42,
+        });
+    let error = replicated.group().unwrap_err().to_string();
+    assert!(error.contains("route unsupported"), "{error}");
+    assert!(error.contains("replica=1"), "{error}");
 }
 
 pub(super) fn context() -> ExpertDispatchContext {

@@ -156,6 +156,8 @@ fn numeric_v2_boot_reaches_runtime_endpoint_and_never_falls_back_to_linear_or_cp
             source: 3,
             members: vec![7],
             entries: vec![(1, 0, 7)],
+            route_entries: None,
+            placement_epoch: 0,
             max_tokens: 4,
             max_bytes: 4096,
             devices: vec![DecoderDevice::Cuda { ordinal: 0 }],

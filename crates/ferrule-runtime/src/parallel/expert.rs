@@ -28,7 +28,8 @@ use ferrule_model::moe::{ExpertId, catalog::ValidatedExpertCatalog};
 use ferrule_model::transformer::expert_parallel::{
     CpuReferenceExpertWorker, ExpertDispatchContext, ExpertDispatchLimits,
     ExpertParallelRoutedExecutor, ExpertPlacement, ExpertResult, ExpertResultExecutor,
-    ExpertTokenBucket, ExpertWorker, RoutedSwiGluExecutor, RoutedSwiGluRequest,
+    ExpertRouteResult, ExpertRouteToken, ExpertTokenBucket, ExpertWorker, RoutedSwiGluExecutor,
+    RoutedSwiGluRequest,
 };
 use ferrule_model::transformer::{
     BoundDecoderResources, ExpertAvailability, ExpertProvider, OperatorProgress, PreparedSwiGlu,
@@ -183,7 +184,7 @@ impl ExpertGroup {
         Ok(catalog)
     }
 
-    fn validate_context(&self, context: ExpertDispatchContext) -> Result<()> {
+    pub(crate) fn validate_context(&self, context: ExpertDispatchContext) -> Result<()> {
         if context.source_rank != self.source_rank || !self.layers.contains(&context.layer) {
             return Err(error("unknown expert source or layer"));
         }
@@ -287,6 +288,141 @@ pub struct ExpertOwnerStats {
     pub cuda_cache: Option<ferrule_model::transformer::ExpertCacheStats>,
 }
 
+#[derive(Clone, Copy)]
+struct RouteExpectation {
+    metadata: ferrule_model::transformer::ExpertRouteMetadata,
+    transaction: ExecutionTransactionId,
+    sequence: u64,
+    source_rank: ParallelRankId,
+    source_row: usize,
+    route_slot: usize,
+    expert: ExpertId,
+    payload_len: usize,
+}
+
+fn route_expectation(route: &ExpertRouteToken) -> RouteExpectation {
+    RouteExpectation {
+        metadata: route.metadata,
+        transaction: route.token.transaction,
+        sequence: route.token.sequence,
+        source_rank: route.token.source_rank,
+        source_row: route.token.source_row,
+        route_slot: route.token.route_slot,
+        expert: route.token.expert,
+        payload_len: route.token.payload.len(),
+    }
+}
+
+fn validate_expected_route_results(
+    expected: &[RouteExpectation],
+    results: Vec<ExpertRouteResult>,
+    owner: Option<ParallelRankId>,
+) -> Result<Vec<ExpertRouteResult>> {
+    if results.len() != expected.len() {
+        return Err(error(format!(
+            "expert route result count mismatch: expected={} actual={}",
+            expected.len(),
+            results.len()
+        )));
+    }
+    let mut by_route = BTreeMap::new();
+    for result in results {
+        let key = (result.result.source_row, result.result.route_slot);
+        if by_route.insert(key, result).is_some() {
+            return Err(error(format!(
+                "expert route result duplicate: row={} route={}",
+                key.0, key.1
+            )));
+        }
+    }
+    let mut ordered = Vec::with_capacity(expected.len());
+    for route in expected {
+        let key = (route.source_row, route.route_slot);
+        let result = by_route.remove(&key).ok_or_else(|| {
+            error(format!(
+                "expert route result missing: row={} route={}",
+                key.0, key.1
+            ))
+        })?;
+        let actual = &result.result;
+        if result.metadata != route.metadata
+            || actual.transaction != route.transaction
+            || actual.sequence != route.sequence
+            || actual.source_rank != route.source_rank
+            || actual.source_row != route.source_row
+            || actual.route_slot != route.route_slot
+            || actual.expert != route.expert
+            || actual.owner_rank != route.metadata.owner_rank
+            || owner.is_some_and(|expected| expected != actual.owner_rank)
+            || actual.output.len() != route.payload_len
+            || actual.output.iter().any(|value| !value.is_finite())
+        {
+            return Err(error(format!(
+                "expert route result identity/shape mismatch: transaction={} source={} logical={}:{} row={} route={} slot={} replica={} owner={}",
+                route.transaction.get(),
+                route.source_rank.get(),
+                route.expert.layer,
+                route.expert.expert,
+                route.source_row,
+                route.route_slot,
+                route.metadata.physical_slot,
+                route.metadata.replica,
+                route.metadata.owner_rank.get()
+            )));
+        }
+        ordered.push(result);
+    }
+    if !by_route.is_empty() {
+        return Err(error("expert route result has extra identities"));
+    }
+    Ok(ordered)
+}
+
+pub(crate) fn validate_route_results(
+    routes: &[ExpertRouteToken],
+    results: Vec<ExpertRouteResult>,
+    owner: Option<ParallelRankId>,
+) -> Result<Vec<ExpertRouteResult>> {
+    let expected = routes.iter().map(route_expectation).collect::<Vec<_>>();
+    validate_expected_route_results(&expected, results, owner)
+}
+
+#[cfg(feature = "cuda")]
+fn attach_route_results(
+    routes: &[ExpertRouteToken],
+    results: Vec<ExpertResult>,
+    owner: ParallelRankId,
+) -> Result<Vec<ExpertRouteResult>> {
+    let mut by_route = BTreeMap::new();
+    for result in results {
+        let key = (result.source_row, result.route_slot);
+        if by_route.insert(key, result).is_some() {
+            return Err(error(format!(
+                "expert worker route result duplicate: row={} route={}",
+                key.0, key.1
+            )));
+        }
+    }
+    let mut candidates = Vec::with_capacity(routes.len());
+    for route in routes {
+        let key = (route.token.source_row, route.token.route_slot);
+        let result = by_route.remove(&key).ok_or_else(|| {
+            error(format!(
+                "expert worker route result missing: row={} route={}",
+                key.0, key.1
+            ))
+        })?;
+        candidates.push(ExpertRouteResult {
+            metadata: route.metadata,
+            result,
+        });
+    }
+    if !by_route.is_empty() {
+        return Err(error("expert worker route result has extra identities"));
+    }
+    validate_route_results(routes, candidates, Some(owner))
+}
+
 impl ExpertRankWorker {
     pub fn prepare_cpu(
         resources: &BoundDecoderResources,
@@ -353,6 +489,33 @@ impl ExpertRankWorker {
         CpuReferenceExpertWorker::new(self.rank.owner, &self.group.placement, &mut self.experts)
             .compute(tokens)
     }
+
+    pub(super) fn compute_routes(
+        &mut self,
+        routes: &[ExpertRouteToken],
+    ) -> Result<Vec<ExpertRouteResult>> {
+        #[cfg(feature = "cuda")]
+        if self.cuda.is_some() {
+            if routes.iter().any(|route| route.metadata.replica != 0) {
+                return Err(error(
+                    "CUDA process expert route replica requires a replica-aware CUDA worker",
+                ));
+            }
+            let tokens = routes
+                .iter()
+                .map(|route| route.token.clone())
+                .collect::<Vec<_>>();
+            let results = self.compute(&tokens)?;
+            return attach_route_results(routes, results, self.rank.owner);
+        }
+        let results = CpuReferenceExpertWorker::new(
+            self.rank.owner,
+            &self.group.placement,
+            &mut self.experts,
+        )
+        .compute_routes(routes)?;
+        validate_route_results(routes, results, Some(self.rank.owner))
+    }
 }
 
 #[derive(Debug)]
@@ -364,6 +527,10 @@ pub(super) enum Command {
         context: ExpertDispatchContext,
         bucket: ExpertTokenBucket,
     },
+    ComputeRoutes {
+        context: ExpertDispatchContext,
+        routes: Vec<ExpertRouteToken>,
+    },
 }
 
 #[derive(Debug)]
@@ -372,6 +539,7 @@ pub(super) enum Reply {
     #[cfg(unix)]
     ProcessStats(super::expert_process::NumericProcessStats),
     Results(Vec<ExpertResult>),
+    RouteResults(Vec<ExpertRouteResult>),
 }
 
 impl ReplicaWorker<Command> for ExpertRankWorker {
@@ -395,6 +563,14 @@ impl ReplicaWorker<Command> for ExpertRankWorker {
                 if bucket.owner_rank != self.rank.owner {
                     return Err(error("incorrect expert owner"));
                 }
+                if self.group.placement.is_replicated()
+                    || self.group.placement.epoch()
+                        != ferrule_model::transformer::ExpertPlacementEpoch::INITIAL
+                {
+                    return Err(error(
+                        "versioned or replicated placement requires route-aware command",
+                    ));
+                }
                 if request.cancellation.is_requested() {
                     return Err(error("cancelled expert work"));
                 }
@@ -408,6 +584,113 @@ impl ReplicaWorker<Command> for ExpertRankWorker {
                     return Err(error("cancelled expert result"));
                 }
                 Ok(Reply::Results(results))
+            }
+            Command::ComputeRoutes { context, routes } => {
+                if routes.is_empty() {
+                    return Ok(Reply::RouteResults(Vec::new()));
+                }
+                if routes.iter().any(|route| {
+                    route.token.transaction != context.transaction
+                        || route.token.source_rank != context.source_rank
+                        || route.token.expert.layer != context.layer
+                        || route.metadata.owner_rank != self.rank.owner
+                }) {
+                    return Err(error(
+                        "expert route validation: transaction/source/layer/owner mismatch",
+                    ));
+                }
+                let mut identities = BTreeSet::new();
+                let mut bytes = 0usize;
+                for route in &routes {
+                    let metadata = route.metadata;
+                    if metadata.placement_epoch != self.group.placement.epoch() {
+                        let reason = if metadata.placement_epoch < self.group.placement.epoch() {
+                            "stale"
+                        } else {
+                            "future"
+                        };
+                        return Err(error(format!(
+                            "expert route validation: {reason} epoch={} current={} logical={}:{} slot={} replica={} owner={}",
+                            metadata.placement_epoch.get(),
+                            self.group.placement.epoch().get(),
+                            metadata.logical_expert.layer,
+                            metadata.logical_expert.expert,
+                            metadata.physical_slot,
+                            metadata.replica,
+                            metadata.owner_rank.get()
+                        )));
+                    }
+                    let Some(entry) = self
+                        .group
+                        .placement
+                        .entry(metadata.logical_expert, metadata.physical_slot)
+                    else {
+                        return Err(error(format!(
+                            "expert route validation: wrong physical slot logical={}:{} slot={} replica={} owner={}",
+                            metadata.logical_expert.layer,
+                            metadata.logical_expert.expert,
+                            metadata.physical_slot,
+                            metadata.replica,
+                            metadata.owner_rank.get()
+                        )));
+                    };
+                    if entry.replica != metadata.replica {
+                        return Err(error(format!(
+                            "expert route validation: wrong replica logical={}:{} slot={} replica={} registered={}",
+                            metadata.logical_expert.layer,
+                            metadata.logical_expert.expert,
+                            metadata.physical_slot,
+                            metadata.replica,
+                            entry.replica
+                        )));
+                    }
+                    if entry.owner_rank != metadata.owner_rank
+                        || metadata.owner_rank != self.rank.owner
+                    {
+                        return Err(error(format!(
+                            "expert route validation: wrong owner logical={}:{} slot={} replica={} owner={} registered={} receiver={}",
+                            metadata.logical_expert.layer,
+                            metadata.logical_expert.expert,
+                            metadata.physical_slot,
+                            metadata.replica,
+                            metadata.owner_rank.get(),
+                            entry.owner_rank.get(),
+                            self.rank.owner.get()
+                        )));
+                    }
+                    if metadata.logical_expert != route.token.expert
+                        || !identities.insert((route.token.source_row, route.token.route_slot))
+                    {
+                        return Err(error(
+                            "expert route validation: logical or duplicate route identity",
+                        ));
+                    }
+                    bytes =
+                        bytes
+                            .checked_add(
+                                route.token.payload.len().checked_mul(4).ok_or_else(|| {
+                                    error("expert route activation byte overflow")
+                                })?,
+                            )
+                            .ok_or_else(|| error("expert route activation byte overflow"))?;
+                }
+                if routes.len() > self.group.limits.max_tokens
+                    || bytes > self.group.limits.max_bytes
+                {
+                    return Err(error("expert route dispatch exceeds limits"));
+                }
+                self.group.validate_context(context)?;
+                if request.cancellation.is_requested() {
+                    return Err(error("cancelled expert work"));
+                }
+                let results = self.compute_routes(&routes)?;
+                self.stats.calls = self.stats.calls.saturating_add(1);
+                self.stats.tokens = self.stats.tokens.saturating_add(routes.len());
+                self.stats.last_context = Some(context);
+                if request.cancellation.is_requested() {
+                    return Err(error("cancelled expert result"));
+                }
+                Ok(Reply::RouteResults(results))
             }
         }
     }
@@ -650,7 +933,9 @@ impl ExpertRankWorkers {
             .checked_add(1)
             .ok_or_else(|| error("command serial exhausted"))?;
         let outer = match &command {
-            Command::Compute { context, .. } => Some(context.transaction),
+            Command::Compute { context, .. } | Command::ComputeRoutes { context, .. } => {
+                Some(context.transaction)
+            }
             Command::Stats => None,
             #[cfg(unix)]
             Command::ProcessStats => None,
@@ -843,6 +1128,14 @@ impl ExpertRankWorkers {
         if self.closed {
             return Err(error("expert workers closed or unavailable"));
         }
+        if self.group.placement.is_replicated()
+            || self.group.placement.epoch()
+                != ferrule_model::transformer::ExpertPlacementEpoch::INITIAL
+        {
+            return Err(error(
+                "versioned or replicated placement requires explicit route-aware execution",
+            ));
+        }
         check_active(context.transaction)?;
         self.group.validate_context(context)?;
         let mut seen = BTreeSet::new();
@@ -908,6 +1201,14 @@ impl ExpertRankWorkers {
         if self.closed {
             return Err(error("expert workers closed or unavailable"));
         }
+        if self.group.placement.is_replicated()
+            || self.group.placement.epoch()
+                != ferrule_model::transformer::ExpertPlacementEpoch::INITIAL
+        {
+            return Err(error(
+                "versioned or replicated placement requires explicit route-aware execution",
+            ));
+        }
         check_active(context.transaction)?;
         self.group.validate_bucket(context, &bucket)?;
         if bucket.tokens.is_empty() {
@@ -920,6 +1221,121 @@ impl ExpertRankWorkers {
         )? {
             Reply::Results(results) => Ok(results),
             _ => Err(error("unexpected expert reply")),
+        }
+    }
+
+    /// Explicit route-aware transport entry. The model route plan remains the
+    /// authority for route-set membership; this seam revalidates the receiver
+    /// owner/epoch/slot/replica before admission and emits route results.
+    pub fn execute_route_bucket(
+        &mut self,
+        context: ExpertDispatchContext,
+        routes: Vec<ExpertRouteToken>,
+        check_active: &mut dyn FnMut(ExecutionTransactionId) -> Result<()>,
+    ) -> Result<Vec<ExpertRouteResult>> {
+        if self.closed {
+            return Err(error("expert workers closed or unavailable"));
+        }
+        check_active(context.transaction)?;
+        self.group.validate_context(context)?;
+        let Some(owner) = routes.first().map(|route| route.metadata.owner_rank) else {
+            return Ok(Vec::new());
+        };
+        let mut identities = BTreeSet::new();
+        let mut bytes = 0usize;
+        for route in &routes {
+            let metadata = route.metadata;
+            if metadata.owner_rank != owner
+                || metadata.logical_expert != route.token.expert
+                || route.token.transaction != context.transaction
+                || route.token.source_rank != context.source_rank
+                || route.token.expert.layer != context.layer
+            {
+                return Err(error(
+                    "expert route validation: transaction/source/logical/owner mismatch",
+                ));
+            }
+            if metadata.placement_epoch != self.group.placement.epoch() {
+                let reason = if metadata.placement_epoch < self.group.placement.epoch() {
+                    "stale"
+                } else {
+                    "future"
+                };
+                return Err(error(format!(
+                    "expert route validation: {reason} epoch={} current={} logical={}:{} slot={} replica={} owner={}",
+                    metadata.placement_epoch.get(),
+                    self.group.placement.epoch().get(),
+                    metadata.logical_expert.layer,
+                    metadata.logical_expert.expert,
+                    metadata.physical_slot,
+                    metadata.replica,
+                    metadata.owner_rank.get()
+                )));
+            }
+            let Some(entry) = self
+                .group
+                .placement
+                .entry(metadata.logical_expert, metadata.physical_slot)
+            else {
+                return Err(error(format!(
+                    "expert route validation: wrong physical slot logical={}:{} slot={} replica={} owner={}",
+                    metadata.logical_expert.layer,
+                    metadata.logical_expert.expert,
+                    metadata.physical_slot,
+                    metadata.replica,
+                    metadata.owner_rank.get()
+                )));
+            };
+            if entry.replica != metadata.replica {
+                return Err(error(format!(
+                    "expert route validation: wrong replica logical={}:{} slot={} replica={} registered={}",
+                    metadata.logical_expert.layer,
+                    metadata.logical_expert.expert,
+                    metadata.physical_slot,
+                    metadata.replica,
+                    entry.replica
+                )));
+            }
+            if entry.owner_rank != owner {
+                return Err(error(format!(
+                    "expert route validation: wrong owner logical={}:{} slot={} replica={} owner={} registered={}",
+                    metadata.logical_expert.layer,
+                    metadata.logical_expert.expert,
+                    metadata.physical_slot,
+                    metadata.replica,
+                    owner.get(),
+                    entry.owner_rank.get()
+                )));
+            }
+            if !identities.insert((route.token.source_row, route.token.route_slot)) {
+                return Err(error("expert route validation: duplicate route identity"));
+            }
+            bytes = bytes
+                .checked_add(
+                    route
+                        .token
+                        .payload
+                        .len()
+                        .checked_mul(std::mem::size_of::<f32>())
+                        .ok_or_else(|| error("expert route activation byte overflow"))?,
+                )
+                .ok_or_else(|| error("expert route activation byte overflow"))?;
+        }
+        if routes.len() > self.group.limits.max_tokens || bytes > self.group.limits.max_bytes {
+            return Err(error("expert route dispatch exceeds limits"));
+        }
+        let expected = routes.iter().map(route_expectation).collect::<Vec<_>>();
+        let reply = self.call(
+            owner,
+            Command::ComputeRoutes { context, routes },
+            &mut || check_active(context.transaction),
+        )?;
+        let Reply::RouteResults(results) = reply else {
+            self.lose_proof();
+        };
+        match validate_expected_route_results(&expected, results, Some(owner)) {
+            Ok(results) => Ok(results),
+            Err(_) => self.lose_proof(),
         }
     }
 
@@ -1010,6 +1426,18 @@ impl ExpertParallelExecutor {
     }
     pub fn owner_stats(&mut self) -> Result<Vec<ExpertOwnerStats>> {
         self.workers.owner_stats()
+    }
+    /// Route-aware process/worker seam. Callers must supply metadata produced
+    /// by `ExpertDispatchPlan::route_view`; it is not reconstructed from a
+    /// logical expert ID and cannot use the legacy primary route implicitly.
+    pub fn execute_route_bucket(
+        &mut self,
+        context: ExpertDispatchContext,
+        routes: Vec<ExpertRouteToken>,
+        check_active: &mut dyn FnMut(ExecutionTransactionId) -> Result<()>,
+    ) -> Result<Vec<ExpertRouteResult>> {
+        self.workers
+            .execute_route_bucket(context, routes, check_active)
     }
     #[cfg(unix)]
     pub fn process_stats(&mut self) -> Result<Vec<super::expert_process::NumericProcessStats>> {

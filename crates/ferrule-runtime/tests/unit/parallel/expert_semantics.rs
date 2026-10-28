@@ -2,11 +2,38 @@ use super::*;
 use crate::parallel::expert::{ExpertRank, ExpertRankWorker};
 use ferrule_model::moe::catalog::ValidatedExpertCatalog;
 use ferrule_model::transformer::{
-    DecoderLayer, DecoderModelParts, DecoderModelSpec, ExpertDispatchLimits, ExpertPlacement,
-    FeedForward, Moe, UnsupportedOperator,
+    DecoderLayer, DecoderModelParts, DecoderModelSpec, ExpertDispatchContext, ExpertDispatchLimits,
+    ExpertPlacement, ExpertPlacementEpoch, ExpertRouteMetadata, FeedForward, Moe,
+    UnsupportedOperator,
 };
 
 use crate::parallel::expert::numeric_test_fixture as fixture;
+
+#[test]
+fn nonfinite_route_reply_is_a_protocol_failure_for_process_quarantine() {
+    let context = ExpertDispatchContext {
+        transaction: ExecutionTransactionId::new(17).unwrap(),
+        source_rank: ParallelRankId::new(7),
+        layer: 0,
+    };
+    let metadata = ExpertRouteMetadata::new(
+        ferrule_model::moe::ExpertId::new(0, 0),
+        4,
+        0,
+        ParallelRankId::new(109),
+        ExpertPlacementEpoch::new(7),
+    );
+    let error = super::validate_route_reply_values(&[f32::NAN], context, metadata)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("nonfinite expert route reply"), "{error}");
+    assert!(error.contains("transaction=17"), "{error}");
+    assert!(error.contains("source=7"), "{error}");
+    assert!(error.contains("slot=4"), "{error}");
+    assert!(error.contains("replica=0"), "{error}");
+    assert!(error.contains("owner=109"), "{error}");
+    assert!(error.contains("epoch=7"), "{error}");
+}
 
 fn image() -> (tempfile::NamedTempFile, BoundDecoderResources) {
     let file = tempfile::NamedTempFile::new().unwrap();

@@ -181,6 +181,12 @@ mod fixture {
                                 tokens,
                             }))
                         }
+                        NumericCommand::ComputeRoutes { tokens, .. } => {
+                            Ok(Output::Reply(NumericReply::RouteResults {
+                                owner: request.identity.owner.rank.get(),
+                                tokens,
+                            }))
+                        }
                         NumericCommand::Stats => Err(ProcessHandlerError::fenced(
                             ProcessFailureKind::Handler,
                             "stats unavailable",
@@ -370,6 +376,12 @@ mod fixture {
                         self.calls += 1;
                         self.tokens += tokens.len();
                         Ok(NumericReply::Results {
+                            owner: self.boot.owner,
+                            tokens,
+                        })
+                    }
+                    NumericCommand::ComputeRoutes { tokens, .. } => {
+                        Ok(NumericReply::RouteResults {
                             owner: self.boot.owner,
                             tokens,
                         })

@@ -30,7 +30,8 @@ use ferrule_runtime::parallel::pipeline::{
 #[cfg(unix)]
 use ferrule_runtime::parallel::process::decoder::{
     DECODER_WIRE_VERSION, DecoderBoot, DecoderDevice, DecoderPrecision, DecoderRecipeKind,
-    ExpertPlacementFrame, KvConfigFrame, ProcessPipelineTransport, SegmentFrame,
+    ExpertPlacementEntryFrame, ExpertPlacementFrame, KvConfigFrame, ProcessPipelineTransport,
+    SegmentFrame,
 };
 #[cfg(unix)]
 use ferrule_runtime::parallel::process::{
@@ -1392,11 +1393,28 @@ fn process_boots(
                             entries.push((layer, expert, owner.get()));
                         }
                     }
+                    let route_aware =
+                        group.placement.epoch().get() != 0 || group.placement.is_replicated();
+                    let route_entries = route_aware.then(|| {
+                        group
+                            .placement
+                            .entries()
+                            .map(|entry| ExpertPlacementEntryFrame {
+                                layer: entry.logical_expert.layer,
+                                expert: entry.logical_expert.expert,
+                                physical_slot: entry.physical_slot,
+                                replica: entry.replica,
+                                owner: entry.owner_rank.get(),
+                            })
+                            .collect()
+                    });
                     Ok(ExpertPlacementFrame {
                         source_scope: ferrule_common::topology::ExpertSourceScope::ExternalStage,
                         source: group.source_rank.get(),
                         members: group.members.iter().map(|rank| rank.get()).collect(),
-                        entries,
+                        entries: if route_aware { Vec::new() } else { entries },
+                        route_entries,
+                        placement_epoch: group.placement.epoch().get(),
                         max_tokens: group.limits.max_tokens,
                         max_bytes: group.limits.max_bytes,
                         devices: group
