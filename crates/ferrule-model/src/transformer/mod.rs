@@ -49,7 +49,8 @@ pub use connection::{
 };
 pub use expert_parallel::{
     CpuReferenceExpertWorker, ExpertDispatchContext, ExpertDispatchLimits, ExpertDispatchPlan,
-    ExpertPlacement, ExpertResult, ExpertToken, ExpertTokenBucket, ExpertWorker,
+    ExpertPlacement, ExpertPlacementEntry, ExpertPlacementEpoch, ExpertResult, ExpertRouteMetadata,
+    ExpertRouteResult, ExpertRouteToken, ExpertToken, ExpertTokenBucket, ExpertWorker,
 };
 pub use forward::{
     AddResidual, Connected, HyperReduction, LayerMode, LayerRequest, MtpTap, NoPostLayerTap,

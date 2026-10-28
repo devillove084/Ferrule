@@ -13,8 +13,9 @@ use ferrule_model::nn::{
 };
 use ferrule_model::transformer::expert_parallel::{
     CpuExpertResultExecutor, CpuReferenceExpertWorker, ExpertDispatchContext, ExpertDispatchLimits,
-    ExpertDispatchPlan, ExpertParallelRoutedExecutor, ExpertPlacement, ExpertResult,
-    ExpertResultExecutor, ExpertToken, ExpertTokenBucket, ExpertWorker, RoutedSwiGluExecutor,
+    ExpertDispatchPlan, ExpertParallelRoutedExecutor, ExpertPlacement, ExpertPlacementEntry,
+    ExpertPlacementEpoch, ExpertResult, ExpertResultExecutor, ExpertRouteMetadata,
+    ExpertRouteToken, ExpertToken, ExpertTokenBucket, ExpertWorker, RoutedSwiGluExecutor,
     RoutedSwiGluRequest,
 };
 use ferrule_model::transformer::{
@@ -486,6 +487,293 @@ fn placement_members_routes_and_sequences_reject_ambiguous_or_unknown_identities
         ),
         "non-empty",
     );
+}
+
+#[test]
+fn placement_roundtrips_replicas_and_authenticates_versioned_routes() {
+    let fixed = placement();
+    let fixed_entries = fixed.entries().copied().collect::<Vec<_>>();
+    let fixed_roundtrip = ExpertPlacement::from_entries(
+        fixed.epoch(),
+        fixed_entries,
+        fixed.participants().iter().copied(),
+    )
+    .unwrap();
+    assert_eq!(fixed_roundtrip, fixed);
+    assert_eq!(fixed.epoch(), ExpertPlacementEpoch::INITIAL);
+    assert_eq!(fixed.generation(), fixed.epoch());
+
+    let replicated = ExpertPlacement::from_entries(
+        ExpertPlacementEpoch::new(7),
+        [
+            ExpertPlacementEntry {
+                logical_expert: ExpertId::new(LAYER, 0),
+                physical_slot: 4,
+                replica: 0,
+                owner_rank: rank(2),
+            },
+            ExpertPlacementEntry {
+                logical_expert: ExpertId::new(LAYER, 0),
+                physical_slot: 9,
+                replica: 1,
+                owner_rank: rank(7),
+            },
+            ExpertPlacementEntry {
+                logical_expert: ExpertId::new(LAYER, 1),
+                physical_slot: 6,
+                replica: 0,
+                owner_rank: rank(2),
+            },
+        ],
+        [rank(2), rank(3), rank(7)],
+    )
+    .unwrap();
+    assert_eq!(
+        replicated.replicas(ExpertId::new(LAYER, 0)).unwrap().len(),
+        2
+    );
+    assert_eq!(replicated.owner(LAYER, 0), Some(rank(2)));
+    let replica_route = replicated
+        .route_metadata(ExpertId::new(LAYER, 0), 1)
+        .unwrap();
+    assert_eq!(
+        replica_route,
+        ExpertRouteMetadata::new(
+            ExpertId::new(LAYER, 0),
+            9,
+            1,
+            rank(7),
+            ExpertPlacementEpoch::new(7),
+        )
+    );
+
+    let routes = RouterRoutes::new(1, 1, vec![0], vec![1.0]).unwrap();
+    let plan = ExpertDispatchPlan::new_with_route_metadata(
+        context(),
+        members(),
+        &replicated,
+        &routes,
+        &[replica_route],
+        &[100],
+        1,
+        limits(),
+    )
+    .unwrap();
+    assert_eq!(plan.placement_epoch(), ExpertPlacementEpoch::new(7));
+    assert_eq!(
+        plan.route_metadata().collect::<Vec<_>>(),
+        vec![&replica_route]
+    );
+    plan.validate_route_metadata(&replica_route).unwrap();
+    let buckets = plan.dispatch(&[2.0], &mut active).unwrap();
+    assert_eq!(buckets[0].owner_rank, rank(7));
+    assert_eq!(buckets[0].tokens.len(), 1);
+    assert!(buckets[1].tokens.is_empty());
+    assert!(buckets[2].tokens.is_empty());
+}
+
+#[test]
+fn versioned_routes_reject_stale_unknown_and_wrong_owner_metadata() {
+    let placement = ExpertPlacement::from_entries(
+        ExpertPlacementEpoch::new(4),
+        [
+            ExpertPlacementEntry {
+                logical_expert: ExpertId::new(LAYER, 0),
+                physical_slot: 0,
+                replica: 0,
+                owner_rank: rank(2),
+            },
+            ExpertPlacementEntry {
+                logical_expert: ExpertId::new(LAYER, 1),
+                physical_slot: 1,
+                replica: 0,
+                owner_rank: rank(7),
+            },
+        ],
+        members(),
+    )
+    .unwrap();
+    let routes = RouterRoutes::new(1, 1, vec![0], vec![1.0]).unwrap();
+    let metadata = placement
+        .route_metadata(ExpertId::new(LAYER, 0), 0)
+        .unwrap();
+    let plan = ExpertDispatchPlan::new_with_route_metadata(
+        context(),
+        members(),
+        &placement,
+        &routes,
+        &[metadata],
+        &[100],
+        1,
+        limits(),
+    )
+    .unwrap();
+
+    let mut stale = metadata;
+    stale.placement_epoch = ExpertPlacementEpoch::new(3);
+    assert_error(
+        plan.validate_route_metadata(&stale),
+        "stale route placement epoch",
+    );
+    assert_error(
+        ExpertDispatchPlan::new_with_route_metadata(
+            context(),
+            members(),
+            &placement,
+            &routes,
+            &[stale],
+            &[100],
+            1,
+            limits(),
+        ),
+        "stale route placement epoch",
+    );
+    assert_error(
+        ExpertDispatchPlan::new(
+            context(),
+            members(),
+            &placement,
+            &routes,
+            &[100],
+            1,
+            limits(),
+        ),
+        "unversioned RouterRoutes",
+    );
+
+    let mut unknown = metadata;
+    unknown.logical_expert = ExpertId::new(LAYER, 99);
+    assert_error(
+        plan.validate_route_metadata(&unknown),
+        "unknown expert logical id",
+    );
+
+    let mut wrong_owner = metadata;
+    wrong_owner.owner_rank = rank(7);
+    assert_error(
+        plan.validate_route_metadata(&wrong_owner),
+        "route owner mismatch",
+    );
+
+    let next = ExpertPlacement::from_entries(
+        ExpertPlacementEpoch::new(5),
+        placement.entries().copied(),
+        placement.participants().iter().copied(),
+    )
+    .unwrap();
+    placement.validate_update(&next).unwrap();
+    assert_error(placement.validate_update(&placement), "not newer");
+}
+
+#[test]
+fn invalid_physical_slots_and_empty_route_inputs_fail_without_fallback() {
+    let duplicate_slot = [
+        ExpertPlacementEntry {
+            logical_expert: ExpertId::new(LAYER, 0),
+            physical_slot: 3,
+            replica: 0,
+            owner_rank: rank(2),
+        },
+        ExpertPlacementEntry {
+            logical_expert: ExpertId::new(LAYER, 1),
+            physical_slot: 3,
+            replica: 0,
+            owner_rank: rank(7),
+        },
+    ];
+    assert_error(
+        ExpertPlacement::from_entries(ExpertPlacementEpoch::new(1), duplicate_slot, []),
+        "duplicate physical slot",
+    );
+    assert_error(
+        ExpertPlacement::from_entries(
+            ExpertPlacementEpoch::new(1),
+            [ExpertPlacementEntry {
+                logical_expert: ExpertId::new(LAYER, 0),
+                physical_slot: 3,
+                replica: 1,
+                owner_rank: rank(2),
+            }],
+            [],
+        ),
+        "invalid replica mapping",
+    );
+    assert_error(
+        ExpertPlacement::from_entries(
+            ExpertPlacementEpoch::new(1),
+            [
+                ExpertPlacementEntry {
+                    logical_expert: ExpertId::new(LAYER, 0),
+                    physical_slot: 3,
+                    replica: 0,
+                    owner_rank: rank(2),
+                },
+                ExpertPlacementEntry {
+                    logical_expert: ExpertId::new(LAYER, 0),
+                    physical_slot: 4,
+                    replica: 0,
+                    owner_rank: rank(7),
+                },
+            ],
+            [],
+        ),
+        "duplicate replica",
+    );
+    assert_error(
+        ExpertPlacement::from_entries(
+            ExpertPlacementEpoch::new(1),
+            [ExpertPlacementEntry {
+                logical_expert: ExpertId::new(LAYER, 0),
+                physical_slot: 3,
+                replica: 0,
+                owner_rank: rank(2),
+            }],
+            [rank(7)],
+        ),
+        "owner is not an EP participant",
+    );
+
+    let replicated = ExpertPlacement::from_entries(
+        ExpertPlacementEpoch::INITIAL,
+        [
+            ExpertPlacementEntry {
+                logical_expert: ExpertId::new(LAYER, 0),
+                physical_slot: 0,
+                replica: 0,
+                owner_rank: rank(2),
+            },
+            ExpertPlacementEntry {
+                logical_expert: ExpertId::new(LAYER, 0),
+                physical_slot: 1,
+                replica: 1,
+                owner_rank: rank(7),
+            },
+        ],
+        members(),
+    )
+    .unwrap();
+    let one_route = RouterRoutes::new(1, 1, vec![0], vec![1.0]).unwrap();
+    assert_error(
+        ExpertDispatchPlan::new(
+            context(),
+            members(),
+            &replicated,
+            &one_route,
+            &[100],
+            1,
+            limits(),
+        ),
+        "replicated placement requires explicit route metadata",
+    );
+
+    let empty = ExpertPlacement::new([]).unwrap();
+    assert!(empty.participants().is_empty());
+    let routes = RouterRoutes::new(1, 1, vec![0], vec![1.0]).unwrap();
+    assert_error(
+        ExpertDispatchPlan::new(context(), members(), &empty, &routes, &[100], 1, limits()),
+        "unknown expert",
+    );
+    assert!(RouterRoutes::new(0, 1, vec![], vec![]).is_err());
 }
 
 #[test]
@@ -1397,6 +1685,250 @@ fn topk2_two_owners_actual_prepared_swiglu_matches_local_moe_and_weights_once() 
     // Route weights sum to 1.75 in row zero; EP must not renormalize them.
     let silu_times_x = 1.0 / (1.0 + (-1.0f32).exp());
     assert!((output.values()[0] - silu_times_x * (-0.25 + 1.5 * 2.0)).abs() < 1e-6);
+}
+
+#[test]
+fn authenticated_replica_route_executes_at_physical_slot_and_owner() {
+    let fixture = PreparedFixture::new();
+    let placement = ExpertPlacement::from_entries(
+        ExpertPlacementEpoch::new(7),
+        [
+            ExpertPlacementEntry {
+                logical_expert: ExpertId::new(LAYER, 0),
+                physical_slot: 4,
+                replica: 0,
+                owner_rank: rank(2),
+            },
+            ExpertPlacementEntry {
+                logical_expert: ExpertId::new(LAYER, 0),
+                physical_slot: 9,
+                replica: 1,
+                owner_rank: rank(7),
+            },
+            ExpertPlacementEntry {
+                logical_expert: ExpertId::new(LAYER, 1),
+                physical_slot: 6,
+                replica: 0,
+                owner_rank: rank(2),
+            },
+        ],
+        members(),
+    )
+    .unwrap();
+    let routes = RouterRoutes::new(1, 1, vec![0], vec![1.0]).unwrap();
+    let metadata = placement
+        .route_metadata(ExpertId::new(LAYER, 0), 1)
+        .unwrap();
+    let plan = ExpertDispatchPlan::new_with_route_metadata(
+        context(),
+        members(),
+        &placement,
+        &routes,
+        &[metadata],
+        &[100],
+        2,
+        limits(),
+    )
+    .unwrap();
+    let buckets = plan.dispatch(&[1.0, 2.0], &mut active).unwrap();
+    let mut legacy_worker = EchoWorker {
+        owner: rank(7),
+        calls: 0,
+    };
+    assert_error(
+        plan.execute_bucket(&buckets[0], &mut legacy_worker, &mut active),
+        "unsupported route execution",
+    );
+    assert_eq!(legacy_worker.calls, 0);
+
+    let mut provider = LocalProvider::new(&fixture, &[0]);
+    let mut worker = CpuReferenceExpertWorker::new(rank(7), &placement, &mut provider);
+    let results = plan
+        .execute_bucket(&buckets[0], &mut worker, &mut active)
+        .unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(provider.calls, [ExpertId::new(LAYER, 0)]);
+
+    let token = buckets[0].tokens[0].clone();
+    for (owner, metadata, expected) in [
+        (rank(2), metadata, "route owner mismatch at CPU worker"),
+        (
+            rank(7),
+            ExpertRouteMetadata {
+                physical_slot: 6,
+                ..metadata
+            },
+            "unknown physical expert slot at CPU worker",
+        ),
+        (
+            rank(7),
+            ExpertRouteMetadata {
+                replica: 0,
+                ..metadata
+            },
+            "route replica mismatch at CPU worker",
+        ),
+        (
+            rank(7),
+            ExpertRouteMetadata {
+                placement_epoch: ExpertPlacementEpoch::new(6),
+                ..metadata
+            },
+            "stale route placement epoch at CPU worker",
+        ),
+        (
+            rank(7),
+            ExpertRouteMetadata {
+                placement_epoch: ExpertPlacementEpoch::new(8),
+                ..metadata
+            },
+            "route placement epoch does not match CPU worker placement",
+        ),
+    ] {
+        let mut provider = LocalProvider::new(&fixture, &[0]);
+        let mut worker = CpuReferenceExpertWorker::new(owner, &placement, &mut provider);
+        assert_error(
+            worker.compute_routes(&[ExpertRouteToken {
+                metadata,
+                token: token.clone(),
+            }]),
+            expected,
+        );
+        assert!(provider.calls.is_empty());
+    }
+}
+
+#[test]
+fn versioned_routed_executor_uses_route_aware_worker_path() {
+    let fixture = PreparedFixture::new();
+    let placement = ExpertPlacement::from_entries(
+        ExpertPlacementEpoch::new(7),
+        [
+            ExpertPlacementEntry {
+                logical_expert: ExpertId::new(LAYER, 0),
+                physical_slot: 4,
+                replica: 0,
+                owner_rank: rank(2),
+            },
+            ExpertPlacementEntry {
+                logical_expert: ExpertId::new(LAYER, 0),
+                physical_slot: 9,
+                replica: 1,
+                owner_rank: rank(7),
+            },
+            ExpertPlacementEntry {
+                logical_expert: ExpertId::new(LAYER, 1),
+                physical_slot: 6,
+                replica: 0,
+                owner_rank: rank(2),
+            },
+        ],
+        members(),
+    )
+    .unwrap();
+    let routes = RouterRoutes::new(1, 1, vec![0], vec![1.0]).unwrap();
+    let metadata = placement
+        .route_metadata(ExpertId::new(LAYER, 0), 1)
+        .unwrap();
+
+    let run = |metadata: ExpertRouteMetadata| {
+        let input = Rows::Host(
+            HostRows::new(
+                RowsShape::new(1, 2).unwrap(),
+                RowsDType::F32,
+                None,
+                vec![1.0, 2.0],
+            )
+            .unwrap(),
+        );
+        let request = RoutedSwiGluRequest {
+            context: context(),
+            sequences: &[100],
+            input: &input,
+            routes: &routes,
+            arena: Some(RowsArenaId::new(91)),
+        };
+        let mut provider = LocalProvider::new(&fixture, &[0]);
+        let mut worker = CpuReferenceExpertWorker::new(rank(7), &placement, &mut provider);
+        let mut executor = ExpertParallelRoutedExecutor::new_versioned(
+            members(),
+            &placement,
+            limits(),
+            &mut worker,
+        );
+        executor.execute_versioned(request, &[metadata], &mut active)
+    };
+
+    let output = ready_host(run(metadata).unwrap());
+    assert_eq!(output.shape(), RowsShape::new(1, 2).unwrap());
+    assert_eq!(output.arena(), Some(RowsArenaId::new(91)));
+
+    for (metadata, expected) in [
+        (
+            ExpertRouteMetadata {
+                owner_rank: rank(2),
+                ..metadata
+            },
+            "route owner mismatch",
+        ),
+        (
+            ExpertRouteMetadata {
+                physical_slot: 6,
+                ..metadata
+            },
+            "unknown physical expert slot",
+        ),
+        (
+            ExpertRouteMetadata {
+                replica: 0,
+                ..metadata
+            },
+            "route replica mismatch",
+        ),
+        (
+            ExpertRouteMetadata {
+                placement_epoch: ExpertPlacementEpoch::new(6),
+                ..metadata
+            },
+            "stale route placement epoch",
+        ),
+        (
+            ExpertRouteMetadata {
+                placement_epoch: ExpertPlacementEpoch::new(8),
+                ..metadata
+            },
+            "route placement epoch",
+        ),
+    ] {
+        assert_error(run(metadata), expected);
+    }
+
+    let input = Rows::Host(
+        HostRows::new(
+            RowsShape::new(1, 2).unwrap(),
+            RowsDType::F32,
+            None,
+            vec![1.0, 2.0],
+        )
+        .unwrap(),
+    );
+    let request = RoutedSwiGluRequest {
+        context: context(),
+        sequences: &[100],
+        input: &input,
+        routes: &routes,
+        arena: None,
+    };
+    let mut legacy_results = RecordingResults::default();
+    let mut legacy_executor =
+        ExpertParallelRoutedExecutor::new(members(), &placement, limits(), &mut legacy_results);
+    assert!(matches!(
+        legacy_executor
+            .execute_versioned(request, &[metadata], &mut active)
+            .unwrap(),
+        OperatorProgress::Unsupported(_)
+    ));
+    assert!(legacy_results.calls.is_empty());
 }
 
 #[test]

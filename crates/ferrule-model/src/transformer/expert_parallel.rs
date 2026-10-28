@@ -12,6 +12,8 @@
 //! transaction authority to reject cancelled or unknown identities. This module
 //! has no transaction state machine or replay registry. The caller must serialize
 //! cancellation with publication; a synchronous worker cannot be interrupted.
+//! EP members here are an attached activation/expert group only; they do not
+//! establish tensor-parallel or KV ownership semantics.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::mem::size_of;
@@ -27,27 +29,266 @@ use super::{
     HostRows, OperatorProgress, RouterRoutes, Rows, RowsDType, RowsShape, UnsupportedOperator,
 };
 
-/// Immutable `(layer, expert) -> owner rank` mapping. No weight data is stored.
+type RouteIdentityKey = (ExpertId, usize, usize, ParallelRankId, ExpertPlacementEpoch);
+
+fn route_identity_key(metadata: &ExpertRouteMetadata) -> RouteIdentityKey {
+    (
+        metadata.logical_expert,
+        metadata.physical_slot,
+        metadata.replica,
+        metadata.owner_rank,
+        metadata.placement_epoch,
+    )
+}
+
+/// Monotonic identity for a logical-to-physical expert placement.
+///
+/// This is deliberately separate from `ExecutionTransactionId`: an epoch
+/// describes the placement contract observed by a route, not completion,
+/// cancellation, or publication authority.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ExpertPlacementEpoch(u64);
+
+impl ExpertPlacementEpoch {
+    pub const INITIAL: Self = Self(0);
+
+    pub const fn new(value: u64) -> Self {
+        Self(value)
+    }
+
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+}
+
+/// One physical slot for a logical expert. The slot is an activation-routing
+/// identity only; it does not carry weights or change residency authority.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExpertPlacementEntry {
+    pub logical_expert: ExpertId,
+    pub physical_slot: usize,
+    pub replica: usize,
+    pub owner_rank: ParallelRankId,
+}
+
+/// Versioned route identity at the logical -> physical slot -> owner seam.
+///
+/// `RouterRoutes` remains the existing model-router output. This metadata is
+/// the EP attachment's authenticated interpretation of one selected route.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExpertRouteMetadata {
+    pub logical_expert: ExpertId,
+    pub physical_slot: usize,
+    pub replica: usize,
+    pub owner_rank: ParallelRankId,
+    pub placement_epoch: ExpertPlacementEpoch,
+}
+
+impl ExpertRouteMetadata {
+    pub const fn new(
+        logical_expert: ExpertId,
+        physical_slot: usize,
+        replica: usize,
+        owner_rank: ParallelRankId,
+        placement_epoch: ExpertPlacementEpoch,
+    ) -> Self {
+        Self {
+            logical_expert,
+            physical_slot,
+            replica,
+            owner_rank,
+            placement_epoch,
+        }
+    }
+}
+
+/// Immutable logical expert -> physical replica/slot -> owner description.
+/// No weight data, migration state, or transaction state is stored.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExpertPlacement {
-    owners: BTreeMap<ExpertId, ParallelRankId>,
+    epoch: ExpertPlacementEpoch,
+    replicas: BTreeMap<ExpertId, Vec<ExpertPlacementEntry>>,
+    slots: BTreeMap<usize, ExpertPlacementEntry>,
+    participants: BTreeSet<ParallelRankId>,
 }
 
 impl ExpertPlacement {
+    /// Compatibility constructor for the original fixed one-slot-per-expert
+    /// mapping. Physical slots are assigned deterministically by
+    /// `(layer, logical expert, owner)` and the fixed map has the initial
+    /// epoch; it never invents a fresh epoch for a route.
     pub fn new(entries: impl IntoIterator<Item = (usize, usize, ParallelRankId)>) -> Result<Self> {
-        let mut owners = BTreeMap::new();
-        for (layer, expert, owner) in entries {
-            if owners.insert(ExpertId::new(layer, expert), owner).is_some() {
-                return Err(protocol_error(format!(
-                    "duplicate placement for expert {layer}:{expert}"
-                )));
-            }
-        }
-        Ok(Self { owners })
+        let mut logical_seen = BTreeSet::new();
+        let mut entries = entries.into_iter().collect::<Vec<_>>();
+        entries.sort_unstable_by_key(|&(layer, expert, owner_rank)| (layer, expert, owner_rank));
+        let entries = entries
+            .into_iter()
+            .enumerate()
+            .map(|(physical_slot, (layer, expert, owner_rank))| {
+                let logical_expert = ExpertId::new(layer, expert);
+                if !logical_seen.insert(logical_expert) {
+                    return Err(protocol_error(format!(
+                        "duplicate placement for expert {layer}:{expert}"
+                    )));
+                }
+                Ok(ExpertPlacementEntry {
+                    logical_expert,
+                    physical_slot,
+                    replica: 0,
+                    owner_rank,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Self::from_entries(ExpertPlacementEpoch::INITIAL, entries, [])
     }
 
+    /// Build a versioned map with explicit physical slots and replica indexes.
+    ///
+    /// `participants` is the attached EP group. An empty participant iterator
+    /// means "infer the group from owners", which keeps fixed maps concise.
+    /// Every physical slot and `(logical expert, replica)` pair must be unique;
+    /// replica indexes must be contiguous from zero for each logical expert.
+    pub fn from_entries(
+        epoch: ExpertPlacementEpoch,
+        entries: impl IntoIterator<Item = ExpertPlacementEntry>,
+        participants: impl IntoIterator<Item = ParallelRankId>,
+    ) -> Result<Self> {
+        let mut replicas = BTreeMap::<ExpertId, Vec<ExpertPlacementEntry>>::new();
+        let mut slots = BTreeMap::new();
+        let mut owner_participants = BTreeSet::new();
+        for entry in entries {
+            if slots.insert(entry.physical_slot, entry).is_some() {
+                return Err(protocol_error(format!(
+                    "duplicate physical slot {}",
+                    entry.physical_slot
+                )));
+            }
+            owner_participants.insert(entry.owner_rank);
+            replicas
+                .entry(entry.logical_expert)
+                .or_default()
+                .push(entry);
+        }
+
+        for (logical_expert, entries) in &mut replicas {
+            entries.sort_unstable_by_key(|entry| entry.replica);
+            let mut seen_replicas = BTreeSet::new();
+            for (expected_replica, entry) in entries.iter().enumerate() {
+                if !seen_replicas.insert(entry.replica) {
+                    return Err(protocol_error(format!(
+                        "duplicate replica {} for expert {}:{}",
+                        entry.replica, logical_expert.layer, logical_expert.expert
+                    )));
+                }
+                if entry.replica != expected_replica {
+                    return Err(protocol_error(format!(
+                        "invalid replica mapping for expert {}:{}",
+                        logical_expert.layer, logical_expert.expert
+                    )));
+                }
+            }
+        }
+
+        let requested_participants = participants.into_iter().collect::<BTreeSet<_>>();
+        let participants = if requested_participants.is_empty() {
+            owner_participants
+        } else {
+            if !owner_participants.is_subset(&requested_participants) {
+                return Err(protocol_error("placement owner is not an EP participant"));
+            }
+            requested_participants
+        };
+
+        Ok(Self {
+            epoch,
+            replicas,
+            slots,
+            participants,
+        })
+    }
+
+    pub fn epoch(&self) -> ExpertPlacementEpoch {
+        self.epoch
+    }
+
+    /// Alias used by callers that describe placement versions as generations.
+    pub fn generation(&self) -> ExpertPlacementEpoch {
+        self.epoch
+    }
+
+    pub fn is_replicated(&self) -> bool {
+        self.replicas.values().any(|entries| entries.len() > 1)
+    }
+
+    pub fn participants(&self) -> &BTreeSet<ParallelRankId> {
+        &self.participants
+    }
+
+    pub fn logical_experts(&self) -> impl Iterator<Item = &ExpertId> {
+        self.replicas.keys()
+    }
+
+    pub fn entries(&self) -> impl Iterator<Item = &ExpertPlacementEntry> {
+        self.replicas.values().flat_map(|entries| entries.iter())
+    }
+
+    pub fn replicas(&self, logical_expert: ExpertId) -> Option<&[ExpertPlacementEntry]> {
+        self.replicas.get(&logical_expert).map(Vec::as_slice)
+    }
+
+    pub fn entry(
+        &self,
+        logical_expert: ExpertId,
+        physical_slot: usize,
+    ) -> Option<&ExpertPlacementEntry> {
+        self.slots
+            .get(&physical_slot)
+            .filter(|entry| entry.logical_expert == logical_expert)
+    }
+
+    pub fn primary(&self, logical_expert: ExpertId) -> Option<&ExpertPlacementEntry> {
+        self.replicas.get(&logical_expert)?.first()
+    }
+
+    /// Compatibility lookup. For replicated logical experts this returns the
+    /// deterministic primary replica (replica zero); callers needing a
+    /// specific copy must use `replicas` or `entry`.
     pub fn owner(&self, layer: usize, expert: usize) -> Option<ParallelRankId> {
-        self.owners.get(&ExpertId::new(layer, expert)).copied()
+        self.primary(ExpertId::new(layer, expert))
+            .map(|entry| entry.owner_rank)
+    }
+
+    pub fn route_metadata(
+        &self,
+        logical_expert: ExpertId,
+        replica: usize,
+    ) -> Option<ExpertRouteMetadata> {
+        let entry = self.replicas(logical_expert)?.get(replica)?;
+        Some(ExpertRouteMetadata::new(
+            entry.logical_expert,
+            entry.physical_slot,
+            entry.replica,
+            entry.owner_rank,
+            self.epoch,
+        ))
+    }
+
+    /// Validate a descriptive placement update without performing migration,
+    /// changing residency, or changing owner authority.
+    pub fn validate_update(&self, next: &Self) -> Result<()> {
+        if next.epoch <= self.epoch {
+            return Err(protocol_error(format!(
+                "placement epoch {} is not newer than {}",
+                next.epoch.get(),
+                self.epoch.get()
+            )));
+        }
+        if self.replicas.keys().ne(next.replicas.keys()) {
+            return Err(protocol_error(
+                "placement update changed the logical expert set",
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -113,6 +354,25 @@ impl ExpertResult {
     }
 }
 
+/// An authenticated route view paired with the legacy activation token.
+/// `ExpertDispatchPlan::route_view` is the only plan-owned constructor used by
+/// execution; callers cannot make a stale or unknown view valid by changing the
+/// legacy token identity alone.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExpertRouteToken {
+    pub metadata: ExpertRouteMetadata,
+    pub token: ExpertToken,
+}
+
+/// A route-aware worker reply. The metadata is checked before the legacy
+/// `ExpertResult` is released to combine, so a replica cannot be collapsed to
+/// the logical primary by an accidental worker implementation.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExpertRouteResult {
+    pub metadata: ExpertRouteMetadata,
+    pub result: ExpertResult,
+}
+
 /// Dispatch retains a bucket for every member, including owners with no work.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExpertTokenBucket {
@@ -123,6 +383,7 @@ pub struct ExpertTokenBucket {
 #[derive(Debug)]
 struct ExpectedRoute {
     expert: ExpertId,
+    metadata: ExpertRouteMetadata,
     sequence: u64,
     owner_index: usize,
     weight: f32,
@@ -138,9 +399,13 @@ struct ExpectedRoute {
 #[derive(Debug)]
 pub struct ExpertDispatchPlan {
     context: ExpertDispatchContext,
+    placement_epoch: ExpertPlacementEpoch,
+    placement_slots: BTreeMap<(ExpertId, usize), ExpertPlacementEntry>,
+    logical_experts: BTreeSet<ExpertId>,
     members: Vec<ParallelRankId>,
     owner_counts: Vec<usize>,
     routes: Vec<ExpectedRoute>,
+    route_identity_keys: BTreeSet<RouteIdentityKey>,
     rows: usize,
     top_k: usize,
     width: usize,
@@ -166,6 +431,57 @@ impl ExpertDispatchPlan {
         width: usize,
         limits: ExpertDispatchLimits,
     ) -> Result<Self> {
+        if placement.is_replicated() {
+            return Err(protocol_error(
+                "replicated placement requires explicit route metadata; legacy new cannot select a primary",
+            ));
+        }
+        if placement.epoch() != ExpertPlacementEpoch::INITIAL {
+            return Err(protocol_error(
+                "unversioned RouterRoutes require the initial fixed placement; use new_with_route_metadata",
+            ));
+        }
+        let metadata = routes
+            .expert_ids()
+            .iter()
+            .map(|&expert| {
+                let logical_expert = ExpertId::new(context.layer, expert);
+                let entry = placement.primary(logical_expert).ok_or_else(|| {
+                    protocol_error(format!(
+                        "unknown expert logical id {}:{expert}",
+                        context.layer
+                    ))
+                })?;
+                Ok(ExpertRouteMetadata::new(
+                    logical_expert,
+                    entry.physical_slot,
+                    entry.replica,
+                    entry.owner_rank,
+                    placement.epoch(),
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Self::new_with_route_metadata(
+            context, members, placement, routes, &metadata, sequences, width, limits,
+        )
+    }
+
+    /// Construct a plan from explicit logical -> physical route metadata.
+    ///
+    /// This is the versioned boundary for a dynamic placement description.
+    /// The old `new` constructor resolves the deterministic primary replica for
+    /// fixed maps; it never manufactures a fresh epoch. No migration or weight
+    /// movement is performed here.
+    pub fn new_with_route_metadata(
+        context: ExpertDispatchContext,
+        members: Vec<ParallelRankId>,
+        placement: &ExpertPlacement,
+        routes: &RouterRoutes,
+        route_metadata: &[ExpertRouteMetadata],
+        sequences: &[u64],
+        width: usize,
+        limits: ExpertDispatchLimits,
+    ) -> Result<Self> {
         if members.is_empty() || width == 0 {
             return Err(protocol_error(
                 "members and activation width must be non-empty",
@@ -177,6 +493,11 @@ impl ExpertDispatchPlan {
             ));
         }
         let token_count = checked_mul(routes.rows(), routes.top_k())?;
+        if route_metadata.len() != token_count {
+            return Err(protocol_error(
+                "one placement route metadata entry is required per route",
+            ));
+        }
         if token_count > limits.max_tokens {
             return Err(protocol_error("routed token limit exceeded"));
         }
@@ -191,12 +512,20 @@ impl ExpertDispatchPlan {
                 return Err(protocol_error("duplicate dispatch member"));
             }
         }
+        let placement_slots = placement
+            .entries()
+            .map(|entry| ((entry.logical_expert, entry.physical_slot), *entry))
+            .collect::<BTreeMap<_, _>>();
+        let logical_experts = placement
+            .logical_experts()
+            .copied()
+            .collect::<BTreeSet<_>>();
         let mut owner_counts = vec![0; members.len()];
         let mut expected = Vec::with_capacity(token_count);
         for (row, &sequence) in sequences.iter().enumerate() {
             let (experts, weights) = routes.row(row)?;
             let mut seen = BTreeSet::new();
-            for (&expert, &weight) in experts.iter().zip(weights) {
+            for (route_slot, (&expert, &weight)) in experts.iter().zip(weights).enumerate() {
                 if !seen.insert(expert) {
                     return Err(protocol_error(format!(
                         "duplicate expert in source row {row}"
@@ -207,26 +536,66 @@ impl ExpertDispatchPlan {
                         "route weight must be finite and non-negative",
                     ));
                 }
-                let owner = placement.owner(context.layer, expert).ok_or_else(|| {
-                    protocol_error(format!("unknown expert {}:{expert}", context.layer))
-                })?;
+                let logical_expert = ExpertId::new(context.layer, expert);
+                let metadata = route_metadata[row * routes.top_k() + route_slot];
+                if metadata.placement_epoch != placement.epoch() {
+                    if metadata.placement_epoch < placement.epoch() {
+                        return Err(protocol_error(format!(
+                            "stale route placement epoch {} (current {})",
+                            metadata.placement_epoch.get(),
+                            placement.epoch().get()
+                        )));
+                    }
+                    return Err(protocol_error(format!(
+                        "route placement epoch {} does not match current {}",
+                        metadata.placement_epoch.get(),
+                        placement.epoch().get()
+                    )));
+                }
+                if metadata.logical_expert != logical_expert {
+                    return Err(protocol_error("route logical expert mismatch"));
+                }
+                if placement.replicas(logical_expert).is_none() {
+                    return Err(protocol_error(format!(
+                        "unknown expert logical id {}:{expert}",
+                        context.layer
+                    )));
+                }
+                let entry = placement
+                    .entry(logical_expert, metadata.physical_slot)
+                    .ok_or_else(|| protocol_error("unknown physical expert slot"))?;
+                if entry.replica != metadata.replica {
+                    return Err(protocol_error("route replica mismatch"));
+                }
+                if entry.owner_rank != metadata.owner_rank {
+                    return Err(protocol_error("route owner mismatch"));
+                }
                 let owner_index = *member_indexes
-                    .get(&owner)
+                    .get(&metadata.owner_rank)
                     .ok_or_else(|| protocol_error("unknown expert owner rank"))?;
                 owner_counts[owner_index] += 1;
                 expected.push(ExpectedRoute {
-                    expert: ExpertId::new(context.layer, expert),
+                    expert: logical_expert,
+                    metadata,
                     sequence,
                     owner_index,
                     weight,
                 });
             }
         }
+        let route_identity_keys = expected
+            .iter()
+            .map(|route| route_identity_key(&route.metadata))
+            .collect();
         Ok(Self {
             context,
+            placement_epoch: placement.epoch(),
+            placement_slots,
+            logical_experts,
             members,
             owner_counts,
             routes: expected,
+            route_identity_keys,
             rows: routes.rows(),
             top_k: routes.top_k(),
             width,
@@ -236,6 +605,59 @@ impl ExpertDispatchPlan {
 
     pub fn context(&self) -> ExpertDispatchContext {
         self.context
+    }
+
+    pub fn placement_epoch(&self) -> ExpertPlacementEpoch {
+        self.placement_epoch
+    }
+
+    pub fn route_metadata(&self) -> impl Iterator<Item = &ExpertRouteMetadata> {
+        self.routes.iter().map(|route| &route.metadata)
+    }
+
+    /// Authenticate a route identity against this immutable plan before it is
+    /// attached to a transport or owner bucket. Epoch mismatch is checked
+    /// before logical/physical identity so an old route cannot be refreshed by
+    /// merely matching the current owner.
+    pub fn validate_route_metadata(&self, metadata: &ExpertRouteMetadata) -> Result<()> {
+        if metadata.placement_epoch != self.placement_epoch {
+            if metadata.placement_epoch < self.placement_epoch {
+                return Err(protocol_error(format!(
+                    "stale route placement epoch {} (current {})",
+                    metadata.placement_epoch.get(),
+                    self.placement_epoch.get()
+                )));
+            }
+            return Err(protocol_error(format!(
+                "route placement epoch {} does not match current {}",
+                metadata.placement_epoch.get(),
+                self.placement_epoch.get()
+            )));
+        }
+        if !self.logical_experts.contains(&metadata.logical_expert) {
+            return Err(protocol_error(
+                "unknown expert logical id in route metadata",
+            ));
+        }
+        let entry = self
+            .placement_slots
+            .get(&(metadata.logical_expert, metadata.physical_slot))
+            .ok_or_else(|| protocol_error("unknown physical expert slot"))?;
+        if entry.replica != metadata.replica {
+            return Err(protocol_error("route replica mismatch"));
+        }
+        if entry.owner_rank != metadata.owner_rank {
+            return Err(protocol_error("route owner mismatch"));
+        }
+        if !self
+            .route_identity_keys
+            .contains(&route_identity_key(metadata))
+        {
+            return Err(protocol_error(
+                "route metadata is not in this dispatch plan",
+            ));
+        }
+        Ok(())
     }
 
     pub fn members(&self) -> &[ParallelRankId] {
@@ -248,6 +670,25 @@ impl ExpertDispatchPlan {
 
     pub fn required_bytes(&self) -> usize {
         self.required_bytes
+    }
+
+    /// Return route identities authenticated against this plan and bucket.
+    /// The returned view carries the physical slot, replica, owner, and epoch
+    /// that the route-aware worker must use.
+    pub fn route_view(&self, bucket: &ExpertTokenBucket) -> Result<Vec<ExpertRouteToken>> {
+        self.validate_bucket(bucket)?;
+        bucket
+            .tokens
+            .iter()
+            .map(|token| {
+                let route = self.route(token.source_row, token.route_slot)?;
+                self.validate_route_metadata(&route.metadata)?;
+                Ok(ExpertRouteToken {
+                    metadata: route.metadata,
+                    token: token.clone(),
+                })
+            })
+            .collect()
     }
 
     /// Buckets raw F32 row-major activations in member order. Tokens within each
@@ -325,18 +766,21 @@ impl ExpertDispatchPlan {
         check_active: &mut dyn FnMut(ExecutionTransactionId) -> Result<()>,
     ) -> Result<Vec<ExpertResult>> {
         check_active(self.context.transaction)?;
-        self.validate_bucket(bucket)?;
+        let routes = self.route_view(bucket)?;
         if worker.owner() != bucket.owner_rank {
             return Err(protocol_error("worker has the wrong owner rank"));
         }
-        let results = if bucket.tokens.is_empty() {
+        let routed_results = if routes.is_empty() {
             Vec::new()
         } else {
-            worker.compute(&bucket.tokens)?
+            worker.compute_routes(&routes)?
         };
-        self.ordered_results(&results, Some(bucket.owner_rank))?;
+        self.ordered_route_results(&routed_results, Some(bucket.owner_rank))?;
         check_active(self.context.transaction)?;
-        Ok(results)
+        Ok(routed_results
+            .into_iter()
+            .map(|routed| routed.result)
+            .collect())
     }
 
     /// Validate all replies before reducing, then apply each frozen weight once
@@ -440,6 +884,48 @@ impl ExpertDispatchPlan {
         Ok(())
     }
 
+    fn ordered_route_results<'a>(
+        &self,
+        results: &'a [ExpertRouteResult],
+        owner: Option<ParallelRankId>,
+    ) -> Result<Vec<&'a ExpertRouteResult>> {
+        let expected_count = match owner {
+            Some(owner) => self.owner_counts[self.owner_index(owner)?],
+            None => self.routes.len(),
+        };
+        if results.len() != expected_count {
+            return Err(protocol_error("incomplete or excess route result set"));
+        }
+        for routed in results {
+            let result = &routed.result;
+            let route = self.route(result.source_row, result.route_slot)?;
+            self.validate_context(result.transaction, result.source_rank)?;
+            if result.sequence != route.sequence {
+                return Err(protocol_error("stale result sequence"));
+            }
+            if result.expert != route.expert
+                || result.owner_rank != self.members[route.owner_index]
+                || owner.is_some_and(|owner| owner != result.owner_rank)
+            {
+                return Err(protocol_error("unknown result expert or wrong owner"));
+            }
+            self.validate_route_metadata(&routed.metadata)?;
+            if routed.metadata != route.metadata {
+                return Err(protocol_error("route result metadata mismatch"));
+            }
+            validate_values(&result.output, self.width, "expert output")?;
+        }
+        let mut ordered = results.iter().collect::<Vec<_>>();
+        ordered.sort_unstable_by_key(|routed| (routed.result.source_row, routed.result.route_slot));
+        if ordered.windows(2).any(|pair| {
+            (pair[0].result.source_row, pair[0].result.route_slot)
+                == (pair[1].result.source_row, pair[1].result.route_slot)
+        }) {
+            return Err(protocol_error("duplicate route result"));
+        }
+        Ok(ordered)
+    }
+
     pub(crate) fn ordered_results<'a>(
         &self,
         results: &'a [ExpertResult],
@@ -485,6 +971,33 @@ impl ExpertDispatchPlan {
 pub trait ExpertWorker {
     fn owner(&self) -> ParallelRankId;
     fn compute(&mut self, tokens: &[ExpertToken]) -> Result<Vec<ExpertResult>>;
+
+    /// Compatibility bridge for existing workers. Legacy workers can execute
+    /// fixed single-replica routes, but may not silently collapse replica N to
+    /// logical replica zero. Replica-aware workers must override this method.
+    fn compute_routes(&mut self, routes: &[ExpertRouteToken]) -> Result<Vec<ExpertRouteResult>> {
+        if routes.iter().any(|route| route.metadata.replica != 0) {
+            return Err(unsupported_route_error(
+                "worker does not accept replicated physical slots",
+            ));
+        }
+        let tokens = routes
+            .iter()
+            .map(|route| route.token.clone())
+            .collect::<Vec<_>>();
+        let results = self.compute(&tokens)?;
+        if results.len() != routes.len() {
+            return Err(protocol_error("route worker result count mismatch"));
+        }
+        Ok(results
+            .into_iter()
+            .zip(routes)
+            .map(|(result, route)| ExpertRouteResult {
+                metadata: route.metadata,
+                result,
+            })
+            .collect())
+    }
 }
 
 /// Synchronous owner multiplexer for local CPU workers. Workers/providers are
@@ -527,15 +1040,20 @@ impl ExpertResultExecutor for CpuExpertResultExecutor<'_> {
 /// forward, weights, sequence cursors or transaction state. Group and per-call
 /// admission checks happen before any bucket is sent.
 ///
-/// The synchronous F32 implementation returns Ready or an error (Unsupported
-/// for non-F32 rows). It has no asynchronous continuation or automatic retry.
-/// Shared layer math should inject it in place of `operators.routed_swiglu`,
-/// before shared-expert and residual additions, not around the whole forward.
+/// `new` retains the legacy transport boundary. `new_versioned` is the
+/// route-aware CPU/reference boundary and must be entered through
+/// `execute_versioned`; it never sends a versioned bucket through the legacy
+/// logical-only `ExpertResultExecutor`.
+enum ExpertParallelExecution<'a> {
+    Legacy(&'a mut dyn ExpertResultExecutor),
+    Versioned(&'a mut dyn ExpertWorker),
+}
+
 pub struct ExpertParallelRoutedExecutor<'a> {
     members: Vec<ParallelRankId>,
     placement: &'a ExpertPlacement,
     limits: ExpertDispatchLimits,
-    results: &'a mut dyn ExpertResultExecutor,
+    execution: ExpertParallelExecution<'a>,
 }
 
 impl<'a> ExpertParallelRoutedExecutor<'a> {
@@ -549,8 +1067,86 @@ impl<'a> ExpertParallelRoutedExecutor<'a> {
             members,
             placement,
             limits,
-            results,
+            execution: ExpertParallelExecution::Legacy(results),
         }
+    }
+
+    /// Construct the route-aware production adapter over an owner-local worker.
+    /// The worker receives authenticated physical-slot route views through
+    /// `execute_versioned`; it is never reached through the legacy result
+    /// transport.
+    pub fn new_versioned(
+        members: Vec<ParallelRankId>,
+        placement: &'a ExpertPlacement,
+        limits: ExpertDispatchLimits,
+        worker: &'a mut dyn ExpertWorker,
+    ) -> Self {
+        Self {
+            members,
+            placement,
+            limits,
+            execution: ExpertParallelExecution::Versioned(worker),
+        }
+    }
+
+    /// Execute a routed request using explicit, versioned route metadata.
+    /// `new_with_route_metadata` validation happens before dispatch; each bucket
+    /// then goes through `ExpertDispatchPlan::execute_bucket`, preserving the
+    /// existing provider/residency and transaction/cancellation boundaries.
+    pub fn execute_versioned(
+        &mut self,
+        request: RoutedSwiGluRequest<'_>,
+        route_metadata: &[ExpertRouteMetadata],
+        check_active: &mut dyn FnMut(ExecutionTransactionId) -> Result<()>,
+    ) -> Result<OperatorProgress<Rows>> {
+        let worker = match &mut self.execution {
+            ExpertParallelExecution::Versioned(worker) => worker,
+            ExpertParallelExecution::Legacy(_) => {
+                return Ok(OperatorProgress::Unsupported(UnsupportedOperator::new(
+                    "expert_parallel_routed_swiglu",
+                    "versioned execution requires new_versioned and execute_versioned",
+                )));
+            }
+        };
+        check_active(request.context.transaction)?;
+        let input = request.input.host()?;
+        if input.dtype() != RowsDType::F32 {
+            return Ok(OperatorProgress::Unsupported(UnsupportedOperator::new(
+                "expert_parallel_routed_swiglu",
+                "the CPU EP executor requires F32 activations",
+            )));
+        }
+        if request.routes.rows() != input.shape().rows() {
+            return Err(protocol_error("routed input row count mismatch"));
+        }
+        let plan = ExpertDispatchPlan::new_with_route_metadata(
+            request.context,
+            self.members.clone(),
+            self.placement,
+            request.routes,
+            route_metadata,
+            request.sequences,
+            input.shape().width(),
+            self.limits,
+        )?;
+        let buckets = plan.dispatch(input.values(), check_active)?;
+        let mut results = Vec::with_capacity(plan.token_count());
+        for bucket in buckets {
+            // The versioned constructor binds one owner-local worker. Empty
+            // participant buckets remain part of dispatch accounting but do
+            // not require a worker/provider call.
+            if bucket.tokens.is_empty() {
+                continue;
+            }
+            results.extend(plan.execute_bucket(&bucket, *worker, check_active)?);
+        }
+        let output = plan.combine(&results, check_active)?;
+        Ok(OperatorProgress::Ready(Rows::Host(HostRows::new(
+            output.shape(),
+            RowsDType::F32,
+            request.arena,
+            output.into_values(),
+        )?)))
     }
 }
 
@@ -560,6 +1156,15 @@ impl RoutedSwiGluExecutor for ExpertParallelRoutedExecutor<'_> {
         request: RoutedSwiGluRequest<'_>,
         check_active: &mut dyn FnMut(ExecutionTransactionId) -> Result<()>,
     ) -> Result<OperatorProgress<Rows>> {
+        let results_executor = match &mut self.execution {
+            ExpertParallelExecution::Legacy(results) => results,
+            ExpertParallelExecution::Versioned(_) => {
+                return Ok(OperatorProgress::Unsupported(UnsupportedOperator::new(
+                    "expert_parallel_routed_swiglu",
+                    "versioned executor requires execute_versioned",
+                )));
+            }
+        };
         check_active(request.context.transaction)?;
         let input = request.input.host()?;
         if input.dtype() != RowsDType::F32 {
@@ -581,7 +1186,7 @@ impl RoutedSwiGluExecutor for ExpertParallelRoutedExecutor<'_> {
             self.limits,
         )?;
         let buckets = plan.dispatch(input.values(), check_active)?;
-        let results = plan.execute_results(self.results, buckets, check_active)?;
+        let results = plan.execute_results(*results_executor, buckets, check_active)?;
         let output = plan.combine(&results, check_active)?;
         Ok(OperatorProgress::Ready(Rows::Host(HostRows::new(
             output.shape(),
@@ -593,8 +1198,12 @@ impl RoutedSwiGluExecutor for ExpertParallelRoutedExecutor<'_> {
 }
 
 /// F32 CPU reference adapter over existing owner-local prepared experts.
-/// Provider residency/streaming remains local; Waiting/Unsupported returns an
-/// error (no polling, retries or partial publication in this minimal protocol).
+/// The physical slot selects the authenticated owner/route group, but the
+/// existing provider still resolves a logical expert. This seam therefore
+/// does not claim migrated weights or independently materialized physical
+/// copies; storage, residency, and weight authority remain unchanged.
+/// Waiting/Unsupported returns an error (no polling, retries or partial
+/// publication in this minimal protocol).
 pub struct CpuReferenceExpertWorker<'a> {
     owner: ParallelRankId,
     placement: &'a ExpertPlacement,
@@ -617,9 +1226,92 @@ impl<'a> CpuReferenceExpertWorker<'a> {
     }
 }
 
+impl CpuReferenceExpertWorker<'_> {
+    fn validate_route(&self, route: &ExpertRouteToken) -> Result<()> {
+        let metadata = route.metadata;
+        if metadata.placement_epoch != self.placement.epoch() {
+            if metadata.placement_epoch < self.placement.epoch() {
+                return Err(protocol_error("stale route placement epoch at CPU worker"));
+            }
+            return Err(protocol_error(
+                "route placement epoch does not match CPU worker placement",
+            ));
+        }
+        if metadata.logical_expert != route.token.expert {
+            return Err(protocol_error("route token logical expert mismatch"));
+        }
+        if self.placement.replicas(metadata.logical_expert).is_none() {
+            return Err(protocol_error("unknown expert logical id at CPU worker"));
+        }
+        let entry = self
+            .placement
+            .entry(metadata.logical_expert, metadata.physical_slot)
+            .ok_or_else(|| protocol_error("unknown physical expert slot at CPU worker"))?;
+        if entry.replica != metadata.replica {
+            return Err(protocol_error("route replica mismatch at CPU worker"));
+        }
+        if entry.owner_rank != metadata.owner_rank || metadata.owner_rank != self.owner {
+            return Err(protocol_error("route owner mismatch at CPU worker"));
+        }
+        Ok(())
+    }
+}
+
 impl ExpertWorker for CpuReferenceExpertWorker<'_> {
     fn owner(&self) -> ParallelRankId {
         self.owner
+    }
+
+    fn compute_routes(&mut self, routes: &[ExpertRouteToken]) -> Result<Vec<ExpertRouteResult>> {
+        let mut groups = BTreeMap::<(ExpertId, usize), Vec<&ExpertRouteToken>>::new();
+        for route in routes {
+            self.validate_route(route)?;
+            groups
+                .entry((route.metadata.logical_expert, route.metadata.physical_slot))
+                .or_default()
+                .push(route);
+        }
+        let mut results = Vec::with_capacity(routes.len());
+        for ((expert, _physical_slot), routes) in groups {
+            let prepared = match self.experts.expert(expert.layer, expert.expert)? {
+                ExpertAvailability::Ready(prepared) => prepared,
+                ExpertAvailability::Waiting => {
+                    return Err(protocol_error(format!("expert {expert:?} is waiting")));
+                }
+                ExpertAvailability::Unsupported(reason) => {
+                    return Err(protocol_error(format!(
+                        "expert {expert:?} is unsupported: {reason}"
+                    )));
+                }
+            };
+            let width = prepared.input_width();
+            if prepared.output_width() != width {
+                return Err(protocol_error("expert must preserve activation width"));
+            }
+            for route in &routes {
+                validate_values(&route.token.payload, width, "CPU expert input")?;
+            }
+            let shape = RowsShape::new(routes.len(), width)?;
+            let values = routes
+                .iter()
+                .flat_map(|route| route.token.payload.iter().copied())
+                .collect();
+            let input = Rows::Host(HostRows::new(shape, RowsDType::F32, None, values)?);
+            let output = self
+                .operators
+                .apply_prepared_swiglu(&prepared, &input, None)?
+                .into_host()?;
+            if output.shape() != shape {
+                return Err(protocol_error("expert output shape mismatch"));
+            }
+            for (route, row) in routes.into_iter().zip(output.values().chunks_exact(width)) {
+                results.push(ExpertRouteResult {
+                    metadata: route.metadata,
+                    result: ExpertResult::from_token(&route.token, self.owner, row.to_vec()),
+                });
+            }
+        }
+        Ok(results)
     }
 
     fn compute(&mut self, tokens: &[ExpertToken]) -> Result<Vec<ExpertResult>> {
@@ -690,6 +1382,15 @@ fn validate_values(values: &[f32], width: usize, label: &str) -> Result<()> {
 fn checked_mul(left: usize, right: usize) -> Result<usize> {
     left.checked_mul(right)
         .ok_or_else(|| protocol_error("dispatch size overflow"))
+}
+
+fn unsupported_route_error(message: impl Into<String>) -> Error {
+    Error::ModelSource {
+        source: Box::new(UnsupportedOperator::new(
+            "expert_parallel_route",
+            format!("unsupported route execution: {}", message.into()),
+        )),
+    }
 }
 
 fn protocol_error(message: impl Into<String>) -> Error {
