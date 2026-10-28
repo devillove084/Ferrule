@@ -38,6 +38,23 @@ pub enum OperatorContractError {
         first: &'static str,
         second: &'static str,
     },
+    #[snafu(display(
+        "operator contract: fusion stage {index} has invalid order: expected {expected}, got {actual}"
+    ))]
+    FusionStageOrder {
+        index: usize,
+        expected: &'static str,
+        actual: &'static str,
+    },
+    #[snafu(display(
+        "operator contract: fusion stage {index} {field} mismatch: expected {expected}, got {actual}"
+    ))]
+    FusionStageMismatch {
+        index: usize,
+        field: &'static str,
+        expected: String,
+        actual: String,
+    },
 }
 
 /// Result type for descriptor construction and validation.
@@ -111,6 +128,754 @@ impl AdvisoryStorageIdentity {
 pub enum AliasPolicy {
     Disjoint,
     MayAlias,
+}
+
+impl AliasPolicy {
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Disjoint => "Disjoint",
+            Self::MayAlias => "MayAlias",
+        }
+    }
+}
+
+/// Logical operation represented by one ordered linear-fusion stage.
+///
+/// These are semantic boundaries only. The contract does not specify launch
+/// count; any implementation must preserve this order and the declared dtype
+/// and storage obligations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LinearStageKind {
+    Decode,
+    Cast,
+    Linear,
+    Accumulate,
+}
+
+impl LinearStageKind {
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Decode => "decode",
+            Self::Cast => "cast",
+            Self::Linear => "linear",
+            Self::Accumulate => "accumulate",
+        }
+    }
+}
+
+/// Association of a stage with the quantized weight scale operand.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScaleOperand {
+    None,
+    Weight,
+}
+
+impl ScaleOperand {
+    const fn name(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Weight => "weight",
+        }
+    }
+}
+
+/// Semantic rounding required by an activation conversion stage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CastSemantics {
+    None,
+    RoundToNearestEven,
+}
+
+impl CastSemantics {
+    const fn name(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::RoundToNearestEven => "round-to-nearest-even",
+        }
+    }
+}
+
+/// Provider-neutral description of one logical linear-fusion stage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LinearStage {
+    pub kind: LinearStageKind,
+    pub input_dtype: LogicalDType,
+    pub output_dtype: LogicalDType,
+    /// Decoded weight dtype consumed by a [`LinearStageKind::Linear`] stage.
+    /// Other stage kinds do not have a second data operand.
+    pub weight_dtype: Option<LogicalDType>,
+    pub materialized: bool,
+    pub alias_policy: AliasPolicy,
+    pub scale_operand: ScaleOperand,
+    pub cast_semantics: CastSemantics,
+}
+
+impl LinearStage {
+    pub const fn new(
+        kind: LinearStageKind,
+        input_dtype: LogicalDType,
+        output_dtype: LogicalDType,
+        materialized: bool,
+        alias_policy: AliasPolicy,
+        scale_operand: ScaleOperand,
+    ) -> Self {
+        Self {
+            kind,
+            input_dtype,
+            output_dtype,
+            weight_dtype: None,
+            materialized,
+            alias_policy,
+            scale_operand,
+            cast_semantics: CastSemantics::None,
+        }
+    }
+
+    pub const fn decode(
+        output_dtype: LogicalDType,
+        materialized: bool,
+        alias_policy: AliasPolicy,
+    ) -> Self {
+        Self::new(
+            LinearStageKind::Decode,
+            LogicalDType::E4M3Fn,
+            output_dtype,
+            materialized,
+            alias_policy,
+            ScaleOperand::Weight,
+        )
+    }
+
+    /// Inline activation conversion: no separately materialized output.
+    pub const fn cast(input_dtype: LogicalDType, output_dtype: LogicalDType) -> Self {
+        Self::cast_with_storage(input_dtype, output_dtype, false, AliasPolicy::MayAlias)
+    }
+
+    /// Activation conversion with explicit storage semantics.
+    ///
+    /// Both `(false, MayAlias)` and `(true, Disjoint)` are valid: the former
+    /// describes an inline conversion, while the latter describes a bounded
+    /// materialized conversion buffer already represented by the provider
+    /// workspace contract.
+    pub const fn cast_with_storage(
+        input_dtype: LogicalDType,
+        output_dtype: LogicalDType,
+        materialized: bool,
+        alias_policy: AliasPolicy,
+    ) -> Self {
+        Self {
+            cast_semantics: CastSemantics::RoundToNearestEven,
+            ..Self::new(
+                LinearStageKind::Cast,
+                input_dtype,
+                output_dtype,
+                materialized,
+                alias_policy,
+                ScaleOperand::None,
+            )
+        }
+    }
+
+    pub const fn linear(
+        input_dtype: LogicalDType,
+        weight_dtype: LogicalDType,
+        output_dtype: LogicalDType,
+        materialized: bool,
+        alias_policy: AliasPolicy,
+    ) -> Self {
+        Self {
+            weight_dtype: Some(weight_dtype),
+            ..Self::new(
+                LinearStageKind::Linear,
+                input_dtype,
+                output_dtype,
+                materialized,
+                alias_policy,
+                ScaleOperand::None,
+            )
+        }
+    }
+
+    pub const fn accumulate(
+        input_dtype: LogicalDType,
+        output_dtype: LogicalDType,
+        materialized: bool,
+        alias_policy: AliasPolicy,
+    ) -> Self {
+        Self::new(
+            LinearStageKind::Accumulate,
+            input_dtype,
+            output_dtype,
+            materialized,
+            alias_policy,
+            ScaleOperand::None,
+        )
+    }
+}
+
+/// An allocation-free, ordered set of logical linear-fusion stages.
+///
+/// The fixed storage is intentional: production construction copies only
+/// metadata and never creates decoded weights, workspace, or provider state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LinearFusionPlan {
+    stages: [LinearStage; 4],
+    stage_count: u8,
+}
+
+impl LinearFusionPlan {
+    pub const fn from_two(stages: [LinearStage; 2]) -> Self {
+        Self {
+            stages: [stages[0], stages[1], stages[1], stages[1]],
+            stage_count: 2,
+        }
+    }
+
+    pub const fn from_three(stages: [LinearStage; 3]) -> Self {
+        Self {
+            stages: [stages[0], stages[1], stages[2], stages[2]],
+            stage_count: 3,
+        }
+    }
+
+    pub const fn from_four(stages: [LinearStage; 4]) -> Self {
+        Self {
+            stages,
+            stage_count: 4,
+        }
+    }
+
+    /// Copy and validate a caller-provided logical stage sequence.
+    /// Descriptor validation additionally binds the sequence to its tensor
+    /// dtypes, scale presence, and caller output alias policy.
+    pub fn from_stages(stages: &[LinearStage]) -> ContractResult<Self> {
+        if stages.is_empty() || stages.len() > 4 {
+            return Err(invalid(
+                "fusion stages",
+                "the sequence must contain between one and four stages",
+            ));
+        }
+        let mut stored = [stages[0]; 4];
+        for (slot, stage) in stored.iter_mut().zip(stages.iter().copied()) {
+            *slot = stage;
+        }
+        let plan = Self {
+            stages: stored,
+            stage_count: stages.len() as u8,
+        };
+        plan.validate()?;
+        Ok(plan)
+    }
+
+    pub fn stages(&self) -> &[LinearStage] {
+        &self.stages[..self.stage_count as usize]
+    }
+
+    pub const fn stage_count(self) -> usize {
+        self.stage_count as usize
+    }
+
+    const fn inferred(
+        input: TensorViewDescriptor<'_>,
+        weight: TensorViewDescriptor<'_>,
+        output: TensorViewDescriptor<'_>,
+        has_scale: bool,
+        alias_policy: AliasPolicy,
+    ) -> Self {
+        if has_scale {
+            let decode = LinearStage::decode(LogicalDType::Bf16, true, AliasPolicy::Disjoint);
+            let input_is_f32 = match input.dtype {
+                LogicalDType::F32 => true,
+                LogicalDType::Bf16 | LogicalDType::E4M3Fn => false,
+            };
+            let linear = LinearStage::linear(
+                if input_is_f32 {
+                    LogicalDType::Bf16
+                } else {
+                    input.dtype
+                },
+                LogicalDType::Bf16,
+                output.dtype,
+                false,
+                AliasPolicy::MayAlias,
+            );
+            let accumulate =
+                LinearStage::accumulate(output.dtype, output.dtype, true, alias_policy);
+            if input_is_f32 {
+                Self::from_four([
+                    decode,
+                    LinearStage::cast(LogicalDType::F32, LogicalDType::Bf16),
+                    linear,
+                    accumulate,
+                ])
+            } else {
+                Self::from_three([decode, linear, accumulate])
+            }
+        } else {
+            Self::from_two([
+                LinearStage::linear(
+                    input.dtype,
+                    weight.dtype,
+                    output.dtype,
+                    false,
+                    AliasPolicy::MayAlias,
+                ),
+                LinearStage::accumulate(output.dtype, output.dtype, true, alias_policy),
+            ])
+        }
+    }
+
+    fn numeric(plan: NumericFp8LinearPlan, input_dtype: LogicalDType) -> Self {
+        let decoded_dtype = match plan.precision() {
+            NumericFp8Precision::F32Tf32x3 => LogicalDType::F32,
+            NumericFp8Precision::Bf16RneF32Accumulate
+            | NumericFp8Precision::Bf16SlicedK2F32Accumulate
+            | NumericFp8Precision::Bf16M1GemvF32Accumulate
+            | NumericFp8Precision::W8A16Bf16F32Accumulate => LogicalDType::Bf16,
+        };
+        let decode_materialized = !matches!(
+            plan.selected_kernel(),
+            NumericFp8SelectedKernel::F32FusedM1
+                | NumericFp8SelectedKernel::W8A16FusedBf16Mma
+                | NumericFp8SelectedKernel::W8A16FusedBf16Vector
+        );
+        let decode = LinearStage::decode(
+            decoded_dtype,
+            decode_materialized,
+            if decode_materialized {
+                AliasPolicy::Disjoint
+            } else {
+                AliasPolicy::MayAlias
+            },
+        );
+        let needs_cast = input_dtype == LogicalDType::F32 && decoded_dtype == LogicalDType::Bf16;
+        let cast_materialized = matches!(
+            plan.selected_kernel(),
+            NumericFp8SelectedKernel::Bf16TiledGemm
+                | NumericFp8SelectedKernel::Bf16TiledSlicedK2Gemm
+        );
+        let linear_input = if needs_cast {
+            LogicalDType::Bf16
+        } else {
+            input_dtype
+        };
+        let linear = LinearStage::linear(
+            linear_input,
+            decoded_dtype,
+            LogicalDType::F32,
+            false,
+            AliasPolicy::MayAlias,
+        );
+        let accumulate = LinearStage::accumulate(
+            LogicalDType::F32,
+            LogicalDType::F32,
+            true,
+            AliasPolicy::Disjoint,
+        );
+        if needs_cast {
+            Self::from_four([
+                decode,
+                LinearStage::cast_with_storage(
+                    LogicalDType::F32,
+                    LogicalDType::Bf16,
+                    cast_materialized,
+                    if cast_materialized {
+                        AliasPolicy::Disjoint
+                    } else {
+                        AliasPolicy::MayAlias
+                    },
+                ),
+                linear,
+                accumulate,
+            ])
+        } else {
+            Self::from_three([decode, linear, accumulate])
+        }
+    }
+
+    pub fn validate(self) -> ContractResult<()> {
+        let stages = self.stages();
+        if stages.len() < 2 || stages.len() > 4 {
+            return Err(invalid(
+                "fusion stages",
+                "a linear fusion must contain two to four stages",
+            ));
+        }
+        let expected = match stages.len() {
+            2 => [
+                LinearStageKind::Linear,
+                LinearStageKind::Accumulate,
+                LinearStageKind::Accumulate,
+                LinearStageKind::Accumulate,
+            ],
+            3 => [
+                LinearStageKind::Decode,
+                LinearStageKind::Linear,
+                LinearStageKind::Accumulate,
+                LinearStageKind::Accumulate,
+            ],
+            4 => [
+                LinearStageKind::Decode,
+                LinearStageKind::Cast,
+                LinearStageKind::Linear,
+                LinearStageKind::Accumulate,
+            ],
+            _ => unreachable!(),
+        };
+        for (index, stage) in stages.iter().enumerate() {
+            Self::validate_stage_storage(index, *stage)?;
+            if stage.kind != expected[index] {
+                return Err(OperatorContractError::FusionStageOrder {
+                    index,
+                    expected: expected[index].name(),
+                    actual: stage.kind.name(),
+                });
+            }
+            if stage.kind != LinearStageKind::Cast && stage.cast_semantics != CastSemantics::None {
+                return Err(OperatorContractError::FusionStageMismatch {
+                    index,
+                    field: "cast semantics",
+                    expected: CastSemantics::None.name().into(),
+                    actual: stage.cast_semantics.name().into(),
+                });
+            }
+            match stage.kind {
+                LinearStageKind::Decode => {
+                    if stage.input_dtype != LogicalDType::E4M3Fn {
+                        return Err(OperatorContractError::FusionStageMismatch {
+                            index,
+                            field: "input dtype",
+                            expected: LogicalDType::E4M3Fn.name().into(),
+                            actual: stage.input_dtype.name().into(),
+                        });
+                    }
+                    if !matches!(stage.output_dtype, LogicalDType::Bf16 | LogicalDType::F32) {
+                        return Err(OperatorContractError::FusionStageMismatch {
+                            index,
+                            field: "output dtype",
+                            expected: "BF16 or F32".into(),
+                            actual: stage.output_dtype.name().into(),
+                        });
+                    }
+                    if stage.weight_dtype.is_some() {
+                        return Err(OperatorContractError::FusionStageMismatch {
+                            index,
+                            field: "weight dtype association",
+                            expected: "none".into(),
+                            actual: "present".into(),
+                        });
+                    }
+                    if stage.scale_operand != ScaleOperand::Weight {
+                        return Err(OperatorContractError::FusionStageMismatch {
+                            index,
+                            field: "scale operand",
+                            expected: ScaleOperand::Weight.name().into(),
+                            actual: stage.scale_operand.name().into(),
+                        });
+                    }
+                }
+                LinearStageKind::Cast => {
+                    if stage.input_dtype != LogicalDType::F32
+                        || stage.output_dtype != LogicalDType::Bf16
+                    {
+                        return Err(OperatorContractError::FusionStageMismatch {
+                            index,
+                            field: "cast dtype",
+                            expected: "F32 -> BF16".into(),
+                            actual: format!(
+                                "{} -> {}",
+                                stage.input_dtype.name(),
+                                stage.output_dtype.name()
+                            ),
+                        });
+                    }
+                    if stage.cast_semantics != CastSemantics::RoundToNearestEven {
+                        return Err(OperatorContractError::FusionStageMismatch {
+                            index,
+                            field: "cast semantics",
+                            expected: CastSemantics::RoundToNearestEven.name().into(),
+                            actual: stage.cast_semantics.name().into(),
+                        });
+                    }
+                    if stage.weight_dtype.is_some() {
+                        return Err(OperatorContractError::FusionStageMismatch {
+                            index,
+                            field: "weight dtype association",
+                            expected: "none".into(),
+                            actual: "present".into(),
+                        });
+                    }
+                    if stage.scale_operand != ScaleOperand::None {
+                        return Err(OperatorContractError::FusionStageMismatch {
+                            index,
+                            field: "scale operand",
+                            expected: ScaleOperand::None.name().into(),
+                            actual: stage.scale_operand.name().into(),
+                        });
+                    }
+                }
+                LinearStageKind::Linear => {
+                    if stage.weight_dtype.is_none() {
+                        return Err(OperatorContractError::FusionStageMismatch {
+                            index,
+                            field: "weight dtype association",
+                            expected: "present".into(),
+                            actual: "none".into(),
+                        });
+                    }
+                    if stage.scale_operand != ScaleOperand::None {
+                        return Err(OperatorContractError::FusionStageMismatch {
+                            index,
+                            field: "scale operand",
+                            expected: ScaleOperand::None.name().into(),
+                            actual: stage.scale_operand.name().into(),
+                        });
+                    }
+                }
+                LinearStageKind::Accumulate => {
+                    if stage.weight_dtype.is_some() {
+                        return Err(OperatorContractError::FusionStageMismatch {
+                            index,
+                            field: "weight dtype association",
+                            expected: "none".into(),
+                            actual: "present".into(),
+                        });
+                    }
+                    if stage.scale_operand != ScaleOperand::None {
+                        return Err(OperatorContractError::FusionStageMismatch {
+                            index,
+                            field: "scale operand",
+                            expected: ScaleOperand::None.name().into(),
+                            actual: stage.scale_operand.name().into(),
+                        });
+                    }
+                    if stage.input_dtype != stage.output_dtype {
+                        return Err(OperatorContractError::FusionStageMismatch {
+                            index,
+                            field: "accumulate dtype",
+                            expected: stage.input_dtype.name().into(),
+                            actual: stage.output_dtype.name().into(),
+                        });
+                    }
+                }
+            }
+        }
+        let (linear_index, accumulate_index) = match stages.len() {
+            2 => (0, 1),
+            3 => (1, 2),
+            4 => (2, 3),
+            _ => unreachable!(),
+        };
+        if stages[linear_index].output_dtype != stages[accumulate_index].input_dtype {
+            return Err(OperatorContractError::FusionStageMismatch {
+                index: accumulate_index,
+                field: "input dtype",
+                expected: stages[linear_index].output_dtype.name().into(),
+                actual: stages[accumulate_index].input_dtype.name().into(),
+            });
+        }
+        if stages.len() >= 3 {
+            let Some(linear_weight_dtype) = stages[linear_index].weight_dtype else {
+                return Err(OperatorContractError::FusionStageMismatch {
+                    index: linear_index,
+                    field: "weight dtype association",
+                    expected: "present".into(),
+                    actual: "none".into(),
+                });
+            };
+            if stages[0].output_dtype != linear_weight_dtype {
+                return Err(OperatorContractError::FusionStageMismatch {
+                    index: linear_index,
+                    field: "weight dtype",
+                    expected: stages[0].output_dtype.name().into(),
+                    actual: linear_weight_dtype.name().into(),
+                });
+            }
+        }
+        if stages.len() == 4 && stages[1].output_dtype != stages[2].input_dtype {
+            return Err(OperatorContractError::FusionStageMismatch {
+                index: 2,
+                field: "input dtype",
+                expected: stages[1].output_dtype.name().into(),
+                actual: stages[2].input_dtype.name().into(),
+            });
+        }
+        Ok(())
+    }
+
+    fn validate_stage_storage(index: usize, stage: LinearStage) -> ContractResult<()> {
+        match stage.kind {
+            LinearStageKind::Decode => {
+                let expected = if stage.materialized {
+                    AliasPolicy::Disjoint
+                } else {
+                    AliasPolicy::MayAlias
+                };
+                if stage.alias_policy != expected {
+                    return Err(OperatorContractError::FusionStageMismatch {
+                        index,
+                        field: "alias policy",
+                        expected: expected.name().into(),
+                        actual: stage.alias_policy.name().into(),
+                    });
+                }
+            }
+            LinearStageKind::Cast => {
+                let expected = if stage.materialized {
+                    AliasPolicy::Disjoint
+                } else {
+                    AliasPolicy::MayAlias
+                };
+                if stage.alias_policy != expected {
+                    return Err(OperatorContractError::FusionStageMismatch {
+                        index,
+                        field: "alias policy",
+                        expected: expected.name().into(),
+                        actual: stage.alias_policy.name().into(),
+                    });
+                }
+            }
+            LinearStageKind::Linear => {
+                if stage.materialized {
+                    return Err(OperatorContractError::FusionStageMismatch {
+                        index,
+                        field: "materialized output",
+                        expected: "false".into(),
+                        actual: "true".into(),
+                    });
+                }
+                if stage.alias_policy != AliasPolicy::MayAlias {
+                    return Err(OperatorContractError::FusionStageMismatch {
+                        index,
+                        field: "alias policy",
+                        expected: AliasPolicy::MayAlias.name().into(),
+                        actual: stage.alias_policy.name().into(),
+                    });
+                }
+            }
+            LinearStageKind::Accumulate => {
+                if !stage.materialized {
+                    return Err(OperatorContractError::FusionStageMismatch {
+                        index,
+                        field: "materialized output",
+                        expected: "true".into(),
+                        actual: "false".into(),
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_for_descriptor(
+        self,
+        input_dtype: LogicalDType,
+        weight_dtype: LogicalDType,
+        output_dtype: LogicalDType,
+        has_scale: bool,
+        alias_policy: AliasPolicy,
+    ) -> ContractResult<()> {
+        self.validate()?;
+        let stages = self.stages();
+        let has_decode = matches!(stages.len(), 3 | 4);
+        let has_cast = stages.len() == 4;
+        if has_decode != has_scale {
+            return Err(OperatorContractError::FusionStageMismatch {
+                index: 0,
+                field: "scale association",
+                expected: has_scale.to_string(),
+                actual: has_decode.to_string(),
+            });
+        }
+        let linear_index = if has_cast {
+            2
+        } else if has_decode {
+            1
+        } else {
+            0
+        };
+        let accumulate_index = linear_index + 1;
+        let expected_linear_input = if has_cast {
+            stages[1].output_dtype
+        } else {
+            input_dtype
+        };
+        if stages[linear_index].input_dtype != expected_linear_input {
+            return Err(OperatorContractError::FusionStageMismatch {
+                index: linear_index,
+                field: "input dtype",
+                expected: expected_linear_input.name().into(),
+                actual: stages[linear_index].input_dtype.name().into(),
+            });
+        }
+        if has_cast && stages[1].input_dtype != input_dtype {
+            return Err(OperatorContractError::FusionStageMismatch {
+                index: 1,
+                field: "input dtype",
+                expected: input_dtype.name().into(),
+                actual: stages[1].input_dtype.name().into(),
+            });
+        }
+        let expected_cast = has_decode
+            && input_dtype == LogicalDType::F32
+            && stages[0].output_dtype == LogicalDType::Bf16;
+        if has_cast != expected_cast {
+            return Err(OperatorContractError::FusionStageMismatch {
+                index: if has_cast { 1 } else { 0 },
+                field: "activation cast",
+                expected: expected_cast.to_string(),
+                actual: has_cast.to_string(),
+            });
+        }
+        let expected_linear_weight = if has_decode {
+            stages[0].output_dtype
+        } else {
+            weight_dtype
+        };
+        if stages[linear_index].weight_dtype != Some(expected_linear_weight) {
+            return Err(OperatorContractError::FusionStageMismatch {
+                index: linear_index,
+                field: "weight dtype",
+                expected: expected_linear_weight.name().into(),
+                actual: stages[linear_index]
+                    .weight_dtype
+                    .map_or_else(|| "none".into(), |dtype| dtype.name().into()),
+            });
+        }
+        if stages[accumulate_index].output_dtype != output_dtype {
+            return Err(OperatorContractError::FusionStageMismatch {
+                index: accumulate_index,
+                field: "output dtype",
+                expected: output_dtype.name().into(),
+                actual: stages[accumulate_index].output_dtype.name().into(),
+            });
+        }
+        if !stages[accumulate_index].materialized {
+            return Err(OperatorContractError::FusionStageMismatch {
+                index: accumulate_index,
+                field: "materialized output",
+                expected: "true".into(),
+                actual: "false".into(),
+            });
+        }
+        if stages[accumulate_index].alias_policy != alias_policy {
+            return Err(OperatorContractError::FusionStageMismatch {
+                index: accumulate_index,
+                field: "alias policy",
+                expected: alias_policy.name().into(),
+                actual: stages[accumulate_index].alias_policy.name().into(),
+            });
+        }
+        if has_decode && stages[0].input_dtype != weight_dtype {
+            return Err(OperatorContractError::FusionStageMismatch {
+                index: 0,
+                field: "input dtype",
+                expected: weight_dtype.name().into(),
+                actual: stages[0].input_dtype.name().into(),
+            });
+        }
+        Ok(())
+    }
 }
 
 /// Whether the descriptor may be submitted while an execution graph is captured.
@@ -360,6 +1125,7 @@ pub struct LinearOperatorDescriptor<'a> {
     pub weight: TensorViewDescriptor<'a>,
     pub output: TensorViewDescriptor<'a>,
     pub quantization: Option<QuantizationDescriptor<'a>>,
+    pub fusion_plan: LinearFusionPlan,
     pub alias_policy: AliasPolicy,
     pub capture_policy: CapturePolicy,
     pub retention_policy: RetentionPolicy,
@@ -375,11 +1141,35 @@ impl<'a> LinearOperatorDescriptor<'a> {
         capture_policy: CapturePolicy,
         retention_policy: RetentionPolicy,
     ) -> Self {
+        let has_scale = quantization.is_some();
+        Self::with_fusion_plan(
+            input,
+            weight,
+            output,
+            quantization,
+            LinearFusionPlan::inferred(input, weight, output, has_scale, alias_policy),
+            alias_policy,
+            capture_policy,
+            retention_policy,
+        )
+    }
+
+    pub const fn with_fusion_plan(
+        input: TensorViewDescriptor<'a>,
+        weight: TensorViewDescriptor<'a>,
+        output: TensorViewDescriptor<'a>,
+        quantization: Option<QuantizationDescriptor<'a>>,
+        fusion_plan: LinearFusionPlan,
+        alias_policy: AliasPolicy,
+        capture_policy: CapturePolicy,
+        retention_policy: RetentionPolicy,
+    ) -> Self {
         Self {
             input,
             weight,
             output,
             quantization,
+            fusion_plan,
             alias_policy,
             capture_policy,
             retention_policy,
@@ -418,6 +1208,13 @@ impl<'a> LinearOperatorDescriptor<'a> {
         if let Some(quantization) = self.quantization {
             quantization.validate_for_weight(self.weight)?;
         }
+        self.fusion_plan.validate_for_descriptor(
+            self.input.dtype,
+            self.weight.dtype,
+            self.output.dtype,
+            self.quantization.is_some(),
+            self.alias_policy,
+        )?;
         if self.alias_policy == AliasPolicy::Disjoint {
             check_advisory_disjoint("input", self.input, "weight", self.weight)?;
             check_advisory_disjoint("input", self.input, "output", self.output)?;
@@ -602,6 +1399,12 @@ pub fn build_numeric_fp8_operator_contract<R>(
     inspect: impl for<'a> FnOnce(LinearOperatorDescriptor<'a>) -> ContractResult<R>,
 ) -> ContractResult<R> {
     let layout = plan.layout();
+    if plan.precision() == NumericFp8Precision::F32Tf32x3 && input_dtype != LogicalDType::F32 {
+        return Err(OperatorContractError::Unsupported {
+            capability: "numeric F32 precision input",
+            reason: "the F32 precision provider accepts only an explicit F32 input view".into(),
+        });
+    }
     if plan.selected_kernel() == NumericFp8SelectedKernel::Bf16M1Gemv
         && input_dtype != LogicalDType::Bf16
     {
@@ -683,11 +1486,14 @@ pub fn build_numeric_fp8_operator_contract<R>(
     } else {
         CapturePolicy::CaptureSafe
     };
-    let descriptor = LinearOperatorDescriptor::new(
+    let fusion_plan = LinearFusionPlan::numeric(plan, input_dtype);
+    fusion_plan.validate()?;
+    let descriptor = LinearOperatorDescriptor::with_fusion_plan(
         input,
         weight,
         output,
         Some(quantization),
+        fusion_plan,
         AliasPolicy::Disjoint,
         capture_policy,
         RetentionPolicy::UntilCompletion,
