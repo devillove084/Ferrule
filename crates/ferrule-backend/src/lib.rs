@@ -16,6 +16,7 @@
 pub mod cpu;
 pub mod cuda_plan;
 pub mod error;
+pub mod operator_contract;
 pub mod physical_placement;
 pub use physical_placement as host_kv_placement;
 pub mod plan;

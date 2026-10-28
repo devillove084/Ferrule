@@ -41,6 +41,9 @@ use ferrule_common::Result;
 use crate::cuda::operators::{OperatorOwner, OperatorWorkspaceRequirements};
 use crate::cuda::providers::cutlass;
 use crate::cuda::runtime::{CudaStream, DeviceBuffer};
+use crate::operator_contract::{
+    LinearCapability, LogicalDType, build_numeric_fp8_operator_contract,
+};
 
 pub(crate) use crate::cuda::operator_owner::ARTIFACT_LINEAR_FP8_ACTIVATION_BLOCK_SIZE;
 pub use crate::cuda::operator_owner::{
@@ -251,6 +254,13 @@ impl CudaOperators {
         output_stride: usize,
     ) -> Result<()> {
         self.submit_operator(plan.kernel_launches() as u64, |stream| {
+            build_numeric_fp8_operator_contract(
+                plan,
+                LogicalDType::F32,
+                activation_stride,
+                output_stride,
+                |descriptor| descriptor.validate_for(LinearCapability::NumericFp8),
+            )?;
             numeric_fp8_linear(
                 stream,
                 weight,
@@ -287,6 +297,13 @@ impl CudaOperators {
         output_stride: usize,
     ) -> Result<()> {
         self.submit_operator(plan.kernel_launches() as u64, |stream| {
+            build_numeric_fp8_operator_contract(
+                plan,
+                LogicalDType::Bf16,
+                activation_stride,
+                output_stride,
+                |descriptor| descriptor.validate_for(LinearCapability::NumericFp8),
+            )?;
             cutlass::numeric_fp8_bf16_linear(
                 stream,
                 weight,
