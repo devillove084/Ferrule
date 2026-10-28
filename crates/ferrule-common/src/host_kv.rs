@@ -4,6 +4,7 @@
 //! adapter must retain its allocations and obtain real producer/consumer fences.
 
 use std::ops::Range;
+use std::sync::Arc;
 
 use crate::execution::{
     ExecutionTransactionId, KvLayoutSchemaIdentity, KvPageId, KvReservationView, StateSlot,
@@ -75,6 +76,27 @@ impl CommittedKvSource {
         }
         Ok(())
     }
+}
+
+/// A witness-issued identity for one logical host-KV read.
+///
+/// This capability contains only transaction/request metadata. It has no page
+/// address, placement handle, fence, allocation, or completion authority. Its
+/// fields are private so safe callers can obtain one only from a witness.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HostKvReadCapability {
+    transaction: ExecutionTransactionId,
+    reservation_id: u64,
+    owner: u64,
+    state_slot: StateSlot,
+    generation: u64,
+    incarnation: u64,
+    schema: KvLayoutSchemaIdentity,
+    committed_tokens: usize,
+    source_positions: Range<usize>,
+    reservation_positions: Range<usize>,
+    execution_state_slot: StateSlot,
+    execution_generation: u64,
 }
 
 /// Logical witness for a read spanning a committed prefix and one existing
@@ -152,13 +174,17 @@ impl HostKvAppendReadWitness {
         {
             return Err(HostKvError::InvalidGeometry);
         }
-        Ok(Self {
+        let witness = Self {
             transaction,
             reservation_id,
             source,
             reservation,
             pages,
-        })
+        };
+        // Keep the same page/source/destination geometry invariant at the
+        // existing witness admission boundary without allocating a plan.
+        witness.validate_read_geometry(witness.positions())?;
+        Ok(witness)
     }
     pub const fn transaction(&self) -> ExecutionTransactionId {
         self.transaction
@@ -178,6 +204,59 @@ impl HostKvAppendReadWitness {
     pub fn positions(&self) -> Range<usize> {
         self.source.positions.start..self.reservation.positions.end
     }
+    /// Issue the packed logical read description for the complete witness range.
+    /// This contains no physical placement or completion information.
+    pub fn read_plan(&self) -> HostKvResult<KvReadPlan> {
+        self.read_plan_for(self.positions())
+    }
+    /// Issue a packed logical read description for a nonempty subrange of the
+    /// witness. Each emitted segment is page-bounded and destination-packed.
+    pub fn read_plan_for(&self, logical_tokens: Range<usize>) -> HostKvResult<KvReadPlan> {
+        KvReadPlan::from_witness(self, logical_tokens)
+    }
+    /// Validate a plan against this exact transaction, reservation and source
+    /// witness. This is metadata validation, not a DMA or consumer receipt.
+    pub fn validate_read_plan(&self, plan: &KvReadPlan) -> HostKvResult<()> {
+        if !plan.capability.matches_witness(self) {
+            return Err(HostKvError::StaleSource);
+        }
+
+        let mut segment_index = 0usize;
+        let geometry =
+            self.for_each_read_segment_geometry(plan.logical_tokens.clone(), |expected| {
+                let segment = plan
+                    .segments
+                    .get(segment_index)
+                    .ok_or(HostKvError::InvalidGeometry)?;
+                if segment.capability.as_ref() != plan.capability.as_ref() {
+                    return Err(HostKvError::StaleSource);
+                }
+                if segment.logical_tokens.start != expected.logical_start
+                    || segment.logical_tokens.end != expected.logical_end
+                    || segment.page_tokens.start != expected.page_tokens_start
+                    || segment.page_tokens.end != expected.page_tokens_end
+                {
+                    return Err(HostKvError::InvalidRange);
+                }
+                if segment.source_page != expected.source_page {
+                    return Err(HostKvError::StaleSource);
+                }
+                if segment.destination_offset != expected.destination_offset {
+                    return Err(HostKvError::InvalidRange);
+                }
+                if segment.destination_length != expected.destination_length {
+                    return Err(HostKvError::InvalidGeometry);
+                }
+                segment_index = segment_index.checked_add(1).ok_or(HostKvError::Overflow)?;
+                Ok(())
+            })?;
+        if segment_index != plan.segments.len()
+            || geometry.destination_length != plan.destination_length
+        {
+            return Err(HostKvError::InvalidGeometry);
+        }
+        Ok(())
+    }
     /// Exact, disjoint coverage for partial attention of the one appended query.
     /// Both operands must be unnormalized (max, denominator, numerator) states
     /// for the same Q, head geometry and mask. This metadata check is not a DMA
@@ -195,6 +274,254 @@ impl HostKvAppendReadWitness {
             return Err(HostKvError::InvalidRange);
         }
         Ok(())
+    }
+}
+
+impl HostKvReadCapability {
+    fn from_witness(witness: &HostKvAppendReadWitness) -> Self {
+        Self {
+            transaction: witness.transaction,
+            reservation_id: witness.reservation_id,
+            owner: witness.source.owner,
+            state_slot: witness.source.state_slot,
+            generation: witness.source.generation,
+            incarnation: witness.source.incarnation,
+            schema: witness.source.schema.clone(),
+            committed_tokens: witness.source.committed_tokens,
+            source_positions: witness.source.positions.clone(),
+            reservation_positions: witness.reservation.positions.clone(),
+            execution_state_slot: witness.reservation.execution_state_slot,
+            execution_generation: witness.reservation.execution_generation,
+        }
+    }
+
+    fn matches_witness(&self, witness: &HostKvAppendReadWitness) -> bool {
+        self.transaction == witness.transaction
+            && self.reservation_id == witness.reservation_id
+            && self.owner == witness.source.owner
+            && self.state_slot == witness.source.state_slot
+            && self.generation == witness.source.generation
+            && self.incarnation == witness.source.incarnation
+            && self.schema == witness.source.schema
+            && self.committed_tokens == witness.source.committed_tokens
+            && self.source_positions == witness.source.positions
+            && self.reservation_positions == witness.reservation.positions
+            && self.execution_state_slot == witness.reservation.execution_state_slot
+            && self.execution_generation == witness.reservation.execution_generation
+    }
+
+    pub const fn transaction(&self) -> ExecutionTransactionId {
+        self.transaction
+    }
+    pub const fn reservation_id(&self) -> u64 {
+        self.reservation_id
+    }
+    pub const fn owner(&self) -> u64 {
+        self.owner
+    }
+    pub const fn state_slot(&self) -> StateSlot {
+        self.state_slot
+    }
+    pub const fn generation(&self) -> u64 {
+        self.generation
+    }
+    pub const fn incarnation(&self) -> u64 {
+        self.incarnation
+    }
+    pub fn schema(&self) -> &KvLayoutSchemaIdentity {
+        &self.schema
+    }
+    pub const fn committed_tokens(&self) -> usize {
+        self.committed_tokens
+    }
+    pub fn source_positions(&self) -> Range<usize> {
+        self.source_positions.clone()
+    }
+    pub fn reservation_positions(&self) -> Range<usize> {
+        self.reservation_positions.clone()
+    }
+    pub const fn execution_state_slot(&self) -> StateSlot {
+        self.execution_state_slot
+    }
+    pub const fn execution_generation(&self) -> u64 {
+        self.execution_generation
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct KvReadSegmentGeometry {
+    source_page: KvPageId,
+    logical_start: usize,
+    logical_end: usize,
+    page_tokens_start: usize,
+    page_tokens_end: usize,
+    destination_offset: usize,
+    destination_length: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct KvReadGeometry {
+    destination_length: usize,
+}
+
+fn checked_bytes_per_token(schema: &KvLayoutSchemaIdentity) -> HostKvResult<usize> {
+    if schema.page_size() == 0 || schema.planes().is_empty() {
+        return Err(HostKvError::InvalidGeometry);
+    }
+    let mut total = 0usize;
+    for plane in schema.planes() {
+        if plane.elements_per_token == 0 || plane.layer_count == 0 {
+            return Err(HostKvError::InvalidGeometry);
+        }
+        let elements = plane
+            .elements_per_token
+            .checked_mul(plane.layer_count)
+            .ok_or(HostKvError::Overflow)?;
+        let bytes = elements
+            .checked_mul(plane.element_type.bytes_per_element())
+            .ok_or(HostKvError::Overflow)?;
+        total = total.checked_add(bytes).ok_or(HostKvError::Overflow)?;
+    }
+    Ok(total)
+}
+
+/// One page-bounded logical source range packed into a destination byte range.
+///
+/// The private capability makes a segment witness-issued. The public fields are
+/// only logical metadata: `source_page` is never a physical address and the
+/// destination values do not identify an allocation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KvReadSegment {
+    pub source_page: KvPageId,
+    /// Absolute logical token positions in the witnessed sequence.
+    pub logical_tokens: Range<usize>,
+    /// Token positions relative to `source_page`.
+    pub page_tokens: Range<usize>,
+    pub destination_offset: usize,
+    pub destination_length: usize,
+    capability: Arc<HostKvReadCapability>,
+}
+impl KvReadSegment {
+    pub fn capability(&self) -> &HostKvReadCapability {
+        self.capability.as_ref()
+    }
+}
+
+/// Provider-neutral, non-owning packed description of a witnessed KV read.
+///
+/// Current append-read semantics are exact contiguous coverage, so this plan
+/// emits no implicit zero-fill or gap segments. Physical placement, DMA
+/// submission, stream/event state, and completion remain outside this type.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KvReadPlan {
+    pub logical_tokens: Range<usize>,
+    pub destination_length: usize,
+    segments: Vec<KvReadSegment>,
+    capability: Arc<HostKvReadCapability>,
+}
+impl KvReadPlan {
+    /// Derive a plan only from an existing witness capability.
+    pub fn from_witness(
+        witness: &HostKvAppendReadWitness,
+        logical_tokens: Range<usize>,
+    ) -> HostKvResult<Self> {
+        witness.build_read_plan(logical_tokens)
+    }
+
+    pub fn segments(&self) -> &[KvReadSegment] {
+        &self.segments
+    }
+    pub fn capability(&self) -> &HostKvReadCapability {
+        self.capability.as_ref()
+    }
+}
+
+impl HostKvAppendReadWitness {
+    fn validate_read_geometry(&self, logical_tokens: Range<usize>) -> HostKvResult<KvReadGeometry> {
+        self.for_each_read_segment_geometry(logical_tokens, |_| Ok(()))
+    }
+
+    fn for_each_read_segment_geometry<F>(
+        &self,
+        logical_tokens: Range<usize>,
+        mut visit: F,
+    ) -> HostKvResult<KvReadGeometry>
+    where
+        F: FnMut(KvReadSegmentGeometry) -> HostKvResult<()>,
+    {
+        let witness_range = self.positions();
+        if logical_tokens.start >= logical_tokens.end
+            || logical_tokens.start < witness_range.start
+            || logical_tokens.end > witness_range.end
+        {
+            return Err(HostKvError::InvalidRange);
+        }
+        let page_size = self.source.schema.page_size();
+        let bytes_per_token = checked_bytes_per_token(&self.source.schema)?;
+        if self.pages.is_empty() {
+            return Err(HostKvError::InvalidGeometry);
+        }
+
+        let first_page = logical_tokens.start / page_size;
+        let last_page = (logical_tokens.end - 1) / page_size;
+        let mut destination_offset = 0usize;
+        for page_index in first_page..=last_page {
+            let page_origin = page_index
+                .checked_mul(page_size)
+                .ok_or(HostKvError::Overflow)?;
+            let page_limit = page_origin
+                .checked_add(page_size)
+                .ok_or(HostKvError::Overflow)?;
+            let logical_start = logical_tokens.start.max(page_origin);
+            let logical_end = logical_tokens.end.min(page_limit);
+            if logical_start >= logical_end {
+                return Err(HostKvError::InvalidGeometry);
+            }
+            let token_count = logical_end
+                .checked_sub(logical_start)
+                .ok_or(HostKvError::Overflow)?;
+            let destination_length = token_count
+                .checked_mul(bytes_per_token)
+                .ok_or(HostKvError::Overflow)?;
+            let source_page = *self.pages.get(page_index).ok_or(HostKvError::StaleSource)?;
+            visit(KvReadSegmentGeometry {
+                source_page,
+                logical_start,
+                logical_end,
+                page_tokens_start: logical_start - page_origin,
+                page_tokens_end: logical_end - page_origin,
+                destination_offset,
+                destination_length,
+            })?;
+            destination_offset = destination_offset
+                .checked_add(destination_length)
+                .ok_or(HostKvError::Overflow)?;
+        }
+        Ok(KvReadGeometry {
+            destination_length: destination_offset,
+        })
+    }
+
+    fn build_read_plan(&self, logical_tokens: Range<usize>) -> HostKvResult<KvReadPlan> {
+        let capability = Arc::new(HostKvReadCapability::from_witness(self));
+        let mut segments = Vec::new();
+        let geometry = self.for_each_read_segment_geometry(logical_tokens.clone(), |expected| {
+            segments.push(KvReadSegment {
+                source_page: expected.source_page,
+                logical_tokens: expected.logical_start..expected.logical_end,
+                page_tokens: expected.page_tokens_start..expected.page_tokens_end,
+                destination_offset: expected.destination_offset,
+                destination_length: expected.destination_length,
+                capability: Arc::clone(&capability),
+            });
+            Ok(())
+        })?;
+        Ok(KvReadPlan {
+            logical_tokens,
+            destination_length: geometry.destination_length,
+            segments,
+            capability,
+        })
     }
 }
 
@@ -258,3 +585,7 @@ pub struct HostKvPlan {
     pub credits: placement::PlacementCredits,
     pub fence: HostKvFence,
 }
+
+#[cfg(test)]
+#[path = "../tests/unit/host_kv/read_plan.rs"]
+mod read_plan_tests;
