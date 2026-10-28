@@ -133,6 +133,21 @@ pub enum ParallelTopologyError {
     EmptyParticipants,
     DuplicateParticipant,
     ParticipantTopologyMismatch,
+    ZeroLayerCount,
+    StageCountMismatch,
+    StageOutOfBounds,
+    DuplicateStage,
+    MissingStage,
+    EmptyLayerRange,
+    ReversedLayerRange,
+    LayerRangeGap,
+    LayerRangeOverlap,
+    LayerRangeOutOfBounds,
+    LayerRangeOverflow,
+    RankLaneMismatch,
+    StagePartitionTopologyMismatch,
+    PlacementTopologyMismatch,
+    PlacementRankMismatch,
     ExpertDispatchMemberOverlap,
     KvOwnerOverlap,
     ExpertDispatchMembersAlreadyAttached,
@@ -144,11 +159,147 @@ pub enum ParallelTopologyError {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PipelineStageLayerRange {
+    stage: u32,
+    start: usize,
+    end: usize,
+}
+
+impl PipelineStageLayerRange {
+    pub fn new(stage: u32, start: usize, end: usize) -> Result<Self, ParallelTopologyError> {
+        if start == end {
+            return Err(ParallelTopologyError::EmptyLayerRange);
+        }
+        if start > end {
+            return Err(ParallelTopologyError::ReversedLayerRange);
+        }
+        Ok(Self { stage, start, end })
+    }
+
+    pub fn from_len(stage: u32, start: usize, len: usize) -> Result<Self, ParallelTopologyError> {
+        let end = start
+            .checked_add(len)
+            .ok_or(ParallelTopologyError::LayerRangeOverflow)?;
+        Self::new(stage, start, end)
+    }
+
+    pub const fn stage(&self) -> u32 {
+        self.stage
+    }
+
+    pub const fn start(&self) -> usize {
+        self.start
+    }
+
+    pub const fn end(&self) -> usize {
+        self.end
+    }
+}
+
+/// A model-independent, sealed PP partition attached to one validated mesh.
+/// Ranges are half-open and stored in stage order; this does not create another
+/// mesh or infer model-layer semantics.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PipelineStageLayerRanges {
+    topology_id: ParallelTopologyId,
+    plan: ParallelismPlan,
+    total_layers: usize,
+    ranges: Vec<PipelineStageLayerRange>,
+}
+
+impl PipelineStageLayerRanges {
+    pub fn new(
+        topology: &ValidatedParallelTopology,
+        total_layers: usize,
+        ranges: impl IntoIterator<Item = PipelineStageLayerRange>,
+    ) -> Result<Self, ParallelTopologyError> {
+        if total_layers == 0 {
+            return Err(ParallelTopologyError::ZeroLayerCount);
+        }
+        let mut ranges: Vec<_> = ranges.into_iter().collect();
+        if ranges.is_empty() {
+            return Err(ParallelTopologyError::MissingStage);
+        }
+        if ranges.len() < topology.plan.pipeline_parallel {
+            return Err(ParallelTopologyError::MissingStage);
+        }
+        if ranges.len() > topology.plan.pipeline_parallel {
+            return Err(ParallelTopologyError::StageCountMismatch);
+        }
+        if ranges
+            .iter()
+            .any(|range| range.stage as usize >= topology.plan.pipeline_parallel)
+        {
+            return Err(ParallelTopologyError::StageOutOfBounds);
+        }
+        ranges.sort_unstable_by_key(PipelineStageLayerRange::stage);
+        if ranges.windows(2).any(|pair| pair[0].stage == pair[1].stage) {
+            return Err(ParallelTopologyError::DuplicateStage);
+        }
+        if ranges
+            .iter()
+            .enumerate()
+            .any(|(stage, range)| range.stage as usize != stage)
+        {
+            return Err(ParallelTopologyError::MissingStage);
+        }
+
+        let mut cursor = 0;
+        for range in &ranges {
+            if range.end > total_layers {
+                return Err(ParallelTopologyError::LayerRangeOutOfBounds);
+            }
+            if range.start < cursor {
+                return Err(ParallelTopologyError::LayerRangeOverlap);
+            }
+            if range.start > cursor {
+                return Err(ParallelTopologyError::LayerRangeGap);
+            }
+            cursor = range.end;
+        }
+        if cursor != total_layers {
+            return Err(ParallelTopologyError::LayerRangeGap);
+        }
+        Ok(Self {
+            topology_id: topology.topology_id,
+            plan: topology.plan,
+            total_layers,
+            ranges,
+        })
+    }
+
+    pub const fn topology_id(&self) -> ParallelTopologyId {
+        self.topology_id
+    }
+
+    pub const fn total_layers(&self) -> usize {
+        self.total_layers
+    }
+
+    pub fn len(&self) -> usize {
+        self.ranges.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.ranges.is_empty()
+    }
+
+    pub fn get(&self, stage: u32) -> Option<&PipelineStageLayerRange> {
+        self.ranges.get(stage as usize)
+    }
+
+    pub fn iter(&self) -> std::slice::Iter<'_, PipelineStageLayerRange> {
+        self.ranges.iter()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ValidatedParallelTopology {
     topology_id: ParallelTopologyId,
     world_size: u32,
     local_rank: ParallelRankId,
     plan: ParallelismPlan,
+    stage_ranges: Option<PipelineStageLayerRanges>,
 }
 
 impl ValidatedParallelTopology {
@@ -158,6 +309,22 @@ impl ValidatedParallelTopology {
         local_rank: ParallelRankId,
         plan: ParallelismPlan,
     ) -> Result<Self, ParallelTopologyError> {
+        Self::validate_mesh_contract(topology_id, world_size, local_rank, plan)?;
+        Ok(Self {
+            topology_id,
+            world_size,
+            local_rank,
+            plan,
+            stage_ranges: None,
+        })
+    }
+
+    fn validate_mesh_contract(
+        topology_id: ParallelTopologyId,
+        world_size: u32,
+        local_rank: ParallelRankId,
+        plan: ParallelismPlan,
+    ) -> Result<(), ParallelTopologyError> {
         if topology_id.get() == 0 {
             return Err(ParallelTopologyError::ZeroId);
         }
@@ -182,12 +349,35 @@ impl ValidatedParallelTopology {
         {
             return Err(ParallelTopologyError::UnsupportedParallelism);
         }
-        Ok(Self {
-            topology_id,
-            world_size,
-            local_rank,
-            plan,
-        })
+        Ok(())
+    }
+
+    /// Construct the existing mesh contract and seal a model-independent PP
+    /// layer partition on it. The ordinary `new` constructor remains unchanged
+    /// for callers that do not yet have layer metadata.
+    pub fn new_with_stage_ranges(
+        topology_id: ParallelTopologyId,
+        world_size: u32,
+        local_rank: ParallelRankId,
+        plan: ParallelismPlan,
+        total_layers: usize,
+        ranges: impl IntoIterator<Item = PipelineStageLayerRange>,
+    ) -> Result<Self, ParallelTopologyError> {
+        Self::new(topology_id, world_size, local_rank, plan)?
+            .with_stage_ranges(total_layers, ranges)
+    }
+
+    pub fn with_stage_ranges(
+        mut self,
+        total_layers: usize,
+        ranges: impl IntoIterator<Item = PipelineStageLayerRange>,
+    ) -> Result<Self, ParallelTopologyError> {
+        self.stage_ranges = Some(PipelineStageLayerRanges::new(&self, total_layers, ranges)?);
+        Ok(self)
+    }
+
+    pub fn stage_ranges(&self) -> Option<&PipelineStageLayerRanges> {
+        self.stage_ranges.as_ref()
     }
     pub const fn topology_id(&self) -> ParallelTopologyId {
         self.topology_id
@@ -200,6 +390,16 @@ impl ValidatedParallelTopology {
     }
     pub const fn plan(&self) -> ParallelismPlan {
         self.plan
+    }
+
+    pub fn validate_stage_ranges(
+        &self,
+        ranges: &PipelineStageLayerRanges,
+    ) -> Result<(), ParallelTopologyError> {
+        if ranges.topology_id != self.topology_id || ranges.plan != self.plan {
+            return Err(ParallelTopologyError::StagePartitionTopologyMismatch);
+        }
+        Ok(())
     }
 
     /// Create a topology-bound coordinate. Coordinates carry the topology
@@ -247,6 +447,52 @@ impl ValidatedParallelTopology {
         self.rank_at(coordinate.replica, coordinate.stage, coordinate.tensor)
     }
 
+    pub fn validate_tensor_lane(
+        &self,
+        coordinate: MeshCoordinate,
+        rank: ParallelRankId,
+    ) -> Result<(), ParallelTopologyError> {
+        if self.rank_of(coordinate)? != rank {
+            return Err(ParallelTopologyError::RankLaneMismatch);
+        }
+        Ok(())
+    }
+
+    /// Keep a logical mesh rank and a physical device ordinal in separate
+    /// identity-bearing fields. The ordinal is an explicit placement input;
+    /// this common contract does not infer or allocate devices.
+    pub fn placement(
+        &self,
+        replica: u32,
+        stage: u32,
+        tensor: u32,
+        device_ordinal: usize,
+    ) -> Result<TopologyPlacement, ParallelTopologyError> {
+        let coordinate = self.coordinate(replica, stage, tensor)?;
+        let logical_rank = self.rank_of(coordinate)?;
+        Ok(TopologyPlacement {
+            coordinate,
+            logical_rank,
+            device_ordinal,
+        })
+    }
+
+    pub fn validate_placement(
+        &self,
+        placement: &TopologyPlacement,
+    ) -> Result<(), ParallelTopologyError> {
+        if placement.coordinate.topology_id != self.topology_id
+            || placement.coordinate.world_size != self.world_size
+            || placement.coordinate.plan != self.plan
+        {
+            return Err(ParallelTopologyError::PlacementTopologyMismatch);
+        }
+        if self.rank_of(placement.coordinate)? != placement.logical_rank {
+            return Err(ParallelTopologyError::PlacementRankMismatch);
+        }
+        Ok(())
+    }
+
     /// Build the first-phase execution scopes for one data-parallel replica.
     /// KV owns the replica's PP×TP mesh; tensor collectives are stage-local.
     /// Expert members are attached activation owners and start empty.
@@ -268,14 +514,16 @@ impl ValidatedParallelTopology {
                     .map(TensorCollectiveParticipants::from_participants)
             })
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(ParallelExecutionScopes {
+        let scopes = ParallelExecutionScopes {
             topology_id: self.topology_id,
             plan: self.plan,
             replica,
             kv_participants: KvParticipants::from_participants(kv),
             tensor_collectives,
             expert_dispatch_members: std::collections::BTreeMap::new(),
-        })
+        };
+        scopes.validate_topology(self)?;
+        Ok(scopes)
     }
 
     pub fn participants(&self) -> ParticipantSet {
@@ -367,8 +615,7 @@ impl ValidatedParallelTopology {
         Ok(rank.get() / (self.plan.pipeline_parallel * self.plan.tensor_parallel) as u32)
     }
 
-    /// Require the same topology epoch, world and mesh; local rank is not scope identity.
-    pub fn validate_participants(
+    fn validate_participant_identity(
         &self,
         participants: &ParticipantSet,
     ) -> Result<(), ParallelTopologyError> {
@@ -378,12 +625,132 @@ impl ValidatedParallelTopology {
         {
             return Err(ParallelTopologyError::ParticipantTopologyMismatch);
         }
+        Ok(())
+    }
+
+    /// Require the same topology epoch, world and mesh; local rank is not scope identity.
+    pub fn validate_participants(
+        &self,
+        participants: &ParticipantSet,
+    ) -> Result<(), ParallelTopologyError> {
+        self.validate_participant_identity(participants)?;
         if participants
             .ranks
             .iter()
             .any(|rank| rank.get() >= self.world_size)
         {
             return Err(ParallelTopologyError::RankOutOfBounds);
+        }
+        Ok(())
+    }
+
+    pub fn validate_kv_participants(
+        &self,
+        replica: u32,
+        participants: &ParticipantSet,
+    ) -> Result<(), ParallelTopologyError> {
+        self.validate_participant_identity(participants)?;
+        self.rank_at(replica, 0, 0)?;
+        let tensor_parallel = self.plan.tensor_parallel;
+        let expected_len = self.plan.pipeline_parallel * tensor_parallel;
+        let length_matches = participants.ranks.len() == expected_len;
+        for (index, actual) in participants.ranks.iter().enumerate() {
+            if actual.get() >= self.world_size {
+                return Err(ParallelTopologyError::RankOutOfBounds);
+            }
+            if length_matches {
+                let stage = (index / tensor_parallel) as u32;
+                let tensor = (index % tensor_parallel) as u32;
+                let expected = self
+                    .rank_at(replica, stage, tensor)
+                    .expect("validated mesh coordinate");
+                if *actual != expected {
+                    return Err(ParallelTopologyError::ScopeKindMismatch);
+                }
+            }
+        }
+        if !length_matches {
+            return Err(ParallelTopologyError::ScopeKindMismatch);
+        }
+        Ok(())
+    }
+
+    pub fn validate_tensor_stage_participants(
+        &self,
+        replica: u32,
+        stage: u32,
+        participants: &ParticipantSet,
+    ) -> Result<(), ParallelTopologyError> {
+        self.validate_participant_identity(participants)?;
+        self.rank_at(replica, stage, 0)?;
+        let length_matches = participants.ranks.len() == self.plan.tensor_parallel;
+        for (tensor, actual) in participants.ranks.iter().enumerate() {
+            if actual.get() >= self.world_size {
+                return Err(ParallelTopologyError::RankOutOfBounds);
+            }
+            if length_matches {
+                let expected = self
+                    .rank_at(replica, stage, tensor as u32)
+                    .expect("validated mesh coordinate");
+                if *actual != expected {
+                    return Err(ParallelTopologyError::ScopeKindMismatch);
+                }
+            }
+        }
+        if !length_matches {
+            return Err(ParallelTopologyError::ScopeKindMismatch);
+        }
+        Ok(())
+    }
+
+    pub fn validate_expert_dispatch_members(
+        &self,
+        attachment: &ExpertDispatchMembers,
+    ) -> Result<(), ParallelTopologyError> {
+        self.rank_of(attachment.attachment)?;
+        if attachment.members.is_empty() {
+            return Err(ParallelTopologyError::EmptyParticipants);
+        }
+        let unique: std::collections::BTreeSet<_> = attachment.members.iter().copied().collect();
+        if unique.len() != attachment.members.len() {
+            return Err(ParallelTopologyError::DuplicateParticipant);
+        }
+        // Expert owners are an explicit attached group, never a hidden extension
+        // of the logical PP×TP mesh or one of its stage-local collectives.
+        if attachment
+            .members
+            .iter()
+            .any(|rank| rank.get() < self.world_size)
+        {
+            return Err(ParallelTopologyError::ExpertDispatchMemberOverlap);
+        }
+        match attachment.source_scope {
+            ExpertSourceScope::Member if !attachment.members.contains(&attachment.source_rank) => {
+                return Err(ParallelTopologyError::ExpertSourceNotMember);
+            }
+            ExpertSourceScope::ExternalStage => {
+                if self.plan.tensor_parallel != 1 {
+                    return Err(ParallelTopologyError::UnsupportedParallelism);
+                }
+                if attachment.source_rank
+                    != self.rank_at(attachment.replica(), attachment.stage(), 0)?
+                {
+                    return Err(ParallelTopologyError::ExpertSourceNotStageCaller);
+                }
+            }
+            ExpertSourceScope::ExternalTensorSource => {
+                let start = self
+                    .rank_at(attachment.replica(), attachment.stage(), 0)?
+                    .get();
+                let end = start + self.plan.tensor_parallel as u32;
+                if !(start..end).contains(&attachment.source_rank.get()) {
+                    return Err(ParallelTopologyError::ExpertSourceNotStageCaller);
+                }
+            }
+            ExpertSourceScope::Member => {}
+        }
+        if self.plan.expert_parallel != 1 && attachment.members.len() != self.plan.expert_parallel {
+            return Err(ParallelTopologyError::ExpertDegreeMismatch);
         }
         Ok(())
     }
@@ -412,6 +779,30 @@ impl MeshCoordinate {
     }
     pub const fn tensor(&self) -> u32 {
         self.tensor
+    }
+}
+
+/// A logical mesh identity paired with an explicit physical device ordinal.
+/// The two values intentionally have different fields and accessors.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct TopologyPlacement {
+    coordinate: MeshCoordinate,
+    logical_rank: ParallelRankId,
+    device_ordinal: usize,
+}
+
+impl TopologyPlacement {
+    pub const fn coordinate(&self) -> MeshCoordinate {
+        self.coordinate
+    }
+    pub const fn topology_id(&self) -> ParallelTopologyId {
+        self.coordinate.topology_id
+    }
+    pub const fn logical_rank(&self) -> ParallelRankId {
+        self.logical_rank
+    }
+    pub const fn device_ordinal(&self) -> usize {
+        self.device_ordinal
     }
 }
 
@@ -539,49 +930,14 @@ impl ExpertDispatchMembers {
     ) -> Result<Self, ParallelTopologyError> {
         let attachment = topology.coordinate(replica, stage, 0)?;
         let members: Vec<_> = members.into_iter().collect();
-        if members.is_empty() {
-            return Err(ParallelTopologyError::EmptyParticipants);
-        }
-        let unique: std::collections::BTreeSet<_> = members.iter().copied().collect();
-        if unique.len() != members.len() {
-            return Err(ParallelTopologyError::DuplicateParticipant);
-        }
-        // Exclude the whole mesh, including other DP replicas, not just this KV scope.
-        if members.iter().any(|rank| rank.get() < topology.world_size) {
-            return Err(ParallelTopologyError::ExpertDispatchMemberOverlap);
-        }
-        match source_scope {
-            ExpertSourceScope::Member if !members.contains(&source_rank) => {
-                return Err(ParallelTopologyError::ExpertSourceNotMember);
-            }
-            ExpertSourceScope::ExternalStage => {
-                if topology.plan.tensor_parallel != 1 {
-                    return Err(ParallelTopologyError::UnsupportedParallelism);
-                }
-                if source_rank != topology.rank_at(replica, stage, 0)? {
-                    return Err(ParallelTopologyError::ExpertSourceNotStageCaller);
-                }
-            }
-            ExpertSourceScope::ExternalTensorSource => {
-                if !(0..topology.plan.tensor_parallel)
-                    .any(|lane| topology.rank_at(replica, stage, lane as u32) == Ok(source_rank))
-                {
-                    return Err(ParallelTopologyError::ExpertSourceNotStageCaller);
-                }
-            }
-            ExpertSourceScope::Member => {}
-        }
-        // EP=1 keeps legacy explicitly configured groups compatible. A declared
-        // EP>1 constrains attached groups; it never allocates implicit owners.
-        if topology.plan.expert_parallel != 1 && members.len() != topology.plan.expert_parallel {
-            return Err(ParallelTopologyError::ExpertDegreeMismatch);
-        }
-        Ok(Self {
+        let attachment = Self {
             attachment,
             source_scope,
             source_rank,
             members,
-        })
+        };
+        topology.validate_expert_dispatch_members(&attachment)?;
+        Ok(attachment)
     }
     pub const fn topology_id(&self) -> ParallelTopologyId {
         self.attachment.topology_id
@@ -663,7 +1019,21 @@ impl ParallelExecutionScopes {
         &self,
         topology: &ValidatedParallelTopology,
     ) -> Result<(), ParallelTopologyError> {
-        topology.validate_participants(self.kv_participants.as_participants())
+        topology.validate_kv_participants(self.replica, self.kv_participants.as_participants())?;
+        for (stage, participants) in self.tensor_collectives.iter().enumerate() {
+            topology.validate_tensor_stage_participants(
+                self.replica,
+                stage as u32,
+                participants.as_participants(),
+            )?;
+        }
+        for (stage, attachment) in &self.expert_dispatch_members {
+            if *stage != attachment.stage() || attachment.replica() != self.replica {
+                return Err(ParallelTopologyError::ScopeKindMismatch);
+            }
+            topology.validate_expert_dispatch_members(attachment)?;
+        }
+        Ok(())
     }
 
     /// Validate a legacy untyped cohort before using it for KV custody. A
@@ -1689,3 +2059,7 @@ mod external_expert_source_tests {
 #[cfg(test)]
 #[path = "../tests/unit/topology/tensor_source.rs"]
 mod tensor_source_tests;
+
+#[cfg(test)]
+#[path = "../tests/unit/topology/contract.rs"]
+mod contract_tests;

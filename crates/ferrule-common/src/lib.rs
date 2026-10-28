@@ -31,7 +31,8 @@ pub use memory::{
 pub use topology::{
     ExpertDispatchMembers, KvParticipants, MeshCoordinate, ParallelExecutionScopes,
     ParallelGroupId, ParallelRankId, ParallelTopologyError, ParallelTopologyId, ParallelismPlan,
-    ParallelismPlanError, ParticipantSet, TensorCollectiveParticipants, ValidatedParallelTopology,
+    ParallelismPlanError, ParticipantSet, PipelineStageLayerRange, PipelineStageLayerRanges,
+    TensorCollectiveParticipants, TopologyPlacement, ValidatedParallelTopology,
 };
 
 /// Quantization format identifier — mirrors GGUF's type enum.
