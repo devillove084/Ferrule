@@ -20,6 +20,26 @@ const FINAL_DEEPSEEK_FILES: &[&str] = &[
     "tests.rs",
 ];
 const DEEPSEEK_TEST_FILES: &[&str] = &["tests.rs"];
+
+const DEEPSEEK_V41_SOURCE_ROOT: &str = "src/models/deepseek_v41";
+const DEEPSEEK_V41_PRODUCTION_FILE_BUDGET: usize = 2;
+// V4.1 metadata-only includes the typed config/index and header contracts;
+// keep the expanded boundary explicit and still tightly capped.
+const DEEPSEEK_V41_PRODUCTION_LOC_BUDGET: usize = 2_100;
+const FINAL_DEEPSEEK_V41_FILES: &[&str] = &["metadata.rs", "mod.rs"];
+const DEEPSEEK_V41_TEST_FILES: &[&str] = &[];
+const FORBIDDEN_DEEPSEEK_V41_FILES: &[&str] = &[
+    "adapter.rs",
+    "assembly.rs",
+    "checkpoint.rs",
+    "recipe.rs",
+    "name_mapper.rs",
+    "runner.rs",
+    "forward.rs",
+    "attention.rs",
+    "moe.rs",
+];
+
 const FORBIDDEN_DEEPSEEK_FILES: &[&str] = &[
     "runner.rs",
     "prepared.rs",
@@ -102,7 +122,8 @@ const QWEN35_BACKEND_PROVIDER_ALLOWLIST: &[&str] = &[];
 /// Every concrete model implementation root is listed here. `common` is an
 /// explicitly non-family shared module; a new sibling root must update this
 /// manifest before it can evade a boundary check.
-const DOCUMENTED_FAMILY_ROOTS: &[&str] = &["deepseek_v4", "qwen3", "qwen35"];
+const DOCUMENTED_FAMILY_ROOTS: &[&str] = &["deepseek_v4", "deepseek_v41", "qwen3", "qwen35"];
+const DOCUMENTED_FAMILY_POLICIES: &[(&str, &str)] = &[("deepseek_v41", "MetadataOnly")];
 const NON_FAMILY_MODEL_ROOTS: &[&str] = &["common"];
 const DOCUMENTED_FAMILY_MANIFEST: &str =
     include_str!("fixtures/architecture_boundaries/family_manifest.txt");
@@ -120,11 +141,17 @@ fn model_family_roots_are_explicitly_enumerated() {
         .filter(|line| !line.is_empty() && !line.starts_with('#'))
         .collect::<BTreeSet<_>>();
     assert_eq!(manifest, DOCUMENTED_FAMILY_ROOTS.iter().copied().collect());
+    assert_eq!(
+        DOCUMENTED_FAMILY_POLICIES,
+        &[("deepseek_v41", "MetadataOnly")],
+        "DeepSeek-V4.1 must remain explicitly metadata-only at the architecture boundary"
+    );
     // Listing a new family without also defining/enforcing its file policy is
     // not sufficient. Every documented policy is invoked here.
     for root in DOCUMENTED_FAMILY_ROOTS {
         match *root {
             "deepseek_v4" => deepseek_source_matches_the_final_file_boundary(),
+            "deepseek_v41" => deepseek_v41_source_is_metadata_only(),
             "qwen3" => qwen_source_converges_on_the_final_boundary(),
             "qwen35" => qwen35_source_converges_on_the_final_boundary(),
             other => panic!("family {other} requires an enforced file/LOC policy"),
@@ -281,6 +308,36 @@ fn deepseek_source_matches_the_final_file_boundary() {
         DEEPSEEK_PRODUCTION_FILE_BUDGET,
         None,
     );
+}
+
+#[test]
+fn deepseek_v41_source_is_metadata_only() {
+    check_family(
+        DEEPSEEK_V41_SOURCE_ROOT,
+        FINAL_DEEPSEEK_V41_FILES,
+        DEEPSEEK_V41_TEST_FILES,
+        FORBIDDEN_DEEPSEEK_V41_FILES,
+        DEEPSEEK_V41_PRODUCTION_FILE_BUDGET,
+        Some(DEEPSEEK_V41_PRODUCTION_LOC_BUDGET),
+    );
+    let source = rg_files(DEEPSEEK_V41_SOURCE_ROOT, "*.rs")
+        .into_iter()
+        .map(|file| std::fs::read_to_string(file).expect("read V4.1 boundary source"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    for forbidden in [
+        "ferrule_backend",
+        "ferrule_runtime",
+        "feature = \"cuda\"",
+        "ModelRunner",
+        "Prepared",
+        "forward(",
+    ] {
+        assert!(
+            !source.contains(forbidden),
+            "V4.1 metadata-only boundary contains runtime marker {forbidden}"
+        );
+    }
 }
 
 #[test]
@@ -488,7 +545,13 @@ fn family_discovery_fixture_detects_new_directory_and_flat_roots() {
             .iter()
             .any(|d| d.contains("new_family"))
     );
-    let expanded = &["deepseek_v4", "qwen3", "qwen35", "new_family"];
+    let expanded = &[
+        "deepseek_v4",
+        "deepseek_v41",
+        "qwen3",
+        "qwen35",
+        "new_family",
+    ];
     assert!(family_discovery_debt(&files, expanded).is_empty());
     files.push("src/models/flat_family.rs".into());
     assert!(

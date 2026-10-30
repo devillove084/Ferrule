@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 /// High-level model family understood by Ferrule's runtime boundary.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ModelFamily {
+    /// DeepSeek-V4.1 is currently an explicit metadata-only family.
+    DeepSeekV41,
     DeepSeekV4,
     DeepSeekV3,
     DeepSeekV2,
@@ -39,7 +41,9 @@ impl ModelFamily {
             _ => {}
         }
         let n = normalize_name(name);
-        if n.contains("deepseek4") || n.contains("deepseekv4") {
+        if n.contains("deepseekv41") || n.contains("deepseek41") {
+            Self::DeepSeekV41
+        } else if n.contains("deepseek4") || n.contains("deepseekv4") {
             Self::DeepSeekV4
         } else if n.contains("deepseek3") || n.contains("deepseekv3") {
             Self::DeepSeekV3
@@ -56,6 +60,7 @@ impl ModelFamily {
 
     pub fn as_str(&self) -> &str {
         match self {
+            Self::DeepSeekV41 => "DeepSeek-V4.1",
             Self::DeepSeekV4 => "DeepSeek-V4",
             Self::DeepSeekV3 => "DeepSeek-V3",
             Self::DeepSeekV2 => "DeepSeek-V2",

@@ -145,6 +145,10 @@ impl ModelDescriptor {
             return crate::models::qwen35::Qwen35Metadata::from_value(model_dir, &json)
                 .map(|metadata| metadata.descriptor());
         }
+        if family == ModelFamily::DeepSeekV41 {
+            return crate::models::deepseek_v41::DeepSeekV41Metadata::open_hf(model_dir)
+                .map(|metadata| metadata.descriptor().clone());
+        }
 
         let mut spec = generic_hf_spec(&json, family, architecture.clone());
         if spec.architecture.is_none() {

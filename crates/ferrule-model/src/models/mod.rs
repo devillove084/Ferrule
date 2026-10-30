@@ -7,5 +7,6 @@
 
 pub mod common;
 pub mod deepseek_v4;
+pub mod deepseek_v41;
 pub mod qwen3;
 pub mod qwen35;
