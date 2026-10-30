@@ -26,6 +26,52 @@ pub enum OperatorContractError {
         expected: String,
         actual: String,
     },
+    #[snafu(display(
+        "operator contract: {operand} byte length mismatch: expected {expected}, got {actual}"
+    ))]
+    ByteLengthMismatch {
+        operand: &'static str,
+        expected: usize,
+        actual: usize,
+    },
+    #[snafu(display(
+        "operator contract: {operand} stride mismatch: expected {expected}, got {actual}"
+    ))]
+    StrideMismatch {
+        operand: &'static str,
+        expected: String,
+        actual: String,
+    },
+    #[snafu(display(
+        "operator contract: FP8 scale grid mismatch: expected {expected:?}, got {actual:?}"
+    ))]
+    Fp8ScaleGridMismatch {
+        expected: [usize; 2],
+        actual: [usize; 2],
+    },
+    #[snafu(display(
+        "operator contract: FP8 {axis} padding mismatch: logical {logical}, padded {padded}"
+    ))]
+    Fp8PaddingMismatch {
+        axis: &'static str,
+        logical: usize,
+        padded: usize,
+    },
+    #[snafu(display(
+        "operator contract: non-finite FP8 dequant product at weight byte {weight_index} and scale byte {scale_index} (weight {weight_byte:#04x}, scale {scale_byte:#04x})"
+    ))]
+    NonFiniteFp8Product {
+        weight_index: usize,
+        scale_index: usize,
+        weight_byte: u8,
+        scale_byte: u8,
+    },
+    #[snafu(display("operator contract: FP8 {operand} byte {index} is invalid: {reason}"))]
+    InvalidFp8Byte {
+        operand: &'static str,
+        index: usize,
+        reason: &'static str,
+    },
     #[snafu(display("operator contract: unsupported {capability}: {reason}"))]
     Unsupported {
         capability: &'static str,
@@ -1110,6 +1156,872 @@ impl<'a> QuantizationDescriptor<'a> {
         }
         Ok(())
     }
+}
+
+/// The scale encoding accepted by the block-32 FP8 contract.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Fp8Block32ScaleFormat {
+    /// Unsigned E8M0 exponent-only scale: `2^(byte - 127)`.
+    Ue8m0,
+    /// An explicitly known but unsupported alternative encoding.
+    E4m3,
+    /// An explicitly known but unsupported floating-point encoding.
+    F32,
+    /// An unknown format identifier from an external metadata source.
+    Unknown(u8),
+}
+
+impl Fp8Block32ScaleFormat {
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Ue8m0 => "UE8M0",
+            Self::E4m3 => "E4M3",
+            Self::F32 => "F32",
+            Self::Unknown(_) => "unknown",
+        }
+    }
+}
+
+/// Check a scale-format tag before handing metadata to this fixed-format
+/// contract. Keeping this check public lets importers reject an unknown
+/// external format without relabelling its bytes as UE8M0.
+pub fn validate_fp8_block32_scale_format(format: Fp8Block32ScaleFormat) -> ContractResult<()> {
+    if format == Fp8Block32ScaleFormat::Ue8m0 {
+        Ok(())
+    } else {
+        Err(OperatorContractError::Unsupported {
+            capability: "FP8 block-32 scale format",
+            reason: format!("expected UE8M0, got {}", format.name()),
+        })
+    }
+}
+
+/// Physical padding for a row-major E4M3 weight matrix.
+///
+/// The logical weight is `[n, k]`; the physical byte matrix is
+/// `[padded_n, padded_k]`. When either padded extent is larger than its
+/// logical extent, it must end on a block-32 boundary after applying the
+/// corresponding absolute origin. This makes a deliberately padded tail
+/// distinguishable from an accidentally inconsistent partial block.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Fp8Block32Padding {
+    pub padded_n: usize,
+    pub padded_k: usize,
+}
+
+impl Fp8Block32Padding {
+    pub const fn new(padded_n: usize, padded_k: usize) -> Self {
+        Self { padded_n, padded_k }
+    }
+
+    pub const fn none(n: usize, k: usize) -> Self {
+        Self::new(n, k)
+    }
+}
+
+/// Provider-neutral per-32 scale geometry for E4M3 weights.
+///
+/// This is a byte-layout contract, not a native FP8-MMA descriptor. It has no
+/// architecture, stream, device pointer, kernel, external GEMM, or workspace
+/// assumptions. The logical weight is row-major `[n, k]` E4M3 bytes. Scale
+/// bytes are UE8M0 values indexed by the intersecting absolute 32x32 blocks;
+/// their local grid is row-major but may have an explicit byte stride.
+///
+/// `row_origin` and `column_origin` are absolute logical coordinates of the
+/// local view. Consequently, an expert prefix can be represented without
+/// relabelling its scale grid: the first scale byte is the block containing
+/// `[row_origin, column_origin]`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Fp8Block32ScaleLayout {
+    pub n: usize,
+    pub k: usize,
+    pub row_origin: usize,
+    pub column_origin: usize,
+    pub scale_shape: [usize; 2],
+    pub scale_stride_bytes: [usize; 2],
+    pub padding: Fp8Block32Padding,
+    /// Byte distance between consecutive physical weight rows.
+    pub weight_row_stride_bytes: usize,
+}
+
+impl Fp8Block32ScaleLayout {
+    pub const BLOCK_SIZE: usize = 32;
+    pub const WEIGHT_ELEMENT_BYTES: usize = 1;
+    pub const SCALE_ELEMENT_BYTES: usize = 1;
+
+    pub const fn block_size(self) -> usize {
+        Self::BLOCK_SIZE
+    }
+
+    /// Construct a contiguous, unpadded row-major layout with the minimal
+    /// intersecting scale grid.
+    pub fn contiguous(
+        n: usize,
+        k: usize,
+        row_origin: usize,
+        column_origin: usize,
+    ) -> ContractResult<Self> {
+        let padding = Fp8Block32Padding::none(n, k);
+        let scale_shape = fp8_block32_scale_grid(n, k, row_origin, column_origin, padding)?;
+        Self::new(
+            n,
+            k,
+            row_origin,
+            column_origin,
+            scale_shape,
+            [scale_shape[1], Self::SCALE_ELEMENT_BYTES],
+            padding,
+            k,
+        )
+    }
+
+    /// Construct an explicit scale view and physical weight padding.
+    pub fn new(
+        n: usize,
+        k: usize,
+        row_origin: usize,
+        column_origin: usize,
+        scale_shape: [usize; 2],
+        scale_stride_bytes: [usize; 2],
+        padding: Fp8Block32Padding,
+        weight_row_stride_bytes: usize,
+    ) -> ContractResult<Self> {
+        let layout = Self {
+            n,
+            k,
+            row_origin,
+            column_origin,
+            scale_shape,
+            scale_stride_bytes,
+            padding,
+            weight_row_stride_bytes,
+        };
+        layout.validate()?;
+        Ok(layout)
+    }
+
+    /// Alias emphasizing that all dimensions and strides are caller-owned
+    /// metadata rather than an allocation or a device view.
+    pub fn from_parts(
+        n: usize,
+        k: usize,
+        row_origin: usize,
+        column_origin: usize,
+        scale_shape: [usize; 2],
+        scale_stride_bytes: [usize; 2],
+        padding: Fp8Block32Padding,
+        weight_row_stride_bytes: usize,
+    ) -> ContractResult<Self> {
+        Self::new(
+            n,
+            k,
+            row_origin,
+            column_origin,
+            scale_shape,
+            scale_stride_bytes,
+            padding,
+            weight_row_stride_bytes,
+        )
+    }
+
+    pub fn expected_scale_shape(self) -> ContractResult<[usize; 2]> {
+        fp8_block32_scale_grid(
+            self.n,
+            self.k,
+            self.row_origin,
+            self.column_origin,
+            self.padding,
+        )
+    }
+
+    pub fn validate(self) -> ContractResult<()> {
+        if self.n == 0 || self.k == 0 {
+            return Err(OperatorContractError::InvalidLayout {
+                field: "FP8 block-32 logical shape",
+                reason: "N and K must be positive".into(),
+            });
+        }
+        if self.padding.padded_n < self.n || self.padding.padded_k < self.k {
+            return Err(OperatorContractError::InvalidLayout {
+                field: "FP8 block-32 padding",
+                reason: "padded extents must cover the logical weight".into(),
+            });
+        }
+        checked_fp8_extent(self.row_origin, self.padding.padded_n, "row origin")?;
+        checked_fp8_extent(self.column_origin, self.padding.padded_k, "column origin")?;
+        check_fp8_padding_axis(self.row_origin, self.n, self.padding.padded_n, "N")?;
+        check_fp8_padding_axis(self.column_origin, self.k, self.padding.padded_k, "K")?;
+
+        if self.weight_row_stride_bytes < self.padding.padded_k {
+            return Err(OperatorContractError::StrideMismatch {
+                operand: "E4M3 weight",
+                expected: format!("at least {} bytes", self.padding.padded_k),
+                actual: self.weight_row_stride_bytes.to_string(),
+            });
+        }
+        if self.weight_row_stride_bytes > isize::MAX as usize {
+            return Err(OperatorContractError::ShapeOverflow {
+                field: "E4M3 weight stride",
+            });
+        }
+        let expected_grid = self.expected_scale_shape()?;
+        if self.scale_shape != expected_grid {
+            return Err(OperatorContractError::Fp8ScaleGridMismatch {
+                expected: expected_grid,
+                actual: self.scale_shape,
+            });
+        }
+        if self.scale_stride_bytes.contains(&0) {
+            return Err(OperatorContractError::StrideMismatch {
+                operand: "UE8M0 scale",
+                expected: "both byte strides positive".into(),
+                actual: format!("{:?}", self.scale_stride_bytes),
+            });
+        }
+        if self.scale_stride_bytes[0] > isize::MAX as usize
+            || self.scale_stride_bytes[1] > isize::MAX as usize
+        {
+            return Err(OperatorContractError::ShapeOverflow {
+                field: "UE8M0 scale stride",
+            });
+        }
+        let minimum_row_stride = (self.scale_shape[1] - 1)
+            .checked_mul(self.scale_stride_bytes[1])
+            .and_then(|span| span.checked_add(Self::SCALE_ELEMENT_BYTES))
+            .ok_or(OperatorContractError::ShapeOverflow {
+                field: "UE8M0 scale stride",
+            })?;
+        if self.scale_stride_bytes[0] < minimum_row_stride {
+            return Err(OperatorContractError::StrideMismatch {
+                operand: "UE8M0 scale",
+                expected: format!("at least {minimum_row_stride} bytes per scale row"),
+                actual: self.scale_stride_bytes[0].to_string(),
+            });
+        }
+        self.weight_byte_len()?
+            .checked_add(self.scale_byte_len()?)
+            .ok_or(OperatorContractError::ShapeOverflow {
+                field: "FP8 block-32 storage",
+            })?;
+        Ok(())
+    }
+
+    pub fn weight_byte_len(self) -> ContractResult<usize> {
+        if self.padding.padded_n == 0 || self.padding.padded_k == 0 {
+            return Err(OperatorContractError::InvalidLayout {
+                field: "E4M3 weight bytes",
+                reason: "padded N and K must be positive".into(),
+            });
+        }
+        if self.weight_row_stride_bytes < self.padding.padded_k {
+            return Err(OperatorContractError::StrideMismatch {
+                operand: "E4M3 weight",
+                expected: format!("at least {} bytes", self.padding.padded_k),
+                actual: self.weight_row_stride_bytes.to_string(),
+            });
+        }
+        if self.weight_row_stride_bytes > isize::MAX as usize {
+            return Err(OperatorContractError::ShapeOverflow {
+                field: "E4M3 weight stride",
+            });
+        }
+        let bytes = (self.padding.padded_n - 1)
+            .checked_mul(self.weight_row_stride_bytes)
+            .and_then(|offset| offset.checked_add(self.padding.padded_k))
+            .ok_or(OperatorContractError::ShapeOverflow {
+                field: "E4M3 weight bytes",
+            })?;
+        if bytes > isize::MAX as usize {
+            return Err(OperatorContractError::ShapeOverflow {
+                field: "E4M3 weight bytes",
+            });
+        }
+        Ok(bytes)
+    }
+
+    pub fn scale_byte_len(self) -> ContractResult<usize> {
+        if self.scale_shape[0] == 0 || self.scale_shape[1] == 0 {
+            return Err(OperatorContractError::InvalidLayout {
+                field: "UE8M0 scale bytes",
+                reason: "scale shape dimensions must be positive".into(),
+            });
+        }
+        if self.scale_stride_bytes.contains(&0) {
+            return Err(OperatorContractError::StrideMismatch {
+                operand: "UE8M0 scale",
+                expected: "both byte strides positive".into(),
+                actual: format!("{:?}", self.scale_stride_bytes),
+            });
+        }
+        if self.scale_stride_bytes[0] > isize::MAX as usize
+            || self.scale_stride_bytes[1] > isize::MAX as usize
+        {
+            return Err(OperatorContractError::ShapeOverflow {
+                field: "UE8M0 scale stride",
+            });
+        }
+        let row_span = (self.scale_shape[0] - 1)
+            .checked_mul(self.scale_stride_bytes[0])
+            .ok_or(OperatorContractError::ShapeOverflow {
+                field: "UE8M0 scale bytes",
+            })?;
+        let column_span = (self.scale_shape[1] - 1)
+            .checked_mul(self.scale_stride_bytes[1])
+            .ok_or(OperatorContractError::ShapeOverflow {
+                field: "UE8M0 scale bytes",
+            })?;
+        let bytes = row_span
+            .checked_add(column_span)
+            .and_then(|offset| offset.checked_add(Self::SCALE_ELEMENT_BYTES))
+            .ok_or(OperatorContractError::ShapeOverflow {
+                field: "UE8M0 scale bytes",
+            })?;
+        if bytes > isize::MAX as usize {
+            return Err(OperatorContractError::ShapeOverflow {
+                field: "UE8M0 scale bytes",
+            });
+        }
+        Ok(bytes)
+    }
+
+    pub fn has_partial_block(self) -> ContractResult<[bool; 2]> {
+        self.validate()?;
+        let row_extent = (self.row_origin % Self::BLOCK_SIZE)
+            .checked_add(self.n)
+            .ok_or(OperatorContractError::ShapeOverflow {
+                field: "FP8 partial row endpoint",
+            })?;
+        let column_extent = (self.column_origin % Self::BLOCK_SIZE)
+            .checked_add(self.k)
+            .ok_or(OperatorContractError::ShapeOverflow {
+                field: "FP8 partial column endpoint",
+            })?;
+        Ok([
+            !row_extent.is_multiple_of(Self::BLOCK_SIZE),
+            !column_extent.is_multiple_of(Self::BLOCK_SIZE),
+        ])
+    }
+
+    pub fn scale_index(self, row: usize, column: usize) -> ContractResult<[usize; 2]> {
+        if row >= self.n || column >= self.k {
+            return Err(OperatorContractError::InvalidField {
+                field: "FP8 logical weight index",
+                reason: format!("({row}, {column}) is outside [{}, {}]", self.n, self.k),
+            });
+        }
+        let absolute_row =
+            self.row_origin
+                .checked_add(row)
+                .ok_or(OperatorContractError::ShapeOverflow {
+                    field: "FP8 row origin",
+                })?;
+        let absolute_column =
+            self.column_origin
+                .checked_add(column)
+                .ok_or(OperatorContractError::ShapeOverflow {
+                    field: "FP8 column origin",
+                })?;
+        let block_row = absolute_row / Self::BLOCK_SIZE - self.row_origin / Self::BLOCK_SIZE;
+        let block_column =
+            absolute_column / Self::BLOCK_SIZE - self.column_origin / Self::BLOCK_SIZE;
+        if block_row >= self.scale_shape[0] || block_column >= self.scale_shape[1] {
+            return Err(OperatorContractError::Fp8ScaleGridMismatch {
+                expected: self.expected_scale_shape()?,
+                actual: self.scale_shape,
+            });
+        }
+        Ok([block_row, block_column])
+    }
+
+    pub fn scale_byte_offset(self, row: usize, column: usize) -> ContractResult<usize> {
+        let [block_row, block_column] = self.scale_index(row, column)?;
+        block_row
+            .checked_mul(self.scale_stride_bytes[0])
+            .and_then(|offset| {
+                block_column
+                    .checked_mul(self.scale_stride_bytes[1])
+                    .and_then(|column_offset| offset.checked_add(column_offset))
+            })
+            .ok_or(OperatorContractError::ShapeOverflow {
+                field: "UE8M0 scale byte offset",
+            })
+    }
+
+    pub fn weight_byte_offset(self, row: usize, column: usize) -> ContractResult<usize> {
+        if row >= self.padding.padded_n || column >= self.padding.padded_k {
+            return Err(OperatorContractError::InvalidField {
+                field: "FP8 physical weight index",
+                reason: format!(
+                    "({row}, {column}) is outside [{}, {}]",
+                    self.padding.padded_n, self.padding.padded_k
+                ),
+            });
+        }
+        row.checked_mul(self.weight_row_stride_bytes)
+            .and_then(|offset| offset.checked_add(column))
+            .ok_or(OperatorContractError::ShapeOverflow {
+                field: "E4M3 weight byte offset",
+            })
+    }
+}
+
+fn fp8_block32_scale_grid(
+    n: usize,
+    k: usize,
+    row_origin: usize,
+    column_origin: usize,
+    padding: Fp8Block32Padding,
+) -> ContractResult<[usize; 2]> {
+    if n == 0 || k == 0 || padding.padded_n == 0 || padding.padded_k == 0 {
+        return Err(OperatorContractError::InvalidLayout {
+            field: "FP8 block-32 shape",
+            reason: "logical and padded extents must be positive".into(),
+        });
+    }
+    let row_end = checked_fp8_extent(row_origin, padding.padded_n, "row origin")?;
+    let column_end = checked_fp8_extent(column_origin, padding.padded_k, "column origin")?;
+    let row_start_block = row_origin / Fp8Block32ScaleLayout::BLOCK_SIZE;
+    let column_start_block = column_origin / Fp8Block32ScaleLayout::BLOCK_SIZE;
+    let rows = row_end
+        .div_ceil(Fp8Block32ScaleLayout::BLOCK_SIZE)
+        .checked_sub(row_start_block)
+        .ok_or(OperatorContractError::ShapeOverflow {
+            field: "FP8 row scale grid",
+        })?;
+    let columns = column_end
+        .div_ceil(Fp8Block32ScaleLayout::BLOCK_SIZE)
+        .checked_sub(column_start_block)
+        .ok_or(OperatorContractError::ShapeOverflow {
+            field: "FP8 column scale grid",
+        })?;
+    Ok([rows, columns])
+}
+
+fn checked_fp8_extent(origin: usize, extent: usize, field: &'static str) -> ContractResult<usize> {
+    origin
+        .checked_add(extent)
+        .filter(|&end| end <= isize::MAX as usize)
+        .ok_or(OperatorContractError::ShapeOverflow { field })
+}
+
+fn check_fp8_padding_axis(
+    origin: usize,
+    logical: usize,
+    padded: usize,
+    axis: &'static str,
+) -> ContractResult<()> {
+    if padded == logical {
+        return Ok(());
+    }
+    let endpoint = (origin % Fp8Block32ScaleLayout::BLOCK_SIZE)
+        .checked_add(padded)
+        .ok_or(OperatorContractError::ShapeOverflow {
+            field: "FP8 padding endpoint",
+        })?;
+    if !endpoint.is_multiple_of(Fp8Block32ScaleLayout::BLOCK_SIZE) {
+        return Err(OperatorContractError::Fp8PaddingMismatch {
+            axis,
+            logical,
+            padded,
+        });
+    }
+    Ok(())
+}
+
+/// A provider-neutral logical `[M, N, K]` linear plan for row-major E4M3
+/// weights with per-32 UE8M0 scales.
+///
+/// `M` is the activation/output row count; the weight and scale layout are
+/// `[N, K]` and its intersecting `[ceil(N/32), ceil(K/32)]` block grid after
+/// applying absolute origins. The byte lengths are checked metadata, not
+/// allocations. This plan deliberately does not claim native FP8 MMA support
+/// and does not select an architecture, kernel library, or runtime fallback.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Fp8E4m3Ue8m0LinearPlan {
+    pub m: usize,
+    pub n: usize,
+    pub k: usize,
+    pub layout: Fp8Block32ScaleLayout,
+    scale_format: Fp8Block32ScaleFormat,
+    derived_weight_bytes: usize,
+    derived_scale_bytes: usize,
+}
+
+impl Fp8E4m3Ue8m0LinearPlan {
+    pub fn new(
+        m: usize,
+        n: usize,
+        k: usize,
+        layout: Fp8Block32ScaleLayout,
+    ) -> ContractResult<Self> {
+        Self::new_with_scale_format(m, n, k, layout, Fp8Block32ScaleFormat::Ue8m0)
+    }
+
+    pub fn new_with_scale_format(
+        m: usize,
+        n: usize,
+        k: usize,
+        layout: Fp8Block32ScaleLayout,
+        scale_format: Fp8Block32ScaleFormat,
+    ) -> ContractResult<Self> {
+        validate_fp8_block32_scale_format(scale_format)?;
+        if m == 0 || n == 0 || k == 0 {
+            return Err(OperatorContractError::InvalidLayout {
+                field: "FP8 E4M3/UE8M0 linear shape",
+                reason: "M, N, and K must be positive".into(),
+            });
+        }
+        if layout.n != n || layout.k != k {
+            return Err(OperatorContractError::ShapeMismatch {
+                field: "FP8 linear layout shape",
+                expected: format!("layout [{n}, {k}]"),
+                actual: format!("layout [{}, {}]", layout.n, layout.k),
+            });
+        }
+        layout.validate()?;
+        Ok(Self {
+            m,
+            n,
+            k,
+            layout,
+            scale_format,
+            derived_weight_bytes: layout.weight_byte_len()?,
+            derived_scale_bytes: layout.scale_byte_len()?,
+        })
+    }
+
+    pub fn with_storage_bytes(
+        m: usize,
+        n: usize,
+        k: usize,
+        layout: Fp8Block32ScaleLayout,
+        weight_bytes: usize,
+        scale_bytes: usize,
+    ) -> ContractResult<Self> {
+        let plan = Self::new(m, n, k, layout)?;
+        if plan.derived_weight_bytes != weight_bytes {
+            return Err(OperatorContractError::ByteLengthMismatch {
+                operand: "E4M3 weight",
+                expected: plan.derived_weight_bytes,
+                actual: weight_bytes,
+            });
+        }
+        if plan.derived_scale_bytes != scale_bytes {
+            return Err(OperatorContractError::ByteLengthMismatch {
+                operand: "UE8M0 scale",
+                expected: plan.derived_scale_bytes,
+                actual: scale_bytes,
+            });
+        }
+        Ok(plan)
+    }
+
+    pub const fn logical_shape(self) -> [usize; 3] {
+        [self.m, self.n, self.k]
+    }
+
+    pub const fn block_size(self) -> usize {
+        Fp8Block32ScaleLayout::BLOCK_SIZE
+    }
+
+    pub const fn scale_format(self) -> Fp8Block32ScaleFormat {
+        self.scale_format
+    }
+
+    pub const fn weight_bytes(self) -> usize {
+        self.derived_weight_bytes
+    }
+
+    pub const fn scale_bytes(self) -> usize {
+        self.derived_scale_bytes
+    }
+
+    pub fn validate(self) -> ContractResult<()> {
+        validate_fp8_block32_scale_format(self.scale_format)?;
+        let expected_weight_bytes = self.layout.weight_byte_len()?;
+        let expected_scale_bytes = self.layout.scale_byte_len()?;
+        if self.derived_weight_bytes != expected_weight_bytes {
+            return Err(OperatorContractError::ByteLengthMismatch {
+                operand: "derived E4M3 weight",
+                expected: expected_weight_bytes,
+                actual: self.derived_weight_bytes,
+            });
+        }
+        if self.derived_scale_bytes != expected_scale_bytes {
+            return Err(OperatorContractError::ByteLengthMismatch {
+                operand: "derived UE8M0 scale",
+                expected: expected_scale_bytes,
+                actual: self.derived_scale_bytes,
+            });
+        }
+        if self.m == 0 || self.n == 0 || self.k == 0 {
+            return Err(OperatorContractError::InvalidLayout {
+                field: "FP8 E4M3/UE8M0 linear shape",
+                reason: "M, N, and K must be positive".into(),
+            });
+        }
+        if self.layout.n != self.n || self.layout.k != self.k {
+            return Err(OperatorContractError::ShapeMismatch {
+                field: "FP8 linear layout shape",
+                expected: format!("layout [{}, {}]", self.n, self.k),
+                actual: format!("layout [{}, {}]", self.layout.n, self.layout.k),
+            });
+        }
+        self.layout.validate()
+    }
+
+    /// Validate host byte payloads for the reference boundary.
+    ///
+    /// UE8M0 byte zero is accepted as `2^-127`; it is not a zero scale. Byte
+    /// `255` decodes to `2^128`, which is not finite in the F32 reference and
+    /// is therefore rejected as a special/non-finite scale. E4M3FN `0x7f` and
+    /// `0xff` are NaN encodings and are rejected. Physical weight padding and
+    /// row-stride gaps must contain zero bytes.
+    pub fn validate_payload(self, weight: &[u8], scales: &[u8]) -> ContractResult<()> {
+        self.validate()?;
+        if weight.len() != self.weight_bytes() {
+            return Err(OperatorContractError::ByteLengthMismatch {
+                operand: "E4M3 weight",
+                expected: self.weight_bytes(),
+                actual: weight.len(),
+            });
+        }
+        if scales.len() != self.scale_bytes() {
+            return Err(OperatorContractError::ByteLengthMismatch {
+                operand: "UE8M0 scale",
+                expected: self.scale_bytes(),
+                actual: scales.len(),
+            });
+        }
+
+        // Validate each scale once before checking products. The weight pass
+        // below then checks the dequant product at the exact scale block that
+        // owns each logical element, without a second full weight scan.
+        for row in 0..self.layout.scale_shape[0] {
+            for column in 0..self.layout.scale_shape[1] {
+                let index = row
+                    .checked_mul(self.layout.scale_stride_bytes[0])
+                    .and_then(|offset| {
+                        column
+                            .checked_mul(self.layout.scale_stride_bytes[1])
+                            .and_then(|column_offset| offset.checked_add(column_offset))
+                    })
+                    .ok_or(OperatorContractError::ShapeOverflow {
+                        field: "UE8M0 scale byte offset",
+                    })?;
+                if !decode_ue8m0(scales[index]).is_finite() {
+                    return Err(OperatorContractError::InvalidFp8Byte {
+                        operand: "UE8M0 scale",
+                        index,
+                        reason: "special/non-finite UE8M0 scale is unsupported",
+                    });
+                }
+            }
+        }
+
+        for row in 0..self.layout.padding.padded_n {
+            for column in 0..self.layout.padding.padded_k {
+                let weight_index = self.layout.weight_byte_offset(row, column)?;
+                let byte = weight[weight_index];
+                if row >= self.n || column >= self.k {
+                    if byte != 0 {
+                        return Err(OperatorContractError::InvalidFp8Byte {
+                            operand: "E4M3 weight padding",
+                            index: weight_index,
+                            reason: "padding must be zero",
+                        });
+                    }
+                } else {
+                    let decoded = decode_e4m3fn(byte);
+                    if decoded.is_nan() {
+                        return Err(OperatorContractError::InvalidFp8Byte {
+                            operand: "E4M3 weight",
+                            index: weight_index,
+                            reason: "E4M3FN NaN is not a finite weight",
+                        });
+                    }
+                    let scale_index = self.layout.scale_byte_offset(row, column)?;
+                    let scale_byte = scales[scale_index];
+                    if !(decoded * decode_ue8m0(scale_byte)).is_finite() {
+                        return Err(OperatorContractError::NonFiniteFp8Product {
+                            weight_index,
+                            scale_index,
+                            weight_byte: byte,
+                            scale_byte,
+                        });
+                    }
+                }
+            }
+            if row + 1 < self.layout.padding.padded_n {
+                for index in (row * self.layout.weight_row_stride_bytes
+                    + self.layout.padding.padded_k)
+                    ..((row + 1) * self.layout.weight_row_stride_bytes)
+                {
+                    if weight[index] != 0 {
+                        return Err(OperatorContractError::InvalidFp8Byte {
+                            operand: "E4M3 weight stride padding",
+                            index,
+                            reason: "row-stride padding must be zero",
+                        });
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Reference/test-only dequantization into contiguous logical `[N, K]`
+    /// F32 values. This does not provide a production CPU fallback.
+    pub fn reference_dequantize(self, weight: &[u8], scales: &[u8]) -> ContractResult<Vec<f32>> {
+        self.validate_payload(weight, scales)?;
+        let elements = self
+            .n
+            .checked_mul(self.k)
+            .ok_or(OperatorContractError::ShapeOverflow {
+                field: "reference dequantized weight",
+            })?;
+        let mut output = vec![0.0; elements];
+        self.reference_dequantize_into_validated(weight, scales, &mut output)?;
+        Ok(output)
+    }
+
+    /// Reference/test-only dequantization into caller-provided contiguous
+    /// logical `[N, K]` F32 storage.
+    pub fn reference_dequantize_into(
+        self,
+        weight: &[u8],
+        scales: &[u8],
+        output: &mut [f32],
+    ) -> ContractResult<()> {
+        self.validate_payload(weight, scales)?;
+        self.reference_dequantize_into_validated(weight, scales, output)
+    }
+
+    fn reference_dequantize_into_validated(
+        self,
+        weight: &[u8],
+        scales: &[u8],
+        output: &mut [f32],
+    ) -> ContractResult<()> {
+        let elements = self
+            .n
+            .checked_mul(self.k)
+            .ok_or(OperatorContractError::ShapeOverflow {
+                field: "reference dequantized weight",
+            })?;
+        if output.len() != elements {
+            return Err(OperatorContractError::ShapeMismatch {
+                field: "reference dequantized weight",
+                expected: elements.to_string(),
+                actual: output.len().to_string(),
+            });
+        }
+        for row in 0..self.n {
+            for column in 0..self.k {
+                let weight_index = self.layout.weight_byte_offset(row, column)?;
+                let scale_index = self.layout.scale_byte_offset(row, column)?;
+                output[row * self.k + column] =
+                    decode_e4m3fn(weight[weight_index]) * decode_ue8m0(scales[scale_index]);
+            }
+        }
+        Ok(())
+    }
+
+    /// Reference/test-only F32 linear oracle: row-major activation `[M, K]`
+    /// times the logical transpose of the dequantized weight `[N, K]`,
+    /// producing contiguous `[M, N]`. This is intentionally not a runtime
+    /// fallback and reads only host slices.
+    pub fn reference_linear(
+        self,
+        activation: &[f32],
+        weight: &[u8],
+        scales: &[u8],
+    ) -> ContractResult<Vec<f32>> {
+        self.validate_payload(weight, scales)?;
+        let activation_elements =
+            self.m
+                .checked_mul(self.k)
+                .ok_or(OperatorContractError::ShapeOverflow {
+                    field: "reference activation",
+                })?;
+        if activation.len() != activation_elements {
+            return Err(OperatorContractError::ShapeMismatch {
+                field: "reference activation",
+                expected: activation_elements.to_string(),
+                actual: activation.len().to_string(),
+            });
+        }
+        let output_elements =
+            self.m
+                .checked_mul(self.n)
+                .ok_or(OperatorContractError::ShapeOverflow {
+                    field: "reference output",
+                })?;
+        let mut output = vec![0.0; output_elements];
+        for batch in 0..self.m {
+            for row in 0..self.n {
+                let mut accumulator = 0.0f32;
+                for column in 0..self.k {
+                    let weight_index = self.layout.weight_byte_offset(row, column)?;
+                    let scale_index = self.layout.scale_byte_offset(row, column)?;
+                    let dequantized =
+                        decode_e4m3fn(weight[weight_index]) * decode_ue8m0(scales[scale_index]);
+                    accumulator += activation[batch * self.k + column] * dequantized;
+                }
+                output[batch * self.n + row] = accumulator;
+            }
+        }
+        Ok(output)
+    }
+}
+
+/// Decode an E4M3FN byte without device or library dependencies.
+///
+/// Exponent zero is finite subnormal/zero (`mantissa * 2^-9`), exponents
+/// one through fifteen use the E4M3FN finite range, and `0x7f`/`0xff` are
+/// NaN. Signed zero is preserved.
+pub fn decode_e4m3fn(byte: u8) -> f32 {
+    let sign = if byte & 0x80 != 0 { -1.0 } else { 1.0 };
+    let exponent = (byte >> 3) & 0x0f;
+    let mantissa = byte & 0x07;
+    if exponent == 0 {
+        return sign * f32::from(mantissa) * 2.0f32.powi(-9);
+    }
+    if exponent == 0x0f && mantissa == 0x07 {
+        return f32::NAN;
+    }
+    sign * f32::from(8 + mantissa) * 2.0f32.powi(i32::from(exponent) - 10)
+}
+
+/// Decode a UE8M0 byte using the exponent-only scale convention.
+///
+/// This follows the public behavior reference: `byte 127 == 1.0`, byte zero
+/// is `2^-127` rather than zero, and byte 255 is `2^128`, represented as
+/// positive infinity by F32. The linear payload validator rejects that last
+/// special/non-finite case instead of silently producing `0 * infinity` NaN.
+pub fn decode_ue8m0(byte: u8) -> f32 {
+    2.0f32.powi(i32::from(byte) - 127)
+}
+
+/// Reference/test-only free-function wrapper for logical `[N, K]` weight
+/// dequantization. It is intentionally not a runtime fallback.
+pub fn reference_fp8_e4m3_ue8m0_weight(
+    plan: Fp8E4m3Ue8m0LinearPlan,
+    weight: &[u8],
+    scales: &[u8],
+) -> ContractResult<Vec<f32>> {
+    plan.reference_dequantize(weight, scales)
+}
+
+/// Reference/test-only free-function wrapper for contiguous F32 linear output.
+/// It reads host slices only and makes no provider or device claim.
+pub fn reference_fp8_e4m3_ue8m0_linear(
+    plan: Fp8E4m3Ue8m0LinearPlan,
+    activation: &[f32],
+    weight: &[u8],
+    scales: &[u8],
+) -> ContractResult<Vec<f32>> {
+    plan.reference_linear(activation, weight, scales)
 }
 
 /// Provider capability checks available for the current linear family.

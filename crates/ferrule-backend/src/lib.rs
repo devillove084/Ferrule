@@ -17,6 +17,11 @@ pub mod cpu;
 pub mod cuda_plan;
 pub mod error;
 pub mod operator_contract;
+pub use operator_contract::{
+    Fp8Block32Padding, Fp8Block32ScaleFormat, Fp8Block32ScaleLayout, Fp8E4m3Ue8m0LinearPlan,
+    decode_e4m3fn, decode_ue8m0, reference_fp8_e4m3_ue8m0_linear, reference_fp8_e4m3_ue8m0_weight,
+    validate_fp8_block32_scale_format,
+};
 pub mod physical_placement;
 pub use physical_placement as host_kv_placement;
 pub mod plan;

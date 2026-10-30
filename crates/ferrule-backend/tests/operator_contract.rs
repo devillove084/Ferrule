@@ -2,10 +2,13 @@ use ferrule_backend::cuda_plan::{
     NUMERIC_BF16_GEMV_SCRATCH_BYTES, NumericFp8Layout, NumericFp8LinearPlan, NumericFp8Precision,
 };
 use ferrule_backend::operator_contract::{
-    AdvisoryStorageIdentity, AliasPolicy, CapturePolicy, CastSemantics, LinearCapability,
+    AdvisoryStorageIdentity, AliasPolicy, CapturePolicy, CastSemantics, Fp8Block32Padding,
+    Fp8Block32ScaleFormat, Fp8Block32ScaleLayout, Fp8E4m3Ue8m0LinearPlan, LinearCapability,
     LinearFusionPlan, LinearOperatorDescriptor, LinearStageKind, LogicalDType,
     OperatorContractError, QuantizationDescriptor, RetentionPolicy, ScaleOperand,
-    TensorViewDescriptor, build_numeric_fp8_operator_contract,
+    TensorViewDescriptor, build_numeric_fp8_operator_contract, decode_e4m3fn, decode_ue8m0,
+    reference_fp8_e4m3_ue8m0_linear, reference_fp8_e4m3_ue8m0_weight,
+    validate_fp8_block32_scale_format,
 };
 use ferrule_common::numeric_fp8::NumericFp8ScaleType;
 
@@ -921,5 +924,405 @@ fn disjoint_policy_detects_overlapping_known_storage() {
             }
         ),
         "unexpected contract error: {error:?}"
+    );
+}
+
+#[test]
+fn block32_fp8_decoders_cover_boundaries_zero_and_special_values() {
+    assert_eq!(decode_e4m3fn(0x00), 0.0);
+    assert_eq!(decode_e4m3fn(0x80).to_bits(), (-0.0f32).to_bits());
+    assert_eq!(decode_e4m3fn(0x01), 2.0f32.powi(-9));
+    assert_eq!(decode_e4m3fn(0x38), 1.0);
+    assert_eq!(decode_e4m3fn(0xb8), -1.0);
+    assert_eq!(decode_e4m3fn(0x7e), 448.0);
+    assert_eq!(decode_e4m3fn(0xfe), -448.0);
+    assert!(decode_e4m3fn(0x7f).is_nan());
+    assert!(decode_e4m3fn(0xff).is_nan());
+
+    assert_eq!(decode_ue8m0(127), 1.0);
+    assert_eq!(decode_ue8m0(128), 2.0);
+    assert_eq!(decode_ue8m0(126), 0.5);
+    assert_eq!(decode_ue8m0(0), 2.0f32.powi(-127));
+    assert!(decode_ue8m0(255).is_infinite());
+}
+
+#[test]
+fn block32_layout_checks_origin_ragged_grid_and_partial_blocks() {
+    let layout = Fp8Block32ScaleLayout::contiguous(33, 65, 7, 11).unwrap();
+    assert_eq!(layout.scale_shape, [2, 3]);
+    assert_eq!(layout.scale_stride_bytes, [3, 1]);
+    assert_eq!(layout.padding, Fp8Block32Padding::none(33, 65));
+    assert_eq!(layout.has_partial_block().unwrap(), [true, true]);
+    assert_eq!(layout.scale_index(0, 0).unwrap(), [0, 0]);
+    assert_eq!(layout.scale_index(25, 21).unwrap(), [1, 1]);
+    assert_eq!(layout.scale_byte_offset(25, 21).unwrap(), 4);
+    assert_eq!(layout.block_size(), 32);
+
+    let expert_prefix = Fp8Block32ScaleLayout::contiguous(33, 33, 64, 32).unwrap();
+    assert_eq!(expert_prefix.scale_shape, [2, 2]);
+    assert_eq!(expert_prefix.scale_index(0, 0).unwrap(), [0, 0]);
+
+    let padded = Fp8Block32ScaleLayout::new(
+        33,
+        33,
+        7,
+        11,
+        [2, 2],
+        [2, 1],
+        Fp8Block32Padding::new(57, 53),
+        53,
+    )
+    .unwrap();
+    assert_eq!(padded.has_partial_block().unwrap(), [true, true]);
+    assert_eq!(padded.weight_byte_len().unwrap(), 57 * 53);
+    assert!(matches!(
+        Fp8Block32ScaleLayout::new(
+            33,
+            33,
+            7,
+            11,
+            [2, 2],
+            [2, 1],
+            Fp8Block32Padding::new(40, 53),
+            53,
+        ),
+        Err(OperatorContractError::Fp8PaddingMismatch { axis: "N", .. })
+    ));
+
+    let max_row_origin = Fp8Block32ScaleLayout {
+        n: 1,
+        k: 1,
+        row_origin: usize::MAX,
+        column_origin: 0,
+        scale_shape: [1, 1],
+        scale_stride_bytes: [1, 1],
+        padding: Fp8Block32Padding::none(1, 1),
+        weight_row_stride_bytes: 1,
+    };
+    assert!(matches!(
+        max_row_origin.has_partial_block(),
+        Err(OperatorContractError::ShapeOverflow {
+            field: "row origin"
+        })
+    ));
+
+    let max_column_origin = Fp8Block32ScaleLayout {
+        row_origin: 0,
+        column_origin: usize::MAX,
+        ..max_row_origin
+    };
+    assert!(matches!(
+        max_column_origin.has_partial_block(),
+        Err(OperatorContractError::ShapeOverflow {
+            field: "column origin"
+        })
+    ));
+
+    let max_logical_n = Fp8Block32ScaleLayout {
+        n: usize::MAX,
+        row_origin: 0,
+        padding: Fp8Block32Padding::new(usize::MAX, 1),
+        ..max_row_origin
+    };
+    assert!(matches!(
+        max_logical_n.has_partial_block(),
+        Err(OperatorContractError::ShapeOverflow { .. })
+    ));
+}
+
+#[test]
+fn block32_layout_rejects_wrong_grid_stride_overflow_and_format() {
+    assert!(matches!(
+        Fp8Block32ScaleLayout::new(
+            33,
+            65,
+            7,
+            11,
+            [1, 3],
+            [3, 1],
+            Fp8Block32Padding::none(33, 65),
+            65,
+        ),
+        Err(OperatorContractError::Fp8ScaleGridMismatch { .. })
+    ));
+    assert!(matches!(
+        Fp8Block32ScaleLayout::new(
+            33,
+            65,
+            7,
+            11,
+            [2, 3],
+            [3, 0],
+            Fp8Block32Padding::none(33, 65),
+            65,
+        ),
+        Err(OperatorContractError::StrideMismatch {
+            operand: "UE8M0 scale",
+            ..
+        })
+    ));
+    assert!(matches!(
+        Fp8Block32ScaleLayout::contiguous(1, 1, usize::MAX, 0),
+        Err(OperatorContractError::ShapeOverflow { .. })
+    ));
+    assert!(matches!(
+        validate_fp8_block32_scale_format(Fp8Block32ScaleFormat::Unknown(9)),
+        Err(OperatorContractError::Unsupported {
+            capability: "FP8 block-32 scale format",
+            ..
+        })
+    ));
+    assert!(matches!(
+        validate_fp8_block32_scale_format(Fp8Block32ScaleFormat::F32),
+        Err(OperatorContractError::Unsupported { .. })
+    ));
+
+    let format_layout = Fp8Block32ScaleLayout::contiguous(1, 1, 0, 0).unwrap();
+    assert_eq!(
+        Fp8E4m3Ue8m0LinearPlan::new(1, 1, 1, format_layout)
+            .unwrap()
+            .scale_format(),
+        Fp8Block32ScaleFormat::Ue8m0
+    );
+    assert!(matches!(
+        Fp8E4m3Ue8m0LinearPlan::new_with_scale_format(
+            1,
+            1,
+            1,
+            format_layout,
+            Fp8Block32ScaleFormat::F32,
+        ),
+        Err(OperatorContractError::Unsupported {
+            capability: "FP8 block-32 scale format",
+            ..
+        })
+    ));
+}
+
+#[test]
+fn block32_public_invalid_layout_lengths_return_typed_errors() {
+    let invalid_weight = Fp8Block32ScaleLayout {
+        n: 1,
+        k: 1,
+        row_origin: 0,
+        column_origin: 0,
+        scale_shape: [1, 1],
+        scale_stride_bytes: [1, 1],
+        padding: Fp8Block32Padding::new(0, 1),
+        weight_row_stride_bytes: 1,
+    };
+    assert!(matches!(
+        invalid_weight.weight_byte_len(),
+        Err(OperatorContractError::InvalidLayout {
+            field: "E4M3 weight bytes",
+            ..
+        })
+    ));
+
+    let invalid_scale = Fp8Block32ScaleLayout {
+        n: 1,
+        k: 1,
+        row_origin: 0,
+        column_origin: 0,
+        scale_shape: [0, 1],
+        scale_stride_bytes: [1, 1],
+        padding: Fp8Block32Padding::none(1, 1),
+        weight_row_stride_bytes: 1,
+    };
+    assert!(matches!(
+        invalid_scale.scale_byte_len(),
+        Err(OperatorContractError::InvalidLayout {
+            field: "UE8M0 scale bytes",
+            ..
+        })
+    ));
+    assert!(matches!(
+        invalid_scale.validate(),
+        Err(OperatorContractError::Fp8ScaleGridMismatch { .. })
+    ));
+
+    let overflow_weight = Fp8Block32ScaleLayout {
+        weight_row_stride_bytes: usize::MAX,
+        ..Fp8Block32ScaleLayout {
+            n: 1,
+            k: 1,
+            row_origin: 0,
+            column_origin: 0,
+            scale_shape: [1, 1],
+            scale_stride_bytes: [1, 1],
+            padding: Fp8Block32Padding::none(1, 1),
+            weight_row_stride_bytes: 1,
+        }
+    };
+    assert!(matches!(
+        overflow_weight.weight_byte_len(),
+        Err(OperatorContractError::ShapeOverflow {
+            field: "E4M3 weight stride",
+        })
+    ));
+
+    let overflow_scale = Fp8Block32ScaleLayout {
+        scale_stride_bytes: [usize::MAX, 1],
+        ..Fp8Block32ScaleLayout {
+            n: 1,
+            k: 1,
+            row_origin: 0,
+            column_origin: 0,
+            scale_shape: [1, 1],
+            scale_stride_bytes: [1, 1],
+            padding: Fp8Block32Padding::none(1, 1),
+            weight_row_stride_bytes: 1,
+        }
+    };
+    assert!(matches!(
+        overflow_scale.scale_byte_len(),
+        Err(OperatorContractError::ShapeOverflow {
+            field: "UE8M0 scale stride",
+        })
+    ));
+}
+
+#[test]
+fn block32_plan_rejects_lengths_nan_padding_and_special_scale() {
+    let layout = Fp8Block32ScaleLayout::contiguous(2, 33, 0, 0).unwrap();
+    let plan = Fp8E4m3Ue8m0LinearPlan::new(1, 2, 33, layout).unwrap();
+    assert_eq!(plan.logical_shape(), [1, 2, 33]);
+    assert_eq!(plan.weight_bytes(), 66);
+    assert_eq!(plan.scale_bytes(), 2);
+    assert!(matches!(
+        Fp8E4m3Ue8m0LinearPlan::with_storage_bytes(1, 2, 33, layout, 65, 2),
+        Err(OperatorContractError::ByteLengthMismatch {
+            operand: "E4M3 weight",
+            ..
+        })
+    ));
+
+    let mut weight = vec![0x38; 66];
+    assert!(plan.validate_payload(&weight, &[0, 127]).is_ok());
+    assert!(matches!(
+        plan.validate_payload(&weight, &[127]),
+        Err(OperatorContractError::ByteLengthMismatch {
+            operand: "UE8M0 scale",
+            ..
+        })
+    ));
+    weight[0] = 0x7f;
+    assert!(matches!(
+        plan.validate_payload(&weight, &[127, 127]),
+        Err(OperatorContractError::InvalidFp8Byte {
+            operand: "E4M3 weight",
+            ..
+        })
+    ));
+    weight[0] = 0x38;
+    assert!(matches!(
+        plan.validate_payload(&weight, &[127, 255]),
+        Err(OperatorContractError::InvalidFp8Byte {
+            operand: "UE8M0 scale",
+            ..
+        })
+    ));
+
+    let padded_layout = Fp8Block32ScaleLayout::new(
+        1,
+        1,
+        0,
+        0,
+        [1, 1],
+        [1, 1],
+        Fp8Block32Padding::new(32, 32),
+        32,
+    )
+    .unwrap();
+    let padded_plan = Fp8E4m3Ue8m0LinearPlan::new(1, 1, 1, padded_layout).unwrap();
+    let mut padded_weight = vec![0; padded_plan.weight_bytes()];
+    padded_weight[0] = 0x38;
+    padded_weight[31] = 1;
+    assert!(matches!(
+        padded_plan.validate_payload(&padded_weight, &[127]),
+        Err(OperatorContractError::InvalidFp8Byte {
+            operand: "E4M3 weight padding",
+            ..
+        })
+    ));
+}
+
+#[test]
+fn block32_payload_rejects_nonfinite_dequant_product() {
+    let layout = Fp8Block32ScaleLayout::contiguous(1, 1, 0, 0).unwrap();
+    let plan = Fp8E4m3Ue8m0LinearPlan::new(1, 1, 1, layout).unwrap();
+
+    // UE8M0 decoding remains independently observable: 255 is 2^128 and
+    // overflows F32. The payload policy rejects it before any product.
+    assert!(decode_ue8m0(255).is_infinite());
+    let error = plan.validate_payload(&[0x7e], &[254]).unwrap_err();
+    assert!(matches!(
+        error,
+        OperatorContractError::NonFiniteFp8Product {
+            weight_index: 0,
+            scale_index: 0,
+            weight_byte: 0x7e,
+            scale_byte: 254,
+        }
+    ));
+    assert!(matches!(
+        plan.reference_dequantize(&[0x7e], &[254]),
+        Err(OperatorContractError::NonFiniteFp8Product { .. })
+    ));
+    assert!(matches!(
+        plan.reference_linear(&[1.0], &[0x7e], &[254]),
+        Err(OperatorContractError::NonFiniteFp8Product { .. })
+    ));
+    assert!(matches!(
+        plan.validate_payload(&[0x7e], &[255]),
+        Err(OperatorContractError::InvalidFp8Byte {
+            operand: "UE8M0 scale",
+            ..
+        })
+    ));
+}
+
+#[test]
+fn block32_cpu_reference_dequant_and_linear_match_f32_oracle() {
+    let layout = Fp8Block32ScaleLayout::contiguous(2, 33, 0, 0).unwrap();
+    let plan = Fp8E4m3Ue8m0LinearPlan::new(2, 2, 33, layout).unwrap();
+    let weight = vec![0x38; plan.weight_bytes()];
+    let scales = [127u8, 128u8];
+
+    let dequantized = reference_fp8_e4m3_ue8m0_weight(plan, &weight, &scales).unwrap();
+    assert_eq!(&dequantized[..32], &[1.0; 32]);
+    assert_eq!(dequantized[32], 2.0);
+    assert_eq!(&dequantized[33..65], &[1.0; 32]);
+    assert_eq!(dequantized[65], 2.0);
+    assert_eq!(layout.scale_index(0, 32).unwrap(), [0, 1]);
+
+    let activation = [1.0f32; 33]
+        .into_iter()
+        .chain(std::iter::repeat_n(2.0, 33))
+        .collect::<Vec<_>>();
+    let output = reference_fp8_e4m3_ue8m0_linear(plan, &activation, &weight, &scales).unwrap();
+    assert_eq!(output, [34.0, 34.0, 68.0, 68.0]);
+}
+
+#[test]
+fn block32_contract_is_distinct_from_existing_numeric_128_layout() {
+    assert_eq!(Fp8Block32ScaleLayout::BLOCK_SIZE, 32);
+    assert_ne!(Fp8Block32ScaleLayout::BLOCK_SIZE, 128);
+    let numeric = NumericFp8Layout {
+        n: 33,
+        k: 33,
+        row_origin: 0,
+        column_origin: 0,
+        scale_type: NumericFp8ScaleType::F32,
+    };
+    assert_eq!(numeric.scale_shape().unwrap(), [1, 1]);
+    assert_eq!(
+        QuantizationDescriptor::new(
+            TensorViewDescriptor::new(LogicalDType::F32, &[1, 1], &[4, 4], 0, 4, None,),
+            [0, 0],
+            [128, 128],
+        )
+        .group_shape,
+        [128, 128]
     );
 }
