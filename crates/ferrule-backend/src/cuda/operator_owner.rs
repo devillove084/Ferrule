@@ -40,8 +40,9 @@ pub use crate::cuda::counters::CudaFailpoints;
 use crate::cuda::counters::CudaOpCounterCells;
 pub use crate::cuda::counters::CudaOpCounters;
 use crate::cuda::ffi::core::{
-    DSV4_DECODE_INDEX_QUERY_SHARED_ELEMENTS, TRANSFORMER_PAGED_BF16_APPEND_CAUSAL_GQA,
-    TRANSFORMER_PAGED_BF16_CAUSAL_GQA, TRANSFORMER_PAGED_BF16_KV_APPEND, TransformerArgs,
+    Bf16Block32PackArgs, DSV4_DECODE_INDEX_QUERY_SHARED_ELEMENTS, Fp8Block32DecodeArgs,
+    TRANSFORMER_PAGED_BF16_APPEND_CAUSAL_GQA, TRANSFORMER_PAGED_BF16_CAUSAL_GQA,
+    TRANSFORMER_PAGED_BF16_KV_APPEND, TransformerArgs,
 };
 use crate::cuda::operators::attention::hybrid::workspace_requirements as hybrid_mla_explicit_selection_workspace_requirements;
 pub use crate::cuda::operators::attention::hybrid::{
@@ -3487,6 +3488,54 @@ impl CudaOperators {
         })?;
         self.counters.add_host_to_device(slice_bytes(values));
         Ok(buffer)
+    }
+
+    /// Upload the two immutable payloads for the block-32 FP8 baseline on the
+    /// owner's compute stream. The semantic module validates the host payload
+    /// before calling this helper; this helper only owns CUDA storage/copies.
+    pub(crate) fn upload_fp8_block32_payload(
+        &self,
+        weight: &[u8],
+        scales: &[u8],
+    ) -> Result<(DeviceBuffer<u8>, DeviceBuffer<u8>)> {
+        let upload_bytes = slice_bytes(weight).saturating_add(slice_bytes(scales));
+        let weight = self.upload_u8(weight)?;
+        let scales = self.upload_u8(scales)?;
+        self.counters.add_artifact_upload(upload_bytes);
+        Ok((weight, scales))
+    }
+
+    /// Allocate owner-local workspace for the block-32 decode/GEMM baseline.
+    /// The optional activation storage exists only when BF16 GEMM K-padding is
+    /// required; both buffers stay on the compute stream and are caller-retained.
+    pub(crate) fn allocate_fp8_block32_workspace_buffers(
+        &self,
+        decoded_elements: usize,
+        activation_elements: Option<usize>,
+    ) -> Result<(DeviceBuffer<u16>, Option<DeviceBuffer<u16>>)> {
+        self.check_capture_safe("FP8 block-32 workspace allocation")?;
+        cu(self.stream.context().check_graph_ready())?;
+        let decoded = self.uninitialized_device_buffer::<u16>(decoded_elements)?;
+        let activation = activation_elements
+            .map(|elements| self.uninitialized_device_buffer::<u16>(elements))
+            .transpose()?;
+        Ok((decoded, activation))
+    }
+
+    pub(crate) fn launch_fp8_block32_decode(
+        &self,
+        stream: &CudaStream,
+        args: Fp8Block32DecodeArgs,
+    ) -> Result<()> {
+        cu(unsafe { self.module.fp8_block32_decode(stream, args) })
+    }
+
+    pub(crate) fn launch_bf16_block32_pack(
+        &self,
+        stream: &CudaStream,
+        args: Bf16Block32PackArgs,
+    ) -> Result<()> {
+        cu(unsafe { self.module.bf16_block32_pack(stream, args) })
     }
 
     fn upload_f32(&self, values: &[f32]) -> Result<DeviceBuffer<f32>> {

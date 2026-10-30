@@ -15,6 +15,41 @@ pub(crate) const LINEAR_FP8_PACKED: u32 = 5;
 pub(crate) const LINEAR_BF16_ROUNDED_INPUT: u32 = 7;
 pub(crate) const LINEAR_FP8_FROM_F32: u32 = 8;
 
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub(crate) struct Fp8Block32DecodeArgs {
+    pub(crate) n: u32,
+    pub(crate) k: u32,
+    pub(crate) padded_k: u32,
+    pub(crate) weight_padded_k: u32,
+    pub(crate) padded_n: u32,
+    pub(crate) weight_row_stride_bytes: u32,
+    pub(crate) scale_rows: u32,
+    pub(crate) scale_cols: u32,
+    pub(crate) scale_row_stride_bytes: u32,
+    pub(crate) scale_col_stride_bytes: u32,
+    pub(crate) row_origin: u32,
+    pub(crate) column_origin: u32,
+    pub(crate) reserved: u32,
+    pub(crate) weight: u64,
+    pub(crate) scales: u64,
+    pub(crate) decoded_weight_bf16: u64,
+    pub(crate) stream: u64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub(crate) struct Bf16Block32PackArgs {
+    pub(crate) rows: u32,
+    pub(crate) k: u32,
+    pub(crate) padded_k: u32,
+    pub(crate) input_stride: u32,
+    pub(crate) reserved: u32,
+    pub(crate) input_bf16: u64,
+    pub(crate) output_bf16: u64,
+    pub(crate) stream: u64,
+}
+
 pub(crate) const GROUPED_F32: u32 = 1;
 pub(crate) const GROUPED_FP8_TO_BF16: u32 = 2;
 
@@ -655,6 +690,12 @@ unsafe extern "C" {
     pub(crate) fn ferrule_core_conv_launch(args: *const ConvArgs) -> i32;
     pub(crate) fn ferrule_core_delta_launch(args: *const DeltaArgs) -> i32;
     pub(crate) fn ferrule_core_linear_launch(args: *const LinearArgs) -> i32;
+    pub(crate) fn ferrule_core_fp8_block32_device_capability(
+        expected_ordinal: u32,
+        actual_sm: *mut u32,
+    ) -> i32;
+    pub(crate) fn ferrule_core_fp8_block32_decode_launch(args: *const Fp8Block32DecodeArgs) -> i32;
+    pub(crate) fn ferrule_core_bf16_block32_pack_launch(args: *const Bf16Block32PackArgs) -> i32;
     pub(crate) fn ferrule_core_dual_linear_launch(args: *const DualLinearArgs) -> i32;
     pub(crate) fn ferrule_core_grouped_linear_launch(args: *const GroupedLinearArgs) -> i32;
     pub(crate) fn ferrule_core_quantize_launch(args: *const QuantizeArgs) -> i32;

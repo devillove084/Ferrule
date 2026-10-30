@@ -37,6 +37,42 @@ typedef struct FerruleCoreLinearArgs {
   uint64_t stream;
 } FerruleCoreLinearArgs;
 
+/* Clean-room block-32 E4M3 + UE8M0 decode into packed BF16 [N, padded_k].
+ * The logical weight is row-major [N, K]. Physical weight rows may be padded
+ * and scale rows/columns may have byte strides. No FP8 MMA capability is
+ * implied; this is the scalar decode stage of the SM80+ correctness baseline. */
+typedef struct FerruleCoreFp8Block32DecodeArgs {
+  uint32_t n;
+  uint32_t k;
+  uint32_t padded_k;
+  uint32_t weight_padded_k;
+  uint32_t padded_n;
+  uint32_t weight_row_stride_bytes;
+  uint32_t scale_rows;
+  uint32_t scale_cols;
+  uint32_t scale_row_stride_bytes;
+  uint32_t scale_col_stride_bytes;
+  uint32_t row_origin;
+  uint32_t column_origin;
+  uint32_t reserved;
+  uint64_t weight;
+  uint64_t scales;
+  uint64_t decoded_weight_bf16;
+  uint64_t stream;
+} FerruleCoreFp8Block32DecodeArgs;
+
+/* Copy packed BF16 activation [M, K] into [M, padded_k], zero-padding K. */
+typedef struct FerruleCoreBf16Block32PackArgs {
+  uint32_t rows;
+  uint32_t k;
+  uint32_t padded_k;
+  uint32_t input_stride;
+  uint32_t reserved;
+  uint64_t input_bf16;
+  uint64_t output_bf16;
+  uint64_t stream;
+} FerruleCoreBf16Block32PackArgs;
+
 typedef struct FerruleCoreDualLinearArgs {
   uint32_t kind;
   uint32_t first_n;
@@ -657,6 +693,12 @@ typedef struct FerruleCoreStreamingGqaArgs {
 int32_t ferrule_core_streaming_gqa_launch(const FerruleCoreStreamingGqaArgs *args);
 
 int32_t ferrule_core_linear_launch(const FerruleCoreLinearArgs *args);
+int32_t ferrule_core_fp8_block32_device_capability(uint32_t expected_ordinal,
+                                                   uint32_t *actual_sm);
+int32_t ferrule_core_fp8_block32_decode_launch(
+    const FerruleCoreFp8Block32DecodeArgs *args);
+int32_t ferrule_core_bf16_block32_pack_launch(
+    const FerruleCoreBf16Block32PackArgs *args);
 int32_t ferrule_core_dual_linear_launch(const FerruleCoreDualLinearArgs *args);
 int32_t
 ferrule_core_grouped_linear_launch(const FerruleCoreGroupedLinearArgs *args);
@@ -698,6 +740,8 @@ int32_t ferrule_core_transformer_f32_launch(const FerruleCoreTransformerArgs *ar
                 #type " stream offset mismatch")
 
 FERRULE_CORE_ASSERT_LAYOUT(FerruleCoreLinearArgs, 88, kind, x, 40, 80);
+FERRULE_CORE_ASSERT_LAYOUT(FerruleCoreFp8Block32DecodeArgs, 88, n, weight, 56, 80);
+FERRULE_CORE_ASSERT_LAYOUT(FerruleCoreBf16Block32PackArgs, 48, rows, input_bf16, 24, 40);
 FERRULE_CORE_ASSERT_LAYOUT(FerruleCoreDualLinearArgs, 104, kind, x, 40, 96);
 FERRULE_CORE_ASSERT_LAYOUT(FerruleCoreGroupedLinearArgs, 72, kind, input, 32,
                            64);

@@ -180,6 +180,38 @@ impl CoreOperators {
         )
     }
     #[allow(clippy::too_many_arguments)]
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
+    pub(crate) unsafe fn fp8_block32_decode(
+        &self,
+        stream: &CudaStream,
+        mut args: Fp8Block32DecodeArgs,
+    ) -> KernelResult<()> {
+        invoke!(
+            stream,
+            args,
+            ferrule_core_fp8_block32_decode_launch,
+            "FP8 block-32 BF16 decode"
+        )
+    }
+
+    /// # Safety
+    /// All device buffers must be valid allocations sized for the shapes passed,
+    /// and the launch must be enqueued on a stream belonging to this context.
+    pub(crate) unsafe fn bf16_block32_pack(
+        &self,
+        stream: &CudaStream,
+        mut args: Bf16Block32PackArgs,
+    ) -> KernelResult<()> {
+        invoke!(
+            stream,
+            args,
+            ferrule_core_bf16_block32_pack_launch,
+            "BF16 block-32 activation padding"
+        )
+    }
+
     ///
     /// # Safety
     /// All device buffers must be valid allocations sized for the shapes passed,

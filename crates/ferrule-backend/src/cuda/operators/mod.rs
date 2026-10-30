@@ -1,5 +1,6 @@
 pub mod attention;
 mod contracts;
+pub mod fp8_block32;
 mod impls;
 pub mod kv;
 pub mod legacy;

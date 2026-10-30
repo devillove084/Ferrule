@@ -4,6 +4,7 @@
 #include "core/device.cuh"
 #include "core/validation.cuh"
 #include "core/dense_ops.cuh"
+#include "core/fp8_block32.cuh"
 #include "core/cutlass_f32.cuh"
 #include "cutlass/bf16_linear.cuh"
 #include "cutlass/numeric_bf16_gemv.cuh"
@@ -24,6 +25,83 @@ ferrule_core_linear_launch(const FerruleCoreLinearArgs *args) {
   ferrule::cuda::core::linear_kernel<<<ferrule::cuda::core::blocks_for(static_cast<uint64_t>(args->batch) * args->n),
                   ferrule::cuda::core::kBlock, 0, ferrule::cuda::core::stream(args->stream)>>>(*args);
   return ferrule::cuda::core::launch_status();
+}
+
+extern "C" int32_t ferrule_core_fp8_block32_device_capability(
+    uint32_t expected_ordinal, uint32_t *actual_sm) {
+  if (!actual_sm || expected_ordinal > 0x7fffffffu) {
+    return static_cast<int32_t>(CUDA_ERROR_INVALID_VALUE);
+  }
+  CUdevice expected_device = 0;
+  CUdevice current_device = 0;
+  CUresult result = cuDeviceGet(&expected_device, static_cast<int>(expected_ordinal));
+  if (result != CUDA_SUCCESS) {
+    return static_cast<int32_t>(result);
+  }
+  result = cuCtxGetDevice(&current_device);
+  if (result != CUDA_SUCCESS) {
+    return static_cast<int32_t>(result);
+  }
+  if (current_device != expected_device) {
+    return static_cast<int32_t>(CUDA_ERROR_INVALID_DEVICE);
+  }
+  int major = 0;
+  int minor = 0;
+  result = cuDeviceGetAttribute(&major, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR,
+                                current_device);
+  if (result != CUDA_SUCCESS) {
+    return static_cast<int32_t>(result);
+  }
+  result = cuDeviceGetAttribute(&minor, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR,
+                                current_device);
+  if (result != CUDA_SUCCESS) {
+    return static_cast<int32_t>(result);
+  }
+  *actual_sm = static_cast<uint32_t>(major * 10 + minor);
+#if FERRULE_CUDA_TARGET_SM < 80
+  return static_cast<int32_t>(CUDA_ERROR_NOT_SUPPORTED);
+#else
+  if (*actual_sm < 80u || *actual_sm != FERRULE_CUDA_TARGET_SM) {
+    return static_cast<int32_t>(CUDA_ERROR_INVALID_VALUE);
+  }
+  return static_cast<int32_t>(CUDA_SUCCESS);
+#endif
+}
+
+extern "C" int32_t
+ferrule_core_fp8_block32_decode_launch(
+    const FerruleCoreFp8Block32DecodeArgs *args) {
+#if FERRULE_CUDA_TARGET_SM < 80
+  (void)args;
+  return static_cast<int32_t>(cudaErrorNotSupported);
+#else
+  if (!ferrule::cuda::core::fp8_block32_decode_valid(args)) {
+    return static_cast<int32_t>(cudaErrorInvalidValue);
+  }
+  const uint64_t count = uint64_t(args->n) * args->padded_k;
+  ferrule::cuda::core::fp8_block32_decode_kernel<<<
+      ferrule::cuda::core::blocks_for(count), ferrule::cuda::core::kBlock, 0,
+      ferrule::cuda::core::stream(args->stream)>>>(*args);
+  return static_cast<int32_t>(cudaGetLastError());
+#endif
+}
+
+extern "C" int32_t
+ferrule_core_bf16_block32_pack_launch(
+    const FerruleCoreBf16Block32PackArgs *args) {
+#if FERRULE_CUDA_TARGET_SM < 80
+  (void)args;
+  return static_cast<int32_t>(cudaErrorNotSupported);
+#else
+  if (!ferrule::cuda::core::bf16_block32_pack_valid(args)) {
+    return static_cast<int32_t>(cudaErrorInvalidValue);
+  }
+  const uint64_t count = uint64_t(args->rows) * args->padded_k;
+  ferrule::cuda::core::bf16_block32_pack_kernel<<<
+      ferrule::cuda::core::blocks_for(count), ferrule::cuda::core::kBlock, 0,
+      ferrule::cuda::core::stream(args->stream)>>>(*args);
+  return static_cast<int32_t>(cudaGetLastError());
+#endif
 }
 
 extern "C" int32_t

@@ -45,11 +45,15 @@ use crate::operator_contract::{
     LinearCapability, LogicalDType, build_numeric_fp8_operator_contract,
 };
 
+pub use super::fp8_block32::{
+    CudaFp8Block32Artifact, CudaFp8Block32Workspace, FP8_BLOCK32_ACTIVATION_DTYPE,
+    FP8_BLOCK32_BASELINE_PATH, fp8_block32_workspace_requirements,
+};
 pub(crate) use crate::cuda::operator_owner::ARTIFACT_LINEAR_FP8_ACTIVATION_BLOCK_SIZE;
 pub use crate::cuda::operator_owner::{
     CudaArtifactLinearHandle, CudaArtifactLinearShape, CudaArtifactLinearWorkspace, CudaBf16Buffer,
-    CudaF32Buffer, CudaFp8ActivationPack, CudaOperators, CudaPreparedFp8Activation, cuda_gemv,
-    cuda_gemv_fp8_e4m3fn_e8m0_2d,
+    CudaComputeEvent, CudaF32Buffer, CudaFp8ActivationPack, CudaOperators,
+    CudaPreparedFp8Activation, cuda_gemv, cuda_gemv_fp8_e4m3fn_e8m0_2d,
 };
 pub use crate::cuda::operators::contracts::{
     F32ToBf16RowsLayout, StridedBf16RowsLayout, StridedF32RowsLayout,
