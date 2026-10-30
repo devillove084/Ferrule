@@ -46,8 +46,10 @@ use crate::operator_contract::{
 };
 
 pub use super::fp8_block32::{
-    CudaFp8Block32Artifact, CudaFp8Block32Workspace, FP8_BLOCK32_ACTIVATION_DTYPE,
-    FP8_BLOCK32_BASELINE_PATH, fp8_block32_workspace_requirements,
+    CudaDecodedFp8Block32Artifact, CudaFp8Block32ActivationWorkspace, CudaFp8Block32Artifact,
+    CudaFp8Block32Workspace, DecodedFp8Block32Artifact, FP8_BLOCK32_ACTIVATION_DTYPE,
+    FP8_BLOCK32_BASELINE_PATH, Fp8Block32Completion, fp8_block32_activation_workspace_requirements,
+    fp8_block32_workspace_requirements,
 };
 pub(crate) use crate::cuda::operator_owner::ARTIFACT_LINEAR_FP8_ACTIVATION_BLOCK_SIZE;
 pub use crate::cuda::operator_owner::{

@@ -2460,6 +2460,9 @@ pub struct CudaOperators {
     /// a capture region returns an error immediately. This is the E2
     /// capture-safe assertion mode.
     capture_safe: Cell<bool>,
+    /// Monotonic owner-local identity for explicit FP8 completion tokens. This
+    /// is a proof token sequence, not a residency or eviction ledger.
+    fp8_block32_completion_generation: Cell<u64>,
     pending_copy_cleanup: RefCell<Vec<(Arc<PinnedHostBuffer<i32>>, DeviceBuffer<i32>)>>,
     numeric_gemv: RefCell<Option<Arc<crate::cuda::providers::cutlass::NumericBf16Gemv>>>,
 }
@@ -2518,6 +2521,7 @@ impl CudaOperators {
             failpoints: CudaFailpoints::default(),
             observability,
             capture_safe: Cell::new(false),
+            fp8_block32_completion_generation: Cell::new(0),
             pending_copy_cleanup: RefCell::new(Vec::new()),
             numeric_gemv: RefCell::new(None),
         })
@@ -3293,6 +3297,14 @@ impl CudaOperators {
         self.compute_stream_authority().record_event()
     }
 
+    /// Allocate a unique completion-token generation for this owner. This is
+    /// intentionally scoped to FP8 completion proofs, not resource residency.
+    pub(crate) fn next_fp8_block32_completion_generation(&self) -> u64 {
+        let generation = self.fp8_block32_completion_generation.get().wrapping_add(1);
+        self.fp8_block32_completion_generation.set(generation);
+        generation
+    }
+
     /// Explicit facade sync-operation attempts, including submitted-copy cleanup.
     /// Copy-and-sync operations count one attempt before either native operation;
     /// DeviceBuffer's internal synchronous upload/download calls are excluded.
@@ -3520,6 +3532,29 @@ impl CudaOperators {
             .map(|elements| self.uninitialized_device_buffer::<u16>(elements))
             .transpose()?;
         Ok((decoded, activation))
+    }
+
+    /// Allocate only owner-local transient storage for FP8 block-32 activation
+    /// padding. The decoded-weight artifact uses a separate persistent buffer so
+    /// its bytes are never charged to this workspace.
+    pub(crate) fn allocate_fp8_block32_activation_workspace_buffer(
+        &self,
+        activation_elements: Option<usize>,
+    ) -> Result<Option<DeviceBuffer<u16>>> {
+        self.check_capture_safe("FP8 block-32 activation workspace allocation")?;
+        cu(self.stream.context().check_graph_ready())?;
+        activation_elements
+            .map(|elements| self.uninitialized_device_buffer::<u16>(elements))
+            .transpose()
+    }
+
+    pub(crate) fn allocate_fp8_block32_decoded_weight_buffer(
+        &self,
+        decoded_elements: usize,
+    ) -> Result<DeviceBuffer<u16>> {
+        self.check_capture_safe("FP8 block-32 decoded artifact allocation")?;
+        cu(self.stream.context().check_graph_ready())?;
+        self.uninitialized_device_buffer::<u16>(decoded_elements)
     }
 
     pub(crate) fn launch_fp8_block32_decode(

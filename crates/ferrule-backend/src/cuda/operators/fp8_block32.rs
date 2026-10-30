@@ -7,16 +7,18 @@
 //! padding are caller-owned workspace and must remain alive until the owner's
 //! completion event proves the compute stream is finished.
 
-use std::{cell::Cell, mem::size_of};
+use std::{cell::Cell, mem::size_of, sync::Arc};
 
 use crate::cuda::architecture::{COMPILED_TARGET, compiled_capabilities};
 use crate::cuda::ffi::core::{
     Bf16Block32PackArgs, Fp8Block32DecodeArgs, ferrule_core_fp8_block32_device_capability,
 };
-use crate::cuda::operator_owner::{CudaBf16Buffer, CudaF32Buffer, CudaOperators, cu};
+use crate::cuda::operator_owner::{
+    CudaBf16Buffer, CudaComputeEvent, CudaF32Buffer, CudaOperators, cu,
+};
 use crate::cuda::operators::{OperatorOwner, linear::Bf16GemmLayout};
 use crate::cuda::providers::cutlass::{bf16_gemm, bf16_gemm_can_implement};
-use crate::cuda::runtime::{DeviceBuffer, DeviceCopy};
+use crate::cuda::runtime::{CudaContext, CudaStream, DeviceBuffer, DeviceCopy};
 use crate::operator_contract::Fp8E4m3Ue8m0LinearPlan;
 use crate::plan::OperatorWorkspaceRequirements;
 use ferrule_common::{Error, Result};
@@ -102,28 +104,45 @@ fn ensure_supported(plan: Fp8E4m3Ue8m0LinearPlan) -> Result<usize> {
             "decoded BF16 weight launch grid exceeds CUDA limit",
         ));
     }
-    if plan.m.checked_mul(gemm_k).is_none() || plan.m.checked_mul(plan.n).is_none() {
-        return Err(invalid("activation/output extent overflows"));
+    let activation_elements = plan
+        .m
+        .checked_mul(gemm_k)
+        .ok_or_else(|| invalid("activation extent overflows"))?;
+    if plan.m.checked_mul(plan.n).is_none() {
+        return Err(invalid("output extent overflows"));
+    }
+    if gemm_k > plan.k && activation_elements > 256usize.saturating_mul(65_535) {
+        return Err(invalid(
+            "padded BF16 activation launch grid exceeds CUDA limit",
+        ));
     }
     Ok(gemm_k)
 }
 
-fn workspace_bytes_for_plan(plan: Fp8E4m3Ue8m0LinearPlan, gemm_k: usize) -> Result<usize> {
-    let decoded = plan
-        .n
+fn decoded_weight_bytes_for_plan(plan: Fp8E4m3Ue8m0LinearPlan, gemm_k: usize) -> Result<usize> {
+    plan.n
         .checked_mul(gemm_k)
         .and_then(|elements| elements.checked_mul(size_of::<u16>()))
-        .ok_or_else(|| invalid("decoded BF16 workspace size overflows"))?;
-    let activation = if gemm_k > plan.k {
+        .ok_or_else(|| invalid("decoded BF16 weight size overflows"))
+}
+
+fn activation_workspace_bytes_for_plan(
+    plan: Fp8E4m3Ue8m0LinearPlan,
+    gemm_k: usize,
+) -> Result<usize> {
+    if gemm_k > plan.k {
         plan.m
             .checked_mul(gemm_k)
             .and_then(|elements| elements.checked_mul(size_of::<u16>()))
-            .ok_or_else(|| invalid("padded BF16 activation workspace size overflows"))?
+            .ok_or_else(|| invalid("padded BF16 activation workspace size overflows"))
     } else {
-        0
-    };
-    decoded
-        .checked_add(activation)
+        Ok(0)
+    }
+}
+
+fn workspace_bytes_for_plan(plan: Fp8E4m3Ue8m0LinearPlan, gemm_k: usize) -> Result<usize> {
+    decoded_weight_bytes_for_plan(plan, gemm_k)?
+        .checked_add(activation_workspace_bytes_for_plan(plan, gemm_k)?)
         .ok_or_else(|| invalid("FP8 block-32 workspace size overflows"))
 }
 
@@ -170,6 +189,293 @@ impl CudaFp8Block32Artifact {
 
     pub fn scale_bytes(&self) -> usize {
         self.scales.len()
+    }
+}
+
+/// Explicit, owner-local persistent BF16 storage prepared from one encoded
+/// artifact. The encoded source is retained as provenance and as an
+/// asynchronous decode lifetime lease; it is not a global residency entry.
+///
+/// The caller owns the artifact lifetime and the extra
+/// [`Self::decoded_weight_bytes`] BF16 bytes. Retain it until the final
+/// consumer completion event has completed, and retire it explicitly when the
+/// caller's memory budget permits. No implicit cache lookup or eviction is
+/// performed by this type.
+pub struct CudaDecodedFp8Block32Artifact {
+    source: CudaFp8Block32Artifact,
+    plan: Fp8E4m3Ue8m0LinearPlan,
+    gemm_k: usize,
+    decoded_weight: DeviceBuffer<u16>,
+    ready_event: CudaComputeEvent,
+    poisoned: Cell<bool>,
+}
+
+/// Short name for callers that do not need the CUDA prefix used by the older
+/// encoded artifact type.
+pub type DecodedFp8Block32Artifact = CudaDecodedFp8Block32Artifact;
+
+impl CudaDecodedFp8Block32Artifact {
+    pub fn plan(&self) -> Fp8E4m3Ue8m0LinearPlan {
+        self.plan
+    }
+
+    pub fn gemm_k(&self) -> usize {
+        self.gemm_k
+    }
+
+    /// Exact persistent BF16 storage charged to the caller's cache budget.
+    pub fn decoded_weight_bytes(&self) -> usize {
+        self.decoded_weight.num_bytes()
+    }
+
+    /// The encoded source remains owned by this artifact for provenance and
+    /// until decode completion, even though steady GEMM does not read it.
+    pub fn source_artifact(&self) -> &CudaFp8Block32Artifact {
+        &self.source
+    }
+
+    pub fn is_poisoned(&self) -> bool {
+        self.poisoned.get()
+    }
+
+    /// Explicitly quarantine this artifact after an external completion/event
+    /// failure. A quarantined artifact cannot be submitted again.
+    pub fn quarantine(&self) {
+        self.poison();
+    }
+
+    /// Query the owner-local decode event without synchronizing the stream.
+    /// This standalone query has no activation workspace to quarantine; the
+    /// decoded submission path passes its workspace to the same classifier.
+    pub fn is_ready(&self) -> Result<bool> {
+        if self.poisoned.get() {
+            return Err(invalid("decoded artifact is quarantined"));
+        }
+        match self.ready_event.is_complete() {
+            Ok(ready) => Ok(ready),
+            Err(error) => {
+                let (_, error) = classify_fp8_block32_event_failure(
+                    self.decoded_weight.context(),
+                    "query decode readiness",
+                    error,
+                    self,
+                    None,
+                );
+                Err(error)
+            }
+        }
+    }
+
+    /// Wait for the one-time decode completion. Capture-active synchronization
+    /// failure remains retryable; Unknown or an actual event failure quarantines
+    /// this artifact. The steady same-owner-stream entry does not need to wait
+    /// because the GEMM is ordered after the recorded event on that stream.
+    pub fn wait_until_ready(&self) -> Result<()> {
+        if self.poisoned.get() {
+            return Err(invalid("decoded artifact is quarantined"));
+        }
+        match self.ready_event.synchronize() {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                let (_, error) = classify_fp8_block32_event_failure(
+                    self.decoded_weight.context(),
+                    "wait for decode readiness",
+                    error,
+                    self,
+                    None,
+                );
+                Err(error)
+            }
+        }
+    }
+
+    fn poison(&self) {
+        self.poisoned.set(true);
+    }
+}
+
+/// Caller-owned activation-only storage used by the decoded path when logical
+/// K is not already a provider-compatible multiple of eight. It intentionally
+/// contains no decoded weight, so its byte budget cannot double-count the
+/// persistent artifact.
+pub struct CudaFp8Block32ActivationWorkspace {
+    plan: Fp8E4m3Ue8m0LinearPlan,
+    gemm_k: usize,
+    /// Stored even for K8-compatible plans where no activation allocation is
+    /// needed, so zero-byte workspaces remain owner/context-bound.
+    owner_context: Arc<CudaContext>,
+    activation_padded: Option<DeviceBuffer<u16>>,
+    poisoned: Cell<bool>,
+    workspace_bytes: usize,
+}
+
+impl CudaFp8Block32ActivationWorkspace {
+    pub fn plan(&self) -> Fp8E4m3Ue8m0LinearPlan {
+        self.plan
+    }
+
+    pub fn gemm_k(&self) -> usize {
+        self.gemm_k
+    }
+
+    pub fn activation_padding_bytes(&self) -> usize {
+        self.activation_padded
+            .as_ref()
+            .map(DeviceBuffer::num_bytes)
+            .unwrap_or(0)
+    }
+
+    pub fn workspace_bytes(&self) -> usize {
+        self.workspace_bytes
+    }
+
+    pub fn is_poisoned(&self) -> bool {
+        self.poisoned.get()
+    }
+
+    /// Explicitly quarantine transient activation storage when a caller-owned
+    /// completion/event operation fails.
+    pub fn quarantine(&self) {
+        self.poison();
+    }
+
+    fn poison(&self) {
+        self.poisoned.set(true);
+    }
+}
+
+/// A one-shot completion proof bound to the exact decoded artifact and
+/// activation workspace borrowed for one submission. The event is not
+/// interchangeable with another event from the same owner or an older call.
+pub struct Fp8Block32Completion<'a> {
+    artifact: &'a CudaDecodedFp8Block32Artifact,
+    workspace: &'a CudaFp8Block32ActivationWorkspace,
+    plan: Fp8E4m3Ue8m0LinearPlan,
+    generation: u64,
+    owner_context: Arc<CudaContext>,
+    owner_stream: Arc<CudaStream>,
+    event: Option<CudaComputeEvent>,
+    finalized: bool,
+}
+
+impl Fp8Block32Completion<'_> {
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    pub fn is_finalized(&self) -> bool {
+        self.finalized
+    }
+
+    fn consume_after_terminal_failure(&mut self) {
+        self.event.take();
+        self.finalized = true;
+    }
+
+    /// Consume the completion event exactly once. Capture-active is a
+    /// retryable preflight state and leaves the token/resources usable;
+    /// completion Unknown or an actual event synchronization failure
+    /// quarantines both resources and consumes the token.
+    pub fn finalize(&mut self, owner: &CudaOperators) -> Result<()> {
+        if self.finalized || self.event.is_none() {
+            return Err(invalid("FP8 block-32 completion was already finalized"));
+        }
+        let owner_context = owner.stream_clone();
+        if !Arc::ptr_eq(&self.owner_context, owner_context.context())
+            || !Arc::ptr_eq(&self.owner_stream, &owner_context)
+        {
+            return Err(invalid("FP8 block-32 completion owner/stream mismatch"));
+        }
+        if self.generation == 0
+            || self.artifact.plan != self.plan
+            || self.workspace.plan != self.plan
+        {
+            return Err(invalid("FP8 block-32 completion token metadata mismatch"));
+        }
+        if self.artifact.poisoned.get() || self.workspace.poisoned.get() {
+            return Err(invalid(
+                "decoded artifact or activation workspace was quarantined",
+            ));
+        }
+        owner.check_buffer_owner(
+            &self.artifact.source.weight,
+            "FP8 block-32 completion source weight",
+        )?;
+        owner.check_buffer_owner(
+            &self.artifact.source.scales,
+            "FP8 block-32 completion source scales",
+        )?;
+        owner.check_buffer_owner(
+            &self.artifact.decoded_weight,
+            "FP8 block-32 completion decoded weight",
+        )?;
+        if !Arc::ptr_eq(&self.workspace.owner_context, owner_context.context()) {
+            return Err(invalid("FP8 block-32 completion workspace mismatch"));
+        }
+        if let Some(padded) = self.workspace.activation_padded.as_ref() {
+            owner.check_buffer_owner(padded, "FP8 block-32 completion activation")?;
+        }
+        let event = self.event.as_ref().expect("completion event checked above");
+        cu(event
+            .event()
+            .check_context(owner_context.context(), "FP8 block-32 completion event"))?;
+
+        let graph_state = match owner.fp8_block32_completion_graph_state() {
+            Ok(state) => state,
+            Err(error) => {
+                let (state, error) = classify_fp8_block32_event_failure(
+                    owner_context.context(),
+                    "check FP8 block-32 completion readiness",
+                    error,
+                    self.artifact,
+                    Some(self.workspace),
+                );
+                if !matches!(state, Fp8Block32GraphState::CaptureActive) {
+                    self.consume_after_terminal_failure();
+                }
+                return Err(error);
+            }
+        };
+        match graph_state {
+            Fp8Block32GraphState::CaptureActive => {
+                return Err(invalid(
+                    "FP8 block-32 completion finalize deferred: CUDA capture active",
+                ));
+            }
+            Fp8Block32GraphState::CompletionUnknown => {
+                let (_, error) = classify_fp8_block32_event_failure(
+                    owner_context.context(),
+                    "finalize FP8 block-32 completion",
+                    invalid("FP8 block-32 completion reached sticky completion Unknown"),
+                    self.artifact,
+                    Some(self.workspace),
+                );
+                self.consume_after_terminal_failure();
+                return Err(error);
+            }
+            Fp8Block32GraphState::Ready => {}
+        }
+
+        match event.synchronize() {
+            Ok(()) => {
+                self.event.take();
+                self.finalized = true;
+                Ok(())
+            }
+            Err(error) => {
+                let (state, error) = classify_fp8_block32_event_failure(
+                    owner_context.context(),
+                    "finalize FP8 block-32 completion",
+                    error,
+                    self.artifact,
+                    Some(self.workspace),
+                );
+                if !matches!(state, Fp8Block32GraphState::CaptureActive) {
+                    self.consume_after_terminal_failure();
+                }
+                Err(error)
+            }
+        }
     }
 }
 
@@ -231,7 +537,106 @@ pub fn fp8_block32_workspace_requirements(
     })
 }
 
+/// Query only the transient activation-padding budget for the explicit decoded
+/// path. Persistent decoded weight bytes are reported by the artifact instead.
+pub fn fp8_block32_activation_workspace_requirements(
+    plan: Fp8E4m3Ue8m0LinearPlan,
+) -> Result<OperatorWorkspaceRequirements> {
+    let gemm_k = ensure_supported(plan)?;
+    Ok(OperatorWorkspaceRequirements {
+        bytes: checked_u64(
+            activation_workspace_bytes_for_plan(plan, gemm_k)?,
+            "activation workspace bytes",
+        )?,
+        alignment: 16,
+    })
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Fp8Block32GraphState {
+    Ready,
+    CaptureActive,
+    CompletionUnknown,
+}
+
+fn fp8_block32_context_graph_state(context: &CudaContext) -> Fp8Block32GraphState {
+    if context.graph_completion_unknown() {
+        Fp8Block32GraphState::CompletionUnknown
+    } else if context.is_capturing() {
+        Fp8Block32GraphState::CaptureActive
+    } else {
+        Fp8Block32GraphState::Ready
+    }
+}
+
+/// Classify a failure from a decoded artifact or bound completion event.
+/// Capture-active is the only retryable class. A sticky Unknown or an actual
+/// event failure quarantines every resource supplied by the caller; standalone
+/// artifact readiness intentionally supplies no workspace because no decoded
+/// submission has associated one yet.
+fn classify_fp8_block32_event_failure(
+    context: &CudaContext,
+    operation: &str,
+    error: Error,
+    artifact: &CudaDecodedFp8Block32Artifact,
+    workspace: Option<&CudaFp8Block32ActivationWorkspace>,
+) -> (Fp8Block32GraphState, Error) {
+    let state = fp8_block32_context_graph_state(context);
+    let error = match state {
+        Fp8Block32GraphState::CaptureActive => invalid(format!(
+            "{operation} deferred: CUDA capture active; retry after capture completes"
+        )),
+        Fp8Block32GraphState::CompletionUnknown => {
+            artifact.poison();
+            if let Some(workspace) = workspace {
+                workspace.poison();
+            }
+            let resources = if workspace.is_some() {
+                "artifact and activation workspace"
+            } else {
+                "decoded artifact"
+            };
+            invalid(format!(
+                "{operation} reached sticky completion Unknown; {resources} quarantined"
+            ))
+        }
+        Fp8Block32GraphState::Ready => {
+            artifact.poison();
+            if let Some(workspace) = workspace {
+                workspace.poison();
+            }
+            error
+        }
+    };
+    (state, error)
+}
+
 impl CudaOperators {
+    fn fp8_block32_completion_graph_state(&self) -> Result<Fp8Block32GraphState> {
+        let stream = self.stream_clone();
+        let context = stream.context();
+        if context.graph_completion_unknown() {
+            return Ok(Fp8Block32GraphState::CompletionUnknown);
+        }
+        if context.is_capturing() {
+            return Ok(Fp8Block32GraphState::CaptureActive);
+        }
+        match context.check_graph_ready() {
+            Ok(()) => {}
+            Err(error) => {
+                if context.graph_completion_unknown() {
+                    return Ok(Fp8Block32GraphState::CompletionUnknown);
+                }
+                if context.is_capturing() {
+                    return Ok(Fp8Block32GraphState::CaptureActive);
+                }
+                return Err(error.into());
+            }
+        }
+        cu(context.bind_to_thread())?;
+        Ok(Fp8Block32GraphState::Ready)
+    }
+
     fn fp8_block32_graph_preflight(&self) -> Result<()> {
         let stream = self.stream_clone();
         cu(stream.context().check_graph_ready())?;
@@ -274,6 +679,34 @@ impl CudaOperators {
         if let Some(padded) = workspace.activation_padded.as_ref() {
             self.check_buffer_owner(padded, "FP8 block-32 activation workspace")?;
         }
+        Ok(())
+    }
+
+    fn check_fp8_block32_decoded_owners(
+        &self,
+        artifact: &CudaDecodedFp8Block32Artifact,
+        input: &CudaBf16Buffer,
+        output: &CudaF32Buffer,
+        workspace: &CudaFp8Block32ActivationWorkspace,
+    ) -> Result<()> {
+        self.check_buffer_owner(&artifact.source.weight, "FP8 block-32 source weight")?;
+        self.check_buffer_owner(&artifact.source.scales, "FP8 block-32 source scales")?;
+        self.check_buffer_owner(
+            &artifact.decoded_weight,
+            "FP8 block-32 decoded artifact weight",
+        )?;
+        self.check_buffer_owner(input.as_device_buffer(), "FP8 block-32 activation")?;
+        self.check_buffer_owner(output.as_device_buffer(), "FP8 block-32 output")?;
+        if !Arc::ptr_eq(&workspace.owner_context, self.stream_clone().context()) {
+            return Err(invalid("FP8 block-32 activation workspace owner mismatch"));
+        }
+        if let Some(padded) = workspace.activation_padded.as_ref() {
+            self.check_buffer_owner(padded, "FP8 block-32 activation workspace")?;
+        }
+        cu(artifact.ready_event.event().check_context(
+            self.stream_clone().context(),
+            "FP8 block-32 decoded artifact ready event",
+        ))?;
         Ok(())
     }
 
@@ -342,6 +775,267 @@ impl CudaOperators {
             activation_padded,
             poisoned: Cell::new(false),
             workspace_bytes,
+        })
+    }
+
+    /// Allocate only the transient activation padding required by the decoded
+    /// path. For K8-compatible plans this owns no storage and reports zero
+    /// bytes; decoded weight storage is owned by [`CudaDecodedFp8Block32Artifact`].
+    pub fn fp8_block32_activation_workspace(
+        &self,
+        plan: Fp8E4m3Ue8m0LinearPlan,
+    ) -> Result<CudaFp8Block32ActivationWorkspace> {
+        self.fp8_block32_context_preflight()?;
+        let gemm_k = ensure_supported(plan)?;
+        let activation_bytes = activation_workspace_bytes_for_plan(plan, gemm_k)?;
+        let activation_elements = if gemm_k > plan.k {
+            Some(
+                plan.m
+                    .checked_mul(gemm_k)
+                    .ok_or_else(|| invalid("padded BF16 activation workspace size overflows"))?,
+            )
+        } else {
+            None
+        };
+        let activation_padded =
+            self.allocate_fp8_block32_activation_workspace_buffer(activation_elements)?;
+        if activation_padded
+            .as_ref()
+            .map(DeviceBuffer::num_bytes)
+            .unwrap_or(0)
+            != activation_bytes
+        {
+            return Err(invalid("FP8 block-32 activation workspace size mismatch"));
+        }
+        Ok(CudaFp8Block32ActivationWorkspace {
+            plan,
+            gemm_k,
+            owner_context: Arc::clone(self.stream_clone().context()),
+            activation_padded,
+            poisoned: Cell::new(false),
+            workspace_bytes: activation_bytes,
+        })
+    }
+
+    /// Prepare one explicit persistent BF16 decoded-weight artifact. The
+    /// encoded source is moved into the returned artifact and remains owned
+    /// until the caller retires that artifact after its completion event.
+    /// Preparation submits exactly one decode launch and no GEMM.
+    pub fn prepare_fp8_block32_decoded_weight(
+        &self,
+        source: CudaFp8Block32Artifact,
+        plan: Fp8E4m3Ue8m0LinearPlan,
+    ) -> Result<CudaDecodedFp8Block32Artifact> {
+        self.fp8_block32_graph_preflight()?;
+        let gemm_k = ensure_supported(plan)?;
+        self.check_buffer_owner(&source.weight, "FP8 block-32 source weight")?;
+        self.check_buffer_owner(&source.scales, "FP8 block-32 source scales")?;
+        if source.plan != plan {
+            return Err(invalid("encoded source/prepare plan mismatch"));
+        }
+        self.fp8_block32_runtime_capability()?;
+        let decoded_elements = plan
+            .n
+            .checked_mul(gemm_k)
+            .ok_or_else(|| invalid("decoded BF16 artifact size overflows"))?;
+        let decoded_weight = self.allocate_fp8_block32_decoded_weight_buffer(decoded_elements)?;
+        let decode_args = Fp8Block32DecodeArgs {
+            n: checked_u32(plan.n, "N")?,
+            k: checked_u32(plan.k, "K")?,
+            padded_k: checked_u32(gemm_k, "padded K")?,
+            weight_padded_k: checked_u32(plan.layout.padding.padded_k, "physical padded K")?,
+            padded_n: checked_u32(plan.layout.padding.padded_n, "padded N")?,
+            weight_row_stride_bytes: checked_u32(
+                plan.layout.weight_row_stride_bytes,
+                "weight row stride",
+            )?,
+            scale_rows: checked_u32(plan.layout.scale_shape[0], "scale rows")?,
+            scale_cols: checked_u32(plan.layout.scale_shape[1], "scale columns")?,
+            scale_row_stride_bytes: checked_u32(
+                plan.layout.scale_stride_bytes[0],
+                "scale row stride",
+            )?,
+            scale_col_stride_bytes: checked_u32(
+                plan.layout.scale_stride_bytes[1],
+                "scale column stride",
+            )?,
+            row_origin: checked_u32(plan.layout.row_origin, "row origin")?,
+            column_origin: checked_u32(plan.layout.column_origin, "column origin")?,
+            reserved: 0,
+            weight: source.weight.cu_deviceptr(),
+            scales: source.scales.cu_deviceptr(),
+            decoded_weight_bf16: decoded_weight.cu_deviceptr(),
+            stream: 0,
+        };
+        self.submit_operator(1, |stream| {
+            self.launch_fp8_block32_decode(stream, decode_args)
+        })?;
+        let ready_event = self.record_compute_event()?;
+        Ok(CudaDecodedFp8Block32Artifact {
+            source,
+            plan,
+            gemm_k,
+            decoded_weight,
+            ready_event,
+            poisoned: Cell::new(false),
+        })
+    }
+
+    /// Submit the explicit decoded path. After preparation this performs only
+    /// owner/graph/plan/readiness checks and the existing BF16 GEMM, plus the
+    /// required activation pack for ragged K. The decoded weight is never
+    /// allocated or written here. The launch counter is committed only after
+    /// the semantic submission closure returns successfully; a partial native
+    /// submit is quarantined and is not a completion or partial-launch ledger.
+    pub fn fp8_block32_linear_from_decoded(
+        &self,
+        artifact: &CudaDecodedFp8Block32Artifact,
+        input: &CudaBf16Buffer,
+        output: &mut CudaF32Buffer,
+        workspace: &mut CudaFp8Block32ActivationWorkspace,
+        plan: Fp8E4m3Ue8m0LinearPlan,
+    ) -> Result<()> {
+        if let Err(error) = self.fp8_block32_graph_preflight() {
+            if self.stream_clone().context().graph_completion_unknown() {
+                artifact.poison();
+                workspace.poison();
+            }
+            return Err(error);
+        }
+        let gemm_k = ensure_supported(plan)?;
+        self.check_fp8_block32_decoded_owners(artifact, input, output, workspace)?;
+        self.fp8_block32_runtime_capability()?;
+        if artifact.plan != plan
+            || artifact.gemm_k != gemm_k
+            || workspace.plan != plan
+            || workspace.gemm_k != gemm_k
+        {
+            return Err(invalid("decoded artifact/workspace/plan mismatch"));
+        }
+        if artifact.poisoned.get() || workspace.poisoned.get() {
+            return Err(invalid(
+                "decoded artifact or activation workspace was quarantined",
+            ));
+        }
+        if let Err(error) = artifact.ready_event.is_complete() {
+            let (_, error) = classify_fp8_block32_event_failure(
+                artifact.decoded_weight.context(),
+                "query decode readiness",
+                error,
+                artifact,
+                Some(workspace),
+            );
+            return Err(error);
+        }
+
+        let input_elements = plan
+            .m
+            .checked_mul(plan.k)
+            .ok_or_else(|| invalid("BF16 activation extent overflows"))?;
+        let output_elements = plan
+            .m
+            .checked_mul(plan.n)
+            .ok_or_else(|| invalid("F32 output extent overflows"))?;
+        let input_span = device_span(input.as_device_buffer(), input_elements, "activation")?;
+        let output_span = device_span(output.as_device_buffer(), output_elements, "output")?;
+        if spans_overlap(input_span, output_span) {
+            return Err(invalid("activation and output ranges overlap"));
+        }
+
+        let layout = Bf16GemmLayout::contiguous(plan.m, plan.n, gemm_k);
+        if let Some(padded) = workspace.activation_padded.as_ref() {
+            bf16_gemm_can_implement(
+                &self.stream_clone(),
+                padded,
+                &artifact.decoded_weight,
+                output.as_device_buffer(),
+                layout,
+            )?;
+        } else {
+            bf16_gemm_can_implement(
+                &self.stream_clone(),
+                input.as_device_buffer(),
+                &artifact.decoded_weight,
+                output.as_device_buffer(),
+                layout,
+            )?;
+        }
+
+        let needs_activation_padding = workspace.activation_padded.is_some();
+        self.submit_operator(if needs_activation_padding { 2 } else { 1 }, |stream| {
+            if let Some(padded) = workspace.activation_padded.as_ref() {
+                let pack_args = Bf16Block32PackArgs {
+                    rows: checked_u32(plan.m, "M")?,
+                    k: checked_u32(plan.k, "K")?,
+                    padded_k: checked_u32(gemm_k, "padded K")?,
+                    input_stride: checked_u32(plan.k, "activation stride")?,
+                    reserved: 0,
+                    input_bf16: input.as_device_buffer().cu_deviceptr(),
+                    output_bf16: padded.cu_deviceptr(),
+                    stream: 0,
+                };
+                if let Err(error) = self.launch_bf16_block32_pack(stream, pack_args) {
+                    artifact.poison();
+                    workspace.poison();
+                    return Err(error);
+                }
+            }
+
+            let gemm_result = if let Some(padded) = workspace.activation_padded.as_ref() {
+                bf16_gemm(
+                    stream,
+                    padded,
+                    &artifact.decoded_weight,
+                    output.as_device_buffer_mut(),
+                    layout,
+                )
+            } else {
+                bf16_gemm(
+                    stream,
+                    input.as_device_buffer(),
+                    &artifact.decoded_weight,
+                    output.as_device_buffer_mut(),
+                    layout,
+                )
+            };
+            if let Err(error) = gemm_result {
+                artifact.poison();
+                workspace.poison();
+                return Err(error);
+            }
+            Ok(())
+        })
+    }
+
+    /// Submit the explicit decoded path and return a one-shot completion token
+    /// bound to this exact artifact/workspace/plan submission. The token keeps
+    /// those borrows alive until its finalize attempt completes.
+    pub fn fp8_block32_linear_from_decoded_with_completion<'a>(
+        &self,
+        artifact: &'a CudaDecodedFp8Block32Artifact,
+        input: &CudaBf16Buffer,
+        output: &mut CudaF32Buffer,
+        workspace: &'a mut CudaFp8Block32ActivationWorkspace,
+        plan: Fp8E4m3Ue8m0LinearPlan,
+    ) -> Result<Fp8Block32Completion<'a>> {
+        self.fp8_block32_linear_from_decoded(artifact, input, output, workspace, plan)?;
+        let event = match self.record_compute_event() {
+            Ok(event) => event,
+            Err(error) => {
+                artifact.poison();
+                workspace.poison();
+                return Err(error);
+            }
+        };
+        Ok(Fp8Block32Completion {
+            artifact,
+            workspace,
+            plan,
+            generation: self.next_fp8_block32_completion_generation(),
+            owner_context: Arc::clone(self.stream_clone().context()),
+            owner_stream: self.stream_clone(),
+            event: Some(event),
+            finalized: false,
         })
     }
 

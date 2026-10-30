@@ -54,14 +54,30 @@ if command -v nvidia-smi >/dev/null 2>&1; then
         exit 1
     fi
 else
-    echo "warning: nvidia-smi unavailable; GPU identity check skipped" >&2
+    echo "GPU[0]: identity=unverified (nvidia-smi unavailable); RTX3090/SM86 requirement was not verified" >&2
 fi
 
 cd "$ROOT"
 case "$MODE" in
     check)
         exec cargo check --locked --offline -p ferrule-backend --features cuda \
-            --test fp8_block32_benchmark
+            --test fp8_block32 --test fp8_block32_benchmark
+        ;;
+    clippy)
+        exec cargo clippy --locked --offline -p ferrule-backend --features cuda \
+            --all-targets -- -D warnings
+        ;;
+    correctness)
+        exec cargo test --locked --offline -p ferrule-backend --features cuda \
+            --test fp8_block32 -- \
+            --exact decoded_block32_cache_ragged_matches_cpu_and_quarantines_owner_mismatch \
+            --ignored --nocapture --test-threads=1
+        ;;
+    steady)
+        exec cargo test --locked --offline -p ferrule-backend --features cuda \
+            --test fp8_block32 -- \
+            --exact decoded_block32_cache_k8_steady_calls_are_one_gemm \
+            --ignored --nocapture --test-threads=1
         ;;
     run)
         exec cargo test --locked --offline -p ferrule-backend --features cuda \
@@ -70,7 +86,7 @@ case "$MODE" in
             --ignored --nocapture --test-threads=1
         ;;
     *)
-        echo "usage: $0 [check|run]" >&2
+        echo "usage: $0 [check|clippy|correctness|steady|run]" >&2
         exit 2
         ;;
 esac
